@@ -472,6 +472,31 @@ impl Application {
         self.watched_graph_target = Some(manifold_core::GraphTarget::Generator(layer_id));
     }
 
+    /// Open the shared Save to Library / Save to Project name-prompt text
+    /// input (PRESET_LIBRARY_DESIGN D4, P3). Shared tail for the card-menu
+    /// path (`PanelAction::SaveToLibrary`/`SaveToProject`, resolved by
+    /// `dispatch_inspector` and handed back via `DispatchResult`) — the
+    /// graph editor header path (`GraphEditCommand::SaveGraphToLibrary`/
+    /// `SaveGraphToProject`) opens the session inline instead, since it
+    /// already has a real button rect to anchor on; this path anchors on the
+    /// dropdown's last position (cosmetic only — a degenerate rect just
+    /// anchors near the top-left, which doesn't affect the save itself).
+    fn begin_save_preset_prompt(
+        &mut self,
+        kind: manifold_core::preset_def::PresetKind,
+        def: manifold_core::effect_graph_def::EffectGraphDef,
+        destination: crate::text_input::SavePresetDestination,
+    ) {
+        let bounds = self.ws.ui_root.dropdown.container_bounds();
+        let anchor = if bounds.width > 0.0 && bounds.height > 0.0 {
+            crate::text_input::AnchorRect::new(bounds.x, bounds.y, bounds.width, 24.0)
+        } else {
+            crate::text_input::AnchorRect::new(120.0, 120.0, 220.0, 24.0)
+        };
+        self.text_input.begin(crate::text_input::TextInputField::SavePresetName, "", anchor, 12.0);
+        self.text_input.save_preset = Some(crate::text_input::SavePresetCtx { kind, def, destination });
+    }
+
     pub(crate) fn tick_and_render(&mut self) {
         let dt = self.frame_timer.consume_tick();
         let realtime = self.frame_timer.realtime_since_start();
@@ -714,6 +739,14 @@ impl Application {
             if let Some(aspect) = preview_aspect {
                 canvas.set_preview_aspect(aspect);
             }
+            // P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D17): the one per-frame
+            // tick for the canvas's marquee-fade/connect-pop/error-shake
+            // tweens — no seam existed for this before (graph_canvas had no
+            // `tick`/`update` method at all); this is the natural insertion
+            // point, right beside the `set_snapshot`/`apply_live_values`
+            // calls that already run every frame the editor window is open,
+            // using the `dt` this function already computed above.
+            canvas.tick((dt * 1000.0) as f32);
             canvas.set_snapshot(&ui_snap);
             // Overlay this frame's live (modulated) node values on top of the
             // just-pushed structural snapshot, so a driver / Ableton / envelope /
@@ -856,22 +889,20 @@ impl Application {
                     if let Some(tx) = self.content_tx.as_ref() {
                         crate::ui_bridge::undo(tx);
                     }
-                    // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2).
-                    // Generic label: the undone command's *name* lives only in
-                    // the content thread's `UndoRedoManager` (each `Command`
-                    // has a `description()` — manifold-editing/src/command.rs:9
-                    // — but nothing plumbs it into `ContentState` today, and
-                    // adding that field means editing content_commands.rs /
-                    // content_state.rs, both `content*` and out of this
-                    // phase's bounds). Escalated in the phase report rather
-                    // than crossing that line.
-                    self.ws.ui_root.toast.show("Undo");
+                    // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2):
+                    // the real "Undid: <command name>" label now fires from
+                    // `ui_bridge/state_sync.rs`'s `push_state`, once the
+                    // content thread's `ContentState.undo_redo_event` round-
+                    // trips back with the actual command description (see
+                    // `content_commands.rs`'s `Undo`/`Redo` handlers and
+                    // `ContentThread::pending_undo_redo_event`). No toast is
+                    // fired here directly any more — that would show a
+                    // generic label first and then get immediately replaced.
                 }
                 M::Redo => {
                     if let Some(tx) = self.content_tx.as_ref() {
                         crate::ui_bridge::redo(tx);
                     }
-                    self.ws.ui_root.toast.show("Redo");
                 }
                 M::Settings => self.pending_open_settings = true,
             }
@@ -1836,6 +1867,9 @@ impl Application {
             if result.resolution_changed {
                 needs_resolution_resize = true;
             }
+            if let Some((kind, def, destination)) = result.begin_save_preset {
+                self.begin_save_preset_prompt(kind, def, destination);
+            }
         }
 
         // ── Editor inspector segment ────────────────────────────────────────
@@ -1851,6 +1885,14 @@ impl Application {
         if actions.len() > editor_card_seg_start {
             let mut retarget_effect: Option<usize> = None;
             let mut retarget_generator = false;
+            // Deferred like the retargets above: `self.begin_save_preset_prompt`
+            // needs `&mut self`, which would conflict with `ed`'s live borrow of
+            // `self.graph_editor` for the loop's duration.
+            let mut pending_save_preset: Option<(
+                manifold_core::preset_def::PresetKind,
+                manifold_core::effect_graph_def::EffectGraphDef,
+                crate::text_input::SavePresetDestination,
+            )> = None;
             if let Some(ed) = self.graph_editor.as_mut() {
                 let content_tx = self.content_tx.as_ref().unwrap();
                 for action in &actions[editor_card_seg_start..] {
@@ -1883,7 +1925,13 @@ impl Application {
                     if result.resolution_changed {
                         needs_resolution_resize = true;
                     }
+                    if result.begin_save_preset.is_some() {
+                        pending_save_preset = result.begin_save_preset;
+                    }
                 }
+            }
+            if let Some((kind, def, destination)) = pending_save_preset {
+                self.begin_save_preset_prompt(kind, def, destination);
             }
             // Retarget the canvas to the clicked card's graph (opening the window
             // stays a deliberate cog action, so only retarget when it's open).
@@ -2079,6 +2127,82 @@ impl Application {
                                 eid.clone(),
                             );
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::SaveGraphToLibrary { anchor }
+                | manifold_ui::GraphEditCommand::SaveGraphToProject { anchor } => {
+                    // Save to Library / Save to Project (PRESET_LIBRARY_DESIGN
+                    // D4, P3), triggered from the graph editor header. The
+                    // watched instance's CURRENT effective definition — its
+                    // diverged `graph` if `Some`, else the catalog default —
+                    // with the card's live slider values snapshotted in, same
+                    // resolution `ui_bridge::inspector::preset_source_def`
+                    // does for the card-menu path.
+                    let destination = if matches!(cmd, manifold_ui::GraphEditCommand::SaveGraphToLibrary { .. }) {
+                        crate::text_input::SavePresetDestination::Library
+                    } else {
+                        crate::text_input::SavePresetDestination::Project
+                    };
+                    if let Some(target) = self.watched_graph_target.clone()
+                        && let Some(inst) = self.local_project.preset_instance(&target)
+                        && let Some(mut def) = inst
+                            .graph
+                            .clone()
+                            .or_else(|| self.watched_catalog_default.clone())
+                    {
+                        inst.snapshot_values_into_def(&mut def);
+                        let kind = target.preset_kind();
+                        self.text_input.begin(
+                            crate::text_input::TextInputField::SavePresetName,
+                            "",
+                            crate::text_input::AnchorRect::new(anchor.0, anchor.1, anchor.2, anchor.3),
+                            11.0,
+                        );
+                        self.text_input.save_preset = Some(crate::text_input::SavePresetCtx {
+                            kind,
+                            def,
+                            destination,
+                        });
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::PushGraphToLibrary { anchor } => {
+                    // Push to Library (PRESET_LIBRARY_DESIGN D3, P4): only
+                    // reachable while diverged (the header pill is gated on
+                    // `has_graph_mod`), so the source is the instance's OWN
+                    // diverged graph — no catalog-default fallback (there
+                    // would be nothing meaningful to push).
+                    if let Some(target) = self.watched_graph_target.clone()
+                        && let Some(inst) = self.local_project.preset_instance(&target)
+                        && let Some(mut def) = inst.graph.clone()
+                    {
+                        let preset_id = inst.effect_type().clone();
+                        inst.snapshot_values_into_def(&mut def);
+                        let kind = target.preset_kind();
+                        let lib = crate::user_library::UserLibrary::new();
+                        if lib.is_user_entry(kind, &preset_id) {
+                            if let Err(e) = lib.push(kind, &preset_id, &def) {
+                                log::error!("[preset] push to library failed: {e}");
+                            }
+                        } else {
+                            // Factory/stock id — no file to overwrite; fall
+                            // back to the same Save to Library (as new)
+                            // prompt the header's own Save pill opens.
+                            self.text_input.begin(
+                                crate::text_input::TextInputField::SavePresetName,
+                                "",
+                                crate::text_input::AnchorRect::new(
+                                    anchor.0, anchor.1, anchor.2, anchor.3,
+                                ),
+                                11.0,
+                            );
+                            self.text_input.save_preset = Some(crate::text_input::SavePresetCtx {
+                                kind,
+                                def,
+                                destination: crate::text_input::SavePresetDestination::Library,
+                            });
+                        }
                     }
                     continue;
                 }
@@ -2715,6 +2839,13 @@ impl Application {
         // 6. Lightweight update (playhead, insert cursor, layer selection, HUD values)
         self.ws.ui_root.update();
 
+        // 6·drag-motion. P2 drag-visual tweens (`UI_CRAFT_AND_MOTION_PLAN.md`
+        // D15/D17: grab lift, duplicate ghost, grid settle, landing-line
+        // flash, error shake). The GPU clip-body pass (Pass 4b below) already
+        // re-emits every frame unconditionally, so ticking here is enough —
+        // no `needs_rebuild` flag to set, unlike the UITree-driven panels.
+        self.overlay.tick((dt * 1000.0) as f32);
+
         // 6·motion. P1 drawer open/close tween: while any inspector drawer-height
         // tween is in flight, force a rebuild each frame so the interpolated height
         // re-lays-out and the content below reflows. Mirrors the is_dragging()
@@ -2723,6 +2854,14 @@ impl Application {
         // separate invalidate is needed here. Reduced motion settles instantly, so
         // this is false at once — no per-frame rebuild churn.
         if self.ws.ui_root.inspector.drawer_anim_active() {
+            self.needs_rebuild = true;
+        }
+
+        // P2 "panel-split snap-back" (D15): while a double-click-reset tween
+        // on either main split is in flight, force a rebuild each frame so
+        // every panel re-lays-out from the eased ratio/width — same poll
+        // shape as `drawer_anim_active` just above.
+        if self.ws.ui_root.layout.is_split_reset_animating() {
             self.needs_rebuild = true;
         }
 
@@ -3341,6 +3480,11 @@ impl Application {
             canvas.resolve_pending_focus(vp);
             // Frame the whole level on editor open / scope change (camera only).
             canvas.apply_pending_fit(vp);
+            // D17 "wire→port magnetize": needs `vp` (port screen positions),
+            // which the main `canvas.tick(dt_ms)` call site (§1c above)
+            // doesn't have — ticked here instead, right before the draw
+            // pass that reads it.
+            canvas.tick_wire_magnet(vp);
         }
 
         // ── Build frame: clear, then draw the canvas + sidebar ──
@@ -3889,7 +4033,17 @@ impl Application {
                     region.is_some() && self.selection.selection_count() == 0;
                 let hovered = self.ws.ui_root.viewport.hovered_clip_id();
                 self.clip_body_scratch.clear();
-                for cr in &self.clip_rect_scratch {
+                // P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D15/D17): grab
+                // lift + grid settle + error shake are pure X/Y offsets
+                // applied to the SAME `ClipScreenRect` used below for
+                // waveforms/thumbnails/names — mutating `cr.rect` in place
+                // (rather than only the local `ClipBody`) keeps the whole
+                // clip (body, waveform, label) moving together instead of
+                // the body sliding out from under its own text.
+                let lift_dy = -2.0 * self.overlay.lift_amount();
+                let drag_dx = self.overlay.settle_dx_px() + self.overlay.error_shake_offset_px();
+                let ghost_alpha = self.overlay.ghost_alpha();
+                for cr in &mut self.clip_rect_scratch {
                     let in_marquee = region_selects_clips
                         && region.is_some_and(|r| {
                             manifold_ui::bitmap_renderer::clip_overlaps_region(
@@ -3901,6 +4055,14 @@ impl Application {
                         });
                     let selected = self.selection.is_selected(&cr.clip_id) || in_marquee;
                     let is_hovered = hovered == Some(cr.clip_id.as_str());
+                    let is_drag_visual = self.overlay.is_drag_visual_target(&cr.clip_id);
+                    if is_drag_visual {
+                        cr.rect.x += drag_dx;
+                        cr.rect.y += lift_dy;
+                    }
+                    // D17 "clip split flick": a brief 1px separation between
+                    // the two just-split halves, independent of drag state.
+                    cr.rect.x += self.ws.ui_root.viewport.split_flick_offset(&cr.clip_id);
                     self.clip_body_scratch
                         .push(manifold_renderer::clip_draw::ClipBody {
                             rect: cr.rect,
@@ -3910,6 +4072,7 @@ impl Application {
                             muted: cr.is_muted,
                             locked: cr.is_locked,
                             generator: cr.is_generator,
+                            alpha: if is_drag_visual { ghost_alpha } else { 1.0 },
                         });
                 }
 
@@ -4184,6 +4347,25 @@ impl Application {
                 }
                 for (x, c) in &self.timeline_marker_scratch {
                     scissor.draw_rect(*x, overlay_tracks.y, 1.0, overlay_tracks.height, *c);
+                }
+                // D15 "landing-line flash" — a brief vertical line at the beat a
+                // move-drag settled to, spanning the dragged selection's layer
+                // range; drawn through the D7 lane-content scissor. NOTE (P1
+                // merge, 2026-07-04): dormant under the P1.4 per-frame-snap model
+                // — its trigger lived in `finalize_move_snap`, which P1.4 deleted
+                // (snap is continuous now, so there is no discrete snap moment to
+                // flash). Preserved so Peter's motion pass can re-hook the fire at
+                // drag-end if wanted. See `docs/UI_CRAFT_AND_MOTION_PLAN.md` D15.
+                if let Some((progress, beat, min_layer, max_layer)) = self.overlay.landing_flash() {
+                    let x = self.ws.ui_root.viewport.beat_to_pixel(beat);
+                    let y0 = self.ws.ui_root.viewport.track_y(min_layer);
+                    let y1 = self.ws.ui_root.viewport.track_y(max_layer)
+                        + self.ws.ui_root.viewport.track_height(max_layer);
+                    if y1 > y0 {
+                        let alpha = ((1.0 - progress) * 230.0).round().clamp(0.0, 255.0) as u8;
+                        let c = manifold_ui::color::with_alpha(manifold_ui::color::INSERT_CURSOR_BLUE, alpha);
+                        scissor.draw_rect(x - 1.0, y0, 2.0, y1 - y0, c);
+                    }
                 }
             }
 

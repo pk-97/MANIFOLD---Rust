@@ -252,7 +252,9 @@ impl GraphCanvas {
 
     /// Bounding rect of the "Reset to Default" header button. Single
     /// source of truth so render-side and click-hit-test use the same
-    /// geometry.
+    /// geometry. Pure geometry — doesn't check `has_graph_mod`, so
+    /// [`Self::save_to_project_button_rect`] / [`Self::save_to_library_button_rect`]
+    /// can anchor off this slot whether or not Reset is currently shown.
     pub(crate) fn reset_button_rect(&self, viewport: Rect) -> Rect {
         let y = viewport.y + (HEADER_HEIGHT - RESET_BUTTON_H) * 0.5;
         let x = viewport.x + viewport.w - RESET_BUTTON_RIGHT_GAP - RESET_BUTTON_W;
@@ -261,6 +263,44 @@ impl GraphCanvas {
             y,
             w: RESET_BUTTON_W,
             h: RESET_BUTTON_H,
+        }
+    }
+
+    /// Bounding rect of the "Save to Project" header button — immediately
+    /// left of the (always-reserved) Reset slot.
+    pub(crate) fn save_to_project_button_rect(&self, viewport: Rect) -> Rect {
+        let reset = self.reset_button_rect(viewport);
+        Rect {
+            x: reset.x - SAVE_BUTTON_GAP - SAVE_BUTTON_W,
+            y: reset.y,
+            w: SAVE_BUTTON_W,
+            h: SAVE_BUTTON_H,
+        }
+    }
+
+    /// Bounding rect of the "Save to Library" header button — immediately
+    /// left of "Save to Project".
+    pub(crate) fn save_to_library_button_rect(&self, viewport: Rect) -> Rect {
+        let sp = self.save_to_project_button_rect(viewport);
+        Rect {
+            x: sp.x - SAVE_BUTTON_GAP - SAVE_BUTTON_W,
+            y: sp.y,
+            w: SAVE_BUTTON_W,
+            h: SAVE_BUTTON_H,
+        }
+    }
+
+    /// Bounding rect of the "Push to Library" header button
+    /// (PRESET_LIBRARY_DESIGN D3, P4) — immediately left of "Save to
+    /// Library". Only ever shown while diverged (`has_graph_mod`), same
+    /// gate as "Reset to Default".
+    pub(crate) fn push_to_library_button_rect(&self, viewport: Rect) -> Rect {
+        let sl = self.save_to_library_button_rect(viewport);
+        Rect {
+            x: sl.x - SAVE_BUTTON_GAP - SAVE_BUTTON_W,
+            y: sl.y,
+            w: SAVE_BUTTON_W,
+            h: SAVE_BUTTON_H,
         }
     }
 

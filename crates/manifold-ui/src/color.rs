@@ -736,6 +736,12 @@ pub const HEADER_BUTTON_ACTIVE_HOVER: Color32 = Color32::new(110, 190, 240, 255)
 pub const HEADER_BUTTON_ACTIVE_PRESSED: Color32 = Color32::new(70, 150, 210, 255);
 pub const HEADER_PROGRESS_FILL: Color32 = Color32::new(89, 173, 232, 255);
 
+// Graph editor header pills (Save to Library / Save to Project / Push to
+// Library — PRESET_LIBRARY_DESIGN D4/D3, P3/P4). Token home per the
+// design-token guard (`tests/design_tokens.rs`) — `graph_canvas/mod.rs`
+// re-exports this rather than defining its own raw literal.
+pub const GRAPH_SAVE_BUTTON_BG: Color32 = Color32::new(74, 96, 138, 230);
+
 // Footer panel
 pub const FOOTER_BTN_HOVER: Color32 = Color32::new(75, 75, 79, 255);
 pub const FOOTER_BTN_PRESSED: Color32 = Color32::new(50, 50, 53, 255);

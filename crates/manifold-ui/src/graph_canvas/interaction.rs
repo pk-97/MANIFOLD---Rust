@@ -634,6 +634,37 @@ impl GraphCanvas {
                 return;
             }
         }
+        // Save to Library / Save to Project header pills (PRESET_LIBRARY_DESIGN
+        // D4, P3) — same chrome-priority as Reset; only present when there's an
+        // active graph (mirrors the render-side gate).
+        if !self.nodes.is_empty() {
+            let sp_rect = self.save_to_project_button_rect(viewport);
+            if sx >= sp_rect.x && sx <= sp_rect.x + sp_rect.w && sy >= sp_rect.y && sy <= sp_rect.y + sp_rect.h {
+                self.pending_actions.push(GraphEditCommand::SaveGraphToProject {
+                    anchor: (sp_rect.x, sp_rect.y, sp_rect.w, sp_rect.h),
+                });
+                return;
+            }
+            let sl_rect = self.save_to_library_button_rect(viewport);
+            if sx >= sl_rect.x && sx <= sl_rect.x + sl_rect.w && sy >= sl_rect.y && sy <= sl_rect.y + sl_rect.h {
+                self.pending_actions.push(GraphEditCommand::SaveGraphToLibrary {
+                    anchor: (sl_rect.x, sl_rect.y, sl_rect.w, sl_rect.h),
+                });
+                return;
+            }
+        }
+        // Push to Library header pill (PRESET_LIBRARY_DESIGN D3, P4) — same
+        // chrome-priority, only present while diverged (mirrors the
+        // render-side gate).
+        if self.has_graph_mod {
+            let pl_rect = self.push_to_library_button_rect(viewport);
+            if sx >= pl_rect.x && sx <= pl_rect.x + pl_rect.w && sy >= pl_rect.y && sy <= pl_rect.y + pl_rect.h {
+                self.pending_actions.push(GraphEditCommand::PushGraphToLibrary {
+                    anchor: (pl_rect.x, pl_rect.y, pl_rect.w, pl_rect.h),
+                });
+                return;
+            }
+        }
         // No collapse toggle — nodes stay expanded (Blender-style). A header
         // click falls through to select / drag below.
         if let Some(hit) = self.port_under(viewport, sx, sy) {
@@ -1009,16 +1040,39 @@ impl GraphCanvas {
             } => {
                 // Only commit on drop over an input port — drop on
                 // empty or an output cancels silently.
-                if let Some(hit) = self.port_under(viewport, sx, sy)
-                    && !hit.is_output
-                    && hit.node_id != from_node
-                {
-                    self.pending_actions.push(GraphEditCommand::ConnectPorts {
-                        from_node,
-                        from_port,
-                        to_node: hit.node_id,
-                        to_port: hit.port_name,
-                    });
+                let valid_drop = self
+                    .port_under(viewport, sx, sy)
+                    .filter(|hit| !hit.is_output && hit.node_id != from_node);
+                match valid_drop {
+                    Some(hit) => {
+                        // D17 "flow pulse": geometry captured now (screen
+                        // space) — `from_port`/`hit.port_name` move into the
+                        // command below.
+                        if let (Some(from_n), Some(to_n)) =
+                            (self.find_node(from_node), self.find_node(hit.node_id))
+                            && let Some(fi) = from_n.outputs.iter().position(|p| p.name == from_port)
+                            && let Some(ti) = to_n.inputs.iter().position(|p| p.name == hit.port_name)
+                        {
+                            let (fgx, fgy) = from_n.output_port_pos_graph(fi);
+                            let (tgx, tgy) = to_n.input_port_pos_graph(ti);
+                            let from_pt = self.to_screen(viewport, fgx, fgy);
+                            let to_pt = self.to_screen(viewport, tgx, tgy);
+                            self.fire_wire_flow_pulse(from_pt, to_pt);
+                        }
+                        self.pending_actions.push(GraphEditCommand::ConnectPorts {
+                            from_node,
+                            from_port,
+                            to_node: hit.node_id,
+                            to_port: hit.port_name,
+                        });
+                        // D17 "wire→port ... pop".
+                        self.fire_connect_pop(sx, sy);
+                    }
+                    None => {
+                        // D17 error shake — a wire dropped on empty canvas,
+                        // an output port, or back onto its own source node.
+                        self.fire_error_shake(sx, sy);
+                    }
                 }
             }
             DragMode::NodeMove { node_id, .. } => {

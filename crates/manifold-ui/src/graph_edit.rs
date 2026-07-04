@@ -61,6 +61,26 @@ pub enum GraphEditCommand {
     /// (`instance.graph = None`). Emitted by the "Reset to Default"
     /// button in the graph editor header when the card is diverged.
     RevertEffectGraph,
+    /// Save to Library (PRESET_LIBRARY_DESIGN D4, P3): publish the watched
+    /// graph's current effective definition as a new user-library entry.
+    /// Opens the shared name-prompt text-input session anchored at the
+    /// header button; the write happens on commit. Emitted by the "Save to
+    /// Library" header button.
+    SaveGraphToLibrary { anchor: (f32, f32, f32, f32) },
+    /// Save to Project (PRESET_LIBRARY_DESIGN D4, P3): publish the watched
+    /// graph's current effective definition as a new `origin: Saved`
+    /// project-embedded preset, without retargeting the watched instance.
+    /// Emitted by the "Save to Project" header button.
+    SaveGraphToProject { anchor: (f32, f32, f32, f32) },
+    /// Push to Library (PRESET_LIBRARY_DESIGN D3, P4): overwrite the
+    /// watched instance's tracked user-library file with its current
+    /// (diverged) definition — every OTHER instance still tracking that id
+    /// picks it up via the existing hot-reload watcher. A factory/stock id
+    /// has no user file to overwrite; the app-side handler falls back to
+    /// opening the Save to Library (as new) prompt at `anchor` instead.
+    /// Emitted by the "Push to Library" header button, shown only while
+    /// diverged.
+    PushGraphToLibrary { anchor: (f32, f32, f32, f32) },
     /// Update a node's editor position. Emitted by the canvas's
     /// node-drag completion path.
     MoveGraphNode { node_id: u32, new_pos: (f32, f32) },

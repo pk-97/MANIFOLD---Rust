@@ -28,6 +28,19 @@ pub struct DispatchResult {
     pub structural_change: bool,
     /// True if the output resolution changed (needs compositor + generator resize).
     pub resolution_changed: bool,
+    /// Set by the `SaveToLibrary`/`SaveToProject` card-menu actions
+    /// (PRESET_LIBRARY_DESIGN D4, P3): the resolved kind + current effective
+    /// definition + destination, for the caller to open the shared
+    /// name-prompt text-input session with. `dispatch_inspector` resolves the
+    /// `GraphParamTarget` and the def (it already has `project` + the
+    /// tab/selection context); only the CALLER (`app_render.rs`'s per-frame
+    /// loop) has `self.text_input`, so the handoff rides here rather than
+    /// `dispatch_inspector` reaching for UI-thread-only state it isn't given.
+    pub begin_save_preset: Option<(
+        manifold_core::preset_def::PresetKind,
+        manifold_core::effect_graph_def::EffectGraphDef,
+        crate::text_input::SavePresetDestination,
+    )>,
 }
 
 impl DispatchResult {
@@ -35,24 +48,28 @@ impl DispatchResult {
         Self {
             structural_change: false,
             resolution_changed: false,
+            begin_save_preset: None,
         }
     }
     pub(crate) fn structural() -> Self {
         Self {
             structural_change: true,
             resolution_changed: false,
+            begin_save_preset: None,
         }
     }
     pub(crate) fn resolution() -> Self {
         Self {
             structural_change: true,
             resolution_changed: true,
+            begin_save_preset: None,
         }
     }
     pub(crate) fn unhandled() -> Self {
         Self {
             structural_change: false,
             resolution_changed: false,
+            begin_save_preset: None,
         }
     }
 }
@@ -329,6 +346,10 @@ pub fn dispatch(
         | PanelAction::CopyGenerator
         | PanelAction::PasteGenerator
         | PanelAction::MakePresetUnique(..)
+        | PanelAction::SaveToLibrary(..)
+        | PanelAction::SaveToProject(..)
+        | PanelAction::RevertToLibrary(..)
+        | PanelAction::PushToLibrary(..)
         | PanelAction::ExportPreset(..)
         | PanelAction::ImportPreset(..)
         | PanelAction::MacrosCollapseToggle
@@ -853,6 +874,12 @@ pub(crate) fn led_exit_path_label(
     }
 }
 
+// Re-export public functions from sub-modules
+pub use state_sync::{
+    TransportDisplayCache, check_auto_scroll, push_state, sync_clip_positions, sync_inspector_data,
+    sync_project_data,
+};
+
 #[cfg(test)]
 mod d2_d3_tests {
     //! `docs/TIMELINE_INTERACTION_P1_SPEC.md` D2/D3 regression tests — the
@@ -1028,9 +1055,3 @@ mod d2_d3_tests {
         assert!(!commands.is_empty());
     }
 }
-
-// Re-export public functions from sub-modules
-pub use state_sync::{
-    TransportDisplayCache, check_auto_scroll, push_state, sync_clip_positions, sync_inspector_data,
-    sync_project_data,
-};

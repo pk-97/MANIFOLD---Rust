@@ -1158,6 +1158,31 @@ pub(super) fn dispatch_inspector(
                     })
                     .flatten();
                 if let Some(old) = changed {
+                    // P2 "value snap-back" (D15): the data above already
+                    // snapped instantly (`set_base_param`) — this only starts
+                    // the card's own `AnimF32` so the slider FILL eases
+                    // `old` -> `default_val` instead of jumping. Perform-
+                    // context inspector cards only: when the graph editor
+                    // drives this (`editor_target.is_some()`), the row that
+                    // fired the gesture lives in `graph_editor.rs`'s own
+                    // separate `ParamCardPanel` instance, not `ui.inspector`,
+                    // and `effective_tab`/`idx` here address the *inspector's*
+                    // current tab — reaching into the wrong card would
+                    // animate an unrelated row, so skip rather than guess.
+                    if editor_target.is_none() {
+                        match gpt {
+                            GraphParamTarget::Effect(idx) => {
+                                if let Some(card) = ui.inspector.effect_card_mut(effective_tab, *idx) {
+                                    card.begin_value_snapback(param_id, old, *default_val);
+                                }
+                            }
+                            GraphParamTarget::Generator => {
+                                if let Some(card) = ui.inspector.gen_params_mut() {
+                                    card.begin_value_snapback(param_id, old, *default_val);
+                                }
+                            }
+                        }
+                    }
                     let cmd = ChangeGraphParamCommand::new(
                         target,
                         param_id.clone(),
@@ -2419,6 +2444,96 @@ pub(super) fn dispatch_inspector(
                 }
             }
             DispatchResult::structural()
+        }
+        PanelAction::SaveToLibrary(gpt) | PanelAction::SaveToProject(gpt) => {
+            // Library doors (PRESET_LIBRARY_DESIGN D4): resolve the target's
+            // current effective def (same `preset_source_def` resolution as
+            // Make Unique / Export) and hand it back on `DispatchResult` for
+            // the caller to open the shared name-prompt text-input session
+            // with — this function has no `TextInputState` access (it's
+            // UI-thread overlay state, not routed here), so the prompt itself
+            // opens one level up.
+            let mut result = DispatchResult::handled();
+            if let Some(target) = resolve_graph_target(
+                gpt,
+                editor_target,
+                effective_tab,
+                active_layer,
+                selection,
+                project,
+            ) && let Some((def, _)) = preset_source_def(&target, project)
+            {
+                let destination = if matches!(action, PanelAction::SaveToLibrary(_)) {
+                    crate::text_input::SavePresetDestination::Library
+                } else {
+                    crate::text_input::SavePresetDestination::Project
+                };
+                result.begin_save_preset = Some((target.preset_kind(), def, destination));
+            }
+            result
+        }
+        PanelAction::RevertToLibrary(gpt) => {
+            // PRESET_LIBRARY_DESIGN D3/P4: clear the per-instance graph
+            // override, undoable — but ONLY if the tracked library id still
+            // resolves in the catalog. The resolution check happens HERE
+            // (app/renderer-aware) rather than inside the command itself:
+            // `manifold-editing` cannot depend on `manifold-renderer`
+            // (`manifold-playback` already depends on `manifold-editing`,
+            // and `manifold-renderer` depends on `manifold-playback` — the
+            // reverse dependency would cycle), so the fact is resolved once
+            // here and baked into the command, mirroring how
+            // `ForkPresetCommand` is handed an already-resolved `source_def`
+            // rather than looking the catalog up inside `Command::execute`.
+            use manifold_editing::commands::preset::RevertToLibraryCommand;
+            if let Some(target) = resolve_graph_target(
+                gpt,
+                editor_target,
+                effective_tab,
+                active_layer,
+                selection,
+                project,
+            ) && let Some(preset_id) = project.instance_preset_id(&target)
+            {
+                let resolves = manifold_renderer::node_graph::loaded_preset_view_by_id(&preset_id)
+                    .is_some();
+                let cmd = RevertToLibraryCommand::new(target, resolves);
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::PushToLibrary(gpt) => {
+            // Push to Library (D3, P4): overwrite the targeted preset's
+            // tracked user-library file with its current (diverged)
+            // definition in place — no name prompt (id/filename never
+            // change). A factory/stock id has no user file to overwrite;
+            // fall back to the same Save-to-Library-as-new prompt the
+            // `SaveToLibrary` action opens, via `begin_save_preset` (this
+            // function has no `TextInputState` access — see the comment on
+            // the `SaveToLibrary`/`SaveToProject` arm above).
+            let mut result = DispatchResult::handled();
+            if let Some(target) = resolve_graph_target(
+                gpt,
+                editor_target,
+                effective_tab,
+                active_layer,
+                selection,
+                project,
+            ) && let Some((def, preset_id)) = preset_source_def(&target, project)
+            {
+                let kind = target.preset_kind();
+                let lib = crate::user_library::UserLibrary::new();
+                if lib.is_user_entry(kind, &preset_id) {
+                    if let Err(e) = lib.push(kind, &preset_id, &def) {
+                        log::error!("[preset] push to library failed: {e}");
+                    }
+                } else {
+                    result.begin_save_preset =
+                        Some((kind, def, crate::text_input::SavePresetDestination::Library));
+                }
+            }
+            result
         }
 
         // ── Generator params ───────────────────────────────────────

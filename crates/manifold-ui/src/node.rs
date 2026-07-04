@@ -436,6 +436,13 @@ pub struct UIStyle {
     /// Left-aligned text (and the prefix) from the left edge, and to Right-aligned
     /// text from the right edge; Centre is unaffected. 0 = text flush to the edge.
     pub text_inset_x: f32,
+    /// Optional 2D affine (rotate/scale/skew) applied to this node's own draws
+    /// (background, text, dropdown caret) — NOT its subtree (node-local only in
+    /// v1, `docs/UI_TRANSFORM_STACK_DESIGN.md`). Expressed about the local
+    /// origin (e.g. `Affine2::rotate(theta)`); the renderer pivots it about the
+    /// node's own rect center at draw time, since bounds aren't known until
+    /// layout runs. `None` (the default) draws axis-aligned as before.
+    pub transform: Option<crate::transform2d::Affine2>,
 }
 
 impl Default for UIStyle {
@@ -455,6 +462,7 @@ impl Default for UIStyle {
             prefix_label: None,
             prefix_color: Color32::TRANSPARENT,
             text_inset_x: 0.0,
+            transform: None,
         }
     }
 }

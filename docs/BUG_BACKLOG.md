@@ -217,7 +217,18 @@ section overlap.
 **Fix shape** — TBD after repro. If it's the known invariant class, the fix is at the layout
 single-source, not per-section patches.
 
-### BUG-016 — Imported .glb layers are black boxes: no card params, no Model File picker, edit paths silently no-op — HIGH
+### BUG-016 — Imported .glb layers are black boxes: no card params, no Model File picker, edit paths silently no-op — FIXED 2026-07-04 (`2d5e4dc6`)
+
+**Resolution** — PRESET_LIBRARY P0 (D9) shipped: the drop now registers the assembled
+graph as a project-embedded preset (`origin: Saved`) and the layer TRACKS it (`graph:
+None`); the assembler emits a curated 13-slider card (camera/sun/envmap/per-object
+material) with real bindings; the app installs the catalog overlay before the layer is
+created, so the process-global preset registry seeds `init_defaults` consistently on both
+threads. The `graph_def_mut` override install is deleted. verify-at-impl #4 resolved
+(`bundled_preset_json` reads the overlay-merged catalog, no change needed). Assembler +
+command tests + GPU render proofs green. **Still owed: the live drag-drop manual gate** in
+a running app (card sliders move pixels, editor opens on the cog, save/reload intact) — the
+one thing only Peter can eyeball. Original analysis below for reference.
 
 **Root cause** — the glTF Stage-4 install mints a preset id that resolves in no catalog and
 stashes the def only on the layer
@@ -271,6 +282,42 @@ which node(s) are missing/changed before just overwriting.
 **Fix shape** — mechanical: `cargo run -p manifold-renderer --bin gen_node_catalog`, commit
 the regenerated `docs/node_catalog.json`. Same reasoning as BUG-017 for not fixing it this
 session (unrelated to the work at hand, and worth doing once rather than mid-churn).
+
+### BUG-019 — Motion "group fold" (D17) has no UI surface to fold — DESIGN GAP (deferred)
+
+**Symptom** — found 2026-07-04 completing UI motion P2. D17 lists "group fold: children
+collapse into header," but the animation has nothing to animate: `EffectGroup.collapsed`
+exists at the model layer (`crates/manifold-core/src/effects.rs:3194`) with zero rendering
+surface — no group header, no collapse toggle, no child-card grouping by `group_id` in the
+inspector (`rg EffectGroup crates/manifold-ui/src` → 0 hits).
+
+**Root cause** — the design assumed a foldable effect-group UI in the inspector that was
+never built. Group fold is a *new feature* (group header + child-card filtering + collapse
+toggle), not an animation retrofit — correctly out of the motion layer's scope.
+
+**Fix shape** — build the effect-group inspector UI first (own small design: header row,
+`group_id`-keyed child filtering, collapse toggle), THEN the fold animation is a `FlipList`
++ exit-state retrofit like the other P2 collapses. Needs a design/build decision from Peter.
+
+### BUG-020 — Card collapse animates effect cards but not generator cards — LOW (deferred)
+
+**Symptom** — found 2026-07-04 (UI motion P2 batch 1). Effect cards collapse/expand with the
+`collapse_anim` reflow; generator cards do not — their rows parent at root (`None`) in
+`ParamCardPanel::build_generator`, so there is no `ClipRegion` seam to clip the collapsing
+body the way `build_effect` has.
+
+**Fix shape** — give `build_generator` the same parent/clip-region seam `build_effect` uses,
+then reuse the existing `collapse_anim`. Small, localized to `param_card.rs`.
+
+### BUG-021 — Value snap-back is Perform-inspector only, not the graph-editor param cards — LOW (deferred)
+
+**Symptom** — found 2026-07-04 (UI motion P2 closer). Right-click value-reset eases the fill
+(EASE_SNAP) on Perform-context inspector cards; the graph editor owns a separate
+`ParamCardPanel` instance not reachable from the `ParamRightClick` dispatch site
+(`ui_bridge/inspector.rs:1140`), so its value resets snap without the settle.
+
+**Fix shape** — thread the snap-back trigger to the graph-editor's `ParamCardPanel` too, or
+lift the reset-with-settle into shared `ParamCardPanel` logic both dispatch sites reach.
 
 ## Fixed
 

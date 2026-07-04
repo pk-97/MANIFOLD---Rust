@@ -35,6 +35,7 @@ fn apply_one(ui: &mut UIRoot, data: &mut SceneData, spec: &str) -> String {
     match spec.split_once(':') {
         Some(("select", target)) => select_layer(ui, data, target),
         Some(("collapse", target)) => collapse_layer(data, target),
+        Some(("collapse_effect", target)) => collapse_effect(ui, data, target),
         Some(("delete", target)) => delete_layer(data, target),
         Some(("open", "settings")) => {
             ui.settings_popup.open();
@@ -53,8 +54,8 @@ fn apply_one(ui: &mut UIRoot, data: &mut SceneData, spec: &str) -> String {
         Some(("drag_clip_toward_zero", rest)) => drag_clip_toward_zero(data, rest),
         Some(("drag_readout", rest)) => drag_readout(ui, data, rest),
         Some((verb, _)) => format!(
-            "unknown interact verb '{verb}' (known: select, collapse, delete, open, \
-             automation_add, automation_move, automation_bend, automation_segment_drag, \
+            "unknown interact verb '{verb}' (known: select, collapse, collapse_effect, delete, \
+             open, automation_add, automation_move, automation_bend, automation_segment_drag, \
              automation_group_move, automation_group_delete, click_clip, shift_click_clip, \
              cmd_click_clip, cmd_d, drag_clip_toward_zero, drag_readout)"
         ),
@@ -514,6 +515,41 @@ fn collapse_layer(data: &mut SceneData, target: &str) -> String {
     };
     layer.is_collapsed = !layer.is_collapsed;
     format!("collapse -> layer '{target}' is_collapsed={}", layer.is_collapsed)
+}
+
+/// P2 "caret rotate" evidence verb (`docs/UI_CRAFT_AND_MOTION_PLAN.md` P2):
+/// `collapse_effect:<layer-id>` toggles `.collapsed` on `target`'s FIRST
+/// effect, both on the model (data field, same "drive the model directly"
+/// convention as `collapse_layer` above) AND directly on the already-built
+/// card panel via `ParamCardPanel::set_collapsed` — the same "test/
+/// automation harness drives it directly, snapping `collapse_anim`, no
+/// ease" setter the panel's own doc comment names for exactly this use.
+/// Driving the model alone isn't enough for a SINGLE headless frame: the
+/// panel already exists from the base render, so the caller's follow-up
+/// `sync_build` → `configure()` call sees a card that's configured once
+/// already and EASES toward the new collapsed state instead of snapping
+/// (matching a real live toggle) — with no per-frame tick loop in this
+/// one-shot tool, the chevron would still show mid-flight (near its
+/// expanded angle), not the fully-collapsed rotation this verb exists to
+/// prove. Snapping the panel here first means the follow-up `configure()`
+/// finds it already at the target and leaves it alone.
+fn collapse_effect(ui: &mut UIRoot, data: &mut SceneData, target: &str) -> String {
+    let Some(layer) = data.project.timeline.layers.iter_mut().find(|l| l.layer_id == target)
+    else {
+        return format!("collapse_effect: no layer with id '{target}'");
+    };
+    let Some(effects) = layer.effects.as_mut() else {
+        return format!("collapse_effect: layer '{target}' has no effects");
+    };
+    let Some(fx) = effects.first_mut() else {
+        return format!("collapse_effect: layer '{target}' has an empty effect list");
+    };
+    fx.collapsed = !fx.collapsed;
+    let new_collapsed = fx.collapsed;
+    if let Some(card) = ui.inspector.layer_effect_mut(0) {
+        card.set_collapsed(new_collapsed);
+    }
+    format!("collapse_effect -> layer '{target}' effect[0] collapsed={new_collapsed}")
 }
 
 /// P0.0 evidence-gathering verb: remove the target layer (and any children

@@ -686,6 +686,14 @@ impl TimelineInputHost for AppInputHost<'_> {
                     manifold_core::Beats::from_f32(beat),
                     spb,
                 ) {
+                    // D17 "clip split flick": both resulting ids are known
+                    // synchronously (the tail clip's id is minted client-side
+                    // in `split_clip_at_beat`, not round-tripped from the
+                    // content thread) — fire the visual now, ahead of the
+                    // command actually executing.
+                    self.ui_root
+                        .viewport
+                        .fire_split_flick(id.clone(), cmd.tail_clip_id().clone());
                     commands.push(Box::new(cmd));
                 }
             }

@@ -470,6 +470,15 @@ pub struct Application {
     // From Unity PanelResizeHandle.cs — drag to resize video vs timeline proportion.
     pub(crate) split_dragging: bool,
     pub(crate) split_was_hovered: bool,
+    /// P2 "panel-split snap-back" (D15): double-click-to-default timers for
+    /// the two draggable splits, mirroring `output_last_click`'s pattern
+    /// below — both handles are checked (and their drags started) BEFORE
+    /// the press ever reaches the generic `UIEvent`/`Gesture::DoubleClick`
+    /// pipeline (see `primary_mouse_input`), so a plain timestamp check here
+    /// is the same shape as the output window's raw double-click, not a
+    /// new mechanism.
+    pub(crate) split_handle_last_click: Option<std::time::Instant>,
+    pub(crate) inspector_handle_last_click: Option<std::time::Instant>,
 
     // Output window double-click fullscreen toggle.
     // Double-click fullscreen toggle for the output window.
@@ -696,6 +705,8 @@ impl Application {
             cursor_manager: CursorManager::new(),
             split_dragging: false,
             split_was_hovered: false,
+            split_handle_last_click: None,
+            inspector_handle_last_click: None,
             output_last_click: None,
             output_saved_frame: None,
             current_project_path: None,
@@ -1463,6 +1474,47 @@ impl Application {
                     }
                 }
             }
+            TextInputField::SavePresetName => {
+                // Save to Library / Save to Project (PRESET_LIBRARY_DESIGN
+                // D4, P3). The ctx carries the target's CURRENT effective
+                // definition, already resolved (and values-snapshotted) at
+                // the point the prompt opened — this arm only mints the name
+                // and writes/upserts it.
+                if let Some(ctx) = self.text_input.save_preset.take() {
+                    let typed = text.trim();
+                    if typed.is_empty() {
+                        log::warn!("[preset] Save to {:?} cancelled: empty name", ctx.destination);
+                    } else {
+                        match ctx.destination {
+                            crate::text_input::SavePresetDestination::Library => {
+                                let lib = crate::user_library::UserLibrary::new();
+                                match lib.save(ctx.kind, typed, &ctx.def) {
+                                    Ok(id) => log::info!(
+                                        "[preset] saved '{}' to the user library",
+                                        id.as_str()
+                                    ),
+                                    Err(e) => log::error!("[preset] Save to Library failed: {e}"),
+                                }
+                            }
+                            crate::text_input::SavePresetDestination::Project => {
+                                let mut def = ctx.def;
+                                if let Some(meta) = def.preset_metadata.as_mut() {
+                                    meta.display_name = typed.to_string();
+                                }
+                                let cmd =
+                                    manifold_editing::commands::preset::SaveToProjectCommand::new(
+                                        ctx.kind, def,
+                                    );
+                                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                                    Box::new(cmd);
+                                boxed.execute(&mut self.local_project);
+                                self.send_content_cmd(ContentCommand::Execute(boxed));
+                            }
+                        }
+                    }
+                }
+                self.needs_rebuild = true;
+            }
         }
     }
 
@@ -2101,6 +2153,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 last_sent_midi_device_names: Arc::from([]),
                 // No project is live at construction, so no forks yet.
                 embedded_presets_fingerprint: 0,
+                pending_undo_redo_event: None,
                 #[cfg(feature = "profiling")]
                 profiler: None,
             };

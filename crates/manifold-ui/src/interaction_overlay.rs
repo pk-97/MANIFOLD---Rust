@@ -10,8 +10,10 @@
 use manifold_foundation::{Beats, ClipId, ParamId, Seconds};
 use std::collections::HashSet;
 
+use crate::anim::{AnimF32, Transient};
 use crate::automation_hit_tester::{self, AutomationHit};
 use crate::clip_hit_tester::{ClipHitResult, ClipHitTester, HitRegion};
+use crate::color;
 use crate::input::Modifiers;
 use crate::node::Vec2;
 use crate::panels::viewport::TimelineViewportPanel;
@@ -386,6 +388,54 @@ pub struct InteractionOverlay {
     automation_marquee: Option<AutomationMarqueeState>,
     automation_group_drag: Option<AutomationGroupDragState>,
     automation_draw: Option<AutomationDrawState>,
+
+    // ── P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D15/D17) ──────────────
+    // Purely visual drag feedback — the model already moves/snaps instantly
+    // (D15: data first, visual follows); these only change what the render
+    // loop draws for the dragged clip set. Shared scalars, not per-clip:
+    // every clip in a move-drag starts/ends its lift, ghost, and settle at
+    // the SAME moment (drag begin / `finalize_move_snap`), so one `AnimF32`
+    // per effect — applied uniformly to every id in `drag_visual_clip_ids`
+    // — is correct, not an approximation.
+    /// Grab lift (D17): targets 1.0 while `drag_mode == Move`, 0.0
+    /// otherwise. The render loop reads [`Self::lift_amount`] for a 1-2px
+    /// rise on every dragged clip (the shadow itself is unconditional on
+    /// `selected` already — see `clip_draw::emit_clip_shadows` — so lift
+    /// only adds the rise + lets the caller boost that shadow's opacity).
+    lift_anim: AnimF32,
+    /// Duplicate-drag ghost (D17): targets 0.5 while alt-dragging
+    /// (`drag_mode == Move && duplicate_on_release`), 1.0 otherwise — eases
+    /// back up ("solidifies") once the drag ends and the real duplicate
+    /// commits in `on_end_drag`.
+    ghost_alpha: AnimF32,
+    /// Grid-settle offset in PIXELS (D15): seeded in `finalize_move_snap`
+    /// with the just-applied snap correction (screen-space) and eased to
+    /// 0 — the model is already at its final snapped position; this only
+    /// eases the DRAWN rect there from where the release-frame visual sat.
+    settle_dx: AnimF32,
+    /// The clip ids [`Self::lift_anim`]/[`Self::ghost_alpha`]/
+    /// [`Self::settle_dx`] apply to. During a live move-drag this mirrors
+    /// `drag_snapshot_clip_ids`; `on_end_drag` snapshots it here BEFORE
+    /// clearing the real drag state, so the tweens have something to keep
+    /// easing against post-release — the same "keep drawing past the state
+    /// event" idea the exit-state pattern uses for deletion, applied here to
+    /// a visual settle instead. Cleared once every tween above has settled
+    /// (see `tick`).
+    drag_visual_clip_ids: Vec<ClipId>,
+    /// Landing-line flash (D15): fires once in `finalize_move_snap` when the
+    /// snap correction actually moved something. Geometry for the render
+    /// loop's vertical line: the snapped beat + the dragged selection's
+    /// layer span.
+    landing_flash: Transient,
+    landing_flash_beat: Beats,
+    landing_flash_layers: (usize, usize),
+    /// Error shake (D17): fires once on the RISING edge of
+    /// `drag_layer_blocked` (a cross-layer move rejected mid-drag) — a
+    /// 3px/240ms horizontal shake applied to every dragged clip.
+    /// `was_layer_blocked` detects the edge so a held-blocked drag doesn't
+    /// re-fire every frame.
+    error_shake: Transient,
+    was_layer_blocked: bool,
 }
 
 impl InteractionOverlay {
@@ -418,7 +468,108 @@ impl InteractionOverlay {
             automation_marquee: None,
             automation_group_drag: None,
             automation_draw: None,
+            lift_anim: AnimF32::new(0.0, color::MOTION_MED_MS),
+            ghost_alpha: AnimF32::new(1.0, color::MOTION_MED_MS),
+            settle_dx: AnimF32::new(0.0, color::MOTION_MED_MS),
+            drag_visual_clip_ids: Vec::with_capacity(8),
+            landing_flash: Transient::default(),
+            landing_flash_beat: Beats::ZERO,
+            landing_flash_layers: (0, 0),
+            error_shake: Transient::default(),
+            was_layer_blocked: false,
         }
+    }
+
+    // ── P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D15/D17) ──────────────
+
+    /// Per-frame tween tick for the overlay's drag-visual pieces (grab lift,
+    /// duplicate ghost, grid settle, landing-line flash, error shake). Call
+    /// once per frame from the app's frame loop — mirrors
+    /// `GraphCanvas::tick`. Returns `true` while anything is still
+    /// animating, so the caller can keep the timeline dirty/repainting.
+    pub fn tick(&mut self, dt_ms: f32) -> bool {
+        let mut any = false;
+
+        let dragging_move = self.drag_mode == DragMode::Move;
+        if dragging_move {
+            self.drag_visual_clip_ids.clear();
+            self.drag_visual_clip_ids
+                .extend(self.drag_snapshot_clip_ids.iter().cloned());
+        }
+
+        self.lift_anim.set_target(if dragging_move { 1.0 } else { 0.0 });
+        any |= self.lift_anim.tick(dt_ms);
+
+        self.ghost_alpha
+            .set_target(if dragging_move && self.duplicate_on_release { 0.5 } else { 1.0 });
+        any |= self.ghost_alpha.tick(dt_ms);
+
+        any |= self.settle_dx.tick(dt_ms);
+        any |= self.landing_flash.tick(dt_ms);
+        any |= self.error_shake.tick(dt_ms);
+
+        // Drop the settling clip-id memory once every visual has caught up
+        // and no new drag is in flight — otherwise a rapid re-drag right
+        // after release would still see stale ids from the previous
+        // gesture (harmless — they'd just get overwritten above — but
+        // there's no reason to hold them once nothing reads them).
+        if !dragging_move
+            && !self.lift_anim.is_animating()
+            && !self.ghost_alpha.is_animating()
+            && !self.settle_dx.is_animating()
+        {
+            self.drag_visual_clip_ids.clear();
+        }
+        any
+    }
+
+    /// Whether `clip_id` is currently a target of the drag-visual tweens
+    /// (grab lift / duplicate ghost / grid settle) — either live-dragged
+    /// right now, or still easing out post-release. The render loop checks
+    /// this per visible clip before applying [`Self::lift_amount`] /
+    /// [`Self::ghost_alpha`] / [`Self::settle_dx_px`].
+    pub fn is_drag_visual_target(&self, clip_id: &ClipId) -> bool {
+        self.drag_visual_clip_ids.contains(clip_id)
+    }
+
+    /// 0..1 grab-lift progress — the render loop derives a 1-2px rise from
+    /// this for every [`Self::is_drag_visual_target`] clip.
+    pub fn lift_amount(&self) -> f32 {
+        self.lift_anim.value().clamp(0.0, 1.0)
+    }
+
+    /// 0..1 alpha for a duplicate-drag ghost (1.0 = fully solid — the
+    /// common case outside an alt-drag, so callers can multiply
+    /// unconditionally).
+    pub fn ghost_alpha(&self) -> f32 {
+        self.ghost_alpha.value().clamp(0.0, 1.0)
+    }
+
+    /// Current grid-settle X offset in screen pixels (D15) — added to the
+    /// dragged clip's already-final (snapped) drawn rect, decaying to 0.
+    pub fn settle_dx_px(&self) -> f32 {
+        self.settle_dx.value()
+    }
+
+    /// Current error-shake X offset in screen pixels (D17) — a decaying
+    /// sine over the shake's 240ms, `None` when idle.
+    pub fn error_shake_offset_px(&self) -> f32 {
+        match self.error_shake.progress() {
+            Some(p) => {
+                let decay = 1.0 - p;
+                (p * std::f32::consts::PI * 5.0).sin() * 3.0 * decay
+            }
+            None => 0.0,
+        }
+    }
+
+    /// `Some(progress)` while the landing-line flash (D15) is active, plus
+    /// its screen geometry: the snapped beat and the dragged selection's
+    /// `(min_layer, max_layer)` span.
+    pub fn landing_flash(&self) -> Option<(f32, Beats, usize, usize)> {
+        self.landing_flash
+            .progress()
+            .map(|p| (p, self.landing_flash_beat, self.landing_flash_layers.0, self.landing_flash_layers.1))
     }
 
     /// True while any drag is in progress. Unity: IsDragging property.
@@ -1314,6 +1465,7 @@ impl InteractionOverlay {
         viewport: &TimelineViewportPanel,
     ) {
         self.drag_layer_blocked = false;
+        self.was_layer_blocked = false;
 
         // P4 Unit A: grabbing an existing automation dot starts a point
         // drag instead of clip/region logic — see `begin_automation_drag`'s
@@ -1732,6 +1884,13 @@ impl InteractionOverlay {
         } else {
             host.set_cursor(TimelineCursor::Move);
         }
+
+        // D17 error shake: fire once on the RISING edge of `drag_layer_blocked`
+        // (a held-blocked drag must not re-fire every frame).
+        if self.drag_layer_blocked && !self.was_layer_blocked {
+            self.error_shake.fire(240.0);
+        }
+        self.was_layer_blocked = self.drag_layer_blocked;
 
         // Unity lines 508-520: apply cross-layer moves
         if layer_delta != 0 {
@@ -3277,5 +3436,98 @@ mod p1_4_gesture_integrity_tests {
             Beats::from_f32(10.03),
             "a drag landing near a marker must snap to it"
         );
+    }
+}
+
+// ── P2 motion tests (`UI_CRAFT_AND_MOTION_PLAN.md` D15/D17) ────────────────
+// `InteractionOverlay` has no existing test harness (every other method here
+// takes `&mut dyn TimelineEditingHost`, which would need a full mock to
+// exercise) — these drive the new drag-visual state machine directly via
+// its private fields/`tick`, which take no host, rather than building one.
+#[cfg(test)]
+mod motion_tests {
+    use super::*;
+
+    fn overlay() -> InteractionOverlay {
+        InteractionOverlay::new(6.0)
+    }
+
+    #[test]
+    fn lift_and_ghost_target_zero_and_one_when_idle() {
+        let mut ov = overlay();
+        assert_eq!(ov.drag_mode, DragMode::None);
+        ov.tick(16.0);
+        assert_eq!(ov.lift_amount(), 0.0, "no lift while not dragging");
+        assert_eq!(ov.ghost_alpha(), 1.0, "fully solid while not dragging");
+        assert_eq!(ov.error_shake_offset_px(), 0.0, "no shake while idle");
+        assert!(ov.landing_flash().is_none(), "no landing flash while idle");
+    }
+
+    #[test]
+    fn move_drag_ramps_lift_up_and_settles_to_one() {
+        let mut ov = overlay();
+        ov.drag_mode = DragMode::Move;
+        ov.drag_snapshot_clip_ids.insert(ClipId::new("clip-a"));
+
+        ov.tick(16.0);
+        assert!(ov.lift_amount() > 0.0, "lift starts rising the first tick of a move drag");
+        assert!(ov.is_drag_visual_target(&ClipId::new("clip-a")));
+        assert!(!ov.is_drag_visual_target(&ClipId::new("clip-b")));
+
+        // Drive it to settle at the full MOTION_MED_MS duration.
+        ov.tick(color::MOTION_MED_MS);
+        assert_eq!(ov.lift_amount(), 1.0, "settles fully lifted while still dragging");
+    }
+
+    #[test]
+    fn alt_duplicate_drag_dims_ghost_then_solidifies_on_release() {
+        let mut ov = overlay();
+        ov.drag_mode = DragMode::Move;
+        ov.duplicate_on_release = true;
+        ov.drag_snapshot_clip_ids.insert(ClipId::new("clip-a"));
+
+        ov.tick(color::MOTION_MED_MS);
+        assert!(
+            ov.ghost_alpha() < 1.0 && ov.ghost_alpha() > 0.0,
+            "alt-dragging dims toward the ghost target: {}",
+            ov.ghost_alpha()
+        );
+
+        // Release: drag_mode drops, ghost eases back up ("solidifies").
+        ov.drag_mode = DragMode::None;
+        ov.duplicate_on_release = false;
+        ov.tick(color::MOTION_MED_MS);
+        assert_eq!(ov.ghost_alpha(), 1.0, "fully solid once settled post-release");
+        // The clip stays a visual target until every tween has caught up —
+        // by now they all have, so the memory is dropped.
+        assert!(!ov.is_drag_visual_target(&ClipId::new("clip-a")));
+    }
+
+    #[test]
+    fn error_shake_fires_and_decays_to_zero() {
+        let mut ov = overlay();
+        ov.error_shake.fire(240.0);
+        ov.tick(1.0);
+        assert!(ov.error_shake_offset_px().abs() <= 3.0001, "amplitude capped near 3px");
+
+        // Run past the full duration — decays back to inert.
+        ov.tick(240.0);
+        assert_eq!(ov.error_shake_offset_px(), 0.0, "shake settles to zero once finished");
+    }
+
+    #[test]
+    fn landing_flash_reports_geometry_while_active() {
+        let mut ov = overlay();
+        ov.landing_flash_beat = Beats(4.0);
+        ov.landing_flash_layers = (1, 3);
+        ov.landing_flash.fire(color::MOTION_MED_MS);
+
+        let (progress, beat, min_layer, max_layer) = ov.landing_flash().expect("active");
+        assert!((0.0..=1.0).contains(&progress));
+        assert_eq!(beat, Beats(4.0));
+        assert_eq!((min_layer, max_layer), (1, 3));
+
+        ov.tick(color::MOTION_MED_MS * 2.0);
+        assert!(ov.landing_flash().is_none(), "flash finishes and reports idle");
     }
 }

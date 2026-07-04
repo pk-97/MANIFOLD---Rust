@@ -10,9 +10,8 @@
 use manifold_core::GraphTarget;
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::macro_bank::MacroCurve;
 use manifold_core::preset_def::PresetKind;
-use manifold_core::project::{EmbeddedPreset, Project};
+use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset, Project};
 
 use crate::command::Command;
 
@@ -89,14 +88,16 @@ impl Command for ForkPresetCommand {
                 .as_ref()
                 .map(|m| m.id.as_str().to_string())
                 .unwrap_or_else(|| "preset".to_string());
-            let new_id = project.mint_embedded_preset_id(&base);
+            let new_id = project.mint_forked_preset_id(&base);
             let mut def = self.source_def.clone();
             if let Some(m) = def.preset_metadata.as_mut() {
                 m.id = new_id.clone();
+                m.display_name = new_id.as_str().to_string();
             }
             self.forked = Some(EmbeddedPreset {
                 kind: self.kind,
                 def,
+                origin: EmbeddedOrigin::Saved,
             });
         }
         let fp = self.forked.clone().expect("forked set above");
@@ -139,79 +140,183 @@ impl Command for ForkPresetCommand {
     }
 }
 
-/// Edit one param's slider calibration (range + response) on a project-embedded
-/// preset. The DAW-style reshape, now stored where it belongs — in the preset —
-/// instead of a per-instance `ParamMapping` note. No-op if the preset or param
-/// id isn't found (e.g. the preset is stock/read-only — callers fork first).
+/// Save to Project (PRESET_LIBRARY_DESIGN D4, P3): register `source_def` as a
+/// new project-embedded preset (`origin: Saved`), WITHOUT retargeting any
+/// instance. This is a "library door" — publishing the current effective
+/// look as a new named entry the project's picker can hand out to any card —
+/// not a divergence action. That distinguishes it from [`ForkPresetCommand`]
+/// (Make Unique / Import), which both mints an entry AND retargets the
+/// instance that triggered it; Save to Project only does the former.
 #[derive(Debug)]
-pub struct EditPresetParamCommand {
-    preset_id: PresetTypeId,
-    param_id: String,
-    new_min: f32,
-    new_max: f32,
-    new_curve: MacroCurve,
-    new_invert: bool,
-    /// Captured on first execute: `(min, max, curve, invert)`.
-    old: Option<(f32, f32, MacroCurve, bool)>,
+pub struct SaveToProjectCommand {
+    kind: PresetKind,
+    source_def: EffectGraphDef,
+    /// The created embedded preset (with its minted id), captured on first
+    /// execute so redo re-inserts the SAME preset deterministically (mirrors
+    /// `ForkPresetCommand::forked`).
+    saved: Option<EmbeddedPreset>,
 }
 
-impl EditPresetParamCommand {
-    pub fn new(
-        preset_id: PresetTypeId,
-        param_id: impl Into<String>,
-        min: f32,
-        max: f32,
-        curve: MacroCurve,
-        invert: bool,
-    ) -> Self {
-        Self {
-            preset_id,
-            param_id: param_id.into(),
-            new_min: min,
-            new_max: max,
-            new_curve: curve,
-            new_invert: invert,
-            old: None,
-        }
+impl SaveToProjectCommand {
+    /// `source_def`'s `preset_metadata.display_name` (falling back to its
+    /// `id`) is the mint base — the caller (the Save to Project UI action)
+    /// stamps the user-typed name onto `source_def` before constructing this
+    /// command, so the minted id/display_name reflect what the user typed.
+    pub fn new(kind: PresetKind, source_def: EffectGraphDef) -> Self {
+        Self { kind, source_def, saved: None }
     }
 
-    fn apply(project: &mut Project, preset_id: &PresetTypeId, param_id: &str, vals: (f32, f32, MacroCurve, bool)) -> Option<(f32, f32, MacroCurve, bool)> {
-        let preset = project
-            .embedded_presets
-            .iter_mut()
-            .find(|p| p.id() == Some(preset_id))?;
-        let meta = preset.def.preset_metadata.as_mut()?;
-        let p = meta.params.iter_mut().find(|p| p.id == param_id)?;
-        let prev = (p.min, p.max, p.curve, p.invert);
-        p.min = vals.0;
-        p.max = vals.1;
-        p.curve = vals.2;
-        p.invert = vals.3;
-        Some(prev)
+    /// The minted id, available after `execute`.
+    pub fn saved_id(&self) -> Option<&PresetTypeId> {
+        self.saved.as_ref().and_then(|p| p.id())
     }
 }
 
-impl Command for EditPresetParamCommand {
+impl Command for SaveToProjectCommand {
     fn execute(&mut self, project: &mut Project) {
-        let prev = Self::apply(
-            project,
-            &self.preset_id,
-            &self.param_id,
-            (self.new_min, self.new_max, self.new_curve, self.new_invert),
-        );
-        if self.old.is_none() {
-            self.old = prev;
+        if self.saved.is_none() {
+            let base = self
+                .source_def
+                .preset_metadata
+                .as_ref()
+                .map(|m| m.display_name.clone())
+                .filter(|s| !s.is_empty())
+                .or_else(|| self.source_def.preset_metadata.as_ref().map(|m| m.id.as_str().to_string()))
+                .unwrap_or_else(|| "Preset".to_string());
+            let new_id = mint_project_preset_name(project, &base);
+            let mut def = self.source_def.clone();
+            if let Some(m) = def.preset_metadata.as_mut() {
+                m.id = new_id.clone();
+                m.display_name = new_id.as_str().to_string();
+            }
+            self.saved = Some(EmbeddedPreset {
+                kind: self.kind,
+                def,
+                origin: EmbeddedOrigin::Saved,
+            });
         }
+        let sp = self.saved.clone().expect("saved set above");
+        project.upsert_embedded_preset(sp);
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if let Some(old) = self.old {
-            Self::apply(project, &self.preset_id, &self.param_id, old);
+        if let Some(id) = self.saved.as_ref().and_then(|p| p.id().cloned()) {
+            project.remove_embedded_preset(&id);
         }
     }
 
     fn description(&self) -> &str {
-        "Edit Preset Param"
+        "Save Preset to Project"
+    }
+}
+
+/// Revert a diverged instance back to tracking its library entry
+/// (PRESET_LIBRARY_DESIGN D3/§4, P4): clears the per-instance graph override
+/// (`inst.graph = None`), undoable. The card/editor's "MODIFIED" badge is
+/// exactly `graph.is_some()` (D3/§6.6 — no hashing), so this is the single
+/// action that turns the badge back off.
+///
+/// Fails loud: if the instance's library id no longer resolves in the
+/// catalog, `execute` is a no-op (the graph is left untouched) rather than
+/// clearing it — reverting to nothing (a card with no params, D9's
+/// "not-representable state") is worse than staying diverged. The
+/// resolution check itself happens OUTSIDE this crate: `manifold-editing`
+/// cannot depend on `manifold-renderer` (the JSON catalog's home) without
+/// creating a dependency cycle — `manifold-playback` already depends on
+/// `manifold-editing`, and `manifold-renderer` depends on
+/// `manifold-playback`, so `manifold-editing -> manifold-renderer` would
+/// close the loop. The caller (the UI/app layer, which has renderer access)
+/// resolves "does this id still exist" once, at the moment the user clicks
+/// Revert, and bakes the answer into `resolves_in_catalog` — exactly the
+/// same pre-resolve-at-the-call-site pattern [`ForkPresetCommand`] already
+/// uses for `source_def`, so the same fact replays identically on both the
+/// UI-local project copy and the content thread's authoritative one.
+#[derive(Debug)]
+pub struct RevertToLibraryCommand {
+    target: GraphTarget,
+    /// Whether `target`'s library id resolved in the catalog at the moment
+    /// this command was constructed. `false` makes `execute` a no-op + log.
+    resolves_in_catalog: bool,
+    /// Captured on execute (`inst.graph.take()`), restored on undo. Doubles
+    /// as the "was there anything to revert" state via `Option::take` —
+    /// redo re-executes against the value undo just restored, so no
+    /// separate first-execute flag is needed.
+    old_graph: Option<EffectGraphDef>,
+}
+
+impl RevertToLibraryCommand {
+    pub fn new(target: GraphTarget, resolves_in_catalog: bool) -> Self {
+        Self { target, resolves_in_catalog, old_graph: None }
+    }
+}
+
+impl Command for RevertToLibraryCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if !self.resolves_in_catalog {
+            eprintln!(
+                "[manifold-editing] RevertToLibrary: {} no longer resolves in the catalog; refusing to revert (staying diverged is safer than reverting to nothing)",
+                self.target.label()
+            );
+            return;
+        }
+        let taken = project.with_preset_graph_mut(&self.target, |inst| {
+            let prev = inst.graph_def_mut().take();
+            inst.bump_graph_structure_version();
+            prev
+        });
+        if let Some(prev) = taken {
+            self.old_graph = prev;
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        // `execute` was a no-op fail-loud refusal — the graph was never
+        // touched, so undo must be a no-op too (an unconditional restore
+        // here would WRITE `None` over an untouched `Some(diverged_def)`).
+        if !self.resolves_in_catalog {
+            return;
+        }
+        let restore = self.old_graph.take();
+        project.with_preset_graph_mut(&self.target, |inst| {
+            *inst.graph_def_mut() = restore;
+            inst.bump_graph_structure_version();
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Revert to Library"
+    }
+}
+
+/// Mint a collision-free embedded-preset id from a user-TYPED name for Save
+/// to Project: `base` itself if free, else `"{base} 2"`, `"{base} 3"`, ... —
+/// deliberately NOT `Project::mint_forked_preset_id` (which always appends a
+/// numeric suffix, even to a name with no collision at all — correct for
+/// Make Unique/Import, whose base is always an EXISTING preset's own id, but
+/// wrong here: a freshly typed name with no collision should be saved
+/// verbatim, not surprise-suffixed "2"). Scoped to `project.embedded_presets`
+/// only, matching `mint_forked_preset_id`/`mint_embedded_preset_id`'s
+/// existing collision domain (not the global stock/user catalog — that
+/// wider check is `UserLibrary::save`'s job for the Library door; extending
+/// it here would be a scope change to already-shipped fork minting, not a
+/// P3 concern).
+fn mint_project_preset_name(project: &Project, base: &str) -> PresetTypeId {
+    let taken = |candidate: &str| {
+        project
+            .embedded_presets
+            .iter()
+            .any(|p| p.id().map(|i| i.as_str()) == Some(candidate))
+    };
+    if !taken(base) {
+        return PresetTypeId::from_string(base.to_string());
+    }
+    let mut n = 2;
+    loop {
+        let candidate = format!("{base} {n}");
+        if !taken(&candidate) {
+            return PresetTypeId::from_string(candidate);
+        }
+        n += 1;
     }
 }
 
@@ -219,6 +324,7 @@ impl Command for EditPresetParamCommand {
 mod tests {
     use super::*;
     use manifold_core::effect_graph_def::{EffectGraphDef, ParamSpecDef, PresetMetadata};
+    use manifold_core::macro_bank::MacroCurve;
 
     fn def_with_param(id: &str, param: &str, min: f32, max: f32) -> EffectGraphDef {
         EffectGraphDef {
@@ -276,9 +382,14 @@ mod tests {
         cmd.execute(&mut project);
 
         let new_id = cmd.forked_id().cloned().expect("forked id");
-        assert_eq!(new_id.as_str(), "OilyFluid#1");
+        assert_eq!(new_id.as_str(), "OilyFluid 2");
         assert_eq!(project.instance_preset_id(&target).as_ref(), Some(&new_id));
-        assert!(project.embedded_preset(&new_id).is_some());
+        let forked = project.embedded_preset(&new_id).expect("forked preset registered");
+        assert_eq!(
+            forked.def.preset_metadata.as_ref().unwrap().display_name,
+            "OilyFluid 2",
+            "minted name must be written to display_name AND id (D2)",
+        );
 
         cmd.undo(&mut project);
         assert_eq!(
@@ -330,28 +441,144 @@ mod tests {
         );
     }
 
-    #[test]
-    fn edit_preset_param_widens_range_and_undoes() {
-        let mut project = Project::default();
-        project.upsert_embedded_preset(EmbeddedPreset {
-            kind: PresetKind::Generator,
-            def: def_with_param("OilyFluid#1", "speed", 0.1, 4.0),
-        });
-        let id = PresetTypeId::from_string("OilyFluid#1".to_string());
+    // ── SaveToProjectCommand (PRESET_LIBRARY_DESIGN P3) ─────────────────
 
-        let mut cmd =
-            EditPresetParamCommand::new(id.clone(), "speed", 0.1, 10.0, MacroCurve::Exponential, true);
+    #[test]
+    fn save_to_project_upserts_saved_origin_and_round_trips() {
+        let mut project = Project::default();
+        let mut def = def_with_param("Bloom", "intensity", 0.0, 2.0);
+        // Simulate the UI action stamping the user-typed name onto the
+        // effective def before constructing the command.
+        def.preset_metadata.as_mut().unwrap().display_name = "Sunset Glow".to_string();
+
+        let mut cmd = SaveToProjectCommand::new(PresetKind::Effect, def);
         cmd.execute(&mut project);
 
-        let p = &project.embedded_preset(&id).unwrap().def.preset_metadata.as_ref().unwrap().params[0];
-        assert_eq!(p.max, 10.0);
-        assert_eq!(p.curve, MacroCurve::Exponential);
-        assert!(p.invert);
+        let id = cmd.saved_id().cloned().expect("saved id");
+        assert_eq!(id.as_str(), "Sunset Glow", "a fresh name with no collision saves verbatim");
+
+        let saved = project.embedded_preset(&id).expect("preset upserted into the project");
+        assert_eq!(saved.kind, PresetKind::Effect);
+        assert_eq!(saved.origin, EmbeddedOrigin::Saved);
+        assert_eq!(saved.def.preset_metadata.as_ref().unwrap().display_name, "Sunset Glow");
+
+        // Round-trip: re-import the (de)serialized def and confirm nothing
+        // is lost (the calibration — the widened `intensity` range — is the
+        // whole point of a saved look).
+        let json = serde_json::to_string(&saved.def).expect("serialize");
+        let back: EffectGraphDef = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.preset_metadata.unwrap().params[0].max, 2.0);
+    }
+
+    #[test]
+    fn save_to_project_does_not_retarget_any_instance() {
+        let mut project = Project::default();
+        let fx = manifold_core::effects::PresetInstance::new(PresetTypeId::BLOOM);
+        let fx_id = fx.id.clone();
+        project.settings.master_effects.push(fx);
+        let target = GraphTarget::Effect(fx_id.clone());
+
+        let def = def_with_param("Bloom", "intensity", 0.0, 2.0);
+        let mut cmd = SaveToProjectCommand::new(PresetKind::Effect, def);
+        cmd.execute(&mut project);
+
+        // The instance that triggered the save keeps its ORIGINAL preset id
+        // — Save to Project publishes a copy, it doesn't divert the card
+        // that made it (unlike Make Unique / Import).
+        assert_eq!(
+            project.instance_preset_id(&target),
+            Some(PresetTypeId::BLOOM),
+            "Save to Project must not retarget the source instance"
+        );
+    }
+
+    #[test]
+    fn save_to_project_disambiguates_name_collision_and_undo_removes_it() {
+        let mut project = Project::default();
+        // Pre-existing embedded preset already named "Look".
+        project.upsert_embedded_preset(EmbeddedPreset {
+            kind: PresetKind::Generator,
+            def: def_with_param("Look", "speed", 0.0, 1.0),
+            origin: EmbeddedOrigin::Saved,
+        });
+
+        let mut def = def_with_param("OilyFluid", "speed", 0.0, 1.0);
+        def.preset_metadata.as_mut().unwrap().display_name = "Look".to_string();
+        let mut cmd = SaveToProjectCommand::new(PresetKind::Generator, def);
+        cmd.execute(&mut project);
+
+        let id = cmd.saved_id().cloned().expect("saved id");
+        assert_eq!(id.as_str(), "Look 2", "a name collision must disambiguate to 'Name 2'");
+        assert!(project.embedded_preset(&PresetTypeId::from_string("Look".to_string())).is_some());
+        assert!(project.embedded_preset(&id).is_some());
 
         cmd.undo(&mut project);
-        let p = &project.embedded_preset(&id).unwrap().def.preset_metadata.as_ref().unwrap().params[0];
-        assert_eq!(p.max, 4.0);
-        assert_eq!(p.curve, MacroCurve::Linear);
-        assert!(!p.invert);
+        assert!(
+            project.embedded_preset(&id).is_none(),
+            "undo must remove only the newly-saved entry"
+        );
+        assert!(
+            project.embedded_preset(&PresetTypeId::from_string("Look".to_string())).is_some(),
+            "undo must not touch the pre-existing entry it disambiguated against"
+        );
+    }
+
+    // ── RevertToLibraryCommand (PRESET_LIBRARY_DESIGN P4) ───────────────
+
+    #[test]
+    fn revert_to_library_clears_graph_and_undo_restores_it() {
+        let mut project = Project::default();
+        let mut fx = manifold_core::effects::PresetInstance::new(PresetTypeId::BLOOM);
+        let diverged = def_with_param("Bloom", "intensity", 0.0, 5.0);
+        fx.graph = Some(diverged.clone());
+        let fx_id = fx.id.clone();
+        project.settings.master_effects.push(fx);
+        let target = GraphTarget::Effect(fx_id);
+
+        let mut cmd = RevertToLibraryCommand::new(target.clone(), true);
+        cmd.execute(&mut project);
+        assert!(
+            project.preset_instance(&target).unwrap().graph.is_none(),
+            "execute must clear the per-instance graph override (tracking again)"
+        );
+
+        cmd.undo(&mut project);
+        assert_eq!(
+            project.preset_instance(&target).unwrap().graph.as_ref(),
+            Some(&diverged),
+            "undo must restore the exact diverged graph"
+        );
+    }
+
+    #[test]
+    fn revert_to_library_is_a_no_op_when_the_id_no_longer_resolves() {
+        let mut project = Project::default();
+        let mut fx = manifold_core::effects::PresetInstance::new(PresetTypeId::BLOOM);
+        let diverged = def_with_param("Bloom", "intensity", 0.0, 5.0);
+        fx.graph = Some(diverged.clone());
+        let fx_id = fx.id.clone();
+        project.settings.master_effects.push(fx);
+        let target = GraphTarget::Effect(fx_id);
+
+        // `resolves_in_catalog: false` simulates a deleted/renamed library
+        // file — execute must refuse rather than orphan the card (reverting
+        // to nothing is worse than staying diverged).
+        let mut cmd = RevertToLibraryCommand::new(target.clone(), false);
+        cmd.execute(&mut project);
+        assert_eq!(
+            project.preset_instance(&target).unwrap().graph.as_ref(),
+            Some(&diverged),
+            "a refused execute must leave the diverged graph untouched"
+        );
+
+        // undo after a refused execute must also be a no-op — nothing was
+        // taken, so nothing may be written back (would otherwise clear a
+        // graph `execute` never touched).
+        cmd.undo(&mut project);
+        assert_eq!(
+            project.preset_instance(&target).unwrap().graph.as_ref(),
+            Some(&diverged),
+            "undo of a refused execute must not clear the untouched graph"
+        );
     }
 }

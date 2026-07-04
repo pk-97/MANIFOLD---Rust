@@ -266,6 +266,21 @@ pub fn push_state(
             }
         }
 
+        // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — real command
+        // label instead of the generic "Undo"/"Redo" the M::Undo/M::Redo menu
+        // handlers used to show directly (`app_render.rs`). Same re-fire guard
+        // as the export toast above; keyed on `data_version` (bumped by every
+        // undo/redo) rather than the description, so undoing the same command
+        // twice in a row (rare, but possible via redo-then-undo) still fires.
+        if let Some(ev) = &content_state.undo_redo_event {
+            let key = content_state.data_version;
+            if ui.last_undo_redo_toast_key != Some(key) {
+                let verb = if ev.is_redo { "Redid" } else { "Undid" };
+                ui.toast.show(format!("{verb}: {}", ev.description));
+                ui.last_undo_redo_toast_key = Some(key);
+            }
+        }
+
         // Cache Ableton session for parameter mapping dropdown
         if let Some(session) = &content_state.ableton_session {
             ui.ableton_session = Some(std::sync::Arc::clone(session));
@@ -1564,36 +1579,6 @@ pub fn sync_inspector_data(
     }
 }
 
-/// Build the single [`ParamCardConfig`] for whatever the graph editor is
-/// currently editing, resolved by identity from `watched_graph_target` — an
-/// effect instance (`Effect(EffectId)`, found anywhere via
-/// [`effect_card_config_by_id`]) or a layer generator (`Generator(LayerId)`).
-/// The editor's left lane renders the REAL card from this: the same
-/// [`ParamCardConfig`] the inspector builds, sourced from the same
-/// `PresetInstance` / `PresetInstance`, so the editor card is the actual
-/// instrument card and not a separate mirror. Returns `None` when nothing is
-/// being edited or the target can't be resolved (degenerate open state → the
-/// lane shows nothing).
-///
-/// One `GraphTarget` covers both arms, so the editor is a single surface that
-/// doesn't fork its data model on Effect vs Generator.
-/// Card title for a preset instance. A project-embedded ("forked") preset is
-/// minted with an id of the form `"{base}#{n}"` (see
-/// [`manifold_core::project::Project::mint_embedded_preset_id`]); when the
-/// instance is on such a variant, the title shows the base catalog name plus a
-/// `(variant)` marker so the operator can see at a glance that this card is on a
-/// project-local fork rather than the shared stock preset. Non-variant instances
-/// show the plain registry display name.
-fn card_preset_name(id: &PresetTypeId, display: impl Fn(&PresetTypeId) -> String) -> String {
-    match id.as_str().split_once('#') {
-        Some((base, _)) => {
-            let base_id = PresetTypeId::from_string(base.to_string());
-            format!("{} (variant)", display(&base_id))
-        }
-        None => display(id),
-    }
-}
-
 // ── Helpers ──────────────────────────────────────────────────────
 
 /// OSC address scope for effect param configs.
@@ -2140,7 +2125,14 @@ fn preset_to_config(
             manifold_core::EffectId::new(""),
             true,
             false,
-            false,
+            // PRESET_LIBRARY_DESIGN D3/P4: a generator's per-card divergence
+            // is the SAME `graph.is_some()` bit as an effect's (graph-home
+            // unification put both on `PresetInstance`) — this was
+            // hardcoded `false` (a pre-P4 gap that permanently suppressed
+            // the MOD badge on generator cards regardless of actual
+            // divergence), fixed to read the real state like the Effect arm
+            // above.
+            inst.graph.is_some(),
         ),
     };
 
@@ -2148,8 +2140,14 @@ fn preset_to_config(
         kind: card_kind,
         effect_index,
         effect_id,
-        name: card_preset_name(preset_type, |i| {
-            manifold_core::preset_type_registry::display_name(i).to_string()
+        // A project-embedded (forked) preset's `display_name` — sourced from
+        // `reg_def`, the same catalog-overlay-aware lookup the rows above
+        // used — carries its own human name directly (D2: ids are now
+        // display-based, so no id-format parsing is needed to render one).
+        // Falls back to the static registry name for stock/user presets not
+        // (yet) reflected in the overlay snapshot.
+        name: reg_def.as_deref().map(|d| d.display_name.clone()).unwrap_or_else(|| {
+            manifold_core::preset_type_registry::display_name(preset_type).to_string()
         }),
         enabled,
         collapsed,

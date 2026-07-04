@@ -74,6 +74,46 @@ impl GraphCanvas {
             );
         }
 
+        // Save to Library / Save to Project (PRESET_LIBRARY_DESIGN D4, P3) —
+        // only when there's an active graph to save (mirrors the header
+        // label's own "No active graph" gate).
+        if !self.nodes.is_empty() {
+            let sp_rect = self.save_to_project_button_rect(viewport);
+            ui.draw_rect(sp_rect.x, sp_rect.y, sp_rect.w, sp_rect.h, SAVE_BUTTON_BG);
+            ui.draw_text(
+                sp_rect.x + 8.0,
+                sp_rect.y + (sp_rect.h - 11.0) * 0.5,
+                "Save to Project",
+                11.0,
+                TEXT_HEADER,
+            );
+
+            let sl_rect = self.save_to_library_button_rect(viewport);
+            ui.draw_rect(sl_rect.x, sl_rect.y, sl_rect.w, sl_rect.h, SAVE_BUTTON_BG);
+            ui.draw_text(
+                sl_rect.x + 8.0,
+                sl_rect.y + (sl_rect.h - 11.0) * 0.5,
+                "Save to Library",
+                11.0,
+                TEXT_HEADER,
+            );
+        }
+
+        // Push to Library (PRESET_LIBRARY_DESIGN D3, P4) — only when
+        // diverged (mirrors "Reset to Default"'s own gate; pushing an
+        // undiverged card would overwrite the library file with itself).
+        if self.has_graph_mod {
+            let pl_rect = self.push_to_library_button_rect(viewport);
+            ui.draw_rect(pl_rect.x, pl_rect.y, pl_rect.w, pl_rect.h, SAVE_BUTTON_BG);
+            ui.draw_text(
+                pl_rect.x + 8.0,
+                pl_rect.y + (pl_rect.h - 11.0) * 0.5,
+                "Push to Library",
+                11.0,
+                TEXT_HEADER,
+            );
+        }
+
         let canvas = Rect {
             x: viewport.x,
             y: viewport.y + HEADER_HEIGHT,
@@ -122,6 +162,12 @@ impl GraphCanvas {
             self.draw_ghost_wire(ui, viewport, *from_node, from_port);
         }
 
+        // D17 "flow pulse": one dash traveling source→dest, fired the
+        // instant a `ConnectPorts` commits (`fire_wire_flow_pulse`).
+        if let Some(p) = self.wire_flow_pulse.progress() {
+            self.draw_wire_flow_pulse(ui, p);
+        }
+
         // Nodes draw at CONTENT depth so they sit *above* the wires (BASE).
         // The renderer batches all of a depth's rects before its lines, so
         // node bodies (rects) and wires (lines) at the same depth would force
@@ -153,14 +199,20 @@ impl GraphCanvas {
         }
 
         // Live rubber-band rectangle while marquee-selecting — over the nodes.
-        if let DragMode::Marquee { origin_screen } = &self.drag_mode {
-            let (ox, oy) = *origin_screen;
-            let (cx, cy) = self.cursor;
-            let x = ox.min(cx);
-            let y = oy.min(cy);
-            let w = (cx - ox).abs();
-            let h = (cy - oy).abs();
-            ui.draw_bordered_rect(x, y, w, h, MARQUEE_FILL, 0.0, 1.0, MARQUEE_BORDER);
+        // D17 "marquee fade in/out": `marquee_alpha` eases 0..1 (see
+        // `GraphCanvas::tick`), so the rect fades in on press and fades out
+        // after release instead of popping/vanishing instantly.
+        // `marquee_last_rect` is what keeps the geometry available for the
+        // fade-OUT frames, after `drag_mode` has already reset to `None`.
+        let alpha = self.marquee_alpha.value();
+        if alpha > 0.001
+            && let Some((x, y, w, h)) = self.marquee_last_rect
+        {
+            // Scale each color's OWN baked-in alpha by the fraction — not
+            // replace it — so the fully-faded-in state matches the original
+            // (already-subtle) fill/border alpha exactly, not full opacity.
+            let scale = |c: Color32| color::with_alpha(c, (c.a as f32 * alpha).round() as u8);
+            ui.draw_bordered_rect(x, y, w, h, scale(MARQUEE_FILL), 0.0, 1.0, scale(MARQUEE_BORDER));
         }
 
         ui.pop_depth();
@@ -172,6 +224,15 @@ impl GraphCanvas {
         if matches!(self.drag_mode, DragMode::None) && !self.mapping_popover.is_open() {
             ui.push_depth(Depth::TOOLTIP);
             self.draw_hover_tooltip(ui, viewport, canvas);
+            ui.pop_depth();
+        }
+
+        // D17 connect-pop / error-shake — drawn at TOOLTIP depth so they
+        // read above nodes/wires regardless of where the drop landed.
+        if self.connect_pop.progress().is_some() || self.error_shake.progress().is_some() {
+            ui.push_depth(Depth::TOOLTIP);
+            self.draw_connect_pop(ui);
+            self.draw_error_shake(ui);
             ui.pop_depth();
         }
 
@@ -197,6 +258,45 @@ impl GraphCanvas {
         }
 
         ui.pop_immediate_clip();
+    }
+
+    /// D17 "wire→port ... pop" (partial — see `GraphCanvas::tick`'s doc
+    /// comment for what's scoped out). A brief expanding, fading ring at the
+    /// drop point on a successful `ConnectPorts` commit.
+    fn draw_connect_pop(&self, ui: &mut dyn Painter) {
+        let Some(p) = self.connect_pop.progress() else {
+            return;
+        };
+        let (cx, cy) = self.connect_pop_pos;
+        let radius = 4.0 + 10.0 * p;
+        let alpha = ((1.0 - p) * 255.0).round() as u8;
+        let ring = color::with_alpha(color::ACCENT_BLUE_C32, alpha);
+        ui.draw_bordered_rect(
+            cx - radius,
+            cy - radius,
+            radius * 2.0,
+            radius * 2.0,
+            Color32::TRANSPARENT,
+            radius,
+            2.0,
+            ring,
+        );
+    }
+
+    /// D17 error shake — a small red X at the drop point, with a decaying
+    /// horizontal jitter (a couple of oscillations, settled by the end of
+    /// the transient) when a wire is dropped somewhere invalid.
+    fn draw_error_shake(&self, ui: &mut dyn Painter) {
+        let Some(p) = self.error_shake.progress() else {
+            return;
+        };
+        let (cx, cy) = self.error_shake_pos;
+        let shake_x = (p * std::f32::consts::PI * 4.0).sin() * 3.0 * (1.0 - p);
+        let alpha = ((1.0 - p) * 255.0).round() as u8;
+        let mark = color::with_alpha(color::RED_BASE, alpha);
+        let r = 6.0;
+        ui.draw_line(cx - r + shake_x, cy - r, cx + r + shake_x, cy + r, 2.0, mark);
+        ui.draw_line(cx - r + shake_x, cy + r, cx + r + shake_x, cy - r, 2.0, mark);
     }
 
     /// Floating help card near the cursor: a param's help line when the
@@ -313,7 +413,10 @@ impl GraphCanvas {
         };
         let (gx0, gy0) = node.output_port_pos_graph(idx);
         let (sx0, sy0) = self.to_screen(viewport, gx0, gy0);
-        let (sx1, sy1) = self.cursor;
+        // D17 "wire→port magnetize": the endpoint eases toward a nearby
+        // input port instead of tracking the raw cursor 1:1 (see
+        // `tick_wire_magnet`).
+        let (sx1, sy1) = self.wire_ghost_endpoint();
 
         // Same bezier shape as `draw_wire`, sampled lightly.
         let span_x = (sx1 - sx0).abs();
@@ -345,6 +448,33 @@ impl GraphCanvas {
             ui.draw_line(prev.0, prev.1, curr.0, curr.1, thickness, ghost_color);
             prev = curr;
         }
+    }
+
+    /// D17 "flow pulse": one bright dot traveling `wire_flow_pulse_from` →
+    /// `wire_flow_pulse_to` at `progress` (0..1) along the SAME simplified
+    /// bezier shape `draw_ghost_wire` uses (not `draw_wire`'s fuller
+    /// fan-in-staggered curve — a brief traveling dash reading close to the
+    /// wire is enough; it doesn't need to land pixel-exact on it).
+    fn draw_wire_flow_pulse(&self, ui: &mut dyn Painter, progress: f32) {
+        let (sx0, sy0) = self.wire_flow_pulse_from;
+        let (sx1, sy1) = self.wire_flow_pulse_to;
+        let span_x = (sx1 - sx0).abs();
+        let dx = span_x.max(40.0) * 0.5;
+        let (cx0, cy0, cx1, cy1) = (sx0 + dx, sy0, sx1 - dx, sy1);
+        let (px, py) = cubic_bezier(progress.clamp(0.0, 1.0), sx0, sy0, cx0, cy0, cx1, cy1, sx1, sy1);
+        // Fades in the first quarter, holds, fades out the last quarter —
+        // a clean pop-and-travel rather than an abrupt appear/disappear.
+        let alpha = if progress < 0.25 {
+            progress / 0.25
+        } else if progress > 0.75 {
+            (1.0 - progress) / 0.25
+        } else {
+            1.0
+        };
+        // Same "rounded square = dot" primitive `draw_port_dot` uses — this
+        // file has no separate filled-circle draw call.
+        let d = (7.0 * self.zoom).clamp(4.0, 12.0);
+        self.draw_port_dot(ui, px, py, d, CONNECT_OK_COLOR.with_alpha((217.0 * alpha) as u8));
     }
 
     /// A sparse reference grid, drawn at `GRID_SPACING * GRID_LINE_EVERY` —

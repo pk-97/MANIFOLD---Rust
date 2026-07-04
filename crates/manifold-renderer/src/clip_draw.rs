@@ -27,6 +27,13 @@ pub struct ClipBody {
     pub muted: bool,
     pub locked: bool,
     pub generator: bool,
+    /// P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D17 "duplicate-drag ghost"):
+    /// 0..1 body alpha multiplier. `1.0` (opaque) is the resting value every
+    /// clip uses outside an alt-duplicate drag — `emit_clip_body` only
+    /// departs from the usual hard-`opaque()` force when this is < 1.0, so a
+    /// normal clip's body/well/strip is unaffected and the lane grid still
+    /// never bleeds through it.
+    pub alpha: f32,
 }
 
 impl ClipBody {
@@ -82,24 +89,33 @@ pub fn clip_strip_height(h: f32) -> Option<f32> {
 }
 
 /// The preview-well colour: the identity colour scaled toward black (hue-
-/// preserving), standing in for the thumbnail until §F populates it.
+/// preserving), standing in for the thumbnail until §F populates it. Carries
+/// the input's own alpha through unchanged — a preview well is a solid
+/// backstop against the lane grid (Peter, 2026-06-28) EXCEPT during a P2
+/// duplicate-drag ghost (`ClipBody::alpha` < 1.0, see [`body_alpha`]), where
+/// the whole clip — well included — is meant to read as translucent.
 fn well_color(c: Color32) -> Color32 {
     let s = color::CLIP_PREVIEW_WELL_SCALE;
     Color32::new(
         (c.r as f32 * s) as u8,
         (c.g as f32 * s) as u8,
         (c.b as f32 * s) as u8,
-        // A preview well is a SOLID backstop (the thumbnail blits over it) — force
-        // full opacity so the lane grid never shows through (Peter, 2026-06-28).
-        255,
+        c.a,
     )
 }
 
-/// Force a clip colour fully opaque. A clip body is solid by definition — if the
-/// identity colour ever carries alpha < 255, the lane grid would bleed through.
+/// A clip colour's body alpha: fully opaque (255) unless `alpha` is
+/// mid-fade (P2 duplicate-drag ghost, `ClipBody::alpha`), in which case it
+/// scales down instead of being force-opaqued. A clip body is solid by
+/// default — if the identity colour ever carried alpha < 255 outside this
+/// one deliberate case, the lane grid would bleed through.
 #[inline]
-fn opaque(c: Color32) -> Color32 {
-    Color32::new(c.r, c.g, c.b, 255)
+fn body_alpha(c: Color32, alpha: f32) -> Color32 {
+    if alpha >= 0.999 {
+        Color32::new(c.r, c.g, c.b, 255)
+    } else {
+        Color32::new(c.r, c.g, c.b, (255.0 * alpha.clamp(0.0, 1.0)) as u8)
+    }
 }
 
 /// Emit one clip body. Tall clips render the §E anatomy — a darker preview WELL
@@ -111,7 +127,7 @@ pub fn emit_clip_body(ui: &mut UIRenderer, c: &ClipBody) {
         return;
     }
     let r = color::CLIP_RADIUS;
-    let body = opaque(c.resolved_color());
+    let body = body_alpha(c.resolved_color(), c.alpha);
 
     if let Some(strip_h) = clip_strip_height(c.rect.height) {
         // Preview well (full-height, rounded) — the identity colour darkened so
@@ -174,6 +190,9 @@ pub fn emit_clip_body(ui: &mut UIRenderer, c: &ClipBody) {
     } else {
         (color::CLIP_BORDER_NORMAL_WIDTH, c.base_color)
     };
+    // The border fades with the same ghost alpha as the body — otherwise a
+    // fully-faded duplicate-drag ghost would still show a solid outline.
+    let bc = body_alpha(bc, c.alpha);
     if bw > 0.0 {
         ui.draw_bordered_rect(
             c.rect.x,

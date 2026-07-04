@@ -27,6 +27,23 @@ pub struct EmbeddedPreset {
     pub kind: PresetKind,
     /// The complete preset definition (graph + `preset_metadata`).
     pub def: EffectGraphDef,
+    /// `Saved` = user pressed "Save to Project" / "Make Unique" / import
+    /// (PRESET_LIBRARY_DESIGN D4/D9) — deliberate, resolves ON TOP of stock/
+    /// user disk tiers. `Snapshot` = auto-captured at save for
+    /// self-containment (D5) — pruned + refreshed every save, resolves
+    /// BELOW disk (disk wins over a stale snapshot; the snapshot is the
+    /// fallback when the library file is gone). Defaults to `Saved` so
+    /// legacy files with no `origin` field keep today's on-top behavior.
+    #[serde(default)]
+    pub origin: EmbeddedOrigin,
+}
+
+/// See [`EmbeddedPreset::origin`].
+#[derive(Default, Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Debug)]
+pub enum EmbeddedOrigin {
+    #[default]
+    Saved,
+    Snapshot,
 }
 
 impl EmbeddedPreset {
@@ -767,32 +784,6 @@ impl Project {
         None
     }
 
-    /// Count instances (effects + generators) that use a given preset id.
-    /// The fork-if-shared rule (Phase 4/5): a preset-level edit edits in place
-    /// when the count is 1 (sole user) and forks a project variant when > 1.
-    pub fn count_preset_uses(&self, id: &PresetTypeId) -> usize {
-        let mut n = 0;
-        for fx in &self.settings.master_effects {
-            if fx.effect_type() == id {
-                n += 1;
-            }
-        }
-        for layer in &self.timeline.layers {
-            if let Some(effects) = layer.effects.as_ref() {
-                n += effects.iter().filter(|fx| fx.effect_type() == id).count();
-            }
-            for clip in &layer.clips {
-                n += clip.effects.iter().filter(|fx| fx.effect_type() == id).count();
-            }
-            if let Some(gp) = layer.gen_params()
-                && gp.generator_type() == id
-            {
-                n += 1;
-            }
-        }
-        n
-    }
-
     /// The project-embedded preset with this id, if any.
     pub fn embedded_preset(&self, id: &PresetTypeId) -> Option<&EmbeddedPreset> {
         self.embedded_presets.iter().find(|p| p.id() == Some(id))
@@ -813,6 +804,57 @@ impl Project {
             }
             n += 1;
         }
+    }
+
+    /// Mint a human-readable, collision-free id for an explicit fork (Make
+    /// Unique / Import — `ForkPresetCommand`) — a `base " {n}"` probe (e.g.
+    /// `"Bloom 2"`) instead of `mint_embedded_preset_id`'s `base#{n}`. Starts
+    /// at 2 so the first fork of a preset reads as its second instance, not
+    /// literally "1" (D2: the design supersedes attempt #8's `#N` variant
+    /// ids). The minted string is written to BOTH the embedded preset's id
+    /// and its `display_name` — the id itself is now display-based, so the
+    /// card can render it directly with no id-format parsing. Legacy `#N`
+    /// ids already in a project keep resolving unchanged; this only changes
+    /// what NEW forks mint.
+    pub fn mint_forked_preset_id(&self, base: &str) -> PresetTypeId {
+        let mut n = 2;
+        loop {
+            let candidate = format!("{base} {n}");
+            let taken = self
+                .embedded_presets
+                .iter()
+                .any(|p| p.id().map(|i| i.as_str()) == Some(candidate.as_str()));
+            if !taken {
+                return PresetTypeId::from_string(candidate);
+            }
+            n += 1;
+        }
+    }
+
+    /// Load-time cosmetic pass (P1, D2): a legacy project-embedded fork
+    /// minted before ids became display-based carries a `base#N` id whose
+    /// `display_name` was never separately set. The card used to derive a
+    /// "(variant)" label from the id at render time (`card_preset_name`'s
+    /// `'#'` split, now deleted) — stamp an equivalent readable name once at
+    /// load instead, so old projects still read cleanly. Never touches an
+    /// entry that already has a `display_name` (new forks set it directly;
+    /// this is purely for entries the previous, display-name-less minting
+    /// path left behind). Returns the number of presets backfilled.
+    pub fn backfill_legacy_fork_display_names(&mut self) -> usize {
+        let mut n = 0;
+        for ep in &mut self.embedded_presets {
+            let Some(meta) = ep.def.preset_metadata.as_mut() else {
+                continue;
+            };
+            if !meta.display_name.is_empty() {
+                continue;
+            }
+            if let Some((base, _)) = meta.id.as_str().split_once('#') {
+                meta.display_name = format!("{base} (variant)");
+                n += 1;
+            }
+        }
+        n
     }
 
     /// The current preset id of the instance addressed by `target`, if found.
@@ -886,6 +928,63 @@ impl Project {
         Some(self.embedded_presets.remove(pos))
     }
 
+    /// Every `(id, kind)` referenced by a TRACKING instance (`graph: None`)
+    /// anywhere in the project — master effects, every layer's effects,
+    /// every clip's effects, and every layer's generator. A diverged
+    /// instance (`graph: Some`) already carries its own private copy; its
+    /// library id (still named by `effect_type`, D8) is not collected here
+    /// because no self-containment snapshot is needed for it.
+    ///
+    /// Used at save time (PRESET_LIBRARY_DESIGN D5) to know which library
+    /// ids need their current def cached into `embedded_presets` as
+    /// `origin: Snapshot`. Renderer-free (reads only instance state), so it
+    /// lives in core; the actual catalog lookup + upsert happens app-side
+    /// (see `manifold-app::project_io::snapshot_and_prune_embedded_presets`),
+    /// which has both this project AND the renderer's live catalog.
+    pub fn tracking_preset_ids(&self) -> Vec<(PresetTypeId, PresetKind)> {
+        fn collect(
+            fx: &crate::effects::PresetInstance,
+            kind: PresetKind,
+            out: &mut Vec<(PresetTypeId, PresetKind)>,
+        ) {
+            if fx.graph.is_none() {
+                out.push((fx.effect_type().clone(), kind));
+            }
+        }
+        let mut out = Vec::new();
+        for fx in &self.settings.master_effects {
+            collect(fx, PresetKind::Effect, &mut out);
+        }
+        for layer in &self.timeline.layers {
+            if let Some(effects) = layer.effects.as_ref() {
+                for fx in effects {
+                    collect(fx, PresetKind::Effect, &mut out);
+                }
+            }
+            for clip in &layer.clips {
+                for fx in &clip.effects {
+                    collect(fx, PresetKind::Effect, &mut out);
+                }
+            }
+            if let Some(gp) = layer.gen_params() {
+                collect(gp, PresetKind::Generator, &mut out);
+            }
+        }
+        out
+    }
+
+    /// Remove every `Snapshot`-origin embedded preset whose id is not in
+    /// `referenced` (D5) — the stale-snapshot prune that keeps the overlay
+    /// from accumulating ids no tracking instance uses anymore (e.g. after
+    /// an instance is retargeted or deleted). `Saved` entries are never
+    /// touched here — they are a deliberate project-scoped fork, not
+    /// save-time plumbing, and survive independent of what's referenced.
+    pub fn prune_stale_snapshots(&mut self, referenced: &std::collections::HashSet<PresetTypeId>) {
+        self.embedded_presets.retain(|p| {
+            p.origin == EmbeddedOrigin::Saved || p.id().is_some_and(|id| referenced.contains(id))
+        });
+    }
+
     /// Retarget the instance addressed by `target` at a different preset id,
     /// keeping its param values. Returns `false` if the target wasn't found.
     pub fn set_instance_preset_id(
@@ -942,6 +1041,7 @@ impl Project {
         self.embedded_presets.push(EmbeddedPreset {
             kind,
             def: source_def,
+            origin: EmbeddedOrigin::Saved,
         });
         Some(new_id)
     }
@@ -1331,13 +1431,11 @@ mod tests {
     }
 
     #[test]
-    fn fork_preset_mints_id_retargets_instance_and_updates_use_count() {
+    fn fork_preset_mints_id_and_retargets_instance() {
         let mut p = Project::default();
         let fx = PresetInstance::new(PresetTypeId::BLOOM);
         let fx_id = fx.id.clone();
         p.settings.master_effects.push(fx);
-
-        assert_eq!(p.count_preset_uses(&PresetTypeId::BLOOM), 1);
 
         let target = crate::GraphTarget::Effect(fx_id.clone());
         let new_id = p
@@ -1350,9 +1448,6 @@ mod tests {
         assert_eq!(p.find_effect_by_id(&fx_id).unwrap().effect_type(), &new_id);
         assert!(p.embedded_preset(&new_id).is_some());
         assert_eq!(p.embedded_preset(&new_id).unwrap().def.preset_metadata.as_ref().unwrap().id, new_id);
-        // Use counts moved from the stock id to the fork.
-        assert_eq!(p.count_preset_uses(&PresetTypeId::BLOOM), 0);
-        assert_eq!(p.count_preset_uses(&new_id), 1);
 
         // A second fork of the same base mints a fresh id.
         let fx2 = PresetInstance::new(PresetTypeId::BLOOM);
@@ -1367,6 +1462,62 @@ mod tests {
             .unwrap();
         assert_eq!(new_id2.as_str(), "Bloom#2");
         assert_eq!(p.embedded_presets.len(), 2);
+    }
+
+    #[test]
+    fn mint_forked_preset_id_starts_at_2_and_probes_past_collisions() {
+        let mut p = Project::default();
+        // No embedded presets yet: first fork of "Bloom" reads as "Bloom 2",
+        // not "Bloom 1" (D2 — a fork is presented as the preset's second
+        // instance).
+        assert_eq!(p.mint_forked_preset_id("Bloom").as_str(), "Bloom 2");
+
+        p.embedded_presets.push(EmbeddedPreset {
+            kind: PresetKind::Effect,
+            def: graph_def_with_id("Bloom 2", "Bloom 2"),
+            origin: EmbeddedOrigin::Saved,
+        });
+        // "Bloom 2" is taken — probes to "Bloom 3".
+        assert_eq!(p.mint_forked_preset_id("Bloom").as_str(), "Bloom 3");
+    }
+
+    #[test]
+    fn backfill_legacy_fork_display_names_derives_variant_label_from_id() {
+        let mut p = Project::default();
+        p.embedded_presets.push(EmbeddedPreset {
+            kind: PresetKind::Effect,
+            def: graph_def_with_id("Bloom#1", ""),
+            origin: EmbeddedOrigin::Saved,
+        });
+        // A new-style fork already carries its own display_name — untouched.
+        p.embedded_presets.push(EmbeddedPreset {
+            kind: PresetKind::Effect,
+            def: graph_def_with_id("Bloom 2", "Bloom 2"),
+            origin: EmbeddedOrigin::Saved,
+        });
+
+        let n = p.backfill_legacy_fork_display_names();
+        assert_eq!(n, 1);
+        assert_eq!(
+            p.embedded_preset(&PresetTypeId::from_string("Bloom#1".to_string()))
+                .unwrap()
+                .def
+                .preset_metadata
+                .as_ref()
+                .unwrap()
+                .display_name,
+            "Bloom (variant)"
+        );
+        assert_eq!(
+            p.embedded_preset(&PresetTypeId::from_string("Bloom 2".to_string()))
+                .unwrap()
+                .def
+                .preset_metadata
+                .as_ref()
+                .unwrap()
+                .display_name,
+            "Bloom 2"
+        );
     }
 
     #[test]
@@ -1406,6 +1557,7 @@ mod tests {
         p.embedded_presets.push(EmbeddedPreset {
             kind: PresetKind::Generator,
             def,
+            origin: EmbeddedOrigin::Saved,
         });
 
         let json = serde_json::to_string(&p).unwrap();
@@ -1413,9 +1565,69 @@ mod tests {
         let back: Project = serde_json::from_str(&json).unwrap();
         assert_eq!(back.embedded_presets.len(), 1);
         assert_eq!(back.embedded_presets[0].kind, PresetKind::Generator);
+        assert_eq!(back.embedded_presets[0].origin, EmbeddedOrigin::Saved);
         assert_eq!(
             back.embedded_presets[0].id().map(|i| i.as_str()),
             Some("OilyFluid#layer2")
+        );
+    }
+
+    /// D5: `origin` round-trips for BOTH variants, and a legacy embedded
+    /// preset with no `origin` field on the wire (pre-P2 project files)
+    /// loads as `Saved` — the deliberate, on-top-of-disk default that
+    /// matches what those files' entries always meant before `Snapshot`
+    /// existed.
+    #[test]
+    fn embedded_preset_origin_round_trips_both_variants_and_defaults_legacy_to_saved() {
+        let mut p = Project::default();
+        p.embedded_presets.push(EmbeddedPreset {
+            kind: PresetKind::Effect,
+            def: graph_def_with_id("Bloom 2", "Bloom 2"),
+            origin: EmbeddedOrigin::Saved,
+        });
+        p.embedded_presets.push(EmbeddedPreset {
+            kind: PresetKind::Effect,
+            def: graph_def_with_id("Bloom", "Bloom"),
+            origin: EmbeddedOrigin::Snapshot,
+        });
+
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"origin\":\"Saved\""), "Saved must serialize: {json}");
+        assert!(json.contains("\"origin\":\"Snapshot\""), "Snapshot must serialize: {json}");
+
+        let back: Project = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.embedded_preset(&PresetTypeId::from_string("Bloom 2".to_string()))
+                .unwrap()
+                .origin,
+            EmbeddedOrigin::Saved
+        );
+        assert_eq!(
+            back.embedded_preset(&PresetTypeId::from_string("Bloom".to_string()))
+                .unwrap()
+                .origin,
+            EmbeddedOrigin::Snapshot
+        );
+
+        // Legacy shape: an embedded preset JSON object with no `origin` key
+        // at all (as every pre-P2 project file has) must default to Saved.
+        // `origin` is the last field in `EmbeddedPreset`, so it serializes
+        // with a LEADING comma and no trailing one.
+        let legacy_json = json.replacen(",\"origin\":\"Snapshot\"", "", 1);
+        assert_eq!(
+            legacy_json.matches("\"origin\"").count(),
+            1,
+            "sanity: exactly the Snapshot entry's origin key must be gone \
+             (the untouched Saved entry still carries its own): {legacy_json}"
+        );
+        let legacy_back: Project = serde_json::from_str(&legacy_json).unwrap();
+        assert_eq!(
+            legacy_back
+                .embedded_preset(&PresetTypeId::from_string("Bloom".to_string()))
+                .unwrap()
+                .origin,
+            EmbeddedOrigin::Saved,
+            "no `origin` field on the wire must default to Saved"
         );
     }
 

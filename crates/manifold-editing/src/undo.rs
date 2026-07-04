@@ -66,6 +66,23 @@ impl UndoRedoManager {
     pub fn can_redo(&self) -> bool {
         !self.redo_stack.is_empty()
     }
+
+    /// Description of the command `undo()` would act on next — the top of
+    /// `undo_stack`. Read this BEFORE calling `undo()`: the command moves onto
+    /// `redo_stack` once undone, so peeking after the fact would need a second
+    /// accessor. Lets a caller (the D11 undo/redo toast,
+    /// `UI_CRAFT_AND_MOTION_PLAN.md` P2) show the real command name — "Undid:
+    /// Move Clip" — without exposing command objects themselves.
+    pub fn peek_undo_description(&self) -> Option<&str> {
+        self.undo_stack.back().map(|c| c.description())
+    }
+
+    /// Description of the command `redo()` would act on next — the top of
+    /// `redo_stack`. Same "peek before mutating" contract as
+    /// [`Self::peek_undo_description`].
+    pub fn peek_redo_description(&self) -> Option<&str> {
+        self.redo_stack.last().map(|c| c.description())
+    }
     pub fn undo_count(&self) -> usize {
         self.undo_stack.len()
     }

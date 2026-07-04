@@ -197,6 +197,12 @@ pub struct UIRoot {
     /// enough to just compare as a string. `None` = no export toast shown yet.
     pub last_export_toast_key: Option<String>,
 
+    /// Same re-fire guard as `last_export_toast_key`, for the D11 undo/redo
+    /// toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2). Keyed on
+    /// `content_state.data_version` (undo/redo always bumps it, so each real
+    /// undo/redo gets a distinct key even when the description repeats).
+    pub last_undo_redo_toast_key: Option<u64>,
+
     /// Project-embedded ("forked") presets surfaced into the Add pickers, kept
     /// in sync with the content snapshot. Change-gated by
     /// `embedded_presets_fingerprint` so the Vec rebuilds only when the embedded
@@ -292,6 +298,10 @@ pub struct UIRoot {
     split_handle_id: Option<NodeId>,
     /// Node ID for the inspector resize handle (vertical bar at inspector right edge).
     inspector_handle_id: Option<NodeId>,
+    /// P2 "panel-split snap-back" (D15): self-tracked elapsed time for
+    /// `layout.tick_splits`, same self-contained-`Instant` shape as
+    /// `InspectorCompositePanel::update`'s `motion_last_tick`.
+    layout_tick_last: std::time::Instant,
 
     /// True when a DragBegin originated in the tracks area. While active,
     /// all Drag/DragEnd events are stashed for the InteractionOverlay
@@ -361,6 +371,7 @@ impl UIRoot {
             perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel::new(),
             toast: manifold_ui::panels::toast::ToastPanel::new(),
             last_export_toast_key: None,
+            last_undo_redo_toast_key: None,
             embedded_presets: Vec::new(),
             embedded_presets_fingerprint: 0,
             built: false,
@@ -392,6 +403,7 @@ impl UIRoot {
             macro_ableton_mapped: [false; manifold_core::MACRO_COUNT],
             split_handle_id: None,
             inspector_handle_id: None,
+            layout_tick_last: std::time::Instant::now(),
             overlay_drag_active: false,
             ableton_session: None,
             ableton_picker: manifold_ui::panels::ableton_picker::AbletonPickerPopup::new(),
@@ -1968,6 +1980,43 @@ impl UIRoot {
                     DropdownItem::new("Make Unique")
                         .with_action(PanelAction::MakePresetUnique(*gpt)),
                 );
+                // Divergence actions (PRESET_LIBRARY_DESIGN D3, P4): only
+                // meaningful once the instance has diverged from its library
+                // entry (`graph.is_some()`) — reuse the retained card's own
+                // `has_graph_mod` bit (the exact source the MOD badge reads),
+                // same tab-resolution `is_effect_ableton_mapped` above uses,
+                // so there's one source of truth for "is this card diverged"
+                // rather than a second computation.
+                let has_graph_mod = match gpt {
+                    GraphParamTarget::Effect(fx_idx) => {
+                        self.inspector.effect_has_graph_mod(self.inspector.last_effect_tab(), *fx_idx)
+                    }
+                    GraphParamTarget::Generator => self.inspector.gen_has_graph_mod(),
+                };
+                if has_graph_mod {
+                    items.push(
+                        DropdownItem::new("Revert to Library")
+                            .with_action(PanelAction::RevertToLibrary(*gpt)),
+                    );
+                    // Wording states the blast radius WITHOUT computing it
+                    // (PRESET_LIBRARY_DESIGN §4/§6: counting how many
+                    // instances track an id is the forbidden machinery this
+                    // design deletes) — "instances", not a computed N.
+                    items.push(
+                        DropdownItem::new("Push to Library — updates instances tracking this preset")
+                            .with_action(PanelAction::PushToLibrary(*gpt)),
+                    );
+                }
+                // Library doors (PRESET_LIBRARY_DESIGN D4) — explicit "publish a
+                // copy" actions, distinct from Make Unique's divergence/retarget.
+                items.push(
+                    DropdownItem::new("Save to Library…")
+                        .with_action(PanelAction::SaveToLibrary(*gpt)),
+                );
+                items.push(
+                    DropdownItem::new("Save to Project…")
+                        .with_action(PanelAction::SaveToProject(*gpt)),
+                );
                 items.push(
                     DropdownItem::new("Export Preset…").with_action(PanelAction::ExportPreset(*gpt)),
                 );
@@ -2198,6 +2247,16 @@ impl UIRoot {
         if !self.built {
             return;
         }
+        // P2 "panel-split snap-back" (D15): advance the two splits'
+        // double-click-reset tweens. `min(100.0)` matches
+        // `InspectorCompositePanel::update`'s own dt clamp (a stall/debugger
+        // pause must not fling the tween in one giant step). The app layer
+        // (`app_render.rs`, mirroring its `drawer_anim_active` poll) reads
+        // `layout.is_split_reset_animating()` after this call and forces the
+        // rebuild that re-lays-out every panel from the eased ratio/width.
+        let split_dt_ms = (self.layout_tick_last.elapsed().as_secs_f32() * 1000.0).min(100.0);
+        self.layout_tick_last = std::time::Instant::now();
+        self.layout.tick_splits(split_dt_ms);
         self.transport.update(&mut self.tree);
         self.header.update(&mut self.tree);
         self.footer.update(&mut self.tree);
@@ -2209,6 +2268,14 @@ impl UIRoot {
         // in place while showing; a no-op once idle. Runs every frame like the
         // panels above it, not gated on anything overlay-specific.
         self.toast.update(&mut self.tree);
+        // D17 "modal/dropdown enter": a no-op once settled or closed (see
+        // `DropdownPanel::update`'s own guard) — cheap to call unconditionally.
+        self.dropdown.update(&mut self.tree);
+        // Same D17 enter, mirrored to the other three popups (P2 batch 2 —
+        // `UI_CRAFT_AND_MOTION_PLAN.md` §5 item 4: "universal popup enter").
+        self.ableton_picker.update(&mut self.tree);
+        self.browser_popup.update(&mut self.tree);
+        self.settings_popup.update(&mut self.tree);
     }
 
     /// Resize the Audio Setup level meters from live per-send levels. Cheap

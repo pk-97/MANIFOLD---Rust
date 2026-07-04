@@ -31,6 +31,7 @@ use manifold_gpu::{
 use manifold_ui::{
     node::{FontWeight, Vec2},
     text::TextMeasure,
+    transform2d::Affine2,
 };
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -731,6 +732,9 @@ struct TextCommand {
     font_weight: FontWeight,
     clip_bounds: Option<[f32; 4]>,
     depth: Depth,
+    /// Transform captured at draw time — see `ui_renderer::RectCommand::transform`.
+    /// Applied to each glyph quad's corner positions in `prepare()`.
+    transform: Affine2,
 }
 
 /// Command to draw an icon from the atlas.
@@ -743,6 +747,8 @@ struct IconCommand {
     color: [u8; 4],
     clip_bounds: Option<[f32; 4]>,
     depth: Depth,
+    /// Transform captured at draw time — see `TextCommand::transform`.
+    transform: Affine2,
 }
 
 // ─── TextVertex ──────────────────────────────────────────────────────────────
@@ -915,6 +921,7 @@ impl NativeTextRenderer {
         font_weight: FontWeight,
         clip_bounds: Option<[f32; 4]>,
         depth: Depth,
+        transform: Affine2,
     ) {
         if text.is_empty() {
             return;
@@ -932,6 +939,7 @@ impl NativeTextRenderer {
             font_weight,
             clip_bounds,
             depth,
+            transform,
         });
     }
 
@@ -986,6 +994,7 @@ impl NativeTextRenderer {
         color: [u8; 4],
         clip_bounds: Option<[f32; 4]>,
         depth: Depth,
+        transform: Affine2,
     ) {
         if (icon_id as usize) < ICON_COUNT && self.icon_infos[icon_id as usize].is_some() {
             self.icon_commands.push(IconCommand {
@@ -997,6 +1006,7 @@ impl NativeTextRenderer {
                 color,
                 clip_bounds,
                 depth,
+                transform,
             });
         }
     }
@@ -1132,24 +1142,33 @@ impl NativeTextRenderer {
                     }
                 }
 
+                // Multiply each glyph quad corner POSITION by the command's
+                // captured affine (`docs/UI_TRANSFORM_STACK_DESIGN.md`) — `uv`
+                // is untouched, so the atlas sampling is unaffected; only the
+                // screen placement rotates/scales.
+                let (p0x, p0y) = cmd.transform.apply((qx0, qy0));
+                let (p1x, p1y) = cmd.transform.apply((qx1, qy0));
+                let (p2x, p2y) = cmd.transform.apply((qx1, qy1));
+                let (p3x, p3y) = cmd.transform.apply((qx0, qy1));
+
                 let base = self.vertices.len() as u32;
                 self.vertices.push(TextVertex {
-                    position: [qx0, qy0],
+                    position: [p0x, p0y],
                     uv: [u0, v0],
                     color,
                 });
                 self.vertices.push(TextVertex {
-                    position: [qx1, qy0],
+                    position: [p1x, p1y],
                     uv: [u1, v0],
                     color,
                 });
                 self.vertices.push(TextVertex {
-                    position: [qx1, qy1],
+                    position: [p2x, p2y],
                     uv: [u1, v1],
                     color,
                 });
                 self.vertices.push(TextVertex {
-                    position: [qx0, qy1],
+                    position: [p3x, p3y],
                     uv: [u0, v1],
                     color,
                 });
@@ -1237,24 +1256,31 @@ impl NativeTextRenderer {
                 }
             }
 
+            // Corner positions through the command's captured affine — see the
+            // glyph-quad transform above.
+            let (p0x, p0y) = cmd.transform.apply((qx0, qy0));
+            let (p1x, p1y) = cmd.transform.apply((qx1, qy0));
+            let (p2x, p2y) = cmd.transform.apply((qx1, qy1));
+            let (p3x, p3y) = cmd.transform.apply((qx0, qy1));
+
             let base = self.vertices.len() as u32;
             self.vertices.push(TextVertex {
-                position: [qx0, qy0],
+                position: [p0x, p0y],
                 uv: [u0, v0],
                 color,
             });
             self.vertices.push(TextVertex {
-                position: [qx1, qy0],
+                position: [p1x, p1y],
                 uv: [u1, v0],
                 color,
             });
             self.vertices.push(TextVertex {
-                position: [qx1, qy1],
+                position: [p2x, p2y],
                 uv: [u1, v1],
                 color,
             });
             self.vertices.push(TextVertex {
-                position: [qx0, qy1],
+                position: [p3x, p3y],
                 uv: [u0, v1],
                 color,
             });
