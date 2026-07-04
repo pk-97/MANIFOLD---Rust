@@ -202,6 +202,12 @@ impl ContentThread {
                 self.engine.session_set_quantize(beats);
             }
 
+            // ── Automation lanes (P1) ───────────────────────────────
+            ContentCommand::AutomationBackToArrangement => {
+                self.engine.automation_back_to_arrangement();
+                self.engine.mark_compositor_dirty_now();
+            }
+
             // ── Editing ────────────────────────────────────────────
             ContentCommand::Execute(cmd) => {
                 if let Some(p) = self.engine.project_mut() {

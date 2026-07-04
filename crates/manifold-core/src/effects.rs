@@ -457,6 +457,19 @@ pub struct ParamSlot {
     /// through to `value`, so a stale `base` here is never observed.
     pub base: f32,
     pub exposed: bool,
+    /// Runtime-only touch flag for the automation-lane override latch (see
+    /// `docs/AUTOMATION_LANES_DESIGN.md` §4). Set by [`PresetInstance::set_base_param`]
+    /// — the single funnel every live hand (UI slider, Ableton macro, OSC,
+    /// macro bank) writes through — so `manifold-playback`'s automation
+    /// evaluator can detect "a hand touched this param since I last looked"
+    /// without a per-path hook. Never serialized: `ParamSlot` has hand-written
+    /// `Serialize`/`Deserialize` impls below that only ever read/write
+    /// `value` + `exposed`, so this field is dropped on the wire by
+    /// construction, no `#[serde(skip)]` needed. System-level base seeding
+    /// (registry defaults via `create_default`) goes through the internal
+    /// `write_base_param` instead of `set_base_param`, so a freshly-created
+    /// instance's params start untouched.
+    pub touched: bool,
 }
 
 impl Default for ParamSlot {
@@ -465,6 +478,7 @@ impl Default for ParamSlot {
             value: 0.0,
             base: 0.0,
             exposed: true,
+            touched: false,
         }
     }
 }
@@ -478,6 +492,7 @@ impl ParamSlot {
             value,
             base: value,
             exposed: true,
+            touched: false,
         }
     }
 }
@@ -575,6 +590,7 @@ impl<'de> Deserialize<'de> for ParamSlot {
                     value: v,
                     base: v,
                     exposed: exposed.unwrap_or(true),
+                    touched: false,
                 })
             }
         }
@@ -654,6 +670,11 @@ pub struct PresetInstance {
     /// drives a param from a named audio send. `None` when unused. See
     /// `docs/AUDIO_MODULATION_DESIGN.md`.
     pub audio_mods: Option<Vec<crate::audio_mod::ParameterAudioMod>>,
+    /// Per-instance timeline automation, keyed by `param_id` — a lane is a
+    /// beat-indexed base writer sampled each tick (a tier-1 "hand"), riding
+    /// on top of the same modulation pipeline audio_mods/drivers/envelopes
+    /// feed. `None` when unused. See `docs/AUTOMATION_LANES_DESIGN.md`.
+    pub automation_lanes: Option<Vec<AutomationLane>>,
     pub group_id: Option<EffectGroupId>,
 
     /// Per-instance graph topology override. `None` means "use the
@@ -1176,6 +1197,9 @@ impl Serialize for PresetInstance {
         if self.audio_mods.is_some() {
             field_count += 1;
         }
+        if self.automation_lanes.is_some() {
+            field_count += 1;
+        }
         if self.group_id.is_some() {
             field_count += 1;
         }
@@ -1241,6 +1265,9 @@ impl Serialize for PresetInstance {
         if let Some(a) = &self.audio_mods {
             s.serialize_field("audioMods", a)?;
         }
+        if let Some(a) = &self.automation_lanes {
+            s.serialize_field("automationLanes", a)?;
+        }
         if let Some(g) = &self.group_id {
             s.serialize_field("groupId", g)?;
         }
@@ -1292,6 +1319,9 @@ impl PresetInstance {
         if self.audio_mods.is_some() {
             field_count += 1;
         }
+        if self.automation_lanes.is_some() {
+            field_count += 1;
+        }
         if self.graph.is_some() {
             field_count += 1;
         }
@@ -1329,6 +1359,9 @@ impl PresetInstance {
         }
         if let Some(a) = &self.audio_mods {
             s.serialize_field("audioMods", a)?;
+        }
+        if let Some(a) = &self.automation_lanes {
+            s.serialize_field("automationLanes", a)?;
         }
         if let Some(g) = &self.graph {
             s.serialize_field("graph", g)?;
@@ -1443,6 +1476,8 @@ impl<'de> Deserialize<'de> for PresetInstance {
             #[serde(default)]
             audio_mods: Option<Vec<crate::audio_mod::ParameterAudioMod>>,
             #[serde(default)]
+            automation_lanes: Option<Vec<AutomationLane>>,
+            #[serde(default)]
             group_id: Option<EffectGroupId>,
             #[serde(default)]
             graph: Option<EffectGraphDef>,
@@ -1518,6 +1553,7 @@ impl<'de> Deserialize<'de> for PresetInstance {
             envelopes: raw.envelopes,
             ableton_mappings: raw.ableton_mappings,
             audio_mods: raw.audio_mods,
+            automation_lanes: raw.automation_lanes,
             group_id: raw.group_id,
             graph: raw.graph,
             graph_version: 0,
@@ -1554,6 +1590,8 @@ struct GeneratorInstanceRaw {
     ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
     #[serde(default)]
     audio_mods: Option<Vec<crate::audio_mod::ParameterAudioMod>>,
+    #[serde(default)]
+    automation_lanes: Option<Vec<AutomationLane>>,
     /// The generator's per-instance graph override. Lives on the generator
     /// `PresetInstance` now (graph-home unification) exactly like an effect's
     /// `graph`; older projects carried it on the layer (`generatorGraph`) and
@@ -1592,6 +1630,7 @@ impl GeneratorInstanceRaw {
             envelopes: self.envelopes,
             ableton_mappings: self.ableton_mappings,
             audio_mods: self.audio_mods,
+            automation_lanes: self.automation_lanes,
             group_id: None,
             graph: self.graph,
             graph_version: 0,
@@ -1690,6 +1729,7 @@ impl PresetInstance {
             envelopes: None,
             ableton_mappings: None,
             audio_mods: None,
+            automation_lanes: None,
             group_id: None,
             graph: None,
             graph_version: 0,
@@ -1718,6 +1758,7 @@ impl PresetInstance {
             envelopes: None,
             ableton_mappings: None,
             audio_mods: None,
+            automation_lanes: None,
             group_id: None,
             graph: None,
             graph_version: 0,
@@ -1853,7 +1894,39 @@ impl PresetInstance {
     /// `param_values` to the registry length before writing — generator-only,
     /// because an effect's `param_values` is already aligned by
     /// `align_to_definition`.
+    ///
+    /// **The single funnel** every live hand (UI slider, Ableton macro, OSC
+    /// param router, macro bank, editing commands) writes through — marks the
+    /// slot `touched` so the automation-lane override latch
+    /// (`docs/AUTOMATION_LANES_DESIGN.md` §4) can detect it. System-level base
+    /// seeding that is NOT a live gesture (registry default population,
+    /// automation-lane sampling) must go through [`Self::write_base_param`] /
+    /// [`Self::set_base_param_from_automation`] instead — see those docs for
+    /// why using this one there would be a bug (spurious self-latch).
     pub fn set_base_param(&mut self, index: usize, value: f32) {
+        self.write_base_param(index, value);
+        if let Some(slot) = self.param_values.get_mut(index) {
+            slot.touched = true;
+        }
+    }
+
+    /// Automation-lane-only sibling of [`Self::set_base_param`]: writes
+    /// `base`/`value` identically via [`Self::write_base_param`] but does
+    /// **not** set `touched`. Using `set_base_param` from the automation
+    /// evaluator would set `touched` on its own write, and the very next
+    /// frame's touch-check would read that back as "a hand just touched
+    /// this" and latch the lane as overridden — a same-frame self-trigger.
+    /// See `docs/AUTOMATION_LANES_DESIGN.md` §4. Callers outside
+    /// `manifold-playback`'s automation sampler should use `set_base_param`.
+    pub fn set_base_param_from_automation(&mut self, index: usize, value: f32) {
+        self.write_base_param(index, value);
+    }
+
+    /// Shared body for [`Self::set_base_param`] and
+    /// [`Self::set_base_param_from_automation`]: generator migrate-on-touch,
+    /// `ensure_base_values`, grow to `index`, write base + effective. Does
+    /// not touch the `touched` flag — callers decide that.
+    pub(crate) fn write_base_param(&mut self, index: usize, value: f32) {
         if self.is_generator()
             && let Some(def) = crate::preset_definition_registry::try_get(&self.effect_type)
             && self.param_values.len() < def.param_count
@@ -2699,6 +2772,11 @@ impl PresetInstance {
                 orphans.insert(a.param_id.to_string());
             }
         }
+        for l in self.automation_lanes.iter().flatten() {
+            if self.param_id_to_value_index(&l.param_id).is_none() {
+                orphans.insert(l.param_id.to_string());
+            }
+        }
         if orphans.is_empty() {
             return RemovedAutomation::default();
         }
@@ -2709,6 +2787,9 @@ impl PresetInstance {
             }),
             envelopes: take_automation_by_ids(&mut self.envelopes, &orphans, |e| &e.param_id),
             audio_mods: take_automation_by_ids(&mut self.audio_mods, &orphans, |a| &a.param_id),
+            automation_lanes: take_automation_by_ids(&mut self.automation_lanes, &orphans, |l| {
+                &l.param_id
+            }),
         }
     }
 
@@ -2733,6 +2814,11 @@ impl PresetInstance {
             self.audio_mods
                 .get_or_insert_with(Vec::new)
                 .extend(removed.audio_mods);
+        }
+        if !removed.automation_lanes.is_empty() {
+            self.automation_lanes
+                .get_or_insert_with(Vec::new)
+                .extend(removed.automation_lanes);
         }
     }
 
@@ -2804,16 +2890,17 @@ fn take_automation_by_ids<T>(
     taken
 }
 
-/// Automation rows (drivers / Ableton mappings / envelopes) removed because
-/// their `param_id` no longer resolved to a live param. Returned by
-/// [`PresetInstance::prune_orphaned_automation`] and restored by
-/// [`PresetInstance::restore_automation`] on undo.
+/// Automation rows (drivers / Ableton mappings / envelopes / automation
+/// lanes) removed because their `param_id` no longer resolved to a live
+/// param. Returned by [`PresetInstance::prune_orphaned_automation`] and
+/// restored by [`PresetInstance::restore_automation`] on undo.
 #[derive(Debug, Clone, Default)]
 pub struct RemovedAutomation {
     drivers: Vec<ParameterDriver>,
     ableton_mappings: Vec<crate::ableton_mapping::AbletonParamMapping>,
     envelopes: Vec<ParamEnvelope>,
     audio_mods: Vec<crate::audio_mod::ParameterAudioMod>,
+    automation_lanes: Vec<AutomationLane>,
 }
 
 /// Implement ParamSource for PresetInstance.
@@ -3634,6 +3721,138 @@ impl<'de> Deserialize<'de> for ParamEnvelope {
     }
 }
 
+// ─── Automation lanes ───
+//
+// Timeline arrangement automation — a tier-1 "hand" sampled from the
+// arrangement each tick (`manifold-playback::automation`), riding on top of
+// the same base/value slot every other hand writes through. See
+// `docs/AUTOMATION_LANES_DESIGN.md`.
+
+/// Per-param timeline automation, keyed by `param_id` — the exact pattern of
+/// the sibling per-param automation rows (`drivers` / `envelopes` /
+/// `audio_mods` / `ableton_mappings`) that already live on `PresetInstance`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutomationLane {
+    pub param_id: ParamId,
+    /// Lane on/off (Ableton: a deactivated automation lane). A disabled lane
+    /// neither samples nor participates in touch/latch bookkeeping.
+    pub enabled: bool,
+    /// Sorted ascending by `beat` — the write-time invariant P2's editing
+    /// commands enforce (mirrors `TempoMap::ensure_sorted`). [`Self::value_at`]
+    /// assumes this and does not re-sort.
+    pub points: Vec<AutomationPoint>,
+}
+
+/// One breakpoint on an [`AutomationLane`]. `value` is stored in param-range
+/// units (not normalized) — a lane's points are only ever resolved against
+/// [`resolve_param_in`]'s min/max for clamping, at write time (P2) and again
+/// at sample time (defensive against a range narrowed after the point was
+/// authored).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutomationPoint {
+    /// Arrangement beat, absolute (not clip-relative). Automation lanes are
+    /// beat-indexed, so they stretch with tempo automatically.
+    pub beat: Beats,
+    pub value: f32,
+    /// Shape of the segment LEAVING this point, toward the next one.
+    pub shape: SegmentShape,
+}
+
+/// The interpolation shape of one automation segment.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "camelCase")]
+pub enum SegmentShape {
+    Linear,
+    /// Step — holds the earlier point's value for the whole segment.
+    /// Required for enum/int-backed params (the sampler doesn't round; the
+    /// existing param write path handles that exactly as slider writes do —
+    /// authoring with `Hold` is what keeps an enum param from reading a
+    /// nonsense mid-interpolation value).
+    Hold,
+    /// Power-curve bend, Ableton-style segment drag. `-1..1`: negative bends
+    /// concave (slow start), positive bends convex (fast start), `0` is
+    /// linear. Values outside `-1..1` are clamped at evaluation time.
+    Curved(f32),
+}
+
+impl AutomationLane {
+    /// Sample the curve at `beat`, in param-range units. Pure,
+    /// allocation-free: binary-search the segment containing `beat`.
+    ///
+    /// - Empty lane → `0.0` (never sampled in practice — the evaluator skips
+    ///   empty lanes before calling this).
+    /// - Before the first point → the first point's value (Ableton
+    ///   behavior: no backward extrapolation).
+    /// - After the last point → the last point's value.
+    /// - Between two points → the earlier point's [`SegmentShape`] decides:
+    ///   `Linear` interpolates, `Hold` steps, `Curved(bend)` applies the
+    ///   power-curve bend to the interpolation parameter before lerping.
+    pub fn value_at(&self, beat: Beats) -> f32 {
+        match self.points.as_slice() {
+            [] => 0.0,
+            [only] => only.value,
+            points => {
+                let first = &points[0];
+                if beat.0 <= first.beat.0 {
+                    return first.value;
+                }
+                let last = &points[points.len() - 1];
+                if beat.0 >= last.beat.0 {
+                    return last.value;
+                }
+                // `partial_cmp` is safe here: both operands come from
+                // `Beats(f64)` values that reached the arrangement (never
+                // NaN in practice), and a NaN comparison degrading to
+                // `Equal` only widens the binary search, never panics.
+                let idx = match points
+                    .binary_search_by(|p| p.beat.0.partial_cmp(&beat.0).unwrap_or(std::cmp::Ordering::Equal))
+                {
+                    Ok(i) => i,
+                    // `i > 0` is guaranteed: the `beat <= first.beat` check
+                    // above already returned for any beat at or before index 0.
+                    Err(i) => i - 1,
+                };
+                let a = &points[idx];
+                let b = &points[idx + 1];
+                let span = (b.beat.0 - a.beat.0) as f32;
+                if span <= 0.0 {
+                    return a.value;
+                }
+                let t = ((beat.0 - a.beat.0) as f32 / span).clamp(0.0, 1.0);
+                match a.shape {
+                    SegmentShape::Hold => a.value,
+                    SegmentShape::Linear => a.value + (b.value - a.value) * t,
+                    SegmentShape::Curved(bend) => {
+                        let shaped = segment_bend(t, bend);
+                        a.value + (b.value - a.value) * shaped
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Power-curve bend for a `Curved` segment's interpolation parameter `t`
+/// (already `[0, 1]`). `bend` in `-1..1`: `0` is identity (linear); positive
+/// bends convex (`t^exponent`, exponent > 1, slow start / fast finish);
+/// negative bends concave (exponent < 1, fast start / slow finish) — the
+/// standard symmetric power-curve shape, Ableton's segment-drag feel.
+/// Endpoints are exact regardless of bend: `f(0) = 0`, `f(1) = 1`.
+fn segment_bend(t: f32, bend: f32) -> f32 {
+    let bend = bend.clamp(-1.0, 1.0);
+    if bend == 0.0 {
+        return t;
+    }
+    let exponent = if bend > 0.0 {
+        1.0 + bend * 3.0 // 1..4
+    } else {
+        1.0 / (1.0 - bend * 3.0) // 1..0.25
+    };
+    t.powf(exponent)
+}
+
 // ─── Default helpers ───
 
 fn default_true() -> bool {
@@ -4073,6 +4292,7 @@ mod tests {
             envelopes: None,
             ableton_mappings: None,
             audio_mods: None,
+            automation_lanes: None,
             group_id: None,
             graph: None,
             graph_version: 0,
@@ -4125,11 +4345,13 @@ mod tests {
                     value: 0.1,
                     base: 0.1,
                     exposed: true,
+                    touched: false,
                 },
                 ParamSlot {
                     value: 0.2,
                     base: 0.2,
                     exposed: false,
+                    touched: false,
                 },
             ],
             base_tracked: false,
@@ -4137,6 +4359,7 @@ mod tests {
             envelopes: None,
             ableton_mappings: None,
             audio_mods: None,
+            automation_lanes: None,
             group_id: None,
             graph: None,
             graph_version: 0,
@@ -4437,9 +4660,21 @@ mod tests {
         assert!(removed.is_some());
         assert_eq!(fx.user_param_count(), 1);
         // Static prefix preserved + user tail compacted around the gap.
+        // Slot 0 was seeded directly (never a `set_base_param` hand) so it
+        // stays untouched; slot 1's value came from `set_base_param(2, 0.6)`
+        // above, so it carries `touched: true` — the funnel every hand
+        // (including this test's own setup) writes through.
         assert_eq!(
             fx.param_values,
-            vec![ParamSlot::exposed(0.7), ParamSlot::exposed(0.6)]
+            vec![
+                ParamSlot::exposed(0.7),
+                ParamSlot {
+                    value: 0.6,
+                    base: 0.6,
+                    exposed: true,
+                    touched: true,
+                },
+            ]
         );
     }
 
@@ -4630,6 +4865,15 @@ mod tests {
         fx.create_driver(ParamId::from("user.a.b.1")); // live
         fx.create_driver(ParamId::from("user.gone.x.1")); // orphan — never bound
         fx.envelopes = Some(vec![ParamEnvelope::new("user.gone.x.1")]); // orphan
+        fx.automation_lanes = Some(vec![AutomationLane {
+            param_id: ParamId::from("user.gone.x.1"),
+            enabled: true,
+            points: vec![AutomationPoint {
+                beat: Beats(0.0),
+                value: 0.5,
+                shape: SegmentShape::Linear,
+            }],
+        }]); // orphan — same unresolvable id as the driver/envelope above
 
         let removed = fx.prune_orphaned_automation();
         assert!(fx.find_driver("user.a.b.1").is_some(), "live driver kept");
@@ -4637,6 +4881,10 @@ mod tests {
         assert!(
             fx.envelopes.is_none(),
             "sole orphan envelope pruned, list collapses to None"
+        );
+        assert!(
+            fx.automation_lanes.is_none(),
+            "sole orphan automation lane pruned, list collapses to None"
         );
 
         fx.restore_automation(removed);
@@ -4647,6 +4895,11 @@ mod tests {
         assert!(
             fx.find_envelope("user.gone.x.1").is_some(),
             "orphan envelope restored on undo"
+        );
+        assert_eq!(
+            fx.automation_lanes.as_ref().map(|v| v.len()),
+            Some(1),
+            "orphan automation lane restored on undo"
         );
     }
 
@@ -4836,5 +5089,279 @@ mod tests {
         }"#;
         let fx: PresetInstance = serde_json::from_str(json).unwrap();
         assert!(fx.graph.is_none());
+    }
+
+    // ─── Automation lane curve evaluation ───
+
+    fn pt(beat: f64, value: f32, shape: SegmentShape) -> AutomationPoint {
+        AutomationPoint {
+            beat: Beats(beat),
+            value,
+            shape,
+        }
+    }
+
+    #[test]
+    fn automation_lane_empty_returns_zero() {
+        let lane = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: Vec::new(),
+        };
+        assert_eq!(lane.value_at(Beats(4.0)), 0.0);
+    }
+
+    #[test]
+    fn automation_lane_single_point_holds_everywhere() {
+        let lane = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![pt(4.0, 0.7, SegmentShape::Linear)],
+        };
+        assert_eq!(lane.value_at(Beats(-10.0)), 0.7);
+        assert_eq!(lane.value_at(Beats(4.0)), 0.7);
+        assert_eq!(lane.value_at(Beats(100.0)), 0.7);
+    }
+
+    #[test]
+    fn automation_lane_before_first_point_holds_first_value() {
+        // Ableton behavior: no backward extrapolation.
+        let lane = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![
+                pt(4.0, 0.2, SegmentShape::Linear),
+                pt(8.0, 0.8, SegmentShape::Linear),
+            ],
+        };
+        assert_eq!(lane.value_at(Beats(0.0)), 0.2);
+        assert_eq!(lane.value_at(Beats(4.0)), 0.2);
+    }
+
+    #[test]
+    fn automation_lane_after_last_point_holds_last_value() {
+        let lane = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![
+                pt(4.0, 0.2, SegmentShape::Linear),
+                pt(8.0, 0.8, SegmentShape::Linear),
+            ],
+        };
+        assert_eq!(lane.value_at(Beats(8.0)), 0.8);
+        assert_eq!(lane.value_at(Beats(1000.0)), 0.8);
+    }
+
+    #[test]
+    fn automation_lane_linear_segment_interpolates() {
+        let lane = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![
+                pt(0.0, 0.0, SegmentShape::Linear),
+                pt(4.0, 1.0, SegmentShape::Linear),
+            ],
+        };
+        assert!((lane.value_at(Beats(2.0)) - 0.5).abs() < 1e-6);
+        assert!((lane.value_at(Beats(1.0)) - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn automation_lane_hold_segment_steps() {
+        // `Hold` on the earlier point: the segment holds that point's value
+        // for its whole span, then jumps at the next point — required for
+        // enum/int-backed params.
+        let lane = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![
+                pt(0.0, 0.0, SegmentShape::Hold),
+                pt(4.0, 1.0, SegmentShape::Hold),
+                pt(8.0, 2.0, SegmentShape::Linear),
+            ],
+        };
+        assert_eq!(lane.value_at(Beats(0.0)), 0.0);
+        assert_eq!(lane.value_at(Beats(3.9)), 0.0, "holds through the segment");
+        assert_eq!(lane.value_at(Beats(4.0)), 1.0, "steps exactly at the next point");
+        assert_eq!(lane.value_at(Beats(7.9)), 1.0);
+    }
+
+    #[test]
+    fn automation_lane_curved_segment_bends_but_keeps_endpoints() {
+        let convex = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![
+                pt(0.0, 0.0, SegmentShape::Curved(1.0)),
+                pt(4.0, 1.0, SegmentShape::Linear),
+            ],
+        };
+        let concave = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![
+                pt(0.0, 0.0, SegmentShape::Curved(-1.0)),
+                pt(4.0, 1.0, SegmentShape::Linear),
+            ],
+        };
+        // Endpoints exact regardless of bend.
+        assert_eq!(convex.value_at(Beats(0.0)), 0.0);
+        assert_eq!(convex.value_at(Beats(4.0)), 1.0);
+        // Midpoint: positive bend (convex) sits BELOW the linear midpoint
+        // (slow start); negative bend (concave) sits ABOVE it (fast start).
+        let mid_linear = 0.5;
+        let mid_convex = convex.value_at(Beats(2.0));
+        let mid_concave = concave.value_at(Beats(2.0));
+        assert!(mid_convex < mid_linear, "convex bend lags at the midpoint");
+        assert!(mid_concave > mid_linear, "concave bend leads at the midpoint");
+    }
+
+    #[test]
+    fn automation_lane_bend_out_of_range_is_clamped() {
+        // `Curved` bends are only meaningful in -1..1; anything past that
+        // clamps rather than producing a wild exponent.
+        let over = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![
+                pt(0.0, 0.0, SegmentShape::Curved(5.0)),
+                pt(4.0, 1.0, SegmentShape::Linear),
+            ],
+        };
+        let clamped = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![
+                pt(0.0, 0.0, SegmentShape::Curved(1.0)),
+                pt(4.0, 1.0, SegmentShape::Linear),
+            ],
+        };
+        assert!((over.value_at(Beats(2.0)) - clamped.value_at(Beats(2.0))).abs() < 1e-6);
+    }
+
+    #[test]
+    fn automation_lane_three_points_binary_search_finds_middle_segment() {
+        let lane = AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![
+                pt(0.0, 0.0, SegmentShape::Linear),
+                pt(4.0, 1.0, SegmentShape::Linear),
+                pt(8.0, 0.0, SegmentShape::Linear),
+            ],
+        };
+        assert!((lane.value_at(Beats(6.0)) - 0.5).abs() < 1e-6);
+    }
+
+    // ─── PresetInstance.automation_lanes serde (skip-when-empty) ───
+
+    #[test]
+    fn preset_instance_without_automation_lanes_serializes_byte_identical() {
+        // No lanes → no `automationLanes` key at all, and round-tripping a
+        // fixture that never had lanes must not introduce one. Same
+        // skip-when-empty convention as `drivers`/`envelopes`/`audioMods`.
+        let fx = PresetInstance::new(PresetTypeId::new("Mirror"));
+        assert!(fx.automation_lanes.is_none());
+        let json = serde_json::to_string(&fx).unwrap();
+        assert!(
+            !json.contains("automationLanes"),
+            "no automation_lanes → no key on the wire; got: {json}"
+        );
+        let back: PresetInstance = serde_json::from_str(&json).unwrap();
+        assert!(back.automation_lanes.is_none());
+    }
+
+    #[test]
+    fn preset_instance_automation_lanes_roundtrip_when_present() {
+        let mut fx = PresetInstance::new(PresetTypeId::new("Mirror"));
+        fx.automation_lanes = Some(vec![AutomationLane {
+            param_id: ParamId::from("amount"),
+            enabled: true,
+            points: vec![pt(0.0, 0.25, SegmentShape::Curved(0.5))],
+        }]);
+        let json = serde_json::to_string(&fx).unwrap();
+        assert!(json.contains("automationLanes"));
+        let back: PresetInstance = serde_json::from_str(&json).unwrap();
+        let lanes = back.automation_lanes.expect("lanes round-trip");
+        assert_eq!(lanes.len(), 1);
+        assert_eq!(lanes[0].param_id, ParamId::from("amount"));
+        assert!(lanes[0].enabled);
+        assert_eq!(lanes[0].points.len(), 1);
+        assert_eq!(lanes[0].points[0].value, 0.25);
+        assert_eq!(lanes[0].points[0].shape, SegmentShape::Curved(0.5));
+    }
+
+    // ─── touched flag: the automation self-trigger footgun ───
+
+    #[test]
+    fn set_base_param_marks_touched() {
+        // The single funnel every live hand writes through — the automation
+        // evaluator's touch-detection relies on this.
+        let mut fx = PresetInstance::new(PresetTypeId::new("Mirror"));
+        fx.set_base_param(0, 0.5);
+        assert!(fx.param_values[0].touched, "set_base_param marks touched");
+    }
+
+    #[test]
+    fn write_base_param_does_not_mark_touched() {
+        // System-level seeding (registry defaults) must not look like a hand
+        // touch — see `preset_definition_registry::create_default`.
+        let mut fx = PresetInstance::new(PresetTypeId::new("Mirror"));
+        fx.write_base_param(0, 0.5);
+        assert!(
+            !fx.param_values[0].touched,
+            "write_base_param must not set touched"
+        );
+        assert_eq!(fx.param_values[0].base, 0.5);
+        assert_eq!(fx.param_values[0].value, 0.5);
+    }
+
+    #[test]
+    fn set_base_param_from_automation_does_not_mark_touched() {
+        // The automation evaluator's own write path — using the public
+        // set_base_param here would self-latch the very next frame.
+        let mut fx = PresetInstance::new(PresetTypeId::new("Mirror"));
+        fx.set_base_param_from_automation(0, 0.5);
+        assert!(
+            !fx.param_values[0].touched,
+            "set_base_param_from_automation must not set touched"
+        );
+        assert_eq!(fx.param_values[0].base, 0.5);
+        assert_eq!(fx.param_values[0].value, 0.5);
+    }
+
+    // Registered via `inventory::submit!` at module scope (mirrors
+    // `manifold-playback`'s `modulation::tests` fixture pattern) — the
+    // registry is normally populated by manifold-renderer's effect
+    // implementations, which manifold-core's own test binary doesn't link.
+    inventory::submit! {
+        crate::effect_registration::EffectMetadata {
+            id: PresetTypeId::new("TestCreateDefaultUntouched"),
+            display_name: "Test Create Default Untouched",
+            category: "Test",
+            available: true,
+            osc_prefix: "testCreateDefaultUntouched",
+            legacy_discriminant: None,
+            params: &[crate::generator_registration::ParamSpec::continuous(
+                "amount", "Amount", 0.0, 1.0, 0.42, "F2", "",
+            )],
+        }
+    }
+
+    #[test]
+    fn create_default_does_not_mark_params_touched() {
+        // The exact bug this phase's call-site audit found: `create_default`
+        // used to seed via the public `set_base_param`, which would have
+        // marked every freshly-created effect's params `touched` before any
+        // lane or hand ever existed — pre-latching any lane authored on them
+        // later.
+        let inst = crate::preset_definition_registry::create_default(&PresetTypeId::new(
+            "TestCreateDefaultUntouched",
+        ));
+        assert!(
+            !inst.param_values[0].touched,
+            "create_default must not mark freshly-seeded params touched"
+        );
+        assert_eq!(inst.param_values[0].base, 0.42);
     }
 }

@@ -177,6 +177,12 @@ pub struct PlaybackEngine {
     /// [`Self::set_audio_snapshot`]. Empty when audio modulation is inactive, in
     /// which case the audio phase of the modulation pipeline is a no-op.
     audio_snapshot: manifold_core::audio_features::AudioFeatureSnapshot,
+    /// Automation-lane override latch: params a live hand has touched since
+    /// the last Back to Arrangement. Runtime-only, owned by the playback
+    /// side (never the `Project`), never serialized, survives play/stop
+    /// within a session. See `crate::automation` and
+    /// `docs/AUTOMATION_LANES_DESIGN.md` §4.
+    automation_latches: crate::automation::AutomationLatches,
     /// Frame count when timeline_active_scratch was last populated.
     /// Used to skip redundant re-queries within the same frame.
     timeline_query_frame: u64,
@@ -261,6 +267,7 @@ impl PlaybackEngine {
             sync_start_scratch: Vec::with_capacity(4),
             modulation_timing_scratch: Vec::with_capacity(64),
             audio_snapshot: manifold_core::audio_features::AudioFeatureSnapshot::default(),
+            automation_latches: crate::automation::AutomationLatches::default(),
             timeline_query_frame: u64::MAX, // sentinel: never matches a real frame
             became_ready_list: Vec::with_capacity(8),
             clips_to_stop_drift: Vec::with_capacity(8),
@@ -747,6 +754,24 @@ impl PlaybackEngine {
         //    Port of C# line 1166.
         self.check_custom_loop_boundaries();
 
+        // 6b. Sample automation lanes — a tier-1 hand (base writer), sampled
+        //     from the arrangement. Must land BEFORE the modulation base→value
+        //     reset just below it, not after — automation is not a fifth
+        //     modulation phase. Runs whenever the transport is playing
+        //     (tick_playing only — export drives the transport in Playing
+        //     state too, so export sampling falls out for free; when stopped,
+        //     tick_non_playing never calls this, so lanes don't write and
+        //     params hold). See docs/AUTOMATION_LANES_DESIGN.md §1, §3.
+        let automation_dirty = if let Some(project) = &mut self.project {
+            crate::automation::evaluate_all_automation(
+                project,
+                Beats(self.current_beat),
+                &mut self.automation_latches,
+            )
+        } else {
+            false
+        };
+
         // 7. Evaluate modulation pipeline (LFO drivers + ADSR envelopes).
         //    Port of C# DriverController.Update() [ExecutionOrder 50, after PlaybackController].
         let mut timing = std::mem::take(&mut self.modulation_timing_scratch);
@@ -763,6 +788,10 @@ impl PlaybackEngine {
             false
         };
         self.modulation_timing_scratch = timing;
+        // Automation folds into the same compositor-dirty path modulation
+        // uses — a lane write is just as much a reason to re-send the UI
+        // snapshot as a driver/envelope write.
+        let modulation_dirty = automation_dirty || modulation_dirty;
         if modulation_dirty {
             self.mark_compositor_dirty(ctx.realtime_now);
         }
@@ -1343,6 +1372,22 @@ impl PlaybackEngine {
     /// Read-only access to session runtime state (UI snapshot / tests).
     pub fn session_runtime(&self) -> &SessionRuntime {
         &self.session_runtime
+    }
+
+    /// Automation lanes' "Back to Arrangement": clears every override latch
+    /// (global — one action, not per-layer), resuming every automated
+    /// param's lane on the next tick. Not a project mutation — no undo entry
+    /// (`ContentCommand::AutomationBackToArrangement` is handled directly on
+    /// the content thread, same shape as `SessionBackToArrangement`).
+    pub fn automation_back_to_arrangement(&mut self) {
+        self.automation_latches.clear();
+    }
+
+    /// Read-only access to the automation override latch (UI snapshot: the
+    /// "lit red" Back to Arrangement affordance, and per-lane overridden
+    /// state — P4).
+    pub fn automation_latches(&self) -> &crate::automation::AutomationLatches {
+        &self.automation_latches
     }
 
     // ─── Time/Tempo math ───

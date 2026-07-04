@@ -82,6 +82,16 @@ pub enum ContentCommand {
     #[allow(dead_code)]
     SessionSetQuantize { beats: Beats },
 
+    // ── Automation lanes (P1, docs/AUTOMATION_LANES_DESIGN.md §4/§6) ──
+    /// Automation lanes' "Back to Arrangement": clears every override latch
+    /// (one global action, not per-layer — lights up red in the transport
+    /// bar when any latch is set), resuming every automated param's lane.
+    /// Mutates runtime latch state, not the project, so this is a
+    /// `ContentCommand` (like `SessionBackToArrangement`) rather than an
+    /// `EditingService` command — no undo entry.
+    #[allow(dead_code)]
+    AutomationBackToArrangement,
+
     // ── Audio ──────────────────────────────────────────────────────
     /// Set which send the Audio Setup spectrogram scope is showing (`None` =
     /// panel closed / no selection). Drives the worker's VQT column producer.
