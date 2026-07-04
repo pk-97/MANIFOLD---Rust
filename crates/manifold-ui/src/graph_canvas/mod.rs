@@ -538,6 +538,30 @@ pub struct GraphCanvas {
     /// output port, or the source node itself).
     pub(crate) error_shake: crate::anim::Transient,
     pub(crate) error_shake_pos: (f32, f32),
+
+    /// D17 "wire→port magnetize" — the ghost wire's rendered endpoint while
+    /// dragging a `WireFrom`. Eases (`Curve::Snap`, back-out) toward a
+    /// nearby input port's exact position once `port_under` finds one
+    /// within its hit radius; otherwise tracks the raw cursor with no lag
+    /// (see `tick_wire_magnet`'s doc for why). `wire_magnet_live` gates
+    /// `wire_ghost_endpoint`'s fallback to the raw cursor before the first
+    /// tick of a fresh drag (the anim's stale value from the previous drag
+    /// would otherwise flash for one frame).
+    pub(crate) wire_magnet_x: crate::anim::AnimF32,
+    pub(crate) wire_magnet_y: crate::anim::AnimF32,
+    pub(crate) wire_magnet_live: bool,
+    /// Wall-clock timestamp `tick_wire_magnet` last ran from — mirrors
+    /// `DropdownPanel::last_tick` (this tick needs `viewport: Rect`, which
+    /// `GraphCanvas::tick` doesn't have; it runs from `present_graph_editor_
+    /// window` instead, right where the viewport rect is already computed).
+    pub(crate) wire_magnet_last_tick: Option<std::time::Instant>,
+    /// D17 "flow pulse" — one dash travels source→dest along a wire the
+    /// instant it connects. `Some` only while active; the two endpoints are
+    /// screen-space, captured at fire time (the two nodes don't move mid-
+    /// pulse — MOTION_MED_MS).
+    pub(crate) wire_flow_pulse: crate::anim::Transient,
+    pub(crate) wire_flow_pulse_from: (f32, f32),
+    pub(crate) wire_flow_pulse_to: (f32, f32),
 }
 
 impl GraphCanvas {
@@ -583,28 +607,32 @@ impl GraphCanvas {
             connect_pop_pos: (0.0, 0.0),
             error_shake: crate::anim::Transient::default(),
             error_shake_pos: (0.0, 0.0),
+            wire_magnet_x: crate::anim::AnimF32::new(0.0, color::MOTION_MED_MS)
+                .with_curve(crate::anim::Curve::Snap),
+            wire_magnet_y: crate::anim::AnimF32::new(0.0, color::MOTION_MED_MS)
+                .with_curve(crate::anim::Curve::Snap),
+            wire_magnet_live: false,
+            wire_magnet_last_tick: None,
+            wire_flow_pulse: crate::anim::Transient::default(),
+            wire_flow_pulse_from: (0.0, 0.0),
+            wire_flow_pulse_to: (0.0, 0.0),
         }
     }
 
     /// Per-frame tween tick for the canvas's P2 motion pieces (marquee fade,
-    /// connect pop, error shake — see each field's own doc comment). Call
-    /// once per frame while the graph editor window is open; `app_render.rs`
-    /// is the one call site, next to the existing `set_snapshot`/
-    /// `apply_live_values` calls that already run every such frame. Returns
-    /// `true` while anything is still animating, matching every other
-    /// panel's `tick_*` contract (the caller can use it to force a redraw).
+    /// connect pop, error shake, flow pulse — see each field's own doc
+    /// comment). Call once per frame while the graph editor window is open;
+    /// `app_render.rs` is the one call site, next to the existing
+    /// `set_snapshot`/`apply_live_values` calls that already run every such
+    /// frame. Returns `true` while anything is still animating, matching
+    /// every other panel's `tick_*` contract (the caller can use it to force
+    /// a redraw).
     ///
-    /// NOT done here (scoped out — see the phase report): wire→port
-    /// magnetize (easing the ghost wire's endpoint toward a nearby port
-    /// before the drop, rather than tracking the raw cursor) and a
-    /// traveling dash pulse along the wire from source to destination on
-    /// connect. Both need the port's exact screen position resolved from its
-    /// node + port-index (`NodeView::input_port_pos_graph` indexes by
-    /// position, not name, then needs a graph→screen projection) threaded
-    /// into the drag state live each frame; `connect_pop`/`error_shake`
-    /// below instead fire at the drop cursor position, which is already in
-    /// screen space and lands on (or very near) the real port for a valid
-    /// drop.
+    /// Wire→port magnetize (D17) is deliberately NOT ticked here — it needs
+    /// `viewport: Rect` to resolve a port's screen position (`port_under` +
+    /// `to_screen`), which this call site doesn't have. See
+    /// `tick_wire_magnet`, ticked separately from `present_graph_editor_
+    /// window` where the viewport rect is already computed.
     pub fn tick(&mut self, dt_ms: f32) -> bool {
         let mut any = false;
 
@@ -620,8 +648,83 @@ impl GraphCanvas {
 
         any |= self.connect_pop.tick(dt_ms);
         any |= self.error_shake.tick(dt_ms);
+        any |= self.wire_flow_pulse.tick(dt_ms);
 
         any
+    }
+
+    /// D17 "wire→port magnetize": advance the ghost wire's endpoint by real
+    /// elapsed wall-clock time. While dragging a `WireFrom`, hit-tests the
+    /// live cursor against input ports with the SAME `port_under` radius the
+    /// drop itself uses (so the visual snap point and the functional connect
+    /// threshold can never disagree) — within range, eases
+    /// (`Curve::Snap`, back-out) toward that port's exact position;
+    /// otherwise snaps straight to the raw cursor (no lag — a wire drag
+    /// should track the pointer 1:1 except for the deliberate magnet pull).
+    /// A no-op outside a `WireFrom` drag. Call once per frame from
+    /// `present_graph_editor_window`, which already resolves `viewport` for
+    /// the draw pass this feeds.
+    pub fn tick_wire_magnet(&mut self, viewport: Rect) {
+        let DragMode::WireFrom { .. } = &self.drag_mode else {
+            self.wire_magnet_live = false;
+            self.wire_magnet_last_tick = None;
+            return;
+        };
+
+        let (cx, cy) = self.cursor;
+        let magnet_target = self.port_under(viewport, cx, cy).and_then(|hit| {
+            if hit.is_output {
+                return None; // magnetize toward an INPUT only — the valid drop target
+            }
+            let node = self.find_node(hit.node_id)?;
+            let idx = node.inputs.iter().position(|p| p.name == hit.port_name)?;
+            let (gx, gy) = node.input_port_pos_graph(idx);
+            Some(self.to_screen(viewport, gx, gy))
+        });
+
+        let now = std::time::Instant::now();
+        let dt_ms = self
+            .wire_magnet_last_tick
+            .map(|t| (now - t).as_secs_f32() * 1000.0)
+            .unwrap_or(0.0)
+            .min(100.0);
+        self.wire_magnet_last_tick = Some(now);
+        self.wire_magnet_live = true;
+
+        match magnet_target {
+            Some((tx, ty)) => {
+                self.wire_magnet_x.set_target(tx);
+                self.wire_magnet_y.set_target(ty);
+                self.wire_magnet_x.tick(dt_ms);
+                self.wire_magnet_y.tick(dt_ms);
+            }
+            None => {
+                self.wire_magnet_x.snap(cx);
+                self.wire_magnet_y.snap(cy);
+            }
+        }
+    }
+
+    /// The ghost wire's endpoint this frame (`draw_ghost_wire`'s use) —
+    /// magnetized toward a nearby input port, or the raw cursor when none is
+    /// in range, before `tick_wire_magnet`'s first call this drag (stale
+    /// anim value from a previous drag), or outside a `WireFrom` drag
+    /// entirely.
+    pub(crate) fn wire_ghost_endpoint(&self) -> (f32, f32) {
+        if self.wire_magnet_live && matches!(self.drag_mode, DragMode::WireFrom { .. }) {
+            (self.wire_magnet_x.value(), self.wire_magnet_y.value())
+        } else {
+            self.cursor
+        }
+    }
+
+    /// Fire the D17 flow pulse: one dash travels `from` → `to` (screen
+    /// space) — call right after a `WireFrom` drag commits a `ConnectPorts`
+    /// action, alongside `fire_connect_pop`.
+    pub(crate) fn fire_wire_flow_pulse(&mut self, from: (f32, f32), to: (f32, f32)) {
+        self.wire_flow_pulse_from = from;
+        self.wire_flow_pulse_to = to;
+        self.wire_flow_pulse.fire(color::MOTION_MED_MS);
     }
 
     /// Fire the D17 connect-pop at `(sx, sy)` (screen space) — call right

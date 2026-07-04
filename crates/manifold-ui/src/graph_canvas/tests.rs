@@ -1633,3 +1633,86 @@ fn dropping_a_wire_on_empty_canvas_fires_error_shake() {
     assert!(canvas.error_shake.progress().is_some(), "invalid drop shakes");
     assert!(canvas.connect_pop.progress().is_none());
 }
+
+// ── D17 "wire→port magnetize" + "flow pulse" ────────────────────────────
+
+#[test]
+fn wire_magnet_eases_the_ghost_endpoint_onto_a_nearby_input_port() {
+    let mut canvas = GraphCanvas::new();
+    canvas.set_default_expanded(true);
+    canvas.set_snapshot(&wire_driven_snapshot(false));
+    let vp = Rect::new(0.0, 0.0, 2000.0, 2000.0);
+
+    let (in_gx, in_gy) = canvas.find_node(1).unwrap().input_port_pos_graph(0);
+    let (in_sx, in_sy) = canvas.to_screen(vp, in_gx, in_gy);
+
+    // Drag from node 2's output, cursor placed exactly on node 1's input —
+    // well within `port_under`'s hit radius.
+    canvas.drag_mode = DragMode::WireFrom { from_node: 2, from_port: "out".into() };
+    canvas.cursor = (in_sx, in_sy);
+    canvas.tick_wire_magnet(vp);
+    assert!(canvas.wire_magnet_live);
+
+    // Settle deterministically with an explicit dt (not wall-clock — same
+    // discipline `DropdownPanel`'s own tests use for its entrance tween).
+    canvas.wire_magnet_x.tick(color::MOTION_MED_MS);
+    canvas.wire_magnet_y.tick(color::MOTION_MED_MS);
+    let (ex, ey) = canvas.wire_ghost_endpoint();
+    assert!(
+        (ex - in_sx).abs() < 0.01 && (ey - in_sy).abs() < 0.01,
+        "settles exactly onto the port: ({ex},{ey}) vs ({in_sx},{in_sy})"
+    );
+}
+
+#[test]
+fn wire_magnet_tracks_the_cursor_directly_when_no_port_is_near() {
+    let mut canvas = GraphCanvas::new();
+    canvas.set_default_expanded(true);
+    canvas.set_snapshot(&wire_driven_snapshot(false));
+    let vp = Rect::new(0.0, 0.0, 2000.0, 2000.0);
+
+    canvas.drag_mode = DragMode::WireFrom { from_node: 2, from_port: "out".into() };
+    canvas.cursor = (1900.0, 1900.0); // far from every port
+    canvas.tick_wire_magnet(vp);
+    let (ex, ey) = canvas.wire_ghost_endpoint();
+    assert_eq!((ex, ey), (1900.0, 1900.0), "no lag when nothing is in magnet range");
+}
+
+#[test]
+fn wire_flow_pulse_fires_and_settles() {
+    let mut canvas = GraphCanvas::new();
+    canvas.fire_wire_flow_pulse((0.0, 0.0), (100.0, 50.0));
+    assert!(canvas.wire_flow_pulse.progress().is_some());
+    assert_eq!(canvas.wire_flow_pulse_from, (0.0, 0.0));
+    assert_eq!(canvas.wire_flow_pulse_to, (100.0, 50.0));
+
+    for _ in 0..20 {
+        canvas.tick(20.0);
+    }
+    assert!(canvas.wire_flow_pulse.progress().is_none(), "pulse finishes on its own");
+}
+
+#[test]
+fn connecting_a_wire_end_to_end_fires_the_flow_pulse_with_real_port_geometry() {
+    // Through the real interaction path (not just the direct `fire_*` call
+    // above): begin a WireFrom drag, release exactly on the real target
+    // port, and check the pulse's captured geometry matches the two ports.
+    let mut canvas = GraphCanvas::new();
+    canvas.set_default_expanded(true);
+    canvas.set_snapshot(&wire_driven_snapshot(false));
+    let vp = Rect::new(0.0, 0.0, 2000.0, 2000.0);
+
+    let (out_gx, out_gy) = canvas.find_node(2).unwrap().output_port_pos_graph(0);
+    let (out_sx, out_sy) = canvas.to_screen(vp, out_gx, out_gy);
+    let (in_gx, in_gy) = canvas.find_node(1).unwrap().input_port_pos_graph(0);
+    let (in_sx, in_sy) = canvas.to_screen(vp, in_gx, in_gy);
+
+    canvas.drag_mode = DragMode::WireFrom { from_node: 2, from_port: "out".into() };
+    canvas.on_left_button_up(vp, in_sx, in_sy);
+
+    assert!(canvas.wire_flow_pulse.progress().is_some(), "connect fires the pulse");
+    assert!((canvas.wire_flow_pulse_from.0 - out_sx).abs() < 0.01);
+    assert!((canvas.wire_flow_pulse_from.1 - out_sy).abs() < 0.01);
+    assert!((canvas.wire_flow_pulse_to.0 - in_sx).abs() < 0.01);
+    assert!((canvas.wire_flow_pulse_to.1 - in_sy).abs() < 0.01);
+}

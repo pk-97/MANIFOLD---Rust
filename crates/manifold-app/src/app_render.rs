@@ -3337,6 +3337,11 @@ impl Application {
             canvas.resolve_pending_focus(vp);
             // Frame the whole level on editor open / scope change (camera only).
             canvas.apply_pending_fit(vp);
+            // D17 "wire→port magnetize": needs `vp` (port screen positions),
+            // which the main `canvas.tick(dt_ms)` call site (§1c above)
+            // doesn't have — ticked here instead, right before the draw
+            // pass that reads it.
+            canvas.tick_wire_magnet(vp);
         }
 
         // ── Build frame: clear, then draw the canvas + sidebar ──
