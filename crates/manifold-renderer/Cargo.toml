@@ -35,6 +35,9 @@ core-foundation = "0.9"
 # Serializes GPU tests on the shared Metal device (see `test_device`). Reentrant
 # so a single test may acquire it more than once without deadlocking.
 parking_lot = { workspace = true }
+# glTF proof test only (mesh_snapshot's azalea .glb harness) — not a
+# production import dependency.
+gltf = "1"
 
 [[bin]]
 name = "check-presets"

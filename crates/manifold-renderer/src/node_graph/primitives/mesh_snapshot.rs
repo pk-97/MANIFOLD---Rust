@@ -1045,3 +1045,383 @@ fn scene_two_cubes_renders_to_png() {
         .unwrap_or_else(|e| panic!("save {out_path}: {e}"));
     println!("render_scene two-cubes: wrote {out_path}");
 }
+
+// ============================================================================
+// IMPORT wave — real glTF geometry proof: load a `.glb` fixture, flatten its
+// node tree + mesh primitives into ONE combined `Array<MeshVertex>` buffer
+// (world-space, recentred at the origin), and render it lit through
+// `node.render_scene`. Proves the render path handles real imported geometry
+// end to end, not just hand-built cubes/quads. NOT a production import node —
+// the `gltf` crate is a dev-dependency for this test only.
+// ============================================================================
+
+/// A 4×4 column-major matrix: `m[col][row]`, matching both the `gltf` crate's
+/// `Transform::matrix()` convention and `render_scene.rs`'s `model_matrix`.
+type Mat4 = [[f32; 4]; 4];
+
+const MAT4_IDENTITY: Mat4 = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+];
+
+fn mat4_mul(a: &Mat4, b: &Mat4) -> Mat4 {
+    let mut out = [[0.0f32; 4]; 4];
+    for col in 0..4 {
+        for row in 0..4 {
+            let mut sum = 0.0;
+            for k in 0..4 {
+                sum += a[k][row] * b[col][k];
+            }
+            out[col][row] = sum;
+        }
+    }
+    out
+}
+
+fn mat4_transform_point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
+    [
+        m[0][0] * p[0] + m[1][0] * p[1] + m[2][0] * p[2] + m[3][0],
+        m[0][1] * p[0] + m[1][1] * p[1] + m[2][1] * p[2] + m[3][1],
+        m[0][2] * p[0] + m[1][2] * p[1] + m[2][2] * p[2] + m[3][2],
+    ]
+}
+
+/// Upper-left 3×3 (rotation + scale) block of a column-major `Mat4`,
+/// returned row-major (`m3[row][col]`) for the inverse below.
+fn mat3_upper_row_major(m: &Mat4) -> [[f32; 3]; 3] {
+    [
+        [m[0][0], m[1][0], m[2][0]],
+        [m[0][1], m[1][1], m[2][1]],
+        [m[0][2], m[1][2], m[2][2]],
+    ]
+}
+
+fn mat3_inverse(a: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    let det = a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
+        - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
+        + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
+    if det.abs() < 1e-12 {
+        // Degenerate (zero-scale) transform — identity fallback so
+        // normals don't come out NaN.
+        return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    }
+    let inv_det = 1.0 / det;
+    [
+        [
+            (a[1][1] * a[2][2] - a[1][2] * a[2][1]) * inv_det,
+            (a[0][2] * a[2][1] - a[0][1] * a[2][2]) * inv_det,
+            (a[0][1] * a[1][2] - a[0][2] * a[1][1]) * inv_det,
+        ],
+        [
+            (a[1][2] * a[2][0] - a[1][0] * a[2][2]) * inv_det,
+            (a[0][0] * a[2][2] - a[0][2] * a[2][0]) * inv_det,
+            (a[0][2] * a[1][0] - a[0][0] * a[1][2]) * inv_det,
+        ],
+        [
+            (a[1][0] * a[2][1] - a[1][1] * a[2][0]) * inv_det,
+            (a[0][1] * a[2][0] - a[0][0] * a[2][1]) * inv_det,
+            (a[0][0] * a[1][1] - a[0][1] * a[1][0]) * inv_det,
+        ],
+    ]
+}
+
+fn mat3_transpose(a: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    [
+        [a[0][0], a[1][0], a[2][0]],
+        [a[0][1], a[1][1], a[2][1]],
+        [a[0][2], a[1][2], a[2][2]],
+    ]
+}
+
+fn mat3_mul_vec3(m: [[f32; 3]; 3], v: [f32; 3]) -> [f32; 3] {
+    [
+        m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+        m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+        m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
+    ]
+}
+
+fn normalize3(v: [f32; 3]) -> [f32; 3] {
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if len < 1e-12 {
+        [0.0, 0.0, 1.0]
+    } else {
+        [v[0] / len, v[1] / len, v[2] / len]
+    }
+}
+
+fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+/// Recursively flatten a glTF node's mesh primitives (world-transformed) into
+/// `out`, then recurse into children with the composed world matrix. Every
+/// primitive must be `Mode::Triangles` — anything else is a structural
+/// surprise worth stopping on, not silently reinterpreting.
+fn walk_gltf_node(
+    node: &gltf::Node,
+    parent_world: Mat4,
+    buffers: &[gltf::buffer::Data],
+    out: &mut Vec<MeshVertex>,
+) {
+    let local = node.transform().matrix();
+    let world = mat4_mul(&parent_world, &local);
+
+    if let Some(mesh) = node.mesh() {
+        // Normal matrix = transpose(inverse(upper3x3(world))) — correct
+        // under non-uniform scale, not just rotation + uniform scale.
+        let normal_mat = mat3_transpose(mat3_inverse(mat3_upper_row_major(&world)));
+
+        for primitive in mesh.primitives() {
+            assert_eq!(
+                primitive.mode(),
+                gltf::mesh::Mode::Triangles,
+                "azalea glb primitive uses non-Triangles mode {:?} — unsupported by this proof harness",
+                primitive.mode()
+            );
+
+            let reader = primitive.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
+
+            let positions: Vec<[f32; 3]> = reader
+                .read_positions()
+                .unwrap_or_else(|| panic!("primitive missing required POSITION accessor"))
+                .collect();
+            let normals: Option<Vec<[f32; 3]>> = reader.read_normals().map(|it| it.collect());
+            let uvs: Option<Vec<[f32; 2]>> =
+                reader.read_tex_coords(0).map(|it| it.into_f32().collect());
+
+            let world_positions: Vec<[f32; 3]> = positions
+                .iter()
+                .map(|p| mat4_transform_point(&world, *p))
+                .collect();
+            let world_normals: Option<Vec<[f32; 3]>> = normals
+                .as_ref()
+                .map(|ns| ns.iter().map(|n| normalize3(mat3_mul_vec3(normal_mat, *n))).collect());
+
+            let indices: Vec<u32> = match reader.read_indices() {
+                Some(idx) => idx.into_u32().collect(),
+                None => (0..world_positions.len() as u32).collect(),
+            };
+
+            for tri in indices.chunks_exact(3) {
+                let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+                let p0 = world_positions[i0];
+                let p1 = world_positions[i1];
+                let p2 = world_positions[i2];
+                // Face-normal fallback when NORMAL is absent on this
+                // primitive — computed post-transform, in world space.
+                let face_normal = normalize3(cross3(sub3(p1, p0), sub3(p2, p0)));
+
+                for &i in &[i0, i1, i2] {
+                    let normal = world_normals.as_ref().map_or(face_normal, |ns| ns[i]);
+                    let uv = uvs.as_ref().map_or([0.0, 0.0], |u| u[i]);
+                    out.push(MeshVertex {
+                        position: world_positions[i],
+                        _pad0: 0.0,
+                        normal,
+                        _pad1: 0.0,
+                        uv,
+                        _pad2: [0.0, 0.0],
+                    });
+                }
+            }
+        }
+    }
+
+    for child in node.children() {
+        walk_gltf_node(&child, world, buffers, out);
+    }
+}
+
+/// Load the azalea `.glb` fixture, flatten it to one combined world-space
+/// `Array<MeshVertex>` buffer, and render it lit through `node.render_scene`
+/// with a `PhongMaterial` + a default Sun light + a bbox-framed orbit
+/// camera. Ignored by default: needs a GPU, a large fixture, and writes a
+/// file. Point `MESH_SNAP_OUT` at an absolute path to control the output
+/// location; defaults to `target/mesh-snap/azalea_render_scene.png`.
+///
+/// This is a PROOF, not a production import node: one combined mesh (no
+/// multi-material split), no base-colour/alpha-cutout textures wired — the
+/// point is that real imported geometry renders lit through render_scene at
+/// all, not a faithful material reproduction.
+#[test]
+#[ignore]
+fn azalea_glb_renders_lit_through_render_scene() {
+    // Workspace-root-relative fixture, resolved off `CARGO_MANIFEST_DIR`
+    // (`cargo test`'s cwd is the package dir, not the workspace root) —
+    // same convention as `preset_loader.rs` / `bundled_presets.rs`.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb");
+    if !path.exists() {
+        eprintln!(
+            "azalea_glb_renders_lit_through_render_scene: fixture not found at {}, skipping",
+            path.display()
+        );
+        return;
+    }
+
+    let (document, buffers, _images) =
+        gltf::import(&path).unwrap_or_else(|e| panic!("gltf::import({}): {e}", path.display()));
+
+    let scene = document.default_scene().unwrap_or_else(|| {
+        panic!("{}: glb has no default scene — cannot walk node tree", path.display())
+    });
+
+    let mut verts: Vec<MeshVertex> = Vec::new();
+    for node in scene.nodes() {
+        walk_gltf_node(&node, MAT4_IDENTITY, &buffers, &mut verts);
+    }
+    assert!(
+        !verts.is_empty(),
+        "parsed zero vertices from {} — mesh/primitive traversal found nothing",
+        path.display()
+    );
+
+    // Axis-aligned bbox in world space, then recentre so the model sits at
+    // the origin (CameraOrbit's target is fixed at `(0, look_y, 0)`).
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
+    for v in &verts {
+        for i in 0..3 {
+            min[i] = min[i].min(v.position[i]);
+            max[i] = max[i].max(v.position[i]);
+        }
+    }
+    let center = [
+        (min[0] + max[0]) * 0.5,
+        (min[1] + max[1]) * 0.5,
+        (min[2] + max[2]) * 0.5,
+    ];
+    let dims = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+    let radius = (dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5;
+    println!(
+        "azalea: parsed {} vertices ({} triangles), bbox dims = {dims:?}, radius = {radius:.4}",
+        verts.len(),
+        verts.len() / 3
+    );
+
+    for v in &mut verts {
+        v.position[0] -= center[0];
+        v.position[1] -= center[1];
+        v.position[2] -= center[2];
+    }
+
+    let distance = 2.2 * radius;
+
+    let w = 768u32;
+    let h = 768u32;
+    let device = crate::test_device();
+    let format = GpuTextureFormat::Rgba16Float;
+
+    let mut g = Graph::new();
+    let mesh = g.add_node(Box::new(MeshSource::new()));
+
+    let cam = g.add_node(Box::new(CameraOrbit::new()));
+    g.set_param(cam, "orbit", ParamValue::Float(0.7)).unwrap();
+    g.set_param(cam, "tilt", ParamValue::Float(0.3)).unwrap();
+    g.set_param(cam, "distance", ParamValue::Float(distance)).unwrap();
+    g.set_param(cam, "fov_y", ParamValue::Float(0.9)).unwrap();
+    g.set_param(cam, "look_y", ParamValue::Float(0.0)).unwrap();
+
+    let mat = g.add_node(Box::new(PhongMaterial::new()));
+    g.set_param(mat, "color_r", ParamValue::Float(0.45)).unwrap();
+    g.set_param(mat, "color_g", ParamValue::Float(0.55)).unwrap();
+    g.set_param(mat, "color_b", ParamValue::Float(0.35)).unwrap();
+    g.set_param(mat, "ambient", ParamValue::Float(0.2)).unwrap();
+
+    // Default Sun (mode 0): pos (0, 30, 0), aim origin, white, intensity 1 —
+    // a plain overhead key light, sufficient to prove the lit path fires.
+    let light = g.add_node(Box::new(LightNode::new()));
+
+    let render = g.add_node(Box::new(RenderScene::new()));
+    g.set_param(render, "objects", ParamValue::Float(1.0)).unwrap();
+    g.set_param(render, "lights", ParamValue::Float(1.0)).unwrap();
+
+    let sink = g.add_node(Box::new(FinalOutput::new()));
+
+    g.connect((mesh, "out"), (render, "mesh_0")).unwrap();
+    g.connect((mat, "out"), (render, "material_0")).unwrap();
+    g.connect((cam, "out"), (render, "camera")).unwrap();
+    g.connect((light, "out"), (render, "light_0")).unwrap();
+    g.connect((render, "color"), (sink, "in")).unwrap();
+
+    let plan = compile(&g).unwrap();
+    let r_color = output_resource(&plan, render, "color");
+    let r_mesh = output_resource(&plan, mesh, "out");
+
+    let mut backend = MetalBackend::new(&device, w, h, format);
+    let color_target = RenderTarget::new(&device, w, h, format, "azalea-render-scene-color");
+    let color_slot = backend.pre_bind_texture_2d(r_color, color_target);
+
+    let vert_bytes = (verts.len() * std::mem::size_of::<MeshVertex>()) as u64;
+    let vert_buf = device.create_buffer_shared(vert_bytes);
+    unsafe {
+        vert_buf.write(0, bytemuck::cast_slice(&verts));
+    }
+    backend.pre_bind_array(r_mesh, vert_buf);
+
+    let mut native_enc = device.create_encoder("azalea-render-scene");
+    let mut exec = Executor::new(Box::new(backend));
+    {
+        let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+        exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
+    }
+    native_enc.commit_and_wait_completed();
+
+    let out_tex = exec
+        .backend()
+        .texture_2d(color_slot)
+        .expect("color texture retained");
+    let bytes_per_row = w * 8;
+    let total_bytes = u64::from(h * bytes_per_row);
+    let readback_buf = device.create_buffer_shared(total_bytes);
+    let mut readback_enc = device.create_encoder("azalea-render-scene-readback");
+    readback_enc.copy_texture_to_buffer(out_tex, &readback_buf, w, h, bytes_per_row);
+    readback_enc.commit_and_wait_completed();
+
+    let ptr = readback_buf.mapped_ptr().expect("shared readback");
+    let halves: &[u16] =
+        unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for px in halves.chunks_exact(4) {
+        rgba.push(tonemap_channel(half_to_f32(px[0])));
+        rgba.push(tonemap_channel(half_to_f32(px[1])));
+        rgba.push(tonemap_channel(half_to_f32(px[2])));
+        let a = half_to_f32(px[3]).clamp(0.0, 1.0);
+        rgba.push((a * 255.0).round() as u8);
+    }
+
+    let mut non_black = 0usize;
+    for px in rgba.chunks_exact(4) {
+        if px[0] != 0 || px[1] != 0 || px[2] != 0 {
+            non_black += 1;
+        }
+    }
+    let total = (w * h) as usize;
+    let fraction = non_black as f64 / total as f64;
+    println!("azalea render_scene: non-black pixel fraction = {fraction:.4} ({non_black}/{total})");
+    assert!(
+        fraction > 0.02,
+        "expected >2% non-black pixels, got {fraction:.4} ({non_black}/{total}) — likely a broken render_scene dispatch or empty geometry"
+    );
+
+    let out_path = std::env::var("MESH_SNAP_OUT")
+        .unwrap_or_else(|_| "target/mesh-snap/azalea_render_scene.png".to_string());
+    if let Some(parent) = std::path::Path::new(&out_path).parent() {
+        std::fs::create_dir_all(parent).expect("create output dir");
+    }
+    image::save_buffer(&out_path, &rgba, w, h, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {out_path}: {e}"));
+    println!("azalea render_scene: wrote {out_path}");
+}
