@@ -2,13 +2,15 @@
 """
 PreToolUse hook for Bash. Four jobs, evaluated in this order:
 
-  0. ASK, instead of auto-allowing, a branch-switch git command (checkout/
-     switch/merge) that targets the MAIN checkout while another session's
-     daemon pidfile (.claude/daemon/verdicts/*.pid) is live — see
-     `shared_checkout_guard` and .claude/GIT_TREE_DISCIPLINE.md §1. Solo
-     sessions and worktree-targeted commands (`git -C .claude/worktrees/...`)
-     are unaffected; `checkout -- <paths>` (file restore, not a branch
-     switch) is unaffected. Any failure in this check falls back to no-guard.
+  0. WARN (allow + additionalContext, never an ask — Peter 2026-07-04,
+     so automated orchestrations don't pause) on a branch-switch git
+     command (checkout/switch/merge) that targets the MAIN checkout while
+     another session's daemon pidfile (.claude/daemon/verdicts/*.pid) is
+     live — see `shared_checkout_guard` and GIT_TREE_DISCIPLINE.md §1.
+     Solo sessions and worktree-targeted commands (`git -C
+     .claude/worktrees/...`) are unaffected; `checkout -- <paths>` (file
+     restore, not a branch switch) is unaffected. Any failure in this
+     check falls back to no-guard.
 
   0b. Landing-protocol guard (§1b): main is a merge-based trunk now, not a
      fast-forward pointer (GIT_TREE_DISCIPLINE.md §2 — the ff-only model
@@ -492,9 +494,11 @@ def _shlex_segments(cmd):
 
 
 def shared_checkout_guard(cmd, session_id, cwd):
-    """Return an ask-reason string if `cmd` contains a branch-switch git
+    """Return a warning string if `cmd` contains a branch-switch git
     command targeting the main checkout while another session's daemon is
-    live; otherwise None. Never raises — any failure yields None (no guard)."""
+    live; otherwise None. Delivered as additionalContext on an allow —
+    NOT an ask — so automated orchestrations never pause on it (Peter,
+    2026-07-04). Never raises — any failure yields None (no guard)."""
     try:
         for toks in _shlex_segments(cmd):
             toks = _strip_leading_keywords(toks)
@@ -514,11 +518,13 @@ def shared_checkout_guard(cmd, session_id, cwd):
             foreign = find_live_foreign_session(session_id)
             if foreign:
                 return (
-                    f"Branch-switch command in the shared main checkout "
+                    f"Heads-up: branch-switch in the shared main checkout "
                     f"(`{' '.join(toks)}`) while session {foreign}'s daemon "
-                    f"is still live — confirm before switching so it "
-                    f"doesn't move the tree under that session (see "
-                    f"incident 88257631 / GIT_TREE_DISCIPLINE.md §1)."
+                    f"is live. This moves the tree under that session — "
+                    f"proceed only if intended, prefer a worktree for branch "
+                    f"work, and re-read branch state from command output "
+                    f"afterwards (incident 88257631 / "
+                    f"GIT_TREE_DISCIPLINE.md §1)."
                 )
         return None
     except Exception:
@@ -726,11 +732,9 @@ def main() -> int:
     cwd = data.get("cwd") or os.getcwd()
 
     # 0. Shared-checkout guard: a branch switch in the main tree while
-    # another session's daemon is live asks instead of auto-allowing.
-    ask_reason = shared_checkout_guard(cmd, data.get("session_id"), cwd)
-    if ask_reason:
-        json.dump(build_ask(ask_reason), sys.stdout)
-        return 0
+    # another session's daemon is live gets a warning attached as context —
+    # never an ask, so orchestrations don't pause (Peter, 2026-07-04).
+    shared_checkout_context = shared_checkout_guard(cmd, data.get("session_id"), cwd)
 
     # 0b. Landing-protocol guard: a force-rewrite of main asks unconditionally;
     # a normal push/merge landing on main gets an allow + reminder below.
@@ -741,7 +745,8 @@ def main() -> int:
 
     # 1. Pre-approved? Allow outright, pipes and loops included.
     if is_preapproved_command(cmd):
-        json.dump(build_allow(landing_context), sys.stdout)
+        combined = "\n\n".join(c for c in (shared_checkout_context, landing_context) if c) or None
+        json.dump(build_allow(combined), sys.stdout)
         return 0
 
     # 2. Not pre-approved: enforce the no-pipe / no-cd-prefix rewrite policy.

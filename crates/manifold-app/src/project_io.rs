@@ -40,11 +40,77 @@ pub(crate) fn install_project_preset_overlay(project: &Project) {
             continue;
         };
         match p.kind {
-            PresetKind::Effect => effect.push((id.as_str().to_string(), json)),
-            PresetKind::Generator => generator.push((id.as_str().to_string(), json)),
+            PresetKind::Effect => effect.push((id.as_str().to_string(), json, p.origin)),
+            PresetKind::Generator => generator.push((id.as_str().to_string(), json, p.origin)),
         }
     }
     manifold_renderer::preset_loader::set_project_presets(effect, generator);
+}
+
+/// Self-containment snapshot (PRESET_LIBRARY_DESIGN D5, P2). Called
+/// immediately before every on-disk save (manual save, Save As, autosave) so
+/// a `.manifold` file never strands a project on a library file that later
+/// disappears.
+///
+/// Collects the ids referenced by every TRACKING instance
+/// ([`Project::tracking_preset_ids`]: effects, clip effects, master effects,
+/// generators), and for each one NOT already covered by a `Saved` embedded
+/// entry (a `Saved` entry is already self-contained and deliberately never
+/// shadowed), upserts its CURRENT resolved def into `embedded_presets` as
+/// `origin: Snapshot`. Then prunes `Snapshot` entries no tracking instance
+/// references anymore.
+///
+/// App-side (not `manifold-core`/`manifold-io`) because it needs BOTH the
+/// project (to walk instances) AND the renderer's live preset catalog (to
+/// read each id's current def) — core has no renderer dependency and io
+/// doesn't either, so this is the one seam where both are reachable.
+/// `bundled_preset_def` reads the same overlay-merged catalog the runtime
+/// resolves against, so "current def" here means exactly what a tracking
+/// instance is using right now (disk if present, the prior snapshot as
+/// fallback if not — see `preset_loader::build_catalog`'s merge order).
+pub(crate) fn snapshot_and_prune_embedded_presets(project: &mut Project) {
+    use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset};
+    use std::collections::{HashMap, HashSet};
+
+    let referenced = project.tracking_preset_ids();
+    let referenced_ids: HashSet<PresetTypeId> =
+        referenced.iter().map(|(id, _)| id.clone()).collect();
+
+    // Dedup by id before doing any catalog lookup / clone / upsert work — a
+    // preset type is typically tracked by many instances (dozens of layers
+    // running the same generator, a common effect on several chains); a
+    // typical project has orders of magnitude more instances than distinct
+    // types (see `project_typical_project_scale`), so this keeps save-time
+    // cost proportional to distinct library ids, not instance count.
+    let mut by_id: HashMap<PresetTypeId, PresetKind> = HashMap::new();
+    for (id, kind) in referenced {
+        by_id.entry(id).or_insert(kind);
+    }
+
+    for (id, kind) in &by_id {
+        if project
+            .embedded_preset(id)
+            .is_some_and(|p| p.origin == EmbeddedOrigin::Saved)
+        {
+            // Already self-contained by an explicit Save-to-Project / fork /
+            // import entry — never shadowed by an auto-captured snapshot.
+            continue;
+        }
+        let Some(def) = manifold_renderer::node_graph::bundled_preset_def(id) else {
+            // Resolves nowhere (not even the current overlay) — nothing to
+            // snapshot. This is the orphan case D9 exists to prevent for new
+            // instances; an existing project that somehow reached this state
+            // is left as-is rather than manufacturing a def from nothing.
+            continue;
+        };
+        project.upsert_embedded_preset(EmbeddedPreset {
+            kind: *kind,
+            def: def.clone(),
+            origin: EmbeddedOrigin::Snapshot,
+        });
+    }
+
+    project.prune_stale_snapshots(&referenced_ids);
 }
 
 /// A cheap fingerprint of a project's embedded ("forked") presets, used by the
@@ -348,6 +414,7 @@ impl ProjectIOService {
     ) -> ProjectIOAction {
         // Sync playhead before save (Unity line 179)
         project.saved_playhead_time = current_time;
+        snapshot_and_prune_embedded_presets(project);
 
         if let Some(path) = current_path {
             match manifold_io::saver::save_project(project, path, None, false) {
@@ -406,6 +473,7 @@ impl ProjectIOService {
                 path.set_extension("manifold");
             }
 
+            snapshot_and_prune_embedded_presets(project);
             match manifold_io::saver::save_project(project, &path, None, false) {
                 Ok(()) => {
                     // Update project name from filename (Unity line 217)
@@ -995,5 +1063,146 @@ mod tests {
         assert!(!project.timeline.layers[0].has_overlapping_clips());
 
         let _ = std::fs::remove_file(temp_path);
+    }
+
+    // ── PRESET_LIBRARY_DESIGN D5/P2 — snapshot-on-save ──────────────────
+    //
+    // These exercise the actual production seam (`snapshot_and_prune_
+    // embedded_presets`) rather than just the catalog-merge rule (covered
+    // separately by `manifold-renderer/tests/project_preset_overlay.rs`,
+    // which proves disk-wins-over-Snapshot / Snapshot-as-fallback at the
+    // catalog level). A full save→delete-user-file→reload file-system test
+    // isn't reachable from here: `manifold-app` is a bin-only crate (no
+    // `[lib]` target), so `tests/*.rs` integration binaries can't see
+    // `pub(crate)` items like this function at all — only a `#[cfg(test)]`
+    // unit test inside the crate can call it directly. This is that test.
+
+    #[test]
+    fn snapshot_and_prune_captures_tracking_ids_and_prunes_stale_ones() {
+        use manifold_core::effects::PresetInstance;
+        use manifold_core::project::EmbeddedOrigin;
+
+        let mut project = Project::default();
+        project
+            .settings
+            .master_effects
+            .push(PresetInstance::new(PresetTypeId::BLOOM));
+
+        snapshot_and_prune_embedded_presets(&mut project);
+
+        let snapshot = project
+            .embedded_preset(&PresetTypeId::BLOOM)
+            .expect("a tracking instance's library id must get a self-containment snapshot");
+        assert_eq!(snapshot.origin, EmbeddedOrigin::Snapshot);
+        let expected = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::BLOOM)
+            .expect("Bloom must resolve in the live catalog");
+        assert_eq!(
+            snapshot.def.preset_metadata.as_ref().map(|m| &m.id),
+            expected.preset_metadata.as_ref().map(|m| &m.id),
+            "snapshot must carry Bloom's current resolved def"
+        );
+
+        // The instance no longer references Bloom (deleted here; a
+        // retarget would do the same) — the next save must prune the now-
+        // stale snapshot rather than let it accumulate forever.
+        project.settings.master_effects.clear();
+        snapshot_and_prune_embedded_presets(&mut project);
+        assert!(
+            project.embedded_preset(&PresetTypeId::BLOOM).is_none(),
+            "a Snapshot no tracking instance references anymore must be pruned"
+        );
+    }
+
+    #[test]
+    fn snapshot_and_prune_never_overwrites_a_saved_embedded_entry() {
+        use manifold_core::effects::PresetInstance;
+        use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset};
+
+        let mut project = Project::default();
+        project
+            .settings
+            .master_effects
+            .push(PresetInstance::new(PresetTypeId::BLOOM));
+
+        // A Saved entry under the same id as the tracking instance — Saved
+        // is deliberate (Save to Project / fork / import) and must never be
+        // downgraded or overwritten by the auto-captured snapshot pass.
+        let saved_def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::BLOOM)
+            .expect("Bloom resolves")
+            .clone();
+        project.upsert_embedded_preset(EmbeddedPreset {
+            kind: PresetKind::Effect,
+            def: saved_def,
+            origin: EmbeddedOrigin::Saved,
+        });
+
+        snapshot_and_prune_embedded_presets(&mut project);
+
+        assert_eq!(
+            project.embedded_preset(&PresetTypeId::BLOOM).unwrap().origin,
+            EmbeddedOrigin::Saved,
+            "a Saved entry must never be overwritten by the snapshot pass"
+        );
+    }
+
+    /// P2 size gate: the self-containment snapshot must not blow up a real
+    /// show's file size. Loads the canonical Liveschool fixture (52 layers,
+    /// ~2828 clips, 160 effects) and saves it TWICE to the same V2 archive
+    /// format a real save produces (stored, not deflated) — once as a plain
+    /// re-save (baseline: captures whatever migrations/path-resolution the
+    /// load→save cycle itself causes, independent of P2) and once with
+    /// `snapshot_and_prune_embedded_presets` applied first. Comparing
+    /// scratch-vs-scratch isolates JUST the snapshot mechanism's size cost
+    /// from the confound of a raw-fixture-vs-resave comparison. Both numbers
+    /// are reported (see the phase report). Skipped if the (gitignored,
+    /// local) fixture isn't present.
+    #[test]
+    fn liveschool_snapshot_on_save_size_delta_stays_bounded() {
+        let mut fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        fixture.push("../../tests/fixtures/Liveschool Live Show V6 LEDS.manifold");
+        if !fixture.exists() {
+            return;
+        }
+
+        let original_size = std::fs::metadata(&fixture).expect("stat fixture").len();
+
+        // Baseline: load → save, no snapshot pass. Isolates load/migration/
+        // path-resolution effects on file size from P2's own contribution.
+        let mut baseline_project =
+            manifold_io::loader::load_project(&fixture).expect("load Liveschool fixture");
+        let baseline_path = std::env::temp_dir().join(format!(
+            "manifold-liveschool-baseline-{}.manifold",
+            std::process::id()
+        ));
+        manifold_io::saver::save_project(&mut baseline_project, &baseline_path, None, false)
+            .expect("save baseline (no snapshot) project");
+        let baseline_size = std::fs::metadata(&baseline_path).expect("stat baseline save").len();
+        let _ = std::fs::remove_file(&baseline_path);
+
+        // P2: load → snapshot_and_prune → save.
+        let mut snapshotted_project =
+            manifold_io::loader::load_project(&fixture).expect("load Liveschool fixture");
+        snapshot_and_prune_embedded_presets(&mut snapshotted_project);
+        let snapshot_path = std::env::temp_dir().join(format!(
+            "manifold-liveschool-snapshot-{}.manifold",
+            std::process::id()
+        ));
+        manifold_io::saver::save_project(&mut snapshotted_project, &snapshot_path, None, false)
+            .expect("save snapshotted project");
+        let snapshot_size = std::fs::metadata(&snapshot_path).expect("stat scratch save").len();
+        let _ = std::fs::remove_file(&snapshot_path);
+
+        let isolated_delta = snapshot_size as i64 - baseline_size as i64;
+        let raw_delta = snapshot_size as i64 - original_size as i64;
+        eprintln!(
+            "[P2 size gate] Liveschool: original={original_size} bytes, \
+             baseline-resave={baseline_size} bytes, with-snapshot={snapshot_size} bytes, \
+             isolated P2 delta={isolated_delta} bytes, raw original-vs-final delta={raw_delta} bytes"
+        );
+        assert!(
+            isolated_delta < 5_000_000,
+            "self-containment snapshot alone grew the file by {isolated_delta} bytes (>5MB) — \
+             escalate per PRESET_LIBRARY_DESIGN P2 gate"
+        );
     }
 }

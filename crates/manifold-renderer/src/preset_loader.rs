@@ -43,6 +43,7 @@ use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use arc_swap::ArcSwap;
+use manifold_core::project::EmbeddedOrigin;
 
 /// Monotonic catalog generation counter. Starts at 0 and is bumped by the
 /// hot-reload watcher (after both the catalog snapshots and the core
@@ -179,36 +180,65 @@ pub static EFFECT_CATALOG: LazyLock<ArcSwap<PresetCatalog>> =
 pub static GENERATOR_CATALOG: LazyLock<ArcSwap<PresetCatalog>> =
     LazyLock::new(|| ArcSwap::from(load_catalog(&GENERATOR_DIRS)));
 
-/// Project-scoped preset overlay (Phase 4). `(type_id, json)` for the
-/// currently-loaded project's `embedded_presets`, merged on TOP of stock+user
-/// in [`build_catalog`] (override on id match). Empty when no project is loaded
-/// or the project has no forks. Set via [`set_project_presets`] (which re-merges
-/// both catalogs + rebuilds the core registry through [`apply_reload`]), so the
-/// per-frame render path is unaffected — resolution stays a catalog read.
+/// Project-scoped preset overlay (Phase 4; split into two origin tiers by
+/// PRESET_LIBRARY_DESIGN D5/P2). `(type_id, json)` for the currently-loaded
+/// project's `embedded_presets`, split by [`EmbeddedOrigin`] and merged in
+/// [`build_catalog`] at two different tiers:
+///
+/// - **Saved** (`_SAVED` statics) — explicit project-scoped forks / imports /
+///   Save-to-Project entries (D4/D9). Deliberate, so they merge on TOP of
+///   stock+user, same as every project-overlay entry did pre-P2.
+/// - **Snapshot** (`_SNAPSHOT` statics) — auto-captured at save for
+///   self-containment (D5). Merges BELOW stock+user: disk wins over a stale
+///   snapshot, and the snapshot is only the fallback when the library file is
+///   gone.
+///
+/// Empty when no project is loaded or the project has no embedded presets of
+/// that tier. Set via [`set_project_presets`] (which re-merges both catalogs +
+/// rebuilds the core registry through [`apply_reload`]), so the per-frame
+/// render path is unaffected — resolution stays a catalog read.
 /// `(type_id, json)` overlay entries for one preset kind.
 type OverlayEntries = Vec<(Arc<str>, Arc<str>)>;
-static PROJECT_EFFECT_PRESETS: LazyLock<ArcSwap<OverlayEntries>> =
+static PROJECT_EFFECT_PRESETS_SAVED: LazyLock<ArcSwap<OverlayEntries>> =
     LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
-static PROJECT_GENERATOR_PRESETS: LazyLock<ArcSwap<OverlayEntries>> =
+static PROJECT_GENERATOR_PRESETS_SAVED: LazyLock<ArcSwap<OverlayEntries>> =
+    LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
+static PROJECT_EFFECT_PRESETS_SNAPSHOT: LazyLock<ArcSwap<OverlayEntries>> =
+    LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
+static PROJECT_GENERATOR_PRESETS_SNAPSHOT: LazyLock<ArcSwap<OverlayEntries>> =
     LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
 
 /// Install the loaded project's embedded presets as the catalog overlay and
 /// re-derive both catalogs + the core registry. Call on project load; call
 /// with empty vecs (or [`clear_project_presets`]) on project close/switch so a
 /// stale project's forks never leak into the next one. Returns the new catalog
-/// generation. `(type_id, json)` pairs — `json` is each preset's full
-/// `EffectGraphDef` JSON (graph + `presetMetadata`).
+/// generation.
+///
+/// `(type_id, json, origin)` triples — `json` is each preset's full
+/// `EffectGraphDef` JSON (graph + `presetMetadata`); `origin` picks which
+/// merge tier the entry resolves at (see the overlay doc comment above).
 pub fn set_project_presets(
-    effect: Vec<(String, String)>,
-    generator: Vec<(String, String)>,
+    effect: Vec<(String, String, EmbeddedOrigin)>,
+    generator: Vec<(String, String, EmbeddedOrigin)>,
 ) -> u64 {
-    fn to_entries(v: Vec<(String, String)>) -> Vec<(Arc<str>, Arc<str>)> {
-        v.into_iter()
-            .map(|(id, json)| (Arc::from(id.as_str()), Arc::from(json.as_str())))
-            .collect()
+    fn split(v: Vec<(String, String, EmbeddedOrigin)>) -> (OverlayEntries, OverlayEntries) {
+        let mut saved = Vec::new();
+        let mut snapshot = Vec::new();
+        for (id, json, origin) in v {
+            let entry = (Arc::from(id.as_str()), Arc::from(json.as_str()));
+            match origin {
+                EmbeddedOrigin::Saved => saved.push(entry),
+                EmbeddedOrigin::Snapshot => snapshot.push(entry),
+            }
+        }
+        (saved, snapshot)
     }
-    PROJECT_EFFECT_PRESETS.store(Arc::new(to_entries(effect)));
-    PROJECT_GENERATOR_PRESETS.store(Arc::new(to_entries(generator)));
+    let (effect_saved, effect_snapshot) = split(effect);
+    let (generator_saved, generator_snapshot) = split(generator);
+    PROJECT_EFFECT_PRESETS_SAVED.store(Arc::new(effect_saved));
+    PROJECT_EFFECT_PRESETS_SNAPSHOT.store(Arc::new(effect_snapshot));
+    PROJECT_GENERATOR_PRESETS_SAVED.store(Arc::new(generator_saved));
+    PROJECT_GENERATOR_PRESETS_SNAPSHOT.store(Arc::new(generator_snapshot));
     apply_reload()
 }
 
@@ -218,12 +248,23 @@ pub fn clear_project_presets() -> u64 {
     set_project_presets(Vec::new(), Vec::new())
 }
 
-/// The project overlay entries for a catalog kind (by `KindDirs::label`).
-fn project_overlay_for(label: &str) -> Arc<OverlayEntries> {
+/// The `Saved`-tier project overlay entries for a catalog kind (by
+/// `KindDirs::label`) — merges on top of stock+user in [`build_catalog`].
+fn project_saved_overlay_for(label: &str) -> Arc<OverlayEntries> {
     if label == EFFECT_DIRS.label {
-        PROJECT_EFFECT_PRESETS.load_full()
+        PROJECT_EFFECT_PRESETS_SAVED.load_full()
     } else {
-        PROJECT_GENERATOR_PRESETS.load_full()
+        PROJECT_GENERATOR_PRESETS_SAVED.load_full()
+    }
+}
+
+/// The `Snapshot`-tier project overlay entries for a catalog kind — merges
+/// BELOW stock+user in [`build_catalog`] (disk wins; this is the fallback).
+fn project_snapshot_overlay_for(label: &str) -> Arc<OverlayEntries> {
+    if label == EFFECT_DIRS.label {
+        PROJECT_EFFECT_PRESETS_SNAPSHOT.load_full()
+    } else {
+        PROJECT_GENERATOR_PRESETS_SNAPSHOT.load_full()
     }
 }
 
@@ -441,9 +482,34 @@ fn build_catalog(
         ));
     }
 
-    // Merge: start with stock, then overlay user (override on stem match).
-    let mut merged: Vec<(Arc<str>, Arc<str>)> =
-        stock.into_iter().map(|f| (f.type_id, f.json)).collect();
+    // Merge order (PRESET_LIBRARY_DESIGN D5/P2): Snapshot overlay (bottom) →
+    // stock → user → Saved overlay (top). Snapshot entries are save-time
+    // self-containment plumbing (D5) — disk (stock/user) always wins over
+    // one, so an improved/restored library file is never shadowed by a
+    // stale cache; Snapshot only serves when disk has nothing for that id.
+    // Saved entries are deliberate, explicit project-scoped forks/imports
+    // (D4/D9) and keep today's on-top-of-everything behavior unchanged.
+    let snapshot_overlay = project_snapshot_overlay_for(label);
+    let snapshot_ids: std::collections::HashSet<Arc<str>> =
+        snapshot_overlay.iter().map(|(id, _)| id.clone()).collect();
+    let mut merged: Vec<(Arc<str>, Arc<str>)> = snapshot_overlay.iter().cloned().collect();
+    if !snapshot_overlay.is_empty() {
+        log::info!(
+            "[presets] starting from {} project snapshot {label} preset(s) (D5 self-containment fallback)",
+            snapshot_overlay.len()
+        );
+    }
+
+    // Stock overrides any Snapshot entry with the same id (disk wins).
+    let mut disk_ids: std::collections::HashSet<Arc<str>> = std::collections::HashSet::new();
+    for f in stock {
+        disk_ids.insert(f.type_id.clone());
+        if let Some(slot) = merged.iter_mut().find(|(id, _)| *id == f.type_id) {
+            slot.1 = f.json;
+        } else {
+            merged.push((f.type_id, f.json));
+        }
+    }
 
     if let Some(user_root) = user_root {
         log::info!(
@@ -451,6 +517,7 @@ fn build_catalog(
             user_root.display()
         );
         for f in scan_dir(user_root) {
+            disk_ids.insert(f.type_id.clone());
             if let Some(slot) = merged.iter_mut().find(|(id, _)| *id == f.type_id) {
                 log::info!(
                     "[presets] user {label} preset `{}` overrides the stock one",
@@ -467,13 +534,27 @@ fn build_catalog(
         }
     }
 
-    // Project overlay (Phase 4): the loaded project's embedded presets, on top
-    // of stock+user (override on id match). Lets a project-scoped "fork" resolve
-    // by id through the exact same catalog path as stock/user presets.
-    let project = project_overlay_for(label);
-    if !project.is_empty() {
-        log::info!("[presets] merging {} project {label} preset(s)", project.len());
-        for (id, json) in project.iter() {
+    // Loud log: a Snapshot entry whose library file is gone from BOTH stock
+    // and user disk. This is the exact D5 fallback firing — a saved show
+    // still resolves its preset from the project's own cache instead of
+    // stranding. Logged every catalog build (startup + every hot-reload /
+    // overlay install), deliberately — it's meant to be seen, not buried.
+    for id in &snapshot_ids {
+        if !disk_ids.contains(id) {
+            log::warn!(
+                "[presets] `{id}` has no {label} file on disk — resolving `{id}` from the \
+                 project's saved snapshot (D5 self-containment fallback)"
+            );
+        }
+    }
+
+    // Saved-tier project overlay (Phase 4 / D4 / D9): explicit project-scoped
+    // forks / imports / Save-to-Project entries, on top of stock+user
+    // (override on id match) — unchanged from pre-P2 behavior.
+    let saved_overlay = project_saved_overlay_for(label);
+    if !saved_overlay.is_empty() {
+        log::info!("[presets] merging {} project {label} preset(s)", saved_overlay.len());
+        for (id, json) in saved_overlay.iter() {
             if let Some(slot) = merged.iter_mut().find(|(i, _)| i == id) {
                 slot.1 = json.clone();
             } else {

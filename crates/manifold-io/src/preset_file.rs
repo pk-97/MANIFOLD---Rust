@@ -70,7 +70,7 @@ mod tests {
         BindingDef, BindingTarget, ParamSpecDef, PresetMetadata,
     };
     use manifold_core::preset_def::PresetKind;
-    use manifold_core::project::{EmbeddedPreset, Project};
+    use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset, Project};
 
     /// A minimal forked preset: a single recalibrated card param carried on the
     /// def's `presetMetadata` (range widened, plus a binding scale) — the shape
@@ -160,6 +160,7 @@ mod tests {
         project.upsert_embedded_preset(EmbeddedPreset {
             kind: PresetKind::Generator,
             def: imported,
+            origin: EmbeddedOrigin::Saved,
         });
         assert!(
             project.embedded_preset(&id).is_some(),

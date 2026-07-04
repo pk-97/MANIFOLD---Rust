@@ -670,7 +670,11 @@ mod import_model_tests {
             nodes: Vec::new(),
             wires: Vec::new(),
         };
-        EmbeddedPreset { kind: PresetKind::Generator, def }
+        EmbeddedPreset {
+            kind: PresetKind::Generator,
+            def,
+            origin: manifold_core::project::EmbeddedOrigin::Saved,
+        }
     }
 
     #[test]

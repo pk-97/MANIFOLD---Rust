@@ -54,6 +54,7 @@ impl Application {
         // Save the local project snapshot (best effort — authoritative is on content thread)
         self.local_project.saved_playhead_time = current_time.as_f32();
         self.save_viewport_state();
+        crate::project_io::snapshot_and_prune_embedded_presets(&mut self.local_project);
         if let Some(path) = current_path.as_deref() {
             match manifold_io::saver::save_project(&mut self.local_project, path, None, false) {
                 Ok(()) => {
@@ -562,6 +563,7 @@ impl Application {
         let embedded = manifold_core::project::EmbeddedPreset {
             kind: manifold_core::preset_def::PresetKind::Generator,
             def: graph,
+            origin: manifold_core::project::EmbeddedOrigin::Saved,
         };
         // Register + install the overlay BEFORE creating the layer. The core
         // preset-definition registry is process-global, so installing here (on
