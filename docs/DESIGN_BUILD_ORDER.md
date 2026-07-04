@@ -43,6 +43,7 @@ prerequisites aren't shipped, stop.
 | UI_AUTOMATION_DESIGN | none (dev infra; P1–P2 full, P3–P4 conformance) | full (P1–P2) / conformance (P3–P4) |
 | OVERLAY_SESSIONS_AND_PICKER_DESIGN (added 2026-07-04) | none (extends shipped overlay driver) | full |
 | PRESET_LIBRARY_DESIGN (added 2026-07-04) | P5 needs OVERLAY_SESSIONS P2; P6 verify-at-impl gated | full (P1–P4) / conformance (P5–P6) |
+| TIMELINE_INGEST_DESIGN (added 2026-07-04) | none | full |
 
 Not in the queue: **LIVE_AUDIO_TRIGGERS** is SHIPPED (phases 0–7, proven live,
 branch merged). **COMPETITIVE_STEAL_PASS** is a closed record.
@@ -134,6 +135,19 @@ Grouped in waves; within a wave, items are independent and order is free.
     duplicate/multi-select ARE the composing loop), so like 13b it is re-rankable
     arbitrarily early. Hard edge: runs BEFORE UI_CRAFT_AND_MOTION_PLAN (same
     files; motion must not animate lying previews).
+13d. TIMELINE_INGEST_DESIGN P1–P5 (added 2026-07-04, Peter-driven: file drops aim
+    at a stale cursor so audio spawns new lanes instead of joining the lane under
+    the pointer; Finder-clipboard paste; replace-audio-in-place; role-keyed stem
+    lanes). The drop→detect→compose loop is the authoring front door, so it serves
+    the release-content push directly; zero hard edges, re-rankable arbitrarily
+    early like 13b/13c. P1 opens with a VERIFY-AT-IMPL prototype gate (§3 of the
+    doc) — run that check before committing to the wave.
+13e. AUDIO_SENDS_UX_DESIGN P1–P5 (added 2026-07-04, Peter-driven: "sends work but
+    they're awkward to use and tricky to understand"). Send-path view, per-send
+    analysis gating (perf: one bound param currently analyzes all 16 sends,
+    ~1 ms/tick on the content thread), non-dim right-anchored panel, Send→Source
+    string rename, drawer presets. Zero hard edges, re-rankable arbitrarily early
+    like 13b/13c; P1 (gating + doc truth pass) is a small standalone win.
 14. COMPONENT_LIBRARY → 15. MCP_INTERFACE (in that order — MCP consumes components).
 16. AUTOMATION_LANES.
 17. ML_NODES Vision/CoreML tier.
