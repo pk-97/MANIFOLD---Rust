@@ -1009,16 +1009,26 @@ impl GraphCanvas {
             } => {
                 // Only commit on drop over an input port — drop on
                 // empty or an output cancels silently.
-                if let Some(hit) = self.port_under(viewport, sx, sy)
-                    && !hit.is_output
-                    && hit.node_id != from_node
-                {
-                    self.pending_actions.push(GraphEditCommand::ConnectPorts {
-                        from_node,
-                        from_port,
-                        to_node: hit.node_id,
-                        to_port: hit.port_name,
-                    });
+                let valid_drop = self
+                    .port_under(viewport, sx, sy)
+                    .filter(|hit| !hit.is_output && hit.node_id != from_node);
+                match valid_drop {
+                    Some(hit) => {
+                        self.pending_actions.push(GraphEditCommand::ConnectPorts {
+                            from_node,
+                            from_port,
+                            to_node: hit.node_id,
+                            to_port: hit.port_name,
+                        });
+                        // D17 "wire→port ... pop" (partial — see
+                        // `GraphCanvas::tick`'s doc comment).
+                        self.fire_connect_pop(sx, sy);
+                    }
+                    None => {
+                        // D17 error shake — a wire dropped on empty canvas,
+                        // an output port, or back onto its own source node.
+                        self.fire_error_shake(sx, sy);
+                    }
                 }
             }
             DragMode::NodeMove { node_id, .. } => {
