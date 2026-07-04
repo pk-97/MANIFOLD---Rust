@@ -189,6 +189,37 @@ pub struct TimelineViewportPanel {
     marker_node_ids: Vec<NodeId>,
     marker_drag_id: Option<MarkerId>,
     marker_drag_start_beat: Beats,
+
+    // ── P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D17 "timeline marquee
+    // fade") ──────────────────────────────────────────────────────────
+    /// Eases the region/marquee highlight's alpha in/out. Targets 1.0
+    /// whenever `selection_region` is `Some` (whether still being dragged
+    /// or already a settled selection) and 0.0 once cleared — NOT tied to
+    /// drag state the way `graph_canvas`'s ad-hoc marquee is: unlike that
+    /// one, a timeline region is a persistent selection concept that
+    /// outlives the drag, so re-targeting this on drag-end would fade a
+    /// still-selected region to invisible right after you finish selecting
+    /// it. Ticked in `update` (the existing per-frame `Panel::update` hook).
+    region_alpha: crate::anim::AnimF32,
+    /// Wall-clock timestamp `update()` last ticked `region_alpha` from —
+    /// mirrors `DropdownPanel::last_tick`.
+    region_alpha_last_tick: Option<std::time::Instant>,
+
+    /// D17 "clip split flick": the two just-split clip ids separate by
+    /// ~1px briefly, a one-shot hump (out then back) rather than a
+    /// decaying shake. `None` when idle.
+    split_flick: Option<SplitFlickState>,
+    /// Wall-clock timestamp `update()` last ticked `split_flick` from.
+    split_flick_last_tick: Option<std::time::Instant>,
+}
+
+/// D17 "clip split flick" state — which two clip ids are separating, and
+/// how far through the one-shot hump. Purely visual (the split itself
+/// already committed via `SplitClipCommand` by the time this fires).
+struct SplitFlickState {
+    left_id: ClipId,
+    right_id: ClipId,
+    flick: crate::anim::Transient,
 }
 
 /// Viewport-local drag mode. Only tracks ruler scrub — all clip interaction
@@ -272,6 +303,61 @@ impl TimelineViewportPanel {
             marker_node_ids: Vec::new(),
             marker_drag_id: None,
             marker_drag_start_beat: Beats::ZERO,
+            region_alpha: crate::anim::AnimF32::new(0.0, color::MOTION_FAST_MS),
+            region_alpha_last_tick: None,
+            split_flick: None,
+            split_flick_last_tick: None,
+        }
+    }
+
+    /// Fire the D17 "clip split flick" for a just-completed split — call
+    /// right after `EditingService::split_clip_at_beat` returns a command,
+    /// with the original clip's id and `SplitClipCommand::tail_clip_id()`.
+    pub fn fire_split_flick(&mut self, left_id: ClipId, right_id: ClipId) {
+        let mut flick = crate::anim::Transient::default();
+        flick.fire(color::MOTION_MED_MS);
+        self.split_flick = Some(SplitFlickState { left_id, right_id, flick });
+        self.split_flick_last_tick = None;
+    }
+
+    /// Advance the split-flick hump by real elapsed wall-clock time; drops
+    /// the state once finished. Called from `update()`.
+    fn tick_split_flick(&mut self) {
+        let Some(state) = self.split_flick.as_mut() else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        let dt_ms = self
+            .split_flick_last_tick
+            .map(|t| (now - t).as_secs_f32() * 1000.0)
+            .unwrap_or(0.0)
+            .min(100.0);
+        self.split_flick_last_tick = Some(now);
+        if !state.flick.tick(dt_ms) {
+            self.split_flick = None;
+        }
+    }
+
+    /// The X offset (screen px) `clip_id` should draw at for the split
+    /// flick — `+` for the left half separating leftward, `-` for the
+    /// right half separating rightward, a one-shot hump via `sin(pi * t)`
+    /// (out then back, not a decaying oscillation like the error shake).
+    /// `0.0` when idle or `clip_id` isn't one of the two split halves.
+    pub fn split_flick_offset(&self, clip_id: &ClipId) -> f32 {
+        const AMPLITUDE_PX: f32 = 1.0;
+        let Some(state) = &self.split_flick else {
+            return 0.0;
+        };
+        let Some(p) = state.flick.progress() else {
+            return 0.0;
+        };
+        let hump = (p * std::f32::consts::PI).sin() * AMPLITUDE_PX;
+        if *clip_id == state.left_id {
+            -hump
+        } else if *clip_id == state.right_id {
+            hump
+        } else {
+            0.0
         }
     }
 
@@ -631,6 +717,27 @@ impl TimelineViewportPanel {
         }
     }
 
+    /// D17 "timeline marquee fade": advance `region_alpha` toward 1.0/0.0 by
+    /// real elapsed wall-clock time, targeted on whether a region currently
+    /// exists (see `region_alpha`'s doc comment for why that's the right
+    /// binding, not drag state). Called every frame from `Panel::update`.
+    fn tick_region_alpha(&mut self) {
+        self.region_alpha
+            .set_target(if self.selection_region.is_some() { 1.0 } else { 0.0 });
+        if !self.region_alpha.is_animating() {
+            self.region_alpha_last_tick = None;
+            return;
+        }
+        let now = std::time::Instant::now();
+        let dt_ms = self
+            .region_alpha_last_tick
+            .map(|t| (now - t).as_secs_f32() * 1000.0)
+            .unwrap_or(0.0)
+            .min(100.0);
+        self.region_alpha_last_tick = Some(now);
+        self.region_alpha.tick(dt_ms);
+    }
+
     /// Screen-space geometry for the timeline overlays that sit ON TOP of the
     /// clip bodies + waveforms: the marquee/region highlight, the insert cursor,
     /// and the beat markers. Since §24 5b these are GPU rects emitted in the
@@ -658,10 +765,13 @@ impl TimelineViewportPanel {
             if x1 <= x0 || y1 <= y0 {
                 return None;
             }
-            Some((
-                Rect::new(x0, y0, x1 - x0, y1 - y0),
-                color::ACCENT_BLUE_SELECTION,
-            ))
+            // D17 "timeline marquee fade": scale the highlight's alpha by
+            // the eased `region_alpha` instead of drawing it at full
+            // strength the instant a region exists.
+            let a = self.region_alpha.value().clamp(0.0, 1.0);
+            let base = color::ACCENT_BLUE_SELECTION;
+            let faded = color::with_alpha(base, (base.a as f32 * a) as u8);
+            Some((Rect::new(x0, y0, x1 - x0, y1 - y0), faded))
         });
 
         // Insert cursor: a thin vertical bar on its target layer's row.
@@ -1256,6 +1366,8 @@ impl Panel for TimelineViewportPanel {
     fn update(&mut self, tree: &mut UITree) {
         self.sync_insert_cursor_ruler(tree);
         self.sync_active_track_lane(tree);
+        self.tick_region_alpha();
+        self.tick_split_flick();
     }
 
     fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
@@ -1878,5 +1990,113 @@ mod tests {
 
         let locked = bitmap_painter::get_clip_color(false, false, false, true, false, lc);
         assert_eq!(locked, color::CLIP_LOCKED);
+    }
+
+    // ── P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D17 "timeline marquee fade") ──
+
+    #[test]
+    fn region_highlight_fades_in_when_a_region_appears() {
+        let mut panel = TimelineViewportPanel::new();
+        panel.set_tracks(test_tracks());
+        let mut markers = Vec::new();
+
+        // No region yet — no highlight at all.
+        let overlays = panel.timeline_overlays(None, false, &mut markers);
+        assert!(overlays.region.is_none());
+
+        // A region appears; `tick_region_alpha` targets 1.0. Its own first
+        // call only *establishes* the wall-clock baseline (real elapsed time
+        // since the previous call is unknown, so it moves nothing that
+        // instant — same contract `DropdownPanel::update` documents); drive
+        // the actual partial-progress assertion with an explicit `dt` on the
+        // underlying tween directly, mirroring how `DropdownPanel`'s own
+        // tests split `tick_enter(dt)` out from wall-clock `update` for
+        // exactly this reason.
+        panel.set_selection_region(Some(SelectionRegion {
+            start_beat: Beats::ZERO,
+            end_beat: Beats(4.0),
+            start_layer: 0,
+            end_layer: 1,
+        }));
+        panel.tick_region_alpha();
+        panel.region_alpha.tick(16.0);
+        let overlays = panel.timeline_overlays(None, false, &mut markers);
+        let (_, c) = overlays.region.expect("region now exists");
+        assert!(
+            c.a > 0 && c.a < color::ACCENT_BLUE_SELECTION.a,
+            "first tick fades in partway, not instantly: alpha={}",
+            c.a
+        );
+
+        // Drive it to fully settled.
+        panel.tick_region_alpha();
+        panel.region_alpha.tick(color::MOTION_FAST_MS);
+        let overlays = panel.timeline_overlays(None, false, &mut markers);
+        let (_, c) = overlays.region.expect("region still exists");
+        assert_eq!(c.a, color::ACCENT_BLUE_SELECTION.a, "settles at full strength");
+    }
+
+    #[test]
+    fn region_highlight_survives_drag_end_unfaded() {
+        // The whole point of binding `region_alpha`'s target to region
+        // PRESENCE rather than drag state (unlike `graph_canvas`'s ad-hoc
+        // marquee): a settled selection must NOT fade away just because a
+        // drag ended. Simulates "drag ended, region persists".
+        let mut panel = TimelineViewportPanel::new();
+        panel.set_tracks(test_tracks());
+        panel.set_selection_region(Some(SelectionRegion {
+            start_beat: Beats::ZERO,
+            end_beat: Beats(4.0),
+            start_layer: 0,
+            end_layer: 1,
+        }));
+        // Settle it fully first (as if the fade-in already finished).
+        for _ in 0..10 {
+            panel.tick_region_alpha();
+            panel.region_alpha.tick(color::MOTION_FAST_MS);
+        }
+        let mut markers = Vec::new();
+        let (_, before) = panel
+            .timeline_overlays(None, false, &mut markers)
+            .region
+            .expect("region exists");
+        assert_eq!(before.a, color::ACCENT_BLUE_SELECTION.a);
+
+        // "Drag ends" — nothing about the region itself changes; only a
+        // real `clear_region()` (a different call) should ever fade it out.
+        panel.tick_region_alpha();
+        let (_, after) = panel
+            .timeline_overlays(None, false, &mut markers)
+            .region
+            .expect("still exists after the drag ends");
+        assert_eq!(after.a, before.a, "stays at full strength — no fade-out on drag-end alone");
+    }
+
+    // ── P2 motion (D17 "clip split flick") ──────────────────────────
+
+    #[test]
+    fn split_flick_separates_the_two_halves_oppositely_then_settles() {
+        let mut panel = TimelineViewportPanel::new();
+        let left = ClipId::new("left-half");
+        let right = ClipId::new("right-half");
+        let other = ClipId::new("unrelated-clip");
+
+        assert_eq!(panel.split_flick_offset(&left), 0.0, "idle before firing");
+
+        panel.fire_split_flick(left.clone(), right.clone());
+        // Mid-hump (progress != 0/1): left and right move opposite ways by
+        // the same magnitude; an unrelated clip id is untouched.
+        panel.split_flick.as_mut().unwrap().flick.tick(color::MOTION_MED_MS * 0.5);
+        let l = panel.split_flick_offset(&left);
+        let r = panel.split_flick_offset(&right);
+        assert!(l < 0.0, "left half separates leftward: {l}");
+        assert!(r > 0.0, "right half separates rightward: {r}");
+        assert!((l + r).abs() < 1e-4, "equal and opposite: {l} vs {r}");
+        assert_eq!(panel.split_flick_offset(&other), 0.0, "unrelated clip untouched");
+
+        // Past the full duration, the hump finishes and ticking drops it.
+        panel.split_flick.as_mut().unwrap().flick.tick(color::MOTION_MED_MS);
+        panel.tick_split_flick();
+        assert_eq!(panel.split_flick_offset(&left), 0.0, "settles back to zero");
     }
 }

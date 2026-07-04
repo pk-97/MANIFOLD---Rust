@@ -147,6 +147,12 @@ impl GraphCanvas {
             self.draw_ghost_wire(ui, viewport, *from_node, from_port);
         }
 
+        // D17 "flow pulse": one dash traveling source→dest, fired the
+        // instant a `ConnectPorts` commits (`fire_wire_flow_pulse`).
+        if let Some(p) = self.wire_flow_pulse.progress() {
+            self.draw_wire_flow_pulse(ui, p);
+        }
+
         // Nodes draw at CONTENT depth so they sit *above* the wires (BASE).
         // The renderer batches all of a depth's rects before its lines, so
         // node bodies (rects) and wires (lines) at the same depth would force
@@ -392,7 +398,10 @@ impl GraphCanvas {
         };
         let (gx0, gy0) = node.output_port_pos_graph(idx);
         let (sx0, sy0) = self.to_screen(viewport, gx0, gy0);
-        let (sx1, sy1) = self.cursor;
+        // D17 "wire→port magnetize": the endpoint eases toward a nearby
+        // input port instead of tracking the raw cursor 1:1 (see
+        // `tick_wire_magnet`).
+        let (sx1, sy1) = self.wire_ghost_endpoint();
 
         // Same bezier shape as `draw_wire`, sampled lightly.
         let span_x = (sx1 - sx0).abs();
@@ -424,6 +433,33 @@ impl GraphCanvas {
             ui.draw_line(prev.0, prev.1, curr.0, curr.1, thickness, ghost_color);
             prev = curr;
         }
+    }
+
+    /// D17 "flow pulse": one bright dot traveling `wire_flow_pulse_from` →
+    /// `wire_flow_pulse_to` at `progress` (0..1) along the SAME simplified
+    /// bezier shape `draw_ghost_wire` uses (not `draw_wire`'s fuller
+    /// fan-in-staggered curve — a brief traveling dash reading close to the
+    /// wire is enough; it doesn't need to land pixel-exact on it).
+    fn draw_wire_flow_pulse(&self, ui: &mut dyn Painter, progress: f32) {
+        let (sx0, sy0) = self.wire_flow_pulse_from;
+        let (sx1, sy1) = self.wire_flow_pulse_to;
+        let span_x = (sx1 - sx0).abs();
+        let dx = span_x.max(40.0) * 0.5;
+        let (cx0, cy0, cx1, cy1) = (sx0 + dx, sy0, sx1 - dx, sy1);
+        let (px, py) = cubic_bezier(progress.clamp(0.0, 1.0), sx0, sy0, cx0, cy0, cx1, cy1, sx1, sy1);
+        // Fades in the first quarter, holds, fades out the last quarter —
+        // a clean pop-and-travel rather than an abrupt appear/disappear.
+        let alpha = if progress < 0.25 {
+            progress / 0.25
+        } else if progress > 0.75 {
+            (1.0 - progress) / 0.25
+        } else {
+            1.0
+        };
+        // Same "rounded square = dot" primitive `draw_port_dot` uses — this
+        // file has no separate filled-circle draw call.
+        let d = (7.0 * self.zoom).clamp(4.0, 12.0);
+        self.draw_port_dot(ui, px, py, d, CONNECT_OK_COLOR.with_alpha((217.0 * alpha) as u8));
     }
 
     /// A sparse reference grid, drawn at `GRID_SPACING * GRID_LINE_EVERY` —

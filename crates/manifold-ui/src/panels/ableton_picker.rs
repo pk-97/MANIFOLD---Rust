@@ -12,6 +12,7 @@ use crate::types::{AbletonDeviceIdentity, AbletonMacroAddress, is_default_macro_
 
 use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse};
 use super::popup_shell;
+use crate::anim::AnimF32;
 use crate::color;
 use crate::input::{Key, UIEvent};
 use crate::node::*;
@@ -140,6 +141,13 @@ pub struct AbletonPickerPopup {
     /// can't form the `MapParamToAbleton` action itself — the context (which
     /// param / macro slot) lives on `UIRoot`.
     pending_selection: Option<AbletonMacroAddress>,
+    /// D17 "modal/dropdown enter" (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — same
+    /// scale 0.98→1 + fade `enter_anim` `DropdownPanel` uses, restarted on
+    /// every `open()`. See `update`/`build`'s use of it.
+    enter_anim: AnimF32,
+    /// Wall-clock timestamp `update()` last ticked from — mirrors
+    /// `DropdownPanel::last_tick`.
+    last_tick: Option<std::time::Instant>,
 }
 
 impl Default for AbletonPickerPopup {
@@ -165,7 +173,29 @@ impl AbletonPickerPopup {
             first_node: 0,
             node_count: 0,
             pending_selection: None,
+            enter_anim: AnimF32::new(1.0, color::MOTION_FAST_MS),
+            last_tick: None,
         }
+    }
+
+    /// Advance the entrance tween by real elapsed wall-clock time and, while
+    /// still animating, rebuild at the current (still-settling) scale — a
+    /// no-op once settled or closed. Mirrors `DropdownPanel::update`; call
+    /// every frame from `UiRoot::update()`.
+    pub fn update(&mut self, tree: &mut UITree) {
+        if !self.is_open || !self.enter_anim.is_animating() {
+            self.last_tick = None;
+            return;
+        }
+        let now = std::time::Instant::now();
+        let dt_ms = self
+            .last_tick
+            .map(|t| (now - t).as_secs_f32() * 1000.0)
+            .unwrap_or(0.0)
+            .min(100.0);
+        self.last_tick = Some(now);
+        self.enter_anim.tick(dt_ms);
+        self.build(tree);
     }
 
     /// Drain the macro address selected since the last call (set by
@@ -197,6 +227,11 @@ impl AbletonPickerPopup {
             Some(0)
         };
         self.is_open = true;
+        // D17 "modal/dropdown enter": restart the entrance tween on every
+        // genuine open, mirroring `DropdownPanel::open_at`.
+        self.enter_anim = AnimF32::new(0.0, color::MOTION_FAST_MS);
+        self.enter_anim.set_target(1.0);
+        self.last_tick = None;
         self.compute_layout(anchor);
     }
 
@@ -239,10 +274,20 @@ impl AbletonPickerPopup {
         self.track_row_ids.clear();
         self.macro_item_ids.clear();
 
-        let px = self.popup_x;
-        let py = self.popup_y;
-        let pw = POPUP_W;
-        let ph = self.popup_h;
+        // D17 "modal/dropdown enter": scale the whole popup 0.98→1 about its
+        // own center. Every position below derives from these four locals
+        // (never `self.popup_x`/`self.popup_h` directly), so scaling them
+        // here scales the header, columns, and rows for free — the same
+        // "one already-parameterized rect" trick `DropdownPanel::build_nodes`
+        // uses with its `bounds` local.
+        let t = self.enter_anim.value().clamp(0.0, 1.0);
+        let scale = 0.98 + 0.02 * t;
+        let full_cx = self.popup_x + POPUP_W * 0.5;
+        let full_cy = self.popup_y + self.popup_h * 0.5;
+        let px = full_cx - POPUP_W * 0.5 * scale;
+        let py = full_cy - self.popup_h * 0.5 * scale;
+        let pw = POPUP_W * scale;
+        let ph = self.popup_h * scale;
 
         // Scrim + modal container via the shared shell (§17 lifts it with a
         // soft shadow; the header + columns are added on top as siblings).
@@ -253,6 +298,14 @@ impl AbletonPickerPopup {
             &popup_shell::PopupStyle::MODAL,
         );
         self.backdrop_id = Some(shell.backdrop);
+        // Fade the container's own fill/border alpha by the same progress —
+        // content builds at full opacity, matching `DropdownPanel`'s recipe.
+        if t < 0.999 {
+            let mut cs = tree.get_node(shell.container).style;
+            cs.bg_color = color::with_alpha(cs.bg_color, (cs.bg_color.a as f32 * t) as u8);
+            cs.border_color = color::with_alpha(cs.border_color, (cs.border_color.a as f32 * t) as u8);
+            tree.set_style(shell.container, cs);
+        }
 
         let content_x = px + BORDER + PADDING;
         let content_y = py + BORDER + PADDING;

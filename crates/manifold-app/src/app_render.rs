@@ -2783,6 +2783,13 @@ impl Application {
         // 6. Lightweight update (playhead, insert cursor, layer selection, HUD values)
         self.ws.ui_root.update();
 
+        // 6·drag-motion. P2 drag-visual tweens (`UI_CRAFT_AND_MOTION_PLAN.md`
+        // D15/D17: grab lift, duplicate ghost, grid settle, landing-line
+        // flash, error shake). The GPU clip-body pass (Pass 4b below) already
+        // re-emits every frame unconditionally, so ticking here is enough —
+        // no `needs_rebuild` flag to set, unlike the UITree-driven panels.
+        self.overlay.tick((dt * 1000.0) as f32);
+
         // 6·motion. P1 drawer open/close tween: while any inspector drawer-height
         // tween is in flight, force a rebuild each frame so the interpolated height
         // re-lays-out and the content below reflows. Mirrors the is_dragging()
@@ -3409,6 +3416,11 @@ impl Application {
             canvas.resolve_pending_focus(vp);
             // Frame the whole level on editor open / scope change (camera only).
             canvas.apply_pending_fit(vp);
+            // D17 "wire→port magnetize": needs `vp` (port screen positions),
+            // which the main `canvas.tick(dt_ms)` call site (§1c above)
+            // doesn't have — ticked here instead, right before the draw
+            // pass that reads it.
+            canvas.tick_wire_magnet(vp);
         }
 
         // ── Build frame: clear, then draw the canvas + sidebar ──
@@ -3957,7 +3969,17 @@ impl Application {
                     region.is_some() && self.selection.selected_clip_ids.is_empty();
                 let hovered = self.ws.ui_root.viewport.hovered_clip_id();
                 self.clip_body_scratch.clear();
-                for cr in &self.clip_rect_scratch {
+                // P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D15/D17): grab
+                // lift + grid settle + error shake are pure X/Y offsets
+                // applied to the SAME `ClipScreenRect` used below for
+                // waveforms/thumbnails/names — mutating `cr.rect` in place
+                // (rather than only the local `ClipBody`) keeps the whole
+                // clip (body, waveform, label) moving together instead of
+                // the body sliding out from under its own text.
+                let lift_dy = -2.0 * self.overlay.lift_amount();
+                let drag_dx = self.overlay.settle_dx_px() + self.overlay.error_shake_offset_px();
+                let ghost_alpha = self.overlay.ghost_alpha();
+                for cr in &mut self.clip_rect_scratch {
                     let in_marquee = region_selects_clips
                         && region.is_some_and(|r| {
                             manifold_ui::bitmap_renderer::clip_overlaps_region(
@@ -3969,6 +3991,14 @@ impl Application {
                         });
                     let selected = self.selection.is_selected(&cr.clip_id) || in_marquee;
                     let is_hovered = hovered == Some(cr.clip_id.as_str());
+                    let is_drag_visual = self.overlay.is_drag_visual_target(&cr.clip_id);
+                    if is_drag_visual {
+                        cr.rect.x += drag_dx;
+                        cr.rect.y += lift_dy;
+                    }
+                    // D17 "clip split flick": a brief 1px separation between
+                    // the two just-split halves, independent of drag state.
+                    cr.rect.x += self.ws.ui_root.viewport.split_flick_offset(&cr.clip_id);
                     self.clip_body_scratch
                         .push(manifold_renderer::clip_draw::ClipBody {
                             rect: cr.rect,
@@ -3978,6 +4008,7 @@ impl Application {
                             muted: cr.is_muted,
                             locked: cr.is_locked,
                             generator: cr.is_generator,
+                            alpha: if is_drag_visual { ghost_alpha } else { 1.0 },
                         });
                 }
 
@@ -4249,6 +4280,22 @@ impl Application {
             }
             for (x, c) in &self.timeline_marker_scratch {
                 ui.draw_rect(*x, overlay_tracks.y, 1.0, overlay_tracks.height, *c);
+            }
+            // D15 "landing-line flash" — a brief vertical line at the beat a
+            // move-drag just snapped to, spanning the dragged selection's
+            // layer range. Fades out over the `Transient`'s own duration;
+            // purely visual (the model already snapped in
+            // `InteractionOverlay::finalize_move_snap`).
+            if let Some((progress, beat, min_layer, max_layer)) = self.overlay.landing_flash() {
+                let x = self.ws.ui_root.viewport.beat_to_pixel(beat);
+                let y0 = self.ws.ui_root.viewport.track_y(min_layer);
+                let y1 = self.ws.ui_root.viewport.track_y(max_layer)
+                    + self.ws.ui_root.viewport.track_height(max_layer);
+                if y1 > y0 {
+                    let alpha = ((1.0 - progress) * 230.0).round().clamp(0.0, 255.0) as u8;
+                    let c = manifold_ui::color::with_alpha(manifold_ui::color::INSERT_CURSOR_BLUE, alpha);
+                    ui.draw_rect(x - 1.0, y0, 2.0, y1 - y0, c);
+                }
             }
             ui.pop_immediate_clip();
 

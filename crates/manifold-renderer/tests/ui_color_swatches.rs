@@ -606,6 +606,7 @@ fn clip_body_sheet() {
             muted: mut_,
             locked: lock,
             generator: g,
+            alpha: 1.0,
         });
     }
 
@@ -723,6 +724,7 @@ fn clip_waveform_sheet() {
             muted: false,
             locked: false,
             generator: false,
+            alpha: 1.0,
         });
         clips.push(ClipScreenRect {
             clip_id: manifold_foundation::ClipId::new(format!("a{i}")),

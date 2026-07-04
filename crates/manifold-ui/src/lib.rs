@@ -34,6 +34,7 @@ pub mod text;
 pub mod timeline_editing_host;
 pub mod timeline_input_host;
 pub mod transform;
+pub mod transform2d;
 pub mod tree;
 pub mod trim;
 pub mod types;
@@ -73,6 +74,7 @@ pub use panels::{
     Panel, PanelAction, SyncSource, TrimKind,
 };
 pub use slider::{BitmapSlider, SliderColors, SliderNodeIds};
+pub use transform2d::Affine2;
 pub use tree::UITree;
 pub use types::{
     AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus, AudioBand, AudioDeviceRef,
