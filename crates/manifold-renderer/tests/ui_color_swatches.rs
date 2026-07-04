@@ -422,6 +422,7 @@ fn browser_popup_demo() {
     use manifold_ui::panels::browser_popup::{
         BrowserPopupMode, BrowserPopupPanel, BrowserPopupRequest,
     };
+    use manifold_ui::panels::picker_core::PickerItem;
     use manifold_ui::panels::InspectorTab;
     use manifold_ui::UITree;
 
@@ -435,8 +436,16 @@ fn browser_popup_demo() {
         .iter()
         .map(|s| s.to_string())
         .collect();
-    let cats: Vec<String> = names.iter().map(|_| "Stylize".to_string()).collect();
-    let type_ids: Vec<String> = names.iter().map(|n| n.to_lowercase()).collect();
+    let items: Vec<PickerItem> = names
+        .iter()
+        .map(|n| PickerItem {
+            label: n.clone(),
+            type_id: n.to_lowercase(),
+            category: Some("Stylize".to_string()),
+            search_text: None,
+            badge: None,
+        })
+        .collect();
 
     let mut popup = BrowserPopupPanel::new();
     popup.set_screen_size(W as f32, H as f32);
@@ -444,11 +453,8 @@ fn browser_popup_demo() {
         mode: BrowserPopupMode::Effect,
         tab: InspectorTab::Layer,
         layer_id: None,
-        item_names: names,
-        item_categories: cats,
+        items,
         category_names: vec!["Stylize".to_string()],
-        item_type_ids: type_ids,
-        item_search: None,
         spawn_graph_pos: None,
         paste_count: 0,
         screen_anchor: Vec2::new(30.0, 40.0),

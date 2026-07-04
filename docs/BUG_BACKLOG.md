@@ -319,6 +319,39 @@ then reuse the existing `collapse_anim`. Small, localized to `param_card.rs`.
 **Fix shape** — thread the snap-back trigger to the graph-editor's `ParamCardPanel` too, or
 lift the reset-with-settle into shared `ParamCardPanel` logic both dispatch sites reach.
 
+### BUG-022 — Main-window browser popup: Escape while the search field is focused cancels the text session but leaves the popup open — LOW (found during OVERLAY_SESSIONS_AND_PICKER_DESIGN P1/P2, not fixed this session)
+
+**Symptom** — found 2026-07-04 auditing `window_input.rs`'s keyboard routing while
+implementing `docs/OVERLAY_SESSIONS_AND_PICKER_DESIGN.md`. For the MAIN window (effect/
+generator browser), once the search field has focus (`self.text_input.active &&
+field == SearchFilter`), every keystroke is intercepted by the `if self.text_input.active { ... }`
+block in `window_input.rs` (`primary_keyboard_input`, ~line 1593) before it ever reaches
+`UIRoot::process_events`/`route_overlay_event`. Its `Key::Named(NamedKey::Escape)` arm calls
+only `self.text_input.cancel()` — it never touches `self.ws.ui_root.browser_popup`. So Escape
+while typing clears the search text and ends the text session, but the popup itself stays
+open; a second Escape (now routed normally, since `text_input.active` is false) is needed to
+actually dismiss it. This is plausibly the exact mechanism behind Peter's original report
+("the search and text seems to stay after you search and need to click elsewhere again to
+close it properly") — P1's stash-and-drain fix (`TextSessionOwner`/`take_closed_overlays`)
+closes the *orphaned-session-after-popup-closes-elsewhere* class, but this is the inverse:
+popup not closing when the session ends.
+
+Note the EDITOR window's analogous bespoke branch (`window_input.rs` ~1145, node picker) does
+NOT have this gap — its Escape arm already calls `browser_popup.handle_escape()` directly
+alongside cancelling the text input (now also wired through `note_overlay_closed_if` as part
+of this session's P1 work).
+
+**Root cause** — the main-window `text_input.active` Escape arm was written before the browser
+popup existed as an `Overlay`-driven modal; it only ever needed to cancel a plain text field.
+Nothing updated it when `BrowserPopupPanel` started hosting a `SearchFilter` session.
+
+**Fix shape** — in the main-window Escape arm, when `self.text_input.field == SearchFilter`,
+also call `self.ws.ui_root.browser_popup.handle_escape()` (mirroring the editor's branch) instead
+of only `self.text_input.cancel()`. Small, localized to `window_input.rs`'s
+`if self.text_input.active` block — no design-doc scope change, since this is a pre-existing
+gap outside P1/P2's stated deliverables (which target orphaned-session-on-close, not
+missing-close-on-cancel).
+
 ## Fixed
 
 All five entries below were fixed 2026-06-23, with a test per path:

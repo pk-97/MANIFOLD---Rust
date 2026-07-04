@@ -839,6 +839,15 @@ impl Application {
             .sync_embedded_presets(&self.local_project);
         let mut actions = self.ws.ui_root.process_events();
 
+        // Overlay-hosted text sessions (main window): cancel any session
+        // whose overlay just closed during the routing above — the app pump
+        // half of `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` §3, D2. A no-op
+        // most frames (empty drain).
+        for id in self.ws.ui_root.take_closed_overlays() {
+            self.text_input
+                .cancel_if_owned_by(crate::text_input::TextSessionOwner::MainOverlay(id));
+        }
+
         // Native menu bar clicks → the same PanelAction dispatch as on-screen
         // chrome. Drain into an owned Vec first so the immutable borrow of
         // `self.app_menu` ends before we touch `&mut self` below. File/View
@@ -960,42 +969,59 @@ impl Application {
                         // auto-focused on open, but a click re-focuses).
                         if ed.ui_root.browser_popup.is_search_bar(node_id) {
                             let r = ed.ui_root.browser_popup.search_bar_rect(&ed.ui_root.tree);
-                            self.text_input.begin(
+                            self.text_input.begin_owned(
+                                crate::text_input::TextSessionOwner::EditorOverlay(
+                                    crate::ui_root::OverlayId::BrowserPopup,
+                                ),
                                 crate::text_input::TextInputField::SearchFilter,
-                                &ed.ui_root.browser_popup.current_filter,
+                                ed.ui_root.browser_popup.current_filter(),
                                 crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
                                 11.0,
                             );
                             ed.offscreen_dirty = true;
-                        } else if let Some(action) =
-                            ed.ui_root.browser_popup.handle_click(node_id)
-                        {
-                            match action {
-                                BrowserPopupAction::NodeSelected { type_id, graph_pos } => {
+                        } else {
+                            // This routes straight to `handle_click`, bypassing
+                            // the overlay driver's `route_overlay_event` — so a
+                            // close here (cell pick / backdrop) never reaches
+                            // `route_overlay_event`'s closed-overlay tracking.
+                            // Snapshot before/after and record it ourselves; the
+                            // per-frame pump below drains it and cancels this
+                            // popup's owned text session (no manual `cancel()`
+                            // needed here — that was the distributed-reset
+                            // pattern `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md`
+                            // §3 replaces).
+                            let was_open = ed.ui_root.browser_popup.is_open();
+                            if let Some(action) = ed.ui_root.browser_popup.handle_click(node_id) {
+                                ed.ui_root.note_overlay_closed_if(
+                                    crate::ui_root::OverlayId::BrowserPopup,
+                                    was_open,
+                                );
+                                // Dismissed, or Effect/Generator/Paste (which never
+                                // arise in Node mode from the editor popup), need
+                                // nothing further here — the text-session cancel
+                                // (if any) is handled by the closed-overlay pump.
+                                if let BrowserPopupAction::NodeSelected { type_id, graph_pos } =
+                                    action
+                                {
                                     // Hand off to the layer-2 spawn handler.
-                                    // `graph_pos` is the palette-origin
-                                    // canvas position captured at open — pass
-                                    // it straight through, never recompute.
-                                    graph_edits.push(
-                                        manifold_ui::GraphEditCommand::AddGraphNodeAt {
-                                            type_id,
-                                            graph_pos,
-                                        },
-                                    );
-                                    self.text_input.cancel();
+                                    // `graph_pos` is the palette-origin canvas
+                                    // position captured at open — pass it
+                                    // straight through, never recompute.
+                                    graph_edits.push(manifold_ui::GraphEditCommand::AddGraphNodeAt {
+                                        type_id,
+                                        graph_pos,
+                                    });
                                 }
-                                BrowserPopupAction::Dismissed => {
-                                    self.text_input.cancel();
-                                }
-                                // Effect/Generator/Paste never arise in Node
-                                // mode from the editor popup.
-                                _ => {}
+                                ed.offscreen_dirty = true;
+                            } else if ed.ui_root.browser_popup.contains_node(node_id) {
+                                ed.ui_root.note_overlay_closed_if(
+                                    crate::ui_root::OverlayId::BrowserPopup,
+                                    was_open,
+                                );
+                                // Internal click (category chip, background) —
+                                // consume so it doesn't leak to the canvas.
+                                ed.offscreen_dirty = true;
                             }
-                            ed.offscreen_dirty = true;
-                        } else if ed.ui_root.browser_popup.contains_node(node_id) {
-                            // Internal click (category chip, background) —
-                            // consume so it doesn't leak to the canvas.
-                            ed.offscreen_dirty = true;
                         }
                     }
                 }
@@ -1037,6 +1063,15 @@ impl Application {
                 // These actions dispatch against the EDITOR's UIRoot in the
                 // trailing `editor_card_actions` segment below.
                 editor_card_actions.extend(ed.ui_root.route_inspector_events(&events));
+            }
+            // Overlay-hosted text sessions (editor window): same pump as the
+            // main window above, draining both the bespoke browser-popup
+            // click path (marked via `note_overlay_closed_if` in the branch
+            // above) and any close `route_inspector_events` observed through
+            // the normal overlay driver (e.g. an inspector dropdown).
+            for id in ed.ui_root.take_closed_overlays() {
+                self.text_input
+                    .cancel_if_owned_by(crate::text_input::TextSessionOwner::EditorOverlay(id));
             }
         }
         // 2b. Drain editor-canvas actions (wire-drag completions,
@@ -1510,9 +1545,12 @@ impl Application {
                         .ui_root
                         .browser_popup
                         .search_bar_rect(&self.ws.ui_root.tree);
-                    self.text_input.begin(
+                    self.text_input.begin_owned(
+                        crate::text_input::TextSessionOwner::MainOverlay(
+                            crate::ui_root::OverlayId::BrowserPopup,
+                        ),
                         crate::text_input::TextInputField::SearchFilter,
-                        &self.ws.ui_root.browser_popup.current_filter,
+                        self.ws.ui_root.browser_popup.current_filter(),
                         crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
                         11.0,
                     );
@@ -1993,6 +2031,7 @@ impl Application {
                 } => {
                     use manifold_renderer::node_graph::{Category, descriptor_for};
                     use manifold_ui::panels::browser_popup::*;
+                    use manifold_ui::panels::picker_core::PickerItem;
 
                     // Editor-window logical size — drives the popup's
                     // edge-clamping. Falls back to a sane default if the
@@ -2008,36 +2047,28 @@ impl Application {
                         })
                         .unwrap_or((1280.0, 720.0));
 
-                    let names: Vec<String> = self
-                        .palette_atoms_cache
-                        .iter()
-                        .map(|a| a.label.clone())
-                        .collect();
-                    let type_ids: Vec<String> = self
-                        .palette_atoms_cache
-                        .iter()
-                        .map(|a| a.type_id.clone())
-                        .collect();
-                    let categories: Vec<String> = self
-                        .palette_atoms_cache
-                        .iter()
-                        .map(|a| a.category.clone())
-                        .collect();
                     // Search haystack per item: the friendly label plus the
                     // descriptor's aliases (old names, plain-English, the
                     // TouchDesigner-equivalent operator). Typing "blur top"
                     // or a legacy name finds the node.
-                    let search: Vec<String> = self
+                    let items: Vec<PickerItem> = self
                         .palette_atoms_cache
                         .iter()
                         .map(|a| {
                             let aliases = descriptor_for(&a.type_id)
                                 .map(|d| d.aliases.join(" "))
                                 .unwrap_or_default();
-                            if aliases.is_empty() {
-                                a.label.clone()
+                            let search_text = if aliases.is_empty() {
+                                None
                             } else {
-                                format!("{} {}", a.label, aliases)
+                                Some(format!("{} {}", a.label, aliases))
+                            };
+                            PickerItem {
+                                label: a.label.clone(),
+                                type_id: a.type_id.clone(),
+                                category: Some(a.category.clone()),
+                                search_text,
+                                badge: None,
                             }
                         })
                         .collect();
@@ -2050,11 +2081,8 @@ impl Application {
                             mode: BrowserPopupMode::Node,
                             tab: manifold_ui::panels::InspectorTab::Master,
                             layer_id: None,
-                            item_names: names,
-                            item_categories: categories,
+                            items,
                             category_names: cat_names,
-                            item_type_ids: type_ids,
-                            item_search: Some(search),
                             spawn_graph_pos: Some(*graph_pos),
                             paste_count: 0,
                             screen_anchor: manifold_ui::Vec2::new(screen_pos.0, screen_pos.1),
@@ -2067,7 +2095,10 @@ impl Application {
                     // the overlay at the click point; the field rect is
                     // cosmetic for the picker — keystrokes route by the
                     // active SearchFilter field, not by hit position.
-                    self.text_input.begin(
+                    self.text_input.begin_owned(
+                        crate::text_input::TextSessionOwner::EditorOverlay(
+                            crate::ui_root::OverlayId::BrowserPopup,
+                        ),
                         crate::text_input::TextInputField::SearchFilter,
                         "",
                         crate::text_input::AnchorRect::new(
