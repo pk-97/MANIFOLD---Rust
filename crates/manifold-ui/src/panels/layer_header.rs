@@ -488,7 +488,7 @@ fn compute_layer_row(
     btn_x += MS_BTN_W + MSL_GAP;
 
     if is_audio {
-        return compute_audio_row(d, y_offset, height, w, card_x, pad, btn_x, y);
+        return compute_audio_row(d, y_offset, height, w, card_x, pad, btn_x, y, is_collapsed);
     }
 
     d.set(C::Led, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
@@ -568,8 +568,15 @@ fn compute_layer_row(
 }
 
 /// Audio-layer controls: Mute / Solo are already placed by `compute_layer_row`;
-/// this lays out the Gain row and the Send row beneath them, then the
-/// separator. Audio cards never collapse their detail controls.
+/// this places Analysis on the same button row, then branches on collapse
+/// state (`docs/TIMELINE_LAYOUT_P0_SPEC.md` D4):
+/// - Collapsed: the same collapsed chrome every other layer type gets — name
+///   row + M|S|A row + separator, no Gain/Send. Audio's never-collapse
+///   exception is gone; the mapper's state-only `TrackHeight::Collapsed` now
+///   actually bounds this card's content.
+/// - Expanded: three rows total. Gain takes the slot video cards give Blend
+///   — it joins the M|S|A button row instead of stacking below it — and Send
+///   is the third (and last) row.
 fn compute_audio_row(
     mut d: LayerRowData,
     y_offset: f32,
@@ -579,26 +586,41 @@ fn compute_audio_row(
     pad: f32,
     btn_x: f32,
     y_buttons: f32,
+    is_collapsed: bool,
 ) -> LayerRowData {
     use LayerControl as C;
+    let card_w = (w - card_x).max(1.0);
     // Analysis-only toggle on the button row after Mute/Solo (M | S | A): silent to
     // master, still feeding the send. See `docs/LAYER_CONTROLS_DESIGN.md` §5.3.
     d.set(C::Analysis, Rect::new(btn_x, y_buttons, MS_BTN_W, BTN_H));
-    let mut y = y_buttons + BTN_H + 2.0;
+
+    if is_collapsed {
+        d.set(
+            C::Separator,
+            Rect::new(card_x, y_offset + height - SEP_H, card_w, SEP_H),
+        );
+        return d;
+    }
+
+    // Gain: dB slider filling the rest of the button row (Blend's slot for
+    // video), after Mute | Solo | Analysis.
     let right_edge = w - pad - RIGHT_GUTTER;
+    let gain_x = btn_x + MS_BTN_W + 6.0;
+    d.set(
+        C::Gain,
+        Rect::new(gain_x, y_buttons, (right_edge - gain_x).max(20.0), BTN_H),
+    );
 
-    // Gain: dB slider spanning the row (label is drawn inside the slider widget).
-    d.set(C::Gain, Rect::new(pad, y, (right_edge - pad).max(20.0), BTN_H));
-    y += ROW_STEP;
+    // Send: modulation-send dropdown, the third (and last) row.
+    let send_y = y_buttons + BTN_H;
+    d.set(
+        C::Send,
+        Rect::new(pad, send_y, (right_edge - pad).max(20.0), BTN_H),
+    );
 
-    // Send: modulation-send dropdown spanning the row.
-    d.set(C::Send, Rect::new(pad, y, (right_edge - pad).max(20.0), BTN_H));
-    y += BTN_H + 2.0;
-
-    let _ = y;
     d.set(
         C::Separator,
-        Rect::new(card_x, y_offset + height - SEP_H, (w - card_x).max(1.0), SEP_H),
+        Rect::new(card_x, y_offset + height - SEP_H, card_w, SEP_H),
     );
     d
 }
@@ -1350,6 +1372,28 @@ impl LayerHeaderPanel {
         // Contrast text color for readability on the layer's background.
         let text_clr = color::contrast_text_color(layer.color);
         let mut ids = LayerRowIds::default();
+
+        // Per-row content clip (subregion-scissor-invariant, D4): bounds every
+        // control in this row to the row's own vertical extent, full panel
+        // width — not just the card rect — so group gutter visuals
+        // (AccentBar/Connector at x=0, outside `card_x` for a child layer)
+        // stay visible while a future content overflow is truncated inside
+        // its own row instead of bleeding into the neighbour above/below.
+        // Nested clip regions intersect (verified: `ui_renderer.rs` push/pop
+        // clip, `tree.rs` hit-test clip-ancestor walk), so this composes
+        // safely with the panel-wide scroll clip already at `clip_parent`.
+        let bg_rect = row.rect(C::Background);
+        let full_row_width = bg_rect.x + bg_rect.width;
+        let row_clip_rect = s(Rect::new(0.0, bg_rect.y, full_row_width, bg_rect.height));
+        let row_clip = tree.add_node(
+            clip_parent,
+            row_clip_rect,
+            UINodeType::ClipRegion,
+            UIStyle::default(),
+            None,
+            UIFlags::VISIBLE | UIFlags::CLIPS_CHILDREN,
+        );
+        let clip_parent = Some(row_clip);
 
         // One build arm per control kind, shared by every layer type. Walk the
         // descriptors in declaration (z) order; absent controls are skipped.
@@ -2503,11 +2547,24 @@ mod tests {
         btn_x += MS_BTN_W + 6.0;
         if is_audio {
             d.set(C::Analysis, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
-            let mut ay = y + BTN_H + 2.0;
+            if is_collapsed {
+                d.set(
+                    C::Separator,
+                    Rect::new(card_x, y_offset + height - SEP_H, (w - card_x).max(1.0), SEP_H),
+                );
+                return d;
+            }
             let right_edge = w - pad - RIGHT_GUTTER;
-            d.set(C::Gain, Rect::new(pad, ay, (right_edge - pad).max(20.0), BTN_H));
-            ay += ROW_STEP;
-            d.set(C::Send, Rect::new(pad, ay, (right_edge - pad).max(20.0), BTN_H));
+            let gain_x = btn_x + MS_BTN_W + 6.0;
+            d.set(
+                C::Gain,
+                Rect::new(gain_x, y, (right_edge - gain_x).max(20.0), BTN_H),
+            );
+            let send_y = y + BTN_H;
+            d.set(
+                C::Send,
+                Rect::new(pad, send_y, (right_edge - pad).max(20.0), BTN_H),
+            );
             d.set(
                 C::Separator,
                 Rect::new(card_x, y_offset + height - SEP_H, (w - card_x).max(1.0), SEP_H),
@@ -2590,6 +2647,7 @@ mod tests {
             (true, false, true, false, false, false, false, "collapsed-gen"),
             (false, false, false, false, true, true, false, "child-last"),
             (false, false, false, true, false, false, false, "audio"),
+            (true, false, false, true, false, false, false, "collapsed-audio"),
         ];
         for (coll, grp, genr, aud, child, last, gexp, label) in cases {
             let live = compute_layer_row(0.0, 140.0, 300.0, coll, grp, genr, aud, child, last, gexp);
@@ -2625,6 +2683,98 @@ mod tests {
             crate::input::Modifiers::NONE,
         );
         assert!(matches!(a.as_slice(), [PanelAction::AudioSendClicked(0)]));
+    }
+
+    // ── P0.2 gate: D4 audio fit ──────────────────────────────────────
+    //
+    // `docs/TIMELINE_LAYOUT_P0_SPEC.md` D4: collapsed audio drops the
+    // never-collapse exception and gets the same collapsed chrome as every
+    // other layer type; expanded audio fits three rows inside
+    // `TrackHeight::Normal` with no per-card height exception.
+
+    #[test]
+    fn collapsed_audio_has_no_expanded_controls() {
+        // Mirrors `collapsed_layer_has_no_expanded_controls` for the audio
+        // layer type: collapsed audio must not carry Gain/Send (the RC3
+        // overflow this phase removes), only the same Mute/Solo/Analysis
+        // button row every other collapsed layer keeps.
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = LayerHeaderPanel::new();
+
+        let mut layer = make_audio_layer("Collapsed Audio");
+        layer.is_collapsed = true;
+
+        let layers = vec![layer];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
+
+        assert_eq!(panel.rows[0].id(LayerControl::Gain), None);
+        assert_eq!(panel.rows[0].id(LayerControl::Send), None);
+        assert!(panel.rows[0].id(LayerControl::Mute).is_some());
+        assert!(panel.rows[0].id(LayerControl::Solo).is_some());
+        assert!(panel.rows[0].id(LayerControl::Analysis).is_some());
+    }
+
+    #[test]
+    fn collapsed_audio_content_fits_collapsed_track_height() {
+        // Geometry-level check on the same card the panel-level test above
+        // exercises: every control the collapsed audio card keeps must sit
+        // fully inside `TrackHeight::Collapsed`, mirroring
+        // `expanded_audio_content_fits_normal_track_height` below.
+        let height = color::COLLAPSED_TRACK_HEIGHT;
+        let row = compute_layer_row(0.0, height, 300.0, true, false, false, true, false, false, false);
+        assert!(!row.has(LayerControl::Gain));
+        assert!(!row.has(LayerControl::Send));
+        for c in [LayerControl::Mute, LayerControl::Solo, LayerControl::Analysis] {
+            assert!(row.has(c), "collapsed audio row missing {c:?}");
+            let r = row.rect(c);
+            assert!(
+                r.y + r.height <= height,
+                "{c:?} bottom {} exceeds TrackHeight::Collapsed {height}",
+                r.y + r.height
+            );
+        }
+    }
+
+    #[test]
+    fn expanded_audio_content_fits_normal_track_height() {
+        // The RC3/D4 overflow this phase fixes: Gain + Send used to spill
+        // past whatever height the mapper assigned. Assert every control's
+        // bottom edge sits inside `TrackHeight::Normal` — the state-only
+        // height budget the card must fit without a per-type exception.
+        let height = color::TRACK_HEIGHT;
+        let row = compute_layer_row(0.0, height, 300.0, false, false, false, true, false, false, false);
+        for c in [
+            LayerControl::Mute,
+            LayerControl::Solo,
+            LayerControl::Analysis,
+            LayerControl::Gain,
+            LayerControl::Send,
+        ] {
+            assert!(row.has(c), "expanded audio row missing {c:?}");
+            let r = row.rect(c);
+            assert!(
+                r.y + r.height <= height,
+                "{c:?} bottom {} exceeds TrackHeight::Normal {height}",
+                r.y + r.height
+            );
+        }
+        // Gain no longer stacks below M|S|A as its own row — it shares the
+        // button row's y with Mute/Solo/Analysis (the slot video cards give
+        // Blend).
+        let mute_y = row.rect(LayerControl::Mute).y;
+        assert_eq!(row.rect(LayerControl::Gain).y, mute_y, "Gain joins the M|S|A row");
+        // Gain and Analysis must not overlap horizontally.
+        let analysis = row.rect(LayerControl::Analysis);
+        let gain = row.rect(LayerControl::Gain);
+        assert!(
+            gain.x >= analysis.x + analysis.width,
+            "Gain (x={}) overlaps Analysis (right edge={})",
+            gain.x,
+            analysis.x + analysis.width
+        );
     }
 
     #[test]
