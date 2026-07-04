@@ -16,14 +16,10 @@
 //! outer-card text-config convention `node.image_folder`-based presets use
 //! (see `assets/generator-presets/MriVolume.json`'s `axial_folder`).
 //!
-//! `assemble_import_graph` and its helpers have no production caller yet —
-//! this stage builds and proves the assembler in isolation (its own
-//! `#[cfg(test)]` suite, including the GPU render-to-PNG proof); wiring an
-//! actual import command/UI to call it is the next stage of the glTF import
-//! wave. Until then every item here is only reachable from this module's
-//! tests, which `cargo clippy --all-targets` doesn't see in a plain `--lib`
-//! pass — hence the blanket allow rather than a real dead branch.
-#![allow(dead_code)]
+//! Production caller: `manifold-app`'s `.glb`/`.gltf` file-drop handler
+//! (`Application::import_model_file`) calls [`assemble_import_graph`], then
+//! installs the result on a new generator layer via
+//! `manifold_editing::commands::layer::ImportModelLayerCommand`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -186,6 +182,14 @@ pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportRepor
             summary.default_material_vertex_count,
         );
     }
+    if summary.camera_count > 0 {
+        log::info!(
+            "gltf_import::assemble_import_graph({}): glb carries {} embedded camera(s) — v1 \
+             ignores them and synthesizes its own bbox-framed orbit camera",
+            path.display(),
+            summary.camera_count,
+        );
+    }
 
     let center = [
         (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
@@ -242,7 +246,13 @@ pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportRepor
     sun_node.params.insert("aim_x".to_string(), float(0.0));
     sun_node.params.insert("aim_y".to_string(), float(0.0));
     sun_node.params.insert("aim_z".to_string(), float(0.0));
-    sun_node.params.insert("intensity".to_string(), float(1.5));
+    // 3.5, not the primitive's 1.5 default: `node.pbr_material` divides diffuse
+    // by π (energy conservation), so a unit-intensity sun lands a fully-facing
+    // matte surface at ~0.32 — a dark subject then reads near-black. ~3.5
+    // offsets the /π so an imported model is legible under the default rig
+    // without the user having to touch the light. Aesthetic default; the light
+    // node is a normal graph node the user can dial down.
+    sun_node.params.insert("intensity".to_string(), float(3.5));
     nodes.push(sun_node);
 
     let render_id = fresh_id();
@@ -290,6 +300,11 @@ pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportRepor
         mat_node
             .params
             .insert("roughness".to_string(), float(m.roughness.max(0.01)));
+        // 0.18, not the atom's 0.05 default: a single key light leaves the
+        // shadow side of a matte model near-black, so it reads as a silhouette
+        // rather than a form. A modest ambient lift restores the far side
+        // enough to see shape under the default rig.
+        mat_node.params.insert("ambient".to_string(), float(0.18));
         mat_node
             .params
             .insert("emission_r".to_string(), float(m.emissive[0]));
@@ -681,5 +696,148 @@ mod tests {
         println!(
             "imported_azalea_renders_faithfully_to_png: wrote {out_path} (fraction {fraction:.4}, report {report:?})"
         );
+    }
+
+    /// Stage-4 production-path proof: render the assembled azalea graph the way
+    /// a real dropped-in generator LAYER renders it — through
+    /// [`GeneratorRegistry::create_with_override`] with the import graph as the
+    /// per-layer override and the imported preset id as `gen_type`. This is the
+    /// exact per-layer call `GeneratorRenderer::render_all` makes for a layer
+    /// carrying a `generator_graph`, and it differs from
+    /// `imported_azalea_renders_faithfully_to_png` (which drives
+    /// `PresetRuntime::from_def_with_device` directly) in one load-bearing way:
+    /// `is_watched = false` routes through the **on-demand fusion** attempt
+    /// (`fused_generator_def_for`) that the raw-def path skips. So this closes
+    /// the last gap — proving the imported graph survives the fuser and renders
+    /// through the same code an installed timeline layer hits.
+    ///
+    /// It also proves the registry-gate is a non-issue: the sanitized preset id
+    /// (`cc0_oomurasaki_...`) is NOT in the bundled catalog, yet the override
+    /// def renders anyway because `create_with_override` builds from the def.
+    #[test]
+    #[ignore]
+    fn imported_azalea_renders_through_create_with_override_to_png() {
+        use crate::generators::registry::GeneratorRegistry;
+        use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+        use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+        use crate::render_target::RenderTarget;
+        use manifold_gpu::GpuTextureFormat;
+
+        let path = azalea_fixture_path();
+        if !path.exists() {
+            eprintln!(
+                "imported_azalea_renders_through_create_with_override_to_png: fixture not found at {}, skipping",
+                path.display()
+            );
+            return;
+        }
+
+        let (def, report) = assemble_import_graph(&path).expect("assemble azalea");
+        let preset_id = def
+            .preset_metadata
+            .as_ref()
+            .expect("assembled def carries v2 metadata")
+            .id
+            .clone();
+        println!(
+            "create_with_override proof: preset id = {preset_id:?} (NOT in bundled catalog), report {report:?}"
+        );
+
+        let (w, h) = (768u32, 768u32);
+        let device = crate::test_device();
+        let format = GpuTextureFormat::Rgba16Float;
+        let registry = GeneratorRegistry::new(format);
+
+        // is_watched = false -> production render path, INCLUDING the on-demand
+        // fusion attempt the raw from_def proof never exercised.
+        let mut generator = registry
+            .create_with_override(&device, &preset_id, Some(&def), w, h, false)
+            .expect(
+                "create_with_override must build the imported generator from its override def, \
+                 even though the preset id is not in the bundled catalog",
+            );
+
+        let target = RenderTarget::new(&device, w, h, format, "imported-azalea-layer");
+        let ctx = PresetContext {
+            time: 0.0,
+            beat: 0.0,
+            dt: 1.0 / 60.0,
+            width: w,
+            height: h,
+            output_width: w,
+            output_height: h,
+            aspect: 1.0,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: 0,
+            anim_progress: 0.0,
+            trigger_count: 0,
+            params: [0.0; MAX_GEN_PARAMS],
+            param_count: 0,
+        };
+
+        let max_attempts = 200;
+        let mut rgba = Vec::new();
+        let mut fraction = 0.0f64;
+        for attempt in 0..max_attempts {
+            {
+                let mut enc = device.create_encoder("imported-azalea-layer-render");
+                {
+                    let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                    generator.render(&mut gpu, &target.texture, &ctx);
+                }
+                enc.commit_and_wait_completed();
+            }
+
+            let bytes_per_row = w * 8;
+            let total_bytes = u64::from(h * bytes_per_row);
+            let readback_buf = device.create_buffer_shared(total_bytes);
+            let mut readback_enc = device.create_encoder("imported-azalea-layer-readback");
+            readback_enc.copy_texture_to_buffer(&target.texture, &readback_buf, w, h, bytes_per_row);
+            readback_enc.commit_and_wait_completed();
+
+            let ptr = readback_buf.mapped_ptr().expect("shared readback");
+            let halves: &[u16] =
+                unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+
+            rgba = Vec::with_capacity((w * h * 4) as usize);
+            let mut non_black = 0usize;
+            for px in halves.chunks_exact(4) {
+                let r = tonemap_channel(half_to_f32(px[0]));
+                let g = tonemap_channel(half_to_f32(px[1]));
+                let b = tonemap_channel(half_to_f32(px[2]));
+                if r != 0 || g != 0 || b != 0 {
+                    non_black += 1;
+                }
+                rgba.push(r);
+                rgba.push(g);
+                rgba.push(b);
+                let a = half_to_f32(px[3]).clamp(0.0, 1.0);
+                rgba.push((a * 255.0).round() as u8);
+            }
+            fraction = non_black as f64 / (w * h) as f64;
+            if fraction > 0.02 {
+                println!(
+                    "create_with_override proof: converged on attempt {attempt} (non-black {fraction:.4})"
+                );
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        assert!(
+            fraction > 0.02,
+            "expected the imported layer to render non-black through create_with_override, got \
+             {fraction:.4} — a broken fusion pass, a parse that never landed, or a registry-gate regression"
+        );
+
+        let out_path = std::env::var("MESH_SNAP_OUT")
+            .unwrap_or_else(|_| "target/mesh-snap/imported_azalea_layer.png".to_string());
+        if let Some(parent) = std::path::Path::new(&out_path).parent() {
+            std::fs::create_dir_all(parent).expect("create output dir");
+        }
+        image::save_buffer(&out_path, &rgba, w, h, image::ExtendedColorType::Rgba8)
+            .unwrap_or_else(|e| panic!("save {out_path}: {e}"));
+        println!("create_with_override proof: wrote {out_path} (fraction {fraction:.4})");
     }
 }

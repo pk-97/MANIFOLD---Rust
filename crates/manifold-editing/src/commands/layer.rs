@@ -1,6 +1,7 @@
 use crate::command::Command;
 use manifold_core::PresetTypeId;
 use manifold_core::LayerId;
+use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::session::SessionSlot;
@@ -76,6 +77,106 @@ impl Command for AddLayerCommand {
 
     fn description(&self) -> &str {
         "Add Layer"
+    }
+}
+
+/// Add a generator layer whose per-instance graph is a pre-assembled import
+/// graph — the timeline install step of the glTF import wave.
+///
+/// Unlike [`AddLayerCommand`] (which spawns a *bundled-preset* generator that
+/// resolves its graph from the catalog by `PresetTypeId`), this installs a
+/// self-contained override graph directly onto the new layer's
+/// `gen_params.graph`. The renderer builds it via
+/// `GeneratorRegistry::create_with_override`'s `from_def` path, so the
+/// imported preset id never has to exist in the bundled catalog — the layer
+/// carries its own definition and survives save/reload with no registry work.
+///
+/// The `graph` is produced upstream by
+/// `manifold_renderer::node_graph::gltf_import::assemble_import_graph` (which
+/// lives in the renderer crate, so it cannot be called from here — this
+/// command takes the already-assembled [`EffectGraphDef`], a `manifold-core`
+/// type, keeping the editing crate free of any renderer dependency).
+#[derive(Debug)]
+pub struct ImportModelLayerCommand {
+    layer: Option<Layer>,
+    name: String,
+    preset_type: PresetTypeId,
+    graph: EffectGraphDef,
+    insert_index: usize,
+    parent_group_id: Option<LayerId>,
+}
+
+impl ImportModelLayerCommand {
+    pub fn new(
+        name: String,
+        preset_type: PresetTypeId,
+        graph: EffectGraphDef,
+        insert_index: usize,
+        parent_group_id: Option<LayerId>,
+    ) -> Self {
+        Self {
+            layer: None,
+            name,
+            preset_type,
+            graph,
+            insert_index,
+            parent_group_id,
+        }
+    }
+
+    /// The `LayerId` of the inserted layer, available after [`Command::execute`]
+    /// has run (the id is generated at first execute). `None` before then.
+    /// The drop handler reads it to target the same layer with a default
+    /// generator clip so the model renders immediately.
+    pub fn inserted_layer_id(&self) -> Option<LayerId> {
+        self.layer.as_ref().map(|l| l.layer_id.clone())
+    }
+}
+
+impl Command for ImportModelLayerCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let layer = if let Some(existing) = self.layer.take() {
+            existing
+        } else {
+            // `new_generator` (not `new`) stamps `kind: Generator` so the
+            // instance serializes through the generator path — see the note on
+            // `Layer::new_generator`. It also seeds the preset id, which the
+            // override graph carries independently; keeping them in sync lets
+            // the layer card name the model even before the graph is read.
+            let mut new_layer =
+                Layer::new_generator(self.name.clone(), self.preset_type.clone(), 0);
+            new_layer.parent_layer_id = self.parent_group_id.clone();
+            // Match `AddLayerCommand`: seed a distinct hue from the current
+            // layer count rather than index-0's colour.
+            new_layer.layer_color =
+                Layer::generate_layer_color(project.timeline.layers.len());
+            // Install the assembled import graph as the layer's per-instance
+            // override, then bump the *structure* version so the generator
+            // renderer treats it as an authored graph and builds its chain
+            // against this def (mirrors how the first graph edit lifts 0 → 1).
+            let gp = new_layer.gen_params_or_init();
+            *gp.graph_def_mut() = Some(self.graph.clone());
+            gp.bump_graph_structure_version();
+            new_layer
+        };
+        self.layer = Some(layer.clone());
+        project.timeline.insert_layer(self.insert_index, layer);
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some(layer) = &self.layer
+            && let Some(idx) = project
+                .timeline
+                .layers
+                .iter()
+                .position(|l| l.layer_id == layer.layer_id)
+        {
+            project.timeline.remove_layer(idx);
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Import 3D Model"
     }
 }
 
@@ -535,5 +636,90 @@ impl Command for SetLayerAnalysisOnlyCommand {
 
     fn description(&self) -> &str {
         "Set Audio Layer Analysis-Only"
+    }
+}
+
+#[cfg(test)]
+mod import_model_tests {
+    use super::*;
+    use manifold_core::effect_graph_def::{EFFECT_GRAPH_VERSION, EffectGraphDef};
+
+    /// A minimal self-contained def stands in for a real assembled import
+    /// graph: this command only stores the def and installs the layer, so the
+    /// graph's internal shape is irrelevant to what it proves (the renderer
+    /// crate's own tests cover assembly + rendering). What matters here is the
+    /// *layer* it produces.
+    fn stub_import_graph() -> EffectGraphDef {
+        EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION,
+            name: Some("Azalea".to_string()),
+            description: None,
+            preset_metadata: None,
+            nodes: Vec::new(),
+            wires: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn import_model_installs_generator_layer_with_override_graph() {
+        let mut project = Project::default();
+        let before = project.timeline.layers.len();
+        let preset = PresetTypeId::new("azalea");
+
+        let mut cmd = ImportModelLayerCommand::new(
+            "Azalea".to_string(),
+            preset.clone(),
+            stub_import_graph(),
+            before,
+            None,
+        );
+        cmd.execute(&mut project);
+
+        assert_eq!(project.timeline.layers.len(), before + 1);
+        let layer = &project.timeline.layers[before];
+        assert_eq!(
+            layer.layer_type,
+            LayerType::Generator,
+            "imported model must be a generator layer"
+        );
+        assert_eq!(
+            layer.generator_type(),
+            &preset,
+            "generator type must be the imported preset id (so the card names it)"
+        );
+        assert!(
+            layer.generator_graph().is_some(),
+            "the override graph must be installed on gen_params.graph — the renderer \
+             reads it via create_with_override's from_def path"
+        );
+        assert_eq!(layer.generator_graph().unwrap().name.as_deref(), Some("Azalea"));
+        assert!(
+            layer.generator_graph_structure_version() >= 1,
+            "structure version must be bumped so the generator renderer rebuilds \
+             its chain against the authored graph"
+        );
+    }
+
+    #[test]
+    fn import_model_undo_removes_the_layer() {
+        let mut project = Project::default();
+        let before = project.timeline.layers.len();
+
+        let mut cmd = ImportModelLayerCommand::new(
+            "Azalea".to_string(),
+            PresetTypeId::new("azalea"),
+            stub_import_graph(),
+            before,
+            None,
+        );
+        cmd.execute(&mut project);
+        assert_eq!(project.timeline.layers.len(), before + 1);
+
+        cmd.undo(&mut project);
+        assert_eq!(
+            project.timeline.layers.len(),
+            before,
+            "undo must remove exactly the imported layer"
+        );
     }
 }

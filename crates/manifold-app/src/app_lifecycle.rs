@@ -493,6 +493,118 @@ impl Application {
         let _ = content_tx.send(cmd);
     }
 
+    /// Import a dropped `.glb`/`.gltf` model as a new generator layer whose
+    /// per-instance graph renders the model, plus a default generator clip so
+    /// it plays immediately — the "drop a model in and it renders" gesture.
+    ///
+    /// The graph is assembled by
+    /// [`manifold_renderer::node_graph::gltf_import::assemble_import_graph`]
+    /// (one CPU parse here; the graph's `gltf_mesh_source`/`gltf_texture_source`
+    /// nodes re-parse on their own background threads at render time). The
+    /// layer install routes through [`ImportModelLayerCommand`], the clip
+    /// through the shared `AddClipCommand`.
+    pub(crate) fn import_model_file(
+        &mut self,
+        path: &std::path::Path,
+        drop_beat: f32,
+        layer_under_cursor: Option<usize>,
+    ) {
+        use manifold_editing::command::Command;
+
+        // A model is a scene element you hold, not a one-shot — default to four
+        // 4/4 bars. Trim/extend like any other clip afterwards.
+        const DEFAULT_MODEL_DURATION_BEATS: f32 = 16.0;
+
+        let Some(ref content_tx) = self.content_tx else {
+            return;
+        };
+        let content_tx = content_tx.clone();
+
+        // Parse + assemble on the calling thread. Errors (no geometry with
+        // materials, unreadable file) abort the drop with a log rather than
+        // leaving a half-built layer behind.
+        let (graph, report) =
+            match manifold_renderer::node_graph::gltf_import::assemble_import_graph(path) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    log::warn!("[Import] glTF import failed for {}: {e}", path.display());
+                    return;
+                }
+            };
+
+        let Some(meta) = graph.preset_metadata.as_ref() else {
+            log::warn!("[Import] assembled glTF graph carries no preset metadata — aborting");
+            return;
+        };
+        let preset_id = meta.id.clone();
+        let display_name = if meta.display_name.is_empty() {
+            path.file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Model".to_string())
+        } else {
+            meta.display_name.clone()
+        };
+
+        // Insert above the layer under the cursor, or at the top when dropped
+        // outside the tracks area. Generators are full-canvas — unlike images
+        // they need no specific host layer type.
+        let insert_index = layer_under_cursor
+            .unwrap_or(0)
+            .min(self.local_project.timeline.layers.len());
+
+        let dropped_note = if report.dropped_over_cap > 0 {
+            format!(
+                ", {} material(s) dropped over the 8-object cap",
+                report.dropped_over_cap
+            )
+        } else {
+            String::new()
+        };
+        log::warn!(
+            "[Import] Added 3D model '{display_name}' — {} object(s), {} texture(s){dropped_note}",
+            report.object_count,
+            report.textures_wired,
+        );
+
+        // 1. Layer command — execute locally first so the generated LayerId is
+        //    fixed in the command instance, then send that SAME instance to the
+        //    content thread. Both threads then insert the identical layer (id
+        //    included), which lets the clip below target it deterministically.
+        //    This is the sanctioned add-layer dispatch (see the ui_bridge
+        //    ContextAddGeneratorLayer path).
+        let mut layer_cmd =
+            manifold_editing::commands::layer::ImportModelLayerCommand::new(
+                display_name,
+                preset_id,
+                graph,
+                insert_index,
+                None,
+            );
+        layer_cmd.execute(&mut self.local_project);
+        let Some(layer_id) = layer_cmd.inserted_layer_id() else {
+            log::error!("[Import] layer command produced no layer id — aborting clip add");
+            return;
+        };
+        let layer_boxed: Box<dyn Command + Send> = Box::new(layer_cmd);
+        let _ = content_tx.send(ContentCommand::Execute(layer_boxed));
+
+        // 2. A default generator clip on that layer, so the model renders at
+        //    once. The clip is a bare time-span; the layer's graph drives the
+        //    pixels (a generator clip carries no generator of its own). Sent
+        //    after the layer on the same ordered channel, so the layer exists
+        //    on the content thread before the clip targets it.
+        let spb = 60.0 / self.local_project.settings.bpm.0;
+        let clip = manifold_core::clip::TimelineClip::new_generator(
+            manifold_core::Beats::from_f32(drop_beat.max(0.0)),
+            manifold_core::Beats::from_f32(DEFAULT_MODEL_DURATION_BEATS),
+        );
+        let mut clip_cmd =
+            manifold_editing::commands::clip::AddClipCommand::new(clip, layer_id, spb);
+        clip_cmd.execute(&mut self.local_project);
+        let clip_boxed: Box<dyn Command + Send> = Box::new(clip_cmd);
+        let _ = content_tx.send(ContentCommand::Execute(clip_boxed));
+    }
+
     /// Open. Delegates to ProjectIOService.open_project.
     pub(crate) fn open_project(&mut self) {
         self.send_content_cmd(ContentCommand::PauseRendering);
