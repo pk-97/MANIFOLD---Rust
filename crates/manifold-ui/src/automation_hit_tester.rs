@@ -9,7 +9,7 @@
 //! disagree with what's on screen (mirrors `ClipHitTester`'s "one source for
 //! draw and hit-test" discipline). See `docs/AUTOMATION_LANES_DESIGN.md` §7.
 
-use crate::node::Vec2;
+use crate::node::{Rect, Vec2};
 use crate::panels::viewport::AutomationLaneScreen;
 use crate::view::automation_segment_bend;
 
@@ -117,6 +117,33 @@ pub fn hit_test_automation(pos: Vec2, lanes: &[AutomationLaneScreen]) -> Option<
         return Some(AutomationHit::Strip { lane_index });
     }
     None
+}
+
+/// Build the marquee rect from two screen-space corners in ANY order (the
+/// drag's press position and its current position) — normalizes to a
+/// non-negative-size `Rect` regardless of drag direction.
+pub fn marquee_rect(a: Vec2, b: Vec2) -> Rect {
+    let x0 = a.x.min(b.x);
+    let y0 = a.y.min(b.y);
+    let x1 = a.x.max(b.x);
+    let y1 = a.y.max(b.y);
+    Rect::new(x0, y0, x1 - x0, y1 - y0)
+}
+
+/// All `(lane_index, dot_index)` pairs whose dot falls within `rect` — the
+/// pure core of marquee-select (P4 Unit B, §7's "Marquee-select multiple
+/// dots"). `InteractionOverlay` calls this every frame during an
+/// `AutomationMarquee` drag to refresh `UIState::selected_automation_points`.
+pub fn dots_in_rect(rect: Rect, lanes: &[AutomationLaneScreen]) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    for (lane_index, lane) in lanes.iter().enumerate() {
+        for (dot_index, dot) in lane.dots.iter().enumerate() {
+            if rect.contains(Vec2::new(dot.x, dot.y)) {
+                out.push((lane_index, dot_index));
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -289,5 +316,41 @@ mod tests {
         // Straight line passes through (50, 50); (50, 5) is far above it.
         let hit = hit_test_automation(Vec2::new(50.0, 5.0), &lanes);
         assert_eq!(hit, Some(AutomationHit::Strip { lane_index: 0 }));
+    }
+
+    // ── Marquee-select (P4 Unit B) ───────────────────────────────────
+
+    #[test]
+    fn marquee_rect_normalizes_any_drag_direction() {
+        // Dragging bottom-right to top-left must produce the SAME rect as
+        // top-left to bottom-right.
+        let a = marquee_rect(Vec2::new(10.0, 10.0), Vec2::new(50.0, 40.0));
+        let b = marquee_rect(Vec2::new(50.0, 40.0), Vec2::new(10.0, 10.0));
+        assert_eq!(a, b);
+        assert_eq!(a, Rect::new(10.0, 10.0, 40.0, 30.0));
+    }
+
+    #[test]
+    fn dots_in_rect_selects_only_dots_inside() {
+        let lanes = vec![
+            test_lane(
+                Rect::new(0.0, 0.0, 100.0, 28.0),
+                vec![dot(10.0, 14.0), dot(60.0, 14.0)],
+            ),
+            test_lane(Rect::new(0.0, 28.0, 100.0, 28.0), vec![dot(10.0, 42.0)]),
+        ];
+        // Rect covers (0,0)-(30,50): lane 0's first dot and lane 1's dot, NOT
+        // lane 0's second dot at x=60.
+        let rect = Rect::new(0.0, 0.0, 30.0, 50.0);
+        let mut hits = dots_in_rect(rect, &lanes);
+        hits.sort();
+        assert_eq!(hits, vec![(0, 0), (1, 0)]);
+    }
+
+    #[test]
+    fn dots_in_rect_empty_when_nothing_inside() {
+        let lanes = vec![test_lane(Rect::new(0.0, 0.0, 100.0, 28.0), vec![dot(90.0, 14.0)])];
+        let rect = Rect::new(0.0, 0.0, 10.0, 10.0);
+        assert!(dots_in_rect(rect, &lanes).is_empty());
     }
 }

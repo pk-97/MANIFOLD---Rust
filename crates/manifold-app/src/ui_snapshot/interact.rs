@@ -28,9 +28,12 @@ pub fn apply(ui: &mut UIRoot, data: &mut SceneData, spec: &str) -> String {
         Some(("automation_move", rest)) => automation_move_point(data, rest),
         Some(("automation_bend", rest)) => automation_bend_segment(data, rest),
         Some(("automation_segment_drag", rest)) => automation_segment_drag(data, rest),
+        Some(("automation_group_move", rest)) => automation_group_move(data, rest),
+        Some(("automation_group_delete", rest)) => automation_group_delete(data, rest),
         Some((verb, _)) => format!(
             "unknown interact verb '{verb}' (known: select, collapse, delete, open, \
-             automation_add, automation_move, automation_bend, automation_segment_drag)"
+             automation_add, automation_move, automation_bend, automation_segment_drag, \
+             automation_group_move, automation_group_delete)"
         ),
         None => format!("malformed interact '{spec}' (want verb:target)"),
     }
@@ -160,6 +163,77 @@ fn automation_segment_drag(data: &mut SceneData, rest: &str) -> String {
     lane.points[right_idx].value += delta;
     format!(
         "automation_segment_drag -> '{layer_id}':'{param_id}' [{left_idx},{right_idx}] both += {delta}"
+    )
+}
+
+/// P4 Unit B evidence-gathering verb: `automation_group_move:<layer_id>:
+/// <param_id>:<comma_separated_indices>:<value_delta>` moves every listed
+/// point's value by `value_delta` (unclamped), directly on `data.project` —
+/// mirrors `InteractionOverlay::commit_automation_group_drag`'s end state
+/// (a marquee-selected GROUP moved together, beats/shapes unchanged). The
+/// grab/marquee-rect math itself is unit-tested separately
+/// (`automation_hit_tester::dots_in_rect`).
+fn automation_group_move(data: &mut SceneData, rest: &str) -> String {
+    let parts: Vec<&str> = rest.splitn(4, ':').collect();
+    let [layer_id, param_id, indices_str, delta_str] = parts.as_slice() else {
+        return format!("automation_group_move: want layer:param:indices:delta, got '{rest}'");
+    };
+    let Ok(delta) = delta_str.parse::<f32>() else {
+        return format!("automation_group_move: bad delta '{delta_str}'");
+    };
+    let mut indices = Vec::new();
+    for s in indices_str.split(',') {
+        match s.parse::<usize>() {
+            Ok(i) => indices.push(i),
+            Err(_) => return format!("automation_group_move: bad index '{s}' in '{indices_str}'"),
+        }
+    }
+    let Some(lane) = find_lane_mut(data, layer_id, param_id) else {
+        return format!("automation_group_move: no lane for '{layer_id}':'{param_id}'");
+    };
+    let len = lane.points.len();
+    for &idx in &indices {
+        if idx >= len {
+            return format!("automation_group_move: index {idx} out of range ({len} points)");
+        }
+    }
+    for &idx in &indices {
+        lane.points[idx].value += delta;
+    }
+    format!("automation_group_move -> '{layer_id}':'{param_id}' {indices:?} all += {delta}")
+}
+
+/// P4 Unit B evidence-gathering verb: `automation_group_delete:<layer_id>:
+/// <param_id>:<comma_separated_indices>` removes every listed point,
+/// highest-index-first — mirrors `AppInputHost::delete_selected_automation_points`'s
+/// per-lane ordering (proven generically by `manifold-editing`'s
+/// `composite_group_delete_highest_index_first_survives_execute_and_undo`).
+fn automation_group_delete(data: &mut SceneData, rest: &str) -> String {
+    let parts: Vec<&str> = rest.splitn(3, ':').collect();
+    let [layer_id, param_id, indices_str] = parts.as_slice() else {
+        return format!("automation_group_delete: want layer:param:indices, got '{rest}'");
+    };
+    let mut indices = Vec::new();
+    for s in indices_str.split(',') {
+        match s.parse::<usize>() {
+            Ok(i) => indices.push(i),
+            Err(_) => return format!("automation_group_delete: bad index '{s}' in '{indices_str}'"),
+        }
+    }
+    indices.sort_unstable_by(|a, b| b.cmp(a)); // highest first
+    indices.dedup();
+    let Some(lane) = find_lane_mut(data, layer_id, param_id) else {
+        return format!("automation_group_delete: no lane for '{layer_id}':'{param_id}'");
+    };
+    let before = lane.points.len();
+    for idx in &indices {
+        if *idx < lane.points.len() {
+            lane.points.remove(*idx);
+        }
+    }
+    format!(
+        "automation_group_delete -> '{layer_id}':'{param_id}' removed {indices:?}; {before} -> {} points",
+        lane.points.len()
     )
 }
 
