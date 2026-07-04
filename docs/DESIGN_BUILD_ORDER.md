@@ -93,18 +93,6 @@ along with a flashy headliner rather than headlining.
 
 Grouped in waves; within a wave, items are independent and order is free.
 
-**⚡ RELEASE-CONTENT PUSH (2026-07-04 → ~Aug release) — overrides wave order
-while active.** Peter's music release pivots priority to authoring + export.
-In flight (Opus orchestration, Sonnet workers, worktrees off
-`feat/timeline-ui-redesign`): **Lane A** AUTOMATION_LANES P1–P3 (pulled
-forward from wave 3; P4 after Lane B P0 merges) · **Lane B**
-`docs/TIMELINE_LAYOUT_P0_SPEC.md` P0.0–P0.5 then UI_CRAFT_AND_MOTION_PLAN.
-**Next session picks up: `docs/OFFLINE_AUDIO_REACTIVE_EXPORT_DESIGN.md`
-(Lane C, designed 2026-07-04, not started)** — audio-bound params currently
-render FROZEN in exports; its P3 doubles as the export-mixdown verification.
-Deferred by Peter: SESSION_MODE P5, ABLETON_SHOW_SYNC (see item 13). Live-rig
-items (waves 1–2) resume after the release window.
-
 **Wave 0 — lock the names, protect the work. ✅ COMPLETE (2026-07-03, merged into `feat/timeline-ui-redesign`).**
 1. ✅ VOCAB apply pass — P1–P7 shipped; every "VOCAB apply" prerequisite below (COMPONENT_LIBRARY, MCP_INTERFACE, MATERIAL_SYSTEM, REALTIME_3D, IMPORT P6) is now satisfied.
 2. ✅ GIG_RESILIENCE P1 (autosave + save-error surfacing + crash.log rotation). Two manual checks still owed by Peter (autosave end-to-end; read-only-volume dialog).
@@ -128,9 +116,6 @@ items (waves 1–2) resume after the release window.
 12. LED_STRIPS P1 (patch + sACN, no island dep), then P2–P3 after 4.
 13. ABLETON_SHOW_SYNC — the score importer; makes gig-resilience rejoin exact and is
     the core Ableton workflow. No hard edge, high instrument value.
-    **⏸ SHELVED 2026-07-04 (Peter): release tracks are single-track masters and
-    `.mid` drag-drop covers trigger mockups. Revive for the live-show era —
-    P1+P2 only unless arrangements are changing (P3 re-sync is live machinery).**
 
 **Wave 3 — authoring depth + the AI surface.**
 14. COMPONENT_LIBRARY → 15. MCP_INTERFACE (in that order — MCP consumes components).
