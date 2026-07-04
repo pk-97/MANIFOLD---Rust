@@ -1104,7 +1104,16 @@ fn clip_base_color(
 /// Does NOT touch tracks, bitmap renderers, or layer headers — only clip data.
 /// The bitmap fingerprint will detect if positions actually changed and skip
 /// repaint when nothing moved (cheap no-op outside of drag).
-pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
+///
+/// `automation_visible` also refreshes `viewport`'s automation lane geometry
+/// from the live project when true (P4 Unit A automation point drag —
+/// `InteractionOverlay::handle_automation_drag` mutates the project directly
+/// each frame the same way clip move-drag does, and needs the SAME per-frame
+/// resync path so a dragged dot's on-screen position updates live instead of
+/// waiting for the next structural sync — `docs/AUTOMATION_LANES_DESIGN.md`
+/// §7). Cheap: gated the same way the clip refresh already is (mouse-pressed
+/// or structural change), and lane counts are tens, not hundreds.
+pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project, automation_visible: bool) {
     use manifold_ui::panels::viewport::ViewportClip;
     let mut viewport_clips = Vec::new();
     for (i, layer) in project.timeline.layers.iter().enumerate() {
@@ -1134,6 +1143,21 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
         }
     }
     ui.viewport.set_clips(viewport_clips);
+
+    if automation_visible {
+        use manifold_ui::panels::viewport::ViewportAutomationLane;
+        let mut viewport_lanes = Vec::new();
+        for (i, layer) in project.timeline.layers.iter().enumerate() {
+            if layer.is_collapsed || layer.is_group() {
+                continue;
+            }
+            for lane in crate::ui_translate::layer_automation_lanes_to_ui(layer) {
+                viewport_lanes.push(ViewportAutomationLane { layer_index: i, lane });
+            }
+        }
+        ui.viewport.set_automation_lanes(viewport_lanes);
+    }
+
     // Only sync markers when marker data has changed (avoids re-pushing on every
     // drag frame). Markers are few (dozens), so building the UI view to compare is cheap.
     let ui_markers = crate::ui_translate::markers_to_ui(&project.timeline.markers);

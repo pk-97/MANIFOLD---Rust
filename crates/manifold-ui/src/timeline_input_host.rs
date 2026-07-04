@@ -235,4 +235,14 @@ pub trait TimelineInputHost {
 
     /// Whether any markers are currently selected.
     fn has_selected_markers(&self) -> bool;
+
+    // ── Automation lane editing (P4, `docs/AUTOMATION_LANES_DESIGN.md` §7) ──
+
+    /// Whether a single automation breakpoint is currently selected (set by
+    /// a plain click on a dot — `UIState::selected_automation_point`).
+    fn has_selected_automation_point(&self) -> bool;
+
+    /// Delete the currently selected automation breakpoint. No-op if none
+    /// selected or it no longer resolves (e.g. its lane was cleared).
+    fn delete_selected_automation_point(&mut self);
 }

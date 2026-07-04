@@ -808,7 +808,8 @@ impl Application {
                 DragMode::Move
                 | DragMode::TrimLeft
                 | DragMode::TrimRight
-                | DragMode::RegionSelect => return,
+                | DragMode::RegionSelect
+                | DragMode::AutomationPoint => return,
                 DragMode::None => {}
             }
         }

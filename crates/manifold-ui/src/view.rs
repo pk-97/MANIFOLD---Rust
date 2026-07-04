@@ -183,19 +183,92 @@ pub struct UiAutomationPoint {
     pub shape: UiSegmentShape,
 }
 
+/// UI-local mirror of `manifold_core::GraphTarget` — kept local because
+/// `manifold-ui` depends only on `manifold-foundation`, not `manifold-core`
+/// (see this file's header comment / `docs/UI_LAYERING_INVERSION.md`), so the
+/// real `GraphTarget` isn't reachable here. Carries the addressing an
+/// automation edit needs to build `AddAutomationPointCommand` /
+/// `MoveAutomationPointCommand` / `RemoveAutomationPointCommand` on the
+/// `manifold-app` side (`editing_host.rs` converts this 1:1 back to
+/// `manifold_core::GraphTarget` — both variants wrap the identical
+/// `EffectId`/`LayerId` types re-exported from `manifold-foundation`, so the
+/// conversion is a plain clone, never a lookup).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UiGraphTarget {
+    Effect(EffectId),
+    Generator(LayerId),
+}
+
 /// One lane strip's read-only render data: which param, whether it draws
 /// grayed (overridden), and the breakpoints the viewport samples into a
 /// screen-space polyline. `effect_id` + `param_id` are the identity key that
-/// matches `ContentState::automation_latched_params` for override graying.
+/// matches `ContentState::automation_latched_params` for override graying —
+/// this is the PresetInstance's own (possibly synthetic, for a generator)
+/// `EffectId`, distinct from `target`, which is the ADDRESSING key
+/// (`GraphTarget::Generator(layer_id)` for a generator's own params, since
+/// `PresetInstance::id` is documented synthetic there — see
+/// `manifold_core::effects::PresetInstance::id`'s doc comment). Both are
+/// needed: `effect_id` for the latch-match, `target` for building edit
+/// commands.
 #[derive(Debug, Clone)]
 pub struct UiAutomationLane {
     pub effect_id: EffectId,
     pub param_id: ParamId,
+    pub target: UiGraphTarget,
     /// Display label for the strip's chooser slot (e.g. "Mirror: amount").
     pub label: String,
     /// Sorted ascending by `beat` (mirrors `AutomationLane::points`'
     /// write-time invariant — the translator copies the core order as-is).
     pub points: Vec<UiAutomationPoint>,
+    /// The param's resolved range (`ResolvedParam::min/max` — override range
+    /// when the chevron popover recalibrated it, else the catalog range).
+    /// THE FOOTGUN: `points[i].value_norm` is already `0..1` (divided by this
+    /// range by `ui_translate::push_instance_automation_lanes`), but
+    /// `AutomationPoint.value` in the edit commands is PARAM RANGE. Editing
+    /// code must denormalize screen-space Y back through this range —
+    /// [`Self::denormalize`] is the one place that happens.
+    pub param_min: f32,
+    pub param_max: f32,
+    /// Whether the param is integral (registry `whole_numbers`/`value_labels`,
+    /// or an integral user-binding conversion) — `docs/AUTOMATION_LANES_DESIGN.md`
+    /// §8: "Enum/int-backed params: author with Hold segments." Newly-clicked
+    /// points on such a param default to `Hold` instead of `Linear` — see
+    /// [`Self::new_point_shape`].
+    pub whole_numbers: bool,
+}
+
+impl UiAutomationLane {
+    /// Inverse of `ui_translate::push_instance_automation_lanes`'s
+    /// `(value - min) / range` normalization — screen-space Y (already
+    /// converted to `0..1` by the caller) back to the param-range value
+    /// `AutomationPoint.value` expects. Clamps to `[min, max]` since a
+    /// dragged Y can go slightly out of the strip's rect.
+    pub fn denormalize(&self, value_norm: f32) -> f32 {
+        let n = value_norm.clamp(0.0, 1.0);
+        self.param_min + n * (self.param_max - self.param_min)
+    }
+
+    /// Default `SegmentShape` for a NEWLY clicked/added point (§8: enum/int
+    /// params author with `Hold`; everything else defaults `Linear`, matching
+    /// the shape leaving-this-point convention `AutomationPoint::shape` docs).
+    pub fn new_point_shape(&self) -> UiSegmentShape {
+        if self.whole_numbers {
+            UiSegmentShape::Hold
+        } else {
+            UiSegmentShape::Linear
+        }
+    }
+}
+
+/// Identifies one breakpoint for selection / deletion — the (target, param,
+/// beat) triple is stable identity for a point that hasn't been dragged this
+/// frame (mirrors the core commands' own by-beat point identity, see
+/// `manifold-editing/src/commands/automation.rs`'s module doc).
+#[derive(Debug, Clone, PartialEq)]
+pub struct UiAutomationPointRef {
+    pub target: UiGraphTarget,
+    pub param_id: ParamId,
+    pub beat: Beats,
 }
 
 impl UiAutomationLane {
@@ -266,8 +339,12 @@ mod automation_lane_tests {
         UiAutomationLane {
             effect_id: EffectId::new("fx"),
             param_id: ParamId::from("amount"),
+            target: UiGraphTarget::Effect(EffectId::new("fx")),
             label: "Fx: amount".into(),
             points,
+            param_min: 0.0,
+            param_max: 1.0,
+            whole_numbers: false,
         }
     }
 
@@ -317,5 +394,31 @@ mod automation_lane_tests {
         ]);
         let got = l.value_at_norm(Beats(2.0));
         assert!((got - 0.0625).abs() < 1e-5, "got {got}");
+    }
+
+    #[test]
+    fn denormalize_round_trips_through_a_non_unit_range() {
+        // The footgun this pins: a lane whose param range isn't 0..1 (e.g. a
+        // 20..20000 Hz cutoff) must denormalize a clicked/dragged 0..1 screen
+        // position back to the exact param-range value ui_translate would have
+        // normalized FROM — add→render must land where the user clicked.
+        let mut l = lane(vec![]);
+        l.param_min = 20.0;
+        l.param_max = 20020.0;
+        assert_eq!(l.denormalize(0.0), 20.0);
+        assert_eq!(l.denormalize(1.0), 20020.0);
+        assert_eq!(l.denormalize(0.5), 10020.0);
+        // Out-of-range Y (drag past the strip edge) clamps rather than
+        // extrapolating past the param's own min/max.
+        assert_eq!(l.denormalize(-0.2), 20.0);
+        assert_eq!(l.denormalize(1.2), 20020.0);
+    }
+
+    #[test]
+    fn new_point_shape_defaults_hold_for_whole_numbers_params() {
+        let mut l = lane(vec![]);
+        assert_eq!(l.new_point_shape(), UiSegmentShape::Linear);
+        l.whole_numbers = true;
+        assert_eq!(l.new_point_shape(), UiSegmentShape::Hold);
     }
 }

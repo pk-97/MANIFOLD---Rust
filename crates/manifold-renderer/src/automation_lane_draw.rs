@@ -46,8 +46,15 @@ pub fn emit_automation_lanes(ui: &mut UIRenderer, lanes: &[AutomationLaneScreen]
         }
 
         let d = color::AUTOMATION_DOT_RADIUS * 2.0;
-        for &(x, y) in &l.dots {
-            ui.draw_rounded_rect(x - d * 0.5, y - d * 0.5, d, d, line_color, color::AUTOMATION_DOT_RADIUS);
+        for dot in &l.dots {
+            ui.draw_rounded_rect(
+                dot.x - d * 0.5,
+                dot.y - d * 0.5,
+                d,
+                d,
+                line_color,
+                color::AUTOMATION_DOT_RADIUS,
+            );
         }
 
         // Label, left-anchored inside the strip — the read-only stand-in for

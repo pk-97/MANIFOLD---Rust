@@ -43,8 +43,8 @@ mod render;
 // overlay name the same type.
 pub use crate::clip_hit_tester::{ClipHitResult, HitRegion};
 pub use model::{
-    AutomationLaneScreen, ClipScreenRect, SelectionRegion, TimelineOverlays, TrackInfo,
-    ViewportAutomationLane, ViewportClip,
+    AutomationDotScreen, AutomationLaneScreen, ClipScreenRect, SelectionRegion, TimelineOverlays,
+    TrackInfo, ViewportAutomationLane, ViewportClip,
 };
 use coordinate::GridSubdivision;
 use model::{CollapsedGroupBitmap, MarkerNodeGroup, TrackBgGroup};
@@ -761,7 +761,13 @@ impl TimelineViewportPanel {
                     .map(|p| {
                         let x = self.beat_to_pixel(p.beat);
                         let y = strip_rect.y + strip_rect.height * (1.0 - p.value_norm);
-                        (x, y)
+                        model::AutomationDotScreen {
+                            x,
+                            y,
+                            beat: p.beat,
+                            value_norm: p.value_norm,
+                            shape: p.shape,
+                        }
                     })
                     .collect();
 
@@ -771,6 +777,11 @@ impl TimelineViewportPanel {
                     overridden,
                     polyline,
                     dots,
+                    target: lane.target.clone(),
+                    param_id: lane.param_id.clone(),
+                    param_min: lane.param_min,
+                    param_max: lane.param_max,
+                    whole_numbers: lane.whole_numbers,
                 });
             }
         }
