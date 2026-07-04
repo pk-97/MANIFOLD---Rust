@@ -87,8 +87,11 @@ def build_block(flag):
     payload = (_payloads().get(move_id) or {}).get("payload")
     if not payload:
         return None
+    # No unvalidated/confidence attributes in the model-facing tag: both are
+    # licenses to discount the anchor (Peter's call, 2026-07-04). Confidence
+    # stays in the verdict file for grading.
     return (
-        f'<daemon move="{move_id}" unvalidated="true" confidence="{flag.get("confidence")}">\n'
+        f'<daemon move="{move_id}">\n'
         f"{payload}\n"
         f"\n"
         f"(Supervised mode: briefly acknowledge this note out loud in your next "
