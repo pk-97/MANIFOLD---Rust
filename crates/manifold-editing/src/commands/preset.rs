@@ -10,7 +10,6 @@
 use manifold_core::GraphTarget;
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::macro_bank::MacroCurve;
 use manifold_core::preset_def::PresetKind;
 use manifold_core::project::{EmbeddedPreset, Project};
 
@@ -89,10 +88,11 @@ impl Command for ForkPresetCommand {
                 .as_ref()
                 .map(|m| m.id.as_str().to_string())
                 .unwrap_or_else(|| "preset".to_string());
-            let new_id = project.mint_embedded_preset_id(&base);
+            let new_id = project.mint_forked_preset_id(&base);
             let mut def = self.source_def.clone();
             if let Some(m) = def.preset_metadata.as_mut() {
                 m.id = new_id.clone();
+                m.display_name = new_id.as_str().to_string();
             }
             self.forked = Some(EmbeddedPreset {
                 kind: self.kind,
@@ -139,86 +139,11 @@ impl Command for ForkPresetCommand {
     }
 }
 
-/// Edit one param's slider calibration (range + response) on a project-embedded
-/// preset. The DAW-style reshape, now stored where it belongs — in the preset —
-/// instead of a per-instance `ParamMapping` note. No-op if the preset or param
-/// id isn't found (e.g. the preset is stock/read-only — callers fork first).
-#[derive(Debug)]
-pub struct EditPresetParamCommand {
-    preset_id: PresetTypeId,
-    param_id: String,
-    new_min: f32,
-    new_max: f32,
-    new_curve: MacroCurve,
-    new_invert: bool,
-    /// Captured on first execute: `(min, max, curve, invert)`.
-    old: Option<(f32, f32, MacroCurve, bool)>,
-}
-
-impl EditPresetParamCommand {
-    pub fn new(
-        preset_id: PresetTypeId,
-        param_id: impl Into<String>,
-        min: f32,
-        max: f32,
-        curve: MacroCurve,
-        invert: bool,
-    ) -> Self {
-        Self {
-            preset_id,
-            param_id: param_id.into(),
-            new_min: min,
-            new_max: max,
-            new_curve: curve,
-            new_invert: invert,
-            old: None,
-        }
-    }
-
-    fn apply(project: &mut Project, preset_id: &PresetTypeId, param_id: &str, vals: (f32, f32, MacroCurve, bool)) -> Option<(f32, f32, MacroCurve, bool)> {
-        let preset = project
-            .embedded_presets
-            .iter_mut()
-            .find(|p| p.id() == Some(preset_id))?;
-        let meta = preset.def.preset_metadata.as_mut()?;
-        let p = meta.params.iter_mut().find(|p| p.id == param_id)?;
-        let prev = (p.min, p.max, p.curve, p.invert);
-        p.min = vals.0;
-        p.max = vals.1;
-        p.curve = vals.2;
-        p.invert = vals.3;
-        Some(prev)
-    }
-}
-
-impl Command for EditPresetParamCommand {
-    fn execute(&mut self, project: &mut Project) {
-        let prev = Self::apply(
-            project,
-            &self.preset_id,
-            &self.param_id,
-            (self.new_min, self.new_max, self.new_curve, self.new_invert),
-        );
-        if self.old.is_none() {
-            self.old = prev;
-        }
-    }
-
-    fn undo(&mut self, project: &mut Project) {
-        if let Some(old) = self.old {
-            Self::apply(project, &self.preset_id, &self.param_id, old);
-        }
-    }
-
-    fn description(&self) -> &str {
-        "Edit Preset Param"
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use manifold_core::effect_graph_def::{EffectGraphDef, ParamSpecDef, PresetMetadata};
+    use manifold_core::macro_bank::MacroCurve;
 
     fn def_with_param(id: &str, param: &str, min: f32, max: f32) -> EffectGraphDef {
         EffectGraphDef {
@@ -276,9 +201,14 @@ mod tests {
         cmd.execute(&mut project);
 
         let new_id = cmd.forked_id().cloned().expect("forked id");
-        assert_eq!(new_id.as_str(), "OilyFluid#1");
+        assert_eq!(new_id.as_str(), "OilyFluid 2");
         assert_eq!(project.instance_preset_id(&target).as_ref(), Some(&new_id));
-        assert!(project.embedded_preset(&new_id).is_some());
+        let forked = project.embedded_preset(&new_id).expect("forked preset registered");
+        assert_eq!(
+            forked.def.preset_metadata.as_ref().unwrap().display_name,
+            "OilyFluid 2",
+            "minted name must be written to display_name AND id (D2)",
+        );
 
         cmd.undo(&mut project);
         assert_eq!(
@@ -328,30 +258,5 @@ mod tests {
             vec![ParamSlot::exposed(0.9)],
             "undo must restore the pre-import param_values",
         );
-    }
-
-    #[test]
-    fn edit_preset_param_widens_range_and_undoes() {
-        let mut project = Project::default();
-        project.upsert_embedded_preset(EmbeddedPreset {
-            kind: PresetKind::Generator,
-            def: def_with_param("OilyFluid#1", "speed", 0.1, 4.0),
-        });
-        let id = PresetTypeId::from_string("OilyFluid#1".to_string());
-
-        let mut cmd =
-            EditPresetParamCommand::new(id.clone(), "speed", 0.1, 10.0, MacroCurve::Exponential, true);
-        cmd.execute(&mut project);
-
-        let p = &project.embedded_preset(&id).unwrap().def.preset_metadata.as_ref().unwrap().params[0];
-        assert_eq!(p.max, 10.0);
-        assert_eq!(p.curve, MacroCurve::Exponential);
-        assert!(p.invert);
-
-        cmd.undo(&mut project);
-        let p = &project.embedded_preset(&id).unwrap().def.preset_metadata.as_ref().unwrap().params[0];
-        assert_eq!(p.max, 4.0);
-        assert_eq!(p.curve, MacroCurve::Linear);
-        assert!(!p.invert);
     }
 }

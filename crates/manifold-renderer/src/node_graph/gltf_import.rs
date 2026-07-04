@@ -27,8 +27,8 @@ use std::path::Path;
 use manifold_core::NodeId;
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{
-    BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, PresetMetadata,
-    SerializedParamValue, SkipModeDef, StringBindingDef, StringParamSpecDef,
+    BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, ParamSpecDef,
+    PresetMetadata, SerializedParamValue, SkipModeDef, StringBindingDef, StringParamSpecDef,
 };
 
 use super::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID};
@@ -108,6 +108,65 @@ fn int(v: i32) -> SerializedParamValue {
 }
 fn enum_val(v: u32) -> SerializedParamValue {
     SerializedParamValue::Enum { value: v }
+}
+
+/// Degrees→radians factor for the camera card sliders. The camera node's
+/// `orbit`/`tilt`/`fov_y` params are radians (matching `node.orbit_camera`),
+/// but a performer wants degrees on the card, so each angle slider carries a
+/// [`BindingDef::scale`] of this value — the `param_binding` write boundary
+/// applies `value * scale` (no `deg_to_rad` helper node needed, unlike the
+/// hand-authored MetallicGlass preset).
+const DEG2RAD: f32 = std::f32::consts::PI / 180.0;
+
+/// One outer-card slider definition. Curated performance surface for an
+/// imported model (camera framing, light, material) — see
+/// [`assemble_import_graph`]'s metadata block. `default_value` must match
+/// the wired node param's value (through `scale`) so the card reproduces the
+/// assembler's look on first frame with no drift.
+fn card_param(id: &str, name: &str, min: f32, max: f32, default: f32) -> ParamSpecDef {
+    ParamSpecDef {
+        id: id.to_string(),
+        name: name.to_string(),
+        min,
+        max,
+        default_value: default,
+        whole_numbers: false,
+        is_toggle: false,
+        is_trigger: false,
+        value_labels: Vec::new(),
+        format_string: None,
+        osc_suffix: String::new(),
+        curve: manifold_core::macro_bank::MacroCurve::default(),
+        invert: false,
+    }
+}
+
+/// Route one card slider (`id`) to one inner node param. `scale` folds a
+/// unit conversion (e.g. [`DEG2RAD`]) into the write boundary; pass `1.0`
+/// for a pass-through. `default_value` mirrors the matching [`card_param`]'s
+/// so the slider's fallback (when a project carries no `param_values` slot)
+/// still reproduces the authored look.
+fn card_binding(
+    id: &str,
+    name: &str,
+    default: f32,
+    node_id: &str,
+    param: &str,
+    scale: f32,
+) -> BindingDef {
+    BindingDef {
+        id: id.to_string(),
+        label: name.to_string(),
+        default_value: default,
+        target: BindingTarget::Node {
+            node_id: NodeId::new(node_id),
+            param: param.to_string(),
+        },
+        convert: manifold_core::effects::ParamConvert::Float,
+        user_added: false,
+        scale,
+        offset: 0.0,
+    }
 }
 
 /// Replace every run of non-alphanumeric characters with a single `_` and
@@ -261,7 +320,13 @@ pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportRepor
     render_node.params.insert("lights".to_string(), int(1));
 
     let mut string_bindings = Vec::new();
+    // Curated outer-card performance surface (D9 / P0). Camera + light +
+    // envmap are added once after the loop; per-object material knobs are
+    // pushed here so they interleave with the `mat_k` nodes they target.
+    let mut card_params: Vec<ParamSpecDef> = Vec::new();
+    let mut card_bindings: Vec<BindingDef> = Vec::new();
     let mut textures_wired = 0usize;
+    let multi = n > 1;
 
     for (k, m) in materials.iter().enumerate() {
         let mesh_node_id = format!("mesh_{k}");
@@ -326,6 +391,28 @@ pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportRepor
             .params
             .insert("alpha_cutoff".to_string(), float(m.alpha_cutoff));
         nodes.push(mat_node);
+
+        // Per-object material knobs on the card: metallic + roughness, the
+        // two live PBR controls. Suffixed with the object number only when
+        // there's more than one, so a single-material model reads
+        // "Metallic" / "Roughness" not "Metallic 1". Defaults mirror the
+        // node params set just above, so the card reproduces the glTF's own
+        // material on first frame.
+        let suffix = if multi { format!(" {}", k + 1) } else { String::new() };
+        let metal_default = m.metallic;
+        let rough_default = m.roughness.max(0.01);
+        let metal_id = format!("metal_{k}");
+        let rough_id = format!("rough_{k}");
+        let metal_name = format!("Metallic{suffix}");
+        let rough_name = format!("Roughness{suffix}");
+        card_params.push(card_param(&metal_id, &metal_name, 0.0, 1.0, metal_default));
+        card_bindings.push(card_binding(
+            &metal_id, &metal_name, metal_default, &mat_node_id, "metallic", 1.0,
+        ));
+        card_params.push(card_param(&rough_id, &rough_name, 0.01, 1.0, rough_default));
+        card_bindings.push(card_binding(
+            &rough_id, &rough_name, rough_default, &mat_node_id, "roughness", 1.0,
+        ));
 
         wires.push(wire(mesh_id, "vertices", render_id, &format!("mesh_{k}")));
         wires.push(wire(mat_id, "out", render_id, &format!("material_{k}")));
@@ -397,6 +484,52 @@ pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportRepor
     wires.push(wire(sun_id, "out", render_id, "light_0"));
     wires.push(wire(render_id, "color", final_id, "in"));
 
+    // Shared framing / light / environment card knobs. These come LAST in
+    // `card_params` (after the per-object material knobs) but read first on
+    // the card as the primary performance controls. Angle sliders are in
+    // degrees (scale = DEG2RAD folds the conversion into the write boundary);
+    // defaults mirror the `camera`/`sun`/`envmap` node params set above so
+    // the card is a faithful mirror of the assembled look.
+    card_params.push(card_param("cam_orbit", "Camera Orbit", -180.0, 180.0, 0.7 / DEG2RAD));
+    card_bindings.push(card_binding(
+        "cam_orbit", "Camera Orbit", 0.7 / DEG2RAD, "camera", "orbit", DEG2RAD,
+    ));
+    card_params.push(card_param("cam_tilt", "Camera Tilt", -89.0, 89.0, 0.3 / DEG2RAD));
+    card_bindings.push(card_binding(
+        "cam_tilt", "Camera Tilt", 0.3 / DEG2RAD, "camera", "tilt", DEG2RAD,
+    ));
+    card_params.push(card_param(
+        "cam_dist",
+        "Camera Distance",
+        0.1,
+        (distance * 4.0).max(1.0),
+        distance,
+    ));
+    card_bindings.push(card_binding(
+        "cam_dist", "Camera Distance", distance, "camera", "distance", 1.0,
+    ));
+    card_params.push(card_param("cam_fov", "Camera FOV", 20.0, 120.0, 0.9 / DEG2RAD));
+    card_bindings.push(card_binding(
+        "cam_fov", "Camera FOV", 0.9 / DEG2RAD, "camera", "fov_y", DEG2RAD,
+    ));
+
+    card_params.push(card_param("sun_int", "Sun Intensity", 0.0, 10.0, 3.5));
+    card_bindings.push(card_binding("sun_int", "Sun Intensity", 3.5, "sun", "intensity", 1.0));
+    card_params.push(card_param("sun_x", "Sun X", -15.0, 15.0, 5.0));
+    card_bindings.push(card_binding("sun_x", "Sun X", 5.0, "sun", "pos_x", 1.0));
+    card_params.push(card_param("sun_y", "Sun Y", -15.0, 15.0, 2.0));
+    card_bindings.push(card_binding("sun_y", "Sun Y", 2.0, "sun", "pos_y", 1.0));
+    card_params.push(card_param("sun_z", "Sun Z", -15.0, 15.0, 3.0));
+    card_bindings.push(card_binding("sun_z", "Sun Z", 3.0, "sun", "pos_z", 1.0));
+
+    // `node.bake_environment`'s `horizon_strength` is its brightness knob
+    // (default 1.0, range 0..4) — the closest thing to "envmap intensity"
+    // and what drives IBL reflection strength on the PBR materials.
+    card_params.push(card_param("env_bright", "Reflections", 0.0, 4.0, 1.0));
+    card_bindings.push(card_binding(
+        "env_bright", "Reflections", 1.0, "envmap", "horizon_strength", 1.0,
+    ));
+
     // Category "Geometry" matches the existing 3D-geometry generator
     // convention (Tesseract / DigitalPlants / NestedCubes / Duocylinder /
     // Wireframe) — closer to this preset's actual content than any entry
@@ -412,8 +545,8 @@ pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportRepor
         legacy_discriminant: None,
         available: true,
         is_line_based: false,
-        params: Vec::new(),
-        bindings: Vec::new(),
+        params: card_params,
+        bindings: card_bindings,
         skip_mode: SkipModeDef::default(),
         param_aliases: Vec::new(),
         value_aliases: Vec::new(),
@@ -511,6 +644,41 @@ mod tests {
                 other => panic!("expected a Node binding target, got {other:?}"),
             }
         }
+
+        // Curated performance surface (D9 / P0): the card must carry real
+        // params + bindings, not the empty vecs the pre-P0 assembler emitted.
+        // Azalea has 2 objects → 4 camera + 4 sun + 1 envmap + 2×(metallic +
+        // roughness) = 13 sliders, each with exactly one binding.
+        assert_eq!(meta.params.len(), 13, "4 camera + 4 sun + 1 envmap + 2×2 material");
+        assert_eq!(
+            meta.bindings.len(),
+            meta.params.len(),
+            "every card param routes to exactly one node param"
+        );
+        // Every binding must reference a param that actually exists (address
+        // by id, never by position — the fan-out rule).
+        for b in &meta.bindings {
+            assert!(
+                meta.params.iter().any(|p| p.id == b.id),
+                "binding `{}` has no matching param",
+                b.id
+            );
+            assert!(
+                matches!(b.target, BindingTarget::Node { .. }),
+                "import card bindings route to inner nodes"
+            );
+        }
+        // Spot-check the shared framing knobs and the per-object material
+        // knobs (suffixed because azalea has >1 object).
+        for id in ["cam_orbit", "cam_dist", "sun_int", "env_bright", "metal_0", "rough_1"] {
+            assert!(meta.params.iter().any(|p| p.id == id), "missing card param `{id}`");
+        }
+        // Camera angle sliders convert degrees→radians at the write boundary.
+        let orbit = meta.bindings.iter().find(|b| b.id == "cam_orbit").unwrap();
+        assert!(
+            (orbit.scale - std::f32::consts::PI / 180.0).abs() < 1e-6,
+            "camera angle bindings fold DEG2RAD into `scale`"
+        );
     }
 
     /// Structural gate (fast, no GPU): the assembled azalea graph must

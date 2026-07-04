@@ -523,7 +523,7 @@ impl Application {
         // Parse + assemble on the calling thread. Errors (no geometry with
         // materials, unreadable file) abort the drop with a log rather than
         // leaving a half-built layer behind.
-        let (graph, report) =
+        let (mut graph, report) =
             match manifold_renderer::node_graph::gltf_import::assemble_import_graph(path) {
                 Ok(pair) => pair,
                 Err(e) => {
@@ -536,7 +536,7 @@ impl Application {
             log::warn!("[Import] assembled glTF graph carries no preset metadata — aborting");
             return;
         };
-        let preset_id = meta.id.clone();
+        let base_id = meta.id.clone();
         let display_name = if meta.display_name.is_empty() {
             path.file_stem()
                 .map(|s| s.to_string_lossy().to_string())
@@ -544,6 +544,36 @@ impl Application {
         } else {
             meta.display_name.clone()
         };
+
+        // Mint a project-unique id only on collision, so the common case keeps
+        // the clean sanitized stem (`azalea`) and only a genuine clash gets a
+        // `#N` suffix. The model's graph becomes a project-embedded preset the
+        // layer TRACKS (D9) — an id that resolves in no catalog is BUG-016, so
+        // the id must be stamped onto the def, registered, and installed into
+        // the catalog overlay before any frame reads it.
+        let preset_id = if self.local_project.embedded_preset(&base_id).is_some() {
+            self.local_project.mint_embedded_preset_id(base_id.as_str())
+        } else {
+            base_id
+        };
+        if let Some(m) = graph.preset_metadata.as_mut() {
+            m.id = preset_id.clone();
+        }
+        let embedded = manifold_core::project::EmbeddedPreset {
+            kind: manifold_core::preset_def::PresetKind::Generator,
+            def: graph,
+        };
+        // Register + install the overlay BEFORE creating the layer. The core
+        // preset-definition registry is process-global, so installing here (on
+        // the UI thread) populates it for BOTH threads: the local execute below
+        // and the content thread's later execute of the same command box each
+        // run `new_generator` → `init_defaults`, which reads that global
+        // registry to seed the curated card values. Installing after the local
+        // execute (the doc's tentative option) would leave the two threads'
+        // `param_values` inconsistent — this ordering is the resolved D9
+        // deliverable-3 VERIFY-AT-IMPL.
+        self.local_project.upsert_embedded_preset(embedded.clone());
+        crate::project_io::install_project_preset_overlay(&self.local_project);
 
         // Insert above the layer under the cursor, or at the top when dropped
         // outside the tracks area. Generators are full-canvas — unlike images
@@ -575,8 +605,7 @@ impl Application {
         let mut layer_cmd =
             manifold_editing::commands::layer::ImportModelLayerCommand::new(
                 display_name,
-                preset_id,
-                graph,
+                embedded,
                 insert_index,
                 None,
             );

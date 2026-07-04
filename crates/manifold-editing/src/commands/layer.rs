@@ -1,9 +1,8 @@
 use crate::command::Command;
 use manifold_core::PresetTypeId;
 use manifold_core::LayerId;
-use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::layer::Layer;
-use manifold_core::project::Project;
+use manifold_core::project::{EmbeddedPreset, Project};
 use manifold_core::session::SessionSlot;
 use manifold_core::types::LayerType;
 use std::collections::HashMap;
@@ -80,28 +79,29 @@ impl Command for AddLayerCommand {
     }
 }
 
-/// Add a generator layer whose per-instance graph is a pre-assembled import
-/// graph — the timeline install step of the glTF import wave.
+/// Add a generator layer for a pre-assembled import graph — the timeline
+/// install step of the glTF import wave.
 ///
-/// Unlike [`AddLayerCommand`] (which spawns a *bundled-preset* generator that
-/// resolves its graph from the catalog by `PresetTypeId`), this installs a
-/// self-contained override graph directly onto the new layer's
-/// `gen_params.graph`. The renderer builds it via
-/// `GeneratorRegistry::create_with_override`'s `from_def` path, so the
-/// imported preset id never has to exist in the bundled catalog — the layer
-/// carries its own definition and survives save/reload with no registry work.
+/// The model's assembled graph is registered as a project-embedded preset
+/// (`origin: Saved`) and the new layer **tracks** it (`gen_params.graph =
+/// None`), exactly like a drop from the browser resolves a catalog id
+/// (`PRESET_LIBRARY_DESIGN` D9). An id that resolves in no catalog is not a
+/// representable state: the earlier version stashed the def as a per-instance
+/// override on the layer, which left every type-keyed UI surface blind (card
+/// params empty, string params invisible, editor catalog-default `None` —
+/// BUG-016). Catalog citizenship fixes them as a class.
 ///
-/// The `graph` is produced upstream by
-/// `manifold_renderer::node_graph::gltf_import::assemble_import_graph` (which
-/// lives in the renderer crate, so it cannot be called from here — this
-/// command takes the already-assembled [`EffectGraphDef`], a `manifold-core`
-/// type, keeping the editing crate free of any renderer dependency).
+/// The embedded preset carries its own metadata id; the layer's generator
+/// type is that same id, so the renderer resolves the def through the
+/// overlay-merged catalog exactly like a bundled generator. The caller
+/// (`manifold-app`'s file-drop handler) is responsible for minting a
+/// project-unique id and installing the catalog overlay before the first
+/// frame reads the id — the assembler and this command stay renderer-free.
 #[derive(Debug)]
 pub struct ImportModelLayerCommand {
     layer: Option<Layer>,
     name: String,
-    preset_type: PresetTypeId,
-    graph: EffectGraphDef,
+    preset: EmbeddedPreset,
     insert_index: usize,
     parent_group_id: Option<LayerId>,
 }
@@ -109,16 +109,14 @@ pub struct ImportModelLayerCommand {
 impl ImportModelLayerCommand {
     pub fn new(
         name: String,
-        preset_type: PresetTypeId,
-        graph: EffectGraphDef,
+        preset: EmbeddedPreset,
         insert_index: usize,
         parent_group_id: Option<LayerId>,
     ) -> Self {
         Self {
             layer: None,
             name,
-            preset_type,
-            graph,
+            preset,
             insert_index,
             parent_group_id,
         }
@@ -135,28 +133,33 @@ impl ImportModelLayerCommand {
 
 impl Command for ImportModelLayerCommand {
     fn execute(&mut self, project: &mut Project) {
+        // Register (idempotent by id) the model's graph as a project-embedded
+        // preset, so its id resolves through the catalog overlay just like a
+        // bundled generator. Registering here — instead of stashing an
+        // override on the layer — is what keeps the card, string params, and
+        // editor catalog-default from going blind (BUG-016 / D9). Runs on both
+        // the UI and content threads (the command box is dispatched to each),
+        // so the embedded preset lands in both projects.
+        project.upsert_embedded_preset(self.preset.clone());
+
         let layer = if let Some(existing) = self.layer.take() {
             existing
         } else {
             // `new_generator` (not `new`) stamps `kind: Generator` so the
             // instance serializes through the generator path — see the note on
-            // `Layer::new_generator`. It also seeds the preset id, which the
-            // override graph carries independently; keeping them in sync lets
-            // the layer card name the model even before the graph is read.
-            let mut new_layer =
-                Layer::new_generator(self.name.clone(), self.preset_type.clone(), 0);
+            // `Layer::new_generator`. It seeds the tracking preset id and
+            // (because the overlay is installed before this runs, per the
+            // caller contract) `init_defaults` seeds the curated card values.
+            let preset_type = self.preset.id().cloned().unwrap_or(PresetTypeId::NONE);
+            let mut new_layer = Layer::new_generator(self.name.clone(), preset_type, 0);
             new_layer.parent_layer_id = self.parent_group_id.clone();
             // Match `AddLayerCommand`: seed a distinct hue from the current
             // layer count rather than index-0's colour.
-            new_layer.layer_color =
-                Layer::generate_layer_color(project.timeline.layers.len());
-            // Install the assembled import graph as the layer's per-instance
-            // override, then bump the *structure* version so the generator
-            // renderer treats it as an authored graph and builds its chain
-            // against this def (mirrors how the first graph edit lifts 0 → 1).
-            let gp = new_layer.gen_params_or_init();
-            *gp.graph_def_mut() = Some(self.graph.clone());
-            gp.bump_graph_structure_version();
+            new_layer.layer_color = Layer::generate_layer_color(project.timeline.layers.len());
+            // No override graph: the instance keeps `graph: None` and TRACKS
+            // the embedded preset by id (mechanism A). A definition edit later
+            // bakes a private copy on first touch — that's the one divergence
+            // rule, not the import default.
             new_layer
         };
         self.layer = Some(layer.clone());
@@ -172,6 +175,11 @@ impl Command for ImportModelLayerCommand {
                 .position(|l| l.layer_id == layer.layer_id)
         {
             project.timeline.remove_layer(idx);
+        }
+        // Remove the embedded preset too, so undo is symmetric — the id was
+        // minted project-unique per drop, so no other layer tracks it.
+        if let Some(id) = self.preset.id().cloned() {
+            project.remove_embedded_preset(&id);
         }
     }
 
@@ -627,34 +635,53 @@ impl Command for SetLayerAnalysisOnlyCommand {
 #[cfg(test)]
 mod import_model_tests {
     use super::*;
-    use manifold_core::effect_graph_def::{EFFECT_GRAPH_VERSION, EffectGraphDef};
+    use manifold_core::effect_graph_def::{
+        EFFECT_GRAPH_VERSION, EffectGraphDef, PresetMetadata, SkipModeDef,
+    };
+    use manifold_core::preset_def::PresetKind;
 
-    /// A minimal self-contained def stands in for a real assembled import
-    /// graph: this command only stores the def and installs the layer, so the
-    /// graph's internal shape is irrelevant to what it proves (the renderer
-    /// crate's own tests cover assembly + rendering). What matters here is the
-    /// *layer* it produces.
-    fn stub_import_graph() -> EffectGraphDef {
-        EffectGraphDef {
+    /// A minimal self-contained embedded preset stands in for a real assembled
+    /// import graph. The command registers this as a project preset and tracks
+    /// it from the layer; the graph's internal shape is irrelevant here (the
+    /// renderer crate's own tests cover assembly + rendering). What matters is
+    /// that the id resolves through the overlay — carried in `preset_metadata`.
+    fn stub_embedded_preset(id: &str) -> EmbeddedPreset {
+        let meta = PresetMetadata {
+            id: PresetTypeId::from_string(id.to_string()),
+            display_name: "Azalea".to_string(),
+            category: "Geometry".to_string(),
+            osc_prefix: id.to_string(),
+            legacy_discriminant: None,
+            available: true,
+            is_line_based: false,
+            params: Vec::new(),
+            bindings: Vec::new(),
+            skip_mode: SkipModeDef::default(),
+            param_aliases: Vec::new(),
+            value_aliases: Vec::new(),
+            string_params: Vec::new(),
+            string_bindings: Vec::new(),
+        };
+        let def = EffectGraphDef {
             version: EFFECT_GRAPH_VERSION,
             name: Some("Azalea".to_string()),
             description: None,
-            preset_metadata: None,
+            preset_metadata: Some(meta),
             nodes: Vec::new(),
             wires: Vec::new(),
-        }
+        };
+        EmbeddedPreset { kind: PresetKind::Generator, def }
     }
 
     #[test]
-    fn import_model_installs_generator_layer_with_override_graph() {
+    fn import_model_registers_embedded_preset_and_tracks_it() {
         let mut project = Project::default();
         let before = project.timeline.layers.len();
-        let preset = PresetTypeId::new("azalea");
+        let preset_id = PresetTypeId::new("azalea");
 
         let mut cmd = ImportModelLayerCommand::new(
             "Azalea".to_string(),
-            preset.clone(),
-            stub_import_graph(),
+            stub_embedded_preset("azalea"),
             before,
             None,
         );
@@ -669,42 +696,46 @@ mod import_model_tests {
         );
         assert_eq!(
             layer.generator_type(),
-            &preset,
-            "generator type must be the imported preset id (so the card names it)"
+            &preset_id,
+            "generator type must be the embedded preset id (so it resolves via the overlay)"
         );
         assert!(
-            layer.generator_graph().is_some(),
-            "the override graph must be installed on gen_params.graph — the renderer \
-             reads it via create_with_override's from_def path"
+            layer.generator_graph().is_none(),
+            "the layer must TRACK the embedded preset (graph: None), not carry an \
+             override — that is the D9 fix for BUG-016"
         );
-        assert_eq!(layer.generator_graph().unwrap().name.as_deref(), Some("Azalea"));
         assert!(
-            layer.generator_graph_structure_version() >= 1,
-            "structure version must be bumped so the generator renderer rebuilds \
-             its chain against the authored graph"
+            project.embedded_preset(&preset_id).is_some(),
+            "the model's graph must be registered as a project-embedded preset so its \
+             id resolves in the catalog overlay"
         );
     }
 
     #[test]
-    fn import_model_undo_removes_the_layer() {
+    fn import_model_undo_removes_layer_and_embedded_preset() {
         let mut project = Project::default();
         let before = project.timeline.layers.len();
+        let preset_id = PresetTypeId::new("azalea");
 
         let mut cmd = ImportModelLayerCommand::new(
             "Azalea".to_string(),
-            PresetTypeId::new("azalea"),
-            stub_import_graph(),
+            stub_embedded_preset("azalea"),
             before,
             None,
         );
         cmd.execute(&mut project);
         assert_eq!(project.timeline.layers.len(), before + 1);
+        assert!(project.embedded_preset(&preset_id).is_some());
 
         cmd.undo(&mut project);
         assert_eq!(
             project.timeline.layers.len(),
             before,
             "undo must remove exactly the imported layer"
+        );
+        assert!(
+            project.embedded_preset(&preset_id).is_none(),
+            "undo must also remove the embedded preset — symmetric with execute"
         );
     }
 }
