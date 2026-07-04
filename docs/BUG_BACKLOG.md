@@ -237,6 +237,41 @@ observe at repro.
 and the layer tracks it; assembler emits curated performance bindings. Not per-consumer
 fallbacks.
 
+### BUG-017 — `docs_index_is_in_sync_with_docs_dir` red on main: two design docs never regenerated the index — LOW
+
+**Symptom** — found 2026-07-04 running the full workspace sweep for the automation-P4
+landing (unrelated to that work — pre-existing on origin/main before the landing branch
+touched anything, confirmed via `git show 90ab8531:docs/README.md`).
+`cargo test -p manifold-core --test docs_index_sync` fails:
+`docs/README.md is out of sync with docs/. Missing from the index: ["AUDIO_SENDS_UX_DESIGN.md",
+"TIMELINE_INGEST_DESIGN.md"]`.
+
+**Root cause** — two sessions added design docs (`AUDIO_SENDS_UX_DESIGN.md`,
+`TIMELINE_INGEST_DESIGN.md`) without re-running the generator afterward.
+
+**Fix shape** — mechanical: `python3 scripts/gen_docs_index.py`, commit the regenerated
+`docs/README.md`. Not fixed this session because other sessions were actively adding more
+docs concurrently — regenerating now risked going stale again within the hour. Whichever
+session next touches `docs/` and finds the tree quiet should run the generator and close
+this out.
+
+### BUG-018 — `node_graph::catalog_gen::tests::regenerates_in_sync` red on main: `docs/node_catalog.json` stale against the node registry — LOW
+
+**Symptom** — found 2026-07-04, same full-workspace sweep as BUG-017, same shape: confirmed
+pre-existing on origin/main (`90ab8531`) before the automation-P4 landing branch touched
+anything — reproduced standalone in a disposable worktree at that exact commit.
+`cargo test -p manifold-renderer --lib node_graph::catalog_gen::tests::regenerates_in_sync`
+fails with `docs/node_catalog.json is stale`.
+
+**Root cause** — not investigated; some session added/changed a node-graph primitive without
+re-running `cargo run -p manifold-renderer --bin gen_node_catalog` afterward. Given `node_count`
+sits at 214 in the checked-in file, worth diffing against the live-generated output to see
+which node(s) are missing/changed before just overwriting.
+
+**Fix shape** — mechanical: `cargo run -p manifold-renderer --bin gen_node_catalog`, commit
+the regenerated `docs/node_catalog.json`. Same reasoning as BUG-017 for not fixing it this
+session (unrelated to the work at hand, and worth doing once rather than mid-churn).
+
 ## Fixed
 
 All five entries below were fixed 2026-06-23, with a test per path:
