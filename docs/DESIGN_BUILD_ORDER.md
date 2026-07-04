@@ -41,6 +41,8 @@ prerequisites aren't shipped, stop.
 | DJ_PERFORMANCE_DESIGN | ABLETON_SHOW_SYNC; PERFORM_SURFACE P1; MEDIA_BACKEND P1 | conformance |
 | PRO_DJ_LINK_DESIGN | PERFORM_SURFACE P1; sync-source seam (timecode/Link infra) | conformance |
 | UI_AUTOMATION_DESIGN | none (dev infra; P1–P2 full, P3–P4 conformance) | full (P1–P2) / conformance (P3–P4) |
+| OVERLAY_SESSIONS_AND_PICKER_DESIGN (added 2026-07-04) | none (extends shipped overlay driver) | full |
+| PRESET_LIBRARY_DESIGN (added 2026-07-04) | P5 needs OVERLAY_SESSIONS P2; P6 verify-at-impl gated | full (P1–P4) / conformance (P5–P6) |
 
 Not in the queue: **LIVE_AUDIO_TRIGGERS** is SHIPPED (phases 0–7, proven live,
 branch merged). **COMPETITIVE_STEAL_PASS** is a closed record.
@@ -58,6 +60,7 @@ MATERIAL_SYSTEM ✅ ────→ REALTIME_3D  (its P0 — satisfied 2026-07-0
 MATERIAL M6 ──────────→ IMPORT P1  (albedo/metallic maps + alpha cutout; MATERIAL §11)
 REALTIME_3D P1 ───────→ SIMULATIONS  (sims render into render_scene; cloth can smoke-test earlier)
 REALTIME_3D P1 ───────→ IMPORT P1–P3 · SESSION_MODE + MEDIA_BACKEND P2 → IMPORT P5 (Resolume) · MCP → IMPORT P6 agent half
+OVERLAY_SESSIONS P2 ──→ PRESET_LIBRARY P5  (the browser rides PickerCore; P1–P4 are free)
 ```
 
 Everything else is edge-free and orders by judgment only.
@@ -118,6 +121,10 @@ Grouped in waves; within a wave, items are independent and order is free.
     the core Ableton workflow. No hard edge, high instrument value.
 
 **Wave 3 — authoring depth + the AI surface.**
+13b. OVERLAY_SESSIONS_AND_PICKER P1–P2 → PRESET_LIBRARY P1–P6 (added 2026-07-04,
+    Peter-driven: preset/graph management rethink). Authoring-UX pair serving the
+    release-content push; OVERLAY P1 also fixes a live stale-search bug, so it is
+    re-rankable arbitrarily early — nothing depends on it and it depends on nothing.
 14. COMPONENT_LIBRARY → 15. MCP_INTERFACE (in that order — MCP consumes components).
 16. AUTOMATION_LANES.
 17. ML_NODES Vision/CoreML tier.
