@@ -451,7 +451,12 @@ def extract_json(text):
     return None
 
 
-def call_classifier(system_prompt, window_text, model=MODEL, timeout=60, cwd=None):
+def call_classifier(system_prompt, window_text, model=MODEL, timeout=180, cwd=None):
+    # timeout=180, not 60: classifier latency is bimodal — ~3s healthy, or
+    # minutes when the account is rate-limit saturated (orchestrator fleets).
+    # A 60s kill lands exactly between the modes: full wait, zero verdict,
+    # retry into the same throttle (2026-07-04, ~16:00–17:00, all sessions).
+    # The ceiling a verdict stays whisper-fresh is minutes, so wait it out.
     """Invoke `claude -p` as the classifier. Same invocation shape the live
     daemon uses. Returns a verdict dict, or {"error": "..."} on any failure —
     callers must treat an error verdict as "no flag" (fail open).
