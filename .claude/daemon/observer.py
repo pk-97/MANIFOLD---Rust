@@ -50,6 +50,8 @@ VERIFY_CLAIM_SIGNALS = (
 MUTE_FIRE_THRESHOLD = 5  # >=5 scored fires, 0 scored successes -> auto-mute
 MUTE_DURATION_S = 7 * 86400
 
+HABIT_MEMORY_WINDOW_S = 7 * 86400  # DESIGN.md §4c-2: trailing 7 days, all sessions
+
 
 def _move_family(move_id):
     if move_id == "anchor/verify-claim":
@@ -145,6 +147,13 @@ class Daemon:
         self.recent_events = collections.deque(maxlen=64)  # (event_count, tool_class, status)
         self.last_consumed_seq = 0  # re-seeded in _run; tracks delivery via the consumed marker
 
+        # DESIGN.md §4c-2: habit memory. Seeded from telemetry.jsonl once, in
+        # _run ("at observer start"); _resolve_fire increments this in-memory
+        # copy per fire so a live session's own fires count without re-
+        # scanning the file each time. Session-only, same scope decision as
+        # §4b (see the fire_records comment above).
+        self.weekly_fire_counts = {}  # move_id -> count, trailing HABIT_MEMORY_WINDOW_S
+
         # DESIGN.md §2b: worker nudges, shipped OFF (see _worker_nudges_enabled).
         self.session_dir = os.path.dirname(transcript_path)
         self.agents = {}  # agent_id -> AgentWorker
@@ -215,7 +224,12 @@ class Daemon:
         # mistaken for new deliveries — fire_records starts empty each
         # instance anyway, so this is a perf guard, not a correctness one.
         self.last_consumed_seq = self._read_consumed()
-        _log(logf, f"observer started, pid={os.getpid()}, next_seq={self.next_seq}, transcript={self.transcript_path}")
+        self.weekly_fire_counts = self._rollup_weekly_fires()
+        _log(
+            logf,
+            f"observer started, pid={os.getpid()}, next_seq={self.next_seq}, "
+            f"weekly_baseline={self.weekly_fire_counts}, transcript={self.transcript_path}",
+        )
 
         offset = self._catchup(logf)
         last_activity = time.time()
@@ -496,6 +510,13 @@ class Daemon:
 
         seq = mb.next_seq
         mb.next_seq += 1
+        # DESIGN.md §4c-2: habit memory. Session-only, same reasoning as the
+        # §4b comment above (agent mailboxes don't get scored yet either).
+        weekly_count = None
+        if mailbox is None:
+            self.weekly_fire_counts[effective_id] = self.weekly_fire_counts.get(effective_id, 0) + 1
+            weekly_count = self.weekly_fire_counts[effective_id]
+
         if mailbox is None:
             # §4b outcome scoring is session-only for now (item 3's scope is
             # delivery infra, not scoring) — and mailbox.next_seq is a
@@ -509,6 +530,7 @@ class Daemon:
             "evidence": verdict.get("evidence"),
             "confidence": verdict.get("confidence"),
             "seq": seq,
+            "weekly_count": weekly_count,
         }
 
     # ---- outcome scoring + auto-mute (DESIGN.md §4b) ----
@@ -656,6 +678,37 @@ class Daemon:
             return
         valve.append_telemetry({"ts": now, "session_id": self.session_id, "event": "auto_mute", **mute})
         _log(logf, f"auto-muted {move_id}: {scored_fires} scored fires, 0 successes -> 7 days")
+
+    # ---- habit memory (DESIGN.md §4c-2) ----
+
+    @staticmethod
+    def _rollup_weekly_fires():
+        """Per-move delivery counts across ALL sessions, trailing
+        HABIT_MEMORY_WINDOW_S, read once at observer start from the shared
+        telemetry.jsonl. Counts "scored" records (success/failure/unscored)
+        as the fire proxy — every delivered flag produces exactly one,
+        whether or not its family has a mechanical outcome (§4b). Like
+        fire_count, this is a habituation signal, not a safety-critical
+        count: a baseline that's up to one observer-lifetime stale is an
+        acceptable trade for never re-scanning the whole file mid-session."""
+        counts = {}
+        cutoff = time.time() - HABIT_MEMORY_WINDOW_S
+        try:
+            with open(valve.TELEMETRY_PATH, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if rec.get("event") != "scored" or rec.get("ts", 0) < cutoff:
+                        continue
+                    move_id = rec.get("move_id")
+                    if not move_id:
+                        continue
+                    counts[move_id] = counts.get(move_id, 0) + 1
+        except OSError:
+            pass
+        return counts
 
 
 def main():
