@@ -65,15 +65,17 @@ def write_agent_transcript(path, task_text, reply_text):
 
 def test_scan_agents_noop_when_flag_absent():
     def run(td):
+        # Real layout: subagent transcripts live in <project>/<session_id>/subagents/,
+        # and the Daemon derives that path itself — no attribute override here.
+        # (The old override is what let the wrong derivation ship unnoticed.)
         session_dir = os.path.join(td, "session")
-        os.makedirs(os.path.join(session_dir, "subagents"))
+        os.makedirs(os.path.join(session_dir, "sess1", "subagents"))
         write_agent_transcript(
-            os.path.join(session_dir, "subagents", "agent-abc123.jsonl"),
+            os.path.join(session_dir, "sess1", "subagents", "agent-abc123.jsonl"),
             "do the thing please make it work",
             "Here is a sufficiently long reply that would close a window if fed.",
         )
         d = observer.Daemon("sess1", os.path.join(session_dir, "sess1.jsonl"))
-        d.session_dir = session_dir
         logf = io.StringIO()
         check("flag absent", not observer._worker_nudges_enabled())
         d._scan_agents(logf)
@@ -86,14 +88,13 @@ def test_scan_agents_discovers_and_catches_up_when_enabled():
         with open(observer.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
             f.write("1")
         session_dir = os.path.join(td, "session")
-        os.makedirs(os.path.join(session_dir, "subagents"))
+        os.makedirs(os.path.join(session_dir, "sess1", "subagents"))
         write_agent_transcript(
-            os.path.join(session_dir, "subagents", "agent-abc123.jsonl"),
+            os.path.join(session_dir, "sess1", "subagents", "agent-abc123.jsonl"),
             "do the thing please make it work",
             "Here is a sufficiently long reply that would close a window if fed.",
         )
         d = observer.Daemon("sess1", os.path.join(session_dir, "sess1.jsonl"))
-        d.session_dir = session_dir
         logf = io.StringIO()
         d._scan_agents(logf)
         check("enabled: agent discovered", "abc123" in d.agents)
@@ -108,11 +109,10 @@ def test_agent_window_closes_and_classifies_independently():
         with open(observer.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
             f.write("1")
         session_dir = os.path.join(td, "session")
-        os.makedirs(os.path.join(session_dir, "subagents"))
-        agent_path = os.path.join(session_dir, "subagents", "agent-xyz789.jsonl")
+        os.makedirs(os.path.join(session_dir, "sess1", "subagents"))
+        agent_path = os.path.join(session_dir, "sess1", "subagents", "agent-xyz789.jsonl")
         write_agent_transcript(agent_path, "investigate the failing widget test", "still looking into it")
         d = observer.Daemon("sess1", os.path.join(session_dir, "sess1.jsonl"))
-        d.session_dir = session_dir
 
         calls = []
 
@@ -151,14 +151,13 @@ def test_session_mailbox_unaffected_by_agent_activity():
         with open(observer.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
             f.write("1")
         session_dir = os.path.join(td, "session")
-        os.makedirs(os.path.join(session_dir, "subagents"))
+        os.makedirs(os.path.join(session_dir, "sess1", "subagents"))
         write_agent_transcript(
-            os.path.join(session_dir, "subagents", "agent-def456.jsonl"),
+            os.path.join(session_dir, "sess1", "subagents", "agent-def456.jsonl"),
             "some agent task",
             "some agent reply that is long enough to close a window",
         )
         d = observer.Daemon("sess1", os.path.join(session_dir, "sess1.jsonl"))
-        d.session_dir = session_dir
         logf = io.StringIO()
         d._scan_agents(logf)
         check("session fire_count untouched", d.fire_count == {})

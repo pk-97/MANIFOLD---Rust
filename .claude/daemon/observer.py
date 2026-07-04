@@ -155,7 +155,11 @@ class Daemon:
         self.weekly_fire_counts = {}  # move_id -> count, trailing HABIT_MEMORY_WINDOW_S
 
         # DESIGN.md §2b: worker nudges, shipped OFF (see _worker_nudges_enabled).
-        self.session_dir = os.path.dirname(transcript_path)
+        # Subagent transcripts live under <project_dir>/<session_id>/subagents/,
+        # NOT next to the session transcript — dirname(transcript) alone scanned
+        # a nonexistent dir and discovery never found a single worker (the
+        # 2026-07-04 Opus orchestration ran fully unobserved with the flag ON).
+        self.subagents_dir = os.path.join(os.path.dirname(transcript_path), session_id, "subagents")
         self.agents = {}  # agent_id -> AgentWorker
 
     # ---- lifecycle ----
@@ -260,7 +264,7 @@ class Daemon:
         feature is otherwise unreachable code, per the ship-dark requirement."""
         if not _worker_nudges_enabled():
             return
-        subdir = os.path.join(self.session_dir, "subagents")
+        subdir = self.subagents_dir
         try:
             names = os.listdir(subdir)
         except OSError:

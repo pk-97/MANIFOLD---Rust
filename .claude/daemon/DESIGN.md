@@ -40,14 +40,21 @@ versioned. History on the daemon is non-negotiable — the sleep pass edits it.
   One daemon per session, pidfile in `verdicts/`. Exits when the transcript is
   idle > 10 min or on `Stop`-hook signal. Crash = fail open (see Invariants).
 - **Windowing.** Each analysis window contains: (a) the current task statement —
-  the most recent user message that reads as a task, kept verbatim; (b) a
-  compressed event ledger since the last window (tool name + target + ok/err, one
-  line each); (c) the last two assistant texts verbatim; (d) a `task_addressed`
-  bit carried forward across windows — set once an assistant text answers TASK,
-  so a stale-but-answered TASK stops matching scope-drift after the answering
-  text scrolls out of RECENT (replay round 2: `573a3584` false-fired 3 windows
-  in a row for exactly this). Target ≤ 4k tokens. The task statement must always
-  be present — phase and drift are only measurable as divergence from the goal.
+  the most recent user message that reads as a task, capped at `TASK_MAX_CHARS`
+  and never a harness-injected text (`HARNESS_TEXT_PREFIXES`: task-notifications,
+  system-reminders, slash-command echoes — window v4); (b) a compressed event
+  ledger since the last window (tool name + target + ok/err, one line each);
+  (c) the last two assistant texts, each capped at `RECENT_MAX_CHARS`; (d) a
+  `task_addressed` bit carried forward across windows — set once an assistant
+  text answers TASK, so a stale-but-answered TASK stops matching scope-drift
+  after the answering text scrolls out of RECENT (replay round 2: `573a3584`
+  false-fired 3 windows in a row for exactly this). The ≤ 4k-token target is
+  enforced by the caps since the 2026-07-04 orchestrator incident: a
+  `<task-notification>` carrying a worker's full report became TASK verbatim,
+  windows hit hundreds of KB, and every classifier call timed out for two
+  hours (session `cadd7aad`, nine `classifier error: timeout`). The task
+  statement must always be present — phase and drift are only measurable as
+  divergence from the goal.
 - **Cadence.** Analyze every 8 tool events or 90 s since last analysis, whichever
   comes first, and only if new events exist. **Additionally, analyze immediately
   on every assistant text event** — drift markers *are* assistant texts, and in
@@ -153,6 +160,16 @@ the smaller models this layer exists to lift, and their documented failure modes
   here.
 - Cost sanity: classifier spend scales with agent count (~a few dollars per
   six-worker wave) — acceptable; per-agent cooldowns prevent whisper spam.
+- **Discovery-path bug, found+fixed 2026-07-04 evening.** The implementation
+  scanned `dirname(transcript)/subagents/` — the PROJECT dir, not
+  `<project>/<session_id>/subagents/` where subagent transcripts actually
+  live — so with the flag ON, discovery never found a single worker (the
+  first Opus orchestration ran fully unobserved). The tests passed because
+  every fixture overrode `session_dir` on the Daemon instead of exercising
+  the real derivation; fixtures now use the real layout and the override is
+  gone. Worker nudges have therefore observed ZERO real workers so far —
+  the manual-grading clock (the ≥60% disable rule above) starts at the
+  first orchestration after this fix, not at enablement.
 
 ## 2c. Stopgap detection (approved 2026-07-04, Peter: "I NEVER want the quick fix" — build with Sonnet)
 

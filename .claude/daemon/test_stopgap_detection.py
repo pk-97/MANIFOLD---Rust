@@ -177,8 +177,11 @@ def test_ledger_no_annotation_when_clean():
     check("no adds: annotation on clean edit", "(adds:" not in state.ledger_buffer[0], state.ledger_buffer[0])
 
 
-def test_window_version_is_3():
-    check("WINDOW_VERSION bumped to 3", common.WINDOW_VERSION == 3)
+def test_window_version_current():
+    # §2c landed as v3; the window-caps change (test_window_caps.py) is v4.
+    # >= keeps this from breaking on every later bump — the exact-value guard
+    # belongs to whichever test ships the bump.
+    check("WINDOW_VERSION at least 3", common.WINDOW_VERSION >= 3, common.WINDOW_VERSION)
 
 
 # ---- observer.py tier 1: deterministic mechanical fire ----
@@ -197,7 +200,7 @@ def test_check_stopgap_fires_flag_for_main_session():
             record = json.load(f)
         check("flag written", record.get("flag") is not None, record)
         check("move_id is mechanical/confessed-stopgap", record["flag"]["move_id"] == "mechanical/confessed-stopgap", record)
-        check("window_version on record", record.get("window_version") == 3, record)
+        check("window_version on record", record.get("window_version") == common.WINDOW_VERSION, record)
     with_temp_dirs(run)
 
 
@@ -262,9 +265,11 @@ def test_worker_stopgap_routes_to_agent_mailbox_when_enabled():
     def run(td):
         with open(observer.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
             f.write("1")
+        # Real layout: <project>/<session_id>/subagents/, derived by the Daemon
+        # itself (no session_dir override — that masked the wrong derivation).
         session_dir = os.path.join(td, "session")
-        os.makedirs(os.path.join(session_dir, "subagents"))
-        agent_path = os.path.join(session_dir, "subagents", "agent-abc123.jsonl")
+        os.makedirs(os.path.join(session_dir, "sess1", "subagents"))
+        agent_path = os.path.join(session_dir, "sess1", "subagents", "agent-abc123.jsonl")
         with open(agent_path, "w", encoding="utf-8") as f:
             f.write(json.dumps({"type": "user", "message": {"role": "user", "content": "refactor this please"}, "timestamp": "2026-07-04T00:00:00Z"}) + "\n")
             f.write(json.dumps({
@@ -278,7 +283,6 @@ def test_worker_stopgap_routes_to_agent_mailbox_when_enabled():
                 {"type": "tool_result", "tool_use_id": "t1", "is_error": False, "content": ""},
             ]}, "timestamp": "2026-07-04T00:00:02Z"}) + "\n")
         d = observer.Daemon("sess1", os.path.join(session_dir, "sess1.jsonl"))
-        d.session_dir = session_dir
         logf = io.StringIO()
         d._scan_agents(logf)  # discovers + catchup (classify=False) — should NOT fire yet
         worker = d.agents.get("abc123")
@@ -324,7 +328,7 @@ def main():
         test_malformed_input_never_raises,
         test_ledger_annotates_stopgap_hit,
         test_ledger_no_annotation_when_clean,
-        test_window_version_is_3,
+        test_window_version_current,
         test_check_stopgap_fires_flag_for_main_session,
         test_check_stopgap_no_hit_writes_nothing,
         test_check_stopgap_respects_cooldown,

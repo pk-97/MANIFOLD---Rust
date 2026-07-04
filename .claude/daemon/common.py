@@ -23,7 +23,27 @@ MODEL = "claude-haiku-4-5-20251001"
 # so §4b/sleep-pass scoring never silently mixes pre- and post-change regimes.
 # v3 (§2c tier 3): Edit/Write/MultiEdit ledger lines gain an "(adds: ...)"
 # annotation from STOPGAP_MARKERS.
-WINDOW_VERSION = 3
+# v4: TASK/RECENT hard-capped + harness-injected texts excluded from TASK.
+WINDOW_VERSION = 4
+
+# Window-size discipline (2026-07-04 orchestrator incident, session cadd7aad):
+# a <task-notification> embedding a worker's full report became current_task
+# verbatim, and untruncated assistant texts rode along in RECENT — window text
+# grew to hundreds of KB and every classifier call after 14:00 timed out (nine
+# `classifier error: timeout` entries; the daemon was blind for two hours).
+# TASK/RECENT are context for a judgment call, not an archive: hard-cap them.
+TASK_MAX_CHARS = 800
+RECENT_MAX_CHARS = 1500
+
+# Harness-injected user texts — subagent completion notifications, hook
+# reminders, slash-command echoes — are not instructions from the human and
+# must never become the TASK line. Checked against the stripped text's start.
+HARNESS_TEXT_PREFIXES = (
+    "<task-notification>",
+    "<system-reminder>",
+    "<local-command",  # <local-command-caveat>, <local-command-stdout>
+    "<command-name>",
+)
 
 # Tool names whose repeated targets get a "(Nth touch this session)" ledger
 # annotation (§4c-1). Deliberately narrow to what the spec names — Read/Edit
@@ -221,6 +241,13 @@ def _truncate(s, n=100):
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+def _clip(s, n):
+    """Head-truncate long free text for window assembly. Unlike `_truncate`
+    (one-line ledger targets), keeps newlines — TASK/RECENT prose structure
+    is signal for the classifier."""
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
 def ordinal(n):
     """1 -> '1st', 2 -> '2nd', 3 -> '3rd', 4 -> '4th', 11-13 -> '11th'/'12th'/'13th'."""
     if 10 <= n % 100 <= 20:
@@ -351,7 +378,7 @@ class WindowState:
                 text = c.get("text", "")
                 stripped = text.strip()
                 if stripped:
-                    self.recent_texts.append(text)
+                    self.recent_texts.append(_clip(text, RECENT_MAX_CHARS))
                     self.recent_texts[:] = self.recent_texts[-2:]
                     if self.current_task is not None:
                         if len(stripped) >= TASK_ADDRESSED_MIN_CHARS:
@@ -399,8 +426,8 @@ class WindowState:
                 stripped = text.strip()
                 if stripped:
                     human_texts.append(stripped)
-                    if len(stripped) >= 8:
-                        self.current_task = stripped
+                    if len(stripped) >= 8 and not stripped.startswith(HARNESS_TEXT_PREFIXES):
+                        self.current_task = _clip(stripped, TASK_MAX_CHARS)
                         self.task_addressed = False
                         self.events_since_task = 0
         return closed, human_texts
