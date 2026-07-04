@@ -1,6 +1,7 @@
 pub mod ableton_bridge;
 pub mod active_window;
 pub mod audio_decoder;
+pub mod automation;
 pub mod audio_layer_playback;
 pub mod audio_mixdown;
 pub mod audio_sync;

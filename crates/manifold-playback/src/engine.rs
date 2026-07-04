@@ -61,7 +61,13 @@ pub struct TickContext {
 }
 
 /// Output of a single engine tick.
-#[derive(Debug, Clone, Default)]
+///
+/// No longer `Clone` as of automation recording (§5): `pending_gesture_commits`
+/// holds `Box<dyn Command>`, which trait objects can't derive `Clone` for.
+/// Nothing in the codebase cloned a `TickResult` (it's always moved through
+/// once, ending at `reclaim_tick_result`), so dropping the derive is a
+/// no-op for every existing call site.
+#[derive(Debug, Default)]
 pub struct TickResult {
     /// Active clips ready for compositing (lightweight references).
     pub ready_clips: Vec<ActiveClipRef>,
@@ -81,6 +87,16 @@ pub struct TickResult {
     /// The content thread passes these to VideoRenderer::pre_warm_clips().
     pub prewarm_candidates:
         Option<std::collections::HashMap<String, crate::video_time::PrewarmCandidate>>,
+    /// One `CommitRecordedGestureCommand` per automation recording gesture
+    /// (§5) that finished this tick — built by
+    /// `crate::automation::evaluate_all_automation`'s gesture-closure pass.
+    /// The content thread runs each through `EditingService::execute` (the
+    /// single undo entry per gesture §5/§11.6 requires) right after this
+    /// tick returns, mirroring how `percussion_orchestrator.tick()` is
+    /// already handed `&mut Project` + `&mut EditingService` synchronously
+    /// in the same spot. Always empty while stopped/paused (recording only
+    /// runs during `tick_playing`).
+    pub pending_gesture_commits: Vec<Box<dyn manifold_editing::command::Command>>,
 }
 
 // ─── Playback Engine ───
@@ -177,6 +193,21 @@ pub struct PlaybackEngine {
     /// [`Self::set_audio_snapshot`]. Empty when audio modulation is inactive, in
     /// which case the audio phase of the modulation pipeline is a no-op.
     audio_snapshot: manifold_core::audio_features::AudioFeatureSnapshot,
+    /// Automation-lane override latch: params a live hand has touched since
+    /// the last Back to Arrangement. Runtime-only, owned by the playback
+    /// side (never the `Project`), never serialized, survives play/stop
+    /// within a session. See `crate::automation` and
+    /// `docs/AUTOMATION_LANES_DESIGN.md` §4.
+    automation_latches: crate::automation::AutomationLatches,
+    /// Global Automation Arm (§5): while on, a live touch on an automated
+    /// param (while playing) records into its lane instead of latching an
+    /// override. Runtime-only, owned by the playback side, never the
+    /// `Project`, never serialized — same lifetime rule as
+    /// `automation_latches`. Off by default.
+    automation_armed: bool,
+    /// In-flight recording gestures (§5). Runtime-only, owned by the
+    /// playback side alongside `automation_latches`/`automation_armed`.
+    automation_gestures: crate::automation::AutomationGestures,
     /// Frame count when timeline_active_scratch was last populated.
     /// Used to skip redundant re-queries within the same frame.
     timeline_query_frame: u64,
@@ -261,6 +292,9 @@ impl PlaybackEngine {
             sync_start_scratch: Vec::with_capacity(4),
             modulation_timing_scratch: Vec::with_capacity(64),
             audio_snapshot: manifold_core::audio_features::AudioFeatureSnapshot::default(),
+            automation_latches: crate::automation::AutomationLatches::default(),
+            automation_armed: false,
+            automation_gestures: crate::automation::AutomationGestures::default(),
             timeline_query_frame: u64::MAX, // sentinel: never matches a real frame
             became_ready_list: Vec::with_capacity(8),
             clips_to_stop_drift: Vec::with_capacity(8),
@@ -747,6 +781,32 @@ impl PlaybackEngine {
         //    Port of C# line 1166.
         self.check_custom_loop_boundaries();
 
+        // 6b. Sample automation lanes — a tier-1 hand (base writer), sampled
+        //     from the arrangement. Must land BEFORE the modulation base→value
+        //     reset just below it, not after — automation is not a fifth
+        //     modulation phase. Runs whenever the transport is playing
+        //     (tick_playing only — export drives the transport in Playing
+        //     state too, so export sampling falls out for free; when stopped,
+        //     tick_non_playing never calls this, so lanes don't write and
+        //     params hold). See docs/AUTOMATION_LANES_DESIGN.md §1, §3.
+        //     While `automation_armed`, a touched param records into its
+        //     lane instead of latching (§5); `pending_gesture_commits`
+        //     carries one `CommitRecordedGestureCommand` per gesture that
+        //     closed this tick, for the content thread to run through
+        //     `EditingService` right after this tick returns.
+        let (automation_dirty, pending_gesture_commits) = if let Some(project) = &mut self.project
+        {
+            crate::automation::evaluate_all_automation(
+                project,
+                Beats(self.current_beat),
+                &mut self.automation_latches,
+                self.automation_armed,
+                &mut self.automation_gestures,
+            )
+        } else {
+            (false, Vec::new())
+        };
+
         // 7. Evaluate modulation pipeline (LFO drivers + ADSR envelopes).
         //    Port of C# DriverController.Update() [ExecutionOrder 50, after PlaybackController].
         let mut timing = std::mem::take(&mut self.modulation_timing_scratch);
@@ -763,6 +823,10 @@ impl PlaybackEngine {
             false
         };
         self.modulation_timing_scratch = timing;
+        // Automation folds into the same compositor-dirty path modulation
+        // uses — a lane write is just as much a reason to re-send the UI
+        // snapshot as a driver/envelope write.
+        let modulation_dirty = automation_dirty || modulation_dirty;
         if modulation_dirty {
             self.mark_compositor_dirty(ctx.realtime_now);
         }
@@ -799,6 +863,7 @@ impl PlaybackEngine {
             modulation_active: modulation_dirty,
             stopped_clips: Vec::new(), // Populated by tick() after this returns
             prewarm_candidates: prewarm,
+            pending_gesture_commits,
         }
     }
 
@@ -861,6 +926,9 @@ impl PlaybackEngine {
             modulation_active: modulation_dirty,
             stopped_clips: Vec::new(), // Populated by tick() after this returns
             prewarm_candidates: None,
+            // Recording only runs during tick_playing (§5's "armed + playing
+            // + touched") — stopped/paused never opens or closes a gesture.
+            pending_gesture_commits: Vec::new(),
         }
     }
 
@@ -1343,6 +1411,36 @@ impl PlaybackEngine {
     /// Read-only access to session runtime state (UI snapshot / tests).
     pub fn session_runtime(&self) -> &SessionRuntime {
         &self.session_runtime
+    }
+
+    /// Automation lanes' "Back to Arrangement": clears every override latch
+    /// (global — one action, not per-layer), resuming every automated
+    /// param's lane on the next tick. Not a project mutation — no undo entry
+    /// (`ContentCommand::AutomationBackToArrangement` is handled directly on
+    /// the content thread, same shape as `SessionBackToArrangement`).
+    pub fn automation_back_to_arrangement(&mut self) {
+        self.automation_latches.clear();
+    }
+
+    /// Read-only access to the automation override latch (UI snapshot: the
+    /// "lit red" Back to Arrangement affordance, and per-lane overridden
+    /// state — P4).
+    pub fn automation_latches(&self) -> &crate::automation::AutomationLatches {
+        &self.automation_latches
+    }
+
+    /// Toggle the global Automation Arm (§5). Runtime-only, not a project
+    /// mutation — no undo entry (`ContentCommand::AutomationSetArmed` is
+    /// handled directly on the content thread, same shape as
+    /// `automation_back_to_arrangement`).
+    pub fn set_automation_armed(&mut self, armed: bool) {
+        self.automation_armed = armed;
+    }
+
+    /// Read-only access to the Automation Arm state (UI snapshot: the
+    /// transport-bar arm button's lit/unlit state — P4).
+    pub fn automation_armed(&self) -> bool {
+        self.automation_armed
     }
 
     // ─── Time/Tempo math ───
