@@ -1,3 +1,4 @@
+use crate::anim::AnimF32;
 use crate::color;
 use crate::node::Rect;
 
@@ -20,6 +21,23 @@ pub struct ScreenLayout {
     /// Timeline height as fraction of content area. 0.30 = bottom 30%.
     /// Clamped to [0.15, 0.70] by resize handle.
     pub timeline_split_ratio: f32,
+
+    // ── P2 "panel-split snap-back" (D15) ────────────────────────────
+    /// Double-click-to-default tweens for the two draggable splits above.
+    /// Settled (not animating) except for the brief window right after a
+    /// reset; `tick_splits` writes each eased value straight back into the
+    /// field it mirrors (`inspector_width` / `timeline_split_ratio`) every
+    /// frame it's in flight, so every existing consumer of those two fields —
+    /// rendering, hit-testing (`is_near_split_handle`), persistence — sees the
+    /// settling position automatically, with no call-site changes. A live
+    /// drag still writes the field directly and instantly, exactly as
+    /// before; only `reset_inspector_width`/`reset_timeline_split` touch
+    /// these. Unlike a param's slider fill (a separate cosmetic widget next
+    /// to an always-instant numeric readout), a split ratio has no second
+    /// surface to keep instant — the field IS the visual position, so here
+    /// the ease *is* the whole reset.
+    inspector_width_anim: AnimF32,
+    timeline_split_anim: AnimF32,
 }
 
 impl ScreenLayout {
@@ -33,6 +51,10 @@ impl ScreenLayout {
             inspector_width: color::DEFAULT_INSPECTOR_WIDTH,
             effect_browser_width: 0.0,
             timeline_split_ratio: color::DEFAULT_TIMELINE_SPLIT_RATIO,
+            inspector_width_anim: AnimF32::new(color::DEFAULT_INSPECTOR_WIDTH, color::MOTION_MED_MS)
+                .with_curve(crate::anim::Curve::Snap),
+            timeline_split_anim: AnimF32::new(color::DEFAULT_TIMELINE_SPLIT_RATIO, color::MOTION_MED_MS)
+                .with_curve(crate::anim::Curve::Snap),
         }
     }
 
@@ -241,6 +263,62 @@ impl ScreenLayout {
         );
         self.timeline_split_ratio = ratio;
     }
+
+    /// P2 "panel-split snap-back" (D15): double-click the video/timeline
+    /// split handle to reset it to its default ratio, easing there instead
+    /// of jumping. A no-op if already at the default.
+    pub fn reset_timeline_split(&mut self) {
+        let from = self.timeline_split_ratio;
+        let target = color::DEFAULT_TIMELINE_SPLIT_RATIO;
+        if from == target {
+            return;
+        }
+        self.timeline_split_ratio = target;
+        self.timeline_split_anim.snap(from);
+        self.timeline_split_anim.set_target(target);
+    }
+
+    /// Same as [`Self::reset_timeline_split`], for the inspector-width split.
+    pub fn reset_inspector_width(&mut self) {
+        let from = self.inspector_width;
+        let target = color::DEFAULT_INSPECTOR_WIDTH;
+        if from == target {
+            return;
+        }
+        self.inspector_width = target;
+        self.inspector_width_anim.snap(from);
+        self.inspector_width_anim.set_target(target);
+    }
+
+    /// Whether either split-reset tween is still in flight — for tests /
+    /// automation harnesses driving the gesture headlessly.
+    pub fn is_split_reset_animating(&self) -> bool {
+        self.inspector_width_anim.is_animating() || self.timeline_split_anim.is_animating()
+    }
+
+    /// Advance both split-reset tweens by `dt_ms`; call once per frame
+    /// alongside the app's other per-panel ticks. While either is animating,
+    /// writes its eased value straight back into the field it mirrors so
+    /// every layout consumer sees the settling position with no code change
+    /// of its own. Returns whether either is still in flight.
+    ///
+    /// Checks `is_animating()` BEFORE calling `tick` (not the tick's own
+    /// return value) so the settling frame — where `tick` flips to
+    /// `false` — still gets its one last write-back; skipping it would
+    /// leave the field one tick short of the exact target forever.
+    pub fn tick_splits(&mut self, dt_ms: f32) -> bool {
+        let inspector_was_animating = self.inspector_width_anim.is_animating();
+        let inspector_still_animating = self.inspector_width_anim.tick(dt_ms);
+        if inspector_was_animating {
+            self.inspector_width = self.inspector_width_anim.value();
+        }
+        let timeline_was_animating = self.timeline_split_anim.is_animating();
+        let timeline_still_animating = self.timeline_split_anim.tick(dt_ms);
+        if timeline_was_animating {
+            self.timeline_split_ratio = self.timeline_split_anim.value();
+        }
+        inspector_still_animating || timeline_still_animating
+    }
 }
 
 impl Default for ScreenLayout {
@@ -358,5 +436,62 @@ mod tests {
         // Tracks begin immediately to the right of the controls, no gap/overlap.
         assert!((tracks.x - (controls.x + controls.width)).abs() < 0.1);
         assert!((tracks.x + tracks.width - (body.x + body.width)).abs() < 0.1);
+    }
+
+    // ── P2 "panel-split snap-back" (D15) ─────────────────────────────
+
+    #[test]
+    fn reset_inspector_width_snaps_data_and_starts_the_visual_ease() {
+        let mut layout = ScreenLayout::new(1920.0, 1080.0);
+        layout.inspector_width = 700.0;
+
+        layout.reset_inspector_width();
+        // Data snaps instantly: the field already reads the default the
+        // moment this returns.
+        assert_eq!(layout.inspector_width, color::DEFAULT_INSPECTOR_WIDTH);
+        assert!(layout.is_split_reset_animating(), "reset starts the visual ease");
+
+        // Mid-flight: `tick_splits` writes the eased value back into the
+        // field every animating frame, so it must have moved off the old
+        // width — NOT necessarily monotonically toward the default, since
+        // `Curve::Snap` overshoots by design (D15's back-out curve).
+        layout.tick_splits(color::MOTION_MED_MS * 0.5);
+        assert_ne!(layout.inspector_width, 700.0, "fill must have moved off the pre-reset width");
+        assert!(layout.is_split_reset_animating(), "still mid-flight, not yet settled");
+
+        for _ in 0..30 {
+            layout.tick_splits(color::MOTION_MED_MS / 20.0);
+        }
+        assert!(!layout.is_split_reset_animating(), "tween settles");
+        assert_eq!(layout.inspector_width, color::DEFAULT_INSPECTOR_WIDTH);
+    }
+
+    #[test]
+    fn reset_timeline_split_snaps_data_and_starts_the_visual_ease() {
+        let mut layout = ScreenLayout::new(1920.0, 1080.0);
+        layout.timeline_split_ratio = 0.6;
+
+        layout.reset_timeline_split();
+        assert_eq!(layout.timeline_split_ratio, color::DEFAULT_TIMELINE_SPLIT_RATIO);
+        assert!(layout.is_split_reset_animating());
+
+        layout.tick_splits(color::MOTION_MED_MS * 0.5);
+        assert_ne!(layout.timeline_split_ratio, 0.6, "ratio must have moved off the pre-reset value");
+        assert!(layout.is_split_reset_animating(), "still mid-flight, not yet settled");
+
+        for _ in 0..30 {
+            layout.tick_splits(color::MOTION_MED_MS / 20.0);
+        }
+        assert!(!layout.is_split_reset_animating());
+        assert_eq!(layout.timeline_split_ratio, color::DEFAULT_TIMELINE_SPLIT_RATIO);
+    }
+
+    #[test]
+    fn reset_already_at_default_is_a_no_op() {
+        let mut layout = ScreenLayout::new(1920.0, 1080.0);
+        // Fresh layout already sits at both defaults.
+        layout.reset_inspector_width();
+        layout.reset_timeline_split();
+        assert!(!layout.is_split_reset_animating(), "no-op reset never starts a tween");
     }
 }

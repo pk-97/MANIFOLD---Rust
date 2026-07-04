@@ -298,6 +298,10 @@ pub struct UIRoot {
     split_handle_id: Option<NodeId>,
     /// Node ID for the inspector resize handle (vertical bar at inspector right edge).
     inspector_handle_id: Option<NodeId>,
+    /// P2 "panel-split snap-back" (D15): self-tracked elapsed time for
+    /// `layout.tick_splits`, same self-contained-`Instant` shape as
+    /// `InspectorCompositePanel::update`'s `motion_last_tick`.
+    layout_tick_last: std::time::Instant,
 
     /// True when a DragBegin originated in the tracks area. While active,
     /// all Drag/DragEnd events are stashed for the InteractionOverlay
@@ -399,6 +403,7 @@ impl UIRoot {
             macro_ableton_mapped: [false; manifold_core::MACRO_COUNT],
             split_handle_id: None,
             inspector_handle_id: None,
+            layout_tick_last: std::time::Instant::now(),
             overlay_drag_active: false,
             ableton_session: None,
             ableton_picker: manifold_ui::panels::ableton_picker::AbletonPickerPopup::new(),
@@ -2205,6 +2210,16 @@ impl UIRoot {
         if !self.built {
             return;
         }
+        // P2 "panel-split snap-back" (D15): advance the two splits'
+        // double-click-reset tweens. `min(100.0)` matches
+        // `InspectorCompositePanel::update`'s own dt clamp (a stall/debugger
+        // pause must not fling the tween in one giant step). The app layer
+        // (`app_render.rs`, mirroring its `drawer_anim_active` poll) reads
+        // `layout.is_split_reset_animating()` after this call and forces the
+        // rebuild that re-lays-out every panel from the eased ratio/width.
+        let split_dt_ms = (self.layout_tick_last.elapsed().as_secs_f32() * 1000.0).min(100.0);
+        self.layout_tick_last = std::time::Instant::now();
+        self.layout.tick_splits(split_dt_ms);
         self.transport.update(&mut self.tree);
         self.header.update(&mut self.tree);
         self.footer.update(&mut self.tree);
