@@ -205,6 +205,30 @@ pub fn resolve_param_in(
             .map(|s| (s.min, s.max))
     };
 
+    // Graph-backed generator: the per-instance graph's `meta.params` is the
+    // LIVE slot authority — the same one `param_id_to_value_index` (card
+    // display + prune path) and the `param_values` layout use. Resolve the
+    // slot here too, NOT through `def.id_to_index`: the registry `def` is
+    // frozen when the preset is installed (e.g. a glb auto-import) and never
+    // tracks a per-instance node delete, so its indices go stale the moment a
+    // bundled card slider is removed. Reading the frozen index is what made a
+    // driver on a surviving slider write to its neighbour's slot after a
+    // delete. Mirrors `param_id_to_value_index`'s generator branch exactly so
+    // the two resolvers can't disagree again.
+    if fx.is_generator()
+        && let Some(meta) = fx.graph.as_ref().and_then(|g| g.preset_metadata.as_ref())
+        && !meta.params.is_empty()
+    {
+        let idx = meta.params.iter().position(|p| p.id == id)?;
+        let spec = &meta.params[idx];
+        return Some(ResolvedParam {
+            idx,
+            min: spec.min,
+            max: spec.max,
+            whole_numbers: spec.whole_numbers || !spec.value_labels.is_empty(),
+        });
+    }
+
     if let Some(&idx) = def.id_to_index.get(id) {
         let pd = &def.param_defs[idx];
         // Range from the override when present, else the registry def. idx and
@@ -5379,5 +5403,128 @@ mod tests {
             "create_default must not mark freshly-seeded params touched"
         );
         assert_eq!(inst.param_values[0].base, 0.42);
+    }
+
+    // A generator whose registry def carries five bundled card sliders. The
+    // glb auto-import builds exactly this shape: many `user_added: false`
+    // bindings, one per material/camera knob, all in the static prefix.
+    inventory::submit! {
+        crate::generator_registration::GeneratorMetadata {
+            id: PresetTypeId::new("TestBundledSliderMisroute"),
+            display_name: "Test Bundled Slider Misroute",
+            is_line_based: false,
+            available: true,
+            osc_prefix: "testBundledSliderMisroute",
+            legacy_discriminant: None,
+            params: &[
+                crate::generator_registration::ParamSpec::continuous("a", "A", 0.0, 1.0, 0.0, "F2", ""),
+                crate::generator_registration::ParamSpec::continuous("b", "B", 0.0, 1.0, 0.0, "F2", ""),
+                crate::generator_registration::ParamSpec::continuous("c", "C", 0.0, 1.0, 0.0, "F2", ""),
+                crate::generator_registration::ParamSpec::continuous("d", "D", 0.0, 1.0, 0.0, "F2", ""),
+                crate::generator_registration::ParamSpec::continuous("e", "E", 0.0, 1.0, 0.0, "F2", ""),
+            ],
+        }
+    }
+
+    /// A bundled card slider (`user_added: false`) that the user deletes from a
+    /// per-instance generator graph must not misroute drivers/LFOs on the
+    /// *surviving* sliders. This is the glb-import bug: `param_id_to_value_index`
+    /// (card display + prune path) reads the LIVE `meta.params`, but the runtime
+    /// modulation resolver `resolve_param_in` resolves the static prefix through
+    /// the FROZEN registry `id_to_index`, which never tracks a per-instance graph
+    /// edit. After a middle slider is removed the two disagree, and a driver on a
+    /// later slider writes to a stale slot — the neighbouring param.
+    #[test]
+    fn bundled_slider_delete_does_not_misroute_survivor_drivers() {
+        use crate::effect_graph_def::{
+            BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
+        };
+
+        let ty = PresetTypeId::new("TestBundledSliderMisroute");
+        let mut inst = PresetInstance::new_generator(ty.clone());
+
+        // Post-delete live state: the user removed the "b" slider, so the
+        // per-instance graph now carries [a, c, d, e] — exactly what
+        // `remove_exposures_for_node` produces (it prunes meta.params +
+        // meta.bindings + the param_values slot in lockstep, by live position).
+        let live_ids = ["a", "c", "d", "e"];
+        let card_param = |id: &str| ParamSpecDef {
+            id: id.into(),
+            name: id.to_uppercase().into(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.0,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: Default::default(),
+            invert: false,
+        };
+        let card_binding = |id: &str| BindingDef {
+            id: id.into(),
+            label: id.to_uppercase().into(),
+            default_value: 0.0,
+            target: BindingTarget::Node {
+                node_id: crate::NodeId::new(id),
+                param: "x".into(),
+            },
+            convert: Default::default(),
+            user_added: false, // bundled — the whole point
+            scale: 1.0,
+            offset: 0.0,
+        };
+        let meta = PresetMetadata {
+            id: ty.clone(),
+            display_name: "Test Bundled Slider Misroute".into(),
+            category: String::new(),
+            osc_prefix: String::new(),
+            legacy_discriminant: None,
+            available: true,
+            is_line_based: false,
+            params: live_ids.iter().map(|id| card_param(id)).collect(),
+            bindings: live_ids.iter().map(|id| card_binding(id)).collect(),
+            skip_mode: Default::default(),
+            param_aliases: Vec::new(),
+            value_aliases: Vec::new(),
+            string_params: Vec::new(),
+            string_bindings: Vec::new(),
+        };
+        inst.graph = Some(EffectGraphDef {
+            version: 0,
+            name: None,
+            description: None,
+            preset_metadata: Some(meta),
+            nodes: Vec::new(),
+            wires: Vec::new(),
+        });
+        // Distinct values so a misroute is observable: slot i holds (i+1)*10.
+        inst.param_values = vec![
+            ParamSlot::exposed(10.0), // a
+            ParamSlot::exposed(20.0), // c
+            ParamSlot::exposed(30.0), // d
+            ParamSlot::exposed(40.0), // e
+        ];
+
+        // The card display + prune path resolves "d" to its LIVE slot (2).
+        assert_eq!(
+            inst.param_id_to_value_index("d"),
+            Some(2),
+            "live meta.params authority places surviving slider 'd' at slot 2"
+        );
+
+        // The runtime modulation resolver resolves "d" against the FROZEN
+        // registry, which still thinks 5 sliders exist and "d" is at slot 3.
+        let def = crate::preset_definition_registry::try_get(&ty).unwrap();
+        let resolved = resolve_param_in(&def, &inst, "d").unwrap();
+        assert_eq!(
+            resolved.idx, 2,
+            "runtime driver for 'd' must resolve to its LIVE slot 2, not the \
+             registry-stale slot {} — a stale slot modulates the neighbouring \
+             param 'e' (value 40) instead of 'd' (value 30)",
+            resolved.idx
+        );
     }
 }
