@@ -24,6 +24,9 @@ __pycache__/
 .claude/daemon/eval/run*.json
 .claude/daemon/eval/fires*.json
 .claude/daemon/eval/verdict_cache.jsonl
+# Per-fire transcript slices cut by slice_fires.py for sleep-pass grading —
+# transcript content, regenerable, never committed.
+.claude/daemon/eval/slices/
 # Provisional per-session self-grades (grader:session). Sessions append here so
 # the tracked live_grades.jsonl (the durable, pass-graded corpus) never goes
 # dirty mid-session and never blocks an orchestration landing. The sleep pass
