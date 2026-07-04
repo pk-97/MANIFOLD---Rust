@@ -336,11 +336,18 @@ fn readback_tonemapped_rgba8(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u3
         let r = f16::from_bits(px[0]).to_f32();
         let g = f16::from_bits(px[1]).to_f32();
         let b = f16::from_bits(px[2]).to_f32();
-        let a = f16::from_bits(px[3]).to_f32();
-        out.push(tonemap(r));
-        out.push(tonemap(g));
-        out.push(tonemap(b));
-        out.push((a.clamp(0.0, 1.0) * 255.0).round() as u8);
+        // Composite over OPAQUE BLACK before saving. Generators leave their
+        // background transparent (alpha 0), and a transparent PNG is shown as
+        // white by image viewers — the "white background" thumbnail bug
+        // (BUG-024). Generators produce STRAIGHT alpha (alpha-standardisation:
+        // producers are not premultiplied), so over black the visible colour
+        // is `rgb * a`; fully-opaque content (effects, a = 1) is unchanged.
+        // The saved thumbnail is always fully opaque.
+        let a = f16::from_bits(px[3]).to_f32().clamp(0.0, 1.0);
+        out.push(tonemap(r * a));
+        out.push(tonemap(g * a));
+        out.push(tonemap(b * a));
+        out.push(255);
     }
     out
 }

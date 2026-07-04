@@ -1671,6 +1671,15 @@ impl Application {
                 match &logical_key {
                     Key::Named(NamedKey::Escape) => {
                         self.text_input.cancel();
+                        // BUG-022: cancelling the search field alone left the
+                        // browser popup open (a second Escape was needed).
+                        // Close it here too, mirroring the editor window's
+                        // node-picker Escape branch, so one press dismisses
+                        // both. The closed-overlay pump then reconciles the
+                        // (already-cancelled) text session next frame.
+                        if is_search_filter {
+                            self.ws.ui_root.browser_popup.handle_escape();
+                        }
                         consumed = true;
                     }
                     Key::Named(NamedKey::Enter) => {

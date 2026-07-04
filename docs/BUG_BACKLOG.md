@@ -319,7 +319,15 @@ then reuse the existing `collapse_anim`. Small, localized to `param_card.rs`.
 **Fix shape** — thread the snap-back trigger to the graph-editor's `ParamCardPanel` too, or
 lift the reset-with-settle into shared `ParamCardPanel` logic both dispatch sites reach.
 
-### BUG-022 — Main-window browser popup: Escape while the search field is focused cancels the text session but leaves the popup open — LOW (found during OVERLAY_SESSIONS_AND_PICKER_DESIGN P1/P2, not fixed this session)
+### BUG-022 — Main-window browser popup: Escape while the search field is focused cancels the text session but leaves the popup open — FIXED 2026-07-05
+
+**Resolution** — applied the documented fix shape: in the main-window `text_input.active` Escape arm
+(`window_input.rs`), when `field == SearchFilter`, also call
+`self.ws.ui_root.browser_popup.handle_escape()` alongside `text_input.cancel()`, mirroring the
+editor window's node-picker branch — one press now dismisses both the search field and the popup.
+The closed-overlay pump reconciles the already-cancelled session next frame. Compiles + clippy clean.
+Owed: the in-app one-press-closes confirmation (headless can't drive it), but the code mirrors the
+proven editor branch exactly. Original analysis below.
 
 **Symptom** — found 2026-07-04 auditing `window_input.rs`'s keyboard routing while
 implementing `docs/OVERLAY_SESSIONS_AND_PICKER_DESIGN.md`. For the MAIN window (effect/
@@ -352,7 +360,21 @@ of only `self.text_input.cancel()`. Small, localized to `window_input.rs`'s
 gap outside P1/P2's stated deliverables (which target orphaned-session-on-close, not
 missing-close-on-cancel).
 
-### BUG-024 — Generator preset thumbnails render on a WHITE background (unrepresentative) — MED
+### BUG-024 — Generator preset thumbnails render on a WHITE background (unrepresentative) — FIXED 2026-07-05
+
+**Resolution** — root cause was (a) from the suspect list: generators leave their background
+transparent (alpha 0), and `readback_tonemapped_rgba8` saved that alpha into the PNG, so viewers
+showed the transparent background as white. Fixed by compositing over opaque black in the readback
+(`rgb * a`, force alpha 255) — generators produce straight (non-premultiplied) alpha per
+[[alpha-standardisation]], so `rgb * a` is the correct over-black composite, and opaque content
+(effects, a=1) is byte-identical. Verified by regenerating + Reading the PNGs: StarField now reads
+as stars on black, Lissajous as a clean curve on black, Bloom (effect) unchanged and correct.
+**Residual (separate, minor):** a few full-frame generators still read low-saturation in their bare
+state — Plasma is a grey blob on black (its background is now correct, but its bare/default output
+without audio modulation or a colormap param is desaturated). Not the white-bg bug; a per-generator
+"bare look" issue, low priority — leave for a thumbnail-polish pass if it matters on the picker.
+
+### BUG-024-ORIG — original analysis (Generator thumbnails on WHITE background) — superseded by the FIXED note above
 
 **Symptom** — found 2026-07-05 eyeballing the committed `assets/preset-thumbnails/generators/*.png`
 after adding warm-up frames (PRESET_LIBRARY P6). Effect thumbnails (rendered over the gradient
