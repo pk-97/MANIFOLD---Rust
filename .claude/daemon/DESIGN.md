@@ -136,6 +136,11 @@ the smaller models this layer exists to lift, and their documented failure modes
   constant); turn on only after sleep pass 1 validates the moves on
   main-session telemetry — worker whispers are invisible to supervision, only
   telemetry scoring can validate them. Telemetry records must carry agent_id.
+- **ENABLE RULE (Fable, 2026-07-04 — data-gated, not date-gated):** flip the
+  flag when live main-session grading (RUNBOOK.md step 2) reaches ≥10 graded
+  injections with precision ≥80%. First worker week runs with the supervised
+  acknowledgment sentence so worker transcripts are gradeable the same way.
+  Any sleep pass may execute this rule; none may loosen it without Peter.
 - Cost sanity: classifier spend scales with agent count (~a few dollars per
   six-worker wave) — acceptable; per-agent cooldowns prevent whisper spam.
 

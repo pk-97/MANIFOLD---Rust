@@ -122,6 +122,21 @@ the glTF P1c mispriced fork); coaching/price-the-fork (same P1c specimen).
 > State what done looks like — the observable condition that ends this task — in
 > one sentence, before going further. Without it, "done" drifts toward "tired".
 
+## coaching/name-the-blocker
+- **signature:** Work is being deferred — "later", "next session", "the sleep
+  pass will", "future work", a ticket written instead of the work done — and
+  the stated reason is a date, an owner, or nothing at all, rather than a
+  concrete missing input. Flag when nothing in the window names a dependency
+  that actually prevents doing it now. Do not flag deferrals that name a real
+  gate: data that does not exist yet, exhausted quota or budget, a required
+  approval, an explicit scope instruction from the human.
+- **cooldown:** standard
+- **payload:**
+> Name the blocker, not the date. What input is missing that prevents doing
+> this now? If the answer is nothing, the deferral is a preference wearing a
+> schedule — do the work, or say plainly why the future is a better place
+> for it.
+
 ## coaching/price-the-fork
 - **signature:** The assistant is asking the human to choose between options
   where at least one option's cost or feasibility is stated as unknown or
