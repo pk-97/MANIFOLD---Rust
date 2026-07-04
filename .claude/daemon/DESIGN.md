@@ -195,6 +195,11 @@ Auto-tuning is split by risk:
 3. **Utility gating** (fold into the §4b build): once a move has ≥10 scored
    fires, its confidence threshold scales inversely with scored success rate,
    clamped to [0.7, 0.95]. Bounded numeric dial per §4b; no new machinery.
+3b. **Fatigue ordinal** (small follow-up to the shipped §4b code): every scored
+   injection records its fire ordinal within the session (nth fire of that
+   move). Sleep pass tests whether scored success decays with ordinal:
+   decay = payload fatigue (recognizable has become ignorable) → wording
+   tiers go on the sleep-pass agenda; flat = fixed wording vindicated.
 4. **Falsification experiment** (design in sleep pass 2, run after the
    supervised week): alternate sessions between the daemon and a control arm
    injecting one generic reminder every N tool events with no classifier; score
