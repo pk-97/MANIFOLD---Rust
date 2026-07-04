@@ -604,7 +604,7 @@ impl ContentThread {
             frame_count: self.frame_count,
             export_fixed_dt: Seconds::ZERO,
         };
-        let tick_result = self.engine.tick(ctx);
+        let mut tick_result = self.engine.tick(ctx);
 
         // 4b. Transport output (LateUpdate equivalent — after engine tick).
         // In M4L mode: OscPositionSender sends /manifold/* to M4L device.
@@ -660,6 +660,20 @@ impl ContentThread {
                 &mut self.editing_service,
                 beat.as_f32(),
             );
+        }
+
+        // 6a2. Commit any automation recording gestures that finished this
+        // tick (§5) — one undo entry per gesture, built by
+        // `crate::automation::evaluate_all_automation`'s gesture-closure
+        // pass inside `self.engine.tick()` above. Mirrors the percussion
+        // tick just above: `&mut Project` + `&mut EditingService` handed to
+        // the command synchronously, on the same content-thread frame.
+        if !tick_result.pending_gesture_commits.is_empty()
+            && let Some(p) = self.engine.project_mut()
+        {
+            for cmd in tick_result.pending_gesture_commits.drain(..) {
+                self.editing_service.execute(cmd, p);
+            }
         }
 
         // 6b. Video prewarm — pass lookahead candidates to VideoRenderer
@@ -1290,6 +1304,7 @@ impl ContentThread {
                 .keys()
                 .cloned()
                 .collect(),
+            automation_armed: self.engine.automation_armed(),
         };
 
         // Send state to UI. Unbounded channel — never drops snapshots.

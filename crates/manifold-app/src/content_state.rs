@@ -207,6 +207,12 @@ pub struct ContentState {
     /// per-lane graying. Lane-editing UI (P4) is the consumer; this phase
     /// only wires the data through.
     pub automation_latched_params: Vec<(EffectId, ParamId)>,
+
+    /// Global Automation Arm state (§5) — runtime-only, owned by
+    /// `PlaybackEngine`, copied each tick from `PlaybackEngine::
+    /// automation_armed()` exactly like `automation_latched_params` above.
+    /// Drives the transport-bar arm button's lit/unlit state (P4).
+    pub automation_armed: bool,
 }
 
 /// Lightweight snapshot of modulated param values.
@@ -452,6 +458,7 @@ impl Default for ContentState {
             node_atlas_layout: Vec::new(),
             clip_atlas_layout: Vec::new(),
             automation_latched_params: Vec::new(),
+            automation_armed: false,
         }
     }
 }

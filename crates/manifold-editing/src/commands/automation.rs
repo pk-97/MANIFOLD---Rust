@@ -406,6 +406,90 @@ impl Command for RemoveLaneCommand {
     }
 }
 
+/// Commits a completed recording gesture (§5) as ONE undo entry. By the time
+/// this command is built, `manifold-playback::automation`'s gesture-closure
+/// pass has already computed the final joined point set (pre-punch-in old
+/// points + the recorded segment + post-punch-out old points) — this
+/// command's only job is installing that set and registering the undo entry
+/// with the explicit pre-gesture reverse, mirroring
+/// `EditParamMappingCommand::new_with_reverse`'s drag-commit shape: the
+/// reverse is captured by the caller at gesture START (before any recording
+/// mutated anything), not self-snapshotted here.
+#[derive(Debug)]
+pub struct CommitRecordedGestureCommand {
+    target: GraphTarget,
+    param_id: String,
+    /// The full, already-joined point set to install (sorted ascending).
+    new_points: Vec<AutomationPoint>,
+    /// `None` when the gesture created the lane (no lane existed for this
+    /// param before recording started) — undo then removes the whole lane,
+    /// mirroring `AddAutomationPointCommand`'s `created_lane` behavior.
+    /// `Some(points)` carries the pre-gesture point set to restore exactly.
+    old_points: Option<Vec<AutomationPoint>>,
+}
+
+impl CommitRecordedGestureCommand {
+    pub fn new(
+        target: GraphTarget,
+        param_id: impl Into<String>,
+        new_points: Vec<AutomationPoint>,
+        old_points: Option<Vec<AutomationPoint>>,
+    ) -> Self {
+        Self {
+            target,
+            param_id: param_id.into(),
+            new_points,
+            old_points,
+        }
+    }
+}
+
+impl Command for CommitRecordedGestureCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let param_id = self.param_id.clone();
+        let points = self.new_points.clone();
+        project.with_preset_graph_mut(&self.target, |inst| {
+            let lanes = inst.automation_lanes_mut();
+            match lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id) {
+                Some(lane) => lane.points = points,
+                None => lanes.push(AutomationLane {
+                    param_id: param_id.into(),
+                    enabled: true,
+                    points,
+                }),
+            }
+        });
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let param_id = self.param_id.clone();
+        match self.old_points.clone() {
+            None => {
+                project.with_preset_graph_mut(&self.target, |inst| {
+                    if let Some(lanes) = inst.automation_lanes.as_mut() {
+                        lanes.retain(|l| l.param_id.as_ref() != param_id);
+                    }
+                });
+            }
+            Some(points) => {
+                project.with_preset_graph_mut(&self.target, |inst| {
+                    if let Some(lane) = inst
+                        .automation_lanes
+                        .as_mut()
+                        .and_then(|lanes| lanes.iter_mut().find(|l| l.param_id.as_ref() == param_id))
+                    {
+                        lane.points = points;
+                    }
+                });
+            }
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Record Automation"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -656,5 +740,69 @@ mod tests {
             gp.automation_lanes.as_ref().unwrap()[0].points[0].value,
             0.4
         );
+    }
+
+    #[test]
+    fn commit_recorded_gesture_creates_lane_and_undo_removes_it() {
+        // No pre-existing lane: `old_points: None` mirrors
+        // AddAutomationPointCommand's created_lane path — undo removes the
+        // whole lane, not just points.
+        let (mut project, fx_id) = project_with_effect();
+        let target = GraphTarget::Effect(fx_id.clone());
+        let new_points = vec![point(4.0, 0.3), point(6.0, 0.7)];
+        let mut cmd = CommitRecordedGestureCommand::new(target, "amount", new_points.clone(), None);
+
+        cmd.execute(&mut project);
+        assert_eq!(lane_points(&project, &fx_id), new_points.as_slice());
+
+        cmd.undo(&mut project);
+        let fx = project.find_effect_by_id(&fx_id).unwrap();
+        assert!(
+            fx.automation_lanes.as_ref().is_none_or(|v| v.is_empty()),
+            "undo of a gesture that created the lane removes the whole lane"
+        );
+
+        cmd.execute(&mut project);
+        assert_eq!(lane_points(&project, &fx_id), new_points.as_slice(), "redo re-applies");
+    }
+
+    #[test]
+    fn commit_recorded_gesture_over_existing_lane_restores_pre_gesture_points_on_undo() {
+        // A lane already exists (pre-gesture curve). The gesture punches over
+        // part of it; undo must restore the EXACT pre-gesture point set, not
+        // whatever `execute` self-captured (there is nothing to self-capture
+        // here — `old_points` is the explicit reverse, the
+        // `new_with_reverse` precedent).
+        let (mut project, fx_id) = project_with_effect();
+        let target = GraphTarget::Effect(fx_id.clone());
+        let mut seed = AddAutomationPointCommand::new(target.clone(), "amount", point(0.0, 0.2));
+        seed.execute(&mut project);
+        let mut seed2 = AddAutomationPointCommand::new(target.clone(), "amount", point(10.0, 0.9));
+        seed2.execute(&mut project);
+        let pre_gesture_points = lane_points(&project, &fx_id).to_vec();
+        assert_eq!(pre_gesture_points.len(), 2);
+
+        // Simulate the gesture-closure join: punch-in at beat 4, recorded up
+        // to beat 6, old curve resumes at beat 10 (untouched).
+        let joined = vec![point(0.0, 0.2), point(4.0, 0.4), point(6.0, 0.5), point(10.0, 0.9)];
+        let mut cmd = CommitRecordedGestureCommand::new(
+            target,
+            "amount",
+            joined.clone(),
+            Some(pre_gesture_points.clone()),
+        );
+
+        cmd.execute(&mut project);
+        assert_eq!(lane_points(&project, &fx_id), joined.as_slice());
+
+        cmd.undo(&mut project);
+        assert_eq!(
+            lane_points(&project, &fx_id),
+            pre_gesture_points.as_slice(),
+            "undo restores the exact pre-gesture point set"
+        );
+
+        cmd.execute(&mut project);
+        assert_eq!(lane_points(&project, &fx_id), joined.as_slice(), "redo re-applies the join");
     }
 }

@@ -3765,7 +3765,7 @@ pub struct AutomationLane {
 /// [`resolve_param_in`]'s min/max for clamping, at write time (P2) and again
 /// at sample time (defensive against a range narrowed after the point was
 /// authored).
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutomationPoint {
     /// Arrangement beat, absolute (not clip-relative). Automation lanes are

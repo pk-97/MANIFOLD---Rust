@@ -207,6 +207,11 @@ impl ContentThread {
                 self.engine.automation_back_to_arrangement();
                 self.engine.mark_compositor_dirty_now();
             }
+            // ── Automation recording arm (P3) ───────────────────────
+            ContentCommand::AutomationSetArmed(armed) => {
+                self.engine.set_automation_armed(armed);
+                self.engine.mark_compositor_dirty_now();
+            }
 
             // ── Editing ────────────────────────────────────────────
             ContentCommand::Execute(cmd) => {

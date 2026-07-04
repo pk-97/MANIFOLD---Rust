@@ -91,6 +91,12 @@ pub enum ContentCommand {
     /// `EditingService` command — no undo entry.
     #[allow(dead_code)]
     AutomationBackToArrangement,
+    /// Toggle the global Automation Arm (§5): while on, touching an
+    /// automated param (while playing) records into its lane instead of
+    /// latching an override. Runtime-only state, same shape as
+    /// `AutomationBackToArrangement` — no undo entry.
+    #[allow(dead_code)]
+    AutomationSetArmed(bool),
 
     // ── Audio ──────────────────────────────────────────────────────
     /// Set which send the Audio Setup spectrogram scope is showing (`None` =
