@@ -375,6 +375,17 @@ pub fn push_state(
         let can_clear = project.tempo_map.point_count() > 1;
         ui.transport.set_bpm_clear_active(can_clear);
 
+        // Automation globals (P4, docs/AUTOMATION_LANES_DESIGN.md §4/§5/§7):
+        // ARM mirrors the runtime arm flag; BACK lights red exactly when any
+        // lane override latch is active (Live's Back to Arrangement).
+        ui.transport.set_automation_state(
+            content_state.automation_armed,
+            !content_state.automation_latched_params.is_empty(),
+        );
+        // LANES button (view-only toggle, no content-thread state behind it).
+        ui.transport
+            .set_automation_mode_visible(selection.automation_mode_visible);
+
         // Save dirty state is shown by the "•" in the window/header project name
         // (set above); the transport SAVE button moved to the File menu. HDR /
         // Percussion / render config moved to the Settings popup (fed below).
@@ -797,8 +808,14 @@ pub fn sync_project_data(
     {
         // Rebuild CoordinateMapper Y-layout FIRST so layer headers and viewport share
         // the same Y offsets. Unity: LayerHeaderPanel reads from CoordinateMapper.
-        ui.viewport
-            .rebuild_mapper_layout(&crate::ui_translate::layers_to_ui(&project.timeline.layers));
+        // `_for_layout` (not the plain `layers_to_ui`) resolves
+        // `automation_lane_count` from `selection.automation_mode_visible` — the
+        // one flag that grows a track when lanes are visible
+        // (`docs/AUTOMATION_LANES_DESIGN.md` §7).
+        ui.viewport.rebuild_mapper_layout(&crate::ui_translate::layers_to_ui_for_layout(
+            &project.timeline.layers,
+            selection.automation_mode_visible,
+        ));
 
         // Layer data → LayerHeaderPanel. Y offset/height are NOT copied here —
         // `LayerInfo` no longer carries them; the header panel queries the
@@ -966,6 +983,24 @@ pub fn sync_project_data(
         }
         ui.viewport.set_clips(viewport_clips);
 
+        // Automation lane data → viewport (P4, `docs/AUTOMATION_LANES_DESIGN.md`
+        // §7). Gated on the same flag `layers_to_ui_for_layout` used above, so
+        // the Y-layout and the lane list can never disagree about whether
+        // lanes are showing this frame.
+        let mut viewport_lanes = Vec::new();
+        if selection.automation_mode_visible {
+            use manifold_ui::panels::viewport::ViewportAutomationLane;
+            for (i, layer) in project.timeline.layers.iter().enumerate() {
+                if layer.is_collapsed || layer.is_group() {
+                    continue;
+                }
+                for lane in crate::ui_translate::layer_automation_lanes_to_ui(layer) {
+                    viewport_lanes.push(ViewportAutomationLane { layer_index: i, lane });
+                }
+            }
+        }
+        ui.viewport.set_automation_lanes(viewport_lanes);
+
         // Timeline markers → viewport
         ui.viewport
             .set_markers(crate::ui_translate::markers_to_ui(&project.timeline.markers));
@@ -1069,7 +1104,16 @@ fn clip_base_color(
 /// Does NOT touch tracks, bitmap renderers, or layer headers — only clip data.
 /// The bitmap fingerprint will detect if positions actually changed and skip
 /// repaint when nothing moved (cheap no-op outside of drag).
-pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
+///
+/// `automation_visible` also refreshes `viewport`'s automation lane geometry
+/// from the live project when true (P4 Unit A automation point drag —
+/// `InteractionOverlay::handle_automation_drag` mutates the project directly
+/// each frame the same way clip move-drag does, and needs the SAME per-frame
+/// resync path so a dragged dot's on-screen position updates live instead of
+/// waiting for the next structural sync — `docs/AUTOMATION_LANES_DESIGN.md`
+/// §7). Cheap: gated the same way the clip refresh already is (mouse-pressed
+/// or structural change), and lane counts are tens, not hundreds.
+pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project, automation_visible: bool) {
     use manifold_ui::panels::viewport::ViewportClip;
     let mut viewport_clips = Vec::new();
     for (i, layer) in project.timeline.layers.iter().enumerate() {
@@ -1099,6 +1143,21 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
         }
     }
     ui.viewport.set_clips(viewport_clips);
+
+    if automation_visible {
+        use manifold_ui::panels::viewport::ViewportAutomationLane;
+        let mut viewport_lanes = Vec::new();
+        for (i, layer) in project.timeline.layers.iter().enumerate() {
+            if layer.is_collapsed || layer.is_group() {
+                continue;
+            }
+            for lane in crate::ui_translate::layer_automation_lanes_to_ui(layer) {
+                viewport_lanes.push(ViewportAutomationLane { layer_index: i, lane });
+            }
+        }
+        ui.viewport.set_automation_lanes(viewport_lanes);
+    }
+
     // Only sync markers when marker data has changed (avoids re-pushing on every
     // drag frame). Markers are few (dozens), so building the UI view to compare is cheap.
     let ui_markers = crate::ui_translate::markers_to_ui(&project.timeline.markers);
@@ -1127,6 +1186,7 @@ pub fn sync_inspector_data(
     project: &Project,
     active_layer: Option<usize>,
     selection: &SelectionState,
+    automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
 ) {
     // Audio Setup modal — refresh its current device + send list while it's
     // open. Resolving the device through the directory once per sync (only while
@@ -1340,7 +1400,11 @@ pub fn sync_inspector_data(
     }
 
     // Master effects → inspector (envelopes ride on each instance)
-    let mut master_configs = effects_to_configs(&project.settings.master_effects, OscScope::Master);
+    let mut master_configs = effects_to_configs(
+        &project.settings.master_effects,
+        OscScope::Master,
+        automation_latched,
+    );
     attach_audio_sends(&mut master_configs, &project.audio_setup);
     ui.inspector.configure_master_effects(&master_configs);
 
@@ -1352,7 +1416,7 @@ pub fn sync_inspector_data(
             let mut layer_effects = layer
                 .effects
                 .as_ref()
-                .map(|e| effects_to_configs(e, OscScope::Layer(lid)))
+                .map(|e| effects_to_configs(e, OscScope::Layer(lid), automation_latched))
                 .unwrap_or_default();
             attach_audio_sends(&mut layer_effects, &project.audio_setup);
             ui.inspector.configure_layer_effects(&layer_effects);
@@ -1374,6 +1438,7 @@ pub fn sync_inspector_data(
                         lid,
                         clip_string_params,
                         layer.generator_graph(),
+                        automation_latched,
                     )
                 });
             if let Some(c) = gen_config.as_mut() {
@@ -1547,14 +1612,24 @@ struct CardModulation {
     envelope_active: Vec<bool>,
     target_norm: Vec<f32>,
     env_decay: Vec<f32>,
+    automation_active: Vec<bool>,
+    automation_overridden: Vec<bool>,
 }
 
 /// Build the driver + envelope display arrays for one preset instance's card.
 /// `resolve` maps a modulation row's `param_id` to its card slot index.
+/// `latched` is `ContentState::automation_latched_params` — checked against
+/// `(inst.id, lane.param_id)` for the overridden-gray state (P4 §7's dot).
+/// Always `inst.id`, never the card's own possibly-blanked `effect_id` field:
+/// generator instances get a real, freshly-synthesized `EffectId` at load
+/// (see `manifold_playback::automation`'s `AutomationLatches` doc comment)
+/// even though `preset_to_config` blanks the DISPLAYED `effect_id` for
+/// generator cards for unrelated reasons.
 fn build_card_modulation(
     inst: &PresetInstance,
     n: usize,
     resolve: impl Fn(&str) -> Option<usize>,
+    latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
 ) -> CardModulation {
     let mut m = CardModulation {
         driver_active: vec![false; n],
@@ -1569,6 +1644,8 @@ fn build_card_modulation(
         envelope_active: vec![false; n],
         target_norm: vec![1.0; n],
         env_decay: vec![1.0; n],
+        automation_active: vec![false; n],
+        automation_overridden: vec![false; n],
     };
     if let Some(ref drivers) = inst.drivers {
         for d in drivers {
@@ -1600,6 +1677,23 @@ fn build_card_modulation(
             m.envelope_active[pi] = true;
             m.target_norm[pi] = env.target_normalized;
             m.env_decay[pi] = env.decay_beats;
+        }
+    }
+    if let Some(ref lanes) = inst.automation_lanes {
+        for lane in lanes {
+            // Enabled + non-empty only (§7: "an empty/disabled lane shows no
+            // dot") — matches the sampler's own `has_lanes` gate in
+            // `manifold_playback::automation`.
+            if !lane.enabled || lane.points.is_empty() {
+                continue;
+            }
+            let Some(pi) = resolve(lane.param_id.as_ref()).filter(|&pi| pi < n) else {
+                continue;
+            };
+            m.automation_active[pi] = true;
+            m.automation_overridden[pi] = latched
+                .iter()
+                .any(|(eid, pid)| *eid == inst.id && *pid == lane.param_id);
         }
     }
     m
@@ -1701,6 +1795,7 @@ fn attach_audio_sends(configs: &mut [ParamCardConfig], setup: &manifold_core::au
 fn effects_to_configs(
     effects: &[PresetInstance],
     osc_scope: OscScope<'_>,
+    automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
 ) -> Vec<ParamCardConfig> {
     effects
         .iter()
@@ -1713,6 +1808,7 @@ fn effects_to_configs(
                 osc_scope,
                 None,
                 None,
+                automation_latched,
             )
         })
         .collect()
@@ -1766,6 +1862,8 @@ fn empty_generator_config(inst: &PresetInstance) -> ParamCardConfig {
         driver_triplet: vec![],
         driver_free_period: vec![],
         audio: Default::default(),
+        automation_active: vec![],
+        automation_overridden: vec![],
     }
 }
 
@@ -1785,6 +1883,7 @@ fn preset_to_config(
     osc_scope: OscScope<'_>,
     clip_string_params: Option<&std::collections::BTreeMap<String, String>>,
     generator_graph: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+    automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
 ) -> Option<ParamCardConfig> {
     use manifold_core::preset_def::PresetKind;
     let preset_type = inst.effect_type();
@@ -1970,7 +2069,12 @@ fn preset_to_config(
         .collect();
     let n = params.len();
 
-    let m = build_card_modulation(inst, n, |id| id_to_index.get(id).copied());
+    let m = build_card_modulation(
+        inst,
+        n,
+        |id| id_to_index.get(id).copied(),
+        automation_latched,
+    );
     let audio = build_audio_card_state(inst, n, |id| id_to_index.get(id).copied());
 
     // String params are a generator-only surface (text inputs, font dropdowns),
@@ -2049,6 +2153,8 @@ fn preset_to_config(
         driver_triplet: m.driver_triplet,
         driver_free_period: m.driver_free_period,
         audio,
+        automation_active: m.automation_active,
+        automation_overridden: m.automation_overridden,
     })
 }
 
@@ -2079,6 +2185,7 @@ fn gen_params_to_config(
     layer_id: &str,
     clip_string_params: Option<&std::collections::BTreeMap<String, String>>,
     generator_graph: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+    automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
 ) -> ParamCardConfig {
     preset_to_config(
         gp,
@@ -2087,6 +2194,7 @@ fn gen_params_to_config(
         OscScope::Layer(layer_id),
         clip_string_params,
         generator_graph,
+        automation_latched,
     )
     .expect("generator preset_to_config always yields a config")
 }

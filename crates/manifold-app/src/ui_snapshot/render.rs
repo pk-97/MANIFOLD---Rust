@@ -9,6 +9,7 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::{GpuBinding, GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
+use manifold_renderer::automation_lane_draw::emit_automation_lanes;
 use manifold_renderer::clip_draw::{emit_clip_names, emit_clips, ClipBody};
 use manifold_renderer::clip_thumb_gpu::ClipThumbGpu;
 use manifold_renderer::render_target::RenderTarget;
@@ -25,6 +26,7 @@ const FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba8Unorm;
 pub fn render_ui_to_png(
     ui: &UIRoot,
     selection: &manifold_ui::UIState,
+    automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
     tex_w: u32,
     tex_h: u32,
     scale: f32,
@@ -110,6 +112,22 @@ pub fn render_ui_to_png(
         emit_clip_names(&mut renderer, &clip_rects, tracks);
         if renderer.prepare(&device, tex_w, tex_h, dpi) {
             let mut enc = device.create_encoder("ui-snap-names");
+            renderer.render(&mut enc, &target.texture, GpuLoadAction::Load);
+            enc.commit_and_wait_completed();
+        }
+    }
+
+    // Pass 4b: automation lane strips (P4, `docs/AUTOMATION_LANES_DESIGN.md`
+    // §7) — outside the clip-rects guard since a scene can carry lanes
+    // without any clips currently visible. No-op when automation mode is
+    // off (the viewport never populated any lanes this frame).
+    let automation_lanes = ui.viewport.automation_lane_screens(automation_latched);
+    if !automation_lanes.is_empty() {
+        let tracks = ui.viewport.get_tracks_rect();
+        renderer.begin_frame();
+        emit_automation_lanes(&mut renderer, &automation_lanes, tracks);
+        if renderer.prepare(&device, tex_w, tex_h, dpi) {
+            let mut enc = device.create_encoder("ui-snap-automation-lanes");
             renderer.render(&mut enc, &target.texture, GpuLoadAction::Load);
             enc.commit_and_wait_completed();
         }
@@ -303,7 +321,11 @@ pub fn render_graph_editor_to_png(
         manifold_core::GraphTarget::Effect(_) => None,
     };
     crate::ui_bridge::sync_project_data(&mut editor_ui, project, active_idx, selection);
-    crate::ui_bridge::sync_inspector_data(&mut editor_ui, project, active_idx, selection);
+    // No `ContentState` exists on this path (a bare fixture `Project`, no
+    // playback engine) — the graph-editor lane render never has latch data,
+    // so it can only ever show the red "automated" dot, never the gray
+    // overridden state. Honest empty slice, not a stopgap.
+    crate::ui_bridge::sync_inspector_data(&mut editor_ui, project, active_idx, selection, &[]);
     editor_ui.build_inspector_in_rect(UiRect::new(
         card_x,
         0.0,

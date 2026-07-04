@@ -5,7 +5,7 @@
 // Replaces the former app::SelectionState + app::ClipDragState.
 
 use crate::panels::InspectorTab;
-use crate::view::SelectionRegion;
+use crate::view::{SelectionRegion, UiAutomationPointRef};
 use manifold_foundation::{Beats, ClipId, LayerId, MarkerId};
 use std::collections::HashSet;
 
@@ -66,6 +66,39 @@ pub struct UIState {
     /// one piece of inspector state that isn't pure selection. See
     /// docs/UI_LAYOUT_DESIGN.md.
     scope_pin: Option<(InspectorTab, u64)>,
+
+    /// Automation-mode view toggle (Live's `A`, P4 `docs/AUTOMATION_LANES_DESIGN.md`
+    /// §7): show/hide lane strips across the timeline. Purely a view-state
+    /// bool — never serialized, never routed through `EditingService` — but it
+    /// DOES change the Y-layout (a visible lane grows its track), so any
+    /// toggle must also mark the app's structural-sync dirty flag; see
+    /// `ui_bridge::transport::dispatch_transport`'s `PanelAction::
+    /// ToggleAutomationMode` arm.
+    pub automation_mode_visible: bool,
+
+    /// The single selected breakpoint, for the Delete key (P4 Unit A —
+    /// marquee multi-select is a later unit; `docs/AUTOMATION_LANES_DESIGN.md`
+    /// §7's "Marquee-select multiple dots and drag/delete them together").
+    /// Set on a plain click on an existing dot; cleared on any other
+    /// selection change or when automation mode toggles off. Never
+    /// serialized — pure view/interaction state, same tier as
+    /// `hovered_clip_id`.
+    pub selected_automation_point: Option<UiAutomationPointRef>,
+
+    /// Marquee (rubber-band) multi-selection of automation breakpoints (P4
+    /// Unit B, `docs/AUTOMATION_LANES_DESIGN.md` §7's "Marquee-select
+    /// multiple dots and drag/delete them together"). Populated live during
+    /// an `AutomationMarquee` drag; Delete removes the whole set as one undo
+    /// entry, a drag starting on a member moves the whole set together. Same
+    /// tier as `selected_automation_point` — view/interaction state, never
+    /// serialized.
+    pub selected_automation_points: Vec<UiAutomationPointRef>,
+
+    /// Pencil/draw mode toggle (Live's `B`) — while on, dragging inside an
+    /// automation lane strip draws a point at each grid step instead of
+    /// grabbing a dot/segment (P4 Unit B, §7's "Draw mode"). Only meaningful
+    /// while `automation_mode_visible`; never serialized.
+    pub automation_draw_mode: bool,
 }
 
 impl Default for UIState {
@@ -92,6 +125,10 @@ impl UIState {
             current_zoom_index: crate::color::DEFAULT_ZOOM_INDEX,
             selected_marker_ids: HashSet::new(),
             scope_pin: None,
+            automation_mode_visible: false,
+            selected_automation_point: None,
+            selected_automation_points: Vec::new(),
+            automation_draw_mode: false,
         }
     }
 

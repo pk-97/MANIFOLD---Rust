@@ -164,7 +164,10 @@ pub fn dispatch(
         | PanelAction::ZoomIn
         | PanelAction::ZoomOut
         | PanelAction::InspectorScrolled(_)
-        | PanelAction::InspectorSectionClicked(_) => {
+        | PanelAction::InspectorSectionClicked(_)
+        | PanelAction::ToggleAutomationArm
+        | PanelAction::AutomationBackToArrangement
+        | PanelAction::ToggleAutomationMode => {
             transport::dispatch_transport(action, project, content_tx, content_state, ui, selection)
         }
 

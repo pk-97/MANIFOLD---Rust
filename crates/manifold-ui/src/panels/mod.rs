@@ -155,6 +155,20 @@ pub enum PanelAction {
     SelectClkDevice,
     ToggleSyncOutput,
 
+    // Automation (P4, docs/AUTOMATION_LANES_DESIGN.md §7) — transport-bar globals.
+    /// Toggle the global Automation Arm: while armed, touching an automated
+    /// param (while playing) records into its lane instead of latching an
+    /// override (§5).
+    ToggleAutomationArm,
+    /// Back to Arrangement: clears every automation override latch, resuming
+    /// every automated param's lane (§4). Lit red in the transport bar
+    /// whenever any latch is active.
+    AutomationBackToArrangement,
+    /// Show/hide lane strips across the timeline (Live's `A`) — a pure UI
+    /// view-state toggle, not a project mutation or runtime playback state.
+    /// Lit when lanes are currently visible.
+    ToggleAutomationMode,
+
     // File
     NewProject,
     OpenProject,

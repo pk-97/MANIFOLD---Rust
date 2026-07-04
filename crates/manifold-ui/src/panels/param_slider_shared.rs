@@ -253,6 +253,15 @@ pub struct ParamModState {
     /// Card-level: send ids parallel to `audio_send_labels` — turns a selected
     /// drawer index into the id an `AudioModSetSource` command needs.
     pub audio_send_ids: Vec<manifold_foundation::AudioSendId>,
+
+    // ── Automation lane indicator (P4 §7 last bullet) ──
+    /// Per-param: an enabled automation lane with ≥1 point exists on this
+    /// instance for this param (Live's red "automated" dot).
+    pub automation_active: Vec<bool>,
+    /// Per-param: that lane's `(EffectId, ParamId)` is currently latched in
+    /// `ContentState::automation_latched_params` — the dot grays instead of
+    /// showing red, mirroring the lane-strip / transport BACK button.
+    pub automation_overridden: Vec<bool>,
 }
 
 /// Map a feature-row button index to its `AudioFeatureKind` (clamped).
@@ -355,6 +364,8 @@ impl ParamModState {
             audio_release_ms: vec![120.0; param_count],
             audio_send_labels: Vec::new(),
             audio_send_ids: Vec::new(),
+            automation_active: vec![false; param_count],
+            automation_overridden: vec![false; param_count],
         }
     }
 
@@ -401,6 +412,8 @@ impl ParamModState {
         driver_dotted: &[bool],
         driver_triplet: &[bool],
         driver_free_period: &[Option<f32>],
+        automation_active: &[bool],
+        automation_overridden: &[bool],
     ) {
         for i in 0..n {
             self.driver_expanded[i] = driver_active.get(i).copied().unwrap_or(false);
@@ -415,6 +428,8 @@ impl ParamModState {
             self.driver_dotted[i] = driver_dotted.get(i).copied().unwrap_or(false);
             self.driver_triplet[i] = driver_triplet.get(i).copied().unwrap_or(false);
             self.driver_free_period[i] = driver_free_period.get(i).copied().flatten();
+            self.automation_active[i] = automation_active.get(i).copied().unwrap_or(false);
+            self.automation_overridden[i] = automation_overridden.get(i).copied().unwrap_or(false);
         }
     }
 
@@ -1423,6 +1438,34 @@ pub(crate) fn build_param_row(
     // Make label interactive for click-to-copy OSC address + Ableton mapping.
     if let Some(label_id) = slider.label {
         tree.set_flag(label_id, UIFlags::INTERACTIVE);
+    }
+
+    // "Automated" indicator (P4 §7 last bullet, Live's red dot): a small,
+    // non-interactive circle at the left edge of the label cell when this
+    // param carries an enabled automation lane. Red while live, grays when
+    // the lane is overridden (latched) — same red/gray pairing as the lane
+    // strips and the transport BACK button.
+    if mod_state.automation_active.get(i).copied().unwrap_or(false) {
+        let overridden = mod_state.automation_overridden.get(i).copied().unwrap_or(false);
+        let dot_color = if overridden {
+            color::AUTOMATION_LINE_OVERRIDDEN_COLOR
+        } else {
+            color::AUTOMATION_LINE_COLOR
+        };
+        const AUTOMATION_DOT_D: f32 = 5.0;
+        let dot_y = cy + (ROW_HEIGHT - AUTOMATION_DOT_D) * 0.5;
+        tree.add_panel(
+            parent,
+            x + 1.0,
+            dot_y,
+            AUTOMATION_DOT_D,
+            AUTOMATION_DOT_D,
+            UIStyle {
+                bg_color: dot_color,
+                corner_radius: AUTOMATION_DOT_D * 0.5,
+                ..UIStyle::default()
+            },
+        );
     }
 
     // Trim handles (if driver expanded).

@@ -2410,6 +2410,7 @@ mod tests {
                     LayerType::Video
                 },
                 is_collapsed: l.is_collapsed,
+                automation_lane_count: 0,
             })
             .collect();
         let mut mapper = CoordinateMapper::new();

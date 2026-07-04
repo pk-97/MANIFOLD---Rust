@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod anim;
+pub mod automation_hit_tester;
 pub mod bitmap_painter;
 pub mod bitmap_renderer;
 pub mod chrome;

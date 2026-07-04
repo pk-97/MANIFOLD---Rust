@@ -7,15 +7,17 @@
 //! purely rendering + coordinate conversion. The overlay calls through the
 //! `TimelineEditingHost` trait for operations that need engine/editing access.
 
-use manifold_foundation::{Beats, ClipId, Seconds};
+use manifold_foundation::{Beats, ClipId, ParamId, Seconds};
 use std::collections::HashSet;
 
+use crate::automation_hit_tester::{self, AutomationHit};
 use crate::clip_hit_tester::{ClipHitResult, ClipHitTester, HitRegion};
 use crate::input::Modifiers;
 use crate::node::Vec2;
 use crate::panels::viewport::TimelineViewportPanel;
 use crate::timeline_editing_host::{ClipRef, TimelineCursor, TimelineEditingHost};
 use crate::ui_state::UIState;
+use crate::view::{UiAutomationPointRef, UiGraphTarget, UiSegmentShape};
 
 // ── Constants ───────────────────────────────────────────────────
 // Unity InteractionOverlay lines 78-79.
@@ -95,6 +97,167 @@ pub enum DragMode {
     TrimLeft,
     TrimRight,
     RegionSelect,
+    /// Dragging an existing automation breakpoint (P4 Unit A,
+    /// `docs/AUTOMATION_LANES_DESIGN.md` §7). State lives in
+    /// `InteractionOverlay::automation_drag`, mirroring how `Move`'s state
+    /// lives in `drag_snapshots`/`drag_start_beat`.
+    AutomationPoint,
+    /// Alt-dragging a segment into a curve bend (P4 Unit B, §7's
+    /// "modifier-drag a segment"). State in `automation_segment_bend`.
+    AutomationSegmentBend,
+    /// Plain (no-Alt) vertical drag of a segment — both endpoints move by the
+    /// same value delta (P4 Unit B, §7's "drag a segment"). State in
+    /// `automation_segment_drag`.
+    AutomationSegmentDrag,
+    /// Rubber-band selecting automation breakpoints (P4 Unit B, §7's
+    /// "Marquee-select multiple dots"). State in `automation_marquee`.
+    AutomationMarquee,
+    /// Dragging a marquee-selected GROUP of breakpoints together (grabbed one
+    /// of the selected dots while the marquee set has 2+ members). State in
+    /// `automation_group_drag`.
+    AutomationGroupMove,
+    /// Pencil/draw mode stroke (P4 Unit B, §7's "Draw mode") — active
+    /// whenever `UIState::automation_draw_mode` is on and the press lands in
+    /// a lane strip, overriding dot/segment/marquee routing entirely. State
+    /// in `automation_draw`.
+    AutomationDraw,
+}
+
+// ── AutomationDragState ─────────────────────────────────────────
+// P4 Unit A (`docs/AUTOMATION_LANES_DESIGN.md` §7): grabbed-dot geometry for
+// a `DragMode::AutomationPoint` drag. `last_beat`/`last_value` track where
+// the point currently sits (recomputed fresh from screen each frame, not
+// incrementally) so `TimelineEditingHost::set_automation_point_preview`'s
+// by-beat lookup always finds it — the same "recompute from origin, not
+// incrementally" discipline `handle_move_drag` uses for clips.
+
+#[derive(Debug, Clone)]
+struct AutomationDragState {
+    target: UiGraphTarget,
+    param_id: ParamId,
+    /// The point's state at grab time, PARAM RANGE value — the explicit
+    /// reverse `commit_automation_point_move` needs (the
+    /// `EditParamMappingCommand::new_with_reverse` drag-commit precedent).
+    original: (Beats, f32, UiSegmentShape),
+    /// Where the preview last wrote the point — the `from_beat` the NEXT
+    /// preview call must search by.
+    last_beat: Beats,
+    last_value: f32,
+}
+
+// ── AutomationSegmentBendState / AutomationSegmentDragState ────────
+// P4 Unit B (`docs/AUTOMATION_LANES_DESIGN.md` §7): grabbed-segment geometry
+// for the two segment gestures. Both re-derive their live value from the
+// ORIGINAL grab geometry each frame (never incrementally), matching every
+// other drag state in this file.
+
+/// Alt-drag curve bend: only the LEAVING point's `shape` changes (beat/value
+/// untouched), so this carries just enough to preview + commit that one
+/// field. `grab_y` is the screen Y at press time; `bend` is re-derived from
+/// the vertical delta since grab, not accumulated.
+#[derive(Debug, Clone)]
+struct AutomationSegmentBendState {
+    target: UiGraphTarget,
+    param_id: ParamId,
+    left_beat: Beats,
+    left_value: f32,
+    original_shape: UiSegmentShape,
+    grab_y: f32,
+    last_bend: f32,
+}
+
+/// Plain vertical segment drag: both endpoints move by the same normalized
+/// value delta. Carries both points' original (param-range) values and
+/// shapes — shape is unchanged by this gesture but threaded through so the
+/// commit's `MoveAutomationPointCommand`s preserve it exactly.
+#[derive(Debug, Clone)]
+struct AutomationSegmentDragState {
+    target: UiGraphTarget,
+    param_id: ParamId,
+    left_beat: Beats,
+    left_original_value: f32,
+    left_shape: UiSegmentShape,
+    right_beat: Beats,
+    right_original_value: f32,
+    right_shape: UiSegmentShape,
+    /// Normalized (0..1) Y within the strip at press time.
+    grab_norm: f32,
+    last_left_value: f32,
+    last_right_value: f32,
+}
+
+// ── AutomationMarqueeState / AutomationGroupDragState / AutomationDrawState
+// ────────────────────────────────────────────────────────────────────────
+// P4 Unit B (`docs/AUTOMATION_LANES_DESIGN.md` §7): marquee-select, group
+// move of the marquee-selected set, and pencil/draw mode.
+
+/// Rubber-band marquee in progress — just the press corner; the current
+/// corner is always the live `pos` passed to `on_drag`.
+#[derive(Debug, Clone, Copy)]
+struct AutomationMarqueeState {
+    start: Vec2,
+}
+
+/// One marquee-selected point's captured geometry for a group move. Each
+/// point keeps its OWN param range (points can span multiple lanes/params at
+/// once) — only the normalized delta is shared across the group.
+#[derive(Debug, Clone)]
+struct AutomationGroupPointState {
+    target: UiGraphTarget,
+    param_id: ParamId,
+    beat: Beats,
+    original_value: f32,
+    shape: UiSegmentShape,
+    param_min: f32,
+    param_max: f32,
+    last_value: f32,
+}
+
+/// Dragging the whole marquee-selected group. `grab_target`/`grab_param_id`
+/// identify the GRABBED lane, re-resolved fresh each frame for its
+/// `strip_rect` (handles mid-drag scroll) to compute the shared normalized
+/// delta applied to every point in `points`.
+#[derive(Debug, Clone)]
+struct AutomationGroupDragState {
+    grab_target: UiGraphTarget,
+    grab_param_id: ParamId,
+    grab_norm: f32,
+    points: Vec<AutomationGroupPointState>,
+}
+
+/// One in-progress pencil/draw stroke. `old_points` is the FULL (unfiltered
+/// by visible range) pre-stroke point list — `None` if the stroke is
+/// creating the lane — captured via `TimelineEditingHost::
+/// automation_lane_points` at grab time, since `AutomationLaneScreen::dots`
+/// is culled to the visible beat range and would silently drop off-screen
+/// points. `working` is the list being built as the stroke proceeds; it
+/// starts as a clone of `old_points` (or empty).
+#[derive(Debug, Clone)]
+struct AutomationDrawState {
+    target: UiGraphTarget,
+    param_id: ParamId,
+    /// Value/beat denormalization always re-resolves the lane's CURRENT
+    /// `param_min`/`param_max` fresh each frame in `write_automation_draw_step`
+    /// (handles the (practically static, but consistent with every other
+    /// handler's discipline) case of the range changing mid-stroke) — not
+    /// cached here.
+    new_point_shape: UiSegmentShape,
+    old_points: Option<Vec<(Beats, f32, UiSegmentShape)>>,
+    working: Vec<(Beats, f32, UiSegmentShape)>,
+}
+
+/// Insert-or-overwrite `(beat, value, shape)` into a sorted-by-beat working
+/// point list — the pencil's per-grid-step write. Matches an existing beat
+/// exactly (grid-snapped beats are stable across frames within the same
+/// grid cell) or inserts at the sorted position.
+fn apply_draw_point(points: &mut Vec<(Beats, f32, UiSegmentShape)>, beat: Beats, value: f32, shape: UiSegmentShape) {
+    match points.iter().position(|p| p.0.0 == beat.0) {
+        Some(idx) => points[idx] = (beat, value, shape),
+        None => {
+            let pos = points.iter().position(|p| p.0.0 > beat.0).unwrap_or(points.len());
+            points.insert(pos, (beat, value, shape));
+        }
+    }
 }
 
 // ── DragSnapshot ────────────────────────────────────────────────
@@ -163,6 +326,19 @@ pub struct InteractionOverlay {
     // Current modifier state — set by app before each event.
     // Unity reads Keyboard.current inline; Rust stores latest modifiers here.
     modifiers: Modifiers,
+
+    // P4 Unit A automation-point drag state (`docs/AUTOMATION_LANES_DESIGN.md`
+    // §7) — `Some` only while `drag_mode == DragMode::AutomationPoint`.
+    automation_drag: Option<AutomationDragState>,
+    // P4 Unit B segment-gesture state — `Some` only while `drag_mode` is the
+    // matching `AutomationSegmentBend`/`AutomationSegmentDrag` variant.
+    automation_segment_bend: Option<AutomationSegmentBendState>,
+    automation_segment_drag: Option<AutomationSegmentDragState>,
+    // P4 Unit B marquee / group-move / draw-mode state — `Some` only while
+    // `drag_mode` is the matching variant.
+    automation_marquee: Option<AutomationMarqueeState>,
+    automation_group_drag: Option<AutomationGroupDragState>,
+    automation_draw: Option<AutomationDrawState>,
 }
 
 impl InteractionOverlay {
@@ -189,6 +365,12 @@ impl InteractionOverlay {
             trim_original_in_point: Seconds::ZERO,
             trim_originals: Vec::with_capacity(8),
             modifiers: Modifiers::NONE,
+            automation_drag: None,
+            automation_segment_bend: None,
+            automation_segment_drag: None,
+            automation_marquee: None,
+            automation_group_drag: None,
+            automation_draw: None,
         }
     }
 
@@ -283,6 +465,17 @@ impl InteractionOverlay {
         ui_state: &mut UIState,
         viewport: &TimelineViewportPanel,
     ) {
+        // P4 Unit A (`docs/AUTOMATION_LANES_DESIGN.md` §7): a click inside an
+        // automation lane strip is handled entirely here — click-on-line adds
+        // a breakpoint, click-on-dot selects it, double-click-on-dot deletes
+        // it — and never falls through to clip/region logic below. Right-
+        // clicks are left alone (no automation context menu in Unit A).
+        if !is_right_button
+            && self.handle_automation_click(pos, click_count, host, ui_state, viewport)
+        {
+            return;
+        }
+
         let hit = self.hit_test_at(pos, viewport);
 
         if hit.is_none() {
@@ -375,6 +568,600 @@ impl InteractionOverlay {
         host.on_clip_selected(&hit.clip_id);
     }
 
+    // ────────────────────────────────────────────────────────────
+    // AUTOMATION LANE EDITING (P4 Unit A, `docs/AUTOMATION_LANES_DESIGN.md` §7)
+    // ────────────────────────────────────────────────────────────
+
+    /// Handle a click/double-click that lands inside an automation lane
+    /// strip. Returns `true` when the click was handled (caller must
+    /// return without falling through to clip/region logic).
+    ///
+    /// - Click on an existing dot → select it (Delete key removes it later).
+    /// - Double-click on an existing dot → remove it immediately.
+    /// - Click (or double-click) on bare strip → add a breakpoint at the
+    ///   clicked beat/value (grid-snapped unless Cmd is held; `Hold` shape
+    ///   for whole-numbers params, `Linear` otherwise — §8).
+    fn handle_automation_click(
+        &mut self,
+        pos: Vec2,
+        click_count: u32,
+        host: &mut dyn TimelineEditingHost,
+        ui_state: &mut UIState,
+        viewport: &TimelineViewportPanel,
+    ) -> bool {
+        let lanes = viewport.automation_lane_screens(&[]);
+        let Some(hit) = automation_hit_tester::hit_test_automation(pos, &lanes) else {
+            return false;
+        };
+        match hit {
+            AutomationHit::Dot { lane_index, dot_index } => {
+                let lane = &lanes[lane_index];
+                let dot = lane.dots[dot_index];
+                if click_count >= 2 {
+                    host.remove_automation_point(&lane.target, &lane.param_id, dot.beat);
+                    if ui_state.selected_automation_point.as_ref().is_some_and(|s| {
+                        s.target == lane.target && s.param_id == lane.param_id && s.beat.0 == dot.beat.0
+                    }) {
+                        ui_state.selected_automation_point = None;
+                    }
+                } else {
+                    ui_state.selected_automation_point = Some(UiAutomationPointRef {
+                        target: lane.target.clone(),
+                        param_id: lane.param_id.clone(),
+                        beat: dot.beat,
+                    });
+                }
+            }
+            // A plain CLICK (no drag) on a segment inserts a new breakpoint
+            // there, same as clicking bare strip — Ableton's "click the line
+            // to add a point" behavior. `Segment` only changes DRAG-begin
+            // routing (`begin_automation_drag`), not click routing.
+            AutomationHit::Strip { lane_index } | AutomationHit::Segment { lane_index, .. } => {
+                let lane = &lanes[lane_index];
+                let raw_beat = viewport.pixel_to_beat(pos.x);
+                let beat = if self.modifiers.command {
+                    raw_beat
+                } else {
+                    viewport.snap_to_grid(raw_beat)
+                }
+                .max(Beats::ZERO);
+                let norm = (1.0
+                    - (pos.y - lane.strip_rect.y) / lane.strip_rect.height.max(f32::EPSILON))
+                .clamp(0.0, 1.0);
+                let value = lane.param_min + norm * (lane.param_max - lane.param_min);
+                let shape = if lane.whole_numbers {
+                    UiSegmentShape::Hold
+                } else {
+                    UiSegmentShape::Linear
+                };
+                host.add_automation_point(&lane.target, &lane.param_id, beat, value, shape);
+            }
+        }
+        true
+    }
+
+    /// Hit-test `press_pos` against automation lane strips for a drag begin.
+    /// Returns `true` when an existing dot was grabbed (caller must return
+    /// without falling through to clip drag logic). A drag press on bare
+    /// strip area is NOT handled here — §7's "click on line adds a point" is
+    /// a click action (`handle_automation_click`), not a drag-begin; the
+    /// `DragBegin` event only fires for what the platform layer already
+    /// distinguishes as a drag gesture, so a plain click on the strip is
+    /// routed through `on_pointer_click` instead.
+    fn begin_automation_drag(
+        &mut self,
+        press_pos: Vec2,
+        host: &mut dyn TimelineEditingHost,
+        ui_state: &mut UIState,
+        viewport: &TimelineViewportPanel,
+    ) -> bool {
+        let lanes = viewport.automation_lane_screens(&[]);
+        let hit = automation_hit_tester::hit_test_automation(press_pos, &lanes);
+        let Some(hit) = hit else {
+            return false;
+        };
+
+        // Pencil/draw mode overrides ALL other drag routing while active —
+        // Ableton's pencil draws regardless of whether the press happened to
+        // land on an existing dot/segment (P4 Unit B, §7's "Draw mode").
+        if ui_state.automation_draw_mode {
+            let lane_index = match hit {
+                AutomationHit::Dot { lane_index, .. }
+                | AutomationHit::Segment { lane_index, .. }
+                | AutomationHit::Strip { lane_index } => lane_index,
+            };
+            self.begin_automation_draw(lane_index, press_pos, &lanes, host, viewport);
+            return true;
+        }
+
+        match hit {
+            AutomationHit::Dot { lane_index, dot_index } => {
+                let lane = &lanes[lane_index];
+                let dot = lane.dots[dot_index];
+                let point_ref = UiAutomationPointRef {
+                    target: lane.target.clone(),
+                    param_id: lane.param_id.clone(),
+                    beat: dot.beat,
+                };
+                // Grabbing a dot that's part of an active multi-selection (2+
+                // members) moves the WHOLE group; otherwise this is a plain
+                // single-point drag and any stale marquee selection is
+                // cleared (mirrors clip selection's "bare click selects just
+                // this one").
+                if ui_state.selected_automation_points.len() > 1
+                    && ui_state.selected_automation_points.contains(&point_ref)
+                {
+                    self.begin_automation_group_drag(press_pos, &lanes, ui_state, host);
+                    return true;
+                }
+                ui_state.selected_automation_points.clear();
+
+                let value =
+                    lane.param_min + dot.value_norm.clamp(0.0, 1.0) * (lane.param_max - lane.param_min);
+                self.automation_drag = Some(AutomationDragState {
+                    target: lane.target.clone(),
+                    param_id: lane.param_id.clone(),
+                    original: (dot.beat, value, dot.shape),
+                    last_beat: dot.beat,
+                    last_value: value,
+                });
+                ui_state.selected_automation_point = Some(point_ref);
+                self.drag_mode = DragMode::AutomationPoint;
+                host.set_cursor(TimelineCursor::Move);
+                true
+            }
+            AutomationHit::Segment { lane_index, left_dot_index } => {
+                self.begin_automation_segment_drag(lane_index, left_dot_index, press_pos, &lanes, host);
+                true
+            }
+            AutomationHit::Strip { .. } => {
+                self.automation_marquee = Some(AutomationMarqueeState { start: press_pos });
+                ui_state.selected_automation_points.clear();
+                self.drag_mode = DragMode::AutomationMarquee;
+                true
+            }
+        }
+    }
+
+    /// Begin a marquee-group drag: capture every currently multi-selected
+    /// point's original (beat, value, shape) plus its own lane's param
+    /// range — points can span multiple lanes/params at once, so only the
+    /// NORMALIZED delta is shared, not the raw param-range delta.
+    fn begin_automation_group_drag(
+        &mut self,
+        press_pos: Vec2,
+        lanes: &[crate::panels::viewport::AutomationLaneScreen],
+        ui_state: &UIState,
+        host: &mut dyn TimelineEditingHost,
+    ) {
+        let Some(AutomationHit::Dot { lane_index: grab_lane_index, .. }) =
+            automation_hit_tester::hit_test_automation(press_pos, lanes)
+        else {
+            return;
+        };
+        let grab_lane = &lanes[grab_lane_index];
+        let grab_norm = (1.0
+            - (press_pos.y - grab_lane.strip_rect.y) / grab_lane.strip_rect.height.max(f32::EPSILON))
+        .clamp(0.0, 1.0);
+
+        let mut points = Vec::with_capacity(ui_state.selected_automation_points.len());
+        for r in &ui_state.selected_automation_points {
+            let Some(lane) = lanes.iter().find(|l| l.target == r.target && l.param_id == r.param_id) else {
+                continue;
+            };
+            let Some(dot) = lane.dots.iter().find(|d| d.beat.0 == r.beat.0) else {
+                continue;
+            };
+            let range = lane.param_max - lane.param_min;
+            let value = lane.param_min + dot.value_norm.clamp(0.0, 1.0) * range;
+            points.push(AutomationGroupPointState {
+                target: lane.target.clone(),
+                param_id: lane.param_id.clone(),
+                beat: dot.beat,
+                original_value: value,
+                shape: dot.shape,
+                param_min: lane.param_min,
+                param_max: lane.param_max,
+                last_value: value,
+            });
+        }
+        if points.is_empty() {
+            return;
+        }
+        self.automation_group_drag = Some(AutomationGroupDragState {
+            grab_target: grab_lane.target.clone(),
+            grab_param_id: grab_lane.param_id.clone(),
+            grab_norm,
+            points,
+        });
+        self.drag_mode = DragMode::AutomationGroupMove;
+        host.set_cursor(TimelineCursor::Move);
+    }
+
+    /// Begin a pencil/draw stroke on `lane_index`'s lane: reads the FULL
+    /// pre-stroke point list via `host.automation_lane_points` (NOT
+    /// `AutomationLaneScreen::dots`, which is culled to the visible beat
+    /// range — using it here would silently drop off-screen points from the
+    /// eventual install), seeds `working` from it, then writes the first
+    /// grid step under the press.
+    fn begin_automation_draw(
+        &mut self,
+        lane_index: usize,
+        press_pos: Vec2,
+        lanes: &[crate::panels::viewport::AutomationLaneScreen],
+        host: &mut dyn TimelineEditingHost,
+        viewport: &TimelineViewportPanel,
+    ) {
+        let lane = &lanes[lane_index];
+        let old_points = host.automation_lane_points(&lane.target, &lane.param_id);
+        let working = old_points.clone().unwrap_or_default();
+        self.automation_draw = Some(AutomationDrawState {
+            target: lane.target.clone(),
+            param_id: lane.param_id.clone(),
+            new_point_shape: if lane.whole_numbers { UiSegmentShape::Hold } else { UiSegmentShape::Linear },
+            old_points,
+            working,
+        });
+        self.drag_mode = DragMode::AutomationDraw;
+        host.set_cursor(TimelineCursor::Move);
+        // Falls through to the shared per-frame writer so the press itself
+        // draws a point immediately, not just subsequent movement.
+        self.write_automation_draw_step(press_pos, host, viewport);
+    }
+
+    /// Write (insert-or-overwrite) the grid-snapped point under `pos` into
+    /// the in-progress draw stroke, then push the whole working list to the
+    /// live preview. Re-resolves the stroke's lane fresh each call (handles
+    /// mid-stroke scroll), matching every other drag handler's discipline.
+    fn write_automation_draw_step(
+        &mut self,
+        pos: Vec2,
+        host: &mut dyn TimelineEditingHost,
+        viewport: &TimelineViewportPanel,
+    ) {
+        let Some(state) = self.automation_draw.as_ref() else {
+            return;
+        };
+        let (target, param_id) = (state.target.clone(), state.param_id.clone());
+        let lanes = viewport.automation_lane_screens(&[]);
+        let Some(lane) = lanes.iter().find(|l| l.target == target && l.param_id == param_id) else {
+            return;
+        };
+
+        let beat = viewport.snap_to_grid(viewport.pixel_to_beat(pos.x)).max(Beats::ZERO);
+        let norm = (1.0 - (pos.y - lane.strip_rect.y) / lane.strip_rect.height.max(f32::EPSILON)).clamp(0.0, 1.0);
+        let value = lane.param_min + norm * (lane.param_max - lane.param_min);
+
+        let Some(state) = self.automation_draw.as_mut() else {
+            return;
+        };
+        apply_draw_point(&mut state.working, beat, value, state.new_point_shape);
+        let snapshot = state.working.clone();
+        host.set_automation_draw_preview(&target, &param_id, snapshot);
+    }
+
+    /// Commit a finished draw stroke as one undo entry — no-op if the
+    /// working list ended up identical to the pre-stroke set.
+    fn commit_automation_draw(&mut self, host: &mut dyn TimelineEditingHost) {
+        let Some(state) = self.automation_draw.take() else {
+            return;
+        };
+        let unchanged = state.old_points.as_deref() == Some(state.working.as_slice())
+            || (state.old_points.is_none() && state.working.is_empty());
+        if !unchanged {
+            host.commit_automation_draw_stroke(&state.target, &state.param_id, state.working, state.old_points);
+        }
+    }
+
+    /// Grab a segment for either an Alt-drag curve bend or a plain vertical
+    /// drag (P4 Unit B, §7). Curve-bend is gated off for `whole_numbers`
+    /// lanes (§8: enum/int params author with `Hold`, so bending one would
+    /// silently change its runtime sampling from a step to a curve) — Alt on
+    /// such a lane falls back to the vertical-drag gesture instead of a no-op.
+    fn begin_automation_segment_drag(
+        &mut self,
+        lane_index: usize,
+        left_dot_index: usize,
+        press_pos: Vec2,
+        lanes: &[crate::panels::viewport::AutomationLaneScreen],
+        host: &mut dyn TimelineEditingHost,
+    ) {
+        let lane = &lanes[lane_index];
+        let left = lane.dots[left_dot_index];
+        let right = lane.dots[left_dot_index + 1];
+        let range = lane.param_max - lane.param_min;
+        let left_value = lane.param_min + left.value_norm.clamp(0.0, 1.0) * range;
+        let right_value = lane.param_min + right.value_norm.clamp(0.0, 1.0) * range;
+
+        if self.modifiers.alt && !lane.whole_numbers {
+            let original_bend = match left.shape {
+                UiSegmentShape::Curved(c) => c,
+                _ => 0.0,
+            };
+            self.automation_segment_bend = Some(AutomationSegmentBendState {
+                target: lane.target.clone(),
+                param_id: lane.param_id.clone(),
+                left_beat: left.beat,
+                left_value,
+                original_shape: left.shape,
+                grab_y: press_pos.y,
+                last_bend: original_bend,
+            });
+            self.drag_mode = DragMode::AutomationSegmentBend;
+        } else {
+            let grab_norm = (1.0 - (press_pos.y - lane.strip_rect.y) / lane.strip_rect.height.max(f32::EPSILON))
+                .clamp(0.0, 1.0);
+            self.automation_segment_drag = Some(AutomationSegmentDragState {
+                target: lane.target.clone(),
+                param_id: lane.param_id.clone(),
+                left_beat: left.beat,
+                left_original_value: left_value,
+                left_shape: left.shape,
+                right_beat: right.beat,
+                right_original_value: right_value,
+                right_shape: right.shape,
+                grab_norm,
+                last_left_value: left_value,
+                last_right_value: right_value,
+            });
+            self.drag_mode = DragMode::AutomationSegmentDrag;
+        }
+        host.set_cursor(TimelineCursor::Move);
+    }
+
+    /// Live-preview an in-progress automation point drag (`DragMode::
+    /// AutomationPoint`). Re-derives beat/value fresh from the current
+    /// screen geometry each frame (not incrementally) — mirrors
+    /// `handle_move_drag`'s "recompute from origin" discipline, and stays
+    /// correct if the viewport scrolls vertically mid-drag (the strip's Y
+    /// re-resolves every call, unlike a cached `strip_rect`).
+    fn handle_automation_drag(
+        &mut self,
+        pos: Vec2,
+        host: &mut dyn TimelineEditingHost,
+        viewport: &TimelineViewportPanel,
+    ) {
+        let Some((target, param_id, from_beat)) = self
+            .automation_drag
+            .as_ref()
+            .map(|d| (d.target.clone(), d.param_id.clone(), d.last_beat))
+        else {
+            return;
+        };
+        let lanes = viewport.automation_lane_screens(&[]);
+        let Some(lane) = lanes
+            .iter()
+            .find(|l| l.target == target && l.param_id == param_id)
+        else {
+            return;
+        };
+
+        let raw_beat = viewport.pixel_to_beat(pos.x);
+        let to_beat = if self.modifiers.command {
+            raw_beat
+        } else {
+            viewport.snap_to_grid(raw_beat)
+        }
+        .max(Beats::ZERO);
+        let norm = (1.0
+            - (pos.y - lane.strip_rect.y) / lane.strip_rect.height.max(f32::EPSILON))
+        .clamp(0.0, 1.0);
+        let to_value = lane.param_min + norm * (lane.param_max - lane.param_min);
+
+        host.set_automation_point_preview(&target, &param_id, from_beat, to_beat, to_value);
+
+        if let Some(drag) = self.automation_drag.as_mut() {
+            drag.last_beat = to_beat;
+            drag.last_value = to_value;
+        }
+    }
+
+    /// Commit a finished automation point drag as one undo entry. No-op
+    /// (still clears state) if the point never actually moved.
+    fn commit_automation_drag(&mut self, host: &mut dyn TimelineEditingHost) {
+        let Some(drag) = self.automation_drag.take() else {
+            return;
+        };
+        let new_point = (drag.last_beat, drag.last_value, drag.original.2);
+        let moved = (new_point.0.0 - drag.original.0.0).abs() >= 0.0001
+            || (new_point.1 - drag.original.1).abs() > f32::EPSILON;
+        if moved {
+            host.commit_automation_point_move(&drag.target, &drag.param_id, drag.original, new_point);
+        }
+    }
+
+    /// Pixel range of vertical drag mapped to the full `-1..1` bend swing —
+    /// an interior tuning constant (Alt-drag curve bend, P4 Unit B).
+    const SEGMENT_BEND_PX_RANGE: f32 = 80.0;
+
+    /// Live-preview an in-progress Alt-drag curve bend. Re-derives `bend`
+    /// fresh from the vertical delta since grab each frame (never
+    /// incrementally), same discipline as every other drag handler here.
+    /// Dragging UP (screen Y decreasing) bends positive.
+    fn handle_automation_segment_bend_drag(&mut self, pos: Vec2, host: &mut dyn TimelineEditingHost) {
+        let Some(state) = self.automation_segment_bend.as_ref() else {
+            return;
+        };
+        let mut delta_px = state.grab_y - pos.y;
+        if self.modifiers.shift {
+            delta_px *= 0.25; // fine adjustment, mirrors §7's Shift-drag convention
+        }
+        let bend = (delta_px / Self::SEGMENT_BEND_PX_RANGE).clamp(-1.0, 1.0);
+        host.set_automation_segment_bend_preview(&state.target, &state.param_id, state.left_beat, bend);
+        if let Some(state) = self.automation_segment_bend.as_mut() {
+            state.last_bend = bend;
+        }
+    }
+
+    /// Commit a finished curve-bend drag as one undo entry — reuses
+    /// `commit_automation_point_move` directly: beat and value are
+    /// untouched by this gesture, only `shape` differs between old and new.
+    fn commit_automation_segment_bend(&mut self, host: &mut dyn TimelineEditingHost) {
+        let Some(state) = self.automation_segment_bend.take() else {
+            return;
+        };
+        let new_shape = UiSegmentShape::Curved(state.last_bend);
+        if new_shape != state.original_shape {
+            let old = (state.left_beat, state.left_value, state.original_shape);
+            let new = (state.left_beat, state.left_value, new_shape);
+            host.commit_automation_point_move(&state.target, &state.param_id, old, new);
+        }
+    }
+
+    /// Live-preview an in-progress vertical segment drag. Re-derives both
+    /// endpoints' values fresh from the normalized delta since grab each
+    /// frame — the delta is computed once (not per-point), then each
+    /// endpoint clamps independently to its own `0..1` range, matching how a
+    /// multi-clip drag clamps each clip independently at the timeline edge.
+    fn handle_automation_segment_vertical_drag(
+        &mut self,
+        pos: Vec2,
+        host: &mut dyn TimelineEditingHost,
+        viewport: &TimelineViewportPanel,
+    ) {
+        let Some(state) = self.automation_segment_drag.clone() else {
+            return;
+        };
+        let lanes = viewport.automation_lane_screens(&[]);
+        let Some(lane) = lanes
+            .iter()
+            .find(|l| l.target == state.target && l.param_id == state.param_id)
+        else {
+            return;
+        };
+        let norm = (1.0 - (pos.y - lane.strip_rect.y) / lane.strip_rect.height.max(f32::EPSILON))
+            .clamp(0.0, 1.0);
+        let mut delta_norm = norm - state.grab_norm;
+        if self.modifiers.shift {
+            delta_norm *= 0.25;
+        }
+        let range = (lane.param_max - lane.param_min).max(f32::EPSILON);
+        let left_norm =
+            ((state.left_original_value - lane.param_min) / range + delta_norm).clamp(0.0, 1.0);
+        let right_norm =
+            ((state.right_original_value - lane.param_min) / range + delta_norm).clamp(0.0, 1.0);
+        let left_value = lane.param_min + left_norm * range;
+        let right_value = lane.param_min + right_norm * range;
+
+        host.set_automation_segment_drag_preview(
+            &state.target,
+            &state.param_id,
+            state.left_beat,
+            left_value,
+            state.right_beat,
+            right_value,
+        );
+        if let Some(s) = self.automation_segment_drag.as_mut() {
+            s.last_left_value = left_value;
+            s.last_right_value = right_value;
+        }
+    }
+
+    /// Commit a finished vertical segment drag as ONE undo entry covering
+    /// both endpoints (`host.commit_automation_segment_drag` batches them via
+    /// `ContentCommand::ExecuteBatch`/`CompositeCommand`).
+    fn commit_automation_segment_value_drag(&mut self, host: &mut dyn TimelineEditingHost) {
+        let Some(state) = self.automation_segment_drag.take() else {
+            return;
+        };
+        let moved = (state.last_left_value - state.left_original_value).abs() > f32::EPSILON
+            || (state.last_right_value - state.right_original_value).abs() > f32::EPSILON;
+        if moved {
+            host.commit_automation_segment_drag(
+                &state.target,
+                &state.param_id,
+                (state.left_beat, state.left_original_value, state.last_left_value, state.left_shape),
+                (
+                    state.right_beat,
+                    state.right_original_value,
+                    state.last_right_value,
+                    state.right_shape,
+                ),
+            );
+        }
+    }
+
+    /// Live-update the marquee selection every frame: rebuild the rect from
+    /// the press corner to the CURRENT position, then re-select every dot
+    /// inside it fresh (never incrementally — the same discipline as every
+    /// other drag handler, and it's cheap: typical scale is tens of lanes).
+    fn handle_automation_marquee_drag(&mut self, pos: Vec2, ui_state: &mut UIState, viewport: &TimelineViewportPanel) {
+        let Some(marquee) = self.automation_marquee else {
+            return;
+        };
+        let rect = automation_hit_tester::marquee_rect(marquee.start, pos);
+        let lanes = viewport.automation_lane_screens(&[]);
+        let hits = automation_hit_tester::dots_in_rect(rect, &lanes);
+        ui_state.selected_automation_points = hits
+            .into_iter()
+            .map(|(lane_index, dot_index)| {
+                let lane = &lanes[lane_index];
+                let dot = lane.dots[dot_index];
+                UiAutomationPointRef { target: lane.target.clone(), param_id: lane.param_id.clone(), beat: dot.beat }
+            })
+            .collect();
+    }
+
+    /// Live-preview an in-progress marquee GROUP drag. Computes ONE
+    /// normalized delta from the grabbed lane's strip (re-resolved fresh
+    /// each frame), then applies it to every captured point via the
+    /// EXISTING `set_automation_point_preview` (calling it with
+    /// `from_beat == to_beat` so only the value changes) — no new preview
+    /// plumbing needed.
+    fn handle_automation_group_drag(
+        &mut self,
+        pos: Vec2,
+        host: &mut dyn TimelineEditingHost,
+        viewport: &TimelineViewportPanel,
+    ) {
+        let Some((grab_target, grab_param_id, grab_norm)) = self
+            .automation_group_drag
+            .as_ref()
+            .map(|s| (s.grab_target.clone(), s.grab_param_id.clone(), s.grab_norm))
+        else {
+            return;
+        };
+        let lanes = viewport.automation_lane_screens(&[]);
+        let Some(grab_lane) = lanes.iter().find(|l| l.target == grab_target && l.param_id == grab_param_id)
+        else {
+            return;
+        };
+        let norm = (1.0
+            - (pos.y - grab_lane.strip_rect.y) / grab_lane.strip_rect.height.max(f32::EPSILON))
+        .clamp(0.0, 1.0);
+        let delta_norm = norm - grab_norm;
+
+        let Some(state) = self.automation_group_drag.as_mut() else {
+            return;
+        };
+        for point in &mut state.points {
+            let range = (point.param_max - point.param_min).max(f32::EPSILON);
+            let orig_norm = (point.original_value - point.param_min) / range;
+            let new_value = point.param_min + (orig_norm + delta_norm).clamp(0.0, 1.0) * range;
+            host.set_automation_point_preview(&point.target, &point.param_id, point.beat, point.beat, new_value);
+            point.last_value = new_value;
+        }
+    }
+
+    /// Commit a finished marquee group drag as ONE undo entry covering every
+    /// point (`host.commit_automation_group_move` batches them via
+    /// `ContentCommand::ExecuteBatch`/`CompositeCommand`). No-op if nothing
+    /// actually moved.
+    fn commit_automation_group_drag(&mut self, host: &mut dyn TimelineEditingHost) {
+        let Some(state) = self.automation_group_drag.take() else {
+            return;
+        };
+        let moves: Vec<_> = state
+            .points
+            .iter()
+            .filter(|p| (p.last_value - p.original_value).abs() > f32::EPSILON)
+            .map(|p| (p.target.clone(), p.param_id.clone(), p.beat, p.original_value, p.last_value, p.shape))
+            .collect();
+        if !moves.is_empty() {
+            host.commit_automation_group_move(moves);
+        }
+    }
+
     /// Port of Unity InteractionOverlay.OnPointerMove (lines 219-257).
     pub fn on_pointer_move(
         &mut self,
@@ -452,6 +1239,13 @@ impl InteractionOverlay {
         viewport: &TimelineViewportPanel,
     ) {
         self.drag_layer_blocked = false;
+
+        // P4 Unit A: grabbing an existing automation dot starts a point
+        // drag instead of clip/region logic — see `begin_automation_drag`'s
+        // doc for why bare-strip clicks aren't handled here.
+        if self.begin_automation_drag(press_pos, host, ui_state, viewport) {
+            return;
+        }
 
         // Unity line 284: hit-test at PRESS position
         let hit = self.hit_test_at(press_pos, viewport);
@@ -553,6 +1347,24 @@ impl InteractionOverlay {
             DragMode::RegionSelect => {
                 self.update_region_drag(pos, ui_state, viewport, host);
             }
+            DragMode::AutomationPoint => {
+                self.handle_automation_drag(pos, host, viewport);
+            }
+            DragMode::AutomationSegmentBend => {
+                self.handle_automation_segment_bend_drag(pos, host);
+            }
+            DragMode::AutomationSegmentDrag => {
+                self.handle_automation_segment_vertical_drag(pos, host, viewport);
+            }
+            DragMode::AutomationMarquee => {
+                self.handle_automation_marquee_drag(pos, ui_state, viewport);
+            }
+            DragMode::AutomationGroupMove => {
+                self.handle_automation_group_drag(pos, host, viewport);
+            }
+            DragMode::AutomationDraw => {
+                self.write_automation_draw_step(pos, host, viewport);
+            }
             DragMode::None => {}
         }
     }
@@ -570,6 +1382,66 @@ impl InteractionOverlay {
         if self.drag_mode == DragMode::RegionSelect {
             host.invalidate_all_layer_bitmaps();
             self.drag_mode = DragMode::None;
+            return;
+        }
+
+        // P4 Unit A: automation point drag → commit one undo entry (already
+        // applied live by `set_automation_point_preview`, mirroring the clip
+        // move path's own "already applied, just record" shape below — but
+        // automation doesn't need the command-batch/enforce-non-overlap
+        // machinery a clip move does, so it commits directly and returns.
+        if self.drag_mode == DragMode::AutomationPoint {
+            self.commit_automation_drag(host);
+            self.drag_mode = DragMode::None;
+            host.mark_dirty();
+            host.set_cursor(TimelineCursor::Default);
+            return;
+        }
+
+        // P4 Unit B: segment gestures commit the same way — already applied
+        // live, just register the undo entry (single command for a bend,
+        // batched pair for a vertical drag) — and return, same shape as the
+        // automation-point path above.
+        if self.drag_mode == DragMode::AutomationSegmentBend {
+            self.commit_automation_segment_bend(host);
+            self.drag_mode = DragMode::None;
+            host.mark_dirty();
+            host.set_cursor(TimelineCursor::Default);
+            return;
+        }
+        if self.drag_mode == DragMode::AutomationSegmentDrag {
+            self.commit_automation_segment_value_drag(host);
+            self.drag_mode = DragMode::None;
+            host.mark_dirty();
+            host.set_cursor(TimelineCursor::Default);
+            return;
+        }
+
+        // P4 Unit B: marquee selection isn't an edit — just stop tracking
+        // and redraw (the selected set itself stays in `UIState`, already
+        // written live during `on_drag`).
+        if self.drag_mode == DragMode::AutomationMarquee {
+            self.automation_marquee = None;
+            self.drag_mode = DragMode::None;
+            host.invalidate_all_layer_bitmaps();
+            host.set_cursor(TimelineCursor::Default);
+            return;
+        }
+        // P4 Unit B: group move / draw stroke commit the same way as the
+        // single-point/segment gestures above — already applied live, one
+        // undo entry, return.
+        if self.drag_mode == DragMode::AutomationGroupMove {
+            self.commit_automation_group_drag(host);
+            self.drag_mode = DragMode::None;
+            host.mark_dirty();
+            host.set_cursor(TimelineCursor::Default);
+            return;
+        }
+        if self.drag_mode == DragMode::AutomationDraw {
+            self.commit_automation_draw(host);
+            self.drag_mode = DragMode::None;
+            host.mark_dirty();
+            host.set_cursor(TimelineCursor::Default);
             return;
         }
 

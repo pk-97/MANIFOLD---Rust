@@ -1,3 +1,4 @@
+pub mod automation_lane_draw;
 pub mod background_worker;
 pub mod chain_dispatch;
 pub mod clip_content_gpu;

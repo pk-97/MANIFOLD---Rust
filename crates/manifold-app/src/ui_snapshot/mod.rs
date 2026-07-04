@@ -92,7 +92,7 @@ fn render_ui_scene(
 ) {
     let Some(mut data) = fixtures::build(scene) else {
         eprintln!(
-            "ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, scrollshrink, hairlineclips, graph, editor, all)"
+            "ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, scrollshrink, hairlineclips, automation, graph, editor, all)"
         );
         std::process::exit(2);
     };
@@ -121,7 +121,16 @@ fn render_ui_scene(
         ui.layout.timeline_split_ratio = 0.93;
     }
     sync_build(&mut ui, &data, zoom_ppb);
-    render_and_dump(&ui, &data.selection, &dir, scene, "", want_dump, want_thumbs);
+    render_and_dump(
+        &ui,
+        &data.selection,
+        &data.content.automation_latched_params,
+        &dir,
+        scene,
+        "",
+        want_dump,
+        want_thumbs,
+    );
 
     // P0.1: the viewport is the sole scroll owner (D2) — the header panel
     // reads `viewport.scroll_y_px()` live at draw time, so seeding it here is
@@ -148,7 +157,16 @@ fn render_ui_scene(
         let desc = interact::apply(&mut ui, &mut data, &spec);
         println!("ui-snap: interact {desc}");
         sync_build(&mut ui, &data, zoom_ppb);
-        render_and_dump(&ui, &data.selection, &dir, scene, ".after", want_dump, want_thumbs);
+        render_and_dump(
+            &ui,
+            &data.selection,
+            &data.content.automation_latched_params,
+            &dir,
+            scene,
+            ".after",
+            want_dump,
+            want_thumbs,
+        );
     }
 }
 
@@ -245,13 +263,29 @@ fn sync_build(ui: &mut UIRoot, data: &fixtures::SceneData, zoom_ppb: f32) {
     // the selection — the live app calls this whenever the active layer changes.
     // Without it the inspector stays on its default Master view, so the selected
     // layer's chain never appears.
-    sync_inspector_data(ui, &data.project, data.active, &data.selection);
+    sync_inspector_data(
+        ui,
+        &data.project,
+        data.active,
+        &data.selection,
+        &data.content.automation_latched_params,
+    );
     // Zoom so the fixture's clips fit the lane width (set before build so the
     // ruler ticks and the clip rects agree on px/beat).
     ui.viewport.set_zoom(zoom_ppb);
     ui.build();
     let mut tcache = TransportDisplayCache::new();
     push_state(ui, &data.project, &data.content, data.active, &data.selection, false, None, &mut tcache);
+    // Reconcile the `push_state` setters into the tree — mirrors the live
+    // app's per-frame call (`app_render.rs`'s "6. Lightweight update" after its
+    // own `push_state`). Every panel's `set_*` methods are "store only; the
+    // reconcile applies them" (see `TransportPanel`'s doc comment); without
+    // this the harness only ever showed each panel's `::new()` hardcoded
+    // defaults, silently — every existing scene's fixture `ContentState`
+    // happened to already match those defaults (paused, not recording, no BPM
+    // reset/clear pending), so the gap never surfaced until the `automation`
+    // scene (P4a) deliberately diverged (armed + a latch).
+    ui.update();
 }
 
 /// Render to `<scene><suffix>.png`, and (if requested) the tree dump as JSON +
@@ -259,6 +293,7 @@ fn sync_build(ui: &mut UIRoot, data: &fixtures::SceneData, zoom_ppb: f32) {
 fn render_and_dump(
     ui: &UIRoot,
     selection: &manifold_ui::UIState,
+    automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
     dir: &Path,
     scene: &str,
     suffix: &str,
@@ -271,6 +306,7 @@ fn render_and_dump(
     render::render_ui_to_png(
         ui,
         selection,
+        automation_latched,
         tex_w,
         tex_h,
         SCALE,

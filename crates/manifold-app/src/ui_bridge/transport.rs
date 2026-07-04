@@ -119,6 +119,30 @@ pub(super) fn dispatch_transport(
             DispatchResult::handled()
         }
 
+        // ── Automation globals (P4, docs/AUTOMATION_LANES_DESIGN.md §4/§5) ──
+        // Runtime-only latch/arm state, not a project mutation — no undo entry,
+        // same shape as `SessionBackToArrangement`/session quantize.
+        PanelAction::ToggleAutomationArm => {
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::AutomationSetArmed(!content_state.automation_armed),
+            );
+            DispatchResult::handled()
+        }
+        PanelAction::AutomationBackToArrangement => {
+            ContentCommand::send(content_tx, ContentCommand::AutomationBackToArrangement);
+            DispatchResult::handled()
+        }
+        // Pure UI view-state — no project mutation, no runtime playback
+        // state, so no ContentCommand. It DOES change the Y-layout (a visible
+        // lane grows its track), so this must return `structural()`, not
+        // `handled()`, to force `sync_project_data` to re-derive
+        // `automation_lane_count` and the lane list on the next frame.
+        PanelAction::ToggleAutomationMode => {
+            selection.automation_mode_visible = !selection.automation_mode_visible;
+            DispatchResult::structural()
+        }
+
         PanelAction::CycleQuantize => {
             {
                 let old = project.settings.quantize_mode;
