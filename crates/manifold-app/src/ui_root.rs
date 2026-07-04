@@ -2219,6 +2219,11 @@ impl UIRoot {
         // D17 "modal/dropdown enter": a no-op once settled or closed (see
         // `DropdownPanel::update`'s own guard) — cheap to call unconditionally.
         self.dropdown.update(&mut self.tree);
+        // Same D17 enter, mirrored to the other three popups (P2 batch 2 —
+        // `UI_CRAFT_AND_MOTION_PLAN.md` §5 item 4: "universal popup enter").
+        self.ableton_picker.update(&mut self.tree);
+        self.browser_popup.update(&mut self.tree);
+        self.settings_popup.update(&mut self.tree);
     }
 
     /// Resize the Audio Setup level meters from live per-send levels. Cheap
