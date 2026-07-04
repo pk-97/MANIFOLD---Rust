@@ -73,6 +73,23 @@ allowed), merge/switch variants, `checkout -- path` unchanged.
   it mentions the shared-tree guard, and add one line to the
   `agent-execution-playbook` memory hazards pointing at this doc.
 
+## 2b. Pending cleanup (2026-07-04 hygiene pass — do when trigger fires)
+
+Local prune DONE (47 merged branches deleted; main ff'd to trunk tip). Remaining:
+
+1. **Stuck worker repoint** — owner: the Opus orchestration session. Its
+   worker's worktree branched off stale origin/main (March). Worktree is
+   clean: `git reset --hard feat/timeline-ui-redesign` inside it, resume the
+   worker. THEN delete local `feat/timeline-ui-redesign` (kept only for this).
+2. **Remote branch prune** — trigger: any quiet session. Delete origin
+   branches whose tips are ancestors of origin/main
+   (`git branch -r --merged origin/main`, then `git push origin --delete …`).
+   `origin/feat/timeline-ui-redesign` is a stale divergent push (unique
+   content = the deliberately-reverted build-order block, `fe7622ee`) —
+   delete it too once item 1 is done.
+3. **Lane branches** — trigger: lanes A/B (automation, timeline-p0) land.
+   Merge to trunk, ff main, delete lane branches + worktrees.
+
 ## 3. Already in force (no work)
 
 Commit fast — never sit on uncommitted renames/deletions while other sessions
