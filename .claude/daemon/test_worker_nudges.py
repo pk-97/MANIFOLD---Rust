@@ -167,16 +167,17 @@ def test_session_mailbox_unaffected_by_agent_activity():
     with_temp_dirs(run)
 
 
-def test_posttooluse_hook_still_skips_agent_when_flag_absent():
+def test_posttooluse_hook_agent_event_quiet_without_planted_verdict():
     """End-to-end against the REAL repo state (deliberately not sandboxed —
     the hook subprocess imports its own fresh `valve`, reading the real
-    verdicts dir): since nobody creates worker-nudges.enabled, an agent_id
-    -tagged event must still make the real hook print nothing, exactly as
-    before §2b existed."""
+    verdicts dir): an agent_id-tagged event with no verdict planted for that
+    agent's mailbox must make the real hook print nothing. Holds in BOTH flag
+    states: flag absent = agent events skipped; flag present (the live state
+    since Peter enabled worker nudges 2026-07-04, DESIGN §2b) = agent mailbox
+    consulted, found empty, silent. The old ship-dark invariant assertion was
+    removed when enablement became the shipped state."""
     import subprocess
     real_verdicts = os.path.join(DAEMON_DIR, "verdicts")
-    real_flag = os.path.join(real_verdicts, "worker-nudges.enabled")
-    check("ship-dark invariant: the real flag file does not exist", not os.path.exists(real_flag))
     fake_session = "test-session-for-hook-probe"
     # Pre-claim a pidfile with OUR OWN (guaranteed-alive) pid so the hook's
     # ensure_observer() sees an already-running daemon and does not spawn a
@@ -194,7 +195,7 @@ def test_posttooluse_hook_still_skips_agent_when_flag_absent():
         })
         hook_path = DAEMON_DIR.parent / "hooks" / "daemon-posttooluse.py"
         r = subprocess.run([sys.executable, str(hook_path)], input=payload, capture_output=True, text=True)
-        check("hook prints nothing for agent_id + flag absent", r.stdout.strip() == "", r.stdout)
+        check("hook prints nothing for agent_id with empty mailbox", r.stdout.strip() == "", r.stdout)
     finally:
         for suffix in (".pid", ".json", ".consumed", ".log"):
             try:
@@ -209,7 +210,7 @@ def main():
         test_scan_agents_discovers_and_catches_up_when_enabled,
         test_agent_window_closes_and_classifies_independently,
         test_session_mailbox_unaffected_by_agent_activity,
-        test_posttooluse_hook_still_skips_agent_when_flag_absent,
+        test_posttooluse_hook_agent_event_quiet_without_planted_verdict,
     ]
     for t in tests:
         t()
