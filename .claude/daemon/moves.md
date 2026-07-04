@@ -12,6 +12,10 @@ Cooldown classes: `standard` = 20 tool events; `slow` = 40; `once` = once per se
 wrong-medium sharpening; anchor/ungrounded-resolution (specimens: 735b0dc6 +
 the glTF P1c mispriced fork); coaching/price-the-fork (same P1c specimen).
 
+2026-07-04 stopgap pair (Fable, at Peter's direction — "I NEVER want the quick
+fix"): anchor/symptom-suppression (classifier) + mechanical/confessed-stopgap
+(deterministic, valve-selected). Spec for the plumbing: DESIGN.md §2c.
+
 ---
 
 ## coaching/model-first
@@ -286,6 +290,27 @@ the glTF P1c mispriced fork); coaching/price-the-fork (same P1c specimen).
 > clothing. Relaunch the workers as Sonnet, or say in one sentence why this
 > task needs more.
 
+## anchor/symptom-suppression
+- **signature:** A fix was just applied or described whose stated mechanism is
+  stopping the symptom from showing rather than removing what produces it — a
+  guard or early-return added at the failure site, a special case keyed to the
+  specific failing input, a retry or sleep added for a timing problem, an error
+  caught and swallowed or replaced with a fallback, a test/assertion/lint
+  loosened until it passes — and nowhere in the window is the underlying cause
+  named. The tell is a fix described only by its effect on the symptom ("so it
+  doesn't crash", "skips the bad frame", "falls back when that fails") with no
+  sentence saying what produces the failure. Do not flag when the cause is
+  named and the chosen level is argued (a boundary check stated as the
+  function's contract is a fix, not a bandaid), or when the human explicitly
+  asked for a stopgap.
+- **cooldown:** standard
+- **payload:**
+> That fix silences the symptom, and nothing in view says what produces it. The
+> rule in this repo is fix at the root: name the actual cause, then fix at the
+> level that deletes the whole bug class — even if that means redesign. If the
+> guard genuinely is the right contract, say why in one sentence. "It doesn't
+> happen anymore" is not a cause.
+
 ---
 
 ## mechanical/announced-not-started
@@ -302,6 +327,25 @@ the glTF P1c mispriced fork); coaching/price-the-fork (same P1c specimen).
 > Your last message announced work and then stopped. An announcement is not a
 > start. Do the first concrete action of that work now — open the file, run
 > the command — before ending the turn.
+
+## mechanical/confessed-stopgap
+- **signature:** Deterministic, valve-selected — never the classifier: an Edit
+  or Write to a code file ADDS content matching a confession marker — HACK,
+  XXX, workaround, "for now", "temporary"/"temporarily", "quick fix",
+  stopgap, band-aid, FIXME, a TODO deferring the real fix ("proper", "real
+  fix", "later", "revisit"), a new `#[allow(`, a new sleep outside test code —
+  where the marker is absent from the text being replaced (removing a hack
+  never fires). Markdown files and `.claude/` internals are excluded. Marker
+  table + scan mechanics: DESIGN.md §2c, shared regex in `common.py`.
+- **cooldown:** standard
+- **payload:**
+> That edit confesses itself — "for now", HACK, a fresh #[allow] is the word
+> for "not the fix". The rule in this repo is fix at the root: name the cause
+> and fix at the level that deletes the bug class, even if that means redesign
+> — that is the default, not the stretch goal. If a stopgap is genuinely
+> forced, the marker stays and gains two things beside it: the concrete
+> blocker, and where the real fix is tracked. An unjustified "for now" is
+> permanent.
 
 ## escalate/checkpoint
 - **signature:** Selected by the daemon, not the rubric: the same drift anchor has

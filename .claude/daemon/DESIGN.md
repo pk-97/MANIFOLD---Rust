@@ -154,6 +154,56 @@ the smaller models this layer exists to lift, and their documented failure modes
 - Cost sanity: classifier spend scales with agent count (~a few dollars per
   six-worker wave) — acceptable; per-agent cooldowns prevent whisper spam.
 
+## 2c. Stopgap detection (approved 2026-07-04, Peter: "I NEVER want the quick fix" — build with Sonnet)
+
+Goal: the repo's "fix at the root, not the symptom" hard rule, enforced below
+the narrative layer. The constraint that shapes the design: the ledger renders
+edits as `Edit <path>` — the classifier never sees edit CONTENT, so content-level
+hack detection cannot live in the rubric alone. Three tiers, cheapest first:
+
+- **Tier 1 — deterministic confession scan (valve-side, zero model calls).**
+  Agents narrate their hacks — "for now", HACK, workaround, a fresh
+  `#[allow(` — which makes the highest-precision detector a regex, not a model.
+  Build: a shared `STOPGAP_MARKERS` table in `common.py` (category → compiled
+  pattern; categories: hack-word [HACK/XXX/kludge], workaround, for-now
+  [for now/temporar*/quick fix/stopgap/band-aid], deferral [FIXME, TODO within
+  ~40 chars of proper|real fix|later|revisit], lint-suppression [`#[allow(`],
+  race-sleep [thread::sleep / sleep( outside `#[test]`/`tests/` paths]). The
+  PostToolUse valve (which already receives full `tool_input`) scans
+  Edit/Write/MultiEdit calls: a marker counts only when present in the ADDED
+  content and absent from the replaced content (`new_string` hit +
+  `old_string` miss; for Write, the whole body counts as added) — removing a
+  hack never fires. Exclusions: `*.md`, anything under `.claude/`. On hit,
+  fire `mechanical/confessed-stopgap` through the normal mailbox path —
+  standard cooldown, one-whisper invariant, `mechanical/*` stays out of the
+  catalog/verdict schema exactly like `announced-not-started`. Route on
+  `agent_id` like every other delivery: with worker nudges enabled this tier
+  covers SUBAGENT edits too (PostToolUse fires for them with `agent_id` set),
+  which is where bandaids concentrate — the fuse-for-parity/migration-shortcut
+  precedent is a worker failure mode.
+- **Tier 2 — classifier move for the unconfessed suppression.**
+  `anchor/symptom-suppression` (authored in moves.md, in the catalog now, live
+  at next observer revive — `{{SIGNATURES}}` picks it up automatically). It
+  matches from RECENT: the agent describing its fix by symptom-effect ("so it
+  doesn't crash", "falls back when that fails") with no cause named anywhere
+  in the window. Works day one on RECENT alone; tier 3 widens its reach.
+- **Tier 3 — richer windows v3.** Annotate Edit/Write ledger lines with hit
+  categories from the SAME shared regex table — `Edit foo.rs (adds: for-now,
+  lint-suppression)` — so tier 2 can see hack history after it scrolls out of
+  RECENT, and so `verify-claim`-style done-claims get judged against a ledger
+  that shows the fix was a confessed stopgap. `window_version` → 3. Cache
+  note: annotated windows re-classify (content-addressed key changes for
+  exactly those windows — by design, same as the Agent-model enrichment).
+- **Scoring:** both moves start "unscored" under §4b. A plausible mechanical
+  success oracle for confessed-stopgap (marker removed, or blocker text added
+  near it, within the ~10-event window) is sleep-pass-1 design work, not build
+  work — don't guess it in.
+- **Honest residue:** the competent unconfessed shallow fix — a right-looking
+  patch at the wrong level, no markers, no suppression narration — is
+  invisible to a window classifier at any tier. That class stays with
+  `coaching/enumerate-levels`, the CLAUDE.md hard rule at the narrative layer,
+  and code review. This section narrows the funnel; it does not close it.
+
 ## 3. Payload library (`moves.md`)
 
 Two families, one format. **Coaching moves** fire on phase transitions (hypothesis
