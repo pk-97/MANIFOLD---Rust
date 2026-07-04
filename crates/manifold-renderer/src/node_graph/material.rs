@@ -49,6 +49,21 @@ pub enum MaterialKind {
     Cel,
 }
 
+/// Alpha coverage model for the surface (glTF `alphaMode`, minus BLEND).
+/// [`Opaque`](AlphaMode::Opaque): alpha is ignored for coverage — every
+/// rasterised fragment is written. [`Mask`](AlphaMode::Mask): a fragment
+/// whose resolved alpha is below [`Material::alpha_cutoff`] is `discard`ed
+/// (cutout), so foliage cards and decals punch holes instead of rendering
+/// as opaque rectangles. Smooth transparency (glTF BLEND) is intentionally
+/// out of scope — it needs draw-order / OIT design (see MATERIAL M6-D3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AlphaMode {
+    /// Alpha ignored for coverage; all fragments written.
+    Opaque,
+    /// Cutout: fragments with `alpha < alpha_cutoff` are discarded.
+    Mask,
+}
+
 /// Material struct flowing through [`PortType::Material`](crate::node_graph::ports::PortType::Material)
 /// wires. Built once per frame in each material atom's `run()`; passed by
 /// value to every downstream consumer.
@@ -98,6 +113,14 @@ pub struct Material {
     pub band_low: f32,
     /// Highest band value — the "lit side" colour multiplier.
     pub band_high: f32,
+
+    // ---- Alpha coverage (all kinds respect these). ----
+    /// Coverage model. [`AlphaMode::Opaque`] writes every fragment;
+    /// [`AlphaMode::Mask`] discards fragments with resolved alpha below
+    /// [`Self::alpha_cutoff`]. Set post-construction by the material atoms.
+    pub alpha_mode: AlphaMode,
+    /// Cutout threshold in `[0, 1]`, used only when `alpha_mode == Mask`.
+    pub alpha_cutoff: f32,
 }
 
 impl Material {
@@ -119,6 +142,8 @@ impl Material {
             cel_bands: 4,
             band_low: 0.08,
             band_high: 1.0,
+            alpha_mode: AlphaMode::Opaque,
+            alpha_cutoff: 0.5,
         }
     }
 

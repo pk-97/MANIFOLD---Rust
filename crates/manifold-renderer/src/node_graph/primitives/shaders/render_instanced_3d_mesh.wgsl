@@ -26,7 +26,7 @@ struct Instance {
 };
 
 // Superset uniform — must match render_3d_mesh.wgsl's Uniforms layout
-// exactly. 16-byte aligned, 208 bytes (192 + texture_flags).
+// exactly. 16-byte aligned, 224 bytes (192 + texture_flags + alpha_params).
 struct Uniforms {
     view_proj: mat4x4<f32>,
     camera_pos: vec4<f32>,
@@ -37,8 +37,12 @@ struct Uniforms {
     pbr_metallic_roughness: vec4<f32>,
     specular: vec4<f32>,
     cel_params: vec4<f32>,
-    // x: use_normal_map (0/1), y: use_roughness_map (0/1), z/w: reserved.
+    // x: use_normal_map, y: use_roughness_map, z: use_base_color_map,
+    // w: use_metallic_map (each 0/1).
     texture_flags: vec4<f32>,
+    // x: alpha_mode (1.0 = Mask/cutout, 0.0 = Opaque), y: alpha_cutoff,
+    // z/w: reserved.
+    alpha_params: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -51,6 +55,11 @@ struct Uniforms {
 // signed-RGB normal-map convention.
 @group(0) @binding(5) var normal_map: texture_2d<f32>;
 @group(0) @binding(6) var roughness_map: texture_2d<f32>;
+// Surface albedo (rgba) + metallic (red) maps — see render_3d_mesh.wgsl
+// for the linear-texel / cutout-alpha convention. Shared across every
+// instance. Unwired maps bind the 1×1 dummy, gated by texture_flags.zw.
+@group(0) @binding(7) var base_color_map: texture_2d<f32>;
+@group(0) @binding(8) var metallic_map: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) clip_pos: vec4<f32>,
@@ -75,6 +84,25 @@ fn resolve_roughness(uv: vec2<f32>) -> f32 {
         r = u.pbr_metallic_roughness.y;
     }
     return max(r, 0.01);
+}
+
+// Resolve surface albedo (rgb) + opacity (a) — base_color_map at mesh UV
+// modulates the material base_color when wired (texture_flags.z).
+fn resolve_albedo(uv: vec2<f32>) -> vec4<f32> {
+    if u.texture_flags.z > 0.5 {
+        let t = textureSampleLevel(base_color_map, envmap_sampler, uv, 0.0);
+        return vec4<f32>(u.base_color.rgb * t.rgb, u.base_color.a * t.a);
+    }
+    return u.base_color;
+}
+
+// Resolve metallic: metallic_map.r at mesh UV when wired (texture_flags.w),
+// else the material's scalar metallic.
+fn resolve_metallic(uv: vec2<f32>) -> f32 {
+    if u.texture_flags.w > 0.5 {
+        return textureSampleLevel(metallic_map, envmap_sampler, uv, 0.0).r;
+    }
+    return u.pbr_metallic_roughness.x;
 }
 
 // Build a 3×3 rotation matrix from XYZ Euler angles (XYZ order).
@@ -130,32 +158,50 @@ fn vs_main(
 
 @fragment
 fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
-    let rgb = u.base_color.rgb + u.emission.rgb;
-    return vec4<f32>(rgb, u.base_color.a);
+    let albedo = resolve_albedo(in.uv);
+    if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
+        discard;
+    }
+    let rgb = albedo.rgb + u.emission.rgb;
+    return vec4<f32>(rgb, albedo.a);
 }
 
 @fragment
-fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
-    let N = resolve_normal(in.uv, in.world_normal);
+fn fs_phong(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+    let albedo = resolve_albedo(in.uv);
+    if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
+        discard;
+    }
+    var N = resolve_normal(in.uv, in.world_normal);
+    if !front_facing {
+        N = -N;
+    }
     let L = normalize(u.light_dir.xyz);
     let V = normalize(u.camera_pos.xyz - in.world_pos);
     let H = normalize(L + V);
     let n_dot_l = max(dot(N, L), 0.0);
     let n_dot_h = max(dot(N, H), 0.0);
     let ambient = u.light_color.a;
-    let diffuse = u.base_color.rgb * (1.0 - ambient) * n_dot_l + u.base_color.rgb * ambient;
+    let diffuse = albedo.rgb * (1.0 - ambient) * n_dot_l + albedo.rgb * ambient;
     let spec = u.specular.rgb * pow(n_dot_h, max(u.specular.w, 1.0)) * n_dot_l;
     let lit = (diffuse + spec) * u.light_color.rgb * u.light_dir.w;
-    return vec4<f32>(lit + u.emission.rgb, u.base_color.a);
+    return vec4<f32>(lit + u.emission.rgb, albedo.a);
 }
 
 @fragment
-fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
-    let N = resolve_normal(in.uv, in.world_normal);
+fn fs_pbr(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+    let albedo = resolve_albedo(in.uv);
+    if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
+        discard;
+    }
+    var N = resolve_normal(in.uv, in.world_normal);
+    if !front_facing {
+        N = -N;
+    }
     let L = normalize(u.light_dir.xyz);
     let V = normalize(u.camera_pos.xyz - in.world_pos);
     let H = normalize(L + V);
-    let metallic = clamp(u.pbr_metallic_roughness.x, 0.0, 1.0);
+    let metallic = clamp(resolve_metallic(in.uv), 0.0, 1.0);
     let roughness = resolve_roughness(in.uv);
 
     let n_dot_l = max(dot(N, L), 0.0);
@@ -163,7 +209,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let n_dot_h = max(dot(N, H), 0.0);
     let v_dot_h = max(dot(V, H), 0.001);
 
-    let F0 = mix(vec3<f32>(0.04), u.base_color.rgb, metallic);
+    let F0 = mix(vec3<f32>(0.04), albedo.rgb, metallic);
     let a = roughness * roughness;
     let a2 = a * a;
     let denom_d = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
@@ -178,7 +224,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let F = F0 + (1.0 - F0) * pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
     let specular = (D * G * F) / (4.0 * n_dot_v * n_dot_l + 0.0001);
     let kd = (1.0 - F) * (1.0 - metallic);
-    let diffuse = kd * u.base_color.rgb / PI;
+    let diffuse = kd * albedo.rgb / PI;
 
     let direct = (diffuse + specular) * u.light_color.rgb * n_dot_l * u.light_dir.w;
 
@@ -190,14 +236,21 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let ibl_strength = 1.0 - roughness * 0.7;
     let ibl = F * ibl_sample * ibl_strength;
 
-    let ambient = u.base_color.rgb * u.light_color.a;
+    let ambient = albedo.rgb * u.light_color.a;
     let rgb = direct + ibl + ambient + u.emission.rgb;
-    return vec4<f32>(rgb, u.base_color.a);
+    return vec4<f32>(rgb, albedo.a);
 }
 
 @fragment
-fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
-    let N = resolve_normal(in.uv, in.world_normal);
+fn fs_cel(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+    let albedo = resolve_albedo(in.uv);
+    if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
+        discard;
+    }
+    var N = resolve_normal(in.uv, in.world_normal);
+    if !front_facing {
+        N = -N;
+    }
     let L = normalize(u.light_dir.xyz);
     let n_dot_l = max(dot(N, L), 0.0);
     let bands = max(u.cel_params.x, 2.0);
@@ -205,6 +258,6 @@ fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
     let band_high = u.cel_params.z;
     let snapped = floor(n_dot_l * bands) / (bands - 1.0);
     let level = mix(band_low, band_high, clamp(snapped, 0.0, 1.0));
-    let lit = u.base_color.rgb * level * u.light_color.rgb * u.light_dir.w;
-    return vec4<f32>(lit + u.emission.rgb, u.base_color.a);
+    let lit = albedo.rgb * level * u.light_color.rgb * u.light_dir.w;
+    return vec4<f32>(lit + u.emission.rgb, albedo.a);
 }

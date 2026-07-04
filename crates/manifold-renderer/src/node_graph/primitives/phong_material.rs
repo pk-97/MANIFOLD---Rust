@@ -12,9 +12,11 @@
 //! you need lit surfaces but don't need full PBR's IBL + microfacet cost.
 
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::material::{Material, MaterialKind};
+use crate::node_graph::material::{AlphaMode, Material, MaterialKind};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+
+const ALPHA_MODES: &[&str] = &["Opaque", "Mask"];
 
 crate::primitive! {
     name: PhongMaterial,
@@ -34,6 +36,7 @@ crate::primitive! {
         emission_g: ScalarF32 optional,
         emission_b: ScalarF32 optional,
         emission_intensity: ScalarF32 optional,
+        alpha_cutoff: ScalarF32 optional,
     },
     outputs: {
         out: Material,
@@ -143,6 +146,22 @@ crate::primitive! {
             range: Some((0.0, 10.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: "alpha_mode",
+            label: "Alpha Mode",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0), // Opaque
+            range: Some((0.0, (ALPHA_MODES.len() - 1) as f32)),
+            enum_values: ALPHA_MODES,
+        },
+        ParamDef {
+            name: "alpha_cutoff",
+            label: "Alpha Cutoff",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.5),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
     ],
     composition_notes: "Wire `out` into a 3D mesh renderer's `material` input AND wire a `node.light` into the renderer's `light` input. `specular_power` is the Phong exponent — 1 is very soft (almost diffuse), 32 is the default highlight, 256 is pinpoint. `ambient` mixes via `lit = lambert * (1 - ambient) + ambient`; bump to 0.3+ for half-lit surfaces or zero for hard-lit shadow contrast. Optional renderer-side `normal_map` texture perturbs the per-fragment normal.",
     examples: [],
@@ -173,7 +192,14 @@ impl Primitive for PhongMaterial {
         let emission_b = ctx.scalar_or_param("emission_b", 0.0);
         let emission_intensity = ctx.scalar_or_param("emission_intensity", 0.0);
 
-        let material = Material::phong(
+        let alpha_mode = match ctx.params.get("alpha_mode") {
+            Some(ParamValue::Enum(v)) if *v == 1 => AlphaMode::Mask,
+            Some(ParamValue::Float(f)) if f.round() as i32 == 1 => AlphaMode::Mask,
+            _ => AlphaMode::Opaque,
+        };
+        let alpha_cutoff = ctx.scalar_or_param("alpha_cutoff", 0.5);
+
+        let mut material = Material::phong(
             [color_r, color_g, color_b, color_a],
             ambient,
             [spec_r, spec_g, spec_b],
@@ -181,6 +207,8 @@ impl Primitive for PhongMaterial {
             [emission_r, emission_g, emission_b],
             emission_intensity,
         );
+        material.alpha_mode = alpha_mode;
+        material.alpha_cutoff = alpha_cutoff;
         ctx.outputs.set_material("out", material);
     }
 }

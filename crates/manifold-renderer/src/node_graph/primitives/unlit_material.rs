@@ -13,9 +13,11 @@
 //! shape (Blender's "Background" / TD's "Constant" MAT).
 
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::material::{Material, MaterialKind};
+use crate::node_graph::material::{AlphaMode, Material, MaterialKind};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+
+const ALPHA_MODES: &[&str] = &["Opaque", "Mask"];
 
 crate::primitive! {
     name: UnlitMaterial,
@@ -30,6 +32,7 @@ crate::primitive! {
         emission_g: ScalarF32 optional,
         emission_b: ScalarF32 optional,
         emission_intensity: ScalarF32 optional,
+        alpha_cutoff: ScalarF32 optional,
     },
     outputs: {
         out: Material,
@@ -99,6 +102,22 @@ crate::primitive! {
             range: Some((0.0, 10.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: "alpha_mode",
+            label: "Alpha Mode",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0), // Opaque
+            range: Some((0.0, (ALPHA_MODES.len() - 1) as f32)),
+            enum_values: ALPHA_MODES,
+        },
+        ParamDef {
+            name: "alpha_cutoff",
+            label: "Alpha Cutoff",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.5),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
     ],
     composition_notes: "Wire `out` into a 3D mesh renderer's `material` input. The renderer's `light` input stays unwired when this material is in use (Unlit is the only kind where light is truly optional). `color_a < 1.0` is informational — opaque-only rendering for v1; transparency lands as a follow-up. To get the legacy 'flat lit' look from the pre-Material-system render_3d_mesh, use `node.phong_material` with `ambient = 1.0` instead.",
     examples: [],
@@ -124,11 +143,20 @@ impl Primitive for UnlitMaterial {
         let emission_b = ctx.scalar_or_param("emission_b", 0.0);
         let emission_intensity = ctx.scalar_or_param("emission_intensity", 0.0);
 
-        let material = Material::unlit(
+        let alpha_mode = match ctx.params.get("alpha_mode") {
+            Some(ParamValue::Enum(v)) if *v == 1 => AlphaMode::Mask,
+            Some(ParamValue::Float(f)) if f.round() as i32 == 1 => AlphaMode::Mask,
+            _ => AlphaMode::Opaque,
+        };
+        let alpha_cutoff = ctx.scalar_or_param("alpha_cutoff", 0.5);
+
+        let mut material = Material::unlit(
             [color_r, color_g, color_b, color_a],
             [emission_r, emission_g, emission_b],
             emission_intensity,
         );
+        material.alpha_mode = alpha_mode;
+        material.alpha_cutoff = alpha_cutoff;
         ctx.outputs.set_material("out", material);
     }
 }

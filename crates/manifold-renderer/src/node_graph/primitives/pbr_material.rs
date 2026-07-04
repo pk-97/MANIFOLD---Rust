@@ -18,9 +18,11 @@
 //! CPU-only — no GPU dispatch.
 
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::material::{Material, MaterialKind};
+use crate::node_graph::material::{AlphaMode, Material, MaterialKind};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+
+const ALPHA_MODES: &[&str] = &["Opaque", "Mask"];
 
 crate::primitive! {
     name: PbrMaterial,
@@ -38,6 +40,7 @@ crate::primitive! {
         emission_g: ScalarF32 optional,
         emission_b: ScalarF32 optional,
         emission_intensity: ScalarF32 optional,
+        alpha_cutoff: ScalarF32 optional,
     },
     outputs: {
         out: Material,
@@ -131,6 +134,22 @@ crate::primitive! {
             range: Some((0.0, 10.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: "alpha_mode",
+            label: "Alpha Mode",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0), // Opaque
+            range: Some((0.0, (ALPHA_MODES.len() - 1) as f32)),
+            enum_values: ALPHA_MODES,
+        },
+        ParamDef {
+            name: "alpha_cutoff",
+            label: "Alpha Cutoff",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.5),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
     ],
     composition_notes: "Wire `out` into a 3D mesh renderer's `material` input. The renderer ALSO requires a wired `light` AND an `envmap` Texture2D (typically `node.bake_environment`). `metallic = 0` = dielectric (plastic, wood, fabric), `metallic = 1` = pure metal (chrome, gold). `roughness` is clamped to a 0.01 floor at construction (zero is a numerical landmine in GGX). Optional textures: `normal_map`, `base_color_map`, `roughness_map`, `metallic_map`. The PBR shader writes in linear space; the renderer's tone-map runs internally so no downstream `node.reinhard_tone_map` is needed.",
     examples: [],
@@ -159,7 +178,14 @@ impl Primitive for PbrMaterial {
         let emission_b = ctx.scalar_or_param("emission_b", 0.0);
         let emission_intensity = ctx.scalar_or_param("emission_intensity", 0.0);
 
-        let material = Material::pbr(
+        let alpha_mode = match ctx.params.get("alpha_mode") {
+            Some(ParamValue::Enum(v)) if *v == 1 => AlphaMode::Mask,
+            Some(ParamValue::Float(f)) if f.round() as i32 == 1 => AlphaMode::Mask,
+            _ => AlphaMode::Opaque,
+        };
+        let alpha_cutoff = ctx.scalar_or_param("alpha_cutoff", 0.5);
+
+        let mut material = Material::pbr(
             [color_r, color_g, color_b, color_a],
             ambient,
             metallic,
@@ -167,6 +193,8 @@ impl Primitive for PbrMaterial {
             [emission_r, emission_g, emission_b],
             emission_intensity,
         );
+        material.alpha_mode = alpha_mode;
+        material.alpha_cutoff = alpha_cutoff;
         ctx.outputs.set_material("out", material);
     }
 }

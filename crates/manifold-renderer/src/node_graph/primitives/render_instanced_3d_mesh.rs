@@ -31,10 +31,15 @@ struct InstancedMaterialUniforms {
     pbr_metallic_roughness: [f32; 4],
     specular: [f32; 4],
     cel_params: [f32; 4],
-    /// `(use_normal_map, use_roughness_map, 0, 0)` presence flags
-    /// for the per-pixel surface texture sampling. 1.0 = sample at
-    /// per-fragment mesh UV; 0.0 = use the material's scalar value.
+    /// `(use_normal_map, use_roughness_map, use_base_color_map,
+    /// use_metallic_map)` presence flags for the per-pixel surface
+    /// texture sampling. 1.0 = sample at per-fragment mesh UV; 0.0 = use
+    /// the material's scalar value.
     texture_flags: [f32; 4],
+    /// `(alpha_mode, alpha_cutoff, 0, 0)`. `alpha_mode` is `1.0` for
+    /// [`crate::node_graph::material::AlphaMode::Mask`] (cutout via
+    /// `discard`), `0.0` for Opaque. Own vec4 to keep 16-byte alignment.
+    alpha_params: [f32; 4],
 }
 
 const CONDITIONAL_RULES: &[ConditionalRequirement] = &[
@@ -55,7 +60,7 @@ const CONDITIONAL_RULES: &[ConditionalRequirement] = &[
 crate::primitive! {
     name: RenderInstanced3DMesh,
     type_id: "node.render_copies",
-    purpose: "Bundled instanced 3D mesh renderer. Draws N copies of an Array<MeshVertex> base mesh, each transformed by an Array<InstanceTransform> entry. Takes a Camera + Material + optional Light + optional envmap + optional surface textures (normal_map / roughness_map), picks the matching per-MaterialKind fragment shader (Unlit / Phong / PBR / Cel), and emits a shaded `color` Texture2D. Surface textures sample at the base mesh's per-vertex UV (the same channel as render_3d_mesh) — the texture is shared across every instance and stays locked to the geometry as the camera moves. Pair with node.arrange_copies to drive NestedCubes / DigitalPlants graphs. Per-kind requirements mirror render_3d_mesh: Unlit needs no light; Phong / Cel need light; PBR needs light + envmap.",
+    purpose: "Bundled instanced 3D mesh renderer. Draws N copies of an Array<MeshVertex> base mesh, each transformed by an Array<InstanceTransform> entry. Takes a Camera + Material + optional Light + optional envmap + optional surface textures (normal_map / roughness_map), picks the matching per-MaterialKind fragment shader (Unlit / Phong / PBR / Cel), and emits a shaded `color` Texture2D. Surface textures sample at the base mesh's per-vertex UV (the same channel as render_3d_mesh) — the texture is shared across every instance and stays locked to the geometry as the camera moves. base_color_map (rgba) modulates base colour and supplies the cutout-alpha source; metallic_map.r replaces the material's scalar metallic when wired. Pair with node.arrange_copies to drive NestedCubes / DigitalPlants graphs. Per-kind requirements mirror render_3d_mesh: Unlit needs no light; Phong / Cel need light; PBR needs light + envmap.",
     inputs: {
         vertices: Array(MeshVertex) required,
         instances: Array(InstanceTransform) required,
@@ -65,6 +70,8 @@ crate::primitive! {
         envmap: Texture2D optional,
         normal_map: Texture2D optional,
         roughness_map: Texture2D optional,
+        base_color_map: Texture2D optional,
+        metallic_map: Texture2D optional,
     },
     outputs: {
         color: Texture2D,
@@ -173,6 +180,7 @@ impl RenderInstanced3DMesh {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_uniforms(
     view_proj: [[f32; 4]; 4],
     cam: &Camera,
@@ -181,6 +189,8 @@ fn build_uniforms(
     material: &Material,
     use_normal_map: bool,
     use_roughness_map: bool,
+    use_base_color_map: bool,
+    use_metallic_map: bool,
 ) -> InstancedMaterialUniforms {
     InstancedMaterialUniforms {
         view_proj,
@@ -205,6 +215,15 @@ fn build_uniforms(
         texture_flags: [
             if use_normal_map { 1.0 } else { 0.0 },
             if use_roughness_map { 1.0 } else { 0.0 },
+            if use_base_color_map { 1.0 } else { 0.0 },
+            if use_metallic_map { 1.0 } else { 0.0 },
+        ],
+        alpha_params: [
+            match material.alpha_mode {
+                crate::node_graph::material::AlphaMode::Mask => 1.0,
+                crate::node_graph::material::AlphaMode::Opaque => 0.0,
+            },
+            material.alpha_cutoff,
             0.0,
             0.0,
         ],
@@ -244,6 +263,8 @@ impl Primitive for RenderInstanced3DMesh {
         let envmap_wired = ctx.inputs.texture_2d("envmap");
         let normal_map_wired = ctx.inputs.texture_2d("normal_map");
         let roughness_map_wired = ctx.inputs.texture_2d("roughness_map");
+        let base_color_map_wired = ctx.inputs.texture_2d("base_color_map");
+        let metallic_map_wired = ctx.inputs.texture_2d("metallic_map");
 
         if needs_light && light_wired.is_none() {
             ctx.error(format!(
@@ -316,6 +337,8 @@ impl Primitive for RenderInstanced3DMesh {
             &material,
             normal_map_wired.is_some(),
             roughness_map_wired.is_some(),
+            base_color_map_wired.is_some(),
+            metallic_map_wired.is_some(),
         );
 
         let gpu = ctx.gpu_encoder();
@@ -343,6 +366,8 @@ impl Primitive for RenderInstanced3DMesh {
         let envmap_texture = envmap_wired.unwrap_or(dummy_envmap);
         let normal_map_texture = normal_map_wired.unwrap_or(dummy_envmap);
         let roughness_map_texture = roughness_map_wired.unwrap_or(dummy_envmap);
+        let base_color_map_texture = base_color_map_wired.unwrap_or(dummy_envmap);
+        let metallic_map_texture = metallic_map_wired.unwrap_or(dummy_envmap);
 
         gpu.native_enc.draw_instanced_depth(
             &pipeline,
@@ -379,6 +404,14 @@ impl Primitive for RenderInstanced3DMesh {
                 GpuBinding::Texture {
                     binding: 6,
                     texture: roughness_map_texture,
+                },
+                GpuBinding::Texture {
+                    binding: 7,
+                    texture: base_color_map_texture,
+                },
+                GpuBinding::Texture {
+                    binding: 8,
+                    texture: metallic_map_texture,
                 },
             ],
             vertex_count,
@@ -435,6 +468,12 @@ mod tests {
         let roughness_map = by_name("roughness_map");
         assert!(!roughness_map.required);
         assert_eq!(roughness_map.ty, PortType::Texture2D);
+        let base_color_map = by_name("base_color_map");
+        assert!(!base_color_map.required);
+        assert_eq!(base_color_map.ty, PortType::Texture2D);
+        let metallic_map = by_name("metallic_map");
+        assert!(!metallic_map.required);
+        assert_eq!(metallic_map.ty, PortType::Texture2D);
         assert_eq!(RenderInstanced3DMesh::OUTPUTS.len(), 1);
         assert_eq!(RenderInstanced3DMesh::OUTPUTS[0].name, "color");
     }

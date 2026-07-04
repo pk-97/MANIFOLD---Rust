@@ -49,7 +49,7 @@ struct Vertex {
 };
 
 // Superset uniform — fields inert for kinds that don't read them.
-// 16-byte aligned. Total: 64 + 16*9 = 208 bytes.
+// 16-byte aligned. Total: 64 + 16*10 = 224 bytes.
 struct Uniforms {
     view_proj: mat4x4<f32>,
     camera_pos: vec4<f32>,
@@ -71,11 +71,15 @@ struct Uniforms {
     specular: vec4<f32>,
     // x: cel_bands (count, as f32), y: band_low, z: band_high, w: reserved.
     cel_params: vec4<f32>,
-    // x: use_normal_map (0/1), y: use_roughness_map (0/1), z/w: reserved.
+    // x: use_normal_map, y: use_roughness_map, z: use_base_color_map,
+    // w: use_metallic_map (each 0/1).
     // 1.0 = sample the corresponding texture at in.uv; 0.0 = fall back
     // to the scalar value baked into the material (or the geometry's
     // own per-vertex normal for the normal channel).
     texture_flags: vec4<f32>,
+    // x: alpha_mode (1.0 = Mask/cutout, 0.0 = Opaque), y: alpha_cutoff,
+    // z/w: reserved.
+    alpha_params: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -98,6 +102,15 @@ struct Uniforms {
 // when wired.
 @group(0) @binding(4) var normal_map: texture_2d<f32>;
 @group(0) @binding(5) var roughness_map: texture_2d<f32>;
+// Surface albedo (rgba) + metallic (red) maps, sampled at mesh UV.
+// `base_color_map.rgb` modulates the material base colour and its `.a`
+// is the cutout-alpha source; `metallic_map.r` replaces the scalar
+// metallic. Optional — unwired maps bind the 1×1 dummy and `texture_flags`
+// (.z / .w) gates the sampling. Texels are already linear (the image
+// decode path uploads sRGB-typed textures, so the sampler hardware
+// converts to linear on read); no shader-side colour conversion.
+@group(0) @binding(6) var base_color_map: texture_2d<f32>;
+@group(0) @binding(7) var metallic_map: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) clip_pos: vec4<f32>,
@@ -143,40 +156,79 @@ fn resolve_roughness(uv: vec2<f32>) -> f32 {
     return max(r, 0.01);
 }
 
+// Resolve surface albedo (rgb) + opacity (a): base_color_map at mesh UV
+// modulates the material's base_color when wired (texture_flags.z), else
+// the material's base_color passes through. Texels are already linear —
+// see the binding comment.
+fn resolve_albedo(uv: vec2<f32>) -> vec4<f32> {
+    if u.texture_flags.z > 0.5 {
+        let t = textureSampleLevel(base_color_map, envmap_sampler, uv, 0.0);
+        return vec4<f32>(u.base_color.rgb * t.rgb, u.base_color.a * t.a);
+    }
+    return u.base_color;
+}
+
+// Resolve metallic: metallic_map.r at mesh UV when wired (texture_flags.w),
+// else the material's scalar metallic.
+fn resolve_metallic(uv: vec2<f32>) -> f32 {
+    if u.texture_flags.w > 0.5 {
+        return textureSampleLevel(metallic_map, envmap_sampler, uv, 0.0).r;
+    }
+    return u.pbr_metallic_roughness.x;
+}
+
 // ===== Material kind fragment entry points =====
 
 // Unlit — flat colour passthrough plus emission. No lighting math.
 @fragment
 fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
-    let rgb = u.base_color.rgb + u.emission.rgb;
-    return vec4<f32>(rgb, u.base_color.a);
+    let albedo = resolve_albedo(in.uv);
+    if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
+        discard;
+    }
+    let rgb = albedo.rgb + u.emission.rgb;
+    return vec4<f32>(rgb, albedo.a);
 }
 
 // Phong — Lambert diffuse + Blinn-Phong specular.
 @fragment
-fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
-    let N = resolve_normal(in.uv, in.world_normal);
+fn fs_phong(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+    let albedo = resolve_albedo(in.uv);
+    if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
+        discard;
+    }
+    var N = resolve_normal(in.uv, in.world_normal);
+    if !front_facing {
+        N = -N;
+    }
     let L = normalize(u.light_dir.xyz);
     let V = normalize(u.camera_pos.xyz - in.world_pos);
     let H = normalize(L + V);
     let n_dot_l = max(dot(N, L), 0.0);
     let n_dot_h = max(dot(N, H), 0.0);
     let ambient = u.light_color.a;
-    let diffuse = u.base_color.rgb * (1.0 - ambient) * n_dot_l + u.base_color.rgb * ambient;
+    let diffuse = albedo.rgb * (1.0 - ambient) * n_dot_l + albedo.rgb * ambient;
     let spec = u.specular.rgb * pow(n_dot_h, max(u.specular.w, 1.0)) * n_dot_l;
     let lit = (diffuse + spec) * u.light_color.rgb * u.light_dir.w;
-    return vec4<f32>(lit + u.emission.rgb, u.base_color.a);
+    return vec4<f32>(lit + u.emission.rgb, albedo.a);
 }
 
 // PBR — Cook-Torrance microfacet specular + Lambert diffuse + IBL
 // reflection from envmap. F0 blends 0.04 dielectric ↔ base_color metal.
 @fragment
-fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
-    let N = resolve_normal(in.uv, in.world_normal);
+fn fs_pbr(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+    let albedo = resolve_albedo(in.uv);
+    if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
+        discard;
+    }
+    var N = resolve_normal(in.uv, in.world_normal);
+    if !front_facing {
+        N = -N;
+    }
     let L = normalize(u.light_dir.xyz);
     let V = normalize(u.camera_pos.xyz - in.world_pos);
     let H = normalize(L + V);
-    let metallic = clamp(u.pbr_metallic_roughness.x, 0.0, 1.0);
+    let metallic = clamp(resolve_metallic(in.uv), 0.0, 1.0);
     let roughness = resolve_roughness(in.uv);
 
     let n_dot_l = max(dot(N, L), 0.0);
@@ -185,7 +237,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let v_dot_h = max(dot(V, H), 0.001);
 
     // F0 — dielectric 0.04 lerped to base_color for metals.
-    let F0 = mix(vec3<f32>(0.04), u.base_color.rgb, metallic);
+    let F0 = mix(vec3<f32>(0.04), albedo.rgb, metallic);
 
     // GGX D term.
     let a = roughness * roughness;
@@ -207,7 +259,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
 
     // Lambert diffuse (dielectric only — metals have no diffuse term).
     let kd = (1.0 - F) * (1.0 - metallic);
-    let diffuse = kd * u.base_color.rgb / PI;
+    let diffuse = kd * albedo.rgb / PI;
 
     let direct = (diffuse + specular) * u.light_color.rgb * n_dot_l * u.light_dir.w;
 
@@ -221,16 +273,23 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let ibl_strength = 1.0 - roughness * 0.7;
     let ibl = F * ibl_sample * ibl_strength;
 
-    let ambient = u.base_color.rgb * u.light_color.a;
+    let ambient = albedo.rgb * u.light_color.a;
     let rgb = direct + ibl + ambient + u.emission.rgb;
-    return vec4<f32>(rgb, u.base_color.a);
+    return vec4<f32>(rgb, albedo.a);
 }
 
 // Cel — Lambert N·L quantized into cel_bands discrete steps between
 // band_low (shadow) and band_high (lit).
 @fragment
-fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
-    let N = resolve_normal(in.uv, in.world_normal);
+fn fs_cel(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+    let albedo = resolve_albedo(in.uv);
+    if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
+        discard;
+    }
+    var N = resolve_normal(in.uv, in.world_normal);
+    if !front_facing {
+        N = -N;
+    }
     let L = normalize(u.light_dir.xyz);
     let n_dot_l = max(dot(N, L), 0.0);
     let bands = max(u.cel_params.x, 2.0);
@@ -239,8 +298,8 @@ fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
     // Snap n_dot_l to one of `bands` discrete levels in [0, 1].
     let snapped = floor(n_dot_l * bands) / (bands - 1.0);
     let level = mix(band_low, band_high, clamp(snapped, 0.0, 1.0));
-    let lit = u.base_color.rgb * level * u.light_color.rgb * u.light_dir.w;
-    return vec4<f32>(lit + u.emission.rgb, u.base_color.a);
+    let lit = albedo.rgb * level * u.light_color.rgb * u.light_dir.w;
+    return vec4<f32>(lit + u.emission.rgb, albedo.a);
 }
 
 // ===== G-buffer outputs (preserved from pre-Material design) =====
