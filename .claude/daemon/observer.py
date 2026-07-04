@@ -16,6 +16,7 @@ file may propagate an exception into the coding session; the whole run
 loop is wrapped and any escape is logged to <session>.log, not raised.
 """
 import argparse
+import collections
 import json
 import os
 import signal
@@ -26,14 +27,44 @@ import traceback
 DAEMON_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, DAEMON_DIR)
 import common  # noqa: E402
+import valve  # noqa: E402
 
 VERDICTS_DIR = os.path.join(DAEMON_DIR, "verdicts")
 MOVES_PATH = os.path.join(DAEMON_DIR, "moves.md")
 RUBRIC_PATH = os.path.join(DAEMON_DIR, "rubric.md")
+MUTES_DIR = os.path.join(VERDICTS_DIR, "mutes")
 
 POLL_SECONDS = 3
 IDLE_TIMEOUT_S = 600  # DESIGN.md §1: idle > 10 min ends the daemon
 ESCALATE_AFTER = 2  # "flagged again after two injections" -> the 3rd fire escalates
+
+# DESIGN.md §4b: outcome scoring. Only these three families have a defined
+# mechanical signal; every other move_id (coaching moves, escalate/checkpoint)
+# scores "unscored" the moment its delivery is observed — never guessed.
+SCORE_WINDOW_EVENTS = 10
+VERIFY_CLAIM_SIGNALS = (
+    "cargo test", "cargo run", "cargo build", "cargo bench", "cargo clippy",
+    "pytest", "npm test", "npm run", "go test", "swift test",
+    "render", "screenshot", ".png", "headless",
+)
+MUTE_FIRE_THRESHOLD = 5  # >=5 scored fires, 0 scored successes -> auto-mute
+MUTE_DURATION_S = 7 * 86400
+
+
+def _move_family(move_id):
+    if move_id == "anchor/verify-claim":
+        return "verify-claim"
+    if move_id == "anchor/thrash":
+        return "thrash"
+    if move_id == "anchor/circling":
+        return "circling"
+    return None
+
+
+def _tool_class(tool_label_str):
+    """Strip the `[type@model]` suffix `common.tool_label` adds for Agent/Task
+    calls, leaving the bare tool class ("Agent", "Bash", "Read", ...)."""
+    return tool_label_str.split("[", 1)[0]
 
 
 def _log(logf, msg):
@@ -71,6 +102,12 @@ class Daemon:
         self.next_seq = 1  # re-seeded in _run from the persistent consumed marker
         self.phase = "orienting"
         self.owns_pidfile = False
+
+        # DESIGN.md §4b: outcome scoring + auto-mute.
+        self.fire_records = {}  # seq -> move_id, for every flag *this instance* raised
+        self.pending_scores = {}  # seq -> {move_id, start_event_count, baseline_tool_class}
+        self.recent_events = collections.deque(maxlen=64)  # (event_count, tool_class, status)
+        self.last_consumed_seq = 0  # re-seeded in _run; tracks delivery via the consumed marker
 
     # ---- lifecycle ----
 
@@ -133,6 +170,11 @@ class Daemon:
         prior = self._read_verdict_file() or {}
         prior_seq = (prior.get("flag") or {}).get("seq") or 0
         self.next_seq = max(self._read_consumed(), prior_seq) + 1
+        # Seed from disk, not 0: fires from a PRIOR instance of this observer
+        # (before an idle-exit revive) are already consumed and must not be
+        # mistaken for new deliveries — fire_records starts empty each
+        # instance anyway, so this is a perf guard, not a correctness one.
+        self.last_consumed_seq = self._read_consumed()
         _log(logf, f"observer started, pid={os.getpid()}, next_seq={self.next_seq}, transcript={self.transcript_path}")
 
         offset = self._catchup(logf)
@@ -152,6 +194,8 @@ class Daemon:
             elif time.time() - last_activity > IDLE_TIMEOUT_S:
                 _log(logf, "idle timeout, exiting")
                 break
+            self._check_deliveries(logf)
+            self._score_pending(logf)
             time.sleep(POLL_SECONDS)
 
     # ---- transcript reading ----
@@ -212,9 +256,32 @@ class Daemon:
                 closed = self.state.feed_assistant_content(content, ts, model=d.get("message", {}).get("model"))
         else:
             if content is not None and not (isinstance(content, list) and not content):
+                # Peek tool_result -> (name, input) BEFORE feed_user_content
+                # pops them from state.pending, so the outcome-scoring ledger
+                # (§4b) can see what ran without duplicating WindowState's
+                # own bookkeeping.
+                count_before = self.state.total_tool_event_count
+                peeked = self._peek_tool_events(content)
                 closed, _human = self.state.feed_user_content(content, ts)
+                for idx, (name, input_, status) in enumerate(peeked):
+                    label = common.tool_label(name, input_, self.state.session_model)
+                    target = common.tool_target(input_)
+                    self.recent_events.append((count_before + idx + 1, _tool_class(label), status, target))
         if closed and classify:
             self._handle_window(closed, logf)
+
+    def _peek_tool_events(self, content):
+        """Read-only pass over tool_result blocks -> [(name, input, status)],
+        in the same order common.WindowState.feed_user_content will consume
+        them. Must run BEFORE that call, which pops state.pending."""
+        events = []
+        if not isinstance(content, list):
+            return events
+        for c in content:
+            if isinstance(c, dict) and c.get("type") == "tool_result":
+                name, input_ = self.state.pending.get(c.get("tool_use_id"), ("?", {}))
+                events.append((name, input_, common.tool_result_status(c)))
+        return events
 
     # ---- classification + verdict mailbox ----
 
@@ -261,6 +328,9 @@ class Daemon:
             return 0
 
     def _resolve_fire(self, event_count, move_id, verdict, logf):
+        if self._is_muted(move_id):
+            _log(logf, f"suppressed {move_id} — auto-muted (DESIGN.md §4b)")
+            return None
         cd_class = self.moves.get(move_id, {}).get("cooldown", "standard")
         if cd_class == "once":
             if self.fire_count.get(move_id, 0) >= 1:
@@ -291,12 +361,156 @@ class Daemon:
 
         seq = self.next_seq
         self.next_seq += 1
+        self.fire_records[seq] = effective_id
         return {
             "move_id": effective_id,
             "evidence": verdict.get("evidence"),
             "confidence": verdict.get("confidence"),
             "seq": seq,
         }
+
+    # ---- outcome scoring + auto-mute (DESIGN.md §4b) ----
+
+    def _check_deliveries(self, logf):
+        """Poll the consumed-seq marker (written by the valve hooks in a
+        different process) for fires this instance raised. A newly-consumed
+        seq means that flag was just delivered to the model — start its
+        scoring window from the ledger position right now."""
+        consumed = self._read_consumed()
+        if consumed <= self.last_consumed_seq:
+            return
+        for seq in range(self.last_consumed_seq + 1, consumed + 1):
+            move_id = self.fire_records.get(seq)
+            if not move_id:
+                continue  # delivered before this instance existed, or unknown
+            family = _move_family(move_id)
+            if family is None:
+                self._append_scored(seq, move_id, None, "unscored", logf)
+                continue
+            self.pending_scores[seq] = {
+                "move_id": move_id,
+                "family": family,
+                "start_event_count": self.state.total_tool_event_count,
+                "baseline_tool_class": self.recent_events[-1][1] if self.recent_events else None,
+            }
+        self.last_consumed_seq = consumed
+
+    def _score_pending(self, logf):
+        if not self.pending_scores:
+            return
+        for seq, info in list(self.pending_scores.items()):
+            window = [e for e in self.recent_events if e[0] > info["start_event_count"]]
+            success = self._family_succeeded(info["family"], info["baseline_tool_class"], window)
+            if success:
+                self._append_scored(seq, info["move_id"], info["family"], "success", logf)
+                del self.pending_scores[seq]
+            elif len(window) >= SCORE_WINDOW_EVENTS:
+                self._append_scored(seq, info["move_id"], info["family"], "failure", logf)
+                del self.pending_scores[seq]
+            # else: not enough events yet — leave pending, check again next poll
+
+    @staticmethod
+    def _family_succeeded(family, baseline_tool_class, window):
+        window = window[:SCORE_WINDOW_EVENTS]
+        if family == "verify-claim":
+            return any(
+                any(sig in f"{tool_class} {target}".lower() for sig in VERIFY_CLAIM_SIGNALS)
+                for _ec, tool_class, _status, target in window
+            )
+        if family == "thrash":
+            return any(status == "ok" for _ec, _tool_class, status, _target in window)
+        if family == "circling":
+            return any(tool_class != baseline_tool_class for _ec, tool_class, _status, _target in window)
+        return False
+
+    def _append_scored(self, seq, move_id, family, outcome, logf):
+        valve.append_telemetry(
+            {
+                "ts": time.time(),
+                "session_id": self.session_id,
+                "event": "scored",
+                "seq": seq,
+                "move_id": move_id,
+                "family": family,
+                "outcome": outcome,
+            }
+        )
+        _log(logf, f"scored seq={seq} move={move_id} outcome={outcome}")
+        if outcome in ("success", "failure"):
+            self._maybe_auto_mute(move_id, logf)
+
+    # ---- auto-mute ----
+
+    @staticmethod
+    def _mute_path(move_id):
+        return os.path.join(MUTES_DIR, move_id.replace("/", "__") + ".json")
+
+    def _is_muted(self, move_id):
+        path = self._mute_path(move_id)
+        try:
+            with open(path, encoding="utf-8") as f:
+                mute = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return False
+        if mute.get("unmute_at", 0) <= time.time():
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            return False
+        return True
+
+    @staticmethod
+    def _scored_stats(move_id):
+        """Scored fires + successes for `move_id`, read from the shared
+        telemetry.jsonl (mute state must survive an observer restart —
+        DESIGN.md §4b — so this reads durable state, not in-process counters,
+        and reflects every session's fires, not just this one's)."""
+        scored_fires = 0
+        successes = 0
+        try:
+            with open(valve.TELEMETRY_PATH, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if rec.get("event") != "scored" or rec.get("move_id") != move_id:
+                        continue
+                    outcome = rec.get("outcome")
+                    if outcome not in ("success", "failure"):
+                        continue
+                    scored_fires += 1
+                    if outcome == "success":
+                        successes += 1
+        except OSError:
+            pass
+        return scored_fires, successes
+
+    def _maybe_auto_mute(self, move_id, logf):
+        if self._is_muted(move_id):
+            return
+        scored_fires, successes = self._scored_stats(move_id)
+        if scored_fires < MUTE_FIRE_THRESHOLD or successes > 0:
+            return
+        os.makedirs(MUTES_DIR, exist_ok=True)
+        now = time.time()
+        mute = {
+            "move_id": move_id,
+            "muted_at": now,
+            "unmute_at": now + MUTE_DURATION_S,
+            "scored_fires": scored_fires,
+            "successes": successes,
+        }
+        try:
+            tmp = f"{self._mute_path(move_id)}.tmp.{os.getpid()}"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(mute, f)
+            os.replace(tmp, self._mute_path(move_id))
+        except OSError:
+            return
+        valve.append_telemetry({"ts": now, "session_id": self.session_id, "event": "auto_mute", **mute})
+        _log(logf, f"auto-muted {move_id}: {scored_fires} scored fires, 0 successes -> 7 days")
 
 
 def main():
