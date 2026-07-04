@@ -2801,6 +2801,14 @@ impl Application {
             self.needs_rebuild = true;
         }
 
+        // P2 "panel-split snap-back" (D15): while a double-click-reset tween
+        // on either main split is in flight, force a rebuild each frame so
+        // every panel re-lays-out from the eased ratio/width — same poll
+        // shape as `drawer_anim_active` just above.
+        if self.ws.ui_root.layout.is_split_reset_animating() {
+            self.needs_rebuild = true;
+        }
+
         // 6·audio. Live per-send level meters in the Audio Setup modal — in-place
         // node resize from the latest content-state levels, no rebuild.
         if self.ws.ui_root.audio_setup_panel.is_open() {

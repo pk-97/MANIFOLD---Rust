@@ -470,6 +470,15 @@ pub struct Application {
     // From Unity PanelResizeHandle.cs — drag to resize video vs timeline proportion.
     pub(crate) split_dragging: bool,
     pub(crate) split_was_hovered: bool,
+    /// P2 "panel-split snap-back" (D15): double-click-to-default timers for
+    /// the two draggable splits, mirroring `output_last_click`'s pattern
+    /// below — both handles are checked (and their drags started) BEFORE
+    /// the press ever reaches the generic `UIEvent`/`Gesture::DoubleClick`
+    /// pipeline (see `primary_mouse_input`), so a plain timestamp check here
+    /// is the same shape as the output window's raw double-click, not a
+    /// new mechanism.
+    pub(crate) split_handle_last_click: Option<std::time::Instant>,
+    pub(crate) inspector_handle_last_click: Option<std::time::Instant>,
 
     // Output window double-click fullscreen toggle.
     // Double-click fullscreen toggle for the output window.
@@ -696,6 +705,8 @@ impl Application {
             cursor_manager: CursorManager::new(),
             split_dragging: false,
             split_was_hovered: false,
+            split_handle_last_click: None,
+            inspector_handle_last_click: None,
             output_last_click: None,
             output_saved_frame: None,
             current_project_path: None,

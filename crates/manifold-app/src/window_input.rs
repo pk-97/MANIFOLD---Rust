@@ -75,6 +75,18 @@ impl Application {
         Vec2::new(position.x as f32 / scale as f32, position.y as f32 / scale as f32)
     }
 
+    /// Whether `last_click` (a handle's own timestamp, e.g.
+    /// `split_handle_last_click`) is recent enough to make THIS press a
+    /// double-click. Same threshold and shape as the output window's
+    /// `output_last_click` check — the one double-click primitive every raw
+    /// (pre-`UIEvent`-pipeline) click target in this file uses.
+    pub(crate) fn is_double_click(&self, last_click: Option<std::time::Instant>) -> bool {
+        const DOUBLE_CLICK_MS: u128 = 300;
+        last_click
+            .map(|t| std::time::Instant::now().duration_since(t).as_millis() < DOUBLE_CLICK_MS)
+            .unwrap_or(false)
+    }
+
     /// Push the cursor-manager's pending shape to `window_id` if it changed.
     /// The one place the `TimelineCursor → winit::CursorIcon` mapping lives;
     /// both the primary timeline cursor track and the editor's divider-hover
@@ -264,13 +276,37 @@ impl Application {
                                 .layout
                                 .is_near_split_handle(self.cursor_pos)
                             {
-                                // Begin video/timeline split drag.
-                                // From Unity PanelResizeHandle.OnPointerDown.
-                                self.split_dragging = true;
-                                self.ws.ui_root.set_split_handle_drag();
+                                // P2 "panel-split snap-back" (D15): a double-
+                                // click resets the split to its default
+                                // instead of starting a drag — checked before
+                                // the drag-start below, same
+                                // timestamp-comparison shape as
+                                // `output_last_click`'s double-click (this
+                                // press never reaches the generic
+                                // `Gesture::DoubleClick` pipeline, it's
+                                // intercepted here exactly like the single-
+                                // click drag-start already was).
+                                if self.is_double_click(self.split_handle_last_click) {
+                                    self.split_handle_last_click = None;
+                                    self.ws.ui_root.layout.reset_timeline_split();
+                                    self.needs_rebuild = true;
+                                } else {
+                                    self.split_handle_last_click = Some(std::time::Instant::now());
+                                    // Begin video/timeline split drag.
+                                    // From Unity PanelResizeHandle.OnPointerDown.
+                                    self.split_dragging = true;
+                                    self.ws.ui_root.set_split_handle_drag();
+                                }
                             } else if self.ws.ui_root.is_near_inspector_edge(self.cursor_pos) {
-                                self.ws.ui_root.begin_inspector_resize(self.cursor_pos.x);
-                                self.ws.ui_root.set_inspector_handle_drag();
+                                if self.is_double_click(self.inspector_handle_last_click) {
+                                    self.inspector_handle_last_click = None;
+                                    self.ws.ui_root.layout.reset_inspector_width();
+                                    self.needs_rebuild = true;
+                                } else {
+                                    self.inspector_handle_last_click = Some(std::time::Instant::now());
+                                    self.ws.ui_root.begin_inspector_resize(self.cursor_pos.x);
+                                    self.ws.ui_root.set_inspector_handle_drag();
+                                }
                             } else {
                                 self.ws.ui_root.pointer_event(
                                     self.cursor_pos,
