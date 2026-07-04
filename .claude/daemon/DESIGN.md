@@ -205,7 +205,9 @@ Auto-tuning is split by risk:
    injecting one generic reminder every N tool events with no classifier; score
    both arms with the same §4b telemetry. Pre-committed: if the control
    matches, the classifier is decoration and the thesis reduces to "inject
-   more often."
+   more often." Third arm (added 2026-07-04): the daemon's timing with the
+   note replaced by a content-free marker — separates interruption from
+   content (any injection perturbs; this measures the interruption floor).
 5. **Retrieval note (not scheduled):** at ~100x incident corpus (multi-repo,
    multi-user), the named-move library stops being the right compression — an
    embedding space over historical episodes replaces id-selection. Below that
