@@ -1,6 +1,7 @@
-use super::{Panel, PanelAction};
+use super::PanelAction;
 use crate::chrome::{ChromeHost, Pad, Sizing, View, components};
 use crate::color::{self, darken, lighten};
+use crate::coordinate_mapper::CoordinateMapper;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
 use crate::node::*;
@@ -37,6 +38,11 @@ const LBL_W: f32 = 52.0;
 /// `.rform{gap:9px}` airy rhythm. The old 2px read cramped now that the expanded
 /// track is 200px. Used for the mix→routing gap too.
 const ROUTING_ROW_GAP: f32 = 9.0;
+/// P0.5 collapsed-card generator label: a fixed-width dimmed zone carved out
+/// of the Name rect's right edge, so the row's total width never grows — the
+/// generator name ellipsizes inside this budget instead
+/// (`docs/TIMELINE_LAYOUT_P0_SPEC.md` P0.5).
+const GEN_LABEL_COLLAPSED_W: f32 = 80.0;
 const ACCENT_W: f32 = color::GROUP_ACCENT_BAR_WIDTH;
 /// Width of the left-edge selection accent bar. The selected layer is marked by
 /// this bright bar (DAW convention) plus a small brighten of its own colour —
@@ -265,10 +271,6 @@ pub struct LayerInfo {
     /// Name of the modulation send this audio layer feeds, if any. `None` shows
     /// "No send".
     pub audio_send_name: Option<String>,
-    /// Y offset within the layer controls panel (panel-local).
-    pub y_offset: f32,
-    /// Height of this layer row.
-    pub height: f32,
     pub is_selected: bool,
     /// Layer color (auto-assigned or user-set).
     pub color: Color32,
@@ -298,6 +300,14 @@ enum LayerControl {
     Chevron,
     Name,
     DragHandle,
+    /// The generator's type name (P0.5, `docs/TIMELINE_LAYOUT_P0_SPEC.md`):
+    /// display-only, never a picker. Expanded, it occupies the same row/height
+    /// budget `PathLabel`+`Folder` would use for a video layer — one line
+    /// under the name, not an extra row. Collapsed, it's a fixed-width dimmed
+    /// zone carved out of the Name rect's right edge, ellipsized, never
+    /// widening the row. Set only when `LayerInfo.generator_type.is_some()` —
+    /// absent for video/audio/group layers.
+    GenType,
     Mute,
     Solo,
     Led,
@@ -323,7 +333,7 @@ enum LayerControl {
     Analysis,
 }
 
-const N_CONTROLS: usize = 29;
+const N_CONTROLS: usize = 30;
 
 impl LayerControl {
     /// All controls in declaration (build / z) order.
@@ -336,6 +346,7 @@ impl LayerControl {
         LayerControl::Chevron,
         LayerControl::Name,
         LayerControl::DragHandle,
+        LayerControl::GenType,
         LayerControl::Mute,
         LayerControl::Solo,
         LayerControl::Led,
@@ -419,6 +430,10 @@ fn compute_layer_row(
     is_child: bool,
     is_last_child: bool,
     is_group_expanded: bool,
+    // P0.5: `LayerInfo.generator_type.is_some()`, decided by the caller (this
+    // fn stays content-free — geometry only, per the file's existing
+    // discipline of passing structural bools rather than the layer itself).
+    has_gen_label: bool,
 ) -> LayerRowData {
     use LayerControl as C;
     let mut d = LayerRowData::default();
@@ -472,8 +487,23 @@ fn compute_layer_row(
     // starts right after the chevron and reclaims the badge's slot.
     let name_left = pad + chevron_w + if chevron_w > 0.0 { TOP_GAP } else { 0.0 };
     let handle_x = w - pad - HANDLE_W - 8.0;
-    let name_w = (handle_x - name_left - TOP_GAP).max(20.0);
-    d.set(C::Name, Rect::new(name_left, y, name_w, NAME_H));
+    // P0.5 collapsed generator label: carve a fixed-width dimmed zone out of
+    // the Name rect's right edge (before DragHandle) instead of adding a row —
+    // the row's total width is unchanged, Name just gives up some of its own
+    // budget. Expanded rows are unaffected (Name keeps its full width; the
+    // generator name gets its own line in the routing-form slot below).
+    if is_collapsed && has_gen_label {
+        let label_x = handle_x - TOP_GAP - GEN_LABEL_COLLAPSED_W;
+        let name_w = (label_x - TOP_GAP - name_left).max(20.0);
+        d.set(C::Name, Rect::new(name_left, y, name_w, NAME_H));
+        d.set(
+            C::GenType,
+            Rect::new(label_x, y, GEN_LABEL_COLLAPSED_W, NAME_H),
+        );
+    } else {
+        let name_w = (handle_x - name_left - TOP_GAP).max(20.0);
+        d.set(C::Name, Rect::new(name_left, y, name_w, NAME_H));
+    }
     d.set(C::DragHandle, Rect::new(handle_x, y, HANDLE_W, BTN_H));
 
     y += ROW_STEP;
@@ -491,7 +521,7 @@ fn compute_layer_row(
     btn_x += MS_BTN_W + MSL_GAP;
 
     if is_audio {
-        return compute_audio_row(d, y_offset, height, w, card_x, pad, btn_x, y);
+        return compute_audio_row(d, y_offset, height, w, card_x, pad, btn_x, y, is_collapsed);
     }
 
     d.set(C::Led, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
@@ -544,6 +574,13 @@ fn compute_layer_row(
             d.set(C::PathLabel, Rect::new(pad, y, LBL_W, BTN_H));
             d.set(C::Folder, Rect::new(val_x, y, val_w, BTN_H));
             y += BTN_H + ROUTING_ROW_GAP;
+        } else if has_gen_label {
+            // P0.5: the generator name occupies the exact row/height budget
+            // FOLDER would use for a video layer — one line under the name,
+            // not an extra row. Full-width (no separate label column): the
+            // brief asks for "the generator name", not a label+value pair.
+            d.set(C::GenType, Rect::new(pad, y, (right_edge - pad).max(20.0), BTN_H));
+            y += BTN_H + ROUTING_ROW_GAP;
         }
         // MIDI | note input + trigger-mode toggle.
         d.set(C::MidiLabel, Rect::new(pad, y, LBL_W, BTN_H));
@@ -571,8 +608,15 @@ fn compute_layer_row(
 }
 
 /// Audio-layer controls: Mute / Solo are already placed by `compute_layer_row`;
-/// this lays out the Gain row and the Send row beneath them, then the
-/// separator. Audio cards never collapse their detail controls.
+/// this places Analysis on the same button row, then branches on collapse
+/// state (`docs/TIMELINE_LAYOUT_P0_SPEC.md` D4):
+/// - Collapsed: the same collapsed chrome every other layer type gets — name
+///   row + M|S|A row + separator, no Gain/Send. Audio's never-collapse
+///   exception is gone; the mapper's state-only `TrackHeight::Collapsed` now
+///   actually bounds this card's content.
+/// - Expanded: three rows total. Gain takes the slot video cards give Blend
+///   — it joins the M|S|A button row instead of stacking below it — and Send
+///   is the third (and last) row.
 fn compute_audio_row(
     mut d: LayerRowData,
     y_offset: f32,
@@ -582,26 +626,41 @@ fn compute_audio_row(
     pad: f32,
     btn_x: f32,
     y_buttons: f32,
+    is_collapsed: bool,
 ) -> LayerRowData {
     use LayerControl as C;
+    let card_w = (w - card_x).max(1.0);
     // Analysis-only toggle on the button row after Mute/Solo (M | S | A): silent to
     // master, still feeding the send. See `docs/LAYER_CONTROLS_DESIGN.md` §5.3.
     d.set(C::Analysis, Rect::new(btn_x, y_buttons, MS_BTN_W, BTN_H));
-    let mut y = y_buttons + BTN_H + 2.0;
+
+    if is_collapsed {
+        d.set(
+            C::Separator,
+            Rect::new(card_x, y_offset + height - SEP_H, card_w, SEP_H),
+        );
+        return d;
+    }
+
+    // Gain: dB slider filling the rest of the button row (Blend's slot for
+    // video), after Mute | Solo | Analysis.
     let right_edge = w - pad - RIGHT_GUTTER;
+    let gain_x = btn_x + MS_BTN_W + 6.0;
+    d.set(
+        C::Gain,
+        Rect::new(gain_x, y_buttons, (right_edge - gain_x).max(20.0), BTN_H),
+    );
 
-    // Gain: dB slider spanning the row (label is drawn inside the slider widget).
-    d.set(C::Gain, Rect::new(pad, y, (right_edge - pad).max(20.0), BTN_H));
-    y += ROW_STEP;
+    // Send: modulation-send dropdown, the third (and last) row.
+    let send_y = y_buttons + BTN_H;
+    d.set(
+        C::Send,
+        Rect::new(pad, send_y, (right_edge - pad).max(20.0), BTN_H),
+    );
 
-    // Send: modulation-send dropdown spanning the row.
-    d.set(C::Send, Rect::new(pad, y, (right_edge - pad).max(20.0), BTN_H));
-    y += BTN_H + 2.0;
-
-    let _ = y;
     d.set(
         C::Separator,
-        Rect::new(card_x, y_offset + height - SEP_H, (w - card_x).max(1.0), SEP_H),
+        Rect::new(card_x, y_offset + height - SEP_H, card_w, SEP_H),
     );
     d
 }
@@ -747,8 +806,11 @@ pub struct LayerHeaderPanel {
     panel_origin: Vec2,
     panel_width: f32,
 
-    // Scroll container for clipping layer rows to the visible area.
-    // Scroll offset is set externally via set_scroll_y() (synced with viewport).
+    // Scroll container used ONLY for the clip-region node (`begin()` /
+    // `clip_node_id()`). It does NOT own the scroll offset — the viewport
+    // does (D2, `docs/TIMELINE_LAYOUT_P0_SPEC.md`); `build()`/
+    // `try_update_vertical_scroll()` take the viewport's `scroll_y_px` as a
+    // parameter instead of storing a second copy here.
     scroll: ScrollContainer,
 
     // Per-row gain slider drag state (audio layers). Reuses the shared
@@ -794,11 +856,6 @@ impl LayerHeaderPanel {
             cache_first_node: usize::MAX,
             cache_node_count: 0,
         }
-    }
-
-    /// Set vertical scroll offset (synchronized with viewport).
-    pub fn set_scroll_y(&mut self, y: f32) {
-        self.scroll.set_scroll_offset(y);
     }
 
     /// Set the layer data snapshot. Must be called before build().
@@ -1211,7 +1268,15 @@ impl LayerHeaderPanel {
     }
 
     /// Call during an active drag with the current pointer position (screen space).
-    pub fn handle_drag(&mut self, tree: &mut UITree, screen_pos: Vec2) -> Vec<PanelAction> {
+    /// `mapper` is the same `CoordinateMapper` the viewport draws lanes from — the
+    /// drag target must land on the same row the lanes show, so it's queried live
+    /// here rather than read from a copy (see `docs/TIMELINE_LAYOUT_P0_SPEC.md` D1).
+    pub fn handle_drag(
+        &mut self,
+        tree: &mut UITree,
+        screen_pos: Vec2,
+        mapper: &CoordinateMapper,
+    ) -> Vec<PanelAction> {
         if self.drag_source < 0 {
             return Vec::new();
         }
@@ -1221,11 +1286,13 @@ impl LayerHeaderPanel {
 
         // Find target layer based on Y position
         let mut target = -1i32;
-        for (i, layer) in self.layers.iter().enumerate() {
-            if layer.height <= 0.0 {
+        for i in 0..self.layers.len() {
+            let height = mapper.get_layer_height(i);
+            if height <= 0.0 {
                 continue;
             }
-            if local_y >= layer.y_offset && local_y < layer.y_offset + layer.height {
+            let y_offset = mapper.get_layer_y_offset(i);
+            if local_y >= y_offset && local_y < y_offset + height {
                 target = i as i32;
                 break;
             }
@@ -1241,7 +1308,7 @@ impl LayerHeaderPanel {
 
         if target != self.drag_target {
             self.drag_target = target;
-            self.update_insert_indicator(tree);
+            self.update_insert_indicator(tree, mapper);
             return vec![PanelAction::LayerDragMoved(
                 self.drag_source as usize,
                 target as usize,
@@ -1284,19 +1351,16 @@ impl LayerHeaderPanel {
 
     // ── Drag visual helpers ─────────────────────────────────────────
 
-    fn update_insert_indicator(&self, tree: &mut UITree) {
+    fn update_insert_indicator(&self, tree: &mut UITree, mapper: &CoordinateMapper) {
         let Some(indicator_id) = self.insert_indicator_id else {
             return;
         };
 
+        let idx = self.drag_target as usize;
         let y = if self.drag_target <= self.drag_source {
-            self.layers
-                .get(self.drag_target as usize)
-                .map_or(0.0, |l| l.y_offset)
+            mapper.get_layer_y_offset(idx)
         } else {
-            self.layers
-                .get(self.drag_target as usize)
-                .map_or(0.0, |l| l.y_offset + l.height)
+            mapper.get_layer_y_offset(idx) + mapper.get_layer_height(idx)
         };
 
         let screen_y = self.panel_origin.y + y - INSERT_LINE_H * 0.5;
@@ -1348,6 +1412,28 @@ impl LayerHeaderPanel {
         // Contrast text color for readability on the layer's background.
         let text_clr = color::contrast_text_color(layer.color);
         let mut ids = LayerRowIds::default();
+
+        // Per-row content clip (subregion-scissor-invariant, D4): bounds every
+        // control in this row to the row's own vertical extent, full panel
+        // width — not just the card rect — so group gutter visuals
+        // (AccentBar/Connector at x=0, outside `card_x` for a child layer)
+        // stay visible while a future content overflow is truncated inside
+        // its own row instead of bleeding into the neighbour above/below.
+        // Nested clip regions intersect (verified: `ui_renderer.rs` push/pop
+        // clip, `tree.rs` hit-test clip-ancestor walk), so this composes
+        // safely with the panel-wide scroll clip already at `clip_parent`.
+        let bg_rect = row.rect(C::Background);
+        let full_row_width = bg_rect.x + bg_rect.width;
+        let row_clip_rect = s(Rect::new(0.0, bg_rect.y, full_row_width, bg_rect.height));
+        let row_clip = tree.add_node(
+            clip_parent,
+            row_clip_rect,
+            UINodeType::ClipRegion,
+            UIStyle::default(),
+            None,
+            UIFlags::VISIBLE | UIFlags::CLIPS_CHILDREN,
+        );
+        let clip_parent = Some(row_clip);
 
         // One build arm per control kind, shared by every layer type. Walk the
         // descriptors in declaration (z) order; absent controls are skipped.
@@ -1479,6 +1565,47 @@ impl LayerHeaderPanel {
                         tree.add_panel(Some(handle), bar_x, bar_y, bar_w, bar_h, bar_style);
                     }
                     handle
+                }
+                // P0.5 (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): display-only generator
+                // name, never a picker. Two mutually-exclusive placements share
+                // this one control (compute_layer_row never sets both in the
+                // same row): collapsed → a dimmed, ellipsized label to the right
+                // of Name; expanded → a full-contrast line in the same row/height
+                // slot a video layer's FOLDER row would use.
+                C::GenType => {
+                    let gen_text = layer.generator_type.as_deref().unwrap_or("");
+                    if layer.is_collapsed {
+                        let truncated =
+                            crate::draw::elide_to_width(gen_text, SMALL_FONT as f32, r.width);
+                        tree.add_label(
+                            clip_parent,
+                            r.x,
+                            r.y,
+                            r.width,
+                            r.height,
+                            &truncated,
+                            UIStyle {
+                                // Dimmed — ~55% of the contrast text colour, same
+                                // recede-into-the-header treatment as DragHandle's
+                                // bars, so it reads as secondary info next to the
+                                // bright layer name.
+                                text_color: color::with_alpha(text_clr, 140),
+                                font_size: SMALL_FONT,
+                                text_align: TextAlign::Left,
+                                ..UIStyle::default()
+                            },
+                        )
+                    } else {
+                        tree.add_label(
+                            clip_parent,
+                            r.x,
+                            r.y,
+                            r.width,
+                            r.height,
+                            gen_text,
+                            routing_label_style(text_clr),
+                        )
+                    }
                 }
                 C::Mute => tree.add_button(
                     clip_parent,
@@ -1843,7 +1970,12 @@ impl LayerHeaderPanel {
     /// Try to update layer row Y positions in-place for vertical scroll.
     /// Computes the Y delta from the new scroll offset and shifts all node
     /// positions. Returns `true` if successful, `false` if full rebuild needed.
-    pub fn try_update_vertical_scroll(&mut self, tree: &mut UITree, layout: &ScreenLayout) -> bool {
+    pub fn try_update_vertical_scroll(
+        &mut self,
+        tree: &mut UITree,
+        layout: &ScreenLayout,
+        scroll_y_px: f32,
+    ) -> bool {
         // Guard: must have been built
         if self.rows.is_empty() || self.rows.len() != self.layers.len() {
             return false;
@@ -1851,7 +1983,7 @@ impl LayerHeaderPanel {
 
         let lc = layout.layer_controls();
         let header_spacer = layout.track_header_height();
-        let new_origin_y = lc.y + header_spacer - self.scroll.scroll_offset();
+        let new_origin_y = lc.y + header_spacer - scroll_y_px;
         let delta_y = new_origin_y - self.panel_origin.y;
 
         // Nothing changed
@@ -1884,8 +2016,31 @@ impl Default for LayerHeaderPanel {
     }
 }
 
-impl Panel for LayerHeaderPanel {
-    fn build(&mut self, tree: &mut UITree, layout: &ScreenLayout) {
+// LayerHeaderPanel deliberately does NOT implement the shared `Panel` trait
+// (`super::Panel`, `panels/mod.rs`): `build()` here needs a `&CoordinateMapper`
+// and the shared scroll offset, which `Panel::build`'s fixed
+// `(&mut self, tree, layout)` signature can't carry. `Panel` is never used via
+// `dyn Panel` or a generic bound anywhere in the codebase (verified
+// 2026-07-04), so this type-local divergence has zero effect on any other
+// panel or call site. `node_range()` below reproduces the trait's default
+// method — the one piece of `Panel` this type's callers still rely on
+// (`ui_root.rs`'s panel-cache-info sweep).
+impl LayerHeaderPanel {
+    /// Build all nodes for this panel into the tree.
+    ///
+    /// `mapper` is the same `CoordinateMapper` the viewport builds lanes
+    /// from — Y offsets and heights are queried from it at draw time instead
+    /// of being copied into `LayerInfo`, so headers and lanes cannot disagree
+    /// (`docs/TIMELINE_LAYOUT_P0_SPEC.md` D1). `scroll_y_px` is the viewport's
+    /// scroll position, the sole owner (D2) — the header no longer keeps its
+    /// own copy.
+    pub fn build(
+        &mut self,
+        tree: &mut UITree,
+        layout: &ScreenLayout,
+        mapper: &CoordinateMapper,
+        scroll_y_px: f32,
+    ) {
         self.cache_first_node = tree.count();
 
         let lc = layout.layer_controls();
@@ -1894,7 +2049,7 @@ impl Panel for LayerHeaderPanel {
         // is the single source for this offset — the viewport reads the same value, so
         // the two cannot diverge.
         let header_spacer = layout.track_header_height();
-        self.panel_origin = Vec2::new(lc.x, lc.y + header_spacer - self.scroll.scroll_offset());
+        self.panel_origin = Vec2::new(lc.x, lc.y + header_spacer - scroll_y_px);
         self.panel_width = lc.width;
 
         // ── Top chrome (full-area background + recording controls) on the host.
@@ -1935,9 +2090,11 @@ impl Panel for LayerHeaderPanel {
 
         for i in 0..layer_count {
             let layer = &layers_snapshot[i];
-            if layer.height <= 0.0 {
+            let height = mapper.get_layer_height(i);
+            if height <= 0.0 {
                 continue;
             }
+            let y_offset = mapper.get_layer_y_offset(i);
 
             // Build ALL rows (including off-screen) for update-in-place.
             // The CLIPS_CHILDREN clip region handles visual clipping, and
@@ -1955,8 +2112,8 @@ impl Panel for LayerHeaderPanel {
             };
 
             let row = compute_layer_row(
-                layer.y_offset,
-                layer.height,
+                y_offset,
+                height,
                 lc.width,
                 layer.is_collapsed,
                 layer.is_group,
@@ -1965,6 +2122,7 @@ impl Panel for LayerHeaderPanel {
                 is_child,
                 is_last_child,
                 layer.is_group && !layer.is_collapsed,
+                layer.generator_type.is_some(),
             );
 
             self.build_layer_row(tree, i, layer, row, self.panel_origin, clip_parent);
@@ -1977,16 +2135,6 @@ impl Panel for LayerHeaderPanel {
 
         // Swap layers back
         self.layers = layers_snapshot;
-
-        // Tell ScrollContainer the total content height so set_scroll_offset
-        // clamps correctly. The viewport drives the offset, but ScrollContainer
-        // acts as a safety net — clamping to known content bounds.
-        let content_h = self
-            .layers
-            .last()
-            .map(|l| l.y_offset + l.height)
-            .unwrap_or(0.0);
-        self.scroll.set_content_height(content_h);
 
         // Insert indicator (hidden off-screen)
         self.insert_indicator_id = Some(tree.add_panel(
@@ -2007,7 +2155,7 @@ impl Panel for LayerHeaderPanel {
         self.cache_node_count = tree.count() - self.cache_first_node;
     }
 
-    fn update(&mut self, tree: &mut UITree) {
+    pub fn update(&mut self, tree: &mut UITree) {
         // §19: breathe the Record button while recording. First, so a selection
         // change (which early-returns below) never skips a pulse frame.
         self.tick_record_pulse(tree);
@@ -2042,7 +2190,7 @@ impl Panel for LayerHeaderPanel {
         }
     }
 
-    fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
+    pub fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
         match event {
             UIEvent::Click {
                 node_id, modifiers, ..
@@ -2074,19 +2222,32 @@ impl Panel for LayerHeaderPanel {
         }
     }
 
-    fn first_node(&self) -> usize {
+    pub fn first_node(&self) -> usize {
         self.cache_first_node
     }
-    fn node_count(&self) -> usize {
+    pub fn node_count(&self) -> usize {
         self.cache_node_count
+    }
+
+    /// Node range as (start, end). Reproduces `Panel::node_range`'s default
+    /// body — this type no longer implements `Panel` (see the comment above
+    /// `impl LayerHeaderPanel` at the top of this block).
+    pub fn node_range(&self) -> (usize, usize) {
+        let first = self.first_node();
+        if first == usize::MAX {
+            return (0, 0);
+        }
+        (first, first + self.node_count())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::LayerType;
+    use crate::view::UiLayer;
 
-    fn make_video_layer(name: &str, y_offset: f32, height: f32) -> LayerInfo {
+    fn make_video_layer(name: &str) -> LayerInfo {
         LayerInfo {
             name: name.into(),
             layer_id: name.into(),
@@ -2110,34 +2271,61 @@ mod tests {
             midi_all_notes: false,
             audio_gain_db: 0.0,
             audio_send_name: None,
-            y_offset,
-            height,
             is_selected: false,
             color: Color32::new(100, 148, 210, 220),
         }
     }
 
-    fn make_audio_layer(name: &str, y_offset: f32, height: f32) -> LayerInfo {
+    fn make_audio_layer(name: &str) -> LayerInfo {
         LayerInfo {
             is_audio: true,
             audio_send_name: Some("Drums".into()),
-            ..make_video_layer(name, y_offset, height)
+            ..make_video_layer(name)
         }
     }
 
-    fn make_gen_layer(name: &str, y_offset: f32, height: f32) -> LayerInfo {
+    fn make_gen_layer(name: &str) -> LayerInfo {
         LayerInfo {
             is_generator: true,
             generator_type: Some("Plasma".into()),
-            ..make_video_layer(name, y_offset, height)
+            ..make_video_layer(name)
         }
     }
 
-    fn make_group_layer(name: &str, y_offset: f32, height: f32) -> LayerInfo {
+    fn make_group_layer(name: &str) -> LayerInfo {
         LayerInfo {
             is_group: true,
-            ..make_video_layer(name, y_offset, height)
+            ..make_video_layer(name)
         }
+    }
+
+    /// Build the real `CoordinateMapper` a test's `LayerInfo` fixture would
+    /// produce in the live app — the single Y-layout authority both the
+    /// header panel and viewport read (D1). Tests no longer hand-author
+    /// `y_offset`/`height`; they derive it from the same structural fields
+    /// (`is_collapsed`, `is_group`, `parent_layer_id`) `sync_project_data`
+    /// feeds the mapper in production.
+    fn mapper_for(layers: &[LayerInfo]) -> CoordinateMapper {
+        let ui_layers: Vec<UiLayer> = layers
+            .iter()
+            .map(|l| UiLayer {
+                layer_id: LayerId::new(&l.layer_id),
+                parent_layer_id: l.parent_layer_id.as_deref().map(LayerId::new),
+                layer_type: if l.is_group {
+                    LayerType::Group
+                } else if l.is_generator {
+                    LayerType::Generator
+                } else if l.is_audio {
+                    LayerType::Audio
+                } else {
+                    LayerType::Video
+                },
+                is_collapsed: l.is_collapsed,
+            })
+            .collect();
+        let mut mapper = CoordinateMapper::new();
+        mapper.rebuild_y_layout(&ui_layers);
+        mapper
     }
 
     #[test]
@@ -2170,13 +2358,15 @@ mod tests {
         let layout = ScreenLayout::new(1920.0, 2160.0);
         let mut panel = LayerHeaderPanel::new();
 
-        panel.set_layers(vec![
-            make_video_layer("Layer 1", 0.0, 140.0),
-            make_video_layer("Layer 2", 140.0, 140.0),
-            make_gen_layer("Gen Layer", 280.0, 140.0),
-        ]);
+        let layers = vec![
+            make_video_layer("Layer 1"),
+            make_video_layer("Layer 2"),
+            make_gen_layer("Gen Layer"),
+        ];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
 
-        panel.build(&mut tree, &layout);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
 
         assert_eq!(panel.layer_count(), 3);
         // All layers should have bg, name, mute, solo, blend_mode
@@ -2202,8 +2392,10 @@ mod tests {
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = LayerHeaderPanel::new();
-        panel.set_layers(vec![make_video_layer("L1", 0.0, 140.0)]);
-        panel.build(&mut tree, &layout);
+        let layers = vec![make_video_layer("L1")];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
 
         let a = panel.handle_click(
             panel.rows[0].id(LayerControl::Mute).unwrap(),
@@ -2226,11 +2418,10 @@ mod tests {
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = LayerHeaderPanel::new();
-        panel.set_layers(vec![
-            make_video_layer("L0", 0.0, 140.0),
-            make_video_layer("L1", 140.0, 140.0),
-        ]);
-        panel.build(&mut tree, &layout);
+        let layers = vec![make_video_layer("L0"), make_video_layer("L1")];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
 
         let mut intents = IntentRegistry::new();
         panel.register_intents(&mut intents);
@@ -2252,8 +2443,10 @@ mod tests {
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = LayerHeaderPanel::new();
-        panel.set_layers(vec![make_video_layer("L1", 0.0, 140.0)]);
-        panel.build(&mut tree, &layout);
+        let layers = vec![make_video_layer("L1")];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
 
         let a = panel.handle_click(
             panel.rows[0].id(LayerControl::Chevron).unwrap(),
@@ -2267,8 +2460,10 @@ mod tests {
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = LayerHeaderPanel::new();
-        panel.set_layers(vec![make_video_layer("L1", 0.0, 140.0)]);
-        panel.build(&mut tree, &layout);
+        let layers = vec![make_video_layer("L1")];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
 
         tree.clear_dirty();
         panel.set_mute_state(&mut tree, 0, true);
@@ -2286,12 +2481,14 @@ mod tests {
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = LayerHeaderPanel::new();
 
-        let mut child = make_video_layer("Child", 70.0, 140.0);
+        let mut child = make_video_layer("Child");
         child.parent_layer_id = Some("Group".into());
 
-        panel.set_layers(vec![make_group_layer("Group", 0.0, 70.0), child]);
+        let layers = vec![make_group_layer("Group"), child];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
 
-        panel.build(&mut tree, &layout);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
 
         // Group has connector
         assert!(panel.rows[0].id(LayerControl::Connector).is_some());
@@ -2320,11 +2517,13 @@ mod tests {
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = LayerHeaderPanel::new();
 
-        let mut layer = make_video_layer("Collapsed", 0.0, 48.0);
+        let mut layer = make_video_layer("Collapsed");
         layer.is_collapsed = true;
 
-        panel.set_layers(vec![layer]);
-        panel.build(&mut tree, &layout);
+        let layers = vec![layer];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
 
         // Collapsed layer should NOT have folder, new_clip, midi controls
         assert_eq!(panel.rows[0].id(LayerControl::Folder), None);
@@ -2342,8 +2541,10 @@ mod tests {
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = LayerHeaderPanel::new();
-        panel.set_layers(vec![make_video_layer("L1", 0.0, 140.0)]);
-        panel.build(&mut tree, &layout);
+        let layers = vec![make_video_layer("L1")];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
 
         let event = UIEvent::DoubleClick {
             node_id: panel.rows[0].id(LayerControl::Name).unwrap(),
@@ -2383,6 +2584,7 @@ mod tests {
         is_child: bool,
         is_last_child: bool,
         is_group_expanded: bool,
+        has_gen_label: bool,
     ) -> LayerRowData {
         use LayerControl as C;
         let mut d = LayerRowData::default();
@@ -2417,8 +2619,18 @@ mod tests {
         d.set(C::Chevron, Rect::new(pad, y, CHEVRON_W, BTN_H));
         let name_left = pad + chevron_w + if chevron_w > 0.0 { TOP_GAP } else { 0.0 };
         let handle_x = w - pad - HANDLE_W - 8.0;
-        let name_w = (handle_x - name_left - TOP_GAP).max(20.0);
-        d.set(C::Name, Rect::new(name_left, y, name_w, NAME_H));
+        if is_collapsed && has_gen_label {
+            let label_x = handle_x - TOP_GAP - GEN_LABEL_COLLAPSED_W;
+            let name_w = (label_x - TOP_GAP - name_left).max(20.0);
+            d.set(C::Name, Rect::new(name_left, y, name_w, NAME_H));
+            d.set(
+                C::GenType,
+                Rect::new(label_x, y, GEN_LABEL_COLLAPSED_W, NAME_H),
+            );
+        } else {
+            let name_w = (handle_x - name_left - TOP_GAP).max(20.0);
+            d.set(C::Name, Rect::new(name_left, y, name_w, NAME_H));
+        }
         d.set(C::DragHandle, Rect::new(handle_x, y, HANDLE_W, BTN_H));
         y += ROW_STEP;
         let mut btn_x = pad;
@@ -2428,11 +2640,24 @@ mod tests {
         btn_x += MS_BTN_W + 6.0;
         if is_audio {
             d.set(C::Analysis, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
-            let mut ay = y + BTN_H + 2.0;
+            if is_collapsed {
+                d.set(
+                    C::Separator,
+                    Rect::new(card_x, y_offset + height - SEP_H, (w - card_x).max(1.0), SEP_H),
+                );
+                return d;
+            }
             let right_edge = w - pad - RIGHT_GUTTER;
-            d.set(C::Gain, Rect::new(pad, ay, (right_edge - pad).max(20.0), BTN_H));
-            ay += ROW_STEP;
-            d.set(C::Send, Rect::new(pad, ay, (right_edge - pad).max(20.0), BTN_H));
+            let gain_x = btn_x + MS_BTN_W + 6.0;
+            d.set(
+                C::Gain,
+                Rect::new(gain_x, y, (right_edge - gain_x).max(20.0), BTN_H),
+            );
+            let send_y = y + BTN_H;
+            d.set(
+                C::Send,
+                Rect::new(pad, send_y, (right_edge - pad).max(20.0), BTN_H),
+            );
             d.set(
                 C::Separator,
                 Rect::new(card_x, y_offset + height - SEP_H, (w - card_x).max(1.0), SEP_H),
@@ -2472,6 +2697,9 @@ mod tests {
             if !is_generator {
                 d.set(C::PathLabel, Rect::new(pad, y, LBL_W, BTN_H));
                 d.set(C::Folder, Rect::new(val_x, y, val_w, BTN_H));
+                y += BTN_H + ROUTING_ROW_GAP;
+            } else if has_gen_label {
+                d.set(C::GenType, Rect::new(pad, y, (right_edge - pad).max(20.0), BTN_H));
                 y += BTN_H + ROUTING_ROW_GAP;
             }
             d.set(C::MidiLabel, Rect::new(pad, y, LBL_W, BTN_H));
@@ -2515,10 +2743,14 @@ mod tests {
             (true, false, true, false, false, false, false, "collapsed-gen"),
             (false, false, false, false, true, true, false, "child-last"),
             (false, false, false, true, false, false, false, "audio"),
+            (true, false, false, true, false, false, false, "collapsed-audio"),
         ];
         for (coll, grp, genr, aud, child, last, gexp, label) in cases {
-            let live = compute_layer_row(0.0, 140.0, 300.0, coll, grp, genr, aud, child, last, gexp);
-            let oracle = oracle_row(0.0, 140.0, 300.0, coll, grp, genr, aud, child, last, gexp);
+            // Synthetic equivalence check, not the gating test — `genr` doubles
+            // as `has_gen_label` here since both fns receive the identical
+            // value either way.
+            let live = compute_layer_row(0.0, 140.0, 300.0, coll, grp, genr, aud, child, last, gexp, genr);
+            let oracle = oracle_row(0.0, 140.0, 300.0, coll, grp, genr, aud, child, last, gexp, genr);
             assert_row_eq(&live, &oracle, label);
         }
     }
@@ -2528,8 +2760,10 @@ mod tests {
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = LayerHeaderPanel::new();
-        panel.set_layers(vec![make_audio_layer("Drums In", 0.0, 140.0)]);
-        panel.build(&mut tree, &layout);
+        let layers = vec![make_audio_layer("Drums In")];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
 
         // Audio layers expose Mute / Solo / Gain / Send …
         assert!(panel.rows[0].id(LayerControl::Mute).is_some());
@@ -2550,6 +2784,174 @@ mod tests {
         assert!(matches!(a.as_slice(), [PanelAction::AudioSendClicked(0)]));
     }
 
+    // ── P0.5 gate: generator label, both states ───────────────────────
+    //
+    // `docs/TIMELINE_LAYOUT_P0_SPEC.md` P0.5: a display-only generator-name
+    // label renders iff `LayerInfo.generator_type.is_some()` — present for a
+    // generator layer, absent for a video layer — in both the collapsed and
+    // expanded row geometry.
+
+    #[test]
+    fn generator_label_present_iff_generator_type_is_some() {
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = LayerHeaderPanel::new();
+        let layers = vec![make_video_layer("Video"), make_gen_layer("Gen")];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
+
+        assert_eq!(
+            panel.rows[0].id(LayerControl::GenType),
+            None,
+            "video layer (generator_type: None) must not get a generator label"
+        );
+        assert!(
+            panel.rows[1].id(LayerControl::GenType).is_some(),
+            "generator layer (generator_type: Some) must get its label"
+        );
+    }
+
+    #[test]
+    fn generator_label_present_iff_generator_type_is_some_collapsed() {
+        // Same gate, collapsed geometry — the label moves next to Name instead
+        // of into the routing-form slot, but the presence rule is identical.
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = LayerHeaderPanel::new();
+
+        let mut video = make_video_layer("Video");
+        video.is_collapsed = true;
+        let mut gen_layer = make_gen_layer("Gen");
+        gen_layer.is_collapsed = true;
+
+        let layers = vec![video, gen_layer];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
+
+        assert_eq!(panel.rows[0].id(LayerControl::GenType), None);
+        assert!(panel.rows[1].id(LayerControl::GenType).is_some());
+    }
+
+    #[test]
+    fn generator_label_collapsed_never_widens_row() {
+        // Geometry-level check mirroring `collapsed_audio_content_fits_
+        // collapsed_track_height`: the collapsed generator label is carved out
+        // of Name's own width budget, so the row's total content width never
+        // grows past what a non-generator collapsed row already uses.
+        let row_gen =
+            compute_layer_row(0.0, 140.0, 300.0, true, false, true, false, false, false, false, true);
+        let row_video =
+            compute_layer_row(0.0, 140.0, 300.0, true, false, false, false, false, false, false, false);
+
+        let label = row_gen.rect(LayerControl::GenType);
+        let name_gen = row_gen.rect(LayerControl::Name);
+        let handle_gen = row_gen.rect(LayerControl::DragHandle);
+        let handle_video = row_video.rect(LayerControl::DragHandle);
+
+        // DragHandle's x (the row's right-hand boundary for this content) is
+        // unchanged by the label's presence.
+        assert_eq!(handle_gen.x, handle_video.x, "label must not push DragHandle right");
+        // The label sits entirely between Name and DragHandle — it never
+        // extends past the row's existing right edge.
+        assert!(label.x + label.width <= handle_gen.x);
+        // Name shrank to make room — it does not overlap the label.
+        assert!(name_gen.x + name_gen.width <= label.x);
+    }
+
+    // ── P0.2 gate: D4 audio fit ──────────────────────────────────────
+    //
+    // `docs/TIMELINE_LAYOUT_P0_SPEC.md` D4: collapsed audio drops the
+    // never-collapse exception and gets the same collapsed chrome as every
+    // other layer type; expanded audio fits three rows inside
+    // `TrackHeight::Normal` with no per-card height exception.
+
+    #[test]
+    fn collapsed_audio_has_no_expanded_controls() {
+        // Mirrors `collapsed_layer_has_no_expanded_controls` for the audio
+        // layer type: collapsed audio must not carry Gain/Send (the RC3
+        // overflow this phase removes), only the same Mute/Solo/Analysis
+        // button row every other collapsed layer keeps.
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = LayerHeaderPanel::new();
+
+        let mut layer = make_audio_layer("Collapsed Audio");
+        layer.is_collapsed = true;
+
+        let layers = vec![layer];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
+
+        assert_eq!(panel.rows[0].id(LayerControl::Gain), None);
+        assert_eq!(panel.rows[0].id(LayerControl::Send), None);
+        assert!(panel.rows[0].id(LayerControl::Mute).is_some());
+        assert!(panel.rows[0].id(LayerControl::Solo).is_some());
+        assert!(panel.rows[0].id(LayerControl::Analysis).is_some());
+    }
+
+    #[test]
+    fn collapsed_audio_content_fits_collapsed_track_height() {
+        // Geometry-level check on the same card the panel-level test above
+        // exercises: every control the collapsed audio card keeps must sit
+        // fully inside `TrackHeight::Collapsed`, mirroring
+        // `expanded_audio_content_fits_normal_track_height` below.
+        let height = color::COLLAPSED_TRACK_HEIGHT;
+        let row = compute_layer_row(0.0, height, 300.0, true, false, false, true, false, false, false, false);
+        assert!(!row.has(LayerControl::Gain));
+        assert!(!row.has(LayerControl::Send));
+        for c in [LayerControl::Mute, LayerControl::Solo, LayerControl::Analysis] {
+            assert!(row.has(c), "collapsed audio row missing {c:?}");
+            let r = row.rect(c);
+            assert!(
+                r.y + r.height <= height,
+                "{c:?} bottom {} exceeds TrackHeight::Collapsed {height}",
+                r.y + r.height
+            );
+        }
+    }
+
+    #[test]
+    fn expanded_audio_content_fits_normal_track_height() {
+        // The RC3/D4 overflow this phase fixes: Gain + Send used to spill
+        // past whatever height the mapper assigned. Assert every control's
+        // bottom edge sits inside `TrackHeight::Normal` — the state-only
+        // height budget the card must fit without a per-type exception.
+        let height = color::TRACK_HEIGHT;
+        let row = compute_layer_row(0.0, height, 300.0, false, false, false, true, false, false, false, false);
+        for c in [
+            LayerControl::Mute,
+            LayerControl::Solo,
+            LayerControl::Analysis,
+            LayerControl::Gain,
+            LayerControl::Send,
+        ] {
+            assert!(row.has(c), "expanded audio row missing {c:?}");
+            let r = row.rect(c);
+            assert!(
+                r.y + r.height <= height,
+                "{c:?} bottom {} exceeds TrackHeight::Normal {height}",
+                r.y + r.height
+            );
+        }
+        // Gain no longer stacks below M|S|A as its own row — it shares the
+        // button row's y with Mute/Solo/Analysis (the slot video cards give
+        // Blend).
+        let mute_y = row.rect(LayerControl::Mute).y;
+        assert_eq!(row.rect(LayerControl::Gain).y, mute_y, "Gain joins the M|S|A row");
+        // Gain and Analysis must not overlap horizontally.
+        let analysis = row.rect(LayerControl::Analysis);
+        let gain = row.rect(LayerControl::Gain);
+        assert!(
+            gain.x >= analysis.x + analysis.width,
+            "Gain (x={}) overlaps Analysis (right edge={})",
+            gain.x,
+            analysis.x + analysis.width
+        );
+    }
+
     #[test]
     fn gain_db_mapping() {
         assert!((gain_db_to_norm(GAIN_DB_MIN) - 0.0).abs() < 1e-6);
@@ -2562,5 +2964,68 @@ mod tests {
         assert_eq!(gain_db_to_norm(200.0), 1.0);
         assert_eq!(gain_db_text(-60.0), "-inf");
         assert_eq!(gain_db_text(0.0), "+0.0 dB");
+    }
+
+    // ── P0.1 gate: header/lane Y agreement ───────────────────────────
+    //
+    // `docs/TIMELINE_LAYOUT_P0_SPEC.md` D1: the header panel must query the
+    // same `CoordinateMapper` the viewport's lanes read
+    // (`viewport/coordinate.rs` `track_y`) — never a copy. This asserts the
+    // header's actual built row rects land at exactly the mapper's
+    // `get_layer_y_offset`/`get_layer_height` for every layer, across the
+    // three structural states the spec names: collapsed, hidden-child (of a
+    // collapsed group), and group. Because both columns call the identical
+    // mapper method, this is the strongest guard against RC2 (headers
+    // drawing from a stale copy) regressing.
+    #[test]
+    fn header_rows_agree_with_mapper_y_collapsed_hidden_child_group() {
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 2160.0);
+        let mut panel = LayerHeaderPanel::new();
+
+        let mut collapsed = make_video_layer("Collapsed");
+        collapsed.is_collapsed = true;
+
+        let mut group = make_group_layer("Group");
+        group.is_collapsed = true; // collapsed group hides its child below
+
+        let mut hidden_child = make_video_layer("Hidden");
+        hidden_child.parent_layer_id = Some("Group".into());
+
+        let layers = vec![make_video_layer("Normal"), collapsed, group, hidden_child];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
+
+        for i in 0..panel.layer_count() {
+            let expected_height = mapper.get_layer_height(i);
+            if expected_height <= 0.0 {
+                // Hidden child of a collapsed group: build() skips the row
+                // entirely, matching the zero-height lanes side sees too.
+                assert!(
+                    panel.rows[i].id(LayerControl::Background).is_none(),
+                    "row {i} (hidden child) should have no built row"
+                );
+                continue;
+            }
+            let bg_id = panel.rows[i]
+                .id(LayerControl::Background)
+                .unwrap_or_else(|| panic!("row {i} should have a Background node"));
+            let rect = tree.get_bounds(bg_id);
+            // Strip panel_origin to recover the panel-local Y the mapper
+            // assigned — the exact value the viewport's lanes read via the
+            // same `mapper.get_layer_y_offset(i)` call.
+            let local_y = rect.y - panel.panel_origin.y;
+            let expected_y = mapper.get_layer_y_offset(i);
+            assert!(
+                (local_y - expected_y).abs() < 0.01,
+                "row {i} y mismatch: header={local_y} mapper={expected_y}"
+            );
+            assert!(
+                (rect.height - expected_height).abs() < 0.01,
+                "row {i} height mismatch: header={} mapper={expected_height}",
+                rect.height
+            );
+        }
     }
 }

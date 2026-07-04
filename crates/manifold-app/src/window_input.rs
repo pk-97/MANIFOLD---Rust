@@ -467,11 +467,8 @@ impl Application {
                         self.ws.ui_root.viewport.scroll_x_beats().as_f32(),
                         new_y,
                     ) {
-                        // Sync layer headers with viewport vertical scroll
-                        self.ws
-                            .ui_root
-                            .layer_headers
-                            .set_scroll_y(self.ws.ui_root.viewport.scroll_y_px());
+                        // Layer headers read the viewport's scroll_y_px live at
+                        // the next build/update — no separate push (D2).
                         self.scroll_dirty.scroll_y = true;
                     }
                 }

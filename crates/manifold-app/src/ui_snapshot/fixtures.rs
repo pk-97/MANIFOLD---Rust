@@ -29,6 +29,8 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "timeline" => Some(timeline_scene()),
         "states" => Some(states_scene()),
         "inspector" => Some(inspector_scene()),
+        "scrollshrink" => Some(scroll_shrink_scene()),
+        "hairlineclips" => Some(hairline_clips_scene()),
         _ => None,
     }
 }
@@ -84,8 +86,13 @@ fn timeline_scene() -> SceneData {
     flowers.clips.push(TimelineClip::new_video("flowers_loop_B.mov".into(), Beats(28.0), Beats(20.0), Seconds::ZERO));
     layers.push(flowers);
 
-    // 2: PLASMA — generator, the SELECTED layer.
-    let mut plasma = Layer::new("PLASMA".into(), LayerType::Generator, 2);
+    // 2: PLASMA — generator, the SELECTED layer. `new_generator` (not `new`)
+    // so `gen_params` is actually populated — P0.5 evidence needs a real
+    // `generator_type` to show the label; a bare `LayerType::Generator` layer
+    // with no gen_params is the same "renders black" trap `Layer::new_generator`'s
+    // own doc comment warns about, just surfacing here as a missing label
+    // instead (`docs/TIMELINE_LAYOUT_P0_SPEC.md` P0.5).
+    let mut plasma = Layer::new_generator("PLASMA".into(), PresetTypeId::PLASMA, 2);
     plasma.layer_id = lid("plasma");
     plasma.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(48.0)));
     layers.push(plasma);
@@ -131,6 +138,60 @@ fn timeline_scene() -> SceneData {
 
     // No selection by default — `--interact select:<layer>` makes the ring appear,
     // so base-vs-after renders/dumps differ measurably.
+    SceneData { project, content, active: None, selection: UIState::default() }
+}
+
+/// P0.0 evidence scene for `docs/TIMELINE_LAYOUT_P0_SPEC.md`'s RC1 (dual scroll
+/// state): 14 video layers at `TrackHeight::Normal` — well past the
+/// `LOGICAL_H` viewport budget the `timeline` scene was sized to exactly fit
+/// (7 lanes), so a vertical scrollbar exists and a `--scroll` seed is
+/// meaningful. Used with `--scroll <px>` (seeds both `Viewport::scroll_y_px`
+/// and `LayerHeaderPanel`'s `ScrollContainer` offset identically, mirroring
+/// `ui_root.rs:512-517`'s settings-restore path) plus `--interact
+/// collapse:<id>` on one of the layers, to capture the header/lane detach when
+/// a scrolled, content-shrinking edit reclamps one column's scroll state but
+/// not the other's.
+fn scroll_shrink_scene() -> SceneData {
+    let mut layers: Vec<Layer> = Vec::new();
+    for i in 0..14 {
+        let id = format!("stack-{i}");
+        let mut l = Layer::new(format!("LAYER {i}"), LayerType::Video, i);
+        l.layer_id = lid(&id);
+        l.clips.push(TimelineClip::new_video(format!("{id}.mov"), Beats(0.0), Beats(48.0), Seconds::ZERO));
+        layers.push(l);
+    }
+
+    let mut project = Project::default();
+    project.timeline.layers = layers;
+
+    let content = ContentState { current_beat: Beats(0.0), is_playing: false, ..Default::default() };
+
+    SceneData { project, content, active: None, selection: UIState::default() }
+}
+
+/// P0.3 evidence scene for `docs/TIMELINE_LAYOUT_P0_SPEC.md`: one lane of many
+/// short trigger clips — the MIDI-mockup workflow's bread and butter — spread
+/// across a wide beat range. Rendered at the minimum zoom level
+/// (`color::ZOOM_LEVELS[0]` = 1px/beat, wired in by `ui_snapshot::mod`'s
+/// `zoom_ppb` override for this scene name) so each clip's on-screen width
+/// (0.5 beats × 1px/beat = 0.5px) rounds below 1px. Proves `visible_clip_rects`
+/// clamps sub-pixel clips to a 1px hairline instead of culling them — pre-fix
+/// every one of these 200 clips renders as nothing.
+fn hairline_clips_scene() -> SceneData {
+    let mut trigs = Layer::new("TRIGGERS".into(), LayerType::Video, 0);
+    trigs.layer_id = lid("triggers");
+    for i in 0..200 {
+        let start = Beats(i as f64 * 4.0);
+        trigs
+            .clips
+            .push(TimelineClip::new_video(format!("trig_{i}"), start, Beats(0.5), Seconds::ZERO));
+    }
+
+    let mut project = Project::default();
+    project.timeline.layers = vec![trigs];
+
+    let content = ContentState { current_beat: Beats(0.0), is_playing: false, ..Default::default() };
+
     SceneData { project, content, active: None, selection: UIState::default() }
 }
 
