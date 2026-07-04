@@ -102,6 +102,13 @@ pub enum DragMode {
     /// `InteractionOverlay::automation_drag`, mirroring how `Move`'s state
     /// lives in `drag_snapshots`/`drag_start_beat`.
     AutomationPoint,
+    /// Alt-dragging a segment into a curve bend (P4 Unit B, §7's
+    /// "modifier-drag a segment"). State in `automation_segment_bend`.
+    AutomationSegmentBend,
+    /// Plain (no-Alt) vertical drag of a segment — both endpoints move by the
+    /// same value delta (P4 Unit B, §7's "drag a segment"). State in
+    /// `automation_segment_drag`.
+    AutomationSegmentDrag,
 }
 
 // ── AutomationDragState ─────────────────────────────────────────
@@ -124,6 +131,47 @@ struct AutomationDragState {
     /// preview call must search by.
     last_beat: Beats,
     last_value: f32,
+}
+
+// ── AutomationSegmentBendState / AutomationSegmentDragState ────────
+// P4 Unit B (`docs/AUTOMATION_LANES_DESIGN.md` §7): grabbed-segment geometry
+// for the two segment gestures. Both re-derive their live value from the
+// ORIGINAL grab geometry each frame (never incrementally), matching every
+// other drag state in this file.
+
+/// Alt-drag curve bend: only the LEAVING point's `shape` changes (beat/value
+/// untouched), so this carries just enough to preview + commit that one
+/// field. `grab_y` is the screen Y at press time; `bend` is re-derived from
+/// the vertical delta since grab, not accumulated.
+#[derive(Debug, Clone)]
+struct AutomationSegmentBendState {
+    target: UiGraphTarget,
+    param_id: ParamId,
+    left_beat: Beats,
+    left_value: f32,
+    original_shape: UiSegmentShape,
+    grab_y: f32,
+    last_bend: f32,
+}
+
+/// Plain vertical segment drag: both endpoints move by the same normalized
+/// value delta. Carries both points' original (param-range) values and
+/// shapes — shape is unchanged by this gesture but threaded through so the
+/// commit's `MoveAutomationPointCommand`s preserve it exactly.
+#[derive(Debug, Clone)]
+struct AutomationSegmentDragState {
+    target: UiGraphTarget,
+    param_id: ParamId,
+    left_beat: Beats,
+    left_original_value: f32,
+    left_shape: UiSegmentShape,
+    right_beat: Beats,
+    right_original_value: f32,
+    right_shape: UiSegmentShape,
+    /// Normalized (0..1) Y within the strip at press time.
+    grab_norm: f32,
+    last_left_value: f32,
+    last_right_value: f32,
 }
 
 // ── DragSnapshot ────────────────────────────────────────────────
@@ -196,6 +244,10 @@ pub struct InteractionOverlay {
     // P4 Unit A automation-point drag state (`docs/AUTOMATION_LANES_DESIGN.md`
     // §7) — `Some` only while `drag_mode == DragMode::AutomationPoint`.
     automation_drag: Option<AutomationDragState>,
+    // P4 Unit B segment-gesture state — `Some` only while `drag_mode` is the
+    // matching `AutomationSegmentBend`/`AutomationSegmentDrag` variant.
+    automation_segment_bend: Option<AutomationSegmentBendState>,
+    automation_segment_drag: Option<AutomationSegmentDragState>,
 }
 
 impl InteractionOverlay {
@@ -223,6 +275,8 @@ impl InteractionOverlay {
             trim_originals: Vec::with_capacity(8),
             modifiers: Modifiers::NONE,
             automation_drag: None,
+            automation_segment_bend: None,
+            automation_segment_drag: None,
         }
     }
 
@@ -464,7 +518,11 @@ impl InteractionOverlay {
                     });
                 }
             }
-            AutomationHit::Strip { lane_index } => {
+            // A plain CLICK (no drag) on a segment inserts a new breakpoint
+            // there, same as clicking bare strip — Ableton's "click the line
+            // to add a point" behavior. `Segment` only changes DRAG-begin
+            // routing (`begin_automation_drag`), not click routing.
+            AutomationHit::Strip { lane_index } | AutomationHit::Segment { lane_index, .. } => {
                 let lane = &lanes[lane_index];
                 let raw_beat = viewport.pixel_to_beat(pos.x);
                 let beat = if self.modifiers.command {
@@ -504,29 +562,90 @@ impl InteractionOverlay {
         viewport: &TimelineViewportPanel,
     ) -> bool {
         let lanes = viewport.automation_lane_screens(&[]);
-        let Some(AutomationHit::Dot { lane_index, dot_index }) =
-            automation_hit_tester::hit_test_automation(press_pos, &lanes)
-        else {
-            return false;
-        };
+        match automation_hit_tester::hit_test_automation(press_pos, &lanes) {
+            Some(AutomationHit::Dot { lane_index, dot_index }) => {
+                let lane = &lanes[lane_index];
+                let dot = lane.dots[dot_index];
+                let value =
+                    lane.param_min + dot.value_norm.clamp(0.0, 1.0) * (lane.param_max - lane.param_min);
+                self.automation_drag = Some(AutomationDragState {
+                    target: lane.target.clone(),
+                    param_id: lane.param_id.clone(),
+                    original: (dot.beat, value, dot.shape),
+                    last_beat: dot.beat,
+                    last_value: value,
+                });
+                ui_state.selected_automation_point = Some(UiAutomationPointRef {
+                    target: lane.target.clone(),
+                    param_id: lane.param_id.clone(),
+                    beat: dot.beat,
+                });
+                self.drag_mode = DragMode::AutomationPoint;
+                host.set_cursor(TimelineCursor::Move);
+                true
+            }
+            Some(AutomationHit::Segment { lane_index, left_dot_index }) => {
+                self.begin_automation_segment_drag(lane_index, left_dot_index, press_pos, &lanes, host);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Grab a segment for either an Alt-drag curve bend or a plain vertical
+    /// drag (P4 Unit B, §7). Curve-bend is gated off for `whole_numbers`
+    /// lanes (§8: enum/int params author with `Hold`, so bending one would
+    /// silently change its runtime sampling from a step to a curve) — Alt on
+    /// such a lane falls back to the vertical-drag gesture instead of a no-op.
+    fn begin_automation_segment_drag(
+        &mut self,
+        lane_index: usize,
+        left_dot_index: usize,
+        press_pos: Vec2,
+        lanes: &[crate::panels::viewport::AutomationLaneScreen],
+        host: &mut dyn TimelineEditingHost,
+    ) {
         let lane = &lanes[lane_index];
-        let dot = lane.dots[dot_index];
-        let value = lane.param_min + dot.value_norm.clamp(0.0, 1.0) * (lane.param_max - lane.param_min);
-        self.automation_drag = Some(AutomationDragState {
-            target: lane.target.clone(),
-            param_id: lane.param_id.clone(),
-            original: (dot.beat, value, dot.shape),
-            last_beat: dot.beat,
-            last_value: value,
-        });
-        ui_state.selected_automation_point = Some(UiAutomationPointRef {
-            target: lane.target.clone(),
-            param_id: lane.param_id.clone(),
-            beat: dot.beat,
-        });
-        self.drag_mode = DragMode::AutomationPoint;
+        let left = lane.dots[left_dot_index];
+        let right = lane.dots[left_dot_index + 1];
+        let range = lane.param_max - lane.param_min;
+        let left_value = lane.param_min + left.value_norm.clamp(0.0, 1.0) * range;
+        let right_value = lane.param_min + right.value_norm.clamp(0.0, 1.0) * range;
+
+        if self.modifiers.alt && !lane.whole_numbers {
+            let original_bend = match left.shape {
+                UiSegmentShape::Curved(c) => c,
+                _ => 0.0,
+            };
+            self.automation_segment_bend = Some(AutomationSegmentBendState {
+                target: lane.target.clone(),
+                param_id: lane.param_id.clone(),
+                left_beat: left.beat,
+                left_value,
+                original_shape: left.shape,
+                grab_y: press_pos.y,
+                last_bend: original_bend,
+            });
+            self.drag_mode = DragMode::AutomationSegmentBend;
+        } else {
+            let grab_norm = (1.0 - (press_pos.y - lane.strip_rect.y) / lane.strip_rect.height.max(f32::EPSILON))
+                .clamp(0.0, 1.0);
+            self.automation_segment_drag = Some(AutomationSegmentDragState {
+                target: lane.target.clone(),
+                param_id: lane.param_id.clone(),
+                left_beat: left.beat,
+                left_original_value: left_value,
+                left_shape: left.shape,
+                right_beat: right.beat,
+                right_original_value: right_value,
+                right_shape: right.shape,
+                grab_norm,
+                last_left_value: left_value,
+                last_right_value: right_value,
+            });
+            self.drag_mode = DragMode::AutomationSegmentDrag;
+        }
         host.set_cursor(TimelineCursor::Move);
-        true
     }
 
     /// Live-preview an in-progress automation point drag (`DragMode::
@@ -587,6 +706,117 @@ impl InteractionOverlay {
             || (new_point.1 - drag.original.1).abs() > f32::EPSILON;
         if moved {
             host.commit_automation_point_move(&drag.target, &drag.param_id, drag.original, new_point);
+        }
+    }
+
+    /// Pixel range of vertical drag mapped to the full `-1..1` bend swing —
+    /// an interior tuning constant (Alt-drag curve bend, P4 Unit B).
+    const SEGMENT_BEND_PX_RANGE: f32 = 80.0;
+
+    /// Live-preview an in-progress Alt-drag curve bend. Re-derives `bend`
+    /// fresh from the vertical delta since grab each frame (never
+    /// incrementally), same discipline as every other drag handler here.
+    /// Dragging UP (screen Y decreasing) bends positive.
+    fn handle_automation_segment_bend_drag(&mut self, pos: Vec2, host: &mut dyn TimelineEditingHost) {
+        let Some(state) = self.automation_segment_bend.as_ref() else {
+            return;
+        };
+        let mut delta_px = state.grab_y - pos.y;
+        if self.modifiers.shift {
+            delta_px *= 0.25; // fine adjustment, mirrors §7's Shift-drag convention
+        }
+        let bend = (delta_px / Self::SEGMENT_BEND_PX_RANGE).clamp(-1.0, 1.0);
+        host.set_automation_segment_bend_preview(&state.target, &state.param_id, state.left_beat, bend);
+        if let Some(state) = self.automation_segment_bend.as_mut() {
+            state.last_bend = bend;
+        }
+    }
+
+    /// Commit a finished curve-bend drag as one undo entry — reuses
+    /// `commit_automation_point_move` directly: beat and value are
+    /// untouched by this gesture, only `shape` differs between old and new.
+    fn commit_automation_segment_bend(&mut self, host: &mut dyn TimelineEditingHost) {
+        let Some(state) = self.automation_segment_bend.take() else {
+            return;
+        };
+        let new_shape = UiSegmentShape::Curved(state.last_bend);
+        if new_shape != state.original_shape {
+            let old = (state.left_beat, state.left_value, state.original_shape);
+            let new = (state.left_beat, state.left_value, new_shape);
+            host.commit_automation_point_move(&state.target, &state.param_id, old, new);
+        }
+    }
+
+    /// Live-preview an in-progress vertical segment drag. Re-derives both
+    /// endpoints' values fresh from the normalized delta since grab each
+    /// frame — the delta is computed once (not per-point), then each
+    /// endpoint clamps independently to its own `0..1` range, matching how a
+    /// multi-clip drag clamps each clip independently at the timeline edge.
+    fn handle_automation_segment_vertical_drag(
+        &mut self,
+        pos: Vec2,
+        host: &mut dyn TimelineEditingHost,
+        viewport: &TimelineViewportPanel,
+    ) {
+        let Some(state) = self.automation_segment_drag.clone() else {
+            return;
+        };
+        let lanes = viewport.automation_lane_screens(&[]);
+        let Some(lane) = lanes
+            .iter()
+            .find(|l| l.target == state.target && l.param_id == state.param_id)
+        else {
+            return;
+        };
+        let norm = (1.0 - (pos.y - lane.strip_rect.y) / lane.strip_rect.height.max(f32::EPSILON))
+            .clamp(0.0, 1.0);
+        let mut delta_norm = norm - state.grab_norm;
+        if self.modifiers.shift {
+            delta_norm *= 0.25;
+        }
+        let range = (lane.param_max - lane.param_min).max(f32::EPSILON);
+        let left_norm =
+            ((state.left_original_value - lane.param_min) / range + delta_norm).clamp(0.0, 1.0);
+        let right_norm =
+            ((state.right_original_value - lane.param_min) / range + delta_norm).clamp(0.0, 1.0);
+        let left_value = lane.param_min + left_norm * range;
+        let right_value = lane.param_min + right_norm * range;
+
+        host.set_automation_segment_drag_preview(
+            &state.target,
+            &state.param_id,
+            state.left_beat,
+            left_value,
+            state.right_beat,
+            right_value,
+        );
+        if let Some(s) = self.automation_segment_drag.as_mut() {
+            s.last_left_value = left_value;
+            s.last_right_value = right_value;
+        }
+    }
+
+    /// Commit a finished vertical segment drag as ONE undo entry covering
+    /// both endpoints (`host.commit_automation_segment_drag` batches them via
+    /// `ContentCommand::ExecuteBatch`/`CompositeCommand`).
+    fn commit_automation_segment_value_drag(&mut self, host: &mut dyn TimelineEditingHost) {
+        let Some(state) = self.automation_segment_drag.take() else {
+            return;
+        };
+        let moved = (state.last_left_value - state.left_original_value).abs() > f32::EPSILON
+            || (state.last_right_value - state.right_original_value).abs() > f32::EPSILON;
+        if moved {
+            host.commit_automation_segment_drag(
+                &state.target,
+                &state.param_id,
+                (state.left_beat, state.left_original_value, state.last_left_value, state.left_shape),
+                (
+                    state.right_beat,
+                    state.right_original_value,
+                    state.last_right_value,
+                    state.right_shape,
+                ),
+            );
         }
     }
 
@@ -778,6 +1008,12 @@ impl InteractionOverlay {
             DragMode::AutomationPoint => {
                 self.handle_automation_drag(pos, host, viewport);
             }
+            DragMode::AutomationSegmentBend => {
+                self.handle_automation_segment_bend_drag(pos, host);
+            }
+            DragMode::AutomationSegmentDrag => {
+                self.handle_automation_segment_vertical_drag(pos, host, viewport);
+            }
             DragMode::None => {}
         }
     }
@@ -805,6 +1041,25 @@ impl InteractionOverlay {
         // machinery a clip move does, so it commits directly and returns.
         if self.drag_mode == DragMode::AutomationPoint {
             self.commit_automation_drag(host);
+            self.drag_mode = DragMode::None;
+            host.mark_dirty();
+            host.set_cursor(TimelineCursor::Default);
+            return;
+        }
+
+        // P4 Unit B: segment gestures commit the same way — already applied
+        // live, just register the undo entry (single command for a bend,
+        // batched pair for a vertical drag) — and return, same shape as the
+        // automation-point path above.
+        if self.drag_mode == DragMode::AutomationSegmentBend {
+            self.commit_automation_segment_bend(host);
+            self.drag_mode = DragMode::None;
+            host.mark_dirty();
+            host.set_cursor(TimelineCursor::Default);
+            return;
+        }
+        if self.drag_mode == DragMode::AutomationSegmentDrag {
+            self.commit_automation_segment_value_drag(host);
             self.drag_mode = DragMode::None;
             host.mark_dirty();
             host.set_cursor(TimelineCursor::Default);
