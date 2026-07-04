@@ -97,10 +97,16 @@ versioned. History on the daemon is non-negotiable — the sleep pass edits it.
   valve.** A Stop hook may block ONCE per turn, only when an ALREADY-PENDING
   undelivered flag exists at Stop time (never wait for classification — the
   race is accepted, turn-final-text flags stay next-prompt-delivered), with
-  the whisper as the block reason, honoring stop_hook_active, fail-open on
-  every error. Judgment: a one-beat extension carrying a pending whisper is
-  delivery, not blocking; waiting or classifying synchronously at Stop would
-  be blocking and stays forbidden. Sonnet-buildable.
+  the whisper as the block reason, fail-open on every error. Block mechanics
+  (verified against code.claude.com/docs/en/hooks 2026-07-04): top-level
+  `{"decision": "block", "reason": "..."}` with exit 0. Re-block guard is
+  SELF-MANAGED — `stop_hook_active` is not in the current docs, so the hook
+  writes `verdicts/<session>.stopblock.<prompt_id>` when it blocks and never
+  blocks again for that prompt_id (honor `stop_hook_active` defensively if
+  present). Stop stdin carries agent_id: route mailbox reads on it exactly
+  like the PostToolUse valve. Judgment: a one-beat extension carrying a
+  pending whisper is delivery, not blocking; waiting or classifying
+  synchronously at Stop would be blocking and stays forbidden. Sonnet-buildable.
 - **Subagent rule (2026-07-04, verified by live probe):** PostToolUse also fires
   for tool calls made *inside* subagents, carrying the MAIN session's id and
   transcript_path plus an `agent_id` field. The valve must not deliver when
