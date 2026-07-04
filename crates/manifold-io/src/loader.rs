@@ -196,6 +196,19 @@ pub fn run_post_load_validation(project: &mut Project) {
         );
     }
 
+    // Step 9.6: Backfill display names for legacy `#N`-id forks (P1, D2).
+    // Projects saved before fork ids became display-based carry an
+    // embedded preset with an empty `display_name` — the card used to
+    // derive a "(variant)" label from the id at render time
+    // (`card_preset_name`'s now-deleted `'#'` split). Stamp the equivalent
+    // readable name once here so old projects still read cleanly.
+    let backfilled = project.backfill_legacy_fork_display_names();
+    if backfilled > 0 {
+        log::info!(
+            "[Loader] Backfilled {backfilled} legacy fork preset display name(s)"
+        );
+    }
+
     // Step 10: Repair pre-existing clip overlaps.
     // Projects saved before overlap enforcement was added to all mutation paths
     // may contain overlapping clips. Remove the shorter clip in each collision.
