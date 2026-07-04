@@ -1014,14 +1014,27 @@ impl GraphCanvas {
                     .filter(|hit| !hit.is_output && hit.node_id != from_node);
                 match valid_drop {
                     Some(hit) => {
+                        // D17 "flow pulse": geometry captured now (screen
+                        // space) — `from_port`/`hit.port_name` move into the
+                        // command below.
+                        if let (Some(from_n), Some(to_n)) =
+                            (self.find_node(from_node), self.find_node(hit.node_id))
+                            && let Some(fi) = from_n.outputs.iter().position(|p| p.name == from_port)
+                            && let Some(ti) = to_n.inputs.iter().position(|p| p.name == hit.port_name)
+                        {
+                            let (fgx, fgy) = from_n.output_port_pos_graph(fi);
+                            let (tgx, tgy) = to_n.input_port_pos_graph(ti);
+                            let from_pt = self.to_screen(viewport, fgx, fgy);
+                            let to_pt = self.to_screen(viewport, tgx, tgy);
+                            self.fire_wire_flow_pulse(from_pt, to_pt);
+                        }
                         self.pending_actions.push(GraphEditCommand::ConnectPorts {
                             from_node,
                             from_port,
                             to_node: hit.node_id,
                             to_port: hit.port_name,
                         });
-                        // D17 "wire→port ... pop" (partial — see
-                        // `GraphCanvas::tick`'s doc comment).
+                        // D17 "wire→port ... pop".
                         self.fire_connect_pop(sx, sy);
                     }
                     None => {

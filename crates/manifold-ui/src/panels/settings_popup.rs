@@ -13,6 +13,7 @@
 //! only by the video-export encoder — live on-screen HDR is automatic, driven by
 //! the display's EDR headroom.
 
+use crate::anim::AnimF32;
 use crate::chrome::{ChromeHost, Pad, Sizing, View, components};
 use crate::color;
 use crate::input::{Key, UIEvent};
@@ -24,6 +25,7 @@ use super::PanelAction;
 use super::overlay::{
     Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse, SizePolicy,
 };
+use super::popup_shell;
 
 // Stable keys for the host-owned modal chrome (background + title strip).
 const KEY_BG: u64 = 71_001;
@@ -58,6 +60,22 @@ pub struct SettingsPopup {
     render_scale: f32,
     tonemap: TonemapCurve,
     hdr_on: bool,
+
+    /// D17 "modal/dropdown enter" (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — same
+    /// scale 0.98→1 + fade `enter_anim` `DropdownPanel` uses, restarted on
+    /// every `open()`/`toggle()`-into-open. Applied via
+    /// `popup_shell::scale_nodes_about` (this popup's rows come from
+    /// `ChromeHost`'s flex layout, not one resizable rect).
+    enter_anim: AnimF32,
+    /// Wall-clock timestamp `update()` last ticked from — mirrors
+    /// `DropdownPanel::last_tick`.
+    last_tick: Option<std::time::Instant>,
+    /// The `(x, y)` origin `build_at` last resolved from `Anchor::Centered`
+    /// — `update()`'s own tick has no `OverlayPlacement` to work from
+    /// (unlike `DropdownPanel`/`AbletonPickerPopup`/`BrowserPopupPanel`,
+    /// which self-manage their anchor and can rebuild standalone), so it's
+    /// stashed here on every `build_at`.
+    last_placement: Option<(f32, f32)>,
 }
 
 impl Default for SettingsPopup {
@@ -78,6 +96,9 @@ impl SettingsPopup {
             render_scale: 1.0,
             tonemap: TonemapCurve::AcesNarkowicz,
             hdr_on: false,
+            enter_anim: AnimF32::new(1.0, color::MOTION_FAST_MS),
+            last_tick: None,
+            last_placement: None,
         }
     }
 
@@ -85,14 +106,51 @@ impl SettingsPopup {
     pub fn is_open(&self) -> bool {
         self.open
     }
+    /// D17 "modal/dropdown enter": restart the entrance tween, mirroring
+    /// `DropdownPanel::open_at`.
+    fn restart_enter_anim(&mut self) {
+        self.enter_anim = AnimF32::new(0.0, color::MOTION_FAST_MS);
+        self.enter_anim.set_target(1.0);
+        self.last_tick = None;
+    }
     pub fn open(&mut self) {
         self.open = true;
+        self.restart_enter_anim();
     }
     pub fn toggle(&mut self) {
         self.open = !self.open;
+        if self.open {
+            self.restart_enter_anim();
+        }
     }
     pub fn close(&mut self) {
         self.open = false;
+    }
+
+    /// Advance the entrance tween by real elapsed wall-clock time and, while
+    /// still animating, rebuild at the current (still-settling) scale — a
+    /// no-op once settled or closed. Mirrors `DropdownPanel::update`; call
+    /// every frame from `UiRoot::update()`. Needs the same `(x, y)` origin
+    /// `build_at` resolves from `Anchor::Centered` — stashed on open/last
+    /// build via `last_placement` since `update()` has no placement of its
+    /// own to work from.
+    pub fn update(&mut self, tree: &mut UITree) {
+        if !self.open || !self.enter_anim.is_animating() {
+            self.last_tick = None;
+            return;
+        }
+        let Some((x, y)) = self.last_placement else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        let dt_ms = self
+            .last_tick
+            .map(|t| (now - t).as_secs_f32() * 1000.0)
+            .unwrap_or(0.0)
+            .min(100.0);
+        self.last_tick = Some(now);
+        self.enter_anim.tick(dt_ms);
+        self.build_nodes(tree, x, y);
     }
 
     // ── State setters (store only; the next build applies them) ──
@@ -158,6 +216,8 @@ impl SettingsPopup {
 
     fn build_nodes(&mut self, tree: &mut UITree, x: f32, y: f32) {
         self.actions.clear();
+        self.last_placement = Some((x, y));
+        let first_node = tree.count();
 
         let chrome = self.chrome_view();
         self.host
@@ -242,6 +302,22 @@ impl SettingsPopup {
             if self.hdr_on { "On" } else { "Off" },
         );
         self.actions.push((hdr_id, PanelAction::ToggleHdr));
+
+        // D17 "modal/dropdown enter": scale the whole popup 0.98→1 about its
+        // own center via the generic post-pass (this popup's rows come from
+        // `ChromeHost`'s flex layout, not one resizable rect like
+        // `DropdownPanel`'s `bounds`) + fade the chrome bg's own alpha,
+        // matching `DropdownPanel`'s recipe (content builds at full opacity).
+        let t = self.enter_anim.value().clamp(0.0, 1.0);
+        let scale = 0.98 + 0.02 * t;
+        let center = (x + PANEL_W * 0.5, y + self.body_height() * 0.5);
+        popup_shell::scale_nodes_about(tree, first_node, center, scale);
+        if t < 0.999 && self.bg_id != NodeId::PLACEHOLDER {
+            let mut cs = tree.get_node(self.bg_id).style;
+            cs.bg_color = color::with_alpha(cs.bg_color, (cs.bg_color.a as f32 * t) as u8);
+            cs.border_color = color::with_alpha(cs.border_color, (cs.border_color.a as f32 * t) as u8);
+            tree.set_style(self.bg_id, cs);
+        }
     }
 
     fn row_label(&self, tree: &mut UITree, x: f32, y: f32, text: &str) {
