@@ -17,6 +17,9 @@ cargo xtask ui-snap editor --preset FluidSimulation      # FULL editor window: p
 cargo xtask ui-snap timeline --vs-mockup                 # app | mockup side-by-side
 cargo xtask ui-snap timeline --thumbs                    # inject a test atlas into the clips
 cargo xtask ui-snap all                                  # render every scene in one sweep
+cargo xtask ui-snap timeline --interact "collapse:kick"  # toggle is_collapsed on a layer; base + .after
+cargo xtask ui-snap timeline --interact "delete:flowers" # remove a layer (+ children); base + .after
+cargo xtask ui-snap scrollshrink --scroll 5000 --interact "collapse:stack-2"  # scroll + shrink content
 ```
 Output goes to `target/ui-snapshots/<scene>/`. Verified end-to-end: real `UIRoot`/`state_sync`
 path, the tree dump with real node values, a real-input-host `select:` that flips the selection-
@@ -31,6 +34,7 @@ currently injects one full-body window per clip. Golden-image diffing remains de
 |---|---|---|
 | `timeline` | Whole timeline: ruler, header column, lanes, clips, playhead. Inspector dropped. | The original whole-UI scene. `--interact`, `--dump`, `--thumbs`, `--vs-mockup`. |
 | `states` | One layer per state (normal/selected/muted/solo/collapsed/expanded) in one image. | State matrix. |
+| `scrollshrink` | 14 uniform video layers — deliberately past the `timeline` scene's exact-7-lane budget, so a vertical scrollbar exists. | P0.0 evidence fixture (`docs/TIMELINE_LAYOUT_P0_SPEC.md`) for RC1 (dual scroll state): pair with `--scroll <px>` + `--interact collapse:<id>` to capture a scrolled, content-shrinking edit. |
 | `inspector` | A selected video layer (GLOW) with a real Mirror→Bloom chain; a sine LFO armed on Mirror so the source-tinted (teal) modulation drawer renders. | The inspector — param cards, sliders, enum rows, mod drawer — was invisible before this scene (the others zero the inspector width). The fixture is built through the real `sync_inspector_data` path. |
 | `graph` | The node-graph **editor canvas only** for one preset: nodes, typed ports, wires, and **real per-node output thumbnails** (effects), on the dot-grid backdrop. `--preset <TypeId>` picks any effect or generator (default `Mirror`). | The canvas is synthesized from the catalog (`loaded_preset_view_by_id` → `snapshot_for_view` → `ui_translate::graph_snapshot_to_ui`); the thumbnails come from a **headless one-frame graph render** (the parity-harness machinery: `EffectGraphDef::into_graph` → `Executor::execute_frame_with_gpu` with `set_dump_all`), then each node's output texture is blitted over its placeholder. **Effects** render correctly (a UV-gradient fixture feeds the `Source`, so spatial effects are legible). **Generators are structure-only** — a single raw-executor frame can't produce correct generator output (particle warmup / per-frame state / HDR tonemap live in the content pipeline), so their thumbnails are skipped rather than shown wrong. Driving generators through `GeneratorRenderer` is the follow-up. The card lane / sidebar are intentionally omitted here — see `editor` for the full window. |
 | `editor` | The **FULL graph-editor window**: left preview sidebar (chrome only — backing panel, "Node Output" / "Master Out" titles, empty-state hint), center canvas (same as `graph`), right card lane (the real `ParamCardPanel` + inner-node param list, same widgets the live editor drives). `--preset <TypeId>` — **generator presets only** (e.g. `FluidSimulation`); an effect needs a chain to live in, which the fixture doesn't build yet. | Builds a one-layer fixture `Project` carrying the preset (`fixtures::generator_editor_fixture`) so `editor_card_config` resolves the real `ParamCardConfig`, not synthesized. The preview-monitor **images** are content-thread-bound (`SetGraphPreviewNode`/`SetNodeAtlasVisible`) and can't render headless — left as the live editor's own "Select a node" hint, not faked. Layout: preview docks left, card docks right (same side as the main timeline's inspector) — `EDITOR_CARD_LANE_WIDTH` / `SIDEBAR_WIDTH` in `manifold_ui::panels::graph_editor`. |
@@ -88,6 +92,18 @@ without this (you have to actually *select* something to see the selection treat
 
 `--interact "select:layer2"`, `--interact "hover:mute@layer0"`, `--interact "expand:BG STACK"`,
 chained.
+
+**Implemented today** (`ui_snapshot/interact.rs`): `select:<layer-id>` (drives a
+real click through the input host — see its own doc comment for the exact
+path), `collapse:<layer-id>` (toggles `is_collapsed` directly on the `Project`
+data, not via a synthesized chevron click — the bug classes this harness
+exists to catch live in the render/sync path's reaction to that state, not in
+input dispatch), `delete:<layer-id>` (removes the layer + any children),
+`open:settings`. Plus a `--scroll <px>` flag (not an interact verb — it seeds
+`Viewport::scroll_y_px` and the header's `ScrollContainer` offset identically,
+mirroring the settings-restore path, so a scene can start "already scrolled"
+before an `--interact` is applied). `hover:`/`expand:` above are aspirational,
+not yet built.
 
 ### 3. State matrix
 Render one component across all its states — normal / selected / muted / collapsed / expanded /

@@ -38,13 +38,21 @@ pub fn run(args: &[String]) {
     let want_vs_mockup = args.iter().any(|a| a == "--vs-mockup");
     let want_thumbs = args.iter().any(|a| a == "--thumbs");
     let interact = arg_value(args, "--interact");
+    // P0.0 evidence flag (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): seed BOTH scroll
+    // owners (`Viewport::scroll_y_px` + the header panel's `ScrollContainer`
+    // offset) to the same non-zero pixel value right after the base render
+    // and before any `--interact`, so a subsequent content-shrinking edit can
+    // be captured mid-scroll. A flag rather than an `interact` verb because it
+    // seeds state that predates the interaction being tested, not an action
+    // being tested itself.
+    let scroll_seed: Option<f32> = arg_value(args, "--scroll").and_then(|s| s.parse().ok());
 
     // `all`: render every scene in one process — a full-app eyeball after a
     // change. Skips the per-scene-only flags (mockup, interact); pass those to a
     // single scene when you need them.
     if scene == "all" {
         for s in ["timeline", "states", "inspector"] {
-            render_ui_scene(s, want_dump, false, want_thumbs, None);
+            render_ui_scene(s, want_dump, false, want_thumbs, None, None);
         }
         run_graph_preset("Mirror");
         run_editor_preset("FluidSim2D");
@@ -68,7 +76,7 @@ pub fn run(args: &[String]) {
         return;
     }
 
-    render_ui_scene(scene, want_dump, want_vs_mockup, want_thumbs, interact);
+    render_ui_scene(scene, want_dump, want_vs_mockup, want_thumbs, interact, scroll_seed);
 }
 
 /// Build + render one UITree scene (`timeline` / `states` / `inspector`) through
@@ -80,9 +88,12 @@ fn render_ui_scene(
     want_vs_mockup: bool,
     want_thumbs: bool,
     interact: Option<String>,
+    scroll_seed: Option<f32>,
 ) {
     let Some(mut data) = fixtures::build(scene) else {
-        eprintln!("ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, graph, editor, all)");
+        eprintln!(
+            "ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, scrollshrink, graph, editor, all)"
+        );
         std::process::exit(2);
     };
 
@@ -105,6 +116,20 @@ fn render_ui_scene(
     }
     sync_build(&mut ui, &data);
     render_and_dump(&ui, &data.selection, &dir, scene, "", want_dump, want_thumbs);
+
+    // P0.0 evidence: seed both scroll owners to the same pixel value now that
+    // the mapper's real `total_content_height()` is current (from the
+    // `sync_build` above) — mirrors `ui_root.rs:512-517`'s settings-restore
+    // path. Neither owner is touched again by the structural resync inside
+    // the `--interact` branch below (`sync_project_data` never calls
+    // `set_scroll`), so this reproduces "user scrolled, then the content
+    // shrank" exactly as RC1 describes it.
+    if let Some(y) = scroll_seed {
+        let x = ui.viewport.scroll_x_beats().as_f32();
+        ui.viewport.set_scroll(x, y);
+        ui.layer_headers.set_scroll_y(y);
+        println!("ui-snap: scroll-seed y={y} (viewport clamped to {})", ui.viewport.scroll_y_px());
+    }
 
     // Optional: render the HTML mockup and composite app | mockup side by side.
     if want_vs_mockup {

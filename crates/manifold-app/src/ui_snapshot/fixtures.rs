@@ -29,6 +29,7 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "timeline" => Some(timeline_scene()),
         "states" => Some(states_scene()),
         "inspector" => Some(inspector_scene()),
+        "scrollshrink" => Some(scroll_shrink_scene()),
         _ => None,
     }
 }
@@ -131,6 +132,34 @@ fn timeline_scene() -> SceneData {
 
     // No selection by default — `--interact select:<layer>` makes the ring appear,
     // so base-vs-after renders/dumps differ measurably.
+    SceneData { project, content, active: None, selection: UIState::default() }
+}
+
+/// P0.0 evidence scene for `docs/TIMELINE_LAYOUT_P0_SPEC.md`'s RC1 (dual scroll
+/// state): 14 video layers at `TrackHeight::Normal` — well past the
+/// `LOGICAL_H` viewport budget the `timeline` scene was sized to exactly fit
+/// (7 lanes), so a vertical scrollbar exists and a `--scroll` seed is
+/// meaningful. Used with `--scroll <px>` (seeds both `Viewport::scroll_y_px`
+/// and `LayerHeaderPanel`'s `ScrollContainer` offset identically, mirroring
+/// `ui_root.rs:512-517`'s settings-restore path) plus `--interact
+/// collapse:<id>` on one of the layers, to capture the header/lane detach when
+/// a scrolled, content-shrinking edit reclamps one column's scroll state but
+/// not the other's.
+fn scroll_shrink_scene() -> SceneData {
+    let mut layers: Vec<Layer> = Vec::new();
+    for i in 0..14 {
+        let id = format!("stack-{i}");
+        let mut l = Layer::new(format!("LAYER {i}"), LayerType::Video, i);
+        l.layer_id = lid(&id);
+        l.clips.push(TimelineClip::new_video(format!("{id}.mov"), Beats(0.0), Beats(48.0), Seconds::ZERO));
+        layers.push(l);
+    }
+
+    let mut project = Project::default();
+    project.timeline.layers = layers;
+
+    let content = ContentState { current_beat: Beats(0.0), is_playing: false, ..Default::default() };
+
     SceneData { project, content, active: None, selection: UIState::default() }
 }
 
