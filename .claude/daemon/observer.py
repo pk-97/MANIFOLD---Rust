@@ -82,6 +82,36 @@ def _atomic_write_json(path, obj):
     os.replace(tmp, path)
 
 
+WORKER_NUDGES_FLAG = os.path.join(VERDICTS_DIR, "worker-nudges.enabled")
+
+
+def _worker_nudges_enabled():
+    return os.path.exists(WORKER_NUDGES_FLAG)
+
+
+class AgentWorker:
+    """Per-subagent mailbox + window state (DESIGN.md §2b, shipped OFF behind
+    WORKER_NUDGES_FLAG). Deliberately duck-types the subset of Daemon's own
+    attributes that `_handle_window`/`_resolve_fire`/`_read_verdict_file`/
+    `_read_consumed` read through `mailbox`, so those methods run unmodified
+    for agents instead of a forked copy that could drift from the session
+    path. No §4b scoring here — that stays session-only (see `_resolve_fire`)."""
+
+    def __init__(self, agent_id, session_id, transcript_path):
+        self.agent_id = agent_id
+        key = f"{session_id}.{agent_id}"
+        self.verdict_path = os.path.join(VERDICTS_DIR, f"{key}.json")
+        self.consumed_path = os.path.join(VERDICTS_DIR, f"{key}.consumed")
+        self.transcript_path = transcript_path
+        self.offset = 0
+        self.state = common.WindowState()
+        self.last_fire_event = {}
+        self.fire_count = {}
+        self.escalated = False
+        self.next_seq = 1
+        self.phase = "orienting"
+
+
 class Daemon:
     def __init__(self, session_id, transcript_path):
         self.session_id = session_id
@@ -108,6 +138,10 @@ class Daemon:
         self.pending_scores = {}  # seq -> {move_id, start_event_count, baseline_tool_class}
         self.recent_events = collections.deque(maxlen=64)  # (event_count, tool_class, status)
         self.last_consumed_seq = 0  # re-seeded in _run; tracks delivery via the consumed marker
+
+        # DESIGN.md §2b: worker nudges, shipped OFF (see _worker_nudges_enabled).
+        self.session_dir = os.path.dirname(transcript_path)
+        self.agents = {}  # agent_id -> AgentWorker
 
     # ---- lifecycle ----
 
@@ -196,7 +230,85 @@ class Daemon:
                 break
             self._check_deliveries(logf)
             self._score_pending(logf)
+            self._scan_agents(logf)
             time.sleep(POLL_SECONDS)
+
+    # ---- worker nudges (DESIGN.md §2b, shipped OFF) ----
+
+    def _scan_agents(self, logf):
+        """No-op unless WORKER_NUDGES_FLAG exists — the whole subagent-tailing
+        feature is otherwise unreachable code, per the ship-dark requirement."""
+        if not _worker_nudges_enabled():
+            return
+        subdir = os.path.join(self.session_dir, "subagents")
+        try:
+            names = os.listdir(subdir)
+        except OSError:
+            return
+        for name in sorted(names):
+            if not (name.startswith("agent-") and name.endswith(".jsonl")):
+                continue
+            agent_id = name[len("agent-") : -len(".jsonl")]
+            if agent_id in self.agents:
+                continue
+            worker = AgentWorker(agent_id, self.session_id, os.path.join(subdir, name))
+            self.agents[agent_id] = worker
+            try:
+                worker.offset = self._agent_drain(worker, logf, classify=False)
+                _log(logf, f"worker-nudges: discovered agent {agent_id}, catchup offset={worker.offset}")
+            except Exception:
+                _log(logf, f"worker-nudges: catchup failed for {agent_id}:\n" + traceback.format_exc())
+        for agent_id, worker in list(self.agents.items()):
+            try:
+                size = os.path.getsize(worker.transcript_path)
+            except OSError:
+                continue
+            if size > worker.offset:
+                try:
+                    worker.offset = self._agent_drain(worker, logf, classify=True)
+                except Exception:
+                    _log(logf, f"worker-nudges: drain failed for {agent_id}:\n" + traceback.format_exc())
+
+    def _agent_drain(self, worker, logf, classify):
+        """Mirrors `_drain`, reading `worker.transcript_path` into
+        `worker.state` instead of `self.state`. No outcome-scoring ledger —
+        that stays session-only (§4b is out of this item's scope)."""
+        with open(worker.transcript_path, encoding="utf-8", errors="replace") as f:
+            f.seek(worker.offset)
+            offset = worker.offset
+            while True:
+                line = f.readline()
+                if not line or not line.endswith("\n"):
+                    break
+                try:
+                    self._agent_feed_line(worker, line, classify, logf)
+                except Exception:
+                    _log(logf, f"worker-nudges: feed_line error ({worker.agent_id}):\n" + traceback.format_exc())
+                offset = f.tell()
+        return offset
+
+    def _agent_feed_line(self, worker, line, classify, logf):
+        line = line.strip()
+        if not line:
+            return
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            return
+        etype = d.get("type")
+        if etype not in ("user", "assistant"):
+            return
+        content = d.get("message", {}).get("content")
+        ts = common.parse_ts(d.get("timestamp"))
+        closed = None
+        if etype == "assistant":
+            if isinstance(content, list) and content:
+                closed = worker.state.feed_assistant_content(content, ts, model=d.get("message", {}).get("model"))
+        else:
+            if content is not None and not (isinstance(content, list) and not content):
+                closed, _human = worker.state.feed_user_content(content, ts)
+        if closed and classify:
+            self._handle_window(closed, logf, mailbox=worker)
 
     # ---- transcript reading ----
 
@@ -285,83 +397,100 @@ class Daemon:
 
     # ---- classification + verdict mailbox ----
 
-    def _handle_window(self, window, logf):
+    def _handle_window(self, window, logf, mailbox=None):
+        """`mailbox=None` is the main session (uses `self.*` directly — the
+        exact, unchanged path). DESIGN.md §2b's worker-nudges extension
+        passes an `AgentWorker` here instead, which duck-types the same
+        `verdict_path`/`phase`/fire-tracking attributes `self` has, so this
+        method (and `_resolve_fire` below) is reused verbatim rather than
+        forked — the two paths cannot drift apart the way separately
+        maintained copies would."""
+        mb = mailbox if mailbox is not None else self
         verdict = common.call_classifier(self.system_prompt, window["text"])
         if "error" in verdict:
             _log(logf, f"classifier error: {verdict['error']}")
             return  # fail open — leave the verdict file as it was
 
-        self.phase = verdict.get("phase") or self.phase
+        mb.phase = verdict.get("phase") or mb.phase
         raw_flag = verdict.get("flag")
         move_id = common.validate_move_id(raw_flag, self.moves)
         if raw_flag and not move_id:
             _log(logf, f"rejected unknown/invalid move id from classifier: {raw_flag!r}")
 
-        flag_out = self._resolve_fire(window["end_event_count"], move_id, verdict, logf) if move_id else None
+        flag_out = self._resolve_fire(window["end_event_count"], move_id, verdict, logf, mailbox=mailbox) if move_id else None
 
         record = {
             "ts": time.time(),
             "window_range": {"end_event_count": window["end_event_count"], "end_ts": window["end_ts"]},
-            "phase": self.phase,
+            "phase": mb.phase,
         }
         if flag_out:
             record["flag"] = flag_out
         else:
             # Never clobber an undelivered whisper with null — DESIGN.md
             # invariant 3 is "one whisper at a time", not "zero eventually".
-            prior = self._read_verdict_file()
+            prior = self._read_verdict_file(mailbox)
             record["flag"] = prior["flag"] if prior and prior.get("flag") else None
-        _atomic_write_json(self.verdict_path, record)
+        _atomic_write_json(mb.verdict_path, record)
 
-    def _read_verdict_file(self):
+    def _read_verdict_file(self, mailbox=None):
+        mb = mailbox if mailbox is not None else self
         try:
-            with open(self.verdict_path, encoding="utf-8") as f:
+            with open(mb.verdict_path, encoding="utf-8") as f:
                 return json.load(f)
         except (OSError, json.JSONDecodeError):
             return None
 
-    def _read_consumed(self):
+    def _read_consumed(self, mailbox=None):
+        mb = mailbox if mailbox is not None else self
         try:
-            with open(self.consumed_path, encoding="utf-8") as f:
+            with open(mb.consumed_path, encoding="utf-8") as f:
                 return int(f.read().strip() or "0")
         except (OSError, ValueError):
             return 0
 
-    def _resolve_fire(self, event_count, move_id, verdict, logf):
+    def _resolve_fire(self, event_count, move_id, verdict, logf, mailbox=None):
+        mb = mailbox if mailbox is not None else self
         if self._is_muted(move_id):
             _log(logf, f"suppressed {move_id} — auto-muted (DESIGN.md §4b)")
             return None
         cd_class = self.moves.get(move_id, {}).get("cooldown", "standard")
         if cd_class == "once":
-            if self.fire_count.get(move_id, 0) >= 1:
+            if mb.fire_count.get(move_id, 0) >= 1:
                 return None
         else:
             limit = common.COOLDOWN_EVENTS.get(cd_class, 20)
-            prev = self.last_fire_event.get(move_id)
+            prev = mb.last_fire_event.get(move_id)
             if prev is not None and (event_count - prev) < limit:
                 return None
 
         # One live flag at a time: don't raise a new one while the last
         # delivered flag is still sitting unconsumed in the mailbox.
-        prior = self._read_verdict_file()
+        prior = self._read_verdict_file(mailbox)
         if prior and prior.get("flag"):
             prior_seq = prior["flag"].get("seq")
-            if prior_seq is not None and self._read_consumed() < prior_seq:
+            if prior_seq is not None and self._read_consumed(mailbox) < prior_seq:
                 _log(logf, f"suppressed {move_id} — prior flag seq={prior_seq} still undelivered")
                 return None
 
-        self.last_fire_event[move_id] = event_count
-        self.fire_count[move_id] = self.fire_count.get(move_id, 0) + 1
+        mb.last_fire_event[move_id] = event_count
+        mb.fire_count[move_id] = mb.fire_count.get(move_id, 0) + 1
         effective_id = move_id
 
-        if self.fire_count[move_id] > ESCALATE_AFTER and not self.escalated and "escalate/checkpoint" in self.moves:
+        if mb.fire_count[move_id] > ESCALATE_AFTER and not mb.escalated and "escalate/checkpoint" in self.moves:
             effective_id = "escalate/checkpoint"
-            self.escalated = True
-            _log(logf, f"escalating {move_id} -> escalate/checkpoint after {self.fire_count[move_id]} fires")
+            mb.escalated = True
+            _log(logf, f"escalating {move_id} -> escalate/checkpoint after {mb.fire_count[move_id]} fires")
 
-        seq = self.next_seq
-        self.next_seq += 1
-        self.fire_records[seq] = effective_id
+        seq = mb.next_seq
+        mb.next_seq += 1
+        if mailbox is None:
+            # §4b outcome scoring is session-only for now (item 3's scope is
+            # delivery infra, not scoring) — and mailbox.next_seq is a
+            # separate counter per agent, so recording it here under the
+            # session's shared self.fire_records would collide seq numbers
+            # across mailboxes.
+            self.fire_records[seq] = effective_id
         return {
             "move_id": effective_id,
             "evidence": verdict.get("evidence"),

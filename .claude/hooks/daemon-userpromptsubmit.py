@@ -39,6 +39,7 @@ def main():
             {
                 "ts": time.time(),
                 "session_id": session_id,
+                "agent_id": None,  # UserPromptSubmit is session-only (DESIGN.md §2b routes PostToolUse only)
                 "event": "injected",
                 "valve": "UserPromptSubmit",
                 "seq": seq,

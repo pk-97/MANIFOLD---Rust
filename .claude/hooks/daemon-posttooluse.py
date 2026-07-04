@@ -32,22 +32,34 @@ def main():
         # reviving from one is correct.)
         valve.ensure_observer(session_id, data.get("transcript_path"))
         # This hook also fires for tool calls made INSIDE subagents (agent_id
-        # set), with the main session's id. The verdict is computed from the
-        # orchestrator's transcript — delivering here would inject it into the
-        # wrong context AND mark it consumed, so the orchestrator never sees
-        # it. During orchestration most fires are subagent fires, so without
-        # this guard mis-delivery is the common case (verified by probe,
-        # 2026-07-04).
-        if data.get("agent_id"):
+        # set), with the main session's id. The verdict computed from the
+        # orchestrator's transcript must never be delivered to a subagent
+        # (wrong context, and it'd mark the whisper consumed so the
+        # orchestrator never sees it) — during orchestration most fires are
+        # subagent fires, so without this the mis-delivery is the common
+        # case (verified by probe, 2026-07-04).
+        #
+        # DESIGN.md §2b worker nudges (shipped OFF): behind
+        # WORKER_NUDGES_FLAG, an agent-tagged event routes to that agent's
+        # OWN mailbox (`<session>.<agent_id>`) instead of being skipped — a
+        # second probe (2026-07-04, same method) confirmed additionalContext
+        # returned from a subagent-tagged PostToolUse fire lands in the
+        # SUBAGENT's own context, not the parent's, so this is safe once the
+        # flag exists. With the flag absent (the only state so far — nobody
+        # creates it), behavior is byte-for-byte what shipped before §2b.
+        agent_id = data.get("agent_id")
+        if agent_id and not valve.worker_nudges_enabled():
             return
-        block, seq = valve.pending_injection(session_id)
+        key = f"{session_id}.{agent_id}" if agent_id else session_id
+        block, seq = valve.pending_injection(key)
         if not block:
             return
-        valve.write_consumed(session_id, seq)
+        valve.write_consumed(key, seq)
         valve.append_telemetry(
             {
                 "ts": time.time(),
                 "session_id": session_id,
+                "agent_id": agent_id,
                 "event": "injected",
                 "valve": "PostToolUse",
                 "seq": seq,

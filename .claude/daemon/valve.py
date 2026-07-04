@@ -17,8 +17,17 @@ DAEMON_DIR = os.path.dirname(os.path.abspath(__file__))
 VERDICTS_DIR = os.path.join(DAEMON_DIR, "verdicts")
 MOVES_PATH = os.path.join(DAEMON_DIR, "moves.md")
 TELEMETRY_PATH = os.path.join(DAEMON_DIR, "telemetry.jsonl")
+WORKER_NUDGES_FLAG = os.path.join(VERDICTS_DIR, "worker-nudges.enabled")
 
 VERDICT_MAX_AGE = 300  # 5 min — DESIGN.md invariant 1: a stale verdict is treated as absent
+
+
+def worker_nudges_enabled():
+    """DESIGN.md §2b, shipped OFF: absent flag file = fully dark. Nobody
+    creates this file — the caller (PostToolUse hook) must keep returning
+    immediately for agent-tagged events while this is False, exactly like
+    before the feature existed."""
+    return os.path.exists(WORKER_NUDGES_FLAG)
 
 _PAYLOAD_CACHE = None
 
