@@ -3912,6 +3912,9 @@ impl Application {
                         cr.rect.x += drag_dx;
                         cr.rect.y += lift_dy;
                     }
+                    // D17 "clip split flick": a brief 1px separation between
+                    // the two just-split halves, independent of drag state.
+                    cr.rect.x += self.ws.ui_root.viewport.split_flick_offset(&cr.clip_id);
                     self.clip_body_scratch
                         .push(manifold_renderer::clip_draw::ClipBody {
                             rect: cr.rect,

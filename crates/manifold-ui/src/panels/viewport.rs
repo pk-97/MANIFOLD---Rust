@@ -204,6 +204,22 @@ pub struct TimelineViewportPanel {
     /// Wall-clock timestamp `update()` last ticked `region_alpha` from —
     /// mirrors `DropdownPanel::last_tick`.
     region_alpha_last_tick: Option<std::time::Instant>,
+
+    /// D17 "clip split flick": the two just-split clip ids separate by
+    /// ~1px briefly, a one-shot hump (out then back) rather than a
+    /// decaying shake. `None` when idle.
+    split_flick: Option<SplitFlickState>,
+    /// Wall-clock timestamp `update()` last ticked `split_flick` from.
+    split_flick_last_tick: Option<std::time::Instant>,
+}
+
+/// D17 "clip split flick" state — which two clip ids are separating, and
+/// how far through the one-shot hump. Purely visual (the split itself
+/// already committed via `SplitClipCommand` by the time this fires).
+struct SplitFlickState {
+    left_id: ClipId,
+    right_id: ClipId,
+    flick: crate::anim::Transient,
 }
 
 /// Viewport-local drag mode. Only tracks ruler scrub — all clip interaction
@@ -289,6 +305,59 @@ impl TimelineViewportPanel {
             marker_drag_start_beat: Beats::ZERO,
             region_alpha: crate::anim::AnimF32::new(0.0, color::MOTION_FAST_MS),
             region_alpha_last_tick: None,
+            split_flick: None,
+            split_flick_last_tick: None,
+        }
+    }
+
+    /// Fire the D17 "clip split flick" for a just-completed split — call
+    /// right after `EditingService::split_clip_at_beat` returns a command,
+    /// with the original clip's id and `SplitClipCommand::tail_clip_id()`.
+    pub fn fire_split_flick(&mut self, left_id: ClipId, right_id: ClipId) {
+        let mut flick = crate::anim::Transient::default();
+        flick.fire(color::MOTION_MED_MS);
+        self.split_flick = Some(SplitFlickState { left_id, right_id, flick });
+        self.split_flick_last_tick = None;
+    }
+
+    /// Advance the split-flick hump by real elapsed wall-clock time; drops
+    /// the state once finished. Called from `update()`.
+    fn tick_split_flick(&mut self) {
+        let Some(state) = self.split_flick.as_mut() else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        let dt_ms = self
+            .split_flick_last_tick
+            .map(|t| (now - t).as_secs_f32() * 1000.0)
+            .unwrap_or(0.0)
+            .min(100.0);
+        self.split_flick_last_tick = Some(now);
+        if !state.flick.tick(dt_ms) {
+            self.split_flick = None;
+        }
+    }
+
+    /// The X offset (screen px) `clip_id` should draw at for the split
+    /// flick — `+` for the left half separating leftward, `-` for the
+    /// right half separating rightward, a one-shot hump via `sin(pi * t)`
+    /// (out then back, not a decaying oscillation like the error shake).
+    /// `0.0` when idle or `clip_id` isn't one of the two split halves.
+    pub fn split_flick_offset(&self, clip_id: &ClipId) -> f32 {
+        const AMPLITUDE_PX: f32 = 1.0;
+        let Some(state) = &self.split_flick else {
+            return 0.0;
+        };
+        let Some(p) = state.flick.progress() else {
+            return 0.0;
+        };
+        let hump = (p * std::f32::consts::PI).sin() * AMPLITUDE_PX;
+        if *clip_id == state.left_id {
+            -hump
+        } else if *clip_id == state.right_id {
+            hump
+        } else {
+            0.0
         }
     }
 
@@ -1298,6 +1367,7 @@ impl Panel for TimelineViewportPanel {
         self.sync_insert_cursor_ruler(tree);
         self.sync_active_track_lane(tree);
         self.tick_region_alpha();
+        self.tick_split_flick();
     }
 
     fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
@@ -2000,5 +2070,33 @@ mod tests {
             .region
             .expect("still exists after the drag ends");
         assert_eq!(after.a, before.a, "stays at full strength — no fade-out on drag-end alone");
+    }
+
+    // ── P2 motion (D17 "clip split flick") ──────────────────────────
+
+    #[test]
+    fn split_flick_separates_the_two_halves_oppositely_then_settles() {
+        let mut panel = TimelineViewportPanel::new();
+        let left = ClipId::new("left-half");
+        let right = ClipId::new("right-half");
+        let other = ClipId::new("unrelated-clip");
+
+        assert_eq!(panel.split_flick_offset(&left), 0.0, "idle before firing");
+
+        panel.fire_split_flick(left.clone(), right.clone());
+        // Mid-hump (progress != 0/1): left and right move opposite ways by
+        // the same magnitude; an unrelated clip id is untouched.
+        panel.split_flick.as_mut().unwrap().flick.tick(color::MOTION_MED_MS * 0.5);
+        let l = panel.split_flick_offset(&left);
+        let r = panel.split_flick_offset(&right);
+        assert!(l < 0.0, "left half separates leftward: {l}");
+        assert!(r > 0.0, "right half separates rightward: {r}");
+        assert!((l + r).abs() < 1e-4, "equal and opposite: {l} vs {r}");
+        assert_eq!(panel.split_flick_offset(&other), 0.0, "unrelated clip untouched");
+
+        // Past the full duration, the hump finishes and ticking drops it.
+        panel.split_flick.as_mut().unwrap().flick.tick(color::MOTION_MED_MS);
+        panel.tick_split_flick();
+        assert_eq!(panel.split_flick_offset(&left), 0.0, "settles back to zero");
     }
 }
