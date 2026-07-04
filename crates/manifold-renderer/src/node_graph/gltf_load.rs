@@ -399,14 +399,8 @@ pub(crate) fn load_gltf_texture(
 /// the base-color texture index (into `document.textures()`), the alpha
 /// mode, and the exact world-combined triangle-list vertex count (which
 /// sizes that object's `gltf_mesh_source.max_capacity`).
-// Stage 1 output — consumed by `gltf_import::assemble_import_graph` (P1c
-// stage 2), which today only has a `#[cfg(test)]` caller of its own; a
-// production import command/UI is a later stage of the glTF wave. Until
-// then this whole chain (`GltfMaterialInfo`, `GltfImportSummary`,
-// `summarize_node`, `gltf_import_summary`) is unreachable from a plain
-// `--lib` (non-test) build, which is all `cargo clippy --all-targets`
-// checks beyond the test target.
-#[allow(dead_code)]
+// Stage 1 output — consumed by `gltf_import::assemble_import_graph`, which
+// the `manifold-app` file-drop handler calls in production.
 #[derive(Debug, Clone)]
 pub(crate) struct GltfMaterialInfo {
     pub material_index: u32,
@@ -429,7 +423,6 @@ pub(crate) struct GltfMaterialInfo {
 /// framing camera + recentre), and counts of glTF cameras and
 /// default-material (unassigned) geometry so the importer can report what
 /// it did and didn't handle.
-#[allow(dead_code)] // see the note on `GltfMaterialInfo` above
 #[derive(Debug, Clone)]
 pub(crate) struct GltfImportSummary {
     pub materials: Vec<GltfMaterialInfo>,
@@ -445,7 +438,6 @@ pub(crate) struct GltfImportSummary {
 /// Recursively accumulate per-material world-combined vertex counts and a
 /// world-space bounding box over a node subtree. Keyed by
 /// `material().index()` (`None` = glTF default material).
-#[allow(dead_code)] // see the note on `GltfMaterialInfo` above
 fn summarize_node(
     node: &gltf::Node,
     parent_world: Mat4,
@@ -489,7 +481,6 @@ fn summarize_node(
 /// Parse a glb's structure for the importer: the distinct materials with
 /// geometry, the world-space bbox, camera count, and unassigned-geometry
 /// count. One parse; no GPU. See [`GltfImportSummary`].
-#[allow(dead_code)] // see the note on `GltfMaterialInfo` above
 pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSummary, String> {
     let (document, buffers, _images) =
         gltf::import(path).map_err(|e| format!("gltf::import({}): {e}", path.display()))?;
