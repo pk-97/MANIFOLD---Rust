@@ -424,7 +424,7 @@ fn render_mesh_scene(
     let color_slot = backend.pre_bind_texture_2d(r_color, color_target);
 
     // Mesh vertex buffer, pre-filled with the caller's geometry.
-    let vert_bytes = (verts.len() * std::mem::size_of::<MeshVertex>()) as u64;
+    let vert_bytes = std::mem::size_of_val(verts) as u64;
     let vert_buf = device.create_buffer_shared(vert_bytes);
     unsafe {
         vert_buf.write(0, bytemuck::cast_slice(verts));
@@ -1337,11 +1337,31 @@ fn azalea_glb_renders_lit_through_render_scene() {
     g.set_param(mat, "color_r", ParamValue::Float(0.45)).unwrap();
     g.set_param(mat, "color_g", ParamValue::Float(0.55)).unwrap();
     g.set_param(mat, "color_b", ParamValue::Float(0.35)).unwrap();
-    g.set_param(mat, "ambient", ParamValue::Float(0.2)).unwrap();
+    g.set_param(mat, "ambient", ParamValue::Float(0.35)).unwrap();
 
-    // Default Sun (mode 0): pos (0, 30, 0), aim origin, white, intensity 1 —
-    // a plain overhead key light, sufficient to prove the lit path fires.
+    // Key light front-lighting the CAMERA-FACING side. This renderer's
+    // shared vertex winding makes the camera-visible faces of a convex mesh
+    // report `front_facing == false`, so the shader flips their outward
+    // normal to point away from the camera (documented + gated by
+    // `back_face_is_lit_by_front_facing_flip` and used by
+    // `render_scene_two_cubes_png` above). The stored light vector is
+    // `normalize(pos - aim)`, so to hit those FLIPPED normals the Sun must
+    // sit in the OCTANT OPPOSITE the orbit camera: the camera (orbit 0.7,
+    // tilt 0.3) is in (+X,+Y,+Z), so the light goes in (−X,−Y,−Z). Placing
+    // it in the camera's own octant (the naive choice) lights the un-flipped
+    // side instead — N·L ≤ 0 on every visible face → a flat ambient-only
+    // silhouette. The offset is raked (more −X/−Z than −Y) for a clear
+    // left-to-right light/shadow gradient across the foliage rather than
+    // flat frontal fill. Intensity 1.5.
     let light = g.add_node(Box::new(LightNode::new()));
+    g.set_param(light, "mode", ParamValue::Enum(0)).unwrap(); // Sun
+    g.set_param(light, "pos_x", ParamValue::Float(-5.0)).unwrap();
+    g.set_param(light, "pos_y", ParamValue::Float(-2.0)).unwrap();
+    g.set_param(light, "pos_z", ParamValue::Float(-3.0)).unwrap();
+    g.set_param(light, "aim_x", ParamValue::Float(0.0)).unwrap();
+    g.set_param(light, "aim_y", ParamValue::Float(0.0)).unwrap();
+    g.set_param(light, "aim_z", ParamValue::Float(0.0)).unwrap();
+    g.set_param(light, "intensity", ParamValue::Float(1.5)).unwrap();
 
     let render = g.add_node(Box::new(RenderScene::new()));
     g.set_param(render, "objects", ParamValue::Float(1.0)).unwrap();

@@ -394,12 +394,12 @@ mod tests {
         let target = [2.0, 1.0, 5.0];
         let cam = Camera::look_at(pos, target, [0.0, 1.0, 0.0], 0.9, 0.05, 200.0);
         let expected_fwd = normalize3(sub3(target, pos));
-        for axis in 0..3 {
+        for (axis, &expected) in expected_fwd.iter().enumerate() {
             assert!(
-                (cam.fwd[axis] - expected_fwd[axis]).abs() < 1e-6,
+                (cam.fwd[axis] - expected).abs() < 1e-6,
                 "axis {axis}: got {} expected {}",
                 cam.fwd[axis],
-                expected_fwd[axis],
+                expected,
             );
         }
         assert_eq!(cam.pos, pos);
