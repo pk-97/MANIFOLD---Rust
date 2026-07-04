@@ -37,6 +37,23 @@ pub struct ExportFinishedEvent {
     pub output_path: String,
 }
 
+/// D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — the real command
+/// description, so the toast reads "Undid: Move Clip" instead of a generic
+/// "Undo". Unlike `ExportFinishedEvent` (a rare, out-of-band send from a
+/// blocking export thread), undo/redo run inline on every normal content-tick
+/// loop iteration, so this rides the REGULAR per-tick `ContentState` build
+/// instead of a separate degraded-snapshot message — see
+/// `ContentThread::pending_undo_redo_event` (content_thread.rs) and its
+/// `.take()` at the state-build site. `content_commands.rs`'s `Undo`/`Redo`
+/// handlers populate it by peeking `EditingService::peek_undo_description` /
+/// `peek_redo_description` BEFORE calling `undo`/`redo` (the command moves
+/// stacks once acted on).
+#[derive(Clone, Debug)]
+pub struct UndoRedoEvent {
+    pub is_redo: bool,
+    pub description: String,
+}
+
 /// State snapshot sent from the content thread to the UI thread.
 /// The UI thread drains these from a bounded channel and uses the latest.
 // FIXME(dead-code-audit): several fields written by content thread but never
@@ -145,6 +162,13 @@ pub struct ContentState {
     pub export_status: Arc<str>,
     /// Set once when export finishes (success or failure).
     pub export_finished: Option<ExportFinishedEvent>,
+
+    // ── Undo/redo ─────────────────────────────────────────────────
+    /// Set on the tick an undo/redo actually happened; `None` every other
+    /// tick. D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — see
+    /// [`UndoRedoEvent`]'s doc comment for why this differs from
+    /// `export_finished`'s out-of-band pattern.
+    pub undo_redo_event: Option<UndoRedoEvent>,
 
     // ── Ableton bridge ──────────────────────────────────────────
     /// Ableton session data for UI dropdown population.
@@ -445,6 +469,7 @@ impl Default for ContentState {
             export_progress: 0.0,
             export_status: Arc::from(""),
             export_finished: None,
+            undo_redo_event: None,
             ableton_session: None,
             ableton_connected: false,
             ableton_transport_enabled: false,

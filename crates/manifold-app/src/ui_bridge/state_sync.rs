@@ -266,6 +266,21 @@ pub fn push_state(
             }
         }
 
+        // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — real command
+        // label instead of the generic "Undo"/"Redo" the M::Undo/M::Redo menu
+        // handlers used to show directly (`app_render.rs`). Same re-fire guard
+        // as the export toast above; keyed on `data_version` (bumped by every
+        // undo/redo) rather than the description, so undoing the same command
+        // twice in a row (rare, but possible via redo-then-undo) still fires.
+        if let Some(ev) = &content_state.undo_redo_event {
+            let key = content_state.data_version;
+            if ui.last_undo_redo_toast_key != Some(key) {
+                let verb = if ev.is_redo { "Redid" } else { "Undid" };
+                ui.toast.show(format!("{verb}: {}", ev.description));
+                ui.last_undo_redo_toast_key = Some(key);
+            }
+        }
+
         // Cache Ableton session for parameter mapping dropdown
         if let Some(session) = &content_state.ableton_session {
             ui.ableton_session = Some(std::sync::Arc::clone(session));

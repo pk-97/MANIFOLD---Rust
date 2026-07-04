@@ -256,8 +256,19 @@ impl ContentThread {
                         p.settings.render_scale,
                     )
                 });
+                // D11 undo/redo toast: peek the description of the command
+                // ABOUT to be undone before calling `undo` — the manager
+                // moves it onto the redo stack once acted on, so peeking
+                // after would need a second (post-undo) accessor.
+                let desc = self.editing_service.peek_undo_description().map(str::to_string);
                 if let Some(p) = self.engine.project_mut() {
-                    let _ = self.editing_service.undo(p);
+                    let undone = self.editing_service.undo(p);
+                    if undone {
+                        self.pending_undo_redo_event = Some(crate::content_state::UndoRedoEvent {
+                            is_redo: false,
+                            description: desc.unwrap_or_else(|| "action".to_string()),
+                        });
+                    }
                 }
                 self.engine.mark_compositor_dirty_now();
                 self.engine.mark_sync_dirty();
@@ -303,8 +314,17 @@ impl ContentThread {
                         p.settings.render_scale,
                     )
                 });
+                // D11 undo/redo toast: peek BEFORE calling `redo` — see the
+                // matching comment in the `Undo` arm above.
+                let desc = self.editing_service.peek_redo_description().map(str::to_string);
                 if let Some(p) = self.engine.project_mut() {
-                    let _ = self.editing_service.redo(p);
+                    let redone = self.editing_service.redo(p);
+                    if redone {
+                        self.pending_undo_redo_event = Some(crate::content_state::UndoRedoEvent {
+                            is_redo: true,
+                            description: desc.unwrap_or_else(|| "action".to_string()),
+                        });
+                    }
                 }
                 self.engine.mark_compositor_dirty_now();
                 self.engine.mark_sync_dirty();

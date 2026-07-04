@@ -197,6 +197,12 @@ pub struct UIRoot {
     /// enough to just compare as a string. `None` = no export toast shown yet.
     pub last_export_toast_key: Option<String>,
 
+    /// Same re-fire guard as `last_export_toast_key`, for the D11 undo/redo
+    /// toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2). Keyed on
+    /// `content_state.data_version` (undo/redo always bumps it, so each real
+    /// undo/redo gets a distinct key even when the description repeats).
+    pub last_undo_redo_toast_key: Option<u64>,
+
     /// Project-embedded ("forked") presets surfaced into the Add pickers, kept
     /// in sync with the content snapshot. Change-gated by
     /// `embedded_presets_fingerprint` so the Vec rebuilds only when the embedded
@@ -361,6 +367,7 @@ impl UIRoot {
             perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel::new(),
             toast: manifold_ui::panels::toast::ToastPanel::new(),
             last_export_toast_key: None,
+            last_undo_redo_toast_key: None,
             embedded_presets: Vec::new(),
             embedded_presets_fingerprint: 0,
             built: false,

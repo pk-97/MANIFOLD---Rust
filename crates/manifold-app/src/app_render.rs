@@ -855,22 +855,20 @@ impl Application {
                     if let Some(tx) = self.content_tx.as_ref() {
                         crate::ui_bridge::undo(tx);
                     }
-                    // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2).
-                    // Generic label: the undone command's *name* lives only in
-                    // the content thread's `UndoRedoManager` (each `Command`
-                    // has a `description()` — manifold-editing/src/command.rs:9
-                    // — but nothing plumbs it into `ContentState` today, and
-                    // adding that field means editing content_commands.rs /
-                    // content_state.rs, both `content*` and out of this
-                    // phase's bounds). Escalated in the phase report rather
-                    // than crossing that line.
-                    self.ws.ui_root.toast.show("Undo");
+                    // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2):
+                    // the real "Undid: <command name>" label now fires from
+                    // `ui_bridge/state_sync.rs`'s `push_state`, once the
+                    // content thread's `ContentState.undo_redo_event` round-
+                    // trips back with the actual command description (see
+                    // `content_commands.rs`'s `Undo`/`Redo` handlers and
+                    // `ContentThread::pending_undo_redo_event`). No toast is
+                    // fired here directly any more — that would show a
+                    // generic label first and then get immediately replaced.
                 }
                 M::Redo => {
                     if let Some(tx) = self.content_tx.as_ref() {
                         crate::ui_bridge::redo(tx);
                     }
-                    self.ws.ui_root.toast.show("Redo");
                 }
                 M::Settings => self.pending_open_settings = true,
             }

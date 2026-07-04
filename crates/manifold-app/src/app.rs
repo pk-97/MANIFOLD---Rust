@@ -2101,6 +2101,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 last_sent_midi_device_names: Arc::from([]),
                 // No project is live at construction, so no forks yet.
                 embedded_presets_fingerprint: 0,
+                pending_undo_redo_event: None,
                 #[cfg(feature = "profiling")]
                 profiler: None,
             };
