@@ -646,18 +646,18 @@ mod tests {
     #[test]
     fn chip_motion_eases_toward_hover_and_back() {
         let mut m = ChipMotion::new();
-        assert_eq!(m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)), Color32::BLACK);
+        assert_eq!(m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)), Color32::BLACK); // design-token-exempt: test fixture (chip-motion tween highlight)
 
         assert!(m.tick(45.0, true, false), "halfway through MOTION_FAST, still animating");
-        let mid = m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255));
+        let mid = m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)); // design-token-exempt: test fixture (chip-motion tween highlight)
         assert!(mid.r > 0 && mid.r < 255, "partway blended toward hover: r={}", mid.r);
 
         assert!(!m.tick(45.0, true, false), "settles at the end of MOTION_FAST");
-        assert_eq!(m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)), Color32::WHITE);
+        assert_eq!(m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)), Color32::WHITE); // design-token-exempt: test fixture (chip-motion tween highlight)
 
         // Pointer leaves: eases back down, not an instant snap.
         assert!(m.tick(45.0, false, false));
-        let leaving = m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255));
+        let leaving = m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)); // design-token-exempt: test fixture (chip-motion tween highlight)
         assert!(leaving.r > 0 && leaving.r < 255);
     }
 
@@ -669,7 +669,7 @@ mod tests {
         m.tick(90.0, true, true); // fully hovered + pressed after one full MOTION_FAST
         assert_eq!(m.press_offset_y(1.0), 1.0, "fully pressed reaches the max drop");
         // Press wins over hover once both are fully settled.
-        assert_eq!(m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)), Color32::new(255, 0, 0, 255));
+        assert_eq!(m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)), Color32::new(255, 0, 0, 255)); // design-token-exempt: test fixture (chip-motion tween highlight)
     }
 
     #[test]
