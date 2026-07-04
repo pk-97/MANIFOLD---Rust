@@ -217,7 +217,18 @@ section overlap.
 **Fix shape** — TBD after repro. If it's the known invariant class, the fix is at the layout
 single-source, not per-section patches.
 
-### BUG-016 — Imported .glb layers are black boxes: no card params, no Model File picker, edit paths silently no-op — HIGH
+### BUG-016 — Imported .glb layers are black boxes: no card params, no Model File picker, edit paths silently no-op — FIXED 2026-07-04 (`2d5e4dc6`)
+
+**Resolution** — PRESET_LIBRARY P0 (D9) shipped: the drop now registers the assembled
+graph as a project-embedded preset (`origin: Saved`) and the layer TRACKS it (`graph:
+None`); the assembler emits a curated 13-slider card (camera/sun/envmap/per-object
+material) with real bindings; the app installs the catalog overlay before the layer is
+created, so the process-global preset registry seeds `init_defaults` consistently on both
+threads. The `graph_def_mut` override install is deleted. verify-at-impl #4 resolved
+(`bundled_preset_json` reads the overlay-merged catalog, no change needed). Assembler +
+command tests + GPU render proofs green. **Still owed: the live drag-drop manual gate** in
+a running app (card sliders move pixels, editor opens on the cog, save/reload intact) — the
+one thing only Peter can eyeball. Original analysis below for reference.
 
 **Root cause** — the glTF Stage-4 install mints a preset id that resolves in no catalog and
 stashes the def only on the layer
