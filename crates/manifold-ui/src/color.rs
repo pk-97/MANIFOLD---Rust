@@ -823,6 +823,16 @@ pub const MODAL_SCRIM: Color32 = Color32::new(0, 0, 0, 80);
 pub const MODAL_BG: Color32 = Color32::new(19, 19, 20, 250);
 pub const MODAL_BORDER: Color32 = Color32::new(48, 48, 52, 255);
 
+// Browser popup image cells (PRESET_LIBRARY_DESIGN P6, D7) — a thumbnail-
+// filled cell needs translucent (not opaque) hover/press tints so the picture
+// stays visible under the interaction feedback, plus a dark caption strip so
+// the label reads over arbitrary thumbnail content.
+pub const BROWSER_CELL_HOVER_OVER_IMAGE: Color32 = Color32::new(255, 255, 255, 40);
+pub const BROWSER_CELL_PRESSED_OVER_IMAGE: Color32 = Color32::new(0, 0, 0, 60);
+pub const BROWSER_CELL_CAPTION_BG: Color32 = Color32::new(0, 0, 0, 150);
+/// Origin/source badge text on a browser cell (Factory / My Library / …).
+pub const BROWSER_CELL_BADGE_TEXT: Color32 = Color32::new(130, 130, 134, 255);
+
 // ── Interaction thresholds ──────────────────────────────────────────
 pub const DRAG_THRESHOLD_PX: f32 = 4.0;
 pub const DOUBLE_CLICK_TIME_SEC: f32 = 0.3;

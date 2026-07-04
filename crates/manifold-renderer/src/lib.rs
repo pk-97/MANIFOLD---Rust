@@ -25,6 +25,7 @@ pub mod pq_encoder;
 pub mod preset_context;
 pub mod preset_loader;
 pub mod preset_runtime;
+pub mod preset_thumbnail;
 pub mod render_target;
 pub mod render_target_pool;
 #[cfg(target_os = "macos")]

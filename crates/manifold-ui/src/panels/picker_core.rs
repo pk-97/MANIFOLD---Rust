@@ -39,6 +39,12 @@ pub struct PickerItem {
     /// management menu off (an auto-captured cache isn't user-manageable the
     /// way a `Saved` project preset is).
     pub missing_from_library: bool,
+    /// Absolute path to a save-time-rendered thumbnail PNG (PRESET_LIBRARY_DESIGN
+    /// P6, D7) — `Some` for a Factory/My-Library entry that has one, `None`
+    /// otherwise (This-Project entries never do; browse time never renders one
+    /// to fill the gap). Doubles as the cache key the app decodes+registers
+    /// once per distinct path (`manifold_ui::node::texture_handle_for_key`).
+    pub thumbnail: Option<String>,
 }
 
 /// Which of the three library places an item's def lives in — the browser's
@@ -182,6 +188,14 @@ impl PickerCore {
         self.items.get(idx)
     }
 
+    /// Every item, regardless of the current filter/category/source
+    /// (PRESET_LIBRARY_DESIGN P6) — the app decodes+registers every open
+    /// item's thumbnail up front (a bounded corpus, tens of presets) rather
+    /// than tracking which ones are currently filtered into view.
+    pub fn all_items(&self) -> impl Iterator<Item = &PickerItem> {
+        self.items.iter()
+    }
+
     /// Handle Up/Down/Enter/Escape. Up/Down move the cursor within the
     /// filtered list with wraparound. Enter picks the cursor's item; with no
     /// cursor and a non-empty filter it picks `filtered[0]` — the
@@ -273,6 +287,7 @@ mod tests {
             badge: None,
             source,
             missing_from_library: false,
+            thumbnail: None,
         }
     }
 

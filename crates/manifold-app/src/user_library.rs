@@ -101,6 +101,17 @@ impl UserLibrary {
         self.kind_dir(kind).join(format!("{}.json", id))
     }
 
+    /// Path a library entry's save-time thumbnail PNG lives (or would live)
+    /// at, for `kind` (PRESET_LIBRARY_DESIGN P6, D7) — same directory + stem
+    /// as [`Self::path_for`]'s JSON, `.png` extension. Pure path computation
+    /// (no device access; the caller renders + writes the bytes after a
+    /// successful [`Self::save`]) so callers can check existence
+    /// (`Path::is_file`) for the browser's clean-fallback rule without
+    /// touching the filesystem here.
+    pub fn thumbnail_path(&self, kind: PresetKind, id: &str) -> PathBuf {
+        self.kind_dir(kind).join(format!("{}.png", id))
+    }
+
     /// Whether `id` already names a preset for `kind`, checked two ways:
     /// (1) a file already on disk under THIS root (catches a just-saved file
     /// before the ~1s hot-reload watcher has re-scanned, and makes an

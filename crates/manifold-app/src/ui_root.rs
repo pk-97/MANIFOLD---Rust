@@ -1234,6 +1234,20 @@ impl UIRoot {
                 let is_user = lib.is_user_entry(kind, &reg.id);
                 let id = reg.id.as_str().to_string();
                 seen_ids.insert(id.clone());
+                // PRESET_LIBRARY_DESIGN P6, D7: a My-Library entry's PNG
+                // sits beside its JSON (`UserLibrary::thumbnail_path`); a
+                // Factory entry's comes from the committed one-shot bin
+                // output. `None` (no `Path::is_file` check needed further)
+                // when the file simply doesn't exist yet — clean text
+                // fallback, never a browse-time render.
+                let thumbnail = if is_user {
+                    let p = lib.thumbnail_path(kind, reg.id.as_str());
+                    p.is_file().then(|| p.to_string_lossy().into_owned())
+                } else {
+                    manifold_renderer::preset_thumbnail::factory_thumbnail_path(kind, reg.id.as_str())
+                        .filter(|p| p.is_file())
+                        .map(|p| p.to_string_lossy().into_owned())
+                };
                 PickerItem {
                     label: reg.display_name.to_string(),
                     type_id: id,
@@ -1246,6 +1260,7 @@ impl UIRoot {
                     badge: Some(if is_user { "My Library" } else { "Factory" }.to_string()),
                     source: Some(if is_user { Source::MyLibrary } else { Source::Factory }),
                     missing_from_library: false,
+                    thumbnail,
                 }
             })
             .collect();
@@ -1274,6 +1289,9 @@ impl UIRoot {
                 ),
                 source: Some(Source::Project),
                 missing_from_library: missing,
+                // This-Project entries never get a thumbnail (D7 only
+                // covers Save to Library + the factory bin) — text fallback.
+                thumbnail: None,
             });
         }
 

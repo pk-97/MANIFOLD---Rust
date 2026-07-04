@@ -347,6 +347,40 @@ impl UITree {
         )
     }
 
+    /// Add a non-interactive image node (PRESET_LIBRARY_DESIGN P6, D7):
+    /// draws `texture` — a handle the renderer resolves against its
+    /// registered-image cache (populated once, off the per-frame path, by
+    /// decoding a saved thumbnail PNG) — filling the rect, rounded to
+    /// `corner_radius`. `UINodeType::Image` and `UINode.texture` existed as
+    /// dead Unity-port scaffolding (zero consumers) until this; see
+    /// `ui_renderer.rs`'s tree walk for the drawing side. Non-interactive by
+    /// design — an interactive sibling (e.g. the browser cell's own button)
+    /// drawn in the same rect keeps click/hover handling unchanged.
+    pub fn add_image(
+        &mut self,
+        parent_id: Option<NodeId>,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        corner_radius: f32,
+        texture: TextureHandle,
+    ) -> NodeId {
+        let id = self.add_node(
+            parent_id,
+            Rect::new(x, y, w, h),
+            UINodeType::Image,
+            UIStyle {
+                corner_radius,
+                ..UIStyle::default()
+            },
+            None,
+            UIFlags::empty(),
+        );
+        self.nodes[id.index()].texture = Some(texture);
+        id
+    }
+
     /// Add a text label. Takes explicit width (fixes Unity's width=0 bug).
     #[allow(clippy::too_many_arguments)]
     pub fn add_label(

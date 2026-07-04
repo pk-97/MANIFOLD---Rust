@@ -58,6 +58,16 @@ const SEARCH_TEXT: Color32 = Color32::new(168, 168, 172, 255);
 const CELL_NORMAL: Color32 = Color32::new(36, 36, 38, 255);
 const CELL_HOVER: Color32 = Color32::new(51, 51, 56, 255);
 const CELL_PRESSED: Color32 = Color32::new(46, 46, 48, 255);
+/// Translucent hover/press tints for an image-filled cell (PRESET_LIBRARY_DESIGN
+/// P6, D7) — `CELL_HOVER`/`CELL_PRESSED` are fully opaque and would blot the
+/// thumbnail; these composite over it as a subtle lift instead.
+const CELL_HOVER_OVER_IMAGE: Color32 = color::BROWSER_CELL_HOVER_OVER_IMAGE;
+const CELL_PRESSED_OVER_IMAGE: Color32 = color::BROWSER_CELL_PRESSED_OVER_IMAGE;
+/// Caption-strip height + fill for an image cell's label legibility band
+/// (PRESET_LIBRARY_DESIGN P6, D7) — dark enough that light label text reads
+/// over any thumbnail content.
+const CAPTION_STRIP_H: f32 = 14.0;
+const CAPTION_STRIP_BG: Color32 = color::BROWSER_CELL_CAPTION_BG;
 const CHIP_INACTIVE: Color32 = Color32::new(41, 41, 43, 255);
 const CHIP_HOVER: Color32 = Color32::new(56, 56, 58, 255);
 const PASTE_BG: Color32 = Color32::new(40, 40, 42, 255);
@@ -71,9 +81,6 @@ const CAT_POST_PROCESS: Color32 = Color32::new(140, 160, 220, 255);
 const CAT_FILMIC: Color32 = Color32::new(200, 180, 120, 255);
 const CAT_SURVEILLANCE: Color32 = Color32::new(180, 100, 100, 255);
 
-/// Badge text color — dim, same tone as the chip "inactive" text, since a
-/// badge is metadata about a cell, not a call to action.
-const BADGE_TEXT: Color32 = Color32::new(130, 130, 134, 255);
 
 /// Fixed source-chip order (PRESET_LIBRARY_DESIGN P5, D6): "All" is chip 0
 /// (handled like the category row's "All"), then these three, always in this
@@ -290,6 +297,18 @@ impl BrowserPopupPanel {
     /// The live search filter text (empty when closed).
     pub fn current_filter(&self) -> &str {
         self.session.as_ref().map_or("", |s| s.picker.filter())
+    }
+
+    /// Every open item's thumbnail path (PRESET_LIBRARY_DESIGN P6, D7),
+    /// regardless of the current filter/category/source — the app decodes +
+    /// registers each one, once per distinct path, so the picture is ready
+    /// the moment a cell scrolls into view. Empty when closed or in Node
+    /// mode (no preset item ever carries a thumbnail there).
+    pub fn thumbnail_paths(&self) -> impl Iterator<Item = &str> {
+        self.session
+            .iter()
+            .flat_map(|s| s.picker.all_items())
+            .filter_map(|it| it.thumbnail.as_deref())
     }
 
     pub fn open(&mut self, req: BrowserPopupRequest) {
@@ -660,10 +679,38 @@ impl BrowserPopupPanel {
                 );
             }
 
+            // Image cell (PRESET_LIBRARY_DESIGN P6, D7): a save-time-rendered
+            // thumbnail fills the body, with a dark caption strip behind the
+            // label for legibility over arbitrary thumbnail content. Both are
+            // non-interactive and painted BEFORE the button below, so they
+            // never shadow its click region and the button's own (in this
+            // case transparent) fill + hover/press tint composite on top.
+            // No thumbnail → skip entirely, today's flat-color cell exactly
+            // (D7's "clean fallback").
+            let has_thumbnail = item.thumbnail.is_some();
+            if let Some(path) = item.thumbnail.as_deref() {
+                let handle = crate::node::texture_handle_for_key(path);
+                tree.add_image(clip_parent, cell_x, cell_y, CELL_WIDTH, CELL_HEIGHT, CELL_RADIUS, handle);
+                tree.add_panel(
+                    clip_parent,
+                    cell_x,
+                    cell_y + CELL_HEIGHT - CAPTION_STRIP_H,
+                    CELL_WIDTH,
+                    CAPTION_STRIP_H,
+                    UIStyle {
+                        bg_color: CAPTION_STRIP_BG,
+                        ..UIStyle::default()
+                    },
+                );
+            }
+
             // Cell button — full height, ClipRegion handles visual clipping.
             // The keyboard cursor (P2 arrow nav) reuses the existing hover
             // tint rather than a new design token — a highlighted cell reads
             // identically whether the mouse or the keyboard put it there.
+            // Over a thumbnail the fill is transparent (the image already
+            // fills the body) and the hover/press tints turn translucent so
+            // interaction feedback still shows without blotting the picture.
             let prefix = if has_categories { "     " } else { "  " };
             let label = format!("{prefix}{}", item.label);
             let is_cursor = cursor == Some(fi);
@@ -674,9 +721,15 @@ impl BrowserPopupPanel {
                 CELL_WIDTH,
                 CELL_HEIGHT,
                 UIStyle {
-                    bg_color: if is_cursor { CELL_HOVER } else { CELL_NORMAL },
-                    hover_bg_color: CELL_HOVER,
-                    pressed_bg_color: CELL_PRESSED,
+                    bg_color: if has_thumbnail {
+                        if is_cursor { CELL_HOVER_OVER_IMAGE } else { Color32::TRANSPARENT }
+                    } else if is_cursor {
+                        CELL_HOVER
+                    } else {
+                        CELL_NORMAL
+                    },
+                    hover_bg_color: if has_thumbnail { CELL_HOVER_OVER_IMAGE } else { CELL_HOVER },
+                    pressed_bg_color: if has_thumbnail { CELL_PRESSED_OVER_IMAGE } else { CELL_PRESSED },
                     corner_radius: CELL_RADIUS,
                     font_size: CELL_FONT,
                     text_color: TEXT_PRIMARY,
@@ -699,7 +752,7 @@ impl BrowserPopupPanel {
                     badge,
                     UIStyle {
                         font_size: color::FONT_CAPTION,
-                        text_color: BADGE_TEXT,
+                        text_color: color::BROWSER_CELL_BADGE_TEXT,
                         text_align: TextAlign::Right,
                         ..UIStyle::default()
                     },

@@ -48,6 +48,10 @@ path = "src/bin/check_presets.rs"
 name = "freeze-profile"
 path = "src/bin/freeze_profile.rs"
 
+[[bin]]
+name = "generate-preset-thumbnails"
+path = "src/bin/generate_preset_thumbnails.rs"
+
 [features]
 
 [lints]

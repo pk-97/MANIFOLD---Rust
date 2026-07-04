@@ -352,6 +352,40 @@ of only `self.text_input.cancel()`. Small, localized to `window_input.rs`'s
 gap outside P1/P2's stated deliverables (which target orphaned-session-on-close, not
 missing-close-on-cancel).
 
+### BUG-023 — `no_new_raw_color_literals` red on main: real count (201) one above baseline (200) — FIXED 2026-07-05 (in the P6 landing)
+
+**Resolution** — the extra raw literal was localized (not a "prior session" — it was THIS
+orchestration's own P5 landing `0d6e857e`): `browser_popup.rs` carried
+`const BADGE_TEXT: Color32 = Color32::new(130, 130, 134, 255)` for the origin-badge text,
+added by P5 and missed because that phase ran clippy + focused tests but not the
+`design_tokens` integration guard. Fixed by tokenizing it into `color::BROWSER_CELL_BADGE_TEXT`
+(color.rs is the scan's exempt token home), dropping the counted set back to 200. Guard green.
+Lesson for the orchestration: run `-p manifold-ui --test design_tokens` on any phase that
+adds UI color, not just clippy. Original analysis below.
+
+**Symptom** — found 2026-07-05 running the full gate for `PRESET_LIBRARY_DESIGN.md` P6
+(thumbnails). `cargo test -p manifold-ui --test design_tokens no_new_raw_color_literals` fails:
+`Raw Color32::new( count rose to 201 (baseline 200)`. Confirmed pre-existing and unrelated to
+P6: re-ran the same scan logic against `git show HEAD:<path>` for every file under
+`crates/manifold-ui/src` (a standalone Python re-implementation of `scan()`/`classify()`) and got
+201 on HEAD alone, before any P6 edit — the P6 changes to `browser_popup.rs`/`color.rs` net to
+**zero** new raw literals (three new cells' worth of `Color32::new(` were added to `color.rs`,
+which the scan excludes as the token home, and the matching local consts in `browser_popup.rs`
+were pointed at those new tokens instead of a raw literal — no net change to the counted set).
+
+**Root cause** — not investigated; some prior session's commit added exactly one raw
+`Color32::new(` line somewhere under `crates/manifold-ui/src` without bumping
+`COLOR_BASELINE` in `crates/manifold-ui/tests/design_tokens.rs` (or without using a
+`// design-token-exempt:` comment for a genuine one-off). `git bisect`/`git log -S"Color32::new("`
+over the file list the scan touches would localize it quickly; not run this session since it's
+orthogonal to P6 and risked burning session budget chasing an unrelated one-line drift.
+
+**Fix shape** — mechanical, one of: (a) find the extra raw literal and tokenize it (count back to
+200, no baseline change), or (b) if it's a genuine one-off, add `// design-token-exempt: <reason>`
+on that line (count back to 200), or (c) bump `COLOR_BASELINE` to 201 if it's accepted debt. Not
+fixed this session — the gate confirms the diff at hand is P6-clean; picking apart an unrelated
+pre-existing count belongs to whoever next touches `manifold-ui/src`'s colour call sites.
+
 ## Fixed
 
 All five entries below were fixed 2026-06-23, with a test per path:

@@ -1489,10 +1489,34 @@ impl Application {
                             crate::text_input::SavePresetDestination::Library => {
                                 let lib = crate::user_library::UserLibrary::new();
                                 match lib.save(ctx.kind, typed, &ctx.def) {
-                                    Ok(id) => log::info!(
-                                        "[preset] saved '{}' to the user library",
-                                        id.as_str()
-                                    ),
+                                    Ok(id) => {
+                                        log::info!(
+                                            "[preset] saved '{}' to the user library",
+                                            id.as_str()
+                                        );
+                                        // PRESET_LIBRARY_DESIGN P6/D7: the ONLY
+                                        // render — save-time, once, here. The
+                                        // browser only ever reads this PNG back
+                                        // off disk (never renders).
+                                        if let Some(gpu) = self.gpu.as_ref() {
+                                            let png_path =
+                                                lib.thumbnail_path(ctx.kind, id.as_str());
+                                            if let Err(e) =
+                                                manifold_renderer::preset_thumbnail::render_preset_thumbnail_to_file(
+                                                    &gpu.device,
+                                                    ctx.kind,
+                                                    &ctx.def,
+                                                    manifold_renderer::preset_thumbnail::THUMBNAIL_SIZE,
+                                                    &png_path,
+                                                )
+                                            {
+                                                log::error!(
+                                                    "[preset] thumbnail render failed for '{}': {e}",
+                                                    id.as_str()
+                                                );
+                                            }
+                                        }
+                                    }
                                     Err(e) => log::error!("[preset] Save to Library failed: {e}"),
                                 }
                             }

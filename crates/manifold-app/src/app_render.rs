@@ -2106,6 +2106,9 @@ impl Application {
                                 // the source row or the management menu.
                                 source: None,
                                 missing_from_library: false,
+                                // Node mode never has a thumbnail (only the
+                                // Effect/Generator preset browser does).
+                                thumbnail: None,
                             }
                         })
                         .collect();
@@ -4495,6 +4498,28 @@ impl Application {
                     thumb_color,
                     radius,
                 );
+            }
+
+            // Browser popup thumbnails (PRESET_LIBRARY_DESIGN P6, D7):
+            // decode + register every open item's PNG ONCE per distinct path
+            // (checked via `has_image`, so a re-open in the same process is
+            // free too) — never per frame, never a render. `self.gpu` (the
+            // device the registry uploads through) and `self.ws` (the popup's
+            // current items) are disjoint fields from `self.ui_renderer`
+            // (`ui`, already borrowed above), so all three borrow together.
+            if let Some(gpu) = self.gpu.as_ref() {
+                for path in self.ws.ui_root.browser_popup.thumbnail_paths() {
+                    let handle = manifold_ui::node::texture_handle_for_key(path);
+                    if ui.has_image(handle) {
+                        continue;
+                    }
+                    match manifold_renderer::preset_thumbnail::decode_png_rgba8(std::path::Path::new(path)) {
+                        Ok((w, h, rgba)) => {
+                            ui.register_image(&gpu.device, handle, w, h, &rgba);
+                        }
+                        Err(e) => log::error!("[preset-thumb] decode failed for {path}: {e}"),
+                    }
+                }
             }
 
             // Top-level overlays (perf HUD, dropdown, modals) — built by the

@@ -473,6 +473,43 @@ impl Default for UIStyle {
 /// Matches Unity UINode.Texture field — the renderer resolves this to a GPU texture.
 pub type TextureHandle = u64;
 
+/// Derive a stable [`TextureHandle`] from a string key (an absolute file path,
+/// typically) — PRESET_LIBRARY_DESIGN P6. `manifold-ui` has no GPU access, so
+/// it can't hold the actual texture; this pure hash lets a tree-building call
+/// (no device) and the app-side decode/registration call (has a device) agree
+/// on the same handle for the same key without any shared mutable state.
+/// FNV-1a 64-bit: deterministic within a process run, which is all that's
+/// required — the handle never crosses a process boundary or gets persisted.
+pub fn texture_handle_for_key(key: &str) -> TextureHandle {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in key.as_bytes() {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+#[cfg(test)]
+mod texture_handle_tests {
+    use super::texture_handle_for_key;
+
+    #[test]
+    fn same_key_hashes_identically() {
+        assert_eq!(
+            texture_handle_for_key("/a/b/Bloom.png"),
+            texture_handle_for_key("/a/b/Bloom.png")
+        );
+    }
+
+    #[test]
+    fn different_keys_hash_differently() {
+        assert_ne!(
+            texture_handle_for_key("/a/b/Bloom.png"),
+            texture_handle_for_key("/a/b/Bloom2.png")
+        );
+    }
+}
+
 /// A single node in the UI tree.
 ///
 /// Invariant: `id` == array index in `UITree.nodes`.

@@ -446,6 +446,7 @@ fn browser_popup_demo() {
             badge: None,
             source: None,
             missing_from_library: false,
+            thumbnail: None,
         })
         .collect();
 
