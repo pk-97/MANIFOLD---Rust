@@ -382,6 +382,9 @@ pub fn push_state(
             content_state.automation_armed,
             !content_state.automation_latched_params.is_empty(),
         );
+        // LANES button (view-only toggle, no content-thread state behind it).
+        ui.transport
+            .set_automation_mode_visible(selection.automation_mode_visible);
 
         // Save dirty state is shown by the "•" in the window/header project name
         // (set above); the transport SAVE button moved to the File menu. HDR /
@@ -805,8 +808,14 @@ pub fn sync_project_data(
     {
         // Rebuild CoordinateMapper Y-layout FIRST so layer headers and viewport share
         // the same Y offsets. Unity: LayerHeaderPanel reads from CoordinateMapper.
-        ui.viewport
-            .rebuild_mapper_layout(&crate::ui_translate::layers_to_ui(&project.timeline.layers));
+        // `_for_layout` (not the plain `layers_to_ui`) resolves
+        // `automation_lane_count` from `selection.automation_mode_visible` — the
+        // one flag that grows a track when lanes are visible
+        // (`docs/AUTOMATION_LANES_DESIGN.md` §7).
+        ui.viewport.rebuild_mapper_layout(&crate::ui_translate::layers_to_ui_for_layout(
+            &project.timeline.layers,
+            selection.automation_mode_visible,
+        ));
 
         // Layer data → LayerHeaderPanel. Y offset/height are NOT copied here —
         // `LayerInfo` no longer carries them; the header panel queries the
@@ -973,6 +982,24 @@ pub fn sync_project_data(
             }
         }
         ui.viewport.set_clips(viewport_clips);
+
+        // Automation lane data → viewport (P4, `docs/AUTOMATION_LANES_DESIGN.md`
+        // §7). Gated on the same flag `layers_to_ui_for_layout` used above, so
+        // the Y-layout and the lane list can never disagree about whether
+        // lanes are showing this frame.
+        let mut viewport_lanes = Vec::new();
+        if selection.automation_mode_visible {
+            use manifold_ui::panels::viewport::ViewportAutomationLane;
+            for (i, layer) in project.timeline.layers.iter().enumerate() {
+                if layer.is_collapsed || layer.is_group() {
+                    continue;
+                }
+                for lane in crate::ui_translate::layer_automation_lanes_to_ui(layer) {
+                    viewport_lanes.push(ViewportAutomationLane { layer_index: i, lane });
+                }
+            }
+        }
+        ui.viewport.set_automation_lanes(viewport_lanes);
 
         // Timeline markers → viewport
         ui.viewport

@@ -172,16 +172,64 @@ fn scroll_shrink_scene() -> SceneData {
 
 /// P4a evidence scene (`docs/AUTOMATION_LANES_DESIGN.md` §7): the same layer
 /// set as `timeline_scene`, but with the automation transport globals LIVE —
-/// Automation Arm on, one override latch active — so the transport bar's
-/// ARM/BACK buttons render their lit state. The latched entry doesn't need to
-/// resolve to a real lane for this scene: the transport bar only reads
-/// `!automation_latched_params.is_empty()`, never the id itself (lane-strip
-/// rendering off that data is P4's remaining, not-yet-built surface).
+/// Automation Arm on, lane strips visible — so the transport bar's ARM/BACK/
+/// LANES buttons render their lit state, AND the FLOWERS layer carries two
+/// real automation lanes for the lane-strip renderer (P4 lane-strip
+/// rendering, the read-only visual layer):
+/// - Mirror's lane: three points, Linear then Curved segments, LIVE (red).
+/// - Bloom's lane: two points, Hold then Linear, OVERRIDDEN (grayed) — its
+///   `(EffectId, ParamId)` is in `automation_latched_params`, exercising the
+///   override-graying path.
 fn automation_scene() -> SceneData {
+    use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
+
     let mut data = timeline_scene();
     data.content.automation_armed = true;
-    data.content.automation_latched_params =
-        vec![(manifold_core::EffectId::new("evidence-fx"), std::borrow::Cow::Borrowed("amount"))];
+    data.selection.automation_mode_visible = true;
+
+    let flowers = data
+        .project
+        .timeline
+        .layers
+        .iter_mut()
+        .find(|l| l.layer_id == lid("flowers"))
+        .expect("timeline_scene always has a 'flowers' layer");
+
+    let mut mirror = effect("Mirror");
+    let mirror_param = manifold_core::preset_definition_registry::try_get(mirror.effect_type())
+        .and_then(|def| def.param_ids.first().cloned())
+        .expect("Mirror has at least one automatable param");
+    mirror.automation_lanes = Some(vec![AutomationLane {
+        param_id: mirror_param.into(),
+        enabled: true,
+        points: vec![
+            AutomationPoint { beat: Beats(0.0), value: 0.1, shape: SegmentShape::Linear },
+            AutomationPoint { beat: Beats(16.0), value: 0.9, shape: SegmentShape::Curved(0.6) },
+            AutomationPoint { beat: Beats(32.0), value: 0.3, shape: SegmentShape::Linear },
+        ],
+    }]);
+
+    let mut bloom = effect("Bloom");
+    let bloom_param = manifold_core::preset_definition_registry::try_get(bloom.effect_type())
+        .and_then(|def| def.param_ids.first().cloned())
+        .expect("Bloom has at least one automatable param");
+    // Bloom's `amount` registers 0..5 (not 0..1 like Mirror's) — pick values
+    // far apart in that range (not just 0.2/0.8) so the Hold-then-jump reads
+    // clearly once normalized, instead of both points sitting near the
+    // bottom of the strip.
+    bloom.automation_lanes = Some(vec![AutomationLane {
+        param_id: bloom_param.clone().into(),
+        enabled: true,
+        points: vec![
+            AutomationPoint { beat: Beats(0.0), value: 0.5, shape: SegmentShape::Hold },
+            AutomationPoint { beat: Beats(20.0), value: 4.5, shape: SegmentShape::Linear },
+        ],
+    }]);
+    let bloom_id = bloom.id.clone();
+
+    flowers.effects = Some(vec![mirror, bloom]);
+
+    data.content.automation_latched_params = vec![(bloom_id, bloom_param.into())];
     data
 }
 

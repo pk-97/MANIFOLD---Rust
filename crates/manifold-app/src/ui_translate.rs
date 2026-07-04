@@ -10,7 +10,10 @@
 //! Shared primitives (ids, `Beats`, `ParamId`) need no conversion — they are the
 //! identical `manifold-foundation` type on both sides.
 
-use manifold_ui::view::{SelectionRegion as UiSelectionRegion, UiLayer, UiMarker, UiParamSlot};
+use manifold_ui::view::{
+    SelectionRegion as UiSelectionRegion, UiAutomationLane, UiAutomationPoint, UiLayer, UiMarker,
+    UiParamSlot, UiSegmentShape,
+};
 use manifold_ui::{
     AbletonMacroAddress as UiAbletonMacroAddress, AbletonMappingStatus as UiAbletonMappingStatus,
     AudioBand as UiAudioBand, AudioDeviceRef as UiAudioDeviceRef, AudioFeature as UiAudioFeature,
@@ -27,7 +30,7 @@ use manifold_core::ableton_mapping::{
 use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind};
 use manifold_core::audio_setup::{AudioDeviceRef, AudioSourceKind};
 use manifold_core::effect_graph_def::SerializedParamValue;
-use manifold_core::effects::{ParamConvert, ParamSlot};
+use manifold_core::effects::{ParamConvert, ParamSlot, PresetInstance, SegmentShape, resolve_param_in};
 use manifold_core::layer::Layer;
 use manifold_core::macro_bank::MacroCurve;
 use manifold_core::marker::TimelineMarker;
@@ -220,11 +223,98 @@ pub fn layer_to_ui(l: &Layer) -> UiLayer {
         parent_layer_id: l.parent_layer_id.clone(),
         layer_type: layer_type_to_ui(l.layer_type),
         is_collapsed: l.is_collapsed,
+        automation_lane_count: 0,
     }
 }
 
 pub fn layers_to_ui(layers: &[Layer]) -> Vec<UiLayer> {
     layers.iter().map(layer_to_ui).collect()
+}
+
+/// Same as [`layers_to_ui`], but also resolves `automation_lane_count` — the
+/// one field that feeds `CoordinateMapper::layer_height`'s Y-layout, so the
+/// header column and viewport tracks grow together when automation mode is on
+/// (`docs/AUTOMATION_LANES_DESIGN.md` §7). Callers that only need the
+/// selection-shape fields (hit-testing, region math) should keep using the
+/// plain `layers_to_ui` — computing lane counts there would be wasted work
+/// and (more importantly) would NOT be the value `rebuild_mapper_layout` used,
+/// so a second call site recomputing it independently is exactly the
+/// "single-source-of-truth" trap this field exists to avoid.
+pub fn layers_to_ui_for_layout(layers: &[Layer], automation_visible: bool) -> Vec<UiLayer> {
+    layers
+        .iter()
+        .map(|l| {
+            let mut ui = layer_to_ui(l);
+            if automation_visible && !l.is_collapsed && !l.is_group() {
+                ui.automation_lane_count = layer_automation_lanes_to_ui(l).len();
+            }
+            ui
+        })
+        .collect()
+}
+
+/// Collect UI-facing automation lane view-models for one layer's instances —
+/// its effects chain plus its generator params, if any (mirrors the walk
+/// shape of `manifold_playback::automation::evaluate_all_automation`). Only
+/// `enabled` lanes produce a strip (Ableton: a deactivated lane draws
+/// nothing). See `docs/AUTOMATION_LANES_DESIGN.md` §7.
+pub fn layer_automation_lanes_to_ui(layer: &Layer) -> Vec<UiAutomationLane> {
+    let mut out = Vec::new();
+    if let Some(effects) = &layer.effects {
+        for fx in effects {
+            push_instance_automation_lanes(fx, &mut out);
+        }
+    }
+    if let Some(gp) = layer.gen_params() {
+        push_instance_automation_lanes(gp, &mut out);
+    }
+    out
+}
+
+fn push_instance_automation_lanes(instance: &PresetInstance, out: &mut Vec<UiAutomationLane>) {
+    let Some(lanes) = instance.automation_lanes.as_ref() else {
+        return;
+    };
+    if lanes.is_empty() {
+        return;
+    }
+    let Some(def) = manifold_core::preset_definition_registry::try_get(instance.effect_type())
+    else {
+        return;
+    };
+    let effect_label = manifold_core::preset_type_registry::display_name(instance.effect_type());
+    for lane in lanes {
+        if !lane.enabled {
+            continue;
+        }
+        let Some(resolved) = resolve_param_in(&def, instance, lane.param_id.as_ref()) else {
+            continue;
+        };
+        let range = (resolved.max - resolved.min).abs().max(f32::EPSILON);
+        let points = lane
+            .points
+            .iter()
+            .map(|p| UiAutomationPoint {
+                beat: p.beat,
+                value_norm: ((p.value - resolved.min) / range).clamp(0.0, 1.0),
+                shape: segment_shape_to_ui(p.shape),
+            })
+            .collect();
+        out.push(UiAutomationLane {
+            effect_id: instance.id.clone(),
+            param_id: lane.param_id.clone(),
+            label: format!("{effect_label}: {}", lane.param_id),
+            points,
+        });
+    }
+}
+
+fn segment_shape_to_ui(s: SegmentShape) -> UiSegmentShape {
+    match s {
+        SegmentShape::Linear => UiSegmentShape::Linear,
+        SegmentShape::Hold => UiSegmentShape::Hold,
+        SegmentShape::Curved(bend) => UiSegmentShape::Curved(bend),
+    }
 }
 
 pub fn marker_to_ui(m: &TimelineMarker) -> UiMarker {

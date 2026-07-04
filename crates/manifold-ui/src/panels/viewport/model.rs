@@ -123,6 +123,35 @@ pub struct TrackInfo {
     pub child_layer_indices: Vec<usize>,
 }
 
+/// One automation lane bucketed to its track row — mirrors `ViewportClip`'s
+/// `layer_index` bucketing pattern (`docs/AUTOMATION_LANES_DESIGN.md` §7).
+#[derive(Debug, Clone)]
+pub struct ViewportAutomationLane {
+    pub layer_index: usize,
+    pub lane: UiAutomationLane,
+}
+
+/// Screen-space geometry for one automation lane strip, resolved against the
+/// current Y-layout + beat→pixel mapping by
+/// [`super::TimelineViewportPanel::automation_lane_screens`]. The renderer
+/// (`manifold_renderer::automation_lane_draw`) draws these directly — no
+/// UITree nodes, the same "GPU rects computed here, drawn there" split as
+/// [`ClipScreenRect`] / [`TimelineOverlays`].
+#[derive(Debug, Clone)]
+pub struct AutomationLaneScreen {
+    /// The strip's background band, full tracks width.
+    pub strip_rect: Rect,
+    pub label: String,
+    /// True when this lane's param is currently latched/overridden — draws
+    /// grayed instead of red (Live's affordance).
+    pub overridden: bool,
+    /// The sampled breakpoint line, screen-space `(x, y)` pairs in ascending
+    /// x order — the caller draws consecutive segments with `draw_line`.
+    pub polyline: Vec<(f32, f32)>,
+    /// Breakpoint dot centers, screen-space, culled to the visible beat range.
+    pub dots: Vec<(f32, f32)>,
+}
+
 // ── Marker node group for update-in-place ──────────────────────
 
 /// Structured storage for one timeline marker's nodes.

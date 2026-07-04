@@ -237,7 +237,9 @@ impl CoordinateMapper {
     /// - Child of a collapsed parent → 0 (hidden)
     /// - Group (any state) → a fixed container-header height (it shows no clips)
     /// - Otherwise → [`TrackHeight::Collapsed`] when collapsed, else
-    ///   [`TrackHeight::Normal`] — the same for video / generator / audio / text.
+    ///   [`TrackHeight::Normal`] plus one [`color::AUTOMATION_LANE_STRIP_HEIGHT`]
+    ///   per visible automation lane (P4, `docs/AUTOMATION_LANES_DESIGN.md` §7) —
+    ///   the same for video / generator / audio / text either way.
     pub fn layer_height(layers: &[UiLayer], index: usize) -> f32 {
         let layer = match layers.get(index) {
             Some(l) => l,
@@ -257,8 +259,20 @@ impl CoordinateMapper {
             return color::GROUP_TRACK_HEIGHT;
         }
 
-        // Content track: one preset, selected by collapse state alone.
-        TrackHeight::for_collapsed(layer.is_collapsed).px()
+        // A collapsed track shows no lane strips (Ableton: Fold also hides
+        // automation) — `automation_lane_count` is normally already 0 here
+        // (`ui_translate::layers_to_ui_for_layout` zeroes it for a collapsed
+        // layer), but the early return keeps that invariant true regardless
+        // of the caller.
+        if layer.is_collapsed {
+            return TrackHeight::Collapsed.px();
+        }
+
+        // Expanded content track: the base preset plus one strip per visible
+        // automation lane (P4, `docs/AUTOMATION_LANES_DESIGN.md` §7) — engaging
+        // automation mode grows the track, exactly like Ableton.
+        TrackHeight::Normal.px()
+            + layer.automation_lane_count as f32 * color::AUTOMATION_LANE_STRIP_HEIGHT
     }
 
     /// Get the cumulative Y offset for a layer (top of that layer's track row).
@@ -360,6 +374,7 @@ mod tests {
             parent_layer_id: None,
             layer_type,
             is_collapsed: false,
+            automation_lane_count: 0,
         }
     }
 

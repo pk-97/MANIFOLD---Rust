@@ -881,6 +881,25 @@ pub const COLLAPSED_TRACK_HEIGHT: f32 = 58.0;
 /// Tall: a roomier track for larger previews. Reserved for a future per-layer
 /// tall mode; the preset exists so the height vocabulary is complete.
 pub const TALL_TRACK_HEIGHT: f32 = 200.0;
+
+// ── Automation lane strips (P4, `docs/AUTOMATION_LANES_DESIGN.md` §7) ──────
+// Engaging automation mode grows a content track by one strip per enabled
+// lane — `CoordinateMapper::layer_height` is the single place this height
+// actually applies (never re-derived elsewhere).
+pub const AUTOMATION_LANE_STRIP_HEIGHT: f32 = 28.0;
+/// Strip background — a subtle recess so the lane reads as its own row
+/// within the taller track, distinct from the routing-form area above it.
+pub const AUTOMATION_STRIP_BG: Color32 = Color32::new(20, 20, 22, 255);
+/// The breakpoint line + dots, Live's exact affordance: red while live.
+pub const AUTOMATION_LINE_COLOR: Color32 = RED_ACTIVE;
+/// The breakpoint line + dots when the lane's param is overridden (a live
+/// touch latched it) — grayed instead of red, Live's exact affordance.
+pub const AUTOMATION_LINE_OVERRIDDEN_COLOR: Color32 = Color32::new(120, 120, 126, 255);
+pub const AUTOMATION_LINE_THICKNESS: f32 = 1.6;
+pub const AUTOMATION_DOT_RADIUS: f32 = 3.0;
+pub const AUTOMATION_LABEL_COLOR: Color32 = TEXT_DIMMED_C32;
+pub const AUTOMATION_LABEL_FONT: u16 = FONT_SMALL;
+
 pub const RULER_HEIGHT: f32 = 40.0;
 // §K1: header column widened 200→230 to match the mockup grid (room for the
 // 18px type-badge chip + name + menu in the identity row without crushing).

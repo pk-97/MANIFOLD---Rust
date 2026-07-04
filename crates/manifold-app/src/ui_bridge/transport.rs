@@ -133,6 +133,15 @@ pub(super) fn dispatch_transport(
             ContentCommand::send(content_tx, ContentCommand::AutomationBackToArrangement);
             DispatchResult::handled()
         }
+        // Pure UI view-state — no project mutation, no runtime playback
+        // state, so no ContentCommand. It DOES change the Y-layout (a visible
+        // lane grows its track), so this must return `structural()`, not
+        // `handled()`, to force `sync_project_data` to re-derive
+        // `automation_lane_count` and the lane list on the next frame.
+        PanelAction::ToggleAutomationMode => {
+            selection.automation_mode_visible = !selection.automation_mode_visible;
+            DispatchResult::structural()
+        }
 
         PanelAction::CycleQuantize => {
             {

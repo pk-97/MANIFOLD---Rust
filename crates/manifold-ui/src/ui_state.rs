@@ -66,6 +66,15 @@ pub struct UIState {
     /// one piece of inspector state that isn't pure selection. See
     /// docs/UI_LAYOUT_DESIGN.md.
     scope_pin: Option<(InspectorTab, u64)>,
+
+    /// Automation-mode view toggle (Live's `A`, P4 `docs/AUTOMATION_LANES_DESIGN.md`
+    /// §7): show/hide lane strips across the timeline. Purely a view-state
+    /// bool — never serialized, never routed through `EditingService` — but it
+    /// DOES change the Y-layout (a visible lane grows its track), so any
+    /// toggle must also mark the app's structural-sync dirty flag; see
+    /// `ui_bridge::transport::dispatch_transport`'s `PanelAction::
+    /// ToggleAutomationMode` arm.
+    pub automation_mode_visible: bool,
 }
 
 impl Default for UIState {
@@ -92,6 +101,7 @@ impl UIState {
             current_zoom_index: crate::color::DEFAULT_ZOOM_INDEX,
             selected_marker_ids: HashSet::new(),
             scope_pin: None,
+            automation_mode_visible: false,
         }
     }
 

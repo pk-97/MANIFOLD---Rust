@@ -121,7 +121,16 @@ fn render_ui_scene(
         ui.layout.timeline_split_ratio = 0.93;
     }
     sync_build(&mut ui, &data, zoom_ppb);
-    render_and_dump(&ui, &data.selection, &dir, scene, "", want_dump, want_thumbs);
+    render_and_dump(
+        &ui,
+        &data.selection,
+        &data.content.automation_latched_params,
+        &dir,
+        scene,
+        "",
+        want_dump,
+        want_thumbs,
+    );
 
     // P0.1: the viewport is the sole scroll owner (D2) — the header panel
     // reads `viewport.scroll_y_px()` live at draw time, so seeding it here is
@@ -148,7 +157,16 @@ fn render_ui_scene(
         let desc = interact::apply(&mut ui, &mut data, &spec);
         println!("ui-snap: interact {desc}");
         sync_build(&mut ui, &data, zoom_ppb);
-        render_and_dump(&ui, &data.selection, &dir, scene, ".after", want_dump, want_thumbs);
+        render_and_dump(
+            &ui,
+            &data.selection,
+            &data.content.automation_latched_params,
+            &dir,
+            scene,
+            ".after",
+            want_dump,
+            want_thumbs,
+        );
     }
 }
 
@@ -269,6 +287,7 @@ fn sync_build(ui: &mut UIRoot, data: &fixtures::SceneData, zoom_ppb: f32) {
 fn render_and_dump(
     ui: &UIRoot,
     selection: &manifold_ui::UIState,
+    automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
     dir: &Path,
     scene: &str,
     suffix: &str,
@@ -281,6 +300,7 @@ fn render_and_dump(
     render::render_ui_to_png(
         ui,
         selection,
+        automation_latched,
         tex_w,
         tex_h,
         SCALE,
