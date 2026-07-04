@@ -23,7 +23,7 @@ or human can read it, and it needs no external tool.
 
 ## Open
 
-All nine entries below come from the **freeze-compiler adversarial bug hunt, 2026-07-03**
+BUG-006–014 come from the **freeze-compiler adversarial bug hunt, 2026-07-03**
 (40-agent Sonnet workflow `wf_73bb4ddf-885`; 10 finder lenses → every finding attacked by 2
 independent skeptics). BUG-006–012 were **confirmed by both skeptics** with line-level
 evidence; BUG-013/014 got split verdicts (judgment recorded per entry). Full verifier
@@ -195,6 +195,27 @@ path into node params (scrub handlers clamp to finite ranges; JSON round-trips r
 non-finite). Parked as a hardening note — if a new param write path ever skips the clamp,
 this becomes live. Cheapest closure: reject non-finite values at the `SerializedParamValue`
 boundary (the eliminate-bug-class-at-storage-layer pattern).
+
+### BUG-015 — Inspector sections render overlapping / at stale offsets after scroll — MED (repro needed)
+
+**Symptom** — observed once by Peter, 2026-07-04, right after the timeline-P0 / multi-select
+UX changes landed: the layer inspector drew its sections interleaved — the MIDI block
+(MIDI / CHANNEL / DEVICE) and the audio-send block (send dropdown, +0.0 dB) overlapping
+each other with a dead band between them, and the "No audio input" header clipped mid-panel.
+Described as "a scrolling bug with the UI timeline updates". Screenshot lives in the
+2026-07-04 session transcript.
+
+**Root cause** — unknown. Suspect surface: inspector section Y-layout vs. scroll offset
+(the `single-source-y-layout` invariant) or a stale subregion scissor
+(`subregion-scissor-invariant`) going stale when timeline updates force a rebuild while the
+inspector is scrolled.
+
+**Repro** — not yet pinned. First step is reproducing: select a generator layer, scroll the
+inspector, then trigger timeline churn (clip drag / multi-select updates) and watch for
+section overlap.
+
+**Fix shape** — TBD after repro. If it's the known invariant class, the fix is at the layout
+single-source, not per-section patches.
 
 ## Fixed
 
