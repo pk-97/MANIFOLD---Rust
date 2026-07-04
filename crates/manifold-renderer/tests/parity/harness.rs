@@ -796,8 +796,3 @@ pub fn port_is_texture(ty: &PortType) -> bool {
     matches!(ty, PortType::Texture2D | PortType::Texture2DTyped(_))
 }
 
-// Suppress dead-code warnings until at least one parity test file
-// imports each helper. The harness is a foundation commit — concrete
-// tests follow in §6.1.
-#[allow(dead_code)]
-fn _unused_anchor(_: Fixture, _: ParityHarness, _: PresetContext) {}
