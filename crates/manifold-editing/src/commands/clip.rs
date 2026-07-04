@@ -3,6 +3,7 @@ use manifold_core::clip::TimelineClip;
 use manifold_core::layer::OverlapAction;
 use manifold_core::project::Project;
 use manifold_core::{Beats, ClipId, LayerId, Seconds};
+use std::collections::HashSet;
 
 /// Move a clip to a new beat position and/or layer.
 /// Matches Unity MoveClipCommand: cross-layer transfer removes from source and adds to target,
@@ -260,6 +261,11 @@ pub struct AddClipCommand {
     clip: TimelineClip,
     layer_id: LayerId,
     spb: f32,
+    /// Clips protected from this add's own overlap enforcement pass —
+    /// members of the same batch operation (e.g. the drag/nudge selection
+    /// that produced this add via an overlap-split tail). Empty for a
+    /// standalone add.
+    ignore_ids: HashSet<ClipId>,
     /// Overlap actions performed during execute — reversed on undo.
     overlap_actions: Vec<OverlapAction>,
 }
@@ -270,6 +276,28 @@ impl AddClipCommand {
             clip,
             layer_id,
             spb,
+            ignore_ids: HashSet::new(),
+            overlap_actions: Vec::new(),
+        }
+    }
+
+    /// Same as `new`, but protects `ignore_ids` from this add's own overlap
+    /// enforcement pass. Use when this add is a tail/member of a larger
+    /// batch operation (e.g. an overlap-split tail born from
+    /// `EditingService::enforce_non_overlap`) whose other members must
+    /// survive even if this clip's geometry would otherwise collide with
+    /// them.
+    pub fn new_with_ignore_ids(
+        clip: TimelineClip,
+        layer_id: LayerId,
+        spb: f32,
+        ignore_ids: HashSet<ClipId>,
+    ) -> Self {
+        Self {
+            clip,
+            layer_id,
+            spb,
+            ignore_ids,
             overlap_actions: Vec::new(),
         }
     }
@@ -280,7 +308,7 @@ impl Command for AddClipCommand {
         if let Some(li) = project.timeline.layer_index_for_id(&self.layer_id)
             && let Some(layer) = project.timeline.layers.get_mut(li)
         {
-            self.overlap_actions = layer.add_clip(self.clip.clone(), self.spb);
+            self.overlap_actions = layer.add_clip(self.clip.clone(), &self.ignore_ids, self.spb);
         }
         project.timeline.mark_clip_lookup_dirty();
     }

@@ -492,7 +492,7 @@ impl Command for PasteSlotToTimelineCommand {
             let new_id = new_clip.id.clone();
 
             if let Some(layer) = project.timeline.layers.get_mut(li) {
-                let actions = layer.add_clip(new_clip, spb);
+                let actions = layer.add_clip(new_clip, &std::collections::HashSet::new(), spb);
                 self.pasted.push((new_id, actions));
             }
         }

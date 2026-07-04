@@ -7,6 +7,7 @@ use manifold_core::units::Bpm;
 use manifold_core::{Beats, ClipId};
 use manifold_editing::command::Command;
 use manifold_editing::service::EditingService;
+use std::collections::HashSet;
 
 fn make_project() -> Project {
     let mut project = Project::default();
@@ -30,7 +31,6 @@ fn make_region(
     start_layer: usize,
     end_layer: usize,
 ) -> SelectionRegion {
-    use std::collections::HashSet;
     let layers = &project.timeline.layers;
     let lo = start_layer.min(end_layer);
     let hi = start_layer
@@ -330,6 +330,83 @@ fn nudge_selected_clips() {
 
     let clip = project.timeline.find_clip_by_id(&id1).unwrap();
     assert!((clip.start_beat - Beats(3.0)).abs() < Beats(0.001));
+}
+
+// ─── S5 regression: batch move onto an occupied lane must not silently
+// delete a protected member (docs/TIMELINE_INTERACTION_P1_SPEC.md P1.3) ───
+
+/// Reproduces the real S5 gesture per the P1.0 evidence deck
+/// (`docs/evidence/timeline_interaction_p1/P1.0-notes.md`): a multi-clip
+/// selection (`c1`, `c2`) is dragged so `c1` lands inside a stationary
+/// unselected occupant `c3`, triggering a Case-4 trim+tail split whose tail
+/// geometry happens to fully cover `c2`. Mirrors the exact production shape:
+/// `interaction_overlay.rs:1483-1485`'s per-snapshot loop, each iteration
+/// calling `EditingService::enforce_non_overlap` and then executing the
+/// returned commands immediately before the next snapshot is processed
+/// (`editing_host.rs:410-449`'s `enforce_non_overlap` host method — the same
+/// shape `nudge_clips`'s callers and the live drag-commit path both use).
+///
+/// Before the P1.3a fix: `Layer::add_clip` (the tail's `AddClipCommand`
+/// executing) ran its own overlap enforcement with a hardcoded empty ignore
+/// set, so it didn't know `c2` was a protected batch member — `c2` fell
+/// fully inside the tail's span and was deleted outright. This test FAILS on
+/// pre-fix code (`c2` missing after the loop) and PASSES after the fix
+/// (`Layer::add_clip` takes an `ignore_ids` param, threaded from
+/// `EditingService::enforce_non_overlap`'s Case-4 tail via
+/// `AddClipCommand::new_with_ignore_ids`).
+#[test]
+fn s5_multi_clip_move_onto_occupied_lane_preserves_all_moved_clips() {
+    let mut project = make_project();
+    let spb = 0.5;
+    let layer_index = 0;
+
+    // Live-drag already wrote the post-drag positions into the model (D5:
+    // preview mutates the model directly, no separate ghost) — c1 lands at
+    // [25,35) inside c3's [20,50) span; c2 lands at [40,50), inside where
+    // c3's split tail will land ([35,50)).
+    let c1 = add_clip(&mut project, layer_index, 25.0, 10.0); // [25,35)
+    let c2 = add_clip(&mut project, layer_index, 40.0, 10.0); // [40,50)
+    let c3 = add_clip(&mut project, layer_index, 20.0, 30.0); // [20,50) — stationary, unselected
+
+    let mut ignore_ids: HashSet<ClipId> = HashSet::new();
+    ignore_ids.insert(c1.clone());
+    ignore_ids.insert(c2.clone());
+
+    // Per-snapshot loop, processing c1 first (mirrors the observed console
+    // order in P1.0's repro) — execute each snapshot's commands before
+    // moving to the next, exactly as the real drag-commit host does.
+    for moved_id in [&c1, &c2] {
+        let moved_clip = project.timeline.layers[layer_index]
+            .find_clip(moved_id)
+            .expect("moved clip must exist before its own enforcement pass")
+            .clone();
+        let cmds = EditingService::enforce_non_overlap(
+            &project,
+            &moved_clip,
+            layer_index,
+            &ignore_ids,
+            spb,
+        );
+        for mut cmd in cmds {
+            cmd.execute(&mut project);
+        }
+    }
+    project.timeline.mark_clip_lookup_dirty();
+
+    assert!(
+        project.timeline.layers[layer_index].find_clip(&c1).is_some(),
+        "c1 (moved/selected) must survive the batch overlap-split"
+    );
+    assert!(
+        project.timeline.layers[layer_index].find_clip(&c2).is_some(),
+        "c2 (moved/selected) must survive the batch overlap-split — S5: the \
+         overlap-split tail's own enforcement pass must honor the batch's \
+         protected ignore set, not silently delete a sibling"
+    );
+    assert!(
+        project.timeline.layers[layer_index].find_clip(&c3).is_some(),
+        "c3's trimmed head must survive (only its span shrinks, at [20,25))"
+    );
 }
 
 // ─── Undo/Redo ───

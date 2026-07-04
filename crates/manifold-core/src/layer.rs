@@ -518,12 +518,20 @@ impl Layer {
     /// Add a clip with DaVinci-style overlap enforcement.
     /// Trims or deletes existing clips that collide with the new clip.
     /// Returns the actions taken so callers can build undo commands.
+    /// `ignore_ids` protects clips that are members of the same batch
+    /// operation (e.g. a multi-clip drag/nudge) from this clip's overlap
+    /// pass — pass an empty set for a genuinely standalone add.
     /// `spb` = seconds per beat (60.0 / bpm), used for video in_point trimming.
-    pub fn add_clip(&mut self, mut clip: TimelineClip, spb: f32) -> Vec<OverlapAction> {
+    pub fn add_clip(
+        &mut self,
+        mut clip: TimelineClip,
+        ignore_ids: &HashSet<ClipId>,
+        spb: f32,
+    ) -> Vec<OverlapAction> {
         clip.layer_id = self.layer_id.clone();
         let clip_id = clip.id.clone();
         self.clips.push(clip);
-        let actions = self.enforce_non_overlap_for(&clip_id, &HashSet::new(), spb);
+        let actions = self.enforce_non_overlap_for(&clip_id, ignore_ids, spb);
         self.mark_clips_unsorted();
         actions
     }
@@ -1014,7 +1022,7 @@ mod tests {
     #[test]
     fn add_clip_syncs_clip_layer_id() {
         let mut layer = Layer::new("Video 1".into(), LayerType::Video, 0);
-        layer.add_clip(TimelineClip::default(), 0.5);
+        layer.add_clip(TimelineClip::default(), &HashSet::new(), 0.5);
 
         assert_eq!(layer.clips.len(), 1);
         assert_eq!(layer.clips[0].layer_id, layer.layer_id);
@@ -1094,6 +1102,7 @@ mod tests {
                 duration_beats: Beats(4.0),
                 ..TimelineClip::default()
             },
+            &HashSet::new(),
             0.5,
         );
         assert_eq!(layer.clips.len(), 2);

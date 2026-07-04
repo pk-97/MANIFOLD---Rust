@@ -294,10 +294,11 @@ impl EditingService {
                     clip.in_point,
                     clip.in_point,
                 )));
-                commands.push(Box::new(AddClipCommand::new(
+                commands.push(Box::new(AddClipCommand::new_with_ignore_ids(
                     tail,
                     layer.layer_id.clone(),
                     spb,
+                    ignore_ids.clone(),
                 )));
             }
         }
