@@ -69,6 +69,13 @@ pub enum TextInputField {
     /// `TextInputState::graph_table_edit`; commit parses the new f32, rebuilds the
     /// one cell, and routes to `SetGraphNodeParam(Table)`.
     GraphTableCell,
+    /// Save to Library / Save to Project name prompt (PRESET_LIBRARY_DESIGN
+    /// D4, P3) — one field for both destinations (which one rides on
+    /// `TextInputState::save_preset`, since `EffectGraphDef` isn't `Copy`).
+    /// Opened from the card context menu AND the graph editor header; commit
+    /// either calls `UserLibrary::save` directly (Library) or executes
+    /// `SaveToProjectCommand` (Project).
+    SavePresetName,
 }
 
 impl TextInputField {
@@ -120,6 +127,31 @@ pub struct InspectorParamCtx {
 pub struct DriverFreePeriodCtx {
     pub target: manifold_ui::panels::GraphParamTarget,
     pub param_id: manifold_core::effects::ParamId,
+}
+
+/// Which library door a [`TextInputField::SavePresetName`] session is headed
+/// for — set alongside [`SavePresetCtx`] when the session opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SavePresetDestination {
+    /// Write a new file under the user's library folder (`UserLibrary::save`).
+    Library,
+    /// Upsert a new `origin: Saved` project-embedded preset
+    /// (`SaveToProjectCommand`), without retargeting any instance.
+    Project,
+}
+
+/// Context for an in-flight Save to Library / Save to Project name prompt —
+/// set when the box opens ([`TextInputField::SavePresetName`]) and read on
+/// commit. Lives off the `Copy` field enum because `EffectGraphDef` isn't
+/// `Copy`. The def is the instance's CURRENT effective definition, already
+/// resolved (diverged `graph` if `Some`, else the catalog default) and
+/// values-snapshotted at the point the prompt opened — the same
+/// `preset_source_def` resolution Export/Make Unique use.
+#[derive(Debug, Clone)]
+pub struct SavePresetCtx {
+    pub kind: manifold_core::preset_def::PresetKind,
+    pub def: manifold_core::effect_graph_def::EffectGraphDef,
+    pub destination: SavePresetDestination,
 }
 
 /// Screen-space rectangle for anchoring the text input overlay.
@@ -181,6 +213,9 @@ pub struct TextInputState {
     /// Context for `DriverFreePeriod` (target + id). Set right after `begin()`,
     /// read on commit.
     pub driver_free_period: Option<DriverFreePeriodCtx>,
+    /// Context for `SavePresetName` (kind + effective def + destination). Set
+    /// right after `begin()`, read (and taken) on commit.
+    pub save_preset: Option<SavePresetCtx>,
 }
 
 impl TextInputState {
@@ -200,6 +235,7 @@ impl TextInputState {
             graph_table_edit: None,
             inspector_param: None,
             driver_free_period: None,
+            save_preset: None,
         }
     }
 
@@ -224,9 +260,11 @@ impl TextInputState {
             TextInputField::GenStringParam(_) | TextInputField::GraphWgsl(_)
         );
         // Stale param ctx from a prior session must not leak in; the caller sets
-        // it again immediately for an `InspectorParam` / `DriverFreePeriod` field.
+        // it again immediately for an `InspectorParam` / `DriverFreePeriod` /
+        // `SavePresetName` field.
         self.inspector_param = None;
         self.driver_free_period = None;
+        self.save_preset = None;
     }
 
     /// Cancel editing without committing.
@@ -241,6 +279,7 @@ impl TextInputState {
         self.graph_table_edit = None;
         self.inspector_param = None;
         self.driver_free_period = None;
+        self.save_preset = None;
     }
 
     /// Insert a character at the cursor position.

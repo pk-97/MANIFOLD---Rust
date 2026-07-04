@@ -47,6 +47,7 @@ mod ui_root;
 #[cfg(feature = "ui-snapshot")]
 mod ui_snapshot;
 mod ui_translate;
+mod user_library;
 mod user_prefs;
 mod window_input;
 mod window_registry;

@@ -471,6 +471,31 @@ impl Application {
         self.watched_graph_target = Some(manifold_core::GraphTarget::Generator(layer_id));
     }
 
+    /// Open the shared Save to Library / Save to Project name-prompt text
+    /// input (PRESET_LIBRARY_DESIGN D4, P3). Shared tail for the card-menu
+    /// path (`PanelAction::SaveToLibrary`/`SaveToProject`, resolved by
+    /// `dispatch_inspector` and handed back via `DispatchResult`) — the
+    /// graph editor header path (`GraphEditCommand::SaveGraphToLibrary`/
+    /// `SaveGraphToProject`) opens the session inline instead, since it
+    /// already has a real button rect to anchor on; this path anchors on the
+    /// dropdown's last position (cosmetic only — a degenerate rect just
+    /// anchors near the top-left, which doesn't affect the save itself).
+    fn begin_save_preset_prompt(
+        &mut self,
+        kind: manifold_core::preset_def::PresetKind,
+        def: manifold_core::effect_graph_def::EffectGraphDef,
+        destination: crate::text_input::SavePresetDestination,
+    ) {
+        let bounds = self.ws.ui_root.dropdown.container_bounds();
+        let anchor = if bounds.width > 0.0 && bounds.height > 0.0 {
+            crate::text_input::AnchorRect::new(bounds.x, bounds.y, bounds.width, 24.0)
+        } else {
+            crate::text_input::AnchorRect::new(120.0, 120.0, 220.0, 24.0)
+        };
+        self.text_input.begin(crate::text_input::TextInputField::SavePresetName, "", anchor, 12.0);
+        self.text_input.save_preset = Some(crate::text_input::SavePresetCtx { kind, def, destination });
+    }
+
     pub(crate) fn tick_and_render(&mut self) {
         let dt = self.frame_timer.consume_tick();
         let realtime = self.frame_timer.realtime_since_start();
@@ -1841,6 +1866,9 @@ impl Application {
             if result.resolution_changed {
                 needs_resolution_resize = true;
             }
+            if let Some((kind, def, destination)) = result.begin_save_preset {
+                self.begin_save_preset_prompt(kind, def, destination);
+            }
         }
 
         // ── Editor inspector segment ────────────────────────────────────────
@@ -1856,6 +1884,14 @@ impl Application {
         if actions.len() > editor_card_seg_start {
             let mut retarget_effect: Option<usize> = None;
             let mut retarget_generator = false;
+            // Deferred like the retargets above: `self.begin_save_preset_prompt`
+            // needs `&mut self`, which would conflict with `ed`'s live borrow of
+            // `self.graph_editor` for the loop's duration.
+            let mut pending_save_preset: Option<(
+                manifold_core::preset_def::PresetKind,
+                manifold_core::effect_graph_def::EffectGraphDef,
+                crate::text_input::SavePresetDestination,
+            )> = None;
             if let Some(ed) = self.graph_editor.as_mut() {
                 let content_tx = self.content_tx.as_ref().unwrap();
                 for action in &actions[editor_card_seg_start..] {
@@ -1888,7 +1924,13 @@ impl Application {
                     if result.resolution_changed {
                         needs_resolution_resize = true;
                     }
+                    if result.begin_save_preset.is_some() {
+                        pending_save_preset = result.begin_save_preset;
+                    }
                 }
+            }
+            if let Some((kind, def, destination)) = pending_save_preset {
+                self.begin_save_preset_prompt(kind, def, destination);
             }
             // Retarget the canvas to the clicked card's graph (opening the window
             // stays a deliberate cog action, so only retarget when it's open).
@@ -2084,6 +2126,43 @@ impl Application {
                                 eid.clone(),
                             );
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::SaveGraphToLibrary { anchor }
+                | manifold_ui::GraphEditCommand::SaveGraphToProject { anchor } => {
+                    // Save to Library / Save to Project (PRESET_LIBRARY_DESIGN
+                    // D4, P3), triggered from the graph editor header. The
+                    // watched instance's CURRENT effective definition — its
+                    // diverged `graph` if `Some`, else the catalog default —
+                    // with the card's live slider values snapshotted in, same
+                    // resolution `ui_bridge::inspector::preset_source_def`
+                    // does for the card-menu path.
+                    let destination = if matches!(cmd, manifold_ui::GraphEditCommand::SaveGraphToLibrary { .. }) {
+                        crate::text_input::SavePresetDestination::Library
+                    } else {
+                        crate::text_input::SavePresetDestination::Project
+                    };
+                    if let Some(target) = self.watched_graph_target.clone()
+                        && let Some(inst) = self.local_project.preset_instance(&target)
+                        && let Some(mut def) = inst
+                            .graph
+                            .clone()
+                            .or_else(|| self.watched_catalog_default.clone())
+                    {
+                        inst.snapshot_values_into_def(&mut def);
+                        let kind = target.preset_kind();
+                        self.text_input.begin(
+                            crate::text_input::TextInputField::SavePresetName,
+                            "",
+                            crate::text_input::AnchorRect::new(anchor.0, anchor.1, anchor.2, anchor.3),
+                            11.0,
+                        );
+                        self.text_input.save_preset = Some(crate::text_input::SavePresetCtx {
+                            kind,
+                            def,
+                            destination,
+                        });
                     }
                     continue;
                 }

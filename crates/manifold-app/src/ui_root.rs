@@ -1975,6 +1975,16 @@ impl UIRoot {
                     DropdownItem::new("Make Unique")
                         .with_action(PanelAction::MakePresetUnique(*gpt)),
                 );
+                // Library doors (PRESET_LIBRARY_DESIGN D4) — explicit "publish a
+                // copy" actions, distinct from Make Unique's divergence/retarget.
+                items.push(
+                    DropdownItem::new("Save to Library…")
+                        .with_action(PanelAction::SaveToLibrary(*gpt)),
+                );
+                items.push(
+                    DropdownItem::new("Save to Project…")
+                        .with_action(PanelAction::SaveToProject(*gpt)),
+                );
                 items.push(
                     DropdownItem::new("Export Preset…").with_action(PanelAction::ExportPreset(*gpt)),
                 );

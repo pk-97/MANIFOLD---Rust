@@ -2420,6 +2420,33 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
+        PanelAction::SaveToLibrary(gpt) | PanelAction::SaveToProject(gpt) => {
+            // Library doors (PRESET_LIBRARY_DESIGN D4): resolve the target's
+            // current effective def (same `preset_source_def` resolution as
+            // Make Unique / Export) and hand it back on `DispatchResult` for
+            // the caller to open the shared name-prompt text-input session
+            // with — this function has no `TextInputState` access (it's
+            // UI-thread overlay state, not routed here), so the prompt itself
+            // opens one level up.
+            let mut result = DispatchResult::handled();
+            if let Some(target) = resolve_graph_target(
+                gpt,
+                editor_target,
+                effective_tab,
+                active_layer,
+                selection,
+                project,
+            ) && let Some((def, _)) = preset_source_def(&target, project)
+            {
+                let destination = if matches!(action, PanelAction::SaveToLibrary(_)) {
+                    crate::text_input::SavePresetDestination::Library
+                } else {
+                    crate::text_input::SavePresetDestination::Project
+                };
+                result.begin_save_preset = Some((target.preset_kind(), def, destination));
+            }
+            result
+        }
 
         // ── Generator params ───────────────────────────────────────
         PanelAction::GenTypeClicked(_) => DispatchResult::handled(),
