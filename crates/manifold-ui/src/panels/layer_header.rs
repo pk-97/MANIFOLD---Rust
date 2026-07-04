@@ -38,6 +38,11 @@ const LBL_W: f32 = 52.0;
 /// `.rform{gap:9px}` airy rhythm. The old 2px read cramped now that the expanded
 /// track is 200px. Used for the mix→routing gap too.
 const ROUTING_ROW_GAP: f32 = 9.0;
+/// P0.5 collapsed-card generator label: a fixed-width dimmed zone carved out
+/// of the Name rect's right edge, so the row's total width never grows — the
+/// generator name ellipsizes inside this budget instead
+/// (`docs/TIMELINE_LAYOUT_P0_SPEC.md` P0.5).
+const GEN_LABEL_COLLAPSED_W: f32 = 80.0;
 const ACCENT_W: f32 = color::GROUP_ACCENT_BAR_WIDTH;
 /// Width of the left-edge selection accent bar. The selected layer is marked by
 /// this bright bar (DAW convention) plus a small brighten of its own colour —
@@ -295,6 +300,14 @@ enum LayerControl {
     Chevron,
     Name,
     DragHandle,
+    /// The generator's type name (P0.5, `docs/TIMELINE_LAYOUT_P0_SPEC.md`):
+    /// display-only, never a picker. Expanded, it occupies the same row/height
+    /// budget `PathLabel`+`Folder` would use for a video layer — one line
+    /// under the name, not an extra row. Collapsed, it's a fixed-width dimmed
+    /// zone carved out of the Name rect's right edge, ellipsized, never
+    /// widening the row. Set only when `LayerInfo.generator_type.is_some()` —
+    /// absent for video/audio/group layers.
+    GenType,
     Mute,
     Solo,
     Led,
@@ -320,7 +333,7 @@ enum LayerControl {
     Analysis,
 }
 
-const N_CONTROLS: usize = 29;
+const N_CONTROLS: usize = 30;
 
 impl LayerControl {
     /// All controls in declaration (build / z) order.
@@ -333,6 +346,7 @@ impl LayerControl {
         LayerControl::Chevron,
         LayerControl::Name,
         LayerControl::DragHandle,
+        LayerControl::GenType,
         LayerControl::Mute,
         LayerControl::Solo,
         LayerControl::Led,
@@ -416,6 +430,10 @@ fn compute_layer_row(
     is_child: bool,
     is_last_child: bool,
     is_group_expanded: bool,
+    // P0.5: `LayerInfo.generator_type.is_some()`, decided by the caller (this
+    // fn stays content-free — geometry only, per the file's existing
+    // discipline of passing structural bools rather than the layer itself).
+    has_gen_label: bool,
 ) -> LayerRowData {
     use LayerControl as C;
     let mut d = LayerRowData::default();
@@ -469,8 +487,23 @@ fn compute_layer_row(
     // starts right after the chevron and reclaims the badge's slot.
     let name_left = pad + chevron_w + if chevron_w > 0.0 { TOP_GAP } else { 0.0 };
     let handle_x = w - pad - HANDLE_W - 8.0;
-    let name_w = (handle_x - name_left - TOP_GAP).max(20.0);
-    d.set(C::Name, Rect::new(name_left, y, name_w, NAME_H));
+    // P0.5 collapsed generator label: carve a fixed-width dimmed zone out of
+    // the Name rect's right edge (before DragHandle) instead of adding a row —
+    // the row's total width is unchanged, Name just gives up some of its own
+    // budget. Expanded rows are unaffected (Name keeps its full width; the
+    // generator name gets its own line in the routing-form slot below).
+    if is_collapsed && has_gen_label {
+        let label_x = handle_x - TOP_GAP - GEN_LABEL_COLLAPSED_W;
+        let name_w = (label_x - TOP_GAP - name_left).max(20.0);
+        d.set(C::Name, Rect::new(name_left, y, name_w, NAME_H));
+        d.set(
+            C::GenType,
+            Rect::new(label_x, y, GEN_LABEL_COLLAPSED_W, NAME_H),
+        );
+    } else {
+        let name_w = (handle_x - name_left - TOP_GAP).max(20.0);
+        d.set(C::Name, Rect::new(name_left, y, name_w, NAME_H));
+    }
     d.set(C::DragHandle, Rect::new(handle_x, y, HANDLE_W, BTN_H));
 
     y += ROW_STEP;
@@ -540,6 +573,13 @@ fn compute_layer_row(
         if !is_generator {
             d.set(C::PathLabel, Rect::new(pad, y, LBL_W, BTN_H));
             d.set(C::Folder, Rect::new(val_x, y, val_w, BTN_H));
+            y += BTN_H + ROUTING_ROW_GAP;
+        } else if has_gen_label {
+            // P0.5: the generator name occupies the exact row/height budget
+            // FOLDER would use for a video layer — one line under the name,
+            // not an extra row. Full-width (no separate label column): the
+            // brief asks for "the generator name", not a label+value pair.
+            d.set(C::GenType, Rect::new(pad, y, (right_edge - pad).max(20.0), BTN_H));
             y += BTN_H + ROUTING_ROW_GAP;
         }
         // MIDI | note input + trigger-mode toggle.
@@ -1526,6 +1566,47 @@ impl LayerHeaderPanel {
                     }
                     handle
                 }
+                // P0.5 (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): display-only generator
+                // name, never a picker. Two mutually-exclusive placements share
+                // this one control (compute_layer_row never sets both in the
+                // same row): collapsed → a dimmed, ellipsized label to the right
+                // of Name; expanded → a full-contrast line in the same row/height
+                // slot a video layer's FOLDER row would use.
+                C::GenType => {
+                    let gen_text = layer.generator_type.as_deref().unwrap_or("");
+                    if layer.is_collapsed {
+                        let truncated =
+                            crate::draw::elide_to_width(gen_text, SMALL_FONT as f32, r.width);
+                        tree.add_label(
+                            clip_parent,
+                            r.x,
+                            r.y,
+                            r.width,
+                            r.height,
+                            &truncated,
+                            UIStyle {
+                                // Dimmed — ~55% of the contrast text colour, same
+                                // recede-into-the-header treatment as DragHandle's
+                                // bars, so it reads as secondary info next to the
+                                // bright layer name.
+                                text_color: color::with_alpha(text_clr, 140),
+                                font_size: SMALL_FONT,
+                                text_align: TextAlign::Left,
+                                ..UIStyle::default()
+                            },
+                        )
+                    } else {
+                        tree.add_label(
+                            clip_parent,
+                            r.x,
+                            r.y,
+                            r.width,
+                            r.height,
+                            gen_text,
+                            routing_label_style(text_clr),
+                        )
+                    }
+                }
                 C::Mute => tree.add_button(
                     clip_parent,
                     r.x,
@@ -2041,6 +2122,7 @@ impl LayerHeaderPanel {
                 is_child,
                 is_last_child,
                 layer.is_group && !layer.is_collapsed,
+                layer.generator_type.is_some(),
             );
 
             self.build_layer_row(tree, i, layer, row, self.panel_origin, clip_parent);
@@ -2502,6 +2584,7 @@ mod tests {
         is_child: bool,
         is_last_child: bool,
         is_group_expanded: bool,
+        has_gen_label: bool,
     ) -> LayerRowData {
         use LayerControl as C;
         let mut d = LayerRowData::default();
@@ -2536,8 +2619,18 @@ mod tests {
         d.set(C::Chevron, Rect::new(pad, y, CHEVRON_W, BTN_H));
         let name_left = pad + chevron_w + if chevron_w > 0.0 { TOP_GAP } else { 0.0 };
         let handle_x = w - pad - HANDLE_W - 8.0;
-        let name_w = (handle_x - name_left - TOP_GAP).max(20.0);
-        d.set(C::Name, Rect::new(name_left, y, name_w, NAME_H));
+        if is_collapsed && has_gen_label {
+            let label_x = handle_x - TOP_GAP - GEN_LABEL_COLLAPSED_W;
+            let name_w = (label_x - TOP_GAP - name_left).max(20.0);
+            d.set(C::Name, Rect::new(name_left, y, name_w, NAME_H));
+            d.set(
+                C::GenType,
+                Rect::new(label_x, y, GEN_LABEL_COLLAPSED_W, NAME_H),
+            );
+        } else {
+            let name_w = (handle_x - name_left - TOP_GAP).max(20.0);
+            d.set(C::Name, Rect::new(name_left, y, name_w, NAME_H));
+        }
         d.set(C::DragHandle, Rect::new(handle_x, y, HANDLE_W, BTN_H));
         y += ROW_STEP;
         let mut btn_x = pad;
@@ -2605,6 +2698,9 @@ mod tests {
                 d.set(C::PathLabel, Rect::new(pad, y, LBL_W, BTN_H));
                 d.set(C::Folder, Rect::new(val_x, y, val_w, BTN_H));
                 y += BTN_H + ROUTING_ROW_GAP;
+            } else if has_gen_label {
+                d.set(C::GenType, Rect::new(pad, y, (right_edge - pad).max(20.0), BTN_H));
+                y += BTN_H + ROUTING_ROW_GAP;
             }
             d.set(C::MidiLabel, Rect::new(pad, y, LBL_W, BTN_H));
             d.set(
@@ -2650,8 +2746,11 @@ mod tests {
             (true, false, false, true, false, false, false, "collapsed-audio"),
         ];
         for (coll, grp, genr, aud, child, last, gexp, label) in cases {
-            let live = compute_layer_row(0.0, 140.0, 300.0, coll, grp, genr, aud, child, last, gexp);
-            let oracle = oracle_row(0.0, 140.0, 300.0, coll, grp, genr, aud, child, last, gexp);
+            // Synthetic equivalence check, not the gating test — `genr` doubles
+            // as `has_gen_label` here since both fns receive the identical
+            // value either way.
+            let live = compute_layer_row(0.0, 140.0, 300.0, coll, grp, genr, aud, child, last, gexp, genr);
+            let oracle = oracle_row(0.0, 140.0, 300.0, coll, grp, genr, aud, child, last, gexp, genr);
             assert_row_eq(&live, &oracle, label);
         }
     }
@@ -2683,6 +2782,82 @@ mod tests {
             crate::input::Modifiers::NONE,
         );
         assert!(matches!(a.as_slice(), [PanelAction::AudioSendClicked(0)]));
+    }
+
+    // ── P0.5 gate: generator label, both states ───────────────────────
+    //
+    // `docs/TIMELINE_LAYOUT_P0_SPEC.md` P0.5: a display-only generator-name
+    // label renders iff `LayerInfo.generator_type.is_some()` — present for a
+    // generator layer, absent for a video layer — in both the collapsed and
+    // expanded row geometry.
+
+    #[test]
+    fn generator_label_present_iff_generator_type_is_some() {
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = LayerHeaderPanel::new();
+        let layers = vec![make_video_layer("Video"), make_gen_layer("Gen")];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
+
+        assert_eq!(
+            panel.rows[0].id(LayerControl::GenType),
+            None,
+            "video layer (generator_type: None) must not get a generator label"
+        );
+        assert!(
+            panel.rows[1].id(LayerControl::GenType).is_some(),
+            "generator layer (generator_type: Some) must get its label"
+        );
+    }
+
+    #[test]
+    fn generator_label_present_iff_generator_type_is_some_collapsed() {
+        // Same gate, collapsed geometry — the label moves next to Name instead
+        // of into the routing-form slot, but the presence rule is identical.
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = LayerHeaderPanel::new();
+
+        let mut video = make_video_layer("Video");
+        video.is_collapsed = true;
+        let mut gen_layer = make_gen_layer("Gen");
+        gen_layer.is_collapsed = true;
+
+        let layers = vec![video, gen_layer];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
+
+        assert_eq!(panel.rows[0].id(LayerControl::GenType), None);
+        assert!(panel.rows[1].id(LayerControl::GenType).is_some());
+    }
+
+    #[test]
+    fn generator_label_collapsed_never_widens_row() {
+        // Geometry-level check mirroring `collapsed_audio_content_fits_
+        // collapsed_track_height`: the collapsed generator label is carved out
+        // of Name's own width budget, so the row's total content width never
+        // grows past what a non-generator collapsed row already uses.
+        let row_gen =
+            compute_layer_row(0.0, 140.0, 300.0, true, false, true, false, false, false, false, true);
+        let row_video =
+            compute_layer_row(0.0, 140.0, 300.0, true, false, false, false, false, false, false, false);
+
+        let label = row_gen.rect(LayerControl::GenType);
+        let name_gen = row_gen.rect(LayerControl::Name);
+        let handle_gen = row_gen.rect(LayerControl::DragHandle);
+        let handle_video = row_video.rect(LayerControl::DragHandle);
+
+        // DragHandle's x (the row's right-hand boundary for this content) is
+        // unchanged by the label's presence.
+        assert_eq!(handle_gen.x, handle_video.x, "label must not push DragHandle right");
+        // The label sits entirely between Name and DragHandle — it never
+        // extends past the row's existing right edge.
+        assert!(label.x + label.width <= handle_gen.x);
+        // Name shrank to make room — it does not overlap the label.
+        assert!(name_gen.x + name_gen.width <= label.x);
     }
 
     // ── P0.2 gate: D4 audio fit ──────────────────────────────────────
@@ -2724,7 +2899,7 @@ mod tests {
         // fully inside `TrackHeight::Collapsed`, mirroring
         // `expanded_audio_content_fits_normal_track_height` below.
         let height = color::COLLAPSED_TRACK_HEIGHT;
-        let row = compute_layer_row(0.0, height, 300.0, true, false, false, true, false, false, false);
+        let row = compute_layer_row(0.0, height, 300.0, true, false, false, true, false, false, false, false);
         assert!(!row.has(LayerControl::Gain));
         assert!(!row.has(LayerControl::Send));
         for c in [LayerControl::Mute, LayerControl::Solo, LayerControl::Analysis] {
@@ -2745,7 +2920,7 @@ mod tests {
         // bottom edge sits inside `TrackHeight::Normal` — the state-only
         // height budget the card must fit without a per-type exception.
         let height = color::TRACK_HEIGHT;
-        let row = compute_layer_row(0.0, height, 300.0, false, false, false, true, false, false, false);
+        let row = compute_layer_row(0.0, height, 300.0, false, false, false, true, false, false, false, false);
         for c in [
             LayerControl::Mute,
             LayerControl::Solo,

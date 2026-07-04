@@ -86,8 +86,13 @@ fn timeline_scene() -> SceneData {
     flowers.clips.push(TimelineClip::new_video("flowers_loop_B.mov".into(), Beats(28.0), Beats(20.0), Seconds::ZERO));
     layers.push(flowers);
 
-    // 2: PLASMA — generator, the SELECTED layer.
-    let mut plasma = Layer::new("PLASMA".into(), LayerType::Generator, 2);
+    // 2: PLASMA — generator, the SELECTED layer. `new_generator` (not `new`)
+    // so `gen_params` is actually populated — P0.5 evidence needs a real
+    // `generator_type` to show the label; a bare `LayerType::Generator` layer
+    // with no gen_params is the same "renders black" trap `Layer::new_generator`'s
+    // own doc comment warns about, just surfacing here as a missing label
+    // instead (`docs/TIMELINE_LAYOUT_P0_SPEC.md` P0.5).
+    let mut plasma = Layer::new_generator("PLASMA".into(), PresetTypeId::PLASMA, 2);
     plasma.layer_id = lid("plasma");
     plasma.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(48.0)));
     layers.push(plasma);
