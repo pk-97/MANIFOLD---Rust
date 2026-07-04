@@ -1,6 +1,6 @@
 # Git tree discipline — build spec
 
-Status: approved by Peter 2026-07-04, not built. Builder: Sonnet, any session.
+Status: §1 hook guard BUILT 2026-07-04 (`6737cfe6`); §2 conventions in force (also in CLAUDE.md hard rules).
 Origin: two live sessions shared the main checkout; one switched branches and
 fast-forward merged while the other had uncommitted file moves in flight. The
 merge resurrected the moved files' old paths and the second session's commit
@@ -47,6 +47,17 @@ with a fake live foreign pidfile (prompts), same with only own-session pidfile
 allowed), merge/switch variants, `checkout -- path` unchanged.
 
 ## 2. Worktree-per-workstream convention (doc change, no code)
+
+- **`main` = last known-good.** Never developed on; fast-forwarded to the
+  verified tip whenever a workstream lands clean, without touching any
+  checkout: `git branch -f main <tip> && git push origin <tip>:main`.
+  Rationale: everything that bases off the default branch (fresh clones,
+  the Agent tool's `isolation: "worktree"`) reads main; a stale main hands
+  agents months-old code (2026-07-04 incident: a worker got a March
+  checkout predating the node-graph system). For the same reason, never
+  use `isolation: "worktree"` for repo work — manual `git worktree add`
+  off the verified tip only, with the step-0 base-verification guard in
+  the brief.
 
 - A session doing sustained code work gets a LONG-LIVED worktree at
   `.claude/worktrees/<branch>`, created off a verified tip (the playbook's

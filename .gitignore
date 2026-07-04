@@ -1,4 +1,4 @@
-/target
+target/
 *.manifold
 **/.DS_Store
 # Runtime diagnostic logs from MANIFOLD_LOG_CHAIN_STATS etc.
