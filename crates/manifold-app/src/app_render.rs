@@ -689,7 +689,11 @@ impl Application {
         // until the next unrelated edit. Re-sync so the new renderer attaches; the
         // per-layer fingerprint (waveform.is_some()) then repaints the lane once.
         if self.ws.ui_root.audio_waveforms.poll_and_request(&audio_clips) {
-            crate::ui_bridge::sync_clip_positions(&mut self.ws.ui_root, &self.local_project);
+            crate::ui_bridge::sync_clip_positions(
+                &mut self.ws.ui_root,
+                &self.local_project,
+                self.selection.automation_mode_visible,
+            );
         }
 
         // 1c. Push the latest graph snapshot into the editor canvas
@@ -2644,7 +2648,11 @@ impl Application {
         // project model. Outside of drag with no version change, the viewport
         // cache is already current. Skipping saves 50+ string clones per frame.
         if self.mouse_pressed || needs_structural_sync {
-            crate::ui_bridge::sync_clip_positions(&mut self.ws.ui_root, &self.local_project);
+            crate::ui_bridge::sync_clip_positions(
+                &mut self.ws.ui_root,
+                &self.local_project,
+                self.selection.automation_mode_visible,
+            );
         }
 
         // 4c. Apply per-layer bitmap invalidation from editing operations.

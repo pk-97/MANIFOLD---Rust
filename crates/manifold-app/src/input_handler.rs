@@ -193,6 +193,13 @@ impl InputHandler {
             if self.inspector_has_focus && host.handle_effect_delete() {
                 return true;
             }
+            // Priority 1.5: selected automation breakpoint → delete it
+            // (P4 Unit A, `docs/AUTOMATION_LANES_DESIGN.md` §7's "Delete
+            // removes the selection").
+            if host.has_selected_automation_point() {
+                host.delete_selected_automation_point();
+                return true;
+            }
             // Priority 2: selected markers → delete markers
             if host.has_selected_markers() {
                 host.delete_selected_markers();

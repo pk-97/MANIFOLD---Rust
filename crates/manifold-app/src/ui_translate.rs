@@ -11,8 +11,8 @@
 //! identical `manifold-foundation` type on both sides.
 
 use manifold_ui::view::{
-    SelectionRegion as UiSelectionRegion, UiAutomationLane, UiAutomationPoint, UiLayer, UiMarker,
-    UiParamSlot, UiSegmentShape,
+    SelectionRegion as UiSelectionRegion, UiAutomationLane, UiAutomationPoint, UiGraphTarget,
+    UiLayer, UiMarker, UiParamSlot, UiSegmentShape,
 };
 use manifold_ui::{
     AbletonMacroAddress as UiAbletonMacroAddress, AbletonMappingStatus as UiAbletonMappingStatus,
@@ -262,16 +262,32 @@ pub fn layer_automation_lanes_to_ui(layer: &Layer) -> Vec<UiAutomationLane> {
     let mut out = Vec::new();
     if let Some(effects) = &layer.effects {
         for fx in effects {
-            push_instance_automation_lanes(fx, &mut out);
+            let target = UiGraphTarget::Effect(fx.id.clone());
+            push_instance_automation_lanes(fx, target, &mut out);
         }
     }
     if let Some(gp) = layer.gen_params() {
-        push_instance_automation_lanes(gp, &mut out);
+        // A generator's own params are addressed by the LAYER's id
+        // (`GraphTarget::Generator`), NOT `gp.id` — that field is documented
+        // synthetic for generator instances (`PresetInstance::id`'s doc
+        // comment: "a layer has one generator, addressed by LayerId"). The
+        // instance's own `id` still feeds `effect_id` below for the
+        // `automation_latched_params` match (the playback latch map keys on
+        // the instance's own id regardless of kind — see
+        // `manifold-playback/src/automation.rs`), but `target` — the
+        // addressing this UI needs to build edit commands — must be the
+        // layer id.
+        let target = UiGraphTarget::Generator(layer.layer_id.clone());
+        push_instance_automation_lanes(gp, target, &mut out);
     }
     out
 }
 
-fn push_instance_automation_lanes(instance: &PresetInstance, out: &mut Vec<UiAutomationLane>) {
+fn push_instance_automation_lanes(
+    instance: &PresetInstance,
+    target: UiGraphTarget,
+    out: &mut Vec<UiAutomationLane>,
+) {
     let Some(lanes) = instance.automation_lanes.as_ref() else {
         return;
     };
@@ -303,8 +319,12 @@ fn push_instance_automation_lanes(instance: &PresetInstance, out: &mut Vec<UiAut
         out.push(UiAutomationLane {
             effect_id: instance.id.clone(),
             param_id: lane.param_id.clone(),
+            target: target.clone(),
             label: format!("{effect_label}: {}", lane.param_id),
             points,
+            param_min: resolved.min,
+            param_max: resolved.max,
+            whole_numbers: resolved.whole_numbers,
         });
     }
 }

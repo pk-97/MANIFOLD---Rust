@@ -4,6 +4,7 @@
 //! Same split-borrow pattern as AppEditingHost — borrows individual fields
 //! so InputHandler, UIState, and viewport can be borrowed separately.
 use manifold_core::{Beats, ClipId, LayerId, Seconds};
+use manifold_editing::command::Command;
 use manifold_editing::commands::clip::MuteClipCommand;
 use manifold_editing::commands::effect_target::EffectTarget;
 use manifold_editing::commands::effects::RemoveEffectCommand;
@@ -1373,6 +1374,45 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn has_selected_markers(&self) -> bool {
         !self.selection.selected_marker_ids.is_empty()
+    }
+
+    // ── Automation lane editing ──────────────────────────────────
+
+    fn has_selected_automation_point(&self) -> bool {
+        self.selection.selected_automation_point.is_some()
+    }
+
+    fn delete_selected_automation_point(&mut self) {
+        use manifold_editing::commands::automation::RemoveAutomationPointCommand;
+
+        let Some(point_ref) = self.selection.selected_automation_point.clone() else {
+            return;
+        };
+        let target = crate::editing_host::to_graph_target(&point_ref.target);
+        let param_id_str = point_ref.param_id.as_ref();
+        let index = self.project.preset_instance(&target).and_then(|inst| {
+            inst.automation_lanes.as_ref().and_then(|lanes| {
+                lanes
+                    .iter()
+                    .find(|l| l.param_id.as_ref() == param_id_str)
+                    .and_then(|lane| {
+                        lane.points
+                            .iter()
+                            .position(|p| p.beat.0 == point_ref.beat.0)
+                    })
+            })
+        });
+        self.selection.selected_automation_point = None;
+        let Some(index) = index else {
+            return;
+        };
+        let mut cmd = RemoveAutomationPointCommand::new(target, param_id_str, index);
+        cmd.execute(self.project);
+        ContentCommand::send(
+            self.content_tx,
+            ContentCommand::Execute(Box::new(cmd)),
+        );
+        *self.needs_rebuild = true;
     }
 }
 

@@ -136,7 +136,12 @@ pub struct ViewportAutomationLane {
 /// [`super::TimelineViewportPanel::automation_lane_screens`]. The renderer
 /// (`manifold_renderer::automation_lane_draw`) draws these directly — no
 /// UITree nodes, the same "GPU rects computed here, drawn there" split as
-/// [`ClipScreenRect`] / [`TimelineOverlays`].
+/// [`ClipScreenRect`] / [`TimelineOverlays`]. `InteractionOverlay`'s
+/// automation hit-testing/editing also reads this same geometry (per
+/// `docs/AUTOMATION_LANES_DESIGN.md` §7's "click on the line adds a
+/// breakpoint" vocabulary) — one source for both the draw and the click, so
+/// they cannot disagree, the same discipline `ClipScreenRect` already keeps
+/// for clip bodies.
 #[derive(Debug, Clone)]
 pub struct AutomationLaneScreen {
     /// The strip's background band, full tracks width.
@@ -148,8 +153,41 @@ pub struct AutomationLaneScreen {
     /// The sampled breakpoint line, screen-space `(x, y)` pairs in ascending
     /// x order — the caller draws consecutive segments with `draw_line`.
     pub polyline: Vec<(f32, f32)>,
-    /// Breakpoint dot centers, screen-space, culled to the visible beat range.
-    pub dots: Vec<(f32, f32)>,
+    /// Breakpoint dots, screen-space, culled to the visible beat range —
+    /// carries each dot's beat/value/shape (not just its pixel position) so
+    /// editing can identify + reconstruct the exact `AutomationPoint` a grab
+    /// or delete targets, per [`AutomationDotScreen`].
+    pub dots: Vec<AutomationDotScreen>,
+    /// Addressing for this lane's edit commands
+    /// (`AddAutomationPointCommand`/`MoveAutomationPointCommand`/
+    /// `RemoveAutomationPointCommand`) — `Effect(EffectId)` or
+    /// `Generator(LayerId)`, mirroring `manifold_core::GraphTarget`.
+    pub target: crate::view::UiGraphTarget,
+    pub param_id: ParamId,
+    /// The param's resolved range — see `UiAutomationLane::param_min/max`'s
+    /// doc for the footgun this exists to close (screen Y is normalized
+    /// 0..1; `AutomationPoint.value` is param range).
+    pub param_min: f32,
+    pub param_max: f32,
+    /// Whether this param is integral — new points click-added on it default
+    /// to `Hold` instead of `Linear` (`docs/AUTOMATION_LANES_DESIGN.md` §8).
+    pub whole_numbers: bool,
+}
+
+/// One breakpoint's screen position plus the model data needed to identify
+/// and edit it — the point-level counterpart to [`AutomationLaneScreen`]'s
+/// lane-level target/range fields. `beat`/`value_norm`/`shape` are copied
+/// verbatim from the `UiAutomationPoint` this dot was sampled from, so a
+/// drag-grab or delete can reconstruct the exact pre-edit `AutomationPoint`
+/// (by-beat identity, matching `manifold-editing/src/commands/automation.rs`'s
+/// point-matching convention) without re-deriving it from pixels.
+#[derive(Debug, Clone, Copy)]
+pub struct AutomationDotScreen {
+    pub x: f32,
+    pub y: f32,
+    pub beat: Beats,
+    pub value_norm: f32,
+    pub shape: crate::view::UiSegmentShape,
 }
 
 // ── Marker node group for update-in-place ──────────────────────

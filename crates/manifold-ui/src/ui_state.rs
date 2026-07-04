@@ -5,7 +5,7 @@
 // Replaces the former app::SelectionState + app::ClipDragState.
 
 use crate::panels::InspectorTab;
-use crate::view::SelectionRegion;
+use crate::view::{SelectionRegion, UiAutomationPointRef};
 use manifold_foundation::{Beats, ClipId, LayerId, MarkerId};
 use std::collections::HashSet;
 
@@ -75,6 +75,15 @@ pub struct UIState {
     /// `ui_bridge::transport::dispatch_transport`'s `PanelAction::
     /// ToggleAutomationMode` arm.
     pub automation_mode_visible: bool,
+
+    /// The single selected breakpoint, for the Delete key (P4 Unit A —
+    /// marquee multi-select is a later unit; `docs/AUTOMATION_LANES_DESIGN.md`
+    /// §7's "Marquee-select multiple dots and drag/delete them together").
+    /// Set on a plain click on an existing dot; cleared on any other
+    /// selection change or when automation mode toggles off. Never
+    /// serialized — pure view/interaction state, same tier as
+    /// `hovered_clip_id`.
+    pub selected_automation_point: Option<UiAutomationPointRef>,
 }
 
 impl Default for UIState {
@@ -102,6 +111,7 @@ impl UIState {
             selected_marker_ids: HashSet::new(),
             scope_pin: None,
             automation_mode_visible: false,
+            selected_automation_point: None,
         }
     }
 

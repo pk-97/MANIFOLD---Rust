@@ -12,8 +12,8 @@
 //! on manifold-editing.
 
 use crate::node::Vec2;
-use crate::view::{SelectionRegion, UiLayer};
-use manifold_foundation::{Beats, ClipId, LayerId, Seconds};
+use crate::view::{SelectionRegion, UiGraphTarget, UiLayer, UiSegmentShape};
+use manifold_foundation::{Beats, ClipId, LayerId, ParamId, Seconds};
 use std::collections::HashSet;
 
 /// Cursor shapes the overlay can request.
@@ -237,4 +237,66 @@ pub trait TimelineEditingHost {
     /// Maximum clip duration in beats based on video source length and InPoint.
     /// Returns 0 if unavailable. Unity: GetMaxDurationBeats (InteractionOverlay line 960-971).
     fn get_max_duration_beats(&self, clip_id: &str) -> Beats;
+
+    // ── Automation lane editing (P4, `docs/AUTOMATION_LANES_DESIGN.md` §7) ──
+    //
+    // Mirrors the clip-drag shape above: a single click/double-click action
+    // executes + sends immediately (like `create_clip_at_position`); a drag
+    // mutates the point live each frame via `set_automation_point_preview`
+    // (like `set_clip_start_beat` — bypasses undo, "already applied" by the
+    // time the commit method runs), then commits ONE undo entry on release.
+    // Values are always PARAM-RANGE `f32` (never normalized) — the overlay
+    // denormalizes via `AutomationLaneScreen::param_min/max` /
+    // `UiAutomationLane::denormalize` before calling any of these, so the
+    // host never needs registry access to resolve a range.
+
+    /// Add a breakpoint to `param_id`'s lane on `target` at `beat` (already
+    /// grid-snapped by the caller unless Cmd was held) with `value` in PARAM
+    /// RANGE and `shape` the segment leaving the new point. Creates the lane
+    /// if none exists yet. Executes + sends immediately — no batch.
+    fn add_automation_point(
+        &mut self,
+        target: &UiGraphTarget,
+        param_id: &ParamId,
+        beat: Beats,
+        value: f32,
+        shape: UiSegmentShape,
+    );
+
+    /// Live-preview a point drag: directly mutates the point currently at
+    /// `from_beat` to `(to_beat, to_value)` in PARAM RANGE, bypassing undo.
+    /// The caller re-derives `from_beat` each frame as whatever beat this
+    /// method itself last wrote (starting from the grabbed point's original
+    /// beat) — see `InteractionOverlay`'s automation drag state, mirroring
+    /// how clip move-drag always recomputes from the drag-start snapshot
+    /// rather than incrementally.
+    fn set_automation_point_preview(
+        &mut self,
+        target: &UiGraphTarget,
+        param_id: &ParamId,
+        from_beat: Beats,
+        to_beat: Beats,
+        to_value: f32,
+    );
+
+    /// Commit a completed point drag as one undo entry. `old` is the point's
+    /// state BEFORE the drag started (the explicit reverse, captured at grab
+    /// time — the `MoveAutomationPointCommand` drag-commit precedent); `new`
+    /// is its final state. The point is already at `new` in the live project
+    /// (from `set_automation_point_preview` calls during the drag) — this
+    /// only registers the undo entry and mirrors it to the content thread,
+    /// same as `record_move` + `commit_command_batch`'s "already applied"
+    /// comment.
+    fn commit_automation_point_move(
+        &mut self,
+        target: &UiGraphTarget,
+        param_id: &ParamId,
+        old: (Beats, f32, UiSegmentShape),
+        new: (Beats, f32, UiSegmentShape),
+    );
+
+    /// Remove the breakpoint at `beat` (double-click or Delete key). Looks up
+    /// the point's current index within the lane at call time. No-op if no
+    /// point exists at that beat. Executes + sends immediately.
+    fn remove_automation_point(&mut self, target: &UiGraphTarget, param_id: &ParamId, beat: Beats);
 }
