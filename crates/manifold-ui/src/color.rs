@@ -959,6 +959,23 @@ pub const POPUP_RADIUS: f32 = 6.0;
 // trim/target/scale bars). A named token so the guard (§16) stays at zero.
 pub const HAIRLINE_RADIUS: f32 = 1.0;
 
+// ── Motion ────────────────────────────────────────────────────────────
+// The whole motion vocabulary (`UI_CRAFT_AND_MOTION_PLAN.md` D1/D15): three
+// durations + one overshoot magnitude. `crate::anim::AnimF32` reads these;
+// no widget picks a bespoke duration — three tokens or the system rots.
+/// Hover/press feedback — the fastest, most-felt tween in the kit.
+pub const MOTION_FAST_MS: f32 = 90.0;
+/// Drawers, tab ink, card collapse.
+pub const MOTION_MED_MS: f32 = 160.0;
+/// Value flash, toast.
+pub const MOTION_SLOW_MS: f32 = 240.0;
+/// D15 magnetic-snap curve (`Curve::Snap`): back-out overshoot constant.
+/// `3.0` peaks the ease at exactly 25% overshoot past the target (verified
+/// numerically in `anim::tests::snap_curve_overshoots_by_roughly_25_percent`)
+/// — the doc's "≈25% overshoot". ⚠ retune with Peter's playground numbers at
+/// P2 entry per D15.
+pub const EASE_SNAP_BACK_C1: f32 = 3.0;
+
 // ── Font sizes ──────────────────────────────────────────────────────
 // Semantic scale — all panel font sizes should reference these.
 pub const FONT_CAPTION: u16 = 8; // tiny badges, config buttons

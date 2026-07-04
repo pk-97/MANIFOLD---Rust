@@ -24,6 +24,7 @@
 //! the scattered `*_btn_style` helpers with them. Until then both coexist — the
 //! old helpers stay in use and these are their token-based successors.
 
+use crate::anim::AnimF32;
 use crate::chrome::view::View;
 use crate::color;
 use crate::node::{Color32, TextAlign, UIStyle};
@@ -207,6 +208,88 @@ pub fn state_button_style(active_color: Color32, active: bool) -> UIStyle {
 /// a neutral chip otherwise. Size + wire it like any component.
 pub fn state_button(label: impl Into<String>, active_color: Color32, active: bool) -> View {
     View::button(label).style(state_button_style(active_color, active))
+}
+
+// ── ChipMotion ──────────────────────────────────────────────────────
+// The one hover/press tween a kit control uses instead of the renderer's
+// instant flag-driven color jump (`UI_CRAFT_AND_MOTION_PLAN.md` P1: "kit chip
+// hover/press — background tween + 1px press drop"). Owned by the caller's
+// own per-widget state — never a registry (`anim` module's D3) — and ticked
+// once per frame from the panel's existing per-frame update path. See
+// `panels/layer_header.rs`'s record-pulse (`tick_record_pulse`) for the
+// precedent this rides: a per-frame imperative `tree.set_style`/`set_bounds`
+// poke, not a new redraw-scheduling mechanism.
+
+/// Per-instance hover/press tween state for one chip-like control. Two
+/// `AnimF32`s (zero heap allocation): `hover` eases 0→1 while the pointer is
+/// over the control, `press` eases 0→1 while it's held down. Both use
+/// `MOTION_FAST` (90ms) — the fastest, most-felt tween in the kit.
+#[derive(Clone, Copy)]
+pub struct ChipMotion {
+    hover: AnimF32,
+    press: AnimF32,
+}
+
+impl ChipMotion {
+    pub fn new() -> Self {
+        Self {
+            hover: AnimF32::new(0.0, color::MOTION_FAST_MS),
+            press: AnimF32::new(0.0, color::MOTION_FAST_MS),
+        }
+    }
+
+    /// Feed this frame's discrete hover/press flags (read from the node's
+    /// `UIFlags` by the caller) and advance both tweens by `dt_ms`. Returns
+    /// `true` while either is still animating. NOT a "skip repainting" signal
+    /// by itself — a fully-pressed control that just released has `false`
+    /// here (nothing is mid-flight) yet is still displaced from rest; use
+    /// [`ChipMotion::is_at_rest`] to decide whether the caller can skip a
+    /// row entirely (before calling `tick`, not after — see
+    /// `panels/layer_header.rs::tick_mute_motion` for the pattern).
+    pub fn tick(&mut self, dt_ms: f32, hovered: bool, pressed: bool) -> bool {
+        self.hover.set_target(if hovered { 1.0 } else { 0.0 });
+        self.press.set_target(if pressed { 1.0 } else { 0.0 });
+        let hover_animating = self.hover.tick(dt_ms);
+        let press_animating = self.press.tick(dt_ms);
+        hover_animating || press_animating
+    }
+
+    /// Whether either tween is currently in flight.
+    pub fn is_animating(&self) -> bool {
+        self.hover.is_animating() || self.press.is_animating()
+    }
+
+    /// Whether this control is fully settled AND back at its neutral
+    /// baseline (both `hover` and `press` at exactly `0.0`). A control that
+    /// has settled but stayed displaced — e.g. held fully pressed — is NOT
+    /// at rest: `is_animating()` alone would wrongly say "nothing to do"
+    /// there, because "settled" and "at the zero baseline" are different
+    /// facts. The caller's per-frame skip check must use this, not
+    /// `!is_animating()`.
+    pub fn is_at_rest(&self) -> bool {
+        !self.is_animating() && self.hover.value() == 0.0 && self.press.value() == 0.0
+    }
+
+    /// Blend `rest` toward `hover_color` (by the hover tween) then toward
+    /// `press_color` (by the press tween) — press wins once it's under way,
+    /// same precedence as the renderer's old instant PRESSED-over-HOVERED
+    /// flag check.
+    pub fn blend(&self, rest: Color32, hover_color: Color32, press_color: Color32) -> Color32 {
+        let base = color::mix(rest, hover_color, self.hover.value());
+        color::mix(base, press_color, self.press.value())
+    }
+
+    /// The "1px press drop" vertical offset: `0.0` at rest, up to `max_px`
+    /// fully pressed.
+    pub fn press_offset_y(&self, max_px: f32) -> f32 {
+        self.press.value() * max_px
+    }
+}
+
+impl Default for ChipMotion {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ── Chip ────────────────────────────────────────────────────────────
@@ -559,6 +642,45 @@ mod tests {
     use super::*;
     use crate::chrome::view::validate;
     use crate::node::UINodeType;
+
+    #[test]
+    fn chip_motion_eases_toward_hover_and_back() {
+        let mut m = ChipMotion::new();
+        assert_eq!(m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)), Color32::BLACK);
+
+        assert!(m.tick(45.0, true, false), "halfway through MOTION_FAST, still animating");
+        let mid = m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255));
+        assert!(mid.r > 0 && mid.r < 255, "partway blended toward hover: r={}", mid.r);
+
+        assert!(!m.tick(45.0, true, false), "settles at the end of MOTION_FAST");
+        assert_eq!(m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)), Color32::WHITE);
+
+        // Pointer leaves: eases back down, not an instant snap.
+        assert!(m.tick(45.0, false, false));
+        let leaving = m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255));
+        assert!(leaving.r > 0 && leaving.r < 255);
+    }
+
+    #[test]
+    fn chip_motion_press_drop_and_precedence() {
+        let mut m = ChipMotion::new();
+        assert_eq!(m.press_offset_y(1.0), 0.0);
+
+        m.tick(90.0, true, true); // fully hovered + pressed after one full MOTION_FAST
+        assert_eq!(m.press_offset_y(1.0), 1.0, "fully pressed reaches the max drop");
+        // Press wins over hover once both are fully settled.
+        assert_eq!(m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)), Color32::new(255, 0, 0, 255));
+    }
+
+    #[test]
+    fn chip_motion_is_animating_reflects_either_tween() {
+        let mut m = ChipMotion::new();
+        assert!(!m.is_animating());
+        m.tick(1.0, true, false);
+        assert!(m.is_animating());
+        m.tick(1000.0, true, false); // long enough to fully settle
+        assert!(!m.is_animating());
+    }
 
     #[test]
     fn toggle_uses_accent_when_on_and_ramp_when_off() {
