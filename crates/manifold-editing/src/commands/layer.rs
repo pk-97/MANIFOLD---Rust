@@ -237,28 +237,18 @@ impl Command for ReorderLayerCommand {
 pub struct GroupLayersCommand {
     selected_layer_ids: Vec<LayerId>,
     group_layer: Option<Layer>,
-    // Stored but not read by `undo()`, unlike the identical field on
-    // `UngroupLayersCommand` (which restores it via `replace_layer_order`).
-    // `undo()` here only restores `original_parent_ids` + `enforce_tree_order()`,
-    // which may not reproduce the exact prior sibling order. Flagged as a
-    // suspected undo-fidelity gap, not removed, pending a call on whether to
-    // wire it in the same way.
-    #[allow(dead_code)]
+    /// Full layer list captured before grouping (excludes the group layer,
+    /// which `execute` creates). `undo` restores it verbatim so sibling order
+    /// survives the round-trip.
     original_order: Vec<Layer>,
-    original_parent_ids: HashMap<LayerId, Option<LayerId>>,
 }
 
 impl GroupLayersCommand {
     pub fn new(selected_layer_ids: Vec<LayerId>, original_order: Vec<Layer>) -> Self {
-        let original_parent_ids = original_order
-            .iter()
-            .map(|l| (l.layer_id.clone(), l.parent_layer_id.clone()))
-            .collect();
         Self {
             selected_layer_ids,
             group_layer: None,
             original_order,
-            original_parent_ids,
         }
     }
 }
@@ -297,23 +287,12 @@ impl Command for GroupLayersCommand {
     }
 
     fn undo(&mut self, project: &mut Project) {
-        // Remove group layer
-        if let Some(group) = &self.group_layer
-            && let Some(idx) = project
-                .timeline
-                .layers
-                .iter()
-                .position(|l| l.layer_id == group.layer_id)
-        {
-            project.timeline.remove_layer(idx);
-        }
-        // Restore parent IDs
-        for layer in &mut project.timeline.layers {
-            if let Some(parent_id) = self.original_parent_ids.get(&layer.layer_id) {
-                layer.parent_layer_id = parent_id.clone();
-            }
-        }
-        project.timeline.enforce_tree_order();
+        // Restore the pre-group snapshot verbatim: the group layer is gone
+        // (it isn't in `original_order`), parents are back, and sibling order
+        // is reproduced exactly — same restore path as `UngroupLayersCommand`.
+        project
+            .timeline
+            .replace_layer_order(self.original_order.clone());
     }
 
     fn description(&self) -> &str {
@@ -541,5 +520,60 @@ impl Command for SetLayerAnalysisOnlyCommand {
 
     fn description(&self) -> &str {
         "Set Audio Layer Analysis-Only"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn video(name: &str, index: i32) -> Layer {
+        Layer::new(name.to_string(), LayerType::Video, index)
+    }
+
+    /// Grouping a non-contiguous selection then undoing must restore the exact
+    /// original layer order and clear every reparent — `undo` restores the
+    /// pre-group snapshot verbatim rather than re-deriving order.
+    #[test]
+    fn group_then_undo_restores_exact_sibling_order() {
+        let mut project = Project::default();
+        for (i, name) in ["A", "B", "C", "D"].iter().enumerate() {
+            project.timeline.layers.push(video(name, i as i32));
+        }
+        let original = project.timeline.layers.clone();
+        let original_ids: Vec<LayerId> = original.iter().map(|l| l.layer_id.clone()).collect();
+        // Group B and D — non-contiguous, so the naive restore path shuffles order.
+        let selected = vec![original_ids[1].clone(), original_ids[3].clone()];
+
+        let mut cmd = GroupLayersCommand::new(selected.clone(), original.clone());
+        cmd.execute(&mut project);
+
+        // Grouping happened: a Group layer exists and both selections are parented under it.
+        let group_id = project
+            .timeline
+            .layers
+            .iter()
+            .find(|l| l.layer_type == LayerType::Group)
+            .map(|l| l.layer_id.clone())
+            .expect("group layer created");
+        for id in &selected {
+            let parent = project
+                .timeline
+                .layers
+                .iter()
+                .find(|l| &l.layer_id == id)
+                .and_then(|l| l.parent_layer_id.clone());
+            assert_eq!(parent.as_ref(), Some(&group_id));
+        }
+
+        cmd.undo(&mut project);
+
+        let restored_ids: Vec<LayerId> =
+            project.timeline.layers.iter().map(|l| l.layer_id.clone()).collect();
+        assert_eq!(restored_ids, original_ids, "undo must restore exact order");
+        assert!(
+            project.timeline.layers.iter().all(|l| l.parent_layer_id.is_none()),
+            "undo must clear all reparenting"
+        );
     }
 }
