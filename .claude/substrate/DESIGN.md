@@ -82,6 +82,21 @@ versioned. History on the substrate is non-negotiable — the sleep pass edits i
   existing per-turn machinery stays.
 - Payloads are injected verbatim inside `<substrate>` tags. Fixed wording — the
   model habituates to a recognizable anchor instead of parsing novel text.
+- **Subagent rule (2026-07-04, verified by live probe):** PostToolUse also fires
+  for tool calls made *inside* subagents, carrying the MAIN session's id and
+  transcript_path plus an `agent_id` field. The valve must not deliver when
+  `agent_id` is set — the verdict was computed from the orchestrator's
+  transcript, and delivering to a subagent both injects into the wrong context
+  and marks the whisper consumed so the orchestrator never sees it. During
+  orchestration most fires are subagent fires, so unguarded this is the common
+  case, not an edge. Reviving the observer from a subagent fire IS correct
+  (the transcript_path is the main session's). Corollary: the daemon observes
+  the orchestrator only — subagent transcripts (`<session>/subagents/agent-*.
+  jsonl`, any nesting depth) are separate files nothing tails. What the daemon
+  *can* see is the orchestrator's launches: the ledger renders Agent calls as
+  `Agent[type@model]`, resolving an omitted model param to the session's own
+  tier (`@inherit:opus`) via the transcript's `message.model` field, which is
+  what `anchor/agent-model-discipline` matches on.
 
 ## 3. Payload library (`moves.md`)
 

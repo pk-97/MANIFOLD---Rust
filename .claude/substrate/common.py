@@ -87,6 +87,42 @@ def build_system_prompt(rubric_text, moves):
     return rubric_body.replace("{{SIGNATURES}}", build_signature_catalog(moves))
 
 
+MODEL_TIER_NAMES = ("fable", "opus", "sonnet", "haiku")
+
+
+def model_tier(model_id):
+    """'claude-fable-5' / 'opus' / 'claude-opus-4-8' -> 'fable' / 'opus'.
+    Returns None for unrecognized ids rather than guessing."""
+    if not isinstance(model_id, str):
+        return None
+    low = model_id.lower()
+    for tier in MODEL_TIER_NAMES:
+        if tier in low:
+            return tier
+    return None
+
+
+def tool_label(name, input_, session_model=None):
+    """Ledger name for a tool call. Agent launches carry their model choice —
+    `Agent[general-purpose@sonnet]` — because orchestrator model discipline
+    (big model orchestrates, Sonnet executes) is judged from the ledger, and
+    the prompt-only target line hides it. An omitted model param means the
+    worker inherits the session's model, which is the silent way an Opus
+    orchestrator spawns Opus workers — render it resolved (`@inherit:opus`)
+    when the session model is known."""
+    if name not in ("Agent", "Task") or not isinstance(input_, dict):
+        return name
+    explicit = model_tier(input_.get("model"))
+    if explicit:
+        model_str = explicit
+    elif session_model:
+        model_str = f"inherit:{session_model}"
+    else:
+        model_str = "inherit"
+    agent_type = input_.get("subagent_type") or ""
+    return f"{name}[{agent_type}@{model_str}]" if agent_type else f"{name}[@{model_str}]"
+
+
 def tool_target(input_):
     if not isinstance(input_, dict):
         return ""
@@ -159,6 +195,7 @@ class WindowState:
         self.last_window_ts = None
         self.pending = {}
         self.task_addressed = False
+        self.session_model = None  # tier of the last assistant event's model id
 
     def _close_window(self, ts):
         closed = {
@@ -171,7 +208,7 @@ class WindowState:
         self.last_window_ts = ts
         return closed
 
-    def feed_assistant_content(self, content, ts=None):
+    def feed_assistant_content(self, content, ts=None, model=None):
         """Feed one assistant turn's content blocks. Returns a closed window
         the moment a text block lands (with a TASK already set) — drift
         markers ARE assistant texts, and waiting for the next cadence tick
@@ -181,6 +218,9 @@ class WindowState:
         when no text block was seen, or none has been seen since the task was
         set (nothing to judge against yet)."""
         closed = None
+        tier = model_tier(model)
+        if tier:
+            self.session_model = tier
         for c in content:
             if not isinstance(c, dict):
                 continue
@@ -213,7 +253,8 @@ class WindowState:
             ctype = c.get("type")
             if ctype == "tool_result":
                 name, input_ = self.pending.pop(c.get("tool_use_id"), ("?", {}))
-                self.ledger_buffer.append(f"{name} {tool_target(input_)} {tool_result_status(c)}".strip())
+                label = tool_label(name, input_, self.session_model)
+                self.ledger_buffer.append(f"{label} {tool_target(input_)} {tool_result_status(c)}".strip())
                 self.tool_event_count_since_window += 1
                 self.total_tool_event_count += 1
 

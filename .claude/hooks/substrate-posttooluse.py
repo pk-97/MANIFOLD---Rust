@@ -28,7 +28,18 @@ def main():
             return
         # Revive the observer if it idle-exited — session activity is the
         # heartbeat; catchup rebuilds its state from the transcript.
+        # (Subagent tool calls carry the MAIN session's transcript_path, so
+        # reviving from one is correct.)
         valve.ensure_observer(session_id, data.get("transcript_path"))
+        # This hook also fires for tool calls made INSIDE subagents (agent_id
+        # set), with the main session's id. The verdict is computed from the
+        # orchestrator's transcript — delivering here would inject it into the
+        # wrong context AND mark it consumed, so the orchestrator never sees
+        # it. During orchestration most fires are subagent fires, so without
+        # this guard mis-delivery is the common case (verified by probe,
+        # 2026-07-04).
+        if data.get("agent_id"):
+            return
         block, seq = valve.pending_injection(session_id)
         if not block:
             return

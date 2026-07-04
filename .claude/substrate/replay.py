@@ -89,7 +89,7 @@ def build_session_windows(path, incident_labels):
                 # Assistant content is always a block list in practice.
                 if not isinstance(content, list) or not content:
                     continue
-                closed = state.feed_assistant_content(content, ts)
+                closed = state.feed_assistant_content(content, ts, model=d.get("message", {}).get("model"))
                 if closed:
                     windows.append(closed)
             else:

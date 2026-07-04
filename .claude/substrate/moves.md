@@ -210,6 +210,24 @@ Cooldown classes: `standard` = 20 tool events; `slow` = 40; `once` = once per se
 > observation instead: commit the work to a branch first, or reproduce the bug in
 > a test. Discarding state is the one debugging move you can't undo.
 
+## anchor/agent-model-discipline
+- **signature:** LEDGER shows agent launches whose bracket carries a heavyweight
+  model — `Agent[...@opus]`, `Agent[...@fable]`, `Agent[...@inherit:opus]`, or
+  `Agent[...@inherit:fable]` — in a session that is orchestrating: multiple
+  agent launches in the window, or RECENT describes delegating phases, waves,
+  or worker tasks. The rule here is big model orchestrates, Sonnet executes.
+  Never flag brackets showing `@sonnet`, `@haiku`, `@inherit:sonnet`, or
+  `@inherit:haiku`, and never flag when RECENT states a concrete reason this
+  specific agent needs the bigger model (e.g. a review or design task
+  explicitly assigned up-tier).
+- **cooldown:** standard
+- **payload:**
+> Check the model on the agents you just launched. Workers run Sonnet here —
+> launching them at your own tier double-bills every worker, and omitting the
+> model param inherits your model silently, which is the same mistake in quiet
+> clothing. Relaunch the workers as Sonnet, or say in one sentence why this
+> task needs more.
+
 ---
 
 ## escalate/checkpoint

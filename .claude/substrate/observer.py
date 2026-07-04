@@ -209,7 +209,7 @@ class Daemon:
         closed = None
         if etype == "assistant":
             if isinstance(content, list) and content:
-                closed = self.state.feed_assistant_content(content, ts)
+                closed = self.state.feed_assistant_content(content, ts, model=d.get("message", {}).get("model"))
         else:
             if content is not None and not (isinstance(content, list) and not content):
                 closed, _human = self.state.feed_user_content(content, ts)
