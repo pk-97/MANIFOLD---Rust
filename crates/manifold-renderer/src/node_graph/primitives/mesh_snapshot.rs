@@ -24,8 +24,8 @@ use crate::node_graph::{
 use crate::render_target::RenderTarget;
 
 use super::{
-    BakeEquirectEnvmap, CameraOrbit, GenerateCubeMesh, GltfMeshSource, LightNode, PbrMaterial,
-    Render3DMesh,
+    BakeEquirectEnvmap, CameraOrbit, GenerateCubeMesh, GltfMeshSource, GltfTextureSource, LightNode,
+    PbrMaterial, Render3DMesh,
 };
 
 fn frame_time() -> FrameTime {
@@ -1802,4 +1802,223 @@ fn gltf_mesh_source_renders_azalea_to_png() {
     image::save_buffer(&out_path, &rgba, w, h, image::ExtendedColorType::Rgba8)
         .unwrap_or_else(|e| panic!("save {out_path}: {e}"));
     println!("gltf_mesh_source render_scene: wrote {out_path}");
+}
+
+/// Full-stack textured proof: `node.gltf_mesh_source` (whole-scene azalea
+/// geometry) + `node.gltf_texture_source` (the glb's embedded texture 0)
+/// wired into `node.render_scene`'s `base_color_map_0`, with a WHITE-base
+/// material so the surface shows the raw sampled texture rather than a flat
+/// tint. This is the combined verification that the two import primitives
+/// and the render_scene texture input compose end to end — the mesh reader,
+/// the texture reader, and the albedo sampling all on the real GPU path.
+///
+/// Note this applies ONE texture to the WHOLE combined mesh (every
+/// primitive's UVs sample texture 0). That is not a faithful azalea render
+/// — faithful per-primitive material/texture mapping is the importer's job
+/// (P1c). The point here is that an embedded glb texture flows through
+/// `gltf_texture_source` → `base_color_map_0` and modulates the surface,
+/// not a correct multi-material reproduction. Alpha is left Opaque: the
+/// cutout-discard path through render_scene is already proven value-level
+/// by `render_scene_base_color_map_alpha_cutout_discards`.
+///
+/// BOTH sources parse on background threads, so the graph runs in the same
+/// bounded polling loop as `gltf_mesh_source_renders_azalea_to_png` — and
+/// because `base_color_map_0` is wired, a white surface stays black until
+/// the texture actually decodes (white × black-texture = black), so the
+/// non-black convergence check waits for the texture too, not just the mesh.
+#[test]
+#[ignore]
+fn gltf_textured_azalea_renders_through_render_scene_to_png() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb");
+    if !path.exists() {
+        eprintln!(
+            "gltf_textured_azalea_renders_through_render_scene_to_png: fixture not found at {}, skipping",
+            path.display()
+        );
+        return;
+    }
+
+    // Framing-only parse (NOT under test) — bbox center + radius so the
+    // camera frames the not-recentered primitive output.
+    let framing_verts = crate::node_graph::gltf_load::load_gltf_mesh(
+        &path,
+        crate::node_graph::gltf_load::GltfMeshSelector::WholeScene,
+    )
+    .unwrap_or_else(|e| panic!("framing parse of {}: {e}", path.display()));
+    assert!(!framing_verts.is_empty(), "framing parse produced zero vertices");
+
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
+    for v in &framing_verts {
+        for i in 0..3 {
+            min[i] = min[i].min(v.position[i]);
+            max[i] = max[i].max(v.position[i]);
+        }
+    }
+    let center = [
+        (min[0] + max[0]) * 0.5,
+        (min[1] + max[1]) * 0.5,
+        (min[2] + max[2]) * 0.5,
+    ];
+    let dims = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+    let radius = (dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5;
+    let distance = 2.2 * radius;
+
+    let w = 768u32;
+    let h = 768u32;
+    let device = crate::test_device();
+    let format = GpuTextureFormat::Rgba16Float;
+
+    let mut g = Graph::new();
+    let src = g.add_node(Box::new(GltfMeshSource::new()));
+    g.set_param(
+        src,
+        "path",
+        ParamValue::String(std::sync::Arc::new(path.to_string_lossy().into_owned())),
+    )
+    .unwrap();
+    g.set_param(src, "mesh_index", ParamValue::Float(-1.0)).unwrap();
+    g.set_param(src, "max_capacity", ParamValue::Float(8_000_000.0))
+        .unwrap();
+
+    // The embedded texture 0 (the azalea's baked albedo, 1024×1024) as the
+    // base_color_map. sRGB (the default) so the hardware linearizes on read.
+    let tex = g.add_node(Box::new(GltfTextureSource::new()));
+    g.set_param(
+        tex,
+        "path",
+        ParamValue::String(std::sync::Arc::new(path.to_string_lossy().into_owned())),
+    )
+    .unwrap();
+    g.set_param(tex, "texture_index", ParamValue::Float(0.0)).unwrap();
+    g.set_param(tex, "color_space", ParamValue::Enum(0)).unwrap();
+    g.set_param(tex, "width", ParamValue::Float(1024.0)).unwrap();
+    g.set_param(tex, "height", ParamValue::Float(1024.0)).unwrap();
+
+    let cam = g.add_node(Box::new(CameraOrbit::new()));
+    g.set_param(cam, "orbit", ParamValue::Float(0.7)).unwrap();
+    g.set_param(cam, "tilt", ParamValue::Float(0.3)).unwrap();
+    g.set_param(cam, "distance", ParamValue::Float(distance)).unwrap();
+    g.set_param(cam, "fov_y", ParamValue::Float(0.9)).unwrap();
+    g.set_param(cam, "look_y", ParamValue::Float(0.0)).unwrap();
+
+    // WHITE base color so albedo == the sampled texture (base_color × map),
+    // making the raw texture unmistakable rather than a green-tinted blend.
+    let mat = g.add_node(Box::new(PhongMaterial::new()));
+    g.set_param(mat, "color_r", ParamValue::Float(1.0)).unwrap();
+    g.set_param(mat, "color_g", ParamValue::Float(1.0)).unwrap();
+    g.set_param(mat, "color_b", ParamValue::Float(1.0)).unwrap();
+    g.set_param(mat, "ambient", ParamValue::Float(0.35)).unwrap();
+
+    let light = g.add_node(Box::new(LightNode::new()));
+    g.set_param(light, "mode", ParamValue::Enum(0)).unwrap(); // Sun
+    g.set_param(light, "pos_x", ParamValue::Float(5.0)).unwrap();
+    g.set_param(light, "pos_y", ParamValue::Float(2.0)).unwrap();
+    g.set_param(light, "pos_z", ParamValue::Float(3.0)).unwrap();
+    g.set_param(light, "aim_x", ParamValue::Float(0.0)).unwrap();
+    g.set_param(light, "aim_y", ParamValue::Float(0.0)).unwrap();
+    g.set_param(light, "aim_z", ParamValue::Float(0.0)).unwrap();
+    g.set_param(light, "intensity", ParamValue::Float(1.5)).unwrap();
+
+    let render = g.add_node(Box::new(RenderScene::new()));
+    g.set_param(render, "objects", ParamValue::Float(1.0)).unwrap();
+    g.set_param(render, "lights", ParamValue::Float(1.0)).unwrap();
+    g.set_param(render, "pos_x_0", ParamValue::Float(-center[0])).unwrap();
+    g.set_param(render, "pos_y_0", ParamValue::Float(-center[1])).unwrap();
+    g.set_param(render, "pos_z_0", ParamValue::Float(-center[2])).unwrap();
+
+    let sink = g.add_node(Box::new(FinalOutput::new()));
+
+    g.connect((src, "vertices"), (render, "mesh_0")).unwrap();
+    g.connect((tex, "out"), (render, "base_color_map_0")).unwrap();
+    g.connect((mat, "out"), (render, "material_0")).unwrap();
+    g.connect((cam, "out"), (render, "camera")).unwrap();
+    g.connect((light, "out"), (render, "light_0")).unwrap();
+    g.connect((render, "color"), (sink, "in")).unwrap();
+
+    let plan = compile(&g).unwrap();
+    let r_color = output_resource(&plan, render, "color");
+    let r_vertices = output_resource(&plan, src, "vertices");
+
+    let mut backend = MetalBackend::new(&device, w, h, format);
+    let color_target = RenderTarget::new(&device, w, h, format, "gltf-textured-color");
+    let color_slot = backend.pre_bind_texture_2d(r_color, color_target);
+
+    // Mesh vertex buffer (chain-bypass) — gltf_texture_source's `out` is a
+    // Texture2D output the backend auto-allocates at its output_dims
+    // (1024²), so only the Array output needs manual pre-binding.
+    let vertex_capacity = 8_000_000u64;
+    let vert_buf =
+        device.create_buffer_shared(vertex_capacity * std::mem::size_of::<MeshVertex>() as u64);
+    backend.pre_bind_array(r_vertices, vert_buf);
+
+    let mut exec = Executor::new(Box::new(backend));
+
+    let max_attempts = 200;
+    let mut rgba = Vec::new();
+    let mut fraction = 0.0f64;
+    for attempt in 0..max_attempts {
+        let mut native_enc = device.create_encoder("gltf-textured-render-scene");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+            exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
+        }
+        native_enc.commit_and_wait_completed();
+
+        let out_tex = exec
+            .backend()
+            .texture_2d(color_slot)
+            .expect("color texture retained");
+        let bytes_per_row = w * 8;
+        let total_bytes = u64::from(h * bytes_per_row);
+        let readback_buf = device.create_buffer_shared(total_bytes);
+        let mut readback_enc = device.create_encoder("gltf-textured-readback");
+        readback_enc.copy_texture_to_buffer(out_tex, &readback_buf, w, h, bytes_per_row);
+        readback_enc.commit_and_wait_completed();
+
+        let ptr = readback_buf.mapped_ptr().expect("shared readback");
+        let halves: &[u16] =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+
+        rgba = Vec::with_capacity((w * h * 4) as usize);
+        let mut non_black = 0usize;
+        for px in halves.chunks_exact(4) {
+            let r = tonemap_channel(half_to_f32(px[0]));
+            let g_ = tonemap_channel(half_to_f32(px[1]));
+            let b = tonemap_channel(half_to_f32(px[2]));
+            if r != 0 || g_ != 0 || b != 0 {
+                non_black += 1;
+            }
+            rgba.push(r);
+            rgba.push(g_);
+            rgba.push(b);
+            let a = half_to_f32(px[3]).clamp(0.0, 1.0);
+            rgba.push((a * 255.0).round() as u8);
+        }
+        let total = (w * h) as usize;
+        fraction = non_black as f64 / total as f64;
+        if fraction > 0.02 {
+            println!("gltf_textured: converged on attempt {attempt} (non-black fraction {fraction:.4})");
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let total = (w * h) as usize;
+    println!("gltf_textured render_scene: non-black pixel fraction = {fraction:.4} (total {total})");
+    assert!(
+        fraction > 0.02,
+        "expected >2% non-black pixels after polling for both background parses, got {fraction:.4} \
+         — a broken gltf_texture_source dispatch, base_color_map sampling, or a parse that never landed"
+    );
+
+    let out_path = std::env::var("MESH_SNAP_OUT")
+        .unwrap_or_else(|_| "target/mesh-snap/gltf_textured_azalea.png".to_string());
+    if let Some(parent) = std::path::Path::new(&out_path).parent() {
+        std::fs::create_dir_all(parent).expect("create output dir");
+    }
+    image::save_buffer(&out_path, &rgba, w, h, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {out_path}: {e}"));
+    println!("gltf_textured render_scene: wrote {out_path}");
 }

@@ -61,7 +61,7 @@ crate::primitive! {
             label: "Color Space",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
-            range: None,
+            range: Some((0.0, 1.0)),
             enum_values: &["sRGB", "Linear"],
         },
         ParamDef {
