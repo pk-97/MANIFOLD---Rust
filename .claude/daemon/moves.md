@@ -16,6 +16,11 @@ the glTF P1c mispriced fork); coaching/price-the-fork (same P1c specimen).
 fix"): anchor/symptom-suppression (classifier) + mechanical/confessed-stopgap
 (deterministic, valve-selected). Spec for the plumbing: DESIGN.md §2c.
 
+2026-07-04 late (Fable, from Peter's Opus-vs-Fable observation):
+anchor/unpackaged-deliverable — specimen: Opus delivered a Lane A worker
+prompt as prose paragraphs instead of one copyable fenced block. The general
+move it compiles: format output for the user's next action, not for reading.
+
 ---
 
 ## coaching/model-first
@@ -310,6 +315,26 @@ fix"): anchor/symptom-suppression (classifier) + mechanical/confessed-stopgap
 > level that deletes the whole bug class — even if that means redesign. If the
 > guard genuinely is the right contract, say why in one sentence. "It doesn't
 > happen anymore" is not a cause.
+
+## anchor/unpackaged-deliverable
+- **signature:** TASK asks for text whose destination is somewhere else — a
+  prompt for another model or session, a message to send, a commit or PR
+  description, anything the human says they will copy or paste — and an
+  assistant reply in RECENT emits that deliverable as flowing prose paragraphs
+  rather than inside one fenced code block. The tell: the deliverable's body
+  is formatted for reading (inline code spans, bold, multiple markdown
+  paragraphs) when the human's next action is selecting and copying it. Never
+  flag when the deliverable already sits in a fenced block, when the reply
+  only discusses or plans the deliverable without emitting its final text, or
+  when the deliverable was written to a file instead of the reply.
+- **cooldown:** standard
+- **payload:**
+> That text is cargo, not prose — the next thing the human does with it is
+> copy-paste, and paragraphs make them hand-select a screenful. Repost the
+> whole deliverable inside one fenced block, commentary outside it, so it
+> copies in one click. The general move: when your output's destination is
+> somewhere else — another session, a commit, a message — format it for the
+> destination, not for the reader.
 
 ---
 
