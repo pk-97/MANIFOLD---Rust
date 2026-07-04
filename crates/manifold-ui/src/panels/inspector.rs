@@ -1996,7 +1996,7 @@ impl Panel for InspectorCompositePanel {
         self.build_in_rect(tree, layout.inspector());
     }
 
-    fn update(&mut self, _tree: &mut UITree) {
+    fn update(&mut self, tree: &mut UITree) {
         // State sync is done via direct accessors on sub-panels.
         // The app layer calls sync methods like:
         //   inspector.master_chrome_mut().sync_opacity(&mut tree, 0.5);
@@ -2010,9 +2010,16 @@ impl Panel for InspectorCompositePanel {
         let mut any = false;
         for card in self.master_effects.iter_mut().chain(self.layer_effects.iter_mut()) {
             any |= card.tick_drawers(dt_ms);
+            // P2 value-change flash + D1 tab-ink slide's ink tween both live in
+            // this same per-param vocabulary; the flash needs `tree` (a style
+            // write, not a layout change), so unlike drawer/ink it never sets
+            // `any` — it doesn't need the forced-rebuild poll, only to run
+            // every frame, which this loop already does.
+            card.tick_value_flash(tree, dt_ms);
         }
         if let Some(gp) = self.gen_params.as_mut() {
             any |= gp.tick_drawers(dt_ms);
+            gp.tick_value_flash(tree, dt_ms);
         }
         // Stay "active" one extra frame after the last tween settles so its final
         // (target) value gets a build to render — the settling tick returns false

@@ -972,9 +972,13 @@ pub const MOTION_SLOW_MS: f32 = 240.0;
 /// D15 magnetic-snap curve (`Curve::Snap`): back-out overshoot constant.
 /// `3.0` peaks the ease at exactly 25% overshoot past the target (verified
 /// numerically in `anim::tests::snap_curve_overshoots_by_roughly_25_percent`)
-/// — the doc's "≈25% overshoot". ⚠ retune with Peter's playground numbers at
-/// P2 entry per D15.
+/// — the doc's "≈25% overshoot". Confirmed at P2 entry (Peter's playground
+/// default, 25%) — do not retune without a new playground session.
 pub const EASE_SNAP_BACK_C1: f32 = 3.0;
+/// D15 magnetic-snap radius: screen-space px within which a drag target
+/// (clip edge → beat grid, wire end → port) snaps instead of tracking the
+/// cursor directly. Confirmed at P2 entry (Peter's playground default, 14px).
+pub const MAGNET_RADIUS_PX: f32 = 14.0;
 
 // ── Font sizes ──────────────────────────────────────────────────────
 // Semantic scale — all panel font sizes should reference these.

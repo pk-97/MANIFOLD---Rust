@@ -18,7 +18,7 @@
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::*;
 use super::{AudioShapeParam, GraphParamTarget, PanelAction, TrimKind};
-use crate::anim::AnimF32;
+use crate::anim::{AnimF32, Transient};
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, View};
 use crate::color;
 use crate::node::*;
@@ -37,6 +37,11 @@ const KEY_CHANGE: u64 = 90_007;
 const KEY_DRAG: u64 = 90_008;
 const KEY_NAME_CLIP: u64 = 90_009;
 const KEY_TOGGLE: u64 = 90_010;
+
+/// D1 tab-ink slide: height of the sliding underline beneath the mod-config
+/// tab strip, inset from the tab's own bottom edge (`HAIRLINE_RADIUS`-scale —
+/// a crisp accent line, not a filled bar).
+const MOD_TAB_INK_H: f32 = 2.0;
 
 /// Map a 0..1 slider position to an [`AudioModShape`] scalar's value, using the
 /// per-control full-scale constants. The single conversion shared by the audio
@@ -486,6 +491,15 @@ pub struct ParamCardPanel {
     /// for routing tab clicks. Empty for rows with fewer than two active configs.
     /// Rebuilt each frame.
     mod_tab_ids: Vec<Vec<(NodeId, ModTab)>>,
+    /// D1 "tab-ink slide" (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — per-param x-position
+    /// tween for the sliding underline beneath the mod-config tab strip
+    /// (`Trigger`/`LFO`/`Audio`/`Ableton`). Preserved across rebuilds like
+    /// `mod_active_tab`/`drawer_height_anim`; ticked by the same `tick_drawers`
+    /// rail, so switching tabs needs no new app-side poll. `target() == 0.0 &&
+    /// value() == 0.0` (the fresh `AnimF32::new` state) doubles as "never
+    /// positioned yet" — snap instead of ease so a tab strip appearing for the
+    /// first time doesn't visibly slide in from x=0.
+    mod_tab_ink: Vec<AnimF32>,
     /// §6b compact mode — when true, every modulation config drawer on this card
     /// is hidden (mods stay armed; arm buttons + slider track overlays still
     /// show). Driven globally by the inspector's "hide mod settings" toggle.
@@ -511,6 +525,13 @@ pub struct ParamCardPanel {
     param_cache: Vec<f32>,
     toggle_cache: Vec<bool>,
     label_cache: Vec<Option<String>>,
+    /// P2 "value-change flash" (`UI_CRAFT_AND_MOTION_PLAN.md` §4) — per-param
+    /// one-shot fired when `sync_values` sees a genuine value change (not the
+    /// post-`configure()` NaN resync, and not while this card's slider is being
+    /// dragged — the drag itself is the feedback). Ticked alongside
+    /// `drawer_height_anim` in `tick_drawers`; ties the value-text color back to
+    /// normal once `progress()` returns `None`.
+    value_flash: Vec<Transient>,
 
     // Node range
     first_node: usize,
@@ -580,6 +601,7 @@ impl ParamCardPanel {
             mod_active_tab: Vec::new(),
             drawer_height_anim: Vec::new(),
             mod_tab_ids: Vec::new(),
+            mod_tab_ink: Vec::new(),
             compact: false,
             toggle_ids: Vec::new(),
             string_param_btn_ids: Vec::new(),
@@ -590,6 +612,7 @@ impl ParamCardPanel {
             param_cache: Vec::new(),
             toggle_cache: Vec::new(),
             label_cache: Vec::new(),
+            value_flash: Vec::new(),
             first_node: 0,
             node_count: 0,
             card_y: 0.0,
@@ -693,6 +716,11 @@ impl ParamCardPanel {
             }
         }
         self.mod_tab_ids = vec![Vec::new(); n];
+        // Ink x-position targets are only knowable once the tab strip is laid
+        // out (build time, not here) — resize only; `sync_mod_tab_ink` sets
+        // targets per-row after `build_param_row` returns.
+        self.mod_tab_ink.resize_with(n, || AnimF32::new(0.0, color::MOTION_MED_MS));
+        self.mod_tab_ink.truncate(n);
         self.toggle_ids = Vec::new();
         self.toggle_ids.resize_with(n, || None);
         self.mapping_chevron_ids = vec![None; n];
@@ -700,6 +728,8 @@ impl ParamCardPanel {
         self.param_cache = vec![f32::NAN; n];
         self.toggle_cache = vec![false; n];
         self.label_cache = vec![None; n];
+        self.value_flash.resize_with(n, Transient::default);
+        self.value_flash.truncate(n);
     }
 
     // ── Accessors ─────────────────────────────────────────────────
@@ -1127,7 +1157,89 @@ impl ParamCardPanel {
         for a in &mut self.drawer_height_anim {
             any |= a.tick(dt_ms);
         }
+        // D1 tab-ink slide rides the same per-frame rail — one bool bubble-up,
+        // no second app-side poll.
+        for a in &mut self.mod_tab_ink {
+            any |= a.tick(dt_ms);
+        }
         any
+    }
+
+    /// P2 value-change flash: advance every param's one-shot `Transient` and
+    /// paint the value-text color accordingly — an accent while `progress()`
+    /// is `Some`, reverted to the normal slider text color the instant it
+    /// finishes. A plain style write to an already-built node (no layout
+    /// change), so unlike `tick_drawers` this never needs the app's
+    /// forced-rebuild poll; it just needs to run every frame, which it already
+    /// does from the same `InspectorCompositePanel::update()` call site.
+    pub fn tick_value_flash(&mut self, tree: &mut UITree, dt_ms: f32) -> bool {
+        let mut any = false;
+        for (i, flash) in self.value_flash.iter_mut().enumerate() {
+            let was_active = flash.progress().is_some();
+            let still_active = flash.tick(dt_ms);
+            any |= still_active;
+            if !still_active && !was_active {
+                continue; // idle both before and after — nothing to repaint
+            }
+            let Some(ref ids) = self.slider_ids[i] else {
+                continue;
+            };
+            // Read-modify-write on the node's existing style so bg/radius/font
+            // (which differ between the effect and generator sliders) are
+            // never guessed at here — only `text_color` changes.
+            let mut style = tree.get_node(ids.value_text).style;
+            style.text_color = if still_active {
+                color::ACCENT_BLUE_C32
+            } else {
+                // Just finished this tick — revert once, not every frame after.
+                color::SLIDER_TEXT_C32
+            };
+            tree.set_style(ids.value_text, style);
+        }
+        any
+    }
+
+    /// D1 "tab-ink slide": after a row's mod-config tab strip is built, point
+    /// this param's ink tween at the shown tab's on-screen x and draw the
+    /// sliding underline. A no-op when fewer than two configs are active (no
+    /// strip was built — `self.mod_tab_ids[i]` is empty).
+    fn sync_mod_tab_ink(&mut self, tree: &mut UITree, i: usize) {
+        let tabs = self.mod_tab_ids[i].clone();
+        if tabs.len() < 2 {
+            if let Some(ink) = self.mod_tab_ink.get_mut(i) {
+                ink.snap(0.0);
+            }
+            return;
+        }
+        let shown = resolve_active_tab(
+            &tabs.iter().map(|(_, t)| *t).collect::<Vec<_>>(),
+            self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
+        );
+        let Some((id, tab)) = shown.and_then(|s| tabs.iter().find(|(_, t)| *t == s).copied())
+        else {
+            return;
+        };
+        let rect = tree.get_bounds(id);
+        let Some(ink) = self.mod_tab_ink.get_mut(i) else {
+            return;
+        };
+        if ink.target() == 0.0 && ink.value() == 0.0 {
+            ink.snap(rect.x);
+        } else {
+            ink.set_target(rect.x);
+        }
+        let ink_y = rect.y + rect.height - MOD_TAB_INK_H;
+        tree.add_panel(
+            Some(id),
+            ink.value(),
+            ink_y,
+            rect.width,
+            MOD_TAB_INK_H,
+            UIStyle {
+                bg_color: mod_tab_accent(tab),
+                ..UIStyle::default()
+            },
+        );
     }
 
     // ── Build ─────────────────────────────────────────────────────
@@ -1759,6 +1871,7 @@ impl ParamCardPanel {
             self.audio_btn_ids[i] = Some(row.audio_btn);
             self.audio_configs[i] = row.audio_config;
             self.mod_tab_ids[i] = row.mod_tabs;
+            self.sync_mod_tab_ink(tree, i);
             // Mapping-drawer chevron at the row's right edge (Author + mappable).
             // A subtle ">" that opens the sideways range/scale/offset/invert/
             // curve drawer for this binding. Sits past the D/E buttons in the
@@ -1961,6 +2074,7 @@ impl ParamCardPanel {
                     self.audio_btn_ids[i] = Some(row.audio_btn);
                     self.audio_configs[i] = row.audio_config;
                     self.mod_tab_ids[i] = row.mod_tabs;
+                    self.sync_mod_tab_ink(tree, i);
                     // Mapping-drawer chevron at the row's right edge (Author +
                     // mappable) — identical to the effect card. Opens the same
                     // sideways range/scale/offset/invert/curve drawer; click
@@ -2169,6 +2283,15 @@ impl ParamCardPanel {
 
             // Value dirty-check
             if val != self.param_cache[i] || self.param_cache[i].is_nan() {
+                // P2 value-change flash: only for a genuine change (not the
+                // post-configure NaN resync) and only while this card's slider
+                // isn't being dragged (the drag is its own feedback).
+                if !self.param_cache[i].is_nan()
+                    && !self.drag.is_dragging()
+                    && let Some(flash) = self.value_flash.get_mut(i)
+                {
+                    flash.fire(color::MOTION_SLOW_MS);
+                }
                 self.param_cache[i] = val;
                 if let Some(ref ids) = self.slider_ids[i] {
                     let norm = BitmapSlider::value_to_normalized(val, info.min, info.max);
@@ -2231,6 +2354,12 @@ impl ParamCardPanel {
                 // Trigger button stays neutral — the counter value isn't
                 // user-visible; nothing to re-render per frame.
             } else if val != self.param_cache[i] || self.param_cache[i].is_nan() {
+                if !self.param_cache[i].is_nan()
+                    && !self.drag.is_dragging()
+                    && let Some(flash) = self.value_flash.get_mut(i)
+                {
+                    flash.fire(color::MOTION_SLOW_MS);
+                }
                 self.param_cache[i] = val;
                 if let Some(ref ids) = self.slider_ids[i] {
                     let norm = BitmapSlider::value_to_normalized(val, info.min, info.max);
@@ -3599,6 +3728,69 @@ mod tests {
     }
 
     #[test]
+    fn value_change_flash_fires_on_genuine_change_not_the_initial_resync() {
+        // P2 value-change flash: `configure()` resets `param_cache` to NaN, so
+        // the very next `sync_values` is a resync (every param "changed" only
+        // because the cache was cleared) — that must NOT flash. A second,
+        // genuinely different value must.
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+
+        use crate::view::UiParamSlot as ParamSlot;
+        panel.sync_values(&mut tree, &[ParamSlot::exposed(50.0), ParamSlot::exposed(0.8)]);
+        assert!(
+            panel.value_flash[0].progress().is_none(),
+            "the post-configure resync must not flash"
+        );
+
+        panel.sync_values(&mut tree, &[ParamSlot::exposed(75.0), ParamSlot::exposed(0.8)]);
+        assert!(
+            panel.value_flash[0].progress().is_some(),
+            "a genuine value change fires the flash"
+        );
+        assert!(panel.value_flash[1].progress().is_none(), "unchanged param 1 stays idle");
+
+        // tick_value_flash paints the accent while active, then reverts once —
+        // the id-based read-modify-write leaves everything else on the node
+        // untouched (font/bg/align), only `text_color` moves.
+        let value_text_id = panel.slider_ids[0].as_ref().unwrap().value_text;
+        panel.tick_value_flash(&mut tree, 1.0);
+        assert_eq!(tree.get_node(value_text_id).style.text_color, color::ACCENT_BLUE_C32);
+
+        for _ in 0..30 {
+            panel.tick_value_flash(&mut tree, color::MOTION_SLOW_MS / 20.0);
+        }
+        assert!(panel.value_flash[0].progress().is_none(), "flash finishes");
+        assert_eq!(
+            tree.get_node(value_text_id).style.text_color,
+            color::SLIDER_TEXT_C32,
+            "reverted to the normal slider text color once finished"
+        );
+    }
+
+    #[test]
+    fn value_change_flash_suppressed_while_dragging() {
+        // The drag itself is the feedback for the row being dragged — a flash
+        // on top would be noise re-triggering every frame of the drag.
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+
+        use crate::view::UiParamSlot as ParamSlot;
+        panel.sync_values(&mut tree, &[ParamSlot::exposed(50.0), ParamSlot::exposed(0.8)]);
+
+        panel.drag.dragging_param = 0;
+        panel.sync_values(&mut tree, &[ParamSlot::exposed(75.0), ParamSlot::exposed(0.8)]);
+        assert!(
+            panel.value_flash[0].progress().is_none(),
+            "no flash while this card is mid-drag"
+        );
+    }
+
+    #[test]
     fn compute_height_collapsed() {
         let mut panel = ParamCardPanel::new();
         panel.configure(&effect_config());
@@ -3791,6 +3983,53 @@ mod tests {
         let actions = panel.handle_click(env_tab_id);
         assert!(matches!(actions.as_slice(), [PanelAction::ModConfigTabChanged]));
         assert_eq!(panel.mod_active_tab[0], ModTab::Envelope);
+    }
+
+    #[test]
+    fn tab_ink_targets_the_shown_tab_and_eases_on_switch() {
+        // D1 "tab-ink slide": the ink underline's x-target follows whichever
+        // tab is shown, and switching tabs retargets an eased tween rather
+        // than snapping — same `AnimF32::set_target` contract `anim.rs`'s own
+        // tests already prove; this checks the param-card wiring around it.
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.state.mod_state.driver_expanded[0] = true;
+        panel.state.mod_state.envelope_expanded[0] = true;
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+
+        let (driver_id, _) = panel.mod_tab_ids[0]
+            .iter()
+            .find(|(_, t)| *t == ModTab::Driver)
+            .copied()
+            .expect("driver tab present");
+        let driver_x = tree.get_bounds(driver_id).x;
+        // First build: the ink was "never positioned" (fresh AnimF32), so it
+        // snapped straight to the Driver tab's x rather than sliding in.
+        assert_eq!(panel.mod_tab_ink[0].value(), driver_x);
+        assert!(!panel.mod_tab_ink[0].is_animating());
+
+        let (env_id, _) = panel.mod_tab_ids[0]
+            .iter()
+            .find(|(_, t)| *t == ModTab::Envelope)
+            .copied()
+            .expect("envelope tab present");
+        let env_x = tree.get_bounds(env_id).x;
+        assert_ne!(env_x, driver_x, "the two tabs occupy different x positions");
+
+        panel.handle_click(env_id);
+        let mut tree2 = UITree::new();
+        panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 400.0));
+        // Retargeted, not re-snapped: value is still at (or near) the old
+        // position the instant the target changes, and animating toward the
+        // new one — exactly `set_target`'s "no jump on the same frame" rule.
+        assert_eq!(panel.mod_tab_ink[0].target(), env_x);
+        assert!(panel.mod_tab_ink[0].is_animating());
+
+        for _ in 0..20 {
+            panel.tick_drawers(20.0);
+        }
+        assert!((panel.mod_tab_ink[0].value() - env_x).abs() < 0.01, "settles at the new tab");
     }
 
     #[test]

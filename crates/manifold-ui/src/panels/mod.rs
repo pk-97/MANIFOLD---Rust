@@ -20,6 +20,7 @@ pub mod param_slider_shared;
 pub mod perf_hud;
 pub mod settings_popup;
 pub mod popup_shell;
+pub mod toast;
 pub mod transport;
 pub mod viewport;
 

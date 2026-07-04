@@ -24,6 +24,7 @@ enum OverlayId {
     Settings,
     BrowserPopup,
     AbletonPicker,
+    Toast,
 }
 
 impl OverlayId {
@@ -31,14 +32,17 @@ impl OverlayId {
     /// input). The perf HUD sits at the bottom so a real modal always covers it.
     /// The dropdown sits on top: it's a transient selection surface opened *from*
     /// another overlay (e.g. the Audio Setup modal's device/channel pickers), so
-    /// it must render above whatever spawned it.
-    const Z_ORDER: [OverlayId; 6] = [
+    /// it must render above whatever spawned it. The toast (D11,
+    /// `UI_CRAFT_AND_MOTION_PLAN.md` P2) sits topmost of all — a status message
+    /// must stay legible over an open modal/dropdown, not be hidden by one.
+    const Z_ORDER: [OverlayId; 7] = [
         OverlayId::PerfHud,
         OverlayId::AudioSetup,
         OverlayId::Settings,
         OverlayId::BrowserPopup,
         OverlayId::AbletonPicker,
         OverlayId::Dropdown,
+        OverlayId::Toast,
     ];
 }
 
@@ -179,6 +183,19 @@ pub struct UIRoot {
     pub audio_setup_panel: manifold_ui::panels::audio_setup_panel::AudioSetupPanel,
     pub settings_popup: manifold_ui::panels::settings_popup::SettingsPopup,
     pub perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel,
+    /// D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2). Fired by
+    /// `Application` on `M::Undo`/`M::Redo` (see `app_render.rs`); ticked every
+    /// frame in `update()`.
+    pub toast: manifold_ui::panels::toast::ToastPanel,
+    /// D17 "export-complete green sweep" one-shot guard: `content_state` is a
+    /// cached snapshot re-pushed every UI frame (`push_state` in
+    /// `ui_bridge/state_sync.rs`), not an edge-triggered event, so without this
+    /// the toast would re-fire on every frame the last-received snapshot still
+    /// carries the same `ExportFinishedEvent` (it can outlive a single UI frame
+    /// under load). Keyed on `(success, message, output_path)` — distinct
+    /// enough that two different real exports are never conflated, cheap
+    /// enough to just compare as a string. `None` = no export toast shown yet.
+    pub last_export_toast_key: Option<String>,
 
     /// Project-embedded ("forked") presets surfaced into the Add pickers, kept
     /// in sync with the content snapshot. Change-gated by
@@ -342,6 +359,8 @@ impl UIRoot {
             audio_setup_panel: manifold_ui::panels::audio_setup_panel::AudioSetupPanel::new(),
             settings_popup: manifold_ui::panels::settings_popup::SettingsPopup::new(),
             perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel::new(),
+            toast: manifold_ui::panels::toast::ToastPanel::new(),
+            last_export_toast_key: None,
             embedded_presets: Vec::new(),
             embedded_presets_fingerprint: 0,
             built: false,
@@ -784,6 +803,7 @@ impl UIRoot {
             OverlayId::Settings => &mut self.settings_popup,
             OverlayId::BrowserPopup => &mut self.browser_popup,
             OverlayId::AbletonPicker => &mut self.ableton_picker,
+            OverlayId::Toast => &mut self.toast,
         }
     }
 
@@ -798,11 +818,12 @@ impl UIRoot {
             OverlayId::Settings => self.settings_popup.is_open(),
             OverlayId::BrowserPopup => self.browser_popup.is_open(),
             OverlayId::AbletonPicker => self.ableton_picker.is_open(),
+            OverlayId::Toast => self.toast.is_open(),
         }
     }
 
     /// Live open-set as a bitmask, bit `i` = `OverlayId::Z_ORDER[i]` is open.
-    /// Five overlays today, so a `u8` has room to spare.
+    /// Seven overlays today, so a `u8` has room to spare.
     fn current_overlay_open_mask(&self) -> u8 {
         let mut mask = 0u8;
         for (i, id) in OverlayId::Z_ORDER.iter().enumerate() {
@@ -2184,6 +2205,10 @@ impl UIRoot {
         self.inspector.update(&mut self.tree);
         self.viewport.update(&mut self.tree);
         self.perf_hud.update(&mut self.tree);
+        // D11 toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2): repaints its own alpha
+        // in place while showing; a no-op once idle. Runs every frame like the
+        // panels above it, not gated on anything overlay-specific.
+        self.toast.update(&mut self.tree);
     }
 
     /// Resize the Audio Setup level meters from live per-send levels. Cheap
