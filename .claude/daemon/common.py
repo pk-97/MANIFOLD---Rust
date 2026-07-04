@@ -73,12 +73,12 @@ def parse_moves(text):
 
 def validate_move_id(move_id, moves):
     """Returns move_id if it's a real, classifier-selectable move in the
-    catalog, else None. `escalate/*` ids are daemon-selected only and are
-    never valid coming from the classifier. An unrecognized id — e.g. the
-    hallucinated `coaching/scope-drift` (nonexistent; only `anchor/scope-drift`
-    is real) seen in replay round 2 — must be treated as clear, not silently
-    accepted under a default cooldown class."""
-    if not move_id or move_id not in moves or move_id.startswith("escalate/"):
+    catalog, else None. `escalate/*` and `mechanical/*` ids are daemon/valve-
+    selected only and are never valid coming from the classifier. An
+    unrecognized id — e.g. the hallucinated `coaching/scope-drift` (nonexistent;
+    only `anchor/scope-drift` is real) seen in replay round 2 — must be treated
+    as clear, not silently accepted under a default cooldown class."""
+    if not move_id or move_id not in moves or move_id.startswith(("escalate/", "mechanical/")):
         return None
     return move_id
 
@@ -86,8 +86,8 @@ def validate_move_id(move_id, moves):
 def build_signature_catalog(moves):
     lines = []
     for mid in sorted(moves):
-        if mid.startswith("escalate/"):
-            continue  # daemon-selected, never offered to the classifier
+        if mid.startswith(("escalate/", "mechanical/")):
+            continue  # daemon/valve-selected, never offered to the classifier
         lines.append(f"### {mid}\n{moves[mid]['signature']}\n")
     return "\n".join(lines)
 

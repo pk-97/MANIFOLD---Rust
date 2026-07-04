@@ -288,6 +288,21 @@ the glTF P1c mispriced fork); coaching/price-the-fork (same P1c specimen).
 
 ---
 
+## mechanical/announced-not-started
+- **signature:** Deterministic, valve-selected at Stop time — never the
+  classifier: the turn's final assistant text announces imminent action
+  ("Starting X now", "Doing this now", "Let me now...", "Beginning X") and no
+  tool call follows it in the turn. Future-conditional phrasing ("I'll do X
+  once you confirm", "next session") is NOT this signature — that is either a
+  legitimate handoff or name-the-blocker's territory. Specimen: Opus, glTF
+  P1c, 2026-07-04 ("Starting P1c now with the material-selector extension" →
+  turn end; admitted "I ended the turn on the sentence instead of doing it").
+- **cooldown:** standard
+- **payload:**
+> Your last message announced work and then stopped. An announcement is not a
+> start. Do the first concrete action of that work now — open the file, run
+> the command — before ending the turn.
+
 ## escalate/checkpoint
 - **signature:** Selected by the daemon, not the rubric: the same drift anchor has
   fired twice this session and the drift persists.
