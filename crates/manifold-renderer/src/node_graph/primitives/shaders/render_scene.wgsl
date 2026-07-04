@@ -2,7 +2,7 @@
 // ONE depth buffer (real occlusion) lit by up to 4 lights. Forked from
 // render_3d_mesh.wgsl (the single-object renderer): keeps every
 // Material-system M4/M6 addition (resolve_albedo / resolve_metallic,
-// alpha-cutout discard, front_facing normal flip) byte-identical, and
+// alpha-cutout discard, view-facing normal flip) byte-identical, and
 // adds exactly two things render_3d_mesh doesn't need:
 //
 //   1. A per-object `model` matrix, composed CPU-side from that
@@ -168,16 +168,16 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
 // wired light; ambient + emission added exactly once (not blended per
 // light the way the single-light render_3d_mesh.wgsl does it).
 @fragment
-fn fs_phong(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = resolve_albedo(in.uv);
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
     var N = resolve_normal(in.uv, in.world_normal);
-    if !front_facing {
+    let V = normalize(u.camera_pos.xyz - in.world_pos);
+    if dot(N, V) < 0.0 {
         N = -N;
     }
-    let V = normalize(u.camera_pos.xyz - in.world_pos);
 
     var lit = vec3<f32>(0.0);
     let light_count = u32(u.scene_params.x);
@@ -204,16 +204,16 @@ fn fs_phong(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0
 // single light would give — the standard split-sum substitute for IBL,
 // and the only well-defined choice when light_count can be 0.
 @fragment
-fn fs_pbr(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = resolve_albedo(in.uv);
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
     var N = resolve_normal(in.uv, in.world_normal);
-    if !front_facing {
+    let V = normalize(u.camera_pos.xyz - in.world_pos);
+    if dot(N, V) < 0.0 {
         N = -N;
     }
-    let V = normalize(u.camera_pos.xyz - in.world_pos);
     let metallic = clamp(resolve_metallic(in.uv), 0.0, 1.0);
     let roughness = resolve_roughness(in.uv);
 
@@ -267,13 +267,14 @@ fn fs_pbr(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 // Cel — Lambert N·L quantized into cel_bands discrete steps, summed over
 // every wired light; ambient + emission added exactly once.
 @fragment
-fn fs_cel(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = resolve_albedo(in.uv);
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
     var N = resolve_normal(in.uv, in.world_normal);
-    if !front_facing {
+    let V = normalize(u.camera_pos.xyz - in.world_pos);
+    if dot(N, V) < 0.0 {
         N = -N;
     }
     let bands = max(u.cel_params.x, 2.0);

@@ -192,17 +192,17 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
 
 // Phong — Lambert diffuse + Blinn-Phong specular.
 @fragment
-fn fs_phong(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = resolve_albedo(in.uv);
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
     var N = resolve_normal(in.uv, in.world_normal);
-    if !front_facing {
+    let V = normalize(u.camera_pos.xyz - in.world_pos);
+    if dot(N, V) < 0.0 {
         N = -N;
     }
     let L = normalize(u.light_dir.xyz);
-    let V = normalize(u.camera_pos.xyz - in.world_pos);
     let H = normalize(L + V);
     let n_dot_l = max(dot(N, L), 0.0);
     let n_dot_h = max(dot(N, H), 0.0);
@@ -216,17 +216,17 @@ fn fs_phong(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0
 // PBR — Cook-Torrance microfacet specular + Lambert diffuse + IBL
 // reflection from envmap. F0 blends 0.04 dielectric ↔ base_color metal.
 @fragment
-fn fs_pbr(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = resolve_albedo(in.uv);
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
     var N = resolve_normal(in.uv, in.world_normal);
-    if !front_facing {
+    let V = normalize(u.camera_pos.xyz - in.world_pos);
+    if dot(N, V) < 0.0 {
         N = -N;
     }
     let L = normalize(u.light_dir.xyz);
-    let V = normalize(u.camera_pos.xyz - in.world_pos);
     let H = normalize(L + V);
     let metallic = clamp(resolve_metallic(in.uv), 0.0, 1.0);
     let roughness = resolve_roughness(in.uv);
@@ -281,13 +281,14 @@ fn fs_pbr(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 // Cel — Lambert N·L quantized into cel_bands discrete steps between
 // band_low (shadow) and band_high (lit).
 @fragment
-fn fs_cel(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = resolve_albedo(in.uv);
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
     var N = resolve_normal(in.uv, in.world_normal);
-    if !front_facing {
+    let V = normalize(u.camera_pos.xyz - in.world_pos);
+    if dot(N, V) < 0.0 {
         N = -N;
     }
     let L = normalize(u.light_dir.xyz);

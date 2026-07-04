@@ -103,7 +103,20 @@ fn render_pbr_cube(w: u32, h: u32) -> Vec<u8> {
     g.set_param(mat, "color_b", ParamValue::Float(0.82)).unwrap();
     g.set_param(mat, "color_a", ParamValue::Float(1.0)).unwrap();
 
+    // Sun placed in the camera's own octant — the physically intuitive
+    // placement now that the M6-D4 flip is view-based (`if dot(N, V) < 0.0
+    // { N = -N; }`): a convex cube's camera-visible faces already have
+    // outward normals facing the camera, so a light near the camera (orbit
+    // 0.7, tilt 0.35 → camera in (+X,+Y,+Z)) lights the visible faces
+    // directly.
     let light = g.add_node(Box::new(LightNode::new()));
+    g.set_param(light, "mode", ParamValue::Enum(0)).unwrap(); // Sun
+    g.set_param(light, "pos_x", ParamValue::Float(3.0)).unwrap();
+    g.set_param(light, "pos_y", ParamValue::Float(4.0)).unwrap();
+    g.set_param(light, "pos_z", ParamValue::Float(3.0)).unwrap();
+    g.set_param(light, "aim_x", ParamValue::Float(0.0)).unwrap();
+    g.set_param(light, "aim_y", ParamValue::Float(0.0)).unwrap();
+    g.set_param(light, "aim_z", ParamValue::Float(0.0)).unwrap();
     let env = g.add_node(Box::new(BakeEquirectEnvmap::new()));
     let render = g.add_node(Box::new(Render3DMesh::new()));
     let sink = g.add_node(Box::new(FinalOutput::new()));
@@ -302,10 +315,10 @@ fn quad_verts() -> Vec<MeshVertex> {
     ]
 }
 
-/// A single triangle in the z=0 plane, geometric normal +z. Wound so its
-/// front face (per the pipeline's winding) points toward +z; a camera on
-/// the −z side therefore sees the BACK face (front_facing == false), which
-/// is exactly what the back-face lighting flip has to handle.
+/// A single triangle in the z=0 plane, geometric normal +z. A camera on
+/// the −z side therefore views this triangle from the side OPPOSITE its
+/// stored normal — exactly the two-sided (dot(N, V) < 0) case the
+/// view-facing lighting flip has to handle.
 fn back_facing_tri() -> Vec<MeshVertex> {
     let n = [0.0, 0.0, 1.0];
     let v = |x: f32, y: f32| MeshVertex {
@@ -589,18 +602,21 @@ fn base_color_map_modulates_albedo() {
     }
 }
 
-/// Back-face lighting: a single triangle seen from behind, lit by a light
-/// on the camera's side. Without the `front_facing` normal flip the back
-/// face would shade with the +z front normal (N·L < 0 → clamped to 0 →
-/// black, since ambient = 0); with the flip it shades correctly. A non-black
-/// footprint proves the flip fired.
+/// Two-sided lighting: a single triangle whose STORED vertex normal (+z)
+/// points away from the camera, lit by a light on the camera's side.
+/// M6-D4's flip is view-based (`if dot(N, V) < 0.0 { N = -N; }`), not
+/// winding-based — it faces the shading normal toward the viewer
+/// regardless of which side the rasterizer thinks is "front". Without the
+/// flip this triangle would shade with its stored +z normal (N·L < 0 →
+/// clamped to 0 → black, since ambient = 0); with the flip it shades
+/// correctly. A non-black footprint proves the flip fired.
 #[test]
-fn back_face_is_lit_by_front_facing_flip() {
+fn back_face_lit_by_two_sided_normal_faces_viewer() {
     let (w, h) = (128u32, 128u32);
-    // The triangle's winding-front faces −z (verified empirically). Viewing
-    // from the +z side (orbit = π/2 → pos ≈ [0, 0, +d]) therefore presents
-    // its BACK face: front_facing == false, which is what the flip handles.
-    let orbit = std::f32::consts::FRAC_PI_2;
+    // Camera on the −z side (orbit = −π/2 → pos ≈ [0, 0, −d]) views the
+    // triangle from the side OPPOSITE its stored normal (+z), so
+    // dot(N, V) < 0 and the view-facing flip engages.
+    let orbit = -std::f32::consts::FRAC_PI_2;
 
     let out = render_mesh_scene(w, h, &back_facing_tri(), orbit, 3.0, |g, render| {
         let mat = g.add_node(Box::new(PhongMaterial::new()));
@@ -611,8 +627,10 @@ fn back_face_is_lit_by_front_facing_flip() {
         g.set_param(mat, "ambient", ParamValue::Float(0.0)).unwrap();
         g.connect((mat, "out"), (render, "material")).unwrap();
 
-        // Sun light travelling +z (pos on −z, aim at origin) → L = -dir = -z,
-        // which lights the flipped (camera-facing) back normal.
+        // Sun on the camera's own side (pos on −z, aim at origin) → L =
+        // (0, 0, -1), matching the flipped (camera-facing) normal exactly.
+        // This is the physically intuitive placement: a light near the
+        // camera lights what the camera sees.
         let light = g.add_node(Box::new(LightNode::new()));
         g.set_param(light, "mode", ParamValue::Enum(0)).unwrap(); // Sun
         g.set_param(light, "pos_x", ParamValue::Float(0.0)).unwrap();
@@ -634,7 +652,7 @@ fn back_face_is_lit_by_front_facing_flip() {
     }
     assert!(
         lit > 200,
-        "back face should be LIT (front-facing flip), got {lit} non-black pixels — silhouette-black means the flip did not fire"
+        "back face should be LIT (two-sided view-facing flip), got {lit} non-black pixels — silhouette-black means the flip did not fire"
     );
 }
 
@@ -798,22 +816,18 @@ fn render_scene_phong_quad_frame(w: u32, h: u32, num_lights: u32) -> Vec<[f32; 4
     g.connect((mat, "out"), (render, "material_0")).unwrap();
     g.connect((cam, "out"), (render, "camera")).unwrap();
 
-    // Sun light on the SAME side the front-facing flip lands on. The
-    // camera's orbit = FRAC_PI_2 puts it at (0, 0, +distance), but
-    // `quad_verts()` shares `back_facing_tri()`'s winding
-    // (`back_face_is_lit_by_front_facing_flip`, above) — this camera
-    // sees the quad's rasterizer BACK face, so `front_facing == false`
-    // and the shader flips the +z geometric normal to (0, 0, -1). A
-    // light at pos_z < 0 aimed at the origin gives dir = (0, 0, 1), so
-    // L = -dir = (0, 0, -1) — matching the FLIPPED normal exactly, N·L
-    // == 1 everywhere it's lit. (A light at pos_z > 0 — the naively
-    // "obvious" camera-side placement — lights the pre-flip normal
-    // instead and this quad reads back black, per the same flip.)
+    // Sun light on the camera's own side — the physically intuitive
+    // placement. Camera orbit = FRAC_PI_2 puts it at (0, 0, +distance); the
+    // quad's stored normal is +z, already facing the camera (dot(N, V) > 0),
+    // so the view-facing flip does not fire here — no two-sided geometry
+    // involved, just a plain front-lit quad. A light at pos_z > 0 aimed at
+    // the origin gives dir = (0, 0, -1), so L = -dir = (0, 0, 1) — matching
+    // the (unflipped) normal exactly, N·L == 1 everywhere it's lit.
     let light0 = g.add_node(Box::new(LightNode::new()));
     g.set_param(light0, "mode", ParamValue::Enum(0)).unwrap();
     g.set_param(light0, "pos_x", ParamValue::Float(0.0)).unwrap();
     g.set_param(light0, "pos_y", ParamValue::Float(0.0)).unwrap();
-    g.set_param(light0, "pos_z", ParamValue::Float(-10.0)).unwrap();
+    g.set_param(light0, "pos_z", ParamValue::Float(10.0)).unwrap();
     g.set_param(light0, "aim_x", ParamValue::Float(0.0)).unwrap();
     g.set_param(light0, "aim_y", ParamValue::Float(0.0)).unwrap();
     g.set_param(light0, "aim_z", ParamValue::Float(0.0)).unwrap();
@@ -825,7 +839,7 @@ fn render_scene_phong_quad_frame(w: u32, h: u32, num_lights: u32) -> Vec<[f32; 4
         g.set_param(light1, "mode", ParamValue::Enum(0)).unwrap();
         g.set_param(light1, "pos_x", ParamValue::Float(0.0)).unwrap();
         g.set_param(light1, "pos_y", ParamValue::Float(0.0)).unwrap();
-        g.set_param(light1, "pos_z", ParamValue::Float(-10.0)).unwrap();
+        g.set_param(light1, "pos_z", ParamValue::Float(10.0)).unwrap();
         g.set_param(light1, "aim_x", ParamValue::Float(0.0)).unwrap();
         g.set_param(light1, "aim_y", ParamValue::Float(0.0)).unwrap();
         g.set_param(light1, "aim_z", ParamValue::Float(0.0)).unwrap();
@@ -938,22 +952,17 @@ fn render_scene_two_cubes_png(w: u32, h: u32) -> Vec<u8> {
     g.set_param(render, "pos_y_1", ParamValue::Float(0.3)).unwrap();
     g.set_param(render, "pos_z_1", ParamValue::Float(1.2)).unwrap();
 
-    // Angled key light in the OPPOSITE octant from the camera. Per the
-    // established `back_facing_tri()` / `back_face_is_lit_by_front_facing_flip`
-    // fixture (above): this renderer's shared vertex winding makes the
-    // camera-visible faces of a convex mesh report `front_facing ==
-    // false`, so the shader's flip inverts their outward normal — a cube
-    // face visible because it points toward the camera's octant ends up
-    // shaded with a normal pointing toward the OPPOSITE octant. A light
-    // placed in the camera's own octant (the naively "obvious" choice)
-    // therefore lights the geometry's UN-flipped (camera-facing) side —
-    // giving zero N·L on every visible face, exactly the all-ambient
-    // result this comment used to describe before the fix. Placing the
-    // light in the opposite octant matches the flipped normal instead.
+    // Angled key light in the camera's OWN octant. The M6-D4 flip is
+    // view-based (`if dot(N, V) < 0.0 { N = -N; }`), so a convex cube's
+    // camera-visible faces already have outward normals that face the
+    // camera — the flip does not fire, and the naively "obvious" light
+    // placement (same octant as the camera) is exactly right: N·L > 0 on
+    // the visible faces instead of the all-ambient result the opposite-
+    // octant placement used to require before the fix.
     let light = g.add_node(Box::new(LightNode::new()));
-    g.set_param(light, "pos_x", ParamValue::Float(-6.0)).unwrap();
-    g.set_param(light, "pos_y", ParamValue::Float(-5.0)).unwrap();
-    g.set_param(light, "pos_z", ParamValue::Float(-4.0)).unwrap();
+    g.set_param(light, "pos_x", ParamValue::Float(6.0)).unwrap();
+    g.set_param(light, "pos_y", ParamValue::Float(5.0)).unwrap();
+    g.set_param(light, "pos_z", ParamValue::Float(4.0)).unwrap();
     g.set_param(light, "intensity", ParamValue::Float(1.6)).unwrap();
 
     let sink = g.add_node(Box::new(FinalOutput::new()));
@@ -1339,25 +1348,20 @@ fn azalea_glb_renders_lit_through_render_scene() {
     g.set_param(mat, "color_b", ParamValue::Float(0.35)).unwrap();
     g.set_param(mat, "ambient", ParamValue::Float(0.35)).unwrap();
 
-    // Key light front-lighting the CAMERA-FACING side. This renderer's
-    // shared vertex winding makes the camera-visible faces of a convex mesh
-    // report `front_facing == false`, so the shader flips their outward
-    // normal to point away from the camera (documented + gated by
-    // `back_face_is_lit_by_front_facing_flip` and used by
-    // `render_scene_two_cubes_png` above). The stored light vector is
-    // `normalize(pos - aim)`, so to hit those FLIPPED normals the Sun must
-    // sit in the OCTANT OPPOSITE the orbit camera: the camera (orbit 0.7,
-    // tilt 0.3) is in (+X,+Y,+Z), so the light goes in (−X,−Y,−Z). Placing
-    // it in the camera's own octant (the naive choice) lights the un-flipped
-    // side instead — N·L ≤ 0 on every visible face → a flat ambient-only
-    // silhouette. The offset is raked (more −X/−Z than −Y) for a clear
+    // Key light front-lighting the CAMERA-FACING side. The M6-D4 flip is
+    // view-based (`if dot(N, V) < 0.0 { N = -N; }`): a convex mesh's
+    // camera-visible faces already have outward normals that face the
+    // camera, so the flip does not fire on them and the naively "obvious"
+    // choice — a light in the camera's OWN octant — is exactly right. The
+    // camera (orbit 0.7, tilt 0.3) is in (+X,+Y,+Z), so the Sun goes in
+    // (+X,+Y,+Z) too. The offset is raked (more +X/+Z than +Y) for a clear
     // left-to-right light/shadow gradient across the foliage rather than
     // flat frontal fill. Intensity 1.5.
     let light = g.add_node(Box::new(LightNode::new()));
     g.set_param(light, "mode", ParamValue::Enum(0)).unwrap(); // Sun
-    g.set_param(light, "pos_x", ParamValue::Float(-5.0)).unwrap();
-    g.set_param(light, "pos_y", ParamValue::Float(-2.0)).unwrap();
-    g.set_param(light, "pos_z", ParamValue::Float(-3.0)).unwrap();
+    g.set_param(light, "pos_x", ParamValue::Float(5.0)).unwrap();
+    g.set_param(light, "pos_y", ParamValue::Float(2.0)).unwrap();
+    g.set_param(light, "pos_z", ParamValue::Float(3.0)).unwrap();
     g.set_param(light, "aim_x", ParamValue::Float(0.0)).unwrap();
     g.set_param(light, "aim_y", ParamValue::Float(0.0)).unwrap();
     g.set_param(light, "aim_z", ParamValue::Float(0.0)).unwrap();
