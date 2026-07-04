@@ -132,6 +132,17 @@ pub struct InspectorCompositePanel {
     master_effects: Vec<ParamCardPanel>,
     layer_effects: Vec<ParamCardPanel>,
     gen_params: Option<ParamCardPanel>,
+    /// D17 "delete collapse" (exit-state pattern, `anim.rs`'s doc comment) —
+    /// cards `reconcile_cards` no longer finds a config for, kept alive here
+    /// so they keep collapsing/fading instead of vanishing the instant the
+    /// model drops them. Drawn after the live cards in the same column
+    /// (append-only — a dying card doesn't preserve its old list position,
+    /// a deliberate simplification: reordering the live list around a
+    /// disappearing card would need the FlipList displacement machinery for
+    /// no visible benefit, since it's shrinking to nothing anyway). Pruned in
+    /// `update()` once `ParamCardPanel::is_delete_finished` is true.
+    master_dying: Vec<ParamCardPanel>,
+    layer_dying: Vec<ParamCardPanel>,
 
     // ── Tabs ──
     /// The single scope currently shown. Drives the section-visibility bools
@@ -234,6 +245,8 @@ impl InspectorCompositePanel {
             master_effects: Vec::new(),
             layer_effects: Vec::new(),
             gen_params: None,
+            master_dying: Vec::new(),
+            layer_dying: Vec::new(),
             active_tab: InspectorTab::Master,
             available_tabs: vec![InspectorTab::Master],
             tab_node_ids: Vec::new(),
@@ -522,12 +535,12 @@ impl InspectorCompositePanel {
 
     pub fn configure_master_effects(&mut self, configs: &[ParamCardConfig]) {
         let existing = std::mem::take(&mut self.master_effects);
-        self.master_effects = Self::reconcile_cards(existing, configs);
+        self.master_effects = Self::reconcile_cards(existing, configs, &mut self.master_dying);
     }
 
     pub fn configure_layer_effects(&mut self, configs: &[ParamCardConfig]) {
         let existing = std::mem::take(&mut self.layer_effects);
-        self.layer_effects = Self::reconcile_cards(existing, configs);
+        self.layer_effects = Self::reconcile_cards(existing, configs, &mut self.layer_dying);
     }
 
     pub fn configure_gen_params(
@@ -556,27 +569,48 @@ impl InspectorCompositePanel {
     /// Reconcile the existing card panels against the new configs, **reusing** a
     /// panel whose effect identity matches so its transient UI-only state (the
     /// modulation config tab, drag, copy-flash) survives the per-snapshot
-    /// rebuild instead of being thrown away. New effects get a fresh panel;
-    /// removed ones are dropped; the result is in config (effect) order.
+    /// rebuild instead of being thrown away. The result is in config (effect)
+    /// order.
+    ///
+    /// D17 additions on top of the original reuse mechanism: a config with NO
+    /// matching existing panel is genuinely new — its fresh panel fires the
+    /// "spawn pop" scale-in (`ParamCardPanel::fire_spawn_pop`). An existing
+    /// panel with no matching config anymore was just removed from the model;
+    /// instead of dropping it here, it moves into `dying` — the exit-state
+    /// pattern (`anim.rs`'s doc comment) — so the caller keeps drawing it
+    /// through its collapse+fade instead of it vanishing mid-frame.
     ///
     /// Replaces the old build-fresh-every-frame path, which reset transient UI
     /// state every sync and re-allocated every panel each frame.
     fn reconcile_cards(
         mut existing: Vec<ParamCardPanel>,
         configs: &[ParamCardConfig],
+        dying: &mut Vec<ParamCardPanel>,
     ) -> Vec<ParamCardPanel> {
-        configs
+        let reconciled = configs
             .iter()
-            .map(|cfg| {
-                let mut card = existing
-                    .iter()
-                    .position(|c| c.matches_effect_config(cfg))
-                    .map(|pos| existing.remove(pos))
-                    .unwrap_or_default();
-                card.configure(cfg);
-                card
+            .map(|cfg| match existing.iter().position(|c| c.matches_effect_config(cfg)) {
+                Some(pos) => {
+                    let mut card = existing.remove(pos);
+                    card.configure(cfg);
+                    card
+                }
+                None => {
+                    let mut card = ParamCardPanel::default();
+                    card.configure(cfg);
+                    card.fire_spawn_pop();
+                    card
+                }
             })
-            .collect()
+            .collect();
+        // Whatever's left in `existing` no longer matches any config — it was
+        // removed from the model this rebuild. Keep it alive in `dying`
+        // rather than letting it drop here.
+        for mut card in existing {
+            card.begin_delete_collapse();
+            dying.push(card);
+        }
+        reconciled
     }
 
     // ── Accessors ─────────────────────────────────────────────────
@@ -1896,6 +1930,22 @@ impl InspectorCompositePanel {
                     .into_iter()
                     .find(|(k, _)| *k == KEY_ADD_EFFECT_BTN)
                     .map(|(_, id)| id);
+                    cy += ADD_EFFECT_BTN_H + SECTION_GAP;
+                }
+            }
+            // D17 "delete collapse" — dying cards render below everything
+            // else in this column (append-only, see `master_dying`'s doc
+            // comment), still shrinking toward zero height until their
+            // exit-state finishes. Recomputes the same inset `inner_x`/
+            // `inner_w` the live-card loop above used (out of scope here —
+            // that `let` lives inside the `master_visible()` block).
+            if !self.master_dying.is_empty() {
+                let inner_x = left_x + SECTION_INSET;
+                let inner_w = left_content_w - SECTION_INSET * 2.0;
+                for card in &mut self.master_dying {
+                    let card_h = card.compute_height();
+                    card.build(tree, Rect::new(inner_x, cy, inner_w, card_h));
+                    cy += card_h + SECTION_GAP;
                 }
             }
         }
@@ -1949,6 +1999,19 @@ impl InspectorCompositePanel {
                     .into_iter()
                     .find(|(k, _)| *k == KEY_ADD_EFFECT_BTN)
                     .map(|(_, id)| id);
+                    cy += ADD_EFFECT_BTN_H + SECTION_GAP;
+                }
+            }
+            // D17 "delete collapse" — see the matching comment in the master
+            // column above. `inner_x`/`inner_w` recomputed the same way (out
+            // of scope here, inside `layer_visible()`'s block).
+            if !self.layer_dying.is_empty() {
+                let inner_x = right_x + SECTION_INSET;
+                let inner_w = right_content_w - SECTION_INSET * 2.0;
+                for card in &mut self.layer_dying {
+                    let card_h = card.compute_height();
+                    card.build(tree, Rect::new(inner_x, cy, inner_w, card_h));
+                    cy += card_h + SECTION_GAP;
                 }
             }
 
@@ -2021,6 +2084,16 @@ impl Panel for InspectorCompositePanel {
             any |= gp.tick_drawers(dt_ms);
             gp.tick_value_flash(tree, dt_ms);
         }
+        // D17 "delete collapse" (exit-state pattern) — dying cards keep
+        // ticking (and forcing the rebuild that reflows what follows them)
+        // until their collapse+fade finishes, then get dropped for good. The
+        // data model already forgot these; this only controls how long the
+        // UI keeps painting a card it no longer has.
+        for card in self.master_dying.iter_mut().chain(self.layer_dying.iter_mut()) {
+            any |= card.tick_drawers(dt_ms);
+        }
+        self.master_dying.retain(|c| !c.is_delete_finished());
+        self.layer_dying.retain(|c| !c.is_delete_finished());
         // Stay "active" one extra frame after the last tween settles so its final
         // (target) value gets a build to render — the settling tick returns false
         // but its new value hasn't reached the screen yet.
@@ -2871,5 +2944,49 @@ mod tests {
             "columns/tabs sit below the macros strip: columns_y={} macros_y={macros_y}",
             panel.columns_y
         );
+    }
+
+    // ── D17 spawn pop / delete collapse (reconcile_cards) ──────────────
+
+    #[test]
+    fn spawn_pop_fires_for_a_new_card_not_a_reused_one() {
+        use super::super::param_card::ParamCardKind;
+        let mut panel = InspectorCompositePanel::new();
+        panel.configure_master_effects(&[mk_config(ParamCardKind::Effect, "A", 2)]);
+        assert!(panel.master_effects[0].is_spawning(), "a genuinely new card pops in");
+
+        // Settle it, then reconfigure with the SAME effect identity — reused,
+        // must not re-pop just because the panel rebuilt.
+        for _ in 0..20 {
+            panel.master_effects[0].tick_drawers(20.0);
+        }
+        assert!(!panel.master_effects[0].is_spawning(), "settled");
+        panel.configure_master_effects(&[mk_config(ParamCardKind::Effect, "A", 2)]);
+        assert!(!panel.master_effects[0].is_spawning(), "a reused card never re-pops on reconfigure");
+    }
+
+    #[test]
+    fn removed_effect_moves_to_dying_and_collapses_instead_of_vanishing() {
+        use super::super::param_card::ParamCardKind;
+        let mut panel = InspectorCompositePanel::new();
+        panel.configure_master_effects(&[mk_config(ParamCardKind::Effect, "A", 2)]);
+        // Settle the spawn-pop so it doesn't interfere with reading collapse state.
+        for _ in 0..20 {
+            panel.master_effects[0].tick_drawers(20.0);
+        }
+        assert!(panel.master_dying.is_empty());
+
+        // Reconfigure with an EMPTY config list — "A" was removed from the model.
+        panel.configure_master_effects(&[]);
+        assert!(panel.master_effects.is_empty(), "no longer a live card");
+        assert_eq!(panel.master_dying.len(), 1, "removed card moves to the exit-state list");
+        assert!(panel.master_dying[0].is_collapse_animating(), "starts collapsing");
+        assert!(!panel.master_dying[0].is_delete_finished(), "not finished the instant it dies");
+
+        // Run the exit animation to completion.
+        for _ in 0..30 {
+            panel.master_dying[0].tick_drawers(20.0);
+        }
+        assert!(panel.master_dying[0].is_delete_finished(), "exit animation completes");
     }
 }

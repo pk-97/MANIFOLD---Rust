@@ -403,6 +403,24 @@ pub struct ParamCardPanel {
     // ── Configuration ──
     enabled: bool,
     is_collapsed: bool,
+    /// P2 "card collapse" (`UI_CRAFT_AND_MOTION_PLAN.md` D17) — eases the
+    /// card's body height between 0 (collapsed) and 1 (expanded) instead of
+    /// snapping, so cards below reflow smoothly (same "AnimF32 drives
+    /// `compute_height`" technique as `drawer_height_anim`, one level up:
+    /// the whole card body instead of one param's drawer). Effect cards
+    /// only — `build_generator`'s rows parent flat to root (`None`) rather
+    /// than threading a `parent` `NodeId` the way `build_effect_sliders`
+    /// does, so there's no reparent-to-a-clip-region seam to hook a
+    /// mid-flight reveal into without a much larger per-row rewrite;
+    /// generator cards keep the instant collapse `compute_height_generator`
+    /// always had. See `collapse_frac`/`sync_collapse_anim`.
+    collapse_anim: AnimF32,
+    /// Whether `collapse_anim` has been pointed at a real target at least
+    /// once. `false` only before the very first `configure()` — a freshly
+    /// constructed card SNAPS to its initial state (no slide-in on first
+    /// appearance), matching `drawer_height_anim`'s `prev_anim_len == 0`
+    /// convention.
+    collapse_configured: bool,
     is_selected: bool,
     supports_envelopes: bool,
     param_info: Vec<ParamInfo>,
@@ -539,12 +557,43 @@ pub struct ParamCardPanel {
     /// normal once `progress()` returns `None`.
     value_flash: Vec<Transient>,
 
+    /// D17 "spawn pop" — a brand-new card (no existing panel matched in
+    /// `InspectorCompositePanel::reconcile_cards`) enters at scale 0.94→1
+    /// eased with `Curve::Snap`. A reused card stays settled at `1.0`
+    /// (`AnimF32::new(1.0, ..)`'s default), so an ordinary reconfigure never
+    /// re-pops. Applied as an already-scaled outer rect (pivot = card
+    /// center) at the top of `build_effect`/`build_generator` — every child
+    /// node built from the resulting (smaller, host-computed) `inner` bounds
+    /// follows along, so the whole card pops as one rigid piece without a
+    /// general transform stack.
+    spawn_scale: AnimF32,
+    /// D17 "delete collapse" (exit-state pattern, `anim.rs`'s doc comment) —
+    /// `Some` only while `InspectorCompositePanel`'s `dying` list is still
+    /// drawing this card after it was removed from the model. Drives
+    /// `is_delete_finished`; the collapse itself rides the existing
+    /// `collapse_anim` mechanism (`begin_delete_collapse` retargets it to 0).
+    delete_fade: Option<Transient>,
+
     // Node range
     first_node: usize,
     node_count: usize,
 
     // Card position (for effect drag-reorder hit testing)
     card_y: f32,
+}
+
+/// D17 "spawn pop" geometry: the card's outer frame rect scaled by `s` about
+/// its own center — `(x, y)` is the card's UNSCALED top-left, `(w, h)` its
+/// UNSCALED width/height. A no-op (returns the exact input rect) once `s`
+/// settles at `1.0`, so a settled card's geometry is bit-identical to the
+/// pre-motion path.
+fn scaled_card_rect(x: f32, y: f32, w: f32, h: f32, s: f32) -> Rect {
+    if (s - 1.0).abs() < 0.0005 {
+        return Rect::new(x, y, w, h);
+    }
+    let cx = x + w * 0.5;
+    let cy = y + h * 0.5;
+    Rect::new(cx - w * 0.5 * s, cy - h * 0.5 * s, w * s, h * s)
 }
 
 impl ParamCardPanel {
@@ -558,6 +607,8 @@ impl ParamCardPanel {
             layer_id: None,
             enabled: true,
             is_collapsed: false,
+            collapse_anim: AnimF32::new(1.0, color::MOTION_MED_MS),
+            collapse_configured: false,
             is_selected: false,
             supports_envelopes: true,
             param_info: Vec::new(),
@@ -619,6 +670,8 @@ impl ParamCardPanel {
             toggle_cache: Vec::new(),
             label_cache: Vec::new(),
             value_flash: Vec::new(),
+            spawn_scale: AnimF32::new(1.0, color::MOTION_MED_MS),
+            delete_fade: None,
             first_node: 0,
             node_count: 0,
             card_y: 0.0,
@@ -639,6 +692,7 @@ impl ParamCardPanel {
         self.name = config.name.clone();
         self.enabled = config.enabled;
         self.is_collapsed = config.collapsed;
+        self.sync_collapse_anim();
         self.supports_envelopes = config.supports_envelopes;
         self.param_info = config.params.clone();
         self.string_param_info = config.string_params.clone();
@@ -846,9 +900,101 @@ impl ParamCardPanel {
     pub fn is_collapsed(&self) -> bool {
         self.is_collapsed
     }
+
+    /// Whether the D17 "spawn pop" scale-in is still in flight. Exposed for
+    /// `InspectorCompositePanel`'s `reconcile_cards` tests (in a different
+    /// module — `spawn_scale` itself stays private).
+    pub fn is_spawning(&self) -> bool {
+        self.spawn_scale.is_animating()
+    }
+
+    /// Whether the D17 "card collapse" tween is still in flight. Same
+    /// cross-module test-accessor purpose as `is_spawning`.
+    pub fn is_collapse_animating(&self) -> bool {
+        self.collapse_anim.is_animating()
+    }
+    /// Force the collapsed flag directly, snapping `collapse_anim` (no ease).
+    /// This is the "test/automation harness drives it directly" setter
+    /// (mirrors `chevron_node_id`'s doc comment) — production code toggles
+    /// collapse through the model (`fx.collapsed` /
+    /// `PanelAction::EffectCollapseToggle`) and `configure()`'s
+    /// `sync_collapse_anim`, which eases. The one production caller of this
+    /// setter is the generator param panel (`ui_bridge/inspector.rs`), whose
+    /// `build_generator` can't render a partial-height body anyway (see
+    /// `collapse_anim`'s doc comment) — always-snap is correct for it too.
     pub fn set_collapsed(&mut self, collapsed: bool) {
         self.is_collapsed = collapsed;
+        let target = if collapsed { 0.0 } else { 1.0 };
+        self.collapse_anim.snap(target);
+        self.collapse_configured = true;
     }
+
+    /// Point `collapse_anim` at the target implied by `is_collapsed`/`kind`.
+    /// Called from `configure()` — the real per-rebuild path a model-driven
+    /// collapse toggle (`PanelAction::EffectCollapseToggle`) round-trips
+    /// through. Effect cards on a ticked (Perform) context ease once already
+    /// configured once (mirrors `drawer_height_anim`'s "don't slide in on
+    /// first appearance" rule); every other case (first-ever configure,
+    /// Author context which nothing ticks, or a Generator card whose
+    /// `build_generator` can't render a partial-height body) snaps instantly
+    /// so `compute_height`/`build` never disagree.
+    fn sync_collapse_anim(&mut self) {
+        let target = if self.is_collapsed { 0.0 } else { 1.0 };
+        let eases = self.kind == ParamCardKind::Effect
+            && self.collapse_configured
+            && self.context != CardContext::Author;
+        if eases {
+            self.collapse_anim.set_target(target);
+        } else {
+            self.collapse_anim.snap(target);
+        }
+        self.collapse_configured = true;
+    }
+
+    /// D17 "card collapse" fraction: `1.0` fully expanded, `0.0` fully
+    /// collapsed, eased between by `collapse_anim` for Effect cards.
+    /// Generator cards always read the settled boolean (see `collapse_anim`'s
+    /// doc comment) — `sync_collapse_anim` snaps them, so this is exactly
+    /// `0.0`/`1.0` there too, just never mid-flight.
+    fn collapse_frac(&self) -> f32 {
+        self.collapse_anim.value().clamp(0.0, 1.0)
+    }
+
+    /// D17 "spawn pop" — call once, right after the first `configure()` on a
+    /// truly new panel (`InspectorCompositePanel::reconcile_cards`, the only
+    /// caller). Restarts `spawn_scale` from 0.94 easing to 1.0 with the
+    /// magnetic-snap back-out curve (D15's `Curve::Snap`).
+    pub fn fire_spawn_pop(&mut self) {
+        self.spawn_scale = AnimF32::new(0.94, color::MOTION_MED_MS).with_curve(crate::anim::Curve::Snap);
+        self.spawn_scale.set_target(1.0);
+    }
+
+    /// D17 "delete collapse" (exit-state pattern) — call once when this card
+    /// has just been dropped from the model's effect list
+    /// (`InspectorCompositePanel::reconcile_cards` moves it into a
+    /// panel-owned `dying` list instead of discarding it here). Retargets the
+    /// existing card-collapse mechanism to fully collapsed (reflows whatever
+    /// follows it, exactly like a user-triggered collapse) and starts the
+    /// exit fade timer `is_delete_finished` reads.
+    pub fn begin_delete_collapse(&mut self) {
+        self.collapse_anim.set_target(0.0);
+        let mut fade = Transient::default();
+        fade.fire(color::MOTION_MED_MS);
+        self.delete_fade = Some(fade);
+    }
+
+    /// Whether this dying card's exit animation has fully played out — both
+    /// the fade timer AND the height collapse have settled. The caller
+    /// (`InspectorCompositePanel`'s `dying` list) drops the panel for good
+    /// once this is `true`; until then it keeps calling `tick_drawers`/
+    /// `build` on it every frame, same as any live card.
+    pub fn is_delete_finished(&self) -> bool {
+        self.delete_fade
+            .as_ref()
+            .is_some_and(|f| f.progress().is_none())
+            && !self.collapse_anim.is_animating()
+    }
+
     /// The header collapse-chevron node id, resolved during `build` (`None`
     /// before the first build). Exposed for headless test / automation
     /// harnesses that drive a synthetic click at the chevron and verify the
@@ -1067,19 +1213,28 @@ impl ParamCardPanel {
     }
 
     fn compute_height_effect(&self) -> f32 {
-        let mut h = BORDER_W * 2.0 + HEADER_HEIGHT;
-        if !self.is_collapsed && !self.param_info.is_empty() {
-            h += HEADER_BODY_GAP;
-            for i in 0..self.param_info.len() {
-                // Hidden params consume zero vertical space.
-                if !self.param_info[i].exposed {
-                    continue;
-                }
-                h += ROW_HEIGHT + ROW_SPACING;
-                h += self.animated_drawer_height(i);
-            }
-        }
+        let h = BORDER_W * 2.0 + HEADER_HEIGHT + self.effect_body_natural_height() * self.collapse_frac();
         h + CARD_BOTTOM_MARGIN
+    }
+
+    /// The effect card's param-row block height at full expansion (frac = 1),
+    /// including each row's own P1 drawer contribution. `compute_height_effect`
+    /// scales this by `collapse_frac()`; `build_effect` sizes the animated
+    /// clip-reveal region to it while `collapse_anim` is mid-flight.
+    fn effect_body_natural_height(&self) -> f32 {
+        if self.param_info.is_empty() {
+            return 0.0;
+        }
+        let mut h = HEADER_BODY_GAP;
+        for i in 0..self.param_info.len() {
+            // Hidden params consume zero vertical space.
+            if !self.param_info[i].exposed {
+                continue;
+            }
+            h += ROW_HEIGHT + ROW_SPACING;
+            h += self.animated_drawer_height(i);
+        }
+        h
     }
 
     fn compute_height_generator(&self) -> f32 {
@@ -1162,6 +1317,12 @@ impl ParamCardPanel {
     /// `drawer_anim_active` poll forces while this returns true).
     pub fn tick_drawers(&mut self, dt_ms: f32) -> bool {
         let mut any = false;
+        // P2 card collapse + spawn pop ride the same per-frame rail.
+        any |= self.collapse_anim.tick(dt_ms);
+        any |= self.spawn_scale.tick(dt_ms);
+        if let Some(fade) = self.delete_fade.as_mut() {
+            any |= fade.tick(dt_ms);
+        }
         for a in &mut self.drawer_height_anim {
             any |= a.tick(dt_ms);
         }
@@ -1498,6 +1659,9 @@ impl ParamCardPanel {
 
     fn build_effect(&mut self, tree: &mut UITree, rect: Rect) {
         self.first_node = tree.count();
+        // Stacking/hit-test position stays at the UNSCALED rect — only the
+        // drawn geometry below pops; a card mid-pop must not jitter its
+        // neighbors' reflow or its own drag-reorder hit test.
         self.card_y = rect.y;
         self.param_cache.iter_mut().for_each(|v| *v = f32::NAN);
         self.label_cache.iter_mut().for_each(|v| *v = None);
@@ -1507,8 +1671,16 @@ impl ParamCardPanel {
         let border_color = self.base_border_color();
         let view = self.effect_frame_view(border_color);
         let h = self.compute_height() - CARD_BOTTOM_MARGIN;
-        self.host
-            .build(tree, &view, Rect::new(rect.x, rect.y, rect.width, h));
+        // D17 "spawn pop": scale the whole card about its own center (the
+        // incoming `rect`'s own width/computed height — NOT `rect.height`,
+        // which callers pass as a loose bounding box, e.g. tests build at a
+        // fixed 300px regardless of the card's real height). Every child
+        // node below is positioned from `inner` (`tree.get_bounds` on this
+        // scaled frame), so the header/badges/rows pop as one rigid piece
+        // with no separate per-child transform — see `spawn_scale`'s doc
+        // comment.
+        let frame_rect = scaled_card_rect(rect.x, rect.y, rect.width, h, self.spawn_scale.value());
+        self.host.build(tree, &view, frame_rect);
         self.first_node = self.host.first_node();
         self.border_id = self.host.node_id_for_key(KEY_BORDER);
         self.inner_bg_id = self.host.node_id_for_key(KEY_INNER);
@@ -1520,15 +1692,31 @@ impl ParamCardPanel {
         // Header contents (badges + decorations into the host-owned header).
         self.build_effect_header(tree, inner.x, inner.y, inner_w);
 
-        // Param sliders
-        if !self.is_collapsed && !self.param_info.is_empty() {
-            self.build_effect_sliders(
-                tree,
-                parent,
-                inner.x,
-                inner.y + HEADER_HEIGHT + HEADER_BODY_GAP,
-                inner_w,
-            );
+        // Param sliders — P2 "card collapse": `collapse_frac()` scales the
+        // body's reserved height (see `compute_height_effect`); while
+        // `collapse_anim` is mid-flight, the row block builds under a
+        // `ClipRegion` sized to the CURRENT animated height (the same
+        // top-down-reveal technique `build_param_row`'s per-row P1 drawer
+        // tween uses — `param_slider_shared.rs`'s `drawer_parent`) so rows
+        // never visually overflow the shrinking/growing card frame. A
+        // settled card keeps the exact old behavior: skip entirely when
+        // collapsed, build unclipped under `parent` when expanded.
+        let frac = self.collapse_frac();
+        if !self.param_info.is_empty() && frac > 0.0 {
+            let body_y = inner.y + HEADER_HEIGHT + HEADER_BODY_GAP;
+            let sliders_parent = if self.collapse_anim.is_animating() {
+                tree.add_node(
+                    Some(parent),
+                    Rect::new(inner.x, body_y, inner_w.max(1.0), (self.effect_body_natural_height() * frac).max(0.0)),
+                    UINodeType::ClipRegion,
+                    UIStyle::default(),
+                    None,
+                    UIFlags::VISIBLE | UIFlags::CLIPS_CHILDREN,
+                )
+            } else {
+                parent
+            };
+            self.build_effect_sliders(tree, sliders_parent, inner.x, body_y, inner_w);
         }
 
         self.node_count = tree.count() - self.first_node;
@@ -1925,8 +2113,13 @@ impl ParamCardPanel {
         let border_color = self.base_border_color();
         let view = self.generator_card_view(border_color);
         let h = self.compute_height() - CARD_BOTTOM_MARGIN;
-        self.host
-            .build(tree, &view, Rect::new(rect.x, rect.y, rect.width, h));
+        // D17 "spawn pop" — see the matching comment in `build_effect`. Not
+        // currently fired for the generator card (no `reconcile_cards`-style
+        // reuse/new detection wired for it — see `spawn_scale`'s call site),
+        // but the geometry mechanics are shared so it's a one-line wire-up
+        // later if that seam gets added.
+        let frame_rect = scaled_card_rect(rect.x, rect.y, rect.width, h, self.spawn_scale.value());
+        self.host.build(tree, &view, frame_rect);
         self.first_node = self.host.first_node();
         self.border_id = self.host.node_id_for_key(KEY_BORDER);
         self.inner_bg_id = self.host.node_id_for_key(KEY_INNER);
@@ -3810,6 +4003,61 @@ mod tests {
         let collapsed_h = panel.compute_height();
 
         assert!(collapsed_h < expanded_h);
+    }
+
+    #[test]
+    fn card_collapse_tween_reserves_interpolated_height_clips_then_settles() {
+        // P2 card collapse, end to end: expanded → collapsing (via the real
+        // `configure()` round-trip a model-driven `EffectCollapseToggle`
+        // takes) retargets the tween, a mid-flight build reserves an
+        // interpolated height (so cards below it reflow) and clips the body
+        // to it, and once the tween settles the card lays out at the fully-
+        // collapsed height with no rows and no clip — same shape as the P1
+        // drawer-tween test above, one level up (the whole card body instead
+        // of one param's drawer).
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config()); // expanded; anim snapped to 1.0 (first configure)
+        let expanded_h = panel.compute_height();
+
+        let mut collapsed_cfg = effect_config();
+        collapsed_cfg.collapsed = true;
+        panel.configure(&collapsed_cfg); // Perform context, already configured once → eases
+        assert!(panel.collapse_anim.is_animating(), "collapse retargets, doesn't snap");
+        assert_eq!(
+            panel.compute_height(),
+            expanded_h,
+            "still the expanded height the instant it retargets — data/UI-state \
+             snaps instantly (is_collapsed is already true), only the visual eases"
+        );
+
+        panel.tick_drawers(color::MOTION_MED_MS * 0.5);
+        let mid_h = panel.compute_height();
+        assert!(mid_h < expanded_h, "mid-flight height has started shrinking: {mid_h} vs {expanded_h}");
+
+        let mut tree = UITree::new();
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+        let clips_midflight = tree
+            .nodes()
+            .iter()
+            .filter(|n| n.node_type == UINodeType::ClipRegion)
+            .count();
+        assert!(clips_midflight >= 1, "an animating card collapse builds its body under a clip region");
+
+        for _ in 0..20 {
+            panel.tick_drawers(20.0);
+        }
+        assert!(!panel.collapse_anim.is_animating(), "tween settles");
+        let collapsed_h = panel.compute_height();
+        assert!(collapsed_h < mid_h, "settled fully collapsed is smaller still: {collapsed_h} vs {mid_h}");
+
+        let mut tree2 = UITree::new();
+        panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 300.0));
+        let clips_settled = tree2
+            .nodes()
+            .iter()
+            .filter(|n| n.node_type == UINodeType::ClipRegion)
+            .count();
+        assert_eq!(clips_settled, 0, "settled collapsed card has no leftover clip region");
     }
 
     #[test]
