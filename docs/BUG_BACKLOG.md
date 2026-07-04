@@ -283,6 +283,42 @@ which node(s) are missing/changed before just overwriting.
 the regenerated `docs/node_catalog.json`. Same reasoning as BUG-017 for not fixing it this
 session (unrelated to the work at hand, and worth doing once rather than mid-churn).
 
+### BUG-019 — Motion "group fold" (D17) has no UI surface to fold — DESIGN GAP (deferred)
+
+**Symptom** — found 2026-07-04 completing UI motion P2. D17 lists "group fold: children
+collapse into header," but the animation has nothing to animate: `EffectGroup.collapsed`
+exists at the model layer (`crates/manifold-core/src/effects.rs:3194`) with zero rendering
+surface — no group header, no collapse toggle, no child-card grouping by `group_id` in the
+inspector (`rg EffectGroup crates/manifold-ui/src` → 0 hits).
+
+**Root cause** — the design assumed a foldable effect-group UI in the inspector that was
+never built. Group fold is a *new feature* (group header + child-card filtering + collapse
+toggle), not an animation retrofit — correctly out of the motion layer's scope.
+
+**Fix shape** — build the effect-group inspector UI first (own small design: header row,
+`group_id`-keyed child filtering, collapse toggle), THEN the fold animation is a `FlipList`
++ exit-state retrofit like the other P2 collapses. Needs a design/build decision from Peter.
+
+### BUG-020 — Card collapse animates effect cards but not generator cards — LOW (deferred)
+
+**Symptom** — found 2026-07-04 (UI motion P2 batch 1). Effect cards collapse/expand with the
+`collapse_anim` reflow; generator cards do not — their rows parent at root (`None`) in
+`ParamCardPanel::build_generator`, so there is no `ClipRegion` seam to clip the collapsing
+body the way `build_effect` has.
+
+**Fix shape** — give `build_generator` the same parent/clip-region seam `build_effect` uses,
+then reuse the existing `collapse_anim`. Small, localized to `param_card.rs`.
+
+### BUG-021 — Value snap-back is Perform-inspector only, not the graph-editor param cards — LOW (deferred)
+
+**Symptom** — found 2026-07-04 (UI motion P2 closer). Right-click value-reset eases the fill
+(EASE_SNAP) on Perform-context inspector cards; the graph editor owns a separate
+`ParamCardPanel` instance not reachable from the `ParamRightClick` dispatch site
+(`ui_bridge/inspector.rs:1140`), so its value resets snap without the settle.
+
+**Fix shape** — thread the snap-back trigger to the graph-editor's `ParamCardPanel` too, or
+lift the reset-with-settle into shared `ParamCardPanel` logic both dispatch sites reach.
+
 ## Fixed
 
 All five entries below were fixed 2026-06-23, with a test per path:
