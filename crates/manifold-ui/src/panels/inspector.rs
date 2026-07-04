@@ -14,6 +14,7 @@ use crate::tree::UITree;
 use manifold_foundation::EffectId;
 use manifold_foundation::LayerId;
 use std::collections::HashSet;
+use std::time::Instant;
 
 // ── Layout constants ────────────────────────────────────────────
 // §14.5 E — the container owns the inter-card gap (one owner): the canonical
@@ -205,6 +206,22 @@ pub struct InspectorCompositePanel {
     // Cache tracking
     cache_first_node: usize,
     cache_node_count: usize,
+
+    // ── P1 drawer motion ──
+    /// True while any card's drawer-height tween is in flight (or settled this
+    /// frame — see `update`). The app polls `drawer_anim_active()` after
+    /// `ui_root.update()` and forces a rebuild while it's true, so the
+    /// interpolated height re-lays-out and content below reflows.
+    drawer_anim_active: bool,
+    /// Whether any tween was advancing last frame — keeps `drawer_anim_active`
+    /// true for one extra frame after the last one settles, so the final (target)
+    /// value gets one build to render (the settling tick returns false, but its
+    /// new value still needs a rebuild to reach the screen).
+    drawer_anim_prev: bool,
+    /// Wall-clock anchor for this frame's tween `dt_ms` — the inspector has no
+    /// frame timer, so it measures its own delta (same pattern as the layer
+    /// header's mute-chip motion).
+    motion_last_tick: Instant,
 }
 
 impl InspectorCompositePanel {
@@ -251,7 +268,19 @@ impl InspectorCompositePanel {
             card_drag_label: String::new(),
             cache_first_node: usize::MAX,
             cache_node_count: 0,
+            drawer_anim_active: false,
+            drawer_anim_prev: false,
+            motion_last_tick: Instant::now(),
         }
+    }
+
+    /// True while any inspector card's drawer open/close tween needs another
+    /// rebuild to advance (P1 motion). The app polls this after `ui_root.update()`
+    /// and forces `needs_rebuild` while true — mirrors the `is_dragging()` rebuild
+    /// poll. Reduced motion settles tweens instantly, so this returns false at
+    /// once (no per-frame rebuild churn).
+    pub fn drawer_anim_active(&self) -> bool {
+        self.drawer_anim_active
     }
 
     // ── Configuration ─────────────────────────────────────────────
@@ -1971,6 +2000,25 @@ impl Panel for InspectorCompositePanel {
         // State sync is done via direct accessors on sub-panels.
         // The app layer calls sync methods like:
         //   inspector.master_chrome_mut().sync_opacity(&mut tree, 0.5);
+
+        // P1 drawer motion: advance every card's drawer-height tween. This only
+        // moves the tween *values*; the reflow they drive happens on the next
+        // build() (which the app's drawer_anim_active poll forces while a tween is
+        // live). No tree mutation here — build reads the advanced values.
+        let dt_ms = (self.motion_last_tick.elapsed().as_secs_f32() * 1000.0).min(100.0);
+        self.motion_last_tick = Instant::now();
+        let mut any = false;
+        for card in self.master_effects.iter_mut().chain(self.layer_effects.iter_mut()) {
+            any |= card.tick_drawers(dt_ms);
+        }
+        if let Some(gp) = self.gen_params.as_mut() {
+            any |= gp.tick_drawers(dt_ms);
+        }
+        // Stay "active" one extra frame after the last tween settles so its final
+        // (target) value gets a build to render — the settling tick returns false
+        // but its new value hasn't reached the screen yet.
+        self.drawer_anim_active = any || self.drawer_anim_prev;
+        self.drawer_anim_prev = any;
     }
 
     fn handle_event(&mut self, event: &UIEvent, tree: &UITree) -> Vec<PanelAction> {

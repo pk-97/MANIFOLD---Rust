@@ -18,6 +18,7 @@
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::*;
 use super::{AudioShapeParam, GraphParamTarget, PanelAction, TrimKind};
+use crate::anim::AnimF32;
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, View};
 use crate::color;
 use crate::node::*;
@@ -473,6 +474,14 @@ pub struct ParamCardPanel {
     /// (configure resizes without clobbering existing entries). `resolve_active_tab`
     /// clamps a stale choice to an active one at build time.
     mod_active_tab: Vec<ModTab>,
+    /// Per-param drawer open/close height tween (`UI_CRAFT_AND_MOTION_PLAN.md`
+    /// P1). Eases toward `row_drawer_height(i)` so arming/disarming a modulator
+    /// grows/shrinks the drawer and reflows content below. UI-only state, preserved
+    /// across rebuilds like `mod_active_tab` (configure resizes without clobbering,
+    /// so a forced per-frame rebuild mid-tween doesn't reset it). Ticked only for
+    /// `Perform` (inspector) cards; `Author` (graph-editor) cards snap, since
+    /// nothing drives their tick — see `configure`.
+    drawer_height_anim: Vec<AnimF32>,
     /// Per-param modulation-config tab strip node ids paired with their `ModTab`,
     /// for routing tab clicks. Empty for rows with fewer than two active configs.
     /// Rebuilt each frame.
@@ -569,6 +578,7 @@ impl ParamCardPanel {
             audio_trim_ids: Vec::new(),
             ableton_config_ids: Vec::new(),
             mod_active_tab: Vec::new(),
+            drawer_height_anim: Vec::new(),
             mod_tab_ids: Vec::new(),
             compact: false,
             toggle_ids: Vec::new(),
@@ -661,6 +671,27 @@ impl ParamCardPanel {
         // for new params. resolve_active_tab clamps stale choices at build time.
         self.mod_active_tab.resize(n, ModTab::Driver);
         self.mod_active_tab.truncate(n);
+        // P1 drawer tween targets. Preserve existing tweens across the rebuild (a
+        // mid-flight tween must not reset), grow for new params. Then point each at
+        // its settled drawer height: a *new* param (or an Author/editor card that
+        // nothing ticks) snaps so it never stalls half-open; an existing param on a
+        // Perform (inspector) card eases (set_target no-ops when the target is
+        // unchanged, so the per-frame rebuild that drives the tween doesn't reset
+        // it). Targets are read into a temp first — `row_drawer_height` borrows
+        // `&self` while the loop needs `&mut self.drawer_height_anim`.
+        let prev_anim_len = self.drawer_height_anim.len();
+        self.drawer_height_anim
+            .resize_with(n, || AnimF32::new(0.0, color::MOTION_MED_MS));
+        self.drawer_height_anim.truncate(n);
+        let drawer_targets: Vec<f32> = (0..n).map(|i| self.row_drawer_height(i)).collect();
+        let eases = self.context != CardContext::Author;
+        for (i, &target) in drawer_targets.iter().enumerate() {
+            if eases && i < prev_anim_len {
+                self.drawer_height_anim[i].set_target(target);
+            } else {
+                self.drawer_height_anim[i].snap(target);
+            }
+        }
         self.mod_tab_ids = vec![Vec::new(); n];
         self.toggle_ids = Vec::new();
         self.toggle_ids.resize_with(n, || None);
@@ -1007,7 +1038,7 @@ impl ParamCardPanel {
                     continue;
                 }
                 h += ROW_HEIGHT + ROW_SPACING;
-                h += self.row_drawer_height(i);
+                h += self.animated_drawer_height(i);
             }
         }
         h + CARD_BOTTOM_MARGIN
@@ -1024,7 +1055,7 @@ impl ParamCardPanel {
                     h += ROW_HEIGHT + ROW_SPACING;
                 } else {
                     h += ROW_HEIGHT + ROW_SPACING;
-                    h += self.row_drawer_height(i);
+                    h += self.animated_drawer_height(i);
                 }
             }
             // String param rows (text fields)
@@ -1068,6 +1099,35 @@ impl ParamCardPanel {
         };
         // Match the build's post-drawer break (see `build_param_row`).
         h + DRAWER_BOTTOM_GAP
+    }
+
+    /// Reserved drawer height for row `i`, following the P1 open/close tween while
+    /// one is in flight. Equals `row_drawer_height(i)` once settled (and always,
+    /// for a card the inspector doesn't tick), so `compute_height` and the build
+    /// agree and a settled card lays out exactly as before the motion work.
+    fn animated_drawer_height(&self, i: usize) -> f32 {
+        match self.drawer_height_anim.get(i) {
+            // Only override while a tween is actually in flight. Once settled,
+            // `row_drawer_height` is the live source of truth — so a state change
+            // that doesn't route through `configure` (e.g. a direct test mutation,
+            // or any future in-place edit) is reflected immediately, and build
+            // (which also only supplies a reveal while `is_animating`) stays in
+            // exact agreement with this reserved height.
+            Some(a) if a.is_animating() => a.value(),
+            _ => self.row_drawer_height(i),
+        }
+    }
+
+    /// Advance this card's drawer-height tweens by `dt_ms`; returns true while any
+    /// is still in flight. Called by the inspector's per-frame `update()`; the
+    /// value it advances is read by the *next* `build()` (which the app's
+    /// `drawer_anim_active` poll forces while this returns true).
+    pub fn tick_drawers(&mut self, dt_ms: f32) -> bool {
+        let mut any = false;
+        for a in &mut self.drawer_height_anim {
+            any |= a.tick(dt_ms);
+        }
+        any
     }
 
     // ── Build ─────────────────────────────────────────────────────
@@ -1678,6 +1738,12 @@ impl ParamCardPanel {
                 self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
                 !self.compact,
                 author.then_some((i as u64) << 8),
+                // P1 drawer tween: supply the interpolated height only while in
+                // flight; settled rows pass None → the natural (unclipped) layout.
+                self.drawer_height_anim
+                    .get(i)
+                    .filter(|a| a.is_animating())
+                    .map(|a| a.value()),
             );
             self.slider_ids[i] = row.slider;
             self.row_catcher_ids[i] = Some(row.row_catcher);
@@ -1875,6 +1941,11 @@ impl ParamCardPanel {
                         self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
                         !self.compact,
                         author.then_some((i as u64) << 8),
+                        // P1 drawer tween: interpolated height while in flight only.
+                        self.drawer_height_anim
+                            .get(i)
+                            .filter(|a| a.is_animating())
+                            .map(|a| a.value()),
                     );
                     self.slider_ids[i] = row.slider;
                     self.row_catcher_ids[i] = Some(row.row_catcher);
@@ -3549,6 +3620,90 @@ mod tests {
 
         assert!(panel.driver_config_ids[0].is_some());
         assert!(panel.trim_ids[0].is_some());
+    }
+
+    #[test]
+    fn drawer_open_tween_reserves_interpolated_height_clips_then_settles() {
+        // P1 drawer motion, end to end: closed → armed retargets the height tween,
+        // the mid-flight build reserves an interpolated height (so content below
+        // reflows) and clips the drawer to it, and once the tween settles the card
+        // lays out at full height with no clip (byte-identical to the pre-motion
+        // path).
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config()); // driver off → drawer closed, anim snapped to 0
+        let closed_h = panel.compute_height();
+
+        // Re-arm the driver on the same param: the tween retargets to the full
+        // drawer height and starts easing (Perform context eases; the param existed
+        // across both configures, so it's a set_target, not a snap).
+        let mut armed = effect_config();
+        armed.driver_active[0] = true;
+        panel.configure(&armed);
+        assert!(
+            panel.drawer_height_anim[0].is_animating(),
+            "arming a mod retargets the drawer tween → in flight"
+        );
+        let full_target = panel.row_drawer_height(0);
+        assert!(full_target > 0.0);
+
+        // Advance partway (well under MOTION_MED): reserved height sits strictly
+        // between closed and fully open — the reflow tracks the tween.
+        panel.tick_drawers(40.0);
+        assert!(panel.drawer_height_anim[0].is_animating(), "still mid-flight after 40ms");
+        let mid_h = panel.compute_height();
+        assert!(
+            mid_h > closed_h && mid_h < closed_h + full_target,
+            "reserved height is interpolated: mid={mid_h} closed={closed_h} full={full_target}"
+        );
+
+        // The mid-flight build wraps the drawer in a clip region.
+        let mut tree = UITree::new();
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+        let clips_midflight = tree
+            .nodes()
+            .iter()
+            .filter(|n| n.node_type == UINodeType::ClipRegion)
+            .count();
+        assert!(clips_midflight >= 1, "an animating drawer builds under a clip region");
+
+        // Run the tween to completion → settled at full height, no drawer clip.
+        for _ in 0..20 {
+            panel.tick_drawers(20.0);
+        }
+        assert!(!panel.drawer_height_anim[0].is_animating(), "tween settles");
+        assert!(
+            (panel.compute_height() - (closed_h + full_target)).abs() < 0.1,
+            "settled height = closed + full drawer contribution"
+        );
+        let mut tree2 = UITree::new();
+        panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 400.0));
+        let clips_settled = tree2
+            .nodes()
+            .iter()
+            .filter(|n| n.node_type == UINodeType::ClipRegion)
+            .count();
+        assert!(
+            clips_settled < clips_midflight,
+            "settled build drops the drawer clip: settled={clips_settled} midflight={clips_midflight}"
+        );
+        assert!(panel.driver_config_ids[0].is_some(), "driver config built (unclipped) when settled");
+    }
+
+    #[test]
+    fn drawer_tween_snaps_on_author_cards() {
+        // Author (graph-editor) cards are not ticked by the inspector, so they must
+        // never enter an animating state (a stalled half-open drawer would be a
+        // layout bug). Arming a mod snaps straight to full.
+        let mut panel = ParamCardPanel::new();
+        panel.set_context(CardContext::Author);
+        panel.configure(&effect_config());
+        let mut armed = effect_config();
+        armed.driver_active[0] = true;
+        panel.configure(&armed);
+        assert!(
+            !panel.drawer_height_anim[0].is_animating(),
+            "author cards snap — no tween to stall"
+        );
     }
 
     #[test]
