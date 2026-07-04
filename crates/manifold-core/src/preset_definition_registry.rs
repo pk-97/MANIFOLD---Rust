@@ -345,6 +345,14 @@ pub fn param_index_to_id(type_id: &PresetTypeId, index: usize) -> Option<Arc<str
 /// defaults, constructed with the correct kind read off the def: an effect
 /// via `PresetInstance::new` + base-param seeding, a generator via
 /// `PresetInstance::new_generator` (which seeds its own defaults).
+///
+/// Seeds via the crate-internal `write_base_param`, NOT the public
+/// `set_base_param` — this is system-level default population at
+/// instance-construction time, not a live hand gesture, so it must not mark
+/// the fresh slots `touched`. A brand-new effect would otherwise start every
+/// param pre-latched as "overridden" for the automation-lane override latch
+/// (`docs/AUTOMATION_LANES_DESIGN.md` §4) before any lane or hand ever
+/// touched it.
 pub fn create_default(type_id: &PresetTypeId) -> crate::effects::PresetInstance {
     let def = get(type_id);
     match def.kind {
@@ -352,7 +360,7 @@ pub fn create_default(type_id: &PresetTypeId) -> crate::effects::PresetInstance 
         PresetKind::Effect => {
             let mut inst = crate::effects::PresetInstance::new(type_id.clone());
             for (i, pd) in def.param_defs.iter().enumerate() {
-                inst.set_base_param(i, pd.default_value);
+                inst.write_base_param(i, pd.default_value);
             }
             inst
         }
