@@ -783,6 +783,18 @@ pub struct LayerHeaderPanel {
     cached_selected: Vec<bool>,
     cached_colors: Vec<Color32>,
 
+    // ── Mute chip motion (UI_CRAFT_AND_MOTION_PLAN.md P1 demonstration) ──
+    // Background hover/press tween + 1px press drop for the Mute chip, one
+    // per row. `mute_base_y` is the resting (unpressed) Y captured right
+    // after `build_layer_row` places the node — the press-drop offset is
+    // always applied relative to this, never compounded frame over frame.
+    mute_motion: Vec<components::ChipMotion>,
+    mute_base_y: Vec<f32>,
+    /// Wall-clock anchor for this frame's `dt_ms` — the same self-timed
+    /// pattern `tick_record_pulse` uses (`recording_since.elapsed()`), just
+    /// measuring a delta instead of a since-start duration.
+    motion_last_tick: Instant,
+
     // Active layer (pushed from app layer each frame)
     active_layer: Option<LayerId>,
     cached_active_layer: Option<LayerId>,
@@ -839,6 +851,9 @@ impl LayerHeaderPanel {
             cached_led: Vec::new(),
             cached_selected: Vec::new(),
             cached_colors: Vec::new(),
+            mute_motion: Vec::new(),
+            mute_base_y: Vec::new(),
+            motion_last_tick: Instant::now(),
             active_layer: None,
             cached_active_layer: None,
             pending_active_layers: None,
@@ -932,6 +947,64 @@ impl LayerHeaderPanel {
                 ..self.record_btn_style()
             },
         );
+    }
+
+    /// Kit-chip hover/press tween for the Mute chip
+    /// (`UI_CRAFT_AND_MOTION_PLAN.md` P1's "kit chip hover/press" demonstration
+    /// surface): background blends smoothly toward hover/press instead of the
+    /// renderer's instant flag-driven jump, and the chip drops 1px while held.
+    /// Rides the same per-frame `update()` tick as `tick_record_pulse` above —
+    /// no new redraw-scheduling mechanism. Reads each row's live `UIFlags`
+    /// (set by `input.rs` on pointer move/down) to know which way to tween;
+    /// settled + idle rows are skipped entirely (zero per-frame cost once the
+    /// pointer has moved on).
+    fn tick_mute_motion(&mut self, tree: &mut UITree, dt_ms: f32) {
+        for i in 0..self.rows.len() {
+            let Some(mute_id) = self.rows[i].id(LayerControl::Mute) else {
+                continue;
+            };
+            let flags = tree.get_node(mute_id).flags;
+            let hovered = flags.contains(UIFlags::HOVERED);
+            let pressed = flags.contains(UIFlags::PRESSED);
+            let motion = &mut self.mute_motion[i];
+
+            // Nothing to do: idle, unhovered/unpressed, AND already at the
+            // neutral baseline — ticking would be a pure no-op. Checked
+            // BEFORE ticking (not after), using `is_at_rest` (not
+            // `is_animating`): a control that just released from a full
+            // press is "settled" (not mid-flight) but still displaced at
+            // press=1.0, and must keep getting ticked back down to 0 before
+            // this can skip. Getting this ordering/predicate wrong leaves
+            // the last mid-animation value painted forever once flags clear.
+            if !hovered && !pressed && motion.is_at_rest() {
+                continue;
+            }
+            motion.tick(dt_ms, hovered, pressed);
+
+            let muted = self.cached_mute.get(i).copied().unwrap_or(false);
+            let layer_color = self.cached_colors.get(i).copied().unwrap_or(Color32::TRANSPARENT);
+            let target = mute_style(muted, layer_color);
+            let blended =
+                motion.blend(target.bg_color, target.hover_bg_color, target.pressed_bg_color);
+            // Point every colour field the renderer might read at the SAME
+            // blended value, so its own instant HOVERED/PRESSED flag branch
+            // (`ui_renderer.rs`) paints exactly what we just computed
+            // regardless of which branch fires this frame.
+            tree.set_style(
+                mute_id,
+                UIStyle {
+                    bg_color: blended,
+                    hover_bg_color: blended,
+                    pressed_bg_color: blended,
+                    ..target
+                },
+            );
+
+            let base_y = self.mute_base_y.get(i).copied().unwrap_or(0.0);
+            let mut bounds = tree.get_bounds(mute_id);
+            bounds.y = base_y + motion.press_offset_y(1.0);
+            tree.set_bounds(mute_id, bounds);
+        }
     }
 
     pub fn set_audio_device_name(&mut self, tree: &mut UITree, name: &str) {
@@ -2083,6 +2156,8 @@ impl LayerHeaderPanel {
         self.cached_led.resize(layer_count, false);
         self.cached_selected.resize(layer_count, false);
         self.cached_colors.resize(layer_count, Color32::TRANSPARENT);
+        self.mute_motion.resize(layer_count, components::ChipMotion::new());
+        self.mute_base_y.resize(layer_count, 0.0);
 
         // Swap layers out to avoid borrow conflict in build_layer_row
         // (takes O(1), avoids cloning the entire Vec)
@@ -2131,6 +2206,13 @@ impl LayerHeaderPanel {
             self.cached_led[i] = layer.is_led;
             self.cached_selected[i] = layer.is_selected;
             self.cached_colors[i] = layer.color;
+            // Resting Y for the mute chip's 1px press drop — captured fresh
+            // right after placement, before any press offset is ever applied,
+            // so the drop always computes from the true rest position rather
+            // than compounding across frames.
+            if let Some(mute_id) = self.rows[i].id(LayerControl::Mute) {
+                self.mute_base_y[i] = tree.get_bounds(mute_id).y;
+            }
         }
 
         // Swap layers back
@@ -2159,6 +2241,13 @@ impl LayerHeaderPanel {
         // §19: breathe the Record button while recording. First, so a selection
         // change (which early-returns below) never skips a pulse frame.
         self.tick_record_pulse(tree);
+
+        // P1 motion foundation: Mute chip hover/press tween. Same "first, so
+        // an early return below never skips a frame" reasoning as the record
+        // pulse above.
+        let dt_ms = self.motion_last_tick.elapsed().as_secs_f32() * 1000.0;
+        self.motion_last_tick = Instant::now();
+        self.tick_mute_motion(tree, dt_ms);
 
         // Multi-select: apply pending active layer flags
         if let Some(flags) = self.pending_active_layers.take() {
@@ -2473,6 +2562,56 @@ mod tests {
         tree.clear_dirty();
         panel.set_mute_state(&mut tree, 0, true);
         assert!(!tree.has_dirty());
+    }
+
+    #[test]
+    fn mute_chip_hover_tweens_background_and_press_drops_then_settles() {
+        // P1 motion foundation, applied: the Mute chip's background eases
+        // toward hover/press instead of jump-cutting, and drops 1px while
+        // held — then returns exactly to rest with no drift.
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = LayerHeaderPanel::new();
+        let layers = vec![make_video_layer("L1")];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
+
+        let mute_id = panel.rows[0].id(LayerControl::Mute).expect("mute chip built");
+        let rest_bg = tree.get_node(mute_id).style.bg_color;
+        let rest_y = tree.get_bounds(mute_id).y;
+
+        // Hover in: background eases partway, not an instant jump.
+        tree.set_flag(mute_id, UIFlags::HOVERED);
+        panel.tick_mute_motion(&mut tree, 45.0); // halfway through MOTION_FAST (90ms)
+        let mid_bg = tree.get_node(mute_id).style.bg_color;
+        assert_ne!(mid_bg, rest_bg, "background should have moved partway toward hover");
+
+        panel.tick_mute_motion(&mut tree, 45.0); // finishes the hover-in tween
+
+        // Press: 1px drop on top of the settled hover.
+        tree.set_flag(mute_id, UIFlags::PRESSED);
+        panel.tick_mute_motion(&mut tree, 90.0); // full MOTION_FAST press-in
+        let pressed_y = tree.get_bounds(mute_id).y;
+        assert!(
+            (pressed_y - (rest_y + 1.0)).abs() < 0.01,
+            "fully pressed should sit at rest_y + 1px: got {pressed_y}, rest {rest_y}"
+        );
+
+        // Release: eases back, no permanent drift in position or colour.
+        tree.clear_flag(mute_id, UIFlags::PRESSED);
+        tree.clear_flag(mute_id, UIFlags::HOVERED);
+        panel.tick_mute_motion(&mut tree, 90.0);
+        panel.tick_mute_motion(&mut tree, 90.0);
+        assert!(
+            (tree.get_bounds(mute_id).y - rest_y).abs() < 0.01,
+            "must return exactly to rest Y, no drift"
+        );
+        assert_eq!(
+            tree.get_node(mute_id).style.bg_color,
+            rest_bg,
+            "background returns exactly to rest"
+        );
     }
 
     #[test]
