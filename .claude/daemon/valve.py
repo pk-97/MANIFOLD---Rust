@@ -109,7 +109,11 @@ def build_block(flag):
         f"\n"
         f"(Supervised mode: briefly acknowledge this note out loud in your next "
         f'message — one sentence, e.g. "daemon nudged me about {move_id} — '
-        f'checking" — so Peter can judge whether the nudge was right.)\n'
+        f'checking" — so Peter can judge whether the nudge was right. Before the '
+        f"session ends, also append one self-grade line per fire to "
+        f".claude/daemon/eval/live_grades.jsonl — format in RUNBOOK.md step 2, "
+        f'with "grader": "session"; the sleep pass treats these as provisional '
+        f"and may override.)\n"
         f"</daemon>"
     )
 

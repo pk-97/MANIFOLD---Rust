@@ -23,6 +23,11 @@ grades and changes nothing is a valid pass; bias toward silence.
    and `effective` (did behavior change in the direction the payload asks?
    y/n/unclear). Append to `eval/live_grades.jsonl`:
    `{ts, session_id, seq, move_id, correct, effective, ordinal, notes}`.
+   Sessions self-grade at fire time since 2026-07-04 (records with
+   `"grader": "session"`, prompted by the supervised-mode sentence): treat
+   these as provisional input, not verdicts — confirm or override each with
+   your own transcript read; on disagreement append a pass-graded record for
+   the same (session_id, seq) rather than editing the session's line.
 3. **Count misses.** Recall can't be read off telemetry. Scan the graded
    week's human messages for correction-shaped turns (the user catching
    drift the daemon didn't flag); each is a FN with a timestamp. Ask Peter
