@@ -27,11 +27,10 @@ pub struct NodePreviewInfo {
     pub outputs: Vec<(String, f32)>,
 }
 
-/// Sent once when an export finishes.
-// FIXME(dead-code-audit): event is constructed and stored in ContentState but
-// never read by UI — export-finished feedback isn't wired.
+/// Sent once when an export finishes. Consumed by `push_state`
+/// (`ui_bridge/state_sync.rs`) to fire the D17 export-complete toast
+/// (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — no longer dead code as of that wiring.
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub struct ExportFinishedEvent {
     pub success: bool,
     pub message: String,
