@@ -2156,6 +2156,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             &self.local_project,
             active_idx,
             &self.selection,
+            &self.content_state.automation_latched_params,
         );
 
         // `--resume` boot fast path (GIG_RESILIENCE_DESIGN §5.2): content

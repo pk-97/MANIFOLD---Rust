@@ -1164,6 +1164,7 @@ impl Application {
                 &self.local_project,
                 active_idx,
                 &self.selection,
+                &self.content_state.automation_latched_params,
             );
         }
 

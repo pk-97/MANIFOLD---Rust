@@ -264,7 +264,14 @@ fn hairline_clips_scene() -> SceneData {
 /// cards / sliders / chrome — the surface the `timeline` scene hides (it zeroes
 /// the inspector width). A couple of context layers sit above/below so the
 /// timeline still reads as a real session next to the inspector.
+///
+/// P4 §7 evidence (the param-card "automated" dot): Mirror carries an
+/// enabled, non-empty automation lane with no latch — its card shows the red
+/// dot. Bloom carries one too, but its `(EffectId, ParamId)` is latched in
+/// `automation_latched_params` — its card shows the gray (overridden) dot.
+/// Mirrors `automation_scene`'s Mirror-live / Bloom-overridden pairing.
 fn inspector_scene() -> SceneData {
+    use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
     let mut text = Layer::new("TEXT BOT L".into(), LayerType::Video, 0);
     text.layer_id = lid("text-bot-l");
     text.clips
@@ -279,8 +286,38 @@ fn inspector_scene() -> SceneData {
     glow.clips
         .push(TimelineClip::new_video("glow_loop.mov".into(), Beats(0.0), Beats(48.0), Seconds::ZERO));
     let mut mirror = effect("Mirror");
-    arm_lfo(&mut mirror);
-    glow.effects = Some(vec![mirror, effect("Bloom")]);
+    arm_lfo(&mut mirror); // arms the driver on Mirror's FIRST param.
+    // The automation lane goes on a DIFFERENT param (second, if Mirror has
+    // one) so the automated dot's row is distinct from the LFO-armed row —
+    // clean evidence for each indicator instead of both stacked on one row.
+    let mirror_param = manifold_core::preset_definition_registry::try_get(mirror.effect_type())
+        .and_then(|def| def.param_ids.get(1).or_else(|| def.param_ids.first()).cloned())
+        .expect("Mirror has at least one automatable param");
+    mirror.automation_lanes = Some(vec![AutomationLane {
+        param_id: mirror_param.into(),
+        enabled: true,
+        points: vec![
+            AutomationPoint { beat: Beats(0.0), value: 0.1, shape: SegmentShape::Linear },
+            AutomationPoint { beat: Beats(16.0), value: 0.9, shape: SegmentShape::Curved(0.6) },
+            AutomationPoint { beat: Beats(32.0), value: 0.3, shape: SegmentShape::Linear },
+        ],
+    }]);
+
+    let mut bloom = effect("Bloom");
+    let bloom_param = manifold_core::preset_definition_registry::try_get(bloom.effect_type())
+        .and_then(|def| def.param_ids.first().cloned())
+        .expect("Bloom has at least one automatable param");
+    bloom.automation_lanes = Some(vec![AutomationLane {
+        param_id: bloom_param.clone().into(),
+        enabled: true,
+        points: vec![
+            AutomationPoint { beat: Beats(0.0), value: 0.5, shape: SegmentShape::Hold },
+            AutomationPoint { beat: Beats(20.0), value: 4.5, shape: SegmentShape::Linear },
+        ],
+    }]);
+    let bloom_id = bloom.id.clone();
+
+    glow.effects = Some(vec![mirror, bloom]);
 
     let mut plasma = Layer::new("PLASMA".into(), LayerType::Generator, 2);
     plasma.layer_id = lid("plasma");
@@ -289,7 +326,8 @@ fn inspector_scene() -> SceneData {
     let mut project = Project::default();
     project.timeline.layers = vec![text, glow, plasma];
 
-    let content = ContentState { current_beat: Beats(8.0), is_playing: false, ..Default::default() };
+    let mut content = ContentState { current_beat: Beats(8.0), is_playing: false, ..Default::default() };
+    content.automation_latched_params = vec![(bloom_id, bloom_param.into())];
 
     let mut selection = UIState::default();
     selection.select_layer(lid("glow"));

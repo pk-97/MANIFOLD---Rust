@@ -263,7 +263,13 @@ fn sync_build(ui: &mut UIRoot, data: &fixtures::SceneData, zoom_ppb: f32) {
     // the selection — the live app calls this whenever the active layer changes.
     // Without it the inspector stays on its default Master view, so the selected
     // layer's chain never appears.
-    sync_inspector_data(ui, &data.project, data.active, &data.selection);
+    sync_inspector_data(
+        ui,
+        &data.project,
+        data.active,
+        &data.selection,
+        &data.content.automation_latched_params,
+    );
     // Zoom so the fixture's clips fit the lane width (set before build so the
     // ruler ticks and the clip rects agree on px/beat).
     ui.viewport.set_zoom(zoom_ppb);
