@@ -634,6 +634,25 @@ impl GraphCanvas {
                 return;
             }
         }
+        // Save to Library / Save to Project header pills (PRESET_LIBRARY_DESIGN
+        // D4, P3) — same chrome-priority as Reset; only present when there's an
+        // active graph (mirrors the render-side gate).
+        if !self.nodes.is_empty() {
+            let sp_rect = self.save_to_project_button_rect(viewport);
+            if sx >= sp_rect.x && sx <= sp_rect.x + sp_rect.w && sy >= sp_rect.y && sy <= sp_rect.y + sp_rect.h {
+                self.pending_actions.push(GraphEditCommand::SaveGraphToProject {
+                    anchor: (sp_rect.x, sp_rect.y, sp_rect.w, sp_rect.h),
+                });
+                return;
+            }
+            let sl_rect = self.save_to_library_button_rect(viewport);
+            if sx >= sl_rect.x && sx <= sl_rect.x + sl_rect.w && sy >= sl_rect.y && sy <= sl_rect.y + sl_rect.h {
+                self.pending_actions.push(GraphEditCommand::SaveGraphToLibrary {
+                    anchor: (sl_rect.x, sl_rect.y, sl_rect.w, sl_rect.h),
+                });
+                return;
+            }
+        }
         // No collapse toggle — nodes stay expanded (Blender-style). A header
         // click falls through to select / drag below.
         if let Some(hit) = self.port_under(viewport, sx, sy) {

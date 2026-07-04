@@ -623,6 +623,18 @@ pub enum PanelAction {
     /// Import a `.json` preset file as a project-embedded preset and retarget
     /// the targeted instance to it (native open dialog).
     ImportPreset(GraphParamTarget),
+    /// Save to Library (PRESET_LIBRARY_DESIGN D4): publish the targeted
+    /// preset's current effective definition as a new named entry under the
+    /// user's library folder. Opens a name-prompt text-input session (NOT a
+    /// native file dialog — Export/Import are the only `rfd` users); the
+    /// actual write happens on commit.
+    SaveToLibrary(GraphParamTarget),
+    /// Save to Project (PRESET_LIBRARY_DESIGN D4): publish the targeted
+    /// preset's current effective definition as a new `origin: Saved`
+    /// project-embedded preset, WITHOUT retargeting the instance that
+    /// triggered it (unlike Make Unique / Import). Opens the same
+    /// name-prompt text-input session as Save to Library.
+    SaveToProject(GraphParamTarget),
 
     // Macros panel collapse
     MacrosCollapseToggle,

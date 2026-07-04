@@ -363,6 +363,15 @@ const RESET_BUTTON_W: f32 = 124.0;
 const RESET_BUTTON_H: f32 = 18.0;
 /// Gap between the reset button and the zoom indicator on its right.
 const RESET_BUTTON_RIGHT_GAP: f32 = 96.0;
+/// Save to Library / Save to Project header pills (PRESET_LIBRARY_DESIGN D4,
+/// P3) — same row as "Reset to Default", anchored to its (always-reserved,
+/// whether or not Reset itself is currently shown) slot so the two save
+/// buttons don't shift position when the modified state changes.
+const SAVE_BUTTON_BG: Color32 = Color32::new(74, 96, 138, 230);
+const SAVE_BUTTON_W: f32 = 108.0;
+const SAVE_BUTTON_H: f32 = RESET_BUTTON_H;
+/// Gap between adjacent header pill buttons.
+const SAVE_BUTTON_GAP: f32 = 8.0;
 
 /// Max seconds between two empty-canvas presses for them to count as a
 /// double-click. Matches the typical OS double-click window.

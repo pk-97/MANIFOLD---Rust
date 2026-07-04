@@ -672,6 +672,44 @@ fn apply_reload() -> u64 {
         &effect_meta,
         &generator_meta,
     );
+    // PRESET_LIBRARY_DESIGN P3 entry-state fix: the Add-effect/Add-generator
+    // browser popup reads `preset_type_registry`, a SEPARATE store from
+    // `PRESET_DEFINITIONS` above — it used to be a `LazyLock` computed once
+    // and never refreshed, so a preset saved into the user dir at runtime
+    // never appeared in the browser without a restart. Rebuilt from the same
+    // freshly-reloaded metadata, in the same reload pass.
+    //
+    // `effect_meta`/`generator_meta` come from the FULL merged catalog
+    // (stock + user + project overlay — `build_catalog`'s merge order), but
+    // the registry must stay STOCK + USER only: project-embedded presets
+    // (Saved and Snapshot) are already surfaced separately as the "Project"
+    // category from `Project.embedded_presets` (`ui_root.rs`'s browser-open
+    // handlers). Feeding them into the registry too would list the same
+    // preset twice in the Add browser, so the current project's overlay ids
+    // are excluded here.
+    let effect_overlay_ids: std::collections::HashSet<Arc<str>> = PROJECT_EFFECT_PRESETS_SAVED
+        .load_full()
+        .iter()
+        .chain(PROJECT_EFFECT_PRESETS_SNAPSHOT.load_full().iter())
+        .map(|(id, _)| id.clone())
+        .collect();
+    let generator_overlay_ids: std::collections::HashSet<Arc<str>> = PROJECT_GENERATOR_PRESETS_SAVED
+        .load_full()
+        .iter()
+        .chain(PROJECT_GENERATOR_PRESETS_SNAPSHOT.load_full().iter())
+        .map(|(id, _)| id.clone())
+        .collect();
+    let effect_meta_for_registry: Vec<_> = effect_meta
+        .iter()
+        .filter(|m| !effect_overlay_ids.contains(m.id.as_str()))
+        .cloned()
+        .collect();
+    let generator_meta_for_registry: Vec<_> = generator_meta
+        .iter()
+        .filter(|m| !generator_overlay_ids.contains(m.id.as_str()))
+        .cloned()
+        .collect();
+    manifold_core::preset_type_registry::rebuild(&effect_meta_for_registry, &generator_meta_for_registry);
 
     let generation = bump_catalog_generation();
     log::info!("[presets] hot-reload applied; catalog generation = {generation}");

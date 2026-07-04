@@ -1474,6 +1474,47 @@ impl Application {
                     }
                 }
             }
+            TextInputField::SavePresetName => {
+                // Save to Library / Save to Project (PRESET_LIBRARY_DESIGN
+                // D4, P3). The ctx carries the target's CURRENT effective
+                // definition, already resolved (and values-snapshotted) at
+                // the point the prompt opened — this arm only mints the name
+                // and writes/upserts it.
+                if let Some(ctx) = self.text_input.save_preset.take() {
+                    let typed = text.trim();
+                    if typed.is_empty() {
+                        log::warn!("[preset] Save to {:?} cancelled: empty name", ctx.destination);
+                    } else {
+                        match ctx.destination {
+                            crate::text_input::SavePresetDestination::Library => {
+                                let lib = crate::user_library::UserLibrary::new();
+                                match lib.save(ctx.kind, typed, &ctx.def) {
+                                    Ok(id) => log::info!(
+                                        "[preset] saved '{}' to the user library",
+                                        id.as_str()
+                                    ),
+                                    Err(e) => log::error!("[preset] Save to Library failed: {e}"),
+                                }
+                            }
+                            crate::text_input::SavePresetDestination::Project => {
+                                let mut def = ctx.def;
+                                if let Some(meta) = def.preset_metadata.as_mut() {
+                                    meta.display_name = typed.to_string();
+                                }
+                                let cmd =
+                                    manifold_editing::commands::preset::SaveToProjectCommand::new(
+                                        ctx.kind, def,
+                                    );
+                                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                                    Box::new(cmd);
+                                boxed.execute(&mut self.local_project);
+                                self.send_content_cmd(ContentCommand::Execute(boxed));
+                            }
+                        }
+                    }
+                }
+                self.needs_rebuild = true;
+            }
         }
     }
 

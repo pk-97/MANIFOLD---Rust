@@ -140,6 +140,108 @@ impl Command for ForkPresetCommand {
     }
 }
 
+/// Save to Project (PRESET_LIBRARY_DESIGN D4, P3): register `source_def` as a
+/// new project-embedded preset (`origin: Saved`), WITHOUT retargeting any
+/// instance. This is a "library door" — publishing the current effective
+/// look as a new named entry the project's picker can hand out to any card —
+/// not a divergence action. That distinguishes it from [`ForkPresetCommand`]
+/// (Make Unique / Import), which both mints an entry AND retargets the
+/// instance that triggered it; Save to Project only does the former.
+#[derive(Debug)]
+pub struct SaveToProjectCommand {
+    kind: PresetKind,
+    source_def: EffectGraphDef,
+    /// The created embedded preset (with its minted id), captured on first
+    /// execute so redo re-inserts the SAME preset deterministically (mirrors
+    /// `ForkPresetCommand::forked`).
+    saved: Option<EmbeddedPreset>,
+}
+
+impl SaveToProjectCommand {
+    /// `source_def`'s `preset_metadata.display_name` (falling back to its
+    /// `id`) is the mint base — the caller (the Save to Project UI action)
+    /// stamps the user-typed name onto `source_def` before constructing this
+    /// command, so the minted id/display_name reflect what the user typed.
+    pub fn new(kind: PresetKind, source_def: EffectGraphDef) -> Self {
+        Self { kind, source_def, saved: None }
+    }
+
+    /// The minted id, available after `execute`.
+    pub fn saved_id(&self) -> Option<&PresetTypeId> {
+        self.saved.as_ref().and_then(|p| p.id())
+    }
+}
+
+impl Command for SaveToProjectCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if self.saved.is_none() {
+            let base = self
+                .source_def
+                .preset_metadata
+                .as_ref()
+                .map(|m| m.display_name.clone())
+                .filter(|s| !s.is_empty())
+                .or_else(|| self.source_def.preset_metadata.as_ref().map(|m| m.id.as_str().to_string()))
+                .unwrap_or_else(|| "Preset".to_string());
+            let new_id = mint_project_preset_name(project, &base);
+            let mut def = self.source_def.clone();
+            if let Some(m) = def.preset_metadata.as_mut() {
+                m.id = new_id.clone();
+                m.display_name = new_id.as_str().to_string();
+            }
+            self.saved = Some(EmbeddedPreset {
+                kind: self.kind,
+                def,
+                origin: EmbeddedOrigin::Saved,
+            });
+        }
+        let sp = self.saved.clone().expect("saved set above");
+        project.upsert_embedded_preset(sp);
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some(id) = self.saved.as_ref().and_then(|p| p.id().cloned()) {
+            project.remove_embedded_preset(&id);
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Save Preset to Project"
+    }
+}
+
+/// Mint a collision-free embedded-preset id from a user-TYPED name for Save
+/// to Project: `base` itself if free, else `"{base} 2"`, `"{base} 3"`, ... —
+/// deliberately NOT `Project::mint_forked_preset_id` (which always appends a
+/// numeric suffix, even to a name with no collision at all — correct for
+/// Make Unique/Import, whose base is always an EXISTING preset's own id, but
+/// wrong here: a freshly typed name with no collision should be saved
+/// verbatim, not surprise-suffixed "2"). Scoped to `project.embedded_presets`
+/// only, matching `mint_forked_preset_id`/`mint_embedded_preset_id`'s
+/// existing collision domain (not the global stock/user catalog — that
+/// wider check is `UserLibrary::save`'s job for the Library door; extending
+/// it here would be a scope change to already-shipped fork minting, not a
+/// P3 concern).
+fn mint_project_preset_name(project: &Project, base: &str) -> PresetTypeId {
+    let taken = |candidate: &str| {
+        project
+            .embedded_presets
+            .iter()
+            .any(|p| p.id().map(|i| i.as_str()) == Some(candidate))
+    };
+    if !taken(base) {
+        return PresetTypeId::from_string(base.to_string());
+    }
+    let mut n = 2;
+    loop {
+        let candidate = format!("{base} {n}");
+        if !taken(&candidate) {
+            return PresetTypeId::from_string(candidate);
+        }
+        n += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,6 +360,88 @@ mod tests {
             inst.param_values,
             vec![ParamSlot::exposed(0.9)],
             "undo must restore the pre-import param_values",
+        );
+    }
+
+    // ── SaveToProjectCommand (PRESET_LIBRARY_DESIGN P3) ─────────────────
+
+    #[test]
+    fn save_to_project_upserts_saved_origin_and_round_trips() {
+        let mut project = Project::default();
+        let mut def = def_with_param("Bloom", "intensity", 0.0, 2.0);
+        // Simulate the UI action stamping the user-typed name onto the
+        // effective def before constructing the command.
+        def.preset_metadata.as_mut().unwrap().display_name = "Sunset Glow".to_string();
+
+        let mut cmd = SaveToProjectCommand::new(PresetKind::Effect, def);
+        cmd.execute(&mut project);
+
+        let id = cmd.saved_id().cloned().expect("saved id");
+        assert_eq!(id.as_str(), "Sunset Glow", "a fresh name with no collision saves verbatim");
+
+        let saved = project.embedded_preset(&id).expect("preset upserted into the project");
+        assert_eq!(saved.kind, PresetKind::Effect);
+        assert_eq!(saved.origin, EmbeddedOrigin::Saved);
+        assert_eq!(saved.def.preset_metadata.as_ref().unwrap().display_name, "Sunset Glow");
+
+        // Round-trip: re-import the (de)serialized def and confirm nothing
+        // is lost (the calibration — the widened `intensity` range — is the
+        // whole point of a saved look).
+        let json = serde_json::to_string(&saved.def).expect("serialize");
+        let back: EffectGraphDef = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.preset_metadata.unwrap().params[0].max, 2.0);
+    }
+
+    #[test]
+    fn save_to_project_does_not_retarget_any_instance() {
+        let mut project = Project::default();
+        let fx = manifold_core::effects::PresetInstance::new(PresetTypeId::BLOOM);
+        let fx_id = fx.id.clone();
+        project.settings.master_effects.push(fx);
+        let target = GraphTarget::Effect(fx_id.clone());
+
+        let def = def_with_param("Bloom", "intensity", 0.0, 2.0);
+        let mut cmd = SaveToProjectCommand::new(PresetKind::Effect, def);
+        cmd.execute(&mut project);
+
+        // The instance that triggered the save keeps its ORIGINAL preset id
+        // — Save to Project publishes a copy, it doesn't divert the card
+        // that made it (unlike Make Unique / Import).
+        assert_eq!(
+            project.instance_preset_id(&target),
+            Some(PresetTypeId::BLOOM),
+            "Save to Project must not retarget the source instance"
+        );
+    }
+
+    #[test]
+    fn save_to_project_disambiguates_name_collision_and_undo_removes_it() {
+        let mut project = Project::default();
+        // Pre-existing embedded preset already named "Look".
+        project.upsert_embedded_preset(EmbeddedPreset {
+            kind: PresetKind::Generator,
+            def: def_with_param("Look", "speed", 0.0, 1.0),
+            origin: EmbeddedOrigin::Saved,
+        });
+
+        let mut def = def_with_param("OilyFluid", "speed", 0.0, 1.0);
+        def.preset_metadata.as_mut().unwrap().display_name = "Look".to_string();
+        let mut cmd = SaveToProjectCommand::new(PresetKind::Generator, def);
+        cmd.execute(&mut project);
+
+        let id = cmd.saved_id().cloned().expect("saved id");
+        assert_eq!(id.as_str(), "Look 2", "a name collision must disambiguate to 'Name 2'");
+        assert!(project.embedded_preset(&PresetTypeId::from_string("Look".to_string())).is_some());
+        assert!(project.embedded_preset(&id).is_some());
+
+        cmd.undo(&mut project);
+        assert!(
+            project.embedded_preset(&id).is_none(),
+            "undo must remove only the newly-saved entry"
+        );
+        assert!(
+            project.embedded_preset(&PresetTypeId::from_string("Look".to_string())).is_some(),
+            "undo must not touch the pre-existing entry it disambiguated against"
         );
     }
 }

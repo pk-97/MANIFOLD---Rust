@@ -9,9 +9,11 @@
 //! (generators carry `None`); the [`ALL_CATEGORIES`] buckets are read only by
 //! the effect picker.
 
+use crate::effect_graph_def::PresetMetadata;
 use crate::preset_def::PresetKind;
 use crate::preset_type_id::PresetTypeId;
-use std::sync::LazyLock;
+use arc_swap::ArcSwap;
+use std::sync::{Arc, LazyLock};
 
 /// Picker metadata for a registered preset type (effect or generator).
 #[derive(Debug, Clone)]
@@ -50,8 +52,31 @@ pub const ALL_CATEGORIES: &[&str] = &[SPATIAL, COLOR, STYLIZE, FILMIC, DIAGNOSTI
 // dual-source pattern as the definition store). Order within a kind matches
 // the former per-kind registry, so position-indexed pickers
 // (`ui_bridge::project::set_gen_type`) stay stable.
+//
+// `ArcSwap` (PRESET_LIBRARY_DESIGN P3 entry-state fix), mirroring
+// `preset_definition_registry::PRESET_DEFINITIONS`: this registry backs the
+// Add-effect / Add-generator browser popup's item list, and used to be a
+// `LazyLock<Vec<_>>` computed once and never refreshed — a preset JSON added
+// to the user dir at runtime never appeared in the browser without an app
+// restart, even though the hot-reload watcher was already rebuilding the
+// (separate) param-definition store. [`rebuild`] is called from
+// `manifold-renderer`'s `apply_reload` right beside
+// `rebuild_preset_definitions`, so both stores swap in the same reload pass.
+static REGISTRY: LazyLock<ArcSwap<Vec<PresetTypeRegistration>>> = LazyLock::new(|| {
+    ArcSwap::from_pointee(build_registry(
+        crate::preset_definition_registry::effect::loaded_preset_metadata(),
+        crate::preset_definition_registry::generator::loaded_preset_metadata(),
+    ))
+});
 
-static REGISTRY: LazyLock<Vec<PresetTypeRegistration>> = LazyLock::new(|| {
+/// Build the flat registry from both kinds' JSON-loaded preset metadata (plus
+/// the compiled-in `inventory` submissions). Shared by the initial `LazyLock`
+/// seed and [`rebuild`] — same shape as
+/// `preset_definition_registry::build_preset_definitions`.
+fn build_registry(
+    effect_json: &[PresetMetadata],
+    generator_json: &[PresetMetadata],
+) -> Vec<PresetTypeRegistration> {
     let mut v: Vec<PresetTypeRegistration> = Vec::new();
 
     // Effects: inventory submissions, then JSON-loaded presets.
@@ -60,7 +85,7 @@ static REGISTRY: LazyLock<Vec<PresetTypeRegistration>> = LazyLock::new(|| {
             v.push(meta.to_type_registration());
         }
     }
-    for preset in crate::preset_definition_registry::effect::loaded_preset_metadata() {
+    for preset in effect_json {
         if !v.iter().any(|r| r.id == preset.id) {
             v.push(PresetTypeRegistration {
                 id: preset.id.clone(),
@@ -78,7 +103,7 @@ static REGISTRY: LazyLock<Vec<PresetTypeRegistration>> = LazyLock::new(|| {
             v.push(meta.to_type_registration());
         }
     }
-    for preset in crate::preset_definition_registry::generator::loaded_preset_metadata() {
+    for preset in generator_json {
         if !v.iter().any(|r| r.id == preset.id) {
             v.push(PresetTypeRegistration {
                 id: preset.id.clone(),
@@ -90,22 +115,38 @@ static REGISTRY: LazyLock<Vec<PresetTypeRegistration>> = LazyLock::new(|| {
         }
     }
     v
-});
+}
+
+/// Hot-reload: rebuild the registry from freshly-reloaded JSON metadata for
+/// both kinds and swap it in with one atomic `ArcSwap::store`. Called by
+/// `manifold-renderer`'s `apply_reload`, right beside
+/// `preset_definition_registry::rebuild_preset_definitions`, so a directory
+/// change (new/edited/removed preset file) reaches the browser popup's item
+/// list on the same reload pass that reaches the param-definition store.
+pub fn rebuild(effect_json: &[PresetMetadata], generator_json: &[PresetMetadata]) {
+    REGISTRY.store(Arc::new(build_registry(effect_json, generator_json)));
+}
 
 fn leak(s: &str) -> &'static str {
     Box::leak(s.to_string().into_boxed_str())
 }
 
 // ── Public API ─────────────────────────────────────────────────────────
+//
+// Accessors return owned clones (a `PresetTypeRegistration` is cheap: a
+// `PresetTypeId` — `Cow<'static, str>` — plus `Copy` fields) rather than
+// `'static` references into the registry, because the registry can now be
+// swapped at any time by [`rebuild`]. Every existing call site only ever
+// iterated the result and read fields off it, so this is source-compatible.
 
 /// All registered preset types (both kinds), effects first.
-pub fn all() -> &'static [PresetTypeRegistration] {
-    &REGISTRY
+pub fn all() -> Vec<PresetTypeRegistration> {
+    REGISTRY.load().to_vec()
 }
 
 /// All registered types of a given kind, in registry order.
-pub fn all_of_kind(kind: PresetKind) -> Vec<&'static PresetTypeRegistration> {
-    REGISTRY.iter().filter(|r| r.kind == kind).collect()
+pub fn all_of_kind(kind: PresetKind) -> Vec<PresetTypeRegistration> {
+    REGISTRY.load().iter().filter(|r| r.kind == kind).cloned().collect()
 }
 
 /// Display name for a preset type. The generator `None` sentinel → "None";
@@ -115,6 +156,7 @@ pub fn display_name(id: &PresetTypeId) -> &str {
         return "None";
     }
     REGISTRY
+        .load()
         .iter()
         .find(|r| r.id == *id)
         .map(|r| r.display_name)
@@ -125,6 +167,7 @@ pub fn display_name(id: &PresetTypeId) -> &str {
 /// former effect registry). Generators have no category.
 pub fn category(id: &PresetTypeId) -> &str {
     REGISTRY
+        .load()
         .iter()
         .find(|r| r.id == *id)
         .and_then(|r| r.category)
@@ -132,15 +175,73 @@ pub fn category(id: &PresetTypeId) -> &str {
 }
 
 /// Types of a given kind available for the browser popup, in registry order.
-pub fn available_of_kind(kind: PresetKind) -> Vec<&'static PresetTypeRegistration> {
+pub fn available_of_kind(kind: PresetKind) -> Vec<PresetTypeRegistration> {
     REGISTRY
+        .load()
         .iter()
         .filter(|r| r.available && r.kind == kind)
+        .cloned()
         .collect()
 }
 
 /// Whether a type id is registered. The generator `None` sentinel counts as
 /// registered (preserves the former generator-registry behavior).
 pub fn is_registered(id: &PresetTypeId) -> bool {
-    id.is_none() || REGISTRY.iter().any(|r| r.id == *id)
+    id.is_none() || REGISTRY.load().iter().any(|r| r.id == *id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::effect_graph_def::PresetMetadata;
+
+    fn probe_meta(id: &str, display: &str) -> PresetMetadata {
+        PresetMetadata {
+            id: PresetTypeId::from_string(id.to_string()),
+            display_name: display.to_string(),
+            category: "Test".to_string(),
+            osc_prefix: String::new(),
+            legacy_discriminant: None,
+            available: true,
+            is_line_based: false,
+            params: Vec::new(),
+            bindings: Vec::new(),
+            skip_mode: Default::default(),
+            param_aliases: Vec::new(),
+            value_aliases: Vec::new(),
+            string_params: Vec::new(),
+            string_bindings: Vec::new(),
+        }
+    }
+
+    /// PRESET_LIBRARY_DESIGN P3 entry-state fix: `rebuild` must make a
+    /// newly-added preset visible immediately (no restart) AND must drop one
+    /// that's no longer present (a full swap, matching a file delete on
+    /// reload) — not just accrete forever. This is the exact defect the
+    /// former `LazyLock<Vec<_>>` had: computed once, never refreshed.
+    #[test]
+    fn rebuild_swaps_in_new_entries_and_drops_stale_ones() {
+        let id = PresetTypeId::from_string("__preset_type_registry_test_probe__".to_string());
+        assert!(!is_registered(&id), "probe id must not pre-exist in the real registry");
+
+        rebuild(&[probe_meta(id.as_str(), "Probe")], &[]);
+        assert!(
+            is_registered(&id),
+            "rebuild must surface a newly-added preset without an app restart"
+        );
+        assert_eq!(display_name(&id), "Probe");
+
+        rebuild(&[], &[]);
+        assert!(
+            !is_registered(&id),
+            "rebuild must be a full swap — a preset no longer present must disappear, not linger"
+        );
+
+        // Restore the real registry: other (later-running) tests / doctests
+        // in this process may read it via the public accessors.
+        rebuild(
+            crate::preset_definition_registry::effect::loaded_preset_metadata(),
+            crate::preset_definition_registry::generator::loaded_preset_metadata(),
+        );
+    }
 }

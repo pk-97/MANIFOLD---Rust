@@ -74,6 +74,31 @@ impl GraphCanvas {
             );
         }
 
+        // Save to Library / Save to Project (PRESET_LIBRARY_DESIGN D4, P3) —
+        // only when there's an active graph to save (mirrors the header
+        // label's own "No active graph" gate).
+        if !self.nodes.is_empty() {
+            let sp_rect = self.save_to_project_button_rect(viewport);
+            ui.draw_rect(sp_rect.x, sp_rect.y, sp_rect.w, sp_rect.h, SAVE_BUTTON_BG);
+            ui.draw_text(
+                sp_rect.x + 8.0,
+                sp_rect.y + (sp_rect.h - 11.0) * 0.5,
+                "Save to Project",
+                11.0,
+                TEXT_HEADER,
+            );
+
+            let sl_rect = self.save_to_library_button_rect(viewport);
+            ui.draw_rect(sl_rect.x, sl_rect.y, sl_rect.w, sl_rect.h, SAVE_BUTTON_BG);
+            ui.draw_text(
+                sl_rect.x + 8.0,
+                sl_rect.y + (sl_rect.h - 11.0) * 0.5,
+                "Save to Library",
+                11.0,
+                TEXT_HEADER,
+            );
+        }
+
         let canvas = Rect {
             x: viewport.x,
             y: viewport.y + HEADER_HEIGHT,
