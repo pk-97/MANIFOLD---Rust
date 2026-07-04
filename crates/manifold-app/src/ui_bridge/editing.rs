@@ -28,27 +28,31 @@ pub(super) fn dispatch_editing(
         // ── Viewport clip interaction ─────────────────────────────
         PanelAction::ClipClicked(clip_id, modifiers) => {
             let clip_id = ClipId::new(clip_id.as_str());
-            // Find the clip's layer index, layer ID, and end beat for UIState
-            let (layer_idx, layer_id, clip_end_beat) = Some(&*project)
+            // Find the clip's layer index and layer ID for UIState. The end
+            // beat this used to carry for the shift-click region extension
+            // (D2's now-deleted `select_region_to_with_project` call below)
+            // is no longer needed — the clip-range gesture looks up its own
+            // anchor/target beats internally.
+            let (layer_idx, layer_id) = Some(&*project)
                 .and_then(|p| {
                     p.timeline.layers.iter().enumerate().find_map(|(i, l)| {
                         l.clips
                             .iter()
                             .find(|c| c.id == clip_id)
-                            .map(|c| (i, l.layer_id.clone(), c.start_beat + c.duration_beats))
+                            .map(|_| (i, l.layer_id.clone()))
                     })
                 })
-                .unwrap_or((0, manifold_core::LayerId::default(), Beats::ZERO));
+                .unwrap_or((0, manifold_core::LayerId::default()));
 
             if modifiers.shift {
-                // Shift+Click: extend region from anchor to clip end.
-                // From Unity InteractionOverlay.OnPointerClick (line 206-207).
-                super::select_region_to_with_project(
-                    clip_end_beat,
-                    layer_idx,
-                    selection,
-                    &*project,
-                );
+                // D2: shift-click on a CLIP is a clip-range selection
+                // (contiguous whole clips on the anchor's layer), not a
+                // region — the Unity `select_region_to_with_project` port
+                // firing here was S1/S3's root
+                // (`docs/TIMELINE_INTERACTION_P1_SPEC.md`). The empty-lane
+                // shift path (`TrackClicked` below) keeps calling
+                // `select_region_to_with_project`.
+                super::select_clip_range_to_with_project(&clip_id, selection, &*project);
             } else if modifiers.command || modifiers.ctrl {
                 // Cmd/Ctrl+Click: toggle clip in/out of selection. D1: no region
                 // is synthesised from the clip set (the old

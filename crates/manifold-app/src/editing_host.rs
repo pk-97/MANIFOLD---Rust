@@ -209,6 +209,29 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         None
     }
 
+    fn clips_on_layer(&self, layer_index: usize) -> Vec<ClipRef> {
+        let Some(layer) = Some(&*self.project).and_then(|p| p.timeline.layers.get(layer_index))
+        else {
+            return Vec::new();
+        };
+        layer
+            .clips
+            .iter()
+            .map(|clip| ClipRef {
+                clip_id: clip.id.clone(),
+                start_beat: clip.start_beat,
+                duration_beats: clip.duration_beats,
+                end_beat: clip.start_beat + clip.duration_beats,
+                layer_index,
+                layer_id: layer.layer_id.clone(),
+                in_point: clip.in_point,
+                is_generator: layer.layer_type == manifold_core::types::LayerType::Generator,
+                is_locked: clip.is_locked,
+                is_looping: clip.is_looping,
+            })
+            .collect()
+    }
+
     // ── Coordinate conversion ───────────────────────────────────
 
     fn screen_position_to_beat(&self, _pos: Vec2) -> Beats {

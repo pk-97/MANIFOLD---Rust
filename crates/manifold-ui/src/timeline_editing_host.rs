@@ -87,6 +87,13 @@ pub trait TimelineEditingHost {
     /// Find a clip by ID. Unity: FindClipById(string).
     fn find_clip_by_id(&self, clip_id: &str) -> Option<ClipRef>;
 
+    /// All clips on a given layer, for whole-clip range selection (D2's
+    /// shift-click-on-clip gesture, `docs/TIMELINE_INTERACTION_P1_SPEC.md`).
+    /// Empty if the layer index is out of range. Order is not guaranteed —
+    /// callers that need contiguous-range semantics filter/sort by
+    /// `start_beat` themselves.
+    fn clips_on_layer(&self, layer_index: usize) -> Vec<ClipRef>;
+
     // ── Coordinate conversion ───────────────────────────────────────
     // Note: most coordinate conversion is handled by the viewport panel
     // (pixel_to_beat, layer_at_y). These screen-position methods are

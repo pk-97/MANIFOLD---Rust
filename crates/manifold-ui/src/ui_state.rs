@@ -320,6 +320,47 @@ impl UIState {
         matches!(&self.selection, TimelineSelection::Clips { ids, .. } if ids.contains(clip_id))
     }
 
+    /// The current clip-selection anchor (`None` unless the selection is
+    /// `Clips`). D2's shift-click-on-clip gesture reads this to know which
+    /// layer/position to extend the range from — the anchor never moves for
+    /// that gesture (only `select_clip`/`toggle_clip_selection` pick a new one).
+    pub fn clip_selection_anchor(&self) -> Option<ClipId> {
+        match &self.selection {
+            TimelineSelection::Clips { anchor, .. } => anchor.clone(),
+            _ => None,
+        }
+    }
+
+    /// D2's shift-click clip-range gesture: install an explicit whole-clip id
+    /// set as the selection while the anchor stays put. Ableton's anchor is
+    /// the fixed end a further shift-click keeps extending from — it never
+    /// jumps to the just-clicked clip (unlike `select_clip`/
+    /// `toggle_clip_selection`, which each pick a new anchor). `primary`/
+    /// `primary_layer_id` become the footer/inspector display target (the
+    /// clip just clicked), independent of the anchor. Callers compute `ids`
+    /// (the contiguous whole-clip set on the anchor's layer) — this method
+    /// only installs the result, matching `select_clips`' division of labor.
+    pub fn set_clip_range(
+        &mut self,
+        ids: HashSet<ClipId>,
+        anchor: ClipId,
+        primary: ClipId,
+        primary_layer_id: LayerId,
+    ) {
+        self.selected_layer_ids.clear();
+        self.primary_selected_layer_id = None;
+        self.selected_marker_ids.clear();
+        self.insert_cursor_beat = None;
+        self.insert_cursor_layer_id = None;
+        self.selection = TimelineSelection::Clips {
+            ids,
+            anchor: Some(anchor),
+        };
+        self.primary_selected_clip_id = Some(primary);
+        self.selected_layer_id_for_clip = Some(primary_layer_id);
+        self.selection_version += 1;
+    }
+
     /// Check if a clip is hovered.
     pub fn is_hovered(&self, clip_id: &str) -> bool {
         self.hovered_clip_id.as_deref() == Some(clip_id)

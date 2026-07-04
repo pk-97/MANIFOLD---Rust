@@ -76,43 +76,28 @@ fn click_clip(data: &mut SceneData, rest: &str) -> String {
     format!("click_clip -> '{clip_id}' on '{layer_id}' (selection cleared, this clip selected)")
 }
 
-/// P1.0 evidence-gathering verb: `shift_click_clip:<clip_id>:<layer_id>`
-/// reproduces TODAY's shift-click-on-clip path exactly —
-/// `ui_bridge/editing.rs:43-51`'s `PanelAction::ClipClicked` shift arm, which
-/// calls `select_region_to_with_project` with the clicked clip's END beat and
-/// layer index. This is the S1/S3 root the design calls out (D2): shift-click
-/// activates a REGION, it does not extend the clip-id set. Driving the real
-/// `ui_bridge` helper (not re-deriving the math) so the "before" PNG shows
-/// exactly what today's code produces.
+/// `shift_click_clip:<clip_id>:<layer_id>` drives the clip-click shift path —
+/// P1.3b's D2 fix (`docs/TIMELINE_INTERACTION_P1_SPEC.md`):
+/// `crate::ui_bridge::select_clip_range_to_with_project`, the same function
+/// `ui_bridge/editing.rs`'s `PanelAction::ClipClicked` shift arm now calls.
+/// Before this phase this verb drove `select_region_to_with_project`
+/// (a REGION) — S1/S3's root; it now drives the clip-RANGE selection D2
+/// mandates, so the after-PNG shows the fixed chrome (per-clip highlight
+/// across the range, no region band).
 fn shift_click_clip(data: &mut SceneData, rest: &str) -> String {
-    // `layer_id` isn't used — the layer index is looked up from the clip
-    // itself (matching editing.rs:32-41's own lookup), kept in the spec only
-    // for symmetry with `click_clip`/`cmd_click_clip`.
+    // `layer_id` isn't used — the clip-range gesture looks up the anchor's
+    // and target's own layer/position internally; kept in the spec only for
+    // symmetry with `click_clip`/`cmd_click_clip`.
     let Some((clip_id, _layer_id)) = rest.split_once(':') else {
         return format!("shift_click_clip: want clip_id:layer_id, got '{rest}'");
     };
     let cid = ClipId::new(clip_id);
-    let Some((layer_idx, clip_end_beat)) =
-        data.project.timeline.layers.iter().enumerate().find_map(|(i, l)| {
-            l.clips
-                .iter()
-                .find(|c| c.id == cid)
-                .map(|c| (i, c.start_beat + c.duration_beats))
-        })
-    else {
-        return format!("shift_click_clip: no clip '{clip_id}' found in project");
-    };
-    crate::ui_bridge::select_region_to_with_project(
-        clip_end_beat,
-        layer_idx,
-        &mut data.selection,
-        &data.project,
-    );
+    crate::ui_bridge::select_clip_range_to_with_project(&cid, &mut data.selection, &data.project);
     format!(
-        "shift_click_clip -> extended region to '{clip_id}' end={clip_end_beat:?} layer_idx={layer_idx} \
-         (region.is_active={}, selected_clip_ids still ={:?})",
-        data.selection.has_region(),
+        "shift_click_clip -> range extended to '{clip_id}' \
+         (selected_clip_ids={:?}, has_region={})",
         data.selection.get_selected_clip_ids(),
+        data.selection.has_region(),
     )
 }
 

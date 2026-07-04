@@ -548,6 +548,65 @@ pub(crate) fn select_region_to_with_project(
     }
 }
 
+/// D2 (`docs/TIMELINE_INTERACTION_P1_SPEC.md`): shift-click on a CLIP is a
+/// contiguous whole-clip range selection, NOT a time-range region — the
+/// `select_region_to_with_project` call this arm used to make was S1/S3's
+/// root. This is the project-based twin of `interaction_overlay::
+/// select_clip_range_to` (manifold-ui), which does the identical thing
+/// against a `&dyn TimelineEditingHost` for the live gesture path; both must
+/// move together (`select_region_to_with_project` stays for the empty-lane
+/// shift path, unaffected). Extends from the current `Clips` selection's
+/// anchor to `target_clip_id`, selecting every WHOLE clip on the anchor's
+/// layer whose start beat falls between the anchor and the target,
+/// inclusive — a gap between clips simply isn't a clip, so nothing
+/// synthesizes a region there. No live anchor falls back to a plain
+/// single-clip select.
+pub(crate) fn select_clip_range_to_with_project(
+    target_clip_id: &manifold_core::ClipId,
+    selection: &mut SelectionState,
+    project: &Project,
+) {
+    let find = |id: &manifold_core::ClipId| -> Option<(usize, LayerId, manifold_core::Beats)> {
+        project.timeline.layers.iter().enumerate().find_map(|(li, l)| {
+            l.clips
+                .iter()
+                .find(|c| c.id == *id)
+                .map(|c| (li, l.layer_id.clone(), c.start_beat))
+        })
+    };
+
+    let Some((_, target_layer_id, target_start)) = find(target_clip_id) else {
+        return; // clip vanished under us
+    };
+
+    let anchor_id = selection.clip_selection_anchor();
+    let anchor_lookup = anchor_id.as_ref().and_then(find);
+
+    let Some((anchor_layer_idx, _, anchor_start)) = anchor_lookup else {
+        // No live anchor to extend from — behaves like a plain click on the target.
+        selection.select_clip(target_clip_id.clone(), target_layer_id);
+        return;
+    };
+
+    let min_beat = anchor_start.min(target_start);
+    let max_beat = anchor_start.max(target_start);
+
+    let ids: std::collections::HashSet<manifold_core::ClipId> = project.timeline.layers
+        [anchor_layer_idx]
+        .clips
+        .iter()
+        .filter(|c| c.start_beat >= min_beat && c.start_beat <= max_beat)
+        .map(|c| c.id.clone())
+        .collect();
+
+    selection.set_clip_range(
+        ids,
+        anchor_id.expect("anchor_lookup Some implies anchor_id Some"),
+        target_clip_id.clone(),
+        target_layer_id,
+    );
+}
+
 /// Handle undo (called from keyboard shortcut). Sends to content thread.
 pub fn undo(content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>) {
     crate::content_command::ContentCommand::send(
@@ -791,6 +850,182 @@ pub(crate) fn led_exit_path_label(
                 "After All FX".into()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod d2_d3_tests {
+    //! `docs/TIMELINE_INTERACTION_P1_SPEC.md` D2/D3 regression tests — the
+    //! project-based twin of the clip-range gesture, and the Cmd+D mode
+    //! dispatch it feeds. Mirrors the `ui_snapshot` harness's `selectionclips`
+    //! fixture shape (4 clips on one layer) without depending on the
+    //! feature-gated `ui_snapshot` module, so these run under a plain
+    //! `cargo test -p manifold-app --lib`.
+    use super::*;
+    use manifold_core::clip::TimelineClip;
+    use manifold_core::layer::Layer;
+    use manifold_core::types::LayerType;
+    use manifold_core::{Beats, ClipId, Seconds};
+    use manifold_editing::service::EditingService;
+    use manifold_ui::UIState;
+
+    fn clip(id: &str, start: f64, dur: f64) -> manifold_core::clip::TimelineClip {
+        let mut c = TimelineClip::new_video(id.into(), Beats(start), Beats(dur), Seconds::ZERO);
+        c.id = ClipId::new(id);
+        c
+    }
+
+    /// `clip_a`[0,8) `clip_b`[8,16) — contiguous — then a GAP (16..24, no
+    /// clip there) — then `clip_c`[24,32) `clip_d`[32,40). A second layer
+    /// carries `other`[0,40), spanning the same beats, to prove the range is
+    /// scoped to the anchor's layer only.
+    fn gap_fixture_project() -> Project {
+        let mut main = Layer::new("MAIN".into(), LayerType::Video, 0);
+        main.layer_id = LayerId::new("main");
+        main.clips.push(clip("clip_a", 0.0, 8.0));
+        main.clips.push(clip("clip_b", 8.0, 8.0));
+        main.clips.push(clip("clip_c", 24.0, 8.0));
+        main.clips.push(clip("clip_d", 32.0, 8.0));
+
+        let mut other = Layer::new("OTHER".into(), LayerType::Video, 1);
+        other.layer_id = LayerId::new("other");
+        other.clips.push(clip("other", 0.0, 40.0));
+
+        let mut project = Project::default();
+        project.timeline.layers = vec![main, other];
+        project
+    }
+
+    #[test]
+    fn shift_click_clip_range_across_a_gap_selects_only_whole_clips() {
+        let project = gap_fixture_project();
+        let mut selection = UIState::new();
+
+        // Anchor: plain click on clip_a.
+        selection.select_clip(ClipId::new("clip_a"), LayerId::new("main"));
+        // Shift-click extends the range to clip_c — spanning the empty
+        // 16..24 gap and clip_b, but NOT clip_d (past the target) or `other`
+        // (a different layer, even though its span covers the same beats).
+        select_clip_range_to_with_project(&ClipId::new("clip_c"), &mut selection, &project);
+
+        let ids: std::collections::HashSet<ClipId> =
+            selection.get_selected_clip_ids().into_iter().collect();
+        assert_eq!(
+            ids,
+            std::collections::HashSet::from([
+                ClipId::new("clip_a"),
+                ClipId::new("clip_b"),
+                ClipId::new("clip_c"),
+            ]),
+            "range selects every whole clip between anchor and target, gap included, nothing beyond"
+        );
+        // The mode leak this phase kills: no synthesized region, ever.
+        assert!(
+            selection.current_region().is_none(),
+            "a clip-range shift-click must produce a Clips selection, never a TimeRange region"
+        );
+    }
+
+    #[test]
+    fn shift_click_clip_range_no_live_anchor_falls_back_to_plain_click() {
+        // Fresh selection (no anchor yet) — shift-clicking a clip behaves
+        // like a plain click on it, per the D2 fallback.
+        let project = gap_fixture_project();
+        let mut selection = UIState::new();
+        select_clip_range_to_with_project(&ClipId::new("clip_b"), &mut selection, &project);
+
+        let ids: Vec<ClipId> = selection.get_selected_clip_ids();
+        assert_eq!(ids, vec![ClipId::new("clip_b")]);
+        assert!(selection.current_region().is_none());
+    }
+
+    /// Mirrors `input_host.rs`'s `duplicate_clips` dispatch exactly (region =
+    /// `selection.current_region().cloned().unwrap_or_default()`, mode =
+    /// `region.is_active`) — the D3 typed dispatch this phase's fix is
+    /// downstream of (D1 already made `current_region()` return `None` for a
+    /// `Clips` selection; D2's fix is what keeps shift-click FROM producing a
+    /// stray `TimeRange` in the first place).
+    fn duplicate_selected_clips(
+        project: &mut Project,
+        selection: &UIState,
+    ) -> (Vec<Box<dyn manifold_editing::command::Command>>, bool) {
+        let clip_ids = selection.get_selected_clip_ids();
+        let region = selection.current_region().cloned().unwrap_or_default();
+        let used_region_mode = region.is_active;
+        let region_core = crate::ui_translate::selection_region_to_core(&region);
+        let spb = 60.0 / project.settings.bpm.0.max(1.0);
+        let commands = EditingService::duplicate_clips(project, &clip_ids, &region_core, spb);
+        (commands, used_region_mode)
+    }
+
+    #[test]
+    fn cmd_d_on_four_contiguous_clips_lands_flush_via_the_clips_path() {
+        let mut project = gap_fixture_project();
+        let mut selection = UIState::new();
+        // Select all 4 clips as a plain `Clips` set (as D2's fixed shift-click
+        // range now produces) — NOT via a region.
+        selection.select_clips(vec![
+            ClipId::new("clip_a"),
+            ClipId::new("clip_b"),
+            ClipId::new("clip_c"),
+            ClipId::new("clip_d"),
+        ]);
+        assert!(
+            selection.current_region().is_none(),
+            "precondition: a Clips selection must not carry a region"
+        );
+
+        let (mut commands, used_region_mode) = duplicate_selected_clips(&mut project, &selection);
+        assert!(
+            !used_region_mode,
+            "Clips selection must dispatch the individual/clip-span path, not region mode"
+        );
+        assert_eq!(commands.len(), 4);
+
+        for c in commands.iter_mut() {
+            c.execute(&mut project);
+        }
+
+        // Old span: clip_a start=0 .. clip_d end=40 (with the 16..24 gap
+        // inside it). New copies must land flush at the span's END (40) —
+        // not offset by some other span/region duration.
+        let main = project
+            .timeline
+            .layers
+            .iter()
+            .find(|l| l.layer_id == LayerId::new("main"))
+            .unwrap();
+        let new_min_start = main
+            .clips
+            .iter()
+            .filter(|c| {
+                !["clip_a", "clip_b", "clip_c", "clip_d"].contains(&c.id.as_str())
+            })
+            .map(|c| c.start_beat)
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+            .expect("4 new copies were created");
+        assert_eq!(
+            new_min_start,
+            Beats(40.0),
+            "copies land flush at the old selection's span end, not gapped"
+        );
+    }
+
+    #[test]
+    fn cmd_d_on_a_rubber_band_time_range_preserves_region_mode() {
+        let mut project = gap_fixture_project();
+        let mut selection = UIState::new();
+        let ui_layers = crate::ui_translate::layers_to_ui(&project.timeline.layers);
+        // A rubber-band region covering clip_a..clip_b on the main layer only.
+        selection.set_region(Beats(0.0), Beats(16.0), 0, 0, &ui_layers);
+        assert!(selection.current_region().is_some());
+
+        let (commands, used_region_mode) = duplicate_selected_clips(&mut project, &selection);
+        assert!(
+            used_region_mode,
+            "a TimeRange selection must still dispatch today's region-duplicate mode"
+        );
+        assert!(!commands.is_empty());
     }
 }
 
