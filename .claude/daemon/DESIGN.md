@@ -82,6 +82,18 @@ versioned. History on the daemon is non-negotiable — the sleep pass edits it.
   existing per-turn machinery stays.
 - Payloads are injected verbatim inside `<daemon>` tags. Fixed wording — the
   model habituates to a recognizable anchor instead of parsing novel text.
+- **Known delivery gap (2026-07-04, observed live on the daemon's first true
+  positive):** a flag raised on a turn's FINAL assistant text has no delivery
+  channel until the next human prompt — PostToolUse never fires again that
+  turn. This is verify-claim's most common firing position (done-claims are
+  turn-final), so the highest-value anchor is delivered one turn late
+  precisely where it matters most. Candidate fix for sleep pass 1: a Stop-hook
+  valve that blocks the stop ONCE with the whisper as reason (model gets one
+  beat to self-correct before yielding). Must resolve first: the classifier-
+  latency race (verdict lands ~5-10 s after the final text; Stop fires
+  immediately; waiting violates fail-open), the invariant question (is a
+  one-beat turn extension "blocking the session"?), and a re-block guard
+  (respect stop_hook_active). Do not build before sleep pass 1 rules on it.
 - **Subagent rule (2026-07-04, verified by live probe):** PostToolUse also fires
   for tool calls made *inside* subagents, carrying the MAIN session's id and
   transcript_path plus an `agent_id` field. The valve must not deliver when
