@@ -210,6 +210,84 @@ impl Command for SaveToProjectCommand {
     }
 }
 
+/// Revert a diverged instance back to tracking its library entry
+/// (PRESET_LIBRARY_DESIGN D3/§4, P4): clears the per-instance graph override
+/// (`inst.graph = None`), undoable. The card/editor's "MODIFIED" badge is
+/// exactly `graph.is_some()` (D3/§6.6 — no hashing), so this is the single
+/// action that turns the badge back off.
+///
+/// Fails loud: if the instance's library id no longer resolves in the
+/// catalog, `execute` is a no-op (the graph is left untouched) rather than
+/// clearing it — reverting to nothing (a card with no params, D9's
+/// "not-representable state") is worse than staying diverged. The
+/// resolution check itself happens OUTSIDE this crate: `manifold-editing`
+/// cannot depend on `manifold-renderer` (the JSON catalog's home) without
+/// creating a dependency cycle — `manifold-playback` already depends on
+/// `manifold-editing`, and `manifold-renderer` depends on
+/// `manifold-playback`, so `manifold-editing -> manifold-renderer` would
+/// close the loop. The caller (the UI/app layer, which has renderer access)
+/// resolves "does this id still exist" once, at the moment the user clicks
+/// Revert, and bakes the answer into `resolves_in_catalog` — exactly the
+/// same pre-resolve-at-the-call-site pattern [`ForkPresetCommand`] already
+/// uses for `source_def`, so the same fact replays identically on both the
+/// UI-local project copy and the content thread's authoritative one.
+#[derive(Debug)]
+pub struct RevertToLibraryCommand {
+    target: GraphTarget,
+    /// Whether `target`'s library id resolved in the catalog at the moment
+    /// this command was constructed. `false` makes `execute` a no-op + log.
+    resolves_in_catalog: bool,
+    /// Captured on execute (`inst.graph.take()`), restored on undo. Doubles
+    /// as the "was there anything to revert" state via `Option::take` —
+    /// redo re-executes against the value undo just restored, so no
+    /// separate first-execute flag is needed.
+    old_graph: Option<EffectGraphDef>,
+}
+
+impl RevertToLibraryCommand {
+    pub fn new(target: GraphTarget, resolves_in_catalog: bool) -> Self {
+        Self { target, resolves_in_catalog, old_graph: None }
+    }
+}
+
+impl Command for RevertToLibraryCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if !self.resolves_in_catalog {
+            eprintln!(
+                "[manifold-editing] RevertToLibrary: {} no longer resolves in the catalog; refusing to revert (staying diverged is safer than reverting to nothing)",
+                self.target.label()
+            );
+            return;
+        }
+        let taken = project.with_preset_graph_mut(&self.target, |inst| {
+            let prev = inst.graph_def_mut().take();
+            inst.bump_graph_structure_version();
+            prev
+        });
+        if let Some(prev) = taken {
+            self.old_graph = prev;
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        // `execute` was a no-op fail-loud refusal — the graph was never
+        // touched, so undo must be a no-op too (an unconditional restore
+        // here would WRITE `None` over an untouched `Some(diverged_def)`).
+        if !self.resolves_in_catalog {
+            return;
+        }
+        let restore = self.old_graph.take();
+        project.with_preset_graph_mut(&self.target, |inst| {
+            *inst.graph_def_mut() = restore;
+            inst.bump_graph_structure_version();
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Revert to Library"
+    }
+}
+
 /// Mint a collision-free embedded-preset id from a user-TYPED name for Save
 /// to Project: `base` itself if free, else `"{base} 2"`, `"{base} 3"`, ... —
 /// deliberately NOT `Project::mint_forked_preset_id` (which always appends a
@@ -442,6 +520,65 @@ mod tests {
         assert!(
             project.embedded_preset(&PresetTypeId::from_string("Look".to_string())).is_some(),
             "undo must not touch the pre-existing entry it disambiguated against"
+        );
+    }
+
+    // ── RevertToLibraryCommand (PRESET_LIBRARY_DESIGN P4) ───────────────
+
+    #[test]
+    fn revert_to_library_clears_graph_and_undo_restores_it() {
+        let mut project = Project::default();
+        let mut fx = manifold_core::effects::PresetInstance::new(PresetTypeId::BLOOM);
+        let diverged = def_with_param("Bloom", "intensity", 0.0, 5.0);
+        fx.graph = Some(diverged.clone());
+        let fx_id = fx.id.clone();
+        project.settings.master_effects.push(fx);
+        let target = GraphTarget::Effect(fx_id);
+
+        let mut cmd = RevertToLibraryCommand::new(target.clone(), true);
+        cmd.execute(&mut project);
+        assert!(
+            project.preset_instance(&target).unwrap().graph.is_none(),
+            "execute must clear the per-instance graph override (tracking again)"
+        );
+
+        cmd.undo(&mut project);
+        assert_eq!(
+            project.preset_instance(&target).unwrap().graph.as_ref(),
+            Some(&diverged),
+            "undo must restore the exact diverged graph"
+        );
+    }
+
+    #[test]
+    fn revert_to_library_is_a_no_op_when_the_id_no_longer_resolves() {
+        let mut project = Project::default();
+        let mut fx = manifold_core::effects::PresetInstance::new(PresetTypeId::BLOOM);
+        let diverged = def_with_param("Bloom", "intensity", 0.0, 5.0);
+        fx.graph = Some(diverged.clone());
+        let fx_id = fx.id.clone();
+        project.settings.master_effects.push(fx);
+        let target = GraphTarget::Effect(fx_id);
+
+        // `resolves_in_catalog: false` simulates a deleted/renamed library
+        // file — execute must refuse rather than orphan the card (reverting
+        // to nothing is worse than staying diverged).
+        let mut cmd = RevertToLibraryCommand::new(target.clone(), false);
+        cmd.execute(&mut project);
+        assert_eq!(
+            project.preset_instance(&target).unwrap().graph.as_ref(),
+            Some(&diverged),
+            "a refused execute must leave the diverged graph untouched"
+        );
+
+        // undo after a refused execute must also be a no-op — nothing was
+        // taken, so nothing may be written back (would otherwise clear a
+        // graph `execute` never touched).
+        cmd.undo(&mut project);
+        assert_eq!(
+            project.preset_instance(&target).unwrap().graph.as_ref(),
+            Some(&diverged),
+            "undo of a refused execute must not clear the untouched graph"
         );
     }
 }

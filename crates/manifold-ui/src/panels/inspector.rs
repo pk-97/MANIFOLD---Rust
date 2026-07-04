@@ -667,6 +667,25 @@ impl InspectorCompositePanel {
             .is_some_and(|gp| gp.param_has_ableton_mapping(param_id))
     }
 
+    /// Whether the effect at `(tab, fx_idx)` has diverged from its library
+    /// entry (PRESET_LIBRARY_DESIGN D3/P4) — same tab-resolution as
+    /// [`Self::is_effect_ableton_mapped`], read by the card context menu to
+    /// gate Revert/Push to Library.
+    pub fn effect_has_graph_mod(&self, tab: InspectorTab, fx_idx: usize) -> bool {
+        let cards = match tab {
+            InspectorTab::Master => &self.master_effects,
+            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => &self.layer_effects,
+        };
+        cards.get(fx_idx).is_some_and(|card| card.has_graph_mod())
+    }
+
+    /// Whether the layer's generator has diverged from its library entry
+    /// (twin of [`Self::effect_has_graph_mod`] for the single generator
+    /// card).
+    pub fn gen_has_graph_mod(&self) -> bool {
+        self.gen_params.as_ref().is_some_and(|gp| gp.has_graph_mod())
+    }
+
     pub fn master_effect_mut(&mut self, idx: usize) -> Option<&mut ParamCardPanel> {
         self.master_effects.get_mut(idx)
     }

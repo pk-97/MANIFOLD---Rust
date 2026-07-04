@@ -99,6 +99,21 @@ impl GraphCanvas {
             );
         }
 
+        // Push to Library (PRESET_LIBRARY_DESIGN D3, P4) — only when
+        // diverged (mirrors "Reset to Default"'s own gate; pushing an
+        // undiverged card would overwrite the library file with itself).
+        if self.has_graph_mod {
+            let pl_rect = self.push_to_library_button_rect(viewport);
+            ui.draw_rect(pl_rect.x, pl_rect.y, pl_rect.w, pl_rect.h, SAVE_BUTTON_BG);
+            ui.draw_text(
+                pl_rect.x + 8.0,
+                pl_rect.y + (pl_rect.h - 11.0) * 0.5,
+                "Push to Library",
+                11.0,
+                TEXT_HEADER,
+            );
+        }
+
         let canvas = Rect {
             x: viewport.x,
             y: viewport.y + HEADER_HEIGHT,

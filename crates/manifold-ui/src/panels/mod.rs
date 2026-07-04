@@ -635,6 +635,19 @@ pub enum PanelAction {
     /// triggered it (unlike Make Unique / Import). Opens the same
     /// name-prompt text-input session as Save to Library.
     SaveToProject(GraphParamTarget),
+    /// Revert to Library (PRESET_LIBRARY_DESIGN D3, P4): clear the targeted
+    /// preset's per-instance graph override, going back to tracking its
+    /// library entry (undoable). Shown in the card menu only when the card
+    /// is diverged (`graph.is_some()`) — reverting an already-tracking
+    /// instance would be a no-op.
+    RevertToLibrary(GraphParamTarget),
+    /// Push to Library (D3, P4): overwrite the targeted preset's tracked
+    /// user-library file with its current (diverged) definition, so every
+    /// OTHER instance still tracking that id picks it up via the existing
+    /// hot-reload watcher. A factory/stock id has no file to overwrite —
+    /// the dispatch falls back to Save to Library (as new) instead. Shown
+    /// only when diverged, same gate as `RevertToLibrary`.
+    PushToLibrary(GraphParamTarget),
 
     // Macros panel collapse
     MacrosCollapseToggle,

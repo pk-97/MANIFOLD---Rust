@@ -1975,6 +1975,33 @@ impl UIRoot {
                     DropdownItem::new("Make Unique")
                         .with_action(PanelAction::MakePresetUnique(*gpt)),
                 );
+                // Divergence actions (PRESET_LIBRARY_DESIGN D3, P4): only
+                // meaningful once the instance has diverged from its library
+                // entry (`graph.is_some()`) — reuse the retained card's own
+                // `has_graph_mod` bit (the exact source the MOD badge reads),
+                // same tab-resolution `is_effect_ableton_mapped` above uses,
+                // so there's one source of truth for "is this card diverged"
+                // rather than a second computation.
+                let has_graph_mod = match gpt {
+                    GraphParamTarget::Effect(fx_idx) => {
+                        self.inspector.effect_has_graph_mod(self.inspector.last_effect_tab(), *fx_idx)
+                    }
+                    GraphParamTarget::Generator => self.inspector.gen_has_graph_mod(),
+                };
+                if has_graph_mod {
+                    items.push(
+                        DropdownItem::new("Revert to Library")
+                            .with_action(PanelAction::RevertToLibrary(*gpt)),
+                    );
+                    // Wording states the blast radius WITHOUT computing it
+                    // (PRESET_LIBRARY_DESIGN §4/§6: counting how many
+                    // instances track an id is the forbidden machinery this
+                    // design deletes) — "instances", not a computed N.
+                    items.push(
+                        DropdownItem::new("Push to Library — updates instances tracking this preset")
+                            .with_action(PanelAction::PushToLibrary(*gpt)),
+                    );
+                }
                 // Library doors (PRESET_LIBRARY_DESIGN D4) — explicit "publish a
                 // copy" actions, distinct from Make Unique's divergence/retarget.
                 items.push(

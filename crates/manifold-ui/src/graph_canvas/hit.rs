@@ -290,6 +290,20 @@ impl GraphCanvas {
         }
     }
 
+    /// Bounding rect of the "Push to Library" header button
+    /// (PRESET_LIBRARY_DESIGN D3, P4) — immediately left of "Save to
+    /// Library". Only ever shown while diverged (`has_graph_mod`), same
+    /// gate as "Reset to Default".
+    pub(crate) fn push_to_library_button_rect(&self, viewport: Rect) -> Rect {
+        let sl = self.save_to_library_button_rect(viewport);
+        Rect {
+            x: sl.x - SAVE_BUTTON_GAP - SAVE_BUTTON_W,
+            y: sl.y,
+            w: SAVE_BUTTON_W,
+            h: SAVE_BUTTON_H,
+        }
+    }
+
     /// While dragging a wire from a port of colour `from_color`, classify the
     /// input port currently under the cursor: `Some(true)` compatible drop,
     /// `Some(false)` incompatible, `None` when the cursor isn't over a foreign

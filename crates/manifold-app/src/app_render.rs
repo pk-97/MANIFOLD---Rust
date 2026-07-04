@@ -2166,6 +2166,45 @@ impl Application {
                     }
                     continue;
                 }
+                manifold_ui::GraphEditCommand::PushGraphToLibrary { anchor } => {
+                    // Push to Library (PRESET_LIBRARY_DESIGN D3, P4): only
+                    // reachable while diverged (the header pill is gated on
+                    // `has_graph_mod`), so the source is the instance's OWN
+                    // diverged graph — no catalog-default fallback (there
+                    // would be nothing meaningful to push).
+                    if let Some(target) = self.watched_graph_target.clone()
+                        && let Some(inst) = self.local_project.preset_instance(&target)
+                        && let Some(mut def) = inst.graph.clone()
+                    {
+                        let preset_id = inst.effect_type().clone();
+                        inst.snapshot_values_into_def(&mut def);
+                        let kind = target.preset_kind();
+                        let lib = crate::user_library::UserLibrary::new();
+                        if lib.is_user_entry(kind, &preset_id) {
+                            if let Err(e) = lib.push(kind, &preset_id, &def) {
+                                log::error!("[preset] push to library failed: {e}");
+                            }
+                        } else {
+                            // Factory/stock id — no file to overwrite; fall
+                            // back to the same Save to Library (as new)
+                            // prompt the header's own Save pill opens.
+                            self.text_input.begin(
+                                crate::text_input::TextInputField::SavePresetName,
+                                "",
+                                crate::text_input::AnchorRect::new(
+                                    anchor.0, anchor.1, anchor.2, anchor.3,
+                                ),
+                                11.0,
+                            );
+                            self.text_input.save_preset = Some(crate::text_input::SavePresetCtx {
+                                kind,
+                                def,
+                                destination: crate::text_input::SavePresetDestination::Library,
+                            });
+                        }
+                    }
+                    continue;
+                }
                 manifold_ui::GraphEditCommand::DisconnectPorts { to_node, to_port } => {
                     if let (Some(eid), Some(default)) = (
                         self.watched_graph_target.as_ref(),

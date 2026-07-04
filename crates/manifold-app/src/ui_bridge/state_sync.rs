@@ -2122,7 +2122,14 @@ fn preset_to_config(
             manifold_core::EffectId::new(""),
             true,
             false,
-            false,
+            // PRESET_LIBRARY_DESIGN D3/P4: a generator's per-card divergence
+            // is the SAME `graph.is_some()` bit as an effect's (graph-home
+            // unification put both on `PresetInstance`) — this was
+            // hardcoded `false` (a pre-P4 gap that permanently suppressed
+            // the MOD badge on generator cards regardless of actual
+            // divergence), fixed to read the real state like the Effect arm
+            // above.
+            inst.graph.is_some(),
         ),
     };
 

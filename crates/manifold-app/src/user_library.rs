@@ -177,6 +177,53 @@ impl UserLibrary {
         Ok(id)
     }
 
+    /// Whether `id` names an entry with a file under THIS user root — the
+    /// user-vs-factory test (`PRESET_LIBRARY_DESIGN` D3/P4): a factory/stock
+    /// preset never lives under `root` (§4's structural guarantee, same one
+    /// [`Self::delete`]/[`Self::rename`] rely on), so this is exactly "can
+    /// [`Self::push`] overwrite this id, or does the caller need to fall
+    /// back to Save-to-Library-as-new instead."
+    pub fn is_user_entry(&self, kind: PresetKind, id: &PresetTypeId) -> bool {
+        self.path_for(kind, id.as_str()).is_file()
+    }
+
+    /// Push to Library (PRESET_LIBRARY_DESIGN §4: "Push to Library =
+    /// `UserLibrary::save` targeting the existing entry's file"): overwrite
+    /// an EXISTING user-library entry's file in place with `def` — unlike
+    /// [`Self::save`], this NEVER mints a new id/name; the id and filename
+    /// stay exactly as they are, so every OTHER instance still tracking
+    /// this id picks up the change via the existing hot-reload watcher.
+    ///
+    /// User entries only: returns `NotFound` if `id` has no file under
+    /// `root` (a factory/stock id, or a typo) — the caller (the card menu /
+    /// graph editor header) is expected to check [`Self::is_user_entry`]
+    /// first and route a factory id to Save-to-Library-as-new instead of
+    /// calling this; `NotFound` here is the same structural guarantee as
+    /// `delete`'s (no path reaches a factory file), not a UI decision this
+    /// method makes.
+    pub fn push(
+        &self,
+        kind: PresetKind,
+        id: &PresetTypeId,
+        def: &EffectGraphDef,
+    ) -> Result<(), LibError> {
+        let path = self.path_for(kind, id.as_str());
+        if !path.is_file() {
+            return Err(LibError::NotFound);
+        }
+        // Stamp the id defensively so filename and `presetMetadata.id` can
+        // never drift apart (matches `save`'s own stamp); display_name is
+        // left as `def` carries it — Push overwrites the definition, not
+        // the name (that's `rename`'s job).
+        let mut def = def.clone();
+        if let Some(meta) = def.preset_metadata.as_mut() {
+            meta.id = id.clone();
+        }
+        manifold_io::preset_file::export_preset(&def, &path)?;
+        log::info!("[UserLibrary] pushed {kind:?} preset '{}' to {}", id.as_str(), path.display());
+        Ok(())
+    }
+
     /// Rename an existing library entry's `display_name` in place. The id
     /// and filename stay — only `preset_metadata.display_name` changes, so
     /// every project that already references this id by name keeps
@@ -261,15 +308,14 @@ mod tests {
     use manifold_core::effect_graph_def::PresetMetadata;
 
     fn scratch_root(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+        std::env::temp_dir().join(format!(
             "manifold-user-library-{tag}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or(0),
-        ));
-        dir
+        ))
     }
 
     fn def_named(display_name: &str) -> EffectGraphDef {
@@ -412,6 +458,46 @@ mod tests {
             Err(LibError::NotFound)
         ));
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ── push (PRESET_LIBRARY_DESIGN P4) ─────────────────────────────────
+
+    #[test]
+    fn push_overwrites_an_existing_user_entry_in_place() {
+        let root = scratch_root("push-overwrite");
+        let lib = UserLibrary { root: root.clone() };
+        let id = lib.save(PresetKind::Effect, "Glow", &def_named("Glow")).unwrap();
+        assert!(lib.is_user_entry(PresetKind::Effect, &id), "just-saved entry must be a user entry");
+
+        // A "diverged" def: same id, different name embedded on the def
+        // itself (standing in for a real topology edit) — push must land
+        // this content at the SAME path/id, not mint a new one.
+        let mut edited = def_named("Glow (edited)");
+        edited.preset_metadata.as_mut().unwrap().id = id.clone();
+        lib.push(PresetKind::Effect, &id, &edited).expect("push succeeds for a user entry");
+
+        let path = root.join("effects").join("Glow.json");
+        assert!(path.is_file(), "push must not rename the file");
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        let parsed: EffectGraphDef = serde_json::from_str(&on_disk).unwrap();
+        let meta = parsed.preset_metadata.unwrap();
+        assert_eq!(meta.id.as_str(), "Glow", "id must stay stable across a push");
+        assert_eq!(meta.display_name, "Glow (edited)", "push must write the new definition");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn push_refuses_an_id_with_no_user_file() {
+        let root = scratch_root("push-not-found");
+        let lib = UserLibrary { root: root.clone() };
+        let stock_like_id = PresetTypeId::from_string("Bloom".to_string());
+        assert!(!lib.is_user_entry(PresetKind::Effect, &stock_like_id), "no file under this root");
+        assert!(matches!(
+            lib.push(PresetKind::Effect, &stock_like_id, &def_named("Bloom")),
+            Err(LibError::NotFound)
+        ), "a factory/never-saved id must refuse rather than write outside root");
         let _ = std::fs::remove_dir_all(&root);
     }
 

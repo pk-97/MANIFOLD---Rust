@@ -653,6 +653,18 @@ impl GraphCanvas {
                 return;
             }
         }
+        // Push to Library header pill (PRESET_LIBRARY_DESIGN D3, P4) — same
+        // chrome-priority, only present while diverged (mirrors the
+        // render-side gate).
+        if self.has_graph_mod {
+            let pl_rect = self.push_to_library_button_rect(viewport);
+            if sx >= pl_rect.x && sx <= pl_rect.x + pl_rect.w && sy >= pl_rect.y && sy <= pl_rect.y + pl_rect.h {
+                self.pending_actions.push(GraphEditCommand::PushGraphToLibrary {
+                    anchor: (pl_rect.x, pl_rect.y, pl_rect.w, pl_rect.h),
+                });
+                return;
+            }
+        }
         // No collapse toggle — nodes stay expanded (Blender-style). A header
         // click falls through to select / drag below.
         if let Some(hit) = self.port_under(viewport, sx, sy) {

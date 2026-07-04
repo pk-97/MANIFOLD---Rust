@@ -348,6 +348,8 @@ pub fn dispatch(
         | PanelAction::MakePresetUnique(..)
         | PanelAction::SaveToLibrary(..)
         | PanelAction::SaveToProject(..)
+        | PanelAction::RevertToLibrary(..)
+        | PanelAction::PushToLibrary(..)
         | PanelAction::ExportPreset(..)
         | PanelAction::ImportPreset(..)
         | PanelAction::MacrosCollapseToggle

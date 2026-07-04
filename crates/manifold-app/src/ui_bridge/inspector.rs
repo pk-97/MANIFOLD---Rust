@@ -2447,6 +2447,69 @@ pub(super) fn dispatch_inspector(
             }
             result
         }
+        PanelAction::RevertToLibrary(gpt) => {
+            // PRESET_LIBRARY_DESIGN D3/P4: clear the per-instance graph
+            // override, undoable — but ONLY if the tracked library id still
+            // resolves in the catalog. The resolution check happens HERE
+            // (app/renderer-aware) rather than inside the command itself:
+            // `manifold-editing` cannot depend on `manifold-renderer`
+            // (`manifold-playback` already depends on `manifold-editing`,
+            // and `manifold-renderer` depends on `manifold-playback` — the
+            // reverse dependency would cycle), so the fact is resolved once
+            // here and baked into the command, mirroring how
+            // `ForkPresetCommand` is handed an already-resolved `source_def`
+            // rather than looking the catalog up inside `Command::execute`.
+            use manifold_editing::commands::preset::RevertToLibraryCommand;
+            if let Some(target) = resolve_graph_target(
+                gpt,
+                editor_target,
+                effective_tab,
+                active_layer,
+                selection,
+                project,
+            ) && let Some(preset_id) = project.instance_preset_id(&target)
+            {
+                let resolves = manifold_renderer::node_graph::loaded_preset_view_by_id(&preset_id)
+                    .is_some();
+                let cmd = RevertToLibraryCommand::new(target, resolves);
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::PushToLibrary(gpt) => {
+            // Push to Library (D3, P4): overwrite the targeted preset's
+            // tracked user-library file with its current (diverged)
+            // definition in place — no name prompt (id/filename never
+            // change). A factory/stock id has no user file to overwrite;
+            // fall back to the same Save-to-Library-as-new prompt the
+            // `SaveToLibrary` action opens, via `begin_save_preset` (this
+            // function has no `TextInputState` access — see the comment on
+            // the `SaveToLibrary`/`SaveToProject` arm above).
+            let mut result = DispatchResult::handled();
+            if let Some(target) = resolve_graph_target(
+                gpt,
+                editor_target,
+                effective_tab,
+                active_layer,
+                selection,
+                project,
+            ) && let Some((def, preset_id)) = preset_source_def(&target, project)
+            {
+                let kind = target.preset_kind();
+                let lib = crate::user_library::UserLibrary::new();
+                if lib.is_user_entry(kind, &preset_id) {
+                    if let Err(e) = lib.push(kind, &preset_id, &def) {
+                        log::error!("[preset] push to library failed: {e}");
+                    }
+                } else {
+                    result.begin_save_preset =
+                        Some((kind, def, crate::text_input::SavePresetDestination::Library));
+                }
+            }
+            result
+        }
 
         // ── Generator params ───────────────────────────────────────
         PanelAction::GenTypeClicked(_) => DispatchResult::handled(),

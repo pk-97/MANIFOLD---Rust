@@ -1005,6 +1005,14 @@ impl ParamCardPanel {
     pub fn state_mut(&mut self) -> &mut ParamCardState {
         &mut self.state
     }
+    /// Whether this card's targeted instance has diverged from its library
+    /// entry (`PresetInstance.graph.is_some()` — the same bit that drives
+    /// the MOD badge). Read by the card context menu
+    /// (PRESET_LIBRARY_DESIGN P4) to gate Revert/Push to Library — mirrors
+    /// [`Self::param_has_ableton_mapping`]'s read-only accessor style.
+    pub fn has_graph_mod(&self) -> bool {
+        self.state.has_graph_mod
+    }
     pub fn set_layer_id(&mut self, id: Option<LayerId>) {
         self.layer_id = id;
     }
