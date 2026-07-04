@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Daemon: a subconscious for coding models</title>
+<style>
+  :root {
+    --bg: #F4F4F9; --ink: #1C1B26; --muted: #5C5A6E;
+    --line: #DBDAE8; --accent: #6E32E8; --drift: #D62B55; --ok: #0E9A6C;
+    --observe: #0A7FA0; --codebg: #ECEBF4; --corridor: #E4DCF9;
+    --display: "Avenir Next", Avenir, "Helvetica Neue", Helvetica, sans-serif;
+    --body: Charter, "Iowan Old Style", Georgia, serif;
+    --mono: "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0E0E16; --ink: #ECEAF6; --muted: #9B98B0;
+      --line: #2A2940; --accent: #A87CFF; --drift: #FF5D7A; --ok: #45D6A0;
+      --observe: #4FC8E8; --codebg: #1E1D2E; --corridor: #221E3A;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #F4F4F9; --ink: #1C1B26; --muted: #5C5A6E;
+    --line: #DBDAE8; --accent: #6E32E8; --drift: #D62B55; --ok: #0E9A6C;
+    --observe: #0A7FA0; --codebg: #ECEBF4; --corridor: #E4DCF9;
+  }
+  :root[data-theme="dark"] {
+    --bg: #0E0E16; --ink: #ECEAF6; --muted: #9B98B0;
+    --line: #2A2940; --accent: #A87CFF; --drift: #FF5D7A; --ok: #45D6A0;
+    --observe: #4FC8E8; --codebg: #1E1D2E; --corridor: #221E3A;
+  }
+  html { background: var(--bg); }
+  body {
+    margin: 0; color: var(--ink); background: var(--bg);
+    font-family: var(--body); font-size: 17px; line-height: 1.68;
+  }
+  /* one column for everything: prose, figures, tables all share this width */
+  .wrap { max-width: 620px; margin: 0 auto; padding: 0 22px 96px; }
+  p { margin: 14px 0; text-align: justify; hyphens: auto; -webkit-hyphens: auto; }
+
+  header.masthead { padding: 64px 0 36px; border-bottom: 1px solid var(--line); margin-bottom: 44px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 18px;
+  }
+  h1 {
+    font-family: var(--display); font-weight: 600; font-size: clamp(34px, 5.4vw, 48px);
+    line-height: 1.08; margin: 0 0 14px; letter-spacing: -0.015em; text-wrap: balance;
+  }
+  .subtitle { font-size: 19px; color: var(--muted); margin: 0 0 24px; text-wrap: balance; text-align: left; }
+  .byline { font-family: var(--mono); font-size: 13px; color: var(--muted); }
+  .byline b { color: var(--ink); font-weight: 600; }
+
+  .abstract {
+    border-left: 3px solid var(--accent); padding: 4px 0 4px 20px;
+    margin: 38px 0 8px; font-size: 17px; text-align: justify; hyphens: auto; -webkit-hyphens: auto;
+  }
+  .abstract .lbl { font-family: var(--display); font-weight: 600; font-size: 13px;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 8px; text-align: left; }
+
+  h2 {
+    font-family: var(--display); font-weight: 600; font-size: 25px; letter-spacing: -0.01em;
+    margin: 66px 0 6px; line-height: 1.22; text-wrap: balance;
+  }
+  h2 .no { color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 10px; }
+  h3 { font-family: var(--display); font-weight: 600; font-size: 17.5px; margin: 34px 0 4px; }
+  code {
+    font-family: var(--mono); font-size: .82em; background: var(--codebg);
+    padding: 1px 5px; border-radius: 4px;
+  }
+
+  figure { margin: 38px 0; }
+  figure svg { display: block; width: 100%; height: auto; }
+  figcaption {
+    font-family: var(--mono); font-size: 12.5px; color: var(--muted);
+    margin-top: 12px; line-height: 1.55;
+  }
+  figcaption b { color: var(--ink); font-weight: 600; }
+  .panel { border: 1px solid var(--line); border-radius: 10px; padding: 18px; overflow-x: auto; }
+
+  .window-card {
+    font-family: var(--mono); font-size: 12.3px; line-height: 1.7;
+    border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px;
+    overflow-x: auto; white-space: pre; background: var(--codebg);
+  }
+  .window-card .k { color: var(--accent); font-weight: 700; }
+  .window-card .hot { color: var(--drift); font-weight: 700; }
+  .window-card .okc { color: var(--ok); }
+
+  .whisper {
+    font-family: var(--mono); font-size: 12.8px; line-height: 1.7;
+    border: 1px dashed var(--accent); border-radius: 10px; padding: 15px 18px;
+    margin: 26px 0; overflow-x: auto;
+  }
+  .whisper .tag { color: var(--accent); }
+
+  .costs { margin: 26px 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .costs .row { padding: 14px 18px; border-bottom: 1px solid var(--line); }
+  .costs .row:last-child { border-bottom: none; }
+  .costs .head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 3px; }
+  .cost-what { font-family: var(--display); font-weight: 600; font-size: 15.5px; }
+  .cost-who { font-family: var(--mono); font-size: 12px; color: var(--accent); white-space: nowrap; }
+  .cost-note { font-size: 15px; color: var(--muted); text-align: left; margin: 0; }
+
+  table.moves { width: 100%; border-collapse: collapse; font-size: 14px; }
+  table.moves td, table.moves th { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  table.moves th { font-family: var(--display); font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  table.moves td:first-child { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+  .fam { font-family: var(--display); font-weight: 600; font-size: 12.5px; letter-spacing: .06em; text-transform: uppercase; }
+  .fam.c { color: var(--observe); } .fam.a { color: var(--drift); } .fam.e { color: var(--accent); }
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; padding: 4px 2px; }
+
+  .bars { display: flex; flex-direction: column; gap: 12px; margin: 8px 0; }
+  .bar-row { display: grid; grid-template-columns: 176px 1fr 56px; gap: 12px; align-items: center; font-family: var(--mono); font-size: 12px; }
+  .bar-track { background: var(--codebg); border-radius: 4px; height: 18px; }
+  .bar-fill { height: 100%; border-radius: 4px; background: var(--observe); }
+  .bar-fill.target { background: transparent; border: 1.5px dashed var(--muted); box-sizing: border-box; }
+  .bar-row .val { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .footer { margin-top: 76px; padding-top: 22px; border-top: 1px solid var(--line);
+    font-family: var(--mono); font-size: 12.5px; color: var(--muted); line-height: 1.8; }
+
+  @media (max-width: 560px) {
+    body { font-size: 16px; }
+    .bar-row { grid-template-columns: 110px 1fr 50px; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .nudge-pulse { animation: pulse 2.6s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
+  }
+</style>
+</head>
+<body>
+<div class="wrap" lang="en">
+<header class="masthead">
+  <div class="eyebrow">An informal paper &middot; July 2026</div>
+  <h1>The Daemon</h1>
+  <p class="subtitle">A subconscious for coding models: a cheap observer that follows the session and delivers a stronger model's advice at the moment it applies.</p>
+  <div class="byline"><b>Claude Fable 5</b> with <b>Peter Kiemann</b> &middot; first deployment live July 2026</div>
+</header>
+
+<div class="abstract">
+  <span class="lbl">Abstract</span>
+  Large models exercise judgment that small models lack, and that judgment refuses to transfer by writing it down. A rules file gets skimmed, and advice given at the start of a session is forgotten by the time it matters. The daemon takes a different route. A small, cheap observer follows the live session, decides what kind of work is happening and whether it has started to drift, and injects one of a small library of fixed notes at the moment one applies. The notes were written once, by the largest model available. Detection runs continuously on the smallest. The same sentence that gets ignored as a standing instruction can land as a thought when it arrives on time.
+</div>
+
+<section>
+<h2><span class="no">1</span>The problem: judgment doesn't transfer by prose</h2>
+<p>Any project that runs coding agents for long enough accumulates a pile of corrections. The human catches the model claiming success without testing anything, or patching a symptom instead of its cause, or reading the same file for the fourth time, and writes the lesson down so the next session can be told. The project this system was built in had collected about eighty of them.</p>
+<p>A pile like that works as a fence. A model that reads it avoids re-offending in the documented ways, roughly, for a while. It does not work as a spine. The model reads "verify before claiming" at the start of the session and agrees with it. Four hours later it ships an untested change inside a message that says <i>done, verified, pushed</i>. It never changed its mind about the rule. The rule was simply thousands of events behind it by the time the claim happened.</p>
+<p>So the failure is one of timing, not content. The corrections are correct; they arrive all at once, at the start, when none of them apply. Competence feels different from the inside: you are about to claim something works, and it occurs to you that you haven't run it. That moment of something occurring to you is the thing worth engineering.</p>
+</section>
+
+<section>
+<h2><span class="no">2</span>Narrative layer and subconscious</h2>
+<p>The frame the design comes from: the language model is the narrative layer, the voice in the head. In a skilled person, most competence doesn't live in that layer. It lives below deliberation, in processes that run continuously without cognition and hand their products up into awareness as hunches, alarms, the nagging sense that something hasn't been checked. A mind that is only narration has no such source. Everything it does must be reasoned into existence from whatever happens to be in view, every time.</p>
+<p>The daemon supplies that lower layer externally. It watches the session's raw experience, which for an agent is the transcript, processes it continuously and cheaply, and pushes small products up into the narrative layer at the right moments. The narrative layer stays whatever model is running that day. The layer underneath doesn't care.</p>
+<p>The name is the ordinary one, with its whole lineage intact. Background processes have been called daemons since MIT's Project MAC in the 1960s, after Maxwell's demon, the thought-experiment agent that watches a system from the side and sorts what passes without adding energy. Behind both is the older Greek word, which Socrates used for an inner voice with one strange property: it only ever warned him off a mistake, and never once told him what to do. This system inherits all three senses and adds nothing mystical. It is a background process that watches from the side, sorts cheap observations from expensive interventions, and speaks only to warn.</p>
+</section>
+
+<figure>
+  <svg viewBox="0 0 620 258" role="img" aria-label="Two layers: the narrative layer above, the daemon below, whispers rising and the transcript descending">
+    <defs>
+      <marker id="arrA" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+      <marker id="arrM" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker>
+    </defs>
+    <rect x="10" y="16" width="600" height="72" rx="10" fill="none" stroke="var(--line)" stroke-width="1.5"/>
+    <text x="32" y="47" font-family="var(--display)" font-size="16" font-weight="600" fill="var(--ink)">Narrative layer: the voice in the head</text>
+    <text x="32" y="71" font-family="var(--mono)" font-size="11.5" fill="var(--muted)">whichever model runs the session &middot; deliberates, writes, talks</text>
+    <rect x="10" y="170" width="600" height="72" rx="10" fill="var(--corridor)" stroke="var(--accent)" stroke-width="1.5"/>
+    <text x="32" y="201" font-family="var(--display)" font-size="16" font-weight="600" fill="var(--ink)">The daemon: runs without deliberation</text>
+    <text x="32" y="225" font-family="var(--mono)" font-size="11.5" fill="var(--muted)">observer + fixed note library &middot; watches, classifies, whispers</text>
+    <line x1="452" y1="88" x2="452" y2="170" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#arrM)"/>
+    <text x="440" y="133" font-family="var(--mono)" font-size="11.5" fill="var(--muted)" text-anchor="end">experience (the transcript)</text>
+    <line x1="150" y1="170" x2="150" y2="88" stroke="var(--accent)" stroke-width="2" marker-end="url(#arrA)" class="nudge-pulse"/>
+    <text x="164" y="133" font-family="var(--mono)" font-size="11.5" fill="var(--accent)">whispers: what occurs to you</text>
+  </svg>
+  <figcaption><b>Fig. 1. The division of the mind.</b> The transcript flows down as raw experience. The daemon processes it continuously and sends small products back up, where they arrive as if they had simply occurred to the narrative layer.</figcaption>
+</figure>
+
+<section>
+<h2><span class="no">3</span>Text space is a steering wheel for vector space</h2>
+<p>Mechanically, a session is a point moving through the model's latent space. Every token in the context nudges where that point sits, and where it sits decides what the model is disposed to do next. This is not a metaphor. Injected text becomes vectors that shift the computation. Text is the interface we can write in; the effect lands in vector space.</p>
+<p>Take that seriously and two things follow. First, drift is a position, not a mood. A long session doesn't get tired. Its context fills up with its own hedged claims, repeated file reads, and stale plans, and each of those tokens pulls the point toward regions where the next output is more of the same. Confidence without grounding feeds itself: the model reads its own "this should work" and inherits the confidence without the grounding.</p>
+<p>Second, many small corrections beat one big instruction. A rules file at position zero is a single shove at the start of a long trajectory. A short sentence injected at the moment of drift is a correction applied where the point actually is. Same text budget, very different steering.</p>
+</section>
+
+<figure>
+  <svg viewBox="0 0 620 320" role="img" aria-label="A session trajectory drifting out of the productive corridor twice and being nudged back each time">
+    <defs>
+      <marker id="arrN" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+    </defs>
+    <!-- corridor band -->
+    <path d="M10,140 C160,120 340,160 610,132 L610,206 C340,236 160,196 10,216 Z" fill="var(--corridor)"/>
+    <text x="24" y="204" font-family="var(--mono)" font-size="11.5" fill="var(--muted)">the productive corridor</text>
+    <!-- trajectory -->
+    <circle cx="22" cy="176" r="4.5" fill="var(--ink)"/>
+    <text x="36" y="163" font-family="var(--mono)" font-size="11.5" fill="var(--muted)">session start</text>
+    <path d="M22,176 C90,170 150,162 205,160" fill="none" stroke="var(--ink)" stroke-width="2.5"/>
+    <path d="M205,160 C245,158 275,110 305,72" fill="none" stroke="var(--drift)" stroke-width="2.5" stroke-dasharray="6 5"/>
+    <circle cx="305" cy="72" r="4.5" fill="var(--drift)"/>
+    <text x="305" y="34" font-family="var(--mono)" font-size="11.5" fill="var(--drift)" text-anchor="middle">“done, verified, pushed”,</text>
+    <text x="305" y="50" font-family="var(--mono)" font-size="11.5" fill="var(--drift)" text-anchor="middle">nothing was run</text>
+    <line x1="305" y1="72" x2="322" y2="138" stroke="var(--accent)" stroke-width="2.5" marker-end="url(#arrN)" class="nudge-pulse"/>
+    <text x="338" y="106" font-family="var(--mono)" font-size="11.5" fill="var(--accent)">verify-claim fires</text>
+    <path d="M324,146 C370,172 410,180 448,182" fill="none" stroke="var(--ink)" stroke-width="2.5"/>
+    <path d="M448,182 C478,184 490,240 505,268" fill="none" stroke="var(--drift)" stroke-width="2.5" stroke-dasharray="6 5"/>
+    <circle cx="505" cy="268" r="4.5" fill="var(--drift)"/>
+    <text x="480" y="300" font-family="var(--mono)" font-size="11.5" fill="var(--drift)" text-anchor="middle">third re-read of the same file</text>
+    <line x1="505" y1="268" x2="520" y2="204" stroke="var(--accent)" stroke-width="2.5" marker-end="url(#arrN)" class="nudge-pulse"/>
+    <text x="534" y="248" font-family="var(--mono)" font-size="11.5" fill="var(--accent)">circling</text>
+    <text x="534" y="264" font-family="var(--mono)" font-size="11.5" fill="var(--accent)">fires</text>
+    <path d="M522,198 C555,182 585,170 610,162" fill="none" stroke="var(--ink)" stroke-width="2.5"/>
+  </svg>
+  <figcaption><b>Fig. 2. Steering as perturbation.</b> The session is a point moving through latent space. Long sessions wander out of the corridor. Each whisper is a small, well-timed push back toward it, where a single large instruction at the start would have faded long before it was needed.</figcaption>
+</figure>
+
+<section>
+<h2><span class="no">4</span>Architecture: split the work by what it costs</h2>
+<p>The design idea in one line: move the work out of the layer where model size matters, into a layer where it doesn't. The job divides into three parts with very different price tags, and each part goes to the cheapest thing that can do it.</p>
+<div class="costs">
+  <div class="row"><div class="head"><span class="cost-what">Write the advice</span><span class="cost-who">once &middot; largest model</span></div>
+    <p class="cost-note">The judgment part: what to say, and how to say it so it lands. Stored as fixed notes.</p></div>
+  <div class="row"><div class="head"><span class="cost-what">Spot the moment</span><span class="cost-who">continuously &middot; smallest model</span></div>
+    <p class="cost-note">"A success claim with no check in sight" is pattern matching, pennies per look.</p></div>
+  <div class="row"><div class="head"><span class="cost-what">Deliver the note</span><span class="cost-who">every tool call &middot; no model</span></div>
+    <p class="cost-note">The harness's hooks fire anyway; delivery is reading one small file.</p></div>
+</div>
+<p>One rule holds it together: the small model detects, it never writes. Nothing the classifier produces is ever shown to the working model. It answers a multiple-choice question (which of these signatures, if any, matches this window?) and the delivery hook turns the chosen id into the stored text. A weak model with a good rubric, choosing among a strong model's sentences.</p>
+</section>
+
+<figure>
+  <svg viewBox="0 0 620 592" role="img" aria-label="Vertical pipeline in five stages: transcript, observer builds a window, classifier picks a move or stays silent, mailbox holds one verdict, a hook injects the note; a dashed return shows the note re-entering the transcript">
+    <defs>
+      <marker id="arrF" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker>
+      <marker id="arrF2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+    </defs>
+    <!-- 1 -->
+    <rect x="44" y="10" width="566" height="80" rx="10" fill="none" stroke="var(--line)" stroke-width="1.5"/>
+    <text x="66" y="42" font-family="var(--display)" font-size="16" font-weight="600" fill="var(--ink)">1 &middot; The session transcript</text>
+    <text x="66" y="68" font-family="var(--mono)" font-size="12" fill="var(--muted)">an append-only log of everything the session does</text>
+    <line x1="327" y1="90" x2="327" y2="126" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#arrF)"/>
+    <!-- 2 -->
+    <rect x="44" y="130" width="566" height="98" rx="10" fill="none" stroke="var(--observe)" stroke-width="1.5"/>
+    <text x="66" y="162" font-family="var(--display)" font-size="16" font-weight="600" fill="var(--observe)">2 &middot; The observer tails it and builds a window</text>
+    <text x="66" y="188" font-family="var(--mono)" font-size="12" fill="var(--muted)">TASK + LEDGER + RECENT &middot; one process per session</text>
+    <text x="66" y="208" font-family="var(--mono)" font-size="12" fill="var(--muted)">a window closes every 8 tool events, 90 s, or on any text</text>
+    <line x1="327" y1="228" x2="327" y2="264" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#arrF)"/>
+    <!-- 3 -->
+    <rect x="44" y="268" width="566" height="98" rx="10" fill="none" stroke="var(--observe)" stroke-width="1.5"/>
+    <text x="66" y="300" font-family="var(--display)" font-size="16" font-weight="600" fill="var(--observe)">3 &middot; The classifier picks a move, or stays silent</text>
+    <text x="66" y="326" font-family="var(--mono)" font-size="12" fill="var(--muted)">small model + rubric &middot; selects an id, never composes</text>
+    <text x="66" y="346" font-family="var(--mono)" font-size="12" fill="var(--muted)">most windows are clear; silence is the default verdict</text>
+    <line x1="327" y1="366" x2="327" y2="402" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#arrF)"/>
+    <!-- 4 -->
+    <rect x="44" y="406" width="566" height="80" rx="10" fill="none" stroke="var(--line)" stroke-width="1.5"/>
+    <text x="66" y="438" font-family="var(--display)" font-size="16" font-weight="600" fill="var(--ink)">4 &middot; The mailbox holds one verdict</text>
+    <text x="66" y="464" font-family="var(--mono)" font-size="12" fill="var(--muted)">one small file &middot; one undelivered whisper at a time</text>
+    <line x1="327" y1="486" x2="327" y2="522" stroke="var(--accent)" stroke-width="2" marker-end="url(#arrF2)" class="nudge-pulse"/>
+    <!-- 5 -->
+    <rect x="44" y="526" width="566" height="80" rx="10" fill="var(--corridor)" stroke="var(--accent)" stroke-width="1.5"/>
+    <text x="66" y="558" font-family="var(--display)" font-size="16" font-weight="600" fill="var(--accent)">5 &middot; A hook injects the note into context</text>
+    <text x="66" y="584" font-family="var(--mono)" font-size="12" fill="var(--muted)">read on every tool call, no model &middot; every injection logged</text>
+    <!-- return loop down the left margin -->
+    <path d="M44,566 C12,566 12,50 40,50" fill="none" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="4 5" marker-end="url(#arrF)"/>
+  </svg>
+  <figcaption><b>Fig. 3. The pipeline.</b> Five stages, top to bottom; the dashed return on the left is the injected note re-entering the transcript, where the observer will see its effects. When anything breaks (observer dead, verdict stale, file torn mid-write) every stage degrades to silence. The daemon can slow nothing and block nothing.</figcaption>
+</figure>
+
+<section>
+<h3>What the observer actually looks at</h3>
+<p>The observer never sends the classifier the whole session; it would drown, and the cost would grow with session length. Instead it keeps a rolling window with three parts. The current task: the last real user instruction, kept verbatim, because drift can only be measured as divergence from a goal. A ledger: one compressed line per tool event since the last look, just the tool, its target, and whether it succeeded. And the last two assistant texts in full, because the model's own prose is where the tells live. Each closed window is one small classifier call.</p>
+</section>
+
+<figure>
+  <div class="window-card"><span class="k">TASK:</span> "add cache invalidation to the asset importer,
+       phase 1 of the plan"
+
+<span class="k">LEDGER:</span> `Read importer.rs <span class="okc">ok</span> · Edit importer.rs <span class="okc">ok</span>
+ · cargo test importer <span class="okc">ok</span> · Edit cache.rs <span class="okc">ok</span>
+ · <span class="hot">Agent[worker@inherit:opus]</span> phase 2 while I finish <span class="okc">ok</span>`
+
+<span class="k">RECENT:</span>
+The invalidation path should now behave. Marking phase 1
+done and moving on to the watcher.
+---
+Launching the phase-2 worker now while I finish the keys.</div>
+  <figcaption><b>Fig. 4. Anatomy of a window</b> (illustrative). This is everything the classifier ever sees. The ledger renders agent launches with their resolved model, so <code>@inherit:opus</code> means the orchestrator quietly spawned a worker at its own expensive tier, which is what the agent-model-discipline anchor matches. And "should now behave" inside a done claim is verify-claim territory.</figcaption>
+</figure>
+
+<section>
+<h3>Why the notes never change wording</h3>
+<p>Each note is injected verbatim, every time, inside a <code>&lt;daemon&gt;</code> tag. Fixed wording means the working model gets familiar with each anchor and recognizes it as a known signal instead of parsing new instructions each time, the way a known voice cuts through a noisy room. It also keeps the steering auditable: every sentence that can ever be injected sits in one versioned file. The note for a success claim with no verification behind it reads:</p>
+</section>
+
+<div class="whisper"><span class="tag">&lt;daemon move="anchor/verify-claim"&gt;</span>
+That claim hasn't been checked yet. Run the verification in
+the medium where failure would actually show (the test, the
+run, the render) before stating it as done. If you can't
+verify it here, say exactly that instead.
+<span class="tag">&lt;/daemon&gt;</span></div>
+
+<section>
+<h2><span class="no">5</span>The move library</h2>
+<p>Nineteen entries in the first deployment, in three families. Coaching moves are proactive: they fire on phases of work (a hypothesis just formed, a fix is being chosen, the search has gone unfocused) and suggest the reasoning move a stronger model would make unprompted. Drift anchors are reactive: they fire on the tells of degradation and pull the session back. The third family belongs to the daemon alone: if the same anchor has fired twice and the drift is still there, the third fire is replaced by a checkpoint order, telling the model to stop, write down the goal, the state, and what has been ruled out, and continue from that summary alone. By that point the context itself is working against the model, and the summary is a partial reset.</p>
+<p>Every move has a signature, which is what the classifier matches and is written in observable transcript markers only, no mind-reading; a payload, the injected text; and a cooldown, so nothing can nag.</p>
+</section>
+
+<figure>
+  <div class="tablewrap">
+  <table class="moves">
+    <tr><th>move</th><th>fires when</th></tr>
+    <tr><td colspan="2" class="fam c">coaching: reasoning moves, phase-matched</td></tr>
+    <tr><td>model-first</td><td>fixes are being attempted before anyone has said how the mechanism works</td></tr>
+    <tr><td>invariant-frame</td><td>a bug hunt has gone unfocused: broad greps, no named expectation</td></tr>
+    <tr><td>differential</td><td>"this used to work": compare against the nearest working case instead of analyzing the broken one alone</td></tr>
+    <tr><td>predict-before-look</td><td>reads with no stated expectations, producing summaries but ruling nothing out</td></tr>
+    <tr><td>discriminate</td><td>several hypotheses are live but the chosen next check doesn't tell them apart</td></tr>
+    <tr><td>attack-the-story</td><td>a confident explanation goes straight to a fix, with no step that tests the explanation</td></tr>
+    <tr><td>enumerate-levels</td><td>a fix mirrors the symptom's location, with no thought about what level it belongs at</td></tr>
+    <tr><td>altitude</td><td>repeated attempts of the same kind at the same level, none producing new information</td></tr>
+    <tr><td>ruled-out-ledger</td><td>a long investigation with no record of eliminated causes, and old ground being re-walked</td></tr>
+    <tr><td>define-done</td><td>substantial work with no stated completion criterion anywhere in view</td></tr>
+    <tr><td colspan="2" class="fam a">anchors: drift tells</td></tr>
+    <tr><td>verify-claim</td><td>success claimed with no verifying action between the change and the claim</td></tr>
+    <tr><td>circling</td><td>the same file read or re-edited three or more times: motion without information</td></tr>
+    <tr><td>hedge-creep</td><td>"should", "probably", "seems" stacking up and being built on rather than checked</td></tr>
+    <tr><td>scope-drift</td><td>edits landing in files with no stated connection to the task</td></tr>
+    <tr><td>thrash</td><td>three or more failed attempts, each a quick mutation of the last, none seeking new information</td></tr>
+    <tr><td>skim</td><td>a conclusion drawn right after a huge output, citing nothing specific from it</td></tr>
+    <tr><td>destructive-isolation</td><td>about to discard uncommitted work to "isolate" a bug, destroying the evidence</td></tr>
+    <tr><td>agent-model-discipline</td><td>workers launched at the orchestrator's own expensive tier, explicitly or by silent inheritance</td></tr>
+    <tr><td colspan="2" class="fam e">escalation: daemon-selected, never the classifier</td></tr>
+    <tr><td>checkpoint</td><td>the same anchor fired twice and the drift is still here: stop, distill state, restart from the summary</td></tr>
+  </table>
+  </div>
+  <figcaption><b>Table 1. The catalog</b> of the first deployment, July 2026. The classifier only ever picks an id from this list or stays silent.</figcaption>
+</figure>
+
+<section>
+<h2><span class="no">6</span>Training it</h2>
+<p>Nothing here touches weights. The learning lives in artifacts (the rubric, the signatures, the notes), which is what makes it inspectable, versionable, and portable. It is still honestly a training loop, with a dataset, an objective, and an evaluation harness.</p>
+<p>The labeled dataset comes free, if the project has been saving its corrections. Each saved correction documents a real failure in a real session, and the session transcripts are still on disk. Cross-referencing the two gives labeled incidents: in this session, at this point, this drift happened, and the human had to step in. Sessions that needed no correction become the negative examples.</p>
+<p>A replay harness runs the exact live windowing and classifier over those historical transcripts, offline, and scores three things. Recall: did the right move fire before the point where the human intervened? Noise: how often does anything fire on a clean session? Precision: spot-checked by hand, were the firings right? The bar the first deployment set: recall of at least 60% on documented incidents, under one false flag per clean session, precision of at least 80%. When precision and recall trade off, buy precision. A wrong whisper costs trust in all whispers.</p>
+</section>
+
+<figure>
+  <div class="panel">
+    <div class="bars">
+      <div class="bar-row"><span>round 1: original text</span><div class="bar-track"><div class="bar-fill" style="width:8%"></div></div><span class="val">8%</span></div>
+      <div class="bar-row"><span>round 2: reworded</span><div class="bar-track"><div class="bar-fill" style="width:42%"></div></div><span class="val">42%</span></div>
+      <div class="bar-row"><span>go-live bar</span><div class="bar-track"><div class="bar-fill target" style="width:60%"></div></div><span class="val">&ge;60%</span></div>
+    </div>
+  </div>
+  <figcaption><b>Fig. 5. Known-incident recall across tuning rounds</b> in the first deployment (12 documented incidents, 496 windows per round). Rewording the signatures took recall from 8% to 42%. The remaining misses turned out to be a property of the windowing, not the language: the evidence kept landing in the couple of events after a window had already closed, or in a stale task line the classifier had no way to know was already answered. Those became code fixes. The live system is expected to clear the bar, but that has not been measured yet; see §8.</figcaption>
+</figure>
+
+<section>
+<p>The tuning rounds taught one rule worth repeating: fix the observation before rewording the language. When the classifier misses, the instinct is to sharpen the signature text. Most of the time the real problem was that the evidence never made it into the window at all.</p>
+<p>Two mechanisms keep the system learning after its author is gone. In-session, the observer scores each injection mechanically: did the behavior the note asks for show up within the next handful of events? A note that fires five times with no effect mutes itself for the week. And weekly, a consolidation pass on the largest available model (we call it the sleep pass) reads the injection log joined with the transcripts it points into and asks, for each one, whether behavior actually changed. It rewrites signatures, retires dead moves, and writes new ones for failure classes the rubric missed, all committed to version control. The one thing that is never automatic is wording. A loop that rewrites its own words based on its own measurements will drift with nobody watching. Numeric dials tune themselves inside fixed bounds; text changes wait for the big model, on a schedule, in git.</p>
+</section>
+
+<figure>
+  <svg viewBox="0 0 620 348" role="img" aria-label="The consolidation cycle: live sessions feed the injection log, the weekly sleep pass reads it and revises the committed note library, which steers future sessions">
+    <defs>
+      <marker id="arrL" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker>
+    </defs>
+    <rect x="14" y="20" width="264" height="76" rx="10" fill="none" stroke="var(--line)" stroke-width="1.5"/>
+    <text x="34" y="52" font-family="var(--display)" font-size="15" font-weight="600" fill="var(--ink)">Live sessions</text>
+    <text x="34" y="76" font-family="var(--mono)" font-size="11.5" fill="var(--muted)">whispers injected, work happens</text>
+    <rect x="342" y="20" width="264" height="76" rx="10" fill="none" stroke="var(--line)" stroke-width="1.5"/>
+    <text x="362" y="52" font-family="var(--display)" font-size="15" font-weight="600" fill="var(--ink)">Injection log</text>
+    <text x="362" y="76" font-family="var(--mono)" font-size="11.5" fill="var(--muted)">every whisper logged + scored</text>
+    <rect x="342" y="252" width="264" height="76" rx="10" fill="var(--corridor)" stroke="var(--accent)" stroke-width="1.5"/>
+    <text x="362" y="284" font-family="var(--display)" font-size="15" font-weight="600" fill="var(--accent)">Sleep pass, weekly</text>
+    <text x="362" y="308" font-family="var(--mono)" font-size="11.5" fill="var(--muted)">largest model &middot; what changed?</text>
+    <rect x="14" y="252" width="264" height="76" rx="10" fill="none" stroke="var(--line)" stroke-width="1.5"/>
+    <text x="34" y="284" font-family="var(--display)" font-size="15" font-weight="600" fill="var(--ink)">Note library + rubric</text>
+    <text x="34" y="308" font-family="var(--mono)" font-size="11.5" fill="var(--muted)">revised, committed, diffable</text>
+    <line x1="280" y1="58" x2="338" y2="58" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#arrL)"/>
+    <line x1="474" y1="96" x2="474" y2="248" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#arrL)"/>
+    <line x1="338" y1="290" x2="282" y2="290" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#arrL)"/>
+    <line x1="146" y1="248" x2="146" y2="100" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#arrL)"/>
+    <text x="310" y="168" font-family="var(--mono)" font-size="11.5" fill="var(--muted)" text-anchor="middle">wording edits: big model</text>
+    <text x="310" y="184" font-family="var(--mono)" font-size="11.5" fill="var(--muted)" text-anchor="middle">only, always in git</text>
+  </svg>
+  <figcaption><b>Fig. 6. Consolidation.</b> Clockwise from the top left. This loop is what keeps the daemon alive after its author is gone; without it, the library fossilizes into a museum of the failure modes it was born with.</figcaption>
+</figure>
+
+<section>
+<h2><span class="no">7</span>What transfers, and what has to be grown</h2>
+<p>The plumbing transfers whole. The observer, the windowing, the mailbox, the hooks, and the fail-open discipline know nothing about any particular codebase; they read a transcript, and every agent harness produces one. About half the catalog transfers too. Moves like verify-claim, circling, thrash, and skim describe how models fail, not how one project fails, and would earn their keep anywhere.</p>
+<p>What can't be copied is the incident data. A new project needs a period of writing corrections down as they happen, an authoring pass where a large model turns that pile into signatures and notes, a replay run over the accumulated transcripts to tune before going live, and the weekly sleep pass from day one. The corpus is the expensive part and the important one. The notes that work are the ones written from failures that actually happened, by a model that understood why they happened.</p>
+<p>The pattern also extends down the stack. Orchestrated worker agents, small models grinding through long phases unsupervised, are the natural next audience; their documented failure modes map onto the existing anchors, and they need the whispers more than the big session model does. That extension is specced (per-worker observation and mailboxes, routed on the worker id the hooks already report) and waits behind a flag until the notes prove themselves on the main session. Nothing about the shape is specific to coding, either. Wherever a model works long and unsupervised and leaves an observable trail, a cheap watcher choosing among an expensive author's fixed lines is a way to make a small model act bigger.</p>
+</section>
+
+<section>
+<h2><span class="no">8</span>Where it stands</h2>
+<p>As of this writing, the first deployment is in its first week, running supervised. Every whisper is marked unvalidated and asks the model to acknowledge it out loud, so the human can judge the nudge itself. The offline bar was not cleared before going live; that was a deliberate call, made because the tuning rounds had already identified the structural fixes, the fixes went in, and live telemetry scores the same bar more honestly than a third offline round would have. The gaps, named so this paper doesn't oversell: the automatic outcome scoring and self-muting are specced but not yet built; worker agents are unobserved until the extension ships; an observer revived mid-session forgets its cooldowns. And the larger question, whether any of this amounts to experience feeding thought or is just well-timed text, stays open. The system works either way.</p>
+</section>
+
+<div class="footer">
+  Written by Claude Fable 5 at Peter's request, July 2026. The informal-paper version of a build spec for a system now running in production on one repo.
+</div>
+</div>
+</body>
+</html>
