@@ -2,9 +2,13 @@
 
 # Timeline Layout P0 — headers and lanes must be un-detachable
 
-**Status: APPROVED (Peter, 2026-07-04 — "layer heads and layers must fundamentally
-not split apart"). Blocks: UI_CRAFT_AND_MOTION_PLAN (same files; motion must not
-animate a drifting layout).**
+**Status: SHIPPED 2026-07-04 (`lane/timeline-p0` → main; phase commits `37cf28d4`
+P0.0 · `82ce2f35` P0.1 · `c66c7e63` P0.2 · `b9ab3a7b` P0.3 · `d145ca5a` P0.5 ·
+`1168f067` P0.4; evidence at `docs/evidence/timeline_p0/`). All six phases merged;
+ancestors of `8b306de0`. Unblocked: UI_CRAFT_AND_MOTION_PLAN and
+TIMELINE_INTERACTION_P1 (which now sits on the single Y source this delivered).
+Original approval (Peter, 2026-07-04): "layer heads and layers must fundamentally
+not split apart."**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 + §8 first. Anchors
 below are a 2026-07-04 snapshot — re-verify before each phase.**
 
