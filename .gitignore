@@ -17,6 +17,7 @@ __pycache__/
 !.claude/hooks/
 !.claude/daemon/
 !.claude/settings.json
+!.claude/GIT_TREE_DISCIPLINE.md
 .claude/settings.local.json
 .claude/daemon/verdicts/
 .claude/daemon/telemetry.jsonl
