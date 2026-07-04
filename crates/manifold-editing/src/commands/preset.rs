@@ -11,7 +11,7 @@ use manifold_core::GraphTarget;
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::preset_def::PresetKind;
-use manifold_core::project::{EmbeddedPreset, Project};
+use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset, Project};
 
 use crate::command::Command;
 
@@ -97,6 +97,7 @@ impl Command for ForkPresetCommand {
             self.forked = Some(EmbeddedPreset {
                 kind: self.kind,
                 def,
+                origin: EmbeddedOrigin::Saved,
             });
         }
         let fp = self.forked.clone().expect("forked set above");

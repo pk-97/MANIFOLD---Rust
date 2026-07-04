@@ -40,9 +40,13 @@ Decided with Peter 2026-07-04, replacing §2 below.
 ## §1. Shared-checkout guard (built, `6737cfe6`)
 
 File: `.claude/hooks/preToolUseBash.py`. `git checkout`, `switch`, and `merge`
-are normally auto-allowed as workflow writes. When BOTH of these hold, they
-fall through to a normal permission prompt instead, naming the other live
-session:
+are normally auto-allowed as workflow writes. **Downgraded 2026-07-04 evening
+(Peter): ask → allow + warning.** Originally these fell through to a permission
+prompt, but that paused every automated orchestration mid-landing (the guard's
+"another session live" condition is always true under fleets). Now, when BOTH
+of these hold, the command is still auto-allowed and a warning naming the other
+live session is attached as additionalContext (proceed only if intended, prefer
+a worktree, re-read branch state from command output):
 
 - The command targets the MAIN checkout. Bare `git ...` counts (cd-prefixes
   are already banned, so bare = main tree). `git -C <path> ...` counts only
@@ -54,8 +58,9 @@ session:
   10 minutes, so a session with no live daemon has been quiet that long and
   is safe to treat as absent. No lock files, nothing to go stale.
 
-Semantics: never hard-deny; the point is that Peter gets ASKED instead of the
-switch happening silently. Solo (no other live daemon) behavior is unchanged.
+Semantics: never deny, never ask; the point is the agent is TOLD instead of the
+switch happening silently — discipline (worktrees, read-state-off-output) does
+the protecting. Solo (no other live daemon) behavior is unchanged.
 Branch-switch detection includes `checkout <branch>`, `checkout -b/-B`,
 `switch`, `merge`, and bare `checkout` with no `--`-separated paths; plain
 `git checkout -- <paths>` (file restore) is destructive-to-worktree, not a

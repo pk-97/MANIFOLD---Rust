@@ -27,6 +27,23 @@ pub struct EmbeddedPreset {
     pub kind: PresetKind,
     /// The complete preset definition (graph + `preset_metadata`).
     pub def: EffectGraphDef,
+    /// `Saved` = user pressed "Save to Project" / "Make Unique" / import
+    /// (PRESET_LIBRARY_DESIGN D4/D9) — deliberate, resolves ON TOP of stock/
+    /// user disk tiers. `Snapshot` = auto-captured at save for
+    /// self-containment (D5) — pruned + refreshed every save, resolves
+    /// BELOW disk (disk wins over a stale snapshot; the snapshot is the
+    /// fallback when the library file is gone). Defaults to `Saved` so
+    /// legacy files with no `origin` field keep today's on-top behavior.
+    #[serde(default)]
+    pub origin: EmbeddedOrigin,
+}
+
+/// See [`EmbeddedPreset::origin`].
+#[derive(Default, Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Debug)]
+pub enum EmbeddedOrigin {
+    #[default]
+    Saved,
+    Snapshot,
 }
 
 impl EmbeddedPreset {
@@ -911,6 +928,63 @@ impl Project {
         Some(self.embedded_presets.remove(pos))
     }
 
+    /// Every `(id, kind)` referenced by a TRACKING instance (`graph: None`)
+    /// anywhere in the project — master effects, every layer's effects,
+    /// every clip's effects, and every layer's generator. A diverged
+    /// instance (`graph: Some`) already carries its own private copy; its
+    /// library id (still named by `effect_type`, D8) is not collected here
+    /// because no self-containment snapshot is needed for it.
+    ///
+    /// Used at save time (PRESET_LIBRARY_DESIGN D5) to know which library
+    /// ids need their current def cached into `embedded_presets` as
+    /// `origin: Snapshot`. Renderer-free (reads only instance state), so it
+    /// lives in core; the actual catalog lookup + upsert happens app-side
+    /// (see `manifold-app::project_io::snapshot_and_prune_embedded_presets`),
+    /// which has both this project AND the renderer's live catalog.
+    pub fn tracking_preset_ids(&self) -> Vec<(PresetTypeId, PresetKind)> {
+        fn collect(
+            fx: &crate::effects::PresetInstance,
+            kind: PresetKind,
+            out: &mut Vec<(PresetTypeId, PresetKind)>,
+        ) {
+            if fx.graph.is_none() {
+                out.push((fx.effect_type().clone(), kind));
+            }
+        }
+        let mut out = Vec::new();
+        for fx in &self.settings.master_effects {
+            collect(fx, PresetKind::Effect, &mut out);
+        }
+        for layer in &self.timeline.layers {
+            if let Some(effects) = layer.effects.as_ref() {
+                for fx in effects {
+                    collect(fx, PresetKind::Effect, &mut out);
+                }
+            }
+            for clip in &layer.clips {
+                for fx in &clip.effects {
+                    collect(fx, PresetKind::Effect, &mut out);
+                }
+            }
+            if let Some(gp) = layer.gen_params() {
+                collect(gp, PresetKind::Generator, &mut out);
+            }
+        }
+        out
+    }
+
+    /// Remove every `Snapshot`-origin embedded preset whose id is not in
+    /// `referenced` (D5) — the stale-snapshot prune that keeps the overlay
+    /// from accumulating ids no tracking instance uses anymore (e.g. after
+    /// an instance is retargeted or deleted). `Saved` entries are never
+    /// touched here — they are a deliberate project-scoped fork, not
+    /// save-time plumbing, and survive independent of what's referenced.
+    pub fn prune_stale_snapshots(&mut self, referenced: &std::collections::HashSet<PresetTypeId>) {
+        self.embedded_presets.retain(|p| {
+            p.origin == EmbeddedOrigin::Saved || p.id().is_some_and(|id| referenced.contains(id))
+        });
+    }
+
     /// Retarget the instance addressed by `target` at a different preset id,
     /// keeping its param values. Returns `false` if the target wasn't found.
     pub fn set_instance_preset_id(
@@ -967,6 +1041,7 @@ impl Project {
         self.embedded_presets.push(EmbeddedPreset {
             kind,
             def: source_def,
+            origin: EmbeddedOrigin::Saved,
         });
         Some(new_id)
     }
@@ -1400,6 +1475,7 @@ mod tests {
         p.embedded_presets.push(EmbeddedPreset {
             kind: PresetKind::Effect,
             def: graph_def_with_id("Bloom 2", "Bloom 2"),
+            origin: EmbeddedOrigin::Saved,
         });
         // "Bloom 2" is taken — probes to "Bloom 3".
         assert_eq!(p.mint_forked_preset_id("Bloom").as_str(), "Bloom 3");
@@ -1411,11 +1487,13 @@ mod tests {
         p.embedded_presets.push(EmbeddedPreset {
             kind: PresetKind::Effect,
             def: graph_def_with_id("Bloom#1", ""),
+            origin: EmbeddedOrigin::Saved,
         });
         // A new-style fork already carries its own display_name — untouched.
         p.embedded_presets.push(EmbeddedPreset {
             kind: PresetKind::Effect,
             def: graph_def_with_id("Bloom 2", "Bloom 2"),
+            origin: EmbeddedOrigin::Saved,
         });
 
         let n = p.backfill_legacy_fork_display_names();
@@ -1479,6 +1557,7 @@ mod tests {
         p.embedded_presets.push(EmbeddedPreset {
             kind: PresetKind::Generator,
             def,
+            origin: EmbeddedOrigin::Saved,
         });
 
         let json = serde_json::to_string(&p).unwrap();
@@ -1486,9 +1565,69 @@ mod tests {
         let back: Project = serde_json::from_str(&json).unwrap();
         assert_eq!(back.embedded_presets.len(), 1);
         assert_eq!(back.embedded_presets[0].kind, PresetKind::Generator);
+        assert_eq!(back.embedded_presets[0].origin, EmbeddedOrigin::Saved);
         assert_eq!(
             back.embedded_presets[0].id().map(|i| i.as_str()),
             Some("OilyFluid#layer2")
+        );
+    }
+
+    /// D5: `origin` round-trips for BOTH variants, and a legacy embedded
+    /// preset with no `origin` field on the wire (pre-P2 project files)
+    /// loads as `Saved` — the deliberate, on-top-of-disk default that
+    /// matches what those files' entries always meant before `Snapshot`
+    /// existed.
+    #[test]
+    fn embedded_preset_origin_round_trips_both_variants_and_defaults_legacy_to_saved() {
+        let mut p = Project::default();
+        p.embedded_presets.push(EmbeddedPreset {
+            kind: PresetKind::Effect,
+            def: graph_def_with_id("Bloom 2", "Bloom 2"),
+            origin: EmbeddedOrigin::Saved,
+        });
+        p.embedded_presets.push(EmbeddedPreset {
+            kind: PresetKind::Effect,
+            def: graph_def_with_id("Bloom", "Bloom"),
+            origin: EmbeddedOrigin::Snapshot,
+        });
+
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"origin\":\"Saved\""), "Saved must serialize: {json}");
+        assert!(json.contains("\"origin\":\"Snapshot\""), "Snapshot must serialize: {json}");
+
+        let back: Project = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.embedded_preset(&PresetTypeId::from_string("Bloom 2".to_string()))
+                .unwrap()
+                .origin,
+            EmbeddedOrigin::Saved
+        );
+        assert_eq!(
+            back.embedded_preset(&PresetTypeId::from_string("Bloom".to_string()))
+                .unwrap()
+                .origin,
+            EmbeddedOrigin::Snapshot
+        );
+
+        // Legacy shape: an embedded preset JSON object with no `origin` key
+        // at all (as every pre-P2 project file has) must default to Saved.
+        // `origin` is the last field in `EmbeddedPreset`, so it serializes
+        // with a LEADING comma and no trailing one.
+        let legacy_json = json.replacen(",\"origin\":\"Snapshot\"", "", 1);
+        assert_eq!(
+            legacy_json.matches("\"origin\"").count(),
+            1,
+            "sanity: exactly the Snapshot entry's origin key must be gone \
+             (the untouched Saved entry still carries its own): {legacy_json}"
+        );
+        let legacy_back: Project = serde_json::from_str(&legacy_json).unwrap();
+        assert_eq!(
+            legacy_back
+                .embedded_preset(&PresetTypeId::from_string("Bloom".to_string()))
+                .unwrap()
+                .origin,
+            EmbeddedOrigin::Saved,
+            "no `origin` field on the wire must default to Saved"
         );
     }
 

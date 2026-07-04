@@ -76,6 +76,18 @@ pub fn run(args: &[String]) {
         return;
     }
 
+    // The `transform` scene is the UI transform-stack capability's visual
+    // proof (`docs/UI_TRANSFORM_STACK_DESIGN.md`) — a bespoke `UITree` with no
+    // `Project`/fixture behind it, so it doesn't go through `fixtures::build`.
+    if scene == "transform" {
+        let dir = out_dir("transform");
+        std::fs::create_dir_all(&dir).expect("create ui-snapshots dir");
+        let png = dir.join("transform.png");
+        render::render_transform_proof_to_png(png.to_str().expect("utf-8 path"));
+        println!("ui-snap: wrote {}", png.display());
+        return;
+    }
+
     render_ui_scene(scene, want_dump, want_vs_mockup, want_thumbs, interact, scroll_seed);
 }
 
@@ -92,7 +104,7 @@ fn render_ui_scene(
 ) {
     let Some(mut data) = fixtures::build(scene) else {
         eprintln!(
-            "ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, scrollshrink, hairlineclips, automation, graph, editor, all)"
+            "ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, scrollshrink, hairlineclips, automation, graph, editor, transform, all)"
         );
         std::process::exit(2);
     };

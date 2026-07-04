@@ -15,6 +15,7 @@
 //! overhaul.
 
 use crate::node::Color32;
+use crate::transform2d::Affine2;
 
 /// Layering depth for immediate-mode draws. Mirror of
 /// `manifold_renderer::ui_renderer::Depth` — the renderer's `Painter` impl maps
@@ -84,6 +85,14 @@ pub trait Painter {
 
     /// Pop the innermost depth.
     fn pop_depth(&mut self);
+
+    /// Compose a 2D affine (rotate/scale about a pivot) onto the current
+    /// transform for subsequent draws, until [`Painter::pop_transform`]. See
+    /// `docs/UI_TRANSFORM_STACK_DESIGN.md`.
+    fn push_transform(&mut self, transform: Affine2);
+
+    /// Pop the innermost transform.
+    fn pop_transform(&mut self);
 }
 
 /// The bitmap font's advance width as a fraction of the em (font) size. One

@@ -478,6 +478,135 @@ pub fn render_graph_editor_to_png(
         .unwrap_or_else(|e| panic!("save {path}: {e}"));
 }
 
+/// Visual proof for the UI transform-stack capability
+/// (`docs/UI_TRANSFORM_STACK_DESIGN.md`) — a bespoke `UITree` with no
+/// `Project`/fixture behind it, built directly in this function since none of
+/// the existing scenes exercise a per-node `UIStyle::transform`. Three panels:
+/// (a) a rotated rounded rect keeps crisp AA'd corners (the SDF runs in local
+/// uv-space, so rotation is "free" — no shader change), (b) rotated text
+/// glyphs rotate with their node, (c) a rect scaled about its own center
+/// bulges symmetrically past an unscaled reference outline (proving the pivot
+/// is the node's rect center, not a corner). `UIStyle::transform` is
+/// node-local (§3 of the design doc) — the renderer pivots it about each
+/// node's own bounds at draw time.
+pub fn render_transform_proof_to_png(path: &str) {
+    use manifold_ui::node::{Color32, TextAlign, UIFlags, UINodeType, UIStyle};
+    use manifold_ui::transform2d::Affine2;
+    use manifold_ui::{Rect as UiRect, UITree};
+
+    const TEX_W: u32 = 1536;
+    const TEX_H: u32 = 768;
+    assert_eq!(TEX_W % 64, 0, "tex_w must be a multiple of 64 for aligned readback");
+
+    let device = GpuDevice::new();
+    let mut renderer = UIRenderer::new(&device, FORMAT);
+    let target = RenderTarget::new(&device, TEX_W, TEX_H, FORMAT, "ui-snap-transform");
+
+    let mut tree = UITree::new();
+
+    // Dark backdrop for contrast.
+    tree.add_panel(
+        None,
+        0.0,
+        0.0,
+        TEX_W as f32,
+        TEX_H as f32,
+        UIStyle { bg_color: Color32::new(18, 20, 26, 255), ..UIStyle::default() },
+    );
+
+    let caption_style = UIStyle {
+        text_color: Color32::new(180, 186, 196, 255),
+        font_size: 16,
+        text_align: TextAlign::Center,
+        ..UIStyle::default()
+    };
+
+    // (a) Rotated rounded rect — crisp AA'd corners under rotation.
+    tree.add_label(None, 140.0, 140.0, 220.0, 24.0, "(a) rotate: rounded rect", caption_style);
+    tree.add_panel(
+        None,
+        140.0,
+        220.0,
+        220.0,
+        150.0,
+        UIStyle {
+            bg_color: Color32::new(64, 200, 220, 255),
+            corner_radius: 28.0,
+            transform: Some(Affine2::rotate(20.0_f32.to_radians())),
+            ..UIStyle::default()
+        },
+    );
+
+    // (b) Rotated text — the glyph quads rotate with their node; the bordered
+    // panel makes the node's rotated bounding box legible alongside the text.
+    tree.add_label(None, 500.0, 140.0, 300.0, 24.0, "(b) rotate: text glyphs", caption_style);
+    tree.add_node(
+        None,
+        UiRect::new(500.0, 220.0, 300.0, 150.0),
+        UINodeType::Panel,
+        UIStyle {
+            bg_color: Color32::new(40, 44, 54, 255),
+            border_color: Color32::new(120, 128, 140, 255),
+            border_width: 2.0,
+            text_color: Color32::new(255, 214, 90, 255),
+            font_size: 48,
+            text_align: TextAlign::Center,
+            transform: Some(Affine2::rotate(-15.0_f32.to_radians())),
+            ..UIStyle::default()
+        },
+        Some("AaBb"),
+        UIFlags::empty(),
+    );
+
+    // (c) Scaled about center — the filled panel is scaled 1.5x and drawn
+    // first; the unscaled reference outline (same bounds, no transform) drawn
+    // on top shows the scale bulging equally on all four sides, not anchored
+    // to a corner.
+    tree.add_label(None, 900.0, 140.0, 260.0, 24.0, "(c) scale about center", caption_style);
+    let rect_c = UiRect::new(900.0, 220.0, 220.0, 150.0);
+    tree.add_node(
+        None,
+        rect_c,
+        UINodeType::Panel,
+        UIStyle {
+            bg_color: Color32::new(230, 130, 60, 220),
+            corner_radius: 20.0,
+            transform: Some(Affine2::scale(1.5, 1.5)),
+            ..UIStyle::default()
+        },
+        None,
+        UIFlags::empty(),
+    );
+    tree.add_node(
+        None,
+        rect_c,
+        UINodeType::Panel,
+        UIStyle {
+            bg_color: Color32::TRANSPARENT,
+            border_color: Color32::new(255, 255, 255, 255),
+            border_width: 2.0,
+            corner_radius: 20.0,
+            ..UIStyle::default()
+        },
+        None,
+        UIFlags::empty(),
+    );
+
+    renderer.begin_frame();
+    renderer.render_tree(&tree, None);
+    let drew = renderer.prepare(&device, TEX_W, TEX_H, 1.0);
+    {
+        let mut enc = device.create_encoder("ui-snap-transform");
+        renderer.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        enc.commit_and_wait_completed();
+    }
+    assert!(drew, "transform proof produced no draws");
+
+    let bytes = readback(&device, &target.texture, TEX_W, TEX_H);
+    image::save_buffer(path, &bytes, TEX_W, TEX_H, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {path}: {e}"));
+}
+
 /// A headless one-frame render of `def`'s graph with the executor's per-node
 /// dump enabled, holding the graph + executor alive so the dumped node textures
 /// stay valid. `texture_for` resolves a stable NodeId to its output texture.
