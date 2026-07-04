@@ -485,6 +485,90 @@ fn browser_popup_demo() {
     eprintln!("browser popup demo → {png}");
 }
 
+/// PRESET_LIBRARY P6 headless DISPLAY proof: a browser cell carrying a
+/// thumbnail path actually PAINTS the decoded image (the full path — the
+/// popup's `add_image` node + the `UIRenderer` textured-quad pipeline + the
+/// registered-image cache), not just a flat coloured cell. Registers a REAL
+/// committed factory thumbnail, opens the popup with items pointing at it,
+/// renders, and writes a PNG to eyeball. This is the one part of P6's
+/// in-app display that IS verifiable without a running app.
+#[test]
+fn browser_popup_thumbnails_paint() {
+    use manifold_ui::node::{texture_handle_for_key, Vec2};
+    use manifold_ui::panels::browser_popup::{
+        BrowserPopupMode, BrowserPopupPanel, BrowserPopupRequest,
+    };
+    use manifold_ui::panels::picker_core::PickerItem;
+    use manifold_ui::panels::InspectorTab;
+    use manifold_ui::UITree;
+
+    let device = GpuDevice::new();
+    let mut ui = UIRenderer::new(&device, FORMAT);
+
+    // A real committed factory thumbnail (verified elsewhere to render as a
+    // clean Lissajous curve on black). Decode + register it exactly as the
+    // app's per-frame thumbnail pass does.
+    let thumb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("assets/preset-thumbnails/generators/Lissajous.png");
+    let (tw, th, rgba) = manifold_renderer::preset_thumbnail::decode_png_rgba8(&thumb)
+        .expect("decode committed Lissajous thumbnail");
+    let thumb_path = thumb.to_string_lossy().to_string();
+    let handle = texture_handle_for_key(&thumb_path);
+    assert!(
+        ui.register_image(&device, handle, tw, th, &rgba),
+        "thumbnail must register into the UIRenderer image cache"
+    );
+
+    let items: Vec<PickerItem> = ["Lissajous", "Plasma", "StarField", "Tesseract"]
+        .iter()
+        .map(|n| PickerItem {
+            label: n.to_string(),
+            type_id: n.to_lowercase(),
+            category: Some("Stylize".to_string()),
+            search_text: None,
+            badge: Some("Factory".to_string()),
+            source: None,
+            missing_from_library: false,
+            thumbnail: Some(thumb_path.clone()),
+        })
+        .collect();
+
+    let mut popup = BrowserPopupPanel::new();
+    popup.set_screen_size(W as f32, H as f32);
+    popup.open(BrowserPopupRequest {
+        mode: BrowserPopupMode::Effect,
+        tab: InspectorTab::Layer,
+        layer_id: None,
+        items,
+        category_names: vec!["Stylize".to_string()],
+        spawn_graph_pos: None,
+        paste_count: 0,
+        screen_anchor: Vec2::new(30.0, 40.0),
+    });
+
+    let mut tree = UITree::new();
+    popup.build(&mut tree);
+
+    ui.begin_frame();
+    ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_3);
+    ui.render_tree(&tree, None);
+    let drew = ui.prepare(&device, W, H, 1.0);
+    assert!(drew, "popup with thumbnails produced no draw commands");
+    let target = RenderTarget::new(&device, W, H, FORMAT, "browser-popup-thumbs");
+    {
+        let mut enc = device.create_encoder("browser-popup-thumbs-render");
+        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        enc.commit_and_wait_completed();
+    }
+    let bytes = readback(&device, &target.texture);
+    let out_dir = std::env::var("SWATCH_OUT")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let png = format!("{out_dir}/browser_popup_thumbnails.png");
+    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    eprintln!("browser popup thumbnails → {png}");
+}
+
 /// Renders a floating surface with and without the §17 soft shadow, so the
 /// "lift" can be eyeballed headlessly.
 #[test]
