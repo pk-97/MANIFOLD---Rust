@@ -324,6 +324,16 @@ hand_descriptor!(
     aliases: ["switch", "mux", "mux texture", "selector", "Switch TOP"],
 );
 
+// 3D scene rendering (render_scene.rs)
+hand_descriptor!(
+    "node.render_scene",
+    "Multi-object 3D scene renderer: draws `objects` (1..=8) separate Array<MeshVertex> meshes into ONE shared depth buffer, so nearer objects correctly occlude farther ones. Each object carries its own material_n: Material and pos/rot/scale transform params. Up to `lights` (0..=4) shared Light inputs accumulate in the Phong/PBR/Cel shading. ONE shared envmap input lights every PBR object in the scene. Reconfigures its port list (mesh_n/material_n pairs, light_0..N) and per-object transform params when `objects` or `lights` changes.",
+    summary: "Draws several 3D objects into one scene so the nearer ones correctly block the farther ones, each with its own position and material, lit by up to four shared lights.",
+    category: Geometry3D,
+    role: Filter,
+    aliases: ["render scene", "scene renderer", "multi-object", "occlusion", "Render TOP"],
+);
+
 // WGSL escape hatch (wgsl_compute.rs)
 hand_descriptor!(
     "node.wgsl_compute",

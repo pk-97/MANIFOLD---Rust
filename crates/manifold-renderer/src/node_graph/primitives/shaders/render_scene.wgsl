@@ -1,0 +1,296 @@
+// node.render_scene — multi-object 3D scene renderer: N objects sharing
+// ONE depth buffer (real occlusion) lit by up to 4 lights. Forked from
+// render_3d_mesh.wgsl (the single-object renderer): keeps every
+// Material-system M4/M6 addition (resolve_albedo / resolve_metallic,
+// alpha-cutout discard, front_facing normal flip) byte-identical, and
+// adds exactly two things render_3d_mesh doesn't need:
+//
+//   1. A per-object `model` matrix, composed CPU-side from that
+//      object's pos/rot/scale params (see
+//      node_graph/primitives/render_scene.rs::model_matrix). One draw
+//      call per object, same shared depth texture — the CPU side draws
+//      object 0 with GpuLoadAction::Clear and objects 1..N with
+//      GpuLoadAction::Load, so the depth test resolves real occlusion
+//      between objects instead of each rendering into its own buffer.
+//   2. A `lights: array<vec4<f32>, 8>` accumulator (up to 4 lights, 2
+//      vec4s each — `lights[i*2]` = dir.xyz + intensity in .w,
+//      `lights[i*2+1]` = premultiplied color.rgb) so the Phong/PBR/Cel
+//      entry points sum every wired light's direct term instead of
+//      reading exactly one `light_dir`/`light_color` pair. Ambient and
+//      emission are added exactly once (after the light loop), not
+//      blended per light.
+//
+// No shadows (P2), no atmosphere/fog (P3). No per-object surface
+// textures in P1 — `texture_flags` is always zero (render_scene has no
+// normal_map / roughness_map / base_color_map / metallic_map inputs);
+// the resolve_* helpers below are kept identical to render_3d_mesh.wgsl
+// so a future per-object texture extension is a pure additive port add,
+// not a shader rewrite. ONE envmap is shared across every PBR object in
+// the scene (an environment map is scene-wide, not per-object).
+//
+// MeshVertex layout (48 bytes), entry point names, and per-kind
+// dispatch: identical to render_3d_mesh.wgsl.
+
+const PI: f32 = 3.14159265358979;
+
+struct Vertex {
+    position: vec3<f32>,
+    _pad0: f32,
+    normal: vec3<f32>,
+    _pad1: f32,
+    uv: vec2<f32>,
+    _pad2: vec2<f32>,
+};
+
+// Superset uniform, rebuilt once per object per draw call. 16-byte
+// aligned throughout (two mat4x4s + nine vec4s + the trailing
+// array<vec4,8> — every member is already a vec4/mat4 multiple, so no
+// manual padding is needed). Total 400 bytes.
+struct Uniforms {
+    view_proj: mat4x4<f32>,
+    // This object's world transform, composed CPU-side from
+    // pos_x/y/z + rot_x/y/z (Euler, X→Y→Z order, matching
+    // render_instanced_3d_mesh.wgsl's euler_xyz) + scale_x/y/z.
+    // v1 ignores non-uniform-scale normal skew (no inverse-transpose
+    // applied to the normal) — fine for uniform/near-uniform scale, a
+    // known limitation for extreme non-uniform scale.
+    model: mat4x4<f32>,
+    camera_pos: vec4<f32>,
+    // rgb: surface diffuse / base colour, w: opacity (informational).
+    base_color: vec4<f32>,
+    // rgb: emission PREMULTIPLIED with intensity, w: reserved.
+    emission: vec4<f32>,
+    // x: metallic [0,1], y: roughness [0.01,1], z/w: reserved.
+    pbr_metallic_roughness: vec4<f32>,
+    // rgb: specular tint, w: Phong exponent.
+    specular: vec4<f32>,
+    // x: cel_bands (as f32), y: band_low, z: band_high, w: reserved.
+    cel_params: vec4<f32>,
+    // Surface-texture presence flags — always 0 in render_scene (no
+    // per-object surface texture inputs in P1). Kept so resolve_* below
+    // stays byte-identical to render_3d_mesh.wgsl.
+    texture_flags: vec4<f32>,
+    // x: alpha_mode (1.0 = Mask/cutout, 0.0 = Opaque), y: alpha_cutoff,
+    // z/w: reserved.
+    alpha_params: vec4<f32>,
+    // x: light_count (as f32, 0..=4), y: ambient (this object's
+    // material.ambient), z/w: reserved.
+    scene_params: vec4<f32>,
+    // Up to 4 lights, 2 vec4s each:
+    //   lights[i*2]   = (dir.xyz: from-surface-toward-light, w: intensity)
+    //   lights[i*2+1] = (color.rgb PREMULTIPLIED with intensity, w: unused)
+    // Only the first `scene_params.x` entries are meaningful.
+    lights: array<vec4<f32>, 8>,
+};
+
+@group(0) @binding(0) var<uniform> u: Uniforms;
+@group(0) @binding(1) var<storage, read> verts: array<Vertex>;
+// PBR-only IBL envmap — ONE shared equirect map for every PBR object in
+// the scene.
+@group(0) @binding(2) var envmap: texture_2d<f32>;
+@group(0) @binding(3) var envmap_sampler: sampler;
+// No per-object surface textures in P1 — these bind the 1×1 dummy every
+// draw; texture_flags (always 0) keeps resolve_* from ever sampling them.
+@group(0) @binding(4) var normal_map: texture_2d<f32>;
+@group(0) @binding(5) var roughness_map: texture_2d<f32>;
+@group(0) @binding(6) var base_color_map: texture_2d<f32>;
+@group(0) @binding(7) var metallic_map: texture_2d<f32>;
+
+struct VsOut {
+    @builtin(position) clip_pos: vec4<f32>,
+    @location(0) world_pos: vec3<f32>,
+    @location(1) world_normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
+    let v = verts[vid];
+    var out: VsOut;
+    let world = u.model * vec4<f32>(v.position, 1.0);
+    out.world_pos = world.xyz;
+    out.clip_pos = u.view_proj * world;
+    out.world_normal = normalize((u.model * vec4<f32>(v.normal, 0.0)).xyz);
+    out.uv = v.uv;
+    return out;
+}
+
+// Identical to render_3d_mesh.wgsl — see that file for fuller commentary.
+fn resolve_normal(uv: vec2<f32>, vertex_normal: vec3<f32>) -> vec3<f32> {
+    if u.texture_flags.x > 0.5 {
+        let sampled = textureSampleLevel(normal_map, envmap_sampler, uv, 0.0).rgb;
+        let n = sampled + vec3<f32>(1e-8, 0.0, 0.0);
+        return normalize(n);
+    }
+    return normalize(vertex_normal);
+}
+
+fn resolve_roughness(uv: vec2<f32>) -> f32 {
+    var r: f32;
+    if u.texture_flags.y > 0.5 {
+        r = textureSampleLevel(roughness_map, envmap_sampler, uv, 0.0).r;
+    } else {
+        r = u.pbr_metallic_roughness.y;
+    }
+    return max(r, 0.01);
+}
+
+fn resolve_albedo(uv: vec2<f32>) -> vec4<f32> {
+    if u.texture_flags.z > 0.5 {
+        let t = textureSampleLevel(base_color_map, envmap_sampler, uv, 0.0);
+        return vec4<f32>(u.base_color.rgb * t.rgb, u.base_color.a * t.a);
+    }
+    return u.base_color;
+}
+
+fn resolve_metallic(uv: vec2<f32>) -> f32 {
+    if u.texture_flags.w > 0.5 {
+        return textureSampleLevel(metallic_map, envmap_sampler, uv, 0.0).r;
+    }
+    return u.pbr_metallic_roughness.x;
+}
+
+// ===== Material kind fragment entry points =====
+
+// Unlit — flat colour passthrough plus emission. No lighting math, no
+// light loop (matches render_3d_mesh.wgsl exactly).
+@fragment
+fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
+    let albedo = resolve_albedo(in.uv);
+    if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
+        discard;
+    }
+    let rgb = albedo.rgb + u.emission.rgb;
+    return vec4<f32>(rgb, albedo.a);
+}
+
+// Phong — Lambert diffuse + Blinn-Phong specular, summed over every
+// wired light; ambient + emission added exactly once (not blended per
+// light the way the single-light render_3d_mesh.wgsl does it).
+@fragment
+fn fs_phong(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+    let albedo = resolve_albedo(in.uv);
+    if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
+        discard;
+    }
+    var N = resolve_normal(in.uv, in.world_normal);
+    if !front_facing {
+        N = -N;
+    }
+    let V = normalize(u.camera_pos.xyz - in.world_pos);
+
+    var lit = vec3<f32>(0.0);
+    let light_count = u32(u.scene_params.x);
+    for (var i = 0u; i < light_count; i = i + 1u) {
+        let l_dir = u.lights[i * 2u];
+        let l_col = u.lights[i * 2u + 1u];
+        let L = normalize(l_dir.xyz);
+        let H = normalize(L + V);
+        let n_dot_l = max(dot(N, L), 0.0);
+        let n_dot_h = max(dot(N, H), 0.0);
+        let diffuse = albedo.rgb * n_dot_l;
+        let spec = u.specular.rgb * pow(n_dot_h, max(u.specular.w, 1.0)) * n_dot_l;
+        lit = lit + (diffuse + spec) * l_col.rgb * l_dir.w;
+    }
+    let ambient = albedo.rgb * u.scene_params.y;
+    return vec4<f32>(lit + ambient + u.emission.rgb, albedo.a);
+}
+
+// PBR — Cook-Torrance microfacet specular + Lambert diffuse, summed over
+// every wired light (H/D/G/F/kd/diffuse are all light-dependent via H,
+// so they're recomputed per light); IBL reflection + ambient + emission
+// added exactly once outside the loop. IBL's Fresnel term uses N·V
+// (view-only Schlick) rather than the light-dependent N·H term any
+// single light would give — the standard split-sum substitute for IBL,
+// and the only well-defined choice when light_count can be 0.
+@fragment
+fn fs_pbr(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+    let albedo = resolve_albedo(in.uv);
+    if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
+        discard;
+    }
+    var N = resolve_normal(in.uv, in.world_normal);
+    if !front_facing {
+        N = -N;
+    }
+    let V = normalize(u.camera_pos.xyz - in.world_pos);
+    let metallic = clamp(resolve_metallic(in.uv), 0.0, 1.0);
+    let roughness = resolve_roughness(in.uv);
+
+    let n_dot_v = max(dot(N, V), 0.001);
+    let F0 = mix(vec3<f32>(0.04), albedo.rgb, metallic);
+    let a = roughness * roughness;
+    let a2 = a * a;
+    let r = roughness + 1.0;
+    let k = (r * r) / 8.0;
+    let g_v = n_dot_v / (n_dot_v * (1.0 - k) + k);
+
+    var direct = vec3<f32>(0.0);
+    let light_count = u32(u.scene_params.x);
+    for (var i = 0u; i < light_count; i = i + 1u) {
+        let l_dir = u.lights[i * 2u];
+        let l_col = u.lights[i * 2u + 1u];
+        let L = normalize(l_dir.xyz);
+        let H = normalize(L + V);
+        let n_dot_l = max(dot(N, L), 0.0);
+        let n_dot_h = max(dot(N, H), 0.0);
+        let v_dot_h = max(dot(V, H), 0.001);
+
+        let denom_d = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
+        let D = a2 / (PI * denom_d * denom_d);
+
+        let g_l = n_dot_l / (n_dot_l * (1.0 - k) + k);
+        let G = g_v * g_l;
+
+        let F = F0 + (1.0 - F0) * pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
+        let specular = (D * G * F) / (4.0 * n_dot_v * n_dot_l + 0.0001);
+        let kd = (1.0 - F) * (1.0 - metallic);
+        let diffuse = kd * albedo.rgb / PI;
+
+        direct = direct + (diffuse + specular) * l_col.rgb * n_dot_l * l_dir.w;
+    }
+
+    let R = reflect(-V, N);
+    let azimuth = atan2(R.z, R.x);
+    let elevation = asin(clamp(R.y, -1.0, 1.0));
+    let uv = vec2<f32>(azimuth / (2.0 * PI) + 0.5, elevation / PI + 0.5);
+    let ibl_sample = textureSampleLevel(envmap, envmap_sampler, uv, 0.0).rgb;
+    let ibl_strength = 1.0 - roughness * 0.7;
+    let f_view = F0 + (1.0 - F0) * pow(clamp(1.0 - n_dot_v, 0.0, 1.0), 5.0);
+    let ibl = f_view * ibl_sample * ibl_strength;
+
+    let ambient = albedo.rgb * u.scene_params.y;
+    let rgb = direct + ibl + ambient + u.emission.rgb;
+    return vec4<f32>(rgb, albedo.a);
+}
+
+// Cel — Lambert N·L quantized into cel_bands discrete steps, summed over
+// every wired light; ambient + emission added exactly once.
+@fragment
+fn fs_cel(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+    let albedo = resolve_albedo(in.uv);
+    if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
+        discard;
+    }
+    var N = resolve_normal(in.uv, in.world_normal);
+    if !front_facing {
+        N = -N;
+    }
+    let bands = max(u.cel_params.x, 2.0);
+    let band_low = u.cel_params.y;
+    let band_high = u.cel_params.z;
+
+    var lit = vec3<f32>(0.0);
+    let light_count = u32(u.scene_params.x);
+    for (var i = 0u; i < light_count; i = i + 1u) {
+        let l_dir = u.lights[i * 2u];
+        let l_col = u.lights[i * 2u + 1u];
+        let L = normalize(l_dir.xyz);
+        let n_dot_l = max(dot(N, L), 0.0);
+        let snapped = floor(n_dot_l * bands) / (bands - 1.0);
+        let level = mix(band_low, band_high, clamp(snapped, 0.0, 1.0));
+        lit = lit + albedo.rgb * level * l_col.rgb * l_dir.w;
+    }
+    let ambient = albedo.rgb * u.scene_params.y;
+    return vec4<f32>(lit + ambient + u.emission.rgb, albedo.a);
+}

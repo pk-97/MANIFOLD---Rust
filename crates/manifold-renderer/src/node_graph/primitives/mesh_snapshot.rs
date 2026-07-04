@@ -229,7 +229,7 @@ use crate::node_graph::effect_node::{
 use crate::node_graph::parameters::ParamDef;
 use crate::node_graph::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::Source;
-use super::{PhongMaterial, UnlitMaterial};
+use super::{PhongMaterial, RenderScene, UnlitMaterial};
 
 /// Test-only no-op source for `Array<MeshVertex>`. The caller pre-binds a
 /// shared buffer to this node's `out` resource and CPU-writes the mesh
@@ -636,4 +636,412 @@ fn back_face_is_lit_by_front_facing_flip() {
         lit > 200,
         "back face should be LIT (front-facing flip), got {lit} non-black pixels — silhouette-black means the flip did not fire"
     );
+}
+
+// ============================================================================
+// REALTIME_3D P1 — `node.render_scene`: shared-depth occlusion between
+// objects, and multi-light accumulation. Same headless raw-executor
+// render + f16 readback as the M6 tests above.
+// ============================================================================
+
+/// Pre-bind an allocated (but CPU-unfilled) `Array<MeshVertex>` buffer for
+/// a `GenerateCubeMesh` node's `vertices` output — the node's own
+/// `evaluate` is a GPU compute dispatch that fills it. Mirrors
+/// `render_pbr_cube`'s cube pre-bind.
+fn pre_bind_cube_output(
+    device: &manifold_gpu::GpuDevice,
+    backend: &mut MetalBackend,
+    resource: ResourceId,
+) {
+    use crate::node_graph::primitive::PrimitiveSpec;
+    let capacity = GenerateCubeMesh::PARAMS
+        .iter()
+        .find(|p| p.name == "max_capacity")
+        .and_then(|p| match p.default {
+            ParamValue::Float(n) => Some(n.round() as u64),
+            _ => None,
+        })
+        .expect("cube max_capacity default");
+    let buf = device.create_buffer_shared(capacity * std::mem::size_of::<MeshVertex>() as u64);
+    backend.pre_bind_array(resource, buf);
+}
+
+/// Two unlit cubes, front-on from a camera parked on +X looking at the
+/// origin (`orbit = tilt = 0` on `node.orbit_camera` → `pos = (distance,
+/// 0, 0)`, `fwd = -X`) — so `pos_x` is exactly the depth axis. Object 0
+/// stays at the origin; object 1 sits `behind` it at `x = -offset`
+/// (farther from the camera), same y/z, so both cubes are centred on the
+/// optical axis and overlap on screen. `lights = 0` (Unlit needs none).
+fn render_scene_occlusion_frame(w: u32, h: u32, offset: f32) -> Vec<[f32; 4]> {
+    let device = crate::test_device();
+    let format = GpuTextureFormat::Rgba16Float;
+
+    let mut g = Graph::new();
+    let cube0 = g.add_node(Box::new(GenerateCubeMesh::new()));
+    let cube1 = g.add_node(Box::new(GenerateCubeMesh::new()));
+
+    let cam = g.add_node(Box::new(CameraOrbit::new()));
+    g.set_param(cam, "orbit", ParamValue::Float(0.0)).unwrap();
+    g.set_param(cam, "tilt", ParamValue::Float(0.0)).unwrap();
+    g.set_param(cam, "distance", ParamValue::Float(8.0)).unwrap();
+    g.set_param(cam, "fov_y", ParamValue::Float(0.9)).unwrap();
+
+    let mat0 = g.add_node(Box::new(UnlitMaterial::new()));
+    g.set_param(mat0, "color_r", ParamValue::Float(1.0)).unwrap();
+    g.set_param(mat0, "color_g", ParamValue::Float(0.0)).unwrap();
+    g.set_param(mat0, "color_b", ParamValue::Float(0.0)).unwrap();
+    g.set_param(mat0, "color_a", ParamValue::Float(1.0)).unwrap();
+
+    let mat1 = g.add_node(Box::new(UnlitMaterial::new()));
+    g.set_param(mat1, "color_r", ParamValue::Float(0.0)).unwrap();
+    g.set_param(mat1, "color_g", ParamValue::Float(1.0)).unwrap();
+    g.set_param(mat1, "color_b", ParamValue::Float(0.0)).unwrap();
+    g.set_param(mat1, "color_a", ParamValue::Float(1.0)).unwrap();
+
+    let render = g.add_node(Box::new(RenderScene::new()));
+    g.set_param(render, "objects", ParamValue::Float(2.0)).unwrap();
+    g.set_param(render, "lights", ParamValue::Float(0.0)).unwrap();
+    g.set_param(render, "pos_x_1", ParamValue::Float(-offset)).unwrap();
+
+    let sink = g.add_node(Box::new(FinalOutput::new()));
+
+    g.connect((cube0, "vertices"), (render, "mesh_0")).unwrap();
+    g.connect((cube1, "vertices"), (render, "mesh_1")).unwrap();
+    g.connect((mat0, "out"), (render, "material_0")).unwrap();
+    g.connect((mat1, "out"), (render, "material_1")).unwrap();
+    g.connect((cam, "out"), (render, "camera")).unwrap();
+    g.connect((render, "color"), (sink, "in")).unwrap();
+
+    let plan = compile(&g).unwrap();
+    let r_color = output_resource(&plan, render, "color");
+    let r_cube0 = output_resource(&plan, cube0, "vertices");
+    let r_cube1 = output_resource(&plan, cube1, "vertices");
+
+    let mut backend = MetalBackend::new(&device, w, h, format);
+    let color_target = RenderTarget::new(&device, w, h, format, "render-scene-occlusion-color");
+    let color_slot = backend.pre_bind_texture_2d(r_color, color_target);
+    pre_bind_cube_output(&device, &mut backend, r_cube0);
+    pre_bind_cube_output(&device, &mut backend, r_cube1);
+
+    let mut native_enc = device.create_encoder("render-scene-occlusion");
+    let mut exec = Executor::new(Box::new(backend));
+    {
+        let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+        exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
+    }
+    native_enc.commit_and_wait_completed();
+
+    let out_tex = exec
+        .backend()
+        .texture_2d(color_slot)
+        .expect("color texture retained");
+    readback_rgba_f32(&device, out_tex, w, h)
+}
+
+/// Value-level occlusion gate (REALTIME_3D §5 P1): two overlapping cube
+/// meshes through `node.render_scene`, sharing one depth buffer. Object 0
+/// (red, nearer) and object 1 (green, farther) are both centred on the
+/// camera's optical axis, so the exact centre pixel is covered by both
+/// silhouettes — it must show object 0's colour (nearer wins) regardless
+/// of draw order, which is exactly what a correctly load-action-managed
+/// shared depth buffer guarantees.
+#[test]
+fn render_scene_shared_depth_resolves_occlusion_between_objects() {
+    let (w, h) = (128u32, 128u32);
+    let out = render_scene_occlusion_frame(w, h, 3.0);
+    let center = out[(h / 2 * w + w / 2) as usize];
+    println!("render_scene occlusion: centre pixel rgba = {center:?}");
+    assert!(
+        center[0] > 0.5 && center[1] < 0.2,
+        "expected nearer (red) object at centre pixel, got {center:?} — occlusion/shared-depth broken"
+    );
+}
+
+/// One Phong-lit quad (facing the camera, normal aligned with the
+/// light so `N·L == 1` at every covered fragment) rendered through
+/// `node.render_scene` with `objects = 1` and either 1 or 2 IDENTICAL
+/// lights wired to `light_0` (/ `light_1`). Ambient = 0 so the readback
+/// is pure per-light diffuse accumulation.
+fn render_scene_phong_quad_frame(w: u32, h: u32, num_lights: u32) -> Vec<[f32; 4]> {
+    let device = crate::test_device();
+    let format = GpuTextureFormat::Rgba16Float;
+
+    let mut g = Graph::new();
+    let mesh = g.add_node(Box::new(MeshSource::new()));
+    let cam = g.add_node(Box::new(CameraOrbit::new()));
+    g.set_param(cam, "orbit", ParamValue::Float(std::f32::consts::FRAC_PI_2))
+        .unwrap();
+    g.set_param(cam, "tilt", ParamValue::Float(0.0)).unwrap();
+    g.set_param(cam, "distance", ParamValue::Float(4.0)).unwrap();
+    g.set_param(cam, "fov_y", ParamValue::Float(1.0)).unwrap();
+
+    let mat = g.add_node(Box::new(PhongMaterial::new()));
+    g.set_param(mat, "color_r", ParamValue::Float(1.0)).unwrap();
+    g.set_param(mat, "color_g", ParamValue::Float(1.0)).unwrap();
+    g.set_param(mat, "color_b", ParamValue::Float(1.0)).unwrap();
+    g.set_param(mat, "ambient", ParamValue::Float(0.0)).unwrap();
+    // Zero specular tint so the readback isolates the diffuse term the
+    // gate cares about (specular would also double correctly with
+    // identical lights, but a flat diffuse-only comparison is cleaner).
+    g.set_param(mat, "specular_color_r", ParamValue::Float(0.0)).unwrap();
+    g.set_param(mat, "specular_color_g", ParamValue::Float(0.0)).unwrap();
+    g.set_param(mat, "specular_color_b", ParamValue::Float(0.0)).unwrap();
+
+    let render = g.add_node(Box::new(RenderScene::new()));
+    g.set_param(render, "objects", ParamValue::Float(1.0)).unwrap();
+    g.set_param(render, "lights", ParamValue::Float(num_lights as f32))
+        .unwrap();
+
+    let sink = g.add_node(Box::new(FinalOutput::new()));
+
+    g.connect((mesh, "out"), (render, "mesh_0")).unwrap();
+    g.connect((mat, "out"), (render, "material_0")).unwrap();
+    g.connect((cam, "out"), (render, "camera")).unwrap();
+
+    // Sun light on the SAME side the front-facing flip lands on. The
+    // camera's orbit = FRAC_PI_2 puts it at (0, 0, +distance), but
+    // `quad_verts()` shares `back_facing_tri()`'s winding
+    // (`back_face_is_lit_by_front_facing_flip`, above) — this camera
+    // sees the quad's rasterizer BACK face, so `front_facing == false`
+    // and the shader flips the +z geometric normal to (0, 0, -1). A
+    // light at pos_z < 0 aimed at the origin gives dir = (0, 0, 1), so
+    // L = -dir = (0, 0, -1) — matching the FLIPPED normal exactly, N·L
+    // == 1 everywhere it's lit. (A light at pos_z > 0 — the naively
+    // "obvious" camera-side placement — lights the pre-flip normal
+    // instead and this quad reads back black, per the same flip.)
+    let light0 = g.add_node(Box::new(LightNode::new()));
+    g.set_param(light0, "mode", ParamValue::Enum(0)).unwrap();
+    g.set_param(light0, "pos_x", ParamValue::Float(0.0)).unwrap();
+    g.set_param(light0, "pos_y", ParamValue::Float(0.0)).unwrap();
+    g.set_param(light0, "pos_z", ParamValue::Float(-10.0)).unwrap();
+    g.set_param(light0, "aim_x", ParamValue::Float(0.0)).unwrap();
+    g.set_param(light0, "aim_y", ParamValue::Float(0.0)).unwrap();
+    g.set_param(light0, "aim_z", ParamValue::Float(0.0)).unwrap();
+    g.set_param(light0, "intensity", ParamValue::Float(1.0)).unwrap();
+    g.connect((light0, "out"), (render, "light_0")).unwrap();
+
+    if num_lights == 2 {
+        let light1 = g.add_node(Box::new(LightNode::new()));
+        g.set_param(light1, "mode", ParamValue::Enum(0)).unwrap();
+        g.set_param(light1, "pos_x", ParamValue::Float(0.0)).unwrap();
+        g.set_param(light1, "pos_y", ParamValue::Float(0.0)).unwrap();
+        g.set_param(light1, "pos_z", ParamValue::Float(-10.0)).unwrap();
+        g.set_param(light1, "aim_x", ParamValue::Float(0.0)).unwrap();
+        g.set_param(light1, "aim_y", ParamValue::Float(0.0)).unwrap();
+        g.set_param(light1, "aim_z", ParamValue::Float(0.0)).unwrap();
+        g.set_param(light1, "intensity", ParamValue::Float(1.0)).unwrap();
+        g.connect((light1, "out"), (render, "light_1")).unwrap();
+    }
+
+    g.connect((render, "color"), (sink, "in")).unwrap();
+
+    let plan = compile(&g).unwrap();
+    let r_color = output_resource(&plan, render, "color");
+    let r_mesh = output_resource(&plan, mesh, "out");
+
+    let mut backend = MetalBackend::new(&device, w, h, format);
+    let color_target = RenderTarget::new(&device, w, h, format, "render-scene-multilight-color");
+    let color_slot = backend.pre_bind_texture_2d(r_color, color_target);
+
+    let verts = quad_verts();
+    let vert_bytes = (verts.len() * std::mem::size_of::<MeshVertex>()) as u64;
+    let vert_buf = device.create_buffer_shared(vert_bytes);
+    unsafe {
+        vert_buf.write(0, bytemuck::cast_slice(&verts));
+    }
+    backend.pre_bind_array(r_mesh, vert_buf);
+
+    let mut native_enc = device.create_encoder("render-scene-multilight");
+    let mut exec = Executor::new(Box::new(backend));
+    {
+        let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+        exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
+    }
+    native_enc.commit_and_wait_completed();
+
+    let out_tex = exec
+        .backend()
+        .texture_2d(color_slot)
+        .expect("color texture retained");
+    readback_rgba_f32(&device, out_tex, w, h)
+}
+
+/// Value-level multi-light gate (REALTIME_3D §5 P1): 2 IDENTICAL lights
+/// must sum to (approximately) 2× the diffuse of 1 light at a
+/// directly-lit pixel, within f16 round-trip tolerance.
+#[test]
+fn render_scene_multi_light_accumulates_diffuse_linearly() {
+    let (w, h) = (64u32, 64u32);
+    let one = render_scene_phong_quad_frame(w, h, 1);
+    let two = render_scene_phong_quad_frame(w, h, 2);
+
+    let center_idx = (h / 2 * w + w / 2) as usize;
+    let p1 = one[center_idx];
+    let p2 = two[center_idx];
+    println!("render_scene multi-light: 1-light = {p1:?}, 2-light = {p2:?}");
+
+    assert!(p1[0] > 0.1, "1-light centre pixel should be lit, got {p1:?}");
+    for c in 0..3 {
+        assert!(
+            (p2[c] - 2.0 * p1[c]).abs() < 0.05,
+            "channel {c}: 2-light {} should be ≈2× 1-light {} (got {})",
+            p2[c],
+            p1[c],
+            p2[c] / p1[c].max(1e-6)
+        );
+    }
+}
+
+/// Two cubes, offset in X and one slightly nearer the camera, phong-lit
+/// by one sun light, through `node.render_scene`. Reinhard-tonemapped
+/// Rgba8 PNG bytes — visual gate for the orchestrator to eyeball.
+fn render_scene_two_cubes_png(w: u32, h: u32) -> Vec<u8> {
+    let device = crate::test_device();
+    let format = GpuTextureFormat::Rgba16Float;
+
+    let mut g = Graph::new();
+    let cube0 = g.add_node(Box::new(GenerateCubeMesh::new()));
+    let cube1 = g.add_node(Box::new(GenerateCubeMesh::new()));
+
+    // Same orbit/tilt/fov as `render_pbr_cube` above (a camera angle
+    // already proven to light a cube well), just pulled back a bit
+    // (distance 4 → 9) to fit two objects in frame.
+    let cam = g.add_node(Box::new(CameraOrbit::new()));
+    g.set_param(cam, "orbit", ParamValue::Float(0.7)).unwrap();
+    g.set_param(cam, "tilt", ParamValue::Float(0.35)).unwrap();
+    g.set_param(cam, "distance", ParamValue::Float(9.0)).unwrap();
+    g.set_param(cam, "fov_y", ParamValue::Float(0.9)).unwrap();
+
+    let mat0 = g.add_node(Box::new(PhongMaterial::new()));
+    g.set_param(mat0, "color_r", ParamValue::Float(0.85)).unwrap();
+    g.set_param(mat0, "color_g", ParamValue::Float(0.3)).unwrap();
+    g.set_param(mat0, "color_b", ParamValue::Float(0.3)).unwrap();
+    g.set_param(mat0, "ambient", ParamValue::Float(0.2)).unwrap();
+
+    let mat1 = g.add_node(Box::new(PhongMaterial::new()));
+    g.set_param(mat1, "color_r", ParamValue::Float(0.3)).unwrap();
+    g.set_param(mat1, "color_g", ParamValue::Float(0.55)).unwrap();
+    g.set_param(mat1, "color_b", ParamValue::Float(0.85)).unwrap();
+    g.set_param(mat1, "ambient", ParamValue::Float(0.2)).unwrap();
+
+    let render = g.add_node(Box::new(RenderScene::new()));
+    g.set_param(render, "objects", ParamValue::Float(2.0)).unwrap();
+    g.set_param(render, "lights", ParamValue::Float(1.0)).unwrap();
+    // Object 0 offset to one side. Object 1 offset toward the camera
+    // along roughly this orbit/tilt's eye-to-origin direction (0.72,
+    // 0.34, 0.60 — the reverse of the camera's forward vector) with only
+    // a modest same-side X offset, so its (larger, nearer) silhouette
+    // partially overlaps object 0's — the occlusion render_scene exists
+    // for, made visible.
+    g.set_param(render, "pos_x_0", ParamValue::Float(-1.5)).unwrap();
+    g.set_param(render, "pos_x_1", ParamValue::Float(0.8)).unwrap();
+    g.set_param(render, "pos_y_1", ParamValue::Float(0.3)).unwrap();
+    g.set_param(render, "pos_z_1", ParamValue::Float(1.2)).unwrap();
+
+    // Angled key light in the OPPOSITE octant from the camera. Per the
+    // established `back_facing_tri()` / `back_face_is_lit_by_front_facing_flip`
+    // fixture (above): this renderer's shared vertex winding makes the
+    // camera-visible faces of a convex mesh report `front_facing ==
+    // false`, so the shader's flip inverts their outward normal — a cube
+    // face visible because it points toward the camera's octant ends up
+    // shaded with a normal pointing toward the OPPOSITE octant. A light
+    // placed in the camera's own octant (the naively "obvious" choice)
+    // therefore lights the geometry's UN-flipped (camera-facing) side —
+    // giving zero N·L on every visible face, exactly the all-ambient
+    // result this comment used to describe before the fix. Placing the
+    // light in the opposite octant matches the flipped normal instead.
+    let light = g.add_node(Box::new(LightNode::new()));
+    g.set_param(light, "pos_x", ParamValue::Float(-6.0)).unwrap();
+    g.set_param(light, "pos_y", ParamValue::Float(-5.0)).unwrap();
+    g.set_param(light, "pos_z", ParamValue::Float(-4.0)).unwrap();
+    g.set_param(light, "intensity", ParamValue::Float(1.6)).unwrap();
+
+    let sink = g.add_node(Box::new(FinalOutput::new()));
+
+    g.connect((cube0, "vertices"), (render, "mesh_0")).unwrap();
+    g.connect((cube1, "vertices"), (render, "mesh_1")).unwrap();
+    g.connect((mat0, "out"), (render, "material_0")).unwrap();
+    g.connect((mat1, "out"), (render, "material_1")).unwrap();
+    g.connect((cam, "out"), (render, "camera")).unwrap();
+    g.connect((light, "out"), (render, "light_0")).unwrap();
+    g.connect((render, "color"), (sink, "in")).unwrap();
+
+    let plan = compile(&g).unwrap();
+    let r_color = output_resource(&plan, render, "color");
+    let r_cube0 = output_resource(&plan, cube0, "vertices");
+    let r_cube1 = output_resource(&plan, cube1, "vertices");
+
+    let mut backend = MetalBackend::new(&device, w, h, format);
+    let color_target = RenderTarget::new(&device, w, h, format, "render-scene-two-cubes-color");
+    let color_slot = backend.pre_bind_texture_2d(r_color, color_target);
+    pre_bind_cube_output(&device, &mut backend, r_cube0);
+    pre_bind_cube_output(&device, &mut backend, r_cube1);
+
+    let mut native_enc = device.create_encoder("render-scene-two-cubes");
+    let mut exec = Executor::new(Box::new(backend));
+    {
+        let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+        exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
+    }
+    native_enc.commit_and_wait_completed();
+
+    let out_tex = exec
+        .backend()
+        .texture_2d(color_slot)
+        .expect("color texture retained");
+    let bytes_per_row = w * 8;
+    let total_bytes = u64::from(h * bytes_per_row);
+    let readback_buf = device.create_buffer_shared(total_bytes);
+    let mut readback_enc = device.create_encoder("render-scene-two-cubes-readback");
+    readback_enc.copy_texture_to_buffer(out_tex, &readback_buf, w, h, bytes_per_row);
+    readback_enc.commit_and_wait_completed();
+
+    let ptr = readback_buf.mapped_ptr().expect("shared readback");
+    let halves: &[u16] =
+        unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for px in halves.chunks_exact(4) {
+        rgba.push(tonemap_channel(half_to_f32(px[0])));
+        rgba.push(tonemap_channel(half_to_f32(px[1])));
+        rgba.push(tonemap_channel(half_to_f32(px[2])));
+        let a = half_to_f32(px[3]).clamp(0.0, 1.0);
+        rgba.push((a * 255.0).round() as u8);
+    }
+    rgba
+}
+
+/// Visual gate (REALTIME_3D §5 P1): render the two-cube scene to a PNG
+/// for the orchestrator to eyeball. Ignored by default: needs a GPU and
+/// writes a file. Point `MESH_SNAP_OUT` at an absolute path to control
+/// the output location; defaults to `target/mesh-snap/scene_two_cubes.png`.
+#[test]
+#[ignore]
+fn scene_two_cubes_renders_to_png() {
+    let w = 512u32;
+    let h = 512u32;
+    let rgba = render_scene_two_cubes_png(w, h);
+
+    let mut non_black = 0usize;
+    for px in rgba.chunks_exact(4) {
+        if px[0] != 0 || px[1] != 0 || px[2] != 0 {
+            non_black += 1;
+        }
+    }
+    let total = (w * h) as usize;
+    let fraction = non_black as f64 / total as f64;
+    println!("render_scene two-cubes: non-black pixel fraction = {fraction:.4} ({non_black}/{total})");
+    assert!(
+        fraction > 0.02,
+        "expected >2% non-black pixels, got {fraction:.4} ({non_black}/{total}) — likely a broken render_scene dispatch"
+    );
+
+    let out_path = std::env::var("MESH_SNAP_OUT")
+        .unwrap_or_else(|_| "target/mesh-snap/scene_two_cubes.png".to_string());
+    if let Some(parent) = std::path::Path::new(&out_path).parent() {
+        std::fs::create_dir_all(parent).expect("create output dir");
+    }
+    image::save_buffer(&out_path, &rgba, w, h, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {out_path}: {e}"));
+    println!("render_scene two-cubes: wrote {out_path}");
 }
