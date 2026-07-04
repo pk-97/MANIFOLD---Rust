@@ -182,7 +182,9 @@ diagnosis); the remaining fixes are structural and are now folded into this
 spec (assistant-text cadence, `task_addressed` state, verify-claim reword,
 move-id validation). Rather than paying for a third offline run, the system
 goes live in **supervised mode**: whispers are injected but carry an explicit
-`unvalidated` marker in the `<daemon>` tag and are surfaced to Peter, every
+`unvalidated` marker in the `<daemon>` tag (marker REMOVED 2026-07-04 with the
+confidence attribute — Peter judged both licenses to discount the anchor;
+supervision continues via the acknowledgment sentence) and are surfaced to Peter, every
 injection is logged, and §4b outcome scoring + auto-mute are active from day
 one. The gates above still stand — they are now scored from live telemetry by
 the sleep pass instead of from replay. `replay.py` stays as the offline
@@ -279,7 +281,7 @@ fossilizes into a museum of 2026 failure modes.
    reword is already in `moves.md`.)
 3. `observer.py` — wrap the same windowing in the tail/cadence/verdict loop.
 4. Valve hooks + `settings.json` wiring, with the fail-open checks. Whispers
-   carry the `unvalidated` marker until the sleep pass clears the gates from
+   carry the `unvalidated` marker (removed 2026-07-04, see §4) until the sleep pass clears the gates from
    live telemetry.
 5. Supervised live period: injections logged AND surfaced to Peter; §4b
    scoring + auto-mute active.
