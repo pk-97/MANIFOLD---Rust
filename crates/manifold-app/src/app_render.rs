@@ -2446,6 +2446,7 @@ impl Application {
                 &self.local_project,
                 active_idx,
                 &self.selection,
+                &self.content_state.automation_latched_params,
             );
             needs_structural_sync = true;
         }
@@ -2466,6 +2467,7 @@ impl Application {
                 &self.local_project,
                 active_idx,
                 &self.selection,
+                &self.content_state.automation_latched_params,
             );
         } else if self.active_layer_id != prev_active_layer {
             let active_idx = self
@@ -2483,6 +2485,7 @@ impl Application {
                 &self.local_project,
                 active_idx,
                 &self.selection,
+                &self.content_state.automation_latched_params,
             );
             needs_structural_sync = true; // Inspector content changed — needs rebuild
         }
@@ -2503,6 +2506,7 @@ impl Application {
                     &self.local_project,
                     active_idx,
                     &self.selection,
+                    &self.content_state.automation_latched_params,
                 );
             }
         }

@@ -321,7 +321,11 @@ pub fn render_graph_editor_to_png(
         manifold_core::GraphTarget::Effect(_) => None,
     };
     crate::ui_bridge::sync_project_data(&mut editor_ui, project, active_idx, selection);
-    crate::ui_bridge::sync_inspector_data(&mut editor_ui, project, active_idx, selection);
+    // No `ContentState` exists on this path (a bare fixture `Project`, no
+    // playback engine) — the graph-editor lane render never has latch data,
+    // so it can only ever show the red "automated" dot, never the gray
+    // overridden state. Honest empty slice, not a stopgap.
+    crate::ui_bridge::sync_inspector_data(&mut editor_ui, project, active_idx, selection, &[]);
     editor_ui.build_inspector_in_rect(UiRect::new(
         card_x,
         0.0,

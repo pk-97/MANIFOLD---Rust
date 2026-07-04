@@ -1204,6 +1204,7 @@ pub fn sync_inspector_data(
     project: &Project,
     active_layer: Option<usize>,
     selection: &SelectionState,
+    automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
 ) {
     // Audio Setup modal — refresh its current device + send list while it's
     // open. Resolving the device through the directory once per sync (only while
@@ -1417,7 +1418,11 @@ pub fn sync_inspector_data(
     }
 
     // Master effects → inspector (envelopes ride on each instance)
-    let mut master_configs = effects_to_configs(&project.settings.master_effects, OscScope::Master);
+    let mut master_configs = effects_to_configs(
+        &project.settings.master_effects,
+        OscScope::Master,
+        automation_latched,
+    );
     attach_audio_sends(&mut master_configs, &project.audio_setup);
     ui.inspector.configure_master_effects(&master_configs);
 
@@ -1429,7 +1434,7 @@ pub fn sync_inspector_data(
             let mut layer_effects = layer
                 .effects
                 .as_ref()
-                .map(|e| effects_to_configs(e, OscScope::Layer(lid)))
+                .map(|e| effects_to_configs(e, OscScope::Layer(lid), automation_latched))
                 .unwrap_or_default();
             attach_audio_sends(&mut layer_effects, &project.audio_setup);
             ui.inspector.configure_layer_effects(&layer_effects);
@@ -1451,6 +1456,7 @@ pub fn sync_inspector_data(
                         lid,
                         clip_string_params,
                         layer.generator_graph(),
+                        automation_latched,
                     )
                 });
             if let Some(c) = gen_config.as_mut() {
@@ -1624,14 +1630,24 @@ struct CardModulation {
     envelope_active: Vec<bool>,
     target_norm: Vec<f32>,
     env_decay: Vec<f32>,
+    automation_active: Vec<bool>,
+    automation_overridden: Vec<bool>,
 }
 
 /// Build the driver + envelope display arrays for one preset instance's card.
 /// `resolve` maps a modulation row's `param_id` to its card slot index.
+/// `latched` is `ContentState::automation_latched_params` — checked against
+/// `(inst.id, lane.param_id)` for the overridden-gray state (P4 §7's dot).
+/// Always `inst.id`, never the card's own possibly-blanked `effect_id` field:
+/// generator instances get a real, freshly-synthesized `EffectId` at load
+/// (see `manifold_playback::automation`'s `AutomationLatches` doc comment)
+/// even though `preset_to_config` blanks the DISPLAYED `effect_id` for
+/// generator cards for unrelated reasons.
 fn build_card_modulation(
     inst: &PresetInstance,
     n: usize,
     resolve: impl Fn(&str) -> Option<usize>,
+    latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
 ) -> CardModulation {
     let mut m = CardModulation {
         driver_active: vec![false; n],
@@ -1646,6 +1662,8 @@ fn build_card_modulation(
         envelope_active: vec![false; n],
         target_norm: vec![1.0; n],
         env_decay: vec![1.0; n],
+        automation_active: vec![false; n],
+        automation_overridden: vec![false; n],
     };
     if let Some(ref drivers) = inst.drivers {
         for d in drivers {
@@ -1677,6 +1695,23 @@ fn build_card_modulation(
             m.envelope_active[pi] = true;
             m.target_norm[pi] = env.target_normalized;
             m.env_decay[pi] = env.decay_beats;
+        }
+    }
+    if let Some(ref lanes) = inst.automation_lanes {
+        for lane in lanes {
+            // Enabled + non-empty only (§7: "an empty/disabled lane shows no
+            // dot") — matches the sampler's own `has_lanes` gate in
+            // `manifold_playback::automation`.
+            if !lane.enabled || lane.points.is_empty() {
+                continue;
+            }
+            let Some(pi) = resolve(lane.param_id.as_ref()).filter(|&pi| pi < n) else {
+                continue;
+            };
+            m.automation_active[pi] = true;
+            m.automation_overridden[pi] = latched
+                .iter()
+                .any(|(eid, pid)| *eid == inst.id && *pid == lane.param_id);
         }
     }
     m
@@ -1778,6 +1813,7 @@ fn attach_audio_sends(configs: &mut [ParamCardConfig], setup: &manifold_core::au
 fn effects_to_configs(
     effects: &[PresetInstance],
     osc_scope: OscScope<'_>,
+    automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
 ) -> Vec<ParamCardConfig> {
     effects
         .iter()
@@ -1790,6 +1826,7 @@ fn effects_to_configs(
                 osc_scope,
                 None,
                 None,
+                automation_latched,
             )
         })
         .collect()
@@ -1843,6 +1880,8 @@ fn empty_generator_config(inst: &PresetInstance) -> ParamCardConfig {
         driver_triplet: vec![],
         driver_free_period: vec![],
         audio: Default::default(),
+        automation_active: vec![],
+        automation_overridden: vec![],
     }
 }
 
@@ -1862,6 +1901,7 @@ fn preset_to_config(
     osc_scope: OscScope<'_>,
     clip_string_params: Option<&std::collections::BTreeMap<String, String>>,
     generator_graph: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+    automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
 ) -> Option<ParamCardConfig> {
     use manifold_core::preset_def::PresetKind;
     let preset_type = inst.effect_type();
@@ -2047,7 +2087,12 @@ fn preset_to_config(
         .collect();
     let n = params.len();
 
-    let m = build_card_modulation(inst, n, |id| id_to_index.get(id).copied());
+    let m = build_card_modulation(
+        inst,
+        n,
+        |id| id_to_index.get(id).copied(),
+        automation_latched,
+    );
     let audio = build_audio_card_state(inst, n, |id| id_to_index.get(id).copied());
 
     // String params are a generator-only surface (text inputs, font dropdowns),
@@ -2126,6 +2171,8 @@ fn preset_to_config(
         driver_triplet: m.driver_triplet,
         driver_free_period: m.driver_free_period,
         audio,
+        automation_active: m.automation_active,
+        automation_overridden: m.automation_overridden,
     })
 }
 
@@ -2156,6 +2203,7 @@ fn gen_params_to_config(
     layer_id: &str,
     clip_string_params: Option<&std::collections::BTreeMap<String, String>>,
     generator_graph: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+    automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
 ) -> ParamCardConfig {
     preset_to_config(
         gp,
@@ -2164,6 +2212,7 @@ fn gen_params_to_config(
         OscScope::Layer(layer_id),
         clip_string_params,
         generator_graph,
+        automation_latched,
     )
     .expect("generator preset_to_config always yields a config")
 }
