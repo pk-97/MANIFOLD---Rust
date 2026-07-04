@@ -165,6 +165,10 @@ pub enum PanelAction {
     /// every automated param's lane (§4). Lit red in the transport bar
     /// whenever any latch is active.
     AutomationBackToArrangement,
+    /// Show/hide lane strips across the timeline (Live's `A`) — a pure UI
+    /// view-state toggle, not a project mutation or runtime playback state.
+    /// Lit when lanes are currently visible.
+    ToggleAutomationMode,
 
     // File
     NewProject,

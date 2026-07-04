@@ -45,6 +45,7 @@ const BPM_CLEAR_W: f32 = 32.0;
 // group, mirroring the removed file-ops group's old slot.
 const AUTO_ARM_BUTTON_W: f32 = 48.0;
 const AUTO_BACK_BUTTON_W: f32 = 92.0;
+const AUTO_LANES_BUTTON_W: f32 = 62.0;
 
 // ── Panel-specific colors ──────────────────────────────────────────
 
@@ -120,6 +121,10 @@ pub struct TransportPanel {
     // Automation globals (P4).
     automation_armed: bool,
     automation_overridden: bool,
+    /// View-only: lanes currently shown across the timeline (`PanelAction::
+    /// ToggleAutomationMode`) — lit exactly when visible, no runtime/project
+    /// state behind it.
+    automation_mode_visible: bool,
 }
 
 impl TransportPanel {
@@ -152,6 +157,7 @@ impl TransportPanel {
             bpm_clear_active: false,
             automation_armed: false,
             automation_overridden: false,
+            automation_mode_visible: false,
         }
     }
 
@@ -239,6 +245,12 @@ impl TransportPanel {
     pub fn set_automation_state(&mut self, armed: bool, overridden: bool) {
         self.automation_armed = armed;
         self.automation_overridden = overridden;
+    }
+
+    /// View-only lane visibility (P4 `ToggleAutomationMode`) — lights the
+    /// LANES button exactly when lane strips are currently shown.
+    pub fn set_automation_mode_visible(&mut self, visible: bool) {
+        self.automation_mode_visible = visible;
     }
 
     // ── View description ────────────────────────────────────────────
@@ -371,17 +383,20 @@ impl TransportPanel {
             )
     }
 
-    /// Right-aligned automation globals (P4): ARM (lit red while armed, mirrors
-    /// REC's active/idle red pair) + BACK (Back to Arrangement, lit red exactly
-    /// when a lane override latch is active — Live's affordance).
+    /// Right-aligned automation globals (P4): LANES (view-only, lit while lane
+    /// strips are shown — Live's `A`) + BACK (Back to Arrangement, lit red
+    /// exactly when a lane override latch is active) + ARM (lit red while
+    /// armed, mirrors REC's active/idle red pair).
     fn automation_group(&self) -> View {
         let arm_bg = if self.automation_armed { color::RECORD_ACTIVE } else { color::RECORD_RED };
         let back_bg = if self.automation_overridden { color::RECORD_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+        let lanes_bg = if self.automation_mode_visible { color::AUTOMATION_LINE_COLOR } else { color::BUTTON_INACTIVE_C32 };
 
         View::row(ITEM_SPACING)
             .fill()
             .main_align(Align::End)
             .cross_align(Align::Center)
+            .child(Self::btn("LANES", AUTO_LANES_BUTTON_W, button_style(lanes_bg), PanelAction::ToggleAutomationMode))
             .child(Self::btn("BACK", AUTO_BACK_BUTTON_W, button_style(back_bg), PanelAction::AutomationBackToArrangement))
             .child(Self::btn("ARM", AUTO_ARM_BUTTON_W, button_style(arm_bg), PanelAction::ToggleAutomationArm))
     }
@@ -500,11 +515,14 @@ mod tests {
             // Right group removed: file ops → File menu, HDR/PERC → Settings popup.
             // Automation globals (P4) now occupy that right-aligned slot: a Row
             // with `main_align(Align::End)` offsets its whole sequence by `slack`
-            // (see `chrome::layout::align_offset`), so BACK/ARM land flush against
-            // the padded right edge in child order — BACK first (left), ARM last
-            // (flush right), same math as `left_group`'s Start-aligned x but mirrored.
-            let auto_w = AUTO_BACK_BUTTON_W + ITEM_SPACING + AUTO_ARM_BUTTON_W;
+            // (see `chrome::layout::align_offset`), so LANES/BACK/ARM land flush
+            // against the padded right edge in child order — LANES first (left),
+            // ARM last (flush right), same math as `left_group`'s Start-aligned x
+            // but mirrored.
+            let auto_w = AUTO_LANES_BUTTON_W + ITEM_SPACING + AUTO_BACK_BUTTON_W + ITEM_SPACING + AUTO_ARM_BUTTON_W;
             let mut ax = bounds.x_max() - INSET - auto_w;
+            put("LANES", ax, AUTO_LANES_BUTTON_W);
+            ax += AUTO_LANES_BUTTON_W + ITEM_SPACING;
             put("BACK", ax, AUTO_BACK_BUTTON_W);
             ax += AUTO_BACK_BUTTON_W + ITEM_SPACING;
             put("ARM", ax, AUTO_ARM_BUTTON_W);
@@ -530,7 +548,7 @@ mod tests {
         g.compute(layout.transport_bar());
 
         let got = buttons(&tree);
-        assert_eq!(got.len(), 13, "13 transport buttons (sync left + transport centre + automation right)");
+        assert_eq!(got.len(), 14, "14 transport buttons (sync left + transport centre + automation right)");
         for (text, rect) in &got {
             let want = g.rects.get(text.as_str()).unwrap_or_else(|| panic!("unexpected button {text:?}"));
             assert!(
@@ -581,6 +599,10 @@ mod tests {
             intents.resolve(&tree, id_of("BACK"), Gesture::Click),
             Some(PanelAction::AutomationBackToArrangement)
         ));
+        assert!(matches!(
+            intents.resolve(&tree, id_of("LANES"), Gesture::Click),
+            Some(PanelAction::ToggleAutomationMode)
+        ));
     }
 
     #[test]
@@ -599,16 +621,23 @@ mod tests {
         }
 
         panel.set_automation_state(true, true);
+        panel.set_automation_mode_visible(true);
         panel.update(&mut tree);
         assert_eq!(tree.structure_version(), sv, "automation state toggle must not rebuild");
         assert_eq!(node(&tree, "ARM").style.bg_color, button_style(color::RECORD_ACTIVE).bg_color);
         assert_eq!(node(&tree, "BACK").style.bg_color, button_style(color::RECORD_ACTIVE).bg_color);
+        assert_eq!(node(&tree, "LANES").style.bg_color, button_style(color::AUTOMATION_LINE_COLOR).bg_color);
 
         panel.set_automation_state(false, false);
+        panel.set_automation_mode_visible(false);
         panel.update(&mut tree);
         assert_eq!(node(&tree, "ARM").style.bg_color, button_style(color::RECORD_RED).bg_color);
         assert_eq!(
             node(&tree, "BACK").style.bg_color,
+            button_style(color::BUTTON_INACTIVE_C32).bg_color
+        );
+        assert_eq!(
+            node(&tree, "LANES").style.bg_color,
             button_style(color::BUTTON_INACTIVE_C32).bg_color
         );
     }

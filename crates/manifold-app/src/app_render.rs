@@ -4164,6 +4164,21 @@ impl Application {
                 overlay_tracks,
             );
 
+            // Automation lane strips (P4, `docs/AUTOMATION_LANES_DESIGN.md` §7) —
+            // on top of the clip names, same overlay pass. Empty whenever
+            // automation mode is off (the viewport never populated any lanes
+            // this frame), so this is a no-op cost in the common case.
+            let automation_lanes = self
+                .ws
+                .ui_root
+                .viewport
+                .automation_lane_screens(&self.content_state.automation_latched_params);
+            manifold_renderer::automation_lane_draw::emit_automation_lanes(
+                ui,
+                &automation_lanes,
+                overlay_tracks,
+            );
+
             // Playhead — a red line spanning ruler + tracks, capped by a downward
             // triangle head at the top of the ruler (§24 5e). The head is the
             // single dominant "now" marker so it never competes with the blue
