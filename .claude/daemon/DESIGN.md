@@ -93,7 +93,14 @@ versioned. History on the daemon is non-negotiable — the sleep pass edits it.
   latency race (verdict lands ~5-10 s after the final text; Stop fires
   immediately; waiting violates fail-open), the invariant question (is a
   one-beat turn extension "blocking the session"?), and a re-block guard
-  (respect stop_hook_active). Do not build before sleep pass 1 rules on it.
+  (respect stop_hook_active). **RULED (Fable, 2026-07-04): build the partial
+  valve.** A Stop hook may block ONCE per turn, only when an ALREADY-PENDING
+  undelivered flag exists at Stop time (never wait for classification — the
+  race is accepted, turn-final-text flags stay next-prompt-delivered), with
+  the whisper as the block reason, honoring stop_hook_active, fail-open on
+  every error. Judgment: a one-beat extension carrying a pending whisper is
+  delivery, not blocking; waiting or classifying synchronously at Stop would
+  be blocking and stays forbidden. Sonnet-buildable.
 - **Subagent rule (2026-07-04, verified by live probe):** PostToolUse also fires
   for tool calls made *inside* subagents, carrying the MAIN session's id and
   transcript_path plus an `agent_id` field. The valve must not deliver when

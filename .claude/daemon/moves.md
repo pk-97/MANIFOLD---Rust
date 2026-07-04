@@ -8,6 +8,10 @@ for the classifier: observable transcript markers only, no mind-reading.
 
 Cooldown classes: `standard` = 20 tool events; `slow` = 40; `once` = once per session.
 
+2026-07-04 additions (Fable, early sleep-pass authoring with Peter): verify-claim
+wrong-medium sharpening; anchor/ungrounded-resolution (specimens: 735b0dc6 +
+the glTF P1c mispriced fork); coaching/price-the-fork (same P1c specimen).
+
 ---
 
 ## coaching/model-first
@@ -118,6 +122,22 @@ Cooldown classes: `standard` = 20 tool events; `slow` = 40; `once` = once per se
 > State what done looks like — the observable condition that ends this task — in
 > one sentence, before going further. Without it, "done" drifts toward "tired".
 
+## coaching/price-the-fork
+- **signature:** The assistant is asking the human to choose between options
+  where at least one option's cost or feasibility is stated as unknown or
+  hedged ("needs a small design fix", "would require some work", "not sure if
+  that's possible"), and the LEDGER shows no attempt to resolve that unknown
+  before asking. Also matches retroactively: the human picks the uncertain
+  option and the assistant declares the unknown resolved within its very next
+  text. Do not flag questions whose options are all concretely priced, or
+  where the unknown genuinely requires the human's knowledge to resolve.
+- **cooldown:** standard
+- **payload:**
+> Price the fork before offering it. One of those options hides an unknown you
+> haven't spent a single check on — resolve what one read or one thought can
+> resolve, then ask with real prices. A question that dissolves the moment the
+> human picks an option was not ready to be asked.
+
 ---
 
 ## anchor/verify-claim
@@ -133,11 +153,34 @@ Cooldown classes: `standard` = 20 tool events; `slow` = 40; `once` = once per se
   clippy run, "tests pass" citing a test run) is verified — never flag it. Flag
   only when the evidence offered checks a different thing than the claim it is
   used to back. A green build is not evidence for a claim it didn't check.
+  Evidence in the wrong MEDIUM is evidence for a different thing: a claim about
+  visual output backed only by arithmetic, measurement, or code reading (no
+  render, no screenshot, no look), or a claim about runtime behavior backed
+  only by reading source, matches this signature even though checking occurred.
+  The check must run where the failure would actually show.
 - **cooldown:** standard
 - **payload:**
 > That claim hasn't been checked yet. Run the verification in the medium where
 > failure would actually show — the test, the run, the render — before stating it
 > as done. If you can't verify it here, say exactly that instead.
+
+## anchor/ungrounded-resolution
+- **signature:** RECENT contains an authoritative account of how a system works,
+  or a declaration that a design question or blocker is resolved ("I just
+  resolved it", "turns out", "the way this works is"), where the account's
+  specifics — names, mechanisms, parameters, defaults — appear for the first
+  time in that same text, and the LEDGER shows no read, search, or run of the
+  described artifact within the window. Do not flag when the text cites files
+  or symbols the LEDGER shows being examined, or when it explicitly marks
+  itself as a guess, proposal, or unverified ("I think", "proposal:", "not
+  checked"). The tell is authority without provenance: the description is
+  stated as fact and nothing in the window is where it could have come from.
+- **cooldown:** standard
+- **payload:**
+> That account exists only in this message so far — nothing in view checked it.
+> Before building on it or presenting it as settled: open the thing you just
+> described and verify the two specifics most likely to be wrong. If it's a
+> proposal rather than a report, call it a proposal and name what's unchecked.
 
 ## anchor/circling
 - **signature:** The same file read three or more times, or edited repeatedly with
