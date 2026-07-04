@@ -9,7 +9,11 @@ grades and changes nothing is a valid pass; bias toward silence.
 - `.claude/daemon/telemetry.jsonl` — injected / scored / observer_spawn events
 - session transcripts: `~/.claude/projects/-Users-peterkiemann-MANIFOLD---Rust/<session>.jsonl`
 - `.claude/daemon/moves.md`, `rubric.md`, `DESIGN.md` (§4 gates, §4b/4c dials)
-- prior grades: `.claude/daemon/eval/live_grades.jsonl` (append-only, created by pass 1)
+- prior grades: `.claude/daemon/eval/live_grades.jsonl` (append-only, the durable
+  pass-graded corpus — the only tracked grade file; this pass writes it)
+- provisional session self-grades: `.claude/daemon/eval/live_grades.session*.jsonl`
+  (gitignored, `grader:session`; a session appends its own fires here so the tracked
+  corpus never goes dirty mid-session — see step 2)
 
 ## Procedure
 
@@ -24,10 +28,13 @@ grades and changes nothing is a valid pass; bias toward silence.
    y/n/unclear). Append to `eval/live_grades.jsonl`:
    `{ts, session_id, seq, move_id, correct, effective, ordinal, notes}`.
    Sessions self-grade at fire time since 2026-07-04 (records with
-   `"grader": "session"`, prompted by the supervised-mode sentence): treat
-   these as provisional input, not verdicts — confirm or override each with
-   your own transcript read; on disagreement append a pass-graded record for
-   the same (session_id, seq) rather than editing the session's line.
+   `"grader": "session"`, prompted by the supervised-mode sentence). Since
+   2026-07-05 those land in `eval/live_grades.session*.jsonl` (gitignored),
+   not the tracked corpus — read every session file for them. Treat them as
+   provisional input, not verdicts — confirm or override each with your own
+   transcript read; on disagreement write a pass-graded record for the same
+   (session_id, seq) into `live_grades.jsonl` rather than editing the
+   session's line.
 3. **Count misses.** Recall can't be read off telemetry. Scan the graded
    week's human messages for correction-shaped turns (the user catching
    drift the daemon didn't flag); each is a FN with a timestamp. Ask Peter
@@ -52,8 +59,11 @@ grades and changes nothing is a valid pass; bias toward silence.
    informs the Stop-valve's value once built).
 8. **Close.** Commit everything (moves.md, dial changes, live_grades.jsonl,
    this file if procedure changed) with a `daemon: sleep pass N` message
-   listing gates + actions. SIGTERM all `verdicts/*.pid` so daemons reload.
-   Update the `daemon` memory (gates, catalog count, open decisions).
+   listing gates + actions. Once the session grades are folded into
+   `live_grades.jsonl`, delete the consumed `eval/live_grades.session*.jsonl`
+   files (gitignored, so nothing to commit) so they don't re-grade next pass.
+   SIGTERM all `verdicts/*.pid` so daemons reload. Update the `daemon` memory
+   (gates, catalog count, open decisions).
 
 ## Rules
 - Fail toward silence: when a grade is genuinely unclear, `unclear`, not TP.
