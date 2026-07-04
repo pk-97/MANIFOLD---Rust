@@ -107,6 +107,7 @@ class AgentWorker:
         self.state = common.WindowState()
         self.last_fire_event = {}
         self.fire_count = {}
+        self.fire_ordinal = {}
         self.escalated = False
         self.next_seq = 1
         self.phase = "orienting"
@@ -128,6 +129,7 @@ class Daemon:
 
         self.last_fire_event = {}  # move_id -> event_count of its last delivered fire
         self.fire_count = {}  # move_id -> times delivered (post-cooldown) this session
+        self.fire_ordinal = {}  # effective move_id -> nth fire this session (§4c-3b)
         self.escalated = False  # escalate/checkpoint fires at most once per session
         self.next_seq = 1  # re-seeded in _run from the persistent consumed marker
         self.phase = "orienting"
@@ -135,6 +137,10 @@ class Daemon:
 
         # DESIGN.md §4b: outcome scoring + auto-mute.
         self.fire_records = {}  # seq -> move_id, for every flag *this instance* raised
+        # DESIGN.md §4c-3b: fatigue ordinal — nth fire of `move_id` this session,
+        # keyed by seq (parallel to fire_records) so a later scoring pass can
+        # attach it without changing fire_records' shape.
+        self.fire_ordinals = {}  # seq -> ordinal
         self.pending_scores = {}  # seq -> {move_id, start_event_count, baseline_tool_class}
         self.recent_events = collections.deque(maxlen=64)  # (event_count, tool_class, status)
         self.last_consumed_seq = 0  # re-seeded in _run; tracks delivery via the consumed marker
@@ -483,6 +489,11 @@ class Daemon:
             mb.escalated = True
             _log(logf, f"escalating {move_id} -> escalate/checkpoint after {mb.fire_count[move_id]} fires")
 
+        # DESIGN.md §4c-3b: fatigue ordinal — nth fire of the move that's
+        # actually recorded downstream (post-escalation), this session.
+        mb.fire_ordinal[effective_id] = mb.fire_ordinal.get(effective_id, 0) + 1
+        ordinal = mb.fire_ordinal[effective_id]
+
         seq = mb.next_seq
         mb.next_seq += 1
         if mailbox is None:
@@ -492,6 +503,7 @@ class Daemon:
             # session's shared self.fire_records would collide seq numbers
             # across mailboxes.
             self.fire_records[seq] = effective_id
+            self.fire_ordinals[seq] = ordinal
         return {
             "move_id": effective_id,
             "evidence": verdict.get("evidence"),
@@ -513,13 +525,15 @@ class Daemon:
             move_id = self.fire_records.get(seq)
             if not move_id:
                 continue  # delivered before this instance existed, or unknown
+            ordinal = self.fire_ordinals.get(seq)  # §4c-3b: None for pre-this-instance fires
             family = _move_family(move_id)
             if family is None:
-                self._append_scored(seq, move_id, None, "unscored", logf)
+                self._append_scored(seq, move_id, None, "unscored", logf, ordinal=ordinal)
                 continue
             self.pending_scores[seq] = {
                 "move_id": move_id,
                 "family": family,
+                "ordinal": ordinal,
                 "start_event_count": self.state.total_tool_event_count,
                 "baseline_tool_class": self.recent_events[-1][1] if self.recent_events else None,
             }
@@ -532,10 +546,10 @@ class Daemon:
             window = [e for e in self.recent_events if e[0] > info["start_event_count"]]
             success = self._family_succeeded(info["family"], info["baseline_tool_class"], window)
             if success:
-                self._append_scored(seq, info["move_id"], info["family"], "success", logf)
+                self._append_scored(seq, info["move_id"], info["family"], "success", logf, ordinal=info["ordinal"])
                 del self.pending_scores[seq]
             elif len(window) >= SCORE_WINDOW_EVENTS:
-                self._append_scored(seq, info["move_id"], info["family"], "failure", logf)
+                self._append_scored(seq, info["move_id"], info["family"], "failure", logf, ordinal=info["ordinal"])
                 del self.pending_scores[seq]
             # else: not enough events yet — leave pending, check again next poll
 
@@ -553,7 +567,7 @@ class Daemon:
             return any(tool_class != baseline_tool_class for _ec, tool_class, _status, _target in window)
         return False
 
-    def _append_scored(self, seq, move_id, family, outcome, logf):
+    def _append_scored(self, seq, move_id, family, outcome, logf, ordinal=None):
         valve.append_telemetry(
             {
                 "ts": time.time(),
@@ -563,9 +577,10 @@ class Daemon:
                 "move_id": move_id,
                 "family": family,
                 "outcome": outcome,
+                "ordinal": ordinal,  # DESIGN.md §4c-3b: nth fire of move_id this session
             }
         )
-        _log(logf, f"scored seq={seq} move={move_id} outcome={outcome}")
+        _log(logf, f"scored seq={seq} move={move_id} outcome={outcome} ordinal={ordinal}")
         if outcome in ("success", "failure"):
             self._maybe_auto_mute(move_id, logf)
 
