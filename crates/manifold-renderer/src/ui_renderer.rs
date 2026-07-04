@@ -9,6 +9,7 @@ use crate::native_text::NativeTextRenderer;
 
 use manifold_ui::node::*;
 use manifold_ui::text::TextMeasure;
+use manifold_ui::transform2d::Affine2;
 use manifold_ui::tree::{TraversalEvent, UITree};
 
 /// Vertex for UI quad rendering.
@@ -206,6 +207,11 @@ struct RectCommand {
     /// `NO_GRAD` default on every solid command) → flat `color`.
     color2: [f32; 4],
     grad: [f32; 4],
+    /// Transform captured at draw time (current composed top of
+    /// `UIRenderer::transform_stack`, identity when empty). Applied to the 4
+    /// corner *positions* in `prepare()` — `uv`/`rect_params` are untouched, so
+    /// the fragment shader's local-space SDF rotates/scales for free.
+    transform: Affine2,
 }
 
 /// `grad` value for a solid (non-gradient) rect: enable channel is 0.
@@ -234,6 +240,8 @@ struct LineCommand {
     /// Immediate clip captured at draw time (lines are only ever emitted via
     /// the immediate API; trees draw rects and text only).
     clip: Option<Rect>,
+    /// Transform captured at draw time — see `RectCommand::transform`.
+    transform: Affine2,
 }
 
 /// A batch of rects sharing the same scissor state.
@@ -315,6 +323,11 @@ pub struct UIRenderer {
     // flushes the pending immediate-mode run so commands on either side
     // land in batches tagged with the correct depth.
     depth_stack: Vec<Depth>,
+    // Transform stack for scale/rotate draws (`docs/UI_TRANSFORM_STACK_DESIGN.md`).
+    // Empty = identity. Entries are pre-composed at push time (like
+    // `immediate_clip_stack`), so the top IS the effective transform.
+    // Pushing/popping flushes the pending immediate-mode run, like depth.
+    transform_stack: Vec<Affine2>,
     // Scissor batches accumulated during tree traversal.
     scissor_batches: Vec<ScissorBatch>,
     // Index into rect_commands where the current batch started.
@@ -417,6 +430,7 @@ impl UIRenderer {
             immediate_clip: None,
             immediate_clip_stack: Vec::with_capacity(4),
             depth_stack: Vec::with_capacity(4),
+            transform_stack: Vec::with_capacity(4),
             scissor_batches: Vec::with_capacity(8),
             current_batch_start: 0,
             prepared_batches: Vec::with_capacity(8),
@@ -478,6 +492,34 @@ impl UIRenderer {
         self.depth_stack.pop();
     }
 
+    // ── Transform ───────────────────────────────────────────────────
+
+    /// The transform subsequent draw commands are captured under. Identity
+    /// when the stack is empty.
+    pub fn current_transform(&self) -> Affine2 {
+        self.transform_stack.last().copied().unwrap_or(Affine2::IDENTITY)
+    }
+
+    /// Compose `transform` onto the current transform for subsequent commands
+    /// (rects, lines, text, icons) until the matching [`Self::pop_transform`].
+    /// Flushes the pending immediate-mode run first, exactly like
+    /// [`Self::push_depth`]/[`Self::push_immediate_clip`].
+    pub fn push_transform(&mut self, transform: Affine2) {
+        self.flush_immediate_run();
+        let composed = match self.transform_stack.last() {
+            Some(top) => top.mul(&transform),
+            None => transform,
+        };
+        self.transform_stack.push(composed);
+    }
+
+    /// Return to the transform that was active before the matching push.
+    pub fn pop_transform(&mut self) {
+        debug_assert!(!self.transform_stack.is_empty(), "pop_transform without push");
+        self.flush_immediate_run();
+        self.transform_stack.pop();
+    }
+
     /// Queue a filled rectangle.
     pub fn draw_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: impl Into<LinearColor>) {
         self.rect_commands.push(RectCommand {
@@ -491,6 +533,7 @@ impl UIRenderer {
             border_color: [0.0; 4],
             color2: [0.0; 4],
             grad: NO_GRAD,
+            transform: self.current_transform(),
         });
     }
 
@@ -515,6 +558,7 @@ impl UIRenderer {
             border_color: [0.0; 4],
             color2: [0.0; 4],
             grad: NO_GRAD,
+            transform: self.current_transform(),
         });
     }
 
@@ -546,6 +590,7 @@ impl UIRenderer {
             border_color: [0.0; 4],
             color2: end.into().0,
             grad: [dir[0], dir[1], 1.0, 0.0],
+            transform: self.current_transform(),
         });
     }
 
@@ -573,6 +618,7 @@ impl UIRenderer {
             border_color: border_color.into().0,
             color2: [0.0; 4],
             grad: NO_GRAD,
+            transform: self.current_transform(),
         });
     }
 
@@ -607,6 +653,7 @@ impl UIRenderer {
             border_color: [0.0; 4],
             color2: [0.0; 4],
             grad: NO_GRAD,
+            transform: self.current_transform(),
         });
     }
 
@@ -631,6 +678,7 @@ impl UIRenderer {
             color: color.into().0,
             depth: self.current_depth(),
             clip: self.immediate_clip,
+            transform: self.current_transform(),
         });
     }
 
@@ -652,8 +700,9 @@ impl UIRenderer {
                 .immediate_clip
                 .map(|r| [r.x, r.y, r.x + r.width, r.y + r.height]);
             let depth = self.current_depth();
+            let transform = self.current_transform();
             self.text_renderer
-                .draw_text(x, y, text, font_size, color, FontWeight::Medium, clip, depth);
+                .draw_text(x, y, text, font_size, color, FontWeight::Medium, clip, depth, transform);
         }
     }
 
@@ -806,6 +855,22 @@ impl UIRenderer {
             return;
         }
 
+        // Node-local affine (pivot = this node's own rect center — bounds
+        // aren't known until layout runs, so `UIStyle::transform` is expressed
+        // about the local origin and pivoted here; no subtree inheritance in
+        // v1, `docs/UI_TRANSFORM_STACK_DESIGN.md`). Pushed once around ALL of
+        // this node's draws below — background, text, dropdown caret — and
+        // popped at the end of the function.
+        let has_transform = if let Some(t) = style.transform {
+            let cx = bounds.x + bounds.width * 0.5;
+            let cy = bounds.y + bounds.height * 0.5;
+            let pivoted = Affine2::translate(cx, cy).mul(&t).mul(&Affine2::translate(-cx, -cy));
+            self.push_transform(pivoted);
+            true
+        } else {
+            false
+        };
+
         // Resolve effective background color from interaction flags
         let mut bg_color = style.bg_color;
         if node.flags.contains(UIFlags::PRESSED) && style.pressed_bg_color.a > 0 {
@@ -835,6 +900,7 @@ impl UIRenderer {
                     border_color: style.border_color.to_f32(),
                     color2: [0.0; 4],
                     grad: NO_GRAD,
+                    transform: self.current_transform(),
                 });
             } else if style.corner_radius > 0.0 {
                 self.rect_commands.push(RectCommand {
@@ -848,6 +914,7 @@ impl UIRenderer {
                     border_color: [0.0; 4],
                     color2: [0.0; 4],
                     grad: NO_GRAD,
+                    transform: self.current_transform(),
                 });
             } else {
                 self.rect_commands.push(RectCommand {
@@ -861,6 +928,7 @@ impl UIRenderer {
                     border_color: [0.0; 4],
                     color2: [0.0; 4],
                     grad: NO_GRAD,
+                    transform: self.current_transform(),
                 });
             }
         } else if style.border_width > 0.0 && style.border_color.a > 0 {
@@ -876,6 +944,7 @@ impl UIRenderer {
                 border_color: style.border_color.to_f32(),
                 color2: [0.0; 4],
                 grad: NO_GRAD,
+                transform: self.current_transform(),
             });
         }
 
@@ -906,6 +975,7 @@ impl UIRenderer {
             };
 
             let depth = self.current_depth();
+            let transform = self.current_transform();
             let first_char = text.chars().next().unwrap();
             if let Some(icon_id) = manifold_ui::icons::Icon::id_from_char(first_char) {
                 // Icon: square aspect ratio, centered in bounds
@@ -924,6 +994,7 @@ impl UIRenderer {
                     text_color,
                     clip_bounds,
                     depth,
+                    transform,
                 );
             } else {
                 let text_size = self.text_renderer.measure_text_cached(
@@ -970,6 +1041,7 @@ impl UIRenderer {
                         style.font_weight,
                         clip_bounds,
                         depth,
+                        transform,
                     );
                 }
 
@@ -982,6 +1054,7 @@ impl UIRenderer {
                     style.font_weight,
                     clip_bounds,
                     depth,
+                    transform,
                 );
             }
         }
@@ -1007,6 +1080,7 @@ impl UIRenderer {
             let caret_y = bounds.y + (bounds.height - size.y) * 0.5
                 + (caret_font as f32) * VERTICAL_OPTICAL_NUDGE;
             let depth = self.current_depth();
+            let transform = self.current_transform();
             self.text_renderer.draw_text(
                 caret_x,
                 caret_y,
@@ -1016,7 +1090,12 @@ impl UIRenderer {
                 style.font_weight,
                 clip_bounds,
                 depth,
+                transform,
             );
+        }
+
+        if has_transform {
+            self.pop_transform();
         }
     }
 
@@ -1037,8 +1116,9 @@ impl UIRenderer {
         #[cfg(target_os = "macos")]
         {
             let depth = self.current_depth();
+            let transform = self.current_transform();
             self.text_renderer
-                .draw_icon(icon_id, x, y, w, h, color.into().0, clip_bounds, depth);
+                .draw_icon(icon_id, x, y, w, h, color.into().0, clip_bounds, depth, transform);
         }
         #[cfg(not(target_os = "macos"))]
         let _ = (icon_id, x, y, w, h, color, clip_bounds);
@@ -1071,6 +1151,7 @@ impl UIRenderer {
         self.immediate_clip = None;
         self.immediate_clip_stack.clear();
         self.depth_stack.clear();
+        self.transform_stack.clear();
         #[cfg(target_os = "macos")]
         self.text_renderer.begin_frame();
     }
@@ -1109,6 +1190,10 @@ impl UIRenderer {
             self.immediate_clip_stack.is_empty(),
             "unbalanced push_immediate_clip at prepare — the clip leaks into later draws"
         );
+        debug_assert!(
+            self.transform_stack.is_empty(),
+            "unbalanced push_transform at prepare — the transform leaks into later draws"
+        );
         // Cover any trailing immediate-mode rects (e.g. a floating widget
         // drawn after the last tree traversal) so they reach the GPU.
         self.flush_immediate_run();
@@ -1127,9 +1212,18 @@ impl UIRenderer {
 
             let (x0, y0) = (cmd.x, cmd.y);
             let (x1, y1) = (cmd.x + cmd.w, cmd.y + cmd.h);
+            // Multiply each corner POSITION by the command's captured affine
+            // (`docs/UI_TRANSFORM_STACK_DESIGN.md`). `uv`/`rect_params` are
+            // untouched — the fragment shader's rounded-rect SDF, border ring,
+            // gradient, and shadow all run in local uv-space, so they
+            // rotate/scale correctly with zero shader changes.
+            let (p0x, p0y) = cmd.transform.apply((x0, y0));
+            let (p1x, p1y) = cmd.transform.apply((x1, y0));
+            let (p2x, p2y) = cmd.transform.apply((x1, y1));
+            let (p3x, p3y) = cmd.transform.apply((x0, y1));
 
             self.vertices.push(UIVertex {
-                position: [x0, y0],
+                position: [p0x, p0y],
                 uv: [0.0, 0.0],
                 color: cmd.color,
                 rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
@@ -1138,7 +1232,7 @@ impl UIRenderer {
                 grad: cmd.grad,
             });
             self.vertices.push(UIVertex {
-                position: [x1, y0],
+                position: [p1x, p1y],
                 uv: [1.0, 0.0],
                 color: cmd.color,
                 rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
@@ -1147,7 +1241,7 @@ impl UIRenderer {
                 grad: cmd.grad,
             });
             self.vertices.push(UIVertex {
-                position: [x1, y1],
+                position: [p2x, p2y],
                 uv: [1.0, 1.0],
                 color: cmd.color,
                 rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
@@ -1156,7 +1250,7 @@ impl UIRenderer {
                 grad: cmd.grad,
             });
             self.vertices.push(UIVertex {
-                position: [x0, y1],
+                position: [p3x, p3y],
                 uv: [0.0, 1.0],
                 color: cmd.color,
                 rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
@@ -1206,8 +1300,14 @@ impl UIRenderer {
                 let zero_params = [0.0; 4];
                 let zero_border = [0.0; 4];
                 let base = self.vertices.len() as u32;
+                // Corner positions in local (unrotated) space, then through the
+                // command's captured affine — same treatment as rect corners.
+                let (q0x, q0y) = cmd.transform.apply((cmd.x0 + nx, cmd.y0 + ny));
+                let (q1x, q1y) = cmd.transform.apply((cmd.x1 + nx, cmd.y1 + ny));
+                let (q2x, q2y) = cmd.transform.apply((cmd.x1 - nx, cmd.y1 - ny));
+                let (q3x, q3y) = cmd.transform.apply((cmd.x0 - nx, cmd.y0 - ny));
                 self.vertices.push(UIVertex {
-                    position: [cmd.x0 + nx, cmd.y0 + ny],
+                    position: [q0x, q0y],
                     uv: [0.0, 0.0],
                     color: cmd.color,
                     rect_params: zero_params,
@@ -1216,7 +1316,7 @@ impl UIRenderer {
                     grad: zero_params,
                 });
                 self.vertices.push(UIVertex {
-                    position: [cmd.x1 + nx, cmd.y1 + ny],
+                    position: [q1x, q1y],
                     uv: [1.0, 0.0],
                     color: cmd.color,
                     rect_params: zero_params,
@@ -1225,7 +1325,7 @@ impl UIRenderer {
                     grad: zero_params,
                 });
                 self.vertices.push(UIVertex {
-                    position: [cmd.x1 - nx, cmd.y1 - ny],
+                    position: [q2x, q2y],
                     uv: [1.0, 1.0],
                     color: cmd.color,
                     rect_params: zero_params,
@@ -1234,7 +1334,7 @@ impl UIRenderer {
                     grad: zero_params,
                 });
                 self.vertices.push(UIVertex {
-                    position: [cmd.x0 - nx, cmd.y0 - ny],
+                    position: [q3x, q3y],
                     uv: [0.0, 1.0],
                     color: cmd.color,
                     rect_params: zero_params,
@@ -1507,6 +1607,14 @@ impl manifold_ui::draw::Painter for UIRenderer {
 
     fn pop_depth(&mut self) {
         self.pop_depth();
+    }
+
+    fn push_transform(&mut self, transform: Affine2) {
+        self.push_transform(transform);
+    }
+
+    fn pop_transform(&mut self) {
+        self.pop_transform();
     }
 }
 
