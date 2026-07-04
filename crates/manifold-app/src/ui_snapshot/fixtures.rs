@@ -30,6 +30,7 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "states" => Some(states_scene()),
         "inspector" => Some(inspector_scene()),
         "scrollshrink" => Some(scroll_shrink_scene()),
+        "hairlineclips" => Some(hairline_clips_scene()),
         _ => None,
     }
 }
@@ -157,6 +158,32 @@ fn scroll_shrink_scene() -> SceneData {
 
     let mut project = Project::default();
     project.timeline.layers = layers;
+
+    let content = ContentState { current_beat: Beats(0.0), is_playing: false, ..Default::default() };
+
+    SceneData { project, content, active: None, selection: UIState::default() }
+}
+
+/// P0.3 evidence scene for `docs/TIMELINE_LAYOUT_P0_SPEC.md`: one lane of many
+/// short trigger clips — the MIDI-mockup workflow's bread and butter — spread
+/// across a wide beat range. Rendered at the minimum zoom level
+/// (`color::ZOOM_LEVELS[0]` = 1px/beat, wired in by `ui_snapshot::mod`'s
+/// `zoom_ppb` override for this scene name) so each clip's on-screen width
+/// (0.5 beats × 1px/beat = 0.5px) rounds below 1px. Proves `visible_clip_rects`
+/// clamps sub-pixel clips to a 1px hairline instead of culling them — pre-fix
+/// every one of these 200 clips renders as nothing.
+fn hairline_clips_scene() -> SceneData {
+    let mut trigs = Layer::new("TRIGGERS".into(), LayerType::Video, 0);
+    trigs.layer_id = lid("triggers");
+    for i in 0..200 {
+        let start = Beats(i as f64 * 4.0);
+        trigs
+            .clips
+            .push(TimelineClip::new_video(format!("trig_{i}"), start, Beats(0.5), Seconds::ZERO));
+    }
+
+    let mut project = Project::default();
+    project.timeline.layers = vec![trigs];
 
     let content = ContentState { current_beat: Beats(0.0), is_playing: false, ..Default::default() };
 

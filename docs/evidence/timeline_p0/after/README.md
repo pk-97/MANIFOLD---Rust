@@ -18,6 +18,7 @@ output lands in that worktree's own `target/`.
 | `05-audio-collapsed.png` | `cargo xtask ui-snap timeline --scroll 300 --interact "collapse:kick"` (`.after.png`) | **Differs from the before-set** (expected: D3's rebuild-time re-clamp changes the resting scroll position slightly for this fixture). RC3 (the Gain/Send controls spilling below the collapsed card) is **unchanged and still present** — D4 is P0.2's job, not this phase's. Header and lane columns agree on Y for every row; only the audio card's internal content still overflows its own row. |
 | `06-shrunk-content-while-scrolled.before.png` | `cargo xtask ui-snap scrollshrink --dump` (base, unscrolled) | **Byte-identical to the before-set** — reference fixture, untouched by this interaction. |
 | `06-shrunk-content-while-scrolled.png` | `cargo xtask ui-snap scrollshrink --scroll 5000 --interact "collapse:stack-2"` (`.after.png`) | **RC1 is fixed.** Scrolled to the bottom, then LAYER 2 collapses (content shrinks). Compare to the before-set: there, an orphan lane clip-strip rendered with no header above it, and every header/lane pair sat at a visibly different vertical offset. Here, the header column and lane column show the exact same set of rows in the exact same order at the exact same Y — the previously-orphaned top lane strip now has its matching header directly above it, because `rebuild_mapper_layout` (D3) re-clamps the one shared scroll position (D2) the instant the mapper rebuilds, and the header panel draws from that same value plus the same `CoordinateMapper` (D1) the lanes use — there is no second copy left to drift. |
+| `07-farzoom-hairline-clips.png` | `cargo xtask ui-snap hairlineclips --dump` | **P0.3 evidence** (`docs/TIMELINE_LAYOUT_P0_SPEC.md`'s P0.3 phase). New scene (`fixtures::hairline_clips_scene`): one lane of 200 trigger clips (0.5 beats each, 4-beat spacing) rendered at the minimum zoom level (1px/beat — `ui_snapshot::mod`'s `zoom_ppb` override, keyed off this scene name only; every other scene keeps the fixed 24px/beat, hence unaffected). Each clip's on-screen width (0.5px) rounds below 1px. **Before the P0.3 fix** (`visible_clip_rects`'s `if w < 1.0 { continue; }`, verified by temporarily reverting the fix and re-rendering), the entire lane renders solid black — all 200 clips vanish. **After the fix**, every clip renders as a 1px hairline — the dense red-striped pattern visible in this PNG. |
 
 ## Regeneration note (shared output path)
 
@@ -42,3 +43,23 @@ output copied to this directory *before* running the next command (scenes
   (D3) and
   `panels::layer_header::tests::header_rows_agree_with_mapper_y_collapsed_hidden_child_group`
   (D1) — PNGs are the visual proof, the tests are the regression gate.
+
+## P0.3 verification (2026-07-04)
+
+- Scenes 01, 04, 05, 06 (before + after) re-verified **byte-identical** via
+  `shasum -a 256` against this same after-set, confirming the P0.3 cull/clamp
+  change in `visible_clip_rects` (`crates/manifold-ui/src/panels/viewport.rs`)
+  has zero visual side effect on any scene it doesn't touch.
+- Scenes 02 (`collapsed-group`) and 03 (`post-delete`) do **not** hash-match
+  this after-set on regeneration — but this was isolated as **pre-existing and
+  unrelated to P0.3**: stashing every P0.3 change and regenerating against the
+  clean P0.2 commit (`c66c7e63`) reproduces the identical divergent hash, in a
+  narrow row band (y≈913–974) spanning the KICK audio card's gain-slider/
+  waveform-placeholder region — nothing this phase's cull-fix touches. Not
+  investigated further (out of P0.3 scope); flagged here rather than adapted
+  around, per the doc's escalation discipline.
+- New unit test (`-p manifold-ui --lib`):
+  `panels::viewport::tests::visible_clip_rects_clamps_subpixel_clips_to_hairline_but_culls_offscreen`
+  — asserts a sub-pixel on-screen clip clamps to a ≥1px hairline while a
+  sub-pixel *offscreen* clip is still culled. The mechanical regression gate;
+  `07-farzoom-hairline-clips.png` is the visual proof.

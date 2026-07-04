@@ -92,10 +92,16 @@ fn render_ui_scene(
 ) {
     let Some(mut data) = fixtures::build(scene) else {
         eprintln!(
-            "ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, scrollshrink, graph, editor, all)"
+            "ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, scrollshrink, hairlineclips, graph, editor, all)"
         );
         std::process::exit(2);
     };
+
+    // P0.3 (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): `hairlineclips` needs genuine
+    // far zoom (the minimum `color::ZOOM_LEVELS` entry) to make its clips
+    // sub-pixel-wide; every other scene keeps the existing fixed 24px/beat so
+    // their PNGs stay byte-identical across this phase.
+    let zoom_ppb: f32 = if scene == "hairlineclips" { 1.0 } else { 24.0 };
 
     let dir = out_dir(scene);
     std::fs::create_dir_all(&dir).expect("create ui-snapshots dir");
@@ -114,7 +120,7 @@ fn render_ui_scene(
         ui.layout.inspector_width = 0.0;
         ui.layout.timeline_split_ratio = 0.93;
     }
-    sync_build(&mut ui, &data);
+    sync_build(&mut ui, &data, zoom_ppb);
     render_and_dump(&ui, &data.selection, &dir, scene, "", want_dump, want_thumbs);
 
     // P0.1: the viewport is the sole scroll owner (D2) — the header panel
@@ -141,7 +147,7 @@ fn render_ui_scene(
     if let Some(spec) = interact {
         let desc = interact::apply(&mut ui, &mut data, &spec);
         println!("ui-snap: interact {desc}");
-        sync_build(&mut ui, &data);
+        sync_build(&mut ui, &data, zoom_ppb);
         render_and_dump(&ui, &data.selection, &dir, scene, ".after", want_dump, want_thumbs);
     }
 }
@@ -230,16 +236,19 @@ fn run_editor_preset(preset: &str) {
 }
 
 /// The real translation path: structural sync → zoom-to-fit → build → push state.
-fn sync_build(ui: &mut UIRoot, data: &fixtures::SceneData) {
+/// `zoom_ppb` is the scene's pixels-per-beat (24.0 for the 48-beat fixtures;
+/// `render_ui_scene` overrides it per scene name — see the `hairlineclips`
+/// far-zoom case).
+fn sync_build(ui: &mut UIRoot, data: &fixtures::SceneData, zoom_ppb: f32) {
     sync_project_data(ui, &data.project, data.active, &data.selection);
     // Configure the inspector (tabs + the active layer's effect/gen cards) from
     // the selection — the live app calls this whenever the active layer changes.
     // Without it the inspector stays on its default Master view, so the selected
     // layer's chain never appears.
     sync_inspector_data(ui, &data.project, data.active, &data.selection);
-    // Zoom out so the 48-beat fixture clips fit the lane width (set before build
-    // so the ruler ticks and the clip rects agree on px/beat).
-    ui.viewport.set_zoom(24.0);
+    // Zoom so the fixture's clips fit the lane width (set before build so the
+    // ruler ticks and the clip rects agree on px/beat).
+    ui.viewport.set_zoom(zoom_ppb);
     ui.build();
     let mut tcache = TransportDisplayCache::new();
     push_state(ui, &data.project, &data.content, data.active, &data.selection, false, None, &mut tcache);
