@@ -92,6 +92,7 @@ mod generate_grid_mesh;
 mod generate_grid_uv;
 mod generate_instance_transforms;
 mod generate_range;
+mod gltf_mesh_source;
 mod pack_vec4;
 mod gradient_central_diff;
 mod gradient_ramp;
@@ -307,6 +308,7 @@ pub use generate_instance_transforms::{
     GenerateInstanceTransforms, INSTANCE_LAYOUTS,
 };
 pub use generate_range::GenerateRange;
+pub use gltf_mesh_source::GltfMeshSource;
 pub use pack_vec4::PackVec4;
 pub use gradient_central_diff::{GRADIENT_CHANNELS, GradientCentralDiff};
 pub use gradient_ramp::GradientRamp;
