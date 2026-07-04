@@ -141,6 +141,12 @@ pub(crate) enum GltfMeshSelector {
         mesh_index: u32,
         primitive_index: u32,
     },
+    /// Every primitive in the default scene whose material index equals
+    /// `material_index`, world-transformed and combined into one buffer —
+    /// the importer's per-material object (one `render_scene` object per
+    /// distinct material). Walks the node tree exactly like `WholeScene`
+    /// but keeps only matching primitives.
+    Material { material_index: u32 },
 }
 
 /// Flatten one glTF primitive's indexed geometry into `out`, applying
@@ -220,10 +226,14 @@ fn flatten_primitive(
 
 /// Recursively flatten a glTF node's mesh primitives (world-transformed)
 /// into `out`, then recurse into children with the composed world matrix.
+/// When `material_filter` is `Some(idx)`, only primitives whose material
+/// index equals `idx` are flattened (the importer's per-material object);
+/// `None` takes every primitive (the whole-scene combine).
 fn walk_gltf_node(
     node: &gltf::Node,
     parent_world: Mat4,
     buffers: &[gltf::buffer::Data],
+    material_filter: Option<u32>,
     out: &mut Vec<MeshVertex>,
 ) -> Result<(), String> {
     let local = node.transform().matrix();
@@ -234,12 +244,19 @@ fn walk_gltf_node(
         // under non-uniform scale, not just rotation + uniform scale.
         let normal_mat = mat3_transpose(mat3_inverse(mat3_upper_row_major(&world)));
         for primitive in mesh.primitives() {
+            if let Some(want) = material_filter {
+                // `material().index()` is `None` for the glTF default
+                // material; a numeric filter never matches that.
+                if primitive.material().index() != Some(want as usize) {
+                    continue;
+                }
+            }
             flatten_primitive(&primitive, buffers, &world, &normal_mat, out)?;
         }
     }
 
     for child in node.children() {
-        walk_gltf_node(&child, world, buffers, out)?;
+        walk_gltf_node(&child, world, buffers, material_filter, out)?;
     }
     Ok(())
 }
@@ -265,7 +282,15 @@ pub(crate) fn load_gltf_mesh(
                 format!("{}: glb has no default scene — cannot walk node tree", path.display())
             })?;
             for node in scene.nodes() {
-                walk_gltf_node(&node, MAT4_IDENTITY, &buffers, &mut out)?;
+                walk_gltf_node(&node, MAT4_IDENTITY, &buffers, None, &mut out)?;
+            }
+        }
+        GltfMeshSelector::Material { material_index } => {
+            let scene = document.default_scene().ok_or_else(|| {
+                format!("{}: glb has no default scene — cannot walk node tree", path.display())
+            })?;
+            for node in scene.nodes() {
+                walk_gltf_node(&node, MAT4_IDENTITY, &buffers, Some(material_index), &mut out)?;
             }
         }
         GltfMeshSelector::Mesh { mesh_index } => {
@@ -369,6 +394,156 @@ pub(crate) fn load_gltf_texture(
     Ok((width, height, rgba))
 }
 
+/// One distinct glTF material that has geometry, plus everything the
+/// importer needs to build its `render_scene` object: the PBR factors,
+/// the base-color texture index (into `document.textures()`), the alpha
+/// mode, and the exact world-combined triangle-list vertex count (which
+/// sizes that object's `gltf_mesh_source.max_capacity`).
+#[derive(Debug, Clone)]
+pub(crate) struct GltfMaterialInfo {
+    pub material_index: u32,
+    pub name: Option<String>,
+    pub base_color_factor: [f32; 4],
+    pub metallic: f32,
+    pub roughness: f32,
+    pub emissive: [f32; 3],
+    /// glTF `alphaMode == MASK` — drives `render_scene`'s cutout discard.
+    pub alpha_mask: bool,
+    pub alpha_cutoff: f32,
+    /// Index into `document.textures()` for the base-color map, if any.
+    pub base_color_texture: Option<u32>,
+    pub vertex_count: u32,
+}
+
+/// What the importer needs to know about a glb up front: the distinct
+/// materials that actually carry geometry (each becomes one
+/// `render_scene` object), the world-space bounding box (for the default
+/// framing camera + recentre), and counts of glTF cameras and
+/// default-material (unassigned) geometry so the importer can report what
+/// it did and didn't handle.
+#[derive(Debug, Clone)]
+pub(crate) struct GltfImportSummary {
+    pub materials: Vec<GltfMaterialInfo>,
+    pub bbox_min: [f32; 3],
+    pub bbox_max: [f32; 3],
+    pub camera_count: usize,
+    /// Triangle-list vertices belonging to primitives with NO material
+    /// (glTF default material). v1 does not import these — reported so the
+    /// caller can warn rather than silently drop them.
+    pub default_material_vertex_count: u32,
+}
+
+/// Recursively accumulate per-material world-combined vertex counts and a
+/// world-space bounding box over a node subtree. Keyed by
+/// `material().index()` (`None` = glTF default material).
+fn summarize_node(
+    node: &gltf::Node,
+    parent_world: Mat4,
+    buffers: &[gltf::buffer::Data],
+    per_material: &mut std::collections::BTreeMap<Option<usize>, u32>,
+    bbox_min: &mut [f32; 3],
+    bbox_max: &mut [f32; 3],
+) {
+    let local = node.transform().matrix();
+    let world = mat4_mul(&parent_world, &local);
+
+    if let Some(mesh) = node.mesh() {
+        for prim in mesh.primitives() {
+            let reader = prim.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
+            let Some(positions) = reader.read_positions() else {
+                continue;
+            };
+            let positions: Vec<[f32; 3]> = positions.collect();
+            // Triangle-list vertex count = index count (or position count
+            // when non-indexed), matching what `flatten_primitive` emits.
+            let vcount = match reader.read_indices() {
+                Some(idx) => idx.into_u32().count() as u32,
+                None => positions.len() as u32,
+            };
+            *per_material.entry(prim.material().index()).or_insert(0) += vcount;
+            for p in &positions {
+                let wp = mat4_transform_point(&world, *p);
+                for i in 0..3 {
+                    bbox_min[i] = bbox_min[i].min(wp[i]);
+                    bbox_max[i] = bbox_max[i].max(wp[i]);
+                }
+            }
+        }
+    }
+
+    for child in node.children() {
+        summarize_node(&child, world, buffers, per_material, bbox_min, bbox_max);
+    }
+}
+
+/// Parse a glb's structure for the importer: the distinct materials with
+/// geometry, the world-space bbox, camera count, and unassigned-geometry
+/// count. One parse; no GPU. See [`GltfImportSummary`].
+pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSummary, String> {
+    let (document, buffers, _images) =
+        gltf::import(path).map_err(|e| format!("gltf::import({}): {e}", path.display()))?;
+    let scene = document.default_scene().ok_or_else(|| {
+        format!("{}: glb has no default scene", path.display())
+    })?;
+
+    let mut per_material: std::collections::BTreeMap<Option<usize>, u32> =
+        std::collections::BTreeMap::new();
+    let mut bbox_min = [f32::INFINITY; 3];
+    let mut bbox_max = [f32::NEG_INFINITY; 3];
+    for node in scene.nodes() {
+        summarize_node(
+            &node,
+            MAT4_IDENTITY,
+            &buffers,
+            &mut per_material,
+            &mut bbox_min,
+            &mut bbox_max,
+        );
+    }
+
+    if !bbox_min[0].is_finite() {
+        return Err(format!("{}: parsed no geometry", path.display()));
+    }
+
+    let materials: Vec<GltfMaterialInfo> = document
+        .materials()
+        .filter_map(|m| {
+            let material_index = m.index()? as u32;
+            let vertex_count = per_material
+                .get(&Some(material_index as usize))
+                .copied()
+                .unwrap_or(0);
+            if vertex_count == 0 {
+                // Declared but unused by any geometry — nothing to draw.
+                return None;
+            }
+            let pbr = m.pbr_metallic_roughness();
+            Some(GltfMaterialInfo {
+                material_index,
+                name: m.name().map(|s| s.to_string()),
+                base_color_factor: pbr.base_color_factor(),
+                metallic: pbr.metallic_factor(),
+                roughness: pbr.roughness_factor(),
+                emissive: m.emissive_factor(),
+                alpha_mask: matches!(m.alpha_mode(), gltf::material::AlphaMode::Mask),
+                alpha_cutoff: m.alpha_cutoff().unwrap_or(0.5),
+                base_color_texture: pbr
+                    .base_color_texture()
+                    .map(|t| t.texture().index() as u32),
+                vertex_count,
+            })
+        })
+        .collect();
+
+    Ok(GltfImportSummary {
+        materials,
+        bbox_min,
+        bbox_max,
+        camera_count: document.cameras().count(),
+        default_material_vertex_count: per_material.get(&None).copied().unwrap_or(0),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,6 +605,58 @@ mod tests {
                     "loads_texture_from_azalea_fixture_when_present: texture 0 not decodable ({e}) — mesh-only glb legitimately has no textures, skipping"
                 );
             }
+        }
+    }
+
+    /// The per-material import summary the P1c importer builds its
+    /// `render_scene` objects from. Skips when the fixture is absent;
+    /// otherwise asserts the azalea's known shape (2 textured materials,
+    /// each with a base-color texture, no glTF cameras) and that the
+    /// `Material` selector actually extracts each material's geometry at
+    /// the summarized vertex count.
+    #[test]
+    fn import_summary_and_material_selector_on_azalea() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb");
+        if !path.exists() {
+            println!("import_summary_and_material_selector_on_azalea: fixture not found, skipping");
+            return;
+        }
+        let summary = gltf_import_summary(&path).expect("summary");
+        println!(
+            "azalea summary: {} materials, bbox {:?}..{:?}, cameras={}, default-mat verts={}",
+            summary.materials.len(),
+            summary.bbox_min,
+            summary.bbox_max,
+            summary.camera_count,
+            summary.default_material_vertex_count,
+        );
+
+        // Known azalea shape: 2 distinct textured materials, no cameras,
+        // no default-material geometry.
+        assert_eq!(summary.materials.len(), 2, "azalea has 2 materials with geometry");
+        assert_eq!(summary.camera_count, 0);
+        assert_eq!(summary.default_material_vertex_count, 0);
+        for m in &summary.materials {
+            assert!(
+                m.base_color_texture.is_some(),
+                "material {} should carry a base-color texture",
+                m.material_index
+            );
+            assert!(m.vertex_count > 0);
+            // The Material selector must extract exactly that many verts.
+            let verts = load_gltf_mesh(
+                &path,
+                GltfMeshSelector::Material { material_index: m.material_index },
+            )
+            .expect("material selector");
+            assert_eq!(
+                verts.len() as u32,
+                m.vertex_count,
+                "Material selector vertex count must match the summary for material {}",
+                m.material_index
+            );
+            assert_eq!(verts.len() % 3, 0, "triangle list");
         }
     }
 }

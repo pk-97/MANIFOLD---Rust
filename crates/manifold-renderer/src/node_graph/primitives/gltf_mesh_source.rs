@@ -53,6 +53,14 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
+            name: "material_index",
+            label: "Material Index",
+            ty: ParamType::Int,
+            default: ParamValue::Float(-1.0),
+            range: Some((-1.0, 1024.0)),
+            enum_values: &[],
+        },
+        ParamDef {
             name: "max_capacity",
             label: "Max Capacity",
             ty: ParamType::Int,
@@ -69,9 +77,9 @@ crate::primitive! {
     role: Source,
     aliases: ["gltf", "glb", "import mesh", "load model", "File In SOP"],
     extra_fields: {
-        // (path, mesh_index, primitive_index) last parsed (or in flight).
-        // Any change re-triggers a background parse.
-        last_key: (String, i32, i32) = (String::new(), i32::MIN, i32::MIN),
+        // (path, mesh_index, primitive_index, material_index) last parsed
+        // (or in flight). Any change re-triggers a background parse.
+        last_key: (String, i32, i32, i32) = (String::new(), i32::MIN, i32::MIN, i32::MIN),
         // Last successfully parsed geometry (CPU-side). Stays resident
         // across frames — only re-uploaded to `staging` when it changes.
         cached_verts: Vec<MeshVertex> = Vec::new(),
@@ -102,10 +110,14 @@ impl Primitive for GltfMeshSource {
             Some(ParamValue::Float(n)) => n.round() as i32,
             _ => -1,
         };
+        let material_index = match ctx.params.get("material_index") {
+            Some(ParamValue::Float(n)) => n.round() as i32,
+            _ => -1,
+        };
 
         // 2. Re-trigger a background parse if the effective selection
         // changed since the last one we started.
-        let key = (path.clone(), mesh_index, primitive_index);
+        let key = (path.clone(), mesh_index, primitive_index, material_index);
         if key != self.last_key && self.pending_load.is_none() {
             self.last_key = key;
             self.cached_verts.clear();
@@ -113,7 +125,15 @@ impl Primitive for GltfMeshSource {
             self.staging_len_bytes = 0;
             self.uploaded = false;
             if !path.is_empty() {
-                let selector = if mesh_index < 0 {
+                // material_index takes precedence: when set, it selects
+                // every primitive of that material across the scene
+                // (the importer's per-material object). Otherwise the
+                // mesh_index / primitive_index path applies.
+                let selector = if material_index >= 0 {
+                    GltfMeshSelector::Material {
+                        material_index: material_index as u32,
+                    }
+                } else if mesh_index < 0 {
                     GltfMeshSelector::WholeScene
                 } else if primitive_index < 0 {
                     GltfMeshSelector::Mesh {
@@ -223,7 +243,10 @@ mod tests {
     #[test]
     fn gltf_mesh_source_param_names_in_order() {
         let names: Vec<&str> = GltfMeshSource::PARAMS.iter().map(|p| p.name).collect();
-        assert_eq!(names, vec!["path", "mesh_index", "primitive_index", "max_capacity"]);
+        assert_eq!(
+            names,
+            vec!["path", "mesh_index", "primitive_index", "material_index", "max_capacity"]
+        );
     }
 
     #[test]
