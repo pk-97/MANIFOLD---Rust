@@ -8,6 +8,7 @@ use manifold_renderer::ui_renderer::{Depth, UIRenderer};
 
 use manifold_ui::node::FontWeight;
 use manifold_ui::panels::PanelAction;
+use manifold_ui::timeline_editing_host::TimelineEditingHost;
 
 use crate::app::Application;
 use crate::content_command::ContentCommand;
@@ -1096,7 +1097,7 @@ impl Application {
                                 *pos,
                                 &mut host,
                                 &mut self.selection,
-                                &self.ws.ui_root.viewport,
+                                &mut self.ws.ui_root.viewport,
                             );
                         }
                         UIEvent::DragEnd { .. } => {
@@ -2510,11 +2511,18 @@ impl Application {
                 );
             }
         }
-        // 2a. Per-frame drag polling with auto-scroll.
-        // InteractionOverlay.PollMoveDrag — continues edge auto-scroll when mouse is stationary.
+        // 2a. Per-frame drag polling with auto-scroll (B11: move/trim/rubber-band —
+        // InteractionOverlay.PollMoveDrag, extended). Continues edge autoscroll
+        // when the mouse is stationary; also drives B13's live readout, which
+        // must reflect the post-poll (already-snapped) clip state (D5: preview
+        // == committed result).
         {
             use manifold_ui::interaction_overlay::DragMode;
-            if self.overlay.drag_mode() == DragMode::Move {
+            let drag_mode = self.overlay.drag_mode();
+            if matches!(
+                drag_mode,
+                DragMode::Move | DragMode::TrimLeft | DragMode::TrimRight | DragMode::RegionSelect
+            ) {
                 let content_tx = self.content_tx.as_ref().unwrap();
                 let mut host = crate::editing_host::AppEditingHost::new(
                     &mut self.local_project,
@@ -2528,15 +2536,24 @@ impl Application {
                     &mut self.invalidate_layers,
                     &mut self.pre_drag_commands,
                 );
-                self.overlay.poll_move_drag(
+                self.overlay.poll_drag(
                     self.cursor_pos,
                     &mut host,
                     &mut self.selection,
-                    &self.ws.ui_root.viewport,
+                    &mut self.ws.ui_root.viewport,
                 );
+
+                let readout = self
+                    .overlay
+                    .drag_readout_clip_id()
+                    .and_then(|id| host.find_clip_by_id(&id))
+                    .map(|c| (c.start_beat, c.duration_beats, c.layer_index));
+                self.ws.ui_root.viewport.set_drag_readout(readout);
+            } else {
+                self.ws.ui_root.viewport.set_drag_readout(None);
             }
         }
-        // Legacy drag polling removed — overlay.poll_move_drag() handles it above.
+        // Legacy drag polling removed — overlay.poll_drag() handles it above.
 
         // 2b. Process deferred export (keyboard shortcut sets flag, processed here
         // where Application has full access for the file dialog).

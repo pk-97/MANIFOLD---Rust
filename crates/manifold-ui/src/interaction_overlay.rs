@@ -431,6 +431,19 @@ impl InteractionOverlay {
         self.drag_mode
     }
 
+    /// B13 — the clip whose position/length the live readout should report,
+    /// or `None` outside a move/trim gesture. Rubber-band (`RegionSelect`)
+    /// has no single clip to report and is deliberately `None` here —
+    /// `ClipId` wraps `Arc<str>`, so this clone is a refcount bump, not an
+    /// allocation.
+    pub fn drag_readout_clip_id(&self) -> Option<ClipId> {
+        match self.drag_mode {
+            DragMode::Move => self.drag_anchor_clip_id.clone(),
+            DragMode::TrimLeft | DragMode::TrimRight => self.trim_clip_id.clone(),
+            _ => None,
+        }
+    }
+
     /// Update the stored modifier state. Call from app before dispatching events.
     /// Unity reads Keyboard.current inline; Rust stores the latest state here.
     pub fn set_modifiers(&mut self, modifiers: Modifiers) {
@@ -477,23 +490,36 @@ impl InteractionOverlay {
     }
 
     // ────────────────────────────────────────────────────────────
-    // MOVE-DRAG POLLING
-    // Unity InteractionOverlay.PollMoveDrag (lines 116-124).
-    // Called from app.rs frame loop every frame during move drag.
-    // Keeps edge auto-scroll running when pointer delta is zero.
+    // DRAG POLLING
+    // Unity InteractionOverlay.PollMoveDrag (lines 116-124), extended (B11) to
+    // trim and region-select — edge autoscroll during move/trim/rubber-band
+    // must keep advancing when the pointer is parked at the edge, not just
+    // when a mouse-move event arrives. Called from app.rs frame loop every
+    // frame while a drag of one of these kinds is in flight.
     // ────────────────────────────────────────────────────────────
 
-    pub fn poll_move_drag(
+    pub fn poll_drag(
         &mut self,
         mouse_screen_pos: Vec2,
         host: &mut dyn TimelineEditingHost,
         ui_state: &mut UIState,
-        viewport: &TimelineViewportPanel,
+        viewport: &mut TimelineViewportPanel,
     ) {
-        if self.drag_mode != DragMode::Move || self.drag_anchor_clip_id.is_none() {
-            return;
+        match self.drag_mode {
+            DragMode::Move if self.drag_anchor_clip_id.is_some() => {
+                self.handle_move_drag(mouse_screen_pos, host, ui_state, viewport);
+            }
+            DragMode::TrimLeft => {
+                self.handle_trim_left_drag(mouse_screen_pos, host, viewport);
+            }
+            DragMode::TrimRight => {
+                self.handle_trim_right_drag(mouse_screen_pos, host, viewport);
+            }
+            DragMode::RegionSelect => {
+                self.update_region_drag(mouse_screen_pos, ui_state, viewport, host);
+            }
+            _ => {}
         }
-        self.handle_move_drag(mouse_screen_pos, host, ui_state, viewport);
     }
 
     // ────────────────────────────────────────────────────────────
@@ -1379,19 +1405,17 @@ impl InteractionOverlay {
         pos: Vec2,
         host: &mut dyn TimelineEditingHost,
         ui_state: &mut UIState,
-        viewport: &TimelineViewportPanel,
+        viewport: &mut TimelineViewportPanel,
     ) {
         match self.drag_mode {
             DragMode::Move => {
                 self.handle_move_drag(pos, host, ui_state, viewport);
             }
             DragMode::TrimLeft => {
-                let beat = viewport.pixel_to_beat(pos.x);
-                self.handle_trim_left_drag(beat, host, viewport);
+                self.handle_trim_left_drag(pos, host, viewport);
             }
             DragMode::TrimRight => {
-                let beat = viewport.pixel_to_beat(pos.x);
-                self.handle_trim_right_drag(beat, host, viewport);
+                self.handle_trim_right_drag(pos, host, viewport);
             }
             DragMode::RegionSelect => {
                 self.update_region_drag(pos, ui_state, viewport, host);
@@ -1651,7 +1675,7 @@ impl InteractionOverlay {
         screen_pos: Vec2,
         host: &mut dyn TimelineEditingHost,
         ui_state: &mut UIState,
-        viewport: &TimelineViewportPanel,
+        viewport: &mut TimelineViewportPanel,
     ) {
         if self.drag_anchor_clip_id.is_none() {
             return;
@@ -1660,8 +1684,11 @@ impl InteractionOverlay {
             self.capture_drag_selection(ui_state, host);
         }
 
-        // Unity line 470: auto-scroll
-        host.auto_scroll_for_drag(screen_pos);
+        // Unity line 470: auto-scroll (B11) — the P0 scroll owner advances
+        // BEFORE the beat conversion below, so this frame's gesture math
+        // already reflects the new scroll position: a parked pointer still
+        // advances the gesture as the content scrolls under it.
+        viewport.autoscroll_edge(screen_pos);
         let mouse_beat = viewport.pixel_to_beat(screen_pos.x);
 
         // Unity lines 474-500: cross-layer delta
@@ -1750,16 +1777,25 @@ impl InteractionOverlay {
     /// the same math — exactly the "two authorities" bug class P0 named).
     /// `finalize_move_snap` is deleted; nothing was left for it to do that
     /// the last frame didn't already show (D5).
+    ///
+    /// B12: Cmd held mid-drag bypasses snap entirely (raw position) — checked
+    /// here, at the ONE call site of the shared `magnetic_snap`, not by
+    /// forking a second snap implementation. The floor clamp below is a
+    /// separate invariant (D5) and still applies even when snap is bypassed.
     fn move_snap_delta(&self, candidate_anchor_beat: Beats, viewport: &TimelineViewportPanel) -> Beats {
-        let snapped = viewport.magnetic_snap(
-            candidate_anchor_beat,
-            self.drag_start_layer_index,
-            &self
-                .drag_snapshot_clip_ids
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>(),
-        );
+        let snapped = if self.modifiers.command {
+            candidate_anchor_beat
+        } else {
+            viewport.magnetic_snap(
+                candidate_anchor_beat,
+                self.drag_start_layer_index,
+                &self
+                    .drag_snapshot_clip_ids
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
+        };
         let mut beat_delta = snapped - self.drag_start_beat;
         // Clamp: don't let the leftmost clip go below beat 0. The ONE shared
         // clamp site on the move path — the per-snapshot `.max(Beats::ZERO)`
@@ -1772,23 +1808,34 @@ impl InteractionOverlay {
     /// Port of Unity InteractionOverlay.HandleTrimLeftDrag (lines 539-560).
     fn handle_trim_left_drag(
         &mut self,
-        mouse_beat: Beats,
+        screen_pos: Vec2,
         host: &mut dyn TimelineEditingHost,
-        viewport: &TimelineViewportPanel,
+        viewport: &mut TimelineViewportPanel,
     ) {
         let trim_id = match &self.trim_clip_id {
             Some(id) => id.clone(),
             None => return,
         };
 
+        // B11: autoscroll BEFORE the beat conversion, same ordering as
+        // `handle_move_drag` — a parked pointer still advances the trim as
+        // the content scrolls under it.
+        viewport.autoscroll_edge(screen_pos);
+        let mouse_beat = viewport.pixel_to_beat(screen_pos.x);
+
         let min_duration = Beats(0.25); // 1/16 note minimum (Unity line 544)
         let spb = host.get_seconds_per_beat() as f64;
 
         // Snap context comes from the grabbed clip; the resulting edge delta is
         // shared by every selected clip (each then clamps individually).
+        // B12: Cmd held bypasses snap entirely (raw position) — same rule,
+        // same shared `magnetic_snap` call, as the move path.
         let clip_layer = host.find_clip_by_id(&trim_id).map_or(0, |c| c.layer_index);
-        let snapped =
-            viewport.magnetic_snap(mouse_beat, clip_layer, std::slice::from_ref(&trim_id));
+        let snapped = if self.modifiers.command {
+            mouse_beat
+        } else {
+            viewport.magnetic_snap(mouse_beat, clip_layer, std::slice::from_ref(&trim_id))
+        };
         let raw_delta = snapped - self.trim_original_start_beat;
 
         for orig in &self.trim_originals {
@@ -1815,22 +1862,30 @@ impl InteractionOverlay {
     /// Port of Unity InteractionOverlay.HandleTrimRightDrag (lines 562-582).
     fn handle_trim_right_drag(
         &mut self,
-        mouse_beat: Beats,
+        screen_pos: Vec2,
         host: &mut dyn TimelineEditingHost,
-        viewport: &TimelineViewportPanel,
+        viewport: &mut TimelineViewportPanel,
     ) {
         let trim_id = match &self.trim_clip_id {
             Some(id) => id.clone(),
             None => return,
         };
 
+        // B11: autoscroll BEFORE the beat conversion (see handle_trim_left_drag).
+        viewport.autoscroll_edge(screen_pos);
+        let mouse_beat = viewport.pixel_to_beat(screen_pos.x);
+
         let min_duration = Beats(0.25); // Unity line 566
 
         // Snap context from the grabbed clip; the edge delta fans over the
-        // whole selection (each clip clamps individually).
+        // whole selection (each clip clamps individually). B12: Cmd bypasses
+        // snap entirely (raw position) — same shared `magnetic_snap` call.
         let clip_layer = host.find_clip_by_id(&trim_id).map_or(0, |c| c.layer_index);
-        let snapped =
-            viewport.magnetic_snap(mouse_beat, clip_layer, std::slice::from_ref(&trim_id));
+        let snapped = if self.modifiers.command {
+            mouse_beat
+        } else {
+            viewport.magnetic_snap(mouse_beat, clip_layer, std::slice::from_ref(&trim_id))
+        };
         let grabbed_original_end =
             self.trim_original_start_beat + self.trim_original_duration_beats;
         let raw_delta = snapped - grabbed_original_end;
@@ -2064,9 +2119,12 @@ impl InteractionOverlay {
         &mut self,
         pos: Vec2,
         ui_state: &mut UIState,
-        viewport: &TimelineViewportPanel,
+        viewport: &mut TimelineViewportPanel,
         host: &dyn TimelineEditingHost,
     ) {
+        // B11: edge autoscroll for rubber-band, same ordering as move/trim —
+        // BEFORE the beat conversion below.
+        viewport.autoscroll_edge(pos);
         let beat = viewport.pixel_to_beat(pos.x);
         let layer = viewport
             .layer_at_y(pos.y)
@@ -2272,7 +2330,6 @@ mod b4_group_move_tests {
         fn on_clip_right_click(&mut self, _clip_id: &str, _screen_pos: Vec2) {}
         fn on_track_right_click(&mut self, _beat: Beats, _layer_index: usize, _screen_pos: Vec2) {}
         fn inspect_layer(&mut self, _layer_index: usize) {}
-        fn auto_scroll_for_drag(&mut self, _screen_pos: Vec2) {}
         fn invalidate_layer_bitmap(&mut self, _layer_index: usize) {}
         fn invalidate_all_layer_bitmaps(&mut self) {}
         fn mark_dirty(&mut self) {}
@@ -2673,7 +2730,6 @@ mod p1_4_gesture_integrity_tests {
         fn on_clip_right_click(&mut self, _clip_id: &str, _screen_pos: Vec2) {}
         fn on_track_right_click(&mut self, _beat: Beats, _layer_index: usize, _screen_pos: Vec2) {}
         fn inspect_layer(&mut self, _layer_index: usize) {}
-        fn auto_scroll_for_drag(&mut self, _screen_pos: Vec2) {}
         fn invalidate_layer_bitmap(&mut self, _layer_index: usize) {}
         fn invalidate_all_layer_bitmaps(&mut self) {}
         fn mark_dirty(&mut self) {}
@@ -2888,7 +2944,7 @@ mod p1_4_gesture_integrity_tests {
     /// half-grid-interval full-coverage threshold; B12's Cmd-bypass toggle is
     /// P1.5). Both must show zero further change at commit.
     fn assert_preview_equals_committed(landing_beat_center: f32, case: &str) {
-        let panel = build_viewport();
+        let mut panel = build_viewport();
         let mut host = GestureTestHost::new(&["layer-0"]).with_clip("clip_a", 0, 0.0, 8.0);
         let mut ui_state = UIState::new();
         ui_state.select_clips(vec![ClipId::new("clip_a")]);
@@ -2901,7 +2957,7 @@ mod p1_4_gesture_integrity_tests {
         for step in 1..=3 {
             let t = step as f32 / 3.0;
             let beat = 2.0 + (landing_beat_center - 2.0) * t;
-            overlay.on_drag(body_pos_for(&panel, beat), &mut host, &mut ui_state, &panel);
+            overlay.on_drag(body_pos_for(&panel, beat), &mut host, &mut ui_state, &mut panel);
         }
 
         let preview = host.find_clip_by_id("clip_a").unwrap().start_beat;
@@ -2926,7 +2982,7 @@ mod p1_4_gesture_integrity_tests {
 
     #[test]
     fn escape_mid_drag_restores_byte_identical_state() {
-        let panel = build_viewport();
+        let mut panel = build_viewport();
         let mut host = GestureTestHost::new(&["layer-0"]).with_clip("clip_a", 0, 0.0, 8.0);
         let mut ui_state = UIState::new();
         ui_state.select_clips(vec![ClipId::new("clip_a")]);
@@ -2935,8 +2991,8 @@ mod p1_4_gesture_integrity_tests {
         let before = host.clips.clone();
 
         overlay.on_begin_drag(body_pos_for(&panel, 2.0), &mut host, &mut ui_state, &panel);
-        overlay.on_drag(body_pos_for(&panel, 10.0), &mut host, &mut ui_state, &panel);
-        overlay.on_drag(body_pos_for(&panel, 12.37), &mut host, &mut ui_state, &panel);
+        overlay.on_drag(body_pos_for(&panel, 10.0), &mut host, &mut ui_state, &mut panel);
+        overlay.on_drag(body_pos_for(&panel, 12.37), &mut host, &mut ui_state, &mut panel);
 
         // Sanity: the drag actually moved the clip before cancelling —
         // otherwise this test would pass for the wrong reason.
@@ -3046,15 +3102,15 @@ mod p1_4_gesture_integrity_tests {
 
     #[test]
     fn full_drag_produces_exactly_one_undo_entry() {
-        let panel = build_viewport();
+        let mut panel = build_viewport();
         let mut host = GestureTestHost::new(&["layer-0"]).with_clip("clip_a", 0, 0.0, 8.0);
         let mut ui_state = UIState::new();
         ui_state.select_clips(vec![ClipId::new("clip_a")]);
         let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
 
         overlay.on_begin_drag(body_pos_for(&panel, 2.0), &mut host, &mut ui_state, &panel);
-        overlay.on_drag(body_pos_for(&panel, 6.0), &mut host, &mut ui_state, &panel);
-        overlay.on_drag(body_pos_for(&panel, 10.0), &mut host, &mut ui_state, &panel);
+        overlay.on_drag(body_pos_for(&panel, 6.0), &mut host, &mut ui_state, &mut panel);
+        overlay.on_drag(body_pos_for(&panel, 10.0), &mut host, &mut ui_state, &mut panel);
         overlay.on_end_drag(&mut host);
 
         assert_eq!(
@@ -3067,7 +3123,7 @@ mod p1_4_gesture_integrity_tests {
 
     #[test]
     fn drag_toward_zero_clamps_every_frame_not_just_at_release() {
-        let panel = build_viewport();
+        let mut panel = build_viewport();
         let mut host = GestureTestHost::new(&["layer-0"]).with_clip("clip_a", 0, 2.0, 4.0);
         let mut ui_state = UIState::new();
         ui_state.select_clips(vec![ClipId::new("clip_a")]);
@@ -3078,7 +3134,7 @@ mod p1_4_gesture_integrity_tests {
         // Walk the pointer far past beat 0 in several steps; the clamp must
         // hold on EVERY intermediate frame, not just once the drag ends.
         for beat in [3.0, 0.5, -2.0, -8.0, -20.0] {
-            overlay.on_drag(body_pos_for(&panel, beat), &mut host, &mut ui_state, &panel);
+            overlay.on_drag(body_pos_for(&panel, beat), &mut host, &mut ui_state, &mut panel);
             let start = host.find_clip_by_id("clip_a").unwrap().start_beat;
             assert!(
                 start >= Beats::ZERO,
@@ -3089,5 +3145,137 @@ mod p1_4_gesture_integrity_tests {
         overlay.on_end_drag(&mut host);
         let start = host.find_clip_by_id("clip_a").unwrap().start_beat;
         assert!(start >= Beats::ZERO, "start_beat negative after release: {start:?}");
+    }
+
+    // ── P1.5 drag ergonomics tests ────────────────────────────────────
+    // `docs/TIMELINE_INTERACTION_P1_SPEC.md` B11 (edge autoscroll),
+    // B12 (clip-edge/marker snap targets + Cmd-bypass).
+
+    /// B11: a pointer parked at the viewport's right edge must keep
+    /// advancing the (single) horizontal scroll offset frame over frame
+    /// with NO further pointer movement, and the gesture's beat mapping
+    /// must track it — the dragged clip keeps moving even though the
+    /// screen position never changes, because the same screen x now maps
+    /// to an advancing beat as the content scrolls under it.
+    #[test]
+    fn edge_autoscroll_advances_scroll_and_gesture_tracks_it() {
+        let mut panel = build_viewport();
+        let mut host = GestureTestHost::new(&["layer-0"]).with_clip("clip_a", 0, 0.0, 8.0);
+        let mut ui_state = UIState::new();
+        ui_state.select_clips(vec![ClipId::new("clip_a")]);
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+
+        overlay.on_begin_drag(body_pos_for(&panel, 2.0), &mut host, &mut ui_state, &panel);
+        assert_eq!(overlay.drag_mode(), DragMode::Move, "drag must begin");
+
+        // Parked just inside the right edge of the tracks area — within
+        // `TimelineViewportPanel::AUTOSCROLL_EDGE_PX` of `tracks_rect.x_max()`.
+        let edge_pos = Vec2::new(panel.tracks_rect().x_max() - 5.0, panel.tracks_rect().y + 70.0);
+
+        let scroll_start = panel.scroll_x_beats();
+        let start_begin = host.find_clip_by_id("clip_a").unwrap().start_beat;
+        let mut last_scroll = scroll_start;
+        let mut last_start = start_begin;
+
+        for frame in 0..8 {
+            // `on_drag` here stands in for both a real mouse-move event AND
+            // the stationary-pointer poll (`poll_drag`) — both funnel into
+            // `handle_move_drag`, which is where `autoscroll_edge` lives.
+            overlay.on_drag(edge_pos, &mut host, &mut ui_state, &mut panel);
+            let scroll_now = panel.scroll_x_beats();
+            let start_now = host.find_clip_by_id("clip_a").unwrap().start_beat;
+            assert!(
+                scroll_now >= last_scroll,
+                "frame {frame}: scroll must never move backward while parked at the edge (was {last_scroll:?}, now {scroll_now:?})"
+            );
+            assert!(
+                start_now >= last_start,
+                "frame {frame}: the dragged clip's model position must track the scrolling view (was {last_start:?}, now {start_now:?})"
+            );
+            last_scroll = scroll_now;
+            last_start = start_now;
+        }
+
+        assert!(
+            last_scroll > scroll_start,
+            "scroll must have actually advanced over 8 parked frames (started at {scroll_start:?}, ended at {last_scroll:?})"
+        );
+        assert!(
+            last_start > start_begin,
+            "the gesture must have actually advanced the clip over 8 parked frames (started at {start_begin:?}, ended at {last_start:?})"
+        );
+    }
+
+    /// B12: with snap on, a dragged clip lands flush against a neighbor's
+    /// edge; with Cmd held mid-drag, the same gesture must NOT snap (raw
+    /// position). Fixture: `clip_a` `[0,8)`, `clip_b` `[16,20)` (from
+    /// `build_viewport`). Press `clip_a` at mouse-beat 2.0 (so
+    /// `drag_offset_beats` = 2.0 - 0.0 = 2.0) and land at mouse-beat 17.9,
+    /// so the candidate anchor is 17.9 - 2.0 = 15.9 — within snap range of
+    /// `clip_b.start_beat` (16.0) but not equal to it, so snapped-vs-raw are
+    /// distinguishable (verified empirically: snap-on lands exactly at
+    /// 16.0; Cmd-bypass lands at the raw ~16.0166, never exactly 16.0).
+    #[test]
+    fn move_drag_snaps_to_clip_edge_and_cmd_bypasses_it() {
+        let mut panel = build_viewport();
+
+        // Snap ON.
+        let mut host = GestureTestHost::new(&["layer-0"]).with_clip("clip_a", 0, 0.0, 8.0);
+        let mut ui_state = UIState::new();
+        ui_state.select_clips(vec![ClipId::new("clip_a")]);
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+        overlay.on_begin_drag(body_pos_for(&panel, 2.0), &mut host, &mut ui_state, &panel);
+        overlay.on_drag(body_pos_for(&panel, 17.9), &mut host, &mut ui_state, &mut panel);
+        let snapped = host.find_clip_by_id("clip_a").unwrap().start_beat;
+        assert_eq!(
+            snapped,
+            Beats::from_f32(16.0),
+            "snap ON must land clip_a flush against clip_b's start edge"
+        );
+
+        // Same gesture, Cmd held: must NOT snap.
+        let mut host2 = GestureTestHost::new(&["layer-0"]).with_clip("clip_a", 0, 0.0, 8.0);
+        let mut ui_state2 = UIState::new();
+        ui_state2.select_clips(vec![ClipId::new("clip_a")]);
+        let mut overlay2 = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+        overlay2.set_modifiers(Modifiers {
+            command: true,
+            ..Modifiers::NONE
+        });
+        overlay2.on_begin_drag(body_pos_for(&panel, 2.0), &mut host2, &mut ui_state2, &panel);
+        overlay2.on_drag(body_pos_for(&panel, 17.9), &mut host2, &mut ui_state2, &mut panel);
+        let raw = host2.find_clip_by_id("clip_a").unwrap().start_beat;
+        assert_ne!(
+            raw,
+            Beats::from_f32(16.0),
+            "Cmd held mid-drag must bypass snap entirely (raw position), got exactly the snapped edge"
+        );
+    }
+
+    /// B12: a drag landing near a timeline marker snaps to it, exactly like
+    /// a clip edge — same shared `magnetic_snap`, a marker candidate is just
+    /// another entry it considers. Marker at beat 10.03 (deliberately off
+    /// the 0.25 grid at this zoom, so a snap to 10.03 can only be the
+    /// marker winning, not a coincidental grid line). Press `clip_a` at
+    /// mouse-beat 2.0, land at mouse-beat 12.02 -> anchor 10.02, within
+    /// range of the marker.
+    #[test]
+    fn move_drag_snaps_to_marker() {
+        let mut panel = build_viewport();
+        panel.set_markers(vec![crate::UiMarker::new(Beats::from_f32(10.03))]);
+
+        let mut host = GestureTestHost::new(&["layer-0"]).with_clip("clip_a", 0, 0.0, 8.0);
+        let mut ui_state = UIState::new();
+        ui_state.select_clips(vec![ClipId::new("clip_a")]);
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+        overlay.on_begin_drag(body_pos_for(&panel, 2.0), &mut host, &mut ui_state, &panel);
+        overlay.on_drag(body_pos_for(&panel, 12.02), &mut host, &mut ui_state, &mut panel);
+
+        let snapped = host.find_clip_by_id("clip_a").unwrap().start_beat;
+        assert_eq!(
+            snapped,
+            Beats::from_f32(10.03),
+            "a drag landing near a marker must snap to it"
+        );
     }
 }

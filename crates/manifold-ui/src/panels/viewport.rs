@@ -194,6 +194,20 @@ pub struct TimelineViewportPanel {
     marker_node_ids: Vec<NodeId>,
     marker_drag_id: Option<MarkerId>,
     marker_drag_start_beat: Beats,
+
+    // B13 — live position/length readout for the clip currently being
+    // moved/trimmed: (position, duration, layer_index). `None` outside a
+    // move/trim gesture. Set once per frame by app_render.rs from the
+    // overlay's drag state (`set_drag_readout`); display-only, no styling
+    // (deferred to UI_CRAFT_AND_MOTION per `TIMELINE_INTERACTION_P1_SPEC.md`
+    // B13/§6.9).
+    drag_readout: Option<(Beats, Beats, usize)>,
+    /// Dirty-checked format cache — house pattern is `TransportDisplayCache`
+    /// (`manifold-app/src/ui_bridge/state_sync.rs`): `format!` runs only
+    /// when the readout's values actually change, never per frame just
+    /// because a gesture is in flight.
+    drag_readout_cache: DragReadoutCache,
+    drag_readout_label_id: Option<NodeId>,
 }
 
 /// Viewport-local drag mode. Only tracks ruler scrub — all clip interaction
@@ -205,6 +219,49 @@ enum ViewportDragMode {
     OverviewScrub,
     MarkerDrag,
     ScrollbarHDrag,
+}
+
+/// B13 — dirty-checked bars.beats formatter for the live drag/trim readout.
+/// House pattern: `TransportDisplayCache` (`manifold-app/src/ui_bridge/state_sync.rs`) —
+/// `format!` runs only when the underlying values changed since the last call,
+/// never on every frame just because a gesture happens to be in flight.
+#[derive(Default)]
+struct DragReadoutCache {
+    prev_position: Option<Beats>,
+    prev_duration: Option<Beats>,
+    prev_bpb: u32,
+    text: String,
+}
+
+impl DragReadoutCache {
+    /// Returns the formatted "bar.beat   len bar.beat" string, reformatting
+    /// only when `position`, `duration`, or `beats_per_bar` differ from the
+    /// last call.
+    fn text(&mut self, position: Beats, duration: Beats, beats_per_bar: u32) -> &str {
+        if self.prev_position != Some(position)
+            || self.prev_duration != Some(duration)
+            || self.prev_bpb != beats_per_bar
+        {
+            self.prev_position = Some(position);
+            self.prev_duration = Some(duration);
+            self.prev_bpb = beats_per_bar;
+            let (pos_bar, pos_beat) = bars_beats(position, beats_per_bar, 1.0);
+            let (dur_bar, dur_beat) = bars_beats(duration, beats_per_bar, 0.0);
+            self.text = format!("{pos_bar}.{pos_beat:.2}   len {dur_bar}.{dur_beat:.2}");
+        }
+        &self.text
+    }
+}
+
+/// Beats → (bar, beat-in-bar) at the given time signature. `origin` is `1.0`
+/// for a position (musician's 1-based bar.beat) or `0.0` for a span/duration
+/// (a length has no "first bar" to be 1-based about).
+fn bars_beats(beat: Beats, beats_per_bar: u32, origin: f32) -> (i64, f32) {
+    let bpb = beats_per_bar.max(1) as f64;
+    let b = beat.0.max(0.0);
+    let bar = (b / bpb).floor() as i64 + origin as i64;
+    let beat_in_bar = (b % bpb) as f32 + origin;
+    (bar, beat_in_bar)
 }
 
 impl TimelineViewportPanel {
@@ -277,6 +334,9 @@ impl TimelineViewportPanel {
             marker_node_ids: Vec::new(),
             marker_drag_id: None,
             marker_drag_start_beat: Beats::ZERO,
+            drag_readout: None,
+            drag_readout_cache: DragReadoutCache::default(),
+            drag_readout_label_id: None,
         }
     }
 
@@ -921,6 +981,68 @@ impl TimelineViewportPanel {
         changed
     }
 
+    /// Edge zone width, in screen px, where a drag pointer triggers autoscroll (B11).
+    const AUTOSCROLL_EDGE_PX: f32 = 32.0;
+    /// Max scroll advance per call (one call per drag frame) at the edge itself —
+    /// px on the vertical axis, and equivalent px (converted to beats via
+    /// `pixels_per_beat`) on the horizontal axis. Scales down linearly to zero
+    /// as the pointer moves away from the edge toward `AUTOSCROLL_EDGE_PX`.
+    const AUTOSCROLL_MAX_PX_PER_FRAME: f32 = 14.0;
+
+    /// Edge autoscroll during an in-flight move/trim/rubber-band drag (B11).
+    /// Callers invoke this once per drag frame — from `on_drag`'s per-move-event
+    /// path and from the stationary-pointer poll — BEFORE converting `pointer`
+    /// to a beat/layer, so the same frame's gesture math already reflects the
+    /// new scroll position: a parked pointer still advances the gesture as the
+    /// content scrolls under it.
+    ///
+    /// Reuses the single P0 scroll owner (`scroll_x_beats`/`scroll_y_px`,
+    /// clamped only inside `set_scroll`) — this is not a second offset, just a
+    /// proximity-scaled `set_scroll` call. Zero per-frame allocations: every
+    /// step below is scalar arithmetic over `Copy` types.
+    pub fn autoscroll_edge(&mut self, pointer: Vec2) -> bool {
+        let rect = self.tracks_rect;
+        let edge = Self::AUTOSCROLL_EDGE_PX;
+        let rate = Self::AUTOSCROLL_MAX_PX_PER_FRAME;
+
+        let left_dist = pointer.x - rect.x;
+        let right_dist = rect.x_max() - pointer.x;
+        let dx_px = if left_dist < edge {
+            -rate * ((edge - left_dist.max(0.0)) / edge).clamp(0.0, 1.0)
+        } else if right_dist < edge {
+            rate * ((edge - right_dist.max(0.0)) / edge).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
+        let top_dist = pointer.y - rect.y;
+        let bottom_dist = rect.y_max() - pointer.y;
+        let dy_px = if top_dist < edge {
+            -rate * ((edge - top_dist.max(0.0)) / edge).clamp(0.0, 1.0)
+        } else if bottom_dist < edge {
+            rate * ((edge - bottom_dist.max(0.0)) / edge).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
+        if dx_px == 0.0 && dy_px == 0.0 {
+            return false;
+        }
+
+        let ppb = self.mapper.pixels_per_beat();
+        let new_x_beats = self.scroll_x_beats.as_f32() + if ppb > 0.0 { dx_px / ppb } else { 0.0 };
+        let new_y_px = self.scroll_y_px + dy_px;
+        self.set_scroll(new_x_beats, new_y_px)
+    }
+
+    /// B13 — set (or clear) the live position/length readout for the clip
+    /// currently being moved/trimmed. Called once per frame by app_render.rs
+    /// from the overlay's drag state; `None` outside a move/trim gesture
+    /// (rubber-band has no single clip to report, matching the design doc).
+    pub fn set_drag_readout(&mut self, readout: Option<(Beats, Beats, usize)>) {
+        self.drag_readout = readout;
+    }
+
     pub fn set_beats_per_bar(&mut self, bpb: u32) {
         self.beats_per_bar = bpb.max(1);
     }
@@ -1263,6 +1385,9 @@ impl Panel for TimelineViewportPanel {
 
         // Insert cursor ruler marker only (track cursor painted into bitmap)
         self.build_insert_cursor_ruler(tree);
+
+        // B13 — live drag/trim readout (plain text, display-only)
+        self.build_drag_readout(tree);
 
         // Playhead: unified overlay quad in app.rs (no UITree node needed)
 

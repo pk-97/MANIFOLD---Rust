@@ -822,6 +822,63 @@ impl TimelineViewportPanel {
         }
     }
 
+    /// B13 — plain-text "bar.beat   len bar.beat" readout for the clip
+    /// currently being moved/trimmed. Display-only chrome; no node persists
+    /// across frames (added fresh, like the other build_* elements above,
+    /// only when a gesture is in flight — skipped entirely otherwise).
+    /// Styling (colors, layout polish) is explicitly deferred to
+    /// `UI_CRAFT_AND_MOTION_PLAN.md` — this reuses existing plain label/bg
+    /// tokens, no new design decisions.
+    ///
+    /// Anchored in the ruler strip (like the insert-cursor marker), NOT
+    /// inside the tracks lane: per-layer clip content is painted as an
+    /// opaque bitmap OUTSIDE the UITree ("Clips: painted into per-layer
+    /// bitmap, not UITree nodes" — see `build()`'s comments), composited
+    /// over the tracks area after the tree draw pass, so a Label node placed
+    /// inside a lane's rect is invisible under that bitmap (verified via a
+    /// ui-snap PNG: the label existed in the tree dump with the right text
+    /// and the VISIBLE flag, but zero trace of it in the rendered pixels).
+    /// The ruler is never bitmap-painted, so chrome anchored there is the
+    /// only placement proven to actually show up.
+    pub(super) fn build_drag_readout(&mut self, tree: &mut UITree) {
+        let Some((position, duration, _layer_index)) = self.drag_readout else {
+            self.drag_readout_label_id = None;
+            return;
+        };
+
+        const READOUT_W: f32 = 160.0;
+        const READOUT_H: f32 = 16.0;
+
+        // Geometry first — both read `&self` immutably, so they must resolve
+        // before the mutable borrow of `drag_readout_cache` below (whose
+        // returned `&str` stays borrowed through the `add_label` call).
+        let x = self.beat_to_pixel(position);
+        let y = self.ruler_rect.y + self.ruler_rect.height - READOUT_H;
+
+        // The FORMATTED STRING is dirty-checked (`DragReadoutCache`) — this
+        // call is cheap (a value comparison) every frame; `format!` itself
+        // only runs when position/duration/time-signature actually changed.
+        let beats_per_bar = self.beats_per_bar;
+        let text = self.drag_readout_cache.text(position, duration, beats_per_bar);
+
+        let id = tree.add_label(
+            self.viewport_clip_id,
+            x,
+            y,
+            READOUT_W,
+            READOUT_H,
+            text,
+            UIStyle {
+                bg_color: color::MARKER_LABEL_BG,
+                text_color: color::TEXT_NORMAL,
+                font_size: RULER_FONT_SIZE,
+                text_align: TextAlign::Left,
+                ..UIStyle::default()
+            },
+        );
+        self.drag_readout_label_id = Some(id);
+    }
+
     // ── Update-in-place (Phase 1: horizontal scroll) ───────────
 
     /// Try to update ruler ticks, labels, markers, and export markers in-place

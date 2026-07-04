@@ -51,11 +51,12 @@ fn apply_one(ui: &mut UIRoot, data: &mut SceneData, spec: &str) -> String {
         Some(("cmd_click_clip", rest)) => cmd_click_clip(data, rest),
         Some(("cmd_d", _)) => duplicate_selected_clips(data),
         Some(("drag_clip_toward_zero", rest)) => drag_clip_toward_zero(data, rest),
+        Some(("drag_readout", rest)) => drag_readout(ui, data, rest),
         Some((verb, _)) => format!(
             "unknown interact verb '{verb}' (known: select, collapse, delete, open, \
              automation_add, automation_move, automation_bend, automation_segment_drag, \
              automation_group_move, automation_group_delete, click_clip, shift_click_clip, \
-             cmd_click_clip, cmd_d, drag_clip_toward_zero)"
+             cmd_click_clip, cmd_d, drag_clip_toward_zero, drag_readout)"
         ),
         None if spec == "cmd_d" => duplicate_selected_clips(data),
         None => format!("malformed interact '{spec}' (want verb:target)"),
@@ -209,6 +210,58 @@ fn drag_clip_toward_zero(data: &mut SceneData, rest: &str) -> String {
     format!(
         "drag_clip_toward_zero -> '{clip_id}' requested_beat={:.1} clamped_start_beat={:.3}",
         requested.0, clip.start_beat.0
+    )
+}
+
+/// P1.5 evidence verb (B13, `docs/TIMELINE_INTERACTION_P1_SPEC.md`, S5):
+/// `drag_readout:<layer_id>:<clip_index>:<position_beat>:<duration_beat>`
+/// sets `TimelineViewportPanel::drag_readout` directly to the given
+/// (position, duration, layer_index) — the same "drive the data field
+/// directly, the level under test is render reaction not input dispatch"
+/// convention `drag_clip_toward_zero`/`collapse_layer` already establish.
+/// The drag math that WOULD produce a live position/length is unit-tested
+/// separately (`interaction_overlay::p1_4_gesture_integrity_tests`'s B11/B12
+/// tests); this verb proves the RENDER reacts — the readout label appears
+/// with the formatted bars.beats text. Keyed by `layer_id` + clip index
+/// (not a clip id) because fixture clip ids are freshly minted UUIDs at
+/// build time (`TimelineClip::default()` calls `short_id()`), not stable
+/// literals a CLI arg could name.
+fn drag_readout(ui: &mut UIRoot, data: &mut SceneData, rest: &str) -> String {
+    let parts: Vec<&str> = rest.splitn(4, ':').collect();
+    let [layer_id, idx_str, position_str, duration_str] = parts.as_slice() else {
+        return format!(
+            "drag_readout: want layer_id:clip_index:position_beat:duration_beat, got '{rest}'"
+        );
+    };
+    let Some(layer_index) = data
+        .project
+        .timeline
+        .layers
+        .iter()
+        .position(|l| l.layer_id == *layer_id)
+    else {
+        return format!("drag_readout: no layer '{layer_id}'");
+    };
+    let Ok(clip_index) = idx_str.parse::<usize>() else {
+        return format!("drag_readout: bad clip_index '{idx_str}'");
+    };
+    if data.project.timeline.layers[layer_index].clips.get(clip_index).is_none() {
+        return format!(
+            "drag_readout: no clip at index {clip_index} on layer '{layer_id}' ({} clips)",
+            data.project.timeline.layers[layer_index].clips.len()
+        );
+    }
+    let Ok(position) = position_str.parse::<f64>() else {
+        return format!("drag_readout: bad position_beat '{position_str}'");
+    };
+    let Ok(duration) = duration_str.parse::<f64>() else {
+        return format!("drag_readout: bad duration_beat '{duration_str}'");
+    };
+    ui.viewport
+        .set_drag_readout(Some((Beats(position), Beats(duration), layer_index)));
+    format!(
+        "drag_readout -> layer '{layer_id}' (index {layer_index}) clip[{clip_index}] \
+         position={position:.3} duration={duration:.3}"
     )
 }
 

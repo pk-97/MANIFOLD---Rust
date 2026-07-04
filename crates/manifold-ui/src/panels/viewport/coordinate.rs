@@ -185,6 +185,17 @@ impl TimelineViewportPanel {
             }
         }
 
+        // Timeline markers (B12): a marker is a snap target exactly like a
+        // clip edge — same threshold, same "closer wins" rule — not a
+        // separate grid or a second snap implementation.
+        for marker in &self.markers {
+            let dist = (marker.beat.0 - beat.0).abs();
+            if dist < grid_threshold && dist < best_dist {
+                best_dist = dist;
+                best_beat = marker.beat;
+            }
+        }
+
         best_beat
     }
 

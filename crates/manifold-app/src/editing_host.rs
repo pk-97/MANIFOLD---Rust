@@ -385,13 +385,6 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         }
     }
 
-    // ── Auto-scroll ─────────────────────────────────────────────
-
-    fn auto_scroll_for_drag(&mut self, _screen_pos: Vec2) {
-        // Auto-scroll is handled in the app.rs frame loop (existing drag polling)
-        // The overlay calls this but the actual scroll logic remains in tick_and_render
-    }
-
     // ── Bitmap invalidation ─────────────────────────────────────
 
     fn invalidate_layer_bitmap(&mut self, layer_index: usize) {
