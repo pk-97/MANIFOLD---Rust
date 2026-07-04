@@ -510,6 +510,34 @@ pub struct GraphCanvas {
     /// `None` when closed. Canvas-owned and modal in `on_left_button_down`, same
     /// pattern as `enum_dropdown` / `vec_editor`.
     pub(crate) table_editor: Option<TableEditor>,
+
+    // ── P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D17) ──────────────────
+    // No per-frame tick existed anywhere in this module before these three —
+    // `GraphCanvas::tick` (below) is the one new per-frame seam, called from
+    // `app_render.rs` right next to the existing `canvas.set_snapshot(..)`
+    // call that already runs every frame the editor window is open.
+    /// Marquee fade in/out: eases visibility instead of an instant pop/
+    /// disappear. Targets 1.0 while `drag_mode` is `Marquee`, 0.0 once
+    /// released; retargeted unconditionally every `tick` (the
+    /// `ChipMotion`/`drawer_height_anim` "call set_target every tick, it
+    /// no-ops when already there" convention).
+    pub(crate) marquee_alpha: crate::anim::AnimF32,
+    /// The marquee's last live screen-space rect, refreshed every `tick`
+    /// while the drag is live. `drag_mode` itself resets to `None` the
+    /// instant `on_left_button_up` fires — this is what the render pass
+    /// draws against while `marquee_alpha` eases back to 0 after release.
+    pub(crate) marquee_last_rect: Option<(f32, f32, f32, f32)>,
+    /// D17 "wire→port ... pop" (partial — see the doc comment on
+    /// `GraphCanvas::tick` for what's NOT done here): a brief ring pop at
+    /// the drop point on a successful `ConnectPorts` commit
+    /// (`on_left_button_up`'s `WireFrom` arm).
+    pub(crate) connect_pop: crate::anim::Transient,
+    pub(crate) connect_pop_pos: (f32, f32),
+    /// Error shake (D17) — a brief red flash + horizontal shake at the drop
+    /// point when a `WireFrom` drag ends somewhere invalid (empty canvas, an
+    /// output port, or the source node itself).
+    pub(crate) error_shake: crate::anim::Transient,
+    pub(crate) error_shake_pos: (f32, f32),
 }
 
 impl GraphCanvas {
@@ -549,7 +577,65 @@ impl GraphCanvas {
             enum_dropdown: None,
             vec_editor: None,
             table_editor: None,
+            marquee_alpha: crate::anim::AnimF32::new(0.0, color::MOTION_FAST_MS),
+            marquee_last_rect: None,
+            connect_pop: crate::anim::Transient::default(),
+            connect_pop_pos: (0.0, 0.0),
+            error_shake: crate::anim::Transient::default(),
+            error_shake_pos: (0.0, 0.0),
         }
+    }
+
+    /// Per-frame tween tick for the canvas's P2 motion pieces (marquee fade,
+    /// connect pop, error shake — see each field's own doc comment). Call
+    /// once per frame while the graph editor window is open; `app_render.rs`
+    /// is the one call site, next to the existing `set_snapshot`/
+    /// `apply_live_values` calls that already run every such frame. Returns
+    /// `true` while anything is still animating, matching every other
+    /// panel's `tick_*` contract (the caller can use it to force a redraw).
+    ///
+    /// NOT done here (scoped out — see the phase report): wire→port
+    /// magnetize (easing the ghost wire's endpoint toward a nearby port
+    /// before the drop, rather than tracking the raw cursor) and a
+    /// traveling dash pulse along the wire from source to destination on
+    /// connect. Both need the port's exact screen position resolved from its
+    /// node + port-index (`NodeView::input_port_pos_graph` indexes by
+    /// position, not name, then needs a graph→screen projection) threaded
+    /// into the drag state live each frame; `connect_pop`/`error_shake`
+    /// below instead fire at the drop cursor position, which is already in
+    /// screen space and lands on (or very near) the real port for a valid
+    /// drop.
+    pub fn tick(&mut self, dt_ms: f32) -> bool {
+        let mut any = false;
+
+        // Marquee fade.
+        if let DragMode::Marquee { origin_screen } = &self.drag_mode {
+            let (ox, oy) = *origin_screen;
+            let (cx, cy) = self.cursor;
+            self.marquee_last_rect = Some((ox.min(cx), oy.min(cy), (cx - ox).abs(), (cy - oy).abs()));
+        }
+        let marquee_live = matches!(self.drag_mode, DragMode::Marquee { .. });
+        self.marquee_alpha.set_target(if marquee_live { 1.0 } else { 0.0 });
+        any |= self.marquee_alpha.tick(dt_ms);
+
+        any |= self.connect_pop.tick(dt_ms);
+        any |= self.error_shake.tick(dt_ms);
+
+        any
+    }
+
+    /// Fire the D17 connect-pop at `(sx, sy)` (screen space) — call right
+    /// after a `WireFrom` drag commits a `ConnectPorts` action.
+    pub(crate) fn fire_connect_pop(&mut self, sx: f32, sy: f32) {
+        self.connect_pop_pos = (sx, sy);
+        self.connect_pop.fire(color::MOTION_MED_MS);
+    }
+
+    /// Fire the D17 error shake at `(sx, sy)` (screen space) — call when a
+    /// `WireFrom` drag ends somewhere invalid.
+    pub(crate) fn fire_error_shake(&mut self, sx: f32, sy: f32) {
+        self.error_shake_pos = (sx, sy);
+        self.error_shake.fire(240.0);
     }
 
     /// Choose whether nodes appearing for the first time start expanded (all

@@ -1553,3 +1553,83 @@ fn removing_the_wire_reclaims_the_param() {
         "no wire → param editable again"
     );
 }
+
+// ── P2 motion: marquee fade / connect pop / error shake (`tick`) ────────
+
+#[test]
+fn marquee_fades_in_while_dragging_and_out_after_release() {
+    let mut canvas = GraphCanvas::new();
+    canvas.drag_mode = DragMode::Marquee { origin_screen: (10.0, 10.0) };
+    canvas.cursor = (50.0, 40.0);
+
+    assert!(canvas.tick(16.0), "still animating toward alpha 1");
+    assert!(canvas.marquee_alpha.value() > 0.0, "fading in");
+    assert_eq!(
+        canvas.marquee_last_rect,
+        Some((10.0, 10.0, 40.0, 30.0)),
+        "rect tracks origin→cursor while live"
+    );
+
+    // Run the fade-in to completion.
+    for _ in 0..20 {
+        canvas.tick(20.0);
+    }
+    assert_eq!(canvas.marquee_alpha.value(), 1.0, "fully faded in");
+
+    // Release: drag_mode resets to None (mirroring on_left_button_up), but the
+    // rect must survive so the fade-OUT frames have something to draw.
+    canvas.drag_mode = DragMode::None;
+    assert!(canvas.tick(16.0), "now easing back toward 0");
+    assert!(canvas.marquee_alpha.value() < 1.0, "fading out");
+    assert!(canvas.marquee_last_rect.is_some(), "rect held onto through the fade-out");
+
+    for _ in 0..20 {
+        canvas.tick(20.0);
+    }
+    assert_eq!(canvas.marquee_alpha.value(), 0.0, "fully faded out");
+}
+
+#[test]
+fn valid_wire_drop_fires_connect_pop_not_error_shake() {
+    let mut canvas = GraphCanvas::new();
+    canvas.fire_connect_pop(100.0, 200.0);
+    assert_eq!(canvas.connect_pop_pos, (100.0, 200.0));
+    assert!(canvas.connect_pop.progress().is_some(), "pop is live");
+    assert!(canvas.error_shake.progress().is_none(), "shake untouched");
+
+    assert!(canvas.tick(16.0), "pop still animating");
+    for _ in 0..30 {
+        canvas.tick(20.0);
+    }
+    assert!(canvas.connect_pop.progress().is_none(), "pop finishes on its own");
+}
+
+#[test]
+fn invalid_wire_drop_fires_error_shake_not_connect_pop() {
+    let mut canvas = GraphCanvas::new();
+    canvas.fire_error_shake(30.0, 40.0);
+    assert_eq!(canvas.error_shake_pos, (30.0, 40.0));
+    assert!(canvas.error_shake.progress().is_some(), "shake is live");
+    assert!(canvas.connect_pop.progress().is_none(), "pop untouched");
+
+    for _ in 0..30 {
+        canvas.tick(20.0);
+    }
+    assert!(canvas.error_shake.progress().is_none(), "shake finishes on its own");
+}
+
+#[test]
+fn dropping_a_wire_on_empty_canvas_fires_error_shake() {
+    // End-to-end through the real interaction path, not just the direct
+    // fire_* calls above: begin a WireFrom drag, release over empty canvas.
+    let mut canvas = GraphCanvas::new();
+    let snap = wire_driven_snapshot(false);
+    canvas.set_default_expanded(true);
+    canvas.set_snapshot(&snap);
+    let vp = Rect::new(0.0, 0.0, 2000.0, 2000.0);
+
+    canvas.drag_mode = DragMode::WireFrom { from_node: 1, from_port: "out".into() };
+    canvas.on_left_button_up(vp, 9999.0, 9999.0); // far off any node/port
+    assert!(canvas.error_shake.progress().is_some(), "invalid drop shakes");
+    assert!(canvas.connect_pop.progress().is_none());
+}

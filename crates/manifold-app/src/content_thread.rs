@@ -187,6 +187,15 @@ pub struct ContentThread {
     /// [`Self::refresh_preset_overlay_if_changed`].
     pub embedded_presets_fingerprint: u64,
 
+    /// D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — set by
+    /// `handle_command`'s `Undo`/`Redo` arms (peeked from
+    /// `EditingService::peek_undo_description`/`peek_redo_description` BEFORE
+    /// the command moves stacks), consumed by `.take()` at the next
+    /// `ContentState` build in the SAME loop iteration (see `content_thread.rs`'s
+    /// per-tick state construction). Rides the regular per-tick snapshot rather
+    /// than a separate out-of-band send — see `UndoRedoEvent`'s doc comment.
+    pub pending_undo_redo_event: Option<crate::content_state::UndoRedoEvent>,
+
     // ── Profiling ──
     /// Active profiling session (only present when feature = "profiling").
     #[cfg(feature = "profiling")]
@@ -1280,6 +1289,7 @@ impl ContentThread {
             export_progress: 0.0,
             export_status: Arc::from(""),
             export_finished: None,
+            undo_redo_event: self.pending_undo_redo_event.take(),
             ableton_session: if self.ableton_bridge.session_changed() {
                 Some(Arc::new(self.ableton_bridge.session().clone()))
             } else {

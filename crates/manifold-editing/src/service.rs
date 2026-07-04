@@ -118,6 +118,19 @@ impl EditingService {
         }
     }
 
+    /// Description of the command `undo()` would act on next. Read this
+    /// BEFORE calling `undo()` — see `UndoRedoManager::peek_undo_description`.
+    /// D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2).
+    pub fn peek_undo_description(&self) -> Option<&str> {
+        self.undo_manager.peek_undo_description()
+    }
+
+    /// Description of the command `redo()` would act on next. Same
+    /// peek-before-mutating contract as [`Self::peek_undo_description`].
+    pub fn peek_redo_description(&self) -> Option<&str> {
+        self.undo_manager.peek_redo_description()
+    }
+
     pub fn can_undo(&self) -> bool {
         self.undo_manager.can_undo()
     }

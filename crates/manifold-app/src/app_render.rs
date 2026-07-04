@@ -713,6 +713,14 @@ impl Application {
             if let Some(aspect) = preview_aspect {
                 canvas.set_preview_aspect(aspect);
             }
+            // P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D17): the one per-frame
+            // tick for the canvas's marquee-fade/connect-pop/error-shake
+            // tweens — no seam existed for this before (graph_canvas had no
+            // `tick`/`update` method at all); this is the natural insertion
+            // point, right beside the `set_snapshot`/`apply_live_values`
+            // calls that already run every frame the editor window is open,
+            // using the `dt` this function already computed above.
+            canvas.tick((dt * 1000.0) as f32);
             canvas.set_snapshot(&ui_snap);
             // Overlay this frame's live (modulated) node values on top of the
             // just-pushed structural snapshot, so a driver / Ableton / envelope /
@@ -855,22 +863,20 @@ impl Application {
                     if let Some(tx) = self.content_tx.as_ref() {
                         crate::ui_bridge::undo(tx);
                     }
-                    // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2).
-                    // Generic label: the undone command's *name* lives only in
-                    // the content thread's `UndoRedoManager` (each `Command`
-                    // has a `description()` — manifold-editing/src/command.rs:9
-                    // — but nothing plumbs it into `ContentState` today, and
-                    // adding that field means editing content_commands.rs /
-                    // content_state.rs, both `content*` and out of this
-                    // phase's bounds). Escalated in the phase report rather
-                    // than crossing that line.
-                    self.ws.ui_root.toast.show("Undo");
+                    // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2):
+                    // the real "Undid: <command name>" label now fires from
+                    // `ui_bridge/state_sync.rs`'s `push_state`, once the
+                    // content thread's `ContentState.undo_redo_event` round-
+                    // trips back with the actual command description (see
+                    // `content_commands.rs`'s `Undo`/`Redo` handlers and
+                    // `ContentThread::pending_undo_redo_event`). No toast is
+                    // fired here directly any more — that would show a
+                    // generic label first and then get immediately replaced.
                 }
                 M::Redo => {
                     if let Some(tx) = self.content_tx.as_ref() {
                         crate::ui_bridge::redo(tx);
                     }
-                    self.ws.ui_root.toast.show("Redo");
                 }
                 M::Settings => self.pending_open_settings = true,
             }
