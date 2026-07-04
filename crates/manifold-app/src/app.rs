@@ -811,7 +811,10 @@ impl Application {
                 | DragMode::RegionSelect
                 | DragMode::AutomationPoint
                 | DragMode::AutomationSegmentBend
-                | DragMode::AutomationSegmentDrag => return,
+                | DragMode::AutomationSegmentDrag
+                | DragMode::AutomationMarquee
+                | DragMode::AutomationGroupMove
+                | DragMode::AutomationDraw => return,
                 DragMode::None => {}
             }
         }

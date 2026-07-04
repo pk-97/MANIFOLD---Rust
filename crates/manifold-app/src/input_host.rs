@@ -1414,6 +1414,82 @@ impl TimelineInputHost for AppInputHost<'_> {
         );
         *self.needs_rebuild = true;
     }
+
+    // ── Automation lane editing — marquee + draw mode (P4 Unit B) ─────
+
+    fn has_selected_automation_points(&self) -> bool {
+        !self.selection.selected_automation_points.is_empty()
+    }
+
+    fn delete_selected_automation_points(&mut self) {
+        use manifold_editing::commands::automation::RemoveAutomationPointCommand;
+        use std::collections::HashMap;
+
+        let refs = std::mem::take(&mut self.selection.selected_automation_points);
+        if refs.is_empty() {
+            return;
+        }
+
+        // Group by lane — index-based removal only makes sense within one
+        // lane; a marquee rect can span multiple lanes/params at once.
+        let mut by_lane: HashMap<(manifold_core::GraphTarget, String), Vec<f64>> = HashMap::new();
+        for r in &refs {
+            let target = crate::editing_host::to_graph_target(&r.target);
+            by_lane.entry((target, r.param_id.as_ref().to_string())).or_default().push(r.beat.0);
+        }
+
+        let mut commands: Vec<Box<dyn Command>> = Vec::new();
+        for ((target, param_id), beats) in by_lane {
+            let Some(inst) = self.project.preset_instance(&target) else {
+                continue;
+            };
+            let Some(lanes) = inst.automation_lanes.as_ref() else {
+                continue;
+            };
+            let Some(lane) = lanes.iter().find(|l| l.param_id.as_ref() == param_id) else {
+                continue;
+            };
+            // Highest index first WITHIN this lane — an earlier removal must
+            // never shift a later target index (see
+            // `commands::automation::tests::composite_group_delete_highest_index_first_survives_execute_and_undo`).
+            let mut indices: Vec<usize> = beats
+                .iter()
+                .filter_map(|b| lane.points.iter().position(|p| p.beat.0 == *b))
+                .collect();
+            indices.sort_unstable_by(|a, b| b.cmp(a));
+            indices.dedup();
+            for idx in indices {
+                commands.push(Box::new(RemoveAutomationPointCommand::new(target.clone(), param_id.clone(), idx)));
+            }
+        }
+        if commands.is_empty() {
+            *self.needs_rebuild = true;
+            return;
+        }
+        // Apply locally first (immediate visual feedback), same
+        // already-executed-then-sent shape as the single-point delete above.
+        // Each command re-derives its target index fresh from whichever
+        // Project it's given, so re-running the SAME commands via
+        // `ExecuteBatch` against the content thread's separate Project copy
+        // is correct, not a double-apply.
+        for cmd in &mut commands {
+            cmd.execute(self.project);
+        }
+        ContentCommand::send(
+            self.content_tx,
+            ContentCommand::ExecuteBatch(commands, "Delete Automation Points".to_string()),
+        );
+        *self.needs_rebuild = true;
+    }
+
+    fn toggle_automation_draw_mode(&mut self) {
+        self.selection.automation_draw_mode = !self.selection.automation_draw_mode;
+        *self.needs_rebuild = true;
+    }
+
+    fn automation_mode_visible(&self) -> bool {
+        self.selection.automation_mode_visible
+    }
 }
 
 // ── Effect resolution helpers (mirrors ui_bridge resolve_effects) ──

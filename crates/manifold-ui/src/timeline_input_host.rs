@@ -245,4 +245,25 @@ pub trait TimelineInputHost {
     /// Delete the currently selected automation breakpoint. No-op if none
     /// selected or it no longer resolves (e.g. its lane was cleared).
     fn delete_selected_automation_point(&mut self);
+
+    // ── Automation lane editing — marquee + draw mode (P4 Unit B) ─────
+
+    /// Whether a marquee multi-selection of automation breakpoints is active
+    /// (`UIState::selected_automation_points` non-empty). Checked BEFORE
+    /// `has_selected_automation_point` in Delete-key priority — a marquee
+    /// selection takes precedence over a single click-selection.
+    fn has_selected_automation_points(&self) -> bool;
+
+    /// Delete the entire marquee-selected set as ONE undo entry — grouped by
+    /// lane, each lane's indices resolved highest-to-lowest so an earlier
+    /// removal within that lane never shifts a later target index.
+    fn delete_selected_automation_points(&mut self);
+
+    /// Toggle pencil/draw mode (Live's `B`) — while on, dragging inside an
+    /// automation lane strip draws points instead of grabbing a dot/segment.
+    fn toggle_automation_draw_mode(&mut self);
+
+    /// Whether automation mode is currently showing lane strips — gates the
+    /// `B` keybinding so it's a no-op with lanes hidden.
+    fn automation_mode_visible(&self) -> bool;
 }

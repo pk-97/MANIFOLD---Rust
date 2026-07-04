@@ -84,6 +84,21 @@ pub struct UIState {
     /// serialized — pure view/interaction state, same tier as
     /// `hovered_clip_id`.
     pub selected_automation_point: Option<UiAutomationPointRef>,
+
+    /// Marquee (rubber-band) multi-selection of automation breakpoints (P4
+    /// Unit B, `docs/AUTOMATION_LANES_DESIGN.md` §7's "Marquee-select
+    /// multiple dots and drag/delete them together"). Populated live during
+    /// an `AutomationMarquee` drag; Delete removes the whole set as one undo
+    /// entry, a drag starting on a member moves the whole set together. Same
+    /// tier as `selected_automation_point` — view/interaction state, never
+    /// serialized.
+    pub selected_automation_points: Vec<UiAutomationPointRef>,
+
+    /// Pencil/draw mode toggle (Live's `B`) — while on, dragging inside an
+    /// automation lane strip draws a point at each grid step instead of
+    /// grabbing a dot/segment (P4 Unit B, §7's "Draw mode"). Only meaningful
+    /// while `automation_mode_visible`; never serialized.
+    pub automation_draw_mode: bool,
 }
 
 impl Default for UIState {
@@ -112,6 +127,8 @@ impl UIState {
             scope_pin: None,
             automation_mode_visible: false,
             selected_automation_point: None,
+            selected_automation_points: Vec::new(),
+            automation_draw_mode: false,
         }
     }
 

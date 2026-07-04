@@ -345,4 +345,54 @@ pub trait TimelineEditingHost {
         left: (Beats, f32, f32, UiSegmentShape),
         right: (Beats, f32, f32, UiSegmentShape),
     );
+
+    // ── Automation lane editing — marquee group move (P4 Unit B) ─────
+
+    /// Commit a marquee group-move as ONE undo entry. Each tuple is
+    /// `(target, param_id, beat, old_value, new_value, shape)` — beat/shape
+    /// unchanged by this gesture. Already applied live (per-point, via
+    /// repeated `set_automation_point_preview` calls with `from_beat ==
+    /// to_beat`) — this only registers the batched undo entry.
+    fn commit_automation_group_move(
+        &mut self,
+        moves: Vec<(UiGraphTarget, ParamId, Beats, f32, f32, UiSegmentShape)>,
+    );
+
+    // ── Automation lane editing — draw/pencil mode (P4 Unit B, §7's
+    // "Draw mode") ────────────────────────────────────────────────────
+
+    /// Full (UNFILTERED by visible beat range) point list for `target`/
+    /// `param_id`'s lane, as `(beat, value, shape)` triples in PARAM-RANGE
+    /// units. `None` when no lane exists yet for this param. Needed at
+    /// draw-stroke grab time — `AutomationLaneScreen::dots` is culled to the
+    /// visible range and would silently drop off-screen points from the
+    /// stroke's eventual install.
+    fn automation_lane_points(
+        &self,
+        target: &UiGraphTarget,
+        param_id: &ParamId,
+    ) -> Option<Vec<(Beats, f32, UiSegmentShape)>>;
+
+    /// Live-preview an in-progress draw stroke: overwrites the WHOLE lane's
+    /// point list, bypassing undo (creates the lane, enabled, if it doesn't
+    /// exist yet — same as a click-add's implicit lane creation).
+    fn set_automation_draw_preview(
+        &mut self,
+        target: &UiGraphTarget,
+        param_id: &ParamId,
+        points: Vec<(Beats, f32, UiSegmentShape)>,
+    );
+
+    /// Commit a finished draw stroke as ONE undo entry — installs
+    /// `new_points` via the same mechanism §5's Automation Arm recording
+    /// uses (`CommitRecordedGestureCommand`): `old_points` is the pre-stroke
+    /// set (`None` if the stroke created the lane, mirroring
+    /// `AddAutomationPointCommand`'s `created_lane` semantics).
+    fn commit_automation_draw_stroke(
+        &mut self,
+        target: &UiGraphTarget,
+        param_id: &ParamId,
+        new_points: Vec<(Beats, f32, UiSegmentShape)>,
+        old_points: Option<Vec<(Beats, f32, UiSegmentShape)>>,
+    );
 }
