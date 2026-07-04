@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """
-PreToolUse hook for Bash. Two jobs, evaluated in this order:
+PreToolUse hook for Bash. Three jobs, evaluated in this order:
+
+  0. ASK, instead of auto-allowing, a branch-switch git command (checkout/
+     switch/merge) that targets the MAIN checkout while another session's
+     daemon pidfile (.claude/daemon/verdicts/*.pid) is live — see
+     `shared_checkout_guard` and .claude/GIT_TREE_DISCIPLINE.md §1. Solo
+     sessions and worktree-targeted commands (`git -C .claude/worktrees/...`)
+     are unaffected; `checkout -- <paths>` (file restore, not a branch
+     switch) is unaffected. Any failure in this check falls back to no-guard.
 
   1. ALLOW pre-approved commands outright — even compound ones (pipes,
      `;` chains, `for`/`while` loops, `$(...)` substitutions) that the
@@ -37,13 +45,17 @@ parsed command-position to be a pre-approved head with no output redirect
 outside /tmp and no mutating flag. A misparse costs at most one avoidable
 prompt; it can never silently green-light an unapproved write.
 
-Receives `{"tool_name": "Bash", "tool_input": {"command": "..."}}` on
-stdin. Emits a JSON object with hookSpecificOutput.permissionDecision
-("allow" or "deny") plus a reason, or nothing (normal flow).
+Receives `{"tool_name": "Bash", "tool_input": {"command": "..."}, "session_id":
+"...", "cwd": "..."}` on stdin. Emits a JSON object with hookSpecificOutput.
+permissionDecision ("allow", "ask", or "deny") plus a reason, or nothing
+(normal flow).
 """
 import json
+import os
 import re
+import shlex
 import sys
+from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +361,160 @@ def is_preapproved_command(raw: str, _depth: int = 0) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Shared-checkout guard (.claude/GIT_TREE_DISCIPLINE.md §1)
+#
+# Two live sessions, one main-checkout HEAD: a branch switch/merge in the main
+# tree while another session's daemon is alive can silently move the tree out
+# from under it (incident: commit 88257631 — a fast-forward merge resurrected
+# a moved file's old path mid-rename). This guard does not add a new deny; it
+# turns a branch-switch command that targets the main checkout, while another
+# session's daemon pidfile is alive, into an "ask" so Peter is prompted by
+# name instead of the switch happening silently. Any exception anywhere in
+# this section falls back to no-guard (today's behavior) — never to blocking.
+# ---------------------------------------------------------------------------
+
+_PROJECT_DIR = Path(__file__).resolve().parents[2]
+_WORKTREES_DIR = _PROJECT_DIR / ".claude" / "worktrees"
+_VERDICTS_DIR = _PROJECT_DIR / ".claude" / "daemon" / "verdicts"
+
+
+def find_live_foreign_session(own_session_id):
+    """First session id under verdicts/*.pid that isn't `own_session_id` and
+    whose pid passes a signal-0 liveness check. Malformed/dead pidfiles are
+    skipped (read as absent), never treated as an error."""
+    try:
+        if not _VERDICTS_DIR.is_dir():
+            return None
+        for pid_file in sorted(_VERDICTS_DIR.glob("*.pid")):
+            sid = pid_file.stem
+            if sid == own_session_id:
+                continue
+            try:
+                pid = int(pid_file.read_text().strip())
+            except (OSError, ValueError):
+                continue  # malformed pidfile -> treat as absent
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                continue  # dead pid -> treat as absent
+            return sid
+    except Exception:
+        return None
+    return None
+
+
+def _git_checkout_dir(toks, cwd):
+    """Resolve the effective working dir for a `git [-C dir]... <sub>` segment,
+    applying `-C` cumulatively (git semantics: each is relative to the last).
+    Returns (resolved_dir, sub, rest_toks) or (None, None, None) if unparsable."""
+    i = 1
+    target = Path(cwd)
+    while i < len(toks) and toks[i].startswith("-"):
+        if toks[i] == "-C":
+            if i + 1 >= len(toks):
+                return None, None, None
+            p = Path(toks[i + 1])
+            target = p if p.is_absolute() else (target / p)
+            i += 2
+        elif toks[i] == "-c":
+            i += 2
+        else:
+            i += 1
+    sub = toks[i] if i < len(toks) else ""
+    return target, sub, toks[i + 1 :]
+
+
+def _is_branch_switch_sub(sub, rest_toks):
+    """switch/merge always count; `checkout` counts unless it's the
+    `checkout -- <paths>` file-restore form (destructive-to-worktree, not a
+    branch switch — left alone per spec)."""
+    if sub in ("switch", "merge"):
+        return True
+    if sub == "checkout":
+        return "--" not in rest_toks
+    return False
+
+
+def _strip_leading_keywords(toks):
+    while toks:
+        t = toks[0]
+        if t in _DATA_KEYWORDS:
+            return []  # data list, not a command
+        if t in _STRIP_KEYWORDS:
+            toks = toks[1:]
+            continue
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t):
+            toks = toks[1:]
+            continue
+        break
+    return toks
+
+
+_SHELL_OPERATORS = {"&&", "||", ";", "|", "&"}
+
+
+def _shlex_segments(cmd):
+    """Tokenize `cmd` with real quote-unescaping (unlike `sanitize`, which
+    collapses quoted spans to a placeholder — fine for the allow/deny
+    classifier, which never needs the literal text, but wrong here: a `-C
+    "<path>"` argument must survive with its real value, notably because
+    the repo path itself contains a space ("MANIFOLD - Rust"). Splits the
+    resulting token stream into command-position segments on operator
+    tokens. Malformed quoting (`shlex.split` raising) yields no segments —
+    fail-safe, same as everywhere else in this guard."""
+    try:
+        tokens = shlex.split(cmd, posix=True)
+    except ValueError:
+        return []
+    segments = []
+    current = []
+    for t in tokens:
+        if t in _SHELL_OPERATORS:
+            if current:
+                segments.append(current)
+            current = []
+        else:
+            current.append(t)
+    if current:
+        segments.append(current)
+    return segments
+
+
+def shared_checkout_guard(cmd, session_id, cwd):
+    """Return an ask-reason string if `cmd` contains a branch-switch git
+    command targeting the main checkout while another session's daemon is
+    live; otherwise None. Never raises — any failure yields None (no guard)."""
+    try:
+        for toks in _shlex_segments(cmd):
+            toks = _strip_leading_keywords(toks)
+            if not toks or toks[0] != "git":
+                continue
+            target_dir, sub, rest = _git_checkout_dir(toks, cwd)
+            if target_dir is None or not _is_branch_switch_sub(sub, rest):
+                continue
+            try:
+                resolved = target_dir.resolve()
+            except OSError:
+                continue
+            in_main = resolved == _PROJECT_DIR or _PROJECT_DIR in resolved.parents
+            in_worktrees = resolved == _WORKTREES_DIR or _WORKTREES_DIR in resolved.parents
+            if not in_main or in_worktrees:
+                continue
+            foreign = find_live_foreign_session(session_id)
+            if foreign:
+                return (
+                    f"Branch-switch command in the shared main checkout "
+                    f"(`{' '.join(toks)}`) while session {foreign}'s daemon "
+                    f"is still live — confirm before switching so it "
+                    f"doesn't move the tree under that session (see "
+                    f"incident 88257631 / GIT_TREE_DISCIPLINE.md §1)."
+                )
+        return None
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Deny messages (unchanged policy for non-pre-approved compounds)
 # ---------------------------------------------------------------------------
 
@@ -377,6 +543,16 @@ def build_allow() -> dict:
     }
 
 
+def build_ask(reason: str) -> dict:
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "ask",
+            "permissionDecisionReason": reason,
+        }
+    }
+
+
 def build_deny(reasons: list[str]) -> dict:
     return {
         "hookSpecificOutput": {
@@ -395,6 +571,13 @@ def main() -> int:
 
     cmd = data.get("tool_input", {}).get("command", "")
     if not cmd:
+        return 0
+
+    # 0. Shared-checkout guard: a branch switch in the main tree while
+    # another session's daemon is live asks instead of auto-allowing.
+    ask_reason = shared_checkout_guard(cmd, data.get("session_id"), data.get("cwd") or os.getcwd())
+    if ask_reason:
+        json.dump(build_ask(ask_reason), sys.stdout)
         return 0
 
     # 1. Pre-approved? Allow outright, pipes and loops included.
