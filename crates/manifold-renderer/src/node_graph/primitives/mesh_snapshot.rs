@@ -1056,6 +1056,131 @@ fn scene_two_cubes_renders_to_png() {
     println!("render_scene two-cubes: wrote {out_path}");
 }
 
+/// One unlit quad through `node.render_scene` (`objects = 1`, `lights = 0`)
+/// with an 8×8 checkerboard-alpha `base_color_map_0` wired via a `Source`
+/// placeholder node, pre-bound the same way `render_mesh_scene`'s optional
+/// `bcmap` wiring works for `node.render_mesh`. Mirrors
+/// `render_scene_phong_quad_frame`'s camera/mesh setup, minus lights.
+fn render_scene_bcmap_quad_frame(w: u32, h: u32, mask: bool, checker: &[[f32; 4]], cw: u32, ch: u32) -> Vec<[f32; 4]> {
+    let device = crate::test_device();
+    let format = GpuTextureFormat::Rgba16Float;
+    let map = upload_f16_rgba(&device, cw, ch, checker);
+
+    let mut g = Graph::new();
+    let mesh = g.add_node(Box::new(MeshSource::new()));
+    let cam = g.add_node(Box::new(CameraOrbit::new()));
+    g.set_param(cam, "orbit", ParamValue::Float(std::f32::consts::FRAC_PI_2))
+        .unwrap();
+    g.set_param(cam, "tilt", ParamValue::Float(0.0)).unwrap();
+    g.set_param(cam, "distance", ParamValue::Float(4.0)).unwrap();
+    g.set_param(cam, "fov_y", ParamValue::Float(1.0)).unwrap();
+
+    let mat = g.add_node(Box::new(UnlitMaterial::new()));
+    g.set_param(mat, "color_r", ParamValue::Float(1.0)).unwrap();
+    g.set_param(mat, "color_g", ParamValue::Float(1.0)).unwrap();
+    g.set_param(mat, "color_b", ParamValue::Float(1.0)).unwrap();
+    g.set_param(
+        mat,
+        "alpha_mode",
+        ParamValue::Enum(if mask { 1 } else { 0 }),
+    )
+    .unwrap();
+    g.set_param(mat, "alpha_cutoff", ParamValue::Float(0.5)).unwrap();
+
+    let render = g.add_node(Box::new(RenderScene::new()));
+    g.set_param(render, "objects", ParamValue::Float(1.0)).unwrap();
+    g.set_param(render, "lights", ParamValue::Float(0.0)).unwrap();
+
+    let src = g.add_node(Box::new(Source::new()));
+    let sink = g.add_node(Box::new(FinalOutput::new()));
+
+    g.connect((mesh, "out"), (render, "mesh_0")).unwrap();
+    g.connect((mat, "out"), (render, "material_0")).unwrap();
+    g.connect((cam, "out"), (render, "camera")).unwrap();
+    g.connect((src, "out"), (render, "base_color_map_0")).unwrap();
+    g.connect((render, "color"), (sink, "in")).unwrap();
+
+    let plan = compile(&g).unwrap();
+    let r_color = output_resource(&plan, render, "color");
+    let r_mesh = output_resource(&plan, mesh, "out");
+    let r_map = output_resource(&plan, src, "out");
+
+    let mut backend = MetalBackend::new(&device, w, h, format);
+    let color_target = RenderTarget::new(&device, w, h, format, "render-scene-bcmap-color");
+    let color_slot = backend.pre_bind_texture_2d(r_color, color_target);
+
+    let verts = quad_verts();
+    let vert_bytes = (verts.len() * std::mem::size_of::<MeshVertex>()) as u64;
+    let vert_buf = device.create_buffer_shared(vert_bytes);
+    unsafe {
+        vert_buf.write(0, bytemuck::cast_slice(&verts));
+    }
+    backend.pre_bind_array(r_mesh, vert_buf);
+    backend.pre_bind_texture_2d(r_map, map);
+
+    let mut native_enc = device.create_encoder("render-scene-bcmap");
+    let mut exec = Executor::new(Box::new(backend));
+    {
+        let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+        exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
+    }
+    native_enc.commit_and_wait_completed();
+
+    let out_tex = exec
+        .backend()
+        .texture_2d(color_slot)
+        .expect("color texture retained");
+    readback_rgba_f32(&device, out_tex, w, h)
+}
+
+/// Value-level cutout gate for `node.render_scene`'s per-object
+/// `base_color_map_n` port (M6 addendum): same checkerboard-alpha cutout
+/// proof as `alpha_mask_cutout_discards_transparent_texels`, routed through
+/// `RenderScene` instead of `Render3DMesh` — proves the sampled
+/// `base_color_map_0` alpha (not a blanket discard) gates the Mask-mode
+/// cutout through render_scene's per-object `texture_flags.z` wiring.
+#[test]
+fn render_scene_base_color_map_alpha_cutout_discards() {
+    let (w, h) = (128u32, 128u32);
+    let cw = 8u32;
+    let ch = 8u32;
+    let checker: Vec<[f32; 4]> = (0..ch)
+        .flat_map(|y| {
+            (0..cw).map(move |x| {
+                let a = if (x + y) % 2 == 0 { 1.0 } else { 0.0 };
+                [1.0, 1.0, 1.0, a]
+            })
+        })
+        .collect();
+
+    let opaque = render_scene_bcmap_quad_frame(w, h, false, &checker, cw, ch);
+    let mask = render_scene_bcmap_quad_frame(w, h, true, &checker, cw, ch);
+
+    let lum = |p: [f32; 4]| p[0] + p[1] + p[2];
+    let mut footprint = 0usize;
+    let mut discarded = 0usize;
+    let mut shaded = 0usize;
+    for (o, m) in opaque.iter().zip(mask.iter()) {
+        if lum(*o) > 0.1 {
+            footprint += 1;
+            if lum(*m) < 0.05 {
+                discarded += 1;
+            } else if lum(*m) > 0.5 {
+                shaded += 1;
+            }
+        }
+    }
+
+    println!(
+        "render_scene base_color_map cutout: discarded={discarded} shaded={shaded} footprint={footprint}"
+    );
+    assert!(footprint > 200, "quad should cover a real area, got {footprint}");
+    assert!(
+        discarded * 5 > footprint && shaded * 5 > footprint,
+        "expected a roughly balanced cutout gated on sampled base_color_map alpha: discarded={discarded} shaded={shaded} footprint={footprint}"
+    );
+}
+
 // ============================================================================
 // IMPORT wave — real glTF geometry proof: load a `.glb` fixture, flatten its
 // node tree + mesh primitives into ONE combined `Array<MeshVertex>` buffer

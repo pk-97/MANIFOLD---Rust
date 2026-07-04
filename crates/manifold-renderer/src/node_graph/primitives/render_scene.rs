@@ -17,11 +17,13 @@
 //! real occlusion regardless of draw order.
 //!
 //! Per docs/REALTIME_3D_DESIGN.md §2 D2/D3 and §5 P1: no shadows (P2),
-//! no atmosphere/fog (P3), no per-object surface-texture inputs or
-//! port-shadowed transforms in P1 (transform params are plain params —
-//! a documented additive follow-up). ONE shared `envmap` input lights
-//! every PBR object in the scene (an environment map is scene-wide by
-//! nature, not per-object).
+//! no atmosphere/fog (P3), no port-shadowed transforms in P1 (transform
+//! params are plain params — a documented additive follow-up). Each
+//! object has an optional `base_color_map_n` albedo/alpha input (M6
+//! addendum); normal/roughness/metallic maps remain unwired per object
+//! (dummy-bound) — a documented additive follow-up. ONE shared `envmap`
+//! input lights every PBR object in the scene (an environment map is
+//! scene-wide by nature, not per-object).
 
 use ahash::AHashMap;
 use manifold_gpu::{GpuBinding, GpuLoadAction};
@@ -61,6 +63,10 @@ const MESH_NAMES: [&str; MAX_OBJECTS] = [
 const MATERIAL_NAMES: [&str; MAX_OBJECTS] = [
     "material_0", "material_1", "material_2", "material_3", "material_4", "material_5",
     "material_6", "material_7",
+];
+const BASE_COLOR_MAP_NAMES: [&str; MAX_OBJECTS] = [
+    "base_color_map_0", "base_color_map_1", "base_color_map_2", "base_color_map_3",
+    "base_color_map_4", "base_color_map_5", "base_color_map_6", "base_color_map_7",
 ];
 const LIGHT_NAMES: [&str; MAX_LIGHTS] = ["light_0", "light_1", "light_2", "light_3"];
 
@@ -117,7 +123,9 @@ struct RenderSceneUniforms {
     pbr_metallic_roughness: [f32; 4],
     specular: [f32; 4],
     cel_params: [f32; 4],
-    /// Always zero in P1 — no per-object surface-texture inputs.
+    /// `z` = 1.0 when this object's `base_color_map_n` is wired (matches
+    /// `resolve_albedo`'s `texture_flags.z` gate); x/y/w remain zero — no
+    /// normal_map/roughness_map/metallic_map inputs per object yet.
     texture_flags: [f32; 4],
     alpha_params: [f32; 4],
     /// `(light_count, ambient, 0, 0)`.
@@ -169,7 +177,7 @@ impl RenderScene {
         let n_obj = objects as usize;
         let n_lights = lights as usize;
 
-        let mut inputs = Vec::with_capacity(2 + n_lights + n_obj * 2);
+        let mut inputs = Vec::with_capacity(2 + n_lights + n_obj * 3);
         inputs.push(NodePort {
             name: "camera",
             ty: PortType::Camera,
@@ -203,6 +211,12 @@ impl RenderScene {
                 ty: PortType::Material,
                 kind: PortKind::Input,
                 required: true,
+            });
+            inputs.push(NodePort {
+                name: BASE_COLOR_MAP_NAMES[i],
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
             });
         }
 
@@ -381,8 +395,8 @@ impl RenderScene {
     pub fn description() -> PrimitiveDescription {
         PrimitiveDescription {
             type_id: RENDER_SCENE_TYPE_ID,
-            purpose: "Multi-object 3D scene renderer: draws `objects` (1..=8) separate Array<MeshVertex> meshes into ONE shared depth buffer, so nearer objects correctly occlude farther ones — the gap node.render_mesh / node.render_copies can't close (each of those renders into its own private depth buffer). Each object carries its own material_n: Material and pos_x/y/z + rot_x/y/z + scale_x/y/z transform params (composed CPU-side into a model matrix). Up to `lights` (0..=4) shared Light inputs light_0..light_{lights-1} accumulate in the Phong/PBR/Cel shading — each light's direct term is summed, ambient + emission are added once. ONE shared envmap input lights every PBR object in the scene (an environment map is scene-wide, not per-object). No shadows (P2), no atmosphere/fog (P3), no per-object surface textures in P1.",
-            composition_notes: "objects and lights are reconfigure params: changing either rebuilds the port list (mesh_n/material_n pairs, light_0..N) and the per-object transform params, same dynamic-port pattern as node.switch_texture's num_inputs. Transform params (pos/rot/scale per object) are plain params in P1 — not port-shadowed, so they aren't beat-modulatable yet (a documented additive follow-up, not a v1 gap). A missing mesh_n or material_n, or a PBR material_n with envmap left unwired, is a structured error (ctx.error + magenta clear on `color`), matching render_mesh's no-silent-fallbacks contract. Object 0 clears the shared color+depth target; objects 1..N load onto it — the shared depth buffer resolves occlusion regardless of which object happens to be object 0.",
+            purpose: "Multi-object 3D scene renderer: draws `objects` (1..=8) separate Array<MeshVertex> meshes into ONE shared depth buffer, so nearer objects correctly occlude farther ones — the gap node.render_mesh / node.render_copies can't close (each of those renders into its own private depth buffer). Each object carries its own material_n: Material, an optional base_color_map_n: Texture2D albedo/alpha map, and pos_x/y/z + rot_x/y/z + scale_x/y/z transform params (composed CPU-side into a model matrix). When base_color_map_n is wired, the sampled texel modulates material_n's base_color (rgb × rgb) and its alpha drives that material's alpha-cutout discard when alpha_mode is Mask — same resolve_albedo path as node.render_mesh. Normal/roughness/metallic maps remain unwired per object (dummy-bound) — a documented additive follow-up. Up to `lights` (0..=4) shared Light inputs light_0..light_{lights-1} accumulate in the Phong/PBR/Cel shading — each light's direct term is summed, ambient + emission are added once. ONE shared envmap input lights every PBR object in the scene (an environment map is scene-wide, not per-object). No shadows (P2), no atmosphere/fog (P3).",
+            composition_notes: "objects and lights are reconfigure params: changing either rebuilds the port list (mesh_n/material_n/base_color_map_n triples, light_0..N) and the per-object transform params, same dynamic-port pattern as node.switch_texture's num_inputs. Transform params (pos/rot/scale per object) are plain params in P1 — not port-shadowed, so they aren't beat-modulatable yet (a documented additive follow-up, not a v1 gap). base_color_map_n is optional — leaving it unwired renders that object with material_n's flat base_color, exactly as before this port existed. A missing mesh_n or material_n, or a PBR material_n with envmap left unwired, is a structured error (ctx.error + magenta clear on `color`), matching render_mesh's no-silent-fallbacks contract. Object 0 clears the shared color+depth target; objects 1..N load onto it — the shared depth buffer resolves occlusion regardless of which object happens to be object 0.",
             examples: &[],
             inputs: &[],
             outputs: &RENDER_SCENE_OUTPUTS,
@@ -583,6 +597,7 @@ impl EffectNode for RenderScene {
             vertices: &'ctx manifold_gpu::GpuBuffer,
             uniforms: RenderSceneUniforms,
             pipeline: manifold_gpu::GpuRenderPipeline,
+            base_color_map: Option<&'ctx manifold_gpu::GpuTexture>,
         }
 
         let mut draws: Vec<ObjectDraw<'ctx>> = Vec::with_capacity(objects);
@@ -621,6 +636,7 @@ impl EffectNode for RenderScene {
                 }
                 return;
             }
+            let base_color_map = ctx.inputs.texture_2d(BASE_COLOR_MAP_NAMES[n]);
 
             let pos = [
                 ctx.params.get(POS_X_NAMES[n]).and_then(|v| v.as_scalar()).unwrap_or(0.0),
@@ -638,7 +654,7 @@ impl EffectNode for RenderScene {
                 ctx.params.get(SCALE_Z_NAMES[n]).and_then(|v| v.as_scalar()).unwrap_or(1.0),
             ];
             let model = model_matrix(pos, rot, scale);
-            let uniforms = build_uniforms(
+            let mut uniforms = build_uniforms(
                 view_proj,
                 model,
                 &cam,
@@ -646,6 +662,9 @@ impl EffectNode for RenderScene {
                 light_count as f32,
                 lights_uniform,
             );
+            if base_color_map.is_some() {
+                uniforms.texture_flags[2] = 1.0; // z = base_color_map present (matches resolve_albedo's texture_flags.z gate)
+            }
 
             let pipeline = {
                 let gpu = ctx.gpu_encoder();
@@ -656,6 +675,7 @@ impl EffectNode for RenderScene {
                 vertices,
                 uniforms,
                 pipeline,
+                base_color_map,
             });
         }
 
@@ -728,7 +748,7 @@ impl EffectNode for RenderScene {
                 },
                 GpuBinding::Texture {
                     binding: 6,
-                    texture: dummy,
+                    texture: draw.base_color_map.unwrap_or(dummy),
                 },
                 GpuBinding::Texture {
                     binding: 7,
@@ -787,13 +807,18 @@ mod tests {
     #[test]
     fn defaults_to_two_objects_one_light() {
         let s = RenderScene::new();
-        // camera + envmap + light_0 + (mesh_0,material_0) + (mesh_1,material_1)
-        assert_eq!(s.inputs().len(), 2 + 1 + 4);
+        // camera + envmap + light_0 + (mesh_0,material_0,base_color_map_0) +
+        // (mesh_1,material_1,base_color_map_1)
+        assert_eq!(s.inputs().len(), 2 + 1 + 6);
         assert!(s.inputs().iter().any(|p| p.name == "mesh_1"));
         assert!(s.inputs().iter().any(|p| p.name == "material_1"));
         assert!(!s.inputs().iter().any(|p| p.name == "mesh_2"));
         assert!(s.inputs().iter().any(|p| p.name == "light_0"));
         assert!(!s.inputs().iter().any(|p| p.name == "light_1"));
+        let by_name = |n: &str| s.inputs().iter().find(|p| p.name == n).unwrap();
+        assert!(!by_name("base_color_map_0").required);
+        assert!(!by_name("base_color_map_1").required);
+        assert!(!s.inputs().iter().any(|p| p.name == "base_color_map_2"));
         // objects + lights + 2 objects * 9 transform params
         assert_eq!(s.parameters().len(), 2 + 2 * 9);
     }
@@ -805,6 +830,7 @@ mod tests {
         node.reconfigure(&params_with(5.0, 3.0));
         assert!(node.inputs().iter().any(|p| p.name == "mesh_4"));
         assert!(node.inputs().iter().any(|p| p.name == "material_4"));
+        assert!(node.inputs().iter().any(|p| p.name == "base_color_map_4"));
         assert!(!node.inputs().iter().any(|p| p.name == "mesh_5"));
         assert!(node.inputs().iter().any(|p| p.name == "light_2"));
         assert!(!node.inputs().iter().any(|p| p.name == "light_3"));
@@ -812,6 +838,7 @@ mod tests {
 
         node.reconfigure(&params_with(1.0, 0.0));
         assert!(!node.inputs().iter().any(|p| p.name == "mesh_1"));
+        assert!(!node.inputs().iter().any(|p| p.name == "base_color_map_1"));
         assert!(!node.inputs().iter().any(|p| p.name == "light_0"));
         assert!(node.inputs().iter().any(|p| p.name == "mesh_0"));
     }
@@ -823,6 +850,8 @@ mod tests {
         node.reconfigure(&params_with(999.0, 999.0));
         assert!(node.inputs().iter().any(|p| p.name == "mesh_7"));
         assert!(!node.inputs().iter().any(|p| p.name == "mesh_8"));
+        assert!(node.inputs().iter().any(|p| p.name == "base_color_map_7"));
+        assert!(!node.inputs().iter().any(|p| p.name == "base_color_map_8"));
         assert!(node.inputs().iter().any(|p| p.name == "light_3"));
     }
 
@@ -835,6 +864,7 @@ mod tests {
         assert!(!by_name("light_0").required);
         assert!(by_name("mesh_0").required);
         assert!(by_name("material_0").required);
+        assert!(!by_name("base_color_map_0").required);
     }
 
     #[test]
