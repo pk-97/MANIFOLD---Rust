@@ -118,6 +118,10 @@ impl TexturePane {
 
     /// Replace a local pane's texture — e.g. when the scope is resized and its
     /// render target is reallocated. No-op for a bridged pane.
+    ///
+    /// Unused today — the spectrogram (the only `Local` consumer so far)
+    /// doesn't yet resize its render target at runtime. Un-suppresses when a
+    /// `TexturePane::local` consumer needs to reallocate on resize.
     #[allow(dead_code)]
     pub fn set_local(&mut self, texture: GpuTexture) {
         if let PaneSource::Local(slot) = &mut self.source {
