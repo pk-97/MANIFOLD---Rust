@@ -17,7 +17,7 @@
 use super::InspectorTab;
 use super::PanelAction;
 use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse};
-use super::picker_core::{PickerCore, PickerItem, PickerNav};
+use super::picker_core::{PickerCore, PickerItem, PickerNav, Source};
 use super::popup_shell;
 use crate::anim::AnimF32;
 use crate::color;
@@ -38,6 +38,9 @@ const CELL_HEIGHT: f32 = 42.5;
 const CELL_SPACING: f32 = 3.75;
 const SEARCH_BAR_HEIGHT: f32 = 35.0;
 const CHIP_ROW_HEIGHT: f32 = 25.0;
+/// Source-filter row (PRESET_LIBRARY_DESIGN P5, D6) — same chip height as the
+/// category row, rendered above it.
+const SOURCE_ROW_HEIGHT: f32 = CHIP_ROW_HEIGHT;
 const SECTION_SPACING: f32 = CELL_SPACING;
 const PASTE_BUTTON_HEIGHT: f32 = 28.0;
 const CELL_RADIUS: f32 = 6.0;
@@ -67,6 +70,19 @@ const CAT_SPATIAL: Color32 = Color32::new(102, 191, 191, 255);
 const CAT_POST_PROCESS: Color32 = Color32::new(140, 160, 220, 255);
 const CAT_FILMIC: Color32 = Color32::new(200, 180, 120, 255);
 const CAT_SURVEILLANCE: Color32 = Color32::new(180, 100, 100, 255);
+
+/// Badge text color — dim, same tone as the chip "inactive" text, since a
+/// badge is metadata about a cell, not a call to action.
+const BADGE_TEXT: Color32 = Color32::new(130, 130, 134, 255);
+
+/// Fixed source-chip order (PRESET_LIBRARY_DESIGN P5, D6): "All" is chip 0
+/// (handled like the category row's "All"), then these three, always in this
+/// order so a right-click's stored [`Source`] and the rendered chip agree.
+const SOURCE_CHIPS: [(Source, &str); 3] = [
+    (Source::Factory, "Factory"),
+    (Source::MyLibrary, "My Library"),
+    (Source::Project, "This Project"),
+];
 
 // ── Public types ──
 
@@ -104,6 +120,21 @@ pub enum BrowserPopupAction {
     },
 }
 
+/// Everything the app needs to open the browser's right-click management menu
+/// (PRESET_LIBRARY_DESIGN P5, D6) for one cell — returned by
+/// [`BrowserPopupPanel::handle_right_click`]. `mode` is always `Effect` or
+/// `Generator` (never `Node` — see that method's doc); it stands in for
+/// `manifold_core::preset_def::PresetKind` here since this crate mirrors
+/// core types rather than depending on `manifold-core` (see
+/// `PickerItem`/`PresetTypeId`'s doc comments for the same pattern) — the app
+/// layer converts at the boundary.
+#[derive(Debug, Clone)]
+pub struct BrowserCellContext {
+    pub mode: BrowserPopupMode,
+    pub type_id: String,
+    pub source: Source,
+}
+
 /// Request to open the popup. Items travel as one `Vec<PickerItem>` (D5) —
 /// replaces the 4-5 parallel per-field `Vec<String>`s (name / type id /
 /// category / search-alias) a request used to carry.
@@ -120,6 +151,18 @@ pub struct BrowserPopupRequest {
     pub screen_anchor: Vec2,
 }
 
+/// Per-cell metadata needed for click AND right-click routing. Selection only
+/// needs `type_id`; the right-click management menu (PRESET_LIBRARY_DESIGN
+/// P5) additionally needs the cell's classified source, and whether it's a
+/// "missing from library" Snapshot entry (which gets no menu at all — an
+/// auto-captured cache isn't user-manageable the way a `Saved` entry is).
+#[derive(Clone)]
+struct CellMeta {
+    type_id: String,
+    source: Option<Source>,
+    missing_from_library: bool,
+}
+
 /// Node-range / rect output rebuilt every `build_at` — not meaningful state
 /// to preserve across builds, so it's a plain rebuild-target, not part of the
 /// session's semantic identity (kept as its own type only for readability).
@@ -134,9 +177,13 @@ struct BrowserLayout {
     search_bar_id: Option<NodeId>,
     chip_all_id: Option<NodeId>,
     chip_ids: Vec<NodeId>,
-    /// (cell node id, the item's type_id) — selection just needs the type_id,
-    /// so no separate index-into-items bookkeeping is needed at click time.
-    cell_ids: Vec<(NodeId, String)>,
+    /// Source-filter row (PRESET_LIBRARY_DESIGN P5, D6) — `None` for Node
+    /// mode, which has no source concept and renders no row.
+    source_all_id: Option<NodeId>,
+    /// Parallel to [`SOURCE_CHIPS`] — `source_chip_ids[i]` is the chip for
+    /// `SOURCE_CHIPS[i]`.
+    source_chip_ids: Vec<NodeId>,
+    cell_ids: Vec<(NodeId, CellMeta)>,
     paste_id: Option<NodeId>,
     first_node: usize,
     node_count: usize,
@@ -154,6 +201,8 @@ impl BrowserLayout {
             search_bar_id: None,
             chip_all_id: None,
             chip_ids: Vec::new(),
+            source_all_id: None,
+            source_chip_ids: Vec::new(),
             cell_ids: Vec::new(),
             paste_id: None,
             first_node: 0,
@@ -282,6 +331,16 @@ impl BrowserPopupPanel {
         Self::recompute_height(session);
     }
 
+    /// Set the active source chip (`None` = "All" — PRESET_LIBRARY_DESIGN P5,
+    /// D6). Mirrors [`Self::set_category`].
+    pub fn set_source(&mut self, source: Option<Source>) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        session.picker.set_source(source);
+        Self::recompute_height(session);
+    }
+
     // ── Layout ──
 
     fn compute_layout(&mut self, anchor: Vec2) {
@@ -316,6 +375,10 @@ impl BrowserPopupPanel {
 
     fn recompute_height(session: &mut BrowserSession) {
         let has_chips = !session.picker.categories().is_empty();
+        // Source row (PRESET_LIBRARY_DESIGN P5, D6): Effect/Generator modes
+        // only — Node mode (the graph-editor's add-node picker) has no
+        // source concept, so it renders no row and gets no extra height.
+        let has_source_row = session.mode != BrowserPopupMode::Node;
         let has_paste = session.paste_count > 0;
         let columns = session.layout.columns.max(1);
         let rows = session.picker.filtered_len().div_ceil(columns);
@@ -323,6 +386,9 @@ impl BrowserPopupPanel {
 
         let mut h = BORDER + PADDING;
         h += SEARCH_BAR_HEIGHT + SECTION_SPACING;
+        if has_source_row {
+            h += SOURCE_ROW_HEIGHT + SECTION_SPACING;
+        }
         if has_chips {
             h += CHIP_ROW_HEIGHT + SECTION_SPACING;
         }
@@ -415,6 +481,62 @@ impl BrowserPopupPanel {
             },
         ));
         cy += SEARCH_BAR_HEIGHT + SECTION_SPACING;
+
+        // Source filter row (PRESET_LIBRARY_DESIGN P5, D6): "All · Factory ·
+        // My Library · This Project", above the category chips. Node mode
+        // (the graph-editor's add-node picker) has no source concept, so it
+        // renders no row — mirrors `recompute_height`'s `has_source_row` gate.
+        session.layout.source_all_id = None;
+        session.layout.source_chip_ids.clear();
+        if session.mode != BrowserPopupMode::Node {
+            let active_source = session.picker.active_source();
+            let mut chip_x = cx;
+            let chip_h = SOURCE_ROW_HEIGHT;
+
+            let all_active = active_source.is_none();
+            let all_w = estimate_chip_width("All");
+            session.layout.source_all_id = Some(tree.add_button(
+                None,
+                chip_x,
+                cy,
+                all_w,
+                chip_h,
+                UIStyle {
+                    bg_color: if all_active { color::ACCENT_BLUE } else { CHIP_INACTIVE },
+                    hover_bg_color: if all_active { color::ACCENT_BLUE } else { CHIP_HOVER },
+                    corner_radius: chip_h * 0.5,
+                    font_size: CELL_FONT,
+                    text_color: if all_active { Color32::WHITE } else { TEXT_DIM },
+                    ..UIStyle::default()
+                },
+                "All",
+            ));
+            chip_x += all_w + CHIP_SPACING;
+
+            for (src, label) in SOURCE_CHIPS {
+                let is_active = active_source == Some(src);
+                let w = estimate_chip_width(label);
+                let id = tree.add_button(
+                    None,
+                    chip_x,
+                    cy,
+                    w,
+                    chip_h,
+                    UIStyle {
+                        bg_color: if is_active { color::ACCENT_BLUE } else { CHIP_INACTIVE },
+                        hover_bg_color: if is_active { color::ACCENT_BLUE } else { CHIP_HOVER },
+                        corner_radius: chip_h * 0.5,
+                        font_size: CELL_FONT,
+                        text_color: if is_active { Color32::WHITE } else { TEXT_DIM },
+                        ..UIStyle::default()
+                    },
+                    &format!(" {label} "),
+                );
+                session.layout.source_chip_ids.push(id);
+                chip_x += w + CHIP_SPACING;
+            }
+            cy += SOURCE_ROW_HEIGHT + SECTION_SPACING;
+        }
 
         // Category chips — cloned out so the loop below can hold `session`
         // mutably (chip_ids.push) without also borrowing `picker.categories()`.
@@ -562,7 +684,36 @@ impl BrowserPopupPanel {
                 },
                 &label,
             );
-            session.layout.cell_ids.push((id, item.type_id.clone()));
+
+            // Origin badge (PRESET_LIBRARY_DESIGN P5, D6) — a non-interactive
+            // label so it never shadows the cell button's click region.
+            // Bottom-right corner, tiny caption font: metadata about the
+            // cell, not a call to action.
+            if let Some(badge) = item.badge.as_deref() {
+                tree.add_label(
+                    clip_parent,
+                    cell_x,
+                    cell_y + CELL_HEIGHT - 13.0,
+                    CELL_WIDTH - 8.0,
+                    12.0,
+                    badge,
+                    UIStyle {
+                        font_size: color::FONT_CAPTION,
+                        text_color: BADGE_TEXT,
+                        text_align: TextAlign::Right,
+                        ..UIStyle::default()
+                    },
+                );
+            }
+
+            session.layout.cell_ids.push((
+                id,
+                CellMeta {
+                    type_id: item.type_id.clone(),
+                    source: item.source,
+                    missing_from_library: item.missing_from_library,
+                },
+            ));
         }
 
         cy += vp_h;
@@ -609,6 +760,8 @@ impl BrowserPopupPanel {
         let search_bar_id = session.layout.search_bar_id;
         let chip_all_id = session.layout.chip_all_id;
         let chip_ids = session.layout.chip_ids.clone();
+        let source_all_id = session.layout.source_all_id;
+        let source_chip_ids = session.layout.source_chip_ids.clone();
         let cell_ids = session.layout.cell_ids.clone();
         let paste_id = session.layout.paste_id;
         let cat_names: Vec<String> = session
@@ -647,17 +800,31 @@ impl BrowserPopupPanel {
             }
         }
 
+        // Source "All" chip (PRESET_LIBRARY_DESIGN P5, D6)
+        if source_all_id == Some(node_id) {
+            self.set_source(None);
+            return None; // Needs rebuild
+        }
+
+        // Source chips
+        for (i, chip_id) in source_chip_ids.iter().enumerate() {
+            if node_id == *chip_id && i < SOURCE_CHIPS.len() {
+                self.set_source(Some(SOURCE_CHIPS[i].0));
+                return None; // Needs rebuild
+            }
+        }
+
         // Grid cells
-        for (cell_id, type_id) in &cell_ids {
+        for (cell_id, meta) in &cell_ids {
             if node_id == *cell_id {
                 let action = if mode == BrowserPopupMode::Node {
                     BrowserPopupAction::NodeSelected {
-                        type_id: type_id.clone(),
+                        type_id: meta.type_id.clone(),
                         graph_pos: spawn_pos.unwrap_or((0.0, 0.0)),
                     }
                 } else {
                     BrowserPopupAction::Selected {
-                        type_id: type_id.clone(),
+                        type_id: meta.type_id.clone(),
                         mode,
                         tab,
                         layer_id: layer_id.clone(),
@@ -675,6 +842,33 @@ impl BrowserPopupPanel {
         }
 
         None
+    }
+
+    /// Resolve a right-click on a grid cell to its management context.
+    /// Returns `None` for: a miss, Node mode (no source concept — the
+    /// graph-editor's add-node picker never gets this menu), a Factory cell
+    /// (read-only, D6: "NOT Factory"), or a "missing from library" Snapshot
+    /// entry (an auto-captured cache, not user-manageable the way a `Saved`
+    /// entry is). Does NOT close the popup — the management menu (a
+    /// `DropdownPanel` the caller opens) stacks on top of it, same as the
+    /// card's right-click menu stacks on top of the inspector.
+    pub fn handle_right_click(&self, node_id: NodeId) -> Option<BrowserCellContext> {
+        let session = self.session.as_ref()?;
+        if session.mode == BrowserPopupMode::Node {
+            return None;
+        }
+        let (_, meta) = session.layout.cell_ids.iter().find(|(id, _)| *id == node_id)?;
+        if meta.missing_from_library {
+            return None;
+        }
+        match meta.source {
+            Some(source @ (Source::MyLibrary | Source::Project)) => Some(BrowserCellContext {
+                mode: session.mode,
+                type_id: meta.type_id.clone(),
+                source,
+            }),
+            _ => None,
+        }
     }
 
     /// Returns true if the search bar was the clicked node.
@@ -891,6 +1085,22 @@ impl Overlay for BrowserPopupPanel {
             UIEvent::Scroll { delta, .. } => {
                 self.handle_scroll(delta.y);
                 OverlayResponse::Consumed(Vec::new())
+            }
+            // Right-click management menu (PRESET_LIBRARY_DESIGN P5, D6).
+            // Deliberately does NOT close the popup — the menu (a
+            // `DropdownPanel` the app opens) stacks on top of it, same as
+            // the card's right-click menu stacks on top of the inspector.
+            // Consumed either way (a miss, Factory cell, or Node mode still
+            // swallows the click so it can't leak to panels beneath the
+            // modal), matching every other outcome in this match.
+            UIEvent::RightClick {
+                node_id: Some(node_id),
+                ..
+            } => {
+                let action = self.handle_right_click(*node_id).map(|ctx| {
+                    PanelAction::BrowserCellRightClicked(ctx.mode, ctx.type_id, ctx.source)
+                });
+                OverlayResponse::Consumed(action.into_iter().collect())
             }
             _ => OverlayResponse::Ignored,
         }

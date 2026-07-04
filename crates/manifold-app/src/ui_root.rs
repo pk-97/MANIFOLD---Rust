@@ -154,6 +154,12 @@ pub struct EmbeddedPresetItem {
     pub kind: manifold_core::preset_def::PresetKind,
     pub type_id: String,
     pub display_name: String,
+    /// PRESET_LIBRARY_DESIGN P5, D6: `Saved` entries are always listed
+    /// ("This Project"); `Snapshot` entries are listed only when their id
+    /// resolves nowhere else (badged "missing from library") — the
+    /// classification lives in `build_preset_picker_items`, which needs this
+    /// to tell the two apart.
+    pub origin: manifold_core::project::EmbeddedOrigin,
 }
 
 /// Owns all UI state for one window.
@@ -1187,9 +1193,91 @@ impl UIRoot {
                     kind: ep.kind,
                     type_id: meta.id.as_str().to_string(),
                     display_name: meta.display_name.to_string(),
+                    origin: ep.origin,
                 })
             })
             .collect();
+    }
+
+    /// Classify one `kind`'s Add-picker items by source
+    /// (PRESET_LIBRARY_DESIGN P5, D6) — the single place this rule lives, so
+    /// `AddEffectClicked` and `GenTypeClicked` can't drift apart:
+    /// - **Factory** / **My Library**: every id `preset_type_registry`
+    ///   resolves, split by `UserLibrary::is_user_entry` (a file under the
+    ///   user root vs. not).
+    /// - **This Project**: every `origin: Saved` embedded preset, always
+    ///   listed; an `origin: Snapshot` embedded preset ONLY when its id
+    ///   resolves nowhere in the registry (its library file is gone) —
+    ///   badged "missing from library" rather than "Project" so the browser
+    ///   reads as plumbing, not a real project preset.
+    ///
+    /// `tag_project_category` sets `category: Some("Project")` on the
+    /// This-Project items (Effect mode's existing "Project" chip grouping);
+    /// Generator mode passes `false`, matching its pre-P5 behavior of never
+    /// tagging generator items by category (it renders no category chips).
+    fn build_preset_picker_items(
+        &self,
+        kind: manifold_core::preset_def::PresetKind,
+        tag_project_category: bool,
+    ) -> Vec<manifold_ui::panels::picker_core::PickerItem> {
+        use manifold_core::preset_type_registry;
+        use manifold_ui::panels::picker_core::{PickerItem, Source};
+
+        let lib = crate::user_library::UserLibrary::new();
+        let available = preset_type_registry::available_of_kind(kind);
+        let mut seen_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::with_capacity(available.len());
+
+        let mut items: Vec<PickerItem> = available
+            .iter()
+            .map(|reg| {
+                let is_user = lib.is_user_entry(kind, &reg.id);
+                let id = reg.id.as_str().to_string();
+                seen_ids.insert(id.clone());
+                PickerItem {
+                    label: reg.display_name.to_string(),
+                    type_id: id,
+                    category: if tag_project_category {
+                        reg.category.map(|c| c.to_string())
+                    } else {
+                        None
+                    },
+                    search_text: None,
+                    badge: Some(if is_user { "My Library" } else { "Factory" }.to_string()),
+                    source: Some(if is_user { Source::MyLibrary } else { Source::Factory }),
+                    missing_from_library: false,
+                }
+            })
+            .collect();
+
+        for e in self.embedded_presets.iter().filter(|e| e.kind == kind) {
+            use manifold_core::project::EmbeddedOrigin;
+            let missing = match e.origin {
+                EmbeddedOrigin::Saved => false,
+                // A Snapshot whose id already resolves elsewhere (disk file
+                // still there) is already represented via `available` above
+                // — skip it entirely rather than list it twice.
+                EmbeddedOrigin::Snapshot => {
+                    if seen_ids.contains(&e.type_id) {
+                        continue;
+                    }
+                    true
+                }
+            };
+            items.push(PickerItem {
+                label: e.display_name.clone(),
+                type_id: e.type_id.clone(),
+                category: if tag_project_category { Some("Project".to_string()) } else { None },
+                search_text: None,
+                badge: Some(
+                    if missing { "missing from library" } else { "Project" }.to_string(),
+                ),
+                source: Some(Source::Project),
+                missing_from_library: missing,
+            });
+        }
+
+        items
     }
 
     /// Clear and repopulate node-intent dispatch from every panel's currently
@@ -1517,34 +1605,12 @@ impl UIRoot {
             PanelAction::AddEffectClicked(tab) => {
                 use manifold_core::{preset_def::PresetKind, preset_type_registry};
                 use manifold_ui::panels::browser_popup::*;
-                use manifold_ui::panels::picker_core::PickerItem;
 
-                let available = preset_type_registry::available_of_kind(PresetKind::Effect);
-                let mut items: Vec<PickerItem> = available
-                    .iter()
-                    .map(|reg| PickerItem {
-                        label: reg.display_name.to_string(),
-                        type_id: reg.id.as_str().to_string(),
-                        category: reg.category.map(|c| c.to_string()),
-                        search_text: None,
-                        badge: None,
-                    })
-                    .collect();
-                // Project-embedded ("forked") effects, grouped under "Project".
-                let embedded: Vec<PickerItem> = self
-                    .embedded_presets
-                    .iter()
-                    .filter(|e| matches!(e.kind, PresetKind::Effect))
-                    .map(|e| PickerItem {
-                        label: e.display_name.clone(),
-                        type_id: e.type_id.clone(),
-                        category: Some("Project".to_string()),
-                        search_text: None,
-                        badge: None,
-                    })
-                    .collect();
-                let has_embedded = !embedded.is_empty();
-                items.extend(embedded);
+                // Effect mode keeps its existing "Project" category chip
+                // grouping (`tag_project_category: true`).
+                let mut items = self.build_preset_picker_items(PresetKind::Effect, true);
+                let has_project_items =
+                    items.iter().any(|it| it.category.as_deref() == Some("Project"));
                 items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
 
                 // Unique category names (+ "Project" when embedded effects exist).
@@ -1552,7 +1618,7 @@ impl UIRoot {
                     .iter()
                     .map(|&c| c.to_string())
                     .collect();
-                if has_embedded {
+                if has_project_items {
                     cat_names.push("Project".to_string());
                 }
 
@@ -1571,34 +1637,13 @@ impl UIRoot {
                 true
             }
             PanelAction::GenTypeClicked(layer_id) => {
-                use manifold_core::{preset_def::PresetKind, preset_type_registry};
+                use manifold_core::preset_def::PresetKind;
                 use manifold_ui::panels::browser_popup::*;
-                use manifold_ui::panels::picker_core::PickerItem;
 
-                let available = preset_type_registry::available_of_kind(PresetKind::Generator);
-                let mut items: Vec<PickerItem> = available
-                    .iter()
-                    .map(|reg| PickerItem {
-                        label: reg.display_name.to_string(),
-                        type_id: reg.id.as_str().to_string(),
-                        category: None,
-                        search_text: None,
-                        badge: None,
-                    })
-                    .collect();
-                // Project-embedded ("forked") generators.
-                items.extend(
-                    self.embedded_presets
-                        .iter()
-                        .filter(|e| matches!(e.kind, PresetKind::Generator))
-                        .map(|e| PickerItem {
-                            label: e.display_name.clone(),
-                            type_id: e.type_id.clone(),
-                            category: None,
-                            search_text: None,
-                            badge: None,
-                        }),
-                );
+                // Generator mode has never rendered category chips (no
+                // `category_names` below) — `tag_project_category: false`
+                // keeps that unchanged; only the source classification is new.
+                let mut items = self.build_preset_picker_items(PresetKind::Generator, false);
                 items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
 
                 self.browser_popup
@@ -1613,6 +1658,42 @@ impl UIRoot {
                     paste_count: 0,
                     screen_anchor: Vec2::new(trigger.x, trigger.y + trigger.height),
                 });
+                true
+            }
+            PanelAction::BrowserCellRightClicked(mode, type_id, source) => {
+                use manifold_ui::panels::picker_core::Source;
+
+                let mut items = Vec::new();
+                items.push(
+                    DropdownItem::new("Rename…").with_action(PanelAction::BrowserRenamePresetClicked(
+                        *mode,
+                        type_id.clone(),
+                        *source,
+                    )),
+                );
+                if matches!(source, Source::MyLibrary) {
+                    items.push(
+                        DropdownItem::new("Duplicate").with_action(
+                            PanelAction::BrowserDuplicatePresetClicked(*mode, type_id.clone()),
+                        ),
+                    );
+                }
+                items.push(
+                    DropdownItem::new("Delete…").with_action(PanelAction::BrowserDeletePresetClicked(
+                        *mode,
+                        type_id.clone(),
+                        *source,
+                    )),
+                );
+                if matches!(source, Source::MyLibrary) {
+                    items.push(
+                        DropdownItem::new("Reveal in Finder").with_action(
+                            PanelAction::BrowserRevealPresetClicked(*mode, type_id.clone()),
+                        ),
+                    );
+                }
+                self.dropdown
+                    .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
             PanelAction::SelectAudioInputDevice => {

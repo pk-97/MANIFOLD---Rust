@@ -496,6 +496,34 @@ impl Application {
         self.text_input.save_preset = Some(crate::text_input::SavePresetCtx { kind, def, destination });
     }
 
+    /// Open the browser management-menu Rename prompt (PRESET_LIBRARY_DESIGN
+    /// P5, D6) — same shape as [`Self::begin_save_preset_prompt`] (panel-
+    /// owned, not `begin_owned`: by the time this runs, the dropdown that
+    /// offered "Rename…" has already closed itself on selection, so tagging
+    /// this session with that overlay's id would have it cancelled the very
+    /// next frame's closed-overlay drain).
+    fn begin_rename_preset_prompt(
+        &mut self,
+        kind: manifold_core::preset_def::PresetKind,
+        id: manifold_core::PresetTypeId,
+        source: manifold_ui::panels::picker_core::Source,
+        initial_name: String,
+    ) {
+        let bounds = self.ws.ui_root.dropdown.container_bounds();
+        let anchor = if bounds.width > 0.0 && bounds.height > 0.0 {
+            crate::text_input::AnchorRect::new(bounds.x, bounds.y, bounds.width, 24.0)
+        } else {
+            crate::text_input::AnchorRect::new(120.0, 120.0, 220.0, 24.0)
+        };
+        self.text_input.begin(
+            crate::text_input::TextInputField::RenamePreset,
+            &initial_name,
+            anchor,
+            12.0,
+        );
+        self.text_input.rename_preset = Some(crate::text_input::RenamePresetCtx { kind, id, source });
+    }
+
     pub(crate) fn tick_and_render(&mut self) {
         let dt = self.frame_timer.consume_tick();
         let realtime = self.frame_timer.realtime_since_start();
@@ -1907,6 +1935,9 @@ impl Application {
             if let Some((kind, def, destination)) = result.begin_save_preset {
                 self.begin_save_preset_prompt(kind, def, destination);
             }
+            if let Some((kind, id, source, initial_name)) = result.begin_rename_preset {
+                self.begin_rename_preset_prompt(kind, id, source, initial_name);
+            }
         }
 
         // ── Editor inspector segment ────────────────────────────────────────
@@ -2069,6 +2100,12 @@ impl Application {
                                 category: Some(a.category.clone()),
                                 search_text,
                                 badge: None,
+                                // Node mode has no source concept
+                                // (PRESET_LIBRARY_DESIGN P5, D6) — the
+                                // graph-editor's node picker never renders
+                                // the source row or the management menu.
+                                source: None,
+                                missing_from_library: false,
                             }
                         })
                         .collect();

@@ -25,12 +25,35 @@ pub struct PickerItem {
     pub category: Option<String>,
     /// Extra haystack (aliases etc.); filter matches label + this.
     pub search_text: Option<String>,
-    /// Origin badge for library surfaces (PRESET_LIBRARY): e.g. User / Project.
-    // consumed by PRESET_LIBRARY P5 (origin badges) — unused until that phase
-    // renders it, so name the un-suppression trigger per CLAUDE.md's
-    // no-bare-allow rule instead of leaving the field unread.
-    #[allow(dead_code)]
+    /// Origin badge for library surfaces (PRESET_LIBRARY_DESIGN P5, D6):
+    /// display text only ("Factory" / "My Library" / "Project" / "missing
+    /// from library") — filtering uses [`Self::source`], not this string.
     pub badge: Option<String>,
+    /// Source-filter dimension (PRESET_LIBRARY_DESIGN P5, D6): `None` for
+    /// pickers with no source concept (the graph-editor node picker).
+    pub source: Option<Source>,
+    /// True for a project-embedded `Snapshot` entry surfaced only because its
+    /// library file is gone (PRESET_LIBRARY_DESIGN §3/D6: "listed only when
+    /// their source file is gone, badged 'missing from library'"). Distinct
+    /// from `source`/`badge` because it also gates the browser's right-click
+    /// management menu off (an auto-captured cache isn't user-manageable the
+    /// way a `Saved` project preset is).
+    pub missing_from_library: bool,
+}
+
+/// Which of the three library places an item's def lives in — the browser's
+/// filter row (PRESET_LIBRARY_DESIGN P5, D6: "All · Factory · My Library ·
+/// This Project"). `None` (no filter dimension) is for pickers that aren't
+/// preset browsers (e.g. the graph-editor node picker).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// Ships with the app; read-only.
+    Factory,
+    /// A file under the user's library folder.
+    MyLibrary,
+    /// A project-embedded preset (`origin: Saved`, or a `Snapshot` whose
+    /// library file is gone — see [`PickerItem::missing_from_library`]).
+    Project,
 }
 
 /// Result of a keyboard-nav step ([`PickerCore::key_nav`]).
@@ -55,8 +78,10 @@ pub struct PickerCore {
     items: Vec<PickerItem>,
     categories: Vec<String>,
     active_category: Option<String>,
+    /// Source-filter dimension (PRESET_LIBRARY_DESIGN P5, D6) — `None` = "All".
+    active_source: Option<Source>,
     filter: String,
-    /// Indices into `items` that pass the current category + filter.
+    /// Indices into `items` that pass the current category + source + filter.
     filtered: Vec<usize>,
     /// Keyboard position *within `filtered`* (not an `items` index).
     cursor: Option<usize>,
@@ -69,6 +94,7 @@ impl PickerCore {
             items,
             categories,
             active_category: None,
+            active_source: None,
             filter: String::new(),
             filtered: Vec::new(),
             cursor: None,
@@ -109,6 +135,19 @@ impl PickerCore {
         self.active_category = cat;
         self.scroll.reset();
         self.rebuild_filtered();
+    }
+
+    /// Set the active source chip (`None` = "All" — PRESET_LIBRARY_DESIGN P5,
+    /// D6). Resets scroll + cursor, mirroring [`Self::set_category`].
+    pub fn set_source(&mut self, source: Option<Source>) {
+        self.active_source = source;
+        self.scroll.reset();
+        self.rebuild_filtered();
+    }
+
+    /// The active source chip, if any.
+    pub fn active_source(&self) -> Option<Source> {
+        self.active_source
     }
 
     pub fn filter(&self) -> &str {
@@ -183,14 +222,20 @@ impl PickerCore {
 
     /// Verbatim move of `BrowserPopupPanel::rebuild_filtered_list`:
     /// case-insensitive substring over `search_text.unwrap_or(label)`, with a
-    /// category pre-filter. Resets the keyboard cursor — a changed filtered
-    /// set invalidates any prior position.
+    /// category pre-filter, plus the source pre-filter (PRESET_LIBRARY_DESIGN
+    /// P5, D6). Resets the keyboard cursor — a changed filtered set
+    /// invalidates any prior position.
     fn rebuild_filtered(&mut self) {
         self.filtered.clear();
         let filter_lower = self.filter.to_lowercase();
         for (i, item) in self.items.iter().enumerate() {
             if let Some(ref cat) = self.active_category
                 && item.category.as_deref() != Some(cat.as_str())
+            {
+                continue;
+            }
+            if let Some(src) = self.active_source
+                && item.source != Some(src)
             {
                 continue;
             }
@@ -211,12 +256,23 @@ mod tests {
     use super::*;
 
     fn item(label: &str, category: Option<&str>, search: Option<&str>) -> PickerItem {
+        item_with_source(label, category, search, None)
+    }
+
+    fn item_with_source(
+        label: &str,
+        category: Option<&str>,
+        search: Option<&str>,
+        source: Option<Source>,
+    ) -> PickerItem {
         PickerItem {
             label: label.to_string(),
             type_id: label.to_lowercase().replace(' ', "_"),
             category: category.map(str::to_string),
             search_text: search.map(str::to_string),
             badge: None,
+            source,
+            missing_from_library: false,
         }
     }
 
@@ -229,6 +285,21 @@ mod tests {
                 item("Noise Field", None, None),
             ],
             vec!["Spatial".to_string(), "Filmic".to_string()],
+        )
+    }
+
+    /// Sample mirroring a real preset browser: one Factory, one My Library,
+    /// one Project entry, spread across two categories so a source-alone
+    /// filter can be told apart from a category-alone filter.
+    fn source_sample() -> PickerCore {
+        PickerCore::new(
+            vec![
+                item_with_source("Bloom", Some("Post-Process"), None, Some(Source::Factory)),
+                item_with_source("Bloom 2", Some("Post-Process"), None, Some(Source::MyLibrary)),
+                item_with_source("Sunset Glow", Some("Filmic"), None, Some(Source::Project)),
+                item_with_source("Chromatic Aberration", Some("Filmic"), None, Some(Source::Factory)),
+            ],
+            vec!["Post-Process".to_string(), "Filmic".to_string()],
         )
     }
 
@@ -259,6 +330,52 @@ mod tests {
         // Filmic ("Chromatic Aberration") and uncategorized ("Noise Field")
         // are excluded even though neither has an active filter string.
         assert_eq!(labels, vec!["Gaussian Blur", "Blur TOP"]);
+    }
+
+    // ── Source filter (PRESET_LIBRARY_DESIGN P5, D6) ────────────────────
+
+    #[test]
+    fn source_filter_alone_selects_only_that_source() {
+        let mut p = source_sample();
+        assert_eq!(p.filtered_len(), 4, "no filter active yet — all four items");
+
+        p.set_source(Some(Source::Factory));
+        let labels: Vec<&str> = p.filtered().map(|(_, it)| it.label.as_str()).collect();
+        assert_eq!(labels, vec!["Bloom", "Chromatic Aberration"]);
+
+        p.set_source(Some(Source::MyLibrary));
+        let labels: Vec<&str> = p.filtered().map(|(_, it)| it.label.as_str()).collect();
+        assert_eq!(labels, vec!["Bloom 2"]);
+
+        p.set_source(Some(Source::Project));
+        let labels: Vec<&str> = p.filtered().map(|(_, it)| it.label.as_str()).collect();
+        assert_eq!(labels, vec!["Sunset Glow"]);
+
+        // Back to "All".
+        p.set_source(None);
+        assert_eq!(p.filtered_len(), 4);
+    }
+
+    #[test]
+    fn source_and_category_combine_as_an_and() {
+        let mut p = source_sample();
+        // Factory ∩ Filmic = "Chromatic Aberration" only ("Bloom" is Factory
+        // but Post-Process; "Sunset Glow" is Filmic but Project).
+        p.set_source(Some(Source::Factory));
+        p.set_category(Some("Filmic".to_string()));
+        let labels: Vec<&str> = p.filtered().map(|(_, it)| it.label.as_str()).collect();
+        assert_eq!(labels, vec!["Chromatic Aberration"]);
+    }
+
+    #[test]
+    fn source_and_text_filter_combine_as_an_and() {
+        let mut p = source_sample();
+        // Both "Bloom" entries match the text filter; restricting to
+        // MyLibrary must leave only "Bloom 2".
+        p.set_filter("bloom".to_string());
+        p.set_source(Some(Source::MyLibrary));
+        let labels: Vec<&str> = p.filtered().map(|(_, it)| it.label.as_str()).collect();
+        assert_eq!(labels, vec!["Bloom 2"]);
     }
 
     #[test]

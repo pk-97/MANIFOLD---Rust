@@ -76,6 +76,13 @@ pub enum TextInputField {
     /// either calls `UserLibrary::save` directly (Library) or executes
     /// `SaveToProjectCommand` (Project).
     SavePresetName,
+    /// Browser management-menu Rename prompt (PRESET_LIBRARY_DESIGN P5, D6) —
+    /// one field for both sources (which one rides on
+    /// `TextInputState::rename_preset`, since `PresetTypeId` isn't `Copy`).
+    /// Opened from the browser's right-click menu; commit calls
+    /// `UserLibrary::rename` (My Library) or executes
+    /// `RenameEmbeddedPresetCommand` (Project).
+    RenamePreset,
 }
 
 impl TextInputField {
@@ -152,6 +159,16 @@ pub struct SavePresetCtx {
     pub kind: manifold_core::preset_def::PresetKind,
     pub def: manifold_core::effect_graph_def::EffectGraphDef,
     pub destination: SavePresetDestination,
+}
+
+/// Context for an in-flight browser Rename prompt — set when the box opens
+/// ([`TextInputField::RenamePreset`]) and read on commit. Lives off the
+/// `Copy` field enum because `PresetTypeId` isn't `Copy`.
+#[derive(Debug, Clone)]
+pub struct RenamePresetCtx {
+    pub kind: manifold_core::preset_def::PresetKind,
+    pub id: manifold_core::PresetTypeId,
+    pub source: manifold_ui::panels::picker_core::Source,
 }
 
 /// Which overlay (and in which window) an in-flight text session belongs to —
@@ -232,6 +249,9 @@ pub struct TextInputState {
     /// Context for `SavePresetName` (kind + effective def + destination). Set
     /// right after `begin()`, read (and taken) on commit.
     pub save_preset: Option<SavePresetCtx>,
+    /// Context for `RenamePreset` (kind + id + source). Set right after
+    /// `begin()`, read (and taken) on commit.
+    pub rename_preset: Option<RenamePresetCtx>,
     /// The overlay hosting this session, if any — `None` for panel-owned
     /// fields. Set by [`Self::begin_owned`], cleared by [`Self::begin`]
     /// (a raw `begin` is always panel-owned) and [`Self::cancel`]/[`Self::commit`].
@@ -256,6 +276,7 @@ impl TextInputState {
             inspector_param: None,
             driver_free_period: None,
             save_preset: None,
+            rename_preset: None,
             owner: None,
         }
     }
@@ -285,10 +306,11 @@ impl TextInputState {
         );
         // Stale param ctx from a prior session must not leak in; the caller sets
         // it again immediately for an `InspectorParam` / `DriverFreePeriod` /
-        // `SavePresetName` field.
+        // `SavePresetName` / `RenamePreset` field.
         self.inspector_param = None;
         self.driver_free_period = None;
         self.save_preset = None;
+        self.rename_preset = None;
         self.owner = None;
     }
 
@@ -332,6 +354,7 @@ impl TextInputState {
         self.inspector_param = None;
         self.driver_free_period = None;
         self.save_preset = None;
+        self.rename_preset = None;
         self.owner = None;
     }
 

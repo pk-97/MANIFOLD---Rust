@@ -1515,6 +1515,45 @@ impl Application {
                 }
                 self.needs_rebuild = true;
             }
+            TextInputField::RenamePreset => {
+                // Browser management-menu Rename commit (PRESET_LIBRARY_DESIGN
+                // P5, D6). MyLibrary is a plain file rewrite (no undo, matches
+                // `UserLibrary::rename`'s existing non-undoable precedent —
+                // Push to Library is the same shape); Project routes through
+                // the undoable `RenameEmbeddedPresetCommand`, same
+                // execute-locally-then-send-to-content-thread pattern as
+                // `SavePresetName`'s Project-destination arm above.
+                if let Some(ctx) = self.text_input.rename_preset.take() {
+                    let typed = text.trim();
+                    if typed.is_empty() {
+                        log::warn!("[preset] Rename cancelled: empty name");
+                    } else {
+                        use manifold_ui::panels::picker_core::Source;
+                        match ctx.source {
+                            Source::MyLibrary => {
+                                let lib = crate::user_library::UserLibrary::new();
+                                if let Err(e) = lib.rename(ctx.kind, &ctx.id, typed) {
+                                    log::error!("[preset] rename failed: {e}");
+                                }
+                            }
+                            Source::Project => {
+                                let cmd = manifold_editing::commands::preset::RenameEmbeddedPresetCommand::new(
+                                    ctx.id,
+                                    typed.to_string(),
+                                );
+                                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                                    Box::new(cmd);
+                                boxed.execute(&mut self.local_project);
+                                self.send_content_cmd(ContentCommand::Execute(boxed));
+                            }
+                            Source::Factory => {
+                                log::error!("[preset] rename requested for a Factory id — unreachable");
+                            }
+                        }
+                    }
+                }
+                self.needs_rebuild = true;
+            }
         }
     }
 

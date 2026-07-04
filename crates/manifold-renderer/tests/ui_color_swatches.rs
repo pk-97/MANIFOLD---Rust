@@ -444,6 +444,8 @@ fn browser_popup_demo() {
             category: Some("Stylize".to_string()),
             search_text: None,
             badge: None,
+            source: None,
+            missing_from_library: false,
         })
         .collect();
 
