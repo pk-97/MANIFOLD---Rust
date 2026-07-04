@@ -7,15 +7,31 @@
 //! `UIState::select_layer` the app bridge calls. No faked state.
 //! See `docs/HEADLESS_UI_HARNESS.md` §2.
 
+use manifold_core::{ClipId, LayerId};
 use manifold_ui::{PanelAction, PointerAction, UIState, Vec2};
 
 use super::fixtures::SceneData;
 use crate::ui_root::UIRoot;
 
-/// Apply one interaction spec (`"select:<layer-id>"`). Mutates `data`'s
-/// selection so the caller can re-sync + re-render. Returns a description of
-/// what happened (for stdout evidence).
+/// Apply one interaction spec. Specs may be chained with `;` — each part is
+/// applied in sequence against the same `data`/`ui` (e.g. a click then a
+/// shift-click to build a multi-clip selection in one `--interact` string;
+/// the CLI only threads one `--interact` value per process, so chaining
+/// within the string is how a multi-gesture "before" scene gets built).
+/// Mutates `data`'s selection/project so the caller can re-sync + re-render.
+/// Returns a description of what happened (for stdout evidence).
 pub fn apply(ui: &mut UIRoot, data: &mut SceneData, spec: &str) -> String {
+    if spec.contains(';') {
+        return spec
+            .split(';')
+            .map(|part| apply_one(ui, data, part.trim()))
+            .collect::<Vec<_>>()
+            .join(" | ");
+    }
+    apply_one(ui, data, spec)
+}
+
+fn apply_one(ui: &mut UIRoot, data: &mut SceneData, spec: &str) -> String {
     match spec.split_once(':') {
         Some(("select", target)) => select_layer(ui, data, target),
         Some(("collapse", target)) => collapse_layer(data, target),
@@ -30,13 +46,158 @@ pub fn apply(ui: &mut UIRoot, data: &mut SceneData, spec: &str) -> String {
         Some(("automation_segment_drag", rest)) => automation_segment_drag(data, rest),
         Some(("automation_group_move", rest)) => automation_group_move(data, rest),
         Some(("automation_group_delete", rest)) => automation_group_delete(data, rest),
+        Some(("click_clip", rest)) => click_clip(data, rest),
+        Some(("shift_click_clip", rest)) => shift_click_clip(data, rest),
+        Some(("cmd_click_clip", rest)) => cmd_click_clip(data, rest),
+        Some(("cmd_d", _)) => duplicate_selected_clips(data),
         Some((verb, _)) => format!(
             "unknown interact verb '{verb}' (known: select, collapse, delete, open, \
              automation_add, automation_move, automation_bend, automation_segment_drag, \
-             automation_group_move, automation_group_delete)"
+             automation_group_move, automation_group_delete, click_clip, shift_click_clip, \
+             cmd_click_clip, cmd_d)"
         ),
+        None if spec == "cmd_d" => duplicate_selected_clips(data),
         None => format!("malformed interact '{spec}' (want verb:target)"),
     }
+}
+
+/// P1.0 evidence-gathering verb (`docs/TIMELINE_INTERACTION_P1_SPEC.md` P1.0):
+/// `click_clip:<clip_id>:<layer_id>` — a plain click on a clip, driven through
+/// `UIState::select_clip` exactly as `ui_bridge/editing.rs`'s
+/// `PanelAction::ClipClicked` plain-click arm does (`editing.rs:60`). Selects
+/// one clip and clears any region — the anchor for a subsequent
+/// `shift_click_clip`/`cmd_click_clip` in a chained spec.
+fn click_clip(data: &mut SceneData, rest: &str) -> String {
+    let Some((clip_id, layer_id)) = rest.split_once(':') else {
+        return format!("click_clip: want clip_id:layer_id, got '{rest}'");
+    };
+    data.selection
+        .select_clip(ClipId::new(clip_id), LayerId::new(layer_id));
+    format!("click_clip -> '{clip_id}' on '{layer_id}' (selection cleared, this clip selected)")
+}
+
+/// P1.0 evidence-gathering verb: `shift_click_clip:<clip_id>:<layer_id>`
+/// reproduces TODAY's shift-click-on-clip path exactly —
+/// `ui_bridge/editing.rs:43-51`'s `PanelAction::ClipClicked` shift arm, which
+/// calls `select_region_to_with_project` with the clicked clip's END beat and
+/// layer index. This is the S1/S3 root the design calls out (D2): shift-click
+/// activates a REGION, it does not extend the clip-id set. Driving the real
+/// `ui_bridge` helper (not re-deriving the math) so the "before" PNG shows
+/// exactly what today's code produces.
+fn shift_click_clip(data: &mut SceneData, rest: &str) -> String {
+    // `layer_id` isn't used — the layer index is looked up from the clip
+    // itself (matching editing.rs:32-41's own lookup), kept in the spec only
+    // for symmetry with `click_clip`/`cmd_click_clip`.
+    let Some((clip_id, _layer_id)) = rest.split_once(':') else {
+        return format!("shift_click_clip: want clip_id:layer_id, got '{rest}'");
+    };
+    let cid = ClipId::new(clip_id);
+    let Some((layer_idx, clip_end_beat)) =
+        data.project.timeline.layers.iter().enumerate().find_map(|(i, l)| {
+            l.clips
+                .iter()
+                .find(|c| c.id == cid)
+                .map(|c| (i, c.start_beat + c.duration_beats))
+        })
+    else {
+        return format!("shift_click_clip: no clip '{clip_id}' found in project");
+    };
+    crate::ui_bridge::select_region_to_with_project(
+        clip_end_beat,
+        layer_idx,
+        &mut data.selection,
+        &data.project,
+    );
+    format!(
+        "shift_click_clip -> extended region to '{clip_id}' end={clip_end_beat:?} layer_idx={layer_idx} \
+         (region.is_active={}, selected_clip_ids still ={:?})",
+        data.selection.has_region(),
+        data.selection.get_selected_clip_ids(),
+    )
+}
+
+/// P1.0 evidence-gathering verb: `cmd_click_clip:<clip_id>:<layer_id>`
+/// reproduces today's cmd/ctrl-click path — `ui_bridge/editing.rs:52-57`'s
+/// `PanelAction::ClipClicked` cmd arm: `toggle_clip_selection` then
+/// `update_region_from_clip_selection_inline` (region bounds follow the
+/// clip-id set once 2+ clips are selected — both authorities live at once,
+/// which is S1's "region overlay + clip selection together" scene).
+fn cmd_click_clip(data: &mut SceneData, rest: &str) -> String {
+    let Some((clip_id, layer_id)) = rest.split_once(':') else {
+        return format!("cmd_click_clip: want clip_id:layer_id, got '{rest}'");
+    };
+    data.selection
+        .toggle_clip_selection(ClipId::new(clip_id), LayerId::new(layer_id));
+    crate::ui_bridge::update_region_from_clip_selection_inline(&mut data.selection, &data.project);
+    format!(
+        "cmd_click_clip -> toggled '{clip_id}'; selected_clip_ids={:?} region.is_active={}",
+        data.selection.get_selected_clip_ids(),
+        data.selection.has_region(),
+    )
+}
+
+/// P1.0 evidence-gathering verb: `cmd_d` (no argument) reproduces today's
+/// Cmd+D path — `input_host.rs:572-604`'s `duplicate_clips` — using whatever
+/// selection/region state a preceding chained verb left in `data.selection`.
+/// Calls the same `EditingService::duplicate_clips` + `ui_translate::
+/// selection_region_to_core` the real path calls, executes the resulting
+/// commands directly on `data.project` (mirrors `input_host.rs:594-597`'s
+/// local execute-for-readback), and reports the id churn so the PNG's
+/// "before"/"after" clip count and the console's id list agree. S3's root
+/// (D3): if a preceding `shift_click_clip` left `region.is_active` true, this
+/// takes the REGION-duration offset branch even though 4 *specific* clips
+/// were the intent — the "gap after the originals" symptom.
+fn duplicate_selected_clips(data: &mut SceneData) -> String {
+    let clip_ids = data.selection.get_selected_clip_ids();
+    let region = data.selection.get_region().clone();
+    let used_region_mode = region.is_active;
+    let region_core = crate::ui_translate::selection_region_to_core(&region);
+    let spb = 60.0 / data.project.settings.bpm.0.max(1.0);
+
+    let before_ids: std::collections::HashSet<ClipId> = data
+        .project
+        .timeline
+        .layers
+        .iter()
+        .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
+        .collect();
+
+    let mut commands = manifold_editing::service::EditingService::duplicate_clips(
+        &data.project,
+        &clip_ids,
+        &region_core,
+        spb,
+    );
+    if commands.is_empty() {
+        return format!(
+            "cmd_d: no-op — 0 commands (selected_clip_ids={clip_ids:?}, region.is_active={used_region_mode})"
+        );
+    }
+    for c in commands.iter_mut() {
+        c.execute(&mut data.project);
+    }
+
+    let new_ids: Vec<ClipId> = data
+        .project
+        .timeline
+        .layers
+        .iter()
+        .flat_map(|l| l.clips.iter().filter(|c| !before_ids.contains(&c.id)).map(|c| c.id.clone()))
+        .collect();
+
+    data.selection.clear_selection();
+    for id in &new_ids {
+        data.selection.selected_clip_ids.insert(id.clone());
+    }
+    data.selection.primary_selected_clip_id = new_ids.first().cloned();
+    data.selection.selection_version += 1;
+
+    format!(
+        "cmd_d -> mode={} ({} commands) before_ids={} new_ids={new_ids:?}",
+        if used_region_mode { "REGION" } else { "individual" },
+        commands.len(),
+        before_ids.len(),
+    )
 }
 
 /// P4 Unit A evidence-gathering verb (`docs/AUTOMATION_LANES_DESIGN.md` §7):

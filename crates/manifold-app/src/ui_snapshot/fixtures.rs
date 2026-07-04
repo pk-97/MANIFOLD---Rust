@@ -32,6 +32,7 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "scrollshrink" => Some(scroll_shrink_scene()),
         "hairlineclips" => Some(hairline_clips_scene()),
         "automation" => Some(automation_scene()),
+        "selectionclips" => Some(selection_clips_scene()),
         _ => None,
     }
 }
@@ -253,6 +254,43 @@ fn hairline_clips_scene() -> SceneData {
 
     let mut project = Project::default();
     project.timeline.layers = vec![trigs];
+
+    let content = ContentState { current_beat: Beats(0.0), is_playing: false, ..Default::default() };
+
+    SceneData { project, content, active: None, selection: UIState::default() }
+}
+
+/// P1.0 evidence scene for `docs/TIMELINE_INTERACTION_P1_SPEC.md`'s S1/S3:
+/// one layer with exactly 4 contiguous video clips at normal zoom, so
+/// `--interact "click_clip:...;shift_click_clip:..."` / `cmd_click_clip` /
+/// `cmd_d` chains have clean geometry to act on (no gaps to obscure whether a
+/// chrome mismatch is the selection-authority bug or a fixture artifact). A
+/// second layer with its own single clip sits alongside so the scene still
+/// reads as a real multi-track session, not a single lane in isolation.
+fn selection_clips_scene() -> SceneData {
+    // `TimelineClip::new_video`'s first arg is the display name / video_clip_id,
+    // not the `ClipId` — the id defaults to a fresh random one, so it's
+    // overwritten explicitly below to fixed, predictable ids the interact
+    // verbs (`click_clip:clip-a:...` etc.) can address.
+    fn clip(id: &str, name: &str, start: f64, dur: f64) -> TimelineClip {
+        let mut c = TimelineClip::new_video(name.into(), Beats(start), Beats(dur), Seconds::ZERO);
+        c.id = manifold_core::ClipId::new(id);
+        c
+    }
+
+    let mut clips_layer = Layer::new("SELECT ME".into(), LayerType::Video, 0);
+    clips_layer.layer_id = lid("select-clips");
+    clips_layer.clips.push(clip("clip-a", "clip_a", 0.0, 8.0));
+    clips_layer.clips.push(clip("clip-b", "clip_b", 8.0, 8.0));
+    clips_layer.clips.push(clip("clip-c", "clip_c", 16.0, 8.0));
+    clips_layer.clips.push(clip("clip-d", "clip_d", 24.0, 8.0));
+
+    let mut other = Layer::new("OTHER LANE".into(), LayerType::Video, 1);
+    other.layer_id = lid("other-lane");
+    other.clips.push(clip("other-clip", "other_clip", 0.0, 32.0));
+
+    let mut project = Project::default();
+    project.timeline.layers = vec![clips_layer, other];
 
     let content = ContentState { current_beat: Beats(0.0), is_playing: false, ..Default::default() };
 
