@@ -298,6 +298,77 @@ pub(crate) fn load_gltf_mesh(
     Ok(out)
 }
 
+/// Decode one embedded glTF texture to tightly-packed RGBA8 (row-major,
+/// 4 bytes/pixel, no row padding). `texture_index` indexes
+/// `document.textures()`; its image source is resolved to the decoded
+/// `images[..]` entry `gltf::import` already produced. Returns
+/// (width, height, rgba8) or Err on a missing/out-of-range texture or an
+/// unsupported source pixel format.
+pub(crate) fn load_gltf_texture(
+    path: &std::path::Path,
+    texture_index: u32,
+) -> Result<(u32, u32, Vec<u8>), String> {
+    let (document, _buffers, images) =
+        gltf::import(path).map_err(|e| format!("gltf::import({}): {e}", path.display()))?;
+
+    let textures: Vec<gltf::Texture> = document.textures().collect();
+    let tex = textures.get(texture_index as usize).ok_or_else(|| {
+        format!(
+            "texture_index {texture_index} out of range (document has {} textures)",
+            textures.len()
+        )
+    })?;
+    let img_index = tex.source().index();
+    let data = images.get(img_index).ok_or_else(|| {
+        format!(
+            "texture {texture_index} references image index {img_index}, out of range ({} images decoded)",
+            images.len()
+        )
+    })?;
+
+    let (width, height) = (data.width, data.height);
+    let rgba: Vec<u8> = match data.format {
+        gltf::image::Format::R8G8B8A8 => data.pixels.clone(),
+        gltf::image::Format::R8G8B8 => {
+            let mut out = Vec::with_capacity(data.pixels.len() / 3 * 4);
+            for px in data.pixels.chunks_exact(3) {
+                out.push(px[0]);
+                out.push(px[1]);
+                out.push(px[2]);
+                out.push(255);
+            }
+            out
+        }
+        gltf::image::Format::R8 => {
+            let mut out = Vec::with_capacity(data.pixels.len() * 4);
+            for &v in &data.pixels {
+                out.push(v);
+                out.push(v);
+                out.push(v);
+                out.push(255);
+            }
+            out
+        }
+        gltf::image::Format::R8G8 => {
+            let mut out = Vec::with_capacity(data.pixels.len() / 2 * 4);
+            for px in data.pixels.chunks_exact(2) {
+                out.push(px[0]);
+                out.push(px[1]);
+                out.push(0);
+                out.push(255);
+            }
+            out
+        }
+        other => {
+            return Err(format!(
+                "unsupported glTF image format {other:?} on texture {texture_index}"
+            ));
+        }
+    };
+
+    Ok((width, height, rgba))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,5 +393,43 @@ mod tests {
             .unwrap_or_else(|e| panic!("load_gltf_mesh({}): {e}", path.display()));
         assert!(!verts.is_empty(), "expected non-empty vertex list from azalea fixture");
         assert_eq!(verts.len() % 3, 0, "triangle list must have a vertex count divisible by 3");
+    }
+
+    /// Mirrors `loads_whole_scene_azalea_fixture_when_present`'s
+    /// missing-fixture skip. A mesh-only `.glb` legitimately has zero
+    /// embedded textures, in which case `load_gltf_texture(_, 0)`
+    /// returns `Err` — that's not a test failure, so we print and
+    /// return rather than panic. When the fixture DOES have a texture
+    /// 0, assert the decode produced a well-formed tightly-packed
+    /// RGBA8 buffer.
+    #[test]
+    fn loads_texture_from_azalea_fixture_when_present() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb");
+        if !path.exists() {
+            println!(
+                "loads_texture_from_azalea_fixture_when_present: fixture not found at {}, skipping",
+                path.display()
+            );
+            return;
+        }
+        match load_gltf_texture(&path, 0) {
+            Ok((w, h, rgba)) => {
+                assert!(w > 0 && h > 0, "expected non-zero texture dimensions");
+                assert_eq!(
+                    rgba.len(),
+                    (w * h * 4) as usize,
+                    "expected tightly-packed RGBA8 buffer"
+                );
+                println!(
+                    "loads_texture_from_azalea_fixture_when_present: decoded texture 0 = {w}x{h}"
+                );
+            }
+            Err(e) => {
+                println!(
+                    "loads_texture_from_azalea_fixture_when_present: texture 0 not decodable ({e}) — mesh-only glb legitimately has no textures, skipping"
+                );
+            }
+        }
     }
 }
