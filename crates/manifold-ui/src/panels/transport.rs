@@ -41,6 +41,11 @@ const BPM_FIELD_W: f32 = 60.0;
 const BPM_RESET_W: f32 = 24.0;
 const BPM_CLEAR_W: f32 = 32.0;
 
+// Automation globals (P4, docs/AUTOMATION_LANES_DESIGN.md §7) — right-aligned
+// group, mirroring the removed file-ops group's old slot.
+const AUTO_ARM_BUTTON_W: f32 = 48.0;
+const AUTO_BACK_BUTTON_W: f32 = 92.0;
+
 // ── Panel-specific colors ──────────────────────────────────────────
 
 const BUTTON_FONT: u16 = color::FONT_SUBHEADING;
@@ -111,6 +116,10 @@ pub struct TransportPanel {
     bpm_text: String,
     bpm_reset_active: bool,
     bpm_clear_active: bool,
+
+    // Automation globals (P4).
+    automation_armed: bool,
+    automation_overridden: bool,
 }
 
 impl TransportPanel {
@@ -141,6 +150,8 @@ impl TransportPanel {
             bpm_text: "120.0".into(),
             bpm_reset_active: false,
             bpm_clear_active: false,
+            automation_armed: false,
+            automation_overridden: false,
         }
     }
 
@@ -219,6 +230,15 @@ impl TransportPanel {
 
     pub fn set_bpm_clear_active(&mut self, active: bool) {
         self.bpm_clear_active = active;
+    }
+
+    /// Automation globals (P4): `armed` mirrors `PlaybackEngine::automation_armed()`
+    /// (the ARM button's lit state); `overridden` is whether any lane latch is
+    /// active (`!automation_latched_params.is_empty()`) — the BACK button lights
+    /// red exactly when this is true, matching Live's Back to Arrangement.
+    pub fn set_automation_state(&mut self, armed: bool, overridden: bool) {
+        self.automation_armed = armed;
+        self.automation_overridden = overridden;
     }
 
     // ── View description ────────────────────────────────────────────
@@ -351,10 +371,26 @@ impl TransportPanel {
             )
     }
 
+    /// Right-aligned automation globals (P4): ARM (lit red while armed, mirrors
+    /// REC's active/idle red pair) + BACK (Back to Arrangement, lit red exactly
+    /// when a lane override latch is active — Live's affordance).
+    fn automation_group(&self) -> View {
+        let arm_bg = if self.automation_armed { color::RECORD_ACTIVE } else { color::RECORD_RED };
+        let back_bg = if self.automation_overridden { color::RECORD_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+
+        View::row(ITEM_SPACING)
+            .fill()
+            .main_align(Align::End)
+            .cross_align(Align::Center)
+            .child(Self::btn("BACK", AUTO_BACK_BUTTON_W, button_style(back_bg), PanelAction::AutomationBackToArrangement))
+            .child(Self::btn("ARM", AUTO_ARM_BUTTON_W, button_style(arm_bg), PanelAction::ToggleAutomationArm))
+    }
+
     fn view(&self) -> View {
         // File ops moved to the native File menu; HDR/Percussion to the Settings
         // popup — so the old right group is gone. Left (sync) + centred transport
-        // remain; the centre group stays centred via its own `main_align`.
+        // + right (automation globals), each stacked layer keeping its own
+        // `main_align`.
         View::stack()
             .fill()
             .bg(color::PANEL_BG_DARK)
@@ -362,6 +398,7 @@ impl TransportPanel {
             .pad(Pad { l: INSET, t: GROUP_Y_PAD, r: INSET, b: GROUP_Y_PAD })
             .child(self.left_group())
             .child(self.center_group())
+            .child(self.automation_group())
     }
 }
 
@@ -461,6 +498,16 @@ mod tests {
             put("CLR", cx, BPM_CLEAR_W);
 
             // Right group removed: file ops → File menu, HDR/PERC → Settings popup.
+            // Automation globals (P4) now occupy that right-aligned slot: a Row
+            // with `main_align(Align::End)` offsets its whole sequence by `slack`
+            // (see `chrome::layout::align_offset`), so BACK/ARM land flush against
+            // the padded right edge in child order — BACK first (left), ARM last
+            // (flush right), same math as `left_group`'s Start-aligned x but mirrored.
+            let auto_w = AUTO_BACK_BUTTON_W + ITEM_SPACING + AUTO_ARM_BUTTON_W;
+            let mut ax = bounds.x_max() - INSET - auto_w;
+            put("BACK", ax, AUTO_BACK_BUTTON_W);
+            ax += AUTO_BACK_BUTTON_W + ITEM_SPACING;
+            put("ARM", ax, AUTO_ARM_BUTTON_W);
         }
     }
 
@@ -483,7 +530,7 @@ mod tests {
         g.compute(layout.transport_bar());
 
         let got = buttons(&tree);
-        assert_eq!(got.len(), 11, "11 transport buttons (sync left + transport centre)");
+        assert_eq!(got.len(), 13, "13 transport buttons (sync left + transport centre + automation right)");
         for (text, rect) in &got {
             let want = g.rects.get(text.as_str()).unwrap_or_else(|| panic!("unexpected button {text:?}"));
             assert!(
@@ -526,6 +573,44 @@ mod tests {
         ));
         // Clock authority is display-only: interactive, but no resolved action.
         assert!(intents.resolve(&tree, id_of("SRC:INT"), Gesture::Click).is_none());
+        assert!(matches!(
+            intents.resolve(&tree, id_of("ARM"), Gesture::Click),
+            Some(PanelAction::ToggleAutomationArm)
+        ));
+        assert!(matches!(
+            intents.resolve(&tree, id_of("BACK"), Gesture::Click),
+            Some(PanelAction::AutomationBackToArrangement)
+        ));
+    }
+
+    #[test]
+    fn automation_state_updates_in_place() {
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = TransportPanel::new();
+        panel.build(&mut tree, &layout);
+        let sv = tree.structure_version();
+
+        fn node<'a>(tree: &'a UITree, t: &str) -> &'a UINode {
+            (0..tree.count())
+                .map(|i| tree.get_node(tree.id_at(i)))
+                .find(|n| n.text.as_deref() == Some(t))
+                .unwrap()
+        }
+
+        panel.set_automation_state(true, true);
+        panel.update(&mut tree);
+        assert_eq!(tree.structure_version(), sv, "automation state toggle must not rebuild");
+        assert_eq!(node(&tree, "ARM").style.bg_color, button_style(color::RECORD_ACTIVE).bg_color);
+        assert_eq!(node(&tree, "BACK").style.bg_color, button_style(color::RECORD_ACTIVE).bg_color);
+
+        panel.set_automation_state(false, false);
+        panel.update(&mut tree);
+        assert_eq!(node(&tree, "ARM").style.bg_color, button_style(color::RECORD_RED).bg_color);
+        assert_eq!(
+            node(&tree, "BACK").style.bg_color,
+            button_style(color::BUTTON_INACTIVE_C32).bg_color
+        );
     }
 
     #[test]

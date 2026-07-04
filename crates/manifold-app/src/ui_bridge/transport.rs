@@ -119,6 +119,21 @@ pub(super) fn dispatch_transport(
             DispatchResult::handled()
         }
 
+        // ── Automation globals (P4, docs/AUTOMATION_LANES_DESIGN.md §4/§5) ──
+        // Runtime-only latch/arm state, not a project mutation — no undo entry,
+        // same shape as `SessionBackToArrangement`/session quantize.
+        PanelAction::ToggleAutomationArm => {
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::AutomationSetArmed(!content_state.automation_armed),
+            );
+            DispatchResult::handled()
+        }
+        PanelAction::AutomationBackToArrangement => {
+            ContentCommand::send(content_tx, ContentCommand::AutomationBackToArrangement);
+            DispatchResult::handled()
+        }
+
         PanelAction::CycleQuantize => {
             {
                 let old = project.settings.quantize_mode;
