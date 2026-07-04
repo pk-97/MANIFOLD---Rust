@@ -135,10 +135,6 @@ pub(crate) const BEAT_DIV_LABELS: [&str; BEAT_DIV_COUNT] = [
 pub(crate) const BEAT_DIV_BEATS: [f32; BEAT_DIV_COUNT] =
     [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0];
 
-// Waveform text labels kept for accessibility / tooltips if needed later.
-#[allow(dead_code)]
-pub(crate) const WAVEFORM_LABELS: [&str; WAVEFORM_COUNT] = ["Sin", "Tri", "Saw", "Sqr", "Rnd"];
-
 // ── Shared node ID structs ──────────────────────────────────────
 
 pub(crate) struct DriverConfigIds {

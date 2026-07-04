@@ -894,6 +894,11 @@ macro_rules! primitive {
 #[macro_export]
 macro_rules! __primitive_struct {
     ($struct_name:ident, ) => {
+        // Structural, not deferred: this expands per-primitive (~185 call sites via
+        // `primitive!`), and not every primitive's dispatch path reads `pipeline`/
+        // `sampler` directly (some route through shared helpers), so dead_code can't
+        // be proven false generically. Never un-suppresses as a group; removing it
+        // would require auditing each expansion site individually.
         #[allow(dead_code)]
         pub struct $struct_name {
             pub pipeline: Option<manifold_gpu::GpuComputePipeline>,
@@ -911,6 +916,8 @@ macro_rules! __primitive_struct {
         }
     };
     ($struct_name:ident, extra_fields { $($field_name:ident : $field_ty:ty = $field_init:expr),* }) => {
+        // See the no-extra-fields arm above: same structural reason, same
+        // per-expansion-site scope.
         #[allow(dead_code)]
         pub struct $struct_name {
             pub pipeline: Option<manifold_gpu::GpuComputePipeline>,

@@ -532,8 +532,10 @@ mod tests {
         project.settings.stage_layout.placements.push(placement);
 
         let old = OutputAdvanced::default();
-        let mut new = OutputAdvanced::default();
-        new.density_cap_px_per_mm = Some(2.0);
+        let new = OutputAdvanced {
+            density_cap_px_per_mm: Some(2.0),
+            ..Default::default()
+        };
 
         let mut cmd = SetDisplayAdvancedCommand::new(id, old.clone(), new.clone());
         cmd.execute(&mut project);

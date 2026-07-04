@@ -39,7 +39,6 @@ use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EffectGraphDef, PresetMetadata, SkipModeDef,
 };
-use manifold_core::effects::ParamConvert;
 
 use crate::node_graph::bundled_presets::bundled_preset_def;
 use crate::node_graph::chain_spec::SkipMode;
@@ -209,12 +208,6 @@ fn skip_mode_from_def(def: &SkipModeDef) -> SkipMode {
         }
     }
 }
-
-// Silence unused-warnings during the parallel-infrastructure phase
-// — ParamConvert is re-exported for symmetry with the runtime
-// param_binding module but isn't yet consumed by an external caller.
-#[allow(dead_code)]
-fn _phase_keepalive(_: ParamConvert) {}
 
 /// Build the editor-canvas snapshot for a loaded preset. Reconstructs
 /// a temporary `Graph` from the JSON's canonical def via

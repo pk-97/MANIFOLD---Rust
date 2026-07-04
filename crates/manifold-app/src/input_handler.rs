@@ -1,55 +1,29 @@
-//! Keyboard dispatch, zoom logic, and context menu routing.
+//! Keyboard dispatch and context menu routing.
 //! Mechanical translation of Assets/Scripts/UI/Timeline/InputHandler.cs.
 //!
 //! Plain Rust struct — NOT a MonoBehaviour equivalent.
 //! Calls through TimelineInputHost trait for all operations that need
-//! engine/editing/UI access. Owns zoom state and inspector focus.
+//! engine/editing/UI access. Owns inspector focus.
 use manifold_core::{Beats, ClipId, Seconds};
 use manifold_ui::input::Modifiers;
 use manifold_ui::timeline_input_host::TimelineInputHost;
 
 use winit::keyboard::{Key, NamedKey};
 
-/// Keyboard/zoom handler. Port of InputHandler.cs.
+/// Keyboard handler. Port of InputHandler.cs.
 ///
-/// Owns zoom state (pending anchor, scroll target) and inspector focus.
-/// The app layer calls `handle_keyboard_input()` on each key press.
-#[allow(dead_code)]
+/// Owns inspector focus. The app layer calls `handle_keyboard_input()` on
+/// each key press.
 pub struct InputHandler {
-    // ── Zoom state (Unity lines 51-59) ──
-    pub needs_zoom_update: bool,
-    pub has_pending_zoom_anchor: bool,
-    pub pending_zoom_anchor_beat: f32,
-    pub pending_zoom_anchor_viewport_x: f32,
-    pub pending_zoom_scroll_time: f32, // -1.0 = no pending
-
     // ── Panel focus (Unity line 65) ──
     pub inspector_has_focus: bool,
 }
 
-#[allow(dead_code)]
 impl InputHandler {
     pub fn new() -> Self {
         Self {
-            needs_zoom_update: false,
-            has_pending_zoom_anchor: false,
-            pending_zoom_anchor_beat: 0.0,
-            pending_zoom_anchor_viewport_x: 0.0,
-            pending_zoom_scroll_time: -1.0,
             inspector_has_focus: false,
         }
-    }
-
-    pub fn clear_needs_zoom_update(&mut self) {
-        self.needs_zoom_update = false;
-    }
-
-    pub fn clear_pending_zoom_anchor(&mut self) {
-        self.has_pending_zoom_anchor = false;
-    }
-
-    pub fn clear_pending_zoom_scroll_time(&mut self) {
-        self.pending_zoom_scroll_time = -1.0;
     }
 
     /// Port of Unity InputHandler.HandleKeyboardInput (lines 189-517).
@@ -294,7 +268,6 @@ impl InputHandler {
         // ── F — zoom to fit (Unity line 412) ──
         if matches!(logical_key, Key::Character(c) if c.as_str() == "f") && m.is_none() {
             host.zoom_to_fit();
-            self.needs_zoom_update = true;
             return true;
         }
 
@@ -374,30 +347,5 @@ impl InputHandler {
         }
 
         false // not consumed
-    }
-
-    // ── Zoom (Unity InputHandler lines 864-1006) ─────────────────
-
-    /// Queue a zoom anchor at the playhead position.
-    /// Port of Unity InputHandler.QueuePlayheadZoomAnchor (lines 959-966).
-    pub fn queue_playhead_zoom_anchor(&mut self, playhead_beat: f32, playhead_viewport_x: f32) {
-        self.pending_zoom_scroll_time = -1.0;
-        self.has_pending_zoom_anchor = true;
-        self.pending_zoom_anchor_beat = playhead_beat;
-        self.pending_zoom_anchor_viewport_x = playhead_viewport_x;
-    }
-
-    /// Apply pending zoom scroll after a rebuild or zoom update.
-    /// Port of Unity InputHandler.ApplyPendingZoomScroll (lines 1013-1024).
-    pub fn apply_pending_zoom_scroll(&mut self) -> bool {
-        if self.has_pending_zoom_anchor {
-            self.has_pending_zoom_anchor = false;
-            return true;
-        }
-        if self.pending_zoom_scroll_time >= 0.0 {
-            self.pending_zoom_scroll_time = -1.0;
-            return true;
-        }
-        false
     }
 }

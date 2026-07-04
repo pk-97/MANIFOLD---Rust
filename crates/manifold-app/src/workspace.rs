@@ -32,6 +32,12 @@ pub enum WorkspaceKind {
 /// so global state matches the focused window without correctness loss.
 /// This keeps the Phase 1 refactor surface small.
 pub struct Workspace {
+    // Stored but not yet read back: today Main-vs-GraphEditor specialization
+    // (e.g. the compositor-preview blit) is decided by which optional field
+    // holds the workspace (`Application::graph_editor` vs the main `ws`), not
+    // by matching this enum. Un-suppresses when per-window render/input
+    // routing switches to matching on `kind` directly (see the module doc
+    // above + docs/GRAPH_EDITOR_REDESIGN.md).
     #[allow(dead_code)]
     pub kind: WorkspaceKind,
 

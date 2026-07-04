@@ -31,9 +31,7 @@ use std::sync::{Arc, LazyLock, OnceLock};
 
 use arc_swap::ArcSwap;
 
-use crate::effect_graph_def::{
-    AliasEntry, BindingDef, ParamSpecDef, PresetMetadata, SkipModeDef, ValueAliasEntry,
-};
+use crate::effect_graph_def::{AliasEntry, ParamSpecDef, PresetMetadata, ValueAliasEntry};
 use crate::effect_registration::{ParamAlias, ParamValueAlias};
 use crate::preset_type_id::PresetTypeId;
 use crate::effects::ParamDef;
@@ -645,11 +643,6 @@ fn leak_value_alias_table(
         .collect();
     Box::leak(v.into_boxed_slice())
 }
-
-// Silence unused-warnings for items still in plumbing. The `#[allow]` is
-// removed once the items are wired to a non-test consumer.
-#[allow(dead_code)]
-fn _phase_b_keepalive(_: &BindingDef, _: &SkipModeDef) {}
 
 #[cfg(test)]
 mod tests {

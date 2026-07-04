@@ -50,7 +50,6 @@
 use ahash::AHashMap;
 use manifold_core::PresetTypeId;
 use manifold_core::NodeId;
-use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::{EffectGroup, PresetInstance};
 use manifold_core::id::{EffectGroupId, EffectId};
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat, TexturePool};
@@ -3423,12 +3422,6 @@ fn assign_texture2d_slots(
         slot_dims,
     }
 }
-
-// Silence the dead-code warning for the `EffectMetadata` import —
-// it's used through `metadata_by_id`'s return type but rustc treats
-// the use as an alias.
-#[allow(dead_code)]
-type _EffectMetadataAlias = EffectMetadata;
 
 // (`pre_allocate_array_buffers_effect` was the stop-gap shim added in
 // commit 3500e7a7 to fix the Blob Track drift bug. Both callers now

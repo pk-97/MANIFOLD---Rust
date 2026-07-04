@@ -18,15 +18,12 @@ pub(crate) enum DragMode {
     },
     /// Dragging a node by its header. `anchor_offset` is the graph-space
     /// (cursor - node_origin) at button-down so the node doesn't snap
-    /// to the cursor on pickup. `start_pos` is the node's pre-drag
-    /// position, retained so the `MoveGraphNode` action emitted on
-    /// release reflects only the net delta and the undo command has a
-    /// clean previous-pos to restore.
+    /// to the cursor on pickup. The undo previous-pos doesn't need a
+    /// pre-drag snapshot here: `MoveGraphNodeCommand::execute` captures
+    /// `node.editor_pos` itself before overwriting it.
     NodeMove {
         node_id: u32,
         anchor_offset: (f32, f32),
-        #[allow(dead_code)]
-        start_pos: (f32, f32),
     },
     /// Scrubbing a numeric param on a node's face. Cumulative pixel delta
     /// from `press_origin_x` maps to a value delta over
@@ -871,7 +868,6 @@ impl GraphCanvas {
                 self.drag_mode = DragMode::NodeMove {
                     node_id,
                     anchor_offset,
-                    start_pos: node.pos_graph,
                 };
             }
             return;
