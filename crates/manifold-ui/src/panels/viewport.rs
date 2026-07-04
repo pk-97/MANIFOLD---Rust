@@ -208,6 +208,12 @@ pub struct TimelineViewportPanel {
     /// because a gesture is in flight.
     drag_readout_cache: DragReadoutCache,
     drag_readout_label_id: Option<NodeId>,
+
+    /// View snapshot captured by `Z` (zoom-to-selection, B14) so `Shift+Z`
+    /// can restore it. One level, not a stack — matches the doc's "zoom-back"
+    /// wording, not a full zoom history. `docs/TIMELINE_INTERACTION_P1_SPEC.md`
+    /// §5 P1.6.
+    zoom_back: Option<(f32, Beats, f32)>,
 }
 
 /// Viewport-local drag mode. Only tracks ruler scrub — all clip interaction
@@ -337,6 +343,7 @@ impl TimelineViewportPanel {
             drag_readout: None,
             drag_readout_cache: DragReadoutCache::default(),
             drag_readout_label_id: None,
+            zoom_back: None,
         }
     }
 
@@ -1169,6 +1176,20 @@ impl TimelineViewportPanel {
     pub fn scroll_y_px(&self) -> f32 {
         self.scroll_y_px
     }
+
+    /// Capture the current zoom + scroll as the zoom-back target (B14 `Z`).
+    /// Overwrites any prior snapshot — one level, not a stack.
+    pub fn store_zoom_back(&mut self) {
+        self.zoom_back = Some((self.pixels_per_beat(), self.scroll_x_beats(), self.scroll_y_px));
+    }
+
+    /// Take the stored zoom-back snapshot, if any (B14 `Shift+Z`). Consumes it —
+    /// a second `Shift+Z` with no intervening `Z` is a no-op, matching "zoom-back"
+    /// (restore the one prior view) rather than a navigable history.
+    pub fn recall_zoom_back(&mut self) -> Option<(f32, Beats, f32)> {
+        self.zoom_back.take()
+    }
+
     pub fn viewport_rect(&self) -> Rect {
         self.viewport_rect
     }
@@ -1435,6 +1456,43 @@ mod tests {
 
     fn test_layout() -> ScreenLayout {
         ScreenLayout::new(1920.0, 1080.0)
+    }
+
+    // ── B14 zoom-back (`docs/TIMELINE_INTERACTION_P1_SPEC.md` §5 P1.6) ──
+
+    #[test]
+    fn zoom_back_restores_captured_view() {
+        // scroll_y left at 0.0 — B14's `zoom_to_selection` never sets a
+        // non-zero y (same precedent as the existing `zoom_to_fit`), and
+        // `set_scroll`'s vertical clamp depends on track-height state this
+        // test doesn't configure; the round-trip under test is store/recall,
+        // not the clamp.
+        let mut vp = TimelineViewportPanel::new();
+        vp.set_zoom(50.0);
+        vp.set_scroll(12.0, 0.0);
+
+        vp.store_zoom_back();
+
+        // Simulate `Z` changing the view.
+        vp.set_zoom(150.0);
+        vp.set_scroll(40.0, 0.0);
+        assert_eq!(vp.pixels_per_beat(), 150.0);
+
+        let recalled = vp.recall_zoom_back();
+        assert!(recalled.is_some());
+        let (ppb, scroll_x, scroll_y) = recalled.unwrap();
+        assert_eq!(ppb, 50.0);
+        assert_eq!(scroll_x, Beats::from_f32(12.0));
+        assert_eq!(scroll_y, 0.0);
+    }
+
+    #[test]
+    fn zoom_back_is_one_level_not_a_stack() {
+        let mut vp = TimelineViewportPanel::new();
+        vp.store_zoom_back();
+        assert!(vp.recall_zoom_back().is_some());
+        // A second recall with no intervening store is a no-op.
+        assert!(vp.recall_zoom_back().is_none());
     }
 
     fn test_tracks() -> Vec<TrackInfo> {

@@ -148,6 +148,11 @@ pub trait TimelineInputHost {
     /// Nudge selected clips by beat delta.
     fn nudge_clips(&mut self, clip_ids: &[ClipId], beat_delta: f32);
 
+    /// Move a clip selection across layers by a fixed layer-index delta
+    /// (keyboard Up/Down, B14). All-or-nothing across the selection — see
+    /// `EditingService::move_clips_across_layers`. One undo entry per press.
+    fn move_selection_across_layers(&mut self, clip_ids: &[ClipId], layer_delta: i32);
+
     /// Toggle mute on selected clips.
     fn toggle_mute_clips(&mut self, clip_ids: &[ClipId]);
 
@@ -224,6 +229,15 @@ pub trait TimelineInputHost {
     /// Zoom to fit all clips in the viewport.
     /// Port of Unity InputHandler.ZoomToFit (lines 906-957).
     fn zoom_to_fit(&mut self);
+
+    /// Zoom to frame the current selection (`Clips` or `TimeRange`) with
+    /// margin (B14 `Z`). No-op if there is no selection. Captures the
+    /// pre-zoom view so `zoom_back` can restore it.
+    fn zoom_to_selection(&mut self);
+
+    /// Restore the view captured by the last `zoom_to_selection` (B14
+    /// `Shift+Z`). No-op if no snapshot is stored.
+    fn zoom_back(&mut self);
 
     // ── Timeline markers ─────────────────────────────────────────
 

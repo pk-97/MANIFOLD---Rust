@@ -562,6 +562,80 @@ fn move_clip_to_layer() {
     assert!(project.timeline.layers[1].clips.iter().any(|c| c.id == id1));
 }
 
+// ─── Move clips across layers (B14 keyboard Up/Down —
+// docs/TIMELINE_INTERACTION_P1_SPEC.md §5 P1.6) ───
+
+#[test]
+fn move_clips_across_layers_batches_as_one_undo_entry() {
+    let mut project = make_project();
+    let spb = 0.5;
+    let c1 = add_clip(&mut project, 0, 0.0, 4.0);
+    let c2 = add_clip(&mut project, 0, 10.0, 4.0);
+
+    let cmds =
+        EditingService::move_clips_across_layers(&project, &[c1.clone(), c2.clone()], 1, spb);
+    assert!(!cmds.is_empty());
+
+    let mut service = EditingService::new();
+    service.execute_batch(cmds, "move across layers".into(), &mut project);
+
+    assert!(
+        project.timeline.layers[1].clips.iter().any(|c| c.id == c1),
+        "c1 must have moved to layer 1"
+    );
+    assert!(
+        project.timeline.layers[1].clips.iter().any(|c| c.id == c2),
+        "c2 must have moved to layer 1"
+    );
+    assert!(project.timeline.layers[0].clips.is_empty());
+
+    // One undo entry restores BOTH clips to layer 0 — this is what makes a
+    // keyboard press "one gesture == one undo entry" for a multi-clip move.
+    assert!(service.undo(&mut project));
+    assert!(project.timeline.layers[1].clips.is_empty());
+    assert!(project.timeline.layers[0].clips.iter().any(|c| c.id == c1));
+    assert!(project.timeline.layers[0].clips.iter().any(|c| c.id == c2));
+}
+
+#[test]
+fn move_clips_across_layers_all_or_nothing_at_range_boundary() {
+    let mut project = make_project(); // 2 layers: index 0, 1
+    let c1 = add_clip(&mut project, 0, 0.0, 4.0); // valid destination (1)
+    let c2 = add_clip(&mut project, 1, 0.0, 4.0); // delta +1 -> index 2, out of range
+
+    let cmds = EditingService::move_clips_across_layers(&project, &[c1, c2], 1, 0.5);
+    assert!(
+        cmds.is_empty(),
+        "one clip's destination is out of range, so the WHOLE press must no-op \
+         (all-or-nothing — mirrors the drag cross-layer block in interaction_overlay.rs)"
+    );
+}
+
+#[test]
+fn move_clips_across_layers_blocks_on_gen_video_type_mismatch() {
+    let mut project = make_project();
+    project
+        .timeline
+        .insert_layer(2, Layer::new("Gen 1".into(), LayerType::Generator, 2));
+    let c1 = add_clip(&mut project, 0, 0.0, 4.0); // video layer -> would land on generator layer 1? no: dest=1 is video
+
+    // Move by +2 so c1's destination (layer 2) is a Generator layer while
+    // its source (layer 0) is Video — type mismatch, must block.
+    let cmds = EditingService::move_clips_across_layers(&project, &[c1], 2, 0.5);
+    assert!(
+        cmds.is_empty(),
+        "video clip moving onto a Generator layer must block the whole press"
+    );
+}
+
+#[test]
+fn move_clips_across_layers_zero_delta_is_noop() {
+    let mut project = make_project();
+    let c1 = add_clip(&mut project, 0, 0.0, 4.0);
+    let cmds = EditingService::move_clips_across_layers(&project, &[c1], 0, 0.5);
+    assert!(cmds.is_empty());
+}
+
 // ─── Selection region ───
 
 #[test]

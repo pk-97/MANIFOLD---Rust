@@ -749,6 +749,21 @@ impl TimelineInputHost for AppInputHost<'_> {
         *self.needs_structural_sync = true;
     }
 
+    fn move_selection_across_layers(&mut self, clip_ids: &[ClipId], layer_delta: i32) {
+        if let Some(project) = Some(&mut *self.project) {
+            let spb = 60.0 / project.settings.bpm.0;
+            let commands =
+                EditingService::move_clips_across_layers(project, clip_ids, layer_delta, spb);
+            if !commands.is_empty() {
+                ContentCommand::send(
+                    self.content_tx,
+                    crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()),
+                );
+            }
+        }
+        *self.needs_structural_sync = true;
+    }
+
     fn toggle_mute_clips(&mut self, clip_ids: &[ClipId]) {
         // Unity EditingService.ToggleMuteSelectedClips (line 418-448):
         // Group-mute semantics: if ANY unmuted → mute ALL, else unmute ALL.
@@ -1313,6 +1328,73 @@ impl TimelineInputHost for AppInputHost<'_> {
         self.scroll_dirty.zoom = true;
     }
 
+    /// B14 `Z` — frame the current selection (`Clips` or `TimeRange`) with
+    /// margin. Same fit math as `zoom_to_fit`, bounds narrowed to the
+    /// selection. No-op with nothing selected.
+    fn zoom_to_selection(&mut self) {
+        let viewport_width = self.ui_root.viewport.tracks_rect().width;
+        if viewport_width <= 0.0 {
+            return;
+        }
+
+        let bounds: Option<(f32, f32)> = if let Some(region) = self.selection.current_region() {
+            Some((region.start_beat.as_f32(), region.end_beat.as_f32()))
+        } else {
+            let ids = self.selection.get_selected_clip_ids();
+            if ids.is_empty() {
+                None
+            } else {
+                let mut min_beat = f32::MAX;
+                let mut max_beat = f32::MIN;
+                for layer in &self.project.timeline.layers {
+                    for clip in &layer.clips {
+                        if !ids.contains(&clip.id) {
+                            continue;
+                        }
+                        let sb = clip.start_beat.as_f32();
+                        if sb < min_beat {
+                            min_beat = sb;
+                        }
+                        let end = (clip.start_beat + clip.duration_beats).as_f32();
+                        if end > max_beat {
+                            max_beat = end;
+                        }
+                    }
+                }
+                if max_beat > min_beat {
+                    Some((min_beat, max_beat))
+                } else {
+                    None
+                }
+            }
+        };
+
+        let Some((min_beat, max_beat)) = bounds else {
+            return;
+        };
+
+        // Capture the pre-zoom view — B14 `Shift+Z` restores it.
+        self.ui_root.viewport.store_zoom_back();
+
+        let max_ppb = *manifold_ui::color::ZOOM_LEVELS.last().unwrap_or(&200.0);
+        let (ideal_ppb, scroll_beat) =
+            selection_fit_zoom(min_beat, max_beat, viewport_width, max_ppb);
+        self.ui_root.viewport.set_zoom(ideal_ppb);
+        self.ui_root.viewport.set_scroll(scroll_beat, 0.0);
+
+        self.scroll_dirty.zoom = true;
+    }
+
+    /// B14 `Shift+Z` — restore the view captured by the last
+    /// `zoom_to_selection`. No-op if nothing was captured.
+    fn zoom_back(&mut self) {
+        if let Some((ppb, scroll_x, scroll_y)) = self.ui_root.viewport.recall_zoom_back() {
+            self.ui_root.viewport.set_zoom(ppb);
+            self.ui_root.viewport.set_scroll(scroll_x.as_f32(), scroll_y);
+            self.scroll_dirty.zoom = true;
+        }
+    }
+
     // ── Timeline markers ─────────────────────────────────────────
 
     fn add_marker_at_playhead(&mut self) {
@@ -1520,5 +1602,71 @@ fn resolve_effect_target(
             let layer_id = active_layer.clone().unwrap_or_default();
             EffectTarget::Layer { layer_id }
         }
+    }
+}
+
+/// B14 `Z` fit math — pure function so it's testable without an `AppInputHost`
+/// (which borrows `Application` fields it can't stand up in a unit test).
+/// Same shape as `zoom_to_fit`'s inline math (10% padding each side, min 1
+/// beat; center-scroll on the extent), narrowed to `[min_beat, max_beat)`.
+/// Returns `(pixels_per_beat, scroll_x_beats)`.
+fn selection_fit_zoom(min_beat: f32, max_beat: f32, viewport_width: f32, max_ppb: f32) -> (f32, f32) {
+    let extent_beats = (max_beat - min_beat).max(0.0);
+    let padding = (extent_beats * 0.1).max(1.0);
+    let fit_beats = extent_beats + padding * 2.0;
+
+    let ideal_ppb = (viewport_width / fit_beats).clamp(1.0, max_ppb);
+
+    let center_beat = min_beat + extent_beats * 0.5;
+    let center_pixel = center_beat * ideal_ppb;
+    let scroll_beat = ((center_pixel - viewport_width * 0.5) / ideal_ppb).max(0.0);
+    (ideal_ppb, scroll_beat)
+}
+
+#[cfg(test)]
+mod zoom_to_selection_tests {
+    use super::selection_fit_zoom;
+
+    /// B14 gate: zoom-to-selection frames the selection with margin — assert
+    /// the resulting visible beat range `[scroll, scroll + width/ppb)`
+    /// contains `[min_beat, max_beat)` plus positive margin on both sides.
+    #[test]
+    fn frames_selection_with_margin() {
+        let (min_beat, max_beat) = (10.0f32, 18.0f32);
+        let viewport_width = 800.0f32;
+        let max_ppb = 200.0f32;
+
+        let (ppb, scroll_beat) = selection_fit_zoom(min_beat, max_beat, viewport_width, max_ppb);
+        assert!(ppb > 0.0);
+
+        let visible_start = scroll_beat;
+        let visible_end = scroll_beat + viewport_width / ppb;
+
+        assert!(
+            visible_start < min_beat,
+            "visible range must start before the selection (margin): {visible_start} vs {min_beat}"
+        );
+        assert!(
+            visible_end > max_beat,
+            "visible range must end after the selection (margin): {visible_end} vs {max_beat}"
+        );
+    }
+
+    /// A single-instant selection (min == max, e.g. a zero-width edge case)
+    /// still produces a sane positive-extent fit via the 1-beat padding floor.
+    #[test]
+    fn degenerate_zero_width_selection_still_fits() {
+        let (ppb, scroll_beat) = selection_fit_zoom(4.0, 4.0, 800.0, 200.0);
+        assert!(ppb > 0.0);
+        assert!(scroll_beat >= 0.0);
+    }
+
+    /// Very large selections clamp to the minimum zoom (`max_ppb` floor isn't
+    /// exceeded on the low end either — `ideal_ppb` never goes below the
+    /// clamp's lower bound of 1.0).
+    #[test]
+    fn wide_selection_clamps_ppb_within_bounds() {
+        let (ppb, _) = selection_fit_zoom(0.0, 100_000.0, 800.0, 200.0);
+        assert!((1.0..=200.0).contains(&ppb));
     }
 }

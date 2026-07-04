@@ -1070,6 +1070,82 @@ impl EditingService {
         None
     }
 
+    /// Move a whole clip selection across layers by a fixed layer-index delta
+    /// (keyboard Up/Down, B14 — `docs/TIMELINE_INTERACTION_P1_SPEC.md` §5 P1.6).
+    /// All-or-nothing: if ANY selected clip's destination would fall outside
+    /// the layer range, land on a group layer, or cross the gen/video type
+    /// boundary, the whole press is a no-op — mirrors the drag cross-layer
+    /// block in `interaction_overlay.rs`'s `layer_delta` clamp (the nearest
+    /// in-repo precedent for moving a multi-clip selection across layers;
+    /// same-layer keyboard nudge's per-clip skip in `nudge_clips` does NOT
+    /// apply here — a partial cross-layer move would strand some clips on a
+    /// layer the user never chose). Reuses `move_clip_to_layer` for command
+    /// construction — no new Command type — then `enforce_non_overlap` on
+    /// each destination layer, same as `nudge_clips`, so the write-time
+    /// non-overlap invariant holds for the target lane too.
+    pub fn move_clips_across_layers(
+        project: &Project,
+        clip_ids: &[ClipId],
+        layer_delta: i32,
+        spb: f32,
+    ) -> Vec<Box<dyn Command>> {
+        if layer_delta == 0 || clip_ids.is_empty() {
+            return Vec::new();
+        }
+        let total_layers = project.timeline.layers.len() as i32;
+
+        // Resolve each selected clip's current layer index once, up front —
+        // against the pre-move project, same as `nudge_clips`.
+        let mut sources: Vec<(TimelineClip, i32)> = Vec::new();
+        for (li, layer) in project.timeline.layers.iter().enumerate() {
+            for clip in &layer.clips {
+                if clip_ids.contains(&clip.id) {
+                    sources.push((clip.clone(), li as i32));
+                }
+            }
+        }
+        if sources.is_empty() {
+            return Vec::new();
+        }
+
+        // All-or-nothing gate.
+        for (_, li) in &sources {
+            let dest = li + layer_delta;
+            if dest < 0 || dest >= total_layers {
+                return Vec::new();
+            }
+            let dest_layer = &project.timeline.layers[dest as usize];
+            if dest_layer.is_group() {
+                return Vec::new();
+            }
+            let src_is_gen =
+                project.timeline.layers[*li as usize].layer_type == LayerType::Generator;
+            let dst_is_gen = dest_layer.layer_type == LayerType::Generator;
+            if src_is_gen != dst_is_gen {
+                return Vec::new();
+            }
+        }
+
+        let mut commands: Vec<Box<dyn Command>> = Vec::new();
+        let moved_ids: HashSet<ClipId> = sources.iter().map(|(c, _)| c.id.clone()).collect();
+        for (clip, li) in &sources {
+            let dest = li + layer_delta;
+            if let Some(cmd) = Self::move_clip_to_layer(project, clip.id.as_str(), dest) {
+                commands.push(cmd);
+            }
+            // Overlap enforcement on the destination layer, excluding the
+            // other clips moving in this same batch (they resolve against
+            // each other's final positions only if they actually collide —
+            // same semantics as `nudge_clips`). The clip's own beat position
+            // is unchanged by a cross-layer move, so `clip` itself is already
+            // the correct post-move shape.
+            let overlap_cmds =
+                Self::enforce_non_overlap(project, clip, dest as usize, &moved_ids, spb);
+            commands.extend(overlap_cmds);
+        }
+        commands
+    }
+
     // ─── Batch execution helpers ───
 
     /// Execute multiple commands as a single composite undo entry.
