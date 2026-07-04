@@ -34,6 +34,7 @@ use winit::window::WindowId;
 
 use manifold_ui::cursors::TimelineCursor;
 use manifold_ui::input::PointerAction;
+use manifold_ui::interaction_overlay::DragMode;
 use manifold_ui::node::Vec2;
 
 use crate::app::Application;
@@ -1546,6 +1547,34 @@ impl Application {
         let mut consumed = false;
         let data_version_before = self.content_state.data_version;
         if is_primary {
+            // Escape cancels an in-flight timeline clip move/trim before any
+            // other Escape handling — a live drag holds uncommitted model
+            // mutations (`InteractionOverlay::cancel_drag`, P1.4 D5/B8:
+            // "restore and close batch", never commit-then-undo) that must
+            // be rolled back before anything else touches the project.
+            if matches!(logical_key, Key::Named(NamedKey::Escape))
+                && matches!(
+                    self.overlay.drag_mode(),
+                    DragMode::Move | DragMode::TrimLeft | DragMode::TrimRight
+                )
+                && let Some(content_tx) = self.content_tx.as_ref()
+            {
+                let mut host = crate::editing_host::AppEditingHost::new(
+                    &mut self.local_project,
+                    content_tx,
+                    &self.content_state,
+                    &mut self.cursor_manager,
+                    &mut self.active_layer_id,
+                    &mut self.needs_rebuild,
+                    &mut self.needs_structural_sync,
+                    &mut self.scroll_dirty,
+                    &mut self.invalidate_layers,
+                    &mut self.pre_drag_commands,
+                );
+                self.overlay.cancel_drag(&mut host);
+                return;
+            }
+
             // Text input mode: intercept all keys for text editing
             if self.text_input.active {
                 match &logical_key {

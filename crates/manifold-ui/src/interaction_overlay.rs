@@ -1422,11 +1422,7 @@ impl InteractionOverlay {
     ///
     /// Takes no `UIState`: end-of-drag commits the engine batch and clears the
     /// overlay's own transient state — selection is untouched here.
-    pub fn on_end_drag(
-        &mut self,
-        host: &mut dyn TimelineEditingHost,
-        viewport: &TimelineViewportPanel,
-    ) {
+    pub fn on_end_drag(&mut self, host: &mut dyn TimelineEditingHost) {
         // Unity lines 358-363: region select → finalize
         if self.drag_mode == DragMode::RegionSelect {
             host.invalidate_all_layer_bitmaps();
@@ -1498,9 +1494,9 @@ impl InteractionOverlay {
         host.begin_command_batch();
 
         if self.drag_mode == DragMode::Move {
-            // Unity lines 370-386: finalize move snap + record commands
-            self.finalize_move_snap(host, viewport);
-
+            // Unity lines 370-386: record commands. No finalize-snap step —
+            // `handle_move_drag` already snapped+clamped this position on the
+            // last frame (D5); there is nothing left to reconcile here.
             for snapshot in &self.drag_snapshots {
                 if let Some(clip) = host.find_clip_by_id(&snapshot.clip_id) {
                     let start_changed =
@@ -1577,7 +1573,62 @@ impl InteractionOverlay {
         };
         host.commit_command_batch(desc);
 
-        // Unity lines 423-427: clear drag state
+        // Unity lines 423-427/444-445: clear drag state
+        self.reset_drag_state(host);
+    }
+
+    /// Escape cancels an in-flight move or trim gesture (D5, B8): the model
+    /// is restored to the pre-gesture snapshot through the SAME begin/commit
+    /// batch pair `on_end_drag` uses to land a real drag. Nothing is
+    /// `record_*`'d into the batch, so `commit_command_batch` sees an empty
+    /// command list and returns without pushing an undo entry or reaching the
+    /// content thread (`AppEditingHost::commit_command_batch`'s
+    /// `if commands.is_empty() { return; }`). This is "restore and close
+    /// batch" — never "commit then undo": the latter would create a real
+    /// undo entry only to erase it, which is observable (an extra undo-stack
+    /// slot, a spurious `ContentCommand`) in a way a true cancel is not.
+    ///
+    /// Scope: move and trim only. Other in-flight gestures (region-select,
+    /// automation editing) are untouched by this method — out of scope for
+    /// P1.4 (D5/D8); callers should only invoke this when `drag_mode()` is
+    /// `Move`, `TrimLeft`, or `TrimRight`.
+    pub fn cancel_drag(&mut self, host: &mut dyn TimelineEditingHost) {
+        match self.drag_mode {
+            DragMode::Move => {
+                for snapshot in &self.drag_snapshots {
+                    host.set_clip_start_beat(&snapshot.clip_id, snapshot.start_beat);
+                    if let Some(clip) = host.find_clip_by_id(&snapshot.clip_id)
+                        && clip.layer_index != snapshot.layer_index
+                    {
+                        host.move_clip_to_layer(&snapshot.clip_id, snapshot.layer_index);
+                    }
+                }
+            }
+            DragMode::TrimLeft | DragMode::TrimRight => {
+                for orig in &self.trim_originals {
+                    host.set_clip_trim(
+                        &orig.clip_id,
+                        orig.start_beat,
+                        orig.duration_beats,
+                        orig.in_point,
+                    );
+                }
+            }
+            _ => return,
+        }
+        // Restore-and-close: open/close the SAME batch pair `on_end_drag`
+        // commits, but record nothing into it — the commit is a genuine
+        // no-op (see doc comment above), not a commit-then-undo.
+        host.begin_command_batch();
+        host.commit_command_batch("cancelled");
+        host.invalidate_all_layer_bitmaps();
+        self.reset_drag_state(host);
+    }
+
+    /// The drag-state clear shared by a normal `on_end_drag` commit and an
+    /// Escape `cancel_drag` — both end the gesture the same way once the
+    /// model is settled (committed or restored).
+    fn reset_drag_state(&mut self, host: &mut dyn TimelineEditingHost) {
         self.drag_mode = DragMode::None;
         self.drag_snapshots.clear();
         self.drag_snapshot_clip_ids.clear();
@@ -1585,8 +1636,6 @@ impl InteractionOverlay {
         self.trim_clip_id = None;
         self.trim_originals.clear();
         self.duplicate_on_release = false;
-
-        // Unity lines 444-445
         self.drag_layer_blocked = false;
         host.mark_dirty();
         host.set_cursor(TimelineCursor::Default);
@@ -1669,20 +1718,12 @@ impl InteractionOverlay {
             }
         }
 
-        // Unity lines 522-534: magnetic snap + beat delta
+        // Unity lines 522-534: magnetic snap + beat delta — shared with
+        // (formerly) `finalize_move_snap`, see `move_snap_delta` (D5). The
+        // clip written here IS the committed result: nothing left to reconcile
+        // at release.
         let anchor_start_beat = mouse_beat - self.drag_offset_beats;
-        let snapped = viewport.magnetic_snap(
-            anchor_start_beat,
-            self.drag_start_layer_index,
-            &self
-                .drag_snapshot_clip_ids
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>(),
-        );
-        let mut beat_delta = snapped - self.drag_start_beat;
-        // Clamp: don't let the leftmost clip go below beat 0
-        beat_delta = beat_delta.max(-self.drag_selection_min_start_beat);
+        let beat_delta = self.move_snap_delta(anchor_start_beat, viewport);
 
         // Apply beat delta to all clips (direct mutation during drag — committed in OnEndDrag)
         // Unity line 533: movingClip.StartBeat = Max(0, snapshot.StartBeat + beatDelta)
@@ -1692,6 +1733,40 @@ impl InteractionOverlay {
         }
 
         host.invalidate_all_layer_bitmaps();
+    }
+
+    /// D5 — the shared snap+clamp math for a move drag. Given a candidate
+    /// anchor beat, magnetic-snaps it against the grid and neighboring clip
+    /// edges on the gesture's start layer (excluding the dragged clips
+    /// themselves), then clamps the resulting delta so the group's leftmost
+    /// clip cannot cross beat 0. `handle_move_drag` calls this every frame —
+    /// the on-screen position IS the landed position, snap included.
+    ///
+    /// This used to be computed twice: once inline here, once inline in
+    /// `finalize_move_snap` at release (reading the anchor's already-moved
+    /// `start_beat` back from the host and re-snapping it — a no-op in
+    /// practice since the per-frame value was already a valid snap
+    /// candidate, but a second, independently-maintained implementation of
+    /// the same math — exactly the "two authorities" bug class P0 named).
+    /// `finalize_move_snap` is deleted; nothing was left for it to do that
+    /// the last frame didn't already show (D5).
+    fn move_snap_delta(&self, candidate_anchor_beat: Beats, viewport: &TimelineViewportPanel) -> Beats {
+        let snapped = viewport.magnetic_snap(
+            candidate_anchor_beat,
+            self.drag_start_layer_index,
+            &self
+                .drag_snapshot_clip_ids
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        let mut beat_delta = snapped - self.drag_start_beat;
+        // Clamp: don't let the leftmost clip go below beat 0. The ONE shared
+        // clamp site on the move path — the per-snapshot `.max(Beats::ZERO)`
+        // below is the per-clip floor applied where the model is actually
+        // written, not a second independent clamp.
+        beat_delta = beat_delta.max(-self.drag_selection_min_start_beat);
+        beat_delta
     }
 
     /// Port of Unity InteractionOverlay.HandleTrimLeftDrag (lines 539-560).
@@ -1960,48 +2035,6 @@ impl InteractionOverlay {
                         self.drag_selection_max_layer.max(clip.layer_index);
                 }
             }
-        }
-    }
-
-    /// Port of Unity InteractionOverlay.FinalizeMoveSnap (lines 756-772).
-    fn finalize_move_snap(
-        &mut self,
-        host: &mut dyn TimelineEditingHost,
-        viewport: &TimelineViewportPanel,
-    ) {
-        if self.drag_snapshots.is_empty() || self.drag_anchor_clip_id.is_none() {
-            return;
-        }
-
-        let anchor_id = self.drag_anchor_clip_id.as_ref().unwrap();
-        // Unity line 760: uses dragAnchorClip.StartBeat — the clip's CURRENT position
-        // (after being moved during drag), NOT the snapshot's original start beat.
-        let anchor_start = host.find_clip_by_id(anchor_id).map(|c| c.start_beat);
-
-        if let Some(anchor_start) = anchor_start {
-            let snapped = viewport.magnetic_snap(
-                anchor_start,
-                self.drag_start_layer_index,
-                &self
-                    .drag_snapshot_clip_ids
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            );
-            let snap_delta = snapped - anchor_start;
-            if snap_delta.abs() < Beats(0.0001) {
-                return;
-            }
-            // Unity lines 764-768: apply snap delta to all clips
-            for snapshot in &self.drag_snapshots {
-                if let Some(clip) = host.find_clip_by_id(&snapshot.clip_id) {
-                    host.set_clip_start_beat(
-                        &snapshot.clip_id,
-                        (clip.start_beat + snap_delta).max(Beats::ZERO),
-                    );
-                }
-            }
-            host.invalidate_all_layer_bitmaps();
         }
     }
 
@@ -2479,5 +2512,582 @@ mod b4_group_move_tests {
             ids, expected,
             "a drag begun on any already-selected member keeps the whole group selected"
         );
+    }
+}
+
+// ── P1.4 gesture integrity tests ─────────────────────────────────────
+// `docs/TIMELINE_INTERACTION_P1_SPEC.md` D5 (preview == committed result,
+// per-frame snap+clamp, Escape restores the pre-gesture snapshot) and D8
+// (4px drag threshold).
+#[cfg(test)]
+mod p1_4_gesture_integrity_tests {
+    use super::*;
+    use crate::input::{PointerAction as InputPointerAction, UIEvent, UIInputSystem};
+    use crate::layout::ScreenLayout;
+    use crate::panels::Panel;
+    use crate::panels::viewport::{TimelineViewportPanel, TrackInfo, ViewportClip};
+    use crate::timeline_editing_host::RegionSplitResult;
+    use crate::node::UIStyle;
+    use crate::tree::UITree;
+    use crate::types::LayerType;
+    use crate::view::{SelectionRegion, UiLayer};
+    use manifold_foundation::LayerId;
+
+    /// A move/trim-capable, mutation-tracking host. Unlike
+    /// `b4_group_move_tests::TestHost` (whose `set_clip_start_beat`/
+    /// `move_clip_to_layer` are no-ops — sufficient for that module's
+    /// selection-only assertions), P1.4's tests need to observe the actual
+    /// live model mutation a drag performs, and what `record_move`/
+    /// `record_trim`/`commit_command_batch` do with it — so every mutating
+    /// method here is real, and `commit_command_batch` mirrors
+    /// `AppEditingHost`'s own `if commands.is_empty() { return; }`
+    /// short-circuit (an empty batch pushes no undo entry).
+    #[derive(Clone, Debug, PartialEq)]
+    struct ClipEntry {
+        id: ClipId,
+        layer_index: usize,
+        start_beat: Beats,
+        duration_beats: Beats,
+        in_point: Seconds,
+    }
+
+    struct GestureTestHost {
+        layers: Vec<UiLayer>,
+        clips: Vec<ClipEntry>,
+        move_records: Vec<(ClipId, Beats, Beats, usize, usize)>,
+        trim_records: Vec<(ClipId, Beats, Beats, Beats, Beats)>,
+        batch_ops: usize,
+        committed_batches: Vec<usize>,
+    }
+
+    impl GestureTestHost {
+        fn new(layer_ids: &[&str]) -> Self {
+            let layers = layer_ids
+                .iter()
+                .map(|id| UiLayer {
+                    layer_id: LayerId::new(id),
+                    parent_layer_id: None,
+                    layer_type: LayerType::Video,
+                    is_collapsed: false,
+                    automation_lane_count: 0,
+                })
+                .collect();
+            Self {
+                layers,
+                clips: Vec::new(),
+                move_records: Vec::new(),
+                trim_records: Vec::new(),
+                batch_ops: 0,
+                committed_batches: Vec::new(),
+            }
+        }
+
+        fn with_clip(mut self, id: &str, layer_index: usize, start: f32, duration: f32) -> Self {
+            self.clips.push(ClipEntry {
+                id: ClipId::new(id),
+                layer_index,
+                start_beat: Beats::from_f32(start),
+                duration_beats: Beats::from_f32(duration),
+                in_point: Seconds::ZERO,
+            });
+            self
+        }
+
+        fn to_ref(&self, e: &ClipEntry) -> ClipRef {
+            ClipRef {
+                clip_id: e.id.clone(),
+                start_beat: e.start_beat,
+                duration_beats: e.duration_beats,
+                end_beat: e.start_beat + e.duration_beats,
+                layer_index: e.layer_index,
+                layer_id: self.layers[e.layer_index].layer_id.clone(),
+                in_point: e.in_point,
+                is_generator: false,
+                is_locked: false,
+                is_looping: false,
+            }
+        }
+    }
+
+    impl TimelineEditingHost for GestureTestHost {
+        fn layer_count(&self) -> usize {
+            self.layers.len()
+        }
+        fn layers(&self) -> &[UiLayer] {
+            &self.layers
+        }
+        fn layer_id_at_index(&self, index: usize) -> Option<LayerId> {
+            self.layers.get(index).map(|l| l.layer_id.clone())
+        }
+        fn layer_is_generator(&self, _index: usize) -> bool {
+            false
+        }
+        fn is_layer_muted(&self, _index: usize) -> bool {
+            false
+        }
+        fn project_beats_per_bar(&self) -> u32 {
+            4
+        }
+        fn get_seconds_per_beat(&self) -> f32 {
+            0.5
+        }
+        fn is_playing(&self) -> bool {
+            false
+        }
+        fn find_clip_by_id(&self, clip_id: &str) -> Option<ClipRef> {
+            self.clips
+                .iter()
+                .find(|c| c.id.as_str() == clip_id)
+                .map(|c| self.to_ref(c))
+        }
+        fn clips_on_layer(&self, layer_index: usize) -> Vec<ClipRef> {
+            self.clips
+                .iter()
+                .filter(|c| c.layer_index == layer_index)
+                .map(|c| self.to_ref(c))
+                .collect()
+        }
+        fn screen_position_to_beat(&self, _pos: Vec2) -> Beats {
+            Beats::ZERO
+        }
+        fn get_layer_index_at_position(&self, _pos: Vec2) -> Option<usize> {
+            None
+        }
+        fn beat_to_time(&self, _beat: Beats) -> Seconds {
+            Seconds::ZERO
+        }
+        fn create_clip_at_position(
+            &mut self,
+            _beat: Beats,
+            _layer: usize,
+            _grid_step: Beats,
+        ) -> Option<ClipId> {
+            None
+        }
+        fn move_clip_to_layer(&mut self, clip_id: &str, target_layer: usize) {
+            if let Some(c) = self.clips.iter_mut().find(|c| c.id.as_str() == clip_id) {
+                c.layer_index = target_layer;
+            }
+        }
+        fn on_clip_selected(&mut self, _clip_id: &str) {}
+        fn on_clip_right_click(&mut self, _clip_id: &str, _screen_pos: Vec2) {}
+        fn on_track_right_click(&mut self, _beat: Beats, _layer_index: usize, _screen_pos: Vec2) {}
+        fn inspect_layer(&mut self, _layer_index: usize) {}
+        fn auto_scroll_for_drag(&mut self, _screen_pos: Vec2) {}
+        fn invalidate_layer_bitmap(&mut self, _layer_index: usize) {}
+        fn invalidate_all_layer_bitmaps(&mut self) {}
+        fn mark_dirty(&mut self) {}
+        fn set_cursor(&mut self, _cursor: TimelineCursor) {}
+        fn scrub_to_time(&mut self, _time: Seconds) {}
+        fn enforce_non_overlap(&mut self, _clip_id: &str, _ignore_ids: &HashSet<ClipId>) {}
+        fn split_clips_for_region_move(&mut self, _region: &SelectionRegion) -> RegionSplitResult {
+            RegionSplitResult {
+                interior_clip_ids: Vec::new(),
+                split_count: 0,
+            }
+        }
+        fn begin_command_batch(&mut self) {
+            self.batch_ops = 0;
+        }
+        fn record_move(
+            &mut self,
+            clip_id: &str,
+            old_start: Beats,
+            new_start: Beats,
+            old_layer: usize,
+            new_layer: usize,
+        ) {
+            self.move_records
+                .push((ClipId::new(clip_id), old_start, new_start, old_layer, new_layer));
+            self.batch_ops += 1;
+        }
+        fn record_trim(
+            &mut self,
+            clip_id: &str,
+            old_start: Beats,
+            new_start: Beats,
+            old_duration: Beats,
+            new_duration: Beats,
+            _old_in_point: Seconds,
+            _new_in_point: Seconds,
+        ) {
+            self.trim_records
+                .push((ClipId::new(clip_id), old_start, new_start, old_duration, new_duration));
+            self.batch_ops += 1;
+        }
+        fn duplicate_clip_to(&mut self, _src_clip_id: &str, _target_beat: Beats, _target_layer: usize) {
+            self.batch_ops += 1;
+        }
+        fn commit_command_batch(&mut self, _description: &str) {
+            // Mirrors `AppEditingHost::commit_command_batch`'s
+            // `if commands.is_empty() { return; }` — a batch with nothing
+            // recorded produces no undo entry and reaches nothing downstream.
+            if self.batch_ops > 0 {
+                self.committed_batches.push(self.batch_ops);
+            }
+            self.batch_ops = 0;
+        }
+        fn set_clip_start_beat(&mut self, clip_id: &str, beat: Beats) {
+            if let Some(c) = self.clips.iter_mut().find(|c| c.id.as_str() == clip_id) {
+                c.start_beat = beat;
+            }
+        }
+        fn set_clip_trim(
+            &mut self,
+            clip_id: &str,
+            start_beat: Beats,
+            duration_beats: Beats,
+            in_point: Seconds,
+        ) {
+            if let Some(c) = self.clips.iter_mut().find(|c| c.id.as_str() == clip_id) {
+                c.start_beat = start_beat;
+                c.duration_beats = duration_beats;
+                c.in_point = in_point;
+            }
+        }
+        fn get_max_duration_beats(&self, _clip_id: &str) -> Beats {
+            Beats::ZERO
+        }
+        fn add_automation_point(
+            &mut self,
+            _target: &UiGraphTarget,
+            _param_id: &ParamId,
+            _beat: Beats,
+            _value: f32,
+            _shape: UiSegmentShape,
+        ) {
+        }
+        fn set_automation_point_preview(
+            &mut self,
+            _target: &UiGraphTarget,
+            _param_id: &ParamId,
+            _from_beat: Beats,
+            _to_beat: Beats,
+            _to_value: f32,
+        ) {
+        }
+        fn commit_automation_point_move(
+            &mut self,
+            _target: &UiGraphTarget,
+            _param_id: &ParamId,
+            _old: (Beats, f32, UiSegmentShape),
+            _new: (Beats, f32, UiSegmentShape),
+        ) {
+        }
+        fn remove_automation_point(&mut self, _target: &UiGraphTarget, _param_id: &ParamId, _beat: Beats) {}
+        fn set_automation_segment_bend_preview(
+            &mut self,
+            _target: &UiGraphTarget,
+            _param_id: &ParamId,
+            _left_beat: Beats,
+            _bend: f32,
+        ) {
+        }
+        fn set_automation_segment_drag_preview(
+            &mut self,
+            _target: &UiGraphTarget,
+            _param_id: &ParamId,
+            _left_beat: Beats,
+            _left_value: f32,
+            _right_beat: Beats,
+            _right_value: f32,
+        ) {
+        }
+        fn commit_automation_segment_drag(
+            &mut self,
+            _target: &UiGraphTarget,
+            _param_id: &ParamId,
+            _left: (Beats, f32, f32, UiSegmentShape),
+            _right: (Beats, f32, f32, UiSegmentShape),
+        ) {
+        }
+        fn commit_automation_group_move(
+            &mut self,
+            _moves: Vec<(UiGraphTarget, ParamId, Beats, f32, f32, UiSegmentShape)>,
+        ) {
+        }
+        fn automation_lane_points(
+            &self,
+            _target: &UiGraphTarget,
+            _param_id: &ParamId,
+        ) -> Option<Vec<(Beats, f32, UiSegmentShape)>> {
+            None
+        }
+        fn set_automation_draw_preview(
+            &mut self,
+            _target: &UiGraphTarget,
+            _param_id: &ParamId,
+            _points: Vec<(Beats, f32, UiSegmentShape)>,
+        ) {
+        }
+        fn commit_automation_draw_stroke(
+            &mut self,
+            _target: &UiGraphTarget,
+            _param_id: &ParamId,
+            _new_points: Vec<(Beats, f32, UiSegmentShape)>,
+            _old_points: Option<Vec<(Beats, f32, UiSegmentShape)>>,
+        ) {
+        }
+    }
+
+    fn test_clip(id: &str, layer_index: usize, start: f32, duration: f32) -> ViewportClip {
+        ViewportClip {
+            clip_id: id.into(),
+            layer_index,
+            start_beat: Beats::from_f32(start),
+            duration_beats: Beats::from_f32(duration),
+            name: "".into(),
+            color: crate::color::CLIP_NORMAL,
+            is_muted: false,
+            is_locked: false,
+            is_generator: false,
+            is_audio: false,
+            waveform: None,
+            in_point_seconds: 0.0,
+            warped_secs_per_beat: 0.0,
+        }
+    }
+
+    /// One clip `[0,8)` and a second `[16,20)` on one layer — the second
+    /// gives magnetic snap a neighbor edge to pull toward. Built through the
+    /// REAL `Panel::build` so beat<->pixel geometry matches production.
+    fn build_viewport() -> TimelineViewportPanel {
+        let mut tree = UITree::new();
+        let mut panel = TimelineViewportPanel::new();
+        panel.set_tracks(vec![TrackInfo::default()]);
+        panel.set_clips(vec![
+            test_clip("clip_a", 0, 0.0, 8.0),
+            test_clip("clip_b", 0, 16.0, 4.0),
+        ]);
+        panel.rebuild_mapper_layout(&[UiLayer {
+            layer_id: LayerId::new("layer-0"),
+            parent_layer_id: None,
+            layer_type: LayerType::Video,
+            is_collapsed: false,
+            automation_lane_count: 0,
+        }]);
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        panel.build(&mut tree, &layout);
+        panel
+    }
+
+    fn body_pos_for(panel: &TimelineViewportPanel, beat_center: f32) -> Vec2 {
+        Vec2::new(
+            panel.beat_to_pixel(Beats::from_f32(beat_center)),
+            panel.tracks_rect().y + 70.0,
+        )
+    }
+
+    /// D5 core assertion: drive several synthetic pointer moves, then compare
+    /// the model's position after the LAST move (the on-screen "preview") to
+    /// its position after `on_end_drag` commits (the "committed result").
+    /// Run twice per the gate's "snap on and off": once landing close enough
+    /// to `clip_b`'s start (16.0) that the neighbor-edge candidate wins over
+    /// plain grid-snap, once landing far from any clip edge (grid-snap only —
+    /// grid-snap itself has no "off" state today, per `magnetic_snap`'s
+    /// half-grid-interval full-coverage threshold; B12's Cmd-bypass toggle is
+    /// P1.5). Both must show zero further change at commit.
+    fn assert_preview_equals_committed(landing_beat_center: f32, case: &str) {
+        let panel = build_viewport();
+        let mut host = GestureTestHost::new(&["layer-0"]).with_clip("clip_a", 0, 0.0, 8.0);
+        let mut ui_state = UIState::new();
+        ui_state.select_clips(vec![ClipId::new("clip_a")]);
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+
+        overlay.on_begin_drag(body_pos_for(&panel, 2.0), &mut host, &mut ui_state, &panel);
+        assert_eq!(overlay.drag_mode(), DragMode::Move, "case {case}: drag must begin");
+
+        // Several synthetic pointer moves walking toward the landing spot.
+        for step in 1..=3 {
+            let t = step as f32 / 3.0;
+            let beat = 2.0 + (landing_beat_center - 2.0) * t;
+            overlay.on_drag(body_pos_for(&panel, beat), &mut host, &mut ui_state, &panel);
+        }
+
+        let preview = host.find_clip_by_id("clip_a").unwrap().start_beat;
+        overlay.on_end_drag(&mut host);
+        let committed = host.find_clip_by_id("clip_a").unwrap().start_beat;
+
+        assert_eq!(
+            preview, committed,
+            "case {case}: on-screen preview must already be the committed result (D5)"
+        );
+    }
+
+    #[test]
+    fn preview_equals_committed_neighbor_edge_snap_wins() {
+        assert_preview_equals_committed(15.9, "neighbor-edge snap wins over grid");
+    }
+
+    #[test]
+    fn preview_equals_committed_grid_snap_only() {
+        assert_preview_equals_committed(9.37, "grid-snap only, no neighbor edge in range");
+    }
+
+    #[test]
+    fn escape_mid_drag_restores_byte_identical_state() {
+        let panel = build_viewport();
+        let mut host = GestureTestHost::new(&["layer-0"]).with_clip("clip_a", 0, 0.0, 8.0);
+        let mut ui_state = UIState::new();
+        ui_state.select_clips(vec![ClipId::new("clip_a")]);
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+
+        let before = host.clips.clone();
+
+        overlay.on_begin_drag(body_pos_for(&panel, 2.0), &mut host, &mut ui_state, &panel);
+        overlay.on_drag(body_pos_for(&panel, 10.0), &mut host, &mut ui_state, &panel);
+        overlay.on_drag(body_pos_for(&panel, 12.37), &mut host, &mut ui_state, &panel);
+
+        // Sanity: the drag actually moved the clip before cancelling —
+        // otherwise this test would pass for the wrong reason.
+        assert_ne!(
+            host.find_clip_by_id("clip_a").unwrap().start_beat,
+            Beats::from_f32(0.0),
+            "sanity: the drag must have actually moved the clip"
+        );
+
+        overlay.cancel_drag(&mut host);
+
+        assert_eq!(
+            host.clips, before,
+            "Escape must restore byte-identical clip state"
+        );
+        assert_eq!(overlay.drag_mode(), DragMode::None);
+        assert!(
+            host.committed_batches.is_empty(),
+            "cancel must not push an undo entry — restore-and-close-batch, never commit-then-undo"
+        );
+        assert!(
+            host.move_records.is_empty(),
+            "cancel must not record a move"
+        );
+    }
+
+    #[test]
+    fn sub_four_px_press_release_moves_nothing() {
+        let panel = build_viewport();
+        let mut host = GestureTestHost::new(&["layer-0"]).with_clip("clip_a", 0, 0.0, 8.0);
+        let mut ui_state = UIState::new();
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+
+        // A widget under the press position so `UIInputSystem`'s gesture
+        // recognizer (the real 4px threshold — `input.rs`'s `DRAG_THRESHOLD`)
+        // has something to press/release on. Its identity is irrelevant: only
+        // the emitted event kind + `pos` matter downstream — InteractionOverlay
+        // does its own beat-space hit-testing independent of the UITree node
+        // system, exactly as production does (viewport events are stashed by
+        // node-based `UIInputSystem` events but interpreted by beat/pixel math).
+        let mut tree = UITree::new();
+        let root = tree.add_panel(None, 0.0, 0.0, 1920.0, 1080.0, UIStyle::default());
+        let press_pos = body_pos_for(&panel, 2.0);
+        tree.add_button(
+            Some(root),
+            press_pos.x - 50.0,
+            press_pos.y - 20.0,
+            100.0,
+            40.0,
+            UIStyle::default(),
+            "",
+        );
+
+        let mut input_sys = UIInputSystem::new();
+        input_sys.process_pointer(&mut tree, press_pos, InputPointerAction::Down, 0.0);
+        input_sys.process_pointer(
+            &mut tree,
+            press_pos + Vec2::new(2.0, 1.0),
+            InputPointerAction::Move,
+            0.0,
+        );
+        input_sys.process_pointer(
+            &mut tree,
+            press_pos + Vec2::new(2.0, 1.0),
+            InputPointerAction::Up,
+            0.0,
+        );
+        let events = input_sys.drain_events();
+
+        assert!(
+            !events.iter().any(|e| matches!(
+                e,
+                UIEvent::DragBegin { .. } | UIEvent::Drag { .. } | UIEvent::DragEnd { .. }
+            )),
+            "sub-4px press-release must not produce a drag event, got {events:?}"
+        );
+
+        // Feed exactly what the input layer produced into the overlay — the
+        // ONLY entry points that ever mutate a clip's position
+        // (`on_begin_drag`/`on_drag`) are never called on this path, by
+        // construction, since no DragBegin/Drag event was ever emitted.
+        for event in &events {
+            if let UIEvent::Click { pos, modifiers, .. } = event {
+                overlay.on_pointer_click(
+                    *pos,
+                    modifiers.shift,
+                    modifiers.ctrl || modifiers.command,
+                    1,
+                    false,
+                    &mut host,
+                    &mut ui_state,
+                    &panel,
+                );
+            }
+        }
+
+        assert_eq!(
+            host.find_clip_by_id("clip_a").unwrap().start_beat,
+            Beats::ZERO,
+            "start_beat must be unchanged by a sub-threshold press-release"
+        );
+        assert!(
+            host.move_records.is_empty(),
+            "no move should be recorded for a sub-threshold press-release"
+        );
+    }
+
+    #[test]
+    fn full_drag_produces_exactly_one_undo_entry() {
+        let panel = build_viewport();
+        let mut host = GestureTestHost::new(&["layer-0"]).with_clip("clip_a", 0, 0.0, 8.0);
+        let mut ui_state = UIState::new();
+        ui_state.select_clips(vec![ClipId::new("clip_a")]);
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+
+        overlay.on_begin_drag(body_pos_for(&panel, 2.0), &mut host, &mut ui_state, &panel);
+        overlay.on_drag(body_pos_for(&panel, 6.0), &mut host, &mut ui_state, &panel);
+        overlay.on_drag(body_pos_for(&panel, 10.0), &mut host, &mut ui_state, &panel);
+        overlay.on_end_drag(&mut host);
+
+        assert_eq!(
+            host.committed_batches.len(),
+            1,
+            "exactly one non-empty commit_command_batch call must fire per gesture (B9)"
+        );
+        assert_eq!(host.move_records.len(), 1, "one clip moved -> one record_move call");
+    }
+
+    #[test]
+    fn drag_toward_zero_clamps_every_frame_not_just_at_release() {
+        let panel = build_viewport();
+        let mut host = GestureTestHost::new(&["layer-0"]).with_clip("clip_a", 0, 2.0, 4.0);
+        let mut ui_state = UIState::new();
+        ui_state.select_clips(vec![ClipId::new("clip_a")]);
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+
+        overlay.on_begin_drag(body_pos_for(&panel, 4.0), &mut host, &mut ui_state, &panel);
+
+        // Walk the pointer far past beat 0 in several steps; the clamp must
+        // hold on EVERY intermediate frame, not just once the drag ends.
+        for beat in [3.0, 0.5, -2.0, -8.0, -20.0] {
+            overlay.on_drag(body_pos_for(&panel, beat), &mut host, &mut ui_state, &panel);
+            let start = host.find_clip_by_id("clip_a").unwrap().start_beat;
+            assert!(
+                start >= Beats::ZERO,
+                "start_beat went negative mid-drag: {start:?} at pointer beat {beat}"
+            );
+        }
+
+        overlay.on_end_drag(&mut host);
+        let start = host.find_clip_by_id("clip_a").unwrap().start_beat;
+        assert!(start >= Beats::ZERO, "start_beat negative after release: {start:?}");
     }
 }

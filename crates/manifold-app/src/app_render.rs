@@ -1100,7 +1100,7 @@ impl Application {
                             );
                         }
                         UIEvent::DragEnd { .. } => {
-                            self.overlay.on_end_drag(&mut host, &self.ws.ui_root.viewport);
+                            self.overlay.on_end_drag(&mut host);
                         }
                         _ => {}
                     }

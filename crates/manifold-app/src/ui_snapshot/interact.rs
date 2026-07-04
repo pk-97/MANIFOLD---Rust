@@ -7,7 +7,7 @@
 //! `UIState::select_layer` the app bridge calls. No faked state.
 //! See `docs/HEADLESS_UI_HARNESS.md` §2.
 
-use manifold_core::{ClipId, LayerId};
+use manifold_core::{Beats, ClipId, LayerId};
 use manifold_ui::{PanelAction, PointerAction, UIState, Vec2};
 
 use super::fixtures::SceneData;
@@ -50,11 +50,12 @@ fn apply_one(ui: &mut UIRoot, data: &mut SceneData, spec: &str) -> String {
         Some(("shift_click_clip", rest)) => shift_click_clip(data, rest),
         Some(("cmd_click_clip", rest)) => cmd_click_clip(data, rest),
         Some(("cmd_d", _)) => duplicate_selected_clips(data),
+        Some(("drag_clip_toward_zero", rest)) => drag_clip_toward_zero(data, rest),
         Some((verb, _)) => format!(
             "unknown interact verb '{verb}' (known: select, collapse, delete, open, \
              automation_add, automation_move, automation_bend, automation_segment_drag, \
              automation_group_move, automation_group_delete, click_clip, shift_click_clip, \
-             cmd_click_clip, cmd_d)"
+             cmd_click_clip, cmd_d, drag_clip_toward_zero)"
         ),
         None if spec == "cmd_d" => duplicate_selected_clips(data),
         None => format!("malformed interact '{spec}' (want verb:target)"),
@@ -176,6 +177,38 @@ fn duplicate_selected_clips(data: &mut SceneData) -> String {
         if used_region_mode { "REGION" } else { "individual" },
         commands.len(),
         before_ids.len(),
+    )
+}
+
+/// P1.4 evidence verb (D5/D7, `docs/TIMELINE_INTERACTION_P1_SPEC.md`, S2):
+/// `drag_clip_toward_zero:<clip_id>:<layer_id>` sets the clip's `start_beat`
+/// directly to `(deeply_negative_candidate).max(Beats::ZERO)` — the same
+/// clamp `InteractionOverlay::handle_move_drag`'s per-snapshot loop applies
+/// on EVERY frame of a real drag (proven per-frame, not just at release, by
+/// `interaction_overlay::p1_4_gesture_integrity_tests::
+/// drag_toward_zero_clamps_every_frame_not_just_at_release`). Same
+/// "drive the data field directly, the level under test is render reaction
+/// not input dispatch" convention `collapse_layer`/`automation_add_point`
+/// already establish — the drag MATH is unit-tested; this verb renders the
+/// committed RESULT (a clip legitimately sitting at beat 0) so the PNG
+/// proves D7's structural claim: the clip paints inside the tracks area,
+/// never over the header column, regardless of how it got to beat 0.
+fn drag_clip_toward_zero(data: &mut SceneData, rest: &str) -> String {
+    let Some((clip_id, layer_id)) = rest.split_once(':') else {
+        return format!("drag_clip_toward_zero: want clip_id:layer_id, got '{rest}'");
+    };
+    let Some(layer) = data.project.timeline.layers.iter_mut().find(|l| l.layer_id == layer_id)
+    else {
+        return format!("drag_clip_toward_zero: no layer '{layer_id}'");
+    };
+    let Some(clip) = layer.clips.iter_mut().find(|c| c.id.as_str() == clip_id) else {
+        return format!("drag_clip_toward_zero: no clip '{clip_id}' on layer '{layer_id}'");
+    };
+    let requested = Beats(-40.0); // deeply negative — the drag-toward-zero repro
+    clip.start_beat = requested.max(Beats::ZERO);
+    format!(
+        "drag_clip_toward_zero -> '{clip_id}' requested_beat={:.1} clamped_start_beat={:.3}",
+        requested.0, clip.start_beat.0
     )
 }
 
