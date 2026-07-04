@@ -127,6 +127,8 @@ mod phong_material;
 mod pbr_material;
 mod cel_material;
 mod multi_blend;
+#[cfg(test)]
+mod mesh_snapshot;
 mod mux_array;
 mod mux_scalar;
 mod mux_texture;
