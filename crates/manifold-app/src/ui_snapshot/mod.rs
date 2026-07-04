@@ -38,13 +38,21 @@ pub fn run(args: &[String]) {
     let want_vs_mockup = args.iter().any(|a| a == "--vs-mockup");
     let want_thumbs = args.iter().any(|a| a == "--thumbs");
     let interact = arg_value(args, "--interact");
+    // P0.0 evidence flag (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): seed BOTH scroll
+    // owners (`Viewport::scroll_y_px` + the header panel's `ScrollContainer`
+    // offset) to the same non-zero pixel value right after the base render
+    // and before any `--interact`, so a subsequent content-shrinking edit can
+    // be captured mid-scroll. A flag rather than an `interact` verb because it
+    // seeds state that predates the interaction being tested, not an action
+    // being tested itself.
+    let scroll_seed: Option<f32> = arg_value(args, "--scroll").and_then(|s| s.parse().ok());
 
     // `all`: render every scene in one process — a full-app eyeball after a
     // change. Skips the per-scene-only flags (mockup, interact); pass those to a
     // single scene when you need them.
     if scene == "all" {
         for s in ["timeline", "states", "inspector"] {
-            render_ui_scene(s, want_dump, false, want_thumbs, None);
+            render_ui_scene(s, want_dump, false, want_thumbs, None, None);
         }
         run_graph_preset("Mirror");
         run_editor_preset("FluidSim2D");
@@ -68,7 +76,7 @@ pub fn run(args: &[String]) {
         return;
     }
 
-    render_ui_scene(scene, want_dump, want_vs_mockup, want_thumbs, interact);
+    render_ui_scene(scene, want_dump, want_vs_mockup, want_thumbs, interact, scroll_seed);
 }
 
 /// Build + render one UITree scene (`timeline` / `states` / `inspector`) through
@@ -80,11 +88,20 @@ fn render_ui_scene(
     want_vs_mockup: bool,
     want_thumbs: bool,
     interact: Option<String>,
+    scroll_seed: Option<f32>,
 ) {
     let Some(mut data) = fixtures::build(scene) else {
-        eprintln!("ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, graph, editor, all)");
+        eprintln!(
+            "ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, scrollshrink, hairlineclips, graph, editor, all)"
+        );
         std::process::exit(2);
     };
+
+    // P0.3 (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): `hairlineclips` needs genuine
+    // far zoom (the minimum `color::ZOOM_LEVELS` entry) to make its clips
+    // sub-pixel-wide; every other scene keeps the existing fixed 24px/beat so
+    // their PNGs stay byte-identical across this phase.
+    let zoom_ppb: f32 = if scene == "hairlineclips" { 1.0 } else { 24.0 };
 
     let dir = out_dir(scene);
     std::fs::create_dir_all(&dir).expect("create ui-snapshots dir");
@@ -103,8 +120,23 @@ fn render_ui_scene(
         ui.layout.inspector_width = 0.0;
         ui.layout.timeline_split_ratio = 0.93;
     }
-    sync_build(&mut ui, &data);
+    sync_build(&mut ui, &data, zoom_ppb);
     render_and_dump(&ui, &data.selection, &dir, scene, "", want_dump, want_thumbs);
+
+    // P0.1: the viewport is the sole scroll owner (D2) — the header panel
+    // reads `viewport.scroll_y_px()` live at draw time, so seeding it here is
+    // the only seed needed (mirrors `ui_root.rs`'s settings-restore path).
+    // Before P0.1 this seeded two independent copies to reproduce RC1 ("user
+    // scrolled, then the content shrank"); post-fix, `rebuild_mapper_layout`
+    // (called from `sync_project_data` inside the `--interact` branch below)
+    // re-clamps this same value against the new content height every time
+    // (D3), so RC1 no longer reproduces — see
+    // `docs/evidence/timeline_p0/after/README.md`.
+    if let Some(y) = scroll_seed {
+        let x = ui.viewport.scroll_x_beats().as_f32();
+        ui.viewport.set_scroll(x, y);
+        println!("ui-snap: scroll-seed y={y} (viewport clamped to {})", ui.viewport.scroll_y_px());
+    }
 
     // Optional: render the HTML mockup and composite app | mockup side by side.
     if want_vs_mockup {
@@ -115,7 +147,7 @@ fn render_ui_scene(
     if let Some(spec) = interact {
         let desc = interact::apply(&mut ui, &mut data, &spec);
         println!("ui-snap: interact {desc}");
-        sync_build(&mut ui, &data);
+        sync_build(&mut ui, &data, zoom_ppb);
         render_and_dump(&ui, &data.selection, &dir, scene, ".after", want_dump, want_thumbs);
     }
 }
@@ -204,16 +236,19 @@ fn run_editor_preset(preset: &str) {
 }
 
 /// The real translation path: structural sync → zoom-to-fit → build → push state.
-fn sync_build(ui: &mut UIRoot, data: &fixtures::SceneData) {
+/// `zoom_ppb` is the scene's pixels-per-beat (24.0 for the 48-beat fixtures;
+/// `render_ui_scene` overrides it per scene name — see the `hairlineclips`
+/// far-zoom case).
+fn sync_build(ui: &mut UIRoot, data: &fixtures::SceneData, zoom_ppb: f32) {
     sync_project_data(ui, &data.project, data.active, &data.selection);
     // Configure the inspector (tabs + the active layer's effect/gen cards) from
     // the selection — the live app calls this whenever the active layer changes.
     // Without it the inspector stays on its default Master view, so the selected
     // layer's chain never appears.
     sync_inspector_data(ui, &data.project, data.active, &data.selection);
-    // Zoom out so the 48-beat fixture clips fit the lane width (set before build
-    // so the ruler ticks and the clip rects agree on px/beat).
-    ui.viewport.set_zoom(24.0);
+    // Zoom so the fixture's clips fit the lane width (set before build so the
+    // ruler ticks and the clip rects agree on px/beat).
+    ui.viewport.set_zoom(zoom_ppb);
     ui.build();
     let mut tcache = TransportDisplayCache::new();
     push_state(ui, &data.project, &data.content, data.active, &data.selection, false, None, &mut tcache);

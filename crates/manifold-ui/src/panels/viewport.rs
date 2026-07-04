@@ -378,8 +378,16 @@ impl TimelineViewportPanel {
 
     /// Rebuild the CoordinateMapper's Y-layout from layer data.
     /// Call this from app.rs when layers change (before build).
+    ///
+    /// Re-clamps the scroll position against the new `total_content_height`
+    /// immediately (`docs/TIMELINE_LAYOUT_P0_SPEC.md` D3): a collapse/delete
+    /// that shrinks content must move the scroll position in the same frame,
+    /// not wait for the next explicit scroll event. Since the header panel
+    /// reads this same `scroll_y_px` at draw time (D2), both columns move
+    /// together.
     pub fn rebuild_mapper_layout(&mut self, layers: &[crate::view::UiLayer]) {
         self.mapper.rebuild_y_layout(layers);
+        self.set_scroll(self.scroll_x_beats.as_f32(), self.scroll_y_px);
     }
 
     /// Get a reference to the shared CoordinateMapper.
@@ -561,10 +569,17 @@ impl TimelineViewportPanel {
             }
             for clip in self.clips_for_layer(i) {
                 let x = self.beat_to_pixel(clip.start_beat);
-                let w = self.beat_duration_to_width(clip.duration_beats.as_f32());
-                // Sub-pixel clips and clips fully outside the tracks rect are
-                // skipped; the GPU scissor clamps partials at the edges.
-                if w < 1.0 || x + w < tx0 || x > tx1 {
+                // Sub-pixel clips are clamped to a 1px hairline rather than
+                // culled, so short trigger clips never vanish at far zoom.
+                // Mirrors the overview strip's width clamp
+                // (`viewport/render.rs:125`) and the collapsed-group
+                // summary's per-clip clamp (`viewport/render.rs:298`). Only
+                // clips fully outside the tracks rect are skipped; the GPU
+                // scissor clamps partials at the edges.
+                let w = self
+                    .beat_duration_to_width(clip.duration_beats.as_f32())
+                    .max(1.0);
+                if x + w < tx0 || x > tx1 {
                     continue;
                 }
                 out.push(ClipScreenRect {
@@ -1396,6 +1411,66 @@ mod tests {
     }
 
     #[test]
+    fn visible_clip_rects_clamps_subpixel_clips_to_hairline_but_culls_offscreen() {
+        // P0.3 (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): at far zoom, a clip whose
+        // pixel width rounds below 1px must still draw as a 1px hairline, not
+        // vanish. Only clips fully outside the tracks rect are skipped.
+        let mut panel = TimelineViewportPanel::new();
+        panel.tracks_rect = Rect::new(0.0, 100.0, 1000.0, 600.0);
+        panel.set_zoom(1.0); // far zoom: 1px/beat
+        panel.set_tracks(vec![TrackInfo::default()]);
+        panel.mapper.set_layout(&[140.0]);
+        panel.set_clips(vec![
+            // On-screen, sub-pixel duration (0.3 beats @ 1px/beat = 0.3px).
+            ViewportClip {
+                clip_id: "onscreen-subpixel".into(),
+                layer_index: 0,
+                start_beat: Beats::from_f32(10.0),
+                duration_beats: Beats(0.3),
+                name: "".into(),
+                color: color::CLIP_NORMAL,
+                is_muted: false,
+                is_locked: false,
+                is_generator: false,
+                is_audio: false,
+                waveform: None,
+                in_point_seconds: 0.0,
+                warped_secs_per_beat: 0.0,
+            },
+            // Fully offscreen, well past the right edge of the 1000px tracks
+            // rect — must still be culled even though its clamped width
+            // would be onscreen-sized.
+            ViewportClip {
+                clip_id: "offscreen-subpixel".into(),
+                layer_index: 0,
+                start_beat: Beats::from_f32(5000.0),
+                duration_beats: Beats(0.3),
+                name: "".into(),
+                color: color::CLIP_NORMAL,
+                is_muted: false,
+                is_locked: false,
+                is_generator: false,
+                is_audio: false,
+                waveform: None,
+                in_point_seconds: 0.0,
+                warped_secs_per_beat: 0.0,
+            },
+        ]);
+
+        let mut out = Vec::new();
+        panel.visible_clip_rects(&mut out);
+
+        assert_eq!(out.len(), 1, "only the onscreen clip should survive the cull");
+        let rect = &out[0];
+        assert_eq!(rect.clip_id, "onscreen-subpixel");
+        assert!(
+            rect.rect.width >= 1.0,
+            "sub-pixel clip must clamp to a 1px hairline, got {}",
+            rect.rect.width
+        );
+    }
+
+    #[test]
     fn zeroed_scrollbar_rect_yields_no_layout() {
         // §24 5e-C regression: a build that early-returns (collapsed timeline)
         // zeroes `scrollbar_h_rect`, and a zero strip must produce neither a
@@ -1462,6 +1537,54 @@ mod tests {
         // Beat 5 should be at x=100
         let px = panel.beat_to_pixel(Beats::from_f32(5.0));
         assert!((px - 100.0).abs() < 0.001);
+    }
+
+    // P0.1 gate (D3): a collapse/delete that shrinks content must move the
+    // scroll position in the same frame `rebuild_mapper_layout` runs, not
+    // wait for the next explicit scroll event — see
+    // `docs/TIMELINE_LAYOUT_P0_SPEC.md` D3 and RC1's before-evidence
+    // (`docs/evidence/timeline_p0/before/README.md`, scene 06).
+    #[test]
+    fn rebuild_mapper_layout_reclamps_scroll_immediately() {
+        use crate::types::LayerType;
+        use crate::view::UiLayer;
+
+        let mut panel = TimelineViewportPanel::new();
+        panel.tracks_rect = Rect::new(0.0, 0.0, 1000.0, 300.0);
+
+        let make_layers = |n: usize| -> Vec<UiLayer> {
+            (0..n)
+                .map(|i| UiLayer {
+                    layer_id: LayerId::new(format!("L{i}")),
+                    parent_layer_id: None,
+                    layer_type: LayerType::Video,
+                    is_collapsed: false,
+                })
+                .collect()
+        };
+
+        // 6 layers * TRACK_HEIGHT(200) = 1200 content height, viewport 300 →
+        // max scroll 900. Scroll to the bottom.
+        panel.rebuild_mapper_layout(&make_layers(6));
+        panel.set_scroll(0.0, 900.0);
+        assert!(
+            (panel.scroll_y_px() - 900.0).abs() < 0.01,
+            "sanity: scrolled to max"
+        );
+
+        // Shrink content the way a collapse/delete would — no explicit
+        // `set_scroll` call in between, matching what `sync_project_data`
+        // actually does (`rebuild_mapper_layout` is the only call).
+        panel.rebuild_mapper_layout(&make_layers(2));
+
+        // 2 * 200 = 400 content height, viewport 300 → max scroll 100. The
+        // stale scroll_y_px (900) must already be clamped to 100 THIS call,
+        // not left stale until the next user scroll (RC1's exact mechanism).
+        assert!(
+            (panel.scroll_y_px() - 100.0).abs() < 0.01,
+            "scroll should re-clamp to the new max immediately: got {}",
+            panel.scroll_y_px()
+        );
     }
 
     #[test]
