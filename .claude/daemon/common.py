@@ -223,6 +223,70 @@ def detect_stopgap_markers(name, input_):
     return sorted(hits)
 
 
+# DESIGN.md §2c-ask: a distinct vocabulary from STOPGAP_MARKERS above — that
+# set screens code diffs for confessed hacks; this one screens an
+# AskUserQuestion's own option text for the shortcut-recommended-over-
+# root-fix framing CLAUDE.md's fix-at-the-root rule forbids (2026-07-04
+# incident: "approximate, no new primitive (Recommended)" vs "real transform
+# primitive"). Kept in this file, not the hook, so moves.md/common.py stay
+# the single vocabulary source.
+SHORTCUT_WORDS_RE = re.compile(
+    r"\b(?:approximat\w*|minimal|stopgap|for now|quick(?:\s+fix)?|defer(?:red)?|"
+    r"later|without\s+(?:a|the)\s+new\b|no\s+new\s+\w+)\b",
+    re.IGNORECASE,
+)
+ROOT_FIX_WORDS_RE = re.compile(
+    r"\b(?:proper|full|real|fundamental|redesign|new\s+primitive|root\s*cause|"
+    r"correct(?:ly)?\s+fix|complete\s+fix)\b",
+    re.IGNORECASE,
+)
+RECOMMENDED_MARKER_RE = re.compile(r"\(recommended\)", re.IGNORECASE)
+
+
+def detect_shortcut_fork(tool_input):
+    """AskUserQuestion PreToolUse screen (DESIGN.md §2c-ask). Fires when one
+    question offers an option labeled "(Recommended)" whose label+description
+    carries shortcut vocabulary, while a different option in the same
+    question carries root-fix vocabulary — the exact shortcut-as-
+    recommendation framing the 2026-07-04 incident exhibited. Returns the
+    list of matching question texts (possibly empty); never raises."""
+    if not isinstance(tool_input, dict):
+        return []
+    questions = tool_input.get("questions")
+    if not isinstance(questions, list):
+        return []
+
+    hits = []
+    for q in questions:
+        if not isinstance(q, dict):
+            continue
+        options = q.get("options")
+        if not isinstance(options, list) or len(options) < 2:
+            continue
+
+        recommended = None
+        for opt in options:
+            if isinstance(opt, dict) and RECOMMENDED_MARKER_RE.search(opt.get("label") or ""):
+                recommended = opt
+                break
+        if recommended is None:
+            continue
+
+        rec_text = f"{recommended.get('label') or ''} {recommended.get('description') or ''}"
+        if not SHORTCUT_WORDS_RE.search(rec_text):
+            continue
+
+        others_text = " ".join(
+            f"{o.get('label') or ''} {o.get('description') or ''}"
+            for o in options
+            if isinstance(o, dict) and o is not recommended
+        )
+        if ROOT_FIX_WORDS_RE.search(others_text):
+            hits.append(q.get("question") or "")
+
+    return hits
+
+
 def tool_target(input_):
     if not isinstance(input_, dict):
         return ""

@@ -79,6 +79,15 @@
             "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/lsp-nudge.py\""
           }
         ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/ask-question-guard.py\""
+          }
+        ]
       }
     ],
     "PostToolUse": [
