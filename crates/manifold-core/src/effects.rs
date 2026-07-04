@@ -2950,6 +2950,22 @@ impl PresetInstance {
         self.envelopes.as_mut().unwrap()
     }
 
+    /// The instance's automation-lane list, auto-created on first access.
+    /// Sibling of [`Self::drivers_mut`] / [`Self::envelopes_mut`] /
+    /// [`Self::audio_mods_mut`] — same per-param-id-row pattern. See
+    /// `docs/AUTOMATION_LANES_DESIGN.md` §2.
+    pub fn automation_lanes_mut(&mut self) -> &mut Vec<AutomationLane> {
+        if self.automation_lanes.is_none() {
+            self.automation_lanes = Some(Vec::new());
+        }
+        self.automation_lanes.as_mut().unwrap()
+    }
+
+    /// No-alloc check, mirroring [`Self::has_envelopes`] / [`Self::has_audio_mods`].
+    pub fn has_automation_lanes(&self) -> bool {
+        self.automation_lanes.as_ref().is_some_and(|v| !v.is_empty())
+    }
+
     /// Reset effective values to base — ONLY for params with active drivers or
     /// envelopes (generator semantics).
     pub fn reset_effectives(&mut self) {

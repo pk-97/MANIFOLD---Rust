@@ -1284,6 +1284,12 @@ impl ContentThread {
             live_node_params: self.content_pipeline.live_node_params(),
             node_atlas_layout: self.content_pipeline.node_atlas_layout().to_vec(),
             clip_atlas_layout: self.content_pipeline.clip_atlas_layout().to_vec(),
+            automation_latched_params: self
+                .engine
+                .automation_latches()
+                .keys()
+                .cloned()
+                .collect(),
         };
 
         // Send state to UI. Unbounded channel — never drops snapshots.

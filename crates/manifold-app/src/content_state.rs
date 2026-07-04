@@ -4,9 +4,10 @@
 //! project data version, and other engine state without accessing the
 //! PlaybackEngine or EditingService directly.
 
+use manifold_core::effects::ParamId;
 use manifold_core::project::Project;
 use manifold_core::types::{ClockAuthority, LayerType, OscSyncMode};
-use manifold_core::{Beats, Bpm, Seconds};
+use manifold_core::{Beats, Bpm, EffectId, Seconds};
 use std::sync::Arc;
 
 /// Live state of the editor's node-output preview, pushed each frame so the
@@ -192,6 +193,20 @@ pub struct ContentState {
     /// captured filmstrip cell (bar / bar-group); the timeline tiles them across the
     /// clip body. Empty when no clips currently hold a thumbnail.
     pub clip_atlas_layout: Vec<(manifold_core::ClipId, u32, u32)>,
+
+    /// Automation-lane override latches active this frame — runtime-only
+    /// state (`manifold_playback::automation::AutomationLatches`, owned by
+    /// `PlaybackEngine`, never part of `Project`/serialized; see
+    /// `docs/AUTOMATION_LANES_DESIGN.md` §4). Copied each tick from
+    /// `PlaybackEngine::automation_latches()`, mirroring how other runtime-only
+    /// playback state (e.g. `audio_send_levels`) reaches the UI thread — lane
+    /// *data* itself needs no such copy since it lives on `PresetInstance` and
+    /// already rides `project_snapshot` for free. Empty means nothing is
+    /// overridden (the "Back to Arrangement" affordance is unlit); a
+    /// non-empty entry `(EffectId, ParamId)` names one overridden lane, for
+    /// per-lane graying. Lane-editing UI (P4) is the consumer; this phase
+    /// only wires the data through.
+    pub automation_latched_params: Vec<(EffectId, ParamId)>,
 }
 
 /// Lightweight snapshot of modulated param values.
@@ -436,6 +451,7 @@ impl Default for ContentState {
             live_node_params: Vec::new(),
             node_atlas_layout: Vec::new(),
             clip_atlas_layout: Vec::new(),
+            automation_latched_params: Vec::new(),
         }
     }
 }

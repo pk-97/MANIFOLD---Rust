@@ -1,6 +1,7 @@
 pub mod ableton;
 pub mod audio_mod;
 pub mod audio_setup;
+pub mod automation;
 pub mod clip;
 pub mod clip_detection;
 pub mod drivers;
