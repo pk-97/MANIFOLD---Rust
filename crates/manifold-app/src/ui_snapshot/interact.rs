@@ -26,9 +26,11 @@ pub fn apply(ui: &mut UIRoot, data: &mut SceneData, spec: &str) -> String {
         }
         Some(("automation_add", rest)) => automation_add_point(data, rest),
         Some(("automation_move", rest)) => automation_move_point(data, rest),
+        Some(("automation_bend", rest)) => automation_bend_segment(data, rest),
+        Some(("automation_segment_drag", rest)) => automation_segment_drag(data, rest),
         Some((verb, _)) => format!(
             "unknown interact verb '{verb}' (known: select, collapse, delete, open, \
-             automation_add, automation_move)"
+             automation_add, automation_move, automation_bend, automation_segment_drag)"
         ),
         None => format!("malformed interact '{spec}' (want verb:target)"),
     }
@@ -93,6 +95,72 @@ fn automation_move_point(data: &mut SceneData, rest: &str) -> String {
     point.beat = manifold_core::Beats(new_beat);
     lane.points.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap());
     format!("automation_move -> '{layer_id}':'{param_id}'[{idx}] beat {old_beat} -> {new_beat}")
+}
+
+/// P4 Unit B evidence-gathering verb (`docs/AUTOMATION_LANES_DESIGN.md` §7):
+/// `automation_bend:<layer_id>:<param_id>:<point_index>:<bend>` sets the
+/// point at `point_index`'s shape to `Curved(bend)`, directly on `data.
+/// project` — same "drive the data field, prove the RENDER reacts" level as
+/// `automation_move_point`. Mirrors `InteractionOverlay::
+/// commit_automation_segment_bend`'s end state (beat/value unchanged, only
+/// `shape` differs); the drag math itself (pixel delta -> bend, Alt-gating,
+/// whole_numbers gate) is unit-tested separately
+/// (`interaction_overlay.rs`/`automation_hit_tester.rs`).
+fn automation_bend_segment(data: &mut SceneData, rest: &str) -> String {
+    let parts: Vec<&str> = rest.splitn(4, ':').collect();
+    let [layer_id, param_id, idx_str, bend_str] = parts.as_slice() else {
+        return format!("automation_bend: want layer:param:index:bend, got '{rest}'");
+    };
+    let Ok(idx) = idx_str.parse::<usize>() else {
+        return format!("automation_bend: bad index '{idx_str}'");
+    };
+    let Ok(bend) = bend_str.parse::<f32>() else {
+        return format!("automation_bend: bad bend '{bend_str}'");
+    };
+    let Some(lane) = find_lane_mut(data, layer_id, param_id) else {
+        return format!("automation_bend: no lane for '{layer_id}':'{param_id}'");
+    };
+    let Some(point) = lane.points.get_mut(idx) else {
+        return format!("automation_bend: no point at index {idx} ({} points)", lane.points.len());
+    };
+    point.shape = manifold_core::effects::SegmentShape::Curved(bend);
+    format!("automation_bend -> '{layer_id}':'{param_id}'[{idx}] shape=Curved({bend})")
+}
+
+/// P4 Unit B evidence-gathering verb: `automation_segment_drag:<layer_id>:
+/// <param_id>:<left_index>:<right_index>:<value_delta>` moves both segment
+/// endpoints' VALUES by `value_delta` (param range, unclamped — caller picks
+/// safe numbers), directly on `data.project`. Mirrors `InteractionOverlay::
+/// commit_automation_segment_value_drag`'s end state (beats + shapes
+/// unchanged, only the two values shift by the same delta).
+fn automation_segment_drag(data: &mut SceneData, rest: &str) -> String {
+    let parts: Vec<&str> = rest.split(':').collect();
+    let [layer_id, param_id, left_str, right_str, delta_str] = parts.as_slice() else {
+        return format!(
+            "automation_segment_drag: want layer:param:left_index:right_index:delta, got '{rest}'"
+        );
+    };
+    let Ok(left_idx) = left_str.parse::<usize>() else {
+        return format!("automation_segment_drag: bad left_index '{left_str}'");
+    };
+    let Ok(right_idx) = right_str.parse::<usize>() else {
+        return format!("automation_segment_drag: bad right_index '{right_str}'");
+    };
+    let Ok(delta) = delta_str.parse::<f32>() else {
+        return format!("automation_segment_drag: bad delta '{delta_str}'");
+    };
+    let Some(lane) = find_lane_mut(data, layer_id, param_id) else {
+        return format!("automation_segment_drag: no lane for '{layer_id}':'{param_id}'");
+    };
+    let len = lane.points.len();
+    if left_idx >= len || right_idx >= len {
+        return format!("automation_segment_drag: index out of range ({left_idx},{right_idx}) of {len} points");
+    }
+    lane.points[left_idx].value += delta;
+    lane.points[right_idx].value += delta;
+    format!(
+        "automation_segment_drag -> '{layer_id}':'{param_id}' [{left_idx},{right_idx}] both += {delta}"
+    )
 }
 
 /// Find the automation lane for `param_id` among `layer_id`'s effects (checked

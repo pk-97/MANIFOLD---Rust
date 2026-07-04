@@ -11,11 +11,19 @@
 
 use crate::node::Vec2;
 use crate::panels::viewport::AutomationLaneScreen;
+use crate::view::automation_segment_bend;
 
 /// Grab radius for an existing breakpoint dot, in screen pixels. A click
 /// within this radius of a dot's center grabs/selects/deletes that dot
 /// instead of adding a new point at the click location.
 pub const DOT_HIT_RADIUS_PX: f32 = 7.0;
+
+/// Vertical tolerance (screen pixels) around a segment's drawn curve for a
+/// "grab this segment" hit — P4 Unit B (`docs/AUTOMATION_LANES_DESIGN.md`
+/// §7's "drag a segment" / "modifier-drag a segment" bullets). Deliberately
+/// close to `DOT_HIT_RADIUS_PX` — a click has to land ON the line, not just
+/// somewhere in the strip, or it falls through to `Strip` (add-a-point).
+pub const SEGMENT_HIT_DISTANCE_PX: f32 = 8.0;
 
 /// Result of an automation hit-test.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,8 +33,45 @@ pub enum AutomationHit {
     /// than this type owning a copy, mirroring `ClipHitResult`'s "identity,
     /// not a snapshot" shape.
     Dot { lane_index: usize, dot_index: usize },
+    /// A point on the curve strictly between two consecutive dots — a drag
+    /// grabs the segment (vertical move, or Alt for a curve bend) rather than
+    /// either endpoint. `left_dot_index` is the index (into that lane's
+    /// `dots`) of the point the segment LEAVES — the point whose `shape`
+    /// describes it, matching `AutomationPoint::shape`'s "shape of the
+    /// segment leaving this point" convention. The right endpoint is
+    /// `left_dot_index + 1`.
+    Segment { lane_index: usize, left_dot_index: usize },
     /// Empty strip area — clicking here adds a new breakpoint at `pos`.
     Strip { lane_index: usize },
+}
+
+/// The on-screen Y a segment's curve occupies at `pos.x`, using the same
+/// per-shape math the renderer's polyline sampling uses (`viewport.rs`'s
+/// `automation_lane_screens` / `UiAutomationLane::value_at_norm`) — so a
+/// segment grab can never disagree with what's drawn. Returns `None` when
+/// `pos.x` isn't between the two dots (segment doesn't span that X).
+fn segment_screen_y(
+    lane: &AutomationLaneScreen,
+    left: &crate::panels::viewport::AutomationDotScreen,
+    right: &crate::panels::viewport::AutomationDotScreen,
+    x: f32,
+) -> Option<f32> {
+    let span = right.x - left.x;
+    if span <= 0.0 || x < left.x || x > right.x {
+        return None;
+    }
+    let t = (x - left.x) / span;
+    let norm = match left.shape {
+        crate::view::UiSegmentShape::Hold => left.value_norm,
+        crate::view::UiSegmentShape::Linear => {
+            left.value_norm + (right.value_norm - left.value_norm) * t
+        }
+        crate::view::UiSegmentShape::Curved(bend) => {
+            let shaped = automation_segment_bend(t, bend);
+            left.value_norm + (right.value_norm - left.value_norm) * shaped
+        }
+    };
+    Some(lane.strip_rect.y + lane.strip_rect.height * (1.0 - norm))
 }
 
 /// Hit-test `pos` (screen-space, same coordinates `AutomationLaneScreen::
@@ -53,10 +98,23 @@ pub fn hit_test_automation(pos: Vec2, lanes: &[AutomationLaneScreen]) -> Option<
                 nearest = Some((dot_index, dist_sq));
             }
         }
-        return Some(match nearest {
-            Some((dot_index, _)) => AutomationHit::Dot { lane_index, dot_index },
-            None => AutomationHit::Strip { lane_index },
-        });
+        if let Some((dot_index, _)) = nearest {
+            return Some(AutomationHit::Dot { lane_index, dot_index });
+        }
+
+        // No dot grabbed — check whether `pos` lands on the curve between two
+        // consecutive dots (P4 Unit B: segment drag / Alt-drag curve bend).
+        for left_dot_index in 0..lane.dots.len().saturating_sub(1) {
+            let left = &lane.dots[left_dot_index];
+            let right = &lane.dots[left_dot_index + 1];
+            if let Some(y) = segment_screen_y(lane, left, right, pos.x)
+                && (pos.y - y).abs() <= SEGMENT_HIT_DISTANCE_PX
+            {
+                return Some(AutomationHit::Segment { lane_index, left_dot_index });
+            }
+        }
+
+        return Some(AutomationHit::Strip { lane_index });
     }
     None
 }
@@ -134,5 +192,102 @@ mod tests {
         ];
         let hit = hit_test_automation(Vec2::new(10.0, 42.0), &lanes);
         assert_eq!(hit, Some(AutomationHit::Dot { lane_index: 1, dot_index: 0 }));
+    }
+
+    // ── Segment hit-testing (P4 Unit B) ─────────────────────────────
+
+    fn dot_v(x: f32, value_norm: f32, shape: UiSegmentShape, strip_h: f32) -> AutomationDotScreen {
+        AutomationDotScreen {
+            x,
+            y: strip_h * (1.0 - value_norm),
+            beat: Beats(x as f64),
+            value_norm,
+            shape,
+        }
+    }
+
+    #[test]
+    fn segment_hit_on_linear_midpoint() {
+        // strip 100x100: dot0 at value_norm 1.0 (y=0), dot1 at value_norm 0.0
+        // (y=100). Midpoint of a straight line is (50, 50).
+        let lanes = vec![test_lane(
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            vec![
+                dot_v(0.0, 1.0, UiSegmentShape::Linear, 100.0),
+                dot_v(100.0, 0.0, UiSegmentShape::Linear, 100.0),
+            ],
+        )];
+        let hit = hit_test_automation(Vec2::new(50.0, 50.0), &lanes);
+        assert_eq!(hit, Some(AutomationHit::Segment { lane_index: 0, left_dot_index: 0 }));
+    }
+
+    #[test]
+    fn segment_hit_follows_the_curve_not_the_straight_line() {
+        // dot0 Curved(1.0): exponent = 1 + 1*3 = 4, so t=0.5 -> shaped = 0.5^4 = 0.0625.
+        // value_norm goes 0.0 -> 1.0, so at x=50 the curve sits near y=93.75
+        // (H=100), NOT the straight-line midpoint y=50.
+        let lanes = vec![test_lane(
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            vec![
+                dot_v(0.0, 0.0, UiSegmentShape::Curved(1.0), 100.0),
+                dot_v(100.0, 1.0, UiSegmentShape::Linear, 100.0),
+            ],
+        )];
+        // The straight-line midpoint (50, 50) is far from the actual curve
+        // (which sits near y=93.75) — must NOT register as a segment hit.
+        let miss = hit_test_automation(Vec2::new(50.0, 50.0), &lanes);
+        assert_eq!(
+            miss,
+            Some(AutomationHit::Strip { lane_index: 0 }),
+            "a click at the straight-line midpoint must miss a bent curve's actual position"
+        );
+        // The curve's real position at x=50 IS a hit.
+        let hit = hit_test_automation(Vec2::new(50.0, 93.75), &lanes);
+        assert_eq!(hit, Some(AutomationHit::Segment { lane_index: 0, left_dot_index: 0 }));
+    }
+
+    #[test]
+    fn segment_hit_respects_hold_shape_flat_step() {
+        // Hold: the whole segment sits flat at dot0's value until the very
+        // end (mirrors `UiAutomationLane::value_at_norm`'s Hold arm).
+        let lanes = vec![test_lane(
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            vec![
+                dot_v(0.0, 0.2, UiSegmentShape::Hold, 100.0),
+                dot_v(100.0, 0.9, UiSegmentShape::Linear, 100.0),
+            ],
+        )];
+        let flat_y = 100.0 * (1.0 - 0.2);
+        let hit = hit_test_automation(Vec2::new(60.0, flat_y), &lanes);
+        assert_eq!(hit, Some(AutomationHit::Segment { lane_index: 0, left_dot_index: 0 }));
+    }
+
+    #[test]
+    fn dot_grab_wins_over_segment_near_an_endpoint() {
+        // A click near the left dot must grab the DOT, not the segment
+        // passing through that same point — dots are checked first.
+        let lanes = vec![test_lane(
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            vec![
+                dot_v(0.0, 1.0, UiSegmentShape::Linear, 100.0),
+                dot_v(100.0, 0.0, UiSegmentShape::Linear, 100.0),
+            ],
+        )];
+        let hit = hit_test_automation(Vec2::new(2.0, 1.0), &lanes);
+        assert_eq!(hit, Some(AutomationHit::Dot { lane_index: 0, dot_index: 0 }));
+    }
+
+    #[test]
+    fn segment_far_from_curve_falls_through_to_strip() {
+        let lanes = vec![test_lane(
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            vec![
+                dot_v(0.0, 1.0, UiSegmentShape::Linear, 100.0),
+                dot_v(100.0, 0.0, UiSegmentShape::Linear, 100.0),
+            ],
+        )];
+        // Straight line passes through (50, 50); (50, 5) is far above it.
+        let hit = hit_test_automation(Vec2::new(50.0, 5.0), &lanes);
+        assert_eq!(hit, Some(AutomationHit::Strip { lane_index: 0 }));
     }
 }

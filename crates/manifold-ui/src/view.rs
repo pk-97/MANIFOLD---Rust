@@ -317,8 +317,11 @@ impl UiAutomationLane {
 /// Mirror of `manifold_core::effects::segment_bend` — the power-curve bend
 /// for a `Curved` segment's interpolation parameter `t` (already `[0, 1]`).
 /// Kept byte-identical to the core formula so a lane drawn here matches what
-/// actually samples on the content thread.
-fn automation_segment_bend(t: f32, bend: f32) -> f32 {
+/// actually samples on the content thread. `pub(crate)`: also used by
+/// `automation_hit_tester.rs` to compute the exact on-screen segment Y a
+/// segment-drag/curve-bend hit-test must agree with (P4 Unit B,
+/// `docs/AUTOMATION_LANES_DESIGN.md` §7).
+pub(crate) fn automation_segment_bend(t: f32, bend: f32) -> f32 {
     let bend = bend.clamp(-1.0, 1.0);
     if bend == 0.0 {
         return t;

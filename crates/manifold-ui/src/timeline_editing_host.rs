@@ -299,4 +299,50 @@ pub trait TimelineEditingHost {
     /// the point's current index within the lane at call time. No-op if no
     /// point exists at that beat. Executes + sends immediately.
     fn remove_automation_point(&mut self, target: &UiGraphTarget, param_id: &ParamId, beat: Beats);
+
+    // ── Automation lane editing — segment gestures (P4 Unit B,
+    // `docs/AUTOMATION_LANES_DESIGN.md` §7's "drag a segment" / "modifier-drag
+    // a segment") ────────────────────────────────────────────────────────
+
+    /// Live-preview an Alt-drag curve bend: directly sets the point at
+    /// `left_beat`'s `shape` to `Curved(bend)`, bypassing undo — the shape-only
+    /// twin of `set_automation_point_preview` (beat/value are untouched by
+    /// this gesture, so there's no `from`/`to` beat to re-derive). Commit
+    /// reuses `commit_automation_point_move` directly: old/new share
+    /// beat+value and differ only in `shape`.
+    fn set_automation_segment_bend_preview(
+        &mut self,
+        target: &UiGraphTarget,
+        param_id: &ParamId,
+        left_beat: Beats,
+        bend: f32,
+    );
+
+    /// Live-preview a vertical segment drag: both endpoints move by the same
+    /// value delta (already computed by the caller — this just writes the two
+    /// resulting PARAM-RANGE values), bypassing undo. Beats are unchanged.
+    fn set_automation_segment_drag_preview(
+        &mut self,
+        target: &UiGraphTarget,
+        param_id: &ParamId,
+        left_beat: Beats,
+        left_value: f32,
+        right_beat: Beats,
+        right_value: f32,
+    );
+
+    /// Commit a completed vertical segment drag as ONE undo entry covering
+    /// both endpoints. Each tuple is `(beat, old_value, new_value, shape)` —
+    /// `shape` is unchanged by this gesture, carried through so the resulting
+    /// commands preserve it exactly. Already applied live by
+    /// `set_automation_segment_drag_preview`; this only registers the undo
+    /// entry (mirrors `commit_automation_point_move`'s "already applied"
+    /// shape, batched over two points instead of one).
+    fn commit_automation_segment_drag(
+        &mut self,
+        target: &UiGraphTarget,
+        param_id: &ParamId,
+        left: (Beats, f32, f32, UiSegmentShape),
+        right: (Beats, f32, f32, UiSegmentShape),
+    );
 }
