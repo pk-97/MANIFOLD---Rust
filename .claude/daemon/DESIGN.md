@@ -221,6 +221,46 @@ hack detection cannot live in the rubric alone. Three tiers, cheapest first:
   `coaching/enumerate-levels`, the CLAUDE.md hard rule at the narrative layer,
   and code review. This section narrows the funnel; it does not close it.
 
+## 2c-ask. Shortcut-fork guard on AskUserQuestion (built 2026-07-04, Sonnet)
+
+Same "fix at the root, not the symptom" goal as §2c, but for a different
+failure shape: the model doesn't write a stopgap, it asks the user for
+*permission* to write one — offering the cheap option as "(Recommended)"
+alongside the real fix. Incident (2026-07-04, session
+`d8f20679-e15b-42de-a7a8-ac85aa28a68a`, labeled in `eval/labels.jsonl`): an
+orchestrator hit a "cheap approximation vs. proper transform primitive" fork
+for the D17-juice work and asked with the shortcut marked Recommended.
+
+Why this can't be a §1/§2 observer move: an `AskUserQuestion` wait produces
+no tool events, so nothing revives an idle-exited observer during the wait,
+and even a live observer's whisper is asynchronous — it can only land
+*after* the question has already rendered and the session is already
+blocked on the user. The moment that needs to intervene is the one right
+before the popup exists, which means synchronous, which means PreToolUse,
+which means deterministic (no classifier call in the critical path).
+
+**Build:** `common.detect_shortcut_fork(tool_input)` — a second vocabulary
+table, distinct from `STOPGAP_MARKERS` (that one screens code-diff content;
+this one screens an `AskUserQuestion` call's own option text). Fires when,
+within one question, the option labeled `(Recommended)` matches
+`SHORTCUT_WORDS_RE` (approximate, minimal, stopgap, for now, quick, defer,
+later, "without a new …") and a *different* option in the same question
+matches `ROOT_FIX_WORDS_RE` (proper, full, real, fundamental, redesign, "new
+primitive", root cause). `.claude/hooks/ask-question-guard.py` wires this as
+a `PreToolUse` hook matched on `AskUserQuestion`: on a hit it denies once
+with a reason quoting fix-at-the-root, bounces via a hash-keyed marker file
+(an identical re-ask passes through — never bounce the same question
+twice), and also calls `valve.ensure_observer` since a question-wait is
+otherwise a blind spot for the idle-exit revival path. Fails open on any
+error, same invariant as every other daemon component.
+
+**Scope, honestly:** this is a keyword-pair regex, not a classifier — it
+only catches the incident's *shape* (recommended-cheap vs. named-proper,
+paired in one question), not every semantic variant of the same failure. A
+shortcut-fork question with no matching keyword pair, or no `(Recommended)`
+marker at all, passes through unguarded. Whether a classifier-side move is
+worth adding for that residue is sleep-pass-1 work, noted in the label.
+
 ## 3. Payload library (`moves.md`)
 
 Two families, one format. **Coaching moves** fire on phase transitions (hypothesis
