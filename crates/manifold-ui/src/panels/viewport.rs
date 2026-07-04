@@ -378,8 +378,16 @@ impl TimelineViewportPanel {
 
     /// Rebuild the CoordinateMapper's Y-layout from layer data.
     /// Call this from app.rs when layers change (before build).
+    ///
+    /// Re-clamps the scroll position against the new `total_content_height`
+    /// immediately (`docs/TIMELINE_LAYOUT_P0_SPEC.md` D3): a collapse/delete
+    /// that shrinks content must move the scroll position in the same frame,
+    /// not wait for the next explicit scroll event. Since the header panel
+    /// reads this same `scroll_y_px` at draw time (D2), both columns move
+    /// together.
     pub fn rebuild_mapper_layout(&mut self, layers: &[crate::view::UiLayer]) {
         self.mapper.rebuild_y_layout(layers);
+        self.set_scroll(self.scroll_x_beats.as_f32(), self.scroll_y_px);
     }
 
     /// Get a reference to the shared CoordinateMapper.
@@ -1462,6 +1470,54 @@ mod tests {
         // Beat 5 should be at x=100
         let px = panel.beat_to_pixel(Beats::from_f32(5.0));
         assert!((px - 100.0).abs() < 0.001);
+    }
+
+    // P0.1 gate (D3): a collapse/delete that shrinks content must move the
+    // scroll position in the same frame `rebuild_mapper_layout` runs, not
+    // wait for the next explicit scroll event — see
+    // `docs/TIMELINE_LAYOUT_P0_SPEC.md` D3 and RC1's before-evidence
+    // (`docs/evidence/timeline_p0/before/README.md`, scene 06).
+    #[test]
+    fn rebuild_mapper_layout_reclamps_scroll_immediately() {
+        use crate::types::LayerType;
+        use crate::view::UiLayer;
+
+        let mut panel = TimelineViewportPanel::new();
+        panel.tracks_rect = Rect::new(0.0, 0.0, 1000.0, 300.0);
+
+        let make_layers = |n: usize| -> Vec<UiLayer> {
+            (0..n)
+                .map(|i| UiLayer {
+                    layer_id: LayerId::new(format!("L{i}")),
+                    parent_layer_id: None,
+                    layer_type: LayerType::Video,
+                    is_collapsed: false,
+                })
+                .collect()
+        };
+
+        // 6 layers * TRACK_HEIGHT(200) = 1200 content height, viewport 300 →
+        // max scroll 900. Scroll to the bottom.
+        panel.rebuild_mapper_layout(&make_layers(6));
+        panel.set_scroll(0.0, 900.0);
+        assert!(
+            (panel.scroll_y_px() - 900.0).abs() < 0.01,
+            "sanity: scrolled to max"
+        );
+
+        // Shrink content the way a collapse/delete would — no explicit
+        // `set_scroll` call in between, matching what `sync_project_data`
+        // actually does (`rebuild_mapper_layout` is the only call).
+        panel.rebuild_mapper_layout(&make_layers(2));
+
+        // 2 * 200 = 400 content height, viewport 300 → max scroll 100. The
+        // stale scroll_y_px (900) must already be clamped to 100 THIS call,
+        // not left stale until the next user scroll (RC1's exact mechanism).
+        assert!(
+            (panel.scroll_y_px() - 100.0).abs() < 0.01,
+            "scroll should re-clamp to the new max immediately: got {}",
+            panel.scroll_y_px()
+        );
     }
 
     #[test]

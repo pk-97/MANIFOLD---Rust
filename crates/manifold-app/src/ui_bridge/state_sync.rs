@@ -800,15 +800,15 @@ pub fn sync_project_data(
         ui.viewport
             .rebuild_mapper_layout(&crate::ui_translate::layers_to_ui(&project.timeline.layers));
 
-        // Layer data → LayerHeaderPanel (Y from mapper — matches viewport exactly)
+        // Layer data → LayerHeaderPanel. Y offset/height are NOT copied here —
+        // `LayerInfo` no longer carries them; the header panel queries the
+        // mapper directly at draw time (`docs/TIMELINE_LAYOUT_P0_SPEC.md` D1),
+        // the exact same values the viewport uses for lanes.
         let layers: Vec<LayerInfo> = project
             .timeline
             .layers
             .iter()
-            .enumerate()
-            .map(|(i, layer)| {
-                let y = ui.viewport.mapper().get_layer_y_offset(i);
-                let track_h = ui.viewport.mapper().get_layer_height(i);
+            .map(|layer| {
                 LayerInfo {
                     name: layer.name.clone(),
                     layer_id: layer.layer_id.to_string(),
@@ -855,8 +855,6 @@ pub fn sync_project_data(
                         .audio_setup
                         .send_for_layer(&layer.layer_id)
                         .map(|s| s.label.clone()),
-                    y_offset: y,
-                    height: track_h,
                     is_selected: selection.is_layer_active(&layer.layer_id),
                     color: manifold_ui::node::Color32::from_f32(
                         layer.layer_color.r,

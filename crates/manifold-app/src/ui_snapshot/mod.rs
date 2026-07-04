@@ -117,17 +117,18 @@ fn render_ui_scene(
     sync_build(&mut ui, &data);
     render_and_dump(&ui, &data.selection, &dir, scene, "", want_dump, want_thumbs);
 
-    // P0.0 evidence: seed both scroll owners to the same pixel value now that
-    // the mapper's real `total_content_height()` is current (from the
-    // `sync_build` above) — mirrors `ui_root.rs:512-517`'s settings-restore
-    // path. Neither owner is touched again by the structural resync inside
-    // the `--interact` branch below (`sync_project_data` never calls
-    // `set_scroll`), so this reproduces "user scrolled, then the content
-    // shrank" exactly as RC1 describes it.
+    // P0.1: the viewport is the sole scroll owner (D2) — the header panel
+    // reads `viewport.scroll_y_px()` live at draw time, so seeding it here is
+    // the only seed needed (mirrors `ui_root.rs`'s settings-restore path).
+    // Before P0.1 this seeded two independent copies to reproduce RC1 ("user
+    // scrolled, then the content shrank"); post-fix, `rebuild_mapper_layout`
+    // (called from `sync_project_data` inside the `--interact` branch below)
+    // re-clamps this same value against the new content height every time
+    // (D3), so RC1 no longer reproduces — see
+    // `docs/evidence/timeline_p0/after/README.md`.
     if let Some(y) = scroll_seed {
         let x = ui.viewport.scroll_x_beats().as_f32();
         ui.viewport.set_scroll(x, y);
-        ui.layer_headers.set_scroll_y(y);
         println!("ui-snap: scroll-seed y={y} (viewport clamped to {})", ui.viewport.scroll_y_px());
     }
 

@@ -1,6 +1,7 @@
-use super::{Panel, PanelAction};
+use super::PanelAction;
 use crate::chrome::{ChromeHost, Pad, Sizing, View, components};
 use crate::color::{self, darken, lighten};
+use crate::coordinate_mapper::CoordinateMapper;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
 use crate::node::*;
@@ -265,10 +266,6 @@ pub struct LayerInfo {
     /// Name of the modulation send this audio layer feeds, if any. `None` shows
     /// "No send".
     pub audio_send_name: Option<String>,
-    /// Y offset within the layer controls panel (panel-local).
-    pub y_offset: f32,
-    /// Height of this layer row.
-    pub height: f32,
     pub is_selected: bool,
     /// Layer color (auto-assigned or user-set).
     pub color: Color32,
@@ -747,8 +744,11 @@ pub struct LayerHeaderPanel {
     panel_origin: Vec2,
     panel_width: f32,
 
-    // Scroll container for clipping layer rows to the visible area.
-    // Scroll offset is set externally via set_scroll_y() (synced with viewport).
+    // Scroll container used ONLY for the clip-region node (`begin()` /
+    // `clip_node_id()`). It does NOT own the scroll offset — the viewport
+    // does (D2, `docs/TIMELINE_LAYOUT_P0_SPEC.md`); `build()`/
+    // `try_update_vertical_scroll()` take the viewport's `scroll_y_px` as a
+    // parameter instead of storing a second copy here.
     scroll: ScrollContainer,
 
     // Per-row gain slider drag state (audio layers). Reuses the shared
@@ -794,11 +794,6 @@ impl LayerHeaderPanel {
             cache_first_node: usize::MAX,
             cache_node_count: 0,
         }
-    }
-
-    /// Set vertical scroll offset (synchronized with viewport).
-    pub fn set_scroll_y(&mut self, y: f32) {
-        self.scroll.set_scroll_offset(y);
     }
 
     /// Set the layer data snapshot. Must be called before build().
@@ -1211,7 +1206,15 @@ impl LayerHeaderPanel {
     }
 
     /// Call during an active drag with the current pointer position (screen space).
-    pub fn handle_drag(&mut self, tree: &mut UITree, screen_pos: Vec2) -> Vec<PanelAction> {
+    /// `mapper` is the same `CoordinateMapper` the viewport draws lanes from — the
+    /// drag target must land on the same row the lanes show, so it's queried live
+    /// here rather than read from a copy (see `docs/TIMELINE_LAYOUT_P0_SPEC.md` D1).
+    pub fn handle_drag(
+        &mut self,
+        tree: &mut UITree,
+        screen_pos: Vec2,
+        mapper: &CoordinateMapper,
+    ) -> Vec<PanelAction> {
         if self.drag_source < 0 {
             return Vec::new();
         }
@@ -1221,11 +1224,13 @@ impl LayerHeaderPanel {
 
         // Find target layer based on Y position
         let mut target = -1i32;
-        for (i, layer) in self.layers.iter().enumerate() {
-            if layer.height <= 0.0 {
+        for i in 0..self.layers.len() {
+            let height = mapper.get_layer_height(i);
+            if height <= 0.0 {
                 continue;
             }
-            if local_y >= layer.y_offset && local_y < layer.y_offset + layer.height {
+            let y_offset = mapper.get_layer_y_offset(i);
+            if local_y >= y_offset && local_y < y_offset + height {
                 target = i as i32;
                 break;
             }
@@ -1241,7 +1246,7 @@ impl LayerHeaderPanel {
 
         if target != self.drag_target {
             self.drag_target = target;
-            self.update_insert_indicator(tree);
+            self.update_insert_indicator(tree, mapper);
             return vec![PanelAction::LayerDragMoved(
                 self.drag_source as usize,
                 target as usize,
@@ -1284,19 +1289,16 @@ impl LayerHeaderPanel {
 
     // ── Drag visual helpers ─────────────────────────────────────────
 
-    fn update_insert_indicator(&self, tree: &mut UITree) {
+    fn update_insert_indicator(&self, tree: &mut UITree, mapper: &CoordinateMapper) {
         let Some(indicator_id) = self.insert_indicator_id else {
             return;
         };
 
+        let idx = self.drag_target as usize;
         let y = if self.drag_target <= self.drag_source {
-            self.layers
-                .get(self.drag_target as usize)
-                .map_or(0.0, |l| l.y_offset)
+            mapper.get_layer_y_offset(idx)
         } else {
-            self.layers
-                .get(self.drag_target as usize)
-                .map_or(0.0, |l| l.y_offset + l.height)
+            mapper.get_layer_y_offset(idx) + mapper.get_layer_height(idx)
         };
 
         let screen_y = self.panel_origin.y + y - INSERT_LINE_H * 0.5;
@@ -1843,7 +1845,12 @@ impl LayerHeaderPanel {
     /// Try to update layer row Y positions in-place for vertical scroll.
     /// Computes the Y delta from the new scroll offset and shifts all node
     /// positions. Returns `true` if successful, `false` if full rebuild needed.
-    pub fn try_update_vertical_scroll(&mut self, tree: &mut UITree, layout: &ScreenLayout) -> bool {
+    pub fn try_update_vertical_scroll(
+        &mut self,
+        tree: &mut UITree,
+        layout: &ScreenLayout,
+        scroll_y_px: f32,
+    ) -> bool {
         // Guard: must have been built
         if self.rows.is_empty() || self.rows.len() != self.layers.len() {
             return false;
@@ -1851,7 +1858,7 @@ impl LayerHeaderPanel {
 
         let lc = layout.layer_controls();
         let header_spacer = layout.track_header_height();
-        let new_origin_y = lc.y + header_spacer - self.scroll.scroll_offset();
+        let new_origin_y = lc.y + header_spacer - scroll_y_px;
         let delta_y = new_origin_y - self.panel_origin.y;
 
         // Nothing changed
@@ -1884,8 +1891,31 @@ impl Default for LayerHeaderPanel {
     }
 }
 
-impl Panel for LayerHeaderPanel {
-    fn build(&mut self, tree: &mut UITree, layout: &ScreenLayout) {
+// LayerHeaderPanel deliberately does NOT implement the shared `Panel` trait
+// (`super::Panel`, `panels/mod.rs`): `build()` here needs a `&CoordinateMapper`
+// and the shared scroll offset, which `Panel::build`'s fixed
+// `(&mut self, tree, layout)` signature can't carry. `Panel` is never used via
+// `dyn Panel` or a generic bound anywhere in the codebase (verified
+// 2026-07-04), so this type-local divergence has zero effect on any other
+// panel or call site. `node_range()` below reproduces the trait's default
+// method — the one piece of `Panel` this type's callers still rely on
+// (`ui_root.rs`'s panel-cache-info sweep).
+impl LayerHeaderPanel {
+    /// Build all nodes for this panel into the tree.
+    ///
+    /// `mapper` is the same `CoordinateMapper` the viewport builds lanes
+    /// from — Y offsets and heights are queried from it at draw time instead
+    /// of being copied into `LayerInfo`, so headers and lanes cannot disagree
+    /// (`docs/TIMELINE_LAYOUT_P0_SPEC.md` D1). `scroll_y_px` is the viewport's
+    /// scroll position, the sole owner (D2) — the header no longer keeps its
+    /// own copy.
+    pub fn build(
+        &mut self,
+        tree: &mut UITree,
+        layout: &ScreenLayout,
+        mapper: &CoordinateMapper,
+        scroll_y_px: f32,
+    ) {
         self.cache_first_node = tree.count();
 
         let lc = layout.layer_controls();
@@ -1894,7 +1924,7 @@ impl Panel for LayerHeaderPanel {
         // is the single source for this offset — the viewport reads the same value, so
         // the two cannot diverge.
         let header_spacer = layout.track_header_height();
-        self.panel_origin = Vec2::new(lc.x, lc.y + header_spacer - self.scroll.scroll_offset());
+        self.panel_origin = Vec2::new(lc.x, lc.y + header_spacer - scroll_y_px);
         self.panel_width = lc.width;
 
         // ── Top chrome (full-area background + recording controls) on the host.
@@ -1935,9 +1965,11 @@ impl Panel for LayerHeaderPanel {
 
         for i in 0..layer_count {
             let layer = &layers_snapshot[i];
-            if layer.height <= 0.0 {
+            let height = mapper.get_layer_height(i);
+            if height <= 0.0 {
                 continue;
             }
+            let y_offset = mapper.get_layer_y_offset(i);
 
             // Build ALL rows (including off-screen) for update-in-place.
             // The CLIPS_CHILDREN clip region handles visual clipping, and
@@ -1955,8 +1987,8 @@ impl Panel for LayerHeaderPanel {
             };
 
             let row = compute_layer_row(
-                layer.y_offset,
-                layer.height,
+                y_offset,
+                height,
                 lc.width,
                 layer.is_collapsed,
                 layer.is_group,
@@ -1978,16 +2010,6 @@ impl Panel for LayerHeaderPanel {
         // Swap layers back
         self.layers = layers_snapshot;
 
-        // Tell ScrollContainer the total content height so set_scroll_offset
-        // clamps correctly. The viewport drives the offset, but ScrollContainer
-        // acts as a safety net — clamping to known content bounds.
-        let content_h = self
-            .layers
-            .last()
-            .map(|l| l.y_offset + l.height)
-            .unwrap_or(0.0);
-        self.scroll.set_content_height(content_h);
-
         // Insert indicator (hidden off-screen)
         self.insert_indicator_id = Some(tree.add_panel(
             clip_parent,
@@ -2007,7 +2029,7 @@ impl Panel for LayerHeaderPanel {
         self.cache_node_count = tree.count() - self.cache_first_node;
     }
 
-    fn update(&mut self, tree: &mut UITree) {
+    pub fn update(&mut self, tree: &mut UITree) {
         // §19: breathe the Record button while recording. First, so a selection
         // change (which early-returns below) never skips a pulse frame.
         self.tick_record_pulse(tree);
@@ -2042,7 +2064,7 @@ impl Panel for LayerHeaderPanel {
         }
     }
 
-    fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
+    pub fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
         match event {
             UIEvent::Click {
                 node_id, modifiers, ..
@@ -2074,19 +2096,32 @@ impl Panel for LayerHeaderPanel {
         }
     }
 
-    fn first_node(&self) -> usize {
+    pub fn first_node(&self) -> usize {
         self.cache_first_node
     }
-    fn node_count(&self) -> usize {
+    pub fn node_count(&self) -> usize {
         self.cache_node_count
+    }
+
+    /// Node range as (start, end). Reproduces `Panel::node_range`'s default
+    /// body — this type no longer implements `Panel` (see the comment above
+    /// `impl LayerHeaderPanel` at the top of this block).
+    pub fn node_range(&self) -> (usize, usize) {
+        let first = self.first_node();
+        if first == usize::MAX {
+            return (0, 0);
+        }
+        (first, first + self.node_count())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::LayerType;
+    use crate::view::UiLayer;
 
-    fn make_video_layer(name: &str, y_offset: f32, height: f32) -> LayerInfo {
+    fn make_video_layer(name: &str) -> LayerInfo {
         LayerInfo {
             name: name.into(),
             layer_id: name.into(),
@@ -2110,34 +2145,61 @@ mod tests {
             midi_all_notes: false,
             audio_gain_db: 0.0,
             audio_send_name: None,
-            y_offset,
-            height,
             is_selected: false,
             color: Color32::new(100, 148, 210, 220),
         }
     }
 
-    fn make_audio_layer(name: &str, y_offset: f32, height: f32) -> LayerInfo {
+    fn make_audio_layer(name: &str) -> LayerInfo {
         LayerInfo {
             is_audio: true,
             audio_send_name: Some("Drums".into()),
-            ..make_video_layer(name, y_offset, height)
+            ..make_video_layer(name)
         }
     }
 
-    fn make_gen_layer(name: &str, y_offset: f32, height: f32) -> LayerInfo {
+    fn make_gen_layer(name: &str) -> LayerInfo {
         LayerInfo {
             is_generator: true,
             generator_type: Some("Plasma".into()),
-            ..make_video_layer(name, y_offset, height)
+            ..make_video_layer(name)
         }
     }
 
-    fn make_group_layer(name: &str, y_offset: f32, height: f32) -> LayerInfo {
+    fn make_group_layer(name: &str) -> LayerInfo {
         LayerInfo {
             is_group: true,
-            ..make_video_layer(name, y_offset, height)
+            ..make_video_layer(name)
         }
+    }
+
+    /// Build the real `CoordinateMapper` a test's `LayerInfo` fixture would
+    /// produce in the live app — the single Y-layout authority both the
+    /// header panel and viewport read (D1). Tests no longer hand-author
+    /// `y_offset`/`height`; they derive it from the same structural fields
+    /// (`is_collapsed`, `is_group`, `parent_layer_id`) `sync_project_data`
+    /// feeds the mapper in production.
+    fn mapper_for(layers: &[LayerInfo]) -> CoordinateMapper {
+        let ui_layers: Vec<UiLayer> = layers
+            .iter()
+            .map(|l| UiLayer {
+                layer_id: LayerId::new(&l.layer_id),
+                parent_layer_id: l.parent_layer_id.as_deref().map(LayerId::new),
+                layer_type: if l.is_group {
+                    LayerType::Group
+                } else if l.is_generator {
+                    LayerType::Generator
+                } else if l.is_audio {
+                    LayerType::Audio
+                } else {
+                    LayerType::Video
+                },
+                is_collapsed: l.is_collapsed,
+            })
+            .collect();
+        let mut mapper = CoordinateMapper::new();
+        mapper.rebuild_y_layout(&ui_layers);
+        mapper
     }
 
     #[test]
@@ -2170,13 +2232,15 @@ mod tests {
         let layout = ScreenLayout::new(1920.0, 2160.0);
         let mut panel = LayerHeaderPanel::new();
 
-        panel.set_layers(vec![
-            make_video_layer("Layer 1", 0.0, 140.0),
-            make_video_layer("Layer 2", 140.0, 140.0),
-            make_gen_layer("Gen Layer", 280.0, 140.0),
-        ]);
+        let layers = vec![
+            make_video_layer("Layer 1"),
+            make_video_layer("Layer 2"),
+            make_gen_layer("Gen Layer"),
+        ];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
 
-        panel.build(&mut tree, &layout);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
 
         assert_eq!(panel.layer_count(), 3);
         // All layers should have bg, name, mute, solo, blend_mode
@@ -2202,8 +2266,10 @@ mod tests {
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = LayerHeaderPanel::new();
-        panel.set_layers(vec![make_video_layer("L1", 0.0, 140.0)]);
-        panel.build(&mut tree, &layout);
+        let layers = vec![make_video_layer("L1")];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
 
         let a = panel.handle_click(
             panel.rows[0].id(LayerControl::Mute).unwrap(),
@@ -2226,11 +2292,10 @@ mod tests {
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = LayerHeaderPanel::new();
-        panel.set_layers(vec![
-            make_video_layer("L0", 0.0, 140.0),
-            make_video_layer("L1", 140.0, 140.0),
-        ]);
-        panel.build(&mut tree, &layout);
+        let layers = vec![make_video_layer("L0"), make_video_layer("L1")];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
 
         let mut intents = IntentRegistry::new();
         panel.register_intents(&mut intents);
@@ -2252,8 +2317,10 @@ mod tests {
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = LayerHeaderPanel::new();
-        panel.set_layers(vec![make_video_layer("L1", 0.0, 140.0)]);
-        panel.build(&mut tree, &layout);
+        let layers = vec![make_video_layer("L1")];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
 
         let a = panel.handle_click(
             panel.rows[0].id(LayerControl::Chevron).unwrap(),
@@ -2267,8 +2334,10 @@ mod tests {
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = LayerHeaderPanel::new();
-        panel.set_layers(vec![make_video_layer("L1", 0.0, 140.0)]);
-        panel.build(&mut tree, &layout);
+        let layers = vec![make_video_layer("L1")];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
 
         tree.clear_dirty();
         panel.set_mute_state(&mut tree, 0, true);
@@ -2286,12 +2355,14 @@ mod tests {
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = LayerHeaderPanel::new();
 
-        let mut child = make_video_layer("Child", 70.0, 140.0);
+        let mut child = make_video_layer("Child");
         child.parent_layer_id = Some("Group".into());
 
-        panel.set_layers(vec![make_group_layer("Group", 0.0, 70.0), child]);
+        let layers = vec![make_group_layer("Group"), child];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
 
-        panel.build(&mut tree, &layout);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
 
         // Group has connector
         assert!(panel.rows[0].id(LayerControl::Connector).is_some());
@@ -2320,11 +2391,13 @@ mod tests {
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = LayerHeaderPanel::new();
 
-        let mut layer = make_video_layer("Collapsed", 0.0, 48.0);
+        let mut layer = make_video_layer("Collapsed");
         layer.is_collapsed = true;
 
-        panel.set_layers(vec![layer]);
-        panel.build(&mut tree, &layout);
+        let layers = vec![layer];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
 
         // Collapsed layer should NOT have folder, new_clip, midi controls
         assert_eq!(panel.rows[0].id(LayerControl::Folder), None);
@@ -2342,8 +2415,10 @@ mod tests {
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = LayerHeaderPanel::new();
-        panel.set_layers(vec![make_video_layer("L1", 0.0, 140.0)]);
-        panel.build(&mut tree, &layout);
+        let layers = vec![make_video_layer("L1")];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
 
         let event = UIEvent::DoubleClick {
             node_id: panel.rows[0].id(LayerControl::Name).unwrap(),
@@ -2528,8 +2603,10 @@ mod tests {
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = LayerHeaderPanel::new();
-        panel.set_layers(vec![make_audio_layer("Drums In", 0.0, 140.0)]);
-        panel.build(&mut tree, &layout);
+        let layers = vec![make_audio_layer("Drums In")];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
 
         // Audio layers expose Mute / Solo / Gain / Send …
         assert!(panel.rows[0].id(LayerControl::Mute).is_some());
@@ -2562,5 +2639,68 @@ mod tests {
         assert_eq!(gain_db_to_norm(200.0), 1.0);
         assert_eq!(gain_db_text(-60.0), "-inf");
         assert_eq!(gain_db_text(0.0), "+0.0 dB");
+    }
+
+    // ── P0.1 gate: header/lane Y agreement ───────────────────────────
+    //
+    // `docs/TIMELINE_LAYOUT_P0_SPEC.md` D1: the header panel must query the
+    // same `CoordinateMapper` the viewport's lanes read
+    // (`viewport/coordinate.rs` `track_y`) — never a copy. This asserts the
+    // header's actual built row rects land at exactly the mapper's
+    // `get_layer_y_offset`/`get_layer_height` for every layer, across the
+    // three structural states the spec names: collapsed, hidden-child (of a
+    // collapsed group), and group. Because both columns call the identical
+    // mapper method, this is the strongest guard against RC2 (headers
+    // drawing from a stale copy) regressing.
+    #[test]
+    fn header_rows_agree_with_mapper_y_collapsed_hidden_child_group() {
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 2160.0);
+        let mut panel = LayerHeaderPanel::new();
+
+        let mut collapsed = make_video_layer("Collapsed");
+        collapsed.is_collapsed = true;
+
+        let mut group = make_group_layer("Group");
+        group.is_collapsed = true; // collapsed group hides its child below
+
+        let mut hidden_child = make_video_layer("Hidden");
+        hidden_child.parent_layer_id = Some("Group".into());
+
+        let layers = vec![make_video_layer("Normal"), collapsed, group, hidden_child];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
+
+        for i in 0..panel.layer_count() {
+            let expected_height = mapper.get_layer_height(i);
+            if expected_height <= 0.0 {
+                // Hidden child of a collapsed group: build() skips the row
+                // entirely, matching the zero-height lanes side sees too.
+                assert!(
+                    panel.rows[i].id(LayerControl::Background).is_none(),
+                    "row {i} (hidden child) should have no built row"
+                );
+                continue;
+            }
+            let bg_id = panel.rows[i]
+                .id(LayerControl::Background)
+                .unwrap_or_else(|| panic!("row {i} should have a Background node"));
+            let rect = tree.get_bounds(bg_id);
+            // Strip panel_origin to recover the panel-local Y the mapper
+            // assigned — the exact value the viewport's lanes read via the
+            // same `mapper.get_layer_y_offset(i)` call.
+            let local_y = rect.y - panel.panel_origin.y;
+            let expected_y = mapper.get_layer_y_offset(i);
+            assert!(
+                (local_y - expected_y).abs() < 0.01,
+                "row {i} y mismatch: header={local_y} mapper={expected_y}"
+            );
+            assert!(
+                (rect.height - expected_height).abs() < 0.01,
+                "row {i} height mismatch: header={} mapper={expected_height}",
+                rect.height
+            );
+        }
     }
 }

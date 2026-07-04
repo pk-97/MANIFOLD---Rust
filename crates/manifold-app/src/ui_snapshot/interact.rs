@@ -2,12 +2,12 @@
 //! re-renders. A `select:<layer>` resolves the target header's hit rect from the
 //! built tree, synthesizes a real pointer Down+Up (`UIRoot::pointer_event` →
 //! `UIInputSystem::process_pointer`), drains the real `UIEvent`s, dispatches them
-//! through the real `LayerHeaderPanel` (`Panel::handle_event` →
+//! through the real `LayerHeaderPanel` (`LayerHeaderPanel::handle_event` →
 //! `PanelAction::LayerClicked`), and applies the resulting selection via the same
 //! `UIState::select_layer` the app bridge calls. No faked state.
 //! See `docs/HEADLESS_UI_HARNESS.md` §2.
 
-use manifold_ui::{Panel, PanelAction, PointerAction, UIState, Vec2};
+use manifold_ui::{PanelAction, PointerAction, UIState, Vec2};
 
 use super::fixtures::SceneData;
 use crate::ui_root::UIRoot;

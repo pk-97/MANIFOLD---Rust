@@ -513,8 +513,8 @@ impl UIRoot {
             settings.viewport_scroll_x_beats,
             settings.viewport_scroll_y_px,
         );
-        self.layer_headers
-            .set_scroll_y(settings.viewport_scroll_y_px);
+        // The header panel reads the viewport's scroll_y_px live at the next
+        // build — it no longer keeps its own copy (D2).
 
         // Restore inspector collapse states
         self.inspector
@@ -715,10 +715,12 @@ impl UIRoot {
 
             // Vertical: update track bg Y positions + layer header Y positions
             if ok && dirty.scroll_y {
-                ok = self
-                    .layer_headers
-                    .try_update_vertical_scroll(&mut self.tree, &self.layout)
-                    && self.viewport.try_update_vertical_scroll(&mut self.tree);
+                let scroll_y_px = self.viewport.scroll_y_px();
+                ok = self.layer_headers.try_update_vertical_scroll(
+                    &mut self.tree,
+                    &self.layout,
+                    scroll_y_px,
+                ) && self.viewport.try_update_vertical_scroll(&mut self.tree);
             }
 
             if ok {
@@ -742,7 +744,12 @@ impl UIRoot {
 
     /// Internal: build the scroll-affected panel group.
     fn build_scroll_panels(&mut self) {
-        self.layer_headers.build(&mut self.tree, &self.layout);
+        self.layer_headers.build(
+            &mut self.tree,
+            &self.layout,
+            self.viewport.mapper(),
+            self.viewport.scroll_y_px(),
+        );
         // Record boundary between layer headers and viewport panels.
         self.viewport_panels_start = self.tree.count();
         self.viewport.build(&mut self.tree, &self.layout);
@@ -1235,7 +1242,11 @@ impl UIRoot {
                         actions.append(&mut drag_actions);
                     }
                     if self.layer_headers.is_dragging() {
-                        let mut lh_actions = self.layer_headers.handle_drag(&mut self.tree, *pos);
+                        let mut lh_actions = self.layer_headers.handle_drag(
+                            &mut self.tree,
+                            *pos,
+                            self.viewport.mapper(),
+                        );
                         actions.append(&mut lh_actions);
                     }
                     if self.layer_headers.is_gain_dragging() {
