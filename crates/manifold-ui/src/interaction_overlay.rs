@@ -57,8 +57,7 @@ fn select_region_to(
             ui_state.insert_cursor_beat.unwrap_or(Beats::ZERO),
             anchor_idx,
         ))
-    } else if ui_state.has_region() {
-        let r = ui_state.get_region();
+    } else if let Some(r) = ui_state.current_region() {
         let start_idx = r
             .layer_index_range(host.layers())
             .map(|(lo, _)| lo)
@@ -554,10 +553,12 @@ impl InteractionOverlay {
                 select_region_to(c.end_beat, c.layer_index, ui_state, host);
             }
         } else if ctrl {
-            // Unity lines 208-212: Ctrl → toggle multi-select + auto-compute region
+            // Unity lines 208-212: Ctrl → toggle multi-select. D1: no longer
+            // synthesises a region from the clip set — a multi-clip selection
+            // is a pure `Clips` selection (the redundant region band is gone;
+            // begins the S1 fix). `toggle_clip_selection` owns the whole update.
             let lid = host.layer_id_at_index(hit.layer_index).unwrap_or_default();
             ui_state.toggle_clip_selection(hit.clip_id.clone(), lid);
-            self.update_region_from_clip_selection(ui_state, host);
         } else {
             // Unity line 214: bare click → select single
             let lid = host.layer_id_at_index(hit.layer_index).unwrap_or_default();
@@ -1748,9 +1749,10 @@ impl InteractionOverlay {
         self.drag_mode = DragMode::Move;
 
         // Unity lines 598-648: region-partial move
-        if ui_state.has_region() {
-            let region = ui_state.get_region().clone();
-            if let Some(clip) = host.find_clip_by_id(clip_id) {
+        if let Some(region) = ui_state.current_region().cloned()
+            && let Some(clip) = host.find_clip_by_id(clip_id)
+        {
+            {
                 let layer_in_region = host
                     .layer_id_at_index(clip.layer_index)
                     .is_some_and(|lid| region.contains_layer_id(&lid));
@@ -2011,43 +2013,6 @@ impl InteractionOverlay {
     // ────────────────────────────────────────────────────────────
     // UTILITY
     // ────────────────────────────────────────────────────────────
-
-    /// Port of Unity InteractionOverlay.UpdateRegionFromClipSelection (lines 854-881).
-    fn update_region_from_clip_selection(
-        &self,
-        ui_state: &mut UIState,
-        host: &dyn TimelineEditingHost,
-    ) {
-        let selected_ids = ui_state.get_selected_clip_ids();
-        if selected_ids.len() < 2 {
-            ui_state.clear_region();
-            return;
-        }
-
-        let mut min_beat = Beats(f64::MAX);
-        let mut max_beat = Beats(-f64::MAX);
-        let mut min_layer = usize::MAX;
-        let mut max_layer = 0usize;
-
-        for id in &selected_ids {
-            if let Some(clip) = host.find_clip_by_id(id) {
-                min_beat = min_beat.min(clip.start_beat);
-                max_beat = max_beat.max(clip.end_beat);
-                min_layer = min_layer.min(clip.layer_index);
-                max_layer = max_layer.max(clip.layer_index);
-            }
-        }
-
-        if min_beat < max_beat {
-            ui_state.set_region_from_clip_bounds(
-                min_beat,
-                max_beat,
-                min_layer as i32,
-                max_layer as i32,
-                host.layers(),
-            );
-        }
-    }
 
     /// Hit-test at a screen position using the viewport's coordinate conversion.
     fn hit_test_at(&self, pos: Vec2, viewport: &TimelineViewportPanel) -> Option<ClipHitResult> {

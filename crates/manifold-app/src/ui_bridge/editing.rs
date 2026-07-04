@@ -50,11 +50,12 @@ pub(super) fn dispatch_editing(
                     &*project,
                 );
             } else if modifiers.command || modifiers.ctrl {
-                // Cmd/Ctrl+Click: toggle clip in/out of selection, then update region bounds.
-                // From Unity InteractionOverlay.OnPointerClick (line 208-211).
+                // Cmd/Ctrl+Click: toggle clip in/out of selection. D1: no region
+                // is synthesised from the clip set (the old
+                // `update_region_from_clip_selection_inline` sync is deleted) —
+                // a multi-clip selection is a pure `Clips` selection, so the
+                // redundant region band no longer renders (begins the S1 fix).
                 selection.toggle_clip_selection(clip_id.clone(), layer_id);
-                // Update region to encompass all selected clips (Fix #3)
-                super::update_region_from_clip_selection_inline(selection, &*project);
             } else {
                 // Plain click: select single clip (clears region, layers, insert cursor)
                 selection.select_clip(clip_id.clone(), layer_id);
@@ -153,8 +154,8 @@ pub(super) fn dispatch_editing(
             // If the right-clicked clip is part of a multi-selection, delete every
             // selected clip in one undo step; otherwise just this clip. Mirrors the
             // selection-aware shape of ContextDuplicateLayer.
-            let target_ids: Vec<ClipId> = if selection.selected_clip_ids.contains(&clip_id) {
-                selection.selected_clip_ids.iter().cloned().collect()
+            let target_ids: Vec<ClipId> = if selection.is_selected(&clip_id) {
+                selection.get_selected_clip_ids()
             } else {
                 vec![clip_id.clone()]
             };
@@ -166,14 +167,7 @@ pub(super) fn dispatch_editing(
                     ContentCommand::ExecuteBatch(commands, "Delete clips".to_string()),
                 );
             }
-            for id in &target_ids {
-                selection.selected_clip_ids.remove(id);
-            }
-            if let Some(pid) = selection.primary_selected_clip_id.clone()
-                && target_ids.contains(&pid)
-            {
-                selection.primary_selected_clip_id = None;
-            }
+            selection.deselect_clips(&target_ids);
             DispatchResult::structural()
         }
         PanelAction::ContextDuplicateClip(clip_id) => {
@@ -220,12 +214,7 @@ pub(super) fn dispatch_editing(
             if let Ok(pasted_ids) = rx.recv_timeout(std::time::Duration::from_millis(100))
                 && !pasted_ids.is_empty()
             {
-                selection.selected_clip_ids.clear();
-                for id in &pasted_ids {
-                    selection.selected_clip_ids.insert(id.clone());
-                }
-                selection.primary_selected_clip_id = pasted_ids.first().cloned();
-                selection.selection_version += 1;
+                selection.select_clips(pasted_ids);
             }
             DispatchResult::structural()
         }
@@ -341,12 +330,7 @@ pub(super) fn dispatch_editing(
             if let Ok(pasted_ids) = rx.recv_timeout(std::time::Duration::from_millis(100))
                 && !pasted_ids.is_empty()
             {
-                selection.selected_clip_ids.clear();
-                for id in &pasted_ids {
-                    selection.selected_clip_ids.insert(id.clone());
-                }
-                selection.primary_selected_clip_id = pasted_ids.first().cloned();
-                selection.selection_version += 1;
+                selection.select_clips(pasted_ids);
             }
             DispatchResult::structural()
         }

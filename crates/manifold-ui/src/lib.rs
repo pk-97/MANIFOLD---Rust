@@ -81,6 +81,6 @@ pub use types::{
     SerializedParamValue, TonemapCurve, apply_card_reshape, is_default_macro_name,
     note_number_to_name,
 };
-pub use ui_state::UIState;
+pub use ui_state::{TimelineSelection, UIState};
 pub use view::{UiLayer, UiMarker, UiParamSlot};
 pub use waveform_renderer::WaveformRenderer;

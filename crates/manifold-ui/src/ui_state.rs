@@ -9,9 +9,34 @@ use crate::view::{SelectionRegion, UiAutomationPointRef};
 use manifold_foundation::{Beats, ClipId, LayerId, MarkerId};
 use std::collections::HashSet;
 
+/// D1 (`docs/TIMELINE_INTERACTION_P1_SPEC.md`): the single timeline-selection
+/// authority. Exactly one kind is active at any moment — the enum makes the
+/// old "clip-id set AND an `is_active` region flag simultaneously" state
+/// unrepresentable, which is the P0 bug class this replaces. The
+/// `SelectionRegion` struct survives inside `TimeRange`; what died is
+/// `is_active` as an independent stored flag that gestures forgot to clear.
+/// Derived conveniences (region bounds of a clip selection, etc.) are computed
+/// on demand by callers that have the project, never stored here.
+#[derive(Debug, Clone, Default)]
+pub enum TimelineSelection {
+    #[default]
+    None,
+    /// Clip selection — a set of whole clips. `anchor` is the last-clicked
+    /// clip, the fixed end a future shift-range extends from (P1.3 consumes it;
+    /// until then it simply tracks the primary clip).
+    Clips {
+        ids: HashSet<ClipId>,
+        anchor: Option<ClipId>,
+    },
+    /// Time-range selection — a beat × layer region.
+    TimeRange(SelectionRegion),
+}
+
 pub struct UIState {
-    // ── Clip Selection ──
-    pub selected_clip_ids: HashSet<ClipId>,
+    // ── Selection (single authority — D1) ──
+    /// Clip-set XOR time-range XOR nothing. Replaces the former
+    /// `selected_clip_ids` field + `selection_region.is_active` flag pair.
+    selection: TimelineSelection,
 
     /// Monotonically increasing counter — bumped on every selection/hover change.
     /// Used for cheap dirty-checking by viewport and layer headers.
@@ -28,9 +53,6 @@ pub struct UIState {
 
     /// Most recently selected layer ID (for inspector display).
     pub primary_selected_layer_id: Option<LayerId>,
-
-    // ── Region Selection ──
-    selection_region: SelectionRegion,
 
     // ── Cursor Position (updated on mouse move, used for paste target) ──
     pub cursor_beat: f32,
@@ -110,13 +132,12 @@ impl Default for UIState {
 impl UIState {
     pub fn new() -> Self {
         Self {
-            selected_clip_ids: HashSet::new(),
+            selection: TimelineSelection::None,
             selection_version: 0,
             primary_selected_clip_id: None,
             selected_layer_id_for_clip: None,
             selected_layer_ids: HashSet::new(),
             primary_selected_layer_id: None,
-            selection_region: SelectionRegion::default(),
             cursor_beat: 0.0,
             cursor_layer_id: None,
             insert_cursor_beat: None,
@@ -169,12 +190,17 @@ impl UIState {
     /// Select a single clip (clears previous selection and region). Called on normal click.
     /// Unity UIState.cs SelectClip (lines 167-178).
     pub fn select_clip(&mut self, clip_id: ClipId, layer_id: LayerId) {
-        self.selection_region = SelectionRegion::default();
         self.insert_cursor_beat = None;
         self.insert_cursor_layer_id = None;
         self.clear_layer_selection();
-        self.selected_clip_ids.clear();
-        self.selected_clip_ids.insert(clip_id.clone());
+        let mut ids = HashSet::new();
+        ids.insert(clip_id.clone());
+        // Replacing `selection` inherently drops any active region — the whole
+        // point of D1: no gesture can leave a stale region behind.
+        self.selection = TimelineSelection::Clips {
+            ids,
+            anchor: Some(clip_id.clone()),
+        };
         self.primary_selected_clip_id = Some(clip_id);
         self.selected_layer_id_for_clip = Some(layer_id);
         self.selection_version += 1;
@@ -182,41 +208,116 @@ impl UIState {
 
     /// Toggle a clip in/out of the selection set. Called on Ctrl+Click.
     /// Unity UIState.cs ToggleClipSelection (lines 183-208).
+    ///
+    /// D1 consequence: this no longer synthesises a region from the clip set
+    /// (the old `update_region_from_clip_selection` sync is deleted). A
+    /// multi-clip toggle is a pure `Clips` selection — the redundant region
+    /// band that used to render alongside the per-clip highlight is gone
+    /// (begins the S1 fix; per-clip highlight for the set is unchanged).
     pub fn toggle_clip_selection(&mut self, clip_id: ClipId, layer_id: LayerId) {
         self.clear_layer_selection();
-        if self.selected_clip_ids.contains(&clip_id) {
-            self.selected_clip_ids.remove(&clip_id);
+        // Start from the current clip set (empty if the current selection is a
+        // region or nothing — a cmd-click while a region is active starts a
+        // fresh clip selection, matching the old behaviour where `set_region`
+        // had already cleared the clip-id set).
+        let mut ids = match &self.selection {
+            TimelineSelection::Clips { ids, .. } => ids.clone(),
+            _ => HashSet::new(),
+        };
+        if ids.contains(&clip_id) {
+            ids.remove(&clip_id);
             if self.primary_selected_clip_id.as_ref() == Some(&clip_id) {
                 // Pick a new primary or None
-                self.primary_selected_clip_id = self.selected_clip_ids.iter().next().cloned();
+                self.primary_selected_clip_id = ids.iter().next().cloned();
                 self.selected_layer_id_for_clip = None;
             }
         } else {
-            self.selected_clip_ids.insert(clip_id.clone());
+            ids.insert(clip_id.clone());
             self.primary_selected_clip_id = Some(clip_id);
             self.selected_layer_id_for_clip = Some(layer_id);
         }
+        self.selection = if ids.is_empty() {
+            TimelineSelection::None
+        } else {
+            TimelineSelection::Clips {
+                ids,
+                anchor: self.primary_selected_clip_id.clone(),
+            }
+        };
         self.selection_version += 1;
     }
 
     /// Clear all selection (clips, layers, markers, region, and insert cursor).
     /// Unity UIState.cs ClearSelection (lines 211-222).
     pub fn clear_selection(&mut self) {
-        self.selected_clip_ids.clear();
+        self.selection = TimelineSelection::None;
         self.primary_selected_clip_id = None;
         self.selected_layer_id_for_clip = None;
         self.selected_layer_ids.clear();
         self.primary_selected_layer_id = None;
         self.selected_marker_ids.clear();
-        self.selection_region = SelectionRegion::default();
         self.insert_cursor_beat = None;
         self.insert_cursor_layer_id = None;
         self.selection_version += 1;
     }
 
+    /// Select a set of clips as the whole selection (clears layers, region,
+    /// cursor, markers). Used by the duplicate / paste / select-all read-back
+    /// paths where the caller computed the id list; the first id becomes the
+    /// primary + anchor. Replaces the old "clear then insert into
+    /// `selected_clip_ids`" pattern those sites open-coded.
+    pub fn select_clips(&mut self, ids: Vec<ClipId>) {
+        self.selected_layer_ids.clear();
+        self.primary_selected_layer_id = None;
+        self.selected_marker_ids.clear();
+        self.insert_cursor_beat = None;
+        self.insert_cursor_layer_id = None;
+        let primary = ids.first().cloned();
+        let set: HashSet<ClipId> = ids.into_iter().collect();
+        if set.is_empty() {
+            self.selection = TimelineSelection::None;
+            self.primary_selected_clip_id = None;
+            self.selected_layer_id_for_clip = None;
+        } else {
+            self.selection = TimelineSelection::Clips {
+                ids: set,
+                anchor: primary.clone(),
+            };
+            self.primary_selected_clip_id = primary;
+            self.selected_layer_id_for_clip = None;
+        }
+        self.selection_version += 1;
+    }
+
+    /// Remove clip ids from the current clip selection (e.g. after deleting
+    /// them). No-op unless the current selection is `Clips`. If the primary or
+    /// anchor was removed it is repointed at a survivor (or cleared). Mirrors
+    /// the old open-coded "`selected_clip_ids.remove` + clear primary if
+    /// deleted" loop; deliberately does not bump `selection_version` (the
+    /// following structural sync + `prune_stale_references` handles that).
+    pub fn deselect_clips(&mut self, remove: &[ClipId]) {
+        if let TimelineSelection::Clips { ids, anchor } = &mut self.selection {
+            for id in remove {
+                ids.remove(id);
+            }
+            if ids.is_empty() {
+                self.selection = TimelineSelection::None;
+            } else if let Some(a) = anchor.clone()
+                && remove.contains(&a)
+            {
+                *anchor = ids.iter().next().cloned();
+            }
+        }
+        if let Some(pid) = self.primary_selected_clip_id.clone()
+            && remove.contains(&pid)
+        {
+            self.primary_selected_clip_id = None;
+        }
+    }
+
     /// Check if a clip is in the selection set.
     pub fn is_selected(&self, clip_id: &str) -> bool {
-        self.selected_clip_ids.contains(clip_id)
+        matches!(&self.selection, TimelineSelection::Clips { ids, .. } if ids.contains(clip_id))
     }
 
     /// Check if a clip is hovered.
@@ -224,19 +325,26 @@ impl UIState {
         self.hovered_clip_id.as_deref() == Some(clip_id)
     }
 
-    /// Get a copy of all selected clip IDs.
+    /// Get a copy of all selected clip IDs (empty unless the selection is `Clips`).
     pub fn get_selected_clip_ids(&self) -> Vec<ClipId> {
-        self.selected_clip_ids.iter().cloned().collect()
+        match &self.selection {
+            TimelineSelection::Clips { ids, .. } => ids.iter().cloned().collect(),
+            _ => Vec::new(),
+        }
     }
 
-    /// Number of selected clips.
+    /// Number of selected clips (0 unless the selection is `Clips`).
     pub fn selection_count(&self) -> usize {
-        self.selected_clip_ids.len()
+        match &self.selection {
+            TimelineSelection::Clips { ids, .. } => ids.len(),
+            _ => 0,
+        }
     }
 
     // ── Region Selection ────────────────────────────────────────────
 
-    /// Set a region selection (clears individual clip and layer selection).
+    /// Set a region selection (replaces any clip/layer selection — D1's single
+    /// authority: a `TimeRange` cannot coexist with a `Clips` set).
     /// Unity UIState.cs SetRegion (lines 50-68).
     pub fn set_region(
         &mut self,
@@ -246,82 +354,48 @@ impl UIState {
         end_layer: i32,
         layers: &[crate::view::UiLayer],
     ) {
-        self.selected_clip_ids.clear();
         self.primary_selected_clip_id = None;
         self.selected_layer_id_for_clip = None;
         self.selected_layer_ids.clear();
         self.primary_selected_layer_id = None;
         self.insert_cursor_beat = None;
         self.insert_cursor_layer_id = None;
-        // Populate LayerId-based fields from the layer array
+        // Build the region, then install it as the sole selection.
+        let mut region = SelectionRegion::active(start_beat, end_beat);
         let min = start_layer.min(end_layer).max(0) as usize;
         let max = start_layer.max(end_layer).max(0) as usize;
-        self.selection_region.start_beat = start_beat;
-        self.selection_region.end_beat = end_beat;
-        self.selection_region.is_active = true;
-        self.selection_region.selected_layer_ids.clear();
         let upper = max.min(layers.len().saturating_sub(1));
         for layer in &layers[min..=upper] {
-            self.selection_region
-                .selected_layer_ids
-                .insert(layer.layer_id.clone());
+            region.selected_layer_ids.insert(layer.layer_id.clone());
         }
-        self.selection_region.start_layer_id = layers.get(min).map(|l| l.layer_id.clone());
-        self.selection_region.end_layer_id = layers.get(max).map(|l| l.layer_id.clone());
+        region.start_layer_id = layers.get(min).map(|l| l.layer_id.clone());
+        region.end_layer_id = layers.get(max).map(|l| l.layer_id.clone());
+        self.selection = TimelineSelection::TimeRange(region);
         self.selection_version += 1;
     }
 
-    /// Set region from clip selection bounds. Unlike set_region(), this PRESERVES
-    /// individual clip IDs so per-clip highlight and inspector still work.
-    /// Unity UIState.cs SetRegionFromClipBounds (lines 74-92).
-    pub fn set_region_from_clip_bounds(
-        &mut self,
-        start_beat: Beats,
-        end_beat: Beats,
-        start_layer: i32,
-        end_layer: i32,
-        layers: &[crate::view::UiLayer],
-    ) {
-        self.clear_layer_selection();
-        self.insert_cursor_beat = None;
-        self.insert_cursor_layer_id = None;
-        let s_layer = start_layer.min(end_layer).max(0) as usize;
-        let e_layer = start_layer.max(end_layer).max(0) as usize;
-        let s_beat = start_beat.min(end_beat);
-        let e_beat = start_beat.max(end_beat);
-        self.selection_region.start_beat = s_beat;
-        self.selection_region.end_beat = e_beat;
-        self.selection_region.is_active = true;
-        self.selection_region.selected_layer_ids.clear();
-        let upper = e_layer.min(layers.len().saturating_sub(1));
-        for layer in &layers[s_layer..=upper] {
-            self.selection_region
-                .selected_layer_ids
-                .insert(layer.layer_id.clone());
-        }
-        self.selection_region.start_layer_id = layers.get(s_layer).map(|l| l.layer_id.clone());
-        self.selection_region.end_layer_id = layers.get(e_layer).map(|l| l.layer_id.clone());
-        self.selection_version += 1;
-    }
-
-    /// Clear the region selection (does NOT clear individual clip selection).
+    /// Clear the region selection. Under D1 a region is the whole selection, so
+    /// this returns to `None`; a no-op when the selection isn't a `TimeRange`.
     /// Unity UIState.cs ClearRegion (lines 95-100).
     pub fn clear_region(&mut self) {
-        if !self.selection_region.is_active {
-            return;
+        if matches!(self.selection, TimelineSelection::TimeRange(_)) {
+            self.selection = TimelineSelection::None;
+            self.selection_version += 1;
         }
-        self.selection_region.clear();
-        self.selection_version += 1;
     }
 
-    /// Whether a region selection is active.
+    /// Whether a region (time-range) selection is active.
     pub fn has_region(&self) -> bool {
-        self.selection_region.is_active
+        matches!(self.selection, TimelineSelection::TimeRange(_))
     }
 
-    /// Get the current selection region.
-    pub fn get_region(&self) -> &SelectionRegion {
-        &self.selection_region
+    /// The current selection region, if the selection is a `TimeRange`.
+    /// Replaces the old always-returns-a-default `get_region()`.
+    pub fn current_region(&self) -> Option<&SelectionRegion> {
+        match &self.selection {
+            TimelineSelection::TimeRange(r) => Some(r),
+            _ => None,
+        }
     }
 
     // ── Insert Cursor ───────────────────────────────────────────────
@@ -332,16 +406,14 @@ impl UIState {
         // Skip if nothing would change — same position, no active selection to clear.
         if self.insert_cursor_beat == Some(beat)
             && self.insert_cursor_layer_id.as_ref() == Some(&layer_id)
-            && self.selected_clip_ids.is_empty()
+            && matches!(self.selection, TimelineSelection::None)
             && self.selected_layer_ids.is_empty()
-            && !self.selection_region.is_active
         {
             return;
         }
         self.insert_cursor_beat = Some(beat);
         self.insert_cursor_layer_id = Some(layer_id);
-        self.selection_region = SelectionRegion::default(); // cursor replaces region
-        self.selected_clip_ids.clear(); // deselect clips (Ableton behavior)
+        self.selection = TimelineSelection::None; // cursor replaces clips + region
         self.primary_selected_clip_id = None;
         self.selected_layer_id_for_clip = None;
         self.selected_layer_ids.clear(); // deselect layer headers (Ableton behavior)
@@ -376,8 +448,7 @@ impl UIState {
     /// Select a single layer (clears previous clip, layer, and region selection).
     /// Unity UIState.cs SelectLayer (lines 247-259).
     pub fn select_layer(&mut self, layer_id: LayerId) {
-        self.selection_region = SelectionRegion::default();
-        self.selected_clip_ids.clear();
+        self.selection = TimelineSelection::None; // clears clips + region
         self.primary_selected_clip_id = None;
         self.selected_layer_id_for_clip = None;
         self.insert_cursor_beat = None;
@@ -391,7 +462,7 @@ impl UIState {
     /// Toggle a layer in/out of the selection set. Called on Cmd+Click.
     /// Unity UIState.cs ToggleLayerSelection (lines 264-291).
     pub fn toggle_layer_selection(&mut self, layer_id: LayerId) {
-        self.selected_clip_ids.clear();
+        self.selection = TimelineSelection::None; // clears clips + region
         self.primary_selected_clip_id = None;
         self.selected_layer_id_for_clip = None;
         self.insert_cursor_beat = None;
@@ -416,7 +487,7 @@ impl UIState {
         target_layer_id: &str,
         layers: &[crate::view::UiLayer],
     ) {
-        self.selected_clip_ids.clear();
+        self.selection = TimelineSelection::None; // clears clips + region
         self.primary_selected_clip_id = None;
         self.selected_layer_id_for_clip = None;
         self.insert_cursor_beat = None;
@@ -480,7 +551,9 @@ impl UIState {
             return true;
         }
         // 4. Region selection spans this layer
-        if self.selection_region.is_active && self.selection_region.contains_layer_id(layer_id) {
+        if let TimelineSelection::TimeRange(r) = &self.selection
+            && r.contains_layer_id(layer_id)
+        {
             return true;
         }
         false
@@ -506,12 +579,21 @@ impl UIState {
     ) -> bool {
         let mut changed = false;
 
-        // Prune clip IDs
-        let before = self.selected_clip_ids.len();
-        self.selected_clip_ids
-            .retain(|id| valid_clip_ids.contains(id));
-        if self.selected_clip_ids.len() != before {
-            changed = true;
+        // Prune clip IDs (only meaningful when the selection is a clip set)
+        if let TimelineSelection::Clips { ids, anchor } = &mut self.selection {
+            let before = ids.len();
+            ids.retain(|id| valid_clip_ids.contains(id));
+            if ids.len() != before {
+                changed = true;
+            }
+            if let Some(a) = anchor.clone()
+                && !valid_clip_ids.contains(&a)
+            {
+                *anchor = ids.iter().next().cloned();
+            }
+            if ids.is_empty() {
+                self.selection = TimelineSelection::None;
+            }
         }
 
         if let Some(ref id) = self.primary_selected_clip_id
@@ -558,17 +640,16 @@ impl UIState {
             changed = true;
         }
 
-        // Prune region layer IDs
-        if self.selection_region.is_active {
-            let before = self.selection_region.selected_layer_ids.len();
-            self.selection_region
-                .selected_layer_ids
+        // Prune region layer IDs (only when the selection is a time-range)
+        if let TimelineSelection::TimeRange(r) = &mut self.selection {
+            let before = r.selected_layer_ids.len();
+            r.selected_layer_ids
                 .retain(|id| valid_layer_ids.contains(id));
-            if self.selection_region.selected_layer_ids.len() != before {
+            if r.selected_layer_ids.len() != before {
                 changed = true;
             }
-            if self.selection_region.selected_layer_ids.is_empty() {
-                self.selection_region.clear();
+            if r.selected_layer_ids.is_empty() {
+                self.selection = TimelineSelection::None;
                 changed = true;
             }
         }
@@ -583,12 +664,11 @@ impl UIState {
 
     /// Select a single marker (clears clips, layers, region, cursor).
     pub fn select_marker(&mut self, marker_id: MarkerId) {
-        self.selected_clip_ids.clear();
+        self.selection = TimelineSelection::None; // clears clips + region
         self.primary_selected_clip_id = None;
         self.selected_layer_id_for_clip = None;
         self.selected_layer_ids.clear();
         self.primary_selected_layer_id = None;
-        self.selection_region = SelectionRegion::default();
         self.insert_cursor_beat = None;
         self.insert_cursor_layer_id = None;
         self.selected_marker_ids.clear();

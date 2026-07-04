@@ -3869,7 +3869,7 @@ impl Application {
                 // same overlap test the bitmap path used, kept WYSIWYG).
                 let region = self.ws.ui_root.viewport.selection_region_ref();
                 let region_selects_clips =
-                    region.is_some() && self.selection.selected_clip_ids.is_empty();
+                    region.is_some() && self.selection.selection_count() == 0;
                 let hovered = self.ws.ui_root.viewport.hovered_clip_id();
                 self.clip_body_scratch.clear();
                 for cr in &self.clip_rect_scratch {

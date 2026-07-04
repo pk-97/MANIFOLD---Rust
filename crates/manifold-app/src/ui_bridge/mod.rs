@@ -476,45 +476,6 @@ pub fn dispatch(
     }
 }
 
-/// Update region from clip selection — public version taking &Project directly.
-/// Used by app.rs keyboard handlers that can't pass &PlaybackEngine.
-pub fn update_region_from_clip_selection_inline(
-    selection: &mut SelectionState,
-    project: &manifold_core::project::Project,
-) {
-    if selection.selected_clip_ids.len() < 2 {
-        return;
-    }
-    let mut min_beat = manifold_core::Beats(f64::MAX);
-    let mut max_beat = manifold_core::Beats(-f64::MAX);
-    let mut min_layer = i32::MAX;
-    let mut max_layer = i32::MIN;
-    let mut found = false;
-
-    for (li, layer) in project.timeline.layers.iter().enumerate() {
-        let li = li as i32;
-        for clip in &layer.clips {
-            if selection.selected_clip_ids.contains(&clip.id) {
-                min_beat = min_beat.min(clip.start_beat);
-                max_beat = max_beat.max(clip.start_beat + clip.duration_beats);
-                min_layer = min_layer.min(li);
-                max_layer = max_layer.max(li);
-                found = true;
-            }
-        }
-    }
-
-    if found {
-        selection.set_region_from_clip_bounds(
-            min_beat,
-            max_beat,
-            min_layer,
-            max_layer,
-            &crate::ui_translate::layers_to_ui(&project.timeline.layers),
-        );
-    }
-}
-
 /// Shift+Click region selection with correct anchor precedence.
 pub(crate) fn select_region_to_with_project(
     target_beat: manifold_core::Beats,
@@ -539,8 +500,7 @@ pub(crate) fn select_region_to_with_project(
                 .unwrap_or(manifold_core::Beats::ZERO),
             anchor_idx,
         ))
-    } else if selection.has_region() {
-        let r = selection.get_region();
+    } else if let Some(r) = selection.current_region() {
         let start_idx = r
             .layer_index_range(&crate::ui_translate::layers_to_ui(&project.timeline.layers))
             .map(|(lo, _)| lo)

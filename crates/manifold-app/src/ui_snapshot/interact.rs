@@ -116,21 +116,20 @@ fn shift_click_clip(data: &mut SceneData, rest: &str) -> String {
     )
 }
 
-/// P1.0 evidence-gathering verb: `cmd_click_clip:<clip_id>:<layer_id>`
-/// reproduces today's cmd/ctrl-click path — `ui_bridge/editing.rs:52-57`'s
-/// `PanelAction::ClipClicked` cmd arm: `toggle_clip_selection` then
-/// `update_region_from_clip_selection_inline` (region bounds follow the
-/// clip-id set once 2+ clips are selected — both authorities live at once,
-/// which is S1's "region overlay + clip selection together" scene).
+/// Cmd/ctrl-click path — mirrors `ui_bridge/editing.rs`'s `PanelAction::
+/// ClipClicked` cmd arm. Post-D1 this is a pure `toggle_clip_selection`: no
+/// region is synthesised from the clip set (the old
+/// `update_region_from_clip_selection_inline` sync is deleted), so a multi-clip
+/// selection produces a `Clips` selection with no region band — the S1 collapse
+/// this verb now exercises.
 fn cmd_click_clip(data: &mut SceneData, rest: &str) -> String {
     let Some((clip_id, layer_id)) = rest.split_once(':') else {
         return format!("cmd_click_clip: want clip_id:layer_id, got '{rest}'");
     };
     data.selection
         .toggle_clip_selection(ClipId::new(clip_id), LayerId::new(layer_id));
-    crate::ui_bridge::update_region_from_clip_selection_inline(&mut data.selection, &data.project);
     format!(
-        "cmd_click_clip -> toggled '{clip_id}'; selected_clip_ids={:?} region.is_active={}",
+        "cmd_click_clip -> toggled '{clip_id}'; selected_clip_ids={:?} has_region={}",
         data.selection.get_selected_clip_ids(),
         data.selection.has_region(),
     )
@@ -149,7 +148,7 @@ fn cmd_click_clip(data: &mut SceneData, rest: &str) -> String {
 /// were the intent — the "gap after the originals" symptom.
 fn duplicate_selected_clips(data: &mut SceneData) -> String {
     let clip_ids = data.selection.get_selected_clip_ids();
-    let region = data.selection.get_region().clone();
+    let region = data.selection.current_region().cloned().unwrap_or_default();
     let used_region_mode = region.is_active;
     let region_core = crate::ui_translate::selection_region_to_core(&region);
     let spb = 60.0 / data.project.settings.bpm.0.max(1.0);
@@ -185,12 +184,7 @@ fn duplicate_selected_clips(data: &mut SceneData) -> String {
         .flat_map(|l| l.clips.iter().filter(|c| !before_ids.contains(&c.id)).map(|c| c.id.clone()))
         .collect();
 
-    data.selection.clear_selection();
-    for id in &new_ids {
-        data.selection.selected_clip_ids.insert(id.clone());
-    }
-    data.selection.primary_selected_clip_id = new_ids.first().cloned();
-    data.selection.selection_version += 1;
+    data.selection.select_clips(new_ids.clone());
 
     format!(
         "cmd_d -> mode={} ({} commands) before_ids={} new_ids={new_ids:?}",

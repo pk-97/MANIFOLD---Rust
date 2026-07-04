@@ -26,6 +26,21 @@ pub struct SelectionRegion {
 }
 
 impl SelectionRegion {
+    /// A fresh active region over `[start_beat, end_beat)` with no layer span
+    /// yet (the caller fills `selected_layer_ids` / `start_layer_id` /
+    /// `end_layer_id`). Since D1 a region only ever exists inside
+    /// `TimelineSelection::TimeRange`, so it is always active — `is_active`
+    /// remains as the signal `selection_region_to_core` copies to the engine
+    /// (EditingService's duplicate/delete region-mode still reads it).
+    pub fn active(start_beat: Beats, end_beat: Beats) -> Self {
+        Self {
+            start_beat,
+            end_beat,
+            is_active: true,
+            ..Self::default()
+        }
+    }
+
     pub fn contains_beat(&self, beat: Beats) -> bool {
         // Half-open [start, end) via the shared interval primitive.
         crate::hit::Span::new(self.start_beat.as_f32(), self.end_beat.as_f32())

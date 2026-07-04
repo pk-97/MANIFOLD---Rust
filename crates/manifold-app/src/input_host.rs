@@ -468,33 +468,27 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn select_all_clips(&mut self) {
-        // Unity EditingService.SelectAllClips (lines 264-276)
+        // Unity EditingService.SelectAllClips (lines 264-276). D1: select-all is
+        // a pure `Clips` selection — no bounding region is synthesised (the old
+        // `update_region_from_clip_selection_inline` sync is deleted).
         if let Some(project) = Some(&*self.project) {
-            self.selection.clear_selection();
-            for layer in &project.timeline.layers {
-                for clip in &layer.clips {
-                    self.selection.selected_clip_ids.insert(clip.id.clone());
-                }
-            }
-            self.selection.primary_selected_clip_id =
-                self.selection.selected_clip_ids.iter().next().cloned();
-            self.selection.selection_version += 1;
-
-            // Unity line 275: compute bounding region from all selected clips
-            crate::ui_bridge::update_region_from_clip_selection_inline(self.selection, project);
+            let ids: Vec<ClipId> = project
+                .timeline
+                .layers
+                .iter()
+                .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
+                .collect();
+            self.selection.select_clips(ids);
         }
         *self.needs_structural_sync = true;
     }
 
     fn copy_clips(&mut self, clip_ids: &[ClipId]) {
         // Send copy to content thread (EditingService owns the clipboard)
-        let region = if self.selection.has_region() {
-            Some(crate::ui_translate::selection_region_to_core(
-                self.selection.get_region(),
-            ))
-        } else {
-            None
-        };
+        let region = self
+            .selection
+            .current_region()
+            .map(crate::ui_translate::selection_region_to_core);
         ContentCommand::send(
             self.content_tx,
             crate::content_command::ContentCommand::CopyClips {
@@ -507,9 +501,9 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn cut_clips(&mut self, clip_ids: &[ClipId], has_region: bool) {
         // Copy first (via content thread), then delete locally + record commands
         let region = if has_region {
-            Some(crate::ui_translate::selection_region_to_core(
-                self.selection.get_region(),
-            ))
+            self.selection
+                .current_region()
+                .map(crate::ui_translate::selection_region_to_core)
         } else {
             None
         };
@@ -524,9 +518,9 @@ impl TimelineInputHost for AppInputHost<'_> {
         let project = &mut *self.project;
         let spb = 60.0 / project.settings.bpm.0.max(1.0);
         let del_region = if has_region {
-            Some(crate::ui_translate::selection_region_to_core(
-                self.selection.get_region(),
-            ))
+            self.selection
+                .current_region()
+                .map(crate::ui_translate::selection_region_to_core)
         } else {
             None
         };
@@ -558,13 +552,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         if let Ok(pasted_ids) = rx.recv_timeout(std::time::Duration::from_millis(100))
             && !pasted_ids.is_empty()
         {
-            self.selection.clear_selection();
-            for id in &pasted_ids {
-                self.selection.selected_clip_ids.insert(id.clone());
-            }
-            self.selection.primary_selected_clip_id = pasted_ids.first().cloned();
-            self.selection.selection_version += 1;
-            // Region update will happen when project snapshot arrives
+            self.selection.select_clips(pasted_ids);
         }
         *self.needs_structural_sync = true;
     }
@@ -575,7 +563,10 @@ impl TimelineInputHost for AppInputHost<'_> {
         // Individual mode: offset by the clips' own span.
         // After region duplicate, shift the region forward (Ableton-style).
         if let Some(project) = Some(&mut *self.project) {
-            let region = self.selection.get_region().clone();
+            // D1: a region exists only when the selection is a `TimeRange`; a
+            // clip selection yields the default (inactive) region → individual
+            // (clip-span) duplicate mode, which is the correct D3 behaviour.
+            let region = self.selection.current_region().cloned().unwrap_or_default();
             let used_region_mode = region.is_active;
 
             // Snapshot existing IDs to find new ones after execute
@@ -616,16 +607,15 @@ impl TimelineInputHost for AppInputHost<'_> {
                     })
                     .collect();
 
-                self.selection.clear_selection();
-                for id in &new_ids {
-                    self.selection.selected_clip_ids.insert(id.clone());
-                }
-                self.selection.primary_selected_clip_id = new_ids.first().cloned();
-                self.selection.selection_version += 1;
+                // Select the copies (a pure `Clips` selection).
+                self.selection.select_clips(new_ids.clone());
 
                 if used_region_mode && !new_ids.is_empty() {
-                    // Shift region forward by region duration (Ableton-style).
-                    // Unity lines 743-758.
+                    // Region-mode duplicate: shift the region forward by its
+                    // duration (Ableton-style, Unity lines 743-758). `set_region`
+                    // installs the shifted `TimeRange`, replacing the `Clips`
+                    // selection just set above — matching the old behaviour where
+                    // `set_region` cleared the freshly inserted clip ids.
                     let duration = region.duration_beats();
                     let ui_layers = crate::ui_translate::layers_to_ui(&project.timeline.layers);
                     let (lo, hi) = region.layer_index_range(&ui_layers).unwrap_or((0, 0));
@@ -636,12 +626,9 @@ impl TimelineInputHost for AppInputHost<'_> {
                         hi as i32,
                         &ui_layers,
                     );
-                } else {
-                    crate::ui_bridge::update_region_from_clip_selection_inline(
-                        self.selection,
-                        project,
-                    );
                 }
+                // Individual mode: the `Clips` selection of the copies stands as
+                // set — D1 no longer synthesises a bounding region from it.
             }
         }
         *self.needs_structural_sync = true;
@@ -652,9 +639,9 @@ impl TimelineInputHost for AppInputHost<'_> {
             let spb = 60.0 / project.settings.bpm.0;
             // Step 4i: pass actual region from UIState when active
             let region = if has_region {
-                Some(crate::ui_translate::selection_region_to_core(
-                    self.selection.get_region(),
-                ))
+                self.selection
+                    .current_region()
+                    .map(crate::ui_translate::selection_region_to_core)
             } else {
                 None
             };
@@ -1228,8 +1215,8 @@ impl TimelineInputHost for AppInputHost<'_> {
     // ── UIState delegation ──────────────────────────────────────
 
     fn get_selected_clip_ids(&self) -> Vec<ClipId> {
-        if self.selection.has_region() {
-            let region = crate::ui_translate::selection_region_to_core(self.selection.get_region());
+        if let Some(r) = self.selection.current_region() {
+            let region = crate::ui_translate::selection_region_to_core(r);
             EditingService::get_clips_in_region(self.project, &region)
                 .into_iter()
                 .map(|(_, id)| id)

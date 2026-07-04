@@ -478,19 +478,22 @@ pub fn push_state(
     ui.viewport.set_playhead(Beats::from_f32(playhead_beat));
     ui.viewport.set_playing(content_state.is_playing);
 
-    // Selection → viewport (version-gated to avoid per-frame Vec allocation)
+    // Selection → viewport (version-gated to avoid per-frame Vec allocation).
+    // The panel's `selected_clip_ids` is a pure render cache fed from the enum
+    // here — never an independent authority.
     ui.viewport.sync_selection(
         selection.selection_version,
-        || selection.selected_clip_ids.iter().cloned().collect(),
+        || selection.get_selected_clip_ids(),
         || selection.selected_marker_ids.iter().cloned().collect(),
     );
     if let Some(beat) = selection.insert_cursor_beat {
         ui.viewport.set_insert_cursor(beat);
     }
 
-    // Region → viewport (sync from UIState so clearing via set_insert_cursor propagates)
-    if selection.has_region() {
-        let r = selection.get_region();
+    // Region → viewport (sync from UIState so clearing via set_insert_cursor
+    // propagates). Only a `TimeRange` selection has a region; a `Clips`
+    // selection pushes `None`, so no band draws behind a clip selection (D1).
+    if let Some(r) = selection.current_region() {
         let ui_layers = crate::ui_translate::layers_to_ui(&project.timeline.layers);
         let (start_layer, end_layer) = r.layer_index_range(&ui_layers).unwrap_or((0, 0));
         ui.viewport
