@@ -125,6 +125,12 @@ Grouped in waves; within a wave, items are independent and order is free.
     Peter-driven: preset/graph management rethink). Authoring-UX pair serving the
     release-content push; OVERLAY P1 also fixes a live stale-search bug, so it is
     re-rankable arbitrarily early — nothing depends on it and it depends on nothing.
+13c. TIMELINE_INTERACTION_P1_SPEC P1.0–P1.6 (added 2026-07-04, Peter-driven: five
+    in-app interaction bugs, one authority-duplication disease). Sequel to the
+    shipped TIMELINE_LAYOUT_P0; serves the release-content push directly (trim/
+    duplicate/multi-select ARE the composing loop), so like 13b it is re-rankable
+    arbitrarily early. Hard edge: runs BEFORE UI_CRAFT_AND_MOTION_PLAN (same
+    files; motion must not animate lying previews).
 14. COMPONENT_LIBRARY → 15. MCP_INTERFACE (in that order — MCP consumes components).
 16. AUTOMATION_LANES.
 17. ML_NODES Vision/CoreML tier.
