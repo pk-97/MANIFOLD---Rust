@@ -423,6 +423,7 @@ class Daemon:
             "ts": time.time(),
             "window_range": {"end_event_count": window["end_event_count"], "end_ts": window["end_ts"]},
             "phase": mb.phase,
+            "window_version": common.WINDOW_VERSION,
         }
         if flag_out:
             record["flag"] = flag_out

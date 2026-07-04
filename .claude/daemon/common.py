@@ -19,6 +19,16 @@ CADENCE_EVENTS = 8
 CADENCE_SECONDS = 90
 MODEL = "claude-haiku-4-5-20251001"
 
+# DESIGN.md §4c-1: bumped whenever WindowState's ledger/verdict shape changes,
+# so §4b/sleep-pass scoring never silently mixes pre- and post-change regimes.
+WINDOW_VERSION = 2
+
+# Tool names whose repeated targets get a "(Nth touch this session)" ledger
+# annotation (§4c-1). Deliberately narrow to what the spec names — Read/Edit
+# thrash is the documented tell; widening to every tool is a judgment call
+# for a later sleep pass, not a guess to make now.
+REPEAT_TARGET_TOOLS = ("Read", "Edit")
+
 # The classifier subprocess must never run with cwd inside this (or any)
 # project: Claude Code auto-discovers CLAUDE.md + auto-memory from cwd
 # regardless of --system-prompt/--setting-sources, which both pollutes the
@@ -141,6 +151,15 @@ def _truncate(s, n=100):
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+def ordinal(n):
+    """1 -> '1st', 2 -> '2nd', 3 -> '3rd', 4 -> '4th', 11-13 -> '11th'/'12th'/'13th'."""
+    if 10 <= n % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
 def _flatten_content_text(content):
     if isinstance(content, str):
         return content
@@ -160,10 +179,12 @@ def tool_result_status(block):
 TASK_ADDRESSED_MIN_CHARS = 40  # a trivial ack ("OK.", "Got it.") doesn't count as addressing TASK
 
 
-def format_window(task, ledger, recent, task_addressed=False):
+def format_window(task, ledger, recent, task_addressed=False, events_since_task=0):
     task_str = task if task else "(no task statement yet)"
-    if task and task_addressed:
-        task_str += " — already addressed by a prior reply this session"
+    if task:
+        task_str += f" ({events_since_task} tool events since set)"
+        if task_addressed:
+            task_str += " — already addressed by a prior reply this session"
     ledger_str = " · ".join(ledger) if ledger else "(no tool events)"
     recent_str = "\n---\n".join(t.strip() for t in recent) if recent else "(no assistant text yet)"
     return f'TASK: "{task_str}"\n\nLEDGER: `{ledger_str}`\n\nRECENT:\n{recent_str}'
@@ -197,11 +218,38 @@ class WindowState:
         self.task_addressed = False
         self.session_model = None  # tier of the last assistant event's model id
 
+        # DESIGN.md §4c-1: arithmetic the classifier can't do reliably,
+        # computed here and annotated into the ledger/TASK line instead.
+        self.target_touch_counts = {}  # "Read:path" -> count, REPEAT_TARGET_TOOLS only
+        self.consecutive_failures = 0  # current err streak, across all tools
+        self.events_since_task = 0  # tool events since current_task was last set
+
+    def _annotate_ledger(self, name, target, status):
+        """Returns a "(...)" suffix or "" — the repeat-touch and failure-streak
+        tells from §4c-1. Only fires on a repeat (n>=2) / a streak (n>=2): a
+        first touch or a lone failure isn't a pattern worth flagging."""
+        notes = []
+        if name in REPEAT_TARGET_TOOLS and target:
+            key = f"{name}:{target}"
+            self.target_touch_counts[key] = self.target_touch_counts.get(key, 0) + 1
+            n = self.target_touch_counts[key]
+            if n > 1:
+                notes.append(f"({ordinal(n)} touch this session)")
+        if status == "err":
+            self.consecutive_failures += 1
+            if self.consecutive_failures > 1:
+                notes.append(f"({ordinal(self.consecutive_failures)} consecutive failure)")
+        else:
+            self.consecutive_failures = 0
+        return " ".join(notes)
+
     def _close_window(self, ts):
         closed = {
             "end_event_count": self.total_tool_event_count,
             "end_ts": ts,
-            "text": format_window(self.current_task, self.ledger_buffer, self.recent_texts, self.task_addressed),
+            "text": format_window(
+                self.current_task, self.ledger_buffer, self.recent_texts, self.task_addressed, self.events_since_task
+            ),
         }
         self.ledger_buffer = []
         self.tool_event_count_since_window = 0
@@ -254,9 +302,16 @@ class WindowState:
             if ctype == "tool_result":
                 name, input_ = self.pending.pop(c.get("tool_use_id"), ("?", {}))
                 label = tool_label(name, input_, self.session_model)
-                self.ledger_buffer.append(f"{label} {tool_target(input_)} {tool_result_status(c)}".strip())
+                target = tool_target(input_)
+                status = tool_result_status(c)
+                note = self._annotate_ledger(name, target, status)
+                line = f"{label} {target} {status}".strip()
+                if note:
+                    line += f" {note}"
+                self.ledger_buffer.append(line)
                 self.tool_event_count_since_window += 1
                 self.total_tool_event_count += 1
+                self.events_since_task += 1
 
                 fire = self.tool_event_count_since_window >= CADENCE_EVENTS
                 if not fire and self.last_window_ts is not None and ts is not None:
@@ -271,6 +326,7 @@ class WindowState:
                     if len(stripped) >= 8:
                         self.current_task = stripped
                         self.task_addressed = False
+                        self.events_since_task = 0
         return closed, human_texts
 
 
