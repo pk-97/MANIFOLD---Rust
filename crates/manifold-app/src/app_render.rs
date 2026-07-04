@@ -689,7 +689,11 @@ impl Application {
         // until the next unrelated edit. Re-sync so the new renderer attaches; the
         // per-layer fingerprint (waveform.is_some()) then repaints the lane once.
         if self.ws.ui_root.audio_waveforms.poll_and_request(&audio_clips) {
-            crate::ui_bridge::sync_clip_positions(&mut self.ws.ui_root, &self.local_project);
+            crate::ui_bridge::sync_clip_positions(
+                &mut self.ws.ui_root,
+                &self.local_project,
+                self.selection.automation_mode_visible,
+            );
         }
 
         // 1c. Push the latest graph snapshot into the editor canvas
@@ -2442,6 +2446,7 @@ impl Application {
                 &self.local_project,
                 active_idx,
                 &self.selection,
+                &self.content_state.automation_latched_params,
             );
             needs_structural_sync = true;
         }
@@ -2462,6 +2467,7 @@ impl Application {
                 &self.local_project,
                 active_idx,
                 &self.selection,
+                &self.content_state.automation_latched_params,
             );
         } else if self.active_layer_id != prev_active_layer {
             let active_idx = self
@@ -2479,6 +2485,7 @@ impl Application {
                 &self.local_project,
                 active_idx,
                 &self.selection,
+                &self.content_state.automation_latched_params,
             );
             needs_structural_sync = true; // Inspector content changed — needs rebuild
         }
@@ -2499,6 +2506,7 @@ impl Application {
                     &self.local_project,
                     active_idx,
                     &self.selection,
+                    &self.content_state.automation_latched_params,
                 );
             }
         }
@@ -2644,7 +2652,11 @@ impl Application {
         // project model. Outside of drag with no version change, the viewport
         // cache is already current. Skipping saves 50+ string clones per frame.
         if self.mouse_pressed || needs_structural_sync {
-            crate::ui_bridge::sync_clip_positions(&mut self.ws.ui_root, &self.local_project);
+            crate::ui_bridge::sync_clip_positions(
+                &mut self.ws.ui_root,
+                &self.local_project,
+                self.selection.automation_mode_visible,
+            );
         }
 
         // 4c. Apply per-layer bitmap invalidation from editing operations.
@@ -4161,6 +4173,21 @@ impl Application {
             manifold_renderer::clip_draw::emit_clip_names(
                 ui,
                 &self.clip_rect_scratch,
+                overlay_tracks,
+            );
+
+            // Automation lane strips (P4, `docs/AUTOMATION_LANES_DESIGN.md` §7) —
+            // on top of the clip names, same overlay pass. Empty whenever
+            // automation mode is off (the viewport never populated any lanes
+            // this frame), so this is a no-op cost in the common case.
+            let automation_lanes = self
+                .ws
+                .ui_root
+                .viewport
+                .automation_lane_screens(&self.content_state.automation_latched_params);
+            manifold_renderer::automation_lane_draw::emit_automation_lanes(
+                ui,
+                &automation_lanes,
                 overlay_tracks,
             );
 

@@ -49,6 +49,19 @@ impl InputHandler {
             return true;
         }
 
+        // ── B — toggle automation draw/pencil mode (P4 Unit B,
+        // `docs/AUTOMATION_LANES_DESIGN.md` §7's "Draw mode", Live's `B`).
+        // No pre-existing MANIFOLD binding on this key — bound directly,
+        // Live-exact, no remap needed. Gated on automation mode being
+        // visible: pencil mode is meaningless with no lanes shown. ──
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "b" || c.as_str() == "B")
+            && m.is_none()
+            && host.automation_mode_visible()
+        {
+            host.toggle_automation_draw_mode();
+            return true;
+        }
+
         // ── Escape — priority chain (Unity lines 224-232) ──
         if matches!(logical_key, Key::Named(NamedKey::Escape)) {
             // Level 0: dismiss the top-most open overlay (modal or dropdown).
@@ -191,6 +204,22 @@ impl InputHandler {
         {
             // Priority 1: inspector focused → delete effects
             if self.inspector_has_focus && host.handle_effect_delete() {
+                return true;
+            }
+            // Priority 1.4: marquee-selected automation breakpoints → delete
+            // the whole group as one undo entry (P4 Unit B, §7's
+            // "Marquee-select ... drag/delete them together"). Checked
+            // BEFORE the single-point path below — a marquee selection
+            // takes precedence over a stale single click-selection.
+            if host.has_selected_automation_points() {
+                host.delete_selected_automation_points();
+                return true;
+            }
+            // Priority 1.5: selected automation breakpoint → delete it
+            // (P4 Unit A, `docs/AUTOMATION_LANES_DESIGN.md` §7's "Delete
+            // removes the selection").
+            if host.has_selected_automation_point() {
+                host.delete_selected_automation_point();
                 return true;
             }
             // Priority 2: selected markers → delete markers

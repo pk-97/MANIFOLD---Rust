@@ -218,6 +218,12 @@ pub struct ParamCardConfig {
     /// Audio-modulation state (per-param active/send/feature + card-level send
     /// list). Bundled so the config grows by one field.
     pub audio: super::param_slider_shared::AudioCardState,
+    /// Per-param: an enabled automation lane (≥1 point) exists on this
+    /// instance for this param — drives the red "automated" dot (P4 §7).
+    pub automation_active: Vec<bool>,
+    /// Per-param: that lane is currently overridden (latched) — the dot
+    /// grays instead of showing red.
+    pub automation_overridden: Vec<bool>,
 }
 
 // ── Layout constants ─────────────────────────────────────────────
@@ -657,6 +663,8 @@ impl ParamCardPanel {
             &config.driver_dotted,
             &config.driver_triplet,
             &config.driver_free_period,
+            &config.automation_active,
+            &config.automation_overridden,
         );
         self.state.mod_state.sync_audio(n, &config.audio);
         // AUD badge aggregate: any param has an armed audio modulation (parallels
@@ -3438,6 +3446,8 @@ mod tests {
             driver_triplet: vec![false; n],
             driver_free_period: vec![None; n],
             audio: Default::default(),
+            automation_active: vec![false; n],
+            automation_overridden: vec![false; n],
         }
     }
 
@@ -4271,6 +4281,8 @@ mod tests {
             driver_triplet: vec![false; 3],
             driver_free_period: vec![None; 3],
             audio: Default::default(),
+            automation_active: vec![false; 3],
+            automation_overridden: vec![false; 3],
         }
     }
 

@@ -7,8 +7,8 @@ use crate::layout::ScreenLayout;
 use crate::node::*;
 use crate::snap;
 use crate::tree::UITree;
-use crate::view::UiMarker;
-use manifold_foundation::{Beats, ClipId, LayerId, MarkerId};
+use crate::view::{UiAutomationLane, UiMarker};
+use manifold_foundation::{Beats, ClipId, EffectId, LayerId, MarkerId, ParamId};
 
 // ── Layout constants ────────────────────────────────────────────
 
@@ -42,7 +42,10 @@ mod render;
 // shared hit-tester) and surfaced here so viewport consumers and the click/drag
 // overlay name the same type.
 pub use crate::clip_hit_tester::{ClipHitResult, HitRegion};
-pub use model::{ClipScreenRect, SelectionRegion, TimelineOverlays, TrackInfo, ViewportClip};
+pub use model::{
+    AutomationDotScreen, AutomationLaneScreen, ClipScreenRect, SelectionRegion, TimelineOverlays,
+    TrackInfo, ViewportAutomationLane, ViewportClip,
+};
 use coordinate::GridSubdivision;
 use model::{CollapsedGroupBitmap, MarkerNodeGroup, TrackBgGroup};
 
@@ -72,6 +75,13 @@ pub struct TimelineViewportPanel {
     // Clip data — single storage, bucketed by layer index.
     // Access all clips via clips_by_layer.iter().flatten().
     clips_by_layer: Vec<Vec<ViewportClip>>,
+
+    // Automation lane data (P4, `docs/AUTOMATION_LANES_DESIGN.md` §7) — single
+    // storage bucketed by layer index, mirroring `clips_by_layer`. Populated
+    // by `set_automation_lanes` only when automation mode is visible (the
+    // translator gates it); empty otherwise, so this panel never needs to
+    // know the mode flag itself.
+    automation_lanes_by_layer: Vec<Vec<UiAutomationLane>>,
 
     // Per-layer bitmap renderers (None for group layers)
     bitmap_renderers: Vec<Option<crate::bitmap_renderer::LayerBitmapRenderer>>,
@@ -203,6 +213,7 @@ impl TimelineViewportPanel {
             tracks: Vec::new(),
             track_zebra_even: Vec::new(),
             clips_by_layer: Vec::new(),
+            automation_lanes_by_layer: Vec::new(),
             bitmap_renderers: Vec::new(),
             render_scale: 2.0, // default HiDPI (macOS Retina)
             playhead_beat: Beats::ZERO,
@@ -431,6 +442,24 @@ impl TimelineViewportPanel {
     /// Total number of clips across all layers.
     fn total_clip_count(&self) -> usize {
         self.clips_by_layer.iter().map(|v| v.len()).sum()
+    }
+
+    /// Replace the automation lane data, bucketed by layer index — mirrors
+    /// `set_clips`'s clear-and-refill so repeated calls don't reallocate the
+    /// inner `Vec`s. Called with an empty `lanes` whenever automation mode is
+    /// off (the translator gates population, not this panel) — see
+    /// `docs/AUTOMATION_LANES_DESIGN.md` §7.
+    pub fn set_automation_lanes(&mut self, lanes: Vec<ViewportAutomationLane>) {
+        for v in &mut self.automation_lanes_by_layer {
+            v.clear();
+        }
+        self.automation_lanes_by_layer
+            .resize_with(self.tracks.len(), Vec::new);
+        for entry in lanes {
+            if entry.layer_index < self.automation_lanes_by_layer.len() {
+                self.automation_lanes_by_layer[entry.layer_index].push(entry.lane);
+            }
+        }
     }
 
     /// Force a specific layer's bitmap to repaint on the next frame.
@@ -664,6 +693,99 @@ impl TimelineViewportPanel {
         }
 
         TimelineOverlays { region, cursor }
+    }
+
+    /// Screen-space geometry for every visible automation lane strip (P4,
+    /// `docs/AUTOMATION_LANES_DESIGN.md` §7): one [`AutomationLaneScreen`] per
+    /// lane, in the same "geometry here, GPU draw in manifold-renderer" split
+    /// as [`Self::visible_clip_rects`] / [`Self::timeline_overlays`]. Empty
+    /// whenever `set_automation_lanes` was last called with no data (i.e.
+    /// automation mode is off — this panel never checks the flag itself).
+    ///
+    /// `latched` is `ContentState::automation_latched_params` — a lane whose
+    /// `(effect_id, param_id)` appears there draws grayed instead of red.
+    pub fn automation_lane_screens(
+        &self,
+        latched: &[(EffectId, ParamId)],
+    ) -> Vec<AutomationLaneScreen> {
+        let mut out = Vec::new();
+        let tx0 = self.tracks_rect.x;
+        let tx1 = self.tracks_rect.x_max();
+        let ty0 = self.tracks_rect.y;
+        let ty1 = self.tracks_rect.y + self.tracks_rect.height;
+        let (min_beat, max_beat) = self.visible_beat_range();
+
+        for (i, lanes) in self.automation_lanes_by_layer.iter().enumerate() {
+            if lanes.is_empty() || self.is_group_layer(i) {
+                continue;
+            }
+            let track_y = self.track_y(i);
+            let track_h = self.track_height(i);
+            if track_h <= 0.0 || track_y + track_h < ty0 || track_y > ty1 {
+                continue;
+            }
+            // Lanes stack below the fixed base card, in the extra height
+            // `CoordinateMapper::layer_height` reserved for them — the same
+            // constant both sides use, so they cannot disagree.
+            let base_h = color::TRACK_HEIGHT;
+            for (idx, lane) in lanes.iter().enumerate() {
+                let strip_y = track_y + base_h + idx as f32 * color::AUTOMATION_LANE_STRIP_HEIGHT;
+                let strip_rect =
+                    Rect::new(tx0, strip_y, (tx1 - tx0).max(0.0), color::AUTOMATION_LANE_STRIP_HEIGHT);
+                let overridden = latched
+                    .iter()
+                    .any(|(eid, pid)| *eid == lane.effect_id && *pid == lane.param_id);
+
+                // Sample the curve at a fixed screen-space step across the
+                // visible range — smooth enough for a breakpoint line, cheap
+                // enough per frame (mirrors the graph canvas wire's bezier
+                // step count; typical scale is tens of lanes, not hundreds).
+                const STEP_PX: f32 = 6.0;
+                let mut polyline = Vec::new();
+                let mut x = tx0;
+                while x <= tx1 {
+                    let beat = self.pixel_to_beat(x);
+                    let norm = lane.value_at_norm(beat);
+                    let y = strip_rect.y + strip_rect.height * (1.0 - norm);
+                    polyline.push((x, y));
+                    x += STEP_PX;
+                }
+
+                let dots = lane
+                    .points
+                    .iter()
+                    .filter(|p| {
+                        let b = p.beat.as_f32();
+                        b >= min_beat && b <= max_beat
+                    })
+                    .map(|p| {
+                        let x = self.beat_to_pixel(p.beat);
+                        let y = strip_rect.y + strip_rect.height * (1.0 - p.value_norm);
+                        model::AutomationDotScreen {
+                            x,
+                            y,
+                            beat: p.beat,
+                            value_norm: p.value_norm,
+                            shape: p.shape,
+                        }
+                    })
+                    .collect();
+
+                out.push(AutomationLaneScreen {
+                    strip_rect,
+                    label: lane.label.clone(),
+                    overridden,
+                    polyline,
+                    dots,
+                    target: lane.target.clone(),
+                    param_id: lane.param_id.clone(),
+                    param_min: lane.param_min,
+                    param_max: lane.param_max,
+                    whole_numbers: lane.whole_numbers,
+                });
+            }
+        }
+        out
     }
 
     pub fn set_zoom(&mut self, pixels_per_beat: f32) {
@@ -1559,6 +1681,7 @@ mod tests {
                     parent_layer_id: None,
                     layer_type: LayerType::Video,
                     is_collapsed: false,
+                    automation_lane_count: 0,
                 })
                 .collect()
         };

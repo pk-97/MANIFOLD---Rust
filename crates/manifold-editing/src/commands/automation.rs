@@ -767,6 +767,56 @@ mod tests {
     }
 
     #[test]
+    fn composite_group_delete_highest_index_first_survives_execute_and_undo() {
+        // P4 Unit B (marquee group-delete): `RemoveAutomationPointCommand`
+        // removes BY INDEX at execute time, so deleting several points in one
+        // undo entry must build the removals highest-index-first — otherwise
+        // an earlier removal shifts every later target index down by one.
+        // This pins the exact ordering `CompositeCommand` needs to compose
+        // correctly with index-based removal.
+        use crate::command::CompositeCommand;
+
+        let (mut project, fx_id) = project_with_effect();
+        let target = GraphTarget::Effect(fx_id.clone());
+        // Seed 7 points at beats 0..6 (indices 0..6 once sorted).
+        for beat in 0..7 {
+            let mut add =
+                AddAutomationPointCommand::new(target.clone(), "amount", point(beat as f64, 0.1 * beat as f32));
+            add.execute(&mut project);
+        }
+        assert_eq!(lane_points(&project, &fx_id).len(), 7);
+
+        // Delete the points originally at indices 1, 3, 5 — built HIGH TO LOW
+        // per the design's mandatory ordering.
+        let commands: Vec<Box<dyn Command>> = vec![
+            Box::new(RemoveAutomationPointCommand::new(target.clone(), "amount", 5)),
+            Box::new(RemoveAutomationPointCommand::new(target.clone(), "amount", 3)),
+            Box::new(RemoveAutomationPointCommand::new(target.clone(), "amount", 1)),
+        ];
+        let mut group = CompositeCommand::new(commands, "Delete Automation Points".to_string());
+
+        group.execute(&mut project);
+        let remaining: Vec<f64> = lane_points(&project, &fx_id).iter().map(|p| p.beat.0).collect();
+        assert_eq!(
+            remaining,
+            vec![0.0, 2.0, 4.0, 6.0],
+            "indices 1,3,5 (beats 1,3,5) removed; 0,2,4,6 survive"
+        );
+
+        group.undo(&mut project);
+        let restored: Vec<f64> = lane_points(&project, &fx_id).iter().map(|p| p.beat.0).collect();
+        assert_eq!(
+            restored,
+            vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            "undo (reverse order) fully restores the original 7-point set"
+        );
+
+        group.execute(&mut project);
+        let redone: Vec<f64> = lane_points(&project, &fx_id).iter().map(|p| p.beat.0).collect();
+        assert_eq!(redone, vec![0.0, 2.0, 4.0, 6.0], "redo re-applies the whole group deletion");
+    }
+
+    #[test]
     fn commit_recorded_gesture_over_existing_lane_restores_pre_gesture_points_on_undo() {
         // A lane already exists (pre-gesture curve). The gesture punches over
         // part of it; undo must restore the EXACT pre-gesture point set, not
