@@ -92,7 +92,7 @@ fn render_ui_scene(
 ) {
     let Some(mut data) = fixtures::build(scene) else {
         eprintln!(
-            "ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, scrollshrink, hairlineclips, graph, editor, all)"
+            "ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, scrollshrink, hairlineclips, automation, graph, editor, all)"
         );
         std::process::exit(2);
     };
@@ -252,6 +252,16 @@ fn sync_build(ui: &mut UIRoot, data: &fixtures::SceneData, zoom_ppb: f32) {
     ui.build();
     let mut tcache = TransportDisplayCache::new();
     push_state(ui, &data.project, &data.content, data.active, &data.selection, false, None, &mut tcache);
+    // Reconcile the `push_state` setters into the tree — mirrors the live
+    // app's per-frame call (`app_render.rs`'s "6. Lightweight update" after its
+    // own `push_state`). Every panel's `set_*` methods are "store only; the
+    // reconcile applies them" (see `TransportPanel`'s doc comment); without
+    // this the harness only ever showed each panel's `::new()` hardcoded
+    // defaults, silently — every existing scene's fixture `ContentState`
+    // happened to already match those defaults (paused, not recording, no BPM
+    // reset/clear pending), so the gap never surfaced until the `automation`
+    // scene (P4a) deliberately diverged (armed + a latch).
+    ui.update();
 }
 
 /// Render to `<scene><suffix>.png`, and (if requested) the tree dump as JSON +

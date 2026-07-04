@@ -31,6 +31,7 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "inspector" => Some(inspector_scene()),
         "scrollshrink" => Some(scroll_shrink_scene()),
         "hairlineclips" => Some(hairline_clips_scene()),
+        "automation" => Some(automation_scene()),
         _ => None,
     }
 }
@@ -167,6 +168,21 @@ fn scroll_shrink_scene() -> SceneData {
     let content = ContentState { current_beat: Beats(0.0), is_playing: false, ..Default::default() };
 
     SceneData { project, content, active: None, selection: UIState::default() }
+}
+
+/// P4a evidence scene (`docs/AUTOMATION_LANES_DESIGN.md` §7): the same layer
+/// set as `timeline_scene`, but with the automation transport globals LIVE —
+/// Automation Arm on, one override latch active — so the transport bar's
+/// ARM/BACK buttons render their lit state. The latched entry doesn't need to
+/// resolve to a real lane for this scene: the transport bar only reads
+/// `!automation_latched_params.is_empty()`, never the id itself (lane-strip
+/// rendering off that data is P4's remaining, not-yet-built surface).
+fn automation_scene() -> SceneData {
+    let mut data = timeline_scene();
+    data.content.automation_armed = true;
+    data.content.automation_latched_params =
+        vec![(manifold_core::EffectId::new("evidence-fx"), std::borrow::Cow::Borrowed("amount"))];
+    data
 }
 
 /// P0.3 evidence scene for `docs/TIMELINE_LAYOUT_P0_SPEC.md`: one lane of many

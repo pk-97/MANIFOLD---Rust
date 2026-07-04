@@ -393,6 +393,14 @@ pub fn push_state(
         let can_clear = project.tempo_map.point_count() > 1;
         ui.transport.set_bpm_clear_active(can_clear);
 
+        // Automation globals (P4, docs/AUTOMATION_LANES_DESIGN.md §4/§5/§7):
+        // ARM mirrors the runtime arm flag; BACK lights red exactly when any
+        // lane override latch is active (Live's Back to Arrangement).
+        ui.transport.set_automation_state(
+            content_state.automation_armed,
+            !content_state.automation_latched_params.is_empty(),
+        );
+
         // Save dirty state is shown by the "•" in the window/header project name
         // (set above); the transport SAVE button moved to the File menu. HDR /
         // Percussion / render config moved to the Settings popup (fed below).
