@@ -98,6 +98,28 @@ versioned. History on the substrate is non-negotiable — the sleep pass edits i
   tier (`@inherit:opus`) via the transcript's `message.model` field, which is
   what `anchor/agent-model-discipline` matches on.
 
+## 2b. Worker nudges (approved 2026-07-04, build with Sonnet, gate behind a flag)
+
+Extend observation + delivery to subagents — they grind longest unsupervised, on
+the smaller models this layer exists to lift, and their documented failure modes
+(fuse-for-parity bundling, unverified "done", thrash) map onto existing anchors.
+- Daemon: also tail `<session>/subagents/agent-*.jsonl`, one WindowState per
+  agent (scan the dir each poll; agents appear mid-session).
+- Mailbox: per-agent verdict/consumed files keyed `<session>.<agent_id>` —
+  reuse the existing session-level logic verbatim, just parameterize the key.
+  The PostToolUse valve routes on `agent_id`: absent = session mailbox (current
+  behavior), present = that agent's mailbox.
+- Prerequisite probe (one throwaway agent, same method as 2026-07-04): confirm
+  `additionalContext` returned from a subagent's hook fire lands in the
+  SUBAGENT's context, not the parent's. If it lands in the parent, stop — the
+  whole extension is off.
+- Ship OFF behind a flag (e.g. `verdicts/worker-nudges.enabled` sentinel or a
+  constant); turn on only after sleep pass 1 validates the moves on
+  main-session telemetry — worker whispers are invisible to supervision, only
+  telemetry scoring can validate them. Telemetry records must carry agent_id.
+- Cost sanity: classifier spend scales with agent count (~a few dollars per
+  six-worker wave) — acceptable; per-agent cooldowns prevent whisper spam.
+
 ## 3. Payload library (`moves.md`)
 
 Two families, one format. **Coaching moves** fire on phase transitions (hypothesis
