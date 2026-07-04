@@ -16,6 +16,7 @@ pub mod macros_panel;
 pub mod master_chrome;
 pub mod overlay;
 pub mod param_card;
+pub mod picker_core;
 pub mod param_slider_shared;
 pub mod perf_hud;
 pub mod settings_popup;
@@ -648,6 +649,30 @@ pub enum PanelAction {
     /// the dispatch falls back to Save to Library (as new) instead. Shown
     /// only when diverged, same gate as `RevertToLibrary`.
     PushToLibrary(GraphParamTarget),
+
+    // ── Browser: sources, badges, management (PRESET_LIBRARY_DESIGN P5, D6) ──
+    // Right-click on a browser grid cell opens a management menu; `mode`
+    // stands in for `PresetKind` (Effect/Generator only — Node mode never
+    // reaches these, `browser_popup` screens it out) since this crate
+    // mirrors core types rather than depending on `manifold-core`.
+    /// Right-click on a cell → open its management menu (Rename always;
+    /// Duplicate/Reveal only for `MyLibrary`; never shown for `Factory` —
+    /// `browser_popup::handle_right_click` already screens those out).
+    BrowserCellRightClicked(browser_popup::BrowserPopupMode, String, picker_core::Source),
+    /// Rename clicked → opens the shared name-prompt text-input session
+    /// (mirrors `SaveToLibrary`/`SaveToProject`); the actual write happens on
+    /// commit (`UserLibrary::rename` for `MyLibrary`, an undoable
+    /// `RenameEmbeddedPresetCommand` for `Project`).
+    BrowserRenamePresetClicked(browser_popup::BrowserPopupMode, String, picker_core::Source),
+    /// Duplicate clicked — `MyLibrary` entries only (`UserLibrary::duplicate`).
+    BrowserDuplicatePresetClicked(browser_popup::BrowserPopupMode, String),
+    /// Delete clicked — a native Yes/No confirm (`crate::alerts::confirm`,
+    /// same precedent as `RestoreSnapshot`) gates the actual removal
+    /// (`UserLibrary::delete` for `MyLibrary`, an undoable
+    /// `DeleteEmbeddedPresetCommand` for `Project`).
+    BrowserDeletePresetClicked(browser_popup::BrowserPopupMode, String, picker_core::Source),
+    /// Reveal in Finder clicked — `MyLibrary` entries only (`UserLibrary::reveal`).
+    BrowserRevealPresetClicked(browser_popup::BrowserPopupMode, String),
 
     // Macros panel collapse
     MacrosCollapseToggle,

@@ -41,6 +41,17 @@ pub struct DispatchResult {
         manifold_core::effect_graph_def::EffectGraphDef,
         crate::text_input::SavePresetDestination,
     )>,
+    /// Set by `BrowserRenamePresetClicked` (PRESET_LIBRARY_DESIGN P5, D6):
+    /// the resolved kind + id + source + CURRENT display name, for the
+    /// caller to open the shared name-prompt text-input session with — same
+    /// handoff shape as `begin_save_preset` and for the same reason
+    /// (`dispatch_inspector` has `project`/`ui` but not `self.text_input`).
+    pub begin_rename_preset: Option<(
+        manifold_core::preset_def::PresetKind,
+        manifold_core::PresetTypeId,
+        manifold_ui::panels::picker_core::Source,
+        String,
+    )>,
 }
 
 impl DispatchResult {
@@ -49,6 +60,7 @@ impl DispatchResult {
             structural_change: false,
             resolution_changed: false,
             begin_save_preset: None,
+            begin_rename_preset: None,
         }
     }
     pub(crate) fn structural() -> Self {
@@ -56,6 +68,7 @@ impl DispatchResult {
             structural_change: true,
             resolution_changed: false,
             begin_save_preset: None,
+            begin_rename_preset: None,
         }
     }
     pub(crate) fn resolution() -> Self {
@@ -63,6 +76,7 @@ impl DispatchResult {
             structural_change: true,
             resolution_changed: true,
             begin_save_preset: None,
+            begin_rename_preset: None,
         }
     }
     pub(crate) fn unhandled() -> Self {
@@ -70,6 +84,7 @@ impl DispatchResult {
             structural_change: false,
             resolution_changed: false,
             begin_save_preset: None,
+            begin_rename_preset: None,
         }
     }
 }
@@ -352,6 +367,11 @@ pub fn dispatch(
         | PanelAction::PushToLibrary(..)
         | PanelAction::ExportPreset(..)
         | PanelAction::ImportPreset(..)
+        | PanelAction::BrowserCellRightClicked(..)
+        | PanelAction::BrowserRenamePresetClicked(..)
+        | PanelAction::BrowserDuplicatePresetClicked(..)
+        | PanelAction::BrowserDeletePresetClicked(..)
+        | PanelAction::BrowserRevealPresetClicked(..)
         | PanelAction::MacrosCollapseToggle
         | PanelAction::MacroSnapshot(_)
         | PanelAction::MacroChanged(..)

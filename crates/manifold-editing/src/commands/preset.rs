@@ -288,6 +288,106 @@ impl Command for RevertToLibraryCommand {
     }
 }
 
+/// Rename a project-embedded preset's `display_name` in place
+/// (PRESET_LIBRARY_DESIGN P5, D6: the browser's "This Project" right-click
+/// management menu). The id and filename-equivalent (the embedded preset is
+/// serialized in-project, so there's no separate file) never change — only
+/// `preset_metadata.display_name` — matching `UserLibrary::rename`'s
+/// same-shape guarantee for My Library entries (D8: the id is the stable
+/// serialization anchor).
+#[derive(Debug)]
+pub struct RenameEmbeddedPresetCommand {
+    id: PresetTypeId,
+    new_name: String,
+    /// Captured on first execute so undo restores the pre-rename name.
+    old_name: Option<String>,
+}
+
+impl RenameEmbeddedPresetCommand {
+    pub fn new(id: PresetTypeId, new_name: String) -> Self {
+        Self { id, new_name, old_name: None }
+    }
+}
+
+impl Command for RenameEmbeddedPresetCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let Some(mut ep) = project.embedded_preset(&self.id).cloned() else {
+            return;
+        };
+        let Some(meta) = ep.def.preset_metadata.as_mut() else {
+            return;
+        };
+        if self.old_name.is_none() {
+            self.old_name = Some(meta.display_name.clone());
+        }
+        meta.display_name = self.new_name.clone();
+        project.upsert_embedded_preset(ep);
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some(old_name) = self.old_name.clone() else {
+            return;
+        };
+        let Some(mut ep) = project.embedded_preset(&self.id).cloned() else {
+            return;
+        };
+        if let Some(meta) = ep.def.preset_metadata.as_mut() {
+            meta.display_name = old_name;
+        }
+        project.upsert_embedded_preset(ep);
+    }
+
+    fn description(&self) -> &str {
+        "Rename Project Preset"
+    }
+}
+
+/// Delete a project-embedded preset (PRESET_LIBRARY_DESIGN P5, D6: the
+/// browser's "This Project" right-click management menu, gated by a native
+/// Yes/No confirm at the call site). Undoable — mirrors
+/// [`SaveToProjectCommand`]'s execute/undo shape with execute and undo
+/// swapped: capture what `remove_embedded_preset` returns once, re-insert it
+/// on undo.
+///
+/// Deliberately does NOT retarget any instance still tracking this id (an
+/// instance addresses its preset by id, D8) — a card left pointing at a
+/// deleted project preset behaves exactly like today's "missing id" case
+/// (§1's VERIFY-AT-IMPL, resolved by P2's snapshot fallback for the
+/// self-containment case); this command's job is only the removal.
+#[derive(Debug)]
+pub struct DeleteEmbeddedPresetCommand {
+    id: PresetTypeId,
+    /// Captured on first execute so undo re-inserts the SAME entry
+    /// deterministically (mirrors `ForkPresetCommand::forked`/
+    /// `SaveToProjectCommand::saved`).
+    removed: Option<EmbeddedPreset>,
+}
+
+impl DeleteEmbeddedPresetCommand {
+    pub fn new(id: PresetTypeId) -> Self {
+        Self { id, removed: None }
+    }
+}
+
+impl Command for DeleteEmbeddedPresetCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let removed = project.remove_embedded_preset(&self.id);
+        if self.removed.is_none() {
+            self.removed = removed;
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some(ep) = self.removed.clone() {
+            project.upsert_embedded_preset(ep);
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Delete Project Preset"
+    }
+}
+
 /// Mint a collision-free embedded-preset id from a user-TYPED name for Save
 /// to Project: `base` itself if free, else `"{base} 2"`, `"{base} 3"`, ... —
 /// deliberately NOT `Project::mint_forked_preset_id` (which always appends a
@@ -580,5 +680,86 @@ mod tests {
             Some(&diverged),
             "undo of a refused execute must not clear the untouched graph"
         );
+    }
+
+    // ── RenameEmbeddedPresetCommand (PRESET_LIBRARY_DESIGN P5) ──────────
+
+    #[test]
+    fn rename_embedded_preset_edits_display_name_but_keeps_id_and_undoes() {
+        let mut project = Project::default();
+        let id = PresetTypeId::from_string("Sunset Glow".to_string());
+        project.upsert_embedded_preset(EmbeddedPreset {
+            kind: PresetKind::Effect,
+            def: def_with_param("Sunset Glow", "intensity", 0.0, 2.0),
+            origin: EmbeddedOrigin::Saved,
+        });
+
+        let mut cmd = RenameEmbeddedPresetCommand::new(id.clone(), "Dusk Glow".to_string());
+        cmd.execute(&mut project);
+        let renamed = project.embedded_preset(&id).expect("id must not change");
+        assert_eq!(renamed.def.preset_metadata.as_ref().unwrap().display_name, "Dusk Glow");
+
+        cmd.undo(&mut project);
+        let restored = project.embedded_preset(&id).expect("still present after undo");
+        assert_eq!(
+            restored.def.preset_metadata.as_ref().unwrap().display_name,
+            "Sunset Glow",
+            "undo must restore the pre-rename display_name"
+        );
+
+        // Redo reapplies the same rename.
+        cmd.execute(&mut project);
+        assert_eq!(
+            project.embedded_preset(&id).unwrap().def.preset_metadata.as_ref().unwrap().display_name,
+            "Dusk Glow"
+        );
+    }
+
+    #[test]
+    fn rename_embedded_preset_is_a_no_op_for_a_missing_id() {
+        let mut project = Project::default();
+        let missing = PresetTypeId::from_string("Nonexistent".to_string());
+        let mut cmd = RenameEmbeddedPresetCommand::new(missing.clone(), "New Name".to_string());
+        cmd.execute(&mut project);
+        assert!(project.embedded_preset(&missing).is_none(), "must not fabricate an entry");
+        cmd.undo(&mut project);
+        assert!(project.embedded_preset(&missing).is_none());
+    }
+
+    // ── DeleteEmbeddedPresetCommand (PRESET_LIBRARY_DESIGN P5) ──────────
+
+    #[test]
+    fn delete_embedded_preset_removes_it_and_undo_reinserts_it() {
+        let mut project = Project::default();
+        let id = PresetTypeId::from_string("Throwaway".to_string());
+        project.upsert_embedded_preset(EmbeddedPreset {
+            kind: PresetKind::Generator,
+            def: def_with_param("Throwaway", "speed", 0.0, 1.0),
+            origin: EmbeddedOrigin::Saved,
+        });
+        assert!(project.embedded_preset(&id).is_some());
+
+        let mut cmd = DeleteEmbeddedPresetCommand::new(id.clone());
+        cmd.execute(&mut project);
+        assert!(project.embedded_preset(&id).is_none(), "execute must remove the entry");
+
+        cmd.undo(&mut project);
+        let restored = project.embedded_preset(&id).expect("undo must reinsert the SAME entry");
+        assert_eq!(restored.kind, PresetKind::Generator);
+        assert_eq!(restored.def.preset_metadata.as_ref().unwrap().display_name, "Throwaway");
+
+        // Redo removes it again.
+        cmd.execute(&mut project);
+        assert!(project.embedded_preset(&id).is_none());
+    }
+
+    #[test]
+    fn delete_embedded_preset_is_a_no_op_for_a_missing_id() {
+        let mut project = Project::default();
+        let missing = PresetTypeId::from_string("Nonexistent".to_string());
+        let mut cmd = DeleteEmbeddedPresetCommand::new(missing.clone());
+        cmd.execute(&mut project);
+        cmd.undo(&mut project);
+        assert!(project.embedded_preset(&missing).is_none(), "undo must not fabricate an entry from nothing");
     }
 }

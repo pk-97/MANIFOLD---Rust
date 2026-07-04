@@ -76,6 +76,13 @@ pub enum TextInputField {
     /// either calls `UserLibrary::save` directly (Library) or executes
     /// `SaveToProjectCommand` (Project).
     SavePresetName,
+    /// Browser management-menu Rename prompt (PRESET_LIBRARY_DESIGN P5, D6) —
+    /// one field for both sources (which one rides on
+    /// `TextInputState::rename_preset`, since `PresetTypeId` isn't `Copy`).
+    /// Opened from the browser's right-click menu; commit calls
+    /// `UserLibrary::rename` (My Library) or executes
+    /// `RenameEmbeddedPresetCommand` (Project).
+    RenamePreset,
 }
 
 impl TextInputField {
@@ -154,6 +161,32 @@ pub struct SavePresetCtx {
     pub destination: SavePresetDestination,
 }
 
+/// Context for an in-flight browser Rename prompt — set when the box opens
+/// ([`TextInputField::RenamePreset`]) and read on commit. Lives off the
+/// `Copy` field enum because `PresetTypeId` isn't `Copy`.
+#[derive(Debug, Clone)]
+pub struct RenamePresetCtx {
+    pub kind: manifold_core::preset_def::PresetKind,
+    pub id: manifold_core::PresetTypeId,
+    pub source: manifold_ui::panels::picker_core::Source,
+}
+
+/// Which overlay (and in which window) an in-flight text session belongs to —
+/// `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` §3, D2. Set by `begin_owned`;
+/// `None` means the field is panel-owned (BPM, layer name, etc.), not hosted
+/// inside an overlay. The app's overlay pump drains `UIRoot::take_closed_overlays`
+/// once per frame per window and calls `cancel_if_owned_by` for each closed id,
+/// so a session can never outlive the overlay that hosts its field — closing
+/// the class of bug where a popup's search text stuck around after the popup
+/// closed (Peter, 2026-07-04).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextSessionOwner {
+    /// An overlay on the main window's `UIRoot` (`self.ws.ui_root`).
+    MainOverlay(crate::ui_root::OverlayId),
+    /// An overlay on the graph-editor window's `UIRoot` (`ed.ui_root`).
+    EditorOverlay(crate::ui_root::OverlayId),
+}
+
 /// Screen-space rectangle for anchoring the text input overlay.
 #[derive(Debug, Clone, Copy)]
 pub struct AnchorRect {
@@ -216,6 +249,13 @@ pub struct TextInputState {
     /// Context for `SavePresetName` (kind + effective def + destination). Set
     /// right after `begin()`, read (and taken) on commit.
     pub save_preset: Option<SavePresetCtx>,
+    /// Context for `RenamePreset` (kind + id + source). Set right after
+    /// `begin()`, read (and taken) on commit.
+    pub rename_preset: Option<RenamePresetCtx>,
+    /// The overlay hosting this session, if any — `None` for panel-owned
+    /// fields. Set by [`Self::begin_owned`], cleared by [`Self::begin`]
+    /// (a raw `begin` is always panel-owned) and [`Self::cancel`]/[`Self::commit`].
+    pub owner: Option<TextSessionOwner>,
 }
 
 impl TextInputState {
@@ -236,11 +276,16 @@ impl TextInputState {
             inspector_param: None,
             driver_free_period: None,
             save_preset: None,
+            rename_preset: None,
+            owner: None,
         }
     }
 
     /// Begin editing a field with an initial value.
     /// Auto-cancels any existing session (Unity: only one active at a time).
+    /// Always panel-owned (`owner` cleared) — use [`Self::begin_owned`] for a
+    /// field hosted inside an overlay, so its session gets cancelled when the
+    /// overlay closes.
     pub fn begin(
         &mut self,
         field: TextInputField,
@@ -261,10 +306,39 @@ impl TextInputState {
         );
         // Stale param ctx from a prior session must not leak in; the caller sets
         // it again immediately for an `InspectorParam` / `DriverFreePeriod` /
-        // `SavePresetName` field.
+        // `SavePresetName` / `RenamePreset` field.
         self.inspector_param = None;
         self.driver_free_period = None;
         self.save_preset = None;
+        self.rename_preset = None;
+        self.owner = None;
+    }
+
+    /// `begin()` + tag the session with the overlay hosting it
+    /// (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` §3, D2). The app's overlay
+    /// pump cancels this session via [`Self::cancel_if_owned_by`] when
+    /// `owner`'s overlay closes, so the field can't outlive its host.
+    pub fn begin_owned(
+        &mut self,
+        owner: TextSessionOwner,
+        field: TextInputField,
+        initial: &str,
+        anchor: AnchorRect,
+        font_size: f32,
+    ) {
+        self.begin(field, initial, anchor, font_size);
+        self.owner = Some(owner);
+    }
+
+    /// Cancel iff the active session is owned by `owner` — called by the
+    /// app's overlay pump when `owner`'s overlay just closed. A no-op if the
+    /// active session belongs to a different overlay (or is panel-owned), so
+    /// draining closed overlays for one window never disturbs a session that
+    /// belongs to the other.
+    pub fn cancel_if_owned_by(&mut self, owner: TextSessionOwner) {
+        if self.owner == Some(owner) {
+            self.cancel();
+        }
     }
 
     /// Cancel editing without committing.
@@ -280,6 +354,8 @@ impl TextInputState {
         self.inspector_param = None;
         self.driver_free_period = None;
         self.save_preset = None;
+        self.rename_preset = None;
+        self.owner = None;
     }
 
     /// Insert a character at the cursor position.
@@ -332,6 +408,7 @@ impl TextInputState {
     pub fn commit(&mut self) -> (TextInputField, String) {
         self.active = false;
         self.select_all = false;
+        self.owner = None;
         let field = self.field;
         let text = std::mem::take(&mut self.text);
         (field, text)

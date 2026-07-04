@@ -101,6 +101,17 @@ impl UserLibrary {
         self.kind_dir(kind).join(format!("{}.json", id))
     }
 
+    /// Path a library entry's save-time thumbnail PNG lives (or would live)
+    /// at, for `kind` (PRESET_LIBRARY_DESIGN P6, D7) — same directory + stem
+    /// as [`Self::path_for`]'s JSON, `.png` extension. Pure path computation
+    /// (no device access; the caller renders + writes the bytes after a
+    /// successful [`Self::save`]) so callers can check existence
+    /// (`Path::is_file`) for the browser's clean-fallback rule without
+    /// touching the filesystem here.
+    pub fn thumbnail_path(&self, kind: PresetKind, id: &str) -> PathBuf {
+        self.kind_dir(kind).join(format!("{}.png", id))
+    }
+
     /// Whether `id` already names a preset for `kind`, checked two ways:
     /// (1) a file already on disk under THIS root (catches a just-saved file
     /// before the ~1s hot-reload watcher has re-scanned, and makes an
@@ -229,8 +240,8 @@ impl UserLibrary {
     /// every project that already references this id by name keeps
     /// resolving (D8: `effect_type`/id is the stable serialization anchor).
     ///
-    /// Consumed by the P5 browser management menu (right-click → Rename).
-    #[allow(dead_code)] // wired by PRESET_LIBRARY P5 (browser right-click management)
+    /// Consumed by the browser management menu (right-click → Rename),
+    /// via `TextInputField::RenamePreset`'s commit arm in `app.rs`.
     pub fn rename(&self, kind: PresetKind, id: &PresetTypeId, new_name: &str) -> Result<(), LibError> {
         let path = self.path_for(kind, id.as_str());
         if !path.is_file() {
@@ -247,8 +258,8 @@ impl UserLibrary {
     /// collision-free id/name (`"{name} 2"` style), leaving the original
     /// untouched. Returns the new entry's id.
     ///
-    /// Consumed by the P5 browser management menu (right-click → Duplicate).
-    #[allow(dead_code)] // wired by PRESET_LIBRARY P5 (browser right-click management)
+    /// Consumed by the browser management menu (right-click → Duplicate),
+    /// via `PanelAction::BrowserDuplicatePresetClicked`'s dispatch arm.
     pub fn duplicate(&self, kind: PresetKind, id: &PresetTypeId) -> Result<PresetTypeId, LibError> {
         let path = self.path_for(kind, id.as_str());
         if !path.is_file() {
@@ -268,8 +279,9 @@ impl UserLibrary {
     /// can reach one; `NotFound` is returned instead of touching anything
     /// outside the library root.
     ///
-    /// Consumed by the P5 browser management menu (right-click → Delete).
-    #[allow(dead_code)] // wired by PRESET_LIBRARY P5 (browser right-click management)
+    /// Consumed by the browser management menu (right-click → Delete, gated
+    /// by a native Yes/No confirm), via
+    /// `PanelAction::BrowserDeletePresetClicked`'s dispatch arm.
     pub fn delete(&self, kind: PresetKind, id: &PresetTypeId) -> Result<(), LibError> {
         let path = self.path_for(kind, id.as_str());
         if !path.is_file() {
@@ -285,9 +297,8 @@ impl UserLibrary {
     /// fire-and-forget nature of a Finder reveal (nothing in the app state
     /// depends on whether Finder actually raised a window).
     ///
-    /// Consumed by the P5 browser management menu (right-click → Reveal in
-    /// Finder).
-    #[allow(dead_code)] // wired by PRESET_LIBRARY P5 (browser right-click management)
+    /// Consumed by the browser management menu (right-click → Reveal in
+    /// Finder), via `PanelAction::BrowserRevealPresetClicked`'s dispatch arm.
     pub fn reveal(&self, kind: PresetKind, id: &PresetTypeId) {
         let path = self.path_for(kind, id.as_str());
         if let Err(e) = std::process::Command::new("open").arg("-R").arg(&path).spawn() {

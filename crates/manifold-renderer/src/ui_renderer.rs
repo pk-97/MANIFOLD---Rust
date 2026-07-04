@@ -1,6 +1,7 @@
 use manifold_gpu::{
     GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuDevice, GpuEncoder,
-    GpuLoadAction, GpuRenderPipeline, GpuTexture, GpuTextureFormat, GpuVertexAttribute,
+    GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler, GpuSamplerDesc, GpuTexture,
+    GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage, GpuVertexAttribute,
     GpuVertexFormat, GpuVertexLayout,
 };
 
@@ -269,6 +270,109 @@ struct PreparedBatch {
     depth: Depth,
 }
 
+/// A static-image draw (PRESET_LIBRARY_DESIGN P6, D7): browser cells filling
+/// their body with a save-time-rendered thumbnail. Non-interactive — the
+/// existing button node drawn in the same rect keeps handling clicks/hover;
+/// this only queues the picture.  Accumulated during tree traversal from
+/// [`UITree`] `Image` nodes (see `draw_node`), converted to a
+/// [`PreparedImageDraw`] during `prepare()`. A SEPARATE textured pipeline
+/// from the flat/gradient rect pipeline (one texture bound per quad — no
+/// atlas), so each is its own draw call; the browser's cell count is bounded
+/// (tens of presets), so this is cheap.
+struct ImageCommand {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    corner_radius: f32,
+    handle: TextureHandle,
+    depth: Depth,
+    /// Clip captured at draw time (the tree-traversal clip stack — images are
+    /// only ever emitted via `draw_node`, never the immediate API).
+    clip: Option<Rect>,
+}
+
+/// GPU-ready image draw with physical-pixel scissor.
+struct PreparedImageDraw {
+    scissor: Option<[u32; 4]>,
+    depth: Depth,
+    handle: TextureHandle,
+    vertex_offset: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ImageVertex {
+    position: [f32; 2],
+    uv: [f32; 2],
+    /// (w, h, corner_radius, _) in LOCAL (unrotated) rect space — same
+    /// rounded-rect SDF convention `UI_SHADER`'s fragment stage uses for
+    /// `rect_params`.
+    rect_params: [f32; 4],
+}
+
+/// Textured rounded-rect: samples `t_image` and masks it to the rounded-rect
+/// SDF (same `fwidth`-based one-physical-pixel AA as `UI_SHADER`), so a
+/// thumbnail fills a browser cell with clean rounded corners instead of a
+/// square image poking over them.
+const IMAGE_SHADER: &str = r#"
+struct Globals { viewport_size: vec2<f32>, offset: vec2<f32> };
+@group(0) @binding(0) var<uniform> globals: Globals;
+@group(0) @binding(1) var t_image: texture_2d<f32>;
+@group(0) @binding(2) var s_image: sampler;
+
+struct VsIn {
+    @location(0) position: vec2<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) rect_params: vec4<f32>,
+};
+struct VsOut {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) rect_params: vec4<f32>,
+};
+
+@vertex
+fn vs_main(in: VsIn) -> VsOut {
+    var out: VsOut;
+    let ndc_x = ((in.position.x - globals.offset.x) / globals.viewport_size.x) * 2.0 - 1.0;
+    let ndc_y = 1.0 - ((in.position.y - globals.offset.y) / globals.viewport_size.y) * 2.0;
+    out.position = vec4<f32>(ndc_x, ndc_y, 0.0, 1.0);
+    out.uv = in.uv;
+    out.rect_params = in.rect_params;
+    return out;
+}
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    let rect_w = in.rect_params.x;
+    let rect_h = in.rect_params.y;
+    let radius = in.rect_params.z;
+    let color = textureSample(t_image, s_image, in.uv);
+    if radius <= 0.0 {
+        return color;
+    }
+    let pixel = in.uv * vec2<f32>(rect_w, rect_h);
+    let center = vec2<f32>(rect_w, rect_h) * 0.5;
+    let half_size = center - vec2<f32>(radius);
+    let q = abs(pixel - center) - half_size;
+    let d = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+    let aa = fwidth(d) + 1e-4;
+    let cov = 1.0 - smoothstep(-aa, aa, d);
+    if cov <= 0.0 {
+        discard;
+    }
+    return vec4<f32>(color.rgb, color.a * cov);
+}
+"#;
+
+/// Max image quads a single `prepare()` call queues — a generous bound for a
+/// browser cell grid (tens of presets visible at once at most).
+const MAX_IMAGE_QUADS: usize = 128;
+/// Ring size for the image vertex buffer — mirrors `ClipThumbGpu`'s
+/// `VBUF_RING_SIZE`, small since image draws are far rarer than rect batches.
+const IMAGE_VBUF_RING_SIZE: usize = 3;
+
 /// Initial vertex/index buffer capacities (vertices / indices).
 const INITIAL_VERTEX_CAPACITY: usize = 1024;
 const INITIAL_INDEX_CAPACITY: usize = 1536;
@@ -372,6 +476,30 @@ pub struct UIRenderer {
     // Physical dimensions of the render target (for full-viewport scissor reset).
     prepared_physical_w: u32,
     prepared_physical_h: u32,
+
+    // ── Static images (PRESET_LIBRARY_DESIGN P6, D7) ────────────────────
+    // A separate small textured pipeline from the flat/gradient rect one —
+    // one texture bound per quad, no atlas (the browser's cell count is
+    // bounded — tens of presets — so per-quad draw calls are cheap).
+    image_pipeline: GpuRenderPipeline,
+    image_sampler: GpuSampler,
+    image_index_buf: GpuBuffer,
+    image_vbuf_ring: Vec<Option<GpuBuffer>>,
+    image_ring_idx: usize,
+    // Per-frame queue, accumulated by `draw_node` from `UINodeType::Image`
+    // tree nodes; converted to `prepared_image_draws` and cleared in
+    // `prepare()` (mirrors `rect_commands`).
+    image_commands: Vec<ImageCommand>,
+    // GPU-ready draws produced by `prepare()`.
+    prepared_image_draws: Vec<PreparedImageDraw>,
+    /// Which `image_vbuf_ring` slot holds this frame's prepared vertex data.
+    prepared_image_slot: usize,
+    /// Registered textures, decoded+uploaded ONCE per distinct key by the app
+    /// (`register_image`) — persists across frames and across browser opens
+    /// (no eviction: a bounded, stable corpus of tens of presets). Never
+    /// populated or consulted on a per-frame render path — only at the
+    /// (rare) point a new key shows up.
+    image_textures: ahash::AHashMap<TextureHandle, GpuTexture>,
 }
 
 impl UIRenderer {
@@ -440,6 +568,43 @@ impl UIRenderer {
         let vbuf_ring = (0..BUF_RING_SIZE).map(|_| None).collect();
         let ibuf_ring = (0..BUF_RING_SIZE).map(|_| None).collect();
 
+        // ── Static-image pipeline (PRESET_LIBRARY_DESIGN P6, D7) ──
+        let image_layout = GpuVertexLayout {
+            stride: std::mem::size_of::<ImageVertex>() as u32,
+            attributes: vec![
+                GpuVertexAttribute { format: GpuVertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                GpuVertexAttribute { format: GpuVertexFormat::Float32x2, offset: 8, shader_location: 1 },
+                GpuVertexAttribute { format: GpuVertexFormat::Float32x4, offset: 16, shader_location: 2 },
+            ],
+        };
+        let image_pipeline = device.create_render_pipeline_with_vertex_layout(
+            IMAGE_SHADER,
+            "vs_main",
+            "fs_main",
+            format,
+            Some(blend),
+            &image_layout,
+            "UI Image Pipeline",
+        );
+        let image_sampler = device.create_sampler(&GpuSamplerDesc {
+            min_filter: GpuFilterMode::Linear,
+            mag_filter: GpuFilterMode::Linear,
+            ..Default::default()
+        });
+        let image_index_data: [u32; 6] = [0, 1, 2, 0, 2, 3];
+        let image_index_buf = device.create_buffer_shared(24);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                image_index_data.as_ptr(),
+                image_index_buf.mapped_ptr().unwrap().cast::<u32>(),
+                6,
+            );
+        }
+        let image_vbuf_size = (MAX_IMAGE_QUADS * 4 * std::mem::size_of::<ImageVertex>()) as u64;
+        let image_vbuf_ring = (0..IMAGE_VBUF_RING_SIZE)
+            .map(|_| Some(device.create_buffer_shared(image_vbuf_size)))
+            .collect();
+
         Self {
             pipeline,
             #[cfg(target_os = "macos")]
@@ -466,7 +631,58 @@ impl UIRenderer {
             line_batch_scratch: Vec::with_capacity(8),
             prepared_physical_w: 0,
             prepared_physical_h: 0,
+            image_pipeline,
+            image_sampler,
+            image_index_buf,
+            image_vbuf_ring,
+            image_ring_idx: 0,
+            image_commands: Vec::with_capacity(32),
+            prepared_image_draws: Vec::with_capacity(32),
+            prepared_image_slot: 0,
+            image_textures: ahash::AHashMap::new(),
         }
+    }
+
+    // ── Static images (PRESET_LIBRARY_DESIGN P6, D7) ────────────────────
+
+    /// Whether `handle` already has a registered GPU texture — the app calls
+    /// this before decoding a PNG so a distinct key is decoded+uploaded at
+    /// most once per process (stronger than "once per browser open": once
+    /// cached, re-opening the browser is free too).
+    pub fn has_image(&self, handle: TextureHandle) -> bool {
+        self.image_textures.contains_key(&handle)
+    }
+
+    /// Register a decoded RGBA8 image under `handle`, uploading it to a fresh
+    /// GPU texture. No-op (returns `false`) if `handle` is already
+    /// registered — idempotent, so a caller that doesn't bother checking
+    /// [`Self::has_image`] first still never re-uploads. `rgba.len()` must be
+    /// `w * h * 4`.
+    pub fn register_image(
+        &mut self,
+        device: &GpuDevice,
+        handle: TextureHandle,
+        w: u32,
+        h: u32,
+        rgba: &[u8],
+    ) -> bool {
+        if self.image_textures.contains_key(&handle) {
+            return false;
+        }
+        debug_assert_eq!(rgba.len(), (w * h * 4) as usize, "rgba buffer size must be w*h*4");
+        let tex = device.create_texture(&GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format: GpuTextureFormat::Rgba8UnormSrgb,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::CPU_UPLOAD,
+            label: "ui-registered-image",
+            mip_levels: 1,
+        });
+        device.upload_texture(&tex, rgba);
+        self.image_textures.insert(handle, tex);
+        true
     }
 
     // ── Immediate-mode draw API ─────────────────────────────────────
@@ -990,6 +1206,26 @@ impl UIRenderer {
             });
         }
 
+        // Static image (PRESET_LIBRARY_DESIGN P6, D7): a browser cell's
+        // thumbnail fill. Queued after the (transparent, for an Image node)
+        // background so it paints in the same relative order a bg fill
+        // would, and before text so a caption/badge label drawn on the same
+        // rect stays legible on top.
+        if node.node_type == UINodeType::Image
+            && let Some(handle) = node.texture
+        {
+            self.image_commands.push(ImageCommand {
+                x: bounds.x,
+                y: bounds.y,
+                w: bounds.width,
+                h: bounds.height,
+                corner_radius: style.corner_radius,
+                handle,
+                depth: self.current_depth(),
+                clip: self.clip_stack.last().copied(),
+            });
+        }
+
         // Text (or icon if the first char is an atlas-icon codepoint — see
         // `manifold_ui::icons::Icon`).
         #[cfg(target_os = "macos")]
@@ -1315,6 +1551,7 @@ impl UIRenderer {
             .iter()
             .map(|b| b.depth)
             .chain(self.line_commands.iter().map(|c| c.depth))
+            .chain(self.image_commands.iter().map(|c| c.depth))
             .collect();
         depths.sort_unstable();
         depths.dedup();
@@ -1442,6 +1679,59 @@ impl UIRenderer {
             }
         }
 
+        // Static images (PRESET_LIBRARY_DESIGN P6, D7): one quad per queued
+        // command, into a dedicated small ring-buffered vertex buffer (a
+        // separate textured pipeline from the flat/gradient rect one, so it
+        // can't share `self.vertices`). Capped at `MAX_IMAGE_QUADS` — a
+        // generous bound for a browser cell grid; past it, extras are
+        // silently dropped (same graceful-truncation shape `ClipThumbGpu`
+        // uses) rather than overflowing the fixed-size buffer.
+        self.prepared_image_draws.clear();
+        if !self.image_commands.is_empty() {
+            let slot = self.image_ring_idx % IMAGE_VBUF_RING_SIZE;
+            self.image_ring_idx += 1;
+            self.prepared_image_slot = slot;
+            let mut image_vertices: Vec<ImageVertex> =
+                Vec::with_capacity(self.image_commands.len().min(MAX_IMAGE_QUADS) * 4);
+            for cmd in self.image_commands.iter().take(MAX_IMAGE_QUADS) {
+                let rect_params = [cmd.w, cmd.h, cmd.corner_radius, 0.0];
+                let vertex_offset =
+                    (image_vertices.len() * std::mem::size_of::<ImageVertex>()) as u64;
+                image_vertices.push(ImageVertex { position: [cmd.x, cmd.y], uv: [0.0, 0.0], rect_params });
+                image_vertices.push(ImageVertex {
+                    position: [cmd.x + cmd.w, cmd.y],
+                    uv: [1.0, 0.0],
+                    rect_params,
+                });
+                image_vertices.push(ImageVertex {
+                    position: [cmd.x + cmd.w, cmd.y + cmd.h],
+                    uv: [1.0, 1.0],
+                    rect_params,
+                });
+                image_vertices.push(ImageVertex {
+                    position: [cmd.x, cmd.y + cmd.h],
+                    uv: [0.0, 1.0],
+                    rect_params,
+                });
+                self.prepared_image_draws.push(PreparedImageDraw {
+                    scissor: cmd.clip.map(to_physical),
+                    depth: cmd.depth,
+                    handle: cmd.handle,
+                    vertex_offset,
+                });
+            }
+            let vdata = bytemuck::cast_slice::<ImageVertex, u8>(&image_vertices);
+            let vbuf = match self.image_vbuf_ring[slot].take() {
+                Some(buf) if buf.size >= vdata.len() as u64 => buf,
+                _ => device.create_buffer_shared(vdata.len() as u64),
+            };
+            unsafe {
+                vbuf.write(0, vdata);
+            }
+            self.image_vbuf_ring[slot] = Some(vbuf);
+        }
+        self.image_commands.clear();
+
         // Ring-buffered GPU buffers: each prepare() call advances to the next
         // ring slot, preventing aliasing with in-flight GPU work from previous
         // prepare/commit cycles (both within this frame and across frames).
@@ -1511,7 +1801,7 @@ impl UIRenderer {
         self.current_batch_start = 0;
         self.line_batch_scratch = line_batches;
 
-        self.prepared_index_count > 0 || has_text
+        self.prepared_index_count > 0 || has_text || !self.prepared_image_draws.is_empty()
     }
 
     /// Render prepared rect and text geometry into `target`.
@@ -1567,6 +1857,53 @@ impl UIRenderer {
                 }
                 // Reset scissor to full viewport so text draws unclipped.
                 if drew {
+                    encoder.set_scissor_rect(0, 0, pw, ph);
+                }
+            }
+
+            // Static images (PRESET_LIBRARY_DESIGN P6, D7) — after this
+            // depth's rects, before its text, so a caption/badge label
+            // painted on the same cell stays legible on top of the picture.
+            // One draw call per image (a distinct texture each — no atlas),
+            // skipped silently if its texture hasn't been registered yet
+            // (self-corrects the next frame once the app decodes it).
+            if !self.prepared_image_draws.is_empty() {
+                let pw = self.prepared_physical_w;
+                let ph = self.prepared_physical_h;
+                let vbuf = self.image_vbuf_ring[self.prepared_image_slot]
+                    .as_ref()
+                    .expect("image_vbuf_ring slot populated when prepared_image_draws is non-empty");
+                let mut drew_image = false;
+                for draw in self.prepared_image_draws.iter().filter(|d| d.depth == depth) {
+                    let Some(tex) = self.image_textures.get(&draw.handle) else {
+                        continue;
+                    };
+                    if let Some([x, y, w, h]) = draw.scissor {
+                        encoder.set_scissor_rect(x, y, w, h);
+                    } else {
+                        encoder.set_scissor_rect(0, 0, pw, ph);
+                    }
+                    encoder.draw_in_render_pass(
+                        &self.image_pipeline,
+                        &[
+                            GpuBinding::Bytes {
+                                binding: 0,
+                                data: bytemuck::bytes_of(&self.prepared_globals),
+                            },
+                            GpuBinding::Texture { binding: 1, texture: tex },
+                            GpuBinding::Sampler { binding: 2, sampler: &self.image_sampler },
+                        ],
+                        vbuf,
+                        draw.vertex_offset,
+                        &self.image_index_buf,
+                        6,
+                        0,
+                        None,
+                        "UI Image",
+                    );
+                    drew_image = true;
+                }
+                if drew_image {
                     encoder.set_scissor_rect(0, 0, pw, ph);
                 }
             }
@@ -1669,4 +2006,39 @@ fn intersect_rects(a: Rect, b: Rect) -> Rect {
     let x1 = a.x_max().min(b.x_max());
     let y1 = a.y_max().min(b.y_max());
     Rect::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Decode-cache proof (PRESET_LIBRARY_DESIGN P6, D7): `register_image` is
+    /// idempotent — the SAME `TextureHandle` uploads a GPU texture only on
+    /// its first call, reporting `false` (no-op) on every subsequent one, so
+    /// the app-side "decode + register" loop never re-uploads a key it has
+    /// already cached (the "decoded once per distinct path" contract). Needs
+    /// a real GPU device; run with `--ignored`.
+    #[test]
+    #[ignore = "needs a real GPU device; run with --ignored"]
+    fn register_image_is_idempotent_per_handle() {
+        let device = crate::test_device();
+        let mut ui = UIRenderer::new(&device, GpuTextureFormat::Rgba8Unorm);
+
+        let handle = manifold_ui::node::texture_handle_for_key("/fake/path/Bloom.png");
+        assert!(!ui.has_image(handle), "must start unregistered");
+
+        let rgba = vec![255u8; 4 * 4 * 4]; // 4x4 opaque white
+        let first = ui.register_image(&device, handle, 4, 4, &rgba);
+        assert!(first, "first registration must upload and report true");
+        assert!(ui.has_image(handle));
+
+        let second = ui.register_image(&device, handle, 4, 4, &rgba);
+        assert!(!second, "re-registering the same handle must no-op (false)");
+        assert!(ui.has_image(handle));
+
+        // A DIFFERENT key/handle registers independently.
+        let other_handle = manifold_ui::node::texture_handle_for_key("/fake/path/Glitch.png");
+        assert!(!ui.has_image(other_handle));
+        assert!(ui.register_image(&device, other_handle, 4, 4, &rgba));
+    }
 }

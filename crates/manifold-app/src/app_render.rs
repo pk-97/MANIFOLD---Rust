@@ -497,6 +497,34 @@ impl Application {
         self.text_input.save_preset = Some(crate::text_input::SavePresetCtx { kind, def, destination });
     }
 
+    /// Open the browser management-menu Rename prompt (PRESET_LIBRARY_DESIGN
+    /// P5, D6) — same shape as [`Self::begin_save_preset_prompt`] (panel-
+    /// owned, not `begin_owned`: by the time this runs, the dropdown that
+    /// offered "Rename…" has already closed itself on selection, so tagging
+    /// this session with that overlay's id would have it cancelled the very
+    /// next frame's closed-overlay drain).
+    fn begin_rename_preset_prompt(
+        &mut self,
+        kind: manifold_core::preset_def::PresetKind,
+        id: manifold_core::PresetTypeId,
+        source: manifold_ui::panels::picker_core::Source,
+        initial_name: String,
+    ) {
+        let bounds = self.ws.ui_root.dropdown.container_bounds();
+        let anchor = if bounds.width > 0.0 && bounds.height > 0.0 {
+            crate::text_input::AnchorRect::new(bounds.x, bounds.y, bounds.width, 24.0)
+        } else {
+            crate::text_input::AnchorRect::new(120.0, 120.0, 220.0, 24.0)
+        };
+        self.text_input.begin(
+            crate::text_input::TextInputField::RenamePreset,
+            &initial_name,
+            anchor,
+            12.0,
+        );
+        self.text_input.rename_preset = Some(crate::text_input::RenamePresetCtx { kind, id, source });
+    }
+
     pub(crate) fn tick_and_render(&mut self) {
         let dt = self.frame_timer.consume_tick();
         let realtime = self.frame_timer.realtime_since_start();
@@ -840,6 +868,15 @@ impl Application {
             .sync_embedded_presets(&self.local_project);
         let mut actions = self.ws.ui_root.process_events();
 
+        // Overlay-hosted text sessions (main window): cancel any session
+        // whose overlay just closed during the routing above — the app pump
+        // half of `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` §3, D2. A no-op
+        // most frames (empty drain).
+        for id in self.ws.ui_root.take_closed_overlays() {
+            self.text_input
+                .cancel_if_owned_by(crate::text_input::TextSessionOwner::MainOverlay(id));
+        }
+
         // Native menu bar clicks → the same PanelAction dispatch as on-screen
         // chrome. Drain into an owned Vec first so the immutable borrow of
         // `self.app_menu` ends before we touch `&mut self` below. File/View
@@ -961,42 +998,59 @@ impl Application {
                         // auto-focused on open, but a click re-focuses).
                         if ed.ui_root.browser_popup.is_search_bar(node_id) {
                             let r = ed.ui_root.browser_popup.search_bar_rect(&ed.ui_root.tree);
-                            self.text_input.begin(
+                            self.text_input.begin_owned(
+                                crate::text_input::TextSessionOwner::EditorOverlay(
+                                    crate::ui_root::OverlayId::BrowserPopup,
+                                ),
                                 crate::text_input::TextInputField::SearchFilter,
-                                &ed.ui_root.browser_popup.current_filter,
+                                ed.ui_root.browser_popup.current_filter(),
                                 crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
                                 11.0,
                             );
                             ed.offscreen_dirty = true;
-                        } else if let Some(action) =
-                            ed.ui_root.browser_popup.handle_click(node_id)
-                        {
-                            match action {
-                                BrowserPopupAction::NodeSelected { type_id, graph_pos } => {
+                        } else {
+                            // This routes straight to `handle_click`, bypassing
+                            // the overlay driver's `route_overlay_event` — so a
+                            // close here (cell pick / backdrop) never reaches
+                            // `route_overlay_event`'s closed-overlay tracking.
+                            // Snapshot before/after and record it ourselves; the
+                            // per-frame pump below drains it and cancels this
+                            // popup's owned text session (no manual `cancel()`
+                            // needed here — that was the distributed-reset
+                            // pattern `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md`
+                            // §3 replaces).
+                            let was_open = ed.ui_root.browser_popup.is_open();
+                            if let Some(action) = ed.ui_root.browser_popup.handle_click(node_id) {
+                                ed.ui_root.note_overlay_closed_if(
+                                    crate::ui_root::OverlayId::BrowserPopup,
+                                    was_open,
+                                );
+                                // Dismissed, or Effect/Generator/Paste (which never
+                                // arise in Node mode from the editor popup), need
+                                // nothing further here — the text-session cancel
+                                // (if any) is handled by the closed-overlay pump.
+                                if let BrowserPopupAction::NodeSelected { type_id, graph_pos } =
+                                    action
+                                {
                                     // Hand off to the layer-2 spawn handler.
-                                    // `graph_pos` is the palette-origin
-                                    // canvas position captured at open — pass
-                                    // it straight through, never recompute.
-                                    graph_edits.push(
-                                        manifold_ui::GraphEditCommand::AddGraphNodeAt {
-                                            type_id,
-                                            graph_pos,
-                                        },
-                                    );
-                                    self.text_input.cancel();
+                                    // `graph_pos` is the palette-origin canvas
+                                    // position captured at open — pass it
+                                    // straight through, never recompute.
+                                    graph_edits.push(manifold_ui::GraphEditCommand::AddGraphNodeAt {
+                                        type_id,
+                                        graph_pos,
+                                    });
                                 }
-                                BrowserPopupAction::Dismissed => {
-                                    self.text_input.cancel();
-                                }
-                                // Effect/Generator/Paste never arise in Node
-                                // mode from the editor popup.
-                                _ => {}
+                                ed.offscreen_dirty = true;
+                            } else if ed.ui_root.browser_popup.contains_node(node_id) {
+                                ed.ui_root.note_overlay_closed_if(
+                                    crate::ui_root::OverlayId::BrowserPopup,
+                                    was_open,
+                                );
+                                // Internal click (category chip, background) —
+                                // consume so it doesn't leak to the canvas.
+                                ed.offscreen_dirty = true;
                             }
-                            ed.offscreen_dirty = true;
-                        } else if ed.ui_root.browser_popup.contains_node(node_id) {
-                            // Internal click (category chip, background) —
-                            // consume so it doesn't leak to the canvas.
-                            ed.offscreen_dirty = true;
                         }
                     }
                 }
@@ -1038,6 +1092,15 @@ impl Application {
                 // These actions dispatch against the EDITOR's UIRoot in the
                 // trailing `editor_card_actions` segment below.
                 editor_card_actions.extend(ed.ui_root.route_inspector_events(&events));
+            }
+            // Overlay-hosted text sessions (editor window): same pump as the
+            // main window above, draining both the bespoke browser-popup
+            // click path (marked via `note_overlay_closed_if` in the branch
+            // above) and any close `route_inspector_events` observed through
+            // the normal overlay driver (e.g. an inspector dropdown).
+            for id in ed.ui_root.take_closed_overlays() {
+                self.text_input
+                    .cancel_if_owned_by(crate::text_input::TextSessionOwner::EditorOverlay(id));
             }
         }
         // 2b. Drain editor-canvas actions (wire-drag completions,
@@ -1511,9 +1574,12 @@ impl Application {
                         .ui_root
                         .browser_popup
                         .search_bar_rect(&self.ws.ui_root.tree);
-                    self.text_input.begin(
+                    self.text_input.begin_owned(
+                        crate::text_input::TextSessionOwner::MainOverlay(
+                            crate::ui_root::OverlayId::BrowserPopup,
+                        ),
                         crate::text_input::TextInputField::SearchFilter,
-                        &self.ws.ui_root.browser_popup.current_filter,
+                        self.ws.ui_root.browser_popup.current_filter(),
                         crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
                         11.0,
                     );
@@ -1870,6 +1936,9 @@ impl Application {
             if let Some((kind, def, destination)) = result.begin_save_preset {
                 self.begin_save_preset_prompt(kind, def, destination);
             }
+            if let Some((kind, id, source, initial_name)) = result.begin_rename_preset {
+                self.begin_rename_preset_prompt(kind, id, source, initial_name);
+            }
         }
 
         // ── Editor inspector segment ────────────────────────────────────────
@@ -1994,6 +2063,7 @@ impl Application {
                 } => {
                     use manifold_renderer::node_graph::{Category, descriptor_for};
                     use manifold_ui::panels::browser_popup::*;
+                    use manifold_ui::panels::picker_core::PickerItem;
 
                     // Editor-window logical size — drives the popup's
                     // edge-clamping. Falls back to a sane default if the
@@ -2009,36 +2079,37 @@ impl Application {
                         })
                         .unwrap_or((1280.0, 720.0));
 
-                    let names: Vec<String> = self
-                        .palette_atoms_cache
-                        .iter()
-                        .map(|a| a.label.clone())
-                        .collect();
-                    let type_ids: Vec<String> = self
-                        .palette_atoms_cache
-                        .iter()
-                        .map(|a| a.type_id.clone())
-                        .collect();
-                    let categories: Vec<String> = self
-                        .palette_atoms_cache
-                        .iter()
-                        .map(|a| a.category.clone())
-                        .collect();
                     // Search haystack per item: the friendly label plus the
                     // descriptor's aliases (old names, plain-English, the
                     // TouchDesigner-equivalent operator). Typing "blur top"
                     // or a legacy name finds the node.
-                    let search: Vec<String> = self
+                    let items: Vec<PickerItem> = self
                         .palette_atoms_cache
                         .iter()
                         .map(|a| {
                             let aliases = descriptor_for(&a.type_id)
                                 .map(|d| d.aliases.join(" "))
                                 .unwrap_or_default();
-                            if aliases.is_empty() {
-                                a.label.clone()
+                            let search_text = if aliases.is_empty() {
+                                None
                             } else {
-                                format!("{} {}", a.label, aliases)
+                                Some(format!("{} {}", a.label, aliases))
+                            };
+                            PickerItem {
+                                label: a.label.clone(),
+                                type_id: a.type_id.clone(),
+                                category: Some(a.category.clone()),
+                                search_text,
+                                badge: None,
+                                // Node mode has no source concept
+                                // (PRESET_LIBRARY_DESIGN P5, D6) — the
+                                // graph-editor's node picker never renders
+                                // the source row or the management menu.
+                                source: None,
+                                missing_from_library: false,
+                                // Node mode never has a thumbnail (only the
+                                // Effect/Generator preset browser does).
+                                thumbnail: None,
                             }
                         })
                         .collect();
@@ -2051,11 +2122,8 @@ impl Application {
                             mode: BrowserPopupMode::Node,
                             tab: manifold_ui::panels::InspectorTab::Master,
                             layer_id: None,
-                            item_names: names,
-                            item_categories: categories,
+                            items,
                             category_names: cat_names,
-                            item_type_ids: type_ids,
-                            item_search: Some(search),
                             spawn_graph_pos: Some(*graph_pos),
                             paste_count: 0,
                             screen_anchor: manifold_ui::Vec2::new(screen_pos.0, screen_pos.1),
@@ -2068,7 +2136,10 @@ impl Application {
                     // the overlay at the click point; the field rect is
                     // cosmetic for the picker — keystrokes route by the
                     // active SearchFilter field, not by hit position.
-                    self.text_input.begin(
+                    self.text_input.begin_owned(
+                        crate::text_input::TextSessionOwner::EditorOverlay(
+                            crate::ui_root::OverlayId::BrowserPopup,
+                        ),
                         crate::text_input::TextInputField::SearchFilter,
                         "",
                         crate::text_input::AnchorRect::new(
@@ -4450,6 +4521,28 @@ impl Application {
                     thumb_color,
                     radius,
                 );
+            }
+
+            // Browser popup thumbnails (PRESET_LIBRARY_DESIGN P6, D7):
+            // decode + register every open item's PNG ONCE per distinct path
+            // (checked via `has_image`, so a re-open in the same process is
+            // free too) — never per frame, never a render. `self.gpu` (the
+            // device the registry uploads through) and `self.ws` (the popup's
+            // current items) are disjoint fields from `self.ui_renderer`
+            // (`ui`, already borrowed above), so all three borrow together.
+            if let Some(gpu) = self.gpu.as_ref() {
+                for path in self.ws.ui_root.browser_popup.thumbnail_paths() {
+                    let handle = manifold_ui::node::texture_handle_for_key(path);
+                    if ui.has_image(handle) {
+                        continue;
+                    }
+                    match manifold_renderer::preset_thumbnail::decode_png_rgba8(std::path::Path::new(path)) {
+                        Ok((w, h, rgba)) => {
+                            ui.register_image(&gpu.device, handle, w, h, &rgba);
+                        }
+                        Err(e) => log::error!("[preset-thumb] decode failed for {path}: {e}"),
+                    }
+                }
             }
 
             // Top-level overlays (perf HUD, dropdown, modals) — built by the

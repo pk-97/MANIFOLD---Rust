@@ -31,6 +31,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 crossbeam-channel = "0.5"
 ahash = { workspace = true }
+# `UIRoot::closed_overlays` (OVERLAY_SESSIONS_AND_PICKER_DESIGN.md §3) — a
+# handful of overlay ids per frame at most, so a small inline buffer avoids a
+# heap alloc on the common empty/one-close case. Already resolved in
+# Cargo.lock via a transitive dep.
+smallvec = "1"
 mimalloc = "0.1"
 libc = "0.2"
 parking_lot = { workspace = true }

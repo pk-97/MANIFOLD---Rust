@@ -1153,10 +1153,17 @@ impl Application {
             let mut filter_changed = false;
             match &logical_key {
                 Key::Named(NamedKey::Escape) => {
+                    // Bypasses `route_overlay_event` (this key path is bespoke
+                    // to the editor's browser popup), so record the close
+                    // ourselves — the per-frame pump in `tick_and_render`
+                    // drains it and cancels this popup's owned text session.
+                    // Guarded by the outer `is_open()` check above, so the
+                    // popup is open here.
                     if let Some(ed) = self.graph_editor.as_mut() {
                         ed.ui_root.browser_popup.handle_escape();
+                        ed.ui_root
+                            .note_overlay_closed_if(crate::ui_root::OverlayId::BrowserPopup, true);
                     }
-                    self.text_input.cancel();
                 }
                 Key::Named(NamedKey::Backspace) => {
                     self.text_input.backspace();
@@ -1171,6 +1178,46 @@ impl Application {
                         self.text_input.insert_char(ch);
                     }
                     filter_changed = true;
+                }
+                // Picker keyboard nav (P2): arrows move the grid cursor.
+                Key::Named(NamedKey::ArrowUp) => {
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.ui_root
+                            .browser_popup
+                            .handle_key_nav(manifold_ui::input::Key::Up);
+                    }
+                }
+                Key::Named(NamedKey::ArrowDown) => {
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.ui_root
+                            .browser_popup
+                            .handle_key_nav(manifold_ui::input::Key::Down);
+                    }
+                }
+                // Enter picks (type-and-enter fast path when no cursor and a
+                // non-empty filter). A pick closes the popup — bypasses
+                // `route_overlay_event` same as Escape above, so record the
+                // close for the closed-overlay pump ourselves.
+                Key::Named(NamedKey::Enter) => {
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        let was_open = ed.ui_root.browser_popup.is_open();
+                        if let Some(action) = ed
+                            .ui_root
+                            .browser_popup
+                            .handle_key_nav(manifold_ui::input::Key::Enter)
+                        {
+                            ed.ui_root.note_overlay_closed_if(
+                                crate::ui_root::OverlayId::BrowserPopup,
+                                was_open,
+                            );
+                            use manifold_ui::panels::browser_popup::BrowserPopupAction;
+                            if let BrowserPopupAction::NodeSelected { type_id, graph_pos } = action
+                                && let Some(canvas) = self.graph_canvas.as_mut()
+                            {
+                                canvas.request_add_node_at(type_id, graph_pos);
+                            }
+                        }
+                    }
                 }
                 // Suppress every other key while the modal is up.
                 _ => {}
@@ -1541,6 +1588,41 @@ impl Application {
         let _ = scale_factor;
     }
 
+    /// Convert a `BrowserPopupAction::Selected` from the MAIN window's
+    /// browser popup (Effect/Generator only — Node mode is editor-only and
+    /// never reaches this path) into the equivalent `PanelAction` and stash
+    /// it on `pending_keyboard_actions` for `process_events` to dispatch next
+    /// frame. Mirrors the click-arm translation in `browser_popup.rs`'s
+    /// `Overlay::on_event` impl, just reached from a keyboard pick
+    /// (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` §5 P2 arrow/Enter nav)
+    /// instead of a mouse click.
+    fn stash_browser_popup_pick(
+        &mut self,
+        action: manifold_ui::panels::browser_popup::BrowserPopupAction,
+    ) {
+        use manifold_ui::panels::PanelAction;
+        use manifold_ui::panels::browser_popup::{BrowserPopupAction, BrowserPopupMode};
+        if let BrowserPopupAction::Selected {
+            type_id,
+            mode,
+            tab,
+            layer_id,
+        } = action
+        {
+            let panel_action = match mode {
+                BrowserPopupMode::Effect => {
+                    PanelAction::AddEffect(tab, manifold_ui::types::PresetTypeId::from_string(type_id))
+                }
+                BrowserPopupMode::Generator => PanelAction::SetGenType(
+                    layer_id,
+                    manifold_ui::types::PresetTypeId::from_string(type_id),
+                ),
+                BrowserPopupMode::Node => return,
+            };
+            self.ws.ui_root.pending_keyboard_actions.push(panel_action);
+        }
+    }
+
     /// `KeyboardInput` (a `Pressed` key) for any window. This is the one keyboard
     /// owner: perform-mode handoff, then the editor's keyboard ([`Self::
     /// editor_keyboard_input`], called unconditionally because its leading
@@ -1613,14 +1695,40 @@ impl Application {
 
             // Text input mode: intercept all keys for text editing
             if self.text_input.active {
+                let is_search_filter =
+                    self.text_input.field == crate::text_input::TextInputField::SearchFilter;
                 match &logical_key {
                     Key::Named(NamedKey::Escape) => {
                         self.text_input.cancel();
+                        // BUG-022: cancelling the search field alone left the
+                        // browser popup open (a second Escape was needed).
+                        // Close it here too, mirroring the editor window's
+                        // node-picker Escape branch, so one press dismisses
+                        // both. The closed-overlay pump then reconciles the
+                        // (already-cancelled) text session next frame.
+                        if is_search_filter {
+                            self.ws.ui_root.browser_popup.handle_escape();
+                        }
                         consumed = true;
                     }
                     Key::Named(NamedKey::Enter) => {
                         if self.text_input.multiline && self.modifiers.shift {
                             self.text_input.insert_char('\n');
+                        } else if is_search_filter {
+                            // Type-and-enter fast path (P2): pick straight
+                            // from the picker instead of just committing
+                            // filter text (the reactive-search block below
+                            // already keeps that live on every keystroke).
+                            // If the popup closed as a result (a pick, or an
+                            // empty-filtered-list Escape-equivalent), the
+                            // closed-overlay pump cleans up this text
+                            // session next `process_events` — no manual
+                            // cancel needed here.
+                            if let Some(action) =
+                                self.ws.ui_root.browser_popup.handle_key_nav(manifold_ui::input::Key::Enter)
+                            {
+                                self.stash_browser_popup_pick(action);
+                            }
                         } else {
                             let (field, text) = self.text_input.commit();
                             self.handle_text_input_commit(field, &text);
@@ -1641,6 +1749,18 @@ impl Application {
                     }
                     Key::Named(NamedKey::ArrowRight) => {
                         self.text_input.move_right();
+                        consumed = true;
+                    }
+                    // Picker keyboard nav (P2) — only meaningful while the
+                    // browser search field owns the session; every other
+                    // active text field suppresses arrows (falls to `_`,
+                    // unchanged from before).
+                    Key::Named(NamedKey::ArrowUp) if is_search_filter => {
+                        self.ws.ui_root.browser_popup.handle_key_nav(manifold_ui::input::Key::Up);
+                        consumed = true;
+                    }
+                    Key::Named(NamedKey::ArrowDown) if is_search_filter => {
+                        self.ws.ui_root.browser_popup.handle_key_nav(manifold_ui::input::Key::Down);
                         consumed = true;
                     }
                     Key::Named(NamedKey::Space) => {

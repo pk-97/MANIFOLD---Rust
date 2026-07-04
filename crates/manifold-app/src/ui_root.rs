@@ -16,8 +16,12 @@ use manifold_ui::*;
 /// overlay driver (build / draw / input) iterates — adding an overlay means a
 /// field, an `overlay_mut` arm, and a `Z_ORDER` entry, and the exhaustive match
 /// then forces the wiring. See `docs/OVERLAY_SYSTEM_DESIGN.md`.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum OverlayId {
+///
+/// `pub(crate)`: `text_input::TextSessionOwner` (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md`
+/// §3, D2) tags a text session with the id of the overlay hosting it, so the
+/// crate needs to name overlays outside this module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OverlayId {
     PerfHud,
     Dropdown,
     AudioSetup,
@@ -150,6 +154,12 @@ pub struct EmbeddedPresetItem {
     pub kind: manifold_core::preset_def::PresetKind,
     pub type_id: String,
     pub display_name: String,
+    /// PRESET_LIBRARY_DESIGN P5, D6: `Saved` entries are always listed
+    /// ("This Project"); `Snapshot` entries are listed only when their id
+    /// resolves nowhere else (badged "missing from library") — the
+    /// classification lives in `build_preset_picker_items`, which needs this
+    /// to tell the two apart.
+    pub origin: manifold_core::project::EmbeddedOrigin,
 }
 
 /// Owns all UI state for one window.
@@ -276,6 +286,17 @@ pub struct UIRoot {
     /// Hover actions produced by continuous cursor movement, drained in process_events.
     cursor_hover_actions: Vec<PanelAction>,
 
+    /// `PanelAction`s produced by keyboard-driven overlay picking outside the
+    /// normal per-frame event queue (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md`
+    /// §4/§5 P2 arrow/Enter nav). An active `SearchFilter` text session
+    /// intercepts keys in `window_input.rs` before they ever reach
+    /// `route_overlay_event`, so the browser popup's `handle_key_nav` is
+    /// called directly from there; the resulting action is stashed here and
+    /// drained in `process_events`/`route_inspector_events` the same way
+    /// `cursor_hover_actions` is, so it reaches the same dispatch pipeline a
+    /// mouse-click pick would.
+    pub pending_keyboard_actions: Vec<PanelAction>,
+
     /// Viewport-area events stashed for InteractionOverlay processing by app.rs.
     /// Events in the tracks area that need host trait access are stored here
     /// during process_events() and drained by app.rs to route through the overlay.
@@ -338,6 +359,17 @@ pub struct UIRoot {
     ///
     /// [`detect_overlay_open_change`]: UIRoot::detect_overlay_open_change
     overlay_open_snapshot: u8,
+    /// Overlays whose `is_open()` flipped false since the last drain —
+    /// `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` §3, D2. Populated by
+    /// `route_overlay_event` (covers Escape and normal click routing for both
+    /// windows) and `note_overlay_closed_if` (covers the graph-editor window's
+    /// bespoke browser-popup routing, which bypasses `route_overlay_event`).
+    /// Drained once per frame per window by the app pump via
+    /// `take_closed_overlays`, which cancels any text session the closed
+    /// overlay owned — the same stash-and-drain shape as
+    /// `drain_overlay_selections`, just for text-session ownership instead of
+    /// dropdown/Ableton-picker selections.
+    closed_overlays: smallvec::SmallVec<[OverlayId; 2]>,
 }
 
 impl UIRoot {
@@ -396,6 +428,7 @@ impl UIRoot {
             effect_clipboard_count: 0,
             gen_clipboard: manifold_editing::clipboard::GeneratorClipboard::new(),
             cursor_hover_actions: Vec::new(),
+            pending_keyboard_actions: Vec::new(),
             viewport_events: Vec::new(),
             last_right_click_pos: Vec2::new(0.0, 0.0),
             macro_labels: std::array::from_fn(|_| String::new()),
@@ -412,6 +445,7 @@ impl UIRoot {
             overlay_draw: Vec::new(),
             overlay_region_start: 0,
             overlay_open_snapshot: 0,
+            closed_overlays: smallvec::SmallVec::new(),
         }
     }
 
@@ -653,6 +687,14 @@ impl UIRoot {
         }
 
         let mut actions = Vec::new();
+        // Drain keyboard-driven picker actions (arrow/Enter nav) stashed by
+        // `window_input.rs`'s text-input-active branch — see
+        // `pending_keyboard_actions`'s doc comment. Node-mode picks in this
+        // window route through `GraphCanvas::request_add_node_at` instead
+        // (a `GraphEditCommand`, not a `PanelAction`), so this is normally
+        // empty here; kept for parity with `process_events` in case a future
+        // editor overlay picks a `PanelAction` this way.
+        actions.append(&mut self.pending_keyboard_actions);
         let mut last_click_node: Option<NodeId> = None;
         for event in events {
             if let UIEvent::Click { node_id, .. } = event {
@@ -821,8 +863,9 @@ impl UIRoot {
 
     /// Whether the overlay for `id` is currently open. Immutable mirror of
     /// `overlay_mut(id).is_open()` — the exhaustive match keeps it in lockstep
-    /// with the driver registry.
-    fn overlay_is_open(&self, id: OverlayId) -> bool {
+    /// with the driver registry. `pub(crate)`: used by `note_overlay_closed_if`
+    /// callers outside this module to read the post-close state.
+    pub(crate) fn overlay_is_open(&self, id: OverlayId) -> bool {
         match id {
             OverlayId::PerfHud => self.perf_hud.is_open(),
             OverlayId::Dropdown => self.dropdown.is_open(),
@@ -913,6 +956,8 @@ impl UIRoot {
     /// Route one event to the open overlays, top→bottom. Returns true if an
     /// overlay consumed it (or a modal captured it), so the caller skips the
     /// lower panels. Stashed selections are lowered by `drain_overlay_selections`.
+    /// Also records into `closed_overlays` any overlay whose `on_event` flipped
+    /// it shut (self-close on Escape / backdrop / cell pick) — §3, D2.
     fn route_overlay_event(&mut self, event: &UIEvent, actions: &mut Vec<PanelAction>) -> bool {
         let mut tree = std::mem::replace(&mut self.tree, UITree::new());
         let mut consumed = false;
@@ -921,14 +966,20 @@ impl UIRoot {
             if !ov.is_open() {
                 continue;
             }
-            match ov.on_event(event, &mut tree) {
+            let response = ov.on_event(event, &mut tree);
+            let still_open = ov.is_open();
+            let is_modal = matches!(ov.modality(), Modality::Modal { .. });
+            if !still_open {
+                self.closed_overlays.push(*id);
+            }
+            match response {
                 OverlayResponse::Consumed(acts) => {
                     actions.extend(acts);
                     consumed = true;
                     break;
                 }
                 OverlayResponse::Ignored => {
-                    if matches!(ov.modality(), Modality::Modal { .. }) {
+                    if is_modal {
                         // A modal captures everything — no fall-through below it.
                         consumed = true;
                         break;
@@ -941,6 +992,32 @@ impl UIRoot {
             self.overlay_dirty = true;
         }
         consumed
+    }
+
+    /// Record `id` as closed if it was open before some out-of-band close
+    /// attempt and isn't now — for close paths that don't go through
+    /// `route_overlay_event`. The graph-editor window's browser popup is the
+    /// live example: while it's open, the editor routes clicks straight to
+    /// `browser_popup.handle_click`/`handle_escape` (bypassing the overlay
+    /// driver entirely — see `app_render.rs`'s `browser_popup.is_open()`
+    /// branch), so no `route_overlay_event` call ever observes its
+    /// open→closed transition. The caller snapshots `was_open` immediately
+    /// before the bespoke call and passes it here immediately after.
+    pub(crate) fn note_overlay_closed_if(&mut self, id: OverlayId, was_open: bool) {
+        if was_open && !self.overlay_is_open(id) {
+            self.closed_overlays.push(id);
+        }
+    }
+
+    /// Overlays whose `is_open()` flipped false since the last drain (via
+    /// `route_overlay_event` or `note_overlay_closed_if`). Drained once per
+    /// frame per window by the app pump, which maps each id to a
+    /// `TextSessionOwner` and calls `cancel_if_owned_by` — closing the
+    /// orphaned-search-session bug for every current and future
+    /// overlay-hosted text field, not just the browser search
+    /// (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` §3).
+    pub fn take_closed_overlays(&mut self) -> smallvec::SmallVec<[OverlayId; 2]> {
+        std::mem::take(&mut self.closed_overlays)
     }
 
     /// Lower any selection an overlay stashed during `route_overlay_event` into
@@ -1116,9 +1193,109 @@ impl UIRoot {
                     kind: ep.kind,
                     type_id: meta.id.as_str().to_string(),
                     display_name: meta.display_name.to_string(),
+                    origin: ep.origin,
                 })
             })
             .collect();
+    }
+
+    /// Classify one `kind`'s Add-picker items by source
+    /// (PRESET_LIBRARY_DESIGN P5, D6) — the single place this rule lives, so
+    /// `AddEffectClicked` and `GenTypeClicked` can't drift apart:
+    /// - **Factory** / **My Library**: every id `preset_type_registry`
+    ///   resolves, split by `UserLibrary::is_user_entry` (a file under the
+    ///   user root vs. not).
+    /// - **This Project**: every `origin: Saved` embedded preset, always
+    ///   listed; an `origin: Snapshot` embedded preset ONLY when its id
+    ///   resolves nowhere in the registry (its library file is gone) —
+    ///   badged "missing from library" rather than "Project" so the browser
+    ///   reads as plumbing, not a real project preset.
+    ///
+    /// `tag_project_category` sets `category: Some("Project")` on the
+    /// This-Project items (Effect mode's existing "Project" chip grouping);
+    /// Generator mode passes `false`, matching its pre-P5 behavior of never
+    /// tagging generator items by category (it renders no category chips).
+    fn build_preset_picker_items(
+        &self,
+        kind: manifold_core::preset_def::PresetKind,
+        tag_project_category: bool,
+    ) -> Vec<manifold_ui::panels::picker_core::PickerItem> {
+        use manifold_core::preset_type_registry;
+        use manifold_ui::panels::picker_core::{PickerItem, Source};
+
+        let lib = crate::user_library::UserLibrary::new();
+        let available = preset_type_registry::available_of_kind(kind);
+        let mut seen_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::with_capacity(available.len());
+
+        let mut items: Vec<PickerItem> = available
+            .iter()
+            .map(|reg| {
+                let is_user = lib.is_user_entry(kind, &reg.id);
+                let id = reg.id.as_str().to_string();
+                seen_ids.insert(id.clone());
+                // PRESET_LIBRARY_DESIGN P6, D7: a My-Library entry's PNG
+                // sits beside its JSON (`UserLibrary::thumbnail_path`); a
+                // Factory entry's comes from the committed one-shot bin
+                // output. `None` (no `Path::is_file` check needed further)
+                // when the file simply doesn't exist yet — clean text
+                // fallback, never a browse-time render.
+                let thumbnail = if is_user {
+                    let p = lib.thumbnail_path(kind, reg.id.as_str());
+                    p.is_file().then(|| p.to_string_lossy().into_owned())
+                } else {
+                    manifold_renderer::preset_thumbnail::factory_thumbnail_path(kind, reg.id.as_str())
+                        .filter(|p| p.is_file())
+                        .map(|p| p.to_string_lossy().into_owned())
+                };
+                PickerItem {
+                    label: reg.display_name.to_string(),
+                    type_id: id,
+                    category: if tag_project_category {
+                        reg.category.map(|c| c.to_string())
+                    } else {
+                        None
+                    },
+                    search_text: None,
+                    badge: Some(if is_user { "My Library" } else { "Factory" }.to_string()),
+                    source: Some(if is_user { Source::MyLibrary } else { Source::Factory }),
+                    missing_from_library: false,
+                    thumbnail,
+                }
+            })
+            .collect();
+
+        for e in self.embedded_presets.iter().filter(|e| e.kind == kind) {
+            use manifold_core::project::EmbeddedOrigin;
+            let missing = match e.origin {
+                EmbeddedOrigin::Saved => false,
+                // A Snapshot whose id already resolves elsewhere (disk file
+                // still there) is already represented via `available` above
+                // — skip it entirely rather than list it twice.
+                EmbeddedOrigin::Snapshot => {
+                    if seen_ids.contains(&e.type_id) {
+                        continue;
+                    }
+                    true
+                }
+            };
+            items.push(PickerItem {
+                label: e.display_name.clone(),
+                type_id: e.type_id.clone(),
+                category: if tag_project_category { Some("Project".to_string()) } else { None },
+                search_text: None,
+                badge: Some(
+                    if missing { "missing from library" } else { "Project" }.to_string(),
+                ),
+                source: Some(Source::Project),
+                missing_from_library: missing,
+                // This-Project entries never get a thumbnail (D7 only
+                // covers Save to Library + the factory bin) — text fallback.
+                thumbnail: None,
+            });
+        }
+
+        items
     }
 
     /// Clear and repopulate node-intent dispatch from every panel's currently
@@ -1172,6 +1349,10 @@ impl UIRoot {
 
         // Drain continuous hover actions accumulated from cursor movement.
         actions.append(&mut self.cursor_hover_actions);
+        // Drain keyboard-driven picker actions (arrow/Enter nav) stashed by
+        // `window_input.rs`'s text-input-active branch — see
+        // `pending_keyboard_actions`'s doc comment.
+        actions.append(&mut self.pending_keyboard_actions);
 
         let mut last_click_node: Option<NodeId> = None;
         for event in &events {
@@ -1443,37 +1624,19 @@ impl UIRoot {
                 use manifold_core::{preset_def::PresetKind, preset_type_registry};
                 use manifold_ui::panels::browser_popup::*;
 
-                let available = preset_type_registry::available_of_kind(PresetKind::Effect);
-                let mut items: Vec<(String, String, String)> = available
-                    .iter()
-                    .map(|reg| {
-                        (
-                            reg.display_name.to_string(),
-                            reg.id.as_str().to_string(),
-                            reg.category.unwrap_or("").to_string(),
-                        )
-                    })
-                    .collect();
-                // Project-embedded ("forked") effects, grouped under "Project".
-                let embedded: Vec<(String, String, String)> = self
-                    .embedded_presets
-                    .iter()
-                    .filter(|e| matches!(e.kind, PresetKind::Effect))
-                    .map(|e| (e.display_name.clone(), e.type_id.clone(), "Project".to_string()))
-                    .collect();
-                let has_embedded = !embedded.is_empty();
-                items.extend(embedded);
-                items.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
-                let names: Vec<String> = items.iter().map(|i| i.0.clone()).collect();
-                let type_ids: Vec<String> = items.iter().map(|i| i.1.clone()).collect();
-                let categories: Vec<String> = items.iter().map(|i| i.2.clone()).collect();
+                // Effect mode keeps its existing "Project" category chip
+                // grouping (`tag_project_category: true`).
+                let mut items = self.build_preset_picker_items(PresetKind::Effect, true);
+                let has_project_items =
+                    items.iter().any(|it| it.category.as_deref() == Some("Project"));
+                items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
 
                 // Unique category names (+ "Project" when embedded effects exist).
                 let mut cat_names: Vec<String> = preset_type_registry::ALL_CATEGORIES
                     .iter()
                     .map(|&c| c.to_string())
                     .collect();
-                if has_embedded {
+                if has_project_items {
                     cat_names.push("Project".to_string());
                 }
 
@@ -1483,11 +1646,8 @@ impl UIRoot {
                     mode: BrowserPopupMode::Effect,
                     tab: *tab,
                     layer_id: None,
-                    item_names: names,
-                    item_categories: categories,
+                    items,
                     category_names: cat_names,
-                    item_type_ids: type_ids,
-                    item_search: None,
                     spawn_graph_pos: None,
                     paste_count: self.effect_clipboard_count,
                     screen_anchor: Vec2::new(trigger.x, trigger.y + trigger.height),
@@ -1495,24 +1655,14 @@ impl UIRoot {
                 true
             }
             PanelAction::GenTypeClicked(layer_id) => {
-                use manifold_core::{preset_def::PresetKind, preset_type_registry};
+                use manifold_core::preset_def::PresetKind;
                 use manifold_ui::panels::browser_popup::*;
 
-                let available = preset_type_registry::available_of_kind(PresetKind::Generator);
-                let mut items: Vec<(String, String)> = available
-                    .iter()
-                    .map(|reg| (reg.display_name.to_string(), reg.id.as_str().to_string()))
-                    .collect();
-                // Project-embedded ("forked") generators.
-                items.extend(
-                    self.embedded_presets
-                        .iter()
-                        .filter(|e| matches!(e.kind, PresetKind::Generator))
-                        .map(|e| (e.display_name.clone(), e.type_id.clone())),
-                );
-                items.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
-                let names: Vec<String> = items.iter().map(|i| i.0.clone()).collect();
-                let type_ids: Vec<String> = items.iter().map(|i| i.1.clone()).collect();
+                // Generator mode has never rendered category chips (no
+                // `category_names` below) — `tag_project_category: false`
+                // keeps that unchanged; only the source classification is new.
+                let mut items = self.build_preset_picker_items(PresetKind::Generator, false);
+                items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
 
                 self.browser_popup
                     .set_screen_size(self.screen_width, self.screen_height);
@@ -1520,15 +1670,48 @@ impl UIRoot {
                     mode: BrowserPopupMode::Generator,
                     tab: InspectorTab::Layer,
                     layer_id: layer_id.clone(),
-                    item_names: names,
-                    item_categories: Vec::new(),
+                    items,
                     category_names: Vec::new(),
-                    item_type_ids: type_ids,
-                    item_search: None,
                     spawn_graph_pos: None,
                     paste_count: 0,
                     screen_anchor: Vec2::new(trigger.x, trigger.y + trigger.height),
                 });
+                true
+            }
+            PanelAction::BrowserCellRightClicked(mode, type_id, source) => {
+                use manifold_ui::panels::picker_core::Source;
+
+                let mut items = Vec::new();
+                items.push(
+                    DropdownItem::new("Rename…").with_action(PanelAction::BrowserRenamePresetClicked(
+                        *mode,
+                        type_id.clone(),
+                        *source,
+                    )),
+                );
+                if matches!(source, Source::MyLibrary) {
+                    items.push(
+                        DropdownItem::new("Duplicate").with_action(
+                            PanelAction::BrowserDuplicatePresetClicked(*mode, type_id.clone()),
+                        ),
+                    );
+                }
+                items.push(
+                    DropdownItem::new("Delete…").with_action(PanelAction::BrowserDeletePresetClicked(
+                        *mode,
+                        type_id.clone(),
+                        *source,
+                    )),
+                );
+                if matches!(source, Source::MyLibrary) {
+                    items.push(
+                        DropdownItem::new("Reveal in Finder").with_action(
+                            PanelAction::BrowserRevealPresetClicked(*mode, type_id.clone()),
+                        ),
+                    );
+                }
+                self.dropdown
+                    .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
             PanelAction::SelectAudioInputDevice => {

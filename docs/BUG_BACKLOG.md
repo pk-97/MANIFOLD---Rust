@@ -319,6 +319,119 @@ then reuse the existing `collapse_anim`. Small, localized to `param_card.rs`.
 **Fix shape** — thread the snap-back trigger to the graph-editor's `ParamCardPanel` too, or
 lift the reset-with-settle into shared `ParamCardPanel` logic both dispatch sites reach.
 
+### BUG-022 — Main-window browser popup: Escape while the search field is focused cancels the text session but leaves the popup open — FIXED 2026-07-05
+
+**Resolution** — applied the documented fix shape: in the main-window `text_input.active` Escape arm
+(`window_input.rs`), when `field == SearchFilter`, also call
+`self.ws.ui_root.browser_popup.handle_escape()` alongside `text_input.cancel()`, mirroring the
+editor window's node-picker branch — one press now dismisses both the search field and the popup.
+The closed-overlay pump reconciles the already-cancelled session next frame. Compiles + clippy clean.
+Owed: the in-app one-press-closes confirmation (headless can't drive it), but the code mirrors the
+proven editor branch exactly. Original analysis below.
+
+**Symptom** — found 2026-07-04 auditing `window_input.rs`'s keyboard routing while
+implementing `docs/OVERLAY_SESSIONS_AND_PICKER_DESIGN.md`. For the MAIN window (effect/
+generator browser), once the search field has focus (`self.text_input.active &&
+field == SearchFilter`), every keystroke is intercepted by the `if self.text_input.active { ... }`
+block in `window_input.rs` (`primary_keyboard_input`, ~line 1593) before it ever reaches
+`UIRoot::process_events`/`route_overlay_event`. Its `Key::Named(NamedKey::Escape)` arm calls
+only `self.text_input.cancel()` — it never touches `self.ws.ui_root.browser_popup`. So Escape
+while typing clears the search text and ends the text session, but the popup itself stays
+open; a second Escape (now routed normally, since `text_input.active` is false) is needed to
+actually dismiss it. This is plausibly the exact mechanism behind Peter's original report
+("the search and text seems to stay after you search and need to click elsewhere again to
+close it properly") — P1's stash-and-drain fix (`TextSessionOwner`/`take_closed_overlays`)
+closes the *orphaned-session-after-popup-closes-elsewhere* class, but this is the inverse:
+popup not closing when the session ends.
+
+Note the EDITOR window's analogous bespoke branch (`window_input.rs` ~1145, node picker) does
+NOT have this gap — its Escape arm already calls `browser_popup.handle_escape()` directly
+alongside cancelling the text input (now also wired through `note_overlay_closed_if` as part
+of this session's P1 work).
+
+**Root cause** — the main-window `text_input.active` Escape arm was written before the browser
+popup existed as an `Overlay`-driven modal; it only ever needed to cancel a plain text field.
+Nothing updated it when `BrowserPopupPanel` started hosting a `SearchFilter` session.
+
+**Fix shape** — in the main-window Escape arm, when `self.text_input.field == SearchFilter`,
+also call `self.ws.ui_root.browser_popup.handle_escape()` (mirroring the editor's branch) instead
+of only `self.text_input.cancel()`. Small, localized to `window_input.rs`'s
+`if self.text_input.active` block — no design-doc scope change, since this is a pre-existing
+gap outside P1/P2's stated deliverables (which target orphaned-session-on-close, not
+missing-close-on-cancel).
+
+### BUG-024 — Generator preset thumbnails render on a WHITE background (unrepresentative) — FIXED 2026-07-05
+
+**Resolution** — root cause was (a) from the suspect list: generators leave their background
+transparent (alpha 0), and `readback_tonemapped_rgba8` saved that alpha into the PNG, so viewers
+showed the transparent background as white. Fixed by compositing over opaque black in the readback
+(`rgb * a`, force alpha 255) — generators produce straight (non-premultiplied) alpha per
+[[alpha-standardisation]], so `rgb * a` is the correct over-black composite, and opaque content
+(effects, a=1) is byte-identical. Verified by regenerating + Reading the PNGs: StarField now reads
+as stars on black, Lissajous as a clean curve on black, Bloom (effect) unchanged and correct.
+**Residual (separate, minor):** a few full-frame generators still read low-saturation in their bare
+state — Plasma is a grey blob on black (its background is now correct, but its bare/default output
+without audio modulation or a colormap param is desaturated). Not the white-bg bug; a per-generator
+"bare look" issue, low priority — leave for a thumbnail-polish pass if it matters on the picker.
+
+### BUG-024-ORIG — original analysis (Generator thumbnails on WHITE background) — superseded by the FIXED note above
+
+**Symptom** — found 2026-07-05 eyeballing the committed `assets/preset-thumbnails/generators/*.png`
+after adding warm-up frames (PRESET_LIBRARY P6). Effect thumbnails (rendered over the gradient
+fixture) look correct (Bloom reads right). But GENERATOR thumbnails render their content over a
+WHITE background instead of the generator's own (usually dark) field: StarField is dark specks on
+white (should be bright stars on black); Plasma is a grey blob on white. Warm-up frames (t advances,
+state accumulates) did NOT fix it — so this is a render-path issue, not cold-start.
+
+**Root cause** — unknown, not yet diagnosed. Suspects in
+`crates/manifold-renderer/src/preset_thumbnail.rs::render_generator`: (a) the `Rgba16Float` render
+target isn't cleared to the generator's expected background (black/transparent) before
+`runtime.render`, so unwritten/low-alpha regions read as white after `readback_tonemapped_rgba8`;
+(b) premultiplied-alpha / straight-alpha mismatch in the readback vs how generators composite
+(cf. [[alpha-standardisation]] — compositor is premultiplied, producers aren't); (c) the tonemap
+maps the clear/HDR default toward white. The live `GeneratorRenderer` path composites over the
+correct background, so comparing its clear/blend setup against this one-shot path should localize it.
+
+**Fix shape** — likely: clear the thumbnail target to the same background the live generator path
+uses (black or transparent) before rendering, and match its alpha convention in the readback. Then
+regenerate the 46 factory PNGs via `cargo run -p manifold-renderer --bin generate-preset-thumbnails`.
+Effects are unaffected. Until fixed, generator thumbnails are present but not visually usable — the
+P6 image-cell display infra is correct; the generator render output is not.
+
+### BUG-023 — `no_new_raw_color_literals` red on main: real count (201) one above baseline (200) — FIXED 2026-07-05 (in the P6 landing)
+
+**Resolution** — the extra raw literal was localized (not a "prior session" — it was THIS
+orchestration's own P5 landing `0d6e857e`): `browser_popup.rs` carried
+`const BADGE_TEXT: Color32 = Color32::new(130, 130, 134, 255)` for the origin-badge text,
+added by P5 and missed because that phase ran clippy + focused tests but not the
+`design_tokens` integration guard. Fixed by tokenizing it into `color::BROWSER_CELL_BADGE_TEXT`
+(color.rs is the scan's exempt token home), dropping the counted set back to 200. Guard green.
+Lesson for the orchestration: run `-p manifold-ui --test design_tokens` on any phase that
+adds UI color, not just clippy. Original analysis below.
+
+**Symptom** — found 2026-07-05 running the full gate for `PRESET_LIBRARY_DESIGN.md` P6
+(thumbnails). `cargo test -p manifold-ui --test design_tokens no_new_raw_color_literals` fails:
+`Raw Color32::new( count rose to 201 (baseline 200)`. Confirmed pre-existing and unrelated to
+P6: re-ran the same scan logic against `git show HEAD:<path>` for every file under
+`crates/manifold-ui/src` (a standalone Python re-implementation of `scan()`/`classify()`) and got
+201 on HEAD alone, before any P6 edit — the P6 changes to `browser_popup.rs`/`color.rs` net to
+**zero** new raw literals (three new cells' worth of `Color32::new(` were added to `color.rs`,
+which the scan excludes as the token home, and the matching local consts in `browser_popup.rs`
+were pointed at those new tokens instead of a raw literal — no net change to the counted set).
+
+**Root cause** — not investigated; some prior session's commit added exactly one raw
+`Color32::new(` line somewhere under `crates/manifold-ui/src` without bumping
+`COLOR_BASELINE` in `crates/manifold-ui/tests/design_tokens.rs` (or without using a
+`// design-token-exempt:` comment for a genuine one-off). `git bisect`/`git log -S"Color32::new("`
+over the file list the scan touches would localize it quickly; not run this session since it's
+orthogonal to P6 and risked burning session budget chasing an unrelated one-line drift.
+
+**Fix shape** — mechanical, one of: (a) find the extra raw literal and tokenize it (count back to
+200, no baseline change), or (b) if it's a genuine one-off, add `// design-token-exempt: <reason>`
+on that line (count back to 200), or (c) bump `COLOR_BASELINE` to 201 if it's accepted debt. Not
+fixed this session — the gate confirms the diff at hand is P6-clean; picking apart an unrelated
+pre-existing count belongs to whoever next touches `manifold-ui/src`'s colour call sites.
+
 ## Fixed
 
 All five entries below were fixed 2026-06-23, with a test per path:

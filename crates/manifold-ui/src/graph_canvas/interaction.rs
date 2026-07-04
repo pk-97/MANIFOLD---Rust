@@ -128,6 +128,18 @@ impl GraphCanvas {
         }
     }
 
+    /// Emit `AddGraphNodeAt` for a node picked via keyboard (Enter /
+    /// type-and-enter) in the editor's node picker. The picker popup itself
+    /// lives on the editor window's `UIRoot`, not the canvas — but the
+    /// resulting spawn is a `GraphEditCommand`, so it queues here the same
+    /// way a mouse-click pick does (`app_render.rs`'s
+    /// `BrowserPopupAction::NodeSelected` arm), just reached from
+    /// `window_input.rs`'s keyboard handler instead of a raw click event.
+    pub fn request_add_node_at(&mut self, type_id: String, graph_pos: (f32, f32)) {
+        self.pending_actions
+            .push(GraphEditCommand::AddGraphNodeAt { type_id, graph_pos });
+    }
+
     /// Emit a `GroupSelection` action collapsing the current selection into a
     /// new group at this scope level. Wired to Ctrl+G. No-op on an empty
     /// selection. The new group's handle is auto-named (`group_N`) and made
