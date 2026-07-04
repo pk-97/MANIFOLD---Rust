@@ -1,7 +1,7 @@
 # Preset Library — one mental model for presets, a library you can see, and explicit save/revert/push
 
-**Status:** APPROVED design, not built · 2026-07-04 · Fable
-**Prerequisites:** none for P1–P4; P5 (browser) has a hard edge on OVERLAY_SESSIONS_AND_PICKER P2; P6 (thumbnails) is verify-at-impl gated.
+**Status:** APPROVED design, not built · 2026-07-04 · Fable · P0 added 2026-07-04 evening (glTF-import citizenship, fixes BUG-016)
+**Prerequisites:** none for P0–P4 (P0 is re-rankable first — it fixes live bugs); P5 (browser) has a hard edge on OVERLAY_SESSIONS_AND_PICKER P2; P6 (thumbnails) is verify-at-impl gated.
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 before starting any phase.
 
 Peter, 2026-07-04: **"I want to rethink these categories from the ground up. The
@@ -111,6 +111,18 @@ effective defs).
   anchor (type ids are forever), the Ableton addressing key
   (`find_preset_instance_mut`), and the provenance link. It stops implying "the
   graph comes from the catalog" — that's `graph: None`'s job.
+- **D9 — Imports are library citizens (added 2026-07-04 evening, from the glTF
+  smoke check).** Anything that mints a preset id — today the `.glb` drop, later
+  any importer — registers its def as an `EmbeddedPreset` (`origin: Saved`) and
+  the new instance **tracks** it (`graph: None`), exactly like a drop from the
+  browser. An id that resolves in no catalog is not a representable state; the
+  layer-carried override is divergence only, never a preset's home. The shipped
+  glTF Stage-4 install violates this (def stashed on the layer, id resolves
+  nowhere) and every type-keyed surface goes blind: card params empty, string
+  params invisible (`inspector.rs:2251` reads the registry only), editor
+  catalog-default `None` (which also gates several edit dispatch arms into
+  silent no-ops, e.g. `app.rs:1356`). Fixing the consumers one by one is the
+  forbidden move; catalog citizenship fixes them as a class. Backlog: BUG-016.
 
 Consequences, stated honestly: **a tracking instance changes when its library file
 changes.** That's the deliberate cost of keeping the authoring loop live — a stock
@@ -188,8 +200,64 @@ this design deletes; no edit path may consult how many instances share an id.
 ## 5. Phasing
 
 Test-scope note: P1 and P2 touch core resolution/serialization — each ends with
-the full workspace sweep. P3–P6 are UI/app-scoped — focused tests + manual pass,
-no sweep.
+the full workspace sweep. P0 and P3–P6 are app/renderer-scoped — focused tests +
+manual pass, no sweep (P0 changes no resolution order; it adds a catalog entry
+through the existing overlay).
+
+### P0 — Imports become library citizens (D9; no dependency on P1–P6, re-rankable first)
+
+Fixes the live bugs from the shipped glTF wave (BUG-016). Uses only machinery
+that exists today: `EmbeddedPreset`, `mint_embedded_preset_id`, the project
+overlay install (`project_io.rs:33` → `set_project_presets` → `apply_reload`).
+
+- **Entry state:** reproduce the black box: run the app, drop
+  `tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb` on the
+  timeline → card has no params, no Model File picker. Record whether the graph
+  editor shows nodes when opened via the layer cog vs Cmd+Shift+G (the empty
+  canvas of 2026-07-04 is not fully root-caused; the snapshot path is proven
+  good — `GraphSnapshot::from_def` on the assembled def yields 12 nodes/10
+  wires — so observe where the entry path loses the target and write it down).
+- **Read-back:** D1, D9, §4 forbidden-by-name; `gltf_import.rs`
+  `assemble_import_graph` (metadata block near the end);
+  `ImportModelLayerCommand` (`commands/layer.rs:100`); `import_model_file`
+  (`app_lifecycle.rs:506`); `refresh_preset_overlay_if_changed`
+  (`content_commands.rs:44`) and its call sites.
+- **Deliverables:**
+  1. `assemble_import_graph` emits performance `params` + `bindings` in
+     `preset_metadata` (today both are empty): camera controls
+     (the `free_camera` node's orbit/fov/distance surface), sun intensity +
+     direction, envmap intensity, per-object material knobs up to the 8-object
+     cap. Curated, not exhaustive — the card is the instrument. `string_params`
+     (Model File) stays.
+  2. The drop mints an `EmbeddedPreset { kind: Generator, def, origin: Saved }`
+     and the new layer **tracks** it: `gen_params.graph = None`, preset id =
+     the minted id. `ImportModelLayerCommand` becomes upsert-embedded-preset +
+     insert-tracking-layer; undo removes both. The override-install path
+     (`graph_def_mut` + structure-version bump) is deleted from the command.
+  3. Overlay freshness on both threads: the content thread refreshes via the
+     fingerprint check; ⚠ VERIFY-AT-IMPL that the UI thread's local execute
+     also re-installs the overlay before the first frame needs the id (the
+     card build reads the core registry UI-side). If it doesn't, install at
+     the drop site after the local execute.
+  4. ⚠ VERIFY-AT-IMPL: whether the editor's catalog-default lookup
+     (`bundled_preset_json` at `app_render.rs:469`) consults the project
+     overlay or only the compiled-in bundle. If bundle-only, switch it to the
+     catalog view (`loaded_preset_view_by_id`) — this is what un-blocks the
+     edit-dispatch arms gated on `Some(default)`.
+- **Gate (positive):** manual, on the azalea fixture: drop → card shows the
+  curated params AND the Model File picker; drag a card slider → pixels move;
+  cog opens the editor showing the full graph; a definition edit diverges the
+  instance (`graph.is_some()`), and the layer still renders; save → reload →
+  the layer renders and the card is intact. Focused tests: assembler
+  binding-emission assertions extend the existing azalea test; an io
+  round-trip with an embedded generator preset. Clippy.
+- **Gate (negative):** `rg -n "graph_def_mut" crates/manifold-editing/src/commands/layer.rs`
+  → 0 hits; the import path contains no instance-carried def install.
+- **Forbidden moves:** teaching individual consumers to read layer-carried
+  defs (string params from the instance, card fallbacks — that's the
+  per-consumer policy disease this design exists to kill) · keeping the
+  override install as a fallback beside the embedded-preset path (no silent
+  fallbacks) · exposing every glTF material scalar "for completeness."
 
 ### P1 — One rule: delete the dead fork machinery, humanize explicit forks
 

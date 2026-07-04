@@ -217,6 +217,26 @@ section overlap.
 **Fix shape** — TBD after repro. If it's the known invariant class, the fix is at the layout
 single-source, not per-section patches.
 
+### BUG-016 — Imported .glb layers are black boxes: no card params, no Model File picker, edit paths silently no-op — HIGH
+
+**Root cause** — the glTF Stage-4 install mints a preset id that resolves in no catalog and
+stashes the def only on the layer
+([app_lifecycle.rs:506](../crates/manifold-app/src/app_lifecycle.rs#L506),
+[layer.rs:100](../crates/manifold-editing/src/commands/layer.rs#L100)). Every type-keyed
+surface then fails independently: the assembler emits empty `params`/`bindings`
+([gltf_import.rs](../crates/manifold-renderer/src/node_graph/gltf_import.rs), metadata block)
+so the card is empty; generator string params are sourced from the registry only
+([inspector.rs:2251](../crates/manifold-app/src/ui_bridge/inspector.rs#L2251)) so the Model
+File picker never shows; the editor's catalog default is `None`, which gates several edit
+dispatch arms into silent no-ops (e.g. [app.rs:1356](../crates/manifold-app/src/app.rs#L1356)).
+The reported empty editor canvas is NOT fully root-caused: `GraphSnapshot::from_def` on the
+assembled def is proven good (12 nodes / 10 wires), so the entry path loses the watch target —
+observe at repro.
+
+**Fix shape** — `PRESET_LIBRARY_DESIGN.md` P0 (D9): the drop registers an `EmbeddedPreset`
+and the layer tracks it; assembler emits curated performance bindings. Not per-consumer
+fallbacks.
+
 ## Fixed
 
 All five entries below were fixed 2026-06-23, with a test per path:

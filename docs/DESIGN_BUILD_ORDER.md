@@ -125,6 +125,9 @@ Grouped in waves; within a wave, items are independent and order is free.
     Peter-driven: preset/graph management rethink). Authoring-UX pair serving the
     release-content push; OVERLAY P1 also fixes a live stale-search bug, so it is
     re-rankable arbitrarily early — nothing depends on it and it depends on nothing.
+    **PRESET_LIBRARY P0 (added 2026-07-04 evening) fixes the live glTF-import
+    black-box bugs (BUG-016) and depends on nothing — run it FIRST, ahead of any
+    wave, next Sonnet session.**
 13c. TIMELINE_INTERACTION_P1_SPEC P1.0–P1.6 (added 2026-07-04, Peter-driven: five
     in-app interaction bugs, one authority-duplication disease). Sequel to the
     shipped TIMELINE_LAYOUT_P0; serves the release-content push directly (trim/
