@@ -189,6 +189,21 @@ pub struct TimelineViewportPanel {
     marker_node_ids: Vec<NodeId>,
     marker_drag_id: Option<MarkerId>,
     marker_drag_start_beat: Beats,
+
+    // ── P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D17 "timeline marquee
+    // fade") ──────────────────────────────────────────────────────────
+    /// Eases the region/marquee highlight's alpha in/out. Targets 1.0
+    /// whenever `selection_region` is `Some` (whether still being dragged
+    /// or already a settled selection) and 0.0 once cleared — NOT tied to
+    /// drag state the way `graph_canvas`'s ad-hoc marquee is: unlike that
+    /// one, a timeline region is a persistent selection concept that
+    /// outlives the drag, so re-targeting this on drag-end would fade a
+    /// still-selected region to invisible right after you finish selecting
+    /// it. Ticked in `update` (the existing per-frame `Panel::update` hook).
+    region_alpha: crate::anim::AnimF32,
+    /// Wall-clock timestamp `update()` last ticked `region_alpha` from —
+    /// mirrors `DropdownPanel::last_tick`.
+    region_alpha_last_tick: Option<std::time::Instant>,
 }
 
 /// Viewport-local drag mode. Only tracks ruler scrub — all clip interaction
@@ -272,6 +287,8 @@ impl TimelineViewportPanel {
             marker_node_ids: Vec::new(),
             marker_drag_id: None,
             marker_drag_start_beat: Beats::ZERO,
+            region_alpha: crate::anim::AnimF32::new(0.0, color::MOTION_FAST_MS),
+            region_alpha_last_tick: None,
         }
     }
 
@@ -631,6 +648,27 @@ impl TimelineViewportPanel {
         }
     }
 
+    /// D17 "timeline marquee fade": advance `region_alpha` toward 1.0/0.0 by
+    /// real elapsed wall-clock time, targeted on whether a region currently
+    /// exists (see `region_alpha`'s doc comment for why that's the right
+    /// binding, not drag state). Called every frame from `Panel::update`.
+    fn tick_region_alpha(&mut self) {
+        self.region_alpha
+            .set_target(if self.selection_region.is_some() { 1.0 } else { 0.0 });
+        if !self.region_alpha.is_animating() {
+            self.region_alpha_last_tick = None;
+            return;
+        }
+        let now = std::time::Instant::now();
+        let dt_ms = self
+            .region_alpha_last_tick
+            .map(|t| (now - t).as_secs_f32() * 1000.0)
+            .unwrap_or(0.0)
+            .min(100.0);
+        self.region_alpha_last_tick = Some(now);
+        self.region_alpha.tick(dt_ms);
+    }
+
     /// Screen-space geometry for the timeline overlays that sit ON TOP of the
     /// clip bodies + waveforms: the marquee/region highlight, the insert cursor,
     /// and the beat markers. Since §24 5b these are GPU rects emitted in the
@@ -658,10 +696,13 @@ impl TimelineViewportPanel {
             if x1 <= x0 || y1 <= y0 {
                 return None;
             }
-            Some((
-                Rect::new(x0, y0, x1 - x0, y1 - y0),
-                color::ACCENT_BLUE_SELECTION,
-            ))
+            // D17 "timeline marquee fade": scale the highlight's alpha by
+            // the eased `region_alpha` instead of drawing it at full
+            // strength the instant a region exists.
+            let a = self.region_alpha.value().clamp(0.0, 1.0);
+            let base = color::ACCENT_BLUE_SELECTION;
+            let faded = color::with_alpha(base, (base.a as f32 * a) as u8);
+            Some((Rect::new(x0, y0, x1 - x0, y1 - y0), faded))
         });
 
         // Insert cursor: a thin vertical bar on its target layer's row.
@@ -1256,6 +1297,7 @@ impl Panel for TimelineViewportPanel {
     fn update(&mut self, tree: &mut UITree) {
         self.sync_insert_cursor_ruler(tree);
         self.sync_active_track_lane(tree);
+        self.tick_region_alpha();
     }
 
     fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
@@ -1878,5 +1920,85 @@ mod tests {
 
         let locked = bitmap_painter::get_clip_color(false, false, false, true, false, lc);
         assert_eq!(locked, color::CLIP_LOCKED);
+    }
+
+    // ── P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D17 "timeline marquee fade") ──
+
+    #[test]
+    fn region_highlight_fades_in_when_a_region_appears() {
+        let mut panel = TimelineViewportPanel::new();
+        panel.set_tracks(test_tracks());
+        let mut markers = Vec::new();
+
+        // No region yet — no highlight at all.
+        let overlays = panel.timeline_overlays(None, false, &mut markers);
+        assert!(overlays.region.is_none());
+
+        // A region appears; `tick_region_alpha` targets 1.0. Its own first
+        // call only *establishes* the wall-clock baseline (real elapsed time
+        // since the previous call is unknown, so it moves nothing that
+        // instant — same contract `DropdownPanel::update` documents); drive
+        // the actual partial-progress assertion with an explicit `dt` on the
+        // underlying tween directly, mirroring how `DropdownPanel`'s own
+        // tests split `tick_enter(dt)` out from wall-clock `update` for
+        // exactly this reason.
+        panel.set_selection_region(Some(SelectionRegion {
+            start_beat: Beats::ZERO,
+            end_beat: Beats(4.0),
+            start_layer: 0,
+            end_layer: 1,
+        }));
+        panel.tick_region_alpha();
+        panel.region_alpha.tick(16.0);
+        let overlays = panel.timeline_overlays(None, false, &mut markers);
+        let (_, c) = overlays.region.expect("region now exists");
+        assert!(
+            c.a > 0 && c.a < color::ACCENT_BLUE_SELECTION.a,
+            "first tick fades in partway, not instantly: alpha={}",
+            c.a
+        );
+
+        // Drive it to fully settled.
+        panel.tick_region_alpha();
+        panel.region_alpha.tick(color::MOTION_FAST_MS);
+        let overlays = panel.timeline_overlays(None, false, &mut markers);
+        let (_, c) = overlays.region.expect("region still exists");
+        assert_eq!(c.a, color::ACCENT_BLUE_SELECTION.a, "settles at full strength");
+    }
+
+    #[test]
+    fn region_highlight_survives_drag_end_unfaded() {
+        // The whole point of binding `region_alpha`'s target to region
+        // PRESENCE rather than drag state (unlike `graph_canvas`'s ad-hoc
+        // marquee): a settled selection must NOT fade away just because a
+        // drag ended. Simulates "drag ended, region persists".
+        let mut panel = TimelineViewportPanel::new();
+        panel.set_tracks(test_tracks());
+        panel.set_selection_region(Some(SelectionRegion {
+            start_beat: Beats::ZERO,
+            end_beat: Beats(4.0),
+            start_layer: 0,
+            end_layer: 1,
+        }));
+        // Settle it fully first (as if the fade-in already finished).
+        for _ in 0..10 {
+            panel.tick_region_alpha();
+            panel.region_alpha.tick(color::MOTION_FAST_MS);
+        }
+        let mut markers = Vec::new();
+        let (_, before) = panel
+            .timeline_overlays(None, false, &mut markers)
+            .region
+            .expect("region exists");
+        assert_eq!(before.a, color::ACCENT_BLUE_SELECTION.a);
+
+        // "Drag ends" — nothing about the region itself changes; only a
+        // real `clear_region()` (a different call) should ever fade it out.
+        panel.tick_region_alpha();
+        let (_, after) = panel
+            .timeline_overlays(None, false, &mut markers)
+            .region
+            .expect("still exists after the drag ends");
+        assert_eq!(after.a, before.a, "stays at full strength — no fade-out on drag-end alone");
     }
 }

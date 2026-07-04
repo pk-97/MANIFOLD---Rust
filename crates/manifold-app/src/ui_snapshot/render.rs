@@ -73,6 +73,7 @@ pub fn render_ui_to_png(
                 muted: cr.is_muted,
                 locked: cr.is_locked,
                 generator: cr.is_generator,
+                alpha: 1.0,
             })
             .collect();
         renderer.begin_frame();
