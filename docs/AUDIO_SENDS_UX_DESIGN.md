@@ -1,6 +1,6 @@
 # Audio Sends UX — make the routing legible, the tuning live, and the analysis pay-per-use
 
-**Status:** PROPOSED design, not built · 2026-07-04 · Fable
+**Status:** APPROVED design, not built · approved by Peter 2026-07-04 · Fable · D5 word confirmed: "Source"
 **Prerequisites:** none (all phases run against shipped audio-modulation code)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
