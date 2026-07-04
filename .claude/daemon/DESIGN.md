@@ -179,6 +179,36 @@ Auto-tuning is split by risk:
   sleep passes (big model, committed, diffable). A loop that rewrites its own
   words on its own measurements drifts unsupervised.
 
+## 4c. Approved extensions (Peter, 2026-07-04 — from the external-review pass; build after §4b)
+
+1. **Richer windows** (Sonnet, can ship immediately): WindowState grows arithmetic
+   the classifier can't do reliably — repeat-target counts annotated on ledger
+   lines ("(4th touch this session)"), consecutive-failure streaks, and events
+   since TASK set. No rubric/signature edits needed. Every verdict record gains a
+   `window_version` int so §4b/sleep-pass scoring never mixes regimes.
+2. **Habit memory** (Sonnet, after §4b): at observer start, roll up telemetry
+   fires per move over the trailing 7 days across sessions; when a move fires,
+   the valve appends a FIXED-FORMAT line to the payload: "(Nth fire of this move
+   across sessions this week.)" Amendment to invariant 5: a mechanically
+   computed count inside a fixed template is not a wording edit; the template
+   itself is sleep-pass-only.
+3. **Utility gating** (fold into the §4b build): once a move has ≥10 scored
+   fires, its confidence threshold scales inversely with scored success rate,
+   clamped to [0.7, 0.95]. Bounded numeric dial per §4b; no new machinery.
+4. **Falsification experiment** (design in sleep pass 2, run after the
+   supervised week): alternate sessions between the daemon and a control arm
+   injecting one generic reminder every N tool events with no classifier; score
+   both arms with the same §4b telemetry. Pre-committed: if the control
+   matches, the classifier is decoration and the thesis reduces to "inject
+   more often."
+5. **Retrieval note (not scheduled):** at ~100x incident corpus (multi-repo,
+   multi-user), the named-move library stops being the right compression — an
+   embedding space over historical episodes replaces id-selection. Below that
+   scale, do not build it; it trades away auditability and habituation for
+   coverage the data can't pay for.
+
+The paper (`paper.html` v2, §10) is the readable version of this list.
+
 ## 5. Sleep pass (consolidation)
 
 Weekly scheduled routine on the largest available model. Input: `telemetry.jsonl`
