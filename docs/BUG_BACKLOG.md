@@ -352,6 +352,30 @@ of only `self.text_input.cancel()`. Small, localized to `window_input.rs`'s
 gap outside P1/P2's stated deliverables (which target orphaned-session-on-close, not
 missing-close-on-cancel).
 
+### BUG-024 — Generator preset thumbnails render on a WHITE background (unrepresentative) — MED
+
+**Symptom** — found 2026-07-05 eyeballing the committed `assets/preset-thumbnails/generators/*.png`
+after adding warm-up frames (PRESET_LIBRARY P6). Effect thumbnails (rendered over the gradient
+fixture) look correct (Bloom reads right). But GENERATOR thumbnails render their content over a
+WHITE background instead of the generator's own (usually dark) field: StarField is dark specks on
+white (should be bright stars on black); Plasma is a grey blob on white. Warm-up frames (t advances,
+state accumulates) did NOT fix it — so this is a render-path issue, not cold-start.
+
+**Root cause** — unknown, not yet diagnosed. Suspects in
+`crates/manifold-renderer/src/preset_thumbnail.rs::render_generator`: (a) the `Rgba16Float` render
+target isn't cleared to the generator's expected background (black/transparent) before
+`runtime.render`, so unwritten/low-alpha regions read as white after `readback_tonemapped_rgba8`;
+(b) premultiplied-alpha / straight-alpha mismatch in the readback vs how generators composite
+(cf. [[alpha-standardisation]] — compositor is premultiplied, producers aren't); (c) the tonemap
+maps the clear/HDR default toward white. The live `GeneratorRenderer` path composites over the
+correct background, so comparing its clear/blend setup against this one-shot path should localize it.
+
+**Fix shape** — likely: clear the thumbnail target to the same background the live generator path
+uses (black or transparent) before rendering, and match its alpha convention in the readback. Then
+regenerate the 46 factory PNGs via `cargo run -p manifold-renderer --bin generate-preset-thumbnails`.
+Effects are unaffected. Until fixed, generator thumbnails are present but not visually usable — the
+P6 image-cell display infra is correct; the generator render output is not.
+
 ### BUG-023 — `no_new_raw_color_literals` red on main: real count (201) one above baseline (200) — FIXED 2026-07-05 (in the P6 landing)
 
 **Resolution** — the extra raw literal was localized (not a "prior session" — it was THIS

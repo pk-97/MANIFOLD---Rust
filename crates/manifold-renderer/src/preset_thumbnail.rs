@@ -125,34 +125,53 @@ fn render_generator(device: &GpuDevice, def: &EffectGraphDef, size: u32) -> Resu
             .map_err(|e| format!("generator build failed: {e}"))?;
 
     let target = RenderTarget::new(device, size, size, format, "preset-thumb-gen-target");
-    // Default look: t=0, beat=0, anim_progress=0, no modulation/warm-up —
-    // matches `GeneratorRenderer::render_clip_thumbnail`'s cold-start
-    // rationale (CLIP_THUMBNAILS_DESIGN.md P2c): none of those are computed
-    // off a playhead this render doesn't have.
-    let ctx = PresetContext {
-        time: 0.0,
-        beat: 0.0,
-        dt: 1.0 / 60.0,
-        width: size,
-        height: size,
-        output_width: size,
-        output_height: size,
-        aspect: 1.0,
-        owner_key: 0,
-        is_clip_level: false,
-        frame_count: 0,
-        anim_progress: 0.0,
-        trigger_count: 0,
-        params: [0.0; MAX_GEN_PARAMS],
-        param_count: 0,
+
+    // Warm-up render, NOT a cold t=0 frame. A bare t=0 render is degenerate for
+    // most generators: time-function looks (Plasma, Lissajous, tunnels) sit at
+    // their undeveloped origin, and state-accumulating sims (FluidSim, particle
+    // systems, StrangeAttractor) have no accumulated state at all — the result
+    // is a flat/grey frame that doesn't read as the preset. So advance
+    // `WARMUP_FRAMES` frames, committing each so GPU-resident state (sim
+    // buffers) actually accumulates between frames, and capture the last. The
+    // runtime persists its `StateStore` across `render` calls, so this develops
+    // stateful generators the same way the live playhead would. `dt = 1/60`,
+    // `bpm = 120` (2 beats/sec) — arbitrary but stable defaults; the thumbnail
+    // just needs a representative developed frame, not a specific playhead.
+    const WARMUP_FRAMES: u32 = 60;
+    const DT: f32 = 1.0 / 60.0;
+    let make_ctx = |frame: u32| {
+        let time = frame as f64 * DT as f64;
+        PresetContext {
+            time,
+            beat: time * 2.0, // 120 bpm
+            dt: DT,
+            width: size,
+            height: size,
+            output_width: size,
+            output_height: size,
+            aspect: 1.0,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: frame as i64,
+            // Sweep 0→1 across the warm-up so loop-driven anims land developed.
+            anim_progress: (frame as f32 / WARMUP_FRAMES as f32).min(1.0),
+            trigger_count: 0,
+            params: [0.0; MAX_GEN_PARAMS],
+            param_count: 0,
+        }
     };
 
-    let mut enc = device.create_encoder("preset-thumb-gen-render");
-    {
-        let mut gpu = RendererGpuEncoder::new(&mut enc, device);
-        runtime.render(&mut gpu, &target.texture, &ctx);
+    for frame in 0..WARMUP_FRAMES {
+        let ctx = make_ctx(frame);
+        let mut enc = device.create_encoder("preset-thumb-gen-warmup");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+            runtime.render(&mut gpu, &target.texture, &ctx);
+        }
+        // Commit each frame so state-accumulating generators see the prior
+        // frame's GPU writes before computing the next.
+        enc.commit_and_wait_completed();
     }
-    enc.commit_and_wait_completed();
 
     Ok(readback_tonemapped_rgba8(device, &target.texture, size, size))
 }
