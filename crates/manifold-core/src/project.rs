@@ -182,14 +182,10 @@ impl Project {
         // Clamp saved playhead
         self.saved_playhead_time = self.saved_playhead_time.max(0.0);
 
-        // Align all effect params to current definitions
-        self.align_all_effect_params();
-
-        // Migrate generator param arrays to current registry length, preserving
-        // every existing value. Without this, the first slider interaction on a
-        // clip whose generator gained a parameter since save time would wipe
-        // every value to defaults.
-        self.migrate_all_generator_params();
+        // (The former `align_all_effect_params` / `migrate_all_generator_params`
+        // positional-resize passes are gone: the id-keyed manifest is seeded
+        // whole on load and never has a length to reconcile — PARAM_STORAGE_DESIGN.md
+        // D3.)
 
         // V1.1 → V1.2 migration: every driver/envelope/Ableton mapping
         // deserialized from a legacy `paramIndex: i32` shape needs its
@@ -282,22 +278,6 @@ impl Project {
         }
     }
 
-    /// Resize all effect param arrays to match their definitions.
-    fn align_all_effect_params(&mut self) {
-        // Master effects
-        for fx in &mut self.settings.master_effects {
-            fx.align_to_definition();
-        }
-        // Layer effects
-        for layer in &mut self.timeline.layers {
-            if let Some(ref mut effects) = layer.effects {
-                for fx in effects.iter_mut() {
-                    fx.align_to_definition();
-                }
-            }
-        }
-    }
-
     /// Apply per-effect `legacy_value_aliases` to every effect
     /// instance's `param_values`. Translates pre-migration enum /
     /// numeric values to current ones when loading old projects — the
@@ -320,22 +300,16 @@ impl Project {
                 return;
             }
             for (param_id, value_aliases) in def.legacy_value_aliases {
-                let Some(&slot_idx) = def.id_to_index.get(*param_id) else {
-                    // Param renamed out from under the alias table —
-                    // nothing to migrate. The id-alias resolver should
-                    // have caught the rename in a prior pass.
+                // Resolve directly on the manifest by id — no registry index.
+                let Some(p) = fx.params.get_mut(param_id) else {
                     continue;
                 };
-                let Some(slot) = fx.param_values.get_mut(slot_idx) else {
-                    continue;
-                };
-                let coerced = slot.value.round() as i32;
+                let coerced = p.value.round() as i32;
                 if let Some(&(_, to)) = value_aliases.iter().find(|(from, _)| *from == coerced) {
-                    slot.value = to as f32;
+                    p.value = to as f32;
                     // Keep base in sync so a later `reset_param_effectives`
-                    // doesn't wipe the migration back. base rides the slot now
-                    // (fork #16), so this is the same slot we just wrote.
-                    slot.base = to as f32;
+                    // doesn't wipe the migration back.
+                    p.base = to as f32;
                 }
             }
         }
@@ -347,17 +321,6 @@ impl Project {
                 for fx in effects.iter_mut() {
                     apply_to_effect(fx);
                 }
-            }
-        }
-    }
-
-    /// Migrate every layer's generator param arrays to the current registry
-    /// length, preserving existing values and filling new tail entries from
-    /// the registry's defaults.
-    fn migrate_all_generator_params(&mut self) {
-        for layer in &mut self.timeline.layers {
-            if let Some(gp) = layer.gen_params_mut() {
-                gp.migrate_to_registry_length();
             }
         }
     }

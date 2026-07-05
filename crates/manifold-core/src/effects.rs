@@ -168,11 +168,11 @@ pub trait EffectContainer {
 pub trait ParamSource {
     fn display_name(&self) -> &str;
     fn param_count(&self) -> usize;
-    fn get_param_def(&self, index: usize) -> ParamDef;
-    fn get_param(&self, index: usize) -> f32;
-    fn set_param(&mut self, index: usize, value: f32);
-    fn get_base_param(&self, index: usize) -> f32;
-    fn set_base_param(&mut self, index: usize, value: f32);
+    fn get_param_def(&self, id: &str) -> ParamDef;
+    fn get_param(&self, id: &str) -> f32;
+    fn set_param(&mut self, id: &str, value: f32);
+    fn get_base_param(&self, id: &str) -> f32;
+    fn set_base_param(&mut self, id: &str, value: f32);
     fn find_driver(&self, param_id: &str) -> Option<&ParameterDriver>;
     fn get_drivers_list(&self) -> Option<&Vec<ParameterDriver>>;
     fn create_driver(&mut self, param_id: ParamId) -> &ParameterDriver;
@@ -549,252 +549,264 @@ pub struct PresetInstance {
 
 // ─── Wire-format helpers for `params` (V1.4) ───
 //
-// PARAM_STORAGE_DESIGN.md D4: the typed loader understands ONLY the V1.4
-// id-keyed `params` shape. The four historical positional/keyed value
-// shapes, and the parallel pre-modulation-base value container that used
-// to ride alongside them, are gone from this file — `manifold-io`'s
-// `migrations::param_storage_v14` converts every
-// preset instance to this shape BEFORE typed deserialization ever runs,
-// for both the V1 JSON and V2 ZIP containers, so nothing here needs to
-// understand them anymore. That migration module is now the only place
-// positional param knowledge survives.
+// PARAM_STORAGE_DESIGN.md D4/D12: the typed loader understands ONLY the V1.4
+// id-keyed `params` shape, and the manifest is the single authority. The four
+// historical positional/keyed value shapes are gone — `manifold-io`'s
+// `migrations::param_storage_v14` converts every preset instance to the V1.4
+// shape BEFORE typed deserialization runs (V1 JSON + V2 ZIP), so that module is
+// the only place positional param knowledge survives.
 //
-// In-memory storage stays positional (`Vec<ParamSlot>`) this phase — P1
-// changes the WIRE shape only; the storage swap to an id-keyed
-// `ParamManifest` is P2. See docs/PARAM_STORAGE_DESIGN.md §6.
+// Save is trivial: iterate the manifest, emit each entry by its own id
+// ([`ManifestSer`]). Load is the §4 reconcile: seed bundled + user-added
+// descriptors from the template/graph, overlay the file's state + calibration
+// by id, append self-describing inline-`spec` entries ([`build_param_manifest`]).
+// `meta.params` is READ at load only to reconstruct pre-P2 descriptors; it is
+// NOT re-derived on save (a user param's spec rides the wire's inline `spec`,
+// D12 §4 step 3; a bundled param's range edit rides the `calibration` block,
+// D6). This keeps `meta.params` byte-stable across a round-trip and keeps the
+// manifest the sole runtime authority.
 
-/// One entry in `PresetInstance.params` — the id is the map key, not a
-/// field on this struct. `base` is present iff the instance's
-/// `base_tracked` bit is set (D5: `base` rides inside the same entry now;
-/// there is no more parallel pre-modulation-base wire). `exposed` always
-/// serializes so the shape stays simple to read.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+/// The per-entry calibration block: the recalibrated range (and curve/invert
+/// when non-default) a chevron popover wrote onto a *bundled* param. Present on
+/// the wire iff [`crate::params::Param::calibrated`]; a bundled param without
+/// it tracks the template (D6).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CalibrationWire {
+    min: f32,
+    max: f32,
+    #[serde(default, skip_serializing_if = "curve_is_linear")]
+    curve: crate::macro_bank::MacroCurve,
+    #[serde(default, skip_serializing_if = "is_false")]
+    invert: bool,
+}
+
+/// One entry in `PresetInstance.params` — the id is the map key. `base` iff
+/// `base_tracked` (D5), `calibration` iff calibrated (D6), `spec` inline iff
+/// the param is user-added (D12). `exposed` always serializes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct ParamEntryWire {
     value: f32,
     #[serde(default = "default_true")]
     exposed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     base: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    calibration: Option<CalibrationWire>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    spec: Option<crate::effect_graph_def::ParamSpecDef>,
 }
 
 impl ParamEntryWire {
-    fn from_slot(slot: &ParamSlot, base_tracked: bool) -> Self {
+    /// Wire entry for a manifest param.
+    fn from_param(p: &crate::params::Param, base_tracked: bool) -> Self {
         Self {
-            value: slot.value,
-            exposed: slot.exposed,
-            base: base_tracked.then_some(slot.base),
+            value: p.value,
+            exposed: p.exposed,
+            base: base_tracked.then_some(p.base),
+            calibration: p.calibrated.then(|| CalibrationWire {
+                min: p.spec.min,
+                max: p.spec.max,
+                curve: p.spec.curve,
+                invert: p.spec.invert,
+            }),
+            spec: matches!(p.origin, crate::params::ParamOrigin::UserAdded)
+                .then(|| p.spec.clone()),
         }
+    }
+
+    /// Overlay this file entry onto a manifest param already seeded from the
+    /// template. A self-describing inline `spec` (user-added) replaces the
+    /// descriptor first; then value/base/exposed; then a `calibration` block
+    /// overrides the range (setting `calibrated`). Returns whether the entry
+    /// carried a `base` (folds into the instance `base_tracked` bit).
+    fn apply_to(&self, p: &mut crate::params::Param) -> bool {
+        if let Some(spec) = &self.spec {
+            p.spec = spec.clone();
+        }
+        p.value = self.value;
+        p.base = self.base.unwrap_or(self.value);
+        p.exposed = self.exposed;
+        if let Some(c) = &self.calibration {
+            p.spec.min = c.min;
+            p.spec.max = c.max;
+            p.spec.curve = c.curve;
+            p.spec.invert = c.invert;
+            p.calibrated = true;
+        }
+        self.base.is_some()
     }
 }
 
-/// Serialize-side wrapper for an effect's `params`: the static (registry)
-/// prefix first, then the per-instance user-added tail — the same
-/// `[static prefix | user tail]` layout `param_values` has always used.
-/// A slot whose id can't be resolved (registry missing for this type —
-/// test contexts only, matching the historical `into_positional` warning)
-/// is simply not emitted; there is no positional fallback to catch it
-/// anymore, so an unregistered type's params are silently absent from the
-/// saved file rather than dumped as an unaddressable array.
-struct ParamsSer<'a> {
-    values: &'a [ParamSlot],
-    effect_type: &'a PresetTypeId,
-    user_binding_ids: &'a [&'a str],
+/// Serialize a `PresetInstance`'s `params` — the single V1.4 id-keyed map for
+/// BOTH kinds (D12). Emits each manifest entry by its own id in card order; no
+/// registry lookup, no positional prefix/tail split.
+struct ManifestSer<'a> {
+    manifest: &'a crate::params::ParamManifest,
     base_tracked: bool,
 }
 
-impl Serialize for ParamsSer<'_> {
+impl Serialize for ManifestSer<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         use serde::ser::SerializeMap;
-        let def = crate::preset_definition_registry::try_get(self.effect_type);
-        let static_count = def.as_ref().map(|d| d.param_count).unwrap_or(0);
-        let mut map = serializer.serialize_map(None)?;
-        if let Some(def) = &def {
-            for (i, pv) in self.values.iter().take(static_count).enumerate() {
-                let Some(id) = def.param_ids.get(i).filter(|s| !s.is_empty()) else {
-                    continue;
-                };
-                map.serialize_entry(id, &ParamEntryWire::from_slot(pv, self.base_tracked))?;
-            }
-        }
-        for (j, id) in self.user_binding_ids.iter().enumerate() {
-            if let Some(pv) = self.values.get(static_count + j) {
-                map.serialize_entry(id, &ParamEntryWire::from_slot(pv, self.base_tracked))?;
-            }
-        }
-        map.end()
-    }
-}
-
-/// Serialize-side wrapper for a generator's `params`. Mirrors
-/// `align_to_definition`'s documented authority split: a graph-backed
-/// generator's own `graph.preset_metadata.params` is the full
-/// `[bundled | user-added]` order authority (self-contained — this is what
-/// used to force the positional-`Array` fallback for a generator with a
-/// user-added tail; now the keyed map just reads that same order
-/// directly). Otherwise the registry's static order is used.
-struct GenParamsSer<'a> {
-    values: &'a [ParamSlot],
-    gen_type: &'a PresetTypeId,
-    graph: &'a Option<EffectGraphDef>,
-    base_tracked: bool,
-}
-
-impl Serialize for GenParamsSer<'_> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeMap;
-        let mut map = serializer.serialize_map(None)?;
-        if let Some(meta) = self.graph.as_ref().and_then(|g| g.preset_metadata.as_ref())
-            && !meta.params.is_empty()
-        {
-            for (i, spec) in meta.params.iter().enumerate() {
-                if spec.id.is_empty() {
-                    continue;
-                }
-                if let Some(pv) = self.values.get(i) {
-                    map.serialize_entry(
-                        &spec.id,
-                        &ParamEntryWire::from_slot(pv, self.base_tracked),
-                    )?;
-                }
-            }
-            return map.end();
-        }
-        if let Some(def) = crate::preset_definition_registry::try_get(self.gen_type) {
-            for (i, pv) in self.values.iter().take(def.param_count).enumerate() {
-                let Some(id) = def.param_ids.get(i).filter(|s| !s.is_empty()) else {
-                    continue;
-                };
-                map.serialize_entry(id, &ParamEntryWire::from_slot(pv, self.base_tracked))?;
-            }
-        }
-        map.end()
-    }
-}
-
-/// Build an effect's `param_values` from its V1.4 `params` wire map: seed
-/// `[static prefix | user tail]` defaults, then overlay matching incoming
-/// entries. Static ids resolve alias-aware via `PresetDef::index_for_param`
-/// (so an id renamed in the registry after this project's last save still
-/// lands correctly); the user tail is a per-instance id list with no alias
-/// table, so it's a direct name match. An incoming id matching neither is
-/// dropped (orphan — same policy the old `Keyed` arm used).
-fn build_effect_param_values(
-    effect_type: &PresetTypeId,
-    user_binding_ids: &[&str],
-    user_defaults: &[f32],
-    wire: Option<std::collections::BTreeMap<String, ParamEntryWire>>,
-) -> (Vec<ParamSlot>, bool) {
-    let def = crate::preset_definition_registry::try_get(effect_type);
-    let static_count = def.as_ref().map(|d| d.param_count).unwrap_or(0);
-    let n_user = user_binding_ids.len();
-    let mut values = vec![ParamSlot::default(); static_count + n_user];
-    if let Some(def) = &def {
-        for (i, pd) in def.param_defs.iter().enumerate().take(static_count) {
-            values[i] = ParamSlot::exposed(pd.default_value);
-        }
-    }
-    for (j, &dv) in user_defaults.iter().enumerate() {
-        values[static_count + j] = ParamSlot::exposed(dv);
-    }
-    let mut base_tracked = false;
-    if let Some(wire) = wire {
-        for (id, entry) in wire {
-            let idx = def
-                .as_ref()
-                .and_then(|d| d.index_for_param(&id))
-                .filter(|&i| i < static_count)
-                .or_else(|| {
-                    user_binding_ids
-                        .iter()
-                        .position(|bid| *bid == id)
-                        .map(|j| static_count + j)
-                });
-            let Some(idx) = idx else { continue };
-            if idx >= values.len() {
+        let mut map = serializer.serialize_map(Some(self.manifest.len()))?;
+        for p in self.manifest.iter() {
+            if p.id().is_empty() {
                 continue;
             }
-            values[idx] = ParamSlot {
-                value: entry.value,
-                base: entry.base.unwrap_or(entry.value),
-                exposed: entry.exposed,
-                touched: false,
-            };
-            base_tracked |= entry.base.is_some();
+            map.serialize_entry(p.id(), &ParamEntryWire::from_param(p, self.base_tracked))?;
         }
+        map.end()
     }
-    (values, base_tracked)
 }
 
-/// Generator counterpart to [`build_effect_param_values`]. A graph-backed
-/// generator's `graph.preset_metadata.params` is the full ordered id
-/// authority (bundled + user-added unified, D2); otherwise the registry.
-fn build_generator_param_values(
-    gen_type: &PresetTypeId,
+/// A minimal `ParamSpecDef` for a `user_added` binding with no matching
+/// `meta.params` entry (pre-spec files): range 0..1, linear, integral-ness
+/// inferred from the binding's convert.
+fn spec_from_binding(
+    b: &crate::effect_graph_def::BindingDef,
+) -> crate::effect_graph_def::ParamSpecDef {
+    let whole_numbers = matches!(
+        b.convert,
+        ParamConvert::IntRound | ParamConvert::EnumRound | ParamConvert::Trigger
+    );
+    crate::effect_graph_def::ParamSpecDef {
+        id: b.id.clone(),
+        name: b.label.clone(),
+        min: 0.0,
+        max: 1.0,
+        default_value: b.default_value,
+        whole_numbers,
+        is_toggle: matches!(b.convert, ParamConvert::BoolThreshold),
+        is_trigger: matches!(b.convert, ParamConvert::Trigger),
+        value_labels: Vec::new(),
+        format_string: None,
+        osc_suffix: String::new(),
+        curve: Default::default(),
+        invert: false,
+    }
+}
+
+/// Template + user-added descriptors a fresh manifest is seeded from at load,
+/// in card order. Bundled descriptors: a graph-backed generator's own
+/// `meta.params`, else the registry `param_defs`. User-added descriptors: the
+/// per-instance graph's `user_added` bindings (spec from `meta.params`, else
+/// synthesized). This load-time read of the graph reconstructs the manifest;
+/// the manifest is the authority afterward.
+fn gather_known_params(
+    is_generator: bool,
+    effect_type: &PresetTypeId,
     graph: &Option<EffectGraphDef>,
-    wire: Option<std::collections::BTreeMap<String, ParamEntryWire>>,
-) -> (Vec<ParamSlot>, bool) {
-    let graph_meta = graph
-        .as_ref()
-        .and_then(|g| g.preset_metadata.as_ref())
-        .filter(|m| !m.params.is_empty());
+) -> Vec<(crate::effect_graph_def::ParamSpecDef, crate::params::ParamOrigin)> {
+    use crate::params::ParamOrigin;
+    let meta = graph.as_ref().and_then(|g| g.preset_metadata.as_ref());
 
-    let mut base_tracked = false;
-
-    if let Some(meta) = graph_meta {
-        let mut values: Vec<ParamSlot> = meta
+    // Generator with a per-instance graph: its `meta.params` is the full
+    // ordered descriptor authority; origin is driven by a matching `user_added`
+    // binding.
+    if is_generator
+        && let Some(meta) = meta
+        && !meta.params.is_empty()
+    {
+        return meta
             .params
             .iter()
-            .map(|p| ParamSlot::exposed(p.default_value))
+            .map(|s| {
+                let user = meta.bindings.iter().any(|b| b.user_added && b.id == s.id);
+                let origin = if user {
+                    ParamOrigin::UserAdded
+                } else {
+                    ParamOrigin::Bundled
+                };
+                (s.clone(), origin)
+            })
             .collect();
-        if let Some(wire) = wire {
-            for (id, entry) in wire {
-                let Some(idx) = meta.params.iter().position(|p| p.id == id) else {
-                    continue;
-                };
-                values[idx] = ParamSlot {
-                    value: entry.value,
-                    base: entry.base.unwrap_or(entry.value),
-                    exposed: entry.exposed,
-                    touched: false,
-                };
-                base_tracked |= entry.base.is_some();
-            }
-        }
-        return (values, base_tracked);
     }
 
-    let def = crate::preset_definition_registry::try_get(gen_type);
-    let static_count = def.as_ref().map(|d| d.param_count).unwrap_or(0);
-    let mut values = vec![ParamSlot::default(); static_count];
-    if let Some(def) = &def {
-        for (i, pd) in def.param_defs.iter().enumerate().take(static_count) {
-            values[i] = ParamSlot::exposed(pd.default_value);
+    // Effect (or graph-less generator): bundled from the registry, then the
+    // user-added tail from the graph's `user_added` bindings.
+    let mut out = Vec::new();
+    if let Some(def) = crate::preset_definition_registry::try_get(effect_type) {
+        for pd in def.param_defs.iter() {
+            out.push((pd.to_spec(), ParamOrigin::Bundled));
         }
     }
+    if let Some(meta) = meta {
+        for b in meta.bindings.iter().filter(|b| b.user_added) {
+            let spec = meta
+                .params
+                .iter()
+                .find(|p| p.id == b.id)
+                .cloned()
+                .unwrap_or_else(|| spec_from_binding(b));
+            out.push((spec, ParamOrigin::UserAdded));
+        }
+    }
+    out
+}
+
+/// Build a `PresetInstance`'s manifest from its V1.4 `params` wire map (§4 load
+/// reconcile): seed known descriptors, overlay each file entry's state +
+/// calibration by id (alias-aware), append self-describing inline-`spec`
+/// entries that match nothing, and drop unknown entries with a warning
+/// (today's unknown-id policy). Returns the manifest + the `base_tracked` bit.
+fn build_param_manifest(
+    is_generator: bool,
+    effect_type: &PresetTypeId,
+    graph: &Option<EffectGraphDef>,
+    wire: Option<std::collections::BTreeMap<String, ParamEntryWire>>,
+) -> (crate::params::ParamManifest, bool) {
+    use crate::params::{Param, ParamOrigin};
+    let mut entries: Vec<Param> = gather_known_params(is_generator, effect_type, graph)
+        .into_iter()
+        .map(|(spec, origin)| match origin {
+            ParamOrigin::Bundled => Param::bundled(spec),
+            ParamOrigin::UserAdded => Param::user_added(spec),
+        })
+        .collect();
+
+    // Alias map (old id → new id; `None` = deprecated, drop) from the graph's
+    // per-preset aliases plus the registry's legacy renames.
+    let mut alias: ahash::AHashMap<String, Option<String>> = ahash::AHashMap::new();
+    if let Some(meta) = graph.as_ref().and_then(|g| g.preset_metadata.as_ref()) {
+        for a in &meta.param_aliases {
+            alias.insert(a.old.clone(), a.new.clone());
+        }
+    }
+    if let Some(def) = crate::preset_definition_registry::try_get(effect_type) {
+        for (old, new) in def.legacy_param_aliases.iter() {
+            alias
+                .entry((*old).to_string())
+                .or_insert_with(|| new.map(str::to_string));
+        }
+    }
+
+    let mut base_tracked = false;
     if let Some(wire) = wire {
-        for (id, entry) in wire {
-            let Some(idx) = def.as_ref().and_then(|d| d.index_for_param(&id)) else {
-                continue;
+        for (raw_id, entry) in wire {
+            let id = match alias.get(&raw_id) {
+                Some(Some(new_id)) => new_id.clone(),
+                Some(None) => continue, // deprecated, no replacement
+                None => raw_id,
             };
-            if idx >= values.len() {
-                continue;
+            if let Some(p) = entries.iter_mut().find(|p| p.id() == id) {
+                base_tracked |= entry.apply_to(p);
+            } else if let Some(spec) = &entry.spec {
+                let mut p = Param::user_added(spec.clone());
+                base_tracked |= entry.apply_to(&mut p);
+                entries.push(p);
+            } else {
+                eprintln!(
+                    "[manifold-core] dropping unknown param id {id:?} on {effect_type:?} load \
+                     (no template descriptor, no inline spec)"
+                );
             }
-            values[idx] = ParamSlot {
-                value: entry.value,
-                base: entry.base.unwrap_or(entry.value),
-                exposed: entry.exposed,
-                touched: false,
-            };
-            base_tracked |= entry.base.is_some();
         }
     }
-    (values, base_tracked)
+    (crate::params::ParamManifest::from_params(entries), base_tracked)
 }
 
 // ─── Custom Serialize / Deserialize for PresetInstance ───
@@ -852,25 +864,18 @@ impl Serialize for PresetInstance {
             field_count += 1;
         }
 
-        // The user-tail of `param_values` is keyed (on the wire) by each
-        // user-added binding's stable id. After the storage unification
-        // those ids live in `graph.preset_metadata.bindings` (user_added),
-        // so collect them here for the value serializers. The bindings
-        // themselves ride out inside the `graph` field — there is no
-        // longer a separate `userParamBindings` array.
-        let user_binding_ids: Vec<&str> = self.user_added_bindings().map(|b| b.id.as_str()).collect();
-
         let mut s = serializer.serialize_struct("PresetInstance", field_count)?;
         s.serialize_field("id", &self.id)?;
         s.serialize_field("effectType", &self.effect_type)?;
         s.serialize_field("enabled", &self.enabled)?;
         s.serialize_field("collapsed", &self.collapsed)?;
+        // The `params` map carries each manifest entry by its own id in card
+        // order (bundled + user-added unified); the user-added bindings still
+        // ride out inside the `graph` field.
         s.serialize_field(
             "params",
-            &ParamsSer {
-                values: &self.param_values,
-                effect_type: &self.effect_type,
-                user_binding_ids: &user_binding_ids,
+            &ManifestSer {
+                manifest: &self.params,
                 base_tracked: self.base_tracked,
             },
         )?;
@@ -952,10 +957,8 @@ impl PresetInstance {
         s.serialize_field("generatorType", &self.effect_type)?;
         s.serialize_field(
             "params",
-            &GenParamsSer {
-                values: &self.param_values,
-                gen_type: &self.effect_type,
-                graph: &self.graph,
+            &ManifestSer {
+                manifest: &self.params,
                 base_tracked: self.base_tracked,
             },
         )?;
@@ -1027,46 +1030,12 @@ impl<'de> Deserialize<'de> for PresetInstance {
         }
 
         let raw = Raw::deserialize(deserializer)?;
-        // User-added bindings are the single storage list — they live in
-        // `graph.preset_metadata.bindings` (`user_added`). The legacy
-        // `userParamBindings` array is folded into the graph by the
-        // v1.3→v1.4 load migration before this runs, so by here the only
-        // home for the user tail is the graph. Extract its ids + defaults
-        // (declaration order) to drive the keyed-map → positional fold.
-        let user_binding_ids: Vec<&str> = raw
-            .graph
-            .as_ref()
-            .and_then(|g| g.preset_metadata.as_ref())
-            .map(|m| {
-                m.bindings
-                    .iter()
-                    .filter(|b| b.user_added)
-                    .map(|b| b.id.as_str())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let user_defaults: Vec<f32> = raw
-            .graph
-            .as_ref()
-            .and_then(|g| g.preset_metadata.as_ref())
-            .map(|m| {
-                m.bindings
-                    .iter()
-                    .filter(|b| b.user_added)
-                    .map(|b| b.default_value)
-                    .collect()
-            })
-            .unwrap_or_default();
-        // V1.4: one id-keyed `params` map replaces the old positional-fold
-        // dance entirely (D4/D5) — `build_effect_param_values` seeds
-        // `[static prefix | user tail]` defaults and overlays the incoming
-        // map (value/exposed/base together, no separate base-array zip).
-        let (param_values, base_tracked) = build_effect_param_values(
-            &raw.effect_type,
-            &user_binding_ids,
-            &user_defaults,
-            raw.params,
-        );
+        // V1.4 §4 reconcile: seed the manifest from the effect's registry
+        // template + the graph's `user_added` bindings, then overlay the
+        // incoming `params` map (value/exposed/base/calibration by id, inline
+        // spec for self-describing user params).
+        let (params, base_tracked) =
+            build_param_manifest(false, &raw.effect_type, &raw.graph, raw.params);
 
         Ok(PresetInstance {
             kind: crate::preset_def::PresetKind::Effect,
@@ -1074,7 +1043,7 @@ impl<'de> Deserialize<'de> for PresetInstance {
             effect_type: raw.effect_type,
             enabled: raw.enabled,
             collapsed: raw.collapsed,
-            param_values,
+            params,
             base_tracked,
             drivers: raw.drivers,
             envelopes: raw.envelopes,
@@ -1129,19 +1098,18 @@ struct GeneratorInstanceRaw {
 
 impl GeneratorInstanceRaw {
     fn into_instance(self) -> PresetInstance {
-        // V1.4: `build_generator_param_values` resolves the graph-backed
-        // vs registry-backed id authority (mirrors `align_to_definition`'s
-        // documented split) and overlays the incoming `params` map in one
-        // pass — no more separate positional-fold + base-array zip.
-        let (param_values, base_tracked) =
-            build_generator_param_values(&self.generator_type, &self.graph, self.params);
+        // V1.4 §4 reconcile: a graph-backed generator's own `meta.params` is
+        // the descriptor authority (else the registry); overlay the incoming
+        // `params` map by id.
+        let (params, base_tracked) =
+            build_param_manifest(true, &self.generator_type, &self.graph, self.params);
         PresetInstance {
             kind: crate::preset_def::PresetKind::Generator,
             id: generate_effect_id(),
             effect_type: self.generator_type,
             enabled: true,
             collapsed: false,
-            param_values,
+            params,
             base_tracked,
             drivers: self.drivers,
             envelopes: self.envelopes,
@@ -1218,18 +1186,13 @@ impl PresetInstance {
         self.graph_version = self.graph_version.wrapping_add(1);
     }
 
-    /// Write the user-set base value (pre-modulation) for a `param_id`,
-    /// resolving the id through the static + user-binding tail. Returns `true`
-    /// if the id resolved. The UI clamps upstream, so no clamp here. Used by the
-    /// editing commands that drive a card param through a [`GraphTarget`].
+    /// Write the user-set base value (pre-modulation) for a `param_id`.
+    /// Returns `true` if the id resolved. Thin id-forwarding wrapper kept for
+    /// the editing commands that drive a card param through a [`GraphTarget`];
+    /// [`Self::set_base_param`] is now itself id-keyed and returns the same
+    /// bool.
     pub fn set_base_param_by_id(&mut self, param_id: &str, value: f32) -> bool {
-        match self.param_id_to_value_index(param_id) {
-            Some(idx) => {
-                self.set_base_param(idx, value);
-                true
-            }
-            None => false,
-        }
+        self.set_base_param(param_id, value)
     }
 
     /// Create a new effect-kind PresetInstance with the given type.
@@ -1537,15 +1500,12 @@ impl PresetInstance {
                 (NodeId::default(), outer_name.clone())
             }
         };
-        // The full slider surface (range + curve + invert + label) lives in
-        // the matching `ParamSpecDef` (Phase 2) — the preset is the single
-        // source. scale/offset come from the binding's recipe fold-in. Fall
-        // back to identity only when no spec exists.
-        let spec = self
-            .graph
-            .as_ref()
-            .and_then(|g| g.preset_metadata.as_ref())
-            .and_then(|m| m.params.iter().find(|p| p.id == b.id));
+        // The full slider surface (range + curve + invert + label) is the
+        // manifest entry's live `spec` — so a recalibrated user param's range
+        // reaches the renderer (PARAM_STORAGE_DESIGN.md D6). scale/offset come
+        // from the binding recipe. Identity fallback when no manifest entry.
+        let param = self.params.get(&b.id);
+        let spec = param.map(|p| &p.spec);
         UserParamBinding {
             id: b.id.clone(),
             label: spec.map(|s| s.name.clone()).unwrap_or_else(|| b.label.clone()),
@@ -1565,89 +1525,19 @@ impl PresetInstance {
         }
     }
 
-    /// Position of a user binding by stable id within the user-added
-    /// tail, or `None` if not found. Index is relative to the user tail,
-    /// NOT `param_values`. Use [`Self::param_id_to_value_index`] for the
-    /// `param_values` slot.
+    /// Position of a user binding by stable id within the user-added tail, or
+    /// `None` if not found. Index is relative to the user tail. (For the
+    /// manifest entry, use [`crate::params::ParamManifest::get`] by id.)
     pub fn user_binding_index(&self, id: &str) -> Option<usize> {
         self.user_added_bindings().position(|b| b.id == id)
     }
 
-    /// Translate a stable `param_id` to its slot in `param_values`.
-    ///
-    /// Lookup order:
-    /// 1. Static registry (`def.id_to_index`).
-    /// 2. Per-instance user-added bindings (linear scan; tail position
-    ///    `def.param_count + j` where `j` is the binding's declaration
-    ///    index among the `user_added` entries).
-    ///
-    /// Returns `None` for unknown ids — callers (driver evaluation,
-    /// Ableton update, OSC dispatch) treat this as orphaned addressing.
-    /// Boundary-frequency lookup, not a per-pixel hot path.
-    /// The instance's static (registry-defined) param count — the length of
-    /// the `param_values` prefix before the user-added tail. Kind-aware: an
-    /// effect's prefix comes from the effect registry, a generator's from the
-    /// generator registry. Used by the unified expose/unexpose mirror to place
-    /// a new user-binding slot at `static_param_count() + user_position`.
-    pub fn static_param_count(&self) -> usize {
-        // Matches `align_to_definition`'s asymmetric authority: a generator with
-        // a per-instance graph counts its non-user-added graph bindings (the
-        // graph is the param authority); an effect, or a generator without a
-        // graph, uses the kind's registry (an effect's graph metadata is a stub).
-        if self.is_generator()
-            && let Some(meta) = self.graph.as_ref().and_then(|g| g.preset_metadata.as_ref())
-        {
-            return meta.bindings.iter().filter(|b| !b.user_added).count();
-        }
-        crate::preset_definition_registry::try_get(&self.effect_type)
-            .map(|d| d.param_count)
-            .unwrap_or(0)
-    }
-
-    pub fn param_id_to_value_index(&self, id: &str) -> Option<usize> {
-        // Generator with a per-instance graph: the graph's `preset_metadata`
-        // params are the slot authority (matches `static_param_count` and the
-        // former `Layer::resolve_gen_param_slot`). Effects, and generators
-        // without a graph, resolve against the registry static prefix +
-        // user-binding tail.
-        if self.is_generator()
-            && let Some(meta) = self.graph.as_ref().and_then(|g| g.preset_metadata.as_ref())
-            && !meta.params.is_empty()
-        {
-            return meta.params.iter().position(|p| p.id == id);
-        }
-        if let Some(idx) = crate::preset_definition_registry::param_id_to_index(&self.effect_type, id) {
-            return Some(idx);
-        }
-        let n_static = crate::preset_definition_registry::try_get(&self.effect_type)
-            .map(|d| d.param_count)
-            .unwrap_or(0);
-        self.user_binding_index(id).map(|j| n_static + j)
-    }
-
-    /// Full resolution for a `param_id`: slot index plus the value
-    /// range and whole-number flag the modulation evaluators need.
-    ///
-    /// Handles both addressing modes the host uses:
-    /// - **Static** (def-declared): pulls range from the registry's
-    ///   `ParamDef` for the resolved slot.
-    /// - **User-tail** (per-instance `UserParamBinding`): pulls range
-    ///   from the binding itself; `whole_numbers` is true when the
-    ///   binding's `convert` is `IntRound` / `EnumRound` / `BoolThreshold`.
-    ///
-    /// Returns `None` when the registry doesn't know the effect type
-    /// (test contexts) or the id matches neither a static slot nor a
-    /// user binding. Cost: one `AHashMap::get` for static hits, plus
-    /// one linear scan of `user_param_bindings` for user-tail hits.
-    /// Suitable for the modulation hot path because the alternative
-    /// (caching the resolution on the driver/envelope) would require
-    /// invalidation on every `align_to_definition` and user-binding
-    /// edit — at typical driver counts (<50) the scan is cheaper than
-    /// the bookkeeping.
-    pub fn resolve_param(&self, id: &str) -> Option<ResolvedParam> {
-        let def = crate::preset_definition_registry::try_get(&self.effect_type)?;
-        resolve_param_in(&def, self, id)
-    }
+    // `static_param_count`, `param_id_to_value_index`, and `resolve_param` are
+    // DELETED (PARAM_STORAGE_DESIGN.md D3): there is no positional slot to
+    // resolve an id to, and no static/user split with addressing meaning. A
+    // consumer that needs a param's value/range/whole-number data reads
+    // `self.params.get(id)` and takes it off the entry
+    // (`.value`, `.spec.min`/`.spec.max`, `.whole_numbers()`).
 
     /// Append a user-exposed binding and reserve its `param_values`
     /// (and `base_param_values`, if present) slot at the tail.
@@ -1673,13 +1563,28 @@ impl PresetInstance {
         use crate::effect_graph_def::{
             BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
         };
-        // Align FIRST (against the current user-added binding count,
-        // which doesn't include the new binding yet) so the static
-        // prefix is `n_static` long. Then push — the new tail slot
-        // lands at exactly `n_static + old_user_count`, matching what
-        // `param_id_to_value_index` will compute on lookup.
-        self.align_to_definition();
-        let default_v = binding.default_value;
+        let whole_numbers = matches!(
+            binding.convert,
+            ParamConvert::IntRound | ParamConvert::EnumRound | ParamConvert::Trigger
+        );
+        // The param descriptor: the manifest holds the live copy (the runtime
+        // authority), and `meta.params` keeps a consistent shadow so the graph
+        // def stays uniform with a bundled preset JSON.
+        let spec = ParamSpecDef {
+            id: binding.id.clone(),
+            name: binding.label.clone(),
+            min: binding.min,
+            max: binding.max,
+            default_value: binding.default_value,
+            whole_numbers,
+            is_toggle: matches!(binding.convert, ParamConvert::BoolThreshold),
+            is_trigger: matches!(binding.convert, ParamConvert::Trigger),
+            value_labels: binding.value_labels.clone(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: binding.curve,
+            invert: binding.invert,
+        };
 
         // The per-instance graph is the single binding-storage list.
         // The live expose command lifts the canonical graph before this
@@ -1709,25 +1614,7 @@ impl PresetInstance {
             string_params: Vec::new(),
             string_bindings: Vec::new(),
         });
-        let whole_numbers = matches!(
-            binding.convert,
-            ParamConvert::IntRound | ParamConvert::EnumRound | ParamConvert::Trigger
-        );
-        meta.params.push(ParamSpecDef {
-            id: binding.id.clone(),
-            name: binding.label.clone(),
-            min: binding.min,
-            max: binding.max,
-            default_value: binding.default_value,
-            whole_numbers,
-            is_toggle: matches!(binding.convert, ParamConvert::BoolThreshold),
-            is_trigger: matches!(binding.convert, ParamConvert::Trigger),
-            value_labels: binding.value_labels.clone(),
-            format_string: None,
-            osc_suffix: String::new(),
-            curve: binding.curve,
-            invert: binding.invert,
-        });
+        meta.params.push(spec.clone());
         meta.bindings.push(BindingDef {
             id: binding.id.clone(),
             label: binding.label.clone(),
@@ -1742,10 +1629,9 @@ impl PresetInstance {
             offset: binding.offset,
         });
 
-        // Reshape (range / curve / invert) is carried on the `ParamSpecDef`
-        // pushed above — the preset is the single source. No per-instance note.
-        // base rides the slot now (fork #16), so one push covers value + base.
-        self.param_values.push(ParamSlot::exposed(default_v));
+        // The manifest entry (id as identity, order = card order). `push`
+        // bumps topology (D8). base + value both seed from the spec default.
+        self.params.push(crate::params::Param::user_added(spec));
     }
 
     /// Remove a user-exposed binding by id and drop its `param_values`
@@ -1759,16 +1645,15 @@ impl PresetInstance {
     /// returned by [`Self::param_id_to_value_index`]).
     pub fn remove_user_binding_by_id(&mut self, id: &str) -> Option<UserParamBinding> {
         let j = self.user_binding_index(id)?;
-        let value_idx = self.static_param_count() + j;
 
         // Synthesize the removed view BEFORE mutating the graph (it reads
-        // the binding + its reshape note).
+        // the binding + the manifest spec).
         let removed = {
             let b = self.user_added_bindings().nth(j)?;
             self.synth_user_binding(b)
         };
 
-        // Pull the binding + spec from the graph metadata, and the note.
+        // Pull the binding + shadow spec from the graph metadata.
         if let Some(meta) = self
             .graph
             .as_mut()
@@ -1782,10 +1667,8 @@ impl PresetInstance {
             }
         }
 
-        if value_idx < self.param_values.len() {
-            // Removing the slot removes its base too (fork #16).
-            self.param_values.remove(value_idx);
-        }
+        // Drop the manifest entry (id as identity; bumps topology).
+        self.params.remove(id);
         Some(removed)
     }
 
@@ -1799,7 +1682,7 @@ impl PresetInstance {
         &mut self,
         binding: UserParamBinding,
         position: usize,
-        slot_value: ParamSlot,
+        param: crate::params::Param,
     ) {
         use crate::effect_graph_def::{
             BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
@@ -1880,128 +1763,23 @@ impl PresetInstance {
             invert: binding.invert,
         });
 
-        // Reshape (range / curve / invert) rides on the `ParamSpecDef` pushed
-        // above — the preset is the single source. No per-instance note.
-
-        // Value slot at the original tail index `n_static + position`. The
-        // just-restored binding is user-added, so it doesn't change the bundled
-        // (`static_param_count`) prefix — kind-aware so generators restore at
-        // the right slot too.
-        let value_idx = self.static_param_count() + position;
-        // The restored `slot_value` carries its own `base` now (fork #16), so a
-        // single insert restores value + base together.
-        if value_idx <= self.param_values.len() {
-            self.param_values.insert(value_idx, slot_value);
-        } else {
-            self.param_values.push(slot_value);
-        }
+        // Re-insert the manifest entry at its original display position among
+        // the user tail: the bundled prefix (unchanged by a user-param
+        // removal) plus `position`. `insert_at` clamps + bumps topology (D10).
+        let bundled = self
+            .params
+            .iter()
+            .filter(|p| matches!(p.origin, crate::params::ParamOrigin::Bundled))
+            .count();
+        self.params.insert_at(bundled + position, param);
     }
 
-    /// Resize `param_values` (value + base together, per slot) to match the current effect definition.
-    /// New slots are filled with the definition's default values.
-    ///
-    /// The old WireframeDepth 14→12 legacy positional reorder that used to
-    /// be hardcoded here moved to a baked table in
-    /// `manifold-io`'s `migrations::param_storage_v14` (PARAM_STORAGE_DESIGN.md
-    /// D4) — that migration runs on the JSON `Value` before typed
-    /// deserialization, so by the time an instance reaches this function
-    /// its `param_values` is already sized against the CURRENT definition
-    /// (built from the V1.4 `params` map), never the old 14-slot shape.
-    ///
-    /// V2 user-binding awareness: the target length is
-    /// `def.param_count + self.user_param_bindings.len()`. The static
-    /// prefix is aligned to registry defaults; the user-binding tail
-    /// pulls per-binding `default_value`. Any extra tail beyond the
-    /// known user-binding count is treated as junk and truncated —
-    /// the user_param_bindings vec is the single source of truth for
-    /// "how many user slots exist."
-    pub fn align_to_definition(&mut self) {
-        // Snapshot the user-added binding defaults up front (declaration
-        // order) so the resize loops can pad without a borrow conflict
-        // against `self.graph`.
-        let user_defaults: Vec<f32> = self
-            .user_added_bindings()
-            .map(|b| b.default_value)
-            .collect();
-
-        // Resolve the static (bundled) param block — the `param_values` prefix
-        // before the user-added tail. The authority is *asymmetric*:
-        //  - **Generator with a per-instance graph:** the graph metadata is the
-        //    source of truth (the generator registry can be stale or `NONE`
-        //    while the graph carries the real params). `meta.params` is
-        //    `[bundled | user-added]`, so the bundled prefix is the non-
-        //    `user_added` bindings.
-        //  - **Effect, or generator without a graph:** the kind's registry. An
-        //    effect's per-instance graph metadata is only a *stub* (may carry
-        //    just user-added bindings), so the registry — not the graph — is the
-        //    bundled-param authority for effects.
-        // Both then share the identical `[static prefix | user-added tail]`
-        // alignment below, which is what lets the generator expose/unexpose
-        // mirror route through the shared `append_user_binding` /
-        // `remove_user_binding_by_id` helpers.
-        let static_defaults: Option<Vec<f32>> = if self.is_generator()
-            && let Some(meta) = self.graph.as_ref().and_then(|g| g.preset_metadata.as_ref())
-        {
-            // Graph-backed generator: the graph is the param authority.
-            let bundled = meta.bindings.iter().filter(|b| !b.user_added).count();
-            Some(meta.params.iter().take(bundled).map(|p| p.default_value).collect())
-        } else {
-            // Effect, or generator without a graph: the unified registry.
-            crate::preset_definition_registry::try_get(&self.effect_type)
-                .map(|d| d.param_defs.iter().map(|pd| pd.default_value).collect())
-        };
-        if let Some(static_defaults) = static_defaults {
-            let static_target = static_defaults.len();
-            let n_user = user_defaults.len();
-            let target = static_target + n_user;
-            if self.param_values.len() == target {
-                return;
-            }
-
-            // Interpretation contract: the first `static_target` values
-            // are static (registry-driven). Anything past `static_target`
-            // is user-tail. This trades "graceful resize when the static
-            // count grew between save and load" for "graceful resize
-            // when the user-tail is partially or fully missing." The
-            // latter is the common case — fresh in-memory flows and
-            // partial JSON have absent user-tail; static-count growth
-            // is rare and usually paired with a deliberate alias
-            // declaration, so it's the right trade.
-            let old_total = self.param_values.len();
-            let static_copy = old_total.min(static_target);
-            let user_tail_now: Vec<ParamSlot> = if old_total > static_target {
-                self.param_values[static_target..].to_vec()
-            } else {
-                Vec::new()
-            };
-
-            let mut aligned = vec![ParamSlot::default(); target];
-            // Static prefix — copy what we have, pad with registry defaults
-            // (exposed=true to match historical always-visible behavior for
-            // freshly-introduced static slots).
-            aligned[..static_copy].copy_from_slice(&self.param_values[..static_copy]);
-            for (i, slot) in aligned
-                .iter_mut()
-                .enumerate()
-                .take(static_target)
-                .skip(static_copy)
-            {
-                *slot = ParamSlot::exposed(static_defaults.get(i).copied().unwrap_or(0.0));
-            }
-            // User-binding tail — copy what we have, pad from binding defaults.
-            for j in 0..n_user {
-                aligned[static_target + j] = user_tail_now
-                    .get(j)
-                    .copied()
-                    .unwrap_or_else(|| ParamSlot::exposed(user_defaults[j]));
-            }
-            // base rides each ParamSlot now (fork #16): the copies + padded
-            // `ParamSlot::exposed(default)` slots above already carry the
-            // aligned base, so the former parallel `aligned_base` rebuild is
-            // gone (and with it the length-sync footgun this fork removes).
-            self.param_values = aligned;
-        }
-    }
+    // `align_to_definition` is DELETED (PARAM_STORAGE_DESIGN.md D3). It existed
+    // to resize the positional `param_values` array to the registry/graph param
+    // count after a load or a binding edit — there is no positional array to
+    // resize now. The manifest is coherent by construction: it is seeded whole
+    // at instantiation/load (`build_param_manifest`) and mutated by
+    // `push`/`remove`/`insert_at`, so there is never a length to reconcile.
 
     /// Snapshot this instance's current base (pre-modulation) param values into
     /// `def`'s preset metadata as the new defaults, so the def becomes a frozen
@@ -2016,13 +1794,13 @@ impl PresetInstance {
             return;
         };
         for p in meta.params.iter_mut() {
-            if let Some(idx) = self.param_id_to_value_index(&p.id) {
-                p.default_value = self.get_base_param(idx);
+            if self.params.get(&p.id).is_some() {
+                p.default_value = self.get_base_param(&p.id);
             }
         }
         for b in meta.bindings.iter_mut() {
-            if let Some(idx) = self.param_id_to_value_index(&b.id) {
-                b.default_value = self.get_base_param(idx);
+            if self.params.get(&b.id).is_some() {
+                b.default_value = self.get_base_param(&b.id);
             }
         }
     }
@@ -2037,11 +1815,19 @@ impl PresetInstance {
     /// alignment. No-op without metadata.
     pub fn reseed_param_values_from_def(&mut self, def: &EffectGraphDef) {
         if let Some(meta) = def.preset_metadata.as_ref() {
-            self.param_values = meta
+            let entries = meta
                 .params
                 .iter()
-                .map(|p| ParamSlot::exposed(p.default_value))
+                .map(|p| {
+                    let user = meta.bindings.iter().any(|b| b.user_added && b.id == p.id);
+                    if user {
+                        crate::params::Param::user_added(p.clone())
+                    } else {
+                        crate::params::Param::bundled(p.clone())
+                    }
+                })
                 .collect();
+            self.params = crate::params::ParamManifest::from_params(entries);
         }
     }
 
@@ -2067,10 +1853,8 @@ impl PresetInstance {
                 continue;
             }
             let id = b.id.as_str();
-            let meta_param_index = meta.params.iter().position(|p| p.id == id);
-            let spec = meta_param_index.map(|i| meta.params[i].clone());
-            let value_index = self.param_id_to_value_index(id);
-            let slot = value_index.and_then(|i| self.param_values.get(i).copied());
+            let param_position = self.params.index_of(id);
+            let param = self.params.get(id).cloned();
             let drivers = self
                 .drivers
                 .iter()
@@ -2100,12 +1884,10 @@ impl PresetInstance {
                 .cloned()
                 .collect();
             captured.push(RemovedExposure {
-                meta_param_index,
-                value_index,
+                param_position,
                 binding_index: bi,
-                spec,
+                param,
                 binding: b.clone(),
-                slot,
                 drivers,
                 ableton_mappings,
                 envelopes,
@@ -2117,17 +1899,10 @@ impl PresetInstance {
         }
         let ids: std::collections::HashSet<&str> =
             captured.iter().map(|c| c.binding.id.as_str()).collect();
-        // Remove metadata params + bindings by descending index (indices stay
-        // valid mid-loop). param_values uses the same indices as meta.params.
+        // Remove the descriptor shadow (`meta.params`) + the bindings, and the
+        // manifest entries — all keyed by id, no positional indices.
         if let Some(meta) = self.graph.as_mut().and_then(|g| g.preset_metadata.as_mut()) {
-            let mut pidx: Vec<usize> =
-                captured.iter().filter_map(|c| c.meta_param_index).collect();
-            pidx.sort_unstable_by(|a, b| b.cmp(a));
-            for i in pidx {
-                if i < meta.params.len() {
-                    meta.params.remove(i);
-                }
-            }
+            meta.params.retain(|p| !ids.contains(p.id.as_str()));
             let mut bidx: Vec<usize> = captured.iter().map(|c| c.binding_index).collect();
             bidx.sort_unstable_by(|a, b| b.cmp(a));
             for i in bidx {
@@ -2136,12 +1911,8 @@ impl PresetInstance {
                 }
             }
         }
-        let mut sidx: Vec<usize> = captured.iter().filter_map(|c| c.value_index).collect();
-        sidx.sort_unstable_by(|a, b| b.cmp(a));
-        for i in sidx {
-            if i < self.param_values.len() {
-                self.param_values.remove(i);
-            }
+        for &id in &ids {
+            self.params.remove(id);
         }
         prune_automation_by_ids(&mut self.drivers, &ids, |d| &*d.param_id);
         prune_automation_by_ids(&mut self.ableton_mappings, &ids, |m| &*m.param_id);
@@ -2159,14 +1930,13 @@ impl PresetInstance {
         }
         // Insert in ascending original-index order so each lands where it was.
         if let Some(meta) = self.graph.as_mut().and_then(|g| g.preset_metadata.as_mut()) {
-            let mut params: Vec<(usize, crate::effect_graph_def::ParamSpecDef)> = removed
-                .iter()
-                .filter_map(|r| Some((r.meta_param_index?, r.spec.clone()?)))
-                .collect();
-            params.sort_by_key(|(i, _)| *i);
-            for (i, spec) in params {
-                let i = i.min(meta.params.len());
-                meta.params.insert(i, spec);
+            // Restore the descriptor shadow from each removed entry's spec.
+            for r in &removed {
+                if let Some(p) = &r.param
+                    && !meta.params.iter().any(|s| s.id == p.spec.id)
+                {
+                    meta.params.push(p.spec.clone());
+                }
             }
             let mut binds: Vec<(usize, crate::effect_graph_def::BindingDef)> = removed
                 .iter()
@@ -2178,14 +1948,15 @@ impl PresetInstance {
                 meta.bindings.insert(i, b);
             }
         }
-        let mut slots: Vec<(usize, ParamSlot)> = removed
+        // Re-insert manifest entries at their captured display positions,
+        // ascending so each lands where it was (D10). `insert_at` clamps.
+        let mut params: Vec<(usize, crate::params::Param)> = removed
             .iter()
-            .filter_map(|r| Some((r.value_index?, r.slot?)))
+            .filter_map(|r| Some((r.param_position?, r.param.clone()?)))
             .collect();
-        slots.sort_by_key(|(i, _)| *i);
-        for (i, s) in slots {
-            let i = i.min(self.param_values.len());
-            self.param_values.insert(i, s);
+        params.sort_by_key(|(i, _)| *i);
+        for (i, param) in params {
+            self.params.insert_at(i, param);
         }
         for r in &removed {
             if !r.drivers.is_empty() {
@@ -2220,27 +1991,27 @@ impl PresetInstance {
     pub fn prune_orphaned_automation(&mut self) -> RemovedAutomation {
         let mut orphans: std::collections::HashSet<String> = std::collections::HashSet::new();
         for d in self.drivers.iter().flatten() {
-            if self.param_id_to_value_index(&d.param_id).is_none() {
+            if self.params.get(&d.param_id).is_none() {
                 orphans.insert(d.param_id.to_string());
             }
         }
         for m in self.ableton_mappings.iter().flatten() {
-            if self.param_id_to_value_index(&m.param_id).is_none() {
+            if self.params.get(&m.param_id).is_none() {
                 orphans.insert(m.param_id.to_string());
             }
         }
         for e in self.envelopes.iter().flatten() {
-            if self.param_id_to_value_index(&e.param_id).is_none() {
+            if self.params.get(&e.param_id).is_none() {
                 orphans.insert(e.param_id.to_string());
             }
         }
         for a in self.audio_mods.iter().flatten() {
-            if self.param_id_to_value_index(&a.param_id).is_none() {
+            if self.params.get(&a.param_id).is_none() {
                 orphans.insert(a.param_id.to_string());
             }
         }
         for l in self.automation_lanes.iter().flatten() {
-            if self.param_id_to_value_index(&l.param_id).is_none() {
+            if self.params.get(&l.param_id).is_none() {
                 orphans.insert(l.param_id.to_string());
             }
         }
@@ -2376,25 +2147,10 @@ pub struct RemovedAutomation {
 /// read the generator registry via `self.effect_type` (which holds the preset
 /// type for both kinds). Only ever called on generator-kind instances.
 impl PresetInstance {
-    /// Extend-only pad of `param_values`/`base_param_values` to the generator
-    /// registry's param count, filling the tail with registry defaults.
-    pub fn migrate_to_registry_length(&mut self) {
-        let Some(def) = crate::preset_definition_registry::try_get(&self.effect_type)
-        else {
-            return;
-        };
-        let min_target = def.param_count;
-        if self.param_values.len() < min_target {
-            self.param_values
-                .reserve(min_target - self.param_values.len());
-            // Each padded slot seeds base = default (fork #16), so the former
-            // parallel base pad is gone.
-            for i in self.param_values.len()..min_target {
-                self.param_values
-                    .push(ParamSlot::exposed(def.param_defs[i].default_value));
-            }
-        }
-    }
+    // `migrate_to_registry_length` is DELETED (PARAM_STORAGE_DESIGN.md D3):
+    // there is no lazy positional tail to pad. A generator's manifest is seeded
+    // whole from the template at instantiation (`init_defaults_for_type`) and at
+    // load (`build_param_manifest`).
 
     /// Generator-only home.
     pub fn find_envelope(&self, param_id: &str) -> Option<&ParamEnvelope> {
@@ -2436,37 +2192,26 @@ impl PresetInstance {
     /// Reset effective values to base — ONLY for params with active drivers or
     /// envelopes (generator semantics).
     pub fn reset_effectives(&mut self) {
-        if self.param_values.is_empty() {
+        if self.params.is_empty() {
             return;
         }
         self.ensure_base_values();
-        let def = crate::preset_definition_registry::try_get(&self.effect_type);
-        let id_to_index = def.as_ref().map(|d| &d.id_to_index);
-
-        if let Some(drivers) = &self.drivers {
-            for driver in drivers {
-                if !driver.enabled {
-                    continue;
-                }
-                let Some(&idx) = id_to_index.and_then(|m| m.get(driver.param_id.as_ref())) else {
-                    continue;
-                };
-                if let Some(slot) = self.param_values.get_mut(idx) {
-                    slot.value = slot.base;
-                }
+        // Collect the ids of params with an active driver or envelope first
+        // (disjoint from the `self.params` mutation below).
+        let mut ids: Vec<String> = Vec::new();
+        for d in self.drivers.iter().flatten() {
+            if d.enabled {
+                ids.push(d.param_id.to_string());
             }
         }
-        if let Some(envelopes) = &self.envelopes {
-            for env in envelopes {
-                if !env.enabled {
-                    continue;
-                }
-                let Some(&idx) = id_to_index.and_then(|m| m.get(env.param_id.as_ref())) else {
-                    continue;
-                };
-                if let Some(slot) = self.param_values.get_mut(idx) {
-                    slot.value = slot.base;
-                }
+        for e in self.envelopes.iter().flatten() {
+            if e.enabled {
+                ids.push(e.param_id.to_string());
+            }
+        }
+        for id in ids {
+            if let Some(p) = self.params.get_mut(&id) {
+                p.value = p.base;
             }
         }
     }
@@ -2492,13 +2237,14 @@ impl PresetInstance {
     pub fn init_defaults_for_type(&mut self, gen_type: PresetTypeId) {
         if let Some(def) = crate::preset_definition_registry::try_get(&gen_type) {
             self.effect_type = gen_type;
-            // ParamSlot::exposed seeds base = default; the instance now tracks
-            // base (the former `base_param_values = Some(..)`).
-            self.param_values = def
+            // Seed the manifest whole from the registry template; each bundled
+            // Param seeds base = value = default.
+            let entries = def
                 .param_defs
                 .iter()
-                .map(|pd| ParamSlot::exposed(pd.default_value))
+                .map(|pd| crate::params::Param::bundled(pd.to_spec()))
                 .collect();
+            self.params = crate::params::ParamManifest::from_params(entries);
             self.base_tracked = true;
         }
     }
@@ -2514,9 +2260,9 @@ impl PresetInstance {
     /// `base_param_values: None` fall-through).
     pub fn snapshot_params(&self) -> Vec<f32> {
         if self.base_tracked {
-            self.param_values.iter().map(|s| s.base).collect()
+            self.params.iter().map(|p| p.base).collect()
         } else {
-            self.param_values.iter().map(|s| s.value).collect()
+            self.params.iter().map(|p| p.value).collect()
         }
     }
 
@@ -2542,9 +2288,13 @@ impl PresetInstance {
         drivers: Option<Vec<ParameterDriver>>,
         envelopes: Option<Vec<ParamEnvelope>>,
     ) {
-        self.effect_type = gen_type;
-        // ParamSlot::exposed seeds base = value; the snapshot is the base.
-        self.param_values = params.iter().map(|v| ParamSlot::exposed(*v)).collect();
+        // Re-seed the manifest descriptors from the registry template, then
+        // overlay the snapshotted base values in manifest (card) order.
+        self.init_defaults_for_type(gen_type);
+        for (p, v) in self.params.iter_mut().zip(params.iter()) {
+            p.base = *v;
+            p.value = *v;
+        }
         self.base_tracked = true;
         if let Some(d) = &mut self.drivers {
             d.clear();
@@ -2577,63 +2327,32 @@ impl ParamSource for PresetInstance {
     }
 
     fn param_count(&self) -> usize {
-        self.param_values.len()
+        self.params.len()
     }
 
-    fn get_param_def(&self, index: usize) -> ParamDef {
-        let Some(def) = crate::preset_definition_registry::try_get(&self.effect_type) else {
-            return ParamDef::default();
-        };
-        if index < def.param_count {
-            return def.param_defs[index].clone();
-        }
-        // Past the static prefix: effects synthesize a ParamDef from the
-        // user-added binding tail (routing + reshape range). Generators have
-        // no user-tail in this path, so they fall through to the default.
-        if !self.is_generator() {
-            let user_idx = index - def.param_count;
-            if let Some(b) = self.user_added_bindings().nth(user_idx) {
-                let ub = self.synth_user_binding(b);
-                let whole_numbers = matches!(
-                    ub.convert,
-                    ParamConvert::IntRound | ParamConvert::EnumRound | ParamConvert::Trigger
-                );
-                let is_toggle = matches!(ub.convert, ParamConvert::BoolThreshold);
-                let is_trigger = matches!(ub.convert, ParamConvert::Trigger);
-                return ParamDef {
-                    id: ub.id.clone(),
-                    name: ub.label.clone(),
-                    min: ub.min,
-                    max: ub.max,
-                    default_value: ub.default_value,
-                    whole_numbers,
-                    is_toggle,
-                    is_trigger,
-                    value_labels: None,
-                    format_string: None,
-                    osc_suffix: None,
-                    curve: ub.curve,
-                    invert: ub.invert,
-                };
-            }
-        }
-        ParamDef::default()
+    fn get_param_def(&self, id: &str) -> ParamDef {
+        // The manifest entry's `spec` is the descriptor for every param
+        // (bundled + user-added, calibrated in place). Unknown id → default.
+        self.params
+            .get(id)
+            .map(|p| param_def_from_spec(&p.spec))
+            .unwrap_or_default()
     }
 
-    fn get_param(&self, index: usize) -> f32 {
-        PresetInstance::get_param(self, index)
+    fn get_param(&self, id: &str) -> f32 {
+        PresetInstance::get_param(self, id)
     }
 
-    fn set_param(&mut self, index: usize, value: f32) {
-        PresetInstance::set_param(self, index, value);
+    fn set_param(&mut self, id: &str, value: f32) {
+        PresetInstance::set_param(self, id, value);
     }
 
-    fn get_base_param(&self, index: usize) -> f32 {
-        PresetInstance::get_base_param(self, index)
+    fn get_base_param(&self, id: &str) -> f32 {
+        PresetInstance::get_base_param(self, id)
     }
 
-    fn set_base_param(&mut self, index: usize, value: f32) {
-        PresetInstance::set_base_param(self, index, value);
+    fn set_base_param(&mut self, id: &str, value: f32) {
+        PresetInstance::set_base_param(self, id, value);
     }
 
     fn find_driver(&self, param_id: &str) -> Option<&ParameterDriver> {
