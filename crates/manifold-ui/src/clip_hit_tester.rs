@@ -607,7 +607,7 @@ mod tests {
             clip_id: ClipId::new(id),
             layer_index: 0,
             rect,
-            base_color: Color32::new(100, 100, 100, 255),
+            base_color: Color32::new(100, 100, 100, 255), // design-token-exempt: test fixture (HitTargets screen-rect helper)
             name: name.into(),
             start_beat: Beats::from_f32(0.0),
             end_beat: Beats::from_f32(4.0),

@@ -2,8 +2,8 @@
 
 # Timeline Interaction P1 — one geometry, one selection, previews that tell the truth
 
-**Status: APPROVED (Peter, 2026-07-04 — scope confirmed: structural fixes as
-must-ship, behavior contract as the checklist; "Nice let's build that doc").**
+**Status: SHIPPED 2026-07-05 @ `62a0f01e` (merge of `wave/timeline-fixes`: TimelineSelection enum, S5 overlap-enforcement root fix, edge autoscroll/snap, keyboard layer). Peter's running-app feel-pass owed; re-hook the dormant motion-P2 landing-flash during it. Approved Peter 2026-07-04 — scope confirmed: structural fixes as
+must-ship, behavior contract as the checklist; "Nice let's build that doc".**
 **Prerequisites: TIMELINE_LAYOUT_P0 (shipped 2026-07-04 — single Y source).
 Blocks: UI_CRAFT_AND_MOTION_PLAN (same files; motion must not animate lying
 previews or misaligned chrome).**

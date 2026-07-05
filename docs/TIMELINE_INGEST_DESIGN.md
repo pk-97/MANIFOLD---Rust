@@ -2,7 +2,7 @@
 
 # Timeline Ingest — drop, paste, replace
 
-**Status:** APPROVED design, not built · 2026-07-04 · Fable · **baseline-reviewed 2026-07-05, cleared** (zero unlabeled forks; anchors spot-reverified — symbols all hold, line drift only, e.g. drop arms app.rs:2388→~2447, SwapVideoCommand :338→:368; trust each phase's entry-state re-derivation. §10 levels: P1/P2 gates are L4 by nature — neither headless tests nor the UI-automation layer can synthesize an OS drag session; P3–P5 gate L1 with manual L4 extras.)
+**Status:** P3+P4+P5 SHIPPED 2026-07-05 @ `e0a2931b` (Finder paste, replace-audio, role-keyed stem lanes; manual L4 running-app checks still owed). P1/P2 PARKED — both AppKit drag-poll sources frozen mid-drag; root fix landed separately as BUG-028 (`draggingUpdated:` interpose, `wave/timeline-drop`, live-drag verification owed). · 2026-07-04 · Fable · **baseline-reviewed 2026-07-05, cleared** (zero unlabeled forks; anchors spot-reverified — symbols all hold, line drift only, e.g. drop arms app.rs:2388→~2447, SwapVideoCommand :338→:368; trust each phase's entry-state re-derivation. §10 levels: P1/P2 gates are L4 by nature — neither headless tests nor the UI-automation layer can synthesize an OS drag session; P3–P5 gate L1 with manual L4 extras.)
 **Prerequisites:** none (extends shipped audio-clip-detection + drop paths)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 

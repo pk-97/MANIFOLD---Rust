@@ -655,7 +655,7 @@ per-node output textures with full UV), and delete BOTH flat blit passes. Real i
 renderer change (Painter trait + UIRenderer + canvas render + both blit-pass deletions), but
 headless-verifiable. Not a "patch the overlap cases" job.
 
-### BUG-028 — File-drop targeting can't read the live pointer during a Finder drag (both AppKit poll sources frozen) — MED — FIXED 2026-07-05 (`wave/timeline-drop`, unlanded pending Peter's live-drag gate)
+### BUG-028 — File-drop targeting can't read the live pointer during a Finder drag (both AppKit poll sources frozen) — MED — FIXED 2026-07-05 (`wave/timeline-drop`, landed on main 2026-07-05; Peter's live-drag verification still owed)
 
 **Symptom** — dragging an audio file onto an existing audio lane lands it on a NEW lane
 instead of the target lane. Verified 2026-07-05 (Peter, live drag test).
