@@ -26,9 +26,34 @@ or human can read it, and it needs no external tool.
 
 ---
 
+## Index of open bugs (nickname → say this in chat)
+
+| ID | Nickname | One line |
+|---|---|---|
+| BUG-036 | **dead-LFO-on-reload** | imported card params dropped at project load; modulation targets vanish (MED, root-caused) |
+| BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
+| BUG-037 | **glp-first-render-stall** | ~37ms warm-up on a glTF clip's first rendered frame (MED) |
+| BUG-038 | **ableton-log-spam** | bridge warns every 1.5s forever when Live absent (LOW) |
+| BUG-006 | **fused-param-noop** | param edits/undo on fused-away nodes silently no-op (HIGH) |
+| BUG-007 | **fusion-exclusion-blind** | particle-loop exclusion misses configured wgsl_compute shapes (HIGH) |
+| BUG-008 | **fused-buffer-oob** | mismatched array lengths read out of bounds in fused region (HIGH) |
+| BUG-009 | **stateless-gate-miss** | harvest skip resets StateStore-held scalar state (HIGH) |
+| BUG-010 | **wgsl-first-entry** | multi-entry wgsl_compute silently dispatches the first (MED) |
+| BUG-011 | **fused-output-oversize** | fused output buffer sized to max of all inputs (MED) |
+| BUG-015 | **inspector-overlap** | sections at stale offsets after scroll (MED, repro needed) |
+| BUG-025 | **timeline-scissor-bleed** | clip content bleeds across row bounds (MED, repro needed) |
+| BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
+| BUG-033 | **ui-snapshot-broken** | headless UI harness feature doesn't build (MED) |
+| BUG-012 | **tex-rename-corrupt** | fragment `tex_` port-rename corrupts `tex_*` scalars (LOW) |
+| BUG-018 | **catalog-stale** | node_catalog.json out of sync test red (LOW) |
+| BUG-031 | **audio-load-blip** | ~10ms of audio leaks when a voice is built (LOW) ⚠ id collides with the positional-layer-menu entry under Fixed — first free id is BUG-039 |
+| BUG-034 | **atlas-uv-test-gap** | headless preview doesn't cover live atlas UV path (LOW) |
+| BUG-014 / 030 | parked | NaN content-key hash · color-ratchet red |
+| BUG-019 / 020 / 021 | deferred | group-fold gap · gen-card collapse · snap-back gap |
+
 ## Open
 
-### BUG-037 — First render of a glTF scene layer stalls the content thread ~37ms (warm-up on the frame, not at load) — MED
+### BUG-037 (glp-first-render-stall) — First render of a glTF scene layer stalls the content thread ~37ms (warm-up on the frame, not at load) — MED
 
 **Symptom** — trace run 2026-07-06 (`meshImportTests.manifold`): the first frame after the
 project's glp layer became active showed `generators=37.1ms` (RENDER_TRACE frame=421) —
@@ -46,7 +71,7 @@ is loaded (or armed on a timeline), run its first-frame resource creation off th
 path so frame 1 of the clip renders at steady-state cost. Verify with the same
 MANIFOLD_RENDER_TRACE run: no >20ms frame on first clip render.
 
-### BUG-038 — AbletonBridge retries + WARN-spams every ~1.5s forever when Live isn't running — LOW (log hygiene)
+### BUG-038 (ableton-log-spam) — AbletonBridge retries + WARN-spams every ~1.5s forever when Live isn't running — LOW (log hygiene)
 
 **Symptom** — any session without Ableton running logs
 `[AbletonBridge] OSC send failed for /live/song/get/num_tracks: Connection refused` at
@@ -56,7 +81,7 @@ WARN level every ~1.5s indefinitely (see any 2026-07-06 trace-run log).
 succeeds (state flip logs "reconnected" at info). Optionally back off the poll while
 refused. `manifold-playback/src/ableton_bridge.rs`, small.
 
-### BUG-036 — LFO on an imported-glb generator's card param is dead after project reload; re-importing the same .glb revives it — MED
+### BUG-036 (dead-LFO-on-reload) — LFO on an imported-glb generator's card param is dead after project reload; re-importing the same .glb revives it — MED
 
 **Symptom** (Peter, 2026-07-06, `~/Downloads/meshImportTests.manifold`) — a project saved
 with a glb auto-built graph (the `assemble_import_graph` door) reloads fine visually, but
@@ -91,7 +116,7 @@ layer, drag the .glb back in, rebind: runs.
 Start by diffing `Layer.gen_params` + modulation bindings between the saved project and a
 fresh import of the same file.
 
-### BUG-035 — 3D scenes hitch when a camera/light param is animated — MED — re-encode hypothesis MEASURED AND REFUTED 2026-07-06; cause is app-side, still open
+### BUG-035 (authoring-hitch) — 3D scenes hitch when a camera/light param is animated — MED — re-encode hypothesis MEASURED AND REFUTED 2026-07-06; cause is app-side, still open
 
 **Measurement (2026-07-06, Fable)** — `freeze-profile scene <glb> [param] [frames]` (new bench
 arm): drives the production import door (`assemble_import_graph`) + production
