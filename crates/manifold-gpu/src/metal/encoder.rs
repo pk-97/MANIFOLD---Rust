@@ -117,6 +117,15 @@ fn buffer_identity(buf: &ProtocolObject<dyn objc2_metal::MTLBuffer>) -> *const c
     buf as *const _ as *const c_void
 }
 
+/// One depth-tested mesh in a [`GpuEncoder::draw_instanced_depth_msaa_batch`]
+/// batch: its own material pipeline, its own bindings, its own vertex count.
+/// Construct via [`GpuEncoder::depth_msaa_draw`].
+pub struct DepthMsaaDraw<'a> {
+    pipeline: &'a GpuRenderPipeline,
+    bindings: &'a [GpuBinding<'a>],
+    vertex_count: u32,
+}
+
 impl GpuEncoder {
     pub(super) fn cmd_buf(&self) -> &ProtocolObject<dyn MTLCommandBuffer> {
         &self.cmd_buf
@@ -684,6 +693,107 @@ impl GpuEncoder {
                 );
             }
         }
+        unsafe {
+            enc.popDebugGroup();
+            enc.endEncoding();
+        }
+    }
+
+    /// One draw in a [`Self::draw_instanced_depth_msaa_batch`] call.
+    ///
+    /// Each entry carries its own pipeline and bindings so a scene of
+    /// distinct materials composites in a single render pass.
+    pub fn depth_msaa_draw<'a>(
+        pipeline: &'a GpuRenderPipeline,
+        bindings: &'a [GpuBinding<'a>],
+        vertex_count: u32,
+    ) -> DepthMsaaDraw<'a> {
+        DepthMsaaDraw {
+            pipeline,
+            bindings,
+            vertex_count,
+        }
+    }
+
+    /// Draw a batch of depth-tested triangle meshes into ONE 4x-MSAA pass,
+    /// resolving to `resolve_target`.
+    ///
+    /// All `draws` share one memoryless multisample color + depth target
+    /// (Apple Silicon tile memory — never leaves the GPU), cleared once at
+    /// pass start, so the shared depth buffer resolves inter-object
+    /// occlusion exactly as the old one-pass-per-object path did. The pass
+    /// ends with `MultisampleResolve`, writing the antialiased result to
+    /// the single-sample `resolve_target`. Pair with a pipeline built via
+    /// `create_render_pipeline_depth_msaa` (alpha-to-coverage on) so cutout
+    /// edges resolve too, not just silhouettes.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_instanced_depth_msaa_batch(
+        &mut self,
+        msaa_color: &GpuTexture,
+        resolve_target: &GpuTexture,
+        msaa_depth: &GpuTexture,
+        depth_stencil_state: &GpuDepthStencilState,
+        draws: &[DepthMsaaDraw],
+        label: &str,
+    ) {
+        self.end_current();
+
+        let desc = new_render_pass_descriptor();
+
+        let color = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
+        unsafe {
+            color.setTexture(Some(&msaa_color.raw));
+            color.setResolveTexture(Some(&resolve_target.raw));
+            color.setLoadAction(MTLLoadAction::Clear);
+            color.setStoreAction(MTLStoreAction::MultisampleResolve);
+            color.setClearColor(objc2_metal::MTLClearColor {
+                red: 0.0,
+                green: 0.0,
+                blue: 0.0,
+                alpha: 0.0,
+            });
+        }
+
+        let depth = unsafe { desc.depthAttachment() };
+        unsafe {
+            depth.setTexture(Some(&msaa_depth.raw));
+            depth.setLoadAction(MTLLoadAction::Clear);
+            depth.setStoreAction(MTLStoreAction::DontCare);
+            depth.setClearDepth(1.0);
+        }
+
+        let enc = self.make_render_encoder(&desc, label);
+        unsafe {
+            enc.pushDebugGroup(&NSString::from_str(label));
+            enc.setDepthStencilState(Some(&depth_stencil_state.raw));
+            enc.setViewport(MTLViewport {
+                originX: 0.0,
+                originY: 0.0,
+                width: resolve_target.width as f64,
+                height: resolve_target.height as f64,
+                znear: 0.0,
+                zfar: 1.0,
+            });
+        }
+
+        for draw in draws {
+            if draw.vertex_count == 0 {
+                continue;
+            }
+            unsafe {
+                enc.setRenderPipelineState(&draw.pipeline.state);
+            }
+            apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
+            unsafe {
+                enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
+                    MTLPrimitiveType::Triangle,
+                    0,
+                    draw.vertex_count as usize,
+                    1,
+                );
+            }
+        }
+
         unsafe {
             enc.popDebugGroup();
             enc.endEncoding();
