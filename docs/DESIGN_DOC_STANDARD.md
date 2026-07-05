@@ -173,7 +173,10 @@ brief is not executable — that's the definition.
   states `Demo: none — L1` explicitly. The demo is what forces the vertical path
   (model → command → UI → pixels) to be exercised at least once before landing;
   horizontal slices each passing their own gate while the seam between them never
-  runs is the observed root of "built but invisible in the app".
+  runs is the observed root of "built but invisible in the app". Since UI_AUTOMATION
+  P1–P2 landed (2026-07-05), a phase whose surface the flow driver can reach targets
+  **L3, not L2** — write a `scripts/ui-flows/` flow that drives the real input path,
+  don't stop at a PNG a reviewer merely looks at.
 - **Forbidden moves** — the specific shortcuts THIS phase invites, named. Drawn from
   the observed failure catalog: fuse-for-parity · silent fallback / parallel old path
   kept alive · TODO-as-deferral · "temporary" flags · adapters/shims around a misfit
@@ -283,7 +286,11 @@ The build order that decides which is which: `docs/DESIGN_BUILD_ORDER.md`.
 - **L2** — behavior observed: the acceptance demo's artifact (PNG, packet capture,
   log trace) was produced and actually read by a reviewer.
 - **L3** — scripted interaction: an automation-layer flow drives the real UI input
-  path (unavailable until `UI_AUTOMATION_DESIGN.md` P1–P2 lands).
+  path. Available since UI_AUTOMATION P1–P2 landed (2026-07-05): author a JSON flow
+  under `scripts/ui-flows/` and run it with `cargo xtask ui-snap <scene> --script
+  <flow.json>` — the two proving flows `scripts/ui-flows/select-and-inspect.json`
+  (resolve a widget by name/text, click it, assert) and `drag-clip.json` (drag a clip
+  via its surface target, assert the moved rect) are the precedent to copy.
 - **L4** — human-in-app: Peter, live.
 
 Rules:
