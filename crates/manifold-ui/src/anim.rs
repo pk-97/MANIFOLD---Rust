@@ -63,6 +63,19 @@ pub fn set_reduced_motion(v: bool) {
     REDUCED_MOTION.store(v, Ordering::Relaxed);
 }
 
+/// Master on/off for the UI motion layer, kept conceptually distinct from the
+/// OS accessibility [`reduced_motion`] flag it currently rides on: this is
+/// "does MANIFOLD's chrome animate at all," a product choice, not an
+/// accessibility one. `set_motion_enabled(false)` collapses every
+/// `AnimF32`/`FlipList` tween to an instant snap to its final visible state,
+/// leaving the code in place (the motion is stashed behind the flag, not
+/// deleted). Flip back to `true` to restore it. Does not gate the one-shot
+/// `Transient` feedbacks (value flash, undo toast) — those still fire and are
+/// seen, just as designed.
+pub fn set_motion_enabled(enabled: bool) {
+    set_reduced_motion(!enabled);
+}
+
 // ── Curves ───────────────────────────────────────────────────────────────
 
 /// The one curve family every tween in the app picks from. `Ease` is the
