@@ -130,6 +130,33 @@ hardware pointer) converted via `convertPointFromScreen`; verify the same way. I
 BOTH are frozen during drags, stop and escalate — the design's P1 premise fails and
 Peter decides between a winit fork or living with drop-at-last-cursor.
 
+**VERIFIED 2026-07-05 (Peter, live drag test) — BOTH POLL SOURCES FROZEN; D1 IS DEAD.**
+Poll wired behind the `eprintln!`; Peter dragged an audio file while moving the pointer
+across the window. `mouseLocationOutsideOfEventStream`: byte-identical every frame
+(frozen at the pre-drag point). Fallback `+[NSEvent mouseLocation]` + `convertPointFromScreen`:
+also byte-identical every frame. The poll site (`about_to_wait`) DOES run during the
+NSDragging session — the log streams — so the event loop isn't starved; the position
+APIs simply don't update while macOS owns the drag. **Polling cannot work.**
+
+Root cause + the real fix (supersedes D1): during an NSDragging session the only live
+pointer is what AppKit hands the destination view via `draggingUpdated:`
+(`[sender draggingLocation]`, window coords, live). winit already registers its content
+view as a drag destination — that's how `HoveredFile`/`DroppedFile` arrive — but throws
+the location away. The fix is to intercept `draggingUpdated:` on winit's view (subclass or
+swizzle) and stash the live location for the drop arms. D1 rejected exactly this as
+"fragile against winit internals"; the polling bet it chose has now failed both sources,
+so D1 no longer holds.
+
+**Decision (Peter, 2026-07-05): P1 + P2 PARKED this pass — P3/P4/P5 land without them.**
+A dedicated **Fable** session will design the `draggingUpdated:` interception (or a winit
+fork) against winit 0.30.13's macOS `window_delegate.rs`. The polling prototype on
+`lane/ingest-p1` (a `drag_hover.rs` tracker + per-frame poll) was discarded — the new
+mechanism restructures it — but two results it proved carry forward: the drop-site pattern
+is `drop_position().unwrap_or(cursor_pos)` at the three `DroppedFile` arms (audio/MIDI,
+image, glTF), and the target coordinate convention is **logical, top-left origin** (winit
+stores `cursor_pos` post-`logical_cursor`, so any live source must flip AppKit's
+bottom-left view point by view-height). Tracked as BUG-028.
+
 ## 4. New pieces (committed shapes)
 
 ```rust

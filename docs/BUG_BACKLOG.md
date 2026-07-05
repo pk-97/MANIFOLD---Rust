@@ -539,6 +539,26 @@ So this one needs either that GPU compositing path exercised headless, or a runn
 into the same node-order pass as chrome (or bump batch boundaries per node), rather than
 patching individual overlap cases.
 
+### BUG-028 — File-drop targeting can't read the live pointer during a Finder drag (both AppKit poll sources frozen) — MED (parked, Fable follow-up)
+
+**Symptom** — dragging an audio file onto an existing audio lane lands it on a NEW lane
+instead of the target lane. Verified 2026-07-05 (Peter, live drag test).
+
+**Root cause** — the `DroppedFile` arms in `app.rs` resolve their target from `cursor_pos`,
+which winit freezes for the whole drag (its macOS backend implements no `draggingUpdated:`
+and emits no `CursorMoved` during a drag session). Both AppKit poll fallbacks were live-tested
+and are ALSO frozen during an NSDragging session: `mouseLocationOutsideOfEventStream` and
+`+[NSEvent mouseLocation]` both returned byte-identical values across dozens of frames while
+the pointer was actively moving. The poll site (`about_to_wait`) runs during the drag, so the
+loop isn't starved — the position APIs simply don't update while macOS owns the drag. Polling
+is a dead end.
+
+**Fix shape** — intercept `draggingUpdated:` on winit's content view (subclass/swizzle) and
+stash `[sender draggingLocation]` (live, window coords, flip to logical top-left) for the drop
+arms; or fork winit to forward it. Overrides TIMELINE_INGEST_DESIGN §2 D1. Queued for a
+dedicated Fable session. Blocks P1 (drop targeting) and P2 (drop-target ghost — reads the same
+position). Full write-up: TIMELINE_INGEST_DESIGN.md §3.
+
 ## Fixed
 
 All five entries below were fixed 2026-06-23, with a test per path:
