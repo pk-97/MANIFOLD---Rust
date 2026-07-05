@@ -352,6 +352,97 @@ tier or report it separately — its only meaningful metric is pass-judged
 effectiveness, and `effective: unclear` is the expected common case, not a
 defect.
 
+## 2f. Session-fact store (SPECCED 2026-07-05, Fable — Sonnet builds; Peter approved direction same conversation)
+
+The dominant FP class across sleep pass 1 and live fires since is observation,
+not wording: the window can't see something the session already established.
+Specimens: scope-drift 1/11 (attribution blindness — the context switch that
+explained the "drift" was ordered by the user or a hook, earlier than RECENT
+reaches); several verify-claim FPs where the verifying event existed but sat
+beyond the window ledger; the 2026-07-05 live FP in session `65084a7d` (claim
+"wrapper live immediately" flagged; its verifying event — a fresh-process
+build_block render — ran ~10 events before the claim, outside the window that
+held the summary text). Signature rewording cannot fix this; rounds 1–2
+proved wording tops out while the binding constraint is what the classifier
+can see.
+
+**Build:** the observer already tails every event — it extracts durable facts
+deterministically as they pass and carries them forward past the window
+horizon. A `SessionFacts` struct per mailbox (main + workers), persisted in
+the existing firestate file (main; workers stay in-memory like the rest of
+worker state):
+- `last_verification` per class — test-run / lint / render-read (Read of
+  *.png) / script-run — as (event_count, one-line label). Classes detected
+  from tool name + input by regex, same tier as STOPGAP_MARKERS.
+- `task_addressed` — already exists as a bit; fold it in unchanged.
+- `context_switches` — user- or hook-ordered task changes with event counts
+  (the scope-drift attribution fix: a TASK that changed because the human
+  changed it is not drift).
+- `paths` — the existing unread-edit `paths_seen` set, extended with last
+  Read / last Edit event counts per path.
+
+Rendering: a `SESSION FACTS:` block appended to every classifier window
+(WINDOW_VERSION bump), e.g. "last test run: event 412, 9 events ago
+(cargo test -p ...); TASK set by user at event 388; file X last read event
+301". The rubric's existing exemptions ("never flag claims whose verifying
+event is in the LEDGER") extend naturally — the facts block is a longer
+ledger, not a new contract. No new classifier calls, no new moves.
+
+**Scoring oracle:** verify-claim and scope-drift FP rates before/after, from
+normal pass grading; the scope-drift mute expiry (~2026-07-12) is the natural
+re-test — unmute into the facts-block world and grade a week.
+
+**Honest scope:** facts are regex-extracted, so semantic verification ("the
+test that ran actually covers the claim") stays with the classifier; the
+store only widens what it can see. Facts persist per session, never across
+sessions — cross-session memory is what MEMORY.md is for.
+
+## 2g. Workflow launch gate (SPECCED 2026-07-05, Fable — Sonnet builds; Peter's ask: auto-approve bounded workflows, no babysitting)
+
+Peter's complaint, same conversation: workflows need manual approval, and
+unbounded scripts "destroy token usage" — but he doesn't want to monitor an
+orchestration session just to click approve. Same shape as §2c-ask: rare,
+already-blocking, damage-preceding event → synchronous deterministic
+PreToolUse gate, this time matched on the `Workflow` tool, and this time the
+common case is ALLOW.
+
+**The bounds reframe (the design's core):** the hook never predicts true
+token cost — it verifies the script is *structurally bounded* and the bound
+fits an *allowance*. "How much may run without asking me" is one number
+Peter sets like a card limit, not a prediction problem. Runtime enforcement
+(the Workflow budget ceiling, when a token target is present) does the real
+limiting; static analysis only has to confirm a guard exists.
+
+**Build:** `.claude/hooks/workflow-gate.py`, PreToolUse on `Workflow`;
+config `.claude/daemon/workflow-bounds.json` (gitignored-adjacent runtime
+config, committed default): `{max_auto_agents: 30, max_auto_budget_tokens:
+200000, require_estimate: true}`. Static checks over the script text (regex
+tier, no AST dependency):
+1. Count literal `agent(` call sites; find `parallel(`/`pipeline(` over
+   array literals (fan-out = literal length) vs. over variables (unknown —
+   treat as unbounded unless a `.slice(0, N)`/length guard is visible).
+2. `while`/`for` loops whose body contains `agent(`: bounded only if the
+   condition references `budget.remaining(` or a literal counter cap.
+3. `meta.description` must state an agent estimate (`/\b\d+\s*agents?\b/`)
+   when `require_estimate` is on — the approval line shows a number.
+Decision: every check bounded AND estimate ≤ max_auto_agents →
+`permissionDecision: allow` with a one-line note ("workflow-gate:
+auto-approved, ≤N agents, bounded loops"). Anything unbounded, over
+allowance, or unparseable → `ask` (today's behavior — the gate never
+hard-denies and fails open to ask), with the specific reason attached so a
+manual approval is informed.
+
+**Probe first (step 0, like §2b's):** whether the runtime budget ceiling
+(`budget.total`) can be armed by the orchestrator's own turn rather than
+only by user "+Nk" text. If yes, the gate should require an armed budget
+for auto-approve, making the allowance a hard runtime wall, not a static
+guess. If no, static structural bounds carry the gate alone — say so in the
+config comment.
+
+**Telemetry:** `workflow_gate` records (decision, reasons, estimate) →
+sleep passes review allowance fit; two weeks of all-ask or all-allow means
+the numbers are wrong.
+
 ## 3. Payload library (`moves.md`)
 
 Two families, one format. **Coaching moves** fire on phase transitions (hypothesis
