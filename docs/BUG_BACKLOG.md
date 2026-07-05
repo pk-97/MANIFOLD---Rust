@@ -28,6 +28,27 @@ or human can read it, and it needs no external tool.
 
 ## Open
 
+### BUG-025 — `profiling` feature doesn't compile: rotted against the Beats/Bpm newtypes — LOW (parked)
+
+**Root cause** — the `#[cfg(feature = "profiling")]` blocks in `manifold-app` predate the
+`Beats`/`Bpm`/`Seconds` newtype migration and still treat those values as raw `f32`/`u32`.
+Three sites: [content_thread.rs:854](../crates/manifold-app/src/content_thread.rs#L854)
+(`Beats as u32` — non-primitive cast), [content_thread.rs:988](../crates/manifold-app/src/content_thread.rs#L988)
+(`expected f32, found Beats`), and [content_commands.rs:933](../crates/manifold-app/src/content_commands.rs#L933)
+(`expected f32, found Bpm`).
+
+**Symptom** — `cargo build -p manifold-app --features profiling` fails with 3 `E0308`/`E0605`
+type errors. The default build (profiling off) is unaffected, which is why the rot went
+unnoticed — the feature evidently hasn't been compiled since the newtype migration landed.
+
+**Found during** — PARAM_STORAGE P2 (2026-07-05), while compile-checking the profiling path
+after migrating its param readout from the deleted positional `param_values` to `ParamManifest`
+(that param-side migration is done and correct; these 3 errors are unrelated newtype-cast rot
+in the same blocks).
+
+**Fix shape** — wrap each site in the Beats/Bpm accessor instead of a raw cast (~3 one-line
+fixes). Unrelated to param storage, so parked here rather than folded into P2.
+
 BUG-006–014 come from the **freeze-compiler adversarial bug hunt, 2026-07-03**
 (40-agent Sonnet workflow `wf_73bb4ddf-885`; 10 finder lenses → every finding attacked by 2
 independent skeptics). BUG-006–012 were **confirmed by both skeptics** with line-level
