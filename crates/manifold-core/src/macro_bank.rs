@@ -533,13 +533,8 @@ impl MacroBank {
                     // Resolve by stable id — reaches master, layer, and clip
                     // effects, and never confuses two same-type effects.
                     if let Some(fx) = project.find_effect_by_id_mut(effect_id) {
-                        let effect_type = fx.effect_type().clone();
-                        if let Some(idx) = crate::preset_definition_registry::param_id_to_index(
-                            &effect_type,
-                            param_id.as_ref(),
-                        ) {
-                            fx.set_base_param(idx, mapped);
-                        }
+                        // Direct id write — no registry index resolution (D2).
+                        fx.set_base_param(param_id.as_ref(), mapped);
                     }
                 }
                 MacroMappingTarget::LayerOpacity { layer_id } => {
@@ -554,14 +549,8 @@ impl MacroBank {
                         project.timeline.find_layer_by_id_mut(layer_id.as_str())
                         && let Some(gp) = layer.gen_params_mut()
                     {
-                        let gen_type = gp.generator_type().clone();
-                        let Some(idx) = crate::preset_definition_registry::param_id_to_index(
-                            &gen_type,
-                            param_id.as_ref(),
-                        ) else {
-                            continue;
-                        };
-                        gp.set_base_param(idx, mapped);
+                        // Direct id write — no registry index resolution (D2).
+                        gp.set_base_param(param_id.as_ref(), mapped);
                     }
                 }
             }

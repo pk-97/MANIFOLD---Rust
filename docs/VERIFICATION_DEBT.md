@@ -84,9 +84,19 @@ wall-clock, so it **cannot** exercise this timing bug. Burn-down: open the Add E
 the running app and confirm the dark background panel is present immediately, before moving the
 mouse (and that the fade-in reads smoothly). Peter owns this L4 observation.
 
+### VD-007 — PARAM_STORAGE P2 storage swap: GPU value-parity + live-app behavioural confirmation — L2 reached / L3 target
+Landed 2026-07-05 (`docs/landings/2026-07-05-param-storage-p2.md`). The id-keyed apply path
+(`apply_bindings` resolving by `source_id` instead of a positional index) is covered by 34
+`param_binding` unit tests and the gpu-proofs suite COMPILES, but the GPU value-parity suite was
+not run (P2 touches no shader/kernel/uniform). The three production behavioural fixes the test-pass
+surfaced — revert-prunes-orphaned-user-params, calibration-reaches-the-renderer (D6),
+gen-type-undo-restores-exact-arity — are unit/integration-tested but not exercised in a running app.
+Burn-down: (a) `cargo test -p manifold-renderer --features gpu-proofs` for the GPU parity run;
+(b) the running-app click-script in the landing report. Peter owns the L3 live observation.
+
 *(VD-001–004 seeded 2026-07-05 from the memory corpus plus Peter's in-app findings; VD-006 added
-2026-07-05. VD-005 closed at P2 landing. The full backfill pass over recent landings is still
-owed and will extend this list.)*
+2026-07-05, VD-007 at P2 landing. VD-005 closed at P2 landing. The full backfill pass over recent
+landings is still owed and will extend this list.)*
 
 ## Closed
 

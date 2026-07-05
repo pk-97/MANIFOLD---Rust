@@ -292,7 +292,15 @@ impl OscParamRouter {
                         .iter_mut()
                         .find(|f| f.effect_type() == effect_type)
                     {
-                        fx.set_base_param(*param_index, write.value);
+                        // P2 compile bridge: the OSC target still carries a
+                        // positional index (P4 carries the param_id). Translate
+                        // to the id through the manifest's transient positional
+                        // view, then write through the id funnel.
+                        let id =
+                            fx.params.iter().nth(*param_index).map(|p| p.id().to_string());
+                        if let Some(id) = id {
+                            fx.set_base_param(&id, write.value);
+                        }
                     }
                 }
                 OscParamTarget::LayerOpacity { layer_id } => {
@@ -313,7 +321,15 @@ impl OscParamRouter {
                         && let Some(fx) =
                             effects.iter_mut().find(|f| f.effect_type() == effect_type)
                     {
-                        fx.set_base_param(*param_index, write.value);
+                        // P2 compile bridge: the OSC target still carries a
+                        // positional index (P4 carries the param_id). Translate
+                        // to the id through the manifest's transient positional
+                        // view, then write through the id funnel.
+                        let id =
+                            fx.params.iter().nth(*param_index).map(|p| p.id().to_string());
+                        if let Some(id) = id {
+                            fx.set_base_param(&id, write.value);
+                        }
                     }
                 }
                 OscParamTarget::GenParam {
@@ -324,7 +340,12 @@ impl OscParamRouter {
                         project.timeline.find_layer_by_id_mut(layer_id.as_str())
                         && let Some(gp) = layer.gen_params_mut()
                     {
-                        gp.set_base_param(*param_index, write.value);
+                        // P2 compile bridge (see MasterEffect above).
+                        let id =
+                            gp.params.iter().nth(*param_index).map(|p| p.id().to_string());
+                        if let Some(id) = id {
+                            gp.set_base_param(&id, write.value);
+                        }
                     }
                 }
                 OscParamTarget::Macro { index } => {

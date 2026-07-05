@@ -24,7 +24,8 @@ use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_renderer::preset_runtime::PresetRuntime;
-use manifold_renderer::preset_context::{MAX_GEN_PARAMS, PresetContext};
+use manifold_core::params::ParamManifest;
+use manifold_renderer::preset_context::PresetContext;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::node_graph::primitives::Gain;
 use manifold_renderer::node_graph::{
@@ -304,10 +305,11 @@ fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &GpuDevice) {
     {
         let mut generator = PresetRuntime::from_def_with_device(def.clone(), registry, device, w, h, FORMAT).unwrap();
         let target = RenderTarget::new(device, w, h, FORMAT, "rec-prod");
-        let mk = |t: f64| PresetContext { time: t, beat: t*2.0, dt: 1.0/60.0, width: w, height: h, output_width: w, output_height: h, aspect: w as f32 / h as f32, owner_key: 0, is_clip_level: false, frame_count: 0, anim_progress: 0.0, trigger_count: 0, params: [0.0; MAX_GEN_PARAMS], param_count: 0 };
-        for i in 0..30 { let mut enc = device.create_encoder("rec-prod-warm"); { let mut gpu = RendererGpuEncoder::new(&mut enc, device); generator.render(&mut gpu, &target.texture, &mk(f64::from(i)/60.0)); } enc.commit_and_wait_completed(); }
+        let mk = |t: f64| PresetContext { time: t, beat: t*2.0, dt: 1.0/60.0, width: w, height: h, output_width: w, output_height: h, aspect: w as f32 / h as f32, owner_key: 0, is_clip_level: false, frame_count: 0, anim_progress: 0.0, trigger_count: 0 };
+        let params = ParamManifest::default();
+        for i in 0..30 { let mut enc = device.create_encoder("rec-prod-warm"); { let mut gpu = RendererGpuEncoder::new(&mut enc, device); generator.render(&mut gpu, &target.texture, &mk(f64::from(i)/60.0), &params); } enc.commit_and_wait_completed(); }
         let mut secs = 0.0;
-        for i in 0..30u32 { let mut enc = device.create_encoder("rec-prod-timed"); { let mut gpu = RendererGpuEncoder::new(&mut enc, device); generator.render(&mut gpu, &target.texture, &mk(f64::from(30+i)/60.0)); } secs += enc.commit_and_wait_completed_timed(); }
+        for i in 0..30u32 { let mut enc = device.create_encoder("rec-prod-timed"); { let mut gpu = RendererGpuEncoder::new(&mut enc, device); generator.render(&mut gpu, &target.texture, &mk(f64::from(30+i)/60.0), &params); } secs += enc.commit_and_wait_completed_timed(); }
         println!("PresetRuntime::render: {:.4} ms/frame", secs * 1000.0 / 30.0);
     }
 }
@@ -1250,15 +1252,13 @@ fn profile_generators(registry: &PrimitiveRegistry, device: &GpuDevice) {
                     frame_count: 0,
                     anim_progress: 0.0,
                     trigger_count: 0,
-                    params: [0.0; MAX_GEN_PARAMS],
-                    param_count: 0,
                 };
 
                 for i in 0..GEN_WARMUP {
                     let mut enc = device.create_encoder("freeze-profile-gen-warmup");
                     {
                         let mut gpu = RendererGpuEncoder::new(&mut enc, device);
-                        generator.render(&mut gpu, &target.texture, &mk_ctx(f64::from(i) / 60.0));
+                        generator.render(&mut gpu, &target.texture, &mk_ctx(f64::from(i) / 60.0), &ParamManifest::default());
                     }
                     enc.commit_and_wait_completed();
                 }
@@ -1272,6 +1272,7 @@ fn profile_generators(registry: &PrimitiveRegistry, device: &GpuDevice) {
                             &mut gpu,
                             &target.texture,
                             &mk_ctx(f64::from(GEN_WARMUP + i) / 60.0),
+                            &ParamManifest::default(),
                         );
                     }
                     gpu_secs += enc.commit_and_wait_completed_timed();
@@ -1372,15 +1373,13 @@ fn profile_fluidsim_particle_sweep(registry: &PrimitiveRegistry, device: &GpuDev
                 frame_count: 0,
                 anim_progress: 0.0,
                 trigger_count: 0,
-                params: [0.0; MAX_GEN_PARAMS],
-                param_count: 0,
             };
 
             for i in 0..GEN_WARMUP {
                 let mut enc = device.create_encoder("fluidsweep-warmup");
                 {
                     let mut gpu = RendererGpuEncoder::new(&mut enc, device);
-                    generator.render(&mut gpu, &target.texture, &mk_ctx(f64::from(i) / 60.0));
+                    generator.render(&mut gpu, &target.texture, &mk_ctx(f64::from(i) / 60.0), &ParamManifest::default());
                 }
                 enc.commit_and_wait_completed();
             }
@@ -1393,6 +1392,7 @@ fn profile_fluidsim_particle_sweep(registry: &PrimitiveRegistry, device: &GpuDev
                         &mut gpu,
                         &target.texture,
                         &mk_ctx(f64::from(GEN_WARMUP + i) / 60.0),
+                        &ParamManifest::default(),
                     );
                 }
                 gpu_secs += enc.commit_and_wait_completed_timed();

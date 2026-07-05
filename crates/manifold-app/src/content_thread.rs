@@ -864,32 +864,26 @@ impl ContentThread {
             fn build_effect_params(
                 fx: &manifold_core::effects::PresetInstance,
             ) -> Vec<manifold_profiler::NamedParam> {
-                let def = manifold_core::preset_definition_registry::try_get(fx.effect_type());
-                fx.param_values
+                // The manifest entry carries its own display name (`spec.name`,
+                // seeded from the registry def or a user label) and effective
+                // value — no positional registry lookup needed.
+                fx.params
                     .iter()
-                    .enumerate()
-                    .map(|(i, &v)| {
-                        let name = def
-                            .and_then(|d| d.param_defs.get(i))
-                            .map_or_else(|| format!("param_{}", i), |pd| pd.name.clone());
-                        manifold_profiler::NamedParam { name, value: v }
+                    .map(|p| manifold_profiler::NamedParam {
+                        name: p.spec.name.clone(),
+                        value: p.value,
                     })
                     .collect()
             }
 
             fn build_gen_params(
-                gen_type: &manifold_core::PresetTypeId,
-                values: &[f32],
+                params: &manifold_core::params::ParamManifest,
             ) -> Vec<manifold_profiler::NamedParam> {
-                let def = manifold_core::preset_definition_registry::try_get(gen_type);
-                values
+                params
                     .iter()
-                    .enumerate()
-                    .map(|(i, &v)| {
-                        let name = def
-                            .and_then(|d| d.param_defs.get(i))
-                            .map_or_else(|| format!("param_{}", i), |pd| pd.name.clone());
-                        manifold_profiler::NamedParam { name, value: v }
+                    .map(|p| manifold_profiler::NamedParam {
+                        name: p.spec.name.clone(),
+                        value: p.value,
                     })
                     .collect()
             }
@@ -929,7 +923,7 @@ impl ContentThread {
                         .map(|l| l.generator_type().clone())
                         .unwrap_or_default();
                     let gen_params = gen_param_values
-                        .map(|gp| build_gen_params(&gen_type, &gp.param_values))
+                        .map(|gp| build_gen_params(&gp.params))
                         .unwrap_or_default();
                     let anim_progress = anim_map.get(i).map_or(0.0, |a| a.1);
                     manifold_profiler::ActiveClipInfo {

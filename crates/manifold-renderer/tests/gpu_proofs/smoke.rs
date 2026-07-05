@@ -24,7 +24,7 @@
 use half::f16;
 use manifold_renderer::preset_runtime::PresetRuntime;
 use manifold_renderer::node_graph::PrimitiveRegistry;
-use manifold_renderer::preset_context::{MAX_GEN_PARAMS, PresetContext};
+use manifold_renderer::preset_context::PresetContext;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 
 use crate::harness;
@@ -59,7 +59,12 @@ fn every_registered_generator_runs_without_panicking_or_nans() {
         let mut enc = h.device.create_encoder(&format!("smoke-gen-{}-enc", id.as_str()));
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-            generator.render(&mut gpu, &target.texture, &ctx);
+            generator.render(
+                &mut gpu,
+                &target.texture,
+                &ctx,
+                &manifold_core::params::ParamManifest::default(),
+            );
         }
         enc.commit_and_wait_completed();
 
@@ -89,12 +94,6 @@ fn default_generator_ctx(width: u32, height: u32) -> PresetContext {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
-        // Default-zero params: matches what align_to_definition lands
-        // for unspecified slots. If a generator panics here, its
-        // metadata defaults aren't being read — which is the bug the
-        // test exists to catch.
-        params: [0.0; MAX_GEN_PARAMS],
-        param_count: 0,
     }
 }
 

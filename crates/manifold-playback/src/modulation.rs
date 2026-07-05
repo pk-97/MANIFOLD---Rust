@@ -21,7 +21,6 @@ use manifold_core::audio_features::{AudioFeatureSnapshot, SendFeatures};
 use manifold_core::id::AudioSendId;
 use manifold_core::{Beats, Seconds};
 use manifold_core::effects::{PresetInstance, ParamEnvelope, ParameterDriver};
-use manifold_core::preset_definition_registry;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 
@@ -76,15 +75,14 @@ fn apply_envelope_offset(value: &mut f32, min: f32, max: f32, target_norm: f32, 
 /// value this frame.
 ///
 /// Since envelope-home unification this is the single envelope walk for both
-/// kinds: an envelope lives on its owning `PresetInstance`, and
-/// `resolve_param_in` resolves a param id against either an effect or a
-/// generator definition — so the two formerly-parallel blocks collapse to a
-/// caller that locates the def + timing and hands off here. The level is a pure
+/// kinds: an envelope lives on its owning `PresetInstance` and resolves its
+/// target param directly against that instance's manifest (id-keyed, range +
+/// integral-ness self-contained on each `Param.spec`) — so effects and
+/// generators share one walk with no registry consultation. The level is a pure
 /// function of `active_elapsed`, so the walk reads envelopes immutably and only
-/// mutates `param_values` — no per-frame envelope bookkeeping.
+/// mutates the manifest — no per-frame envelope bookkeeping.
 fn apply_instance_envelopes(
     inst: &mut PresetInstance,
-    def: &manifold_core::preset_def::PresetDef,
     active_elapsed: Beats,
 ) -> bool {
     if active_elapsed < Beats::ZERO {
@@ -106,22 +104,12 @@ fn apply_instance_envelopes(
         if !enabled {
             continue;
         }
-        let Some(resolved) =
-            manifold_core::effects::resolve_param_in(def, inst, param_id.as_ref())
-        else {
+        let Some(p) = inst.params.get_mut(param_id.as_ref()) else {
             continue;
         };
-        if resolved.idx >= inst.param_values.len() {
-            continue;
-        }
+        let (min, max) = (p.spec.min, p.spec.max);
         let level = ParamEnvelope::decay_level(active_elapsed, decay_beats);
-        if apply_envelope_offset(
-            &mut inst.param_values[resolved.idx].value,
-            resolved.min,
-            resolved.max,
-            target_norm,
-            level,
-        ) {
+        if apply_envelope_offset(&mut p.value, min, max, target_norm, level) {
             any_modulated = true;
         }
     }
@@ -210,39 +198,24 @@ fn evaluate_instance_drivers(fx: &mut PresetInstance, current_beat: Beats) -> bo
     if !fx.enabled {
         return false;
     }
-    let drivers = match &fx.drivers {
-        Some(d) if !d.is_empty() => d,
-        _ => return false,
-    };
-
-    let effect_def = match preset_definition_registry::try_get(fx.effect_type()) {
-        Some(d) => d,
-        None => return false,
-    };
+    // Take the drivers out so the manifest can be written in the same pass
+    // without the old per-frame `Vec<(usize, f32)>` scratch (it allocated every
+    // frame on this hot path). No registry def needed: each `Param` carries its
+    // own reshaped range (calibration edits `spec.min`/`spec.max` in place), so
+    // a driver denormalizes against `p.spec` directly — which also removes the
+    // stale-registry-index misroute the manifest redesign targets.
+    let drivers = fx.drivers.take();
     let mut any_driven = false;
-
-    // Collect results to avoid borrow conflict between drivers and param_values
-    let results: Vec<(usize, f32)> = drivers
-        .iter()
-        .filter(|d| d.enabled && !d.is_paused_by_user)
-        .filter_map(|driver| {
-            let resolved = manifold_core::effects::resolve_param_in(
-                &effect_def,
-                fx,
-                driver.param_id.as_ref(),
-            )?;
-            let (idx, min, max) = (resolved.idx, resolved.min, resolved.max);
-            Some((idx, driver_target_value(driver, current_beat, min, max)))
-        })
-        .collect();
-
-    for (idx, value) in results {
-        if idx < fx.param_values.len() {
-            fx.param_values[idx].value = value;
-            any_driven = true;
+    if let Some(ds) = &drivers {
+        for driver in ds.iter().filter(|d| d.enabled && !d.is_paused_by_user) {
+            if let Some(p) = fx.params.get_mut(driver.param_id.as_ref()) {
+                let (min, max) = (p.spec.min, p.spec.max);
+                p.value = driver_target_value(driver, current_beat, min, max);
+                any_driven = true;
+            }
         }
     }
-
+    fx.drivers = drivers;
     any_driven
 }
 
@@ -282,10 +255,7 @@ pub fn evaluate_all_envelopes(
                 if !fx.enabled {
                     continue;
                 }
-                let Some(def) = preset_definition_registry::try_get(fx.effect_type()) else {
-                    continue;
-                };
-                if apply_instance_envelopes(fx, &def, active_elapsed) {
+                if apply_instance_envelopes(fx, active_elapsed) {
                     any_modulated = true;
                 }
             }
@@ -294,8 +264,7 @@ pub fn evaluate_all_envelopes(
         // Generator instance (the layer's singleton gen_params) — the same
         // walk, no separate generator pass.
         if let Some(gp) = layer.gen_params_mut()
-            && let Some(def) = preset_definition_registry::try_get(gp.generator_type())
-            && apply_instance_envelopes(gp, &def, active_elapsed)
+            && apply_instance_envelopes(gp, active_elapsed)
         {
             any_modulated = true;
         }
@@ -414,44 +383,35 @@ fn evaluate_instance_audio_mods(
     if !fx.has_audio_mods() {
         return false;
     }
-    let def = match preset_definition_registry::try_get(fx.effect_type()) {
-        Some(d) => d,
-        None => return false,
-    };
 
-    // Pass 1 (immutable): resolve each enabled mod to its slot + raw feature.
-    let mods = fx.audio_mods.as_ref().unwrap();
-    let work: Vec<(usize, usize, f32, f32, f32)> = mods
-        .iter()
-        .enumerate()
-        .filter(|(_, m)| m.enabled)
-        .filter_map(|(mi, m)| {
-            let features = by_send.get(&m.source.send_id)?;
-            let resolved =
-                manifold_core::effects::resolve_param_in(&def, fx, m.param_id.as_ref())?;
-            if resolved.idx >= fx.param_values.len() {
-                return None;
-            }
-            let raw = m.source.feature.extract(features);
-            Some((mi, resolved.idx, resolved.min, resolved.max, raw))
-        })
-        .collect();
-    if work.is_empty() {
-        return false;
-    }
-
-    // Pass 2 (mutable): shape (advancing the follower state) and write.
+    // Single pass over two disjoint fields: `audio_mods` (mutable — each active
+    // follower advances its smoothing state) and `params` (the id-keyed
+    // manifest). This drops the old per-frame scratch `Vec` and the registry
+    // def lookup; the range is self-contained on each `Param.spec`, so there is
+    // no positional slot to resolve. Existence is checked (via the range read)
+    // BEFORE the follower advances, matching the old pass-1 filter so an
+    // unresolved mod does not advance its smoothing.
     let dt_s = dt.0 as f32;
-    for (mi, idx, min, max, raw) in work {
-        let out_norm = {
-            let mods = fx.audio_mods.as_mut().unwrap();
-            let m = &mut mods[mi];
-            let shape = m.shape;
-            shape.apply(raw, dt_s, &mut m.smoothed, &mut m.prev_raw)
+    let mods = fx.audio_mods.as_mut().unwrap();
+    let params = &mut fx.params;
+    let mut wrote = false;
+    for m in mods.iter_mut().filter(|m| m.enabled) {
+        let Some(features) = by_send.get(&m.source.send_id) else {
+            continue;
         };
-        fx.param_values[idx].value = min + (max - min) * out_norm;
+        let (min, max) = match params.get(m.param_id.as_ref()) {
+            Some(p) => (p.spec.min, p.spec.max),
+            None => continue,
+        };
+        let raw = m.source.feature.extract(features);
+        let shape = m.shape;
+        let out_norm = shape.apply(raw, dt_s, &mut m.smoothed, &mut m.prev_raw);
+        if let Some(p) = params.get_mut(m.param_id.as_ref()) {
+            p.value = min + (max - min) * out_norm;
+            wrote = true;
+        }
     }
-    true
+    wrote
 }
 
 /// Per-layer active clip timing: (elapsed, duration).
@@ -550,7 +510,7 @@ mod tests {
     }
 
     /// A generator layer whose `gen_params` is initialized to `TestEnvGen`
-    /// registry defaults (populated `param_values`, kind = Generator).
+    /// registry defaults (populated `params` manifest, kind = Generator).
     fn generator_layer() -> Layer {
         let mut layer = Layer::new_generator("GenLayer".into(), TEST_GEN.clone(), 0);
         layer.gen_params_or_init().init_defaults_for_type(TEST_GEN.clone());
@@ -593,9 +553,9 @@ mod tests {
         assert!(modulated, "an envelope at its trigger reports modulation");
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         assert!(
-            (fx.param_values[0].value - 1.0).abs() < 1e-6,
+            (fx.params.get("amount").unwrap().value - 1.0).abs() < 1e-6,
             "amount driven from base 0.0 to max 1.0, got {}",
-            fx.param_values[0].value
+            fx.params.get("amount").unwrap().value
         );
     }
 
@@ -610,9 +570,9 @@ mod tests {
         assert!(evaluate_all_envelopes(&mut project, &timing));
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         assert!(
-            (fx.param_values[0].value - 0.5).abs() < 1e-6,
+            (fx.params.get("amount").unwrap().value - 0.5).abs() < 1e-6,
             "amount driven to half-range 0.5, got {}",
-            fx.param_values[0].value
+            fx.params.get("amount").unwrap().value
         );
     }
 
@@ -625,17 +585,29 @@ mod tests {
 
         let half = (DEFAULT_ENVELOPE_DECAY_BEATS * 0.5) as f64;
         assert!(evaluate_all_envelopes(&mut project, &[(Beats(half), Beats(8.0))]));
-        let v_half = project.timeline.layers[0].effects.as_ref().unwrap()[0].param_values[0].value;
+        let v_half = project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .params
+            .get("amount")
+            .unwrap()
+            .value;
         assert!(
             (v_half - 0.5).abs() < 1e-5,
             "half-decay drives amount to ~0.5, got {v_half}"
         );
 
         // Reset base, then past the decay window → level 0 → no change.
-        project.timeline.layers[0].effects.as_mut().unwrap()[0].param_values[0].value = 0.0;
+        project.timeline.layers[0].effects.as_mut().unwrap()[0]
+            .params
+            .get_mut("amount")
+            .unwrap()
+            .value = 0.0;
         let past = (DEFAULT_ENVELOPE_DECAY_BEATS + 0.5) as f64;
         assert!(!evaluate_all_envelopes(&mut project, &[(Beats(past), Beats(8.0))]));
-        let v_past = project.timeline.layers[0].effects.as_ref().unwrap()[0].param_values[0].value;
+        let v_past = project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .params
+            .get("amount")
+            .unwrap()
+            .value;
         assert_eq!(v_past, 0.0, "past the decay window the envelope is spent");
     }
 
@@ -650,7 +622,7 @@ mod tests {
 
         assert!(!modulated, "no active clip => no modulation");
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
-        assert_eq!(fx.param_values[0].value, 0.0, "param untouched");
+        assert_eq!(fx.params.get("amount").unwrap().value, 0.0, "param untouched");
     }
 
     #[test]
@@ -663,7 +635,7 @@ mod tests {
         let timing = vec![(Beats(0.0), Beats(8.0))];
         assert!(!evaluate_all_envelopes(&mut project, &timing));
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
-        assert_eq!(fx.param_values[0].value, 0.0);
+        assert_eq!(fx.params.get("amount").unwrap().value, 0.0);
     }
 
     #[test]
@@ -677,7 +649,7 @@ mod tests {
         let timing = vec![(Beats(0.0), Beats(8.0))];
         assert!(!evaluate_all_envelopes(&mut project, &timing));
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
-        assert_eq!(fx.param_values[0].value, 0.0);
+        assert_eq!(fx.params.get("amount").unwrap().value, 0.0);
     }
 
     /// Post-unification behavior (the bug fix): an envelope binds to the
@@ -698,11 +670,11 @@ mod tests {
         assert!(evaluate_all_envelopes(&mut project, &timing));
         let effects = project.timeline.layers[0].effects.as_ref().unwrap();
         assert_eq!(
-            effects[0].param_values[0].value, 0.0,
+            effects[0].params.get("amount").unwrap().value, 0.0,
             "the effect WITHOUT an envelope is untouched"
         );
         assert!(
-            (effects[1].param_values[0].value - 1.0).abs() < 1e-6,
+            (effects[1].params.get("amount").unwrap().value - 1.0).abs() < 1e-6,
             "the effect WITH the envelope is the one modulated"
         );
     }
@@ -726,9 +698,9 @@ mod tests {
         assert!(modulated);
         let gp = project.timeline.layers[0].gen_params().unwrap();
         assert!(
-            (gp.param_values[0].value - 10.0).abs() < 1e-6,
+            (gp.params.get("speed").unwrap().value - 10.0).abs() < 1e-6,
             "speed driven from 0 to max 10, got {}",
-            gp.param_values[0].value
+            gp.params.get("speed").unwrap().value
         );
     }
 
@@ -746,7 +718,7 @@ mod tests {
         let timing = vec![(Beats(0.0), Beats(8.0))];
         assert!(!evaluate_all_envelopes(&mut project, &timing));
         let gp = project.timeline.layers[0].gen_params().unwrap();
-        assert_eq!(gp.param_values[0].value, 0.0);
+        assert_eq!(gp.params.get("speed").unwrap().value, 0.0);
     }
 
     #[test]
@@ -818,9 +790,9 @@ mod tests {
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         // amount range 0..1, full-range mapping, raw 1.0 → 1.0.
         assert!(
-            (fx.param_values[0].value - 1.0).abs() < 1e-6,
+            (fx.params.get("amount").unwrap().value - 1.0).abs() < 1e-6,
             "amount driven to 1.0, got {}",
-            fx.param_values[0].value
+            fx.params.get("amount").unwrap().value
         );
     }
 
@@ -833,7 +805,7 @@ mod tests {
         let empty = AudioFeatureSnapshot::default();
         assert!(!evaluate_all_audio_mods(&mut project, &empty, Seconds(0.016)));
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
-        assert_eq!(fx.param_values[0].value, 0.0, "param untouched");
+        assert_eq!(fx.params.get("amount").unwrap().value, 0.0, "param untouched");
     }
 
     #[test]
@@ -849,7 +821,7 @@ mod tests {
         let snap = snapshot_low(1.0);
         assert!(!evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016)));
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
-        assert_eq!(fx.param_values[0].value, 0.0);
+        assert_eq!(fx.params.get("amount").unwrap().value, 0.0);
     }
 
     #[test]
@@ -863,61 +835,29 @@ mod tests {
         let snap = snapshot_low(1.0);
         assert!(!evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016)));
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
-        assert_eq!(fx.param_values[0].value, 0.0);
+        assert_eq!(fx.params.get("amount").unwrap().value, 0.0);
     }
 
-    /// Overlay a recalibrated range on a STOCK param via the instance's graph
-    /// `preset_metadata` — exactly what the chevron popover writes. The registry
-    /// def still owns the param; this only narrows its range on this instance.
+    /// Recalibrate a STOCK param's range in place on the instance's own
+    /// manifest entry — exactly what the chevron popover writes (D6:
+    /// calibration edits `spec.min`/`spec.max` in place and sets
+    /// `Param::calibrated`; there is no separate graph/`preset_metadata`
+    /// overlay to resolve through anymore — `p.spec` on the manifest entry
+    /// IS the effective range).
     fn override_stock_param_range(inst: &mut PresetInstance, param_id: &str, min: f32, max: f32) {
-        use manifold_core::effect_graph_def::{EffectGraphDef, ParamSpecDef, PresetMetadata};
-        let graph = inst.graph.get_or_insert_with(|| EffectGraphDef {
-            version: 0,
-            name: None,
-            description: None,
-            preset_metadata: None,
-            nodes: Vec::new(),
-            wires: Vec::new(),
-        });
-        let meta = graph.preset_metadata.get_or_insert_with(|| PresetMetadata {
-            id: PresetTypeId::new(""),
-            display_name: String::new(),
-            category: String::new(),
-            osc_prefix: String::new(),
-            legacy_discriminant: None,
-            available: true,
-            is_line_based: false,
-            params: Vec::new(),
-            bindings: Vec::new(),
-            skip_mode: Default::default(),
-            param_aliases: Vec::new(),
-            value_aliases: Vec::new(),
-            string_params: Vec::new(),
-            string_bindings: Vec::new(),
-        });
-        meta.params.push(ParamSpecDef {
-            id: param_id.to_string(),
-            name: param_id.to_string(),
-            min,
-            max,
-            default_value: 0.0,
-            whole_numbers: false,
-            is_toggle: false,
-            is_trigger: false,
-            value_labels: Vec::new(),
-            format_string: None,
-            osc_suffix: String::new(),
-            curve: Default::default(),
-            invert: false,
-        });
+        let p = inst.params.get_mut(param_id).expect("param must exist on the manifest");
+        p.spec.min = min;
+        p.spec.max = max;
+        p.calibrated = true;
     }
 
     #[test]
     fn audio_mod_respects_recalibrated_range_override() {
         // Narrow `amount`'s range to 0..0.5 on this instance (what the chevron
-        // popover writes to preset_metadata). A full-signal audio mod must cap at
-        // the override max 0.5, not the catalog max 1.0 — the resolver is
-        // override-first, so a recalibrated slider bounds the modulator too.
+        // popover writes, in place, onto the manifest entry's `spec`). A
+        // full-signal audio mod must cap at the override max 0.5, not the
+        // catalog max 1.0 — the recalibrated range IS the effective range, so
+        // a recalibrated slider bounds the modulator too.
         let (mut project, send_id) = project_with_audio_send();
         attach_full_range_low_mod(&mut project, &send_id);
         override_stock_param_range(
@@ -931,9 +871,9 @@ mod tests {
         assert!(evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016)));
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         assert!(
-            (fx.param_values[0].value - 0.5).abs() < 1e-6,
+            (fx.params.get("amount").unwrap().value - 0.5).abs() < 1e-6,
             "full signal caps at the recalibrated max 0.5, got {}",
-            fx.param_values[0].value,
+            fx.params.get("amount").unwrap().value,
         );
     }
 }

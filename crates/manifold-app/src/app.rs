@@ -102,11 +102,9 @@ impl ActiveInspectorDrag {
                 value,
             } => {
                 project.with_preset_graph_mut(target, |inst| {
-                    if let Some(slot) = inst.param_id_to_value_index(param_id.as_ref())
-                        && slot < inst.param_values.len()
-                    {
-                        inst.param_values[slot].value = *value;
-                    }
+                    // Direct id write of the effective value (no-op if the id
+                    // isn't in the manifest).
+                    inst.set_param(param_id.as_ref(), *value);
                 });
             }
         }
@@ -1114,21 +1112,54 @@ impl Application {
                             .settings
                             .master_effects
                             .get(effect_idx)
-                            .map(|fx| (fx.id.clone(), fx.effect_type(), fx.get_base_param(param_idx))),
+                            .map(|fx| {
+                                // Positional card index → transient manifest view
+                                // (boundary translation; a future UI-by-id pass
+                                // addresses inspector params by id).
+                                let old = fx
+                                    .params
+                                    .iter()
+                                    .nth(param_idx)
+                                    .map(|p| if fx.base_tracked { p.base } else { p.value })
+                                    .unwrap_or(0.0);
+                                (fx.id.clone(), fx.effect_type(), old)
+                            }),
                         manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Group => self
                             .active_layer_id
                             .as_ref()
                             .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
                             .and_then(|(_, l)| l.effects.as_ref())
                             .and_then(|e| e.get(effect_idx))
-                            .map(|fx| (fx.id.clone(), fx.effect_type(), fx.get_base_param(param_idx))),
+                            .map(|fx| {
+                                // Positional card index → transient manifest view
+                                // (boundary translation; a future UI-by-id pass
+                                // addresses inspector params by id).
+                                let old = fx
+                                    .params
+                                    .iter()
+                                    .nth(param_idx)
+                                    .map(|p| if fx.base_tracked { p.base } else { p.value })
+                                    .unwrap_or(0.0);
+                                (fx.id.clone(), fx.effect_type(), old)
+                            }),
                         manifold_ui::InspectorTab::Clip => self
                             .selection
                             .primary_selected_clip_id
                             .as_ref()
                             .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
                             .and_then(|c| c.effects.get(effect_idx))
-                            .map(|fx| (fx.id.clone(), fx.effect_type(), fx.get_base_param(param_idx))),
+                            .map(|fx| {
+                                // Positional card index → transient manifest view
+                                // (boundary translation; a future UI-by-id pass
+                                // addresses inspector params by id).
+                                let old = fx
+                                    .params
+                                    .iter()
+                                    .nth(param_idx)
+                                    .map(|p| if fx.base_tracked { p.base } else { p.value })
+                                    .unwrap_or(0.0);
+                                (fx.id.clone(), fx.effect_type(), old)
+                            }),
                     };
                     if let Some((effect_id, effect_type, old_val)) = effect_info {
                         // Clamp to param range from registry
@@ -1188,7 +1219,12 @@ impl Application {
                         parsed
                     };
                     if let Some(gp) = layer.gen_params() {
-                        let old_val = gp.get_base_param(param_idx);
+                        let old_val = gp
+                            .params
+                            .iter()
+                            .nth(param_idx)
+                            .map(|p| if gp.base_tracked { p.base } else { p.value })
+                            .unwrap_or(0.0);
                         // Resolve the positional registry index to the stable
                         // param id the unified by-id command addresses.
                         let param_id =

@@ -28,6 +28,47 @@ or human can read it, and it needs no external tool.
 
 ## Open
 
+### BUG-029 — `profiling` feature doesn't compile: rotted against the Beats/Bpm newtypes — LOW (parked)
+
+**Root cause** — the `#[cfg(feature = "profiling")]` blocks in `manifold-app` predate the
+`Beats`/`Bpm`/`Seconds` newtype migration and still treat those values as raw `f32`/`u32`.
+Three sites: [content_thread.rs:854](../crates/manifold-app/src/content_thread.rs#L854)
+(`Beats as u32` — non-primitive cast), [content_thread.rs:988](../crates/manifold-app/src/content_thread.rs#L988)
+(`expected f32, found Beats`), and [content_commands.rs:933](../crates/manifold-app/src/content_commands.rs#L933)
+(`expected f32, found Bpm`).
+
+**Symptom** — `cargo build -p manifold-app --features profiling` fails with 3 `E0308`/`E0605`
+type errors. The default build (profiling off) is unaffected, which is why the rot went
+unnoticed — the feature evidently hasn't been compiled since the newtype migration landed.
+
+**Found during** — PARAM_STORAGE P2 (2026-07-05), while compile-checking the profiling path
+after migrating its param readout from the deleted positional `param_values` to `ParamManifest`
+(that param-side migration is done and correct; these 3 errors are unrelated newtype-cast rot
+in the same blocks).
+
+**Fix shape** — wrap each site in the Beats/Bpm accessor instead of a raw cast (~3 one-line
+fixes). Unrelated to param storage, so parked here rather than folded into P2.
+
+### BUG-030 — Design-token ratchet red on trunk: raw `Color32::new(` count 201 vs baseline 200 — LOW (parked, not param-storage)
+
+**Root cause** — a UI landing added one raw `Color32::new(` literal in `crates/manifold-ui/src`
+without tokenizing it or bumping the ratchet. [design_tokens.rs:40](../crates/manifold-ui/tests/design_tokens.rs#L40)
+sets `COLOR_BASELINE = 200`; the actual scan count is 201.
+
+**Symptom** — `cargo test -p manifold-ui --test design_tokens` fails (`no_new_raw_color_literals`,
+201 > 200). **Fails identically on origin/main (58bc2d43)**: `crates/manifold-ui/src` is
+byte-identical between that commit and the P2 branch, and `scan()` reads only that directory, so
+the drift predates and is independent of P2.
+
+**Found during** — PARAM_STORAGE P2 (2026-07-05), full-workspace sweep after merging origin/main.
+Two pre-existing trunk failures surfaced (this + the stale node catalog, which P2 regenerated) —
+a signal that a recent UI landing skipped the full workspace test.
+
+**Fix shape** — the UI/design-token owner tokenizes the offending literal (a `color::` token, or
+`// design-token-exempt: <reason>`); the ratchet then returns to green at 200. Left red on purpose
+rather than bumping the baseline, which would silently bless the drift the ratchet exists to catch.
+Unrelated to param storage.
+
 BUG-006–014 come from the **freeze-compiler adversarial bug hunt, 2026-07-03**
 (40-agent Sonnet workflow `wf_73bb4ddf-885`; 10 finder lenses → every finding attacked by 2
 independent skeptics). BUG-006–012 were **confirmed by both skeptics** with line-level

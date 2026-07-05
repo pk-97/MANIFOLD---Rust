@@ -70,20 +70,14 @@ pub enum SkipMode {
 /// `preset_definition_registry::param_id_to_index` which is
 /// dual-source aware — works for both inventory-submitted
 /// `EffectMetadata` and JSON-loaded `PresetMetadata`.
-pub fn is_skipped_for(skip: SkipMode, type_id: &PresetTypeId, fx: &PresetInstance) -> bool {
+pub fn is_skipped_for(skip: SkipMode, _type_id: &PresetTypeId, fx: &PresetInstance) -> bool {
     match skip {
         SkipMode::Never => false,
-        SkipMode::OnZero { param_id } => {
-            let Some(idx) =
-                manifold_core::preset_definition_registry::param_id_to_index(type_id, param_id)
-            else {
-                return false;
-            };
-            fx.param_values
-                .get(idx)
-                .map(|s| s.value <= 0.0)
-                .unwrap_or(false)
-        }
+        SkipMode::OnZero { param_id } => fx
+            .params
+            .get(param_id.as_ref())
+            .map(|p| p.value <= 0.0)
+            .unwrap_or(false),
     }
 }
 

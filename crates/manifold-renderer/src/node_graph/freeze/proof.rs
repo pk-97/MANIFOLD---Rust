@@ -1028,7 +1028,7 @@ fn infrared_preset_black_stays_black() {
 #[test]
 fn wireframe_generator_background_is_black() {
     use crate::node_graph::bundled_presets::bundled_preset_json;
-    use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+    use crate::preset_context::PresetContext;
     use crate::preset_runtime::PresetRuntime;
     use manifold_core::PresetTypeId;
 
@@ -1054,8 +1054,6 @@ fn wireframe_generator_background_is_black() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
-        params: [0.0; MAX_GEN_PARAMS],
-        param_count: 0,
     };
 
     let mut generator = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT)
@@ -1065,7 +1063,7 @@ fn wireframe_generator_background_is_black() {
         let mut enc = device.create_encoder("wz-render");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
-            generator.render(&mut gpu, &target.texture, &ctx);
+            generator.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
         }
         enc.commit_and_wait_completed();
     }
@@ -1809,7 +1807,7 @@ fn grouped_presets_fuse_through_entry_points() {
 #[test]
 fn every_fused_generator_executes_one_frame() {
     use super::install::fused_generator_def_by_id;
-    use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+    use crate::preset_context::PresetContext;
     use crate::preset_runtime::PresetRuntime;
     use std::panic::AssertUnwindSafe;
 
@@ -1830,8 +1828,6 @@ fn every_fused_generator_executes_one_frame() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
-        params: [0.0; MAX_GEN_PARAMS],
-        param_count: 0,
     };
     let mut failures: Vec<String> = Vec::new();
     let mut fused_count = 0usize;
@@ -1855,7 +1851,7 @@ fn every_fused_generator_executes_one_frame() {
             let mut enc = device.create_encoder("fused-gen-smoke");
             {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
-                g.render(&mut gpu, &target.texture, &ctx);
+                g.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
             }
             enc.commit_and_wait_completed();
         }));
@@ -1888,7 +1884,7 @@ fn every_fused_generator_executes_one_frame() {
 #[test]
 fn fused_generator_renders_like_unfused() {
     use super::install::fuse_generator_def;
-    use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+    use crate::preset_context::PresetContext;
     use crate::preset_runtime::PresetRuntime;
 
     let device = crate::test_device();
@@ -1933,8 +1929,6 @@ fn fused_generator_renders_like_unfused() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
-        params: [0.0; MAX_GEN_PARAMS],
-        param_count: 0,
     };
     let render = |def: EffectGraphDef| -> RenderTarget {
         let mut g =
@@ -1944,7 +1938,7 @@ fn fused_generator_renders_like_unfused() {
         let mut enc = device.create_encoder("freeze-gen");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
-            g.render(&mut gpu, &target.texture, &ctx);
+            g.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
         }
         enc.commit_and_wait_completed();
         target
@@ -1983,7 +1977,7 @@ fn fused_generator_renders_like_unfused() {
 #[test]
 fn digitalplants_buffer_fusion_renders_like_unfused() {
     use super::install::fuse_generator_def;
-    use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+    use crate::preset_context::PresetContext;
     use crate::preset_runtime::PresetRuntime;
 
     let device = crate::test_device();
@@ -2013,8 +2007,6 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
-        params: [0.0; MAX_GEN_PARAMS],
-        param_count: 0,
     };
     // Warm up a few frames (instance/particle buffers populate), then capture.
     let render = |def: EffectGraphDef| -> RenderTarget {
@@ -2025,7 +2017,7 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
             let mut enc = device.create_encoder("freeze-dp");
             {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
-                g.render(&mut gpu, &target.texture, &ctx(i as f64 / 60.0));
+                g.render(&mut gpu, &target.texture, &ctx(i as f64 / 60.0), &manifold_core::params::ParamManifest::default());
             }
             enc.commit_and_wait_completed();
         }
@@ -2085,7 +2077,7 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
 #[test]
 fn fluidsim_buffer_fusion_renders_like_unfused() {
     use super::install::fuse_generator_def;
-    use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+    use crate::preset_context::PresetContext;
     use crate::preset_runtime::PresetRuntime;
 
     let device = crate::test_device();
@@ -2194,8 +2186,6 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
-        params: [0.0; MAX_GEN_PARAMS],
-        param_count: 0,
     };
     let render = |def: EffectGraphDef| -> RenderTarget {
         let mut g = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT)
@@ -2205,7 +2195,7 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
             let mut enc = device.create_encoder("freeze-fluid-fusion");
             {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
-                g.render(&mut gpu, &target.texture, &ctx(i as f64 / 60.0));
+                g.render(&mut gpu, &target.texture, &ctx(i as f64 / 60.0), &manifold_core::params::ParamManifest::default());
             }
             enc.commit_and_wait_completed();
         }
@@ -2248,7 +2238,7 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
 #[test]
 fn fluidsim3d_buffer_fusion_includes_3d_sampler_and_renders_like_unfused() {
     use super::install::fuse_generator_def;
-    use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+    use crate::preset_context::PresetContext;
     use crate::preset_runtime::PresetRuntime;
 
     let device = crate::test_device();
@@ -2292,8 +2282,6 @@ fn fluidsim3d_buffer_fusion_includes_3d_sampler_and_renders_like_unfused() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
-        params: [0.0; MAX_GEN_PARAMS],
-        param_count: 0,
     };
     let render = |def: EffectGraphDef| -> RenderTarget {
         let mut g = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT)
@@ -2303,7 +2291,7 @@ fn fluidsim3d_buffer_fusion_includes_3d_sampler_and_renders_like_unfused() {
             let mut enc = device.create_encoder("freeze-fluid3d-fusion");
             {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
-                g.render(&mut gpu, &target.texture, &ctx(i as f64 / 60.0));
+                g.render(&mut gpu, &target.texture, &ctx(i as f64 / 60.0), &manifold_core::params::ParamManifest::default());
             }
             enc.commit_and_wait_completed();
         }
@@ -2345,7 +2333,7 @@ fn fluidsim3d_buffer_fusion_includes_3d_sampler_and_renders_like_unfused() {
 /// means the same clip looks different every time it's triggered live.
 #[test]
 fn fluidsim_renders_deterministically_from_fresh_state() {
-    use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+    use crate::preset_context::PresetContext;
     use crate::preset_runtime::PresetRuntime;
 
     let device = crate::test_device();
@@ -2372,8 +2360,6 @@ fn fluidsim_renders_deterministically_from_fresh_state() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
-        params: [0.0; MAX_GEN_PARAMS],
-        param_count: 0,
     };
     // Warm the feedback loop a handful of frames so any frame-0 divergence has
     // time to amplify through the density→force→position loop, then capture.
@@ -2385,7 +2371,7 @@ fn fluidsim_renders_deterministically_from_fresh_state() {
             let mut enc = device.create_encoder("freeze-fluid");
             {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
-                g.render(&mut gpu, &target.texture, &ctx(i as f64 / 60.0));
+                g.render(&mut gpu, &target.texture, &ctx(i as f64 / 60.0), &manifold_core::params::ParamManifest::default());
             }
             enc.commit_and_wait_completed();
         }
@@ -2420,7 +2406,7 @@ fn render_generator_8_frames(
     w: u32,
     h: u32,
 ) -> RenderTarget {
-    use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+    use crate::preset_context::PresetContext;
     use crate::preset_runtime::PresetRuntime;
     let ctx = |t: f64| PresetContext {
         time: t,
@@ -2436,8 +2422,6 @@ fn render_generator_8_frames(
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
-        params: [0.0; MAX_GEN_PARAMS],
-        param_count: 0,
     };
     let mut g = PresetRuntime::from_def_with_device(def, registry, device, w, h, FMT)
         .expect("preset builds");
@@ -2446,7 +2430,7 @@ fn render_generator_8_frames(
         let mut enc = device.create_encoder("freeze-gen-fusion");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, device);
-            g.render(&mut gpu, &target.texture, &ctx(i as f64 / 60.0));
+            g.render(&mut gpu, &target.texture, &ctx(i as f64 / 60.0), &manifold_core::params::ParamManifest::default());
         }
         enc.commit_and_wait_completed();
     }
@@ -3104,7 +3088,7 @@ fn render_def_capture_array(
 #[test]
 #[ignore]
 fn particletext_production_region_diag() {
-    use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+    use crate::preset_context::PresetContext;
     use crate::preset_runtime::PresetRuntime;
     use std::collections::BTreeMap;
 
@@ -3139,8 +3123,6 @@ fn particletext_production_region_diag() {
         frame_count: 0,
         anim_progress: 0.0,
         trigger_count: 0,
-        params: [0.0; MAX_GEN_PARAMS],
-        param_count: 0,
     };
     let frames: u32 = std::env::var("PT_FRAMES")
         .ok()
@@ -3158,7 +3140,7 @@ fn particletext_production_region_diag() {
             let mut enc = device.create_encoder("prod-diag");
             {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
-                g.render(&mut gpu, &target.texture, &ctx(f64::from(i) / 60.0));
+                g.render(&mut gpu, &target.texture, &ctx(f64::from(i) / 60.0), &manifold_core::params::ParamManifest::default());
             }
             enc.commit_and_wait_completed();
         }

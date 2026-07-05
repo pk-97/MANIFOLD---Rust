@@ -34,9 +34,9 @@ fn fixture_path(name: &str) -> std::path::PathBuf {
 #[test]
 fn macro_drives_the_exact_effect_among_two_of_the_same_type() {
     use manifold_core::PresetTypeId;
-    use manifold_core::effects::PresetInstance;
     use manifold_core::layer::Layer;
     use manifold_core::macro_bank::{MacroBank, MacroCurve, MacroMapping, MacroMappingTarget};
+    use manifold_core::preset_definition_registry;
     use manifold_core::project::Project;
     use manifold_core::types::LayerType;
 
@@ -46,12 +46,10 @@ fn macro_drives_the_exact_effect_among_two_of_the_same_type() {
 
     // Two same-type effects, both seeded to a sentinel so a stray write is
     // visible. A first-match-by-type resolver would hit `fx_a` (the first).
-    let mut fx_a = PresetInstance::new(ty.clone());
-    fx_a.align_to_definition();
-    fx_a.set_base_param(0, 0.25);
-    let mut fx_b = PresetInstance::new(ty.clone());
-    fx_b.align_to_definition();
-    fx_b.set_base_param(0, 0.25);
+    let mut fx_a = preset_definition_registry::create_default(&ty);
+    fx_a.set_base_param(&pid, 0.25);
+    let mut fx_b = preset_definition_registry::create_default(&ty);
+    fx_b.set_base_param(&pid, 0.25);
     let id_a = fx_a.id.clone();
     let id_b = fx_b.id.clone();
 
@@ -77,8 +75,8 @@ fn macro_drives_the_exact_effect_among_two_of_the_same_type() {
 
     MacroBank::apply_macro(&mut project, 0, 1.0);
 
-    let after_a = project.find_effect_by_id(&id_a).unwrap().get_base_param(0);
-    let after_b = project.find_effect_by_id(&id_b).unwrap().get_base_param(0);
+    let after_a = project.find_effect_by_id(&id_a).unwrap().get_base_param(&pid);
+    let after_b = project.find_effect_by_id(&id_b).unwrap().get_base_param(&pid);
     assert!(
         (after_a - 0.25).abs() < 1e-6,
         "the OTHER same-type effect must be untouched, got {after_a}"
@@ -482,9 +480,16 @@ fn liveschool_gen_param_values_save_as_id_keyed_map() {
         .layers
         .iter()
         .filter_map(|l| l.gen_params())
-        .find(|gp| !gp.param_values.is_empty())
+        .find(|gp| !gp.params.is_empty())
         .expect("Liveschool must have at least one generator with params");
-    let original_values = gp.param_values.clone();
+    // Snapshot by id (not the whole manifest — `ParamManifest`'s `topology`
+    // field makes a whole-struct comparison brittle across the two different
+    // construction paths: load-then-clone vs round-trip-through-serde).
+    let original_by_id: Vec<(String, f32)> = gp
+        .params
+        .iter()
+        .map(|p| (p.id().to_string(), p.value))
+        .collect();
 
     let json = serde_json::to_string(gp).expect("serialize PresetInstance");
     assert!(
@@ -500,9 +505,21 @@ fn liveschool_gen_param_values_save_as_id_keyed_map() {
         manifold_core::effects::deserialize_generator_instance(&mut de)
             .expect("deserialize gen map form");
     assert_eq!(
-        back.param_values, original_values,
-        "Map → positional round-trip must preserve all generator values exactly"
+        back.params.len(),
+        original_by_id.len(),
+        "Map round-trip must preserve the generator's param count"
     );
+    for (id, value) in &original_by_id {
+        let got = back
+            .params
+            .get(id)
+            .unwrap_or_else(|| panic!("param {id} missing after round-trip"))
+            .value;
+        assert!(
+            (got - value).abs() < f32::EPSILON,
+            "generator param {id} drifted on round-trip: {got} vs {value}"
+        );
+    }
     assert_eq!(back.generator_type(), gp.generator_type());
 }
 
@@ -534,9 +551,15 @@ fn liveschool_param_values_save_as_id_keyed_map() {
         .settings
         .master_effects
         .iter()
-        .find(|f| !f.param_values.is_empty())
+        .find(|f| !f.params.is_empty())
         .expect("Liveschool must have at least one master effect with params");
-    let original_values = fx.param_values.clone();
+    // Snapshot by id (not the whole manifest — see the generator sibling
+    // test's comment on why a whole-`ParamManifest` comparison is brittle).
+    let original_by_id: Vec<(String, f32)> = fx
+        .params
+        .iter()
+        .map(|p| (p.id().to_string(), p.value))
+        .collect();
 
     // Serialize → must be an id-keyed Map (registry is loaded).
     let json = serde_json::to_string(fx).expect("serialize PresetInstance");
@@ -545,13 +568,26 @@ fn liveschool_param_values_save_as_id_keyed_map() {
         "registry-aware Serialize must emit params as an id-keyed Map; got: {json}"
     );
 
-    // Deserialize back → values must land in identical positions.
+    // Deserialize back → every param must still resolve by id to the same
+    // value.
     let back: manifold_core::effects::PresetInstance =
         serde_json::from_str(&json).expect("deserialize map form");
     assert_eq!(
-        back.param_values, original_values,
-        "Map → positional round-trip must preserve all values exactly"
+        back.params.len(),
+        original_by_id.len(),
+        "Map round-trip must preserve the effect's param count"
     );
+    for (id, value) in &original_by_id {
+        let got = back
+            .params
+            .get(id)
+            .unwrap_or_else(|| panic!("param {id} missing after round-trip"))
+            .value;
+        assert!(
+            (got - value).abs() < f32::EPSILON,
+            "param {id} drifted on round-trip: {got} vs {value}"
+        );
+    }
 }
 
 #[test]
@@ -668,9 +704,10 @@ fn liveschool_mirror_mode_values_migrate_after_curation_drop() {
         "Liveschool fixture is expected to carry Mirror instances",
     );
     for (i, fx) in mirrors.iter().enumerate() {
-        // Mirror's binding order is [amount, mode], so slot 1 holds
-        // the mode value. After migration it must be 6, 7, or 8.
-        let mode_value = fx.param_values.get(1).map(|s| s.value).unwrap_or(0.0);
+        // Mirror's outer params are [amount, mode] addressed by id now;
+        // "mode" holds the value under test. After migration it must be
+        // 6, 7, or 8.
+        let mode_value = fx.get_param("mode");
         let coerced = mode_value.round() as i32;
         assert!(
             (6..=8).contains(&coerced),

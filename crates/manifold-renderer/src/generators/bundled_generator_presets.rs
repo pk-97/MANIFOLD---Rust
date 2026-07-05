@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn every_bundled_preset_executes_one_frame() {
         use crate::preset_runtime::PresetRuntime;
-        use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+        use crate::preset_context::PresetContext;
         use crate::node_graph::PrimitiveRegistry;
         use crate::render_target::RenderTarget;
         use manifold_gpu::GpuTextureFormat;
@@ -258,8 +258,6 @@ mod tests {
                 frame_count: 0,
                 anim_progress: 0.0,
                 trigger_count: 0,
-                params: [0.0; MAX_GEN_PARAMS],
-                param_count: 0,
             };
 
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -267,7 +265,12 @@ mod tests {
                 {
                     let mut gpu =
                         crate::gpu_encoder::GpuEncoder::new(&mut native_enc, &device);
-                    g.render(&mut gpu, &target.texture, &ctx);
+                    g.render(
+                        &mut gpu,
+                        &target.texture,
+                        &ctx,
+                        &manifold_core::params::ParamManifest::default(),
+                    );
                 }
                 native_enc.commit_and_wait_completed();
             }));

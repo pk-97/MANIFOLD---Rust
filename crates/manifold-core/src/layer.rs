@@ -734,19 +734,21 @@ impl Layer {
         self.effect_groups.as_mut().unwrap()
     }
 
-    /// Read a generator param value at index (returns 0.0 if out of range or no gen_params).
+    /// Read a generator param value at card position `index` (returns 0.0 if
+    /// out of range or no gen_params). Positional read over the manifest's
+    /// card order — a transient boundary view, not a stored index.
     pub fn get_gen_param(&self, index: usize) -> f32 {
         self.gen_params
             .as_ref()
-            .and_then(|gp| gp.param_values.get(index).map(|s| s.value))
+            .and_then(|gp| gp.params.iter().nth(index).map(|p| p.value))
             .unwrap_or(0.0)
     }
 
-    /// Snapshot current generator param values (effective floats).
+    /// Snapshot current generator param values (effective floats, card order).
     pub fn snapshot_gen_params(&self) -> Vec<f32> {
-        self.gen_params.as_ref().map_or_else(Vec::new, |gp| {
-            gp.param_values.iter().map(|s| s.value).collect()
-        })
+        self.gen_params
+            .as_ref()
+            .map_or_else(Vec::new, |gp| gp.params.iter().map(|p| p.value).collect())
     }
 
     /// Snapshot current generator drivers.
@@ -929,11 +931,16 @@ impl Layer {
         cloned
     }
 
-    /// Set a generator param base value at index. Routes through the
-    /// unified [`crate::effects::PresetInstance::set_base_param`].
+    /// Set a generator param base value at card position `index`. Resolves the
+    /// position to its id off the manifest (a transient boundary view) and
+    /// routes through the unified id-keyed
+    /// [`crate::effects::PresetInstance::set_base_param`].
     pub fn set_gen_param_base(&mut self, index: usize, value: f32) {
         if let Some(gp) = &mut self.gen_params {
-            gp.set_base_param(index, value);
+            let id = gp.params.iter().nth(index).map(|p| p.id().to_string());
+            if let Some(id) = id {
+                gp.set_base_param(&id, value);
+            }
         }
     }
 }

@@ -3,7 +3,7 @@ use crate::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
 use crate::effect::PostProcessEffect;
 use crate::preset_runtime::PresetRuntime;
 use crate::gpu_encoder::GpuEncoder;
-use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+use crate::preset_context::PresetContext;
 use crate::render_target::RenderTarget;
 use crate::tonemap::TonemapPipeline;
 use crate::uniform_arena::UniformArena;
@@ -274,7 +274,7 @@ fn has_enabled_effects(effects: &[PresetInstance]) -> bool {
     for fx in effects {
         if fx.enabled
             && *fx.effect_type() != PresetTypeId::UNKNOWN
-            && fx.param_values.first().map(|p| p.value).unwrap_or(0.0) > 0.0
+            && fx.params.iter().next().map(|p| p.value).unwrap_or(0.0) > 0.0
         {
             return true;
         }
@@ -1121,8 +1121,6 @@ impl LayerCompositor {
                         frame_count: frame.frame_count as i64,
                         anim_progress: 0.0,
                         trigger_count: 0,
-                        params: [0.0; MAX_GEN_PARAMS],
-                        param_count: 0,
                     };
                     Self::apply_effects(
                         effect_chain,
@@ -1421,8 +1419,6 @@ impl LayerCompositor {
                                 frame_count: frame.frame_count as i64,
                                 anim_progress: 0.0,
                                 trigger_count: 0,
-                                params: [0.0; MAX_GEN_PARAMS],
-                                param_count: 0,
                             };
                             match Self::apply_effects(
                                 group_ec,
@@ -1635,8 +1631,6 @@ impl LayerCompositor {
                     frame_count: frame.frame_count as i64,
                     anim_progress: 0.0,
                     trigger_count: 0,
-                    params: [0.0; MAX_GEN_PARAMS],
-                    param_count: 0,
                 };
                 let result = Self::apply_effects(
                     effect_chain,
@@ -1898,8 +1892,6 @@ impl LayerCompositor {
                             frame_count: frame.frame_count as i64,
                             anim_progress: 0.0,
                             trigger_count: 0,
-                            params: [0.0; MAX_GEN_PARAMS],
-                            param_count: 0,
                         };
                         Self::apply_effects(
                             effect_chain,
@@ -2237,8 +2229,6 @@ impl Compositor for LayerCompositor {
                 frame_count: frame.frame_count as i64,
                 anim_progress: 0.0,
                 trigger_count: 0,
-                params: [0.0; MAX_GEN_PARAMS],
-                param_count: 0,
             };
 
             // Master effects use a dedicated `EffectChain` instance,
@@ -2309,8 +2299,6 @@ impl Compositor for LayerCompositor {
                 frame_count: frame.frame_count as i64,
                 anim_progress: 0.0,
                 trigger_count: 0,
-                params: [0.0; MAX_GEN_PARAMS],
-                param_count: 0,
             };
 
             // Run master FX directly on raw HDR `led_main`, copy result back
