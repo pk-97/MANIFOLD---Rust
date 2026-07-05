@@ -59,6 +59,18 @@ GRADEABLE_MOVE_PREFIXES = ("anchor/", "coaching/", "escalate/")
 GRADE_BACKSTOP_STALE_EVENTS = 40  # matches §2d's oscillation-span convention
 GRADE_BACKSTOP_MOVE_ID = "mechanical/grade-backstop"
 
+# Observation review prompt (2026-07-05, Peter's ask): a standing invitation
+# to log anything worth the next sleep pass's attention, asked at most ONCE
+# per session (own sentinel below, mirroring the grade backstop) — most
+# sessions have nothing to add, and asking every turn until something gets
+# written would force busywork just to go quiet. Also gated on a minimum
+# amount of session activity (same "has this session had enough happen yet"
+# convention as the grade backstop / §2d) — a session a couple of tool calls
+# long hasn't had a "session" worth reviewing. No moves.md entry (valve
+# plumbing, not a drift move).
+OBSERVATION_PROMPT_MOVE_ID = "mechanical/observation-prompt"
+OBSERVATION_PROMPT_MIN_EVENTS = 40
+
 # Conservative imminent-action triggers (moves.md mechanical/announced-not-started).
 # Matched against the LAST sentence of the last assistant text only. A
 # trailing "?" always disqualifies first — a question to the user is never
@@ -254,6 +266,23 @@ def _grade_backstop_reason(ungraded_count, oldest_events_ago):
     )
 
 
+def _observation_prompt_reason():
+    return (
+        f'<daemon move="{OBSERVATION_PROMPT_MOVE_ID}">\n'
+        f"Before this session goes further: is there anything worth logging "
+        f"for the daemon — a drift the observer should have caught but "
+        f"didn't, a pattern that doesn't fit an existing move, or any other "
+        f"note for the next sleep pass? Most sessions won't have anything, "
+        f"and that's fine — no action needed either way. If something IS "
+        f"worth logging, append one record to "
+        f".claude/daemon/eval/observations.session.jsonl: {{ts, session_id, "
+        f'kind: "miss-candidate"|"note", move_id or expect_family, evidence, '
+        f"note}} (schema in RUNBOOK.md step 2/3). This asks once per "
+        f"session, not every turn.\n"
+        f"</daemon>"
+    )
+
+
 def main():
     try:
         import valve
@@ -367,36 +396,58 @@ def main():
             _block(reason, {"move_id": "mechanical/announced-not-started"})
             return
 
-        # 3. Grade-backstop (2026-07-05 review). Main-session only, fires at
-        # most once per session (its own sentinel below, distinct from the
-        # per-turn stopblock).
+        # Steps 3 and 4 below are both main-session-only soft reminders (never
+        # a real drift correction) — neither applies to a worker's Stop.
         if agent_id:
             return
+
+        # 3. Grade-backstop (2026-07-05 review). Fires at most once per
+        # session (its own sentinel below, distinct from the per-turn
+        # stopblock) — if it doesn't fire, fall through to step 4 rather than
+        # returning, so a session with no gradeable backlog still reaches the
+        # observation prompt.
+        backstop_fired = False
         backstop_sentinel = os.path.join(valve.VERDICTS_DIR, f"{session_id}.grade-backstop-fired")
-        if os.path.exists(backstop_sentinel):
+        if not os.path.exists(backstop_sentinel):
+            fires = _session_gradeable_fires(valve.TELEMETRY_PATH, session_id)
+            if fires:
+                graded = _session_grade_count(valve.EVAL_DIR, session_id)
+                if len(fires) > graded:
+                    events_ago = _events_since(transcript_path, fires[0][2])
+                    if events_ago > GRADE_BACKSTOP_STALE_EVENTS:
+                        try:
+                            os.makedirs(valve.VERDICTS_DIR, exist_ok=True)
+                            open(backstop_sentinel, "w").close()
+                        except OSError:
+                            pass
+                        _block(
+                            _grade_backstop_reason(len(fires) - graded, events_ago),
+                            {
+                                "move_id": GRADE_BACKSTOP_MOVE_ID,
+                                "ungraded_count": len(fires) - graded,
+                                "oldest_events_ago": events_ago,
+                            },
+                        )
+                        backstop_fired = True
+        if backstop_fired:
             return
-        fires = _session_gradeable_fires(valve.TELEMETRY_PATH, session_id)
-        if not fires:
+
+        # 4. Observation review prompt (Peter, 2026-07-05). Fires at most
+        # once per session (its own sentinel, like the grade backstop), and
+        # only once the session has done enough to have something worth
+        # reviewing — most sessions have nothing to log, so this is a single
+        # standing invitation, not a repeated demand for a written record.
+        observation_sentinel = os.path.join(valve.VERDICTS_DIR, f"{session_id}.observation-prompt-fired")
+        if os.path.exists(observation_sentinel):
             return
-        graded = _session_grade_count(valve.EVAL_DIR, session_id)
-        if len(fires) <= graded:
-            return
-        events_ago = _events_since(transcript_path, fires[0][2])
-        if events_ago <= GRADE_BACKSTOP_STALE_EVENTS:
+        if _events_since(transcript_path, 0) < OBSERVATION_PROMPT_MIN_EVENTS:
             return
         try:
             os.makedirs(valve.VERDICTS_DIR, exist_ok=True)
-            open(backstop_sentinel, "w").close()
+            open(observation_sentinel, "w").close()
         except OSError:
             pass
-        _block(
-            _grade_backstop_reason(len(fires) - graded, events_ago),
-            {
-                "move_id": GRADE_BACKSTOP_MOVE_ID,
-                "ungraded_count": len(fires) - graded,
-                "oldest_events_ago": events_ago,
-            },
-        )
+        _block(_observation_prompt_reason(), {"move_id": OBSERVATION_PROMPT_MOVE_ID})
     except Exception:
         return
 
