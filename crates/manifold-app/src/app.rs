@@ -468,6 +468,11 @@ pub struct Application {
     pub(crate) modifiers: Modifiers,
     pub(crate) time_since_start: f32,
 
+    // Finder file-drag hover (BUG-028): the live pointer position during an
+    // OS drag, read via drag_interpose — see that module for why cursor_pos
+    // alone can't answer "where is the file being dropped."
+    pub(crate) drag_tracker: crate::drag_hover::DragHoverTracker,
+
     // Cursor feedback — tracks current cursor shape for interaction hints.
     // From Unity Cursors.cs: SetMove, SetBlocked, SetResizeHorizontal, SetDefault.
     pub(crate) cursor_manager: CursorManager,
@@ -702,6 +707,7 @@ impl Application {
             frame_count: 0,
             transport_cache: crate::ui_bridge::TransportDisplayCache::new(),
             cursor_pos: Vec2::ZERO,
+            drag_tracker: crate::drag_hover::DragHoverTracker::default(),
             mouse_pressed: false,
             modifiers: Modifiers {
                 shift: false,
@@ -1825,6 +1831,11 @@ impl ApplicationHandler for Application {
             surface.configure_edr();
             self.edr_headroom = crate::edr_surface::query_window_headroom(&window);
             crate::edr_surface::register_screen_change_observer();
+            // BUG-028: winit never surfaces a live pointer position during a
+            // Finder file drag. Install the draggingUpdated:/performDragOperation:
+            // interposition on the window's delegate so drop targeting can
+            // read the real position — see drag_interpose.rs for why.
+            crate::drag_interpose::install(&window);
 
             // Register primary window
             let wid = window.id();
@@ -2554,11 +2565,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     || crate::project_io::is_supported_audio_extension(&path)
                 {
                     // MIDI + audio files → route through ProjectIOService.
-                    // winit's file-drop carries no coordinates, so resolve the drop
-                    // target from the last tracked cursor position: over an existing
-                    // audio lane → the file joins it; over empty timeline → a new lane.
-                    // Beat comes from the cursor x when inside the tracks area.
-                    let pos = self.cursor_pos;
+                    // winit's file-drop carries no coordinates during a
+                    // Finder drag, so resolve the drop target from the live
+                    // drag position (drag_interpose) when available, falling
+                    // back to the last tracked cursor position otherwise:
+                    // over an existing audio lane → the file joins it; over
+                    // empty timeline → a new lane. Beat comes from the x when
+                    // inside the tracks area.
+                    let pos = self.drag_tracker.drop_position().unwrap_or(self.cursor_pos);
                     let vp = &self.ws.ui_root.viewport;
                     let in_tracks = vp.get_tracks_rect().contains(pos);
                     let drop_beat = if in_tracks {
@@ -2593,9 +2607,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     self.apply_project_io_action(action);
                 } else if crate::project_io::is_supported_image_extension(&path) {
                     // Still images → an image clip, Video layers only. Resolve
-                    // the drop beat from the cursor x and the target layer from
-                    // the cursor y (winit's file-drop carries no coordinates).
-                    let pos = self.cursor_pos;
+                    // the drop beat and target layer from the live drag
+                    // position when available (drag_interpose), falling back
+                    // to the last tracked cursor position (winit's file-drop
+                    // carries no coordinates of its own).
+                    let pos = self.drag_tracker.drop_position().unwrap_or(self.cursor_pos);
                     let (drop_beat, layer_under_cursor) = {
                         let vp = &self.ws.ui_root.viewport;
                         let in_tracks = vp.get_tracks_rect().contains(pos);
@@ -2611,10 +2627,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 } else if ext == "glb" || ext == "gltf" {
                     // 3D models → a new generator layer whose graph renders the
                     // model, plus a default clip so it plays immediately.
-                    // Resolve the drop beat from the cursor x and the target
-                    // layer from the cursor y (winit's file-drop carries no
-                    // coordinates).
-                    let pos = self.cursor_pos;
+                    // Resolve the drop beat and target layer from the live
+                    // drag position when available (drag_interpose), falling
+                    // back to the last tracked cursor position (winit's
+                    // file-drop carries no coordinates of its own).
+                    let pos = self.drag_tracker.drop_position().unwrap_or(self.cursor_pos);
                     let (drop_beat, layer_under_cursor) = {
                         let vp = &self.ws.ui_root.viewport;
                         let in_tracks = vp.get_tracks_rect().contains(pos);
@@ -2633,13 +2650,26 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 } else {
                     log::debug!("Unrecognized file type dropped: {}", path.to_string_lossy());
                 }
+                // Drop consumed — stop reporting a drag position/hover state
+                // regardless of which branch above ran.
+                self.drag_tracker.on_drag_ended();
             }
             WindowEvent::HoveredFile(path) => {
-                log::debug!("File hovering: {}", path.to_string_lossy());
-                // Future: show drop preview (highlight target layer/position)
+                self.drag_tracker.on_hovered_file(path);
+                // Live-gate diagnostic (BUG-028): confirms the tracker sees
+                // the hover and, on the next log line from a DroppedFile,
+                // whether drag_interpose supplied a live position or the
+                // drop fell back to cursor_pos.
+                log::debug!(
+                    "File hovering: {:?} (tracker active={}, {} file(s) hovered)",
+                    self.drag_tracker.hovered_files(),
+                    self.drag_tracker.is_active(),
+                    self.drag_tracker.hovered_files().len(),
+                );
             }
             WindowEvent::HoveredFileCancelled => {
                 log::debug!("File hover cancelled");
+                self.drag_tracker.on_drag_ended();
             }
 
             _ => {}
