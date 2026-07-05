@@ -282,7 +282,7 @@ mod tests {
 
     fn node_with_text<'a>(tree: &'a UITree, text: &str) -> &'a crate::node::UINode {
         (0..tree.count())
-            .map(|i| tree.get_node(tree.id_at(i)))
+            .filter_map(|i| tree.get_node(tree.id_at(i)))
             .find(|n| n.text.as_deref() == Some(text))
             .unwrap_or_else(|| panic!("no node with text {text:?}"))
     }

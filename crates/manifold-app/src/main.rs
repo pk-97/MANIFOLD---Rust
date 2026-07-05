@@ -21,6 +21,8 @@ mod content_thread;
 mod dialog_path_memory;
 #[cfg(target_os = "macos")]
 mod display_link;
+mod drag_hover;
+mod drag_interpose;
 mod editing_host;
 mod edr_surface;
 mod frame_timer;

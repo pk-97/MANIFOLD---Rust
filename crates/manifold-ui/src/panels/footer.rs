@@ -229,7 +229,7 @@ mod tests {
     /// Every Button node in the tree, as (bounds, text), sorted left-to-right.
     fn buttons(tree: &UITree) -> Vec<(Rect, String)> {
         let mut v: Vec<(Rect, String)> = (0..tree.count())
-            .map(|i| tree.get_node(tree.id_at(i)))
+            .filter_map(|i| tree.get_node(tree.id_at(i)))
             .filter(|n| n.node_type == UINodeType::Button)
             .map(|n| (n.bounds, n.text.clone().unwrap_or_default()))
             .collect();
@@ -313,6 +313,6 @@ mod tests {
             sv,
             "value change must not bump structure_version"
         );
-        assert_eq!(tree.get_node(fps_id).text.as_deref(), Some("30 FPS"));
+        assert_eq!(tree.get_node(fps_id).unwrap().text.as_deref(), Some("30 FPS"));
     }
 }

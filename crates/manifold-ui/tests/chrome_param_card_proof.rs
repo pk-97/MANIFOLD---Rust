@@ -229,8 +229,8 @@ fn build_matches_card_structure() {
 
     // Toggle button (DFS index 5) carries "ON" and is interactive.
     let toggle = card.host.node_id(5).unwrap();
-    assert_eq!(t.get_node(toggle).node_type, UINodeType::Button);
-    assert_eq!(t.get_node(toggle).text.as_deref(), Some("ON"));
+    assert_eq!(t.get_node(toggle).unwrap().node_type, UINodeType::Button);
+    assert_eq!(t.get_node(toggle).unwrap().text.as_deref(), Some("ON"));
 
     // The DRV badge (index 4) is emitted but hidden (has_drv = false).
     let badge = card.host.node_id(4).unwrap();
@@ -238,7 +238,7 @@ fn build_matches_card_structure() {
 
     // First param's value label (index 10) reads "1.00".
     let value0 = card.host.node_id(10).unwrap();
-    assert_eq!(t.get_node(value0).text.as_deref(), Some("1.00"));
+    assert_eq!(t.get_node(value0).unwrap().text.as_deref(), Some("1.00"));
 }
 
 #[test]
@@ -264,7 +264,7 @@ fn value_change_reconciles_in_place() {
     );
     // Same node id, new text.
     assert_eq!(card.host.node_id(9), Some(slider0));
-    assert_eq!(t.get_node(value0).text.as_deref(), Some("2.50"));
+    assert_eq!(t.get_node(value0).unwrap().text.as_deref(), Some("2.50"));
 }
 
 #[test]

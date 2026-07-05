@@ -430,8 +430,9 @@ impl DropdownPanel {
         // Fade the container's own fill/border alpha by the same progress —
         // items build at full opacity (a 90ms MOTION_FAST fade on the small
         // item text is imperceptible; the container's fade is what reads).
-        if t < 0.999 {
-            let mut cs = tree.get_node(shell.container).style;
+        if t < 0.999
+            && let Some(mut cs) = tree.get_node(shell.container).map(|n| n.style)
+        {
             cs.bg_color = color::with_alpha(cs.bg_color, (cs.bg_color.a as f32 * t) as u8);
             cs.border_color = color::with_alpha(cs.border_color, (cs.border_color.a as f32 * t) as u8);
             tree.set_style(shell.container, cs);
@@ -903,7 +904,7 @@ mod tests {
 
         dd.open_context(make_items(), Vec2::new(100.0, 200.0), &mut tree);
         assert!(dd.enter_anim.is_animating(), "entrance tween starts mid-flight");
-        let container = tree.get_node(dd.root_id.unwrap());
+        let container = tree.get_node(dd.root_id.unwrap()).unwrap();
         assert!(
             container.style.bg_color.a < popup_shell::PopupStyle::DROPDOWN.bg.a,
             "container starts faded: {} vs full {}",
@@ -917,7 +918,7 @@ mod tests {
         dd.tick_enter(color::MOTION_FAST_MS);
         dd.build_nodes(&mut tree);
         assert!(!dd.enter_anim.is_animating(), "settles after a full MOTION_FAST window");
-        let container = tree.get_node(dd.root_id.unwrap());
+        let container = tree.get_node(dd.root_id.unwrap()).unwrap();
         assert_eq!(
             container.style.bg_color.a,
             popup_shell::PopupStyle::DROPDOWN.bg.a,
@@ -1176,7 +1177,7 @@ mod tests {
         dd.open_context(items, Vec2::new(100.0, 200.0), &mut tree);
 
         let checked_id = dd.item_ids[1];
-        let text = tree.get_node(checked_id).text.as_deref().unwrap();
+        let text = tree.get_node(checked_id).unwrap().text.as_deref().unwrap();
         assert!(text.starts_with('\u{2713}'));
     }
 }

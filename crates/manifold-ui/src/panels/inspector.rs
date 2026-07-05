@@ -2271,11 +2271,11 @@ mod tests {
         chrome::materialize(&mut tree, &section_card_view(), rect);
 
         assert_eq!(tree.count() as u32, before + 2, "border + inner-bg panels");
-        let border = tree.get_node(tree.id_at(before as usize));
+        let border = tree.get_node(tree.id_at(before as usize)).unwrap();
         assert!(close(border.bounds, rect), "border at the card rect");
         assert_eq!(border.style.bg_color, SECTION_CARD_BORDER);
         assert_eq!(border.style.corner_radius, SECTION_CARD_RADIUS);
-        let bg = tree.get_node(tree.id_at(before as usize + 1));
+        let bg = tree.get_node(tree.id_at(before as usize + 1)).unwrap();
         assert!(
             close(bg.bounds, Rect::new(11.0, 21.0, 198.0, 98.0)),
             "inner bg inset 1px: {:?}",
@@ -2296,7 +2296,7 @@ mod tests {
             .find(|(k, _)| *k == KEY_ADD_EFFECT_BTN)
             .map(|(_, id)| *id)
             .expect("button id recovered by key");
-        let btn = tree.get_node(btn_id);
+        let btn = tree.get_node(btn_id).unwrap();
         assert!(close(btn.bounds, rect), "button at the given rect");
         assert_eq!(btn.text.as_deref(), Some("+ Add Effect"));
         assert_eq!(btn.node_type, UINodeType::Button);
@@ -2666,7 +2666,7 @@ mod tests {
         // visited (these are the nodes the GPU would draw).
         let mut missed = Vec::new();
         for i in start..end {
-            let n = tree.get_node(tree.id_at(i));
+            let n = tree.get_node(tree.id_at(i)).unwrap();
             let drawable = n.flags.contains(UIFlags::VISIBLE)
                 && n.bounds.width > 0.0
                 && n.bounds.height > 0.0;
@@ -2765,7 +2765,7 @@ mod tests {
 
         // A scroll node's y before scrolling.
         let probe = panel.layer_chrome.first_node();
-        let y_before = tree.get_node(tree.id_at(probe)).bounds.y;
+        let y_before = tree.get_node(tree.id_at(probe)).unwrap().bounds.y;
         let off_before = panel.layer_scroll.scroll_offset();
 
         // Scroll down (negative wheel delta raises the offset). Cursor anywhere
@@ -2776,7 +2776,7 @@ mod tests {
 
         let off_after = panel.layer_scroll.scroll_offset();
         assert!(off_after > off_before, "offset should rise scrolling down");
-        let y_after = tree.get_node(tree.id_at(probe)).bounds.y;
+        let y_after = tree.get_node(tree.id_at(probe)).unwrap().bounds.y;
         // Content moved up by exactly the offset delta.
         assert!(
             ((y_after - y_before) - -(off_after - off_before)).abs() < 0.01,
@@ -2790,6 +2790,7 @@ mod tests {
         panel.build(&mut tree, &layout);
         let y_rebuilt = tree
             .get_node(tree.id_at(panel.layer_chrome.first_node()))
+            .unwrap()
             .bounds
             .y;
         assert!(
@@ -2823,7 +2824,7 @@ mod tests {
         assert!(panel.layer_scroll.max_scroll() > 0.0, "needs scrollable content");
 
         let probe = panel.layer_chrome.first_node();
-        let y_before = tree.get_node(tree.id_at(probe)).bounds.y;
+        let y_before = tree.get_node(tree.id_at(probe)).unwrap().bounds.y;
 
         // Begin a scrollbar drag on the layer thumb, then drag toward the bottom.
         let thumb = panel.layer_scroll.thumb_id().unwrap();
@@ -2836,7 +2837,7 @@ mod tests {
             panel.take_scrolled_in_place(),
             "scrollbar drag must raise the in-place signal"
         );
-        let y_after = tree.get_node(tree.id_at(probe)).bounds.y;
+        let y_after = tree.get_node(tree.id_at(probe)).unwrap().bounds.y;
         assert!(
             y_after < y_before - 1.0,
             "content must move up when dragging the thumb down (before={y_before}, after={y_after})"

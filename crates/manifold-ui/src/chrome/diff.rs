@@ -379,7 +379,7 @@ mod tests {
             sv,
             "in-place update must not bump structure_version (ids/intents stay valid)"
         );
-        assert_eq!(t.get_node(label_id).text.as_deref(), Some("2.5"));
+        assert_eq!(t.get_node(label_id).unwrap().text.as_deref(), Some("2.5"));
     }
 
     #[test]
@@ -460,6 +460,6 @@ mod tests {
         assert_eq!(t.parent_of(label), Some(col));
         assert_eq!(t.parent_of(button), Some(col));
         // Sanity: kinds match the description.
-        assert_eq!(t.get_node(button).node_type, UINodeType::Button);
+        assert_eq!(t.get_node(button).unwrap().node_type, UINodeType::Button);
     }
 }
