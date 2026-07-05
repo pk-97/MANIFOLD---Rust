@@ -275,6 +275,9 @@ pub enum PanelAction {
     ClipDetectClicked,
     /// Audio clip: remove the triggers this clip produced.
     ClipClearTriggersClicked,
+    /// Audio clip: replace the source file (file dialog → ReplaceAudioFileCommand).
+    /// Keeps detection config/routing, clears cached analysis + generated clips.
+    ClipReplaceAudioClicked,
     /// Audio clip: toggle whether instrument N is detected (re-plans from cache).
     ClipDetectInstrumentToggled(usize),
     /// Audio clip: instrument N's sensitivity changed to this 0..1 value (drag

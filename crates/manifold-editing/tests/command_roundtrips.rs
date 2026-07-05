@@ -1,12 +1,14 @@
 use manifold_core::LayerId;
+use manifold_core::audio_clip_detection::AudioClipDetection;
 use manifold_core::clip::TimelineClip;
 use manifold_core::effects::*;
 use manifold_core::layer::Layer;
+use manifold_core::percussion_analysis::{PercussionAnalysisData, PercussionTriggerType};
 use manifold_core::project::Project;
 use manifold_core::types::*;
 use manifold_core::units::Bpm;
 use manifold_core::{Beats, PresetTypeId, Seconds};
-use manifold_editing::command::Command;
+use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::commands::clip::*;
 use manifold_editing::commands::drivers::*;
 use manifold_editing::commands::effect_groups::*;
@@ -156,6 +158,131 @@ fn swap_video_undo_roundtrip() {
     assert_eq!(clip.video_clip_id, "old_video");
     assert!((clip.in_point - Seconds(0.0)).abs() < Seconds(0.001));
     assert!((clip.duration_beats - Beats(4.0)).abs() < Beats(0.001));
+}
+
+/// D6: replace swaps path/duration, resets in_point + recorded_bpm, keeps the
+/// detection config, clears the cached analysis + counts — and the composite
+/// (mirroring the inspector gesture) deletes every clip this audio clip
+/// generated (`detection_source == clip`) in the same undoable step. One undo
+/// restores the old file, in_point, BPM, cached analysis, AND the deleted
+/// generated clips.
+#[test]
+fn replace_audio_file_undo_restores_source_state_and_generated_clips() {
+    let mut project = Project::default();
+    project.settings.bpm = Bpm(120.0);
+
+    // Song lane: an audio clip with a populated detection config + cached
+    // analysis + counts, as a real Detect run would leave it.
+    project
+        .timeline
+        .insert_layer(0, Layer::new("Song".into(), LayerType::Audio, 0));
+    let mut song = TimelineClip::new_audio(
+        "old_song.wav".into(),
+        Beats(0.0),
+        Beats(16.0),
+        Seconds(1.5),
+        Seconds(30.0),
+    );
+    song.recorded_bpm = 120.0;
+    let mut detection = AudioClipDetection::new();
+    detection.config.quantize_on = false;
+    detection.analysis = Some(PercussionAnalysisData::new(
+        "old_song",
+        Bpm(120.0),
+        Vec::new(),
+        0.9,
+        None,
+        None,
+    ));
+    detection.last_counts.insert(PercussionTriggerType::Kick, 8);
+    song.audio_detection = Some(detection);
+    let song_id = song.id.clone();
+    project.timeline.layers[0].restore_clip(song);
+
+    // A trigger lane with two clips this audio clip produced.
+    project
+        .timeline
+        .insert_layer(1, Layer::new("Kick".into(), LayerType::Generator, 1));
+    let mut trig1 = TimelineClip {
+        start_beat: Beats(0.0),
+        duration_beats: Beats(0.25),
+        ..Default::default()
+    };
+    trig1.detection_source = Some(song_id.clone());
+    let mut trig2 = TimelineClip {
+        start_beat: Beats(4.0),
+        duration_beats: Beats(0.25),
+        ..Default::default()
+    };
+    trig2.detection_source = Some(song_id.clone());
+    project.timeline.layers[1].restore_clip(trig1);
+    project.timeline.layers[1].restore_clip(trig2);
+    project.timeline.rebuild_clip_lookup();
+    assert_eq!(project.timeline.layers[1].clips.len(), 2);
+
+    // Snapshot old state and build the command exactly as the inspector
+    // gesture does (ReplaceAudioFileCommand + one DeleteClipCommand per
+    // generated clip, same tag walk as the orchestrator's clear_clip_triggers).
+    let old_clip = project.timeline.find_clip_by_id(&song_id).unwrap().clone();
+    let replace = ReplaceAudioFileCommand::new(
+        song_id.clone(),
+        old_clip.audio_file_path.clone(),
+        "new_song.wav".into(),
+        old_clip.source_duration,
+        Seconds(42.0),
+        old_clip.in_point,
+        old_clip.recorded_bpm,
+        old_clip.audio_detection.clone(),
+    );
+    let mut commands: Vec<Box<dyn Command>> = vec![Box::new(replace)];
+    for layer in project.timeline.layers.iter() {
+        let layer_id = layer.layer_id.clone();
+        for c in layer
+            .clips
+            .iter()
+            .filter(|c| c.detection_source.as_ref() == Some(&song_id))
+        {
+            commands.push(Box::new(DeleteClipCommand::new(c.clone(), layer_id.clone())));
+        }
+    }
+    assert_eq!(commands.len(), 3, "replace + 2 generated-clip deletes");
+
+    let mut cmd = CompositeCommand::new(commands, "Replace Audio File".to_string());
+    cmd.execute(&mut project);
+
+    let clip = project.timeline.find_clip_by_id(&song_id).unwrap();
+    assert_eq!(clip.audio_file_path, "new_song.wav");
+    assert_eq!(clip.source_duration, Seconds(42.0));
+    assert_eq!(clip.in_point, Seconds::ZERO);
+    assert_eq!(clip.recorded_bpm, 0.0);
+    // start_beat / duration_beats untouched by the replace.
+    assert_eq!(clip.start_beat, Beats(0.0));
+    assert_eq!(clip.duration_beats, Beats(16.0));
+    let det = clip.audio_detection.as_ref().expect("config survives replace");
+    assert!(!det.config.quantize_on, "config kept as-is");
+    assert!(det.analysis.is_none(), "stale analysis cleared");
+    assert!(det.last_counts.is_empty(), "stale counts cleared");
+    assert!(
+        project.timeline.layers[1].clips.is_empty(),
+        "generated clips deleted"
+    );
+
+    cmd.undo(&mut project);
+
+    let clip = project.timeline.find_clip_by_id(&song_id).unwrap();
+    assert_eq!(clip.audio_file_path, "old_song.wav");
+    assert_eq!(clip.source_duration, Seconds(30.0));
+    assert_eq!(clip.in_point, Seconds(1.5));
+    assert_eq!(clip.recorded_bpm, 120.0);
+    let det = clip.audio_detection.as_ref().expect("detection restored");
+    assert!(!det.config.quantize_on);
+    assert!(det.analysis.is_some(), "cached analysis restored");
+    assert_eq!(det.last_counts.get(&PercussionTriggerType::Kick), Some(&8));
+    assert_eq!(
+        project.timeline.layers[1].clips.len(),
+        2,
+        "deleted generated clips restored"
+    );
 }
 
 #[test]
