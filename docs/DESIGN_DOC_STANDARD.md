@@ -254,6 +254,14 @@ Written here once so docs don't repeat it; every doc's header points here.
    landing report states the level reached (§10), ends with a ≤2-minute
    click-script for Peter (numbered steps, expected observation per step), and
    appends one line per unclosed gap to `docs/VERIFICATION_DEBT.md`.
+9. **Landing updates the doc (added 2026-07-05 — Peter's rule).** A landing that
+   completes, starts, or blocks any phase of a design updates that design doc's
+   **Status:** line and the affected phase markers in the same landing, before
+   the push; the landing report quotes the new status line verbatim. A doc
+   claiming "not built" over shipped code is how workers rebuild existing work —
+   the 2026-07-05 baseline triage found ~16 such docs, including
+   AUTOMATION_LANES_DESIGN still reading "Not implemented" after it shipped.
+   Status truth is part of the definition of landed, not follow-up hygiene.
 
 ## 9. Hardening levels (for auditing existing docs)
 

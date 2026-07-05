@@ -1,6 +1,6 @@
 # Param Manifest — id-keyed per-instance parameter storage
 
-**Status:** APPROVED design, not built · 2026-07-05 · Fable 5
+**Status:** IN PROGRESS — **P1 SHIPPED @ `c7ae831f` (2026-07-05)**: V1.4 id-keyed wire + quarantined migration landed, positional arms deleted from effects.rs; P2–P5 remain (P2 = the compile-driven storage swap, strong-model session). Baseline-reviewed 2026-07-05: the §1 resolver anchors have drifted ~−390 lines in effects.rs post-P1 — trust the §1 re-derivation commands, not the baked numbers. · approved 2026-07-05 · Fable 5
 **Prerequisites:** none
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 before starting any phase.
 

@@ -2,7 +2,7 @@
 
 # Audio Clip Detection — Design Doc
 
-Status: **design only.** Branch: TBD (off current HEAD).
+Status: **P0 model SHIPPED** (verified in-tree 2026-07-05 baseline review: `AudioClipDetection` + `DetectionConfig` live in `manifold-core/src/audio_clip_detection.rs`, and `Project.percussion_import` is deleted from core — this doc previously said "design only"); P1+ pending. **Open fork flagged for Peter (baseline review):** §10's "a Detect on clip B while A is running queues or rejects" has no decided default.
 
 Detection becomes a property of the audio clip. Drop an audio file → it's an audio clip on an audio layer (already true). Select it → the inspector shows how it's heard and where its triggers go. Tweak, hit **Detect**, the trigger clips appear on their target layers. This is the studio half of the percussion pipeline: the clip owns its analysis, the way an Ableton clip owns its warp/quantize.
 

@@ -2,7 +2,7 @@
 
 <!-- index: Implementation spec for node groups: the flattener as a pure EffectGraphDef transform, boundary nodes, constraints. The authoritative spec behind GROUPING_GRAPHS. -->
 
-Status: **planned, not started.** Authored 2026-06-01 for a later ultracode build session.
+Status: **backend SHIPPED** (verified in-tree 2026-07-05 baseline review: `flatten.rs` `flatten_groups`, the `GroupDef` schema in `effect_graph_def.rs`, and loader integration in `graph_loader.rs` are all live — this doc previously still said "planned, not started"). UI phases are tracked separately in `NODE_GROUPS_UI_DESIGN.md` (A–C shipped, E pending there). Authored 2026-06-01.
 Scope owner: Peter. Companion docs: `NODE_GRAPH_SYSTEM.md`, `EFFECT_RUNTIME_UNIFICATION.md`,
 `PRIMITIVE_LIBRARY_DESIGN.md`.
 

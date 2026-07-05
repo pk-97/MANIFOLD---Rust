@@ -1,5 +1,12 @@
 # Clip Thumbnails (SOTA §24 5c) — Design
 
+**Status:** base system ALL PHASES SHIPPED (per the in-body status section); the
+appended Filmstrip evolution is PARTIAL — only the P5 box-downsample landed, display/
+capture/persistence phases 1–4 not started (`render_clip_thumbnail` not yet retired).
+Header added 2026-07-05 baseline review (the doc had no status line). Carried
+verification debt: the cross-thread IOSurface visual path needs eyeballing in the
+running app.
+
 Generator/video clips on the timeline should show what they *look like*, not a flat
 colour. This is the implementation contract for that.
 
