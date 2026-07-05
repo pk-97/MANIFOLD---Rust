@@ -1,0 +1,29 @@
+[
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": { "Surface": { "surface": "timeline_clips", "kind": "clip", "label": "Plasma 1" } },
+      "check": { "RectWithin": { "x": 230.0, "y": 618.08, "width": 1152.0, "height": 188.0 } }
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Surface": { "surface": "timeline_clips", "kind": "clip", "label": "Plasma 1" } },
+      "gesture": {
+        "Drag": {
+          "to": { "Point": { "x": 902.0, "y": 712.08 } },
+          "steps": 6
+        }
+      }
+    }
+  },
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": { "Surface": { "surface": "timeline_clips", "kind": "clip", "label": "Plasma 1" } },
+      "check": { "RectWithin": { "x": 314.0, "y": 618.08, "width": 1152.0, "height": 188.0 } }
+    }
+  }
+]

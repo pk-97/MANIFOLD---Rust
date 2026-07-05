@@ -1,0 +1,24 @@
+[
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "GLOW", "type": "Label" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "PLASMA", "type": "Button" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "PLASMA", "type": "Label" } },
+      "check": "Exists"
+    }
+  },
+  "Snapshot",
+  "Dump"
+]

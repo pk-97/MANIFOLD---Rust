@@ -1,14 +1,16 @@
 //! Drive interaction through the REAL input host, then the caller re-syncs and
-//! re-renders. A `select:<layer>` resolves the target header's hit rect from the
-//! built tree, synthesizes a real pointer Down+Up (`UIRoot::pointer_event` →
-//! `UIInputSystem::process_pointer`), drains the real `UIEvent`s, dispatches them
-//! through the real `LayerHeaderPanel` (`LayerHeaderPanel::handle_event` →
-//! `PanelAction::LayerClicked`), and applies the resulting selection via the same
-//! `UIState::select_layer` the app bridge calls. No faked state.
+//! re-renders. `select:<layer>` is sugar (`UI_AUTOMATION_DESIGN.md` §6) for a
+//! one-step `AutomationAction::Pointer { target: Query{text}, gesture: Click }`
+//! compiled to the §4 core (`super::script::click_by_text`): resolve the
+//! target header's rect from the built tree, synthesize a real pointer
+//! Down+Up (`UIRoot::pointer_event` → `UIInputSystem::process_pointer`),
+//! drain the real `UIEvent`s, and dispatch through the real panel/bridge path
+//! — the exact same seam the `--script` runner uses, not a parallel one. No
+//! faked state, and no fallback on a miss (D6) — a miss is returned as an
+//! `Err` and surfaced loudly by the caller (`mod.rs`'s `--interact` branch).
 //! See `docs/HEADLESS_UI_HARNESS.md` §2.
 
 use manifold_core::{Beats, ClipId, LayerId};
-use manifold_ui::{PanelAction, PointerAction, UIState, Vec2};
 
 use super::fixtures::SceneData;
 use crate::ui_root::UIRoot;
@@ -568,6 +570,14 @@ fn delete_layer(data: &mut SceneData, target: &str) -> String {
     format!("delete -> removed '{target}' and any children; {before} -> {after} layers")
 }
 
+/// `select:<layer_id>` sugar (§6): looks up the layer's display name (the
+/// CLI's existing `select:<id>` contract, unchanged) and compiles to a
+/// one-step `Pointer { target: Query{text}, gesture: Click }` against the §4
+/// core (`super::script::click_by_text`) — the same resolver + gesture
+/// dispatch the `--script` runner uses, not a parallel reimplementation. A
+/// synthesized-click miss is no longer silently patched over with an id
+/// lookup (D6, the seam this phase removes): it comes back as `Err` and the
+/// caller (`mod.rs`'s `--interact` branch) fails the run loudly with the dump.
 fn select_layer(ui: &mut UIRoot, data: &mut SceneData, target: &str) -> String {
     let Some(idx) = data
         .project
@@ -578,46 +588,19 @@ fn select_layer(ui: &mut UIRoot, data: &mut SceneData, target: &str) -> String {
     else {
         return format!("select: no layer with id '{target}'");
     };
+    let name = data.project.timeline.layers[idx].name.clone();
 
-    // Real hit position: the centre of the target header's name node.
-    let node = ui.layer_headers.name_node_id(idx);
-    let rect = ui.layer_headers.get_node_bounds(&ui.tree, node);
-    let pos = Vec2::new(rect.x + rect.width * 0.5, rect.y + rect.height * 0.5);
-
-    // Drive a real click through the production input path.
-    ui.pointer_event(pos, PointerAction::Down, 1.0);
-    ui.pointer_event(pos, PointerAction::Up, 1.0);
-
-    // Drain the real events and dispatch through the real panel.
-    let events = ui.input.drain_events();
-    let mut clicked = None;
-    for ev in &events {
-        for action in ui.layer_headers.handle_event(ev, &ui.tree) {
-            if let PanelAction::LayerClicked(i, _mods) = action {
-                clicked = Some(i);
-            }
+    match super::script::click_by_text(ui, data, &name) {
+        // `apply_panel_actions` (script.rs) already set `data.active` from the
+        // real `PanelAction::LayerClicked` the click produced — `idx` (the
+        // pre-click lookup) is reported here only for the human-readable
+        // description, not as a stand-in for it.
+        Ok(()) => {
+            format!("select -> layer {idx} '{name}' (real click dispatched through the automation core)")
         }
+        Err(e) => format!(
+            "select: MISS — synthesized click on '{name}' did not resolve ({e}); the real input \
+             path was NOT exercised and no fallback selection was applied"
+        ),
     }
-    let hit = clicked.is_some();
-    if !hit {
-        eprintln!(
-            "ui-snap: WARNING — synthesized click missed the '{target}' header; the real input \
-             path was NOT exercised. Falling back to id match so the render still updates."
-        );
-    }
-    let i = clicked.unwrap_or(idx);
-
-    // Apply selection exactly as the bridge does on LayerClicked.
-    let lid = data.project.timeline.layers[i].layer_id.clone();
-    let name = data.project.timeline.layers[i].name.clone();
-    let mut sel = UIState::default();
-    sel.select_layer(lid);
-    data.selection = sel;
-    data.active = Some(i);
-
-    format!(
-        "select -> layer {i} '{name}' (click {}, {} event(s) dispatched)",
-        if hit { "hit the header" } else { "missed; fell back to id match" },
-        events.len(),
-    )
 }
