@@ -18,6 +18,11 @@ or human can read it, and it needs no external tool.
 - Severity is about the **instrument on stage**, not code aesthetics: `HIGH` = wrong output
   or silent data corruption a performer would hit; `MED` = reachable but narrow; `LOW` =
   latent / cosmetic / needs an unusual setup.
+- **Escape analysis (added 2026-07-05):** a bug found in the app after an orchestrated
+  landing carries one extra line in its entry — `Escaped: <wave/branch> · caught-by:
+  <brief | gate | demo | held-out input | review>` — per `DESIGN_DOC_STANDARD.md` §10.
+  Over time this is the empirical record of which orchestration stage leaks, so process
+  fixes target the leaking stage instead of guessing.
 
 ---
 
@@ -263,7 +268,7 @@ observe at repro.
 and the layer tracks it; assembler emits curated performance bindings. Not per-consumer
 fallbacks.
 
-### BUG-017 — `docs_index_is_in_sync_with_docs_dir` red on main: two design docs never regenerated the index — LOW
+### BUG-017 — `docs_index_is_in_sync_with_docs_dir` red on main: two design docs never regenerated the index — FIXED 2026-07-05
 
 **Symptom** — found 2026-07-04 running the full workspace sweep for the automation-P4
 landing (unrelated to that work — pre-existing on origin/main before the landing branch
@@ -280,6 +285,9 @@ touched anything, confirmed via `git show 90ab8531:docs/README.md`).
 docs concurrently — regenerating now risked going stale again within the hour. Whichever
 session next touches `docs/` and finds the tree quiet should run the generator and close
 this out.
+
+**Fixed 2026-07-05** — regenerated while adding `VERIFICATION_DEBT.md` (orchestration-quality
+pass); `cargo test -p manifold-core --test docs_index_sync` green, 103 docs indexed.
 
 ### BUG-018 — `node_graph::catalog_gen::tests::regenerates_in_sync` red on main: `docs/node_catalog.json` stale against the node registry — LOW
 
