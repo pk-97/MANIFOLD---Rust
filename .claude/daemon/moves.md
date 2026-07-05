@@ -209,12 +209,15 @@ tool call, so it's neither a clean classifier signature nor hook-catchable yet.)
   or a declaration that a design question or blocker is resolved ("I just
   resolved it", "turns out", "the way this works is"), where the account's
   specifics — names, mechanisms, parameters, defaults — appear for the first
-  time in that same text, and the LEDGER shows no read, search, or run of the
-  described artifact within the window. Do not flag when the text cites files
-  or symbols the LEDGER shows being examined, or when it explicitly marks
-  itself as a guess, proposal, or unverified ("I think", "proposal:", "not
-  checked"). The tell is authority without provenance: the description is
-  stated as fact and nothing in the window is where it could have come from.
+  time in that same text, and neither the LEDGER nor SESSION FACTS shows a
+  read, search, or run of the described artifact. Do not flag when the text
+  cites files or symbols the LEDGER or SESSION FACTS shows being examined —
+  for SESSION FACTS the "read <path>" clause must name the artifact the
+  account describes; an unrelated stale read is not provenance. Do not flag
+  when the text explicitly marks itself as a guess, proposal, or unverified
+  ("I think", "proposal:", "not checked"). The tell is authority without
+  provenance: the description is stated as fact and nothing in view is where
+  it could have come from.
 - **cooldown:** standard
 - **payload:**
 > That account exists only in this message so far — nothing in view checked it.
