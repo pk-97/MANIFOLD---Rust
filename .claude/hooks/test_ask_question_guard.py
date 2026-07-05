@@ -37,6 +37,27 @@ import valve  # noqa: E402 — same cached module hook.main()'s inner `import va
 # is a fire-and-forget side effect the hook never branches on.
 valve.ensure_observer = lambda *a, **kw: None
 
+# Neutralize the other two real-world side effects (module-attribute
+# patching works — hook.main()'s inner `import common` / `import valve` hit
+# these same cached modules). Without this, any question that doesn't match
+# the regex tier falls through to the semantic tier and makes a REAL
+# `claude -p` Haiku call, and every verdict (regex or semantic) writes a
+# REAL record into live telemetry.jsonl — this is exactly the class of bug
+# that put fake session_id s3/s4/s5 records into telemetry.jsonl on a real
+# test run (2026-07-05 day-one log review).
+TELEMETRY = []
+valve.append_telemetry = lambda rec: TELEMETRY.append(rec)
+
+CLASSIFIER_CALLS = []
+
+
+def _default_classifier(system_prompt, window_text, *a, **kw):
+    CLASSIFIER_CALLS.append((system_prompt, window_text))
+    return {"gate": "clear", "confidence": 0.95}
+
+
+common.call_classifier = _default_classifier
+
 PASS, FAIL = [], []
 
 
@@ -257,8 +278,87 @@ def test_hook_malformed_stdin_fails_open():
 
 
 def test_hook_missing_tool_input_fails_open():
+    calls_before = len(CLASSIFIER_CALLS)
     out = run_hook({"session_id": "s5", "transcript_path": "/tmp/none.jsonl"})
     check("missing tool_input fails open", out == "", out)
+    check("missing tool_input makes zero classifier calls", len(CLASSIFIER_CALLS) == calls_before, CLASSIFIER_CALLS[calls_before:])
+
+
+def test_hook_empty_questions_fails_open_with_no_classifier_call():
+    def run(_td):
+        calls_before = len(CLASSIFIER_CALLS)
+        for empty in (None, [], ""):
+            out = run_hook({"session_id": "s-empty", "transcript_path": "/tmp/none.jsonl", "tool_input": {"questions": empty}})
+            check(f"empty questions {empty!r} fails open", out == "", out)
+        check("empty questions never reach the classifier", len(CLASSIFIER_CALLS) == calls_before, CLASSIFIER_CALLS[calls_before:])
+
+    with_bounce_dir(run)
+
+
+def test_regex_denial_records_unified_telemetry():
+    def run(_td):
+        del TELEMETRY[:]
+        out = run_hook({"session_id": "s6", "transcript_path": "/tmp/none.jsonl", "tool_input": {"questions": INCIDENT_QUESTIONS}})
+        check("regex-tier denial still denies", out != "", out)
+        recs = [r for r in TELEMETRY if r.get("event") == "ask_gate"]
+        check("regex-tier denial writes exactly one ask_gate record", len(recs) == 1, recs)
+        if recs:
+            r = recs[0]
+            check("regex record tier is 'regex'", r.get("tier") == "regex", r)
+            check("regex record gate is 'shortcut-fork'", r.get("gate") == "shortcut-fork", r)
+            check("regex record confidence is null", r.get("confidence") is None, r)
+            check("regex record error is null", r.get("error") is None, r)
+            check("regex record denied is true", r.get("denied") is True, r)
+
+    with_bounce_dir(run)
+
+
+def test_semantic_decidable_denies_and_records_telemetry():
+    def run(_td):
+        def fake_decidable(system_prompt, window_text, *a, **kw):
+            return {"gate": "decidable", "confidence": 0.9, "evidence": "you greenlit this earlier"}
+
+        del TELEMETRY[:]
+        orig = common.call_classifier
+        common.call_classifier = fake_decidable
+        try:
+            out = run_hook({"session_id": "s7", "transcript_path": "/tmp/none.jsonl", "tool_input": {"questions": DESTRUCTIVE_CONFIRM_QUESTIONS}})
+        finally:
+            common.call_classifier = orig
+        check("semantic decidable@0.9 denies", out != "", out)
+        if out:
+            reason = json.loads(out).get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
+            check(
+                "semantic deny reason is the pre-authored decidable reason",
+                reason.startswith(hook.ASK_GATE_REASONS["decidable"]),
+                reason,
+            )
+        recs = [r for r in TELEMETRY if r.get("event") == "ask_gate"]
+        check("semantic denial writes exactly one ask_gate record", len(recs) == 1, recs)
+        if recs:
+            r = recs[0]
+            check("semantic record tier is 'semantic'", r.get("tier") == "semantic", r)
+            check("semantic record gate is 'decidable'", r.get("gate") == "decidable", r)
+            check("semantic record confidence is 0.9", r.get("confidence") == 0.9, r)
+            check("semantic record denied is true", r.get("denied") is True, r)
+
+    with_bounce_dir(run)
+
+
+def test_semantic_clear_records_telemetry_undenied():
+    def run(_td):
+        del TELEMETRY[:]
+        out = run_hook({"session_id": "s8", "transcript_path": "/tmp/none.jsonl", "tool_input": {"questions": TASTE_CALL_QUESTIONS}})
+        check("semantic clear verdict does not deny", out == "", out)
+        recs = [r for r in TELEMETRY if r.get("event") == "ask_gate"]
+        check("semantic clear verdict still writes exactly one ask_gate record", len(recs) == 1, recs)
+        if recs:
+            r = recs[0]
+            check("clear record tier is 'semantic'", r.get("tier") == "semantic", r)
+            check("clear record gate is 'clear'", r.get("gate") == "clear", r)
+            check("clear record denied is false", r.get("denied") is False, r)
+
+    with_bounce_dir(run)
 
 
 def main():
@@ -277,6 +377,10 @@ def main():
         test_hook_no_output_for_clean_question,
         test_hook_malformed_stdin_fails_open,
         test_hook_missing_tool_input_fails_open,
+        test_hook_empty_questions_fails_open_with_no_classifier_call,
+        test_regex_denial_records_unified_telemetry,
+        test_semantic_decidable_denies_and_records_telemetry,
+        test_semantic_clear_records_telemetry_undenied,
     ]
     for t in tests:
         t()
