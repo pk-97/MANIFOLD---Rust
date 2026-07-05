@@ -283,6 +283,12 @@ pub fn render_graph_editor_to_png(
     tex_h: u32,
     scale: f32,
     path: &str,
+    // UI_AUTOMATION_DESIGN.md P1: when `Some`, write the extended tree dump
+    // (`super::dump::dump_tree_ex`) here — the real card-lane/inspector tree
+    // (`editor_ui.tree`, widget/name-bearing) plus the graph canvas'
+    // `HitTargets` enumeration as a `custom_surfaces` entry. `None` skips the
+    // dump entirely (unchanged PNG-only behavior).
+    dump_path: Option<&std::path::Path>,
 ) {
     use manifold_ui::draw::Painter;
     use manifold_ui::graph_canvas::{GraphCanvas, Rect as CanvasRect};
@@ -401,6 +407,16 @@ pub fn render_graph_editor_to_png(
     canvas.set_snapshot(snapshot);
     canvas.apply_pending_fit(viewport);
     let node_textures = render_graph_node_textures(&device, def);
+
+    if let Some(dump_path) = dump_path {
+        use manifold_ui::graph_canvas::GraphCanvasTargets;
+        let canvas_targets = GraphCanvasTargets { canvas: &canvas, viewport };
+        let surfaces: [&dyn manifold_ui::hit_targets::HitTargets; 1] = [&canvas_targets];
+        let json = super::dump::dump_tree_ex(&editor_ui.tree, &surfaces);
+        std::fs::write(dump_path, serde_json::to_string_pretty(&json).expect("serialize dump"))
+            .expect("write editor tree json");
+        println!("ui-snap: wrote {}", dump_path.display());
+    }
 
     {
         let mut enc = device.create_encoder("ui-snap-editor-clear");

@@ -55,7 +55,7 @@ pub fn run(args: &[String]) {
             render_ui_scene(s, want_dump, false, want_thumbs, None, None);
         }
         run_graph_preset("Mirror");
-        run_editor_preset("FluidSim2D");
+        run_editor_preset("FluidSim2D", want_dump);
         return;
     }
 
@@ -72,7 +72,7 @@ pub fn run(args: &[String]) {
     // only (see `fixtures::generator_editor_fixture`).
     if scene == "editor" {
         let preset = arg_value(args, "--preset").unwrap_or_else(|| "FluidSim2D".to_string());
-        run_editor_preset(&preset);
+        run_editor_preset(&preset, want_dump);
         return;
     }
 
@@ -224,7 +224,7 @@ fn run_graph_preset(preset: &str) {
 /// for one generator preset. Builds a one-layer fixture `Project` carrying the
 /// preset (`fixtures::generator_editor_fixture`) so the right lane's card is the
 /// real `ParamCardConfig`, not synthesized — see `render::render_graph_editor_to_png`.
-fn run_editor_preset(preset: &str) {
+fn run_editor_preset(preset: &str, want_dump: bool) {
     let pid = manifold_core::PresetTypeId::from_string(preset.to_string());
     let Some(view) = manifold_renderer::node_graph::loaded_preset_view_by_id(&pid) else {
         eprintln!(
@@ -261,6 +261,7 @@ fn run_editor_preset(preset: &str) {
         tex_h,
         SCALE,
         png.to_str().expect("utf-8 path"),
+        want_dump.then(|| dir.join("editor.tree.json")).as_deref(),
     );
     println!("ui-snap: wrote {} ({preset})", png.display());
 }
@@ -328,7 +329,19 @@ fn render_and_dump(
     println!("ui-snap: wrote {}", png.display());
 
     if want_dump {
-        let json = dump::dump_tree(&ui.tree);
+        // Custom-surface targets (UI_AUTOMATION_DESIGN.md D5/§5): the same
+        // live geometry `render_ui_to_png` paints from and `ClipHitTester` /
+        // `hit_test_automation` hit-test against — read once here so the dump
+        // can never disagree with what's on screen or clickable.
+        let mut clip_rects = Vec::new();
+        ui.viewport.visible_clip_rects(&mut clip_rects);
+        let clip_targets = manifold_ui::clip_hit_tester::ClipHitTargets(&clip_rects);
+        let automation_lanes = ui.viewport.automation_lane_screens(automation_latched);
+        let automation_targets = manifold_ui::automation_hit_tester::AutomationHitTargets(&automation_lanes);
+        let surfaces: Vec<&dyn manifold_ui::hit_targets::HitTargets> =
+            vec![&clip_targets, &automation_targets];
+
+        let json = dump::dump_tree_ex(&ui.tree, &surfaces);
         let json_path = dir.join(format!("{scene}{suffix}.tree.json"));
         std::fs::write(&json_path, serde_json::to_string_pretty(&json).expect("serialize dump"))
             .expect("write tree json");

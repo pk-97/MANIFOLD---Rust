@@ -1716,3 +1716,41 @@ fn connecting_a_wire_end_to_end_fires_the_flow_pulse_with_real_port_geometry() {
     assert!((canvas.wire_flow_pulse_to.0 - in_sx).abs() < 0.01);
     assert!((canvas.wire_flow_pulse_to.1 - in_sy).abs() < 0.01);
 }
+
+// ── HitTargets (UI_AUTOMATION_DESIGN.md P1) ──────────────────────
+
+#[test]
+fn graph_canvas_targets_enumerates_nodes_ports_and_wires_with_payload_ids() {
+    use super::hit::GraphCanvasTargets;
+    use crate::hit_targets::HitTargets;
+
+    let snap = GraphSnapshot {
+        nodes: vec![
+            node(0, "system.source", Some("source")),
+            node(2, "system.final_output", Some("final")),
+        ],
+        wires: vec![wire(0, "out", 2, "in")],
+        outer_routings: Vec::new(),
+    };
+    let mut canvas = GraphCanvas::new();
+    canvas.set_snapshot(&snap);
+    let viewport = Rect::new(0.0, 0.0, 1000.0, 800.0);
+    canvas.apply_pending_fit(viewport);
+
+    let targets = GraphCanvasTargets { canvas: &canvas, viewport };
+    assert_eq!(targets.surface_id(), "graph_canvas");
+    let mut out = Vec::new();
+    targets.enumerate(&mut out);
+
+    let nodes: Vec<_> = out.iter().filter(|e| e.kind == "node").collect();
+    assert_eq!(nodes.len(), 2, "one entry per node hit_test can return");
+    assert!(nodes.iter().any(|n| n.payload == "scope=/node=0"));
+    assert!(nodes.iter().any(|n| n.payload == "scope=/node=2"));
+
+    let ports: Vec<_> = out.iter().filter(|e| e.kind == "port").collect();
+    assert!(!ports.is_empty(), "every node's in/out sockets enumerate");
+
+    let wires: Vec<_> = out.iter().filter(|e| e.kind == "wire").collect();
+    assert_eq!(wires.len(), 1);
+    assert_eq!(wires[0].payload, "scope=/from=0:out/to=2:in");
+}

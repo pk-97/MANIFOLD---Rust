@@ -6,7 +6,8 @@
 
 use crate::coordinate_mapper::CoordinateMapper;
 use crate::hit::Span;
-use crate::panels::viewport::{ViewportClip, zone_widths};
+use crate::hit_targets::{HitTargetEntry, HitTargets};
+use crate::panels::viewport::{ClipScreenRect, ViewportClip, zone_widths};
 use manifold_foundation::ClipId;
 
 // ── Data Types ──────────────────────────────────────────────────
@@ -212,6 +213,32 @@ fn neighbor_gap_px(clips: &[ViewportClip], self_idx: usize, ppb: f32) -> (f32, f
         }
     }
     (left_gap, right_gap)
+}
+
+// ── Automation surface (UI_AUTOMATION_DESIGN.md D5/§5) ───────────
+
+/// [`HitTargets`] over the timeline's currently-visible clips — the same
+/// [`ClipScreenRect`] list `ClipHitTester::hit_test` and the clip painter both
+/// read (`TimelineViewportPanel::visible_clip_rects`), so an enumerated clip's
+/// rect can never disagree with what's on screen or what's clickable.
+pub struct ClipHitTargets<'a>(pub &'a [ClipScreenRect]);
+
+impl HitTargets for ClipHitTargets<'_> {
+    fn surface_id(&self) -> &'static str {
+        "timeline_clips"
+    }
+
+    fn enumerate(&self, out: &mut Vec<HitTargetEntry>) {
+        out.reserve(self.0.len());
+        for cr in self.0 {
+            out.push(HitTargetEntry {
+                kind: "clip",
+                label: cr.name.to_string(),
+                rect: cr.rect,
+                payload: cr.clip_id.as_str().to_string(),
+            });
+        }
+    }
 }
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -571,5 +598,43 @@ mod tests {
         );
         assert!(!result.contains(&ClipId::new("c1"))); // group layer skipped
         assert!(result.contains(&ClipId::new("c2"))); // non-group collected
+    }
+
+    // ── HitTargets (UI_AUTOMATION_DESIGN.md P1) ──────────────────────
+
+    fn make_screen_rect(id: &str, name: &str, rect: crate::node::Rect) -> ClipScreenRect {
+        ClipScreenRect {
+            clip_id: ClipId::new(id),
+            layer_index: 0,
+            rect,
+            base_color: Color32::new(100, 100, 100, 255),
+            name: name.into(),
+            start_beat: Beats::from_f32(0.0),
+            end_beat: Beats::from_f32(4.0),
+            is_muted: false,
+            is_locked: false,
+            is_generator: false,
+            is_audio: false,
+            waveform: None,
+            in_point_seconds: 0.0,
+            warped_secs_per_beat: 0.0,
+        }
+    }
+
+    #[test]
+    fn clip_hit_targets_enumerates_every_visible_clip_with_a_payload_id() {
+        let rects = vec![
+            make_screen_rect("c1", "EXILE", crate::node::Rect::new(0.0, 0.0, 400.0, 60.0)),
+            make_screen_rect("c2", "RETURN", crate::node::Rect::new(400.0, 0.0, 300.0, 60.0)),
+        ];
+        let targets = ClipHitTargets(&rects);
+        assert_eq!(targets.surface_id(), "timeline_clips");
+        let mut out = Vec::new();
+        targets.enumerate(&mut out);
+        assert_eq!(out.len(), 2, "one entry per visible clip");
+        assert_eq!(out[0].kind, "clip");
+        assert_eq!(out[0].label, "EXILE");
+        assert_eq!(out[0].payload, "c1");
+        assert_eq!(out[1].payload, "c2");
     }
 }
