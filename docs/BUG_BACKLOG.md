@@ -28,6 +28,31 @@ or human can read it, and it needs no external tool.
 
 ## Open
 
+### BUG-036 — LFO on an imported-glb generator's card param is dead after project reload; re-importing the same .glb revives it — MED
+
+**Symptom** (Peter, 2026-07-06, `~/Downloads/meshImportTests.manifold`) — a project saved
+with a glb auto-built graph (the `assemble_import_graph` door) reloads fine visually, but
+an LFO bound to one of its card params (Camera Orbit) doesn't run. Deleting the layer and
+re-creating it by dropping the SAME .glb makes the identical LFO run. So the modulation
+path works against a freshly-imported instance and not against the deserialized one.
+
+**Root cause** — unknown, not investigated yet. Suspects, ordered: (1) the param-storage
+redesign landed 2026-07-05 (P1–P4 + P5 code-complete) — a modulation binding that resolves
+by param identity could miss against a V-old serialized manifest until re-save; the known
+RED `expose_mirror` test (user_param_bindings_e2e) from that landing is in the same
+neighborhood; (2) imported presets' card params/bindings live on the def's
+`preset_metadata` (gltf_import.rs:678-693) — a reload path that rebuilds the runtime
+without re-seeding `exposed_params`/bindings would leave the LFO writing to a param no
+binding applies; (3) LFO target keyed by something instance-scoped (node doc id) that
+changes between import and reload.
+
+**Repro** — load `meshImportTests.manifold`, press play: Camera Orbit LFO inert. Delete
+layer, drag the .glb back in, rebind: runs.
+
+**Fix shape** — unknown until the binding-resolution path is compared import-vs-reload.
+Start by diffing `Layer.gen_params` + modulation bindings between the saved project and a
+fresh import of the same file.
+
 ### BUG-035 — 3D scenes hitch when a camera/light param is animated — MED — re-encode hypothesis MEASURED AND REFUTED 2026-07-06; cause is app-side, still open
 
 **Measurement (2026-07-06, Fable)** — `freeze-profile scene <glb> [param] [frames]` (new bench
@@ -56,9 +81,20 @@ evaluator on the content thread; UI redraw driven by visibly-changing values (in
 sliders, graph-editor canvas + thumbnail dump_set when the editor is watching); content↔UI
 GPU contention (see `ui-present-content-gpu-contention` memory); present/pacing path.
 
-**Next oracle** — in-app, LFO on vs off on a real glp scene, reading a per-frame breakdown
-of the content frame (not the chain — the chain is exonerated). Blocked on usable in-app
-instrumentation: the `profiling` feature is rotted (BUG-029, three newtype fix sites).
+**In-app profiler sessions (2026-07-06, Peter, `meshImportTests.manifold`)** — the hitch is
+now precisely characterized: baseline content frame ~0.09ms, with **isolated single frames
+of ~59ms (58.6/58.7/59.2), entirely inside `render_content_ms`**, cadence roughly one per
+5–6s, present in BOTH the static and the LFO run. LFO/animation is fully exonerated as a
+cause (the original framing was wrong — a static scene hitches identically; you just see it
+when something moves). The quantized ~59ms magnitude + slow cadence says periodic
+maintenance work or a blocking wait inside `render_content_native`, not render cost.
+Candidate: `pool.prune_stale(300)` every 300 frames (content_pipeline.rs:1584-1595) — frame
+indices of the spikes (900, 1233, 3630) are ≡ 0/33/30 mod 300, consistent if the pool's
+counter is offset from the profiler's frame index. Unproven.
+
+**Next oracle** — spike-triggered sub-phase trace inside `render_content_native`
+(`MANIFOLD_RENDER_TRACE=1`): per-section timers, printed only when the frame exceeds 20ms.
+One more short session names the 59ms exactly.
 
 **Symptom** — animating a 3D scene's camera or sun/light via LFO produces a slight, visible
 hitch — an uneven frame spike, not a clean framerate drop. Reported by Peter 2026-07-05 on

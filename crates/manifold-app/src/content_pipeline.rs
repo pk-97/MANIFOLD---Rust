@@ -1546,6 +1546,33 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // the frame; the readback runs after the compositor CB commits.
         let pending_dump = self.pending_graph_dump.take();
         let native_device = self.native_device.as_ref().unwrap();
+
+        // Spike-triggered sub-phase trace (BUG-035): with MANIFOLD_RENDER_TRACE=1,
+        // any content frame over 20ms prints a per-section breakdown to stderr.
+        // Off: one bool check per section. The profiler's render_content_ms is a
+        // single lump; this names which section a rare ~59ms spike lives in.
+        struct RenderTrace {
+            on: bool,
+            last: std::time::Instant,
+            marks: Vec<(&'static str, f64)>,
+        }
+        impl RenderTrace {
+            #[inline]
+            fn mark(&mut self, label: &'static str) {
+                if self.on {
+                    let now = std::time::Instant::now();
+                    self.marks
+                        .push((label, now.duration_since(self.last).as_secs_f64() * 1000.0));
+                    self.last = now;
+                }
+            }
+        }
+        static TRACE_ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let mut rtrace = RenderTrace {
+            on: *TRACE_ON.get_or_init(|| std::env::var_os("MANIFOLD_RENDER_TRACE").is_some()),
+            last: std::time::Instant::now(),
+            marks: Vec::new(),
+        };
         // Xcode capture boundary: one content frame. The device capture scope
         // brackets everything committed below (generators + compositor) so the
         // camera button grabs the full content workload, not just the UI pass.
@@ -1594,6 +1621,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 pool.prune_stale(300);
             }
         }
+
+        rtrace.mark("pool_prune");
 
         // ── Opaque occlusion (blend-skip only) ────────────────────────
         // The topmost fully-opaque top-level layer replaces every pixel
@@ -1760,6 +1789,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             self.last_live_node_params = gen_r.live_node_params(&layer_id);
         }
         let _gen_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+        rtrace.mark("generators");
 
         // ── Compositor CB (+ direct present, preview, recording) ────
         let mut native_enc = native_device.create_encoder("Compositor");
@@ -1864,6 +1894,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             occluded_layers: &self.occluded_layers_scratch,
         };
         let _desc_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+        rtrace.mark("descriptors");
 
         // ── Compositor (same native encoder) ─────────────────────────
         let _t0 = std::time::Instant::now();
@@ -1899,6 +1930,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             let _compositor_tex = self.compositor.render(&mut gpu_comp, &frame);
         }
+
+        rtrace.mark("compositor_encode");
 
         // ── Clip thumbnail atlas snapshot (§24 5c) ──────────────────
         // AFTER the compositor render so we can prefer each clip's POST-EFFECT
@@ -2241,6 +2274,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         #[cfg(not(target_os = "macos"))]
         let clip_atlas_published = false;
 
+        rtrace.mark("clip_atlas");
+
         // Upscale (render-res → output-res), direct present, and workspace preview.
         // MetalFX preferred; FSR 1.0 as fallback; direct blit when scale = 1.0.
         // Skipped in export mode (export reads output_texture directly).
@@ -2312,6 +2347,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 );
                 native_enc.present_drawable(&drawable);
             }
+
+            rtrace.mark("upscale_present");
 
             // ── Workspace preview (downscaled IOSurface) ────────────
             Self::update_workspace_preview(
@@ -2512,6 +2549,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             });
         }
 
+        rtrace.mark("previews_recording");
+
         // Signal frame completion + commit
         let native_event = self.native_event.as_ref().unwrap();
         native_enc.signal_event(native_event);
@@ -2520,6 +2559,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         native_enc.commit();
         native_device.capture_scope_end();
         let _comp_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+        rtrace.mark("commit");
 
         // One-shot graph dump readback. Runs AFTER the compositor CB commits so
         // the captured node textures hold this frame's writes; the readback
@@ -2593,6 +2633,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         #[cfg(feature = "profiling")]
         {
             self.gpu_poll_ms = _poll_ms;
+        }
+
+        rtrace.mark("tail");
+        if rtrace.on {
+            let total = _t_frame.elapsed().as_secs_f64() * 1000.0;
+            if total > 20.0 {
+                let breakdown: Vec<String> = rtrace
+                    .marks
+                    .iter()
+                    .map(|(l, ms)| format!("{l}={ms:.1}"))
+                    .collect();
+                eprintln!(
+                    "[RENDER_TRACE] frame={frame_count} total={total:.1}ms | {}",
+                    breakdown.join(" ")
+                );
+            }
         }
     }
 
