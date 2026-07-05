@@ -426,6 +426,35 @@ pub fn get_osc_address_for_layer(
     Some(format!("/layer/{}/{}/{}", layer_id, prefix, param_id))
 }
 
+/// Master-effect OSC address for a specific param id (P4): `/master/{prefix}/{param_id}`.
+/// The id comes off the live [`crate::params::ParamManifest`]; only `osc_prefix`
+/// is read from the template (a type-level boundary read, allowed under D2).
+/// Byte-identical to [`get_osc_address`] for bundled params (whose manifest id
+/// equals `param_ids[index]`), and additionally addresses user-added params.
+/// `None` if the type has no prefix or the id is empty.
+pub fn get_osc_address_by_id(type_id: &PresetTypeId, param_id: &str) -> Option<String> {
+    if param_id.is_empty() {
+        return None;
+    }
+    let prefix = try_get(type_id)?.osc_prefix.clone()?;
+    Some(format!("/master/{prefix}/{param_id}"))
+}
+
+/// Layer-scoped OSC address for a specific param id (P4):
+/// `/layer/{layerId}/{prefix}/{param_id}`. Id-keyed sibling of
+/// [`get_osc_address_for_layer`]; same stability guarantee.
+pub fn get_osc_address_for_layer_by_id(
+    type_id: &PresetTypeId,
+    layer_id: &str,
+    param_id: &str,
+) -> Option<String> {
+    if layer_id.is_empty() || param_id.is_empty() {
+        return None;
+    }
+    let prefix = try_get(type_id)?.osc_prefix.clone()?;
+    Some(format!("/layer/{layer_id}/{prefix}/{param_id}"))
+}
+
 /// Default parameters as freshly-seeded bundled [`crate::params::Param`]s, all
 /// exposed, value = base = default.
 pub fn get_defaults(type_id: &PresetTypeId) -> Vec<crate::params::Param> {

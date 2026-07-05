@@ -6,12 +6,20 @@ A flag raised on a turn's FINAL assistant text has no delivery channel until
 the next human prompt — PostToolUse never fires again that turn, and that is
 exactly where verify-claim's most common firing position (done-claims are
 turn-final) lands one turn late. This hook may block the Stop event ONCE,
-delivering that already-pending whisper as the block reason so the model
-gets one beat to self-correct before yielding. It never waits for
-classification and never classifies synchronously — the race between the
-observer's ~5-10s verdict latency and Stop firing immediately is accepted;
-a turn-final flag with no verdict yet stays delivered next-prompt, same as
-before this hook existed.
+delivering a pending whisper as the block reason so the model gets one beat
+to self-correct before yielding.
+
+Re-ruled 2026-07-05 (Peter): the classifier race is no longer accepted —
+turn-final corrections landing on the NEXT prompt defeated the point. The
+hook now waits (bounded) for the observer to CATCH UP: the observer
+publishes a `.offset` heartbeat after each drain, classification runs
+synchronously inside the drain, so heartbeat >= transcript-size-at-Stop
+means every window this turn produced has been judged and any verdict is
+on disk. The wait is capped (STOP_WAIT_CAP_S), skipped entirely when the
+observer is dead or pre-heartbeat (fail open), and delivers the instant a
+verdict appears. Typical cost is one observer poll (~1s); the cap only
+binds when a classification is genuinely in flight — exactly the turns
+the whisper is for.
 
 A second, purely deterministic check (never the classifier — moves.md's
 mechanical/announced-not-started) catches a turn whose final text announces
@@ -183,45 +191,54 @@ def main():
             _block(block, {"seq": seq, "move_id": move_id})
             return
 
-        # 1b. Conditional Stop-wait (sleep pass 1): the chat-lag race —
-        # turn-final text closes a window, Haiku is mid-judgment at the exact
-        # moment the turn ends, and the verdict misses the exit and lands on
-        # the user's NEXT prompt (after the bad message already spent their
-        # attention). Wait ONLY when the observer's classifying marker is
-        # both present and fresh: a stale marker means throttling — fail
-        # open immediately, don't tax the turn. Median cost ~0 (the marker
-        # is rarely present at Stop); worst case CLASSIFY_WAIT_S on the
-        # exact turns where the whisper matters most. Main session only —
-        # the observer never writes the marker for worker windows.
-        CLASSIFY_WAIT_S = 4.0
-        MARKER_FRESH_S = 20.0  # healthy classify is 1-3s; older = throttled
-        if not agent_id:
-            marker = os.path.join(valve.VERDICTS_DIR, f"{session_id}.classifying")
+        # 1b. Catch-up wait (re-ruled 2026-07-05, supersedes the sleep-pass-1
+        # classifying-marker wait): at Stop the observer has almost never
+        # read the turn-final text yet — it polls every POLL_SECONDS, Stop
+        # fires milliseconds after the text lands — so the old marker-only
+        # wait missed the common case. Wait for the observer's `.offset`
+        # heartbeat to reach the transcript size recorded at Stop entry;
+        # classification is synchronous inside the observer's drain and the
+        # heartbeat is written after the drain returns, so caught-up means
+        # every verdict this turn can produce is already on disk. Skips
+        # (fails open) when the observer is dead, the heartbeat file doesn't
+        # exist, or the transcript is unreadable. Main session only —
+        # workers' transcripts aren't heartbeat-tracked.
+        STOP_WAIT_CAP_S = 6.0
+        transcript_path = data.get("transcript_path")
+        if not agent_id and transcript_path:
             try:
-                marker_age = time.time() - os.path.getmtime(marker)
+                target = os.path.getsize(transcript_path)
             except OSError:
-                marker_age = None
-            if marker_age is not None and marker_age < MARKER_FRESH_S:
-                deadline = time.time() + CLASSIFY_WAIT_S
-                while time.time() < deadline:
-                    time.sleep(0.25)
+                target = None
+            offset_path = os.path.join(valve.VERDICTS_DIR, f"{session_id}.offset")
+            if target is not None and os.path.exists(offset_path) and valve.observer_alive(session_id):
+                deadline = time.time() + STOP_WAIT_CAP_S
+                while True:
+                    # Verdicts land inside the drain, before the heartbeat
+                    # moves — check the mailbox first so a whisper delivers
+                    # the moment it exists, not a poll later.
                     block, seq, move_id = valve.pending_injection(mailbox_key)
                     if block:
                         valve.write_consumed(mailbox_key, seq)
                         _block(block, {"seq": seq, "move_id": move_id, "stop_wait": True})
                         return
-                    if not os.path.exists(marker):
-                        # Classification finished — one last read; deliver
-                        # and stop either way.
-                        block, seq, move_id = valve.pending_injection(mailbox_key)
-                        if block:
-                            valve.write_consumed(mailbox_key, seq)
-                            _block(block, {"seq": seq, "move_id": move_id, "stop_wait": True})
-                            return
+                    try:
+                        with open(offset_path, encoding="utf-8") as f:
+                            drained = int(f.read().strip() or "0")
+                    except (OSError, ValueError):
                         break
+                    if drained >= target or time.time() >= deadline:
+                        break
+                    time.sleep(0.25)
+                # Caught up (or capped): one final mailbox read for a verdict
+                # written by the drain that closed the gap.
+                block, seq, move_id = valve.pending_injection(mailbox_key)
+                if block:
+                    valve.write_consumed(mailbox_key, seq)
+                    _block(block, {"seq": seq, "move_id": move_id, "stop_wait": True})
+                    return
 
         # 2. No pending flag: deterministic, valve-selected mechanical check.
-        transcript_path = data.get("transcript_path")
         if not transcript_path or not os.path.exists(transcript_path):
             return
         if _announced_not_started(transcript_path):
