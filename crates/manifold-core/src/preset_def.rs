@@ -13,8 +13,6 @@
 //! two registry modules and their `PresetTypeId` / `PresetTypeId`
 //! keying stay separate; only the value type unified here.
 
-use ahash::AHashMap;
-
 use crate::effect_registration::{ParamAlias, ParamValueAlias};
 use crate::effects::ParamDef;
 use crate::preset_definition_registry::StringParamDef;
@@ -51,7 +49,6 @@ impl PresetKind {
 pub struct PresetDef {
     pub kind: PresetKind,
     pub display_name: String,
-    pub param_count: usize,
     pub param_defs: Vec<ParamDef>,
     /// Generator string params today; effects gain these as the
     /// string-binding capability gap closes. Empty when unused.
@@ -59,24 +56,9 @@ pub struct PresetDef {
     pub osc_prefix: Option<String>,
     /// Generators only render this way; `false` for effects.
     pub is_line_based: bool,
-    pub id_to_index: AHashMap<String, usize>,
-    pub param_ids: Vec<String>,
     pub legacy_param_aliases: &'static [ParamAlias],
     /// Effect slot-value migration table; effects only today, empty for
     /// generators until the capability gap closes.
     pub legacy_value_aliases:
         &'static [(&'static str, &'static [ParamValueAlias])],
-}
-
-impl PresetDef {
-    /// Resolve a param id to its storage index, honoring the legacy alias
-    /// table — the same contract both legacy defs expose.
-    pub fn index_for_param(&self, id: &str) -> Option<usize> {
-        if let Some(&i) = self.id_to_index.get(id) {
-            return Some(i);
-        }
-        let resolved =
-            crate::effect_registration::resolve_param_alias(self.legacy_param_aliases, id)?;
-        self.id_to_index.get(resolved).copied()
-    }
 }

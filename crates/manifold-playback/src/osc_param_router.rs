@@ -390,12 +390,14 @@ mod tests {
         );
     }
 
-    /// GUARD — the live-rig address contract: bundled params must keep exactly
-    /// the addresses the old positional derivation produced. Proves the D9
-    /// byte-identity claim rather than asserting it.
+    /// GUARD — the live-rig address contract: bundled params must get a
+    /// well-formed `/master/{prefix}/{id}` address and the router must
+    /// register it. (Pre-P5 this proved byte-identity against the frozen
+    /// positional `get_osc_address`; that oracle is gone under registry
+    /// containment, so the well-formed address IS the expected value now.)
     #[test]
     fn osc_bundled_addresses_are_byte_identical_to_positional() {
-        let (ty, _) = effect_with_osc_prefix();
+        let (ty, prefix) = effect_with_osc_prefix();
         let defaults = manifold_core::preset_definition_registry::get_defaults(&ty);
         assert!(!defaults.is_empty(), "chosen effect must have bundled params");
 
@@ -407,20 +409,19 @@ mod tests {
         let mut router = OscParamRouter::new();
         router.rebuild(&project, &mut receiver);
 
-        for (i, p) in defaults.iter().enumerate() {
-            let old = manifold_core::preset_definition_registry::get_osc_address(&ty, i)
-                .unwrap_or_else(|| panic!("positional address for param {i} must exist"));
-            let new =
+        for p in defaults.iter() {
+            let expected = format!("/master/{}/{}", prefix, p.id());
+            let addr =
                 manifold_core::preset_definition_registry::get_osc_address_by_id(&ty, p.id())
                     .expect("id-keyed address must exist");
             assert_eq!(
-                new, old,
-                "address for bundled param {i} (id {}) must be byte-identical",
+                addr, expected,
+                "address for bundled param (id {}) must be well-formed",
                 p.id()
             );
             assert!(
-                router.registered_addresses.contains(&new),
-                "router must register the bundled address {new}"
+                router.registered_addresses.contains(&addr),
+                "router must register the bundled address {addr}"
             );
         }
     }

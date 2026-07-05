@@ -8,6 +8,25 @@ use manifold_editing::commands::settings::ChangeBpmCommand;
 use manifold_editing::undo::UndoRedoManager;
 
 fn fixture_path(name: &str) -> std::path::PathBuf {
+    // The `.manifold` fixtures are gitignored (large personal projects), so a
+    // `git worktree` checkout doesn't contain them. Resolve to the MAIN working
+    // tree: `--git-common-dir` points at the primary repo's `.git`, whose parent
+    // is the main checkout where the fixtures live — so these tests RUN from a
+    // worktree instead of panicking with a confusing file-not-found. Falls back
+    // to the crate-relative path (the main checkout, or if git isn't reachable).
+    if let Ok(out) = std::process::Command::new("git")
+        .args(["rev-parse", "--git-common-dir"])
+        .output()
+        && out.status.success()
+        && let Ok(common) =
+            std::path::PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()).canonicalize()
+        && let Some(main_root) = common.parent()
+    {
+        let candidate = main_root.join("tests/fixtures").join(name);
+        if candidate.exists() {
+            return candidate;
+        }
+    }
     let mut p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     p.push("../../tests/fixtures");
     p.push(name);
