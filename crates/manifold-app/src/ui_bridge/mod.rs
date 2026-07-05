@@ -278,6 +278,7 @@ pub fn dispatch(
         | PanelAction::ClipWarpToggled
         | PanelAction::ClipDetectClicked
         | PanelAction::ClipClearTriggersClicked
+        | PanelAction::ClipReplaceAudioClicked
         | PanelAction::ClipDetectInstrumentToggled(_)
         | PanelAction::ClipDetectSensitivityChanged(..)
         | PanelAction::ClipDetectOnsetChanged(_)

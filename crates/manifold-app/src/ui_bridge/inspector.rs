@@ -762,6 +762,63 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
+        PanelAction::ClipReplaceAudioClicked => {
+            // Replace the clip's source file (TIMELINE_INGEST_DESIGN D6/D7): a
+            // native file dialog picks the new file, `ReplaceAudioFileCommand`
+            // swaps path/duration/in_point/BPM and clears the cached analysis
+            // while keeping the detection config, and every clip this audio clip
+            // generated (tagged `detection_source`) is deleted in the same
+            // undoable step — a stale trigger for a song that no longer plays is
+            // worse than none. Detection is never re-run here; it stays manual.
+            use manifold_editing::command::{Command, CompositeCommand};
+            use manifold_editing::commands::clip::{DeleteClipCommand, ReplaceAudioFileCommand};
+            if let Some(clip_id) = selection.primary_selected_clip_id.clone()
+                && let Some(path) = rfd::FileDialog::new()
+                    .add_filter(
+                        "Audio",
+                        &["wav", "mp3", "flac", "aif", "aiff", "ogg", "m4a", "aac"],
+                    )
+                    .pick_file()
+                && let Some(clip) = project.timeline.find_clip_by_id(&clip_id)
+            {
+                let new_path = path.to_string_lossy().into_owned();
+                let new_source_duration = crate::project_io::audio_source_duration(&new_path);
+                let replace = ReplaceAudioFileCommand::new(
+                    clip_id.clone(),
+                    clip.audio_file_path.clone(),
+                    new_path,
+                    clip.source_duration,
+                    new_source_duration,
+                    clip.in_point,
+                    clip.recorded_bpm,
+                    clip.audio_detection.clone(),
+                );
+                let mut commands: Vec<Box<dyn Command>> = vec![Box::new(replace)];
+                for layer in project.timeline.layers.iter() {
+                    let layer_id = layer.layer_id.clone();
+                    for generated in layer
+                        .clips
+                        .iter()
+                        .filter(|c| c.detection_source.as_ref() == Some(&clip_id))
+                    {
+                        commands.push(Box::new(DeleteClipCommand::new(
+                            generated.clone(),
+                            layer_id.clone(),
+                        )));
+                    }
+                }
+                // Always composite (even for just the replace) so the undo
+                // stack always sees one "Replace Audio File" step regardless
+                // of how many generated clips came along.
+                let mut cmd: Box<dyn Command + Send> = Box::new(CompositeCommand::new(
+                    commands,
+                    "Replace Audio File".to_string(),
+                ));
+                cmd.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
+            }
+            DispatchResult::structural()
+        }
         PanelAction::ClipDetectInstrumentToggled(idx) => {
             let idx = *idx;
             if let Some(clip_id) = selection.primary_selected_clip_id.clone() {

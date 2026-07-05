@@ -28,6 +28,11 @@ struct ClipboardEntry {
     beat_offset: Beats,
     layer_offset: i32,
     is_generator: bool,
+    /// D9 (docs/TIMELINE_INGEST_DESIGN.md §2): the clip's source layer was
+    /// `Audio` at copy time. Symmetric with `is_generator` — `paste_clips`
+    /// skips an audio clip pasted onto a non-audio layer the same way it
+    /// skips a generator/video mismatch.
+    is_audio: bool,
 }
 
 /// Result of a paste operation.
@@ -367,16 +372,15 @@ impl EditingService {
 
             for (clip, clip_layer_idx) in overlapping {
                 let trimmed = Self::trim_clip_to_region(clip, region, spb);
-                let is_gen = project
-                    .timeline
-                    .layers
-                    .get(clip_layer_idx)
-                    .is_some_and(|l| l.layer_type == LayerType::Generator);
+                let source_layer = project.timeline.layers.get(clip_layer_idx);
+                let is_gen = source_layer.is_some_and(|l| l.layer_type == LayerType::Generator);
+                let is_audio = source_layer.is_some_and(|l| l.layer_type == LayerType::Audio);
                 self.clipboard.push(ClipboardEntry {
                     beat_offset: trimmed.start_beat - origin_beat,
                     layer_offset: clip_layer_idx as i32 - min_layer as i32,
                     source_clip: trimmed,
                     is_generator: is_gen,
+                    is_audio,
                 });
             }
             return;
@@ -411,16 +415,15 @@ impl EditingService {
             .unwrap_or(0);
 
         for (clip, li) in clips_with_layer {
-            let is_gen = project
-                .timeline
-                .layers
-                .get(li)
-                .is_some_and(|l| l.layer_type == LayerType::Generator);
+            let source_layer = project.timeline.layers.get(li);
+            let is_gen = source_layer.is_some_and(|l| l.layer_type == LayerType::Generator);
+            let is_audio = source_layer.is_some_and(|l| l.layer_type == LayerType::Audio);
             self.clipboard.push(ClipboardEntry {
                 beat_offset: clip.start_beat - min_beat,
                 layer_offset: li as i32 - min_layer_idx,
                 source_clip: clip,
                 is_generator: is_gen,
+                is_audio,
             });
         }
     }
@@ -459,6 +462,14 @@ impl EditingService {
 
             // Gen<->video mismatch: skip
             if clip_is_gen != layer_is_gen {
+                skipped += 1;
+                continue;
+            }
+
+            // D9: audio clip onto a non-audio layer: skip. Symmetric with
+            // the gen/video guard above — `paste_clips` never creates a
+            // typed lane to make an entry fit.
+            if entry.is_audio && layer.layer_type != LayerType::Audio {
                 skipped += 1;
                 continue;
             }
@@ -1458,5 +1469,73 @@ impl EditingService {
 impl Default for EditingService {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod paste_type_guard_tests {
+    // D9 (docs/TIMELINE_INGEST_DESIGN.md §2): an audio clip pastes only onto
+    // an existing audio layer, symmetric with the pre-existing generator/
+    // video mismatch guard in `paste_clips`.
+    use super::*;
+    use manifold_core::project::Project;
+
+    fn make_project() -> Project {
+        let mut project = Project::default();
+        project
+            .timeline
+            .insert_layer(0, Layer::new("Audio 1".into(), LayerType::Audio, 0));
+        project
+            .timeline
+            .insert_layer(1, Layer::new("Video 1".into(), LayerType::Video, 1));
+        project
+    }
+
+    fn add_audio_clip(project: &mut Project, layer: usize, start: f32, dur: f32) -> ClipId {
+        let mut clip = TimelineClip::new_audio(
+            "test.wav".to_string(),
+            Beats::from_f32(start),
+            Beats::from_f32(dur),
+            Seconds::ZERO,
+            Seconds::from_f32(dur),
+        );
+        clip.start_beat = Beats::from_f32(start);
+        clip.duration_beats = Beats::from_f32(dur);
+        let id = clip.id.clone();
+        project.timeline.layers[layer].restore_clip(clip);
+        project.timeline.mark_clip_lookup_dirty();
+        id
+    }
+
+    #[test]
+    fn paste_audio_clip_onto_audio_layer_succeeds() {
+        let mut project = make_project();
+        let id = add_audio_clip(&mut project, 0, 0.0, 4.0);
+
+        let mut service = EditingService::new();
+        service.copy_clips(&project, &[id], None, 0.5);
+        assert!(service.has_clipboard());
+
+        let result = service.paste_clips(&mut project, Beats(10.0), 0, 0.5);
+        assert_eq!(result.pasted_clip_ids.len(), 1, "audio-onto-audio pastes");
+        assert_eq!(result.skipped_count, 0);
+    }
+
+    #[test]
+    fn paste_audio_clip_onto_video_layer_is_skipped() {
+        let mut project = make_project();
+        let id = add_audio_clip(&mut project, 0, 0.0, 4.0);
+
+        let mut service = EditingService::new();
+        service.copy_clips(&project, &[id], None, 0.5);
+
+        // Target layer 1 is Video — D9 skips the audio entry rather than
+        // pasting it or auto-creating a new audio lane.
+        let result = service.paste_clips(&mut project, Beats(10.0), 1, 0.5);
+        assert!(
+            result.pasted_clip_ids.is_empty(),
+            "audio clip must not land on a video layer"
+        );
+        assert_eq!(result.skipped_count, 1);
     }
 }

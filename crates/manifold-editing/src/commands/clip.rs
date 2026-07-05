@@ -1,4 +1,5 @@
 use crate::command::Command;
+use manifold_core::audio_clip_detection::AudioClipDetection;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::OverlapAction;
 use manifold_core::project::Project;
@@ -416,6 +417,83 @@ impl Command for SwapVideoCommand {
 
     fn description(&self) -> &str {
         "Swap Video"
+    }
+}
+
+/// Replace an audio clip's source file. Shaped like `SwapVideoCommand` above, but
+/// for audio: swaps `audio_file_path` + `source_duration`, resets `in_point` to
+/// zero and clears `recorded_bpm` (the old song's BPM is a lie about the new
+/// file), keeps `start_beat`/`duration_beats` untouched, and keeps the
+/// detection **config** (sensitivities/routing/quantize — the user's tuning)
+/// while clearing the cached analysis + per-instrument counts (they describe
+/// the old audio). Never touches other clips or invokes detection — pairing
+/// this with the `detection_source` cleanup composite is the caller's job (see
+/// `docs/TIMELINE_INGEST_DESIGN.md` D6).
+#[derive(Debug)]
+pub struct ReplaceAudioFileCommand {
+    clip_id: ClipId,
+    old_path: String,
+    new_path: String,
+    old_source_duration: Seconds,
+    new_source_duration: Seconds,
+    old_in_point: Seconds,
+    old_recorded_bpm: f32,
+    old_detection: Option<AudioClipDetection>,
+}
+
+impl ReplaceAudioFileCommand {
+    pub fn new(
+        clip_id: ClipId,
+        old_path: String,
+        new_path: String,
+        old_source_duration: Seconds,
+        new_source_duration: Seconds,
+        old_in_point: Seconds,
+        old_recorded_bpm: f32,
+        old_detection: Option<AudioClipDetection>,
+    ) -> Self {
+        Self {
+            clip_id,
+            old_path,
+            new_path,
+            old_source_duration,
+            new_source_duration,
+            old_in_point,
+            old_recorded_bpm,
+            old_detection,
+        }
+    }
+}
+
+impl Command for ReplaceAudioFileCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
+            clip.audio_file_path = self.new_path.clone();
+            clip.source_duration = self.new_source_duration;
+            clip.in_point = Seconds::ZERO;
+            clip.recorded_bpm = 0.0;
+            // Keep the config (the user's tuning), clear the analysis + counts
+            // (they describe the old file). No config yet ⇒ stays None; the
+            // next Detect creates one from scratch, same as a fresh clip.
+            if let Some(det) = clip.audio_detection.as_mut() {
+                det.analysis = None;
+                det.last_counts.clear();
+            }
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
+            clip.audio_file_path = self.old_path.clone();
+            clip.source_duration = self.old_source_duration;
+            clip.in_point = self.old_in_point;
+            clip.recorded_bpm = self.old_recorded_bpm;
+            clip.audio_detection = self.old_detection.clone();
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Replace Audio File"
     }
 }
 

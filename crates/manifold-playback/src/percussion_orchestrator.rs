@@ -30,13 +30,15 @@ use manifold_core::percussion_binding::ProjectPercussionBindingResolver;
 use manifold_core::percussion_settings::PercussionPipelineSettings;
 use manifold_core::LayerId;
 use manifold_core::audio_setup::AudioSend;
-use manifold_core::layer::Layer;
+use manifold_core::layer::{DetectStemRole, Layer};
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_editing::command::{Command, CompositeCommand};
-use manifold_editing::commands::audio_setup::{AddAudioSendCommand, SetLayerAudioSendCommand};
+use manifold_editing::commands::audio_setup::{
+    AddAudioSendCommand, RenameAudioSendCommand, SetLayerAudioSendCommand,
+};
 use manifold_editing::commands::clip::{AddClipCommand, DeleteClipCommand};
-use manifold_editing::commands::layer::{AddLayerCommand, GroupLayersCommand};
+use manifold_editing::commands::layer::{AddLayerCommand, GroupLayersCommand, RenameLayerCommand};
 
 use crate::percussion_backend::{PercussionPipelineBackendResolver, PercussionPipelineInvocation};
 use crate::percussion_import::{
@@ -522,6 +524,14 @@ impl PercussionImportOrchestrator {
         editing_service: &mut manifold_editing::service::EditingService,
     ) {
         const STEM_DISPLAY: [&str; STEM_COUNT] = ["Drums", "Bass", "Other", "Vocals"];
+        // D8: role identity for each stem slot, index-for-index with
+        // STEM_DISPLAY — the pair must never drift apart.
+        const STEM_ROLES: [DetectStemRole; STEM_COUNT] = [
+            DetectStemRole::Drums,
+            DetectStemRole::Bass,
+            DetectStemRole::Other,
+            DetectStemRole::Vocals,
+        ];
 
         // 1. Source clip geometry + the lane it sits on.
         let Some((
@@ -599,10 +609,22 @@ impl PercussionImportOrchestrator {
         }
 
         // 4. For each stem: ensure a lane (reuse or create), add its clip, ensure a send.
+        //    Reuse is keyed by role first (D8) — survives the source song
+        //    being renamed or replaced. Falls back to today's exact-name
+        //    match only for pre-role projects (where no lane carries a role
+        //    yet), and stamps the role the moment a lane is found that way,
+        //    so every later detect on this lane goes through the role path.
         let mut new_stem_layers: Vec<LayerId> = Vec::new();
+        // D8: whether any stem lane below actually followed the song to a
+        // new base this call — the signal that the whole set (not just one
+        // hand-renamed straggler) is still untouched, and the group's own
+        // name is safe to follow too.
+        let mut group_rename_warranted = false;
         for (i, stem_path) in present {
+            let stem_role = STEM_ROLES[i];
             let lane_name = format!("{base} \u{00b7} {}", STEM_DISPLAY[i]);
-            let lane_id = match existing_group.as_ref().and_then(|gid| {
+
+            let by_role = existing_group.as_ref().and_then(|gid| {
                 project
                     .timeline
                     .layers
@@ -610,11 +632,82 @@ impl PercussionImportOrchestrator {
                     .find(|l| {
                         l.parent_layer_id.as_ref() == Some(gid)
                             && l.is_audio()
-                            && l.name == lane_name
+                            && l.detect_stem_role == Some(stem_role)
                     })
                     .map(|l| l.layer_id.clone())
-            }) {
-                Some(id) => id,
+            });
+            // Legacy fallback for pre-role projects: a same-parent audio lane
+            // whose name still equals the CURRENT base's expected name. Only
+            // finds the lane if the song hasn't also been renamed in the same
+            // step — D8 stops there deliberately (no eager migration pass);
+            // the lane is stamped with its role the moment this finds it, so
+            // every detect after this one goes through `by_role` instead.
+            let existing_lane = by_role.or_else(|| {
+                existing_group.as_ref().and_then(|gid| {
+                    project
+                        .timeline
+                        .layers
+                        .iter()
+                        .find(|l| {
+                            l.parent_layer_id.as_ref() == Some(gid)
+                                && l.is_audio()
+                                && l.detect_stem_role.is_none()
+                                && l.name == lane_name
+                        })
+                        .map(|l| l.layer_id.clone())
+                })
+            });
+
+            let lane_id = match existing_lane {
+                Some(id) => {
+                    let old_name = project
+                        .timeline
+                        .find_layer_by_id(&id)
+                        .map(|(_, l)| l.name.clone())
+                        .unwrap_or_default();
+
+                    // Stamp the role on first touch (lazy migration, D8) —
+                    // a no-op once the lane already carries it. Not itself
+                    // wrapped in a Command: like `detect_group_source`
+                    // below, it's one-way bookkeeping the composite's
+                    // structural undo doesn't need to reverse.
+                    if let Some((_, l)) = project.timeline.find_layer_by_id_mut(&id)
+                        && l.detect_stem_role != Some(stem_role)
+                    {
+                        l.detect_stem_role = Some(stem_role);
+                    }
+
+                    // D8 rename-on-reuse: only when the song's base actually
+                    // changed AND this lane still carries the exact
+                    // auto-generated shape — a hand-renamed lane is left
+                    // alone even though it's still the right lane by role.
+                    if old_name != lane_name && is_auto_stem_name(&old_name, STEM_DISPLAY[i]) {
+                        let mut rename_lane = RenameLayerCommand::new(
+                            id.clone(),
+                            old_name.clone(),
+                            lane_name.clone(),
+                        );
+                        rename_lane.execute(project);
+                        commands.push(Box::new(rename_lane));
+                        group_rename_warranted = true;
+
+                        if let Some(send) = project.audio_setup.send_for_layer(&id)
+                            && is_auto_stem_name(&send.label, STEM_DISPLAY[i])
+                            && send.label != lane_name
+                        {
+                            let send_id = send.id.clone();
+                            let old_label = send.label.clone();
+                            let mut rename_send = RenameAudioSendCommand::new(
+                                send_id,
+                                old_label,
+                                lane_name.clone(),
+                            );
+                            rename_send.execute(project);
+                            commands.push(Box::new(rename_send));
+                        }
+                    }
+                    id
+                }
                 None => {
                     let insert_index = project.timeline.layers.len();
                     let mut add = AddLayerCommand::new(
@@ -633,9 +726,12 @@ impl PercussionImportOrchestrator {
                     else {
                         continue;
                     };
-                    // Stem lanes default to analysis-only: silent to master, hot to send.
+                    // Stem lanes default to analysis-only: silent to master,
+                    // hot to send. Role is stamped right at creation, so a
+                    // freshly built lane is never found by name again.
                     if let Some((_, l)) = project.timeline.find_layer_by_id_mut(&id) {
                         l.analysis_only = true;
+                        l.detect_stem_role = Some(stem_role);
                     }
                     commands.push(Box::new(add));
                     new_stem_layers.push(id.clone());
@@ -670,6 +766,22 @@ impl PercussionImportOrchestrator {
                 bind.execute(project);
                 commands.push(Box::new(bind));
             }
+        }
+
+        // D8: the group's name follows the song's base too, but only when
+        // at least one stem lane above actually followed it (proof the set
+        // is still untouched since it was built) AND the group's own name
+        // hasn't already drifted from `base` for some other reason — a
+        // hand-renamed group is otherwise left alone.
+        if group_rename_warranted
+            && let Some(gid) = existing_group.as_ref()
+            && let Some((_, g)) = project.timeline.find_layer_by_id(gid)
+            && g.name != base
+        {
+            let old_name = g.name.clone();
+            let mut rename_group = RenameLayerCommand::new(gid.clone(), old_name, base.clone());
+            rename_group.execute(project);
+            commands.push(Box::new(rename_group));
         }
 
         // 5. First detect: group source + stems + trigger lanes, name + mark it.
@@ -1233,6 +1345,16 @@ fn parse_pipeline_stem_paths(raw_json: &str) -> Vec<Option<String>> {
         .collect()
 }
 
+/// D8's rename-on-reuse gate: true if `name` still has the exact
+/// `"<anything> \u{00b7} {stem}"` shape the Detect-and-Group naming
+/// convention produces — the signal that a lane or send name is still
+/// auto-generated and safe to follow when the source song's base changes.
+/// Any other shape (a fully custom name, or one missing the stem suffix)
+/// means it's been hand-edited; the caller leaves those alone.
+fn is_auto_stem_name(name: &str, stem_display: &str) -> bool {
+    name.ends_with(&format!(" \u{00b7} {stem_display}"))
+}
+
 
 
 #[cfg(test)]
@@ -1548,6 +1670,208 @@ mod tests {
             "undo removes the stem lanes + group"
         );
         assert!(project.audio_setup.sends.is_empty(), "undo removes the sends");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detect_group_reuse_follows_song_rename_by_role() {
+        // D8: stem lanes/sends/group are keyed by role, not name — replacing
+        // the source clip's file under a different song name (simulated here
+        // since P4's ReplaceAudioFileCommand is a separate phase) must reuse
+        // the exact same lanes and sends, renamed to the new base, and never
+        // spawn a second set.
+        let dir = std::env::temp_dir().join(format!("manifold_dg_rename_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let stem_for = |name: &str| {
+            let p = dir.join(format!("{name}.wav"));
+            std::fs::write(&p, b"").unwrap();
+            Some(p.to_string_lossy().into_owned())
+        };
+        let stems = vec![
+            stem_for("drums"),
+            stem_for("bass"),
+            stem_for("other"),
+            stem_for("vocals"),
+        ];
+
+        let mut project = Project::default();
+        let aidx = project
+            .timeline
+            .add_layer("Source", LayerType::Audio, PresetTypeId::NONE);
+        let clip = TimelineClip::new_audio(
+            "MyTrack.wav".into(),
+            Beats(0.0),
+            Beats(64.0),
+            Seconds(0.0),
+            Seconds(120.0),
+        );
+        let clip_id = clip.id.clone();
+        project.timeline.layers[aidx].restore_clip(clip);
+        project.timeline.mark_clip_lookup_dirty();
+
+        let mut es = EditingService::new();
+        orchestrator().build_detect_group(&clip_id, &stems, &mut project, &mut es);
+
+        let lane_ids_before: std::collections::HashSet<LayerId> = project
+            .timeline
+            .layers
+            .iter()
+            .filter(|l| l.is_audio() && l.detect_stem_role.is_some())
+            .map(|l| l.layer_id.clone())
+            .collect();
+        assert_eq!(lane_ids_before.len(), 4, "four role-tagged stem lanes exist");
+        let send_ids_before: std::collections::HashSet<_> = project
+            .audio_setup
+            .sends
+            .iter()
+            .map(|s| s.id.clone())
+            .collect();
+        assert_eq!(send_ids_before.len(), 4);
+        let layers_after_first = project.timeline.layers.len();
+
+        // Simulate P4's ReplaceAudioFileCommand: the clip now points at a
+        // differently-named song file.
+        project
+            .timeline
+            .find_clip_by_id_mut(&clip_id)
+            .unwrap()
+            .audio_file_path = "DifferentSong.wav".to_string();
+
+        // Re-detect the same clip under the new name.
+        orchestrator().build_detect_group(&clip_id, &stems, &mut project, &mut es);
+
+        assert_eq!(
+            project.timeline.layers.len(),
+            layers_after_first,
+            "reuse by role adds no new lanes or group"
+        );
+        let send_ids_after: std::collections::HashSet<_> = project
+            .audio_setup
+            .sends
+            .iter()
+            .map(|s| s.id.clone())
+            .collect();
+        assert_eq!(send_ids_after, send_ids_before, "same sends reused, zero new sends");
+
+        let lane_ids_after: std::collections::HashSet<LayerId> = project
+            .timeline
+            .layers
+            .iter()
+            .filter(|l| l.is_audio() && l.detect_stem_role.is_some())
+            .map(|l| l.layer_id.clone())
+            .collect();
+        assert_eq!(lane_ids_after, lane_ids_before, "same lane IDs reused, zero new lanes");
+
+        // Names followed the rename: lane, its send, and the group.
+        for stem in ["Drums", "Bass", "Other", "Vocals"] {
+            let want = format!("DifferentSong \u{00b7} {stem}");
+            let lane = project
+                .timeline
+                .layers
+                .iter()
+                .find(|l| l.name == want)
+                .unwrap_or_else(|| panic!("stem lane not renamed to '{want}'"));
+            assert_eq!(
+                lane.clips.len(),
+                1,
+                "{want} still carries exactly one stem clip after re-detect"
+            );
+            let send = project.audio_setup.send_for_layer(&lane.layer_id).unwrap();
+            assert_eq!(send.label, want, "send label followed the rename");
+        }
+        let group = project
+            .timeline
+            .layers
+            .iter()
+            .find(|l| l.layer_type == LayerType::Group)
+            .unwrap();
+        assert_eq!(group.name, "DifferentSong", "group name followed the rename");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detect_group_reuse_leaves_hand_renamed_lane_untouched() {
+        // D8's other half: a lane the user has renamed away from the
+        // "<base> · <Stem>" shape must never be clobbered by a later
+        // re-detect under a new song name, even though it's still found (by
+        // role) and still reused for the new stem clip.
+        let dir = std::env::temp_dir().join(format!("manifold_dg_handname_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let stem_for = |name: &str| {
+            let p = dir.join(format!("{name}.wav"));
+            std::fs::write(&p, b"").unwrap();
+            Some(p.to_string_lossy().into_owned())
+        };
+        let stems = vec![
+            stem_for("drums"),
+            stem_for("bass"),
+            stem_for("other"),
+            stem_for("vocals"),
+        ];
+
+        let mut project = Project::default();
+        let aidx = project
+            .timeline
+            .add_layer("Source", LayerType::Audio, PresetTypeId::NONE);
+        let clip = TimelineClip::new_audio(
+            "MyTrack.wav".into(),
+            Beats(0.0),
+            Beats(64.0),
+            Seconds(0.0),
+            Seconds(120.0),
+        );
+        let clip_id = clip.id.clone();
+        project.timeline.layers[aidx].restore_clip(clip);
+        project.timeline.mark_clip_lookup_dirty();
+
+        let mut es = EditingService::new();
+        orchestrator().build_detect_group(&clip_id, &stems, &mut project, &mut es);
+
+        // Peter hand-renames the Drums lane to something of his own choosing.
+        let drums_id = project
+            .timeline
+            .layers
+            .iter()
+            .find(|l| l.name == "MyTrack \u{00b7} Drums")
+            .unwrap()
+            .layer_id
+            .clone();
+        project
+            .timeline
+            .find_layer_by_id_mut(&drums_id)
+            .unwrap()
+            .1
+            .name = "Kick Stems".to_string();
+
+        project
+            .timeline
+            .find_clip_by_id_mut(&clip_id)
+            .unwrap()
+            .audio_file_path = "DifferentSong.wav".to_string();
+        orchestrator().build_detect_group(&clip_id, &stems, &mut project, &mut es);
+
+        let drums = project
+            .timeline
+            .find_layer_by_id(&drums_id)
+            .map(|(_, l)| l)
+            .expect("hand-renamed lane is still reused by role, not recreated");
+        assert_eq!(drums.name, "Kick Stems", "hand-renamed lane is never clobbered");
+        assert_eq!(
+            drums.clips.len(),
+            1,
+            "still reused for the new stem clip despite the custom name"
+        );
+
+        // The other three lanes, never hand-renamed, still follow the song.
+        let bass = project
+            .timeline
+            .layers
+            .iter()
+            .find(|l| l.name == "DifferentSong \u{00b7} Bass")
+            .expect("untouched sibling lane still follows the rename");
+        assert_eq!(bass.clips.len(), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
