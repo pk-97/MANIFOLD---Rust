@@ -923,7 +923,7 @@ impl Application {
                         crate::ui_bridge::undo(tx);
                     }
                     // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2):
-                    // the real "Undid: <command name>" label now fires from
+                    // the real "Undo: <command name>" label now fires from
                     // `ui_bridge/state_sync.rs`'s `push_state`, once the
                     // content thread's `ContentState.undo_redo_event` round-
                     // trips back with the actual command description (see

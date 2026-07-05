@@ -97,8 +97,8 @@ escalation, not a guess.
   reduced alpha. Rejected (for now): full obstacle-avoiding routing — the Sugiyama
   waypoints already minimize crossings after D9; avoidance is polish, revisit only
   if D9+dimming still reads badly.
-- **D11 — Undo/redo toast.** Transient bottom-center toast "Undid: <command name>" /
-  "Redid: …", MOTION_SLOW in, ~1.4 s hold, fade. Command names already exist on the
+- **D11 — Undo/redo toast.** Transient bottom-center toast "Undo: <command name>" /
+  "Redo: …", MOTION_SLOW in, ~1.4 s hold, fade. Command names already exist on the
   undo stack. Shape it like the save flash, as a UI-tree overlay node.
 - **D12 — Discoverability.** Hold-`?` shortcut overlay (grid of the real keymap,
   generated from the binding table, not hand-listed) + every context-menu/tooltip
