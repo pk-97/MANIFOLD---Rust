@@ -28,7 +28,7 @@ or human can read it, and it needs no external tool.
 
 ## Open
 
-### BUG-025 — `profiling` feature doesn't compile: rotted against the Beats/Bpm newtypes — LOW (parked)
+### BUG-029 — `profiling` feature doesn't compile: rotted against the Beats/Bpm newtypes — LOW (parked)
 
 **Root cause** — the `#[cfg(feature = "profiling")]` blocks in `manifold-app` predate the
 `Beats`/`Bpm`/`Seconds` newtype migration and still treat those values as raw `f32`/`u32`.
@@ -49,7 +49,7 @@ in the same blocks).
 **Fix shape** — wrap each site in the Beats/Bpm accessor instead of a raw cast (~3 one-line
 fixes). Unrelated to param storage, so parked here rather than folded into P2.
 
-### BUG-026 — Design-token ratchet red on trunk: raw `Color32::new(` count 201 vs baseline 200 — LOW (parked, not param-storage)
+### BUG-030 — Design-token ratchet red on trunk: raw `Color32::new(` count 201 vs baseline 200 — LOW (parked, not param-storage)
 
 **Root cause** — a UI landing added one raw `Color32::new(` literal in `crates/manifold-ui/src`
 without tokenizing it or bumping the ratchet. [design_tokens.rs:40](../crates/manifold-ui/tests/design_tokens.rs#L40)
