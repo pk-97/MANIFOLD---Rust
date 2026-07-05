@@ -1065,6 +1065,64 @@ impl GpuDevice {
         sample_count: u32,
         label: &str,
     ) -> GpuRenderPipeline {
+        self.create_render_pipeline_depth_inner(
+            wgsl_source,
+            vs_entry,
+            fs_entry,
+            color_format,
+            depth_format,
+            blend,
+            sample_count,
+            false,
+            label,
+        )
+    }
+
+    /// Create an MSAA depth-tested render pipeline with optional
+    /// alpha-to-coverage. `alpha_to_coverage` converts the fragment
+    /// shader's alpha (including a cutout `discard`'s pass/fail) into
+    /// per-sample coverage, so the multisample resolve antialiases the
+    /// cutout edge — not just the triangle silhouette. Only meaningful
+    /// when `sample_count > 1`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_render_pipeline_depth_msaa(
+        &self,
+        wgsl_source: &str,
+        vs_entry: &str,
+        fs_entry: &str,
+        color_format: GpuTextureFormat,
+        depth_format: GpuTextureFormat,
+        blend: Option<GpuBlendState>,
+        sample_count: u32,
+        alpha_to_coverage: bool,
+        label: &str,
+    ) -> GpuRenderPipeline {
+        self.create_render_pipeline_depth_inner(
+            wgsl_source,
+            vs_entry,
+            fs_entry,
+            color_format,
+            depth_format,
+            blend,
+            sample_count,
+            alpha_to_coverage,
+            label,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_render_pipeline_depth_inner(
+        &self,
+        wgsl_source: &str,
+        vs_entry: &str,
+        fs_entry: &str,
+        color_format: GpuTextureFormat,
+        depth_format: GpuTextureFormat,
+        blend: Option<GpuBlendState>,
+        sample_count: u32,
+        alpha_to_coverage: bool,
+        label: &str,
+    ) -> GpuRenderPipeline {
         let base_hash = archive::render_pipeline_hash(wgsl_source, vs_entry, fs_entry);
         let hash = {
             use std::hash::{Hash, Hasher};
@@ -1072,6 +1130,7 @@ impl GpuDevice {
             base_hash.hash(&mut h);
             sample_count.hash(&mut h);
             depth_format.hash(&mut h);
+            alpha_to_coverage.hash(&mut h);
             "depth".hash(&mut h);
             h.finish()
         };
@@ -1148,6 +1207,9 @@ impl GpuDevice {
             desc.setFragmentFunction(Some(&fs_func));
             if sample_count > 1 {
                 desc.setRasterSampleCount(sample_count as usize);
+            }
+            if alpha_to_coverage {
+                desc.setAlphaToCoverageEnabled(true);
             }
             desc.setDepthAttachmentPixelFormat(to_mtl_pixel_format(depth_format));
         }

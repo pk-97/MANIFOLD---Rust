@@ -102,9 +102,22 @@ crate::primitive! {
         depth_texture: Option<manifold_gpu::GpuTexture> = None,
         depth_width: u32 = 0,
         depth_height: u32 = 0,
+        // Memoryless 4x-MSAA color + depth for the antialiased color pass.
+        // The G-buffer passes deliberately stay single-sample (resolving
+        // world positions/normals across a silhouette averages to garbage),
+        // so they keep their own single-sample `depth_texture`.
+        msaa_color: Option<manifold_gpu::GpuTexture> = None,
+        msaa_depth: Option<manifold_gpu::GpuTexture> = None,
+        msaa_width: u32 = 0,
+        msaa_height: u32 = 0,
         dummy_envmap: Option<manifold_gpu::GpuTexture> = None,
     },
 }
+
+/// 4x MSAA for the color pass. Memoryless multisample color + depth are
+/// tile-resident on Apple Silicon and resolve on-chip — no VRAM cost.
+/// Paired with alpha-to-coverage so glTF `Mask` cutout edges antialias too.
+const MSAA_SAMPLES: u32 = 4;
 
 impl Render3DMesh {
     fn ensure_depth_texture(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
@@ -126,6 +139,34 @@ impl Render3DMesh {
         }));
         self.depth_width = width;
         self.depth_height = height;
+    }
+
+    /// Memoryless 4x-MSAA color + depth for the color pass, sized to the
+    /// render target. Tile-resident; the color resolves out at pass end.
+    fn ensure_msaa_targets(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+        if self.msaa_width == width
+            && self.msaa_height == height
+            && self.msaa_color.is_some()
+            && self.msaa_depth.is_some()
+        {
+            return;
+        }
+        self.msaa_color = Some(device.create_texture_msaa_memoryless(
+            width,
+            height,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            MSAA_SAMPLES,
+            "node.render_mesh msaa color",
+        ));
+        self.msaa_depth = Some(device.create_texture_msaa_memoryless(
+            width,
+            height,
+            manifold_gpu::GpuTextureFormat::Depth32Float,
+            MSAA_SAMPLES,
+            "node.render_mesh msaa depth",
+        ));
+        self.msaa_width = width;
+        self.msaa_height = height;
     }
 
     fn ensure_sampler(&mut self, device: &manifold_gpu::GpuDevice) {
@@ -169,14 +210,15 @@ impl Render3DMesh {
             MaterialKind::Cel => "fs_cel",
         };
         self.pipelines.entry(kind).or_insert_with(|| {
-            device.create_render_pipeline_depth(
+            device.create_render_pipeline_depth_msaa(
                 include_str!("shaders/render_3d_mesh.wgsl"),
                 "vs_main",
                 fs_entry,
                 manifold_gpu::GpuTextureFormat::Rgba16Float,
                 manifold_gpu::GpuTextureFormat::Depth32Float,
                 None,
-                1,
+                MSAA_SAMPLES,
+                true, // alpha-to-coverage: antialias the cutout `discard` edge too
                 "node.render_mesh",
             )
         })
@@ -369,6 +411,7 @@ impl Primitive for Render3DMesh {
             );
         }
         self.ensure_depth_texture(gpu.device, width, height);
+        self.ensure_msaa_targets(gpu.device, width, height);
         self.ensure_sampler(gpu.device);
         self.ensure_dummy_envmap(gpu.device);
         // Material pipeline needs a mut borrow on `self.pipelines`;
@@ -383,6 +426,8 @@ impl Primitive for Render3DMesh {
 
         let depth_stencil = self.depth_stencil.as_ref().expect("just inserted");
         let depth_tex = self.depth_texture.as_ref().expect("just inserted");
+        let msaa_color = self.msaa_color.as_ref().expect("just inserted");
+        let msaa_depth = self.msaa_depth.as_ref().expect("just inserted");
         let sampler = self.sampler.as_ref().expect("just inserted");
         let dummy_envmap = self.dummy_envmap.as_ref().expect("just inserted");
 
@@ -435,15 +480,20 @@ impl Primitive for Render3DMesh {
                     texture: metallic_map_texture,
                 },
             ];
-            gpu.native_enc.draw_instanced_depth(
+            // Antialiased color pass: single mesh, one 4x-MSAA pass
+            // (memoryless color+depth) resolving out to `target`.
+            let draw = manifold_gpu::GpuEncoder::depth_msaa_draw(
                 pipeline,
-                target,
-                depth_tex,
-                depth_stencil,
                 &bindings,
                 vertex_count,
                 1,
-                GpuLoadAction::Clear,
+            );
+            gpu.native_enc.draw_instanced_depth_msaa_batch(
+                msaa_color,
+                target,
+                msaa_depth,
+                depth_stencil,
+                std::slice::from_ref(&draw),
                 "node.render_mesh.color",
             );
         }

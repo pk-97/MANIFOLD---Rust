@@ -26,7 +26,7 @@ mod types;
 
 // Re-export all public types so external code paths remain identical.
 pub use device::GpuDevice;
-pub use encoder::GpuEncoder;
+pub use encoder::{DepthMsaaDraw, GpuEncoder};
 pub use fft::{FftKind, GpuFft};
 pub use profiling::{GpuFrameProfile, GpuProfiledSpan, GpuTimestampSampler, GpuWorkKind};
 pub use surface::{GpuDrawable, GpuSurface};
