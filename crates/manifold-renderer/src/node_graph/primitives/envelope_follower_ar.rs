@@ -10,6 +10,7 @@
 //!
 //! State: single f32 (previous smoothed value) in `StateStore`.
 
+use std::borrow::Cow;
 use crate::node_graph::effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, NodeRequires,
 };
@@ -27,19 +28,19 @@ impl NodeState for EnvelopeState {}
 
 const ENVELOPE_INPUTS: [NodeInput; 4] = [
     NodePort {
-        name: "in",
+        name: Cow::Borrowed("in"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: true,
     },
     NodePort {
-        name: "attack",
+        name: Cow::Borrowed("attack"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: false,
     },
     NodePort {
-        name: "release",
+        name: Cow::Borrowed("release"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: false,
@@ -49,7 +50,7 @@ const ENVELOPE_INPUTS: [NodeInput; 4] = [
     // without firing so chain rebuilds don't cause spurious resets.
     // Matches the cross-primitive reset_trigger convention.
     NodePort {
-        name: "reset_trigger",
+        name: Cow::Borrowed("reset_trigger"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: false,
@@ -57,7 +58,7 @@ const ENVELOPE_INPUTS: [NodeInput; 4] = [
 ];
 
 const ENVELOPE_OUTPUTS: [NodeOutput; 1] = [NodePort {
-    name: "out",
+    name: Cow::Borrowed("out"),
     ty: PortType::Scalar(ScalarType::F32),
     kind: PortKind::Output,
     required: false,
@@ -65,7 +66,7 @@ const ENVELOPE_OUTPUTS: [NodeOutput; 1] = [NodePort {
 
 const ENVELOPE_PARAMS: [ParamDef; 2] = [
     ParamDef {
-        name: "attack",
+        name: Cow::Borrowed("attack"),
         label: "Attack (s)",
         ty: ParamType::Float,
         default: ParamValue::Float(0.005),
@@ -73,7 +74,7 @@ const ENVELOPE_PARAMS: [ParamDef; 2] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "release",
+        name: Cow::Borrowed("release"),
         label: "Release (s)",
         ty: ParamType::Float,
         default: ParamValue::Float(0.5),
@@ -235,7 +236,7 @@ mod tests {
     #[test]
     fn envelope_follower_ar_has_attack_and_release_params() {
         let node = EnvelopeFollowerAr::new();
-        let names: Vec<&str> = node.parameters().iter().map(|p| p.name).collect();
+        let names: Vec<&str> = node.parameters().iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["attack", "release"]);
     }
 

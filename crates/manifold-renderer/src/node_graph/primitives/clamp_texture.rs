@@ -7,6 +7,8 @@
 //! with non-integer exponent, LUT lookups, displacement scales). Defaults
 //! to `[0, 1]` — the standard `saturate()` shape from shading code.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -36,7 +38,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "min",
+            name: Cow::Borrowed("min"),
             label: "Min",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -44,7 +46,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "max",
+            name: Cow::Borrowed("max"),
             label: "Max",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),

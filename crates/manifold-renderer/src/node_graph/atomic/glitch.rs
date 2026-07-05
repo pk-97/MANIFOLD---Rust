@@ -8,6 +8,7 @@
 use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
+use std::borrow::Cow;
 
 pub const GLITCH_TYPE_ID: &str = "atomic.glitch";
 
@@ -20,14 +21,14 @@ pub const GLITCH_MODES: &[&str] = &[
 ];
 
 const GLITCH_INPUTS: [NodeInput; 1] = [NodePort {
-    name: "source",
+    name: Cow::Borrowed("source"),
     ty: PortType::Texture2D,
     kind: PortKind::Input,
     required: true,
 }];
 
 const GLITCH_OUTPUTS: [NodeOutput; 1] = [NodePort {
-    name: "out",
+    name: Cow::Borrowed("out"),
     ty: PortType::Texture2D,
     kind: PortKind::Output,
     required: false,
@@ -35,7 +36,7 @@ const GLITCH_OUTPUTS: [NodeOutput; 1] = [NodePort {
 
 const GLITCH_PARAMS: [ParamDef; 4] = [
     ParamDef {
-        name: "intensity",
+        name: Cow::Borrowed("intensity"),
         label: "Intensity",
         ty: ParamType::Float,
         default: ParamValue::Float(0.5),
@@ -43,7 +44,7 @@ const GLITCH_PARAMS: [ParamDef; 4] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "mode",
+        name: Cow::Borrowed("mode"),
         label: "Mode",
         ty: ParamType::Enum,
         default: ParamValue::Enum(4), // Combined
@@ -51,7 +52,7 @@ const GLITCH_PARAMS: [ParamDef; 4] = [
         enum_values: GLITCH_MODES,
     },
     ParamDef {
-        name: "shift_amount",
+        name: Cow::Borrowed("shift_amount"),
         label: "Shift",
         ty: ParamType::Float,
         default: ParamValue::Float(0.05),
@@ -59,7 +60,7 @@ const GLITCH_PARAMS: [ParamDef; 4] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "block_size",
+        name: Cow::Borrowed("block_size"),
         label: "Block Size",
         ty: ParamType::Float,
         default: ParamValue::Float(16.0),

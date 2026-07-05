@@ -4,6 +4,8 @@
 //! input pixel and parameters. They will fuse cleanly with each other and
 //! with other pixel-local primitives once the fusion compiler lands.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
@@ -11,14 +13,14 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 
 const SOURCE_INPUT: NodeInput = NodePort {
-    name: "source",
+    name: Cow::Borrowed("source"),
     ty: PortType::Texture2D,
     kind: PortKind::Input,
     required: true,
 };
 
 const OUT_OUTPUT: NodeOutput = NodePort {
-    name: "out",
+    name: Cow::Borrowed("out"),
     ty: PortType::Texture2D,
     kind: PortKind::Output,
     required: false,
@@ -34,7 +36,7 @@ const BRIGHTNESS_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
 const BRIGHTNESS_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
 
 const BRIGHTNESS_PARAMS: [ParamDef; 1] = [ParamDef {
-    name: "weights",
+    name: Cow::Borrowed("weights"),
     label: "RGB Weights",
     ty: ParamType::Vec3,
     // Rec. 709 luma coefficients.
@@ -158,7 +160,7 @@ const CHANNEL_MIX_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
 
 const CHANNEL_MIX_PARAMS: [ParamDef; 4] = [
     ParamDef {
-        name: "row0",
+        name: Cow::Borrowed("row0"),
         label: "Row 0 (R)",
         ty: ParamType::Vec4,
         default: ParamValue::Vec4([1.0, 0.0, 0.0, 0.0]),
@@ -166,7 +168,7 @@ const CHANNEL_MIX_PARAMS: [ParamDef; 4] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "row1",
+        name: Cow::Borrowed("row1"),
         label: "Row 1 (G)",
         ty: ParamType::Vec4,
         default: ParamValue::Vec4([0.0, 1.0, 0.0, 0.0]),
@@ -174,7 +176,7 @@ const CHANNEL_MIX_PARAMS: [ParamDef; 4] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "row2",
+        name: Cow::Borrowed("row2"),
         label: "Row 2 (B)",
         ty: ParamType::Vec4,
         default: ParamValue::Vec4([0.0, 0.0, 1.0, 0.0]),
@@ -182,7 +184,7 @@ const CHANNEL_MIX_PARAMS: [ParamDef; 4] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "row3",
+        name: Cow::Borrowed("row3"),
         label: "Row 3 (A)",
         ty: ParamType::Vec4,
         default: ParamValue::Vec4([0.0, 0.0, 0.0, 1.0]),
@@ -314,7 +316,7 @@ const COLOR_RAMP_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
 
 const COLOR_RAMP_PARAMS: [ParamDef; 2] = [
     ParamDef {
-        name: "color_a",
+        name: Cow::Borrowed("color_a"),
         label: "Color A",
         ty: ParamType::Color,
         default: ParamValue::Color([0.0, 0.0, 0.0, 1.0]),
@@ -322,7 +324,7 @@ const COLOR_RAMP_PARAMS: [ParamDef; 2] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "color_b",
+        name: Cow::Borrowed("color_b"),
         label: "Color B",
         ty: ParamType::Color,
         default: ParamValue::Color([1.0, 1.0, 1.0, 1.0]),

@@ -15,6 +15,7 @@
 //! `node.fluid_simulate_3d`. Takes a `Camera` input (typically from
 //! `node.orbit_camera`) and reads `cam.fwd`.
 
+use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::generators::compute_common::Particle;
@@ -55,7 +56,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "flatten",
+            name: Cow::Borrowed("flatten"),
             label: "Flatten",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -63,7 +64,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "active_count",
+            name: Cow::Borrowed("active_count"),
             label: "Active Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
@@ -193,7 +194,7 @@ mod tests {
         let particle_layout = ArrayType::of_known::<Particle>();
 
         assert_eq!(FlattenToCameraPlane::TYPE_ID, "node.flatten_to_camera_plane");
-        let names: Vec<&str> = FlattenToCameraPlane::INPUTS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = FlattenToCameraPlane::INPUTS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["in", "camera", "flatten", "active_count"]);
         assert_eq!(
             FlattenToCameraPlane::INPUTS[0].ty,

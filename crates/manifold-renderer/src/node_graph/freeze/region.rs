@@ -693,7 +693,7 @@ fn node_taps_texel_exact(def: &EffectGraphDef, registry: &PrimitiveRegistry, id:
     };
     let mut params: crate::node_graph::effect_node::ParamValues = AHashMap::default();
     for p in n.parameters() {
-        let v = match doc.params.get(p.name) {
+        let v = match doc.params.get(p.name.as_ref()) {
             Some(manifold_core::effect_graph_def::SerializedParamValue::Float { value }) => {
                 Some(*value)
             }
@@ -714,7 +714,7 @@ fn node_taps_texel_exact(def: &EffectGraphDef, registry: &PrimitiveRegistry, id:
             },
         };
         if let Some(v) = v {
-            params.insert(p.name, ParamValue::Float(v));
+            params.insert(p.name.clone(), ParamValue::Float(v));
         }
     }
     n.stencil_taps_texel_exact(&params)
@@ -736,7 +736,7 @@ fn node_sampler_mode(
     };
     let mut params: crate::node_graph::effect_node::ParamValues = AHashMap::default();
     for p in n.parameters() {
-        let v = match doc.params.get(p.name) {
+        let v = match doc.params.get(p.name.as_ref()) {
             Some(manifold_core::effect_graph_def::SerializedParamValue::Float { value }) => {
                 Some(*value)
             }
@@ -757,7 +757,7 @@ fn node_sampler_mode(
             },
         };
         if let Some(v) = v {
-            params.insert(p.name, ParamValue::Float(v));
+            params.insert(p.name.clone(), ParamValue::Float(v));
         }
     }
     n.fused_gather_sampler_mode(&params)
@@ -880,11 +880,11 @@ pub(crate) fn configured_construct(
     // have rejected the def upstream; the freeze pass only needs a faithful shape).
     let mut params: crate::node_graph::effect_node::ParamValues = AHashMap::default();
     for p in boxed.parameters() {
-        params.insert(p.name, p.default.clone());
+        params.insert(p.name.clone(), p.default.clone());
     }
     for (key, value) in &node.params {
         if let Some(p) = boxed.parameters().iter().find(|p| p.name == key.as_str()) {
-            params.insert(p.name, value.clone().into());
+            params.insert(p.name.clone(), value.clone().into());
         }
     }
     boxed.reconfigure(&params);
@@ -991,7 +991,7 @@ fn classify_node(
     // propagating the fused node's output scale — the element-space follow-on.)
     let default_params: crate::node_graph::effect_node::ParamValues = AHashMap::default();
     for o in n.outputs().iter().filter(|o| is_texture_port(&o.ty)) {
-        if let Some(scale) = n.output_canvas_scale(o.name, &default_params)
+        if let Some(scale) = n.output_canvas_scale(o.name.as_ref(), &default_params)
             && scale != (1, 1)
         {
             return NodeClass::Boundary;
@@ -1028,13 +1028,13 @@ fn classify_node(
         .inputs()
         .iter()
         .filter(|i| is_texture_port(&i.ty))
-        .map(|i| i.name)
+        .map(|i| i.name.as_ref())
         .collect();
     let scalar_params: AHashSet<&str> = n
         .parameters()
         .iter()
         .filter(|p| param_wgsl_type(p).is_ok())
-        .map(|p| p.name)
+        .map(|p| p.name.as_ref())
         .collect();
     for w in &def.wires {
         if w.to_node == node.id
@@ -1258,13 +1258,13 @@ fn classify_buffer_node(
         .inputs()
         .iter()
         .filter(|i| matches!(i.ty, PortType::Array(_)) || is_texture_port(&i.ty))
-        .map(|i| i.name)
+        .map(|i| i.name.as_ref())
         .collect();
     let scalar_params: AHashSet<&str> = n
         .parameters()
         .iter()
         .filter(|p| param_wgsl_type(p).is_ok())
-        .map(|p| p.name)
+        .map(|p| p.name.as_ref())
         .collect();
     for w in &def.wires {
         if w.to_node == node.id
@@ -1324,7 +1324,7 @@ fn build_region(
             .inputs()
             .iter()
             .filter(|i| region_port_is_member(&i.ty, is_buffer))
-            .map(|i| i.name)
+            .map(|i| i.name.as_ref())
             .collect();
         let access_list = constructed.input_access();
         let mut inputs: Vec<RegionInput> = Vec::with_capacity(tex_ports.len());
@@ -1554,11 +1554,11 @@ fn node_output_space(
         .outputs()
         .iter()
         .find(|o| is_texture_port(&o.ty))
-        .map(|o| o.name)
+        .map(|o| o.name.clone())
     else {
         return ElementSpace::Canvas;
     };
-    space_of(spaces, id, port)
+    space_of(spaces, id, port.as_ref())
 }
 
 /// Kahn topo-sort of a region's members by intra-region texture wires. `None` on

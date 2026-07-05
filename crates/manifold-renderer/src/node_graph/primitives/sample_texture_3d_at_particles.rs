@@ -12,6 +12,8 @@
 //! `node.move_particles_3d`, and `node.keep_in_box_3d` for
 //! the full 3D advection chain.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::generators::compute_common::Particle;
@@ -44,7 +46,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "active_count",
+            name: Cow::Borrowed("active_count"),
             label: "Active Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
@@ -179,7 +181,7 @@ mod tests {
         );
         let names: Vec<&str> = SampleTexture3DAtParticles::INPUTS
             .iter()
-            .map(|p| p.name)
+            .map(|p| p.name.as_ref())
             .collect();
         assert_eq!(names, vec!["particles", "field", "active_count"]);
         assert_eq!(

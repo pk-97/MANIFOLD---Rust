@@ -15,6 +15,7 @@
 //! — the glTF importer sets width/height to the source image's exact
 //! dimensions so that stretch is a 1:1 copy in the common case.
 
+use std::borrow::Cow;
 use std::sync::mpsc;
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
@@ -41,7 +42,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "path",
+            name: Cow::Borrowed("path"),
             label: "File",
             ty: ParamType::String,
             default: ParamValue::Float(0.0), // String default supplied via stringBindings; this slot is never read.
@@ -49,7 +50,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "texture_index",
+            name: Cow::Borrowed("texture_index"),
             label: "Texture Index",
             ty: ParamType::Int,
             default: ParamValue::Float(0.0),
@@ -57,7 +58,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "color_space",
+            name: Cow::Borrowed("color_space"),
             label: "Color Space",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -65,7 +66,7 @@ crate::primitive! {
             enum_values: &["sRGB", "Linear"],
         },
         ParamDef {
-            name: "width",
+            name: Cow::Borrowed("width"),
             label: "Width",
             ty: ParamType::Int,
             default: ParamValue::Float(1024.0),
@@ -73,7 +74,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "height",
+            name: Cow::Borrowed("height"),
             label: "Height",
             ty: ParamType::Int,
             default: ParamValue::Float(1024.0),
@@ -316,7 +317,7 @@ mod tests {
 
     #[test]
     fn gltf_texture_source_param_names_in_order() {
-        let names: Vec<&str> = GltfTextureSource::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = GltfTextureSource::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec!["path", "texture_index", "color_space", "width", "height"]
@@ -332,8 +333,8 @@ mod tests {
 
     fn params_at(width: f32, height: f32) -> ParamValues {
         let mut p = ahash::AHashMap::default();
-        p.insert("width", ParamValue::Float(width));
-        p.insert("height", ParamValue::Float(height));
+        p.insert(std::borrow::Cow::Borrowed("width"), ParamValue::Float(width));
+        p.insert(std::borrow::Cow::Borrowed("height"), ParamValue::Float(height));
         p
     }
 

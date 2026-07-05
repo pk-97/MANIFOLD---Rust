@@ -32,6 +32,7 @@
 
 #![allow(private_interfaces)]
 
+use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
 
@@ -543,7 +544,7 @@ impl WgslCompute {
                 // already (no `tex_` prefix), so they pass through untouched.
                 for inp in &mut self.inputs {
                     if let Some(stripped) = inp.name.strip_prefix("tex_") {
-                        inp.name = leak_str(stripped);
+                        inp.name = Cow::Borrowed(leak_str(stripped));
                     }
                 }
                 for b in &mut self.bindings {
@@ -561,7 +562,7 @@ impl WgslCompute {
                 }
                 for out in &mut self.outputs {
                     if out.name == FRAGMENT_DST {
-                        out.name = FRAGMENT_OUT;
+                        out.name = Cow::Borrowed(FRAGMENT_OUT);
                     }
                 }
                 if let Some(fmt) = self.output_formats.remove(FRAGMENT_DST) {
@@ -713,7 +714,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                     match class {
                         naga::ImageClass::Sampled { .. } => {
                             inputs.push(NodePort {
-                                name: leak_str(&name),
+                                name: Cow::Borrowed(leak_str(&name)),
                                 ty: if is_3d { PortType::Texture3D } else { PortType::Texture2D },
                                 kind: PortKind::Input,
                                 required: true,
@@ -732,7 +733,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                                     && !access.contains(naga::StorageAccess::LOAD);
                             let port_name = leak_str(&name);
                             outputs.push(NodePort {
-                                name: port_name,
+                                name: Cow::Borrowed(port_name),
                                 ty: PortType::Texture2D,
                                 kind: PortKind::Output,
                                 required: false,
@@ -810,7 +811,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                     // Same `value: U32` shape that u32's KnownItem impl
                     // produces; matches by hash, validates cleanly.
                     outputs.push(NodePort {
-                        name: port_name,
+                        name: Cow::Borrowed(port_name),
                         ty: PortType::Array(ArrayType {
                             item_size: 4,
                             item_align: 4,
@@ -847,7 +848,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                         // the loader allocates a fresh buffer via
                         // `array_output_capacity`.
                         outputs.push(NodePort {
-                            name: port_name,
+                            name: Cow::Borrowed(port_name),
                             ty: PortType::Array(item),
                             kind: PortKind::Output,
                             required: false,
@@ -864,13 +865,13 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                         // output with the same name, register the
                         // pair in aliased_array_io.
                         inputs.push(NodePort {
-                            name: port_name,
+                            name: Cow::Borrowed(port_name),
                             ty: PortType::Array(item),
                             kind: PortKind::Input,
                             required: true,
                         });
                         outputs.push(NodePort {
-                            name: port_name,
+                            name: Cow::Borrowed(port_name),
                             ty: PortType::Array(item),
                             kind: PortKind::Output,
                             required: false,
@@ -888,7 +889,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                         });
                     } else if read && !write {
                         inputs.push(NodePort {
-                            name: port_name,
+                            name: Cow::Borrowed(port_name),
                             ty: PortType::Array(item),
                             kind: PortKind::Input,
                             required: true,
@@ -923,7 +924,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
     // already declares a same-named member, so there's never a double port.
     if reset_gated && !inputs.iter().any(|p| p.name == RESET_TRIGGER_PORT) {
         inputs.push(NodePort {
-            name: RESET_TRIGGER_PORT,
+            name: Cow::Borrowed(RESET_TRIGGER_PORT),
             ty: PortType::Scalar(ScalarType::F32),
             kind: PortKind::Input,
             required: false,
@@ -1044,7 +1045,7 @@ fn parse_uniform(
             UniformMemberType::Bool => ParamValue::Bool(false),
         };
         params.push(ParamDef {
-            name: pname,
+            name: Cow::Borrowed(pname),
             label: pname,
             ty: param_ty,
             default,
@@ -1055,7 +1056,7 @@ fn parse_uniform(
         // ScalarF32 input. evaluate() prefers the wired value if
         // present, falls back to the param value otherwise.
         scalar_inputs.push(NodePort {
-            name: pname,
+            name: Cow::Borrowed(pname),
             ty: PortType::Scalar(ScalarType::F32),
             kind: PortKind::Input,
             required: false,
@@ -1630,7 +1631,7 @@ impl FusionFragment {
                 let name = rest.trim();
                 if !name.is_empty() {
                     inputs.push(NodePort {
-                        name: leak_str(name),
+                        name: Cow::Borrowed(leak_str(name)),
                         ty: PortType::Texture2D,
                         kind: PortKind::Input,
                         required: true,
@@ -1667,7 +1668,7 @@ impl FusionFragment {
     /// introspection therefore exposes one output port `dst`.
     fn synthesize(&self) -> Result<String, String> {
         const OUT: &[NodeOutput] = &[NodePort {
-            name: "out",
+            name: Cow::Borrowed("out"),
             ty: PortType::Texture2D,
             kind: PortKind::Output,
             required: false,
@@ -1712,7 +1713,7 @@ fn parse_fusion_param(rest: &str) -> Option<ParamDef> {
     let default: f32 = default_str.trim().parse().ok()?;
     let name_static = leak_str(name);
     Some(ParamDef {
-        name: name_static,
+        name: Cow::Borrowed(name_static),
         label: name_static,
         ty: ParamType::Float,
         default: ParamValue::Float(default),
@@ -2404,7 +2405,7 @@ mod tests {
     use super::*;
 
     fn input_names(node: &WgslCompute) -> Vec<&str> {
-        node.inputs.iter().map(|i| i.name).collect()
+        node.inputs.iter().map(|i| i.name.as_ref()).collect()
     }
 
     const FRAGMENT_SRC: &str = "// @fusion: pointwise\n// @in: src\n// @param: scale = 0.75 [0, 2]\nfn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32) -> vec4<f32> {\n    return vec4<f32>(c.rgb * scale, c.a);\n}\n";

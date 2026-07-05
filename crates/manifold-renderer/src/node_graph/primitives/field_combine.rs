@@ -10,6 +10,7 @@
 //! can be derived through scalar `node.math` chains driven from
 //! `system.generator_input.time`.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -40,7 +41,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "a",
+            name: Cow::Borrowed("a"),
             label: "R Coefficient",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -48,7 +49,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "b",
+            name: Cow::Borrowed("b"),
             label: "G Coefficient",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -56,7 +57,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "c",
+            name: Cow::Borrowed("c"),
             label: "Constant Offset",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),

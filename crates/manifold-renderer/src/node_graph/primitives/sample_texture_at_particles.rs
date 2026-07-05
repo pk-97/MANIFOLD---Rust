@@ -10,6 +10,8 @@
 //! field-sample step. Compose with `node.move_particles` and
 //! `node.wrap_around` for the full advection chain.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::generators::compute_common::Particle;
@@ -42,7 +44,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "active_count",
+            name: Cow::Borrowed("active_count"),
             label: "Active Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
@@ -172,7 +174,10 @@ mod tests {
         let vec2_layout = ArrayType::of_known::<[f32; 2]>();
 
         assert_eq!(SampleTextureAtParticles::TYPE_ID, "node.sample_image_at_particles");
-        let names: Vec<&str> = SampleTextureAtParticles::INPUTS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = SampleTextureAtParticles::INPUTS
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect();
         assert_eq!(names, vec!["particles", "in", "active_count"]);
         assert_eq!(
             SampleTextureAtParticles::INPUTS[0].ty,

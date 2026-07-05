@@ -15,6 +15,7 @@
 //! into shared MTLBuffer for downstream CPU consumption by
 //! `node.draw_lines`.
 
+use std::borrow::Cow;
 use crate::generators::mesh_common::EdgePair;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -36,7 +37,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "grid_size",
+            name: Cow::Borrowed("grid_size"),
             label: "Grid Size",
             ty: ParamType::Int,
             default: ParamValue::Float(GRID_UV_DEFAULT_SIZE as f32),
@@ -193,7 +194,7 @@ mod tests {
         );
 
         let mut custom = ParamValues::default();
-        custom.insert("grid_size", ParamValue::Float(16.0));
+        custom.insert(std::borrow::Cow::Borrowed("grid_size"), ParamValue::Float(16.0));
         assert_eq!(
             Primitive::array_output_capacity(&prim, "edges", &custom, &[]),
             Some(16 * 16 * 2),

@@ -13,6 +13,8 @@
 //! force field, or use the raw gradient directly for any 3D
 //! displacement / normal / flow pipeline.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -40,7 +42,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "vol_res",
+            name: Cow::Borrowed("vol_res"),
             label: "Volume Resolution",
             ty: ParamType::Int,
             default: ParamValue::Float(128.0),
@@ -48,7 +50,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "vol_depth",
+            name: Cow::Borrowed("vol_depth"),
             label: "Volume Depth",
             ty: ParamType::Int,
             default: ParamValue::Float(128.0),

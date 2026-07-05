@@ -10,6 +10,8 @@
 //! reproduces it bit-for-bit. Reusable for any radial-symmetry warp
 //! (mandala, mirror-wheel), not just kaleidoscope.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -37,7 +39,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "segments",
+            name: Cow::Borrowed("segments"),
             label: "Segments",
             ty: ParamType::Float,
             default: ParamValue::Float(6.0),
@@ -45,7 +47,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "cx",
+            name: Cow::Borrowed("cx"),
             label: "Center X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -53,7 +55,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "cy",
+            name: Cow::Borrowed("cy"),
             label: "Center Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),

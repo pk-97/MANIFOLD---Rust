@@ -5,6 +5,8 @@
 //! Companion to `node.distance_to_point` (which writes only the
 //! scalar distance) and `node.uv_field` (Cartesian).
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -30,7 +32,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "cx",
+            name: Cow::Borrowed("cx"),
             label: "Center X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -38,7 +40,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "cy",
+            name: Cow::Borrowed("cy"),
             label: "Center Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -130,7 +132,7 @@ mod tests {
 
     #[test]
     fn polar_field_has_cx_cy_params() {
-        let names: Vec<&str> = PolarField::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = PolarField::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["cx", "cy"]);
     }
 

@@ -15,6 +15,7 @@
 //! for two frames the executor aliases `in` → `out` (zero GPU work) —
 //! see `skip_passthrough_ports` + `empty_skip_input_ports`.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -48,7 +49,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "symbol",
+            name: Cow::Borrowed("symbol"),
             label: "Symbol",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -56,7 +57,7 @@ crate::primitive! {
             enum_values: &["Corner Brackets", "Crosshair"],
         },
         ParamDef {
-            name: "color",
+            name: Cow::Borrowed("color"),
             label: "Color",
             ty: ParamType::Color,
             default: ParamValue::Color([0.85, 0.92, 1.0, 1.0]),
@@ -64,7 +65,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "alpha",
+            name: Cow::Borrowed("alpha"),
             label: "Alpha",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -72,7 +73,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "size_fraction",
+            name: Cow::Borrowed("size_fraction"),
             label: "Size",
             ty: ParamType::Float,
             default: ParamValue::Float(0.4),
@@ -80,7 +81,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "thickness_px",
+            name: Cow::Borrowed("thickness_px"),
             label: "Thickness",
             ty: ParamType::Float,
             default: ParamValue::Float(2.0),

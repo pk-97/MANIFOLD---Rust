@@ -22,6 +22,7 @@
 //! `max_capacity` trigger a chain rebuild; the active-count
 //! slider stays smooth across drags (uniform write only).
 
+use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::generators::compute_common::Particle;
@@ -63,7 +64,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "max_capacity",
+            name: Cow::Borrowed("max_capacity"),
             label: "Max Capacity",
             ty: ParamType::Int,
             default: ParamValue::Float(1_048_576.0),
@@ -71,7 +72,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "active_count",
+            name: Cow::Borrowed("active_count"),
             label: "Active Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
@@ -79,7 +80,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "seed_offset",
+            name: Cow::Borrowed("seed_offset"),
             label: "Seed",
             ty: ParamType::Int,
             default: ParamValue::Float(0.0),
@@ -87,7 +88,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "seed_mode",
+            name: Cow::Borrowed("seed_mode"),
             label: "Seed Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0), // EveryFrame — legacy default
@@ -245,7 +246,10 @@ mod tests {
 
     #[test]
     fn seed_particles_has_full_param_surface_including_seed_mode() {
-        let names: Vec<&str> = SeedParticles::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = SeedParticles::PARAMS
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect();
         assert_eq!(
             names,
             vec!["max_capacity", "active_count", "seed_offset", "seed_mode"],

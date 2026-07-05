@@ -21,6 +21,8 @@
 //! and keeps downstream CPU readers (replicators, polyline stackers)
 //! on the same-frame-coherent path.
 
+use std::borrow::Cow;
+
 use crate::generators::mesh_common::CurvePoint;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -40,7 +42,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "scale",
+            name: Cow::Borrowed("scale"),
             label: "Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),

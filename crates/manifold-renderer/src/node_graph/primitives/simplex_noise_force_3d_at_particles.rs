@@ -12,6 +12,7 @@
 //! atoms already deposited). Pair downstream of
 //! `node.sample_volume_at_particles`.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::generators::compute_common::Particle;
@@ -53,7 +54,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "turbulence",
+            name: Cow::Borrowed("turbulence"),
             label: "Turbulence",
             ty: ParamType::Float,
             default: ParamValue::Float(0.001),
@@ -61,7 +62,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "anti_clump",
+            name: Cow::Borrowed("anti_clump"),
             label: "Anti-Clump",
             ty: ParamType::Float,
             default: ParamValue::Float(20.0),
@@ -69,7 +70,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "active_count",
+            name: Cow::Borrowed("active_count"),
             label: "Active Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
@@ -233,7 +234,7 @@ mod tests {
         );
         let names: Vec<&str> = SimplexNoiseForce3DAtParticles::INPUTS
             .iter()
-            .map(|p| p.name)
+            .map(|p| p.name.as_ref())
             .collect();
         assert_eq!(
             names,

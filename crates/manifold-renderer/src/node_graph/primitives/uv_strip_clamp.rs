@@ -9,6 +9,8 @@
 //! the legacy edge-stretch clamp, so `remap(Clamp) + mix(Lerp)` reproduces
 //! it bit-for-bit.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -38,7 +40,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "width",
+            name: Cow::Borrowed("width"),
             label: "Width",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -46,7 +48,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "direction",
+            name: Cow::Borrowed("direction"),
             label: "Direction",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),

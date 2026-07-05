@@ -6,6 +6,7 @@
 //! The grain pass of Watercolor, extracted as a reusable atom — a quick
 //! film/paper grain over any source. `amount` port-shadows the param.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -34,7 +35,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "amount",
+            name: Cow::Borrowed("amount"),
             label: "Amount",
             ty: ParamType::Float,
             default: ParamValue::Float(0.15),

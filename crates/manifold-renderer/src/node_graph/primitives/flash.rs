@@ -11,6 +11,7 @@
 //! shape as `node.mix` (8 blend modes) or `node.math` (13 ops): one
 //! composable atom that branches on a `mode` param.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -43,7 +44,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "amount",
+            name: Cow::Borrowed("amount"),
             label: "Amount",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -51,7 +52,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "mode",
+            name: Cow::Borrowed("mode"),
             label: "Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),

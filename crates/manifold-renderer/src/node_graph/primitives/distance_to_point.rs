@@ -7,6 +7,8 @@
 //! Companion to `node.uv_field` and `node.polar_field` in the
 //! procedural texture math family.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -48,7 +50,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "cx",
+            name: Cow::Borrowed("cx"),
             label: "Center X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -56,7 +58,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "cy",
+            name: Cow::Borrowed("cy"),
             label: "Center Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -64,7 +66,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "scale",
+            name: Cow::Borrowed("scale"),
             label: "Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -72,7 +74,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "scale_x",
+            name: Cow::Borrowed("scale_x"),
             label: "Scale X (anisotropic)",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -80,7 +82,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "scale_y",
+            name: Cow::Borrowed("scale_y"),
             label: "Scale Y (anisotropic)",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -167,7 +169,7 @@ mod tests {
         assert_eq!(DistanceToPoint::TYPE_ID, "node.distance_to_point");
         let ins = DistanceToPoint::INPUTS;
         assert_eq!(ins.len(), 5);
-        let names: Vec<&str> = ins.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = ins.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["cx", "cy", "scale", "scale_x", "scale_y"]);
         for port in ins {
             assert!(!port.required);
@@ -180,7 +182,7 @@ mod tests {
 
     #[test]
     fn distance_to_point_has_all_five_params() {
-        let names: Vec<&str> = DistanceToPoint::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = DistanceToPoint::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["cx", "cy", "scale", "scale_x", "scale_y"]);
     }
 

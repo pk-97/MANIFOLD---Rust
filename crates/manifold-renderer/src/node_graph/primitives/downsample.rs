@@ -22,6 +22,7 @@
 //! pass-through we'd specialise the shader per output format — for
 //! now this matches what the legacy `cs_downsample` did.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -51,7 +52,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "factor",
+            name: Cow::Borrowed("factor"),
             label: "Factor",
             ty: ParamType::Enum,
             default: ParamValue::Enum(1),
@@ -234,7 +235,7 @@ mod tests {
     /// graph param-init path.
     fn default_params() -> crate::node_graph::effect_node::ParamValues {
         let mut p = ahash::AHashMap::default();
-        p.insert("factor", ParamValue::Enum(1));
+        p.insert(std::borrow::Cow::Borrowed("factor"), ParamValue::Enum(1));
         p
     }
 
@@ -287,7 +288,7 @@ mod tests {
         let node: &dyn EffectNode = &prim;
         for (enum_v, expected_den) in [(0u32, 2u32), (1, 4), (2, 8)] {
             let mut params = ahash::AHashMap::default();
-            params.insert("factor", ParamValue::Enum(enum_v));
+            params.insert(std::borrow::Cow::Borrowed("factor"), ParamValue::Enum(enum_v));
             assert_eq!(
                 node.output_canvas_scale("out", &params),
                 Some((1, expected_den)),

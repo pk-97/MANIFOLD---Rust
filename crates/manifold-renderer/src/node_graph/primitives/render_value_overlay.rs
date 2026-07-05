@@ -16,6 +16,8 @@
 //! First consumer: Blob Track HUD (hex IDs, coord labels, distance
 //! labels). Reusable for any data-viz numeric annotation layer.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{
     GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuFilterMode, GpuLoadAction,
     GpuRenderPipeline, GpuSampler, GpuSamplerDesc, GpuTexture, GpuTextureDesc,
@@ -114,7 +116,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "format",
+            name: Cow::Borrowed("format"),
             label: "Format",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -122,7 +124,7 @@ crate::primitive! {
             enum_values: FORMATS,
         },
         ParamDef {
-            name: "color",
+            name: Cow::Borrowed("color"),
             label: "Color",
             ty: ParamType::Color,
             default: ParamValue::Color([0.85, 0.92, 1.0, 1.0]),
@@ -130,7 +132,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "alpha",
+            name: Cow::Borrowed("alpha"),
             label: "Alpha",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -138,7 +140,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "font_scale",
+            name: Cow::Borrowed("font_scale"),
             label: "Font Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -146,7 +148,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "label_count",
+            name: Cow::Borrowed("label_count"),
             label: "Label Count",
             ty: ParamType::Int,
             default: ParamValue::Float(32.0),
@@ -154,7 +156,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "offset_x",
+            name: Cow::Borrowed("offset_x"),
             label: "Offset X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -162,7 +164,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "offset_y",
+            name: Cow::Borrowed("offset_y"),
             label: "Offset Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -170,7 +172,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "anchor",
+            name: Cow::Borrowed("anchor"),
             label: "Anchor",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),

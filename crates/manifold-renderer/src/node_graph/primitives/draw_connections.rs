@@ -10,6 +10,7 @@
 //! passes sums the same way; the only difference is one f16 store
 //! round between them, ~1 ulp).
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -43,7 +44,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "color",
+            name: Cow::Borrowed("color"),
             label: "Color",
             ty: ParamType::Color,
             default: ParamValue::Color([0.85, 0.92, 1.0, 1.0]),
@@ -51,7 +52,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "alpha",
+            name: Cow::Borrowed("alpha"),
             label: "Alpha",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -59,7 +60,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "thickness_px",
+            name: Cow::Borrowed("thickness_px"),
             label: "Thickness",
             ty: ParamType::Float,
             default: ParamValue::Float(1.5),
@@ -67,7 +68,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "dash_period_px",
+            name: Cow::Borrowed("dash_period_px"),
             label: "Dash Length",
             ty: ParamType::Float,
             default: ParamValue::Float(12.0),
@@ -75,7 +76,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "dash_fill",
+            name: Cow::Borrowed("dash_fill"),
             label: "Dash Fill",
             ty: ParamType::Float,
             default: ParamValue::Float(0.4),
@@ -83,7 +84,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "midpoint_radius_px",
+            name: Cow::Borrowed("midpoint_radius_px"),
             label: "Midpoint Dot",
             ty: ParamType::Float,
             default: ParamValue::Float(5.0),

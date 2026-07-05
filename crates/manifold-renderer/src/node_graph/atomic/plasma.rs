@@ -7,13 +7,14 @@
 use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
+use std::borrow::Cow;
 
 pub const PLASMA_TYPE_ID: &str = "atomic.plasma";
 
 const PLASMA_INPUTS: [NodeInput; 0] = [];
 
 const PLASMA_OUTPUTS: [NodeOutput; 1] = [NodePort {
-    name: "out",
+    name: Cow::Borrowed("out"),
     ty: PortType::Texture2D,
     kind: PortKind::Output,
     required: false,
@@ -21,7 +22,7 @@ const PLASMA_OUTPUTS: [NodeOutput; 1] = [NodePort {
 
 const PLASMA_PARAMS: [ParamDef; 4] = [
     ParamDef {
-        name: "speed",
+        name: Cow::Borrowed("speed"),
         label: "Speed",
         ty: ParamType::Float,
         default: ParamValue::Float(1.0),
@@ -29,7 +30,7 @@ const PLASMA_PARAMS: [ParamDef; 4] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "scale",
+        name: Cow::Borrowed("scale"),
         label: "Scale",
         ty: ParamType::Float,
         default: ParamValue::Float(1.0),
@@ -37,7 +38,7 @@ const PLASMA_PARAMS: [ParamDef; 4] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "palette_a",
+        name: Cow::Borrowed("palette_a"),
         label: "Color A",
         ty: ParamType::Color,
         default: ParamValue::Color([0.0, 0.2, 0.6, 1.0]),
@@ -45,7 +46,7 @@ const PLASMA_PARAMS: [ParamDef; 4] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "palette_b",
+        name: Cow::Borrowed("palette_b"),
         label: "Color B",
         ty: ParamType::Color,
         default: ParamValue::Color([1.0, 0.4, 0.0, 1.0]),

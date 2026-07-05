@@ -20,6 +20,8 @@
 //! `Texture2DDepth` port type would let the shadow pass become its
 //! own primitive — this fused version ships first.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{
     GpuAddressMode, GpuBinding, GpuFilterMode, GpuLoadAction, GpuSamplerDesc, GpuTextureFormat,
 };
@@ -68,7 +70,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "instance_count",
+            name: Cow::Borrowed("instance_count"),
             label: "Instance Count",
             ty: ParamType::Int,
             default: ParamValue::Float(160_000.0),
@@ -76,7 +78,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "light_x",
+            name: Cow::Borrowed("light_x"),
             label: "Light X",
             ty: ParamType::Float,
             default: ParamValue::Float(8.0),
@@ -84,7 +86,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "light_y",
+            name: Cow::Borrowed("light_y"),
             label: "Light Y",
             ty: ParamType::Float,
             default: ParamValue::Float(20.0),
@@ -92,7 +94,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "light_z",
+            name: Cow::Borrowed("light_z"),
             label: "Light Z",
             ty: ParamType::Float,
             default: ParamValue::Float(8.0),
@@ -100,7 +102,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "light_intensity",
+            name: Cow::Borrowed("light_intensity"),
             label: "Light Intensity",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -404,7 +406,7 @@ mod tests {
 
     #[test]
     fn digital_plants_render_has_light_params() {
-        let names: Vec<&str> = DigitalPlantsRender::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = DigitalPlantsRender::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         for required in &[
             "instance_count",
             "light_x",

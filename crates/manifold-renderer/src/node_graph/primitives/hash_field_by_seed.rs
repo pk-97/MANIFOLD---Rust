@@ -11,6 +11,8 @@
 //! per-beat reshuffle at the heart of Voronoi Prism. General: any value
 //! field + any seed.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -41,7 +43,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "seed",
+            name: Cow::Borrowed("seed"),
             label: "Seed",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -49,7 +51,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "seed_x",
+            name: Cow::Borrowed("seed_x"),
             label: "Seed X",
             ty: ParamType::Float,
             default: ParamValue::Float(1.73),
@@ -57,7 +59,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "seed_y",
+            name: Cow::Borrowed("seed_y"),
             label: "Seed Y",
             ty: ParamType::Float,
             default: ParamValue::Float(2.91),
@@ -65,7 +67,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "mode",
+            name: Cow::Borrowed("mode"),
             label: "Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),

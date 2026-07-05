@@ -12,6 +12,8 @@
 //! the 4D→2D stage in generator_math::project_4d (s = proj_dist /
 //! (proj_dist + z)).
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::{CurvePoint, MeshVertex};
@@ -56,7 +58,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "mode",
+            name: Cow::Borrowed("mode"),
             label: "Projection",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -64,7 +66,7 @@ crate::primitive! {
             enum_values: PROJECT_3D_MODES,
         },
         ParamDef {
-            name: "proj_scale",
+            name: Cow::Borrowed("proj_scale"),
             label: "Projection Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(0.25),
@@ -72,7 +74,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "proj_dist",
+            name: Cow::Borrowed("proj_dist"),
             label: "Projection Distance",
             ty: ParamType::Float,
             default: ParamValue::Float(3.0),
@@ -210,7 +212,7 @@ mod tests {
 
     #[test]
     fn project_3d_has_mode_scale_dist_params() {
-        let names: Vec<&str> = Project3D::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = Project3D::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["mode", "proj_scale", "proj_dist"]);
     }
 

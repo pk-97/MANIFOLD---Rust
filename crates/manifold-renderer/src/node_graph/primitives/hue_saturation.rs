@@ -8,6 +8,8 @@
 //! driver wire sweeps them live. Color Grade composes from this rather
 //! than baking hue/saturation into one fused kernel.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -38,7 +40,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "hue",
+            name: Cow::Borrowed("hue"),
             label: "Hue (deg)",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -46,7 +48,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "saturation",
+            name: Cow::Borrowed("saturation"),
             label: "Saturation",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -54,7 +56,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "value",
+            name: Cow::Borrowed("value"),
             label: "Value",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),

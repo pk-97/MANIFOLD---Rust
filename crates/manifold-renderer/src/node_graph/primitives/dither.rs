@@ -9,6 +9,8 @@
 //! inline, so the quantizer composes with `node.dither_pattern` (the six classic
 //! patterns) OR any BYO threshold texture (blue noise, a custom ramp, voronoi).
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -37,7 +39,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "amount",
+            name: Cow::Borrowed("amount"),
             label: "Amount",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),

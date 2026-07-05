@@ -14,6 +14,8 @@
 //! comparison and reintroduces the 67f8db94 "identical back-to-back
 //! emissions" bug.
 
+use std::borrow::Cow;
+
 use crate::generators::clip_trigger::ClipTriggerCycle;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -32,7 +34,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "modulus",
+            name: Cow::Borrowed("modulus"),
             label: "Modulus",
             ty: ParamType::Int,
             default: ParamValue::Float(3.0),

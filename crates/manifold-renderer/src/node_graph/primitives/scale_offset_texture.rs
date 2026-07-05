@@ -5,6 +5,7 @@
 //! generators output [0, 1] for storage convenience; this primitive
 //! is the affine inverse / re-range step.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -38,7 +39,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "scale",
+            name: Cow::Borrowed("scale"),
             label: "Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -46,7 +47,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "offset",
+            name: Cow::Borrowed("offset"),
             label: "Offset",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -186,7 +187,10 @@ mod tests {
 
     #[test]
     fn scale_offset_texture_has_scale_and_offset_params() {
-        let names: Vec<&str> = ScaleOffsetTexture::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = ScaleOffsetTexture::PARAMS
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect();
         assert_eq!(names, vec!["scale", "offset"]);
     }
 

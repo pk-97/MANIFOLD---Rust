@@ -7,6 +7,7 @@
 //!   - Derived scalar (e.g. `length(velocity)` via `node.vector_length`)
 //!     → flow-aligned intensity.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -37,7 +38,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "steps",
+            name: Cow::Borrowed("steps"),
             label: "Steps",
             ty: ParamType::Int,
             default: ParamValue::Float(16.0),
@@ -45,7 +46,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "dt",
+            name: Cow::Borrowed("dt"),
             label: "Δt (pixels/step)",
             ty: ParamType::Float,
             default: ParamValue::Float(2.0),

@@ -14,6 +14,8 @@
 //! legacy generators' baseline. Override per-preset if a different
 //! reference makes more sense for your calibration.
 
+use std::borrow::Cow;
+
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -31,7 +33,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "width",
+            name: Cow::Borrowed("width"),
             label: "Width",
             ty: ParamType::Float,
             default: ParamValue::Float(1920.0),
@@ -39,7 +41,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "height",
+            name: Cow::Borrowed("height"),
             label: "Height",
             ty: ParamType::Float,
             default: ParamValue::Float(1080.0),
@@ -47,7 +49,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "reference_area",
+            name: Cow::Borrowed("reference_area"),
             label: "Reference Area",
             ty: ParamType::Float,
             default: ParamValue::Float(2_073_600.0),
@@ -64,7 +66,7 @@ crate::primitive! {
         // external monitor). Default 0 = no clamp (existing
         // behaviour, no regression for non-fluid consumers).
         ParamDef {
-            name: "min_width",
+            name: Cow::Borrowed("min_width"),
             label: "Min Width",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -72,7 +74,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "min_height",
+            name: Cow::Borrowed("min_height"),
             label: "Min Height",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -140,7 +142,7 @@ mod tests {
 
     #[test]
     fn canvas_area_scale_has_width_height_reference_area_and_min_params() {
-        let names: Vec<&str> = CanvasAreaScale::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = CanvasAreaScale::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec!["width", "height", "reference_area", "min_width", "min_height"]

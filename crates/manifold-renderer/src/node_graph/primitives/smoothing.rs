@@ -14,6 +14,7 @@
 //!
 //! [`StateStore`]: crate::node_graph::StateStore
 
+use std::borrow::Cow;
 use crate::node_graph::effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, NodeRequires,
 };
@@ -25,7 +26,7 @@ pub const SMOOTHING_TYPE_ID: &str = "node.smoothing";
 
 const SMOOTHING_INPUTS: [NodeInput; 3] = [
     NodePort {
-        name: "in",
+        name: Cow::Borrowed("in"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: true,
@@ -35,7 +36,7 @@ const SMOOTHING_INPUTS: [NodeInput; 3] = [
     // shared Value node feed several Smoothings (e.g. two compass
     // axes that have to share a "reactivity" handle on the card).
     NodePort {
-        name: "time_constant",
+        name: Cow::Borrowed("time_constant"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: false,
@@ -46,7 +47,7 @@ const SMOOTHING_INPUTS: [NodeInput; 3] = [
     // cause spurious resets. Matches `array_feedback` /
     // `node.feedback` edge-detect shape.
     NodePort {
-        name: "reset_trigger",
+        name: Cow::Borrowed("reset_trigger"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: false,
@@ -54,14 +55,14 @@ const SMOOTHING_INPUTS: [NodeInput; 3] = [
 ];
 
 const SMOOTHING_OUTPUTS: [NodeOutput; 1] = [NodePort {
-    name: "out",
+    name: Cow::Borrowed("out"),
     ty: PortType::Scalar(ScalarType::F32),
     kind: PortKind::Output,
     required: false,
 }];
 
 const SMOOTHING_PARAMS: [ParamDef; 1] = [ParamDef {
-    name: "time_constant",
+    name: Cow::Borrowed("time_constant"),
     label: "Time Constant (s)",
     ty: ParamType::Float,
     // 100ms — fast enough to track musical gestures, slow enough to
@@ -242,7 +243,7 @@ mod tests {
         }
         fn inputs(&self) -> &[NodeInput] {
             static INPUTS: [NodeInput; 1] = [NodePort {
-                name: "in",
+                name: Cow::Borrowed("in"),
                 ty: PortType::Scalar(ScalarType::F32),
                 kind: PortKind::Input,
                 required: true,

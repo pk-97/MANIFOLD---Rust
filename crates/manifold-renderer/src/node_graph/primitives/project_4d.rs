@@ -5,6 +5,8 @@
 //! Drives Tesseract / Duocylinder decomposition:
 //! base verts → Rotate4D → Project4D → (line renderer).
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::{CurvePoint, Vec4Vertex};
@@ -39,7 +41,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "proj_scale",
+            name: Cow::Borrowed("proj_scale"),
             label: "Projection Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(0.25),
@@ -47,7 +49,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "proj_dist",
+            name: Cow::Borrowed("proj_dist"),
             label: "Projection Distance",
             ty: ParamType::Float,
             default: ParamValue::Float(3.0),
@@ -173,7 +175,7 @@ mod tests {
 
     #[test]
     fn project_4d_has_scale_and_dist_params() {
-        let names: Vec<&str> = Project4D::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = Project4D::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["proj_scale", "proj_dist"]);
     }
 
@@ -238,7 +240,7 @@ mod gpu_tests {
                 type_id: EffectNodeType::new("test.vec4_source"),
                 inputs: vec![],
                 outputs: vec![NodePort {
-                    name: "out",
+                    name: std::borrow::Cow::Borrowed("out"),
                     ty: PortType::Array(ArrayType::of_known::<Vec4Vertex>()),
                     kind: PortKind::Output,
                     required: false,
@@ -290,7 +292,7 @@ mod gpu_tests {
             Self {
                 type_id: EffectNodeType::new("test.curve_point_sink"),
                 inputs: vec![NodePort {
-                    name: "in",
+                    name: std::borrow::Cow::Borrowed("in"),
                     ty: PortType::Array(ArrayType::of_known::<CurvePoint>()),
                     kind: PortKind::Input,
                     required: true,

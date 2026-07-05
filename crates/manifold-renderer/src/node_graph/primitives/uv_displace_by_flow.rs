@@ -9,6 +9,8 @@
 //! B channels (Watercolor convention). For signed flow data with
 //! mean zero, set `bias = 0`.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -37,7 +39,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "weight",
+            name: Cow::Borrowed("weight"),
             label: "Weight",
             ty: ParamType::Float,
             default: ParamValue::Float(0.001),
@@ -45,7 +47,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "bias",
+            name: Cow::Borrowed("bias"),
             label: "Bias",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -166,7 +168,7 @@ mod tests {
 
     #[test]
     fn uv_displace_by_flow_has_weight_and_bias_params() {
-        let names: Vec<&str> = UvDisplaceByFlow::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = UvDisplaceByFlow::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["weight", "bias"]);
     }
 

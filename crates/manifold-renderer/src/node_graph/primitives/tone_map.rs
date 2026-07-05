@@ -18,6 +18,8 @@
 //! before tone mapping; `paper_white` is the SDR diffuse-white nit
 //! target for HDR modes; `max_nits` is the display peak.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -58,7 +60,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "exposure",
+            name: Cow::Borrowed("exposure"),
             label: "Exposure",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -66,7 +68,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "curve",
+            name: Cow::Borrowed("curve"),
             label: "Curve",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -74,7 +76,7 @@ crate::primitive! {
             enum_values: TONE_MAP_CURVES,
         },
         ParamDef {
-            name: "mode",
+            name: Cow::Borrowed("mode"),
             label: "Output Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -82,7 +84,7 @@ crate::primitive! {
             enum_values: TONE_MAP_MODES,
         },
         ParamDef {
-            name: "paper_white",
+            name: Cow::Borrowed("paper_white"),
             label: "Paper White (nits)",
             ty: ParamType::Float,
             default: ParamValue::Float(203.0),
@@ -90,7 +92,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "max_nits",
+            name: Cow::Borrowed("max_nits"),
             label: "Max Nits",
             ty: ParamType::Float,
             default: ParamValue::Float(1000.0),

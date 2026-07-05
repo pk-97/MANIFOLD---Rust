@@ -7,6 +7,7 @@
 //! produce NaN/Inf where a renderer downstream might propagate them
 //! into a shader.
 
+use std::borrow::Cow;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -41,7 +42,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "a",
+            name: Cow::Borrowed("a"),
             label: "A",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -49,7 +50,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "b",
+            name: Cow::Borrowed("b"),
             label: "B",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -57,7 +58,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "op",
+            name: Cow::Borrowed("op"),
             label: "Operation",
             ty: ParamType::Enum,
             default: ParamValue::Enum(2), // Multiply — the most useful default
@@ -192,7 +193,7 @@ mod tests {
         }
         fn inputs(&self) -> &[NodeInput] {
             static INPUTS: [NodeInput; 1] = [NodePort {
-                name: "in",
+                name: Cow::Borrowed("in"),
                 ty: PortType::Scalar(ScalarType::F32),
                 kind: PortKind::Input,
                 required: true,

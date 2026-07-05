@@ -19,6 +19,8 @@
 //! ```
 //! Target is `(0, look_y, 0)`. World up is `(0, 1, 0)`.
 
+use std::borrow::Cow;
+
 use crate::node_graph::camera::Camera;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -44,7 +46,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "orbit",
+            name: Cow::Borrowed("orbit"),
             label: "Orbit",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.7),
@@ -52,7 +54,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "tilt",
+            name: Cow::Borrowed("tilt"),
             label: "Tilt",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.3),
@@ -60,7 +62,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "distance",
+            name: Cow::Borrowed("distance"),
             label: "Distance",
             ty: ParamType::Float,
             default: ParamValue::Float(4.0),
@@ -68,7 +70,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "fov_y",
+            name: Cow::Borrowed("fov_y"),
             label: "FOV Y",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.9),
@@ -76,7 +78,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "look_y",
+            name: Cow::Borrowed("look_y"),
             label: "Look Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -84,7 +86,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "roll",
+            name: Cow::Borrowed("roll"),
             label: "Roll",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
@@ -92,7 +94,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "near",
+            name: Cow::Borrowed("near"),
             label: "Near",
             ty: ParamType::Float,
             default: ParamValue::Float(0.05),
@@ -100,7 +102,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "far",
+            name: Cow::Borrowed("far"),
             label: "Far",
             ty: ParamType::Float,
             default: ParamValue::Float(200.0),
@@ -154,7 +156,7 @@ mod tests {
         use crate::node_graph::ports::{PortType, ScalarType};
 
         assert_eq!(CameraOrbit::TYPE_ID, "node.orbit_camera");
-        let in_names: Vec<&str> = CameraOrbit::INPUTS.iter().map(|p| p.name).collect();
+        let in_names: Vec<&str> = CameraOrbit::INPUTS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(in_names, vec!["orbit", "tilt", "distance", "fov_y", "look_y", "roll"]);
         for input in CameraOrbit::INPUTS {
             assert!(!input.required, "{} should be optional (port-shadow)", input.name);
@@ -171,7 +173,7 @@ mod tests {
 
     #[test]
     fn camera_orbit_has_full_param_surface() {
-        let names: Vec<&str> = CameraOrbit::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = CameraOrbit::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec!["orbit", "tilt", "distance", "fov_y", "look_y", "roll", "near", "far"]

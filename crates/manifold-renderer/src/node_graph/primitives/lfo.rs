@@ -24,6 +24,7 @@
 //! amplitude `1.5` is `min=0.5, max=3.5`, and the default
 //! `min=0, max=1` preserves the original unipolar behaviour.
 
+use std::borrow::Cow;
 use std::f32::consts::TAU;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -55,7 +56,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "rate_mode",
+            name: Cow::Borrowed("rate_mode"),
             label: "Rate Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0), // Musical — preserves existing behaviour
@@ -63,7 +64,7 @@ crate::primitive! {
             enum_values: LFO_RATE_MODES,
         },
         ParamDef {
-            name: "rate",
+            name: Cow::Borrowed("rate"),
             label: "Rate",
             ty: ParamType::Enum,
             default: ParamValue::Enum(2), // "1/4"
@@ -71,7 +72,7 @@ crate::primitive! {
             enum_values: LFO_RATE_LABELS,
         },
         ParamDef {
-            name: "angular_rate",
+            name: Cow::Borrowed("angular_rate"),
             label: "Speed",
             // Stored rad/s (the oscillator math unit); the editor shows and
             // edits this in Hz. See `ParamType::Frequency`.
@@ -81,7 +82,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "shape",
+            name: Cow::Borrowed("shape"),
             label: "Shape",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -89,7 +90,7 @@ crate::primitive! {
             enum_values: LFO_SHAPES,
         },
         ParamDef {
-            name: "phase",
+            name: Cow::Borrowed("phase"),
             label: "Phase",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -97,7 +98,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "min",
+            name: Cow::Borrowed("min"),
             label: "Min",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -105,7 +106,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "max",
+            name: Cow::Borrowed("max"),
             label: "Max",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -249,7 +250,7 @@ mod tests {
         }
         fn inputs(&self) -> &[NodeInput] {
             static INPUTS: [NodeInput; 1] = [NodePort {
-                name: "in",
+                name: Cow::Borrowed("in"),
                 ty: PortType::Scalar(ScalarType::F32),
                 kind: PortKind::Input,
                 required: true,

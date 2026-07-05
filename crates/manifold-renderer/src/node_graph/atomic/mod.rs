@@ -95,7 +95,7 @@ mod tests {
     fn fluid_sim_has_four_outputs_one_default_three_auxiliary() {
         let f = FluidSim2D::new();
         assert_eq!(f.outputs().len(), 4);
-        let names: Vec<&str> = f.outputs().iter().map(|p| p.name).collect();
+        let names: Vec<&str> = f.outputs().iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["composited", "density", "velocity", "pressure"]);
         // First output is the conventional default.
         assert_eq!(f.outputs()[0].name, "composited");

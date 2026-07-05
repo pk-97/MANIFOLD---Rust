@@ -18,6 +18,7 @@ use crate::generators::compute_common::Particle;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use std::borrow::Cow;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order
 /// (`inject_index` Int → i32, `inject_force` f32, `inject_phase` f32,
@@ -53,7 +54,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "inject_index",
+            name: Cow::Borrowed("inject_index"),
             label: "Inject Zone",
             ty: ParamType::Int,
             default: ParamValue::Float(-1.0),
@@ -61,7 +62,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "inject_force",
+            name: Cow::Borrowed("inject_force"),
             label: "Inject Force",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -69,7 +70,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "inject_phase",
+            name: Cow::Borrowed("inject_phase"),
             label: "Inject Phase",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -77,7 +78,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "active_count",
+            name: Cow::Borrowed("active_count"),
             label: "Active Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
@@ -220,7 +221,7 @@ mod tests {
         );
         let names: Vec<&str> = ApplyRadialBurst3DToParticles::INPUTS
             .iter()
-            .map(|p| p.name)
+            .map(|p| p.name.as_ref())
             .collect();
         assert_eq!(
             names,

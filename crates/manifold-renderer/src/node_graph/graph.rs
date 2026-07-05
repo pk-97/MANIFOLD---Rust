@@ -30,10 +30,11 @@ pub struct NodeInstance {
     pub params: ParamValues,
     /// Names of params currently exposed on the outer card. Mirrors
     /// the serialised `exposed_params` set in `EffectGraphNode`.
-    /// `&'static str` matches the parameter name keys used throughout
-    /// `EffectNode::parameters()`. Mutated by the unified
+    /// `Cow<'static, str>` matches the parameter name keys used throughout
+    /// `EffectNode::parameters()` (borrowed for fixed params, owned for a
+    /// variadic node's formatted names). Mutated by the unified
     /// `ToggleNodeParamExposeCommand` via `Graph::set_param_exposed`.
-    pub exposed_params: AHashSet<&'static str>,
+    pub exposed_params: AHashSet<std::borrow::Cow<'static, str>>,
     /// Author-supplied display title shown in the node header, copied from
     /// `EffectGraphNode::title` at load. `None` falls back to the friendly
     /// palette label (or a prettified type id). Honored for every node type;
@@ -57,7 +58,7 @@ impl NodeInstance {
     fn new(id: NodeInstanceId, mut node: Box<dyn EffectNode>) -> Self {
         let mut params = AHashMap::default();
         for def in node.parameters() {
-            params.insert(def.name, def.default.clone());
+            params.insert(def.name.clone(), def.default.clone());
         }
         // Let variadic nodes build their param-derived port lists from the
         // default param values before the instance is queried by compile /
@@ -257,12 +258,16 @@ impl Graph {
             .nodes
             .get_mut(&id)
             .ok_or(GraphError::NodeNotFound(id))?;
-        let static_name = inst
+        // Clone the ParamDef's canonical name (a `Cow` — `Borrowed` for
+        // fixed params, `Owned` for a variadic node's formatted name) as the
+        // storage key. Cloning also releases the immutable borrow of
+        // `inst.node` before the mutable `inst.params` write below.
+        let key = inst
             .node
             .parameters()
             .iter()
             .find(|p| p.name == name)
-            .map(|p| p.name)
+            .map(|p| p.name.clone())
             .ok_or_else(|| GraphError::ParamNotFound {
                 node: id,
                 param: name.to_string(),
@@ -271,10 +276,10 @@ impl Graph {
         // — no epoch bump (the executor's memo skip keys on `param_epoch`),
         // and no reconfigure (same params ⇒ same port shape). Hosts re-apply
         // bindings and constants every frame; only real changes count.
-        if inst.params.get(static_name) == Some(&value) {
+        if inst.params.get(key.as_ref()) == Some(&value) {
             return Ok(());
         }
-        inst.params.insert(static_name, value);
+        inst.params.insert(key, value);
         inst.param_epoch += 1;
         // Variadic nodes rebuild their port lists when a count-style param
         // changes. Disjoint field borrows (`node` mut, `params` shared).
@@ -353,20 +358,20 @@ impl Graph {
             .nodes
             .get_mut(&id)
             .ok_or(GraphError::NodeNotFound(id))?;
-        let static_name = inst
+        let key = inst
             .node
             .parameters()
             .iter()
             .find(|p| p.name == name)
-            .map(|p| p.name)
+            .map(|p| p.name.clone())
             .ok_or_else(|| GraphError::ParamNotFound {
                 node: id,
                 param: name.to_string(),
             })?;
         if exposed {
-            inst.exposed_params.insert(static_name);
+            inst.exposed_params.insert(key);
         } else {
-            inst.exposed_params.remove(static_name);
+            inst.exposed_params.remove(key.as_ref());
         }
         Ok(())
     }
@@ -397,10 +402,12 @@ impl Graph {
     ) {
         if let Some(inst) = self.nodes.get_mut(&id) {
             // Same compare-on-write contract as `set_param` — see there.
+            // Hot path: `name` is a `&'static str`, wrapped as a borrowed
+            // `Cow` key with no allocation.
             if inst.params.get(name) == Some(&value) {
                 return;
             }
-            inst.params.insert(name, value);
+            inst.params.insert(std::borrow::Cow::Borrowed(name), value);
             inst.param_epoch += 1;
         }
     }
@@ -587,7 +594,7 @@ mod tests {
 
     pub(super) fn input(name: &'static str, ty: PortType, required: bool) -> NodeInput {
         NodePort {
-            name,
+            name: std::borrow::Cow::Borrowed(name),
             ty,
             kind: PortKind::Input,
             required,
@@ -596,7 +603,7 @@ mod tests {
 
     pub(super) fn output(name: &'static str, ty: PortType) -> NodeOutput {
         NodePort {
-            name,
+            name: std::borrow::Cow::Borrowed(name),
             ty,
             kind: PortKind::Output,
             required: false,

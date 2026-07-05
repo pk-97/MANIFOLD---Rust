@@ -65,7 +65,10 @@ pub(crate) fn param_wgsl_type(p: &ParamDef) -> Result<&'static str, CodegenError
         ParamType::Float | ParamType::Angle | ParamType::Frequency => Ok("f32"),
         ParamType::Int => Ok("i32"),
         ParamType::Bool | ParamType::Enum => Ok("u32"),
-        other => Err(CodegenError::UnsupportedParam { name: p.name, ty: other }),
+        other => Err(CodegenError::UnsupportedParam {
+            name: crate::node_graph::intern_name(&p.name),
+            ty: other,
+        }),
     }
 }
 
@@ -85,7 +88,10 @@ pub(crate) fn param_word_count(p: &ParamDef) -> Result<usize, CodegenError> {
         ParamType::Float | ParamType::Angle | ParamType::Frequency => Ok(1),
         ParamType::Int | ParamType::Bool | ParamType::Enum => Ok(1),
         ParamType::Vec3 => Ok(3),
-        other => Err(CodegenError::UnsupportedParam { name: p.name, ty: other }),
+        other => Err(CodegenError::UnsupportedParam {
+            name: crate::node_graph::intern_name(&p.name),
+            ty: other,
+        }),
     }
 }
 
@@ -374,7 +380,7 @@ pub fn generate_standalone_ext(
             if p.ty == ParamType::Table {
                 continue; // emitted as count (here) + array (below)
             }
-            let f = wgsl_safe_field(p.name);
+            let f = wgsl_safe_field(p.name.as_ref());
             if p.ty == ParamType::Vec3 {
                 // A vec3 param expands to three consecutive f32 fields.
                 writeln!(out, "    {f}_x: f32,").unwrap();
@@ -579,7 +585,7 @@ pub fn generate_standalone_ext(
         if p.ty == ParamType::Table {
             continue;
         }
-        let f = wgsl_safe_field(p.name);
+        let f = wgsl_safe_field(p.name.as_ref());
         if p.ty == ParamType::Vec3 {
             args.push(format!("vec3<f32>(params.{f}_x, params.{f}_y, params.{f}_z)"));
         } else {
@@ -770,7 +776,7 @@ fn generate_standalone_buffer(
     // Per-output (port name, element type), in declaration order.
     let out_infos: Vec<(&str, String)> = array_outputs
         .iter()
-        .map(|o| (o.name, buffer_element_type(specs_of(&o.ty), &mut structs)))
+        .map(|o| (o.name.as_ref(), buffer_element_type(specs_of(&o.ty), &mut structs)))
         .collect();
     // Output array global name. Normally `buf_<port>`, but if the output port
     // shares a name with an input port (e.g. instance_position_jitter's
@@ -787,12 +793,12 @@ fn generate_standalone_buffer(
     // Atomic-accumulator output (scatter, single-output only): emitted as
     // `array<atomic<u32>>` and written by the body via `atomicAdd` on the global
     // itself, not the wrapper's `[idx] = body(...)`. WGSL atomics are integer-only.
-    let out_is_atomic = !multi_output && atomic_outputs.contains(&array_outputs[0].name);
+    let out_is_atomic = !multi_output && atomic_outputs.contains(&array_outputs[0].name.as_ref());
     if out_is_atomic && out_infos[0].1 != "u32" && out_infos[0].1 != "i32" {
         return Err(CodegenError::AtomicNonInteger { ty: out_infos[0].1.clone() });
     }
     // Multi-output atomic isn't a shape any atom needs yet.
-    if multi_output && array_outputs.iter().any(|o| atomic_outputs.contains(&o.name)) {
+    if multi_output && array_outputs.iter().any(|o| atomic_outputs.contains(&o.name.as_ref())) {
         return Err(CodegenError::NotFusable(FusionKind::Boundary));
     }
 
@@ -811,7 +817,7 @@ fn generate_standalone_buffer(
     let mut words = 0usize;
     for p in params {
         let ty = param_wgsl_type(p)?; // rejects vec/table/string buffer params
-        let f = wgsl_safe_field(p.name);
+        let f = wgsl_safe_field(p.name.as_ref());
         writeln!(out, "    {f}: {ty},").unwrap();
         words += param_word_count(p)?; // scalar params are 1 word each
     }
@@ -946,7 +952,7 @@ fn generate_standalone_buffer(
         args.push("samp".to_string());
     }
     for p in params {
-        let f = wgsl_safe_field(p.name);
+        let f = wgsl_safe_field(p.name.as_ref());
         args.push(format!("params.{f}"));
     }
     for d in derived_uniforms {
@@ -1046,7 +1052,7 @@ fn generate_standalone_resolve(
         let mut words = 0usize;
         for p in params {
             let ty = param_wgsl_type(p)?;
-            let f = wgsl_safe_field(p.name);
+            let f = wgsl_safe_field(p.name.as_ref());
             writeln!(out, "    {f}: {ty},").unwrap();
             words += param_word_count(p)?;
         }
@@ -1095,7 +1101,7 @@ fn generate_standalone_resolve(
     writeln!(out, "    let idx = {idx_expr};").unwrap();
     let mut args: Vec<String> = vec!["idx".to_string()];
     for p in params {
-        let f = wgsl_safe_field(p.name);
+        let f = wgsl_safe_field(p.name.as_ref());
         args.push(format!("params.{f}"));
     }
     writeln!(out, "    let result = body({});", args.join(", ")).unwrap();
@@ -1607,7 +1613,7 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
         for p in node.params {
             let ty = param_wgsl_type(p)?;
             writeln!(struct_body, "    n{i}_{}: {ty},", p.name).unwrap();
-            param_order.push((node.node_id, p.name));
+            param_order.push((node.node_id, crate::node_graph::intern_name(&p.name)));
             field_count += 1;
         }
     }
@@ -1975,7 +1981,7 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         for p in node.params {
             let ty = param_wgsl_type(p)?;
             writeln!(struct_body, "    n{i}_{}: {ty},", p.name).unwrap();
-            param_order.push((node.node_id, p.name));
+            param_order.push((node.node_id, crate::node_graph::intern_name(&p.name)));
             field_count += 1;
         }
     }
@@ -2160,7 +2166,7 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
             if access != InputAccess::Gather {
                 continue;
             }
-            let port = tex_specs[idx].name;
+            let port = tex_specs[idx].name.clone();
             match src {
                 InputSource::External(e) => {
                     if *e >= region.num_external_inputs {

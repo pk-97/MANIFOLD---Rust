@@ -6,6 +6,8 @@
 //! other mode `amount` acts as opacity for the blend result. Pixel-local
 //! and fuseable. It supersedes the old no-op `Blend` stub (now removed).
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -48,7 +50,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "amount",
+            name: Cow::Borrowed("amount"),
             label: "Amount",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -56,7 +58,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "mode",
+            name: Cow::Borrowed("mode"),
             label: "Blend Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),

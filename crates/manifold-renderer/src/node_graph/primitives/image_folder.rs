@@ -27,6 +27,7 @@
 //! live in their own primitives so this one stays a generic image
 //! player.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
@@ -70,7 +71,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "folder",
+            name: Cow::Borrowed("folder"),
             label: "Folder",
             ty: ParamType::String,
             default: ParamValue::Float(0.0), // String default supplied via stringBindings; this slot is never read.
@@ -78,7 +79,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "position",
+            name: Cow::Borrowed("position"),
             label: "Position",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -86,7 +87,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "uv_scale",
+            name: Cow::Borrowed("uv_scale"),
             label: "Zoom",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -94,7 +95,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "next",
+            name: Cow::Borrowed("next"),
             label: "Next",
             ty: ParamType::Trigger,
             default: ParamValue::Float(0.0),
@@ -102,7 +103,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "prev",
+            name: Cow::Borrowed("prev"),
             label: "Prev",
             ty: ParamType::Trigger,
             default: ParamValue::Float(0.0),
@@ -502,7 +503,7 @@ mod tests {
         assert_eq!(ImageFolder::OUTPUTS[1].name, "trigger_count");
         assert_eq!(ImageFolder::OUTPUTS[1].ty, PortType::Scalar(ScalarType::F32));
 
-        let names: Vec<&str> = ImageFolder::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = ImageFolder::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["folder", "position", "uv_scale", "next", "prev"]);
     }
 

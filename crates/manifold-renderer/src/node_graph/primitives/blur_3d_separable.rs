@@ -10,6 +10,8 @@
 //! relative to a naive Gaussian (matches FluidSim3D's behaviour
 //! exactly).
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -45,7 +47,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "mode",
+            name: Cow::Borrowed("mode"),
             label: "Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -53,7 +55,7 @@ crate::primitive! {
             enum_values: BLUR_3D_MODES,
         },
         ParamDef {
-            name: "axis",
+            name: Cow::Borrowed("axis"),
             label: "Axis",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -61,7 +63,7 @@ crate::primitive! {
             enum_values: BLUR_3D_AXES,
         },
         ParamDef {
-            name: "vol_res",
+            name: Cow::Borrowed("vol_res"),
             label: "Volume Resolution",
             ty: ParamType::Int,
             default: ParamValue::Float(128.0),
@@ -69,7 +71,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "radius",
+            name: Cow::Borrowed("radius"),
             label: "Radius",
             ty: ParamType::Float,
             default: ParamValue::Float(2.0),
@@ -191,7 +193,7 @@ mod tests {
 
     #[test]
     fn blur_3d_has_mode_axis_res_radius_params() {
-        let names: Vec<&str> = Blur3DSeparable::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = Blur3DSeparable::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["mode", "axis", "vol_res", "radius"]);
     }
 

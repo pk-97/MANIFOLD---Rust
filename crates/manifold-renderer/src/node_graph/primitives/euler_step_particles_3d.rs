@@ -9,6 +9,7 @@
 //! unchanged. No boundary handling — pair with
 //! `node.keep_in_box_3d` for the position-bounds policy.
 
+use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::generators::compute_common::Particle;
@@ -44,7 +45,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "active_count",
+            name: Cow::Borrowed("active_count"),
             label: "Active Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
@@ -52,7 +53,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "speed",
+            name: Cow::Borrowed("speed"),
             label: "Speed",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -188,7 +189,7 @@ mod tests {
         let vec3_layout = ArrayType::of_known::<[f32; 3]>();
 
         assert_eq!(EulerStepParticles3D::TYPE_ID, "node.move_particles_3d");
-        let names: Vec<&str> = EulerStepParticles3D::INPUTS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = EulerStepParticles3D::INPUTS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["in", "forces", "speed", "active_count"]);
         assert_eq!(
             EulerStepParticles3D::INPUTS[0].ty,

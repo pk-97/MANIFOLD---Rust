@@ -19,6 +19,8 @@
 //! baked in, so saved projects load unchanged — old presets never stored a
 //! `type` param, so the per-instance default carries it.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -56,7 +58,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "type",
+            name: Cow::Borrowed("type"),
             label: "Type",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -64,7 +66,7 @@ crate::primitive! {
             enum_values: NOISE_TYPES,
         },
         ParamDef {
-            name: "scale",
+            name: Cow::Borrowed("scale"),
             label: "Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(4.0),
@@ -72,7 +74,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "offset_x",
+            name: Cow::Borrowed("offset_x"),
             label: "Offset X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -80,7 +82,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "offset_y",
+            name: Cow::Borrowed("offset_y"),
             label: "Offset Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -88,7 +90,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "octaves",
+            name: Cow::Borrowed("octaves"),
             label: "Detail (octaves)",
             ty: ParamType::Int,
             default: ParamValue::Float(1.0),
@@ -96,7 +98,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "lacunarity",
+            name: Cow::Borrowed("lacunarity"),
             label: "Lacunarity",
             ty: ParamType::Float,
             default: ParamValue::Float(2.0),
@@ -104,7 +106,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "persistence",
+            name: Cow::Borrowed("persistence"),
             label: "Persistence",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -264,7 +266,7 @@ mod tests {
         assert_eq!(Noise::OUTPUTS.len(), 1);
         assert_eq!(Noise::OUTPUTS[0].name, "out");
         assert_eq!(Noise::OUTPUTS[0].ty, PortType::Texture2D);
-        let names: Vec<&str> = Noise::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = Noise::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec!["type", "scale", "offset_x", "offset_y", "octaves", "lacunarity", "persistence"]

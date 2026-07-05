@@ -20,6 +20,7 @@
 //!    per-pixel attenuation — that needs a `world_pos`-wired 3D-mesh-mode
 //!    extension, which this atom doesn't have).
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -60,7 +61,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "light_x",
+            name: Cow::Borrowed("light_x"),
             label: "Light X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.4),
@@ -68,7 +69,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "light_y",
+            name: Cow::Borrowed("light_y"),
             label: "Light Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.6),
@@ -76,7 +77,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "light_z",
+            name: Cow::Borrowed("light_z"),
             label: "Light Z",
             ty: ParamType::Float,
             default: ParamValue::Float(0.7),
@@ -84,7 +85,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "ambient",
+            name: Cow::Borrowed("ambient"),
             label: "Ambient",
             ty: ParamType::Float,
             default: ParamValue::Float(0.1),

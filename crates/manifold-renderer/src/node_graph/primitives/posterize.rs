@@ -7,6 +7,8 @@
 //! this (quantize + an ordered-threshold pattern) rather than baking
 //! both into one fused kernel.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -35,7 +37,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "levels",
+            name: Cow::Borrowed("levels"),
             label: "Levels",
             ty: ParamType::Float,
             default: ParamValue::Float(8.0),

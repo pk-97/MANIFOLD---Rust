@@ -3,6 +3,8 @@
 //! grazing. ADDITIVE — sum with a base shading via `node.compose`
 //! mode=Add (or mode=Screen for HDR-safe).
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -35,7 +37,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "view_x",
+            name: Cow::Borrowed("view_x"),
             label: "View X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -43,7 +45,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "view_y",
+            name: Cow::Borrowed("view_y"),
             label: "View Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -51,7 +53,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "view_z",
+            name: Cow::Borrowed("view_z"),
             label: "View Z",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -59,7 +61,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "power",
+            name: Cow::Borrowed("power"),
             label: "Power",
             ty: ParamType::Float,
             default: ParamValue::Float(3.0),
@@ -67,7 +69,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "color",
+            name: Cow::Borrowed("color"),
             label: "Color",
             ty: ParamType::Color,
             default: ParamValue::Color([0.55, 0.30, 0.85, 1.0]),

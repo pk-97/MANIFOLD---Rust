@@ -20,6 +20,8 @@
 //! …]}`), up to 16 of them. `domain` (default 1.0) scales the t-range covered
 //! by the texture; set it to 2.0 to reproduce Infrared's [0, 2] LUT.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -73,7 +75,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "stops",
+            name: Cow::Borrowed("stops"),
             label: "Stops",
             ty: ParamType::Table,
             // Tables can't live in a const ParamValue (Arc isn't const-
@@ -85,7 +87,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "domain",
+            name: Cow::Borrowed("domain"),
             label: "Domain",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),

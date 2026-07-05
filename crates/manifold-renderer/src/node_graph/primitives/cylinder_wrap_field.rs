@@ -18,6 +18,8 @@
 //! tapered radius — drive from `node.simplex_noise_per_copy` (organic
 //! stem noise) or any other Array<f32> source.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::InstanceTransform;
@@ -55,7 +57,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "base_radius",
+            name: Cow::Borrowed("base_radius"),
             label: "Base Radius",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -63,7 +65,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "height_scale",
+            name: Cow::Borrowed("height_scale"),
             label: "Height",
             ty: ParamType::Float,
             default: ParamValue::Float(2.0),
@@ -71,7 +73,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "taper",
+            name: Cow::Borrowed("taper"),
             label: "Taper",
             ty: ParamType::Float,
             default: ParamValue::Float(2.0),
@@ -79,7 +81,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "instance_scale",
+            name: Cow::Borrowed("instance_scale"),
             label: "Instance Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),

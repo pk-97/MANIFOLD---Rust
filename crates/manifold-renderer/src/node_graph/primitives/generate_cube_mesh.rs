@@ -8,6 +8,8 @@
 //! draw N copies of a cube under different transforms — the
 //! decomposed shape of NestedCubes / DigitalPlants.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::MeshVertex;
@@ -42,7 +44,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "max_capacity",
+            name: Cow::Borrowed("max_capacity"),
             label: "Max Capacity",
             ty: ParamType::Int,
             default: ParamValue::Float(36.0),
@@ -50,7 +52,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "size",
+            name: Cow::Borrowed("size"),
             label: "Size",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),

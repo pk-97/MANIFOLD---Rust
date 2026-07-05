@@ -12,6 +12,7 @@
 //! handling — pair with `node.wrap_around` (or a future
 //! `boundary_death` atom) for the position-bounds policy.
 
+use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::generators::compute_common::Particle;
@@ -47,7 +48,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "active_count",
+            name: Cow::Borrowed("active_count"),
             label: "Active Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
@@ -55,7 +56,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "speed",
+            name: Cow::Borrowed("speed"),
             label: "Speed",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -191,7 +192,7 @@ mod tests {
         let vec2_layout = ArrayType::of_known::<[f32; 2]>();
 
         assert_eq!(EulerStepParticles::TYPE_ID, "node.move_particles");
-        let names: Vec<&str> = EulerStepParticles::INPUTS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = EulerStepParticles::INPUTS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["in", "forces", "speed", "active_count"]);
         assert_eq!(
             EulerStepParticles::INPUTS[0].ty,

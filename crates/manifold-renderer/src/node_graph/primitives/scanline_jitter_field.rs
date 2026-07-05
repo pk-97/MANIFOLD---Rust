@@ -12,6 +12,7 @@
 //! Split out of the old fused `node.glitch_displace`. `time` drives the
 //! hash — wired or read from `FrameTime.seconds`.
 
+use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -51,7 +52,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "amount",
+            name: Cow::Borrowed("amount"),
             label: "Amount",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -59,7 +60,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "scanline",
+            name: Cow::Borrowed("scanline"),
             label: "Scanline",
             ty: ParamType::Float,
             default: ParamValue::Float(0.3),
@@ -67,7 +68,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "speed",
+            name: Cow::Borrowed("speed"),
             label: "Speed",
             ty: ParamType::Float,
             default: ParamValue::Float(2.0),
@@ -75,7 +76,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "motion",
+            name: Cow::Borrowed("motion"),
             label: "Motion",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -83,7 +84,7 @@ crate::primitive! {
             enum_values: SCANLINE_MOTION,
         },
         ParamDef {
-            name: "bands",
+            name: Cow::Borrowed("bands"),
             label: "Bands",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -93,7 +94,7 @@ crate::primitive! {
         // Backing param for the `time` input (port-shadow); run() packs the
         // resolved FrameTime/wired value, so the default below is never live.
         ParamDef {
-            name: "time",
+            name: Cow::Borrowed("time"),
             label: "Time",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -206,7 +207,10 @@ mod tests {
 
     #[test]
     fn amount_speed_time_are_optional_scalar_inputs() {
-        let names: Vec<&str> = ScanlineJitterField::INPUTS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = ScanlineJitterField::INPUTS
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect();
         assert_eq!(names, vec!["amount", "speed", "time"]);
         assert!(ScanlineJitterField::INPUTS.iter().all(|p| !p.required));
         assert!(

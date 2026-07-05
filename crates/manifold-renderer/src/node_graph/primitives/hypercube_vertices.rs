@@ -30,6 +30,7 @@
 //! the legacy generator's *projected* pixels bit-exactly — accepted
 //! trade-off, identical to the prior `generate_tesseract_vertices`.
 
+use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::Vec4Vertex;
@@ -63,7 +64,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "dimension",
+            name: Cow::Borrowed("dimension"),
             label: "Dimension",
             ty: ParamType::Float,
             default: ParamValue::Float(4.0),
@@ -241,7 +242,7 @@ mod gpu_tests {
             Self {
                 type_id: EffectNodeType::new("test.vec4_vertex_sink"),
                 inputs: vec![NodePort {
-                    name: "in",
+                    name: std::borrow::Cow::Borrowed("in"),
                     ty: PortType::Array(ArrayType::of_known::<Vec4Vertex>()),
                     kind: PortKind::Input,
                     required: true,

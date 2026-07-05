@@ -11,6 +11,7 @@
 //! parse result actually changes; the GPU copy into the pre-bound output
 //! buffer runs every frame via a cheap blit.
 
+use std::borrow::Cow;
 use std::sync::mpsc;
 
 use crate::generators::mesh_common::MeshVertex;
@@ -29,7 +30,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "path",
+            name: Cow::Borrowed("path"),
             label: "File",
             ty: ParamType::String,
             default: ParamValue::Float(0.0), // String default supplied via stringBindings; this slot is never read.
@@ -37,7 +38,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "mesh_index",
+            name: Cow::Borrowed("mesh_index"),
             label: "Mesh Index",
             ty: ParamType::Int,
             default: ParamValue::Float(-1.0),
@@ -45,7 +46,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "primitive_index",
+            name: Cow::Borrowed("primitive_index"),
             label: "Primitive Index",
             ty: ParamType::Int,
             default: ParamValue::Float(-1.0),
@@ -53,7 +54,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "material_index",
+            name: Cow::Borrowed("material_index"),
             label: "Material Index",
             ty: ParamType::Int,
             default: ParamValue::Float(-1.0),
@@ -61,7 +62,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "max_capacity",
+            name: Cow::Borrowed("max_capacity"),
             label: "Max Capacity",
             ty: ParamType::Int,
             default: ParamValue::Float(200000.0),
@@ -242,7 +243,7 @@ mod tests {
 
     #[test]
     fn gltf_mesh_source_param_names_in_order() {
-        let names: Vec<&str> = GltfMeshSource::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = GltfMeshSource::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec!["path", "mesh_index", "primitive_index", "material_index", "max_capacity"]

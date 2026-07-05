@@ -13,6 +13,8 @@
 //! MetallicGlass-style feedback-displacement on arbitrary
 //! source textures).
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::MeshVertex;
@@ -46,7 +48,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "max_capacity",
+            name: Cow::Borrowed("max_capacity"),
             label: "Max Capacity",
             ty: ParamType::Int,
             default: ParamValue::Float(2_097_152.0),
@@ -54,7 +56,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "resolution_x",
+            name: Cow::Borrowed("resolution_x"),
             label: "Resolution X",
             ty: ParamType::Int,
             default: ParamValue::Float(256.0),
@@ -62,7 +64,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "resolution_y",
+            name: Cow::Borrowed("resolution_y"),
             label: "Resolution Y",
             ty: ParamType::Int,
             default: ParamValue::Float(256.0),
@@ -70,7 +72,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "size_x",
+            name: Cow::Borrowed("size_x"),
             label: "Size X",
             ty: ParamType::Float,
             default: ParamValue::Float(2.0),
@@ -78,7 +80,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "size_y",
+            name: Cow::Borrowed("size_y"),
             label: "Size Y",
             ty: ParamType::Float,
             default: ParamValue::Float(2.0),
@@ -184,7 +186,7 @@ mod tests {
 
     #[test]
     fn generate_grid_mesh_has_capacity_resolution_and_size_params() {
-        let names: Vec<&str> = GenerateGridMesh::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = GenerateGridMesh::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec![

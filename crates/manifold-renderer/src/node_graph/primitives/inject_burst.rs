@@ -16,6 +16,7 @@
 //! seek / pause clears all state — a re-entered clip starts with no
 //! burst in flight.
 
+use std::borrow::Cow;
 use crate::node_graph::effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, NodeRequires,
 };
@@ -36,7 +37,7 @@ impl NodeState for InjectState {}
 
 const INJECT_BURST_INPUTS: [NodeInput; 2] = [
     NodePort {
-        name: "trigger",
+        name: Cow::Borrowed("trigger"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: true,
@@ -45,7 +46,7 @@ const INJECT_BURST_INPUTS: [NodeInput; 2] = [
     // `(clip_trigger > 0.5) * (mode == 4)`. On trigger-edge frames
     // the primitive only starts a burst if `enable > 0.5`.
     NodePort {
-        name: "enable",
+        name: Cow::Borrowed("enable"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: true,
@@ -54,25 +55,25 @@ const INJECT_BURST_INPUTS: [NodeInput; 2] = [
 
 const INJECT_BURST_OUTPUTS: [NodeOutput; 4] = [
     NodePort {
-        name: "active",
+        name: Cow::Borrowed("active"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Output,
         required: false,
     },
     NodePort {
-        name: "phase",
+        name: Cow::Borrowed("phase"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Output,
         required: false,
     },
     NodePort {
-        name: "point_x",
+        name: Cow::Borrowed("point_x"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Output,
         required: false,
     },
     NodePort {
-        name: "point_y",
+        name: Cow::Borrowed("point_y"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Output,
         required: false,
@@ -80,7 +81,7 @@ const INJECT_BURST_OUTPUTS: [NodeOutput; 4] = [
 ];
 
 const INJECT_BURST_PARAMS: [ParamDef; 1] = [ParamDef {
-    name: "duration",
+    name: Cow::Borrowed("duration"),
     label: "Duration (s)",
     ty: ParamType::Float,
     default: ParamValue::Float(0.5),
@@ -240,14 +241,14 @@ mod tests {
         assert!(node.inputs()[0].required);
         assert_eq!(node.inputs()[1].name, "enable");
         assert!(node.inputs()[1].required);
-        let outs: Vec<&str> = node.outputs().iter().map(|p| p.name).collect();
+        let outs: Vec<&str> = node.outputs().iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(outs, vec!["active", "phase", "point_x", "point_y"]);
     }
 
     #[test]
     fn inject_burst_has_duration_param() {
         let node = InjectBurst::new();
-        let names: Vec<&str> = node.parameters().iter().map(|p| p.name).collect();
+        let names: Vec<&str> = node.parameters().iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["duration"]);
     }
 

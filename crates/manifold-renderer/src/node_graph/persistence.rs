@@ -483,7 +483,7 @@ impl EffectGraphDefExt for EffectGraphDef {
                 for def in inst.node.parameters() {
                     let value = inst
                         .params
-                        .get(def.name)
+                        .get(def.name.as_ref())
                         .cloned()
                         .unwrap_or_else(|| def.default.clone());
                     params.insert(def.name.to_string(), value.into());
@@ -496,11 +496,11 @@ impl EffectGraphDefExt for EffectGraphDef {
                 let mut output_formats = BTreeMap::new();
                 let mut output_canvas_scales = BTreeMap::new();
                 for out in inst.node.outputs() {
-                    if let Some(fmt) = inst.node.output_format(out.name) {
+                    if let Some(fmt) = inst.node.output_format(out.name.as_ref()) {
                         output_formats.insert(out.name.to_string(), format_to_str(fmt).to_string());
                     }
                     if let Some((num, denom)) =
-                        inst.node.output_canvas_scale(out.name, &inst.params)
+                        inst.node.output_canvas_scale(out.name.as_ref(), &inst.params)
                     {
                         // Persist only non-default scales (i.e. nodes
                         // that actually report something — most won't).
@@ -663,10 +663,10 @@ impl EffectGraphDefExt for EffectGraphDef {
                             .parameters()
                             .iter()
                             .find(|p| p.name == param.as_str())
-                            .map(|p| p.name)
+                            .map(|p| p.name.clone())
                     });
                     if let Some(name_static) = static_name {
-                        let _ = graph.set_param_exposed(inst_id, name_static, true);
+                        let _ = graph.set_param_exposed(inst_id, name_static.as_ref(), true);
                     }
                 }
             }

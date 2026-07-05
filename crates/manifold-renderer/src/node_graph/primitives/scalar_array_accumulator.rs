@@ -15,6 +15,7 @@
 //! sets it to `[[0, 90, 180, 270, 360]]` so envelope mode starts with
 //! the legacy initial spread.
 
+use std::borrow::Cow;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -32,7 +33,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "increment",
+            name: Cow::Borrowed("increment"),
             label: "Increment",
             ty: ParamType::Float,
             default: ParamValue::Float(90.0),
@@ -40,7 +41,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "capacity",
+            name: Cow::Borrowed("capacity"),
             label: "Capacity",
             ty: ParamType::Int,
             default: ParamValue::Float(5.0),
@@ -48,7 +49,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "initial",
+            name: Cow::Borrowed("initial"),
             label: "Initial",
             ty: ParamType::Table,
             // Sentinel — see ParamValue::Table docs. Real tables come
@@ -200,7 +201,7 @@ mod tests {
         use crate::node_graph::effect_node::ParamValues;
         let prim = ScalarArrayAccumulator::new();
         let mut params = ParamValues::default();
-        params.insert("capacity", ParamValue::Float(7.0));
+        params.insert(std::borrow::Cow::Borrowed("capacity"), ParamValue::Float(7.0));
         let cap = Primitive::array_output_capacity(&prim, "accumulated", &params, &[]);
         assert_eq!(cap, Some(7));
     }

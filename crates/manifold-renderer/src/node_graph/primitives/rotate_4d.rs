@@ -7,6 +7,8 @@
 //! wired with the same base verts. The transform primitive in
 //! the mesh-family triad: producer → Rotate4D → renderer.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::Vec4Vertex;
@@ -45,7 +47,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "angle_xy",
+            name: Cow::Borrowed("angle_xy"),
             label: "Angle XY",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.6),
@@ -53,7 +55,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "angle_zw",
+            name: Cow::Borrowed("angle_zw"),
             label: "Angle ZW",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.4),
@@ -61,7 +63,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "angle_xw",
+            name: Cow::Borrowed("angle_xw"),
             label: "Angle XW",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.25),
@@ -179,7 +181,10 @@ mod tests {
 
     #[test]
     fn rotate_4d_has_three_rotation_angles() {
-        let names: Vec<&str> = Rotate4D::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = Rotate4D::PARAMS
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect();
         assert_eq!(names, vec!["angle_xy", "angle_zw", "angle_xw"]);
     }
 

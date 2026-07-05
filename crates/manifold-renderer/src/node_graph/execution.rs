@@ -1434,7 +1434,7 @@ mod tests {
 
     fn input(name: &'static str, ty: PortType, required: bool) -> NodeInput {
         NodePort {
-            name,
+            name: std::borrow::Cow::Borrowed(name),
             ty,
             kind: PortKind::Input,
             required,
@@ -1443,7 +1443,7 @@ mod tests {
 
     fn output(name: &'static str, ty: PortType) -> NodeOutput {
         NodePort {
-            name,
+            name: std::borrow::Cow::Borrowed(name),
             ty,
             kind: PortKind::Output,
             required: false,
@@ -2469,7 +2469,7 @@ mod tests {
         }
         fn inputs(&self) -> &[NodeInput] {
             static INPUTS: [NodeInput; 1] = [NodePort {
-                name: "in",
+                name: std::borrow::Cow::Borrowed("in"),
                 ty: PortType::Texture2D,
                 kind: PortKind::Input,
                 required: false,
@@ -2478,7 +2478,7 @@ mod tests {
         }
         fn outputs(&self) -> &[NodeOutput] {
             static OUTPUTS: [NodeOutput; 1] = [NodePort {
-                name: "out",
+                name: std::borrow::Cow::Borrowed("out"),
                 ty: PortType::Texture2D,
                 kind: PortKind::Output,
                 required: false,
@@ -2487,7 +2487,7 @@ mod tests {
         }
         fn parameters(&self) -> &[ParamDef] {
             static PARAMS: [ParamDef; 1] = [ParamDef {
-                name: "k",
+                name: std::borrow::Cow::Borrowed("k"),
                 label: "K",
                 ty: crate::node_graph::parameters::ParamType::Float,
                 default: crate::node_graph::parameters::ParamValue::Float(1.0),
@@ -2673,7 +2673,7 @@ mod tests {
         }
         fn inputs(&self) -> &[NodeInput] {
             static INPUTS: [NodeInput; 1] = [NodePort {
-                name: "in",
+                name: std::borrow::Cow::Borrowed("in"),
                 ty: PortType::Texture2D,
                 kind: PortKind::Input,
                 required: false,
@@ -2682,7 +2682,7 @@ mod tests {
         }
         fn outputs(&self) -> &[NodeOutput] {
             static OUTPUTS: [NodeOutput; 1] = [NodePort {
-                name: "out",
+                name: std::borrow::Cow::Borrowed("out"),
                 ty: PortType::Texture2D,
                 kind: PortKind::Output,
                 required: false,
@@ -2823,13 +2823,13 @@ mod tests {
         fn inputs(&self) -> &[NodeInput] {
             static INPUTS: [NodeInput; 2] = [
                 NodePort {
-                    name: "src",
+                    name: std::borrow::Cow::Borrowed("src"),
                     ty: PortType::Texture2D,
                     kind: PortKind::Input,
                     required: false,
                 },
                 NodePort {
-                    name: "detections",
+                    name: std::borrow::Cow::Borrowed("detections"),
                     ty: PortType::Texture2D,
                     kind: PortKind::Input,
                     required: false,
@@ -2839,7 +2839,7 @@ mod tests {
         }
         fn outputs(&self) -> &[NodeOutput] {
             static OUTPUTS: [NodeOutput; 1] = [NodePort {
-                name: "out",
+                name: std::borrow::Cow::Borrowed("out"),
                 ty: PortType::Texture2D,
                 kind: PortKind::Output,
                 required: false,

@@ -17,6 +17,7 @@
 //! `mode` from its surface to avoid documenting a parameter that has
 //! no effect.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -35,7 +36,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "amount",
+            name: Cow::Borrowed("amount"),
             label: "Amount",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -43,7 +44,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "threshold",
+            name: Cow::Borrowed("threshold"),
             label: "Threshold",
             ty: ParamType::Float,
             default: ParamValue::Float(0.1),

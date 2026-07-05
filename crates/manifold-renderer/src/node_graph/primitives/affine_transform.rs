@@ -22,6 +22,7 @@ use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use std::borrow::Cow;
 
 crate::primitive! {
     name: AffineTransform,
@@ -39,7 +40,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "translate_x",
+            name: Cow::Borrowed("translate_x"),
             label: "Translate X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -47,7 +48,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "translate_y",
+            name: Cow::Borrowed("translate_y"),
             label: "Translate Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -55,7 +56,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "scale",
+            name: Cow::Borrowed("scale"),
             label: "Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -63,7 +64,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "rotation",
+            name: Cow::Borrowed("rotation"),
             label: "Rotation",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -214,7 +215,7 @@ mod port_shadow_tests {
     #[test]
     fn affine_transform_declares_all_three_scalar_input_ports() {
         let affine = AffineTransform::new();
-        let port_names: Vec<_> = affine.inputs().iter().map(|p| p.name).collect();
+        let port_names: Vec<_> = affine.inputs().iter().map(|p| p.name.as_ref()).collect();
         for needed in ["in", "translate_x", "translate_y", "rotation"] {
             assert!(
                 port_names.contains(&needed),

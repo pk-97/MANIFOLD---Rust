@@ -3,6 +3,7 @@
 //! distance, giving a small glow rather than a hard disc. Math ported
 //! verbatim from the Blob Track HUD's `center_dot` wgsl_compute kernel.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -33,7 +34,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "color",
+            name: Cow::Borrowed("color"),
             label: "Color",
             ty: ParamType::Color,
             default: ParamValue::Color([0.85, 0.92, 1.0, 1.0]),
@@ -41,7 +42,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "alpha",
+            name: Cow::Borrowed("alpha"),
             label: "Alpha",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -49,7 +50,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "radius_px",
+            name: Cow::Borrowed("radius_px"),
             label: "Radius",
             ty: ParamType::Float,
             default: ParamValue::Float(4.0),

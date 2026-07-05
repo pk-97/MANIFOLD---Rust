@@ -18,6 +18,7 @@
 //! legacy compute pass had no prior rotation to preserve — the
 //! decomposition gives every primitive the more general contract).
 
+use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::InstanceTransform;
@@ -52,7 +53,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "amplitude",
+            name: Cow::Borrowed("amplitude"),
             label: "Amplitude",
             ty: ParamType::Float,
             default: ParamValue::Float(0.2),
