@@ -3639,8 +3639,8 @@ mod tests {
         let fx: PresetInstance = serde_json::from_str(json).unwrap();
         // amount resolves via the registry; old_phantom_param has nowhere
         // to go (not static, not a user-added tail id) and is dropped.
-        assert_eq!(fx.param_values.len(), 1);
-        assert!((fx.param_values[0].value - 0.7).abs() < f32::EPSILON);
+        assert_eq!(fx.params.len(), 1);
+        assert!((fx.params.get("amount").unwrap().value - 0.7).abs() < f32::EPSILON);
     }
 
     inventory::submit! {
