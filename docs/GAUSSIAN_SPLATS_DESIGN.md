@@ -1,6 +1,6 @@
 # Gaussian Splats — photoreal scans as a playable instrument
 
-**Status:** APPROVED design, not built · 2026-07-05 · Fable
+**Status:** APPROVED design, not built · 2026-07-05 · Fable · **baseline-reviewed 2026-07-05, cleared** (zero unlabeled forks; `render_scene` P1 prerequisite re-verified in-tree @ `8daa89fc`; the "no GPU sort exists" negative claim re-run and confirmed; camera audit row pinned — look_at_camera landed, free_camera absent. §10 levels: P1/P2 gate L1 by nature — no visual surface until P3; P3–P6 gates are already L2 with value-level pixel asserts.)
 **Prerequisites:** none hard — `node.render_scene` P1 is shipped (`render_scene.rs`,
 commit `8daa89fc`), which is all the scene-composite phase (P4) consumes. P1–P3 and
 P5–P6 depend on nothing unbuilt.
@@ -35,7 +35,7 @@ Companions: `REALTIME_3D_DESIGN.md` (the scene splats composite into),
 | Compute dispatch + WGSL→MSL pipeline, persistent node-owned buffers | `dispatch_compute`, `primitive!` `extra_fields` pattern | Shipped, used by every particle atom |
 | GPU sort | — | **Does not exist.** No radix/bitonic sort anywhere in `manifold-gpu` or the graph (verified by search 2026-07-05; MPS bindings cover blur/sobel/histogram/reduction, not sort). P2 builds it |
 | 3D particle stack (seed/force/step/render) | `scatter_particles_3d.rs`, `euler_step_particles_3d.rs`, etc. | Shipped. Splats deliberately do NOT reuse it (D5) — no velocity channel, displacement not integration |
-| Camera | `node_graph/camera.rs`, `node.orbit_camera` | Shipped. `free_camera`/`look_at_camera` (REALTIME_3D P4) may or may not have landed — the starter preset uses `orbit_camera`, which exists today |
+| Camera | `node_graph/camera.rs`, `node.orbit_camera` | Shipped. Pinned 2026-07-05 baseline review: BOTH `node.free_camera` and `node.look_at_camera` have landed (`primitives/free_camera.rs` :18, `look_at_camera.rs` :19) — REALTIME_3D P4 is done; the starter preset may use any of the three cameras |
 
 §2.5 audit finding: nothing splat-shaped exists under any name. `scatter_particles_3d`
 scatters in a volume, `spawn_from_image` samples a texture, `displace_mesh` displaces

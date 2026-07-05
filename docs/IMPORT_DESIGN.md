@@ -1,6 +1,6 @@
 # Import — Blender/glTF Scenes, Baked Caches, Texture Sets, TD & Resolume Funnels
 
-**Status: APPROVED design, not built · 2026-07-03 · Fable**
+**Status: APPROVED design, not built · 2026-07-03 · Fable · baseline-reviewed 2026-07-05.** Reality note: the glTF wave (2026-07-04 @ `47c878d7`) shipped **`node.gltf_mesh_source`** — a single-mesh source primitive in manifold-renderer (`node_graph::gltf_load`, `gltf` crate v1). That is a mesh-level door, NOT this doc's P1 (scene importer → object groups + report + one undo transaction). **P1's read-back must reconcile with it**: same parser crate, so extend/reuse `gltf_load` per extend-don't-redesign — placement (shared module vs manifold-io importer) is the P1 executor's first stated call, escalate only if it forces a crate-boundary change. Known in-app bugs against the shipped node are VD-003 in `docs/VERIFICATION_DEBT.md`; its held-out fixtures are the CC0 photoscans already sitting untracked in `tests/fixtures/gltf/` (apricot, azalea, lowe — the §8 Stewartia was never downloaded; these replace it).
 **Prerequisites (per phase): P1–P2 need REALTIME_3D P1 + MATERIAL M1–M5 **and M6**
 (albedo/metallic maps + alpha cutout — MATERIAL §11; without M6 a textured glTF
 imports colourless and foliage renders as opaque cards; see §8 addendum). P3 pairs with
