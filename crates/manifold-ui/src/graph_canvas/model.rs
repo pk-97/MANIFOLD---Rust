@@ -879,6 +879,17 @@ impl GraphCanvas {
     /// group the inner node producing its output — so groups preview too,
     /// reusing the producer's existing atlas cell. Nodes with no image output
     /// emit nothing. Culls off-canvas nodes.
+    /// Replace the per-node preview sources for this frame (keyed by
+    /// `preview_node_id`). The render host computes each visible node's atlas
+    /// cell (or output texture) + UV and hands it here; `render` then paints the
+    /// preview inline at the node's depth. See [`GraphCanvas::node_preview_src`].
+    pub fn set_node_preview_src(
+        &mut self,
+        src: ahash::AHashMap<manifold_foundation::NodeId, (crate::node::TextureHandle, [f32; 4])>,
+    ) {
+        self.node_preview_src = src;
+    }
+
     pub fn visible_node_thumbnails(
         &self,
         viewport: Rect,

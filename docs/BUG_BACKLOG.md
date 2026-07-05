@@ -49,6 +49,23 @@ in the same blocks).
 **Fix shape** — wrap each site in the Beats/Bpm accessor instead of a raw cast (~3 one-line
 fixes). Unrelated to param storage, so parked here rather than folded into P2.
 
+### BUG-033 — `ui-snapshot` feature build broken: `manifold_core::effects::resolve_param_in` no longer exists — MED (blocks the headless UI harness)
+
+**Root cause** — [interact.rs:500](../crates/manifold-app/src/ui_snapshot/interact.rs#L500) (`lane_param_range`, an
+automation-lane interact verb) calls `manifold_core::effects::resolve_param_in(&def, fx, param_id)`
+to read a param's `(min, max)`. That function/module path is gone after the PARAM_STORAGE
+refactor (the range now lives on the `ParamManifest`/spec, not a `resolve_param_in` helper).
+
+**Symptom** — `cargo build --bin manifold --features ui-snapshot` fails with `E0425` (unknown
+function) + a knock-on `E0433`. The DEFAULT build is unaffected, so it went unnoticed — but it
+means the entire `ui-snap` headless harness (graph/editor/timeline PNG + `--script` driver) can't
+compile on trunk. Found 2026-07-05 (Opus) while rendering a BUG-027 verification PNG; worked
+around with a temporary local stub (reverted) to get the render.
+
+**Fix shape** — resolve the param spec through the current manifest API and read its min/max
+(mirror whatever `lane_param_range`'s live-app equivalent now does). Owner: PARAM_STORAGE P2 (its
+refactor moved the range); ~1 site. Unrelated to the LayerId / node-preview work in this session.
+
 ### BUG-030 — Design-token ratchet red on trunk: raw `Color32::new(` count 201 vs baseline 200 — LOW (parked, not param-storage)
 
 **Root cause** — a UI landing added one raw `Color32::new(` literal in `crates/manifold-ui/src`
@@ -553,7 +570,20 @@ app motion block, mirroring `drawer_anim_active` exactly. Gate: clippy `-D warni
 (open the Add Effect browser, confirm the background is present immediately without moving the
 mouse) is the remaining proof. Tracked in VERIFICATION_DEBT (VD-006).
 
-### BUG-027 — Graph-editor node previews composite on the wrong z-layer vs. node chrome — MED
+### BUG-027 — Graph-editor node previews composite on the wrong z-layer vs. node chrome — MED — FIXED 2026-07-05
+
+**Fix** — node previews now draw INLINE via a new `Painter::draw_image_uv` primitive, emitted by
+`GraphCanvas::draw_node` right after each node's body, with each node pushed to its OWN increasing
+depth band (`CONTENT+1+i`); the renderer's per-depth loop draws that band's rects then its image,
+and a node stacked above (higher band) occludes a lower node's preview. Both flat post-pass blits
+(live `app_render.rs`, headless `ui_snapshot/render.rs`) are deleted; the live path registers the
+rotating atlas front via `UIRenderer::register_external_texture` + a per-cell UV, the harness
+registers each node's output texture. Verified: a deterministic depth-band unit test
+(`node_previews_render_in_per_node_depth_bands`) proves the occlusion ordering, and a Kaleidoscope
+effect-graph PNG confirms real previews render inline correctly. Full default suite green.
+
+---
+_Original analysis (kept for the record):_
 
 **Symptom** — reported by Peter 2026-07-05 (screenshot in session transcript): node preview
 thumbnails overlap neighbouring nodes inconsistently — a preview (e.g. Luma to Color) draws

@@ -1434,6 +1434,128 @@ fn expanded_canvas_from(snap: GraphSnapshot) -> (GraphCanvas, Rect) {
     (canvas, Rect::new(0.0, 0.0, 1200.0, 800.0))
 }
 
+/// BUG-027 fix: each node draws in its OWN increasing depth band, and its output
+/// preview is painted inline within that band — so a node stacked above (a
+/// higher band, drawn later) occludes the preview of one below it. A `Painter`
+/// that records the depth of every rect/image draw proves the ordering without
+/// pixels: two preview nodes must occupy two distinct increasing bands, each
+/// preview sharing its node's band, and the earlier preview's band strictly
+/// below the later node's body band (the occlusion condition).
+#[test]
+fn node_previews_render_in_per_node_depth_bands() {
+    use crate::draw::{Depth, Painter};
+    use crate::transform2d::Affine2;
+
+    #[derive(Default)]
+    struct Rec {
+        stack: Vec<Depth>,
+        rect_depths: Vec<i32>,
+        image_depths: Vec<i32>,
+    }
+    impl Rec {
+        fn cur(&self) -> i32 {
+            self.stack.last().copied().unwrap_or(Depth::BASE).0
+        }
+    }
+    impl Painter for Rec {
+        fn draw_rect(&mut self, _: f32, _: f32, _: f32, _: f32, _: Color32) {
+            self.rect_depths.push(self.cur());
+        }
+        fn draw_rounded_rect(&mut self, _: f32, _: f32, _: f32, _: f32, _: Color32, _: f32) {
+            self.rect_depths.push(self.cur());
+        }
+        fn draw_bordered_rect(
+            &mut self,
+            _: f32,
+            _: f32,
+            _: f32,
+            _: f32,
+            _: Color32,
+            _: f32,
+            _: f32,
+            _: Color32,
+        ) {
+            self.rect_depths.push(self.cur());
+        }
+        fn draw_line(&mut self, _: f32, _: f32, _: f32, _: f32, _: f32, _: Color32) {}
+        fn draw_text(&mut self, _: f32, _: f32, _: &str, _: f32, _: [u8; 4]) {}
+        fn draw_image_uv(
+            &mut self,
+            _: f32,
+            _: f32,
+            _: f32,
+            _: f32,
+            _: crate::node::TextureHandle,
+            _: [f32; 4],
+            _: f32,
+        ) {
+            self.image_depths.push(self.cur());
+        }
+        fn push_immediate_clip(&mut self, _: f32, _: f32, _: f32, _: f32) {}
+        fn pop_immediate_clip(&mut self) {}
+        fn push_depth(&mut self, depth: Depth) {
+            self.stack.push(depth);
+        }
+        fn pop_depth(&mut self) {
+            self.stack.pop();
+        }
+        fn push_transform(&mut self, _: Affine2) {}
+        fn pop_transform(&mut self) {}
+    }
+
+    // Two image-output nodes (Texture2D out + a stable id → each emits a preview).
+    let snap = GraphSnapshot {
+        nodes: vec![node(0, "a", Some("na")), node(1, "b", Some("nb"))],
+        wires: vec![wire(0, "out", 1, "in")],
+        outer_routings: Vec::new(),
+    };
+    let (mut canvas, viewport) = expanded_canvas_from(snap);
+    canvas.apply_pending_fit(viewport); // frame both nodes on-screen
+
+    // Give both nodes a preview source (handle + full-texture UV), so the canvas
+    // paints their previews inline. Keyed by preview_node_id (== node_id here).
+    let handle = crate::node::texture_handle_for_key("test-atlas");
+    let mut src = ahash::AHashMap::new();
+    src.insert(manifold_foundation::NodeId::new("na"), (handle, [0.0, 0.0, 1.0, 1.0]));
+    src.insert(manifold_foundation::NodeId::new("nb"), (handle, [0.0, 0.0, 1.0, 1.0]));
+    canvas.set_node_preview_src(src);
+
+    let mut rec = Rec::default();
+    canvas.render(&mut rec, viewport);
+
+    let content = Depth::CONTENT.0;
+    // Node chrome draws above CONTENT; wires/header/bg are at/below it. Distinct
+    // node-band depths, in order:
+    let mut bands: Vec<i32> = rec.rect_depths.iter().copied().filter(|d| *d > content).collect();
+    bands.sort_unstable();
+    bands.dedup();
+    assert_eq!(
+        bands,
+        vec![content + 1, content + 2],
+        "two nodes must occupy two distinct increasing depth bands, got {bands:?}"
+    );
+
+    // Each preview is painted in a node band (not one shared top layer), and the
+    // two previews land in the two distinct bands.
+    let mut previews: Vec<i32> = rec.image_depths.clone();
+    previews.sort_unstable();
+    previews.dedup();
+    assert_eq!(
+        previews,
+        vec![content + 1, content + 2],
+        "each node's preview must draw in its own band, got {previews:?}"
+    );
+
+    // The occlusion condition: the lower node's preview band is strictly below
+    // the upper node's body band, so the upper body draws over the lower preview.
+    assert!(
+        previews[0] < bands[1],
+        "an earlier node's preview ({}) must sit below a later node's body band ({})",
+        previews[0],
+        bands[1],
+    );
+}
+
 /// Node 1 (`uv`) with a scalar param `translate` shadowed by a same-named input
 /// port, fed by a wire from node 2. Optionally add an outer routing for it.
 fn wire_driven_snapshot(with_outer: bool) -> GraphSnapshot {
