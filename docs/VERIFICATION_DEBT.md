@@ -49,6 +49,18 @@ BUG_BACKLOG with `Escaped:` lines.
 "unverified on real export" since it shipped). Burn-down: one real export of a
 stem-bearing project; listen to / inspect the output file.
 
+### VD-005 — UI_AUTOMATION P1 selector surface: dumps read, no scripted drive yet — L2 reached / L3 target
+Landed 2026-07-05 @ `3294eb9d`. The extended dump (widget/name + `custom_surfaces`
+enumeration) was read at landing and all four target categories confirmed present with
+payload ids — but nothing yet *drives* the surface: resolving a selector and
+synthesizing a gesture against it is P2. Burn-down: lands with P2 — the two proving
+flows (`select-and-inspect.json`, `drag-clip.json`) exercise the resolver against this
+dump, taking the surface to L3. Minor open coverage gap folded in here: the
+`editor` scene dump surfaces zero *named* widgets (graph-editor chrome names don't
+appear in the headless editor scene — the naming pass covered transport/layer-header,
+which show in the `timeline` scene); grow naming coverage organically as flows need it,
+per §3 ("coverage grows organically").
+
 *(VD-001–004 seeded 2026-07-05 from the memory corpus plus Peter's in-app findings;
 the full backfill pass over recent landings is still owed and will extend this
 list.)*
