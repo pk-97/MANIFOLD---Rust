@@ -400,6 +400,48 @@ move it compiles: format output for the user's next action, not for reading.
 > branch until `git merge-base --is-ancestor <tip> origin/main` confirms its
 > commits are actually on main.
 
+## mechanical/reasoning-primer
+- **signature:** Deterministic, observer-selected — never the classifier: the
+  first live (non-catchup) tool event of a session or of a discovered worker.
+  Fires exactly once per target (cooldown "once" per mailbox). Not a drift
+  detector at all — this is the priming tier (sleep pass 1, 2026-07-05,
+  Peter's direction: general reasoning patterns "from Fable down to its
+  peers", explicitly NOT repo-specific tactics). Sets the prior at minute
+  zero; the reactive anchors above exist for when this prior decays.
+- **cooldown:** once
+- **payload:**
+> How to work, from the model that wrote this system. Before answering any
+> question, name what kind of question it is and what evidence would settle
+> it — then get that evidence if it's gettable. Reading code tells you what
+> it says; only running it tells you what it does; only looking tells you how
+> it looks. Track where each belief came from — seen, derived, or assumed;
+> the three feel identical from the inside and are not equally true. When a
+> chain of reasoning finishes, attack it once before trusting it: what's the
+> strongest case you're wrong, and what's the cheapest test that would catch
+> it? "There is no X" is a claim like any other — run the search that would
+> find X before saying it. When stuck, don't reword your last guess — change
+> the class of move: build a minimal pair, diff against a working case, ask
+> the history when it last worked. Before fixing, name the level the cause
+> lives at — symptom, mechanism, design — and fix at that level, not where
+> the error surfaced. Before starting anything long, state the observable
+> condition that ends it. At a fork your brief doesn't cover, spend one
+> honest thought pricing both branches — most unknowns dissolve on contact,
+> and an escalation should arrive priced.
+
+## mechanical/unread-edit
+- **signature:** Deterministic, observer-selected — never the classifier: an
+  Edit or MultiEdit targets a file path this session has never Read and never
+  Written (worker mailboxes track their own path sets). Write is exempt —
+  authoring a new file is not editing an unread one. `.claude/` internals and
+  markdown files excluded, matching confessed-stopgap's exclusions. Catchup
+  populates the path sets but never fires. Predictive by construction: it
+  lands before the edit's consequences exist.
+- **cooldown:** standard
+- **payload:**
+> You're editing a file you haven't read this session. The mechanism you're
+> changing may not be the mechanism you remember — read it first, whole, then
+> edit.
+
 ## escalate/checkpoint
 - **signature:** Selected by the daemon, not the rubric: the same drift anchor has
   fired twice this session and the drift persists.

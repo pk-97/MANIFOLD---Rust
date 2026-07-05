@@ -19,17 +19,16 @@ same question twice) with a reason quoting fix-at-the-root. Also revives the
 observer via `valve.ensure_observer`, since a question-wait is otherwise a
 blind spot for the idle-exit revival path.
 
-Semantic tier — AUTHORED, NOT WIRED (sleep pass 1, 2026-07-05). The rubric
-and deny reasons below implement Peter's "match semantics not raw strings"
-direction: when the regex tier doesn't hit, a SYNCHRONOUS Haiku call would
-judge the question against three gates — decidable-from-decisions-already-
-held, mispriced fork, below the ask threshold. A question is the one event
-where a synchronous model call is affordable: rare, already blocking, and
-about to pause the human for minutes. Wiring this into main() gates the
-agent's own questions to the human, so it ships only with Peter's explicit
-sign-off (harness policy, and the right call) — until then these constants
-are inert and main() is regex-only. Haiku detects, never prescribes — deny
-reasons are pre-authored (sleep-pass-editable only, like moves.md payloads).
+Semantic tier — WIRED 2026-07-05 with Peter's explicit sign-off ("Yes for
+the semantic ask-gate"). When the regex tier doesn't hit, a SYNCHRONOUS
+Haiku call judges the question against three gates — decidable-from-
+decisions-already-held, mispriced fork, below the ask threshold. A question
+is the one event where a synchronous model call is affordable: rare, already
+blocking, and about to pause the human for minutes. Deny-once semantics via
+the same bounce marker as the regex tier; every verdict (deny or clear) is
+logged to telemetry as `ask_gate` for the next sleep pass. Haiku detects,
+never prescribes — deny reasons are pre-authored (sleep-pass-editable only,
+like moves.md payloads).
 
 Fails open on any error: this hook must never be able to block a session.
 """
@@ -119,31 +118,66 @@ def main():
 
         import common
 
-        hits = common.detect_shortcut_fork(tool_input)
-        if not hits:
-            return
-
         questions = tool_input.get("questions")
         key = _question_hash(questions)
         os.makedirs(BOUNCE_DIR, exist_ok=True)
         marker_path = os.path.join(BOUNCE_DIR, f"{key}.bounced")
-
         if os.path.exists(marker_path):
             # Already bounced once — this is the re-ask. Let it through.
+            return
+
+        reason = None
+        gate = None
+        if common.detect_shortcut_fork(tool_input):
+            gate = "shortcut-fork"
+            reason = (
+                "This question offers a cheaper option marked (Recommended) alongside "
+                "a proper/root-fix option — the shortcut-as-recommendation framing "
+                "CLAUDE.md's fix-at-the-root rule forbids. The root fix is the default "
+                "recommendation; if it genuinely can't ship this session, say so "
+                "explicitly rather than recommending the stopgap. Proceed with the "
+                "root fix, or re-ask only if this is a genuine scope, taste, or "
+                "destructive-action call — not a cost tradeoff."
+            )
+        else:
+            # Semantic tier (wired 2026-07-05 with Peter's explicit sign-off).
+            # Synchronous because a question is rare and already blocking;
+            # any error/timeout/low-confidence verdict falls open.
+            verdict = common.call_classifier(
+                ASK_GATE_RUBRIC,
+                json.dumps(questions, indent=1, default=str),
+                timeout=ASK_GATE_TIMEOUT_S,
+            )
+            g = verdict.get("gate") if isinstance(verdict, dict) else None
+            conf = verdict.get("confidence") if isinstance(verdict, dict) else None
+            if g in ASK_GATE_REASONS and isinstance(conf, (int, float)) and conf >= 0.8:
+                gate = g
+                evidence = verdict.get("evidence")
+                quoted = f'\n\n(Flagged text: "{evidence}")' if evidence else ""
+                reason = ASK_GATE_REASONS[g] + quoted
+            try:
+                import valve
+
+                valve.append_telemetry(
+                    {
+                        "ts": time.time(),
+                        "session_id": session_id,
+                        "event": "ask_gate",
+                        "gate": g if isinstance(g, str) else None,
+                        "confidence": conf,
+                        "error": verdict.get("error") if isinstance(verdict, dict) else "no-verdict",
+                        "denied": bool(reason),
+                    }
+                )
+            except Exception:
+                pass
+
+        if not reason:
             return
 
         with open(marker_path, "w", encoding="utf-8") as f:
             f.write(session_id or "")
 
-        reason = (
-            "This question offers a cheaper option marked (Recommended) alongside "
-            "a proper/root-fix option — the shortcut-as-recommendation framing "
-            "CLAUDE.md's fix-at-the-root rule forbids. The root fix is the default "
-            "recommendation; if it genuinely can't ship this session, say so "
-            "explicitly rather than recommending the stopgap. Proceed with the "
-            "root fix, or re-ask only if this is a genuine scope, taste, or "
-            "destructive-action call — not a cost tradeoff."
-        )
         print(
             json.dumps(
                 {

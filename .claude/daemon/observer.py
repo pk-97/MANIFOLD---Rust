@@ -113,6 +113,7 @@ class AgentWorker:
         self.escalated = False
         self.next_seq = 1
         self.phase = "orienting"
+        self.paths_seen = set()  # file paths Read/Written this worker's life (unread-edit)
 
 
 class Daemon:
@@ -143,6 +144,10 @@ class Daemon:
         # catchup rebuilds the same event_count from the transcript.
         self.fire_state_path = os.path.join(VERDICTS_DIR, f"{session_id}.firestate.json")
         self._load_fire_state()
+        # Priming tier (sleep pass 1): file paths Read/Written this session.
+        # Populated during catchup too, so a resumed session doesn't treat
+        # every previously-read file as unread.
+        self.paths_seen = set()
 
         # DESIGN.md §4b: outcome scoring + auto-mute.
         self.fire_records = {}  # seq -> move_id, for every flag *this instance* raised
@@ -345,9 +350,15 @@ class Daemon:
                 count_before = worker.state.total_tool_event_count
                 peeked = self._peek_tool_events(worker.state, content)
                 closed, _human = worker.state.feed_user_content(content, ts)
-                if classify:
-                    for idx, (name, input_, _status) in enumerate(peeked):
-                        self._check_stopgap(name, input_, count_before + idx + 1, logf, mailbox=worker)
+                for idx, (name, input_, _status) in enumerate(peeked):
+                    event_count = count_before + idx + 1
+                    # Same per-event priority as _feed_line: specific beats
+                    # generic, primer last (it retries until delivered).
+                    if classify:
+                        self._check_stopgap(name, input_, event_count, logf, mailbox=worker)
+                    self._check_unread_edit(name, input_, event_count, logf, mailbox=worker, live=classify)
+                    if classify:
+                        self._check_primer(event_count, logf, mailbox=worker)
         if closed and classify:
             self._handle_window(closed, logf, mailbox=worker)
 
@@ -421,9 +432,17 @@ class Daemon:
                     target = common.tool_target(input_)
                     event_count = count_before + idx + 1
                     self.recent_events.append((event_count, _tool_class(label), status, target))
+                    # Per-event priority: specific detections (stopgap,
+                    # git-landing) beat the generic unread-edit, and the
+                    # primer goes last — it retries until delivered, the
+                    # others are one-shot signals for THIS event.
                     if classify:
                         self._check_stopgap(name, input_, event_count, logf)
                         self._check_git_landing(name, input_, event_count, logf)
+                    # live=classify: catchup populates paths_seen, never fires
+                    self._check_unread_edit(name, input_, event_count, logf, live=classify)
+                    if classify:
+                        self._check_primer(event_count, logf)
         if closed and classify:
             self._handle_window(closed, logf)
 
@@ -467,6 +486,60 @@ class Daemon:
         }
         _atomic_write_json(mb.verdict_path, record)
         _log(logf, f"mechanical/confessed-stopgap fired: {name} {common.tool_target(input_)} hits={hits}")
+
+    # ---- priming tier (sleep pass 1: pre-authored advice at predictable
+    # moments — no detection, no classifier, no false-positive budget) ----
+
+    def _check_primer(self, event_count, logf, mailbox=None):
+        """mechanical/reasoning-primer: fire once per target (main session or
+        worker) on its first live tool event. Cooldown "once" + persisted
+        firestate (main) make repeat calls no-ops; if another whisper is
+        pending, _resolve_fire declines and this retries on the next event."""
+        mb = mailbox if mailbox is not None else self
+        if mb.fire_count.get("mechanical/reasoning-primer"):
+            return
+        verdict = {"evidence": "first live tool event (priming tier)", "confidence": 1.0}
+        flag_out = self._resolve_fire(event_count, "mechanical/reasoning-primer", verdict, logf, mailbox=mailbox)
+        if not flag_out:
+            return
+        record = {
+            "ts": time.time(),
+            "phase": mb.phase,
+            "window_version": common.WINDOW_VERSION,
+            "flag": flag_out,
+        }
+        _atomic_write_json(mb.verdict_path, record)
+        _log(logf, "mechanical/reasoning-primer fired (priming tier)")
+
+    def _check_unread_edit(self, name, input_, event_count, logf, mailbox=None, live=True):
+        """mechanical/unread-edit: an Edit/MultiEdit to a path this target has
+        never Read or Written. Called for EVERY tool event including catchup
+        (live=False) so the seen-path set stays complete; only live edits can
+        fire. Check-then-add: the current edit must not vouch for itself."""
+        if not isinstance(input_, dict):
+            return
+        path = input_.get("file_path") or input_.get("notebook_path")
+        if not path or name not in ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit"):
+            return
+        mb = mailbox if mailbox is not None else self
+        unseen = path not in mb.paths_seen
+        mb.paths_seen.add(path)
+        if not (live and unseen and name in ("Edit", "MultiEdit")):
+            return
+        if common.STOPGAP_EXCLUDED_PATH_RE.search(path):
+            return  # .md and .claude/ internals, same exclusions as stopgap
+        verdict = {"evidence": f"{name} {path} — never read this session", "confidence": 1.0}
+        flag_out = self._resolve_fire(event_count, "mechanical/unread-edit", verdict, logf, mailbox=mailbox)
+        if not flag_out:
+            return
+        record = {
+            "ts": time.time(),
+            "phase": mb.phase,
+            "window_version": common.WINDOW_VERSION,
+            "flag": flag_out,
+        }
+        _atomic_write_json(mb.verdict_path, record)
+        _log(logf, f"mechanical/unread-edit fired: {name} {path}")
 
     def _check_git_landing(self, name, input_, event_count, logf, mailbox=None):
         """Deterministic, never the classifier: a Bash cherry-pick or
