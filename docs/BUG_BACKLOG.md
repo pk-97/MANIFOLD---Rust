@@ -28,6 +28,26 @@ or human can read it, and it needs no external tool.
 
 ## Open
 
+### BUG-031 — Audible blip when an audio clip's voice is built (play-then-pause leaks ~10ms of the file's start) — LOW
+
+**Symptom** — a very subtle pop/click from the speakers at the moment an audio file is
+loaded onto the timeline (e.g. Finder drag-drop). Reported by Peter 2026-07-05.
+
+**Root cause** — [audio_layer_playback.rs:171-179](../crates/manifold-playback/src/audio_layer_playback.rs#L171-L179):
+`make_voice` calls `manager.play(data)` at full volume and only then
+`handle.pause(Tween::default())`. kira's `pause` is a fade-out — and `Tween::default()`
+is a **10ms** linear fade (kira-0.9.6 `tween.rs:110`), not instantaneous — so the first
+~10ms of the file renders audibly before the voice reaches its "start paused at 0" state.
+Any file whose first samples carry signal produces the blip. (The 5ms `declick()` tween
+used everywhere else in this module doesn't apply here; this is the one edge built on
+kira's default tween.)
+
+**Fix shape** — build the voice silent instead of pausing it after the fact: apply
+`.volume(0.0)` to the `StaticSoundData` before `manager.play`, keep the pause+seek. The
+per-tick sync path already restores the real volume via `set_volume(volume, declick())`,
+so activation is unaffected. This kills the whole class including the race where an audio
+callback fires between play and pause. One-line-ish, `manifold-playback` only.
+
 ### BUG-029 — `profiling` feature doesn't compile: rotted against the Beats/Bpm newtypes — LOW (parked)
 
 **Root cause** — the `#[cfg(feature = "profiling")]` blocks in `manifold-app` predate the
@@ -48,6 +68,38 @@ in the same blocks).
 
 **Fix shape** — wrap each site in the Beats/Bpm accessor instead of a raw cast (~3 one-line
 fixes). Unrelated to param storage, so parked here rather than folded into P2.
+
+### BUG-033 — `ui-snapshot` feature build broken: `manifold_core::effects::resolve_param_in` no longer exists — MED (blocks the headless UI harness)
+
+**Root cause** — [interact.rs:500](../crates/manifold-app/src/ui_snapshot/interact.rs#L500) (`lane_param_range`, an
+automation-lane interact verb) calls `manifold_core::effects::resolve_param_in(&def, fx, param_id)`
+to read a param's `(min, max)`. That function/module path is gone after the PARAM_STORAGE
+refactor (the range now lives on the `ParamManifest`/spec, not a `resolve_param_in` helper).
+
+**Symptom** — `cargo build --bin manifold --features ui-snapshot` fails with `E0425` (unknown
+function) + a knock-on `E0433`. The DEFAULT build is unaffected, so it went unnoticed — but it
+means the entire `ui-snap` headless harness (graph/editor/timeline PNG + `--script` driver) can't
+compile on trunk. Found 2026-07-05 (Opus) while rendering a BUG-027 verification PNG; worked
+around with a temporary local stub (reverted) to get the render.
+
+**Fix shape** — resolve the param spec through the current manifest API and read its min/max
+(mirror whatever `lane_param_range`'s live-app equivalent now does). Owner: PARAM_STORAGE P2 (its
+refactor moved the range); ~1 site. Unrelated to the LayerId / node-preview work in this session.
+
+### BUG-034 — Headless preview verification doesn't cover the live atlas UV path — LOW (test-coverage gap, follow-up to BUG-027)
+
+**Gap** — the inline node-preview fix (BUG-027) is pixel-verified headless only through the
+per-node-texture path (`ui_snapshot/render.rs`, whole-texture UV `[0,0,1,1]`). The LIVE app packs
+every preview into one rotating atlas and samples a per-cell UV with letterbox/aspect trim; that
+cell-picking math lives inline in [app_render.rs](../crates/manifold-app/src/app_render.rs) and is
+NOT exercised by any headless render (the atlas is filled by the content thread). So a subtle cell
+or aspect error would show wrong/offset/squashed previews in the running editor but pass every test.
+
+**Fix shape** — (1) factor the atlas-cell-UV math out of `app_render.rs` into one shared helper;
+(2) in the harness, pack the already-rendered per-node textures into a synthetic atlas + build the
+matching `node_atlas_layout`, register it under the atlas handle, and drive previews through that
+shared helper. Then a single graph PNG proves the live cell math, not a copy of it. Not large.
+Gated behind BUG-033 (the `ui-snapshot` harness doesn't compile on trunk).
 
 ### BUG-030 — Design-token ratchet red on trunk: raw `Color32::new(` count 201 vs baseline 200 — LOW (parked, not param-storage)
 
@@ -553,7 +605,20 @@ app motion block, mirroring `drawer_anim_active` exactly. Gate: clippy `-D warni
 (open the Add Effect browser, confirm the background is present immediately without moving the
 mouse) is the remaining proof. Tracked in VERIFICATION_DEBT (VD-006).
 
-### BUG-027 — Graph-editor node previews composite on the wrong z-layer vs. node chrome — MED
+### BUG-027 — Graph-editor node previews composite on the wrong z-layer vs. node chrome — MED — FIXED 2026-07-05
+
+**Fix** — node previews now draw INLINE via a new `Painter::draw_image_uv` primitive, emitted by
+`GraphCanvas::draw_node` right after each node's body, with each node pushed to its OWN increasing
+depth band (`CONTENT+1+i`); the renderer's per-depth loop draws that band's rects then its image,
+and a node stacked above (higher band) occludes a lower node's preview. Both flat post-pass blits
+(live `app_render.rs`, headless `ui_snapshot/render.rs`) are deleted; the live path registers the
+rotating atlas front via `UIRenderer::register_external_texture` + a per-cell UV, the harness
+registers each node's output texture. Verified: a deterministic depth-band unit test
+(`node_previews_render_in_per_node_depth_bands`) proves the occlusion ordering, and a Kaleidoscope
+effect-graph PNG confirms real previews render inline correctly. Full default suite green.
+
+---
+_Original analysis (kept for the record):_
 
 **Symptom** — reported by Peter 2026-07-05 (screenshot in session transcript): node preview
 thumbnails overlap neighbouring nodes inconsistently — a preview (e.g. Luma to Color) draws
@@ -561,24 +626,34 @@ OVER another node's body/ports while that node's own chrome draws over the previ
 stacking order disagrees within a single node pair. Previews look like they live on a
 separate layer that ignores node z-order.
 
-**Root cause** — unknown, but the shape is classic split-pipeline compositing: preview
-textured quads render in a different batch/pipeline than the solid-rect node chrome, and the
-two batches aren't interleaved by node draw order (`compositor-layer-ordering` class).
-Surface: `graph_canvas/render.rs` preview draw vs. node body/port pass ordering.
+**Root cause** — KNOWN (2026-07-05 Opus, deeper read; the earlier "unknown" was wrong). The
+node preview thumbnails are NOT part of the depth-ordered chrome render at all — they're a
+SEPARATE flat blit pass issued AFTER the whole chrome is composited, in `visible_node_thumbnails`
+order (no depth). Both paths do it identically:
+- Live app: [app_render.rs](../crates/manifold-app/src/app_render.rs) clears the offscreen to the
+  canvas bg (a `clear`, not a drawn rect), renders chrome + black preview-screen placeholders via
+  the depth-ordered tree/canvas pass, presents to the drawable, then blits each node's atlas cell
+  over the drawable in a final flat loop (~L3668).
+- Headless harness: [ui_snapshot/render.rs](../crates/manifold-app/src/ui_snapshot/render.rs)
+  `render_graph_to_png` does the same — chrome first, then a `ui-snap-graph-thumbs` blit loop over
+  each node's output texture (~L228).
+Because every thumbnail is painted after every node body, no node body can occlude a preview, and
+a lower node's preview lands over a higher node's body. The reason it's a bolt-on post-pass: the
+immediate-mode `Painter` trait (`draw.rs`) has rect/line/text primitives but **no textured-quad
+primitive**, so previews couldn't be drawn inline with the node bodies and were blitted separately.
 
-**Repro** — NOT reachable via the P2 `--script` driver (2026-07-05 Opus). The driver builds
-only `UIRoot` scenes, and the graph editor is not a `UIRoot` panel — it lives in `Application`
-as a separate editor window (`self.ln: Option<crate::ln::…>`), and node preview thumbnails are
-GPU-composited in `app_render.rs` (`node_preview_target`), not in the CPU tree render the
-`--script` driver snapshots. There IS a separate headless graph-canvas render path in
-`ui_snapshot/render.rs` (`manifold_ui::ln` + `generator_editor_fixture`, the `editor` scene),
-but it renders the canvas tree, not the live GPU preview composite where the z-order bug lives.
-So this one needs either that GPU compositing path exercised headless, or a running-app repro
-(overlap two live-preview nodes and look).
+**Repro** — IS headless-reachable (the earlier entry said it wasn't — wrong). `render_graph_to_png`
+reproduces the exact flat-blit bug; render two overlapping preview-emitting nodes and the lower
+node's thumbnail draws over the higher node's body. That gives a before/after PNG to verify a fix.
 
-**Fix shape** — one z-ordered draw sequence per node: interleave the textured preview quads
-into the same node-order pass as chrome (or bump batch boundaries per node), rather than
-patching individual overlap cases.
+**Fix shape** — depth-interleave the previews instead of post-blitting them: add a thumbnail-draw
+primitive to the `Painter` trait, have `canvas.render` emit each node's preview inline right after
+its body (so occlusion follows node draw order), route it through the existing depth-interleaved
+Image pipeline in `ui_renderer.rs` (which already draws per-depth: rects, then images, then text —
+needs the rotating node atlas bound + a per-cell UV subrect for the live path; the harness feeds
+per-node output textures with full UV), and delete BOTH flat blit passes. Real immediate-mode
+renderer change (Painter trait + UIRenderer + canvas render + both blit-pass deletions), but
+headless-verifiable. Not a "patch the overlap cases" job.
 
 ### BUG-028 — File-drop targeting can't read the live pointer during a Finder drag (both AppKit poll sources frozen) — MED — FIXED 2026-07-05 (`wave/timeline-drop`, unlanded pending Peter's live-drag gate)
 
@@ -620,7 +695,14 @@ is checked per-message — but only a live drag proves it). Gate: drag a Finder 
 existing audio lane → joins that lane at the pointer's beat, ghost clip shows lane+length before
 drop; an image drop lands under the pointer.
 
-### BUG-029 — glTF import: a model with >2 materials fails to load ("unknown parameter 'pos_x_2'") and renders black — HIGH — FIXED 2026-07-05 (`dc97bbe6`)
+### BUG-032 — glTF import: a model with >2 materials fails to load ("unknown parameter 'pos_x_2'") and renders black — HIGH — FIXED 2026-07-05 (`dc97bbe6`)
+
+> Id note: originally logged as BUG-029 (commit `dc97bbe6`, commit-message and
+> the `prove-render-path` memory still say 029). A concurrent PARAM_STORAGE P2
+> session independently used BUG-029 for the profiling-compile bug (still Open,
+> above) and added BUG-030. To resolve the collision without splitting that
+> open sequential pair, this closed entry was renumbered to BUG-032. The
+> `dc97bbe6` commit reference is immutable history — this entry is canonical.
 
 **Symptom** — Peter, 2026-07-05: importing `cc0__japanese_apricot_prunus_mume.glb` (4 distinct
 materials) produced a black viewport and a repeating log flood: `Generator … failed to load from
@@ -647,6 +729,30 @@ static-shape nodes; general across every reconfigure-param node. Verified on the
 apricot `.glb` (4 objects) now loads clean through `PresetRuntime::from_def`. Regression tests:
 `render_scene_with_three_objects_loads_per_object_transform_params` (synthetic, portable) +
 `held_out_gltf_generator_loads_through_from_def` (`#[ignore]`, env-gated on a >2-material `.glb`).
+
+### BUG-031 — Layer context-menu + rename still address layers positionally — LOW (follow-up to the LayerId migration `877852a9`)
+
+**Root cause** — the primary layer-header actions were migrated to carry a stable `LayerId`
+(commit `877852a9`, kills the panel-index-vs-live-model collision). Two related clusters were
+deliberately left positional to keep that diff bounded:
+- The **`Context*Layer` right-click-menu family** (`ContextPasteAtLayer`, `ContextImportMidi`,
+  `ContextAddVideoLayer/GeneratorLayer/AudioLayer`, `ContextDuplicateLayer`, `ContextUngroup`,
+  `ContextDeleteLayer`, `DropdownContext::LayerContext`) still carry a `usize`. `LayerHeaderRightClicked`
+  now carries the id and `ui_root` resolves it to the current row synchronously when the menu opens,
+  so there's no regression — but the menu ITEMS bake in that index, leaving a (rare) stale window
+  between menu-open and item-click.
+- **`TextInputField::LayerName(usize)`** (layer rename): the enum derives `Copy`, and `LayerId`
+  isn't `Copy`, so migrating it forces dropping `Copy` and cascades through the whole text-input
+  subsystem (`app.rs` field handling). The double-click intercept resolves id→index locally, so the
+  rename has the same (unchanged) stale window it always had.
+
+**Symptom** — none observed; latent. A context-menu action or a rename committed after the layer
+list changed under it (another command, undo/redo, MIDI phantom layer) could hit the wrong layer.
+Same bug class as the migration killed for the primary controls.
+
+**Fix shape** — carry `LayerId` in the `Context*Layer` family (thread it from
+`LayerHeaderRightClicked` through the menu items) and switch `TextInputField::LayerName` to
+`LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
 

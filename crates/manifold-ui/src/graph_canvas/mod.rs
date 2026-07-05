@@ -396,6 +396,15 @@ const SPARK_CAPACITY: usize = 48;
 pub struct GraphCanvas {
     pub(crate) nodes: Vec<NodeView>,
     pub(crate) wires: Vec<WireView>,
+    /// Per-node output-preview source, set by the render host each frame:
+    /// `preview_node_id` → (texture handle registered on the renderer, source
+    /// UV sub-rect `[u0, v0, u1, v1]`). `draw_node` paints this inline over the
+    /// node's preview screen, at the node's own depth band, so a node stacked
+    /// above occludes it — replacing the old flat post-pass blit (BUG-027). The
+    /// handle points at the shared preview atlas (live app) or a node's output
+    /// texture (headless harness); empty until the host populates it.
+    pub(crate) node_preview_src:
+        ahash::AHashMap<manifold_foundation::NodeId, (crate::node::TextureHandle, [f32; 4])>,
     /// Hash of the current topology (node ids+types + wire endpoints).
     /// Compared on each `set_snapshot` to skip layout recomputation
     /// when only parameter values changed.
@@ -581,6 +590,7 @@ impl GraphCanvas {
     pub fn new() -> Self {
         Self {
             nodes: Vec::new(),
+            node_preview_src: ahash::AHashMap::new(),
             wires: Vec::new(),
             topology_hash: 0,
             pan: (0.0, 0.0),

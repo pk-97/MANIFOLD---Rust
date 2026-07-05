@@ -448,15 +448,16 @@ impl Runner {
     fn apply_panel_actions(&mut self, ui: &mut UIRoot, data: &mut SceneData, actions: &[PanelAction]) {
         for action in actions {
             match action {
-                PanelAction::LayerClicked(idx, modifiers) => {
-                    let layer_id = data
+                PanelAction::LayerClicked(id, modifiers) => {
+                    let Some((idx, layer_id)) = data
                         .project
                         .timeline
-                        .layers
-                        .get(*idx)
-                        .map(|l| l.layer_id.clone())
-                        .unwrap_or_default();
-                    data.active = Some(*idx);
+                        .find_layer_by_id(id)
+                        .map(|(i, l)| (i, l.layer_id.clone()))
+                    else {
+                        continue;
+                    };
+                    data.active = Some(idx);
                     self.active_layer = Some(layer_id.clone());
                     ui.inspector.clear_effect_selection(&mut ui.tree);
                     if modifiers.shift {

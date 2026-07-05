@@ -212,7 +212,6 @@ pub struct TrackInfo {
     pub is_muted: bool,
     pub is_group: bool,
     pub is_collapsed: bool,
-    pub accent_color: Option<Color32>,
     /// For group layers: indices of child layers (used for collapsed group preview).
     /// From Unity ViewportManager.GenerateCollapsedGroupTexture.
     pub child_layer_indices: Vec<usize>,
@@ -302,7 +301,6 @@ pub(crate) struct MarkerNodeGroup {
 /// Structured storage for one track's background nodes.
 pub(crate) struct TrackBgGroup {
     pub(crate) bg_id: NodeId,
-    pub(crate) accent_id: Option<NodeId>, // None if no accent bar
     pub(crate) separator_id: NodeId,
 }
 

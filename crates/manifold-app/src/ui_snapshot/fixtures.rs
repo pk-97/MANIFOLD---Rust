@@ -54,7 +54,7 @@ fn arm_lfo(fx: &mut PresetInstance) {
     use manifold_core::effects::ParameterDriver;
     use manifold_core::types::{BeatDivision, DriverWaveform};
     let param_id = manifold_core::preset_definition_registry::try_get(fx.effect_type())
-        .and_then(|def| def.param_ids.first().cloned());
+        .and_then(|def| def.param_defs.first().map(|pd| pd.id.clone()));
     if let Some(param_id) = param_id {
         fx.drivers = Some(vec![ParameterDriver::new(
             param_id,
@@ -198,7 +198,7 @@ fn automation_scene() -> SceneData {
 
     let mut mirror = effect("Mirror");
     let mirror_param = manifold_core::preset_definition_registry::try_get(mirror.effect_type())
-        .and_then(|def| def.param_ids.first().cloned())
+        .and_then(|def| def.param_defs.first().map(|pd| pd.id.clone()))
         .expect("Mirror has at least one automatable param");
     mirror.automation_lanes = Some(vec![AutomationLane {
         param_id: mirror_param.into(),
@@ -212,7 +212,7 @@ fn automation_scene() -> SceneData {
 
     let mut bloom = effect("Bloom");
     let bloom_param = manifold_core::preset_definition_registry::try_get(bloom.effect_type())
-        .and_then(|def| def.param_ids.first().cloned())
+        .and_then(|def| def.param_defs.first().map(|pd| pd.id.clone()))
         .expect("Bloom has at least one automatable param");
     // Bloom's `amount` registers 0..5 (not 0..1 like Mirror's) — pick values
     // far apart in that range (not just 0.2/0.8) so the Hold-then-jump reads
@@ -329,7 +329,12 @@ fn inspector_scene() -> SceneData {
     // one) so the automated dot's row is distinct from the LFO-armed row —
     // clean evidence for each indicator instead of both stacked on one row.
     let mirror_param = manifold_core::preset_definition_registry::try_get(mirror.effect_type())
-        .and_then(|def| def.param_ids.get(1).or_else(|| def.param_ids.first()).cloned())
+        .and_then(|def| {
+            def.param_defs
+                .get(1)
+                .or_else(|| def.param_defs.first())
+                .map(|pd| pd.id.clone())
+        })
         .expect("Mirror has at least one automatable param");
     mirror.automation_lanes = Some(vec![AutomationLane {
         param_id: mirror_param.into(),
@@ -343,7 +348,7 @@ fn inspector_scene() -> SceneData {
 
     let mut bloom = effect("Bloom");
     let bloom_param = manifold_core::preset_definition_registry::try_get(bloom.effect_type())
-        .and_then(|def| def.param_ids.first().cloned())
+        .and_then(|def| def.param_defs.first().map(|pd| pd.id.clone()))
         .expect("Bloom has at least one automatable param");
     bloom.automation_lanes = Some(vec![AutomationLane {
         param_id: bloom_param.clone().into(),

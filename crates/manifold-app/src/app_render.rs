@@ -1680,19 +1680,27 @@ impl Application {
                         });
                     continue;
                 }
-                PanelAction::LayerDoubleClicked(idx) => {
-                    // Open text input for layer rename
+                PanelAction::LayerDoubleClicked(id) => {
+                    // Open text input for layer rename. The action carries a
+                    // stable LayerId; resolve it to the current row for the
+                    // index-based `name_node_id` / `LayerName` field (the
+                    // text-input subsystem is still positional — a Copy enum
+                    // that would have to drop Copy to hold a LayerId; tracked
+                    // as a follow-up, BUG-031).
                     {
                         let project = &self.local_project;
-                        if let Some(layer) = project.timeline.layers.get(*idx) {
-                            let r = if let Some(nid) = self.ws.ui_root.layer_headers.name_node_id(*idx) {
+                        if let Some((pos, layer)) = project.timeline.find_layer_by_id(id) {
+                            let r = if let Some(nid) =
+                                self.ws.ui_root.layer_headers.name_node_id(pos)
+                            {
                                 self.ws.ui_root.tree.get_bounds(nid)
                             } else {
                                 manifold_ui::node::Rect::new(100.0, 100.0, 120.0, 20.0)
                             };
+                            let name = layer.name.clone();
                             self.text_input.begin(
-                                crate::text_input::TextInputField::LayerName(*idx),
-                                &layer.name,
+                                crate::text_input::TextInputField::LayerName(pos),
+                                &name,
                                 crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
                                 11.0,
                             );
@@ -3571,6 +3579,88 @@ impl Application {
             canvas.tick_wire_magnet(vp);
         }
 
+        // ── Node output previews (BUG-027): register the current atlas front
+        // under a fixed handle and hand each visible node its cell UV, so the
+        // canvas paints the preview inline at the node's own depth band (where a
+        // node stacked above occludes it) instead of the old flat post-pass blit
+        // that ignored node z-order. Phase A reads (build the map + clone the
+        // atlas texture); phase B is the two mutable installs.
+        #[cfg(target_os = "macos")]
+        {
+            let atlas_handle =
+                manifold_ui::node::texture_handle_for_key("__manifold_graph_node_atlas__");
+            let prepared = if let (Some(bridge), Some(canvas)) = (
+                self.node_atlas_texture_bridge.as_ref(),
+                self.graph_canvas.as_ref(),
+            ) {
+                let front = bridge.front_index() as usize;
+                self.ui_node_atlas_textures
+                    .get(front)
+                    .and_then(|t| t.as_ref())
+                    .map(|atlas_tex| {
+                        let layout: ahash::AHashMap<&manifold_core::NodeId, u32> = self
+                            .content_state
+                            .node_atlas_layout
+                            .iter()
+                            .map(|(id, cell)| (id, *cell))
+                            .collect();
+                        let vp = crate::graph_canvas::Rect::new(
+                            canvas_x,
+                            0.0,
+                            canvas_width,
+                            logical_h as f32,
+                        );
+                        // Atlas cell geometry — same constants the old blit used.
+                        let inv = 1.0 / crate::content_pipeline::ATLAS_GRID as f32;
+                        let half_tx = 0.5 / crate::content_pipeline::ATLAS_W as f32;
+                        let half_ty = 0.5 / crate::content_pipeline::ATLAS_H as f32;
+                        // Each source is letterboxed into its 16:9 cell; the
+                        // on-canvas screen takes the project aspect, so sample only
+                        // the letterboxed content sub-rect. Edge-straddle clipping
+                        // is now the canvas viewport scissor, so (unlike the old
+                        // blit) no per-node UV cropping is needed here.
+                        let cell_aspect = crate::content_pipeline::ATLAS_CELL_W as f32
+                            / crate::content_pipeline::ATLAS_CELL_H as f32;
+                        let (content_w_frac, content_h_frac) = if monitor_aspect > cell_aspect {
+                            (1.0, cell_aspect / monitor_aspect)
+                        } else {
+                            (monitor_aspect / cell_aspect, 1.0)
+                        };
+                        let mut map: ahash::AHashMap<
+                            manifold_core::NodeId,
+                            (manifold_ui::node::TextureHandle, [f32; 4]),
+                        > = ahash::AHashMap::new();
+                        for (node_id, _, _, _, _) in canvas.visible_node_thumbnails(vp) {
+                            let Some(&cell) = layout.get(&node_id) else {
+                                continue;
+                            };
+                            let gx = (cell % crate::content_pipeline::ATLAS_GRID) as f32;
+                            let gy = (cell / crate::content_pipeline::ATLAS_GRID) as f32;
+                            let mut u0 = gx * inv + half_tx;
+                            let mut v0 = gy * inv + half_ty;
+                            let mut du = inv - 2.0 * half_tx;
+                            let mut dv = inv - 2.0 * half_ty;
+                            u0 += du * (1.0 - content_w_frac) * 0.5;
+                            v0 += dv * (1.0 - content_h_frac) * 0.5;
+                            du *= content_w_frac;
+                            dv *= content_h_frac;
+                            map.insert(node_id, (atlas_handle, [u0, v0, u0 + du, v0 + dv]));
+                        }
+                        (atlas_tex.clone(), map)
+                    })
+            } else {
+                None
+            };
+            if let Some((atlas_tex, map)) = prepared {
+                if let Some(ui) = self.ui_renderer.as_mut() {
+                    ui.register_external_texture(atlas_handle, atlas_tex);
+                }
+                if let Some(canvas) = self.graph_canvas.as_mut() {
+                    canvas.set_node_preview_src(map);
+                }
+            }
+        }
+
         // ── Build frame: clear, then draw the canvas + sidebar ──
         let mut encoder = gpu.device.create_encoder("Graph Editor Frame");
         encoder.clear_texture(offscreen, 0.10, 0.10, 0.12, 1.0);
@@ -3665,131 +3755,10 @@ impl Application {
             "Editor Offscreen → Drawable",
         );
 
-        // ── Per-node thumbnails on the canvas ──
-        // Blit each visible node's atlas cell into its body, over the canvas.
-        // Authoring-only (the content thread only fills the atlas while the
-        // editor is open). No-op until the first atlas frame lands.
-        #[cfg(target_os = "macos")]
-        if let (Some(thumb_p), Some(atlas_sampler), Some(bridge)) = (
-            self.node_thumb_pipeline.as_ref(),
-            self.thumb_sampler.as_ref(),
-            self.node_atlas_texture_bridge.as_ref(),
-        ) {
-            let front = bridge.front_index() as usize;
-            if let Some(atlas_tex) =
-                self.ui_node_atlas_textures.get(front).and_then(|t| t.as_ref())
-            {
-                let layout: ahash::AHashMap<&manifold_core::NodeId, u32> = self
-                    .content_state
-                    .node_atlas_layout
-                    .iter()
-                    .map(|(id, cell)| (id, *cell))
-                    .collect();
-                if !layout.is_empty() {
-                    let vp = crate::graph_canvas::Rect::new(
-                        canvas_x,
-                        0.0,
-                        canvas_width,
-                        logical_h as f32,
-                    );
-                    let thumbs = self
-                        .graph_canvas
-                        .as_ref()
-                        .map(|c| c.visible_node_thumbnails(vp))
-                        .unwrap_or_default();
-                    let sf = scale as f32;
-                    // The atlas is a GRID×GRID grid of equal-UV cells (cells are
-                    // 16:9 in pixels, but each spans 1/GRID of the atlas on both
-                    // axes), so one `inv` serves u and v. A half-texel inset keeps
-                    // the Linear thumb sampler's taps inside the cell instead of
-                    // bleeding the neighbour at the border.
-                    let inv = 1.0 / crate::content_pipeline::ATLAS_GRID as f32;
-                    let half_tx = 0.5 / crate::content_pipeline::ATLAS_W as f32;
-                    let half_ty = 0.5 / crate::content_pipeline::ATLAS_H as f32;
-                    // Each source is letterboxed into its 16:9 cell (transparent
-                    // margins). The on-canvas screen now takes the project aspect,
-                    // so sample only the letterboxed *content* sub-rect of the cell
-                    // — otherwise a non-16:9 image would be squashed to fill the
-                    // cell's full 16:9 extent. Centred fractions, computed once.
-                    let cell_aspect = crate::content_pipeline::ATLAS_CELL_W as f32
-                        / crate::content_pipeline::ATLAS_CELL_H as f32;
-                    let (content_w_frac, content_h_frac) = if monitor_aspect > cell_aspect {
-                        (1.0, cell_aspect / monitor_aspect)
-                    } else {
-                        (monitor_aspect / cell_aspect, 1.0)
-                    };
-                    for (node_id, bx, by, bw, bh) in thumbs {
-                        let Some(&cell) = layout.get(&node_id) else {
-                            continue;
-                        };
-                        // Clip the strip rect to the canvas viewport so a node
-                        // straddling an edge can't blit its thumbnail over the
-                        // param column (left) or the preview sidebar (right).
-                        // Crop the source UVs by the same fraction the rect lost
-                        // on each side so the visible part stays 1:1 instead of
-                        // squashing the whole image into the clipped rect.
-                        if bw <= 0.0 || bh <= 0.0 {
-                            continue;
-                        }
-                        let clip_l = (vp.x - bx).max(0.0);
-                        let clip_r = (bx + bw - (vp.x + vp.w)).max(0.0);
-                        let clip_t = (vp.y - by).max(0.0);
-                        let clip_b = (by + bh - (vp.y + vp.h)).max(0.0);
-                        let cbw = bw - clip_l - clip_r;
-                        let cbh = bh - clip_t - clip_b;
-                        if cbw <= 0.0 || cbh <= 0.0 {
-                            continue;
-                        }
-                        let cbx = bx + clip_l;
-                        let cby = by + clip_t;
-                        let gx = (cell % crate::content_pipeline::ATLAS_GRID) as f32;
-                        let gy = (cell / crate::content_pipeline::ATLAS_GRID) as f32;
-                        let u0 = gx * inv + half_tx;
-                        let v0 = gy * inv + half_ty;
-                        let du = inv - 2.0 * half_tx;
-                        let dv = inv - 2.0 * half_ty;
-                        // Narrow the cell UV to its centred content sub-rect so the
-                        // project-aspect screen maps the image 1:1, not the cell's
-                        // transparent letterbox margins.
-                        let u0 = u0 + du * (1.0 - content_w_frac) * 0.5;
-                        let v0 = v0 + dv * (1.0 - content_h_frac) * 0.5;
-                        let du = du * content_w_frac;
-                        let dv = dv * content_h_frac;
-                        let cell_uv = [
-                            u0 + du * (clip_l / bw),
-                            v0 + dv * (clip_t / bh),
-                            du * (cbw / bw),
-                            dv * (cbh / bh),
-                        ];
-                        let mut bytes = [0u8; 16];
-                        for (k, v) in cell_uv.iter().enumerate() {
-                            bytes[k * 4..k * 4 + 4].copy_from_slice(&v.to_ne_bytes());
-                        }
-                        present_enc.draw_fullscreen_viewport(
-                            thumb_p,
-                            &drawable_tex,
-                            &[
-                                manifold_gpu::GpuBinding::Texture {
-                                    binding: 0,
-                                    texture: atlas_tex,
-                                },
-                                manifold_gpu::GpuBinding::Sampler {
-                                    binding: 1,
-                                    sampler: atlas_sampler,
-                                },
-                                manifold_gpu::GpuBinding::Bytes {
-                                    binding: 2,
-                                    data: &bytes,
-                                },
-                            ],
-                            (cbx * sf, cby * sf, cbw * sf, cbh * sf),
-                            manifold_gpu::GpuLoadAction::Load,
-                            "Node Thumbnail",
-                        );
-                    }
-                }
-            }
-        }
+        // Node output previews are now drawn INLINE by the canvas at each node's
+        // depth band (see the atlas-registration block above `canvas.render`),
+        // so the old flat post-pass blit-over-the-drawable is gone — that pass
+        // ignored node z-order, which was BUG-027.
 
         // ── Sidebar-top preview monitors ──
         // Composite the captured node texture (top) and the master compositor

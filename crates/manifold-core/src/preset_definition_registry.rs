@@ -25,7 +25,6 @@
 //! (`…::effect::X` / `…::generator::X`) — the function names are
 //! byte-identical to the legacy surface.
 
-use ahash::AHashMap;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, OnceLock};
 
@@ -64,10 +63,11 @@ pub struct StringParamDef {
 // [`rebuild_effect_definitions`] / [`rebuild_generator_definitions`].
 //
 // `get`/`try_get` return a cheap `Arc<PresetDef>` refcount clone. They are
-// NOT a per-frame hot path (modulation/Ableton/OSC route through
-// `param_id_to_index`, an `AHashMap::get` on the snapshot — see below), so
-// the extra atomic pointer load + refcount bump per call is negligible and
-// only happens at chain (re)build / editor / addressing setup time.
+// NOT a per-frame hot path (modulation/Ableton/OSC address params by id
+// against the live `ParamManifest`, not this registry — see P5 registry
+// containment), so the extra atomic pointer load + refcount bump per call
+// is negligible and only happens at chain (re)build / editor / addressing
+// setup time.
 //
 // At rest the stores are never swapped, so a `load_full` returns the same
 // `Arc` every time — byte-identical behaviour to the old `LazyLock`.
@@ -94,10 +94,8 @@ static PRESET_DEFINITIONS: LazyLock<ArcSwap<PresetMap>> = LazyLock::new(|| {
     ))
 });
 
-// The per-frame addressing hot read (`param_id_to_index`) indexes a
-// `PRESET_DEFINITIONS.load()` snapshot — one atomic pointer load, no
-// per-call refcount churn. Built once at init from both kinds' inventory +
-// JSON metadata; rebuilt only on hot-reload.
+// Built once at init from both kinds' inventory + JSON metadata; rebuilt
+// only on hot-reload.
 
 /// Build the one unified definition map. The two kinds are built into
 /// separate maps first — so a JSON preset overriding an inventory
@@ -176,12 +174,9 @@ fn build_generator_kind_map(json_presets: &[PresetMetadata]) -> PresetMap {
             kind: PresetKind::Generator,
             display_name: "None".to_string(),
             is_line_based: false,
-            param_count: 0,
             param_defs: Vec::new(),
             string_param_defs: Vec::new(),
             osc_prefix: None,
-            id_to_index: AHashMap::new(),
-            param_ids: Vec::new(),
             legacy_param_aliases: &[],
             legacy_value_aliases: &[],
         }),
@@ -313,34 +308,6 @@ pub fn try_get(type_id: &PresetTypeId) -> Option<Arc<PresetDef>> {
     PRESET_DEFINITIONS.load().get(type_id).cloned()
 }
 
-/// Translate a stable `ParamSpec::id` into the param's storage index.
-///
-/// Per-frame addressing hot path (driver / envelope / Ableton / OSC). One
-/// `&str → usize` `AHashMap::get` (~50ns) against the snapshot; kind-
-/// irrelevant — the id→index map is per-def.
-pub fn param_id_to_index(type_id: &PresetTypeId, id: &str) -> Option<usize> {
-    PRESET_DEFINITIONS
-        .load()
-        .get(type_id)?
-        .id_to_index
-        .get(id)
-        .copied()
-}
-
-/// Reverse of [`param_id_to_index`]: storage index → param id. Owned
-/// `Arc<str>` (the hot-reloadable registry can't hand back `&'static`).
-/// `None` if out of range or the slot has an empty id.
-pub fn param_index_to_id(type_id: &PresetTypeId, index: usize) -> Option<Arc<str>> {
-    let snapshot = PRESET_DEFINITIONS.load();
-    let def = snapshot.get(type_id)?;
-    let id = def.param_ids.get(index)?;
-    if id.is_empty() {
-        None
-    } else {
-        Some(Arc::from(id.as_str()))
-    }
-}
-
 /// Create a new `PresetInstance` initialised to the type's registry
 /// defaults, constructed with the correct kind read off the def: an effect
 /// via `PresetInstance::new` + base-param seeding, a generator via
@@ -377,7 +344,7 @@ pub fn create_default(type_id: &PresetTypeId) -> crate::effects::PresetInstance 
 /// effect/generator formatters.)
 pub fn format_value(type_id: &PresetTypeId, param_index: usize, value: f32) -> String {
     let def = match try_get(type_id) {
-        Some(d) if param_index < d.param_count => d,
+        Some(d) if param_index < d.param_defs.len() => d,
         _ => return format!("{:.2}", value),
     };
     let pd = &def.param_defs[param_index];
@@ -394,36 +361,30 @@ pub fn format_value(type_id: &PresetTypeId, param_index: usize, value: f32) -> S
     format!("{:.2}", value)
 }
 
-/// Master-effect OSC address: `/master/{prefix}/{param_id}`. Resolved only
-/// for effects (generators address via [`get_osc_address_for_layer`]);
-/// `None` if no prefix or the slot has no stable id.
-pub fn get_osc_address(type_id: &PresetTypeId, param_index: usize) -> Option<String> {
-    let def = try_get(type_id)?;
-    let prefix = def.osc_prefix.as_deref()?;
-    let param_id = def.param_ids.get(param_index)?;
+/// Master-effect OSC address for a specific param id (P4): `/master/{prefix}/{param_id}`.
+/// The id comes off the live [`crate::params::ParamManifest`]; only `osc_prefix`
+/// is read from the template (a type-level boundary read, allowed under D2).
+/// `None` if the type has no prefix or the id is empty.
+pub fn get_osc_address_by_id(type_id: &PresetTypeId, param_id: &str) -> Option<String> {
     if param_id.is_empty() {
         return None;
     }
-    Some(format!("/master/{}/{}", prefix, param_id))
+    let prefix = try_get(type_id)?.osc_prefix.clone()?;
+    Some(format!("/master/{prefix}/{param_id}"))
 }
 
-/// Layer-scoped OSC address: `/layer/{layerId}/{prefix}/{param_id}`.
-/// Identical shape for both kinds (unified scheme), so one fn.
-pub fn get_osc_address_for_layer(
+/// Layer-scoped OSC address for a specific param id (P4):
+/// `/layer/{layerId}/{prefix}/{param_id}`.
+pub fn get_osc_address_for_layer_by_id(
     type_id: &PresetTypeId,
     layer_id: &str,
-    param_index: usize,
+    param_id: &str,
 ) -> Option<String> {
-    if layer_id.is_empty() {
+    if layer_id.is_empty() || param_id.is_empty() {
         return None;
     }
-    let def = try_get(type_id)?;
-    let prefix = def.osc_prefix.as_deref()?;
-    let param_id = def.param_ids.get(param_index)?;
-    if param_id.is_empty() {
-        return None;
-    }
-    Some(format!("/layer/{}/{}/{}", layer_id, prefix, param_id))
+    let prefix = try_get(type_id)?.osc_prefix.clone()?;
+    Some(format!("/layer/{layer_id}/{prefix}/{param_id}"))
 }
 
 /// Default parameters as freshly-seeded bundled [`crate::params::Param`]s, all
@@ -553,15 +514,6 @@ fn format_float_with_format_string(value: f32, fmt: &str) -> String {
 /// at startup when the registries initialise.
 pub fn preset_metadata_to_def(meta: &PresetMetadata, kind: PresetKind) -> PresetDef {
     let param_defs: Vec<ParamDef> = meta.params.iter().map(param_spec_def_to_param_def).collect();
-    let param_count = param_defs.len();
-    let id_to_index: AHashMap<String, usize> = meta
-        .params
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| !p.id.is_empty())
-        .map(|(i, p)| (p.id.clone(), i))
-        .collect();
-    let param_ids: Vec<String> = meta.params.iter().map(|p| p.id.clone()).collect();
     let (is_line_based, legacy_value_aliases): (
         bool,
         &'static [(&'static str, &'static [ParamValueAlias])],
@@ -576,7 +528,6 @@ pub fn preset_metadata_to_def(meta: &PresetMetadata, kind: PresetKind) -> Preset
     PresetDef {
         kind,
         display_name: meta.display_name.clone(),
-        param_count,
         param_defs,
         // Outer-card string params (Text/Font on text generators, folder
         // paths on MRI Volume) come straight from the JSON's `stringParams`.
@@ -594,8 +545,6 @@ pub fn preset_metadata_to_def(meta: &PresetMetadata, kind: PresetKind) -> Preset
             .collect(),
         osc_prefix: Some(meta.osc_prefix.clone()),
         is_line_based,
-        id_to_index,
-        param_ids,
         legacy_param_aliases: leak_alias_table(&meta.param_aliases),
         legacy_value_aliases,
     }
@@ -739,21 +688,6 @@ mod tests {
     }
 
     #[test]
-    fn test_param_counts_match() {
-        // Check all registered effects have consistent param counts
-        for (_, def) in PRESET_DEFINITIONS.load().iter() {
-            assert_eq!(
-                def.param_count,
-                def.param_defs.len(),
-                "param_count mismatch for {}: declared {} but has {} defs",
-                def.display_name,
-                def.param_count,
-                def.param_defs.len()
-            );
-        }
-    }
-
-    #[test]
     fn test_create_default_bloom() {
         let inst = create_default(&PresetTypeId::BLOOM);
         assert_eq!(*inst.effect_type(), PresetTypeId::BLOOM);
@@ -781,130 +715,11 @@ mod tests {
     }
 
     #[test]
-    fn test_osc_address_master() {
-        // Unified scheme: /master/{prefix}/{param_id}. Bloom param 0 id = "amount".
-        let addr = get_osc_address(&PresetTypeId::BLOOM, 0);
-        assert_eq!(addr, Some("/master/bloom/amount".to_string()));
-    }
-
-    #[test]
-    fn test_osc_address_master_param() {
-        // InfiniteZoom param 1 id = "sharp" (slash-separated, stable id leaf —
-        // not the legacy concat "/master/infiniteZoomSharpness").
-        let addr = get_osc_address(&PresetTypeId::INFINITE_ZOOM, 1);
-        assert_eq!(addr, Some("/master/infiniteZoom/sharp".to_string()));
-    }
-
-    #[test]
-    fn test_osc_address_uniform_for_param_zero_and_beyond() {
-        // Every param with a stable id gets an address now — no param-0
-        // special case, no "no suffix → None". Transform ids: x, y, zoom, rot.
-        assert_eq!(
-            get_osc_address(&PresetTypeId::TRANSFORM, 0),
-            Some("/master/transform/x".to_string())
-        );
-        assert_eq!(
-            get_osc_address(&PresetTypeId::TRANSFORM, 1),
-            Some("/master/transform/y".to_string())
-        );
-        // Out-of-range index still returns None.
-        assert_eq!(get_osc_address(&PresetTypeId::TRANSFORM, 99), None);
-    }
-
-    #[test]
-    fn test_osc_address_layer() {
-        let addr = get_osc_address_for_layer(&PresetTypeId::BLOOM, "layer_1", 0);
-        assert_eq!(addr, Some("/layer/layer_1/bloom/amount".to_string()));
-    }
-
-    #[test]
     fn test_sorted_types() {
         let mut sorted = all_of_kind(PresetKind::Effect);
         sorted.sort_by_key(|t| t.as_str().to_string());
         for i in 1..sorted.len() {
             assert!(sorted[i - 1].as_str() <= sorted[i].as_str());
-        }
-    }
-
-    #[test]
-    fn param_id_to_index_resolves_known_ids() {
-        // Bloom: single param with id "amount".
-        assert_eq!(
-            param_id_to_index(&PresetTypeId::BLOOM, "amount"),
-            Some(0),
-            "bloom.amount must resolve to slot 0"
-        );
-
-        // Transform: 4 params in registration order (x, y, zoom, rot).
-        assert_eq!(param_id_to_index(&PresetTypeId::TRANSFORM, "x"), Some(0));
-        assert_eq!(param_id_to_index(&PresetTypeId::TRANSFORM, "y"), Some(1));
-        assert_eq!(param_id_to_index(&PresetTypeId::TRANSFORM, "zoom"), Some(2));
-        assert_eq!(param_id_to_index(&PresetTypeId::TRANSFORM, "rot"), Some(3));
-    }
-
-    #[test]
-    fn param_id_to_index_unknown_id_returns_none() {
-        assert_eq!(
-            param_id_to_index(&PresetTypeId::BLOOM, "nope"),
-            None,
-            "unknown id must return None, not a stale or default index"
-        );
-    }
-
-    #[test]
-    fn param_id_to_index_unknown_effect_returns_none() {
-        let phantom = PresetTypeId::from_string("not-a-real-effect-id".to_string());
-        assert_eq!(param_id_to_index(&phantom, "amount"), None);
-    }
-
-    #[test]
-    fn param_index_to_id_round_trips() {
-        // For each test-fixture effect, every (id → index) entry must
-        // round-trip back through param_index_to_id.
-        for effect in [
-            PresetTypeId::TRANSFORM,
-            PresetTypeId::BLOOM,
-            PresetTypeId::DITHER,
-            PresetTypeId::KALEIDOSCOPE,
-        ] {
-            let def = get(&effect);
-            for (i, pd) in def.param_defs.iter().enumerate() {
-                if pd.id.is_empty() {
-                    continue;
-                }
-                assert_eq!(
-                    param_id_to_index(&effect, &pd.id),
-                    Some(i),
-                    "{}::{} must resolve to {}",
-                    effect.as_str(),
-                    pd.id,
-                    i
-                );
-                assert_eq!(
-                    param_index_to_id(&effect, i).as_deref(),
-                    Some(pd.id.as_str()),
-                    "{} index {} must reverse to {}",
-                    effect.as_str(),
-                    i,
-                    pd.id
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn param_id_to_index_keys_match_param_count() {
-        // Map size must equal the number of params (no dupes, no empties).
-        // This catches accidental collisions when adding new effects.
-        for effect_type in all_of_kind(PresetKind::Effect) {
-            let def = get(&effect_type);
-            let non_empty_id_count = def.param_defs.iter().filter(|pd| !pd.id.is_empty()).count();
-            assert_eq!(
-                def.id_to_index.len(),
-                non_empty_id_count,
-                "{}: id_to_index size mismatch — possible duplicate or empty ids",
-                effect_type.as_str()
-            );
         }
     }
 
@@ -1044,13 +859,10 @@ mod tests {
 
         assert_eq!(def.display_name, "Bloom (from JSON)");
         assert_eq!(def.osc_prefix.as_deref(), Some("bloom_from_json"));
-        assert_eq!(def.param_count, 1);
         assert_eq!(def.param_defs.len(), 1);
         assert_eq!(def.param_defs[0].id, "amount");
         assert_eq!(def.param_defs[0].name, "Amount");
         assert!((def.param_defs[0].default_value - 0.5).abs() < 1e-6);
-        assert_eq!(def.id_to_index.get("amount"), Some(&0));
-        assert_eq!(def.param_ids, vec!["amount"]);
 
         assert_eq!(def.legacy_param_aliases.len(), 1);
         assert_eq!(def.legacy_param_aliases[0].0, "intensity");
@@ -1111,7 +923,6 @@ mod tests {
         let json_def = preset_metadata_to_def(&json_meta, PresetKind::Effect);
 
         assert_eq!(inv_def.display_name, json_def.display_name);
-        assert_eq!(inv_def.param_count, json_def.param_count);
         assert_eq!(inv_def.osc_prefix, json_def.osc_prefix);
         assert_eq!(inv_def.param_defs.len(), json_def.param_defs.len());
         for (a, b) in inv_def.param_defs.iter().zip(json_def.param_defs.iter()) {
@@ -1125,8 +936,6 @@ mod tests {
             assert_eq!(a.format_string, b.format_string);
             assert_eq!(a.osc_suffix, b.osc_suffix);
         }
-        assert_eq!(inv_def.id_to_index, json_def.id_to_index);
-        assert_eq!(inv_def.param_ids, json_def.param_ids);
     }
 
     #[test]
@@ -1140,101 +949,20 @@ mod tests {
 
     // ── Generator-side tests ───────────────────────────────────────
 
-    #[test]
-    fn param_id_to_index_resolves_plasma_ids() {
-        // Plasma — declared in generator_metadata_submissions.rs:
-        //   pattern (0), complexity (1), contrast (2), speed (3),
-        //   scale (4), clip_trigger (5)
-        assert_eq!(
-            param_id_to_index(&PresetTypeId::PLASMA, "pattern"),
-            Some(0)
-        );
-        assert_eq!(
-            param_id_to_index(&PresetTypeId::PLASMA, "complexity"),
-            Some(1)
-        );
-        assert_eq!(
-            param_id_to_index(&PresetTypeId::PLASMA, "contrast"),
-            Some(2)
-        );
-        assert_eq!(
-            param_id_to_index(&PresetTypeId::PLASMA, "speed"),
-            Some(3)
-        );
-        assert_eq!(
-            param_id_to_index(&PresetTypeId::PLASMA, "scale"),
-            Some(4)
-        );
-        assert_eq!(
-            param_id_to_index(&PresetTypeId::PLASMA, "clip_trigger"),
-            Some(5)
-        );
-    }
-
     /// Backward-compat for the `snap` → `clip_trigger` rename.
     #[test]
     fn legacy_snap_id_still_resolves_via_alias() {
         let def = get(&PresetTypeId::PLASMA);
         let resolved = resolve_param_alias(def.legacy_param_aliases, "snap");
         assert_eq!(resolved, Some("clip_trigger"));
+        // Plasma — declared in generator_metadata_submissions.rs:
+        //   pattern (0), complexity (1), contrast (2), speed (3),
+        //   scale (4), clip_trigger (5)
         assert_eq!(
-            param_id_to_index(&PresetTypeId::PLASMA, resolved.unwrap()),
+            def.param_defs
+                .iter()
+                .position(|pd| pd.id == resolved.unwrap()),
             Some(5),
         );
-    }
-
-    #[test]
-    fn gen_param_id_to_index_unknown_id_returns_none() {
-        assert_eq!(
-            param_id_to_index(&PresetTypeId::PLASMA, "nope"),
-            None
-        );
-    }
-
-    #[test]
-    fn gen_param_id_to_index_unknown_generator_returns_none() {
-        let phantom = PresetTypeId::from_string("not-a-real-generator-id".to_string());
-        assert_eq!(param_id_to_index(&phantom, "pattern"), None);
-    }
-
-    #[test]
-    fn gen_param_id_to_index_round_trips_for_all_known_generators() {
-        // Every registered generator's id_to_index map must round-trip
-        // each entry through param_index_to_id.
-        let snapshot = PRESET_DEFINITIONS.load();
-        for (gen_id, def) in snapshot
-            .iter()
-            .filter(|(_, d)| d.kind == PresetKind::Generator)
-        {
-            for (i, pd) in def.param_defs.iter().enumerate() {
-                if pd.id.is_empty() {
-                    continue;
-                }
-                assert_eq!(
-                    param_id_to_index(gen_id, &pd.id),
-                    Some(i),
-                    "{}::{} must resolve to {}",
-                    gen_id.as_str(),
-                    pd.id,
-                    i
-                );
-                assert_eq!(
-                    param_index_to_id(gen_id, i).as_deref(),
-                    Some(pd.id.as_str()),
-                    "{} index {} must reverse to {}",
-                    gen_id.as_str(),
-                    i,
-                    pd.id
-                );
-            }
-            // Map size must equal the number of non-empty ids — no dupes.
-            let non_empty = def.param_defs.iter().filter(|pd| !pd.id.is_empty()).count();
-            assert_eq!(
-                def.id_to_index.len(),
-                non_empty,
-                "{}: id_to_index size mismatch",
-                gen_id.as_str()
-            );
-        }
     }
 }

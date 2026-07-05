@@ -1111,7 +1111,10 @@ impl Application {
             TextInputField::EffectParam(effect_idx, param_idx) => {
                 if let Ok(parsed) = text.parse::<f32>() {
                     let tab = self.ws.ui_root.inspector.last_effect_tab();
-                    // Resolve effect instance to get its stable id + type + old value
+                    // Resolve effect instance and read its param (by card
+                    // index) ONCE from the live manifest — both the clamp
+                    // range and the stable id come off the same lookup, no
+                    // registry consultation (P5 registry containment).
                     let effect_info = match tab {
                         manifold_ui::InspectorTab::Master => self
                             .local_project
@@ -1119,16 +1122,15 @@ impl Application {
                             .master_effects
                             .get(effect_idx)
                             .map(|fx| {
-                                // Positional card index → transient manifest view
-                                // (boundary translation; a future UI-by-id pass
-                                // addresses inspector params by id).
-                                let old = fx
-                                    .params
-                                    .iter()
-                                    .nth(param_idx)
+                                let param = fx.params.iter().nth(param_idx);
+                                let old = param
                                     .map(|p| if fx.base_tracked { p.base } else { p.value })
                                     .unwrap_or(0.0);
-                                (fx.id.clone(), fx.effect_type(), old)
+                                let new_val = param
+                                    .map(|p| parsed.clamp(p.spec.min, p.spec.max))
+                                    .unwrap_or(parsed);
+                                let param_id = param.map(|p| p.id().to_string());
+                                (fx.id.clone(), old, new_val, param_id)
                             }),
                         manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Group => self
                             .active_layer_id
@@ -1137,16 +1139,15 @@ impl Application {
                             .and_then(|(_, l)| l.effects.as_ref())
                             .and_then(|e| e.get(effect_idx))
                             .map(|fx| {
-                                // Positional card index → transient manifest view
-                                // (boundary translation; a future UI-by-id pass
-                                // addresses inspector params by id).
-                                let old = fx
-                                    .params
-                                    .iter()
-                                    .nth(param_idx)
+                                let param = fx.params.iter().nth(param_idx);
+                                let old = param
                                     .map(|p| if fx.base_tracked { p.base } else { p.value })
                                     .unwrap_or(0.0);
-                                (fx.id.clone(), fx.effect_type(), old)
+                                let new_val = param
+                                    .map(|p| parsed.clamp(p.spec.min, p.spec.max))
+                                    .unwrap_or(parsed);
+                                let param_id = param.map(|p| p.id().to_string());
+                                (fx.id.clone(), old, new_val, param_id)
                             }),
                         manifold_ui::InspectorTab::Clip => self
                             .selection
@@ -1155,50 +1156,32 @@ impl Application {
                             .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
                             .and_then(|c| c.effects.get(effect_idx))
                             .map(|fx| {
-                                // Positional card index → transient manifest view
-                                // (boundary translation; a future UI-by-id pass
-                                // addresses inspector params by id).
-                                let old = fx
-                                    .params
-                                    .iter()
-                                    .nth(param_idx)
+                                let param = fx.params.iter().nth(param_idx);
+                                let old = param
                                     .map(|p| if fx.base_tracked { p.base } else { p.value })
                                     .unwrap_or(0.0);
-                                (fx.id.clone(), fx.effect_type(), old)
+                                let new_val = param
+                                    .map(|p| parsed.clamp(p.spec.min, p.spec.max))
+                                    .unwrap_or(parsed);
+                                let param_id = param.map(|p| p.id().to_string());
+                                (fx.id.clone(), old, new_val, param_id)
                             }),
                     };
-                    if let Some((effect_id, effect_type, old_val)) = effect_info {
-                        // Clamp to param range from registry
-                        let new_val = if let Some(def) =
-                            manifold_core::preset_definition_registry::try_get(effect_type)
-                        {
-                            if let Some(pd) = def.param_defs.get(param_idx) {
-                                parsed.clamp(pd.min, pd.max)
-                            } else {
-                                parsed
-                            }
-                        } else {
-                            parsed
-                        };
-                        if (old_val - new_val).abs() > f32::EPSILON
-                            && let Some(param_id) =
-                                manifold_core::preset_definition_registry::param_index_to_id(
-                                    effect_type,
-                                    param_idx,
-                                )
-                        {
-                            let cmd =
-                                manifold_editing::commands::effects::ChangeGraphParamCommand::new(
-                                    manifold_core::GraphTarget::Effect(effect_id),
-                                    param_id.to_string(),
-                                    old_val,
-                                    new_val,
-                                );
-                            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                Box::new(cmd);
-                            boxed.execute(&mut self.local_project);
-                            self.send_content_cmd(ContentCommand::Execute(boxed));
-                        }
+                    if let Some((effect_id, old_val, new_val, param_id)) = effect_info
+                        && (old_val - new_val).abs() > f32::EPSILON
+                        && let Some(param_id) = param_id
+                    {
+                        let cmd =
+                            manifold_editing::commands::effects::ChangeGraphParamCommand::new(
+                                manifold_core::GraphTarget::Effect(effect_id),
+                                param_id,
+                                old_val,
+                                new_val,
+                            );
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(cmd);
+                        boxed.execute(&mut self.local_project);
+                        self.send_content_cmd(ContentCommand::Execute(boxed));
                     }
                 }
                 self.needs_rebuild = true;
@@ -1210,48 +1193,35 @@ impl Application {
                         .as_ref()
                         .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id))
                     && let Some(layer) = self.local_project.timeline.layers.get(layer_idx)
+                    && let Some(gp) = layer.gen_params()
                 {
-                    let gen_type = layer.generator_type();
-                    // Clamp to param range from generator registry
-                    let new_val = if let Some(def) =
-                        manifold_core::preset_definition_registry::try_get(gen_type)
+                    // Read the param (by card index) ONCE from the live
+                    // manifest — both the clamp range and the stable id
+                    // come off the same lookup, no registry consultation
+                    // (P5 registry containment).
+                    let param = gp.params.iter().nth(param_idx);
+                    let old_val = param
+                        .map(|p| if gp.base_tracked { p.base } else { p.value })
+                        .unwrap_or(0.0);
+                    let new_val = param
+                        .map(|p| parsed.clamp(p.spec.min, p.spec.max))
+                        .unwrap_or(parsed);
+                    let param_id = param.map(|p| p.id().to_string());
+                    if (old_val - new_val).abs() > f32::EPSILON
+                        && let Some(param_id) = param_id
                     {
-                        if let Some(pd) = def.param_defs.get(param_idx) {
-                            parsed.clamp(pd.min, pd.max)
-                        } else {
-                            parsed
-                        }
-                    } else {
-                        parsed
-                    };
-                    if let Some(gp) = layer.gen_params() {
-                        let old_val = gp
-                            .params
-                            .iter()
-                            .nth(param_idx)
-                            .map(|p| if gp.base_tracked { p.base } else { p.value })
-                            .unwrap_or(0.0);
-                        // Resolve the positional registry index to the stable
-                        // param id the unified by-id command addresses.
-                        let param_id =
-                            manifold_core::preset_definition_registry::try_get(gen_type)
-                                .and_then(|d| d.param_ids.get(param_idx).map(|s| s.to_string()));
-                        if (old_val - new_val).abs() > f32::EPSILON
-                            && let Some(param_id) = param_id
-                        {
-                            let lid = layer.layer_id.clone();
-                            let cmd =
-                                manifold_editing::commands::effects::ChangeGraphParamCommand::new(
-                                    manifold_core::GraphTarget::Generator(lid),
-                                    param_id,
-                                    old_val,
-                                    new_val,
-                                );
-                            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                Box::new(cmd);
-                            boxed.execute(&mut self.local_project);
-                            self.send_content_cmd(ContentCommand::Execute(boxed));
-                        }
+                        let lid = layer.layer_id.clone();
+                        let cmd =
+                            manifold_editing::commands::effects::ChangeGraphParamCommand::new(
+                                manifold_core::GraphTarget::Generator(lid),
+                                param_id,
+                                old_val,
+                                new_val,
+                            );
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(cmd);
+                        boxed.execute(&mut self.local_project);
+                        self.send_content_cmd(ContentCommand::Execute(boxed));
                     }
                 }
                 self.needs_rebuild = true;

@@ -27,7 +27,7 @@ enum OscParamTarget {
     MasterOpacity,
     MasterEffect {
         effect_type: PresetTypeId,
-        param_index: usize,
+        param_id: String,
     },
     LayerOpacity {
         layer_id: LayerId,
@@ -35,11 +35,11 @@ enum OscParamTarget {
     LayerEffect {
         layer_id: LayerId,
         effect_type: PresetTypeId,
-        param_index: usize,
+        param_id: String,
     },
     GenParam {
         layer_id: LayerId,
-        param_index: usize,
+        param_id: String,
     },
     Macro {
         index: usize,
@@ -117,29 +117,25 @@ impl OscParamRouter {
             1.0,
         );
 
-        // Master effects
+        // Master effects — iterate the LIVE manifest (P4): every param on the
+        // instance is addressable, including user-added / registry-absent ones.
         for fx in &project.settings.master_effects {
-            let Some(def) = manifold_core::preset_definition_registry::try_get(fx.effect_type())
-            else {
-                continue;
-            };
-            for pi in 0..def.param_count {
-                let Some(addr) = manifold_core::preset_definition_registry::get_osc_address(
+            for p in fx.params.iter() {
+                let Some(addr) = manifold_core::preset_definition_registry::get_osc_address_by_id(
                     fx.effect_type(),
-                    pi,
+                    p.id(),
                 ) else {
                     continue;
                 };
-                let pd = &def.param_defs[pi];
                 self.subscribe(
                     receiver,
                     &addr,
                     OscParamTarget::MasterEffect {
                         effect_type: fx.effect_type().clone(),
-                        param_index: pi,
+                        param_id: p.id().to_string(),
                     },
-                    pd.min,
-                    pd.max,
+                    p.spec.min,
+                    p.spec.max,
                 );
             }
         }
@@ -170,64 +166,52 @@ impl OscParamRouter {
         // Layer effects
         if let Some(effects) = &layer.effects {
             for fx in effects {
-                let Some(def) =
-                    manifold_core::preset_definition_registry::try_get(fx.effect_type())
-                else {
-                    continue;
-                };
-                for pi in 0..def.param_count {
+                for p in fx.params.iter() {
                     let Some(addr) =
-                        manifold_core::preset_definition_registry::get_osc_address_for_layer(
+                        manifold_core::preset_definition_registry::get_osc_address_for_layer_by_id(
                             fx.effect_type(),
                             lid_str,
-                            pi,
+                            p.id(),
                         )
                     else {
                         continue;
                     };
-                    let pd = &def.param_defs[pi];
                     self.subscribe(
                         receiver,
                         &addr,
                         OscParamTarget::LayerEffect {
                             layer_id: lid.clone(),
                             effect_type: fx.effect_type().clone(),
-                            param_index: pi,
+                            param_id: p.id().to_string(),
                         },
-                        pd.min,
-                        pd.max,
+                        p.spec.min,
+                        p.spec.max,
                     );
                 }
             }
         }
 
-        // Generator params
+        // Generator params — live manifest (P4).
         if let Some(gp) = layer.gen_params() {
-            let Some(def) =
-                manifold_core::preset_definition_registry::try_get(gp.generator_type())
-            else {
-                return;
-            };
-            for pi in 0..def.param_count {
+            for p in gp.params.iter() {
                 let Some(addr) =
-                    manifold_core::preset_definition_registry::get_osc_address_for_layer(
+                    manifold_core::preset_definition_registry::get_osc_address_for_layer_by_id(
                         gp.generator_type(),
                         lid_str,
-                        pi,
+                        p.id(),
                     )
                 else {
                     continue;
                 };
-                let pd = &def.param_defs[pi];
                 self.subscribe(
                     receiver,
                     &addr,
                     OscParamTarget::GenParam {
                         layer_id: lid.clone(),
-                        param_index: pi,
+                        param_id: p.id().to_string(),
                     },
-                    pd.min,
-                    pd.max,
+                    p.spec.min,
+                    p.spec.max,
                 );
             }
         }
@@ -284,7 +268,7 @@ impl OscParamRouter {
                 }
                 OscParamTarget::MasterEffect {
                     effect_type,
-                    param_index,
+                    param_id,
                 } => {
                     if let Some(fx) = project
                         .settings
@@ -292,15 +276,7 @@ impl OscParamRouter {
                         .iter_mut()
                         .find(|f| f.effect_type() == effect_type)
                     {
-                        // P2 compile bridge: the OSC target still carries a
-                        // positional index (P4 carries the param_id). Translate
-                        // to the id through the manifest's transient positional
-                        // view, then write through the id funnel.
-                        let id =
-                            fx.params.iter().nth(*param_index).map(|p| p.id().to_string());
-                        if let Some(id) = id {
-                            fx.set_base_param(&id, write.value);
-                        }
+                        fx.set_base_param(param_id, write.value);
                     }
                 }
                 OscParamTarget::LayerOpacity { layer_id } => {
@@ -313,7 +289,7 @@ impl OscParamRouter {
                 OscParamTarget::LayerEffect {
                     layer_id,
                     effect_type,
-                    param_index,
+                    param_id,
                 } => {
                     if let Some((_, layer)) =
                         project.timeline.find_layer_by_id_mut(layer_id.as_str())
@@ -321,31 +297,18 @@ impl OscParamRouter {
                         && let Some(fx) =
                             effects.iter_mut().find(|f| f.effect_type() == effect_type)
                     {
-                        // P2 compile bridge: the OSC target still carries a
-                        // positional index (P4 carries the param_id). Translate
-                        // to the id through the manifest's transient positional
-                        // view, then write through the id funnel.
-                        let id =
-                            fx.params.iter().nth(*param_index).map(|p| p.id().to_string());
-                        if let Some(id) = id {
-                            fx.set_base_param(&id, write.value);
-                        }
+                        fx.set_base_param(param_id, write.value);
                     }
                 }
                 OscParamTarget::GenParam {
                     layer_id,
-                    param_index,
+                    param_id,
                 } => {
                     if let Some((_, layer)) =
                         project.timeline.find_layer_by_id_mut(layer_id.as_str())
                         && let Some(gp) = layer.gen_params_mut()
                     {
-                        // P2 compile bridge (see MasterEffect above).
-                        let id =
-                            gp.params.iter().nth(*param_index).map(|p| p.id().to_string());
-                        if let Some(id) = id {
-                            gp.set_base_param(&id, write.value);
-                        }
+                        gp.set_base_param(param_id, write.value);
                     }
                 }
                 OscParamTarget::Macro { index } => {
@@ -353,5 +316,141 @@ impl OscParamRouter {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::osc_receiver::OscReceiver;
+    use manifold_core::effect_graph_def::ParamSpecDef;
+    use manifold_core::effects::PresetInstance;
+    use manifold_core::params::{Param, ParamManifest};
+
+    fn user_spec(id: &str) -> ParamSpecDef {
+        ParamSpecDef {
+            id: id.to_string(),
+            name: id.to_string(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.0,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: manifold_core::macro_bank::MacroCurve::default(),
+            invert: false,
+        }
+    }
+
+    /// An effect type that carries an OSC prefix in the live registry (so its
+    /// params are OSC-addressable at all), plus that prefix. Discovered rather
+    /// than hard-coded — the test shouldn't depend on which specific effect
+    /// happens to declare a prefix.
+    fn effect_with_osc_prefix() -> (PresetTypeId, String) {
+        use manifold_core::preset_def::PresetKind;
+        manifold_core::preset_definition_registry::all_of_kind(PresetKind::Effect)
+            .into_iter()
+            .find_map(|ty| {
+                manifold_core::preset_definition_registry::try_get(&ty)
+                    .and_then(|d| d.osc_prefix.clone())
+                    .map(|p| (ty, p))
+            })
+            .expect("at least one registered effect must declare an osc_prefix")
+    }
+
+    fn project_with_master(fx: PresetInstance) -> Project {
+        let mut project = Project::default();
+        project.settings.master_effects.push(fx);
+        project
+    }
+
+    /// REPRO — design acceptance (b): a user-added param on a master effect
+    /// must get an OSC address. Before P4 the router enumerated the frozen
+    /// registry (`0..def.param_count`), so a param absent from the registry got
+    /// no address — unmappable over OSC. (Runnable-red against pre-P4 code.)
+    #[test]
+    fn osc_registers_address_for_user_added_master_param() {
+        let (ty, prefix) = effect_with_osc_prefix();
+        let mut fx = PresetInstance::new(ty);
+        fx.params = ParamManifest::from_params(vec![Param::user_added(user_spec("user_glow"))]);
+        let project = project_with_master(fx);
+
+        let mut receiver = OscReceiver::new();
+        let mut router = OscParamRouter::new();
+        router.rebuild(&project, &mut receiver);
+
+        let expected = format!("/master/{prefix}/user_glow");
+        assert!(
+            router.registered_addresses.contains(&expected),
+            "user-added param must be OSC-addressable; registered = {:?}",
+            router.registered_addresses
+        );
+    }
+
+    /// GUARD — the live-rig address contract: bundled params must get a
+    /// well-formed `/master/{prefix}/{id}` address and the router must
+    /// register it. (Pre-P5 this proved byte-identity against the frozen
+    /// positional `get_osc_address`; that oracle is gone under registry
+    /// containment, so the well-formed address IS the expected value now.)
+    #[test]
+    fn osc_bundled_addresses_are_byte_identical_to_positional() {
+        let (ty, prefix) = effect_with_osc_prefix();
+        let defaults = manifold_core::preset_definition_registry::get_defaults(&ty);
+        assert!(!defaults.is_empty(), "chosen effect must have bundled params");
+
+        let mut fx = PresetInstance::new(ty.clone());
+        fx.params = ParamManifest::from_params(defaults.clone());
+        let project = project_with_master(fx);
+
+        let mut receiver = OscReceiver::new();
+        let mut router = OscParamRouter::new();
+        router.rebuild(&project, &mut receiver);
+
+        for p in defaults.iter() {
+            let expected = format!("/master/{}/{}", prefix, p.id());
+            let addr =
+                manifold_core::preset_definition_registry::get_osc_address_by_id(&ty, p.id())
+                    .expect("id-keyed address must exist");
+            assert_eq!(
+                addr, expected,
+                "address for bundled param (id {}) must be well-formed",
+                p.id()
+            );
+            assert!(
+                router.registered_addresses.contains(&addr),
+                "router must register the bundled address {addr}"
+            );
+        }
+    }
+
+    /// Dispatch resolves and writes a user-added param by id (design acceptance
+    /// (b), the "dispatches" half). Same-module, so it feeds the router's
+    /// pending queue directly instead of standing up a UDP socket.
+    #[test]
+    fn osc_dispatch_writes_user_param_by_id() {
+        let (ty, _) = effect_with_osc_prefix();
+        let mut fx = PresetInstance::new(ty.clone());
+        fx.params = ParamManifest::from_params(vec![Param::user_added(user_spec("user_glow"))]);
+        let mut project = project_with_master(fx);
+
+        let router = OscParamRouter::new();
+        router.pending.lock().push(PendingWrite {
+            target: OscParamTarget::MasterEffect {
+                effect_type: ty,
+                param_id: "user_glow".to_string(),
+            },
+            value: 0.42,
+        });
+        router.apply(&mut project);
+
+        let v = project.settings.master_effects[0]
+            .params
+            .get("user_glow")
+            .unwrap()
+            .value;
+        assert!((v - 0.42).abs() < 1e-6, "dispatch must write user param by id; got {v}");
     }
 }

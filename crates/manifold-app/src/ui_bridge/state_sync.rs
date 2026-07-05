@@ -928,7 +928,6 @@ pub fn sync_project_data(
         // From Unity ViewportManager.BuildTrack (lines 548-663):
         // - is_muted includes parent group mute (children of muted groups are dimmed)
         // - is_group set correctly for group layers
-        // - accent_color set for child layers
         let tracks: Vec<TrackInfo> = project
             .timeline
             .layers
@@ -946,13 +945,6 @@ pub fn sync_project_data(
 
                 // Track height is owned solely by the CoordinateMapper
                 // (rebuilt above, read back by the viewport). No copy here.
-
-                // Accent color for child layers (group visual)
-                let accent_color = if layer.parent_layer_id.is_some() {
-                    Some(color::DEFAULT_GROUP_ACCENT)
-                } else {
-                    None
-                };
 
                 // Child layer indices for collapsed group preview
                 let child_layer_indices = if layer.is_group() {
@@ -973,7 +965,6 @@ pub fn sync_project_data(
                     is_muted,
                     is_group: layer.is_group(),
                     is_collapsed: layer.is_collapsed,
-                    accent_color,
                     child_layer_indices,
                 }
             })
@@ -2028,13 +2019,16 @@ fn preset_to_config(
             id_to_index.insert(row.id.clone(), pi);
             let osc_address = match osc_scope {
                 OscScope::Master => {
-                    manifold_core::preset_definition_registry::get_osc_address(preset_type, pi)
+                    manifold_core::preset_definition_registry::get_osc_address_by_id(
+                        preset_type,
+                        &row.id,
+                    )
                 }
                 OscScope::Layer(lid) => {
-                    manifold_core::preset_definition_registry::get_osc_address_for_layer(
+                    manifold_core::preset_definition_registry::get_osc_address_for_layer_by_id(
                         preset_type,
                         lid,
-                        pi,
+                        &row.id,
                     )
                 }
             };
@@ -2232,20 +2226,17 @@ fn describe_macro_mapping(
                 return "Effect → ?".to_string();
             };
             let effect_type = fx.effect_type();
-            let def = manifold_core::preset_definition_registry::try_get(effect_type);
-            let effect_name = def
-                .as_ref()
+            // Effect display name is type-level template metadata (a boundary
+            // read); the param name comes off the LIVE manifest so user-added /
+            // glb params resolve instead of rendering "?" (was a registry
+            // id_to_index miss, the UI twin of the P4 blind spot).
+            let effect_name = manifold_core::preset_definition_registry::try_get(effect_type)
                 .map(|d| d.display_name.clone())
                 .unwrap_or_else(|| effect_type.as_str().to_string());
-            let param_name = def
-                .as_ref()
-                .and_then(|d| {
-                    d.id_to_index
-                        .get(param_id.as_ref())
-                        .copied()
-                        .and_then(|i| d.param_defs.get(i))
-                        .map(|p| p.name.clone())
-                })
+            let param_name = fx
+                .params
+                .get(param_id.as_ref())
+                .map(|p| p.spec.name.clone())
                 .unwrap_or_else(|| "?".to_string());
             // Prefix with the owning layer's name; master effects have none.
             match project.layer_id_for_effect(effect_id) {
@@ -2279,16 +2270,63 @@ fn describe_macro_mapping(
                 .iter()
                 .find(|l| l.layer_id == *layer_id);
             let layer_name = layer.map(|l| l.name.as_str()).unwrap_or("?");
+            // Param name off the LIVE manifest (user-added / glb params resolve).
             let param_name = layer
                 .and_then(|l| l.gen_params())
-                .and_then(|gp| {
-                    let def =
-                        manifold_core::preset_definition_registry::try_get(gp.generator_type())?;
-                    let idx = def.id_to_index.get(param_id.as_ref()).copied()?;
-                    def.param_defs.get(idx).map(|p| p.name.clone())
-                })
+                .and_then(|gp| gp.params.get(param_id.as_ref()).map(|p| p.spec.name.clone()))
                 .unwrap_or_else(|| "?".to_string());
             format!("{} Gen → {}", layer_name, param_name)
         }
+    }
+}
+
+#[cfg(test)]
+mod param_label_tests {
+    use super::*;
+    use manifold_core::MacroMappingTarget;
+    use manifold_core::effects::PresetInstance;
+    use manifold_core::params::{Param, ParamManifest};
+
+    fn user_spec(id: &str, name: &str) -> manifold_core::effect_graph_def::ParamSpecDef {
+        manifold_core::effect_graph_def::ParamSpecDef {
+            id: id.to_string(),
+            name: name.to_string(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.0,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: manifold_core::macro_bank::MacroCurve::default(),
+            invert: false,
+        }
+    }
+
+    /// P5: a macro-mapping label resolves a param's display name from the LIVE
+    /// manifest, so a user-added param shows its name instead of "?" (before,
+    /// the registry `id_to_index` lookup missed it — the UI twin of the P4
+    /// blind spot).
+    #[test]
+    fn describe_macro_mapping_uses_live_manifest_param_name() {
+        let mut project = manifold_core::project::Project::default();
+        let mut fx = PresetInstance::new(manifold_core::PresetTypeId::BLOOM);
+        fx.params =
+            ParamManifest::from_params(vec![Param::user_added(user_spec("user_glow", "Glow Amount"))]);
+        let effect_id = fx.id.clone();
+        project.settings.master_effects.push(fx);
+
+        let target = MacroMappingTarget::Effect {
+            effect_id,
+            param_id: std::borrow::Cow::Owned("user_glow".to_string()),
+        };
+        let label = describe_macro_mapping(&target, &project);
+        assert!(
+            label.contains("Glow Amount"),
+            "label must show the live param name, got {label:?}"
+        );
+        assert!(!label.contains('?'), "label must not fall back to ?, got {label:?}");
     }
 }
