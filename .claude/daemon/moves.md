@@ -428,6 +428,32 @@ move it compiles: format output for the user's next action, not for reading.
 > honest thought pricing both branches — most unknowns dissolve on contact,
 > and an escalation should arrive priced.
 
+## mechanical/design-primer
+- **signature:** Deterministic, observer-selected — never the classifier: the
+  first live Write or Edit this session whose path matches a design document
+  (`*_DESIGN.md` / `*_PLAN.md`). Fires once per target (cooldown "once" per
+  mailbox), like reasoning-primer: priming tier, not a drift detector.
+  Peter's third payload family (2026-07-05): design taste — over-engineering,
+  poor architectures — as distinct from reasoning patterns.
+- **cooldown:** once
+- **payload:**
+> You're writing a design. From the model that wrote this system's designs:
+> start from inventory, not invention — list what already exists and name why
+> each existing piece can't carry the requirement; most good designs here
+> turned out to be one wire away from existing machinery, and the strongest
+> sections of past docs are their audits. Design the end state, not the
+> transition — no phase that exists only to avoid touching something, no shim
+> for a state that won't exist next month. Give every fact one owner: if two
+> places can disagree about one truth, the design has a bug before any code
+> does. Put invariants where they can't be violated — a type, a write-time
+> check, a single mutation path — never in prose or convention. Each moving
+> part must earn its place by naming the concrete case that breaks without
+> it; if the justifying case begins with "someday" or "what if", delete the
+> part. Prefer deleting a bug class over handling one. And write the failure
+> story before the success story: what does this do when the input is absent,
+> malformed, or huge — a design that only covers the happy path is a demo
+> script.
+
 ## mechanical/unread-edit
 - **signature:** Deterministic, observer-selected — never the classifier: an
   Edit or MultiEdit targets a file path this session has never Read and never

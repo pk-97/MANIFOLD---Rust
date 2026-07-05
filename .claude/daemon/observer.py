@@ -19,6 +19,7 @@ import argparse
 import collections
 import json
 import os
+import re
 import signal
 import sys
 import time
@@ -356,6 +357,7 @@ class Daemon:
                     # generic, primer last (it retries until delivered).
                     if classify:
                         self._check_stopgap(name, input_, event_count, logf, mailbox=worker)
+                        self._check_design_primer(name, input_, event_count, logf, mailbox=worker)
                     self._check_unread_edit(name, input_, event_count, logf, mailbox=worker, live=classify)
                     if classify:
                         self._check_primer(event_count, logf, mailbox=worker)
@@ -439,6 +441,7 @@ class Daemon:
                     if classify:
                         self._check_stopgap(name, input_, event_count, logf)
                         self._check_git_landing(name, input_, event_count, logf)
+                        self._check_design_primer(name, input_, event_count, logf)
                     # live=classify: catchup populates paths_seen, never fires
                     self._check_unread_edit(name, input_, event_count, logf, live=classify)
                     if classify:
@@ -510,6 +513,34 @@ class Daemon:
         }
         _atomic_write_json(mb.verdict_path, record)
         _log(logf, "mechanical/reasoning-primer fired (priming tier)")
+
+    DESIGN_DOC_RE = re.compile(r"_(?:DESIGN|PLAN)\.md$")
+
+    def _check_design_primer(self, name, input_, event_count, logf, mailbox=None):
+        """mechanical/design-primer: first live Write/Edit of a *_DESIGN.md or
+        *_PLAN.md this session — design-taste advice at the moment a design is
+        being authored. Cooldown "once" per target, retry semantics identical
+        to reasoning-primer."""
+        mb = mailbox if mailbox is not None else self
+        if mb.fire_count.get("mechanical/design-primer"):
+            return
+        if name not in ("Write", "Edit", "MultiEdit") or not isinstance(input_, dict):
+            return
+        path = input_.get("file_path") or ""
+        if not self.DESIGN_DOC_RE.search(path):
+            return
+        verdict = {"evidence": f"{name} {path} (design doc, priming tier)", "confidence": 1.0}
+        flag_out = self._resolve_fire(event_count, "mechanical/design-primer", verdict, logf, mailbox=mailbox)
+        if not flag_out:
+            return
+        record = {
+            "ts": time.time(),
+            "phase": mb.phase,
+            "window_version": common.WINDOW_VERSION,
+            "flag": flag_out,
+        }
+        _atomic_write_json(mb.verdict_path, record)
+        _log(logf, f"mechanical/design-primer fired: {name} {path}")
 
     def _check_unread_edit(self, name, input_, event_count, logf, mailbox=None, live=True):
         """mechanical/unread-edit: an Edit/MultiEdit to a path this target has

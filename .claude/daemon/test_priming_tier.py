@@ -207,12 +207,44 @@ def test_worker_paths_are_isolated():
     with_temp_dirs(run)
 
 
-def test_moves_catalog_has_both_payloads():
+def test_moves_catalog_has_all_payloads():
     moves = common.parse_moves(common.read(os.path.join(DAEMON_DIR, "moves.md")))
-    for mid in ("mechanical/reasoning-primer", "mechanical/unread-edit"):
+    for mid in ("mechanical/reasoning-primer", "mechanical/unread-edit", "mechanical/design-primer"):
         entry = moves.get(mid) or {}
         check(f"{mid} in catalog with payload", bool(entry.get("payload")), mid)
     check("primer cooldown is once", (moves.get("mechanical/reasoning-primer") or {}).get("cooldown") == "once")
+    check("design-primer cooldown is once", (moves.get("mechanical/design-primer") or {}).get("cooldown") == "once")
+
+
+# ---- design-primer ----
+
+
+def test_design_primer_fires_on_design_doc_write():
+    def run(td):
+        d = make_daemon()
+        logf = io.StringIO()
+        d._check_design_primer("Write", {"file_path": "docs/FOO_DESIGN.md"}, 1, logf)
+        flag = read_flag(d)
+        check("design primer fired", flag and flag["move_id"] == "mechanical/design-primer", flag)
+        seq1 = flag["seq"]
+        with open(d.consumed_path, "w", encoding="utf-8") as f:
+            f.write(str(seq1))
+        d._check_design_primer("Edit", {"file_path": "docs/BAR_PLAN.md"}, 2, logf)
+        check("design primer fires once per session", read_flag(d)["seq"] == seq1)
+
+    with_temp_dirs(run)
+
+
+def test_design_primer_ignores_non_design_paths():
+    def run(td):
+        d = make_daemon()
+        logf = io.StringIO()
+        d._check_design_primer("Write", {"file_path": "docs/README.md"}, 1, logf)
+        d._check_design_primer("Edit", {"file_path": "crates/foo/src/lib.rs"}, 2, logf)
+        d._check_design_primer("Read", {"file_path": "docs/FOO_DESIGN.md"}, 3, logf)
+        check("no fire on non-design writes or design reads", not os.path.exists(d.verdict_path))
+
+    with_temp_dirs(run)
 
 
 if __name__ == "__main__":
