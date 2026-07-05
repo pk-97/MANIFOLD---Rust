@@ -822,6 +822,7 @@ mod tests {
                 osc_suffix: String::new(),
                 curve: Default::default(),
                 invert: false,
+                is_angle: false,
             }],
             bindings: vec![BindingDef {
                 id: "amount".to_string(),
@@ -912,6 +913,7 @@ mod tests {
                 osc_suffix: String::new(),
                 curve: Default::default(),
                 invert: false,
+                is_angle: false,
             }],
             bindings: Vec::new(),
             skip_mode: SkipModeDef::default(),

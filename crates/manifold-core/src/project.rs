@@ -1385,6 +1385,7 @@ mod tests {
             osc_suffix: String::new(),
             curve: Default::default(),
             invert: false,
+            is_angle: false,
         };
         let mut p = crate::params::Param::bundled(spec);
         p.value = value;

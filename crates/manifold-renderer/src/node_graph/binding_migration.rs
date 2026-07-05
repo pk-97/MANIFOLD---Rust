@@ -147,6 +147,7 @@ mod tests {
                 osc_suffix: String::new(),
                 curve: Default::default(),
                 invert: false,
+                is_angle: false,
             }],
             bindings: vec![BindingDef {
                 id: id.to_string(),

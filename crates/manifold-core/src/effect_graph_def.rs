@@ -476,6 +476,18 @@ pub struct ParamSpecDef {
     /// skipped on serialize when false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub invert: bool,
+    /// Angle presentation hint. Display-only: the stored value stays RADIANS
+    /// (drivers / Ableton / envelopes write radians every frame, unchanged) —
+    /// the card slider and text boundary convert to DEGREES only for the human.
+    /// This is the single persistent home for the flag (D1): captured onto a
+    /// user-exposed param's spec at expose time from the inner
+    /// `ParamType::Angle`, and read straight off the manifest `Param.spec` by
+    /// the card builder. Before this field it had no home in the unified param
+    /// shape and every card was dead-fed `false`, so no angle param ever showed
+    /// degrees. `serde(default)` (false) keeps every saved show loading; skipped
+    /// on serialize when false so non-angle presets stay byte-identical on disk.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_angle: bool,
 }
 
 /// JSON-wire shape mirroring `manifold_renderer::node_graph::ParamBinding`.
@@ -678,6 +690,7 @@ mod tests {
             osc_suffix: String::new(),
             curve: crate::macro_bank::MacroCurve::Linear,
             invert: false,
+            is_angle: false,
         }
     }
 
@@ -992,6 +1005,7 @@ mod tests {
                 osc_suffix: String::new(),
                 curve: Default::default(),
                 invert: false,
+                is_angle: false,
             }],
             bindings: vec![BindingDef {
                 id: "amount".to_string(),
