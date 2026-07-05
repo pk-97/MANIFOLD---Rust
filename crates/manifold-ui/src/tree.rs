@@ -38,6 +38,16 @@ pub struct UITree {
     /// sibling salt (the sibling index, or an explicit key). Used for hierarchy
     /// (a child salts off its parent's id) and for [`widget_of`](UITree::widget_of).
     widget_ids: Vec<WidgetId>,
+    /// Durable component name per slot, parallel to `nodes`/`widget_ids`
+    /// (`UI_AUTOMATION_DESIGN.md` D8/§3). `&'static str` only — panels register a
+    /// literal like `"layer_header.mute"` via [`set_name`](UITree::set_name)
+    /// right after building the node; *which row* it's on comes from the
+    /// selector's structural query (`under_text`), never a per-row `String`
+    /// allocation (the editor rebuilds its tree every frame, so that would be a
+    /// per-frame alloc on the UI thread). `None` for the overwhelming majority
+    /// of nodes — the automation dump (§3) reaches unnamed nodes via
+    /// text/type/structure instead.
+    names: Vec<Option<&'static str>>,
     /// Per-slot count of children added so far, parallel to `nodes`. The auto
     /// sibling salt for the next child of a node — so siblings get 0, 1, 2, … in
     /// build order, deterministically reproduced on rebuild.
@@ -82,6 +92,7 @@ impl UITree {
             generations: Vec::with_capacity(INITIAL_CAPACITY),
             gen_counter: 1,
             widget_ids: Vec::with_capacity(INITIAL_CAPACITY),
+            names: Vec::with_capacity(INITIAL_CAPACITY),
             child_counts: Vec::with_capacity(INITIAL_CAPACITY),
             root_count: 0,
             widget_to_node: ahash::AHashMap::with_capacity(INITIAL_CAPACITY),
@@ -243,6 +254,7 @@ impl UITree {
         self.last_child.push(None);
         self.generations.push(generation);
         self.widget_ids.push(widget_id);
+        self.names.push(None);
         self.child_counts.push(0);
 
         // Only interactive nodes are ever the target of press / hover / focus, so
@@ -862,6 +874,34 @@ impl UITree {
         self.widget_to_node.get(&widget).copied()
     }
 
+    // ── Automation component names (D8, §3) ──────────────────────────
+
+    /// Register `id`'s durable component name (e.g. `"layer_header.mute"`) —
+    /// the automation selector surface's `name` field. Call once, right after
+    /// the builder that minted `id` returns, at a high-value interaction point
+    /// (§3's naming-pass scope) — most nodes stay unnamed and stay reachable via
+    /// text/type/structure. A no-op (debug-asserts) on a stale/invalid id.
+    pub fn set_name(&mut self, id: NodeId, name: &'static str) {
+        debug_assert!(
+            self.is_live(id),
+            "set_name on a stale/invalid NodeId (index {} gen {})",
+            id.index(),
+            id.generation()
+        );
+        if self.is_live(id) {
+            self.names[id.index()] = Some(name);
+        }
+    }
+
+    /// `id`'s registered component name, or `None` if it was never named (the
+    /// common case) or `id` is stale. Read by the automation dump (§3).
+    pub fn name_of(&self, id: NodeId) -> Option<&'static str> {
+        if !self.is_live(id) {
+            return None;
+        }
+        self.names[id.index()]
+    }
+
     // ── Clear ───────────────────────────────────────────────────────
 
     pub fn clear(&mut self) {
@@ -875,6 +915,7 @@ impl UITree {
         // reused from index 0, but with fresh, higher generations).
         self.generations.clear();
         self.widget_ids.clear();
+        self.names.clear();
         self.child_counts.clear();
         self.root_count = 0;
         // Retain the map's capacity — the editor clears+refills it every frame.
@@ -915,6 +956,7 @@ impl UITree {
         // longer validate.
         self.generations.truncate(from_index);
         self.widget_ids.truncate(from_index);
+        self.names.truncate(from_index);
         self.child_counts.truncate(from_index);
         // Surviving parents keep their child_counts (a partial rebuild's safety
         // invariant guarantees their children all survived), so the rebuilt tail
@@ -1308,6 +1350,24 @@ mod tests {
         let (_, btn) = build_sample(&mut tree);
         tree.clear();
         assert_eq!(tree.widget_of(btn), WidgetId::NONE);
+    }
+
+    #[test]
+    fn named_node_round_trips_its_static_str() {
+        let mut tree = UITree::new();
+        let (root, btn) = build_sample(&mut tree);
+        assert_eq!(tree.name_of(btn), None, "unnamed until registered");
+        tree.set_name(btn, "layer_header.mute");
+        assert_eq!(tree.name_of(btn), Some("layer_header.mute"));
+        // A sibling built alongside it stays unnamed — naming is per-node, opt-in.
+        assert_eq!(tree.name_of(root), None);
+    }
+
+    #[test]
+    fn unnamed_node_is_none() {
+        let mut tree = UITree::new();
+        let (_, btn) = build_sample(&mut tree);
+        assert_eq!(tree.name_of(btn), None);
     }
 
     #[test]

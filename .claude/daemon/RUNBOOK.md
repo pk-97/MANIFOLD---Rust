@@ -19,8 +19,9 @@ grades and changes nothing is a valid pass; bias toward silence.
 
 1. **Join.** For each `injected` record since the last pass: pair with its
    `scored` record by (session_id, seq) if one exists; locate the injected
-   block in the transcript (`rg '<daemon move=' <transcript>`). Pre-§4b
-   records lack move_id in telemetry — the transcript block is authoritative.
+   block in the transcript (`rg '<daemon(-advice)? move=' <transcript>`).
+   Pre-§4b records lack move_id in telemetry — the transcript block is
+   authoritative.
 2. **Grade each injection.** Read the transcript around it (the window before,
    ~40 events after). Two labels, human-judgment level, mechanical score is
    input not verdict: `correct` (did the named drift actually exist? TP/FP)
@@ -33,7 +34,11 @@ grades and changes nothing is a valid pass; bias toward silence.
    Sessions self-grade at fire time since 2026-07-04 (records with
    `"grader": "session"`, prompted by the supervised-mode sentence). Since
    2026-07-05 those land in `eval/live_grades.session*.jsonl` (gitignored),
-   not the tracked corpus — read every session file for them. Treat them as
+   not the tracked corpus — read every session file for them. Advice-kind
+   fires (`<daemon-advice>` blocks, DESIGN §2e) carry no ack and no session
+   self-grade BY DESIGN — grade them pass-level only, on whether the
+   session's downstream behavior shows the payload's patterns, and expect
+   `effective: unclear` to be common rather than a defect. Treat them as
    provisional input, not verdicts — confirm or override each with your own
    transcript read; on disagreement write a pass-graded record for the same
    (session_id, seq) into `live_grades.jsonl` rather than editing the

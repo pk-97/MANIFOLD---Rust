@@ -8,8 +8,12 @@ publish = false
 ahash = { workspace = true }
 bitflags = "2"
 manifold-foundation = { path = "../manifold-foundation" }
+# UI_AUTOMATION_DESIGN.md §4: AutomationAction and friends round-trip through
+# the `--script <file.json>` runner (P2), so the enum needs to (de)serialize.
+serde = { workspace = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

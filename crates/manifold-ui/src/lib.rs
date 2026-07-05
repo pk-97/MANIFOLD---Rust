@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod anim;
+pub mod automation;
 pub mod automation_hit_tester;
 pub mod bitmap_painter;
 pub mod bitmap_renderer;
@@ -20,6 +21,7 @@ pub mod graph_canvas;
 pub mod graph_edit;
 pub mod graph_view;
 pub mod hit;
+pub mod hit_targets;
 pub mod icons;
 pub mod input;
 pub mod intent;
@@ -44,6 +46,10 @@ pub mod waveform_painter;
 pub mod waveform_renderer;
 pub mod widget_layout;
 
+pub use automation::{
+    AssertCheck, AutomationAction, AutomationTarget, Gesture, MatchInfo, ResolveError,
+    ResolvedTarget, SelectorQuery, interpolate_drag, resolve, resolve_all,
+};
 pub use bitmap_renderer::LayerBitmapRenderer;
 pub use coordinate_mapper::CoordinateMapper;
 pub use dock::{Dock, DockEdge};
@@ -51,6 +57,7 @@ pub use mini_timeline::{MiniClip, MiniLayerLabel, MiniTimeline};
 pub use draw::{Depth, Painter};
 pub use graph_canvas::{GraphCanvas, MappingPopover};
 pub use graph_edit::GraphEditCommand;
+pub use hit_targets::{HitTargetEntry, HitTargets};
 pub use input::{Modifiers, PointerAction, UIEvent, UIInputSystem};
 pub use layout::ScreenLayout;
 pub use node::*;

@@ -1,7 +1,9 @@
 # Live Audio Triggers — Design & Phase Tracker
 
-Status: **IN PROGRESS**. Branch `live-audio-triggers` (off `audio-clip-detection`).
-Created 2026-06-18.
+Status: **SHIPPED — phases 0–7 done, fires + renders end-to-end (verified live
+2026-06-19 per §0).** The only outstanding item is Peter's live feel-check on real
+stems (an L4 check). Header corrected 2026-07-05 (it still read "IN PROGRESS").
+Branch `live-audio-triggers` (off `audio-clip-detection`). Created 2026-06-18.
 
 > **This doc is the cross-compaction tracker.** A fresh session reads §0 first, works
 > the §Phase checklist, ticks boxes + commits as it goes, and updates §0 at the end.

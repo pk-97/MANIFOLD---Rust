@@ -4,7 +4,7 @@
 
 Drag an audio file onto a layer and it becomes a track: it plays through Manifold's audio output, draws its waveform on the lane, and routes to a send for audio modulation. No effects, no compositing — an audio track sits in the same lane list as video and generator layers, the way audio, MIDI, and return tracks coexist in an Ableton arrangement. This is the studio half of "Visual DAW": compose the modulation *into* the arrangement, deterministically, instead of riding live capture.
 
-Status: **design only — but most of the playback half already exists.** A recon pass (2026-06-18) found a working **kira**-based subsystem already wired and running, bolted to the percussion-import pipeline: [audio_decoder.rs](../crates/manifold-playback/src/audio_decoder.rs) decodes any format to f32 PCM (symphonia); [audio_sync.rs](../crates/manifold-playback/src/audio_sync.rs) (`ImportedAudioSyncController`) plays an imported track through kira **sample-accurately synced to the transport** (seek-on-drift, replay-on-stop, encoder-delay, volume); [stem_audio.rs](../crates/manifold-playback/src/stem_audio.rs) does the same for *multiple stems*; both are driven each tick from [content_thread.rs](../crates/manifold-app/src/content_thread.rs) via `update_sync`. So **kira is already the output backend and the mixer**, and the follow-the-transport sync policy is already built. What's genuinely new: the layer/clip data model, **send-routing for modulation** (the offline curve), and **warp**. Build order is §12.
+Status: **mostly SHIPPED** per the §13 build ledger (P0/P1/P3/§3R realtime tap/P4 varispeed + the Signalsmith seam all landed; remaining: P5 export, P6 hardening, the audible Signalsmith swap — status corrected 2026-07-05, header still read "design only"). Original recon note: most of the playback half already existed pre-design. A recon pass (2026-06-18) found a working **kira**-based subsystem already wired and running, bolted to the percussion-import pipeline: [audio_decoder.rs](../crates/manifold-playback/src/audio_decoder.rs) decodes any format to f32 PCM (symphonia); [audio_sync.rs](../crates/manifold-playback/src/audio_sync.rs) (`ImportedAudioSyncController`) plays an imported track through kira **sample-accurately synced to the transport** (seek-on-drift, replay-on-stop, encoder-delay, volume); [stem_audio.rs](../crates/manifold-playback/src/stem_audio.rs) does the same for *multiple stems*; both are driven each tick from [content_thread.rs](../crates/manifold-app/src/content_thread.rs) via `update_sync`. So **kira is already the output backend and the mixer**, and the follow-the-transport sync policy is already built. What's genuinely new: the layer/clip data model, **send-routing for modulation** (the offline curve), and **warp**. Build order is §12.
 
 > **Correction (2026-06-18):** an earlier draft of this doc claimed "Manifold has no realtime audio output" and scoped a from-scratch cpal output backend + mixer + sync as the risky new work (§4, §9). That was wrong — kira already provides all three. §4 and §9 are rewritten around reusing it; the from-scratch framing is struck.
 
@@ -272,7 +272,14 @@ Audio layers reuse `is_solo` / `is_muted` but they mean audible things now, para
 ## 7. Serialization (`manifold-io`)
 
 - Persist the audio layer + clip: file path, `in_point`, duration, send assignment, gain. Relative-path handling mirrors `video_folder_path` / `relative_video_folder_path`.
-- **Bundle decision:** embed the audio file in the V2 ZIP like video assets, or reference by path? (§10.)
+- **Bundle decision — DECIDED (Peter, 2026-07-05, baseline review):** reference by
+  path, never embed ("audio should be path not embedded that will bloat project
+  files"). Relative-path handling mirrors the video-folder pattern above. A
+  **Collect All and Save** action (Ableton precedent: copy every externally-
+  referenced file into the project and repoint the paths) is in scope as an
+  explicit user action — design it when P5/P6 rank; it is the portability answer,
+  not default embedding. Rejected: embed-in-ZIP-by-default, because stems bloat
+  the project file.
 - **Feature curve (§3):** cache the offline analysis artifact so a project reopens without re-decoding + re-analyzing every audio clip. Invalidate on file change or analysis-setting change.
 
 ---
@@ -299,7 +306,9 @@ The offline modulation path (§3) is **immune** regardless — a table lookup, n
 
 1. **Decode strategy** — *settled by kira:* `StaticSoundData` is whole-file-in-RAM, which is already how the percussion path loads. Keep it for v1 (a 5-min stereo stem ≈ 50 MB). Streaming is a kira option only if RAM becomes a problem with many clips.
 2. **Output device** — kira plays to the system default output. A device picker means threading kira's `AudioManagerSettings`/backend config through; defer — default first.
-3. **Bundle audio into the project ZIP** vs. reference by path (§7).
+3. **Bundle audio into the project ZIP** vs. reference by path — *decided
+   2026-07-05:* reference by path; Collect All and Save as the explicit
+   portability action (§7).
 4. **Warp / time-stretch** — *decided:* warp is in scope, pitch-preserving (Signalsmith) first-class, varispeed fallback, clip-BPM ratio behind `warp(samples, ratio)` (§4.1). Not an open question; recorded here for visibility.
 5. **Tap feedback loop** — playing audio out *while* tapping system audio re-enters the tapped mix → feedback. Needs a guard or a documented "don't route these together."
 6. **Doubling the same stem** — two apps mixing is fine (macOS sums them like any players); the *only* hazard is Manifold and Ableton playing the **same material** expecting tight lock, because transport sync (OSC/MIDI) isn't sample-accurate and the two copies flam. Manifold audio stays sample-tight to Manifold's *visuals* (one playhead) and only needs rough alignment with Ableton, which transport sync gives. **Constraint: don't double the same sound in both.** This is a usage rule, not a subsystem cost.

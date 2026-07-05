@@ -10,7 +10,12 @@ pub enum PointerAction {
 }
 
 /// Keyboard modifier flags.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// `#[serde(default)]`: an `AutomationAction` script (`UI_AUTOMATION_DESIGN.md`
+/// §4/§6) names a `Gesture::Click { modifiers }` far more often with no
+/// modifiers held than with — every omitted field defaults to `false`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Modifiers {
     pub shift: bool,
     pub ctrl: bool,
@@ -62,7 +67,7 @@ impl Modifiers {
 }
 
 /// Key identifier — subset of common keys used by the UI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Key {
     Space,
     Enter,

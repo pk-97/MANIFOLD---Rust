@@ -1958,6 +1958,17 @@ impl LayerHeaderPanel {
                     )
                 }
             };
+            // Naming pass (UI_AUTOMATION_DESIGN.md D8/§3, high-value points only):
+            // row identity comes from the selector's `under_text` ancestor query,
+            // not a per-row name string — every mute/solo chip across every layer
+            // shares the same static name.
+            if let Some(name) = match c {
+                LayerControl::Mute => Some("layer_header.mute"),
+                LayerControl::Solo => Some("layer_header.solo"),
+                _ => None,
+            } {
+                tree.set_name(node, name);
+            }
             ids.set(c, node);
         }
 

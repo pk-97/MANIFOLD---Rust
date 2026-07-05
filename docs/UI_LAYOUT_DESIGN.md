@@ -1,5 +1,8 @@
 # UI Layout Design — full-width timeline + right-side tabbed inspector
 
+**Status:** SHIPPED — Phases A and B both DONE 2026-06-23 (marked inline; this
+header line added 2026-07-05 baseline review because the doc had no status field).
+
 A UI/UX layout redesign that sits **on top of** the finished UI Architecture Overhaul — it is design work, not architecture work (the substrate it uses, `ScreenLayout` + the declarative View/Panel API, already exists). The goal: make the timeline the uninterrupted full-width spine of the editor, with the preview and a single tabbed inspector stacked above it. The inspector mirrors the current selection — one source of truth, no parallel tab state.
 
 ## Why

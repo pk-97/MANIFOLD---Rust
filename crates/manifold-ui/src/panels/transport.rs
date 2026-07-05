@@ -350,11 +350,15 @@ impl TransportPanel {
             .fill()
             .main_align(Align::Center)
             .cross_align(Align::Center)
-            .child(Self::btn(self.play_text.as_str(), PLAY_BUTTON_W, button_style(self.play_color), PanelAction::PlayPause))
-            .child(Self::btn("STOP", STOP_BUTTON_W, button_style(self.stop_color), PanelAction::Stop))
+            .child(
+                Self::btn(self.play_text.as_str(), PLAY_BUTTON_W, button_style(self.play_color), PanelAction::PlayPause)
+                    .name("transport.play"),
+            )
+            .child(Self::btn("STOP", STOP_BUTTON_W, button_style(self.stop_color), PanelAction::Stop).name("transport.stop"))
             .child(
                 Self::btn("REC", REC_BUTTON_W, button_style(rec_c), PanelAction::Record)
-                    .disabled(!self.rec_enabled),
+                    .disabled(!self.rec_enabled)
+                    .name("transport.record"),
             )
             .child(self.section_break(CENTER_SPACER))
             .child(

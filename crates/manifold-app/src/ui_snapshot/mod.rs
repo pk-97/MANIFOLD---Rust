@@ -11,6 +11,7 @@ mod dump;
 mod fixtures;
 mod interact;
 mod render;
+mod script;
 mod thumbs;
 
 use std::path::{Path, PathBuf};
@@ -38,6 +39,7 @@ pub fn run(args: &[String]) {
     let want_vs_mockup = args.iter().any(|a| a == "--vs-mockup");
     let want_thumbs = args.iter().any(|a| a == "--thumbs");
     let interact = arg_value(args, "--interact");
+    let script_path = arg_value(args, "--script");
     // P0.0 evidence flag (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): seed BOTH scroll
     // owners (`Viewport::scroll_y_px` + the header panel's `ScrollContainer`
     // offset) to the same non-zero pixel value right after the base render
@@ -47,6 +49,14 @@ pub fn run(args: &[String]) {
     // being tested itself.
     let scroll_seed: Option<f32> = arg_value(args, "--scroll").and_then(|s| s.parse().ok());
 
+    // `--script <file.json>` (UI_AUTOMATION_DESIGN.md §6, P2): a JSON array of
+    // `AutomationAction`s executed in order. Fully owns its own build + gate
+    // exit code — bypasses the `--dump`/`--interact`/mockup flags below.
+    if let Some(path) = script_path {
+        script::run(scene, &path);
+        return;
+    }
+
     // `all`: render every scene in one process — a full-app eyeball after a
     // change. Skips the per-scene-only flags (mockup, interact); pass those to a
     // single scene when you need them.
@@ -55,7 +65,7 @@ pub fn run(args: &[String]) {
             render_ui_scene(s, want_dump, false, want_thumbs, None, None);
         }
         run_graph_preset("Mirror");
-        run_editor_preset("FluidSim2D");
+        run_editor_preset("FluidSim2D", want_dump);
         return;
     }
 
@@ -72,7 +82,7 @@ pub fn run(args: &[String]) {
     // only (see `fixtures::generator_editor_fixture`).
     if scene == "editor" {
         let preset = arg_value(args, "--preset").unwrap_or_else(|| "FluidSim2D".to_string());
-        run_editor_preset(&preset);
+        run_editor_preset(&preset, want_dump);
         return;
     }
 
@@ -89,6 +99,16 @@ pub fn run(args: &[String]) {
     }
 
     render_ui_scene(scene, want_dump, want_vs_mockup, want_thumbs, interact, scroll_seed);
+}
+
+/// P0.3 (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): `hairlineclips` needs genuine far
+/// zoom (the minimum `color::ZOOM_LEVELS` entry) to make its clips
+/// sub-pixel-wide; every other scene keeps the existing fixed 24px/beat so
+/// their PNGs stay byte-identical across phases. Shared by `render_ui_scene`
+/// and `script::run` so a script's resolved rects agree with a plain
+/// `--dump`/`--interact` run of the same scene.
+fn zoom_ppb_for_scene(scene: &str) -> f32 {
+    if scene == "hairlineclips" { 1.0 } else { 24.0 }
 }
 
 /// Build + render one UITree scene (`timeline` / `states` / `inspector`) through
@@ -109,11 +129,7 @@ fn render_ui_scene(
         std::process::exit(2);
     };
 
-    // P0.3 (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): `hairlineclips` needs genuine
-    // far zoom (the minimum `color::ZOOM_LEVELS` entry) to make its clips
-    // sub-pixel-wide; every other scene keeps the existing fixed 24px/beat so
-    // their PNGs stay byte-identical across this phase.
-    let zoom_ppb: f32 = if scene == "hairlineclips" { 1.0 } else { 24.0 };
+    let zoom_ppb: f32 = zoom_ppb_for_scene(scene);
 
     let dir = out_dir(scene);
     std::fs::create_dir_all(&dir).expect("create ui-snapshots dir");
@@ -168,6 +184,21 @@ fn render_ui_scene(
     if let Some(spec) = interact {
         let desc = interact::apply(&mut ui, &mut data, &spec);
         println!("ui-snap: interact {desc}");
+        // D6 (§6 seam brief): a synthesized-click miss is no longer patched
+        // over — `select:`'s sugar (`interact::select_layer`) reports it as
+        // "MISS: ..." instead of falling back to an id match. Fail loudly
+        // with the dump attached as evidence rather than rendering an
+        // "after" that never actually happened.
+        if desc.contains("MISS: ") {
+            sync_build(&mut ui, &data, zoom_ppb);
+            let fail_path = dir.join(format!("{scene}.interact-miss.tree.json"));
+            script::write_fail_dump(&ui, &data, &fail_path);
+            eprintln!(
+                "ui-snap: interact MISS — the real input path did not resolve; dump at {}",
+                fail_path.display()
+            );
+            std::process::exit(1);
+        }
         sync_build(&mut ui, &data, zoom_ppb);
         render_and_dump(
             &ui,
@@ -224,7 +255,7 @@ fn run_graph_preset(preset: &str) {
 /// for one generator preset. Builds a one-layer fixture `Project` carrying the
 /// preset (`fixtures::generator_editor_fixture`) so the right lane's card is the
 /// real `ParamCardConfig`, not synthesized — see `render::render_graph_editor_to_png`.
-fn run_editor_preset(preset: &str) {
+fn run_editor_preset(preset: &str, want_dump: bool) {
     let pid = manifold_core::PresetTypeId::from_string(preset.to_string());
     let Some(view) = manifold_renderer::node_graph::loaded_preset_view_by_id(&pid) else {
         eprintln!(
@@ -261,6 +292,7 @@ fn run_editor_preset(preset: &str) {
         tex_h,
         SCALE,
         png.to_str().expect("utf-8 path"),
+        want_dump.then(|| dir.join("editor.tree.json")).as_deref(),
     );
     println!("ui-snap: wrote {} ({preset})", png.display());
 }
@@ -328,7 +360,19 @@ fn render_and_dump(
     println!("ui-snap: wrote {}", png.display());
 
     if want_dump {
-        let json = dump::dump_tree(&ui.tree);
+        // Custom-surface targets (UI_AUTOMATION_DESIGN.md D5/§5): the same
+        // live geometry `render_ui_to_png` paints from and `ClipHitTester` /
+        // `hit_test_automation` hit-test against — read once here so the dump
+        // can never disagree with what's on screen or clickable.
+        let mut clip_rects = Vec::new();
+        ui.viewport.visible_clip_rects(&mut clip_rects);
+        let clip_targets = manifold_ui::clip_hit_tester::ClipHitTargets(&clip_rects);
+        let automation_lanes = ui.viewport.automation_lane_screens(automation_latched);
+        let automation_targets = manifold_ui::automation_hit_tester::AutomationHitTargets(&automation_lanes);
+        let surfaces: Vec<&dyn manifold_ui::hit_targets::HitTargets> =
+            vec![&clip_targets, &automation_targets];
+
+        let json = dump::dump_tree_ex(&ui.tree, &surfaces);
         let json_path = dir.join(format!("{scene}{suffix}.tree.json"));
         std::fs::write(&json_path, serde_json::to_string_pretty(&json).expect("serialize dump"))
             .expect("write tree json");

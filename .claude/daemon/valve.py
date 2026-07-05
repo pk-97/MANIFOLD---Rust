@@ -84,9 +84,28 @@ def write_consumed(session_id, seq):
 
 def build_block(flag):
     move_id = flag.get("move_id")
-    payload = (_payloads().get(move_id) or {}).get("payload")
+    entry = _payloads().get(move_id) or {}
+    payload = entry.get("payload")
     if not payload:
         return None
+    # §2e advice tier (Peter, 2026-07-05): the priming moves are scheduled
+    # general advice, not detections. Framed so they never read as "you did
+    # something wrong" — a distinct tag, an explicit nothing-is-wrong
+    # preamble, no supervised-mode ack, no habit ordinal (both read as
+    # accusation under an advice frame; advice fires are pass-graded from
+    # downstream behavior, never self-graded). Wording frozen per
+    # invariant 5 — sleep-pass edits only, same as the payloads.
+    if entry.get("kind") == "advice":
+        return (
+            f'<daemon-advice move="{move_id}">\n'
+            f"(Scheduled advice, not a detection — nothing you did triggered "
+            f"this and nothing is wrong. It recurs in long sessions so these "
+            f"patterns stay in context. Nothing to acknowledge or grade — "
+            f"fold it in and carry on.)\n"
+            f"\n"
+            f"{payload}\n"
+            f"</daemon-advice>"
+        )
     # No unvalidated/confidence attributes in the model-facing tag: both are
     # licenses to discount the anchor (Peter's call, 2026-07-04). Confidence
     # stays in the verdict file for grading.

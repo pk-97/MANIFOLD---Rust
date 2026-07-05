@@ -53,6 +53,17 @@ MUTE_DURATION_S = 7 * 86400
 
 HABIT_MEMORY_WINDOW_S = 7 * 86400  # DESIGN.md §4c-2: trailing 7 days, all sessions
 
+# DESIGN.md §2d: phase-transition shadow tier. TASK_DIAGNOSIS_RE is the
+# "cheap regex" the spec calls for — deliberately crude, a known risk
+# measured by shadow mode before delivery, not tuned here.
+TASK_DIAGNOSIS_RE = re.compile(r"\b(?:fix|bug|broken|why|crash|wrong)\b", re.IGNORECASE)
+
+# "a short window span" (DESIGN.md §2d rule 3) is not numerically specced —
+# a placeholder judgment call, same status as the §2g card-limit bounds:
+# pass 2 tunes these from shadow telemetry rather than a guess made now.
+PHASE_OSCILLATION_SPAN_EVENTS = 40
+PHASE_OSCILLATION_MIN_FLIPS = 3
+
 
 def _move_family(move_id):
     if move_id == "anchor/verify-claim":
@@ -115,6 +126,11 @@ class AgentWorker:
         self.next_seq = 1
         self.phase = "orienting"
         self.paths_seen = set()  # file paths Read/Written this worker's life (unread-edit)
+        # DESIGN.md §2d: phase-transition shadow tier. In-memory only — workers
+        # never get firestate persistence for anything (same scope decision
+        # as §4b/§4c above); a worker exiting simply loses its phase history.
+        self.phase_history = []  # [(end_event_count, phase)]
+        self.phase_oscillation_active = False  # edge-trigger latch for rule 3
 
 
 class Daemon:
@@ -138,6 +154,13 @@ class Daemon:
         self.next_seq = 1  # re-seeded in _run from the persistent consumed marker
         self.phase = "orienting"
         self.owns_pidfile = False
+        # DESIGN.md §2d: phase-transition shadow tier. Unlike the §2f session
+        # facts, this genuinely can't be rebuilt by catchup — catchup replays
+        # with classify=False, so past windows' classifier verdicts (and
+        # therefore their phases) are never re-issued. Firestate-persisted
+        # below so an idle-exit revive doesn't amnesia the phase stream.
+        self.phase_history = []  # [(end_event_count, phase)]
+        self.phase_oscillation_active = False  # edge-trigger latch for rule 3
         # Sleep pass 1: cooldown/escalation state was daemon-memory only, so
         # an idle-exit + revive re-fired the same move on the same evidence
         # (two confirmed redelivery pairs in the graded week). Persisted per
@@ -494,12 +517,16 @@ class Daemon:
     # moments — no detection, no classifier, no false-positive budget) ----
 
     def _check_primer(self, event_count, logf, mailbox=None):
-        """mechanical/reasoning-primer: fire once per target (main session or
-        worker) on its first live tool event. Cooldown "once" + persisted
-        firestate (main) make repeat calls no-ops; if another whisper is
-        pending, _resolve_fire declines and this retries on the next event."""
+        """mechanical/reasoning-primer: fire on the first live tool event of a
+        target (main session or worker), then re-arm every advice-recur events
+        (§2e, Peter 2026-07-05) so long orchestration/worker runs get the
+        advice back into context after it scrolls out. Firestate persistence
+        (main) keeps the gate across revives; if another whisper is pending,
+        _resolve_fire declines and this retries on the next event."""
         mb = mailbox if mailbox is not None else self
-        if mb.fire_count.get("mechanical/reasoning-primer"):
+        # Fast path only — _resolve_fire re-checks the same advice-recur gate.
+        prev = mb.last_fire_event.get("mechanical/reasoning-primer")
+        if prev is not None and (event_count - prev) < common.COOLDOWN_EVENTS["advice-recur"]:
             return
         verdict = {"evidence": "first live tool event (priming tier)", "confidence": 1.0}
         flag_out = self._resolve_fire(event_count, "mechanical/reasoning-primer", verdict, logf, mailbox=mailbox)
@@ -517,12 +544,14 @@ class Daemon:
     DESIGN_DOC_RE = re.compile(r"_(?:DESIGN|PLAN)\.md$")
 
     def _check_design_primer(self, name, input_, event_count, logf, mailbox=None):
-        """mechanical/design-primer: first live Write/Edit of a *_DESIGN.md or
-        *_PLAN.md this session — design-taste advice at the moment a design is
-        being authored. Cooldown "once" per target, retry semantics identical
-        to reasoning-primer."""
+        """mechanical/design-primer: a live Write/Edit of a *_DESIGN.md or
+        *_PLAN.md — design-taste advice at the moment a design is being
+        authored. Re-arms every advice-recur events per target (§2e); retry
+        semantics identical to reasoning-primer."""
         mb = mailbox if mailbox is not None else self
-        if mb.fire_count.get("mechanical/design-primer"):
+        # Fast path only — _resolve_fire re-checks the same advice-recur gate.
+        prev = mb.last_fire_event.get("mechanical/design-primer")
+        if prev is not None and (event_count - prev) < common.COOLDOWN_EVENTS["advice-recur"]:
             return
         if name not in ("Write", "Edit", "MultiEdit") or not isinstance(input_, dict):
             return
@@ -639,6 +668,11 @@ class Daemon:
 
         flag_out = self._resolve_fire(window["end_event_count"], move_id, verdict, logf, mailbox=mailbox) if move_id else None
 
+        # DESIGN.md §2d: phase-transition shadow tier. Independent of whatever
+        # the classifier flagged this window — zero extra classifier cost,
+        # runs off the phase it already emitted.
+        self._check_phase_transitions(mailbox, window["end_event_count"], logf)
+
         record = {
             "ts": time.time(),
             "window_range": {"end_event_count": window["end_event_count"], "end_ts": window["end_ts"]},
@@ -653,6 +687,116 @@ class Daemon:
             prior = self._read_verdict_file(mailbox)
             record["flag"] = prior["flag"] if prior and prior.get("flag") else None
         _atomic_write_json(mb.verdict_path, record)
+
+    # ---- phase-transition tier (DESIGN.md §2d, shadow mode) ----
+    #
+    # SHADOW MODE ONLY: these rules log `phase_fire` telemetry and deliver
+    # NOTHING — no mailbox/verdict write, no _resolve_fire, no cooldown or
+    # escalation bookkeeping. Pass 2 hand-grades the shadow fires and flips
+    # delivery on per-rule once shadow precision clears 60%; until then this
+    # tier cannot reach the model by construction (no code path writes a
+    # verdict file from here).
+
+    def _check_phase_transitions(self, mailbox, event_count, logf):
+        mb = mailbox if mailbox is not None else self
+        history_before = list(mb.phase_history)
+        prev_phase = history_before[-1][1] if history_before else None
+        current_phase = mb.phase
+
+        if current_phase == "implementing" and prev_phase != "implementing":
+            self._check_phase_rule_investigate(mb, history_before, event_count, logf)
+        if current_phase == "reporting" and prev_phase != "reporting":
+            self._check_phase_rule_verify(mb, history_before, event_count, logf)
+
+        mb.phase_history.append((event_count, current_phase))
+        self._check_phase_rule_oscillation(mb, event_count, logf)
+
+        if mailbox is None:
+            self._save_fire_state()
+
+    def _check_phase_rule_investigate(self, mb, history_before, event_count, logf):
+        """phase/implementing-without-investigating: TASK reads as a
+        diagnosis (cheap regex — the TASK-shape heuristic is deliberately
+        crude, per DESIGN.md §2d) and phase enters `implementing` with zero
+        `investigating` windows since TASK was last set — building before
+        looking, caught at the transition instead of after the fact."""
+        task_text = mb.state.current_task or ""
+        if not TASK_DIAGNOSIS_RE.search(task_text):
+            return
+        task_set_event = mb.state.total_tool_event_count - mb.state.events_since_task
+        since_task_phases = [p for ec, p in history_before if ec > task_set_event]
+        if "investigating" in since_task_phases:
+            return
+        self._log_phase_fire(
+            mb,
+            "phase/implementing-without-investigating",
+            event_count,
+            logf,
+            f"diagnosis-shaped TASK {task_text[:80]!r}; entered implementing with no "
+            f"investigating window since task was set (event {task_set_event})",
+        )
+
+    def _check_phase_rule_verify(self, mb, history_before, event_count, logf):
+        """phase/no-verify-before-reporting: phase enters `reporting` with
+        zero `verifying` windows since the last `implementing` window —
+        fires on the transition, before any done-claim text exists (verify-
+        claim's blind spot). No prior `implementing` window this session
+        means nothing to gate against, so the rule is silent."""
+        last_impl_idx = None
+        for i in range(len(history_before) - 1, -1, -1):
+            if history_before[i][1] == "implementing":
+                last_impl_idx = i
+                break
+        if last_impl_idx is None:
+            return
+        since_impl_phases = [p for _ec, p in history_before[last_impl_idx + 1 :]]
+        if "verifying" in since_impl_phases:
+            return
+        self._log_phase_fire(
+            mb,
+            "phase/no-verify-before-reporting",
+            event_count,
+            logf,
+            "entered reporting with no verifying window since the last implementing window",
+        )
+
+    def _check_phase_rule_oscillation(self, mb, event_count, logf):
+        """phase/stuck-oscillation: implementing<->stuck flips at least
+        PHASE_OSCILLATION_MIN_FLIPS times inside the trailing
+        PHASE_OSCILLATION_SPAN_EVENTS window — coaching/differential's
+        moment, detected structurally instead of from wording. Edge-
+        triggered (fires once per rising edge, not once per window the
+        condition continues to hold) so a long oscillating stretch doesn't
+        flood shadow telemetry with the same specimen."""
+        span_start = event_count - PHASE_OSCILLATION_SPAN_EVENTS
+        filtered = [p for ec, p in mb.phase_history if ec >= span_start and p in ("implementing", "stuck")]
+        flips = sum(1 for i in range(1, len(filtered)) if filtered[i] != filtered[i - 1])
+        firing_now = flips >= PHASE_OSCILLATION_MIN_FLIPS
+        if firing_now and not mb.phase_oscillation_active:
+            self._log_phase_fire(
+                mb,
+                "phase/stuck-oscillation",
+                event_count,
+                logf,
+                f"{flips} implementing<->stuck flips in the last {PHASE_OSCILLATION_SPAN_EVENTS} events",
+            )
+        mb.phase_oscillation_active = firing_now
+
+    def _log_phase_fire(self, mailbox, rule_id, event_count, logf, evidence):
+        """Shadow-mode delivery: telemetry only, per DESIGN.md §2d — never a
+        verdict-file write, never `_resolve_fire`."""
+        valve.append_telemetry(
+            {
+                "ts": time.time(),
+                "session_id": self.session_id,
+                "agent_id": getattr(mailbox, "agent_id", None),
+                "event": "phase_fire",
+                "move_id": rule_id,
+                "event_count": event_count,
+                "evidence": evidence,
+            }
+        )
+        _log(logf, f"phase_fire (shadow, not delivered): {rule_id} @ {event_count}: {evidence}")
 
     def _read_verdict_file(self, mailbox=None):
         mb = mailbox if mailbox is not None else self
@@ -709,6 +853,11 @@ class Daemon:
         self.fire_count = {k: int(v) for k, v in (st.get("fire_count") or {}).items()}
         self.fire_ordinal = {k: int(v) for k, v in (st.get("fire_ordinal") or {}).items()}
         self.escalated = bool(st.get("escalated", False))
+        # DESIGN.md §2d: phase_history can't be rebuilt by catchup (past
+        # windows' classifier verdicts are never re-issued) — unlike the §2f
+        # session facts, this is genuinely daemon-only memory.
+        self.phase_history = [(int(ec), p) for ec, p in (st.get("phase_history") or [])]
+        self.phase_oscillation_active = bool(st.get("phase_oscillation_active", False))
 
     def _save_fire_state(self):
         try:
@@ -720,6 +869,8 @@ class Daemon:
                         "fire_count": self.fire_count,
                         "fire_ordinal": self.fire_ordinal,
                         "escalated": self.escalated,
+                        "phase_history": self.phase_history,
+                        "phase_oscillation_active": self.phase_oscillation_active,
                     },
                     f,
                 )
@@ -760,7 +911,10 @@ class Daemon:
         # beneath it). Discount fires this session already self-graded FP.
         fp_graded = self._session_fp_grades()
         effective_fires = mb.fire_count[move_id] - fp_graded.get(move_id, 0)
-        if effective_fires > ESCALATE_AFTER and not mb.escalated and "escalate/checkpoint" in self.moves:
+        # Advice-kind moves (§2e priming tier) recur by design — repeat fires
+        # are the schedule working, not habituation, so they never escalate.
+        is_advice = self.moves.get(move_id, {}).get("kind") == "advice"
+        if not is_advice and effective_fires > ESCALATE_AFTER and not mb.escalated and "escalate/checkpoint" in self.moves:
             effective_id = "escalate/checkpoint"
             mb.escalated = True
             _log(logf, f"escalating {move_id} -> escalate/checkpoint after {mb.fire_count[move_id]} fires ({fp_graded.get(move_id, 0)} self-graded FP, discounted)")

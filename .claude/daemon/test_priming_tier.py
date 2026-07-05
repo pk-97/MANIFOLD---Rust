@@ -1,6 +1,7 @@
-"""Tests for the priming tier (sleep pass 1): mechanical/reasoning-primer
-(once per target, first live tool event) and mechanical/unread-edit
-(Edit/MultiEdit to a path never Read or Written this session).
+"""Tests for the priming tier (sleep pass 1 + §2e advice tier):
+mechanical/reasoning-primer (first live tool event, re-arming every
+advice-recur events per target) and mechanical/unread-edit (Edit/MultiEdit
+to a path never Read or Written this session).
 
 Run: python3 test_priming_tier.py
 """
@@ -61,7 +62,7 @@ def read_flag(d):
 # ---- reasoning-primer ----
 
 
-def test_primer_fires_once_on_first_live_event():
+def test_primer_first_fire_then_recur_gate():
     def run(td):
         d = make_daemon()
         logf = io.StringIO()
@@ -69,13 +70,36 @@ def test_primer_fires_once_on_first_live_event():
         flag = read_flag(d)
         check("primer fired on first event", flag and flag["move_id"] == "mechanical/reasoning-primer", flag)
         seq1 = flag["seq"]
-        # Deliver it, then verify no re-fire on later events.
+        # Deliver it, then verify the advice-recur gate holds inside the
+        # window and re-arms past it (§2e).
         with open(d.consumed_path, "w", encoding="utf-8") as f:
             f.write(str(seq1))
         d._check_primer(2, logf)
-        d._check_primer(50, logf)
-        check("primer did not re-fire", read_flag(d)["seq"] == seq1)
-        check("fire_count is 1", d.fire_count.get("mechanical/reasoning-primer") == 1)
+        d._check_primer(250, logf)
+        check("primer gated within advice-recur window", read_flag(d)["seq"] == seq1)
+        d._check_primer(301, logf)
+        check("primer re-fired after advice-recur gap", read_flag(d)["seq"] != seq1)
+        check("fire_count is 2", d.fire_count.get("mechanical/reasoning-primer") == 2)
+
+    with_temp_dirs(run)
+
+
+def test_advice_recurs_and_never_escalates():
+    def run(td):
+        d = make_daemon()
+        logf = io.StringIO()
+        seqs = []
+        # Three fires would escalate any alert move (ESCALATE_AFTER=2);
+        # advice-kind moves recur by design and must never checkpoint.
+        for ev in (1, 301, 601):
+            d._check_primer(ev, logf)
+            flag = read_flag(d)
+            check(f"primer fired at event {ev}", flag and flag["move_id"] == "mechanical/reasoning-primer", flag)
+            seqs.append(flag["seq"])
+            with open(d.consumed_path, "w", encoding="utf-8") as f:
+                f.write(str(flag["seq"]))
+        check("three distinct fires", len(set(seqs)) == 3, seqs)
+        check("no escalation on 3rd advice fire", not d.escalated)
 
     with_temp_dirs(run)
 
@@ -212,8 +236,27 @@ def test_moves_catalog_has_all_payloads():
     for mid in ("mechanical/reasoning-primer", "mechanical/unread-edit", "mechanical/design-primer"):
         entry = moves.get(mid) or {}
         check(f"{mid} in catalog with payload", bool(entry.get("payload")), mid)
-    check("primer cooldown is once", (moves.get("mechanical/reasoning-primer") or {}).get("cooldown") == "once")
-    check("design-primer cooldown is once", (moves.get("mechanical/design-primer") or {}).get("cooldown") == "once")
+    check("primer cooldown is advice-recur", (moves.get("mechanical/reasoning-primer") or {}).get("cooldown") == "advice-recur")
+    check("design-primer cooldown is advice-recur", (moves.get("mechanical/design-primer") or {}).get("cooldown") == "advice-recur")
+    check("primer kind is advice", (moves.get("mechanical/reasoning-primer") or {}).get("kind") == "advice")
+    check("design-primer kind is advice", (moves.get("mechanical/design-primer") or {}).get("kind") == "advice")
+    check("anchor kind defaults to alert", (moves.get("anchor/verify-claim") or {}).get("kind") == "alert")
+
+
+def test_build_block_advice_wrapper():
+    block = valve.build_block({"move_id": "mechanical/reasoning-primer", "weekly_count": 5})
+    check("advice tag", block is not None and block.startswith('<daemon-advice move="mechanical/reasoning-primer">'), block[:80] if block else block)
+    check("advice closes with matching tag", block.rstrip().endswith("</daemon-advice>"))
+    check("advice preamble present", "not a detection" in block)
+    check("no supervised-mode ack in advice", "Supervised mode" not in block)
+    check("no habit ordinal in advice", "fire of this move across sessions" not in block)
+    check("payload present", "How to work, from the model that wrote this system" in block)
+
+
+def test_build_block_alert_unchanged():
+    block = valve.build_block({"move_id": "anchor/verify-claim"})
+    check("alert tag unchanged", block is not None and block.startswith('<daemon move="anchor/verify-claim">'), block[:80] if block else block)
+    check("alert keeps supervised-mode ack", "Supervised mode" in block)
 
 
 # ---- design-primer ----
@@ -230,7 +273,9 @@ def test_design_primer_fires_on_design_doc_write():
         with open(d.consumed_path, "w", encoding="utf-8") as f:
             f.write(str(seq1))
         d._check_design_primer("Edit", {"file_path": "docs/BAR_PLAN.md"}, 2, logf)
-        check("design primer fires once per session", read_flag(d)["seq"] == seq1)
+        check("design primer gated within advice-recur window", read_flag(d)["seq"] == seq1)
+        d._check_design_primer("Edit", {"file_path": "docs/BAR_PLAN.md"}, 400, logf)
+        check("design primer re-fired after advice-recur gap", read_flag(d)["seq"] != seq1)
 
     with_temp_dirs(run)
 

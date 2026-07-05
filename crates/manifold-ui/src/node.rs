@@ -3,7 +3,7 @@ use bitflags::bitflags;
 // ── Geometry ──────────────────────────────────────────────────────────
 
 /// 2D point/vector — top-left origin, Y grows downward.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Vec2 {
     pub x: f32,
     pub y: f32,
@@ -39,7 +39,7 @@ impl std::ops::Add for Vec2 {
 
 /// Axis-aligned rectangle — top-left origin.
 /// Matches Unity's Rect(x, y, width, height) semantics.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Rect {
     pub x: f32,
     pub y: f32,

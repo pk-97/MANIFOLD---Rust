@@ -106,6 +106,12 @@ impl SettingsPopup {
     pub fn is_open(&self) -> bool {
         self.open
     }
+    /// True while the entrance tween is still settling — the app polls this
+    /// after `UIRoot::update()` to keep the frame dirty so the fade-in ticks
+    /// to completion. See `BrowserPopupPanel::is_animating` for the rationale.
+    pub fn is_animating(&self) -> bool {
+        self.open && self.enter_anim.is_animating()
+    }
     /// D17 "modal/dropdown enter": restart the entrance tween, mirroring
     /// `DropdownPanel::open_at`.
     fn restart_enter_anim(&mut self) {

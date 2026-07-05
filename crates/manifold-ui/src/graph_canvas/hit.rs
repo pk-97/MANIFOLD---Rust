@@ -4,6 +4,7 @@
 //! view model.
 
 use super::*;
+use crate::hit_targets::{HitTargetEntry, HitTargets};
 
 impl GraphCanvas {
     /// Lay out the breadcrumb segments in the canvas header, left to right:
@@ -349,4 +350,121 @@ pub(crate) fn marquee_hits(rect: (f32, f32, f32, f32), nodes: &[NodeView]) -> Ve
         })
         .map(|n| n.id)
         .collect()
+}
+
+// ── Automation surface (UI_AUTOMATION_DESIGN.md D5/§5) ───────────
+
+/// `crate::node::Rect` conversion — [`HitTargetEntry`] carries the crate-wide
+/// UI `Rect` (shared with the clip/automation surfaces), while the canvas'
+/// internal geometry uses its own `graph_canvas::Rect`.
+fn to_node_rect(r: Rect) -> crate::node::Rect {
+    crate::node::Rect::new(r.x, r.y, r.w, r.h)
+}
+
+/// Stable domain-id string for a node at `scope_path` — the same
+/// `(scope_path, u32 doc id)` addressing `project_graph_command_node_addressing`
+/// already pins for graph edit commands (`GraphEditCommand`'s `scope_path` +
+/// the node's runtime `u32` id), rendered as a greppable, parseable string
+/// (no serde dependency in this crate — a struct payload would need one).
+fn node_payload(scope: &[u32], node_id: u32) -> String {
+    let scope_str = scope.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+    format!("scope={scope_str}/node={node_id}")
+}
+
+/// [`HitTargets`] over a [`GraphCanvas`] at a given screen `viewport` — the
+/// canvas needs an external viewport to convert its graph-space geometry to
+/// screen rects (`to_screen`/`to_graph`, `camera.rs`), so unlike the
+/// clip/automation surfaces (already screen-space at the call site) this
+/// bundles `(canvas, viewport)` rather than implementing `HitTargets` on a
+/// bare `&GraphCanvas`. Enumerates every node, port, and wire `node_under` /
+/// `port_under` / `wire_into` can return at the canvas' *current* scope level
+/// (nested groups are only visible by first descending into them, mirroring
+/// what `hit_test` itself can reach).
+pub struct GraphCanvasTargets<'a> {
+    pub canvas: &'a GraphCanvas,
+    pub viewport: Rect,
+}
+
+impl HitTargets for GraphCanvasTargets<'_> {
+    fn surface_id(&self) -> &'static str {
+        "graph_canvas"
+    }
+
+    fn enumerate(&self, out: &mut Vec<HitTargetEntry>) {
+        let c = self.canvas;
+        let scope = &c.scope;
+        for node in &c.nodes {
+            let (sx, sy) = c.to_screen(self.viewport, node.pos_graph.0, node.pos_graph.1);
+            out.push(HitTargetEntry {
+                kind: "node",
+                label: node.title.clone(),
+                rect: to_node_rect(Rect::new(sx, sy, NODE_WIDTH * c.zoom, node.height() * c.zoom)),
+                payload: node_payload(scope, node.id),
+            });
+
+            let half = 6.0 * c.zoom;
+            for (i, port) in node.outputs.iter().enumerate() {
+                if !node.collapsed && node.output_row_of(i).is_none() {
+                    continue; // hidden socket — not a hit_test target either
+                }
+                let (gx, gy) = node.output_port_pos_graph(i);
+                let (px, py) = c.to_screen(self.viewport, gx, gy);
+                out.push(HitTargetEntry {
+                    kind: "port",
+                    label: format!("{} → {}", node.title, port.name),
+                    rect: to_node_rect(Rect::new(px - half, py - half, half * 2.0, half * 2.0)),
+                    payload: format!(
+                        "{}/port={}/dir=out",
+                        node_payload(scope, node.id),
+                        port.name
+                    ),
+                });
+            }
+            for (i, port) in node.inputs.iter().enumerate() {
+                if !node.collapsed && node.input_row_of(i).is_none() {
+                    continue;
+                }
+                let (gx, gy) = node.input_port_pos_graph(i);
+                let (px, py) = c.to_screen(self.viewport, gx, gy);
+                out.push(HitTargetEntry {
+                    kind: "port",
+                    label: format!("{} ← {}", node.title, port.name),
+                    rect: to_node_rect(Rect::new(px - half, py - half, half * 2.0, half * 2.0)),
+                    payload: format!(
+                        "{}/port={}/dir=in",
+                        node_payload(scope, node.id),
+                        port.name
+                    ),
+                });
+            }
+        }
+
+        for wire in &c.wires {
+            let (Some(from), Some(to)) = (c.find_node(wire.from_node), c.find_node(wire.to_node))
+            else {
+                continue; // boundary/anonymous endpoint outside this scope's node list
+            };
+            let from_idx = from.outputs.iter().position(|p| p.name == wire.from_port).unwrap_or(0);
+            let to_idx = to.inputs.iter().position(|p| p.name == wire.to_port).unwrap_or(0);
+            let (fgx, fgy) = from.output_port_pos_graph(from_idx);
+            let (tgx, tgy) = to.input_port_pos_graph(to_idx);
+            let (fx, fy) = c.to_screen(self.viewport, fgx, fgy);
+            let (tx, ty) = c.to_screen(self.viewport, tgx, tgy);
+            let (x0, x1) = (fx.min(tx), fx.max(tx));
+            let (y0, y1) = (fy.min(ty), fy.max(ty));
+            out.push(HitTargetEntry {
+                kind: "wire",
+                label: format!("{}.{} → {}.{}", from.title, wire.from_port, to.title, wire.to_port),
+                rect: to_node_rect(Rect::new(x0, y0, (x1 - x0).max(1.0), (y1 - y0).max(1.0))),
+                payload: format!(
+                    "scope={}/from={}:{}/to={}:{}",
+                    scope.iter().map(u32::to_string).collect::<Vec<_>>().join(","),
+                    wire.from_node,
+                    wire.from_port,
+                    wire.to_node,
+                    wire.to_port
+                ),
+            });
+        }
+    }
 }

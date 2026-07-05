@@ -402,13 +402,18 @@ move it compiles: format output for the user's next action, not for reading.
 
 ## mechanical/reasoning-primer
 - **signature:** Deterministic, observer-selected — never the classifier: the
-  first live (non-catchup) tool event of a session or of a discovered worker.
-  Fires exactly once per target (cooldown "once" per mailbox). Not a drift
-  detector at all — this is the priming tier (sleep pass 1, 2026-07-05,
-  Peter's direction: general reasoning patterns "from Fable down to its
-  peers", explicitly NOT repo-specific tactics). Sets the prior at minute
-  zero; the reactive anchors above exist for when this prior decays.
-- **cooldown:** once
+  first live (non-catchup) tool event of a session or of a discovered worker,
+  re-arming every 300 tool events per target (cooldown "advice-recur", §2e —
+  Peter 2026-07-05: long orchestration and worker runs outlive the first
+  fire's presence in context). Not a drift detector at all — this is the
+  priming tier (sleep pass 1, 2026-07-05, Peter's direction: general
+  reasoning patterns "from Fable down to its peers", explicitly NOT
+  repo-specific tactics), delivered under the advice frame (kind "advice":
+  <daemon-advice> tag, nothing-is-wrong preamble, no ack, never escalates).
+  Sets the prior at minute zero; the reactive anchors above exist for when
+  this prior decays.
+- **cooldown:** advice-recur
+- **kind:** advice
 - **payload:**
 > How to work, from the model that wrote this system. Before answering any
 > question, name what kind of question it is and what evidence would settle
@@ -429,13 +434,16 @@ move it compiles: format output for the user's next action, not for reading.
 > and an escalation should arrive priced.
 
 ## mechanical/design-primer
-- **signature:** Deterministic, observer-selected — never the classifier: the
-  first live Write or Edit this session whose path matches a design document
-  (`*_DESIGN.md` / `*_PLAN.md`). Fires once per target (cooldown "once" per
-  mailbox), like reasoning-primer: priming tier, not a drift detector.
+- **signature:** Deterministic, observer-selected — never the classifier: a
+  live Write or Edit whose path matches a design document (`*_DESIGN.md` /
+  `*_PLAN.md`), re-arming every 300 tool events per target (cooldown
+  "advice-recur", §2e) so a session authoring designs hours apart gets the
+  taste refreshed. Like reasoning-primer: priming tier, kind "advice"
+  (<daemon-advice> frame, no ack, never escalates), not a drift detector.
   Peter's third payload family (2026-07-05): design taste — over-engineering,
   poor architectures — as distinct from reasoning patterns.
-- **cooldown:** once
+- **cooldown:** advice-recur
+- **kind:** advice
 - **payload:**
 > You're writing a design. From the model that wrote this system's designs:
 > start from inventory, not invention — list what already exists and name why

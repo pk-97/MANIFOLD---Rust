@@ -2470,6 +2470,8 @@ dependencies = [
  "ahash",
  "bitflags 2.11.0",
  "manifold-foundation",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

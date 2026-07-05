@@ -24,7 +24,9 @@ MODEL = "claude-haiku-4-5-20251001"
 # v3 (§2c tier 3): Edit/Write/MultiEdit ledger lines gain an "(adds: ...)"
 # annotation from STOPGAP_MARKERS.
 # v4: TASK/RECENT hard-capped + harness-injected texts excluded from TASK.
-WINDOW_VERSION = 4
+# v5 (§2f): SESSION FACTS block (last verification per class, latest
+# TASK-set context switch, edited-path last-read) appended to window text.
+WINDOW_VERSION = 5
 
 # Window-size discipline (2026-07-04 orchestrator incident, session cadd7aad):
 # a <task-notification> embedding a worker's full report became current_task
@@ -75,7 +77,10 @@ def strip_preamble(text):
 
 
 def parse_moves(text):
-    """Parse moves.md into {move_id: {"signature": str, "cooldown": str, "payload": str}}."""
+    """Parse moves.md into {move_id: {"signature", "cooldown", "kind", "payload"}}.
+    `kind` is "alert" unless the entry carries `- **kind:** advice` (the
+    priming tier, §2e) — advice moves get the <daemon-advice> wrapper, no
+    supervised-mode ack, and never escalate."""
     moves = {}
     for block in re.split(r"(?m)^## ", text)[1:]:
         lines = block.splitlines()
@@ -83,24 +88,28 @@ def parse_moves(text):
         body = "\n".join(lines[1:])
         sig_m = re.search(r"-\s*\*\*signature:\*\*\s*(.*?)(?=\n-\s*\*\*cooldown:\*\*)", body, re.DOTALL)
         cd_m = re.search(r"-\s*\*\*cooldown:\*\*\s*(\S+)", body)
+        kind_m = re.search(r"-\s*\*\*kind:\*\*\s*(\S+)", body)
         pl_m = re.search(r"-\s*\*\*payload:\*\*\s*\n(.*)", body, re.DOTALL)
         signature = re.sub(r"\s+", " ", sig_m.group(1)).strip() if sig_m else ""
         cooldown = cd_m.group(1).strip() if cd_m else "standard"
+        kind = kind_m.group(1).strip() if kind_m else "alert"
         payload = pl_m.group(1).strip() if pl_m else ""
         # payload lines are blockquoted with "> " — strip that for the injected text
         payload = "\n".join(l[2:] if l.startswith("> ") else l for l in payload.splitlines()).strip()
-        moves[move_id] = {"signature": signature, "cooldown": cooldown, "payload": payload}
+        moves[move_id] = {"signature": signature, "cooldown": cooldown, "kind": kind, "payload": payload}
     return moves
 
 
 def validate_move_id(move_id, moves):
     """Returns move_id if it's a real, classifier-selectable move in the
     catalog, else None. `escalate/*` and `mechanical/*` ids are daemon/valve-
-    selected only and are never valid coming from the classifier. An
+    selected only and are never valid coming from the classifier; `phase/*`
+    (DESIGN.md §2d, phase-transition tier) joins that list — those fire from
+    deterministic rules over the phase stream, never from Haiku. An
     unrecognized id — e.g. the hallucinated `coaching/scope-drift` (nonexistent;
     only `anchor/scope-drift` is real) seen in replay round 2 — must be treated
     as clear, not silently accepted under a default cooldown class."""
-    if not move_id or move_id not in moves or move_id.startswith(("escalate/", "mechanical/")):
+    if not move_id or move_id not in moves or move_id.startswith(("escalate/", "mechanical/", "phase/")):
         return None
     return move_id
 
@@ -108,7 +117,7 @@ def validate_move_id(move_id, moves):
 def build_signature_catalog(moves):
     lines = []
     for mid in sorted(moves):
-        if mid.startswith(("escalate/", "mechanical/")):
+        if mid.startswith(("escalate/", "mechanical/", "phase/")):
             continue  # daemon/valve-selected, never offered to the classifier
         lines.append(f"### {mid}\n{moves[mid]['signature']}\n")
     return "\n".join(lines)
@@ -221,6 +230,42 @@ def detect_stopgap_markers(name, input_):
     if "race-sleep" in hits and STOPGAP_TEST_PATH_RE.search(path):
         hits.discard("race-sleep")
     return sorted(hits)
+
+
+# DESIGN.md §2f: the session-fact store's verification-class detector — same
+# regex tier as STOPGAP_MARKERS above, no semantic check on what a command
+# actually covered. render-read is keyed on Read's target suffix, not a
+# command regex, so it's handled separately in detect_verification_class.
+VERIFICATION_MARKERS = {
+    "test-run": re.compile(
+        r"\bcargo\s+(?:test|bench)\b|\bpytest\b|\bnpm\s+test\b|\bgo\s+test\b|\bswift\s+test\b",
+        re.IGNORECASE,
+    ),
+    "lint": re.compile(r"\bcargo\s+clippy\b|\beslint\b|\bruff\b|\bflake8\b|\bpylint\b|\bmypy\b", re.IGNORECASE),
+    "script-run": re.compile(
+        r"\bcargo\s+run\b|\bnpm\s+run\b|\bpython3?\s+\S+\.py\b|\./\S+\.sh\b|\bnode\s+\S+\.js\b",
+        re.IGNORECASE,
+    ),
+}
+
+
+def detect_verification_class(name, input_):
+    """Returns "test-run" / "lint" / "script-run" / "render-read", or None.
+    Bash commands match test-run > lint > script-run (first hit wins — a
+    lint invocation is never also counted as a test-run); a Read of a *.png
+    is render-read regardless of the Bash categories. Never raises."""
+    if not isinstance(input_, dict):
+        return None
+    if name == "Read":
+        path = input_.get("file_path") or ""
+        return "render-read" if path.lower().endswith(".png") else None
+    if name != "Bash":
+        return None
+    cmd = input_.get("command") or ""
+    for cls in ("test-run", "lint", "script-run"):
+        if VERIFICATION_MARKERS[cls].search(cmd):
+            return cls
+    return None
 
 
 # .claude/GIT_TREE_DISCIPLINE.md §2 (2026-07-04): the ff-only "main = pointer"
@@ -370,7 +415,7 @@ def tool_result_status(block):
 TASK_ADDRESSED_MIN_CHARS = 40  # a trivial ack ("OK.", "Got it.") doesn't count as addressing TASK
 
 
-def format_window(task, ledger, recent, task_addressed=False, events_since_task=0):
+def format_window(task, ledger, recent, task_addressed=False, events_since_task=0, session_facts=""):
     task_str = task if task else "(no task statement yet)"
     if task:
         task_str += f" ({events_since_task} tool events since set)"
@@ -378,7 +423,34 @@ def format_window(task, ledger, recent, task_addressed=False, events_since_task=
             task_str += " — already addressed by a prior reply this session"
     ledger_str = " · ".join(ledger) if ledger else "(no tool events)"
     recent_str = "\n---\n".join(t.strip() for t in recent) if recent else "(no assistant text yet)"
-    return f'TASK: "{task_str}"\n\nLEDGER: `{ledger_str}`\n\nRECENT:\n{recent_str}'
+    base = f'TASK: "{task_str}"\n\nLEDGER: `{ledger_str}`\n\nRECENT:\n{recent_str}'
+    if session_facts:
+        base += f"\n\nSESSION FACTS: {session_facts}"
+    return base
+
+
+def format_session_facts(state, current_event_count):
+    """DESIGN.md §2f: renders the durable, regex-extracted facts store as one
+    clause list appended to the window text. The ledger only covers the last
+    ~8 events; a verifying/context-setting event from many windows back
+    (sleep-pass-1's dominant FP class — "the verifying event existed but sat
+    beyond the window ledger") stays visible here for the rest of the
+    session. Bounded regardless of session length: at most one clause per
+    verification class, only the single latest context switch, and only
+    paths edited in the window that's closing right now."""
+    parts = []
+    for cls in ("test-run", "lint", "script-run", "render-read"):
+        fact = state.last_verification.get(cls)
+        if not fact:
+            continue
+        ec, label = fact
+        parts.append(f"last {cls}: event {ec}, {current_event_count - ec} events ago ({label})")
+    if state.context_switches:
+        ec, label = state.context_switches[-1]
+        parts.append(f"TASK set by user at event {ec}" + (f' ("{label}")' if label else ""))
+    for path, read_ec in state.edits_with_prior_read_this_window:
+        parts.append(f"file {path} last read event {read_ec}")
+    return "; ".join(parts)
 
 
 def parse_ts(ts_raw):
@@ -415,6 +487,17 @@ class WindowState:
         self.consecutive_failures = 0  # current err streak, across all tools
         self.events_since_task = 0  # tool events since current_task was last set
 
+        # DESIGN.md §2f: session-fact store. Durable for the whole session
+        # (never trimmed to a window horizon, unlike ledger/recent_texts) —
+        # deterministic functions of the transcript, so a catchup replay
+        # rebuilds them identically; no firestate persistence needed on top
+        # of that (verified: catchup always replays from offset 0).
+        self.last_verification = {}  # class -> (event_count, label)
+        self.context_switches = []  # [(event_count, label)] — every TASK-set event
+        self.last_read_event = {}  # path -> event_count
+        self.last_edit_event = {}  # path -> event_count
+        self.edits_with_prior_read_this_window = []  # [(path, read_event_count)], reset per window
+
     def _annotate_ledger(self, name, target, status, stopgap_hits=None):
         """Returns a "(...)" suffix or "" — the repeat-touch and failure-streak
         tells from §4c-1, plus (§2c tier 3) confession-marker categories an
@@ -444,13 +527,38 @@ class WindowState:
             "end_event_count": self.total_tool_event_count,
             "end_ts": ts,
             "text": format_window(
-                self.current_task, self.ledger_buffer, self.recent_texts, self.task_addressed, self.events_since_task
+                self.current_task,
+                self.ledger_buffer,
+                self.recent_texts,
+                self.task_addressed,
+                self.events_since_task,
+                format_session_facts(self, self.total_tool_event_count),
             ),
         }
         self.ledger_buffer = []
         self.tool_event_count_since_window = 0
         self.last_window_ts = ts
+        self.edits_with_prior_read_this_window = []
         return closed
+
+    def _update_session_facts(self, name, input_, event_count):
+        """DESIGN.md §2f: durable facts the classifier can cite past the
+        ledger horizon — same regex tier as STOPGAP_MARKERS, no semantic
+        verification of what a command actually covered."""
+        if not isinstance(input_, dict):
+            return
+        cls = detect_verification_class(name, input_)
+        if cls:
+            self.last_verification[cls] = (event_count, tool_target(input_))
+        path = input_.get("file_path") or input_.get("notebook_path")
+        if not path:
+            return
+        if name == "Read":
+            self.last_read_event[path] = event_count
+        elif name in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
+            if path in self.last_read_event:
+                self.edits_with_prior_read_this_window.append((path, self.last_read_event[path]))
+            self.last_edit_event[path] = event_count
 
     def feed_assistant_content(self, content, ts=None, model=None):
         """Feed one assistant turn's content blocks. Returns a closed window
@@ -509,6 +617,7 @@ class WindowState:
                 self.tool_event_count_since_window += 1
                 self.total_tool_event_count += 1
                 self.events_since_task += 1
+                self._update_session_facts(name, input_, self.total_tool_event_count)
 
                 fire = self.tool_event_count_since_window >= CADENCE_EVENTS
                 if not fire and self.last_window_ts is not None and ts is not None:
@@ -524,6 +633,13 @@ class WindowState:
                         self.current_task = _clip(stripped, TASK_MAX_CHARS)
                         self.task_addressed = False
                         self.events_since_task = 0
+                        # DESIGN.md §2f: every TASK-set event is, by this
+                        # branch's own gate, a real human chat message — never
+                        # a harness/hook text — so this is a user-ordered
+                        # context switch by construction. Recorded durably so
+                        # the classifier doesn't have to infer freshness from
+                        # RECENT alone once this scrolls out of it.
+                        self.context_switches.append((self.total_tool_event_count, _truncate(stripped, 60)))
         return closed, human_texts
 
 
@@ -629,7 +745,10 @@ class VerdictCache:
             f.write(json.dumps({"k": k, "v": verdict}) + "\n")
 
 
-COOLDOWN_EVENTS = {"standard": 20, "slow": 40}  # "once" handled separately (fire-at-most-once)
+# "once" handled separately (fire-at-most-once); "advice-recur" re-arms the
+# priming tier every N events so long runs get the advice back into context
+# after it scrolls out (§2e, Peter 2026-07-05).
+COOLDOWN_EVENTS = {"standard": 20, "slow": 40, "advice-recur": 300}
 
 
 def apply_cooldowns(fires, move_cooldowns):

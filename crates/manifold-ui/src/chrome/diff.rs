@@ -75,6 +75,9 @@ pub fn materialize(tree: &mut UITree, root: &View, rect: Rect) -> Vec<(u64, Node
         if !n.visible {
             tree.set_visible(id, false);
         }
+        if let Some(name) = n.name {
+            tree.set_name(id, name);
+        }
         if let Some(k) = n.key {
             keyed.push((k, id));
         }
@@ -144,6 +147,9 @@ impl ChromeHost {
             };
             if !self.scratch[i].visible {
                 tree.set_visible(id, false);
+            }
+            if let Some(name) = self.scratch[i].name {
+                tree.set_name(id, name);
             }
             self.ids.push(id);
         }

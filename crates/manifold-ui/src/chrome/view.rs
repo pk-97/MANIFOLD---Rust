@@ -145,6 +145,11 @@ pub struct View {
     /// Optional stable-identity hint (currently advisory — the diff keys on
     /// structural shape; a future keyed reconciler reads this).
     pub(crate) key: Option<u64>,
+    /// Automation component name (`UI_AUTOMATION_DESIGN.md` D8/§3), registered
+    /// on the built `NodeId` via `UITree::set_name` once this view lands in the
+    /// tree. `None` for the overwhelming majority of views — set only at the
+    /// naming pass' high-value points (`.name("layer_header.mute")`).
+    pub(crate) name: Option<&'static str>,
     /// When set, this node is a slider *slot*: the host materialises a
     /// [`BitmapSlider`](crate::slider::BitmapSlider) into its laid rect and
     /// records the resulting ids under [`View::key`].
@@ -172,6 +177,7 @@ impl View {
             disabled: false,
             visible: true,
             key: None,
+            name: None,
             slider: None,
         }
     }
@@ -422,6 +428,15 @@ impl View {
 
     pub fn key(mut self, k: u64) -> Self {
         self.key = Some(k);
+        self
+    }
+
+    /// Register an automation component name for this node (`UI_AUTOMATION_DESIGN.md`
+    /// D8/§3) — a static literal like `"transport.play"`. Applied once the view
+    /// lands in the tree (`ChromeHost::build`/`materialize`); most views leave
+    /// this unset.
+    pub fn name(mut self, name: &'static str) -> Self {
+        self.name = Some(name);
         self
     }
 

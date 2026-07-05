@@ -314,6 +314,176 @@ TASK regex is crude. If shadow shows the phase labels themselves are noisy,
 fix the rubric's phase definitions first — do not tune rules on top of a
 broken signal.
 
+## 2e. Advice tier — framing + recurrence (Peter, 2026-07-05; built same conversation, Fable)
+
+The priming-tier moves (reasoning-primer, design-primer) are scheduled
+general advice, not detections — but they shipped wearing the alert wrapper,
+which has two costs. First, framing: a model receiving an alert it knows it
+didn't trigger learns "daemon notes are wallpaper", and that alert-blindness
+bleeds into the anchors that DO mean something — the tiers share one
+credibility budget. Second, cadence: once-per-session means the advice has
+scrolled far out of effective context long before a long orchestration run
+ends, exactly the sessions that need the prior most.
+
+Two changes, both keyed off a new `kind: advice` field in moves.md
+(parse_moves default: "alert"):
+
+- **Framing.** `valve.build_block` wraps advice moves in a distinct
+  `<daemon-advice>` tag with a frozen preamble stating explicitly: scheduled,
+  not a detection, nothing is wrong, nothing to acknowledge or grade. No
+  supervised-mode ack sentence, no habit-memory ordinal — both read as
+  accusation under an advice frame. Alert moves are untouched; the distinct
+  tag (not an attribute) is deliberate, so skimming models and RUNBOOK greps
+  can't conflate the tiers.
+- **Recurrence.** New cooldown class `advice-recur` (COOLDOWN_EVENTS: 300
+  tool events) replaces "once": first fire unchanged (first live tool event /
+  first design-doc edit), then the move re-arms per target — main session
+  and each worker — so a 1500-event orchestration gets the prior refreshed
+  roughly five times. `last_fire_event` is firestate-persisted for the main
+  session, so idle-exit revives don't double-fire; worker gates are
+  in-memory like the rest of worker state (known, accepted). Advice moves
+  never escalate to escalate/checkpoint — recurrence is the schedule
+  working, not habituation — and are exempt from session self-grades: the
+  sleep pass grades them from downstream behavior only (RUNBOOK step 2).
+
+Grading note for passes: an advice fire's `correct` is trivially TP (the
+trigger is mechanical), so precision denominators should exclude the advice
+tier or report it separately — its only meaningful metric is pass-judged
+effectiveness, and `effective: unclear` is the expected common case, not a
+defect.
+
+## 2f. Session-fact store (SPECCED 2026-07-05, Fable — Sonnet builds; Peter approved direction same conversation)
+
+The dominant FP class across sleep pass 1 and live fires since is observation,
+not wording: the window can't see something the session already established.
+Specimens: scope-drift 1/11 (attribution blindness — the context switch that
+explained the "drift" was ordered by the user or a hook, earlier than RECENT
+reaches); several verify-claim FPs where the verifying event existed but sat
+beyond the window ledger; the 2026-07-05 live FP in session `65084a7d` (claim
+"wrapper live immediately" flagged; its verifying event — a fresh-process
+build_block render — ran ~10 events before the claim, outside the window that
+held the summary text). Signature rewording cannot fix this; rounds 1–2
+proved wording tops out while the binding constraint is what the classifier
+can see.
+
+**Build:** the observer already tails every event — it extracts durable facts
+deterministically as they pass and carries them forward past the window
+horizon. A `SessionFacts` struct per mailbox (main + workers), persisted in
+the existing firestate file (main; workers stay in-memory like the rest of
+worker state):
+- `last_verification` per class — test-run / lint / render-read (Read of
+  *.png) / script-run — as (event_count, one-line label). Classes detected
+  from tool name + input by regex, same tier as STOPGAP_MARKERS.
+- `task_addressed` — already exists as a bit; fold it in unchanged.
+- `context_switches` — user- or hook-ordered task changes with event counts
+  (the scope-drift attribution fix: a TASK that changed because the human
+  changed it is not drift).
+- `paths` — the existing unread-edit `paths_seen` set, extended with last
+  Read / last Edit event counts per path.
+
+Rendering: a `SESSION FACTS:` block appended to every classifier window
+(WINDOW_VERSION bump), e.g. "last test run: event 412, 9 events ago
+(cargo test -p ...); TASK set by user at event 388; file X last read event
+301". The rubric's existing exemptions ("never flag claims whose verifying
+event is in the LEDGER") extend naturally — the facts block is a longer
+ledger, not a new contract. No new classifier calls, no new moves.
+
+**Scoring oracle:** verify-claim and scope-drift FP rates before/after, from
+normal pass grading; the scope-drift mute expiry (~2026-07-12) is the natural
+re-test — unmute into the facts-block world and grade a week.
+
+**Honest scope:** facts are regex-extracted, so semantic verification ("the
+test that ran actually covers the claim") stays with the classifier; the
+store only widens what it can see. Facts persist per session, never across
+sessions — cross-session memory is what MEMORY.md is for.
+
+## 2g. Workflow launch gate (SPECCED 2026-07-05, Fable — Sonnet builds; Peter's ask: auto-approve bounded workflows, no babysitting)
+
+Peter's complaint, same conversation: workflows need manual approval, and
+unbounded scripts "destroy token usage" — but he doesn't want to monitor an
+orchestration session just to click approve. Same shape as §2c-ask: rare,
+already-blocking, damage-preceding event → synchronous deterministic
+PreToolUse gate, this time matched on the `Workflow` tool, and this time the
+common case is ALLOW.
+
+**The bounds reframe (the design's core):** the hook never predicts true
+token cost — it verifies the script is *structurally bounded* and the bound
+fits an *allowance*. "How much may run without asking me" is one number
+Peter sets like a card limit, not a prediction problem. Runtime enforcement
+(the Workflow budget ceiling, when a token target is present) does the real
+limiting; static analysis only has to confirm a guard exists.
+
+**Build:** `.claude/hooks/workflow-gate.py`, PreToolUse on `Workflow`;
+config `.claude/daemon/workflow-bounds.json` (gitignored-adjacent runtime
+config, committed default): `{max_auto_agents: 10, max_auto_budget_tokens:
+100000, require_estimate: true}` — placeholders only; Peter rejected an
+initial 30-agent draft as way too high (2026-07-05), final numbers are his
+call via the design-doc-systems discussion. Open bounds questions for that
+discussion: per-workflow vs per-session cumulative allowance (chained
+auto-approved workflows multiply exposure), and whether worker model tier
+scales the allowance (10 Sonnet agents ≠ 10 Opus agents in cost). Static
+checks over the script text (regex tier, no AST dependency):
+1. Count literal `agent(` call sites; find `parallel(`/`pipeline(` over
+   array literals (fan-out = literal length) vs. over variables (unknown —
+   treat as unbounded unless a `.slice(0, N)`/length guard is visible).
+2. `while`/`for` loops whose body contains `agent(`: bounded only if the
+   condition references `budget.remaining(` or a literal counter cap.
+3. `meta.description` must state an agent estimate (`/\b\d+\s*agents?\b/`)
+   when `require_estimate` is on — the approval line shows a number.
+Decision: every check bounded AND estimate ≤ max_auto_agents →
+`permissionDecision: allow` with a one-line note ("workflow-gate:
+auto-approved, ≤N agents, bounded loops"). Anything unbounded, over
+allowance, or unparseable → `ask` (today's behavior — the gate never
+hard-denies and fails open to ask), with the specific reason attached so a
+manual approval is informed.
+
+**Probe first (step 0, like §2b's):** whether the runtime budget ceiling
+(`budget.total`) can be armed by the orchestrator's own turn rather than
+only by user "+Nk" text. If yes, the gate should require an armed budget
+for auto-approve, making the allowance a hard runtime wall, not a static
+guess. If no, static structural bounds carry the gate alone — say so in the
+config comment.
+
+**Telemetry:** `workflow_gate` records (decision, reasons, estimate) →
+sleep passes review allowance fit; two weeks of all-ask or all-allow means
+the numbers are wrong.
+
+**Launch tier — BUILT 2026-07-05 (Fable, at Peter's direction; separate
+from and prior to the bounds tier above, which remains Sonnet's ticket).**
+The incident: Peter caught an Opus orchestrator launching a workflow whose
+`agent()` calls carried no `model:` — every worker silently inherited the
+session's Opus tier and reused the session defaults. The Agent-tool version
+of this failure has an async anchor (`anchor/agent-model-discipline`); the
+Workflow script path had none, and a whisper after launch is too late — the
+fleet has already spent the tokens. So: `.claude/hooks/workflow-gate.py`,
+PreToolUse on `Workflow`, two deterministic checks, no classifier call,
+fail-open, `workflow_gate` telemetry on every decision:
+
+1. **Model discipline, every launch.** Every `agent(` call site in the
+   script (string-stripped, paren-balanced scan; `scriptPath` files are
+   read) must carry an explicit `model:`. Inheriting is never a choice —
+   it resolves to the orchestrator's own tier. Violations deny with the
+   offending line numbers and are re-checked on every retry; this tier
+   cannot be waited out.
+2. **Announce-once, per (session, workflow name).** The first launch of a
+   given workflow is denied once with pre-authored instructions (payload
+   text in the hook, sleep-pass-editable like moves.md): announce in
+   visible text what the workflow is for, why it needs orchestration over
+   inline work, the fan-out, and the model tier of every stage with a
+   reason — reasoned before launch, not restated defaults. The deny embeds
+   the parsed roster so the announcement is grounded. Keyed on the meta
+   `name`, NOT a content hash — the retry usually edits the script to add
+   `model:`, and a content key would bounce the fixed script twice.
+
+A launch clearing both tiers emits NO permission decision — it falls
+through to today's manual approval, with Peter reading the announcement
+above the prompt. This tier only adds requirements; only the bounds tier
+may ever auto-ALLOW, and when it lands it slots in behind these checks.
+Known residue: nested `workflow()` child calls inside a script never
+re-enter PreToolUse (covered only insofar as the parent script text is
+parsed); name-only saved workflows can't be model-checked (announce-once
+still applies). Tests: `.claude/hooks/test_workflow_gate.py` (27 checks).
+
 ## 3. Payload library (`moves.md`)
 
 Two families, one format. **Coaching moves** fire on phase transitions (hypothesis

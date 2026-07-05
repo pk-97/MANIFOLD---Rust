@@ -2,8 +2,11 @@
 
 # MANIFOLD — Layer Controls Design
 
-Status: **design, not yet built** (2026-06-18). Prereq for the Audio Layer card
-(`docs/AUDIO_LAYER_DESIGN.md`). Owns the timeline layer-header control surface;
+Status: **SHIPPED** (verified in-tree 2026-07-05 baseline review: the `LayerControl`
+descriptor engine, Gain/Send widgets, and the Analysis toggle + routing split are live
+in `layer_header.rs` — this doc previously still said "design, not yet built"; its §5.3
+"still to build" claims are also stale). Authored 2026-06-18 as prereq for the Audio
+Layer card (`docs/AUDIO_LAYER_DESIGN.md`). Owns the timeline layer-header control surface;
 the graph/node UI lives in `docs/UI_UX_SYSTEM_DESIGN.md`, which this does not touch.
 
 ---

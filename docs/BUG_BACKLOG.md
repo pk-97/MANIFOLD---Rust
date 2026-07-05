@@ -476,6 +476,110 @@ on that line (count back to 200), or (c) bump `COLOR_BASELINE` to 201 if it's ac
 fixed this session — the gate confirms the diff at hand is P6-clean; picking apart an unrelated
 pre-existing count belongs to whoever next touches `manifold-ui/src`'s colour call sites.
 
+### BUG-025 — Timeline layer/header scissoring: clip content bleeds across row bounds — MED (repro needed)
+
+**Symptom** — reported by Peter 2026-07-05 (screenshot in session transcript) as "layer and
+header scissoring": in the arrangement view, the bottom layer's purple clip body renders far
+beyond its row — a solid block filling the timeline from its row down to the window edge —
+while the layer-header column at bottom-left shows the Plasma MIDI drawer (MIDI / CHANNEL /
+DEVICE) overlapping into that region. Clip content and header-column content are not being
+mutually clipped to their rows/panes.
+
+**Root cause** — unknown. Suspect surface: the per-row scissor rect for clip bodies (last or
+expanded row), the `track-header-invariant` / `single-source-y-layout` class, or a stale
+subregion scissor (`subregion-scissor-invariant`). Likely same family as BUG-015 (inspector
+sections at stale offsets) — both smell like Y-layout/scissor divergence after the recent
+timeline waves.
+
+**Repro** — not pinned; NOT reproduced headless (2026-07-05 Opus). Snapshotted the `states`
+and `timeline` scenes (both carry a selected generator layer with an open MIDI/CHANNEL/DEVICE
+drawer, the closest fixtures to Peter's screenshot) — both render correctly: every clip body is
+scissored to its row, every header drawer stays in the left column, group nesting clips fine.
+A scroll-down + re-snapshot on `timeline` also did not reproduce (and scroll may not be fully
+wired in the headless tracks path). So the general scissoring path is sound; the bug is
+state-specific. Triage narrows it to a config the fixtures don't hit — most likely the
+*last* row being a selected generator whose clip fills the remaining viewport height, and/or a
+live scroll offset. Pin it with either a targeted fixture (selected generator as the final
+layer) or a running-app repro from Peter's project.
+
+**Fix shape** — TBD after repro. If it's the invariant class (likely, given BUG-015 is the same
+family), fix at the single Y-layout source, not per-widget patches.
+
+### BUG-026 — Batch-2 popups: entrance fade freezes at t=0 (transparent bg) until an input re-dirties the frame — MED — FIX LANDED, running-app verification owed
+
+**Symptom** — reported by Peter 2026-07-05 (before/after screenshots): opening the Add Effect
+browser renders the search field, filter chips, and preset cells floating directly over the
+timeline — the popup's dark background panel is missing. Moving the mouse over the popup makes
+the background appear and it then looks correct.
+
+**Root cause (FOUND)** — not the alpha math, a missing animation-poll in the dirty-driven
+renderer. The batch-2 popups (browser / ableton picker / settings) run a D17 entrance tween:
+`enter_anim` starts at `t=0` and, while `t<0.999`, `BrowserPopupPanel::build` multiplies the
+modal container's background + border alpha by `t` (browser_popup.rs:451,469-474) — so frame 0
+draws the panel fully transparent while the cells (opaque, not `t`-gated) float on top. The
+tween is ticked inside each popup's `update()`, which only re-runs while the frame stays dirty.
+The inspector drawer + panel-split tweens self-sustain via a `needs_rebuild` poll after
+`UIRoot::update()` (app_render.rs ~2927), but the batch-2 popups were added to `update()` and
+never to that poll. Opening a popup dirties exactly one frame (drawing it invisible); nothing
+re-dirties it, so the fade freezes at `t=0` until an unrelated input (mouseover) re-dirties the
+frame — the "no background until mouseover" symptom.
+
+**Fix (LANDED)** — added `is_animating()` to each batch-2 popup and the matching poll in the
+app motion block, mirroring `drawer_anim_active` exactly. Gate: clippy `-D warnings` clean;
+`manifold-ui --lib` 604/604. Commit `01c15213` (branch `fix/popup-enter-anim`).
+
+**Verification owed (L4)** — the headless `--script` driver has no frame loop and its
+`enter_anim` ticks off wall-clock, so it cannot exercise this timing bug; a running-app check
+(open the Add Effect browser, confirm the background is present immediately without moving the
+mouse) is the remaining proof. Tracked in VERIFICATION_DEBT (VD-006).
+
+### BUG-027 — Graph-editor node previews composite on the wrong z-layer vs. node chrome — MED
+
+**Symptom** — reported by Peter 2026-07-05 (screenshot in session transcript): node preview
+thumbnails overlap neighbouring nodes inconsistently — a preview (e.g. Luma to Color) draws
+OVER another node's body/ports while that node's own chrome draws over the preview, so
+stacking order disagrees within a single node pair. Previews look like they live on a
+separate layer that ignores node z-order.
+
+**Root cause** — unknown, but the shape is classic split-pipeline compositing: preview
+textured quads render in a different batch/pipeline than the solid-rect node chrome, and the
+two batches aren't interleaved by node draw order (`compositor-layer-ordering` class).
+Surface: `graph_canvas/render.rs` preview draw vs. node body/port pass ordering.
+
+**Repro** — NOT reachable via the P2 `--script` driver (2026-07-05 Opus). The driver builds
+only `UIRoot` scenes, and the graph editor is not a `UIRoot` panel — it lives in `Application`
+as a separate editor window (`self.ln: Option<crate::ln::…>`), and node preview thumbnails are
+GPU-composited in `app_render.rs` (`node_preview_target`), not in the CPU tree render the
+`--script` driver snapshots. There IS a separate headless graph-canvas render path in
+`ui_snapshot/render.rs` (`manifold_ui::ln` + `generator_editor_fixture`, the `editor` scene),
+but it renders the canvas tree, not the live GPU preview composite where the z-order bug lives.
+So this one needs either that GPU compositing path exercised headless, or a running-app repro
+(overlap two live-preview nodes and look).
+
+**Fix shape** — one z-ordered draw sequence per node: interleave the textured preview quads
+into the same node-order pass as chrome (or bump batch boundaries per node), rather than
+patching individual overlap cases.
+
+### BUG-028 — File-drop targeting can't read the live pointer during a Finder drag (both AppKit poll sources frozen) — MED (parked, Fable follow-up)
+
+**Symptom** — dragging an audio file onto an existing audio lane lands it on a NEW lane
+instead of the target lane. Verified 2026-07-05 (Peter, live drag test).
+
+**Root cause** — the `DroppedFile` arms in `app.rs` resolve their target from `cursor_pos`,
+which winit freezes for the whole drag (its macOS backend implements no `draggingUpdated:`
+and emits no `CursorMoved` during a drag session). Both AppKit poll fallbacks were live-tested
+and are ALSO frozen during an NSDragging session: `mouseLocationOutsideOfEventStream` and
+`+[NSEvent mouseLocation]` both returned byte-identical values across dozens of frames while
+the pointer was actively moving. The poll site (`about_to_wait`) runs during the drag, so the
+loop isn't starved — the position APIs simply don't update while macOS owns the drag. Polling
+is a dead end.
+
+**Fix shape** — intercept `draggingUpdated:` on winit's content view (subclass/swizzle) and
+stash `[sender draggingLocation]` (live, window coords, flip to logical top-left) for the drop
+arms; or fork winit to forward it. Overrides TIMELINE_INGEST_DESIGN §2 D1. Queued for a
+dedicated Fable session. Blocks P1 (drop targeting) and P2 (drop-target ghost — reads the same
+position). Full write-up: TIMELINE_INGEST_DESIGN.md §3.
+
 ## Fixed
 
 All five entries below were fixed 2026-06-23, with a test per path:

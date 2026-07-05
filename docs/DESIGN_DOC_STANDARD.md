@@ -173,7 +173,10 @@ brief is not executable — that's the definition.
   states `Demo: none — L1` explicitly. The demo is what forces the vertical path
   (model → command → UI → pixels) to be exercised at least once before landing;
   horizontal slices each passing their own gate while the seam between them never
-  runs is the observed root of "built but invisible in the app".
+  runs is the observed root of "built but invisible in the app". Since UI_AUTOMATION
+  P1–P2 landed (2026-07-05), a phase whose surface the flow driver can reach targets
+  **L3, not L2** — write a `scripts/ui-flows/` flow that drives the real input path,
+  don't stop at a PNG a reviewer merely looks at.
 - **Forbidden moves** — the specific shortcuts THIS phase invites, named. Drawn from
   the observed failure catalog: fuse-for-parity · silent fallback / parallel old path
   kept alive · TODO-as-deferral · "temporary" flags · adapters/shims around a misfit
@@ -254,6 +257,26 @@ Written here once so docs don't repeat it; every doc's header points here.
    landing report states the level reached (§10), ends with a ≤2-minute
    click-script for Peter (numbered steps, expected observation per step), and
    appends one line per unclosed gap to `docs/VERIFICATION_DEBT.md`.
+9. **Landing updates the doc (added 2026-07-05 — Peter's rule).** A landing that
+   completes, starts, or blocks any phase of a design updates that design doc's
+   **Status:** line and the affected phase markers in the same landing, before
+   the push; the landing report quotes the new status line verbatim. A doc
+   claiming "not built" over shipped code is how workers rebuild existing work —
+   the 2026-07-05 baseline triage found ~16 such docs, including
+   AUTOMATION_LANES_DESIGN still reading "Not implemented" after it shipped.
+   Status truth is part of the definition of landed, not follow-up hygiene.
+10. **The landing report is a committed file (added 2026-07-05).** Everything
+    rules 8–9 require the landing report to carry — gate output verbatim, the
+    §10 level reached, the click-script, deviations from the brief, the quoted
+    status line, VD entries opened or carried — goes in
+    `docs/landings/YYYY-MM-DD-<slug>.md`, committed in the same push as the
+    landing. The chat message becomes a summary plus a pointer to that file.
+    Rationale: the ledger cross-references landing reports (VD IDs, `Escaped:`
+    lines), and until now those references pointed into chat transcripts that
+    evaporate with the session — the same decay path §10's ledger was built to
+    close, one level up. The click-scripts are the acute loss: VD-002's
+    burn-down *is* a click-script, and every one written before this rule is
+    gone. Template: `docs/landings/README.md`.
 
 ## 9. Hardening levels (for auditing existing docs)
 
@@ -275,7 +298,11 @@ The build order that decides which is which: `docs/DESIGN_BUILD_ORDER.md`.
 - **L2** — behavior observed: the acceptance demo's artifact (PNG, packet capture,
   log trace) was produced and actually read by a reviewer.
 - **L3** — scripted interaction: an automation-layer flow drives the real UI input
-  path (unavailable until `UI_AUTOMATION_DESIGN.md` P1–P2 lands).
+  path. Available since UI_AUTOMATION P1–P2 landed (2026-07-05): author a JSON flow
+  under `scripts/ui-flows/` and run it with `cargo xtask ui-snap <scene> --script
+  <flow.json>` — the two proving flows `scripts/ui-flows/select-and-inspect.json`
+  (resolve a widget by name/text, click it, assert) and `drag-clip.json` (drag a clip
+  via its surface target, assert the moved rect) are the precedent to copy.
 - **L4** — human-in-app: Peter, live.
 
 Rules:

@@ -2,7 +2,7 @@
 
 Drive any effect-card slider from live audio. A new modulation source that sits beside the existing envelope and driver (beat-synced LFO) sources on every parameter — same drawer pattern, same per-param binding model. The instrument goal: route a bassline into Manifold and have its **pitch movement** push a visual parameter, so wobbles, glides, pitch-shifts and risers map straight onto the visuals — not just "the music got louder."
 
-Status: **design only.** The audio-input plumbing already exists (recording uses it). The modulation plumbing and UI are to be built. The "intelligent" analysis (pitch/ridge tracking) is deliberately **not built yet** — but the architecture below leaves the seam open so it drops in without rework.
+Status: **v1 SHIPPED 2026-06-17** (§11 steps 1–5 ✅: modulation plumbing, drawer UI, feature×band matrix, spectrogram overlays — status corrected 2026-07-05, it still read "design only"). Remaining: step 6 (onset) and step 7 (pitch/ridge tracking — deliberately deferred; the seam below is open so it drops in without rework). Known stale labeled question: the §12 device-selection default was due "before step 2 ships" — step 2 shipped without closing it in-doc.
 
 ---
 

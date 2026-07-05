@@ -1,7 +1,10 @@
 # Chain Fusion — Cross-Card Freeze Compiler Design
 
-**Status:** Design accepted as session baseline, 2026-06-11. v1 scope: adjacent-card pointwise
-seams, single-input single-output cards, per-region gate on every cross-card region.
+**Status:** BUILT 2026-06-11 (status corrected 2026-07-05 — the header still read "accepted
+as session baseline" while §5's own status says BUILT; `SEGMENT_CACHE`/`SegmentView` and
+`StateStore::migrate_node` are live in-tree). **`docs/FREEZE_COMPILER_MAP.md` is the
+authoritative current-state map — read it first.** v1 scope as built: adjacent-card
+pointwise seams, single-input single-output cards, per-region gate on every cross-card region.
 
 **Branch:** `chain-fusion`. Campaign context: `project_graph_perf_campaign_2026_06`
 (roadmap #3). Target: the ~8ms effect-chain slice of the Liveschool 4K frame — a layer

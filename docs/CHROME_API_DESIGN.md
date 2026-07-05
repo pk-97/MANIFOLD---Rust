@@ -1,6 +1,9 @@
 # Chrome API — declarative widget/layout for panels
 
-Status: **Phase 2a (active).** Sub-design-doc for the UI Architecture Overhaul
+Status: **Phase 2a SHIPPED; 2b in progress** (verified in-tree 2026-07-05 baseline
+review: the `chrome/` module with `ChromeHost`, `validate`, layout/view/diff/theme is
+live and `clip_chrome.rs` is already migrated onto the View system — the header
+previously read "2a active"). Sub-design-doc for the UI Architecture Overhaul
 Phase 2 (`docs/UI_ARCHITECTURE_OVERHAUL.md` §Phase 2a/2b). This is the contract
 the chrome panels migrate onto in Phase 2b.
 
