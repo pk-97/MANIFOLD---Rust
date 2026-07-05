@@ -17,7 +17,8 @@ Rules (normative home: `DESIGN_DOC_STANDARD.md` §10):
   with date and how) or consciously carries them — the landing report says so.
   Silence is not carrying.
 - IDs are stable (`VD-NNN`), never renumbered — they are referenced from landing
-  reports, BUG_BACKLOG `Escaped:` lines, and memory.
+  reports (committed under `docs/landings/`, per §8.10), BUG_BACKLOG `Escaped:`
+  lines, and memory.
 
 ---
 
