@@ -397,8 +397,7 @@ pub fn apply_card_reshape(
 
 // ─── Param Value (per-slot state) ───
 
-/// A single parameter slot's runtime state on an [`PresetInstance`].
-///
+// A single parameter slot's runtime state used to live here.
 // `ParamSlot` is DELETED (PARAM_STORAGE_DESIGN.md D1/D3). Its four fields
 // (`value`, `base`, `exposed`, `touched`) now live on `crate::params::Param`
 // alongside the descriptor (`spec`), `origin`, and `calibrated` — one struct,
@@ -472,10 +471,10 @@ pub struct PresetInstance {
     effect_type: PresetTypeId,
     pub enabled: bool,
     pub collapsed: bool,
-    /// Id-keyed parameter manifest (PARAM_STORAGE_DESIGN.md D1). Descriptor
-    /// + live state in one [`crate::params::Param`] per parameter, keyed by
-    /// id; insertion order is card display order. Replaces the former
-    /// positional `Vec<ParamSlot>` + three id→index resolvers — there is no
+    /// Id-keyed parameter manifest (PARAM_STORAGE_DESIGN.md D1): descriptor
+    /// and live state in one [`crate::params::Param`] per parameter, keyed by
+    /// id, with insertion order as card display order. Replaces the former
+    /// positional `Vec<ParamSlot>` plus three id→index resolvers — there is no
     /// positional identity anymore, so nothing between creation and disk
     /// resolves a param through an index or the registry. Address a param by
     /// its stable id (`params.get(id)` / `params.get_mut(id)`); the renderer's
@@ -604,7 +603,7 @@ impl ParamEntryWire {
             value: p.value,
             exposed: p.exposed,
             base: base_tracked.then_some(p.base),
-            calibration: p.calibrated.then(|| CalibrationWire {
+            calibration: p.calibrated.then_some(CalibrationWire {
                 min: p.spec.min,
                 max: p.spec.max,
                 curve: p.spec.curve,
