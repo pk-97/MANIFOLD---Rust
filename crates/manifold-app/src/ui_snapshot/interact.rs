@@ -494,11 +494,8 @@ fn lane_param_range(data: &SceneData, layer_id: &str, param_id: &str) -> Option<
     let layer = data.project.timeline.layers.iter().find(|l| l.layer_id == layer_id)?;
     let effects = layer.effects.as_ref()?;
     for fx in effects {
-        let Some(def) = manifold_core::preset_definition_registry::try_get(fx.effect_type()) else {
-            continue;
-        };
-        if let Some(resolved) = manifold_core::effects::resolve_param_in(&def, fx, param_id) {
-            return Some((resolved.min, resolved.max));
+        if let Some(param) = fx.params.get(param_id) {
+            return Some((param.spec.min, param.spec.max));
         }
     }
     None

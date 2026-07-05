@@ -928,7 +928,6 @@ pub fn sync_project_data(
         // From Unity ViewportManager.BuildTrack (lines 548-663):
         // - is_muted includes parent group mute (children of muted groups are dimmed)
         // - is_group set correctly for group layers
-        // - accent_color set for child layers
         let tracks: Vec<TrackInfo> = project
             .timeline
             .layers
@@ -946,13 +945,6 @@ pub fn sync_project_data(
 
                 // Track height is owned solely by the CoordinateMapper
                 // (rebuilt above, read back by the viewport). No copy here.
-
-                // Accent color for child layers (group visual)
-                let accent_color = if layer.parent_layer_id.is_some() {
-                    Some(color::DEFAULT_GROUP_ACCENT)
-                } else {
-                    None
-                };
 
                 // Child layer indices for collapsed group preview
                 let child_layer_indices = if layer.is_group() {
@@ -973,7 +965,6 @@ pub fn sync_project_data(
                     is_muted,
                     is_group: layer.is_group(),
                     is_collapsed: layer.is_collapsed,
-                    accent_color,
                     child_layer_indices,
                 }
             })

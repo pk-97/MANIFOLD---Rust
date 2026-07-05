@@ -426,27 +426,6 @@ impl TimelineViewportPanel {
             }
             self.track_bg_ids.push(bg_id);
 
-            // Group child accent bar — always allocated
-            let accent_id = if let Some(accent) = track.accent_color.filter(|_| !track.is_group) {
-                let aid = tree.add_panel(
-                    None,
-                    tr.x,
-                    if visible { clamped_y } else { tr_top },
-                    color::GROUP_ACCENT_BAR_WIDTH,
-                    if visible { clamped_h } else { 0.0 },
-                    UIStyle {
-                        bg_color: accent,
-                        ..UIStyle::default()
-                    },
-                );
-                if !visible || y < tr_top {
-                    tree.set_visible(aid, false);
-                }
-                Some(aid)
-            } else {
-                None
-            };
-
             // Bottom separator — always allocated
             let (sep_h, sep_color) = if track.is_group {
                 (color::GROUP_SEPARATOR_HEIGHT, color::GROUP_SEPARATOR_COLOR)
@@ -474,11 +453,7 @@ impl TimelineViewportPanel {
                 tree.set_visible(separator_id, false);
             }
 
-            self.track_bg_groups.push(TrackBgGroup {
-                bg_id,
-                accent_id,
-                separator_id,
-            });
+            self.track_bg_groups.push(TrackBgGroup { bg_id, separator_id });
         }
 
         // Top separator is painted into the first layer's bitmap (not a UITree node)
@@ -1230,18 +1205,6 @@ impl TimelineViewportPanel {
                     group.bg_id,
                     Rect::new(tr_x, clamped_y, tr_w, clamped_h),
                 );
-            }
-
-            // Accent bar
-            if let Some(accent_id) = group.accent_id {
-                let accent_vis = visible && y >= tr_top;
-                tree.set_visible(accent_id, accent_vis);
-                if accent_vis {
-                    tree.set_bounds(
-                        accent_id,
-                        Rect::new(tr_x, clamped_y, color::GROUP_ACCENT_BAR_WIDTH, clamped_h),
-                    );
-                }
             }
 
             // Separator
