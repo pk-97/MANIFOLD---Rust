@@ -11,6 +11,7 @@ mod dump;
 mod fixtures;
 mod interact;
 mod render;
+mod script;
 mod thumbs;
 
 use std::path::{Path, PathBuf};
@@ -38,6 +39,7 @@ pub fn run(args: &[String]) {
     let want_vs_mockup = args.iter().any(|a| a == "--vs-mockup");
     let want_thumbs = args.iter().any(|a| a == "--thumbs");
     let interact = arg_value(args, "--interact");
+    let script_path = arg_value(args, "--script");
     // P0.0 evidence flag (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): seed BOTH scroll
     // owners (`Viewport::scroll_y_px` + the header panel's `ScrollContainer`
     // offset) to the same non-zero pixel value right after the base render
@@ -46,6 +48,14 @@ pub fn run(args: &[String]) {
     // seeds state that predates the interaction being tested, not an action
     // being tested itself.
     let scroll_seed: Option<f32> = arg_value(args, "--scroll").and_then(|s| s.parse().ok());
+
+    // `--script <file.json>` (UI_AUTOMATION_DESIGN.md §6, P2): a JSON array of
+    // `AutomationAction`s executed in order. Fully owns its own build + gate
+    // exit code — bypasses the `--dump`/`--interact`/mockup flags below.
+    if let Some(path) = script_path {
+        script::run(scene, &path);
+        return;
+    }
 
     // `all`: render every scene in one process — a full-app eyeball after a
     // change. Skips the per-scene-only flags (mockup, interact); pass those to a
@@ -91,6 +101,16 @@ pub fn run(args: &[String]) {
     render_ui_scene(scene, want_dump, want_vs_mockup, want_thumbs, interact, scroll_seed);
 }
 
+/// P0.3 (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): `hairlineclips` needs genuine far
+/// zoom (the minimum `color::ZOOM_LEVELS` entry) to make its clips
+/// sub-pixel-wide; every other scene keeps the existing fixed 24px/beat so
+/// their PNGs stay byte-identical across phases. Shared by `render_ui_scene`
+/// and `script::run` so a script's resolved rects agree with a plain
+/// `--dump`/`--interact` run of the same scene.
+fn zoom_ppb_for_scene(scene: &str) -> f32 {
+    if scene == "hairlineclips" { 1.0 } else { 24.0 }
+}
+
 /// Build + render one UITree scene (`timeline` / `states` / `inspector`) through
 /// the real core→UI translation path, plus an optional `--interact` "after" pass
 /// and mockup composite. Unknown scene name exits 2.
@@ -109,11 +129,7 @@ fn render_ui_scene(
         std::process::exit(2);
     };
 
-    // P0.3 (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): `hairlineclips` needs genuine
-    // far zoom (the minimum `color::ZOOM_LEVELS` entry) to make its clips
-    // sub-pixel-wide; every other scene keeps the existing fixed 24px/beat so
-    // their PNGs stay byte-identical across this phase.
-    let zoom_ppb: f32 = if scene == "hairlineclips" { 1.0 } else { 24.0 };
+    let zoom_ppb: f32 = zoom_ppb_for_scene(scene);
 
     let dir = out_dir(scene);
     std::fs::create_dir_all(&dir).expect("create ui-snapshots dir");
@@ -168,6 +184,21 @@ fn render_ui_scene(
     if let Some(spec) = interact {
         let desc = interact::apply(&mut ui, &mut data, &spec);
         println!("ui-snap: interact {desc}");
+        // D6 (§6 seam brief): a synthesized-click miss is no longer patched
+        // over — `select:`'s sugar (`interact::select_layer`) reports it as
+        // "MISS: ..." instead of falling back to an id match. Fail loudly
+        // with the dump attached as evidence rather than rendering an
+        // "after" that never actually happened.
+        if desc.contains("MISS: ") {
+            sync_build(&mut ui, &data, zoom_ppb);
+            let fail_path = dir.join(format!("{scene}.interact-miss.tree.json"));
+            script::write_fail_dump(&ui, &data, &fail_path);
+            eprintln!(
+                "ui-snap: interact MISS — the real input path did not resolve; dump at {}",
+                fail_path.display()
+            );
+            std::process::exit(1);
+        }
         sync_build(&mut ui, &data, zoom_ppb);
         render_and_dump(
             &ui,

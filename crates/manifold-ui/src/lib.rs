@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod anim;
+pub mod automation;
 pub mod automation_hit_tester;
 pub mod bitmap_painter;
 pub mod bitmap_renderer;
@@ -45,6 +46,10 @@ pub mod waveform_painter;
 pub mod waveform_renderer;
 pub mod widget_layout;
 
+pub use automation::{
+    AssertCheck, AutomationAction, AutomationTarget, Gesture, MatchInfo, ResolveError,
+    ResolvedTarget, SelectorQuery, interpolate_drag, resolve, resolve_all,
+};
 pub use bitmap_renderer::LayerBitmapRenderer;
 pub use coordinate_mapper::CoordinateMapper;
 pub use dock::{Dock, DockEdge};
