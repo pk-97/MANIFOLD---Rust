@@ -10,6 +10,8 @@ stdin, not by observing your own session").
 Run: python3 .claude/hooks/test_preToolUseBash.py
 """
 import importlib.util
+import io
+import json
 import os
 import sys
 import tempfile
@@ -237,6 +239,67 @@ def test_bare_push_on_main_branch_reminds():
         hook._current_branch = orig
 
 
+def run_hook_main(payload):
+    """Drive hook.main() end-to-end with synthetic stdin, returning what it
+    wrote to stdout ("" = no decision, fell through to the permission
+    system). Wrapped in a patched verdicts dir so the shared-checkout guard
+    never observes this session's real pidfile."""
+    result = {}
+
+    def run(vd):
+        orig_in, orig_out = sys.stdin, sys.stdout
+        sys.stdin = io.StringIO(json.dumps(payload))
+        sys.stdout = io.StringIO()
+        try:
+            hook.main()
+            result["out"] = sys.stdout.getvalue()
+        finally:
+            sys.stdin, sys.stdout = orig_in, orig_out
+
+    with_verdicts_dir(run)
+    return result["out"]
+
+
+PIPEY_CMD = "python3 scripts/frob.py | tee /Users/peterkiemann/out.txt"
+
+
+def test_pipe_deny_active_in_default_mode():
+    check("pipey test cmd is not pre-approved", not hook.is_preapproved_command(PIPEY_CMD))
+    out = run_hook_main({
+        "tool_input": {"command": PIPEY_CMD},
+        "cwd": MAIN_CWD,
+        "permission_mode": "default",
+    })
+    check("default mode: non-pre-approved pipe -> deny", '"deny"' in out, out)
+
+
+def test_pipe_deny_skipped_in_auto_mode():
+    for mode in ("auto", "bypassPermissions"):
+        out = run_hook_main({
+            "tool_input": {"command": PIPEY_CMD},
+            "cwd": MAIN_CWD,
+            "permission_mode": mode,
+        })
+        check(f"{mode} mode: non-pre-approved pipe -> no decision", out == "", out)
+
+
+def test_pipe_deny_active_when_mode_missing():
+    out = run_hook_main({
+        "tool_input": {"command": PIPEY_CMD},
+        "cwd": MAIN_CWD,
+    })
+    check("missing permission_mode: deny stays (safe default)", '"deny"' in out, out)
+
+
+def test_landing_ask_survives_auto_mode():
+    out = run_hook_main({
+        "tool_input": {"command": "git push --force origin main"},
+        "cwd": MAIN_CWD,
+        "permission_mode": "auto",
+    })
+    check("auto mode: force-push to main still asks", '"ask"' in out, out)
+
+
 def main():
     test_bare_checkout_foreign_live()
     test_bare_checkout_only_own_session()
@@ -261,6 +324,10 @@ def main():
     test_merge_while_on_main_reminds()
     test_merge_while_on_other_branch_unaffected()
     test_bare_push_on_main_branch_reminds()
+    test_pipe_deny_active_in_default_mode()
+    test_pipe_deny_skipped_in_auto_mode()
+    test_pipe_deny_active_when_mode_missing()
+    test_landing_ask_survives_auto_mode()
 
     for name in PASS:
         print(f"PASS: {name}")

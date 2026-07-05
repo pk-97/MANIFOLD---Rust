@@ -46,7 +46,7 @@ PreToolUse hook for Bash. Four jobs, evaluated in this order:
 
 Parsing is escape/quote-aware (see `sanitize`): backticks and `$(...)`
 that are escaped or sit inside single quotes are literal text (e.g. a
-commit message `-m "fix the \`foo\` helper"`) and are NOT treated as
+commit message `-m "fix the \\`foo\\` helper"`) and are NOT treated as
 command substitutions. Only a substitution that would genuinely execute
 (unescaped, outside single quotes) is pulled out and classified.
 
@@ -671,6 +671,15 @@ def landing_protocol_guard(cmd, cwd):
 # Deny messages (unchanged policy for non-pre-approved compounds)
 # ---------------------------------------------------------------------------
 
+# Permission modes in which Bash calls never prompt. The pipe/cd-prefix
+# denies exist purely as prompt hygiene (a compound defeats the allowlist
+# matcher, and in default mode every miss becomes a prompt); in these modes
+# the deny protects nothing and only costs a rewrite round-trip, so main()
+# skips it. The git guards (shared-checkout, landing-protocol) stay active
+# in every mode — they guard correctness, not prompts. A missing/unknown
+# permission_mode keeps the deny (safe default).
+NON_PROMPTING_MODES = frozenset({"auto", "bypassPermissions"})
+
 PIPE_REASON = (
     "Shell pipe (`|`) in a non-pre-approved command defeats Peter's Bash "
     "allowlist (matcher expects the call to start with `git`/`rg`/`cargo`/"
@@ -749,7 +758,11 @@ def main() -> int:
         json.dump(build_allow(combined), sys.stdout)
         return 0
 
-    # 2. Not pre-approved: enforce the no-pipe / no-cd-prefix rewrite policy.
+    # 2. Not pre-approved: enforce the no-pipe / no-cd-prefix rewrite policy —
+    # prompt hygiene only, so skipped in modes where Bash never prompts.
+    if data.get("permission_mode") in NON_PROMPTING_MODES:
+        return 0
+
     structural = sanitize(cmd)[0]
     reasons: list[str] = []
     if has_shell_pipe(structural):
