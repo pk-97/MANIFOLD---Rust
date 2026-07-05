@@ -415,9 +415,14 @@ limiting; static analysis only has to confirm a guard exists.
 
 **Build:** `.claude/hooks/workflow-gate.py`, PreToolUse on `Workflow`;
 config `.claude/daemon/workflow-bounds.json` (gitignored-adjacent runtime
-config, committed default): `{max_auto_agents: 30, max_auto_budget_tokens:
-200000, require_estimate: true}`. Static checks over the script text (regex
-tier, no AST dependency):
+config, committed default): `{max_auto_agents: 10, max_auto_budget_tokens:
+100000, require_estimate: true}` — placeholders only; Peter rejected an
+initial 30-agent draft as way too high (2026-07-05), final numbers are his
+call via the design-doc-systems discussion. Open bounds questions for that
+discussion: per-workflow vs per-session cumulative allowance (chained
+auto-approved workflows multiply exposure), and whether worker model tier
+scales the allowance (10 Sonnet agents ≠ 10 Opus agents in cost). Static
+checks over the script text (regex tier, no AST dependency):
 1. Count literal `agent(` call sites; find `parallel(`/`pipeline(` over
    array literals (fan-out = literal length) vs. over variables (unknown —
    treat as unbounded unless a `.slice(0, N)`/length guard is visible).
