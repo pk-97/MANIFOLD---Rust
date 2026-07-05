@@ -968,6 +968,12 @@ pub struct RevertEffectGraphCommand {
     /// that were hung on user-added params the cleared graph carried. Captured
     /// for undo; empty when the graph had no such params.
     removed_automation: manifold_core::effects::RemovedAutomation,
+    /// User-added params the cleared graph carried, captured at their original
+    /// display positions so undo can re-insert them exactly. Removing them is
+    /// what makes `prune_orphaned_automation` see the driver's target gone and
+    /// prune it (PARAM_STORAGE_DESIGN.md D3); without it the manifest still
+    /// holds the orphaned param and the sweep is a no-op.
+    removed_params: Vec<(usize, manifold_core::params::Param)>,
 }
 
 impl RevertEffectGraphCommand {
@@ -976,6 +982,7 @@ impl RevertEffectGraphCommand {
             target,
             previous: None,
             removed_automation: Default::default(),
+            removed_params: Vec::new(),
         }
     }
 }
@@ -990,10 +997,36 @@ impl Command for RevertEffectGraphCommand {
             // Re-execute (after undo): clear without re-capturing.
             install_target_graph(project, &self.target, None);
         }
-        // The graph (and any user-added bindings it carried) is gone, so
-        // automation that targeted those params no longer resolves. Sweep it,
-        // capturing the rows once so undo can re-attach them with the graph.
+        // The graph (and any user-added bindings it carried) is gone, so the
+        // manifest's user-added params are now orphaned. Remove them BEFORE the
+        // automation sweep — that is what makes `prune_orphaned_automation` see
+        // the driver's target gone and prune it. Capture them at their original
+        // positions so undo re-inserts exactly. Automation is captured once too.
         if let Some(inst) = project.preset_instance_mut(&self.target) {
+            if first {
+                self.removed_params.clear();
+                // Original positions first — removal shifts indices, so record
+                // them before removing anything, then remove by id.
+                let to_remove: Vec<(usize, String)> = inst
+                    .params
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| {
+                        p.origin == manifold_core::params::ParamOrigin::UserAdded
+                    })
+                    .map(|(i, p)| (i, p.id().to_string()))
+                    .collect();
+                for (pos, id) in &to_remove {
+                    if let Some(p) = inst.params.remove(id) {
+                        self.removed_params.push((*pos, p));
+                    }
+                }
+            } else {
+                // Redo without an intervening undo: re-remove the same params.
+                for (_, p) in &self.removed_params {
+                    inst.params.remove(p.id());
+                }
+            }
             let pruned = inst.prune_orphaned_automation();
             if first {
                 self.removed_automation = pruned;
@@ -1007,7 +1040,13 @@ impl Command for RevertEffectGraphCommand {
         };
         install_target_graph(project, &self.target, prev);
         let restored = std::mem::take(&mut self.removed_automation);
+        let params = std::mem::take(&mut self.removed_params);
         if let Some(inst) = project.preset_instance_mut(&self.target) {
+            // Re-insert the removed params at their captured positions (ascending
+            // order) before re-attaching automation.
+            for (pos, p) in params {
+                inst.params.insert_at(pos, p);
+            }
             inst.restore_automation(restored);
         }
     }

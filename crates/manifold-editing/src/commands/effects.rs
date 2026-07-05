@@ -918,12 +918,25 @@ impl Command for EditParamMappingCommand {
                     *host.graph_def_mut() = Some(seed);
                     host.bump_graph_structure_version();
                 }
-                let graph = host.graph_def_mut().as_mut()?;
-                let meta = graph.preset_metadata.as_mut()?;
-                let spec = meta.params.iter_mut().find(|p| p.id == binding_id)?;
-                let binding = meta.bindings.iter_mut().find(|b| b.id == binding_id);
-                let snap = new.apply_to_spec(spec, binding);
+                let snap = {
+                    let graph = host.graph_def_mut().as_mut()?;
+                    let meta = graph.preset_metadata.as_mut()?;
+                    let spec = meta.params.iter_mut().find(|p| p.id == binding_id)?;
+                    let binding = meta.bindings.iter_mut().find(|b| b.id == binding_id);
+                    new.apply_to_spec(spec, binding)
+                };
                 host.bump_graph_version();
+                // The manifest entry's `spec` is the LIVE reshape the renderer
+                // reads (`synth_user_binding` for a user param, calibration for a
+                // stock one — PARAM_STORAGE_DESIGN.md D6); `meta.params` is only a
+                // save-time shadow. Mirror the same edit onto the manifest so the
+                // range / curve / invert / label actually take effect. scale and
+                // offset have no manifest home (they live on the BindingDef, which
+                // synth reads directly), so pass `None`.
+                if let Some(p) = host.params.get_mut(&binding_id) {
+                    new.apply_to_spec(&mut p.spec, None);
+                    p.calibrated = true;
+                }
                 Some(snap)
             })
             .flatten();
@@ -949,6 +962,10 @@ impl Command for EditParamMappingCommand {
                     reverse_edit.apply_to_spec(spec, binding);
                 }
                 host.bump_graph_version();
+                // Mirror the reverse onto the live manifest spec (see execute).
+                if let Some(p) = host.params.get_mut(&binding_id) {
+                    reverse_edit.apply_to_spec(&mut p.spec, None);
+                }
             });
             return;
         }
@@ -968,6 +985,10 @@ impl Command for EditParamMappingCommand {
                 reverse.restore(spec, binding);
             }
             host.bump_graph_version();
+            // Mirror the reverse onto the live manifest spec (see execute).
+            if let Some(p) = host.params.get_mut(&binding_id) {
+                reverse.restore(&mut p.spec, None);
+            }
         });
     }
 

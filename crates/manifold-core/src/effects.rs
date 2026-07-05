@@ -2289,8 +2289,15 @@ impl PresetInstance {
         envelopes: Option<Vec<ParamEnvelope>>,
     ) {
         // Re-seed the manifest descriptors from the registry template, then
-        // overlay the snapshotted base values in manifest (card) order.
+        // honor the snapshot's arity and overlay the snapshotted base values in
+        // manifest (card) order. The undo snapshot is the authoritative param
+        // set — a curated instance can carry fewer params than the current
+        // registry template — so trim the reseeded template to the snapshot
+        // length; without this, restoring a shorter snapshot leaves the
+        // registry-default tail entries appended past the snapshot
+        // (PARAM_STORAGE_DESIGN.md D-storage).
         self.init_defaults_for_type(gen_type);
+        self.params.truncate(params.len());
         for (p, v) in self.params.iter_mut().zip(params.iter()) {
             p.base = *v;
             p.value = *v;
