@@ -80,7 +80,7 @@ mod macos {
     };
     use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, Sel};
     use objc2::{msg_send, sel};
-    use objc2_foundation::{NSPoint, NSRect};
+    use objc2_foundation::NSPoint;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use std::cell::Cell;
     use std::sync::OnceLock;
@@ -238,55 +238,17 @@ mod macos {
                 convertPoint: window_pt,
                 fromView: std::ptr::null::<AnyObject>(),
             ];
-            let bounds: NSRect = msg_send![ns_view, bounds];
-            let logical = flip_to_logical_top_left(view_pt.x, view_pt.y, bounds.size.height);
+            // winit's WinitView overrides `isFlipped` to return true (its
+            // origin is the upper-left corner), so `convertPoint:fromView:`
+            // already yields top-left-origin coordinates in points — the same
+            // convention and units as `App::cursor_pos`. No flip: flipping on
+            // the view height here mirrors y around the view's vertical
+            // center (the launch-day bug — ghost visible only in the mirror
+            // band, drops landing on the wrong lane).
+            let logical = Vec2::new(view_pt.x as f32, view_pt.y as f32);
+            log::debug!("[drag_interpose] drag position: {:.1},{:.1}", logical.x, logical.y);
             DRAG_POS.with(|c| c.set(Some(logical)));
         }
     }
 
-    /// AppKit points are bottom-left origin; `App::cursor_pos` is top-left,
-    /// logical-pixel (== points) origin. Flip on the view's own height — no
-    /// scale-factor division needed, AppKit bounds are already in points,
-    /// the same units `cursor_pos` uses. Factored out from `stash_location`
-    /// so the one piece of real math here (as opposed to ObjC plumbing) is
-    /// unit-testable without a live NSView.
-    fn flip_to_logical_top_left(view_x: f64, view_y: f64, view_height: f64) -> Vec2 {
-        Vec2::new(view_x as f32, (view_height - view_y) as f32)
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::flip_to_logical_top_left;
-
-        #[test]
-        fn bottom_left_view_origin_maps_to_top_left_logical_y() {
-            // AppKit (0, 0) is the view's bottom-left corner; cursor_pos's
-            // top-left convention puts that at y == view_height.
-            let p = flip_to_logical_top_left(0.0, 0.0, 800.0);
-            assert_eq!(p.x, 0.0);
-            assert_eq!(p.y, 800.0);
-        }
-
-        #[test]
-        fn top_of_view_maps_to_logical_y_zero() {
-            // AppKit's top edge (y == view_height) is logical y == 0.
-            let p = flip_to_logical_top_left(0.0, 800.0, 800.0);
-            assert_eq!(p.y, 0.0);
-        }
-
-        #[test]
-        fn vertical_midpoint_is_its_own_mirror() {
-            let p = flip_to_logical_top_left(100.0, 400.0, 800.0);
-            assert_eq!(p.x, 100.0);
-            assert_eq!(p.y, 400.0);
-        }
-
-        #[test]
-        fn x_passes_through_unchanged() {
-            // Only y flips — AppKit and cursor_pos agree on x (both
-            // left-to-right, same origin column).
-            let p = flip_to_logical_top_left(123.5, 0.0, 600.0);
-            assert_eq!(p.x, 123.5);
-        }
-    }
 }
