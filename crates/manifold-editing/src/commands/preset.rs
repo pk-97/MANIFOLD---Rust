@@ -35,9 +35,9 @@ pub struct ForkPresetCommand {
     reseed_values: bool,
     /// Captured on first execute so undo restores the pre-fork preset id.
     old_type: Option<PresetTypeId>,
-    /// Pre-fork `param_values`, captured on first execute when `reseed_values`
-    /// is set so undo restores them (Make Unique never touches them).
-    old_param_values: Option<Vec<manifold_core::effects::ParamSlot>>,
+    /// Pre-fork param manifest, captured on first execute when `reseed_values`
+    /// is set so undo restores it (Make Unique never touches it).
+    old_param_values: Option<manifold_core::params::ParamManifest>,
     /// The created embedded preset (with its minted id), captured on first
     /// execute so redo re-inserts the SAME preset deterministically.
     forked: Option<EmbeddedPreset>,
@@ -113,7 +113,7 @@ impl Command for ForkPresetCommand {
             && let Some(inst) = project.preset_instance_mut(&self.target)
         {
             if self.old_param_values.is_none() {
-                self.old_param_values = Some(inst.param_values.clone());
+                self.old_param_values = Some(inst.params.clone());
             }
             inst.reseed_param_values_from_def(&fp.def);
         }
@@ -131,7 +131,7 @@ impl Command for ForkPresetCommand {
         if let Some(vals) = self.old_param_values.clone()
             && let Some(inst) = project.preset_instance_mut(&self.target)
         {
-            inst.param_values = vals;
+            inst.params = vals;
         }
     }
 

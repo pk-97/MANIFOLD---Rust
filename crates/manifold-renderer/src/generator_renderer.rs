@@ -1,12 +1,13 @@
 use crate::generators::registry::GeneratorRegistry;
 use crate::preset_runtime::PresetRuntime;
 use crate::gpu_encoder::GpuEncoder;
-use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+use crate::preset_context::PresetContext;
 use crate::render_target::RenderTarget;
 use crate::uniform_arena::UniformArena;
 use ahash::AHashMap;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
+use manifold_core::params::ParamManifest;
 use manifold_core::{Beats, ClipId, PresetTypeId, LayerId, NodeId, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_playback::renderer::ClipRenderer;
@@ -575,18 +576,6 @@ impl GeneratorRenderer {
                 continue;
             }
 
-            // Build PresetContext from layer params (zero allocation)
-            let mut params = [0.0f32; MAX_GEN_PARAMS];
-            let mut param_count = 0u32;
-            if let Some(layer) = layers.get(layer_index as usize)
-                && let Some(gp) = layer.gen_params()
-            {
-                param_count = gp.param_values.len().min(MAX_GEN_PARAMS) as u32;
-                for (i, val) in gp.param_values.iter().take(MAX_GEN_PARAMS).enumerate() {
-                    params[i] = val.value;
-                }
-            }
-
             let ctx = PresetContext {
                 time,
                 beat,
@@ -601,8 +590,6 @@ impl GeneratorRenderer {
                 frame_count: 0,
                 anim_progress,
                 trigger_count,
-                params,
-                param_count,
             };
 
             // Split borrows: use layers[layer_index].layer_id (from the external
@@ -669,10 +656,16 @@ impl GeneratorRenderer {
                 // note edit rebuilds the affected reshapes + clears the
                 // apply-cache so it takes effect immediately. Downstream
                 // only — never touches the value slots modulation writes.
-                let new_progress =
-                    layer_state
-                        .generator
-                        .render(gpu, &active.render_target.texture, &ctx);
+                // The generator's id-keyed slider manifest drives the bindings
+                // by source_id; empty when the layer has no generator instance.
+                let empty = ParamManifest::default();
+                let params = layer.gen_params().map(|gp| &gp.params).unwrap_or(&empty);
+                let new_progress = layer_state.generator.render(
+                    gpu,
+                    &active.render_target.texture,
+                    &ctx,
+                    params,
+                );
                 active.anim_progress = new_progress;
             }
         }
@@ -904,12 +897,6 @@ impl GeneratorRenderer {
             );
         }
 
-        let mut params = [0.0f32; MAX_GEN_PARAMS];
-        let param_count = gp.param_values.len().min(MAX_GEN_PARAMS) as u32;
-        for (i, val) in gp.param_values.iter().take(MAX_GEN_PARAMS).enumerate() {
-            params[i] = val.value;
-        }
-
         let string_params = layer
             .clips
             .get(clip_index as usize)
@@ -943,10 +930,8 @@ impl GeneratorRenderer {
                 frame_count: f as i64,
                 anim_progress: 0.0,
                 trigger_count: 0,
-                params,
-                param_count,
             };
-            t.runtime.render(gpu, &t.rt.texture, &ctx);
+            t.runtime.render(gpu, &t.rt.texture, &ctx, &gp.params);
         }
         Some(&t.rt.texture)
     }

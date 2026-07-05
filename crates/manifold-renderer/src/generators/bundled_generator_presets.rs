@@ -258,8 +258,6 @@ mod tests {
                 frame_count: 0,
                 anim_progress: 0.0,
                 trigger_count: 0,
-                params: [0.0; MAX_GEN_PARAMS],
-                param_count: 0,
             };
 
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

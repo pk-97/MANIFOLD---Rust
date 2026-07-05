@@ -853,7 +853,14 @@ impl AbletonBridge {
         if let AbletonMappingTarget::MacroSlot { slot_index } = target {
             manifold_core::macro_bank::MacroBank::apply_macro(project, *slot_index, value);
         } else if let Some(fx) = project.find_preset_instance_mut(target) {
-            fx.set_base_param(param_index, value);
+            // P2 compile bridge: `WriteTarget` still carries a positional index
+            // (P4 replaces it with the mapping's `param_id`). Translate the
+            // index to its id through the manifest's transient positional view
+            // at this boundary, then write through the id funnel.
+            let id = fx.params.iter().nth(param_index).map(|p| p.id().to_string());
+            if let Some(id) = id {
+                fx.set_base_param(&id, value);
+            }
         }
     }
 

@@ -2,9 +2,10 @@ use crate::command::Command;
 use crate::commands::effect_target::{EffectTarget, with_effects_mut};
 use manifold_core::{EffectId, GraphTarget};
 use manifold_core::effects::{
-    PresetInstance, ParamConvert, ParamEnvelope, ParamId, ParamSlot, ParameterDriver,
+    PresetInstance, ParamConvert, ParamEnvelope, ParamId, ParameterDriver,
     UserParamBinding,
 };
+use manifold_core::params::Param;
 use manifold_core::project::Project;
 
 // ── Addressing model ──────────────────────────────────────────────────
@@ -417,10 +418,10 @@ enum ReverseState {
     /// modulation surface the user had configured.
     Unexposed {
         binding: UserParamBinding,
-        /// The removed slot, carrying both its effective `value` and
-        /// pre-modulation `base` (fork #16) so undo reinstates the exact
-        /// snapshot with a single `restore_user_binding_at`.
-        slot_value: ParamSlot,
+        /// The removed manifest entry, carrying value + base + exposure +
+        /// calibration so undo reinstates the exact snapshot with a single
+        /// `restore_user_binding_at`.
+        param: Param,
         position: usize,
         /// Drivers pruned from `PresetInstance.drivers` because their
         /// `param_id` matched the removed binding's id.
@@ -509,14 +510,18 @@ impl Command for ToggleEffectParamExposeCommand {
                     return ReverseState::None;
                 };
                 let user_param_id = user_bindings[position].id.clone();
-                // Read the current slot values BEFORE removal so undo
-                // can reinstate them.
-                let value_idx = effect.param_id_to_value_index(&user_param_id);
-                // The copied slot carries its `base` too (fork #16), so undo
-                // reinstates the exact pre-modulation snapshot in one insert.
-                let slot_value = value_idx
-                    .and_then(|i| effect.param_values.get(i).copied())
-                    .unwrap_or(ParamSlot::exposed(meta.default_value));
+                // Capture the full manifest entry BEFORE removal so undo
+                // reinstates the exact pre-modulation snapshot (value + base +
+                // calibration) in one insert. The entry is guaranteed present
+                // for a live user binding: `append_user_binding` /
+                // `remove_user_binding_by_id` keep the binding and its manifest
+                // entry coupled by id, so there is no positional mismatch to
+                // defend against as there was under the old value-index model.
+                let param = effect
+                    .params
+                    .get(&user_param_id)
+                    .cloned()
+                    .expect("manifest entry present for a live user binding");
                 // Prune effect-local modulation references that targeted
                 // this binding. After the binding goes away its id stops
                 // resolving anywhere, so the driver / Ableton row would
@@ -580,7 +585,7 @@ impl Command for ToggleEffectParamExposeCommand {
                     .expect("position checked above");
                 ReverseState::Unexposed {
                     binding,
-                    slot_value,
+                    param,
                     position,
                     removed_drivers,
                     removed_ableton_mappings,
@@ -601,7 +606,7 @@ impl Command for ToggleEffectParamExposeCommand {
                 }
                 ReverseState::Unexposed {
                     binding,
-                    slot_value,
+                    param,
                     position,
                     removed_drivers,
                     removed_ableton_mappings,
@@ -611,10 +616,10 @@ impl Command for ToggleEffectParamExposeCommand {
                     // slot positions stay stable for any other addressing
                     // (drivers, Ableton mappings) that referenced the
                     // user_param_id by string.
-                    // The restored slot carries its own `base` (fork #16), so
+                    // The restored manifest entry carries its own `base`, so
                     // restore_user_binding_at reinstates the exact pre-modulation
                     // snapshot — no separate base override needed.
-                    effect.restore_user_binding_at(binding, position, slot_value);
+                    effect.restore_user_binding_at(binding, position, param);
                     // Restore the drivers / Ableton mappings that
                     // execute() pruned. Their `param_id` still points
                     // at the just-reinserted binding's id, so they'll
@@ -649,45 +654,47 @@ impl Command for ToggleEffectParamExposeCommand {
     }
 }
 
-/// Toggle the `exposed` flag on a static-block param slot. Hidden slots
+/// Toggle the `exposed` flag on a param by its id. Hidden params
 /// disappear from the effect card slider list but keep their value,
 /// driver, and Ableton mapping intact — they're still addressable by
 /// `param_id` for OSC / driver / mapping write paths.
 ///
 /// Symmetric undo: stores the previous flag value (which is just `!new`
-/// for non-no-op execution). No-op when the slot already matches the
-/// requested state, or when `param_index` is out of bounds.
+/// for non-no-op execution). No-op when the param already matches the
+/// requested state, or when `param_id` is not in the manifest.
 #[derive(Debug)]
-pub struct ToggleStaticParamExposeCommand {
+pub struct ToggleParamExposeCommand {
     effect_id: EffectId,
-    param_index: usize,
+    param_id: ParamId,
     new_exposed: bool,
     /// Captured on first execute(). `None` when the call was a no-op.
     prev_exposed: Option<bool>,
 }
 
-impl ToggleStaticParamExposeCommand {
-    pub fn new(effect_id: EffectId, param_index: usize, new_exposed: bool) -> Self {
+impl ToggleParamExposeCommand {
+    pub fn new(effect_id: EffectId, param_id: ParamId, new_exposed: bool) -> Self {
         Self {
             effect_id,
-            param_index,
+            param_id,
             new_exposed,
             prev_exposed: None,
         }
     }
 }
 
-impl Command for ToggleStaticParamExposeCommand {
+impl Command for ToggleParamExposeCommand {
     fn execute(&mut self, project: &mut Project) {
-        let pidx = self.param_index;
+        let id = self.param_id.as_ref();
         let new_v = self.new_exposed;
         self.prev_exposed = project.find_effect_by_id_mut(&self.effect_id).and_then(|effect| {
-            let slot = effect.param_values.get_mut(pidx)?;
-            if slot.exposed == new_v {
+            if !effect.params.contains(id) {
                 return None;
             }
-            let was = slot.exposed;
-            slot.exposed = new_v;
+            let was = effect.is_param_exposed(id);
+            if was == new_v {
+                return None;
+            }
+            effect.set_param_exposed(id, new_v);
             Some(was)
         });
     }
@@ -696,11 +703,8 @@ impl Command for ToggleStaticParamExposeCommand {
         let Some(prev) = self.prev_exposed else {
             return;
         };
-        let pidx = self.param_index;
-        if let Some(effect) = project.find_effect_by_id_mut(&self.effect_id)
-            && let Some(slot) = effect.param_values.get_mut(pidx)
-        {
-            slot.exposed = prev;
+        if let Some(effect) = project.find_effect_by_id_mut(&self.effect_id) {
+            effect.set_param_exposed(self.param_id.as_ref(), prev);
         }
     }
 

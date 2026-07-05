@@ -38,7 +38,7 @@
 
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::effects::ParamSlot;
+use manifold_core::params::ParamManifest;
 
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::graph::Graph;
@@ -75,7 +75,7 @@ impl BoundGraph {
 
     /// Push the host's outer-card values through the bindings, skipping slots whose
     /// outer value hasn't changed since last frame. The per-frame hot call.
-    pub fn apply(&mut self, graph: &mut Graph, values: &[ParamSlot]) {
+    pub fn apply(&mut self, graph: &mut Graph, values: &ParamManifest) {
         apply_bindings(&self.bindings, graph, None, values, &mut self.cache);
     }
 

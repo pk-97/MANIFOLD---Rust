@@ -67,7 +67,7 @@ use crate::node_graph::{
 use crate::node_graph::{is_skipped_for, loaded_preset_view_by_id};
 use crate::preset_context::PresetContext;
 use manifold_core::effect_graph_def::{EFFECT_GRAPH_VERSION_WITH_METADATA, EffectGraphDef};
-use manifold_core::effects::ParamSlot;
+use manifold_core::params::ParamManifest;
 use manifold_core::{Beats, Seconds};
 use crate::render_target::RenderTarget;
 
@@ -220,10 +220,6 @@ pub struct PresetRuntime {
     /// String-typed outer-card → inner-node bindings. Generators only — the
     /// shared float `apply` loop can't carry `String` params. Empty for chains.
     string_bindings: Vec<StringBindingResolution>,
-    /// Reusable scratch wrapping the host's `&[f32]` value bus into the
-    /// `&[ParamSlot]` the shared binding `apply` takes (generator render path).
-    /// Cleared + refilled each frame so the apply stays allocation-free.
-    param_slot_scratch: Vec<ParamSlot>,
 }
 
 /// Input/output model for a [`PresetRuntime`]. The one genuine difference
@@ -546,11 +542,12 @@ struct EffectSlot {
     applied_graph_version: u32,
     /// The card-driven binding lifecycle — the resolved binding list + the
     /// skip-on-unchanged cache — shared with the generator runtime via
-    /// [`BoundGraph`]. `bound.bindings[0..n_static]` are spec bindings hydrated
-    /// via [`ResolvedBinding::from_static`]; `bound.bindings[n_static..]` are
-    /// user-exposed bindings hydrated via [`ResolvedBinding::from_user`]. Same
-    /// order as `PresetInstance.param_values`, so [`apply_bindings`] walks both in
-    /// lockstep against one cache.
+    /// [`BoundGraph`]. The static prefix (spec bindings via
+    /// [`ResolvedBinding::from_static`]) comes first, the user tail (via
+    /// [`ResolvedBinding::from_user`]) after; each binding reads its value from
+    /// `PresetInstance.params` by `source_id`, so [`apply_bindings`] is
+    /// order-independent (the static/user boundary is derived from
+    /// [`BindingSource`] when the tail is rehydrated, not stored).
     ///
     /// The user tail is re-hydrated lazily when
     /// `effect.user_param_bindings_version` advances past
@@ -559,20 +556,6 @@ struct EffectSlot {
     /// from the preset spec); the cache clears (via
     /// [`BoundGraph::apply_inner_overrides`]) on a `graph_version` bump.
     bound: BoundGraph,
-    /// Boundary index inside [`Self::bindings`] separating the static
-    /// prefix from the user tail. Equals the count of resolved static
-    /// bindings — orphaned static bindings (handle missing from the
-    /// splice map) are dropped before the slot is built, so this is
-    /// the live length of `bindings[0..n_static]`.
-    n_static: usize,
-    /// Count of static *outer slots* on the host's
-    /// `PresetInstance.param_values` — distinct from [`Self::n_static`]
-    /// when an orphaned spec binding gets dropped at chain build.
-    /// User tail bindings derive their `source_index` as
-    /// `n_static_slots + j`, so that an orphaned static binding
-    /// doesn't shift every subsequent user-tail slider down one slot.
-    /// In the common case (no orphans) this equals `n_static`.
-    n_static_slots: usize,
     /// Last seen `PresetInstance.graph_version` for the user tail. User
     /// bindings live in the per-instance graph now, so a binding add /
     /// remove / reshape bumps the graph version. When the live effect's
@@ -1002,32 +985,12 @@ impl PresetRuntime {
                         let base_view = loaded_preset_view_by_id(fx.effect_type())
                             .expect("preflight guarantees view");
                         let prefix = crate::node_graph::freeze::segment::card_prefix(seg_idx);
-                        let outer_param_index: ahash::AHashMap<&str, usize> = base_view
-                            .canonical_def
-                            .preset_metadata
-                            .as_ref()
-                            .map(|m| {
-                                m.params
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(idx, p)| (p.id.as_str(), idx))
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        let n_static_slots = base_view
-                            .canonical_def
-                            .preset_metadata
-                            .as_ref()
-                            .map(|m| m.params.len())
-                            .unwrap_or(base_view.bindings.len());
                         let card_static = &view.card_bindings[seg_idx];
                         let user_bindings = fx.user_param_bindings();
                         let mut bindings: Vec<ResolvedBinding> =
                             Vec::with_capacity(card_static.len() + user_bindings.len());
                         for b in card_static.iter() {
-                            let source_index =
-                                outer_param_index.get(b.id.as_ref()).copied().unwrap_or(0);
-                            match ResolvedBinding::from_static(b, &node_map, source_index) {
+                            match ResolvedBinding::from_static(b, &node_map) {
                                 Some(rb) => bindings.push(rb),
                                 None => record_chain_error(
                                     &mut errors,
@@ -1038,9 +1001,7 @@ impl PresetRuntime {
                                 ),
                             }
                         }
-                        let n_static = bindings.len();
-                        for (user_slot, core) in user_bindings.iter().enumerate() {
-                            let source_index = n_static_slots + user_slot;
+                        for core in user_bindings.iter() {
                             // Repoint into the segment namespace: a fused-away
                             // target goes through the segment retarget map; a
                             // surviving target resolves by prefixing its stable
@@ -1057,8 +1018,7 @@ impl PresetRuntime {
                             } else {
                                 c.node_id = NodeId::new(prefixed_key.0.clone());
                             }
-                            match ResolvedBinding::from_user(&c, &graph, &node_map, source_index)
-                            {
+                            match ResolvedBinding::from_user(&c, &graph, &node_map) {
                                 Some(rb) => bindings.push(rb),
                                 None => record_chain_error(
                                     &mut errors,
@@ -1098,8 +1058,6 @@ impl PresetRuntime {
                             preview_kinds: Default::default(),
                             applied_graph_version: fx.graph_version,
                             bound,
-                            n_static,
-                            n_static_slots,
                             user_bindings_version: fx.graph_version,
                             def_content_key: 0,
                             generator_input_node,
@@ -1328,33 +1286,10 @@ impl PresetRuntime {
             // Build the unified resolved-binding list: static prefix
             // first (view.bindings → ResolvedBinding::from_static),
             // then user tail (per-instance UserParamBinding →
-            // ResolvedBinding::from_user). Each binding carries its
-            // own `source_index` into `PresetInstance.param_values` —
-            // resolved by matching `BindingDef::id` against the
-            // outer-card param list (NOT the binding's own enumerate
-            // position) so a single outer slider can fan out to
-            // multiple inner-node params and the second/third binding
-            // still reads the right slot. Mirrors the generator-side
-            // shape — see the generator `from_def`'s `outer_param_index`
-            // (same file, the `Generate`-IO constructor).
-            let outer_param_index: ahash::AHashMap<&str, usize> = view
-                .canonical_def
-                .preset_metadata
-                .as_ref()
-                .map(|m| {
-                    m.params
-                        .iter()
-                        .enumerate()
-                        .map(|(i, p)| (p.id.as_str(), i))
-                        .collect()
-                })
-                .unwrap_or_default();
-            let n_static_slots = view
-                .canonical_def
-                .preset_metadata
-                .as_ref()
-                .map(|m| m.params.len())
-                .unwrap_or(view.bindings.len());
+            // ResolvedBinding::from_user). Each binding reads its value from
+            // `PresetInstance.params` by `source_id` (the binding's own id),
+            // so a single outer slider can fan out to multiple inner-node
+            // params by sharing a source_id and order never matters.
             // User-added bindings now live in the per-instance graph's
             // `preset_metadata` (the single binding-storage list);
             // `user_param_bindings()` synthesizes the runtime view (routing
@@ -1384,10 +1319,6 @@ impl PresetRuntime {
             let mut bindings: Vec<ResolvedBinding> =
                 Vec::with_capacity(view.bindings.len() + user_bindings.len());
             for b in view.bindings.iter() {
-                let source_index = outer_param_index
-                    .get(b.id.as_ref())
-                    .copied()
-                    .unwrap_or(0);
                 // Reshape (range/curve/invert + scale/offset) is read from the
                 // preset spec carried on `b` (ParamBinding), with the
                 // effective def's scale/offset patched in when this instance
@@ -1405,7 +1336,7 @@ impl PresetRuntime {
                     }
                     _ => b,
                 };
-                match ResolvedBinding::from_static(b, &node_map, source_index) {
+                match ResolvedBinding::from_static(b, &node_map) {
                     Some(rb) => {
                         bindings.push(rb);
                     }
@@ -1418,9 +1349,7 @@ impl PresetRuntime {
                     ),
                 }
             }
-            let n_static = bindings.len();
-            for (user_slot, core) in user_bindings.iter().enumerate() {
-                let source_index = n_static_slots + user_slot;
+            for core in user_bindings.iter() {
                 // When this effect renders FUSED, the inner node this user
                 // binding targets was collapsed into a fused kernel, so its
                 // stable `node_id` no longer resolves against `node_map`.
@@ -1445,7 +1374,7 @@ impl PresetRuntime {
                         c
                     });
                 let resolve_core = retargeted.as_ref().unwrap_or(core);
-                match ResolvedBinding::from_user(resolve_core, &graph, &node_map, source_index) {
+                match ResolvedBinding::from_user(resolve_core, &graph, &node_map) {
                     Some(rb) => bindings.push(rb),
                     None => record_chain_error(
                         &mut errors,
@@ -1480,8 +1409,6 @@ impl PresetRuntime {
                 preview_kinds,
                 applied_graph_version: fx.graph_version,
                 bound,
-                n_static,
-                n_static_slots,
                 user_bindings_version,
                 def_content_key: crate::node_graph::freeze::install::def_content_key(
                     effective_def,
@@ -1636,7 +1563,6 @@ impl PresetRuntime {
             type_id: None,
             target_format: None,
             string_bindings: chain_string_bindings,
-            param_slot_scratch: Vec::new(),
         };
         // Seed each String binding's declared default into its inner node, the
         // same one-shot the generator path does at construction (a no-op when
@@ -1948,15 +1874,19 @@ impl PresetRuntime {
             // slider has no effect, while the same value set in the
             // graph editor works).
             if fx.graph_version != slot.user_bindings_version {
-                slot.bound.bindings.truncate(slot.n_static);
-                for (user_slot, core) in fx.user_param_bindings().iter().enumerate() {
-                    let source_index = slot.n_static_slots + user_slot;
-                    match ResolvedBinding::from_user(
-                        core,
-                        &self.graph,
-                        &slot.node_map,
-                        source_index,
-                    ) {
+                // Static/user boundary is derived, not stored: the static
+                // prefix is contiguous and comes first, so its count is the
+                // number of `Static`-sourced bindings. Truncating to it drops
+                // the stale user tail before we rebuild it.
+                let n_static = slot
+                    .bound
+                    .bindings
+                    .iter()
+                    .filter(|b| matches!(b.source, BindingSource::Static))
+                    .count();
+                slot.bound.bindings.truncate(n_static);
+                for core in fx.user_param_bindings().iter() {
+                    match ResolvedBinding::from_user(core, &self.graph, &slot.node_map) {
                         Some(rb) => slot.bound.bindings.push(rb),
                         None => record_chain_error(
                             &mut self.errors,
@@ -1975,15 +1905,15 @@ impl PresetRuntime {
                 // targets so the cache's "Applied(default)" claim holds
                 // against an inner that already matches — symmetric
                 // with the static-prefix seed at chain-build time.
-                apply_binding_defaults(&slot.bound.bindings[slot.n_static..], &mut self.graph, None);
+                apply_binding_defaults(&slot.bound.bindings[n_static..], &mut self.graph, None);
                 slot.user_bindings_version = fx.graph_version;
                 // Reset the user-tail cache so the first apply after
                 // re-hydrate unconditionally writes — the previous
                 // cache entries refer to a different binding list and
                 // would skip-write on stale-prev compare.
-                slot.bound.cache.clear_tail(slot.n_static);
+                slot.bound.cache.clear_tail(n_static);
             }
-            slot.bound.apply(&mut self.graph, &fx.param_values);
+            slot.bound.apply(&mut self.graph, &fx.params);
             // If the preset includes a `system.generator_input` node,
             // push every frame-context scalar (time / beat / aspect /
             // output dims) into its params. The standard port-shadows-
@@ -2488,17 +2418,6 @@ impl PresetRuntime {
             .as_ref()
             .map(|m| m.bindings.clone())
             .unwrap_or_default();
-        let outer_param_index: ahash::AHashMap<String, usize> = doc
-            .preset_metadata
-            .as_ref()
-            .map(|m| {
-                m.params
-                    .iter()
-                    .enumerate()
-                    .map(|(i, p)| (p.id.clone(), i))
-                    .collect()
-            })
-            .unwrap_or_default();
         // Per-param slider response (preset curve/invert/range), matching the
         // effect path's `ResolvedBinding::from_static` no-note reshape. Identity
         // for every shipped preset. `param_id -> (min, max, curve, invert)`.
@@ -2528,10 +2447,6 @@ impl PresetRuntime {
         let preview_kinds = manifold_core::flatten::flatten_groups(&doc)
             .map(|flat| crate::node_graph::PreviewEncoding::propagate(&flat))
             .unwrap_or_default();
-
-        // Capture the outer-card param count before `into_graph` consumes `doc`.
-        let n_param_slots: Option<usize> =
-            doc.preset_metadata.as_ref().map(|m| m.params.len());
 
         let mut graph = doc.into_graph(registry)?;
         let plan = compile(&graph)?;
@@ -2569,18 +2484,6 @@ impl PresetRuntime {
             .filter_map(|b| match &b.target {
                 BindingTarget::Node { node_id, param } => {
                     let inst_id = graph.instance_by_node_id(node_id)?;
-                    let source_index = match outer_param_index.get(b.id.as_str()) {
-                        Some(idx) => *idx,
-                        None => {
-                            log::warn!(
-                                "PresetRuntime(gen): binding id `{}` (target node `{node_id}`.`{param}`) \
-                                 has no matching outer-card param — the binding will always emit its \
-                                 default ({}). Add a `params` entry with id=`{}` or remove the binding.",
-                                b.id, b.default_value, b.id,
-                            );
-                            return None;
-                        }
-                    };
                     let inst = graph.get_node(inst_id)?;
                     let static_param = inst
                         .node
@@ -2617,7 +2520,7 @@ impl PresetRuntime {
                         } else {
                             BindingSource::Static
                         },
-                        source_index,
+                        std::borrow::Cow::Owned(b.id.clone()),
                         reshape,
                         false,
                     ))
@@ -2625,8 +2528,6 @@ impl PresetRuntime {
                 BindingTarget::Composite { .. } => None,
             })
             .collect();
-        let n_static = bindings.len();
-        let n_static_slots = n_param_slots.unwrap_or(n_static);
 
         // Hand the resolved bindings to the shared `BoundGraph` (seeds the
         // skip-cache + plants each binding's declared default).
@@ -2668,8 +2569,6 @@ impl PresetRuntime {
             preview_kinds,
             applied_graph_version: 0,
             bound,
-            n_static,
-            n_static_slots,
             user_bindings_version: 0,
             // Generators rebuild through their own registry lifecycle, not the
             // chain dispatcher's prior-runtime handoff — no harvest key.
@@ -2700,7 +2599,6 @@ impl PresetRuntime {
             type_id: Some(type_id),
             target_format: None,
             string_bindings,
-            param_slot_scratch: Vec::new(),
         };
         g.apply_string_defaults();
         Ok(g)
@@ -2837,15 +2735,13 @@ impl PresetRuntime {
     }
 
     /// Push the host's slider values through the preset's bindings to the
-    /// matching inner-node params (generator path). Wraps the float bus into the
-    /// `&[ParamSlot]` the shared `BoundGraph::apply` takes, reusing a persistent
-    /// scratch so the per-frame path doesn't allocate.
-    pub fn apply_param_values(&mut self, values: &[f32]) {
-        self.param_slot_scratch.clear();
-        self.param_slot_scratch
-            .extend(values.iter().map(|v| ParamSlot::exposed(*v)));
+    /// matching inner-node params (generator path). Each binding reads its value
+    /// from the id-keyed `params` manifest by `source_id`; an empty manifest
+    /// leaves every binding at its declared default. No per-frame allocation —
+    /// the manifest is borrowed directly, no float-bus wrapping.
+    pub fn apply_param_values(&mut self, params: &ParamManifest) {
         if let Some(seg) = self.effect_nodes.first_mut() {
-            seg.bound.apply(&mut self.graph, &self.param_slot_scratch);
+            seg.bound.apply(&mut self.graph, params);
         }
     }
 
@@ -2937,12 +2833,16 @@ impl PresetRuntime {
     }
 
     /// Render one generator frame into the host-provided `target` texture.
-    /// Returns the (passed-through) anim progress.
+    /// Returns the (passed-through) anim progress. `params` is the generator's
+    /// id-keyed slider manifest (`Layer.gen_params.params`); pass
+    /// [`ParamManifest::default`] (empty) to run every binding at its declared
+    /// default (preview / import paths that don't override any card).
     pub fn render(
         &mut self,
         gpu: &mut GpuEncoder<'_>,
         target: &GpuTexture,
         ctx: &PresetContext,
+        params: &ParamManifest,
     ) -> f32 {
         // 1. Push per-frame timing into the generator_input node's params.
         self.set_frame_context(
@@ -2956,8 +2856,7 @@ impl PresetRuntime {
         );
 
         // 2. Push the host's outer-card slider values through the bindings.
-        let values = &ctx.params[..ctx.param_count.min(ctx.params.len() as u32) as usize];
-        self.apply_param_values(values);
+        self.apply_param_values(params);
 
         // 3. Install the host's target as the FinalOutput's source slot.
         self.install_target(target);

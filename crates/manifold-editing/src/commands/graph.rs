@@ -1122,9 +1122,9 @@ enum NodeExposeReverse {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 enum EffectMirrorReverse {
-    /// The (handle, param) maps to a static-block slot; we flipped
-    /// `param_values[slot].exposed`. Undo restores `prev_exposed`.
-    StaticSlot { slot: usize, prev_exposed: bool },
+    /// The (handle, param) maps to a bundled-prefix param; we flipped its
+    /// exposure via `set_param_exposed`. Undo restores `prev_exposed`.
+    StaticSlot { param_id: String, prev_exposed: bool },
     /// The (handle, param) is a non-preset param; we appended a
     /// `UserParamBinding`. Undo removes it by id.
     AppendedUserBinding {
@@ -1132,13 +1132,13 @@ enum EffectMirrorReverse {
     },
     /// The (handle, param) is a non-preset param; we removed an
     /// existing `UserParamBinding`. Undo reinserts it at `position`
-    /// with the captured slot value, plus re-attaches any orphaned
+    /// with the captured manifest entry, plus re-attaches any orphaned
     /// drivers / Ableton mappings / envelopes that referenced the
     /// binding's id.
     RemovedUserBinding {
         binding: manifold_core::effects::UserParamBinding,
         position: usize,
-        slot_value: manifold_core::effects::ParamSlot,
+        param: manifold_core::params::Param,
         /// Drivers pruned from `PresetInstance.drivers` because their
         /// `param_id` matched the removed binding's id. Without this
         /// pruning the rows would survive in the project file but
@@ -1471,19 +1471,22 @@ fn mirror_effect_side(
     inner_is_angle: bool,
     inner_value_labels: &[String],
 ) -> EffectMirrorReverse {
-    use manifold_core::effects::{ParamSlot, UserParamBinding};
+    use manifold_core::effects::UserParamBinding;
 
     if let Some(slot) = static_slot {
-        // Static-block path: flip param_values[slot].exposed.
-        let Some(s) = effect.param_values.get_mut(slot) else {
+        // Bundled-prefix path: flip the exposure flag on the slot-th manifest
+        // entry (bundled params occupy the prefix, in card order). Resolve the
+        // positional slot to its stable id so undo re-addresses the same param.
+        let Some(param_id) = effect.params.iter().nth(slot).map(|p| p.id().to_string())
+        else {
             return EffectMirrorReverse::NoOp;
         };
-        if s.exposed == expose {
+        let prev_exposed = effect.is_param_exposed(&param_id);
+        if prev_exposed == expose {
             return EffectMirrorReverse::NoOp;
         }
-        let prev_exposed = s.exposed;
-        s.exposed = expose;
-        return EffectMirrorReverse::StaticSlot { slot, prev_exposed };
+        effect.set_param_exposed(&param_id, expose);
+        return EffectMirrorReverse::StaticSlot { param_id, prev_exposed };
     }
 
     // Non-static path: append / remove a user-added binding (stored in
@@ -1531,16 +1534,16 @@ fn mirror_effect_side(
         };
         let binding = user_bindings[position].clone();
         let binding_id = binding.id.clone();
-        // Capture the slot value BEFORE removal (the slot lives at
-        // static_count + position). Kind-aware so a generator instance routes
-        // through here too (mirror collapse).
-        let static_count = effect.static_param_count();
-        let slot_idx = static_count + position;
-        let slot_value = effect
-            .param_values
-            .get(slot_idx)
-            .copied()
-            .unwrap_or(ParamSlot::exposed(inner_default));
+        // Capture the full manifest entry BEFORE removal so undo reinstates
+        // the exact snapshot (value + base + calibration). The entry is
+        // coupled to the binding by id (append/remove keep them in lockstep),
+        // so there is no positional slot to compute — a generator instance
+        // routes through here too (mirror collapse).
+        let param = effect
+            .params
+            .get(&binding_id)
+            .cloned()
+            .expect("manifest entry present for a live user binding");
         // Prune any effect-local automation that referenced this
         // binding's id. After removal the id stops resolving anywhere
         // and the rows would silently never apply — capture them on
@@ -1598,7 +1601,7 @@ fn mirror_effect_side(
         EffectMirrorReverse::RemovedUserBinding {
             binding,
             position,
-            slot_value,
+            param,
             removed_drivers,
             removed_ableton_mappings,
             removed_envelopes,
@@ -1612,10 +1615,8 @@ fn unmirror_effect_side(
 ) {
     match mirror {
         EffectMirrorReverse::NoOp => {}
-        EffectMirrorReverse::StaticSlot { slot, prev_exposed } => {
-            if let Some(s) = effect.param_values.get_mut(slot) {
-                s.exposed = prev_exposed;
-            }
+        EffectMirrorReverse::StaticSlot { param_id, prev_exposed } => {
+            effect.set_param_exposed(&param_id, prev_exposed);
         }
         EffectMirrorReverse::AppendedUserBinding { user_param_id } => {
             let _ = effect.remove_user_binding_by_id(&user_param_id);
@@ -1623,18 +1624,18 @@ fn unmirror_effect_side(
         EffectMirrorReverse::RemovedUserBinding {
             binding,
             position,
-            slot_value,
+            param,
             removed_drivers,
             removed_ableton_mappings,
             removed_envelopes,
         } => {
             // Restore the binding (graph metadata + reshape note) and its
-            // value slot at the original tail position so other user
-            // bindings keep their slot indices.
-            effect.restore_user_binding_at(binding, position, slot_value);
+            // manifest entry at the original tail position so other user
+            // bindings keep their card order.
+            effect.restore_user_binding_at(binding, position, param);
             // Restore the automation rows that referenced this binding.
-            // The same id now resolves through `param_id_to_value_index`
-            // since we re-inserted the binding above.
+            // The same id resolves through the manifest again since we
+            // re-inserted the binding above.
             if !removed_drivers.is_empty() {
                 effect
                     .drivers
