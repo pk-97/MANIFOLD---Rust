@@ -448,6 +448,42 @@ config comment.
 sleep passes review allowance fit; two weeks of all-ask or all-allow means
 the numbers are wrong.
 
+**Launch tier — BUILT 2026-07-05 (Fable, at Peter's direction; separate
+from and prior to the bounds tier above, which remains Sonnet's ticket).**
+The incident: Peter caught an Opus orchestrator launching a workflow whose
+`agent()` calls carried no `model:` — every worker silently inherited the
+session's Opus tier and reused the session defaults. The Agent-tool version
+of this failure has an async anchor (`anchor/agent-model-discipline`); the
+Workflow script path had none, and a whisper after launch is too late — the
+fleet has already spent the tokens. So: `.claude/hooks/workflow-gate.py`,
+PreToolUse on `Workflow`, two deterministic checks, no classifier call,
+fail-open, `workflow_gate` telemetry on every decision:
+
+1. **Model discipline, every launch.** Every `agent(` call site in the
+   script (string-stripped, paren-balanced scan; `scriptPath` files are
+   read) must carry an explicit `model:`. Inheriting is never a choice —
+   it resolves to the orchestrator's own tier. Violations deny with the
+   offending line numbers and are re-checked on every retry; this tier
+   cannot be waited out.
+2. **Announce-once, per (session, workflow name).** The first launch of a
+   given workflow is denied once with pre-authored instructions (payload
+   text in the hook, sleep-pass-editable like moves.md): announce in
+   visible text what the workflow is for, why it needs orchestration over
+   inline work, the fan-out, and the model tier of every stage with a
+   reason — reasoned before launch, not restated defaults. The deny embeds
+   the parsed roster so the announcement is grounded. Keyed on the meta
+   `name`, NOT a content hash — the retry usually edits the script to add
+   `model:`, and a content key would bounce the fixed script twice.
+
+A launch clearing both tiers emits NO permission decision — it falls
+through to today's manual approval, with Peter reading the announcement
+above the prompt. This tier only adds requirements; only the bounds tier
+may ever auto-ALLOW, and when it lands it slots in behind these checks.
+Known residue: nested `workflow()` child calls inside a script never
+re-enter PreToolUse (covered only insofar as the parent script text is
+parsed); name-only saved workflows can't be model-checked (announce-once
+still applies). Tests: `.claude/hooks/test_workflow_gate.py` (27 checks).
+
 ## 3. Payload library (`moves.md`)
 
 Two families, one format. **Coaching moves** fire on phase transitions (hypothesis
