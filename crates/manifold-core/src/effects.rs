@@ -4346,6 +4346,41 @@ mod tests {
         assert_eq!(fx.param_id_to_value_index("nope"), None);
     }
 
+    // P2 bench baseline (PARAM_STORAGE_DESIGN §5): measures the OLD
+    // `resolve_param_in` worst-case linear scan (40 params, id last) so the
+    // new `ParamManifest::get` bench can be compared against it. Deleted with
+    // `resolve_param_in` itself in the same phase — this is a one-shot number
+    // recorded in the phase notes, not a permanent regression guard.
+    #[test]
+    fn bench_old_resolve_param_in_baseline() {
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        let mut ids: Vec<String> = Vec::new();
+        for i in 0..40 {
+            let id = format!("user.p.{i}.1");
+            fx.append_user_binding(sample_user_binding(&id, "p", "inner"));
+            ids.push(id);
+        }
+        let def = crate::preset_definition_registry::get(&PresetTypeId::BLOOM);
+        let target = ids.last().unwrap().as_str();
+        // warm-up
+        for _ in 0..100_000 {
+            std::hint::black_box(resolve_param_in(&def, &fx, std::hint::black_box(target)));
+        }
+        let iters = 2_000_000u64;
+        let start = std::time::Instant::now();
+        let mut acc = 0usize;
+        for _ in 0..iters {
+            let r = resolve_param_in(&def, &fx, std::hint::black_box(target));
+            acc = acc.wrapping_add(r.map(|r| r.idx).unwrap_or(0));
+        }
+        let el = start.elapsed();
+        std::hint::black_box(acc);
+        let nsop = el.as_nanos() as f64 / iters as f64;
+        println!(
+            "P2-BENCH OLD resolve_param_in worst-case(40, last user id): {nsop:.2} ns/op (acc={acc})"
+        );
+    }
+
     #[test]
     fn align_to_definition_preserves_user_binding_tail() {
         // Simulate: a fixture saved with 2 user bindings is loaded into

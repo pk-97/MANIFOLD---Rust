@@ -23,6 +23,7 @@ pub mod macro_bank;
 pub mod marker;
 pub mod math;
 pub mod midi;
+pub mod params;
 pub mod percussion_analysis;
 pub mod percussion_binding;
 pub mod percussion_settings;
