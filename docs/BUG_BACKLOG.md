@@ -36,15 +36,25 @@ an LFO bound to one of its card params (Camera Orbit) doesn't run. Deleting the 
 re-creating it by dropping the SAME .glb makes the identical LFO run. So the modulation
 path works against a freshly-imported instance and not against the deserialized one.
 
-**Root cause** — unknown, not investigated yet. Suspects, ordered: (1) the param-storage
-redesign landed 2026-07-05 (P1–P4 + P5 code-complete) — a modulation binding that resolves
-by param identity could miss against a V-old serialized manifest until re-save; the known
-RED `expose_mirror` test (user_param_bindings_e2e) from that landing is in the same
-neighborhood; (2) imported presets' card params/bindings live on the def's
-`preset_metadata` (gltf_import.rs:678-693) — a reload path that rebuilds the runtime
-without re-seeding `exposed_params`/bindings would leave the LFO writing to a param no
-binding applies; (3) LFO target keyed by something instance-scoped (node doc id) that
-changes between import and reload.
+**Root cause — SMOKING GUN in the 2026-07-06 trace-run log.** On project load, EVERY card
+param of the imported preset is dropped at deserialization:
+`[manifold-core] dropping unknown param id "cam_orbit" on PresetTypeId(cc0_japanese_apricot_prunus_mume#2) load (no template descriptor, no inline spec)`
+— same for cam_dist/cam_fov/cam_tilt, sun_int/x/y/z, metal_0..3, rough_0..3, env_bright.
+The LFO is inert because its target param no longer exists in the loaded manifest. The
+drop lines appear BEFORE `[presets] merging 4 project generator preset(s)` in the log:
+the V1.4 param loader resolves specs against the template registry, and project-local
+(imported) preset templates are merged into the registry only AFTER the project's layer
+data deserializes — so every param keyed to a project-local preset type resolves to "no
+template descriptor" and is dropped. Re-importing works because a fresh import registers
+the template first. Almost certainly a param-storage-redesign (landed 2026-07-05)
+load-ordering regression, cousin of the known-RED `expose_mirror` test.
+
+**Fix shape** — order the loader so project-local preset templates register before layer
+param deserialization; AND (class-kill, per `eliminate-bug-class-at-storage-layer`)
+make the loader keep an unresolvable param as an inline spec instead of dropping it —
+silent data loss on load is the storage-layer bug class this repo already decided to
+eliminate. The drop log line should become a hard test assertion (load the repro project,
+assert zero drops).
 
 **Repro** — load `meshImportTests.manifold`, press play: Camera Orbit LFO inert. Delete
 layer, drag the .glb back in, rebind: runs.
@@ -92,9 +102,23 @@ Candidate: `pool.prune_stale(300)` every 300 frames (content_pipeline.rs:1584-15
 indices of the spikes (900, 1233, 3630) are ≡ 0/33/30 mod 300, consistent if the pool's
 counter is offset from the profiler's frame index. Unproven.
 
-**Next oracle** — spike-triggered sub-phase trace inside `render_content_native`
-(`MANIFOLD_RENDER_TRACE=1`): per-section timers, printed only when the frame exceeds 20ms.
-One more short session names the 59ms exactly.
+**CAUGHT (2026-07-06, MANIFOLD_RENDER_TRACE run)** — five of five spikes land in the
+`clip_atlas` section: `clip_atlas=57.9–61.6ms`, cadence ~360 frames, exactly the
+CLIP_ATLAS_SAVE_DEBOUNCE=300 cycle. The culprit line is
+[content_pipeline.rs:2225](../crates/manifold-app/src/content_pipeline.rs#L2225) —
+`clip_atlas_readback.try_read()` on the completed persist readback. `try_read`
+([gpu_readback.rs:99-115](../crates/manifold-renderer/src/gpu_readback.rs#L99)) converts
+f16→u8 **per pixel, per channel, scalar, on the content thread**, and the clip atlas is
+8192×1152 Rgba16Float (75MB, 9.4M pixels) — ~58ms of CPU once per debounce cycle. The
+section's "all disk IO is off-thread" claim is true; the CPU conversion before the
+hand-off is the stall. (The separate one-off `generators=37.1ms` spike on the first
+frame after load is glTF texture/pipeline warm — not this bug.)
+
+**Fix shape (root: no O(surface) CPU work on the content thread)** — switch the persist
+path to `try_read_packed()` (plain memcpy, gpu_readback.rs:148) and move the f16→u8
+conversion + `slice_atlas_for_store` into the existing clip-thumb disk worker: hand it
+(raw bytes, layout snapshot, hashes) and let it slice/convert/store on its own thread.
+No new threads, no format change on disk.
 
 **Symptom** — animating a 3D scene's camera or sun/light via LFO produces a slight, visible
 hitch — an uneven frame spike, not a clean framerate drop. Reported by Peter 2026-07-05 on
