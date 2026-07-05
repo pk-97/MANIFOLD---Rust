@@ -94,9 +94,20 @@ gen-type-undo-restores-exact-arity — are unit/integration-tested but not exerc
 Burn-down: (a) `cargo test -p manifold-renderer --features gpu-proofs` for the GPU parity run;
 (b) the running-app click-script in the landing report. Peter owns the L3 live observation.
 
+### VD-008 — PARAM_STORAGE P3 transport topology guard: running-app confirmation — L2 reached / L4 target
+Landed 2026-07-05 (`docs/landings/2026-07-05-param-storage-p3.md`). The transport bridge now stamps
+each modulation block with `ParamManifest::topology()` and skips a block on apply when the live
+topology no longer matches — closing the same-length-reorder misroute the old `len == len` guard
+missed. Covered at unit level by the two `content_state::modulation_topology_guard_tests` (the exact
+reorder-skip case + a control), but the *live* behaviour — a modulation display staying on the
+correct slider when a neighbour param is deleted mid-modulation — is not exercised in a running app
+(headless tests have no modulation loop / live UI). Burn-down: the running-app click-script in the
+landing report (LFO on a slider, delete a neighbour, confirm the display stays put). Peter owns the
+L4 observation. This is the one P3 gate step headless tooling cannot reach.
+
 *(VD-001–004 seeded 2026-07-05 from the memory corpus plus Peter's in-app findings; VD-006 added
-2026-07-05, VD-007 at P2 landing. VD-005 closed at P2 landing. The full backfill pass over recent
-landings is still owed and will extend this list.)*
+2026-07-05, VD-007 at P2 landing, VD-008 at P3 landing. VD-005 closed at P2 landing. The full
+backfill pass over recent landings is still owed and will extend this list.)*
 
 ## Closed
 

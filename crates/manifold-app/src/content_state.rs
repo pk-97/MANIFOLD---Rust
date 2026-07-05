@@ -245,7 +245,7 @@ pub struct ContentState {
 /// All float values are packed into a single flat buffer (`values`).
 /// A parallel `block_lens` array records the length of each param block.
 /// Layout order: macros, master effects, then per-layer (effects, gen).
-/// Clone = 3 Vec allocations (values + block_lens + layer_shapes)
+/// Clone = 4 Vec allocations (values + block_lens + block_topos + layer_shapes)
 /// instead of ~128 separate Vec<f32> clones.
 #[derive(Clone)]
 pub struct ModulationSnapshot {
@@ -256,6 +256,13 @@ pub struct ModulationSnapshot {
     /// block 0 = macros, blocks 1..1+master_count = master effects,
     /// remaining blocks = per-layer effects and gen params (see layer_shapes).
     block_lens: Vec<u16>,
+    /// `ParamManifest::topology` for each block at capture time, parallel to
+    /// `block_lens` (D8). Apply skips any block whose live manifest topology no
+    /// longer matches the captured stamp — this catches same-length param
+    /// reorders, which a `len == len` check silently misroutes. The macro block
+    /// (index 0) has no manifest; its slot holds a sentinel `0` and is guarded
+    /// per-slot instead.
+    block_topos: Vec<u32>,
     /// Number of master effect blocks (immediately after the macro block).
     master_count: u16,
     /// Per-layer: (effect_count, has_gen_params). Determines how many
@@ -269,6 +276,7 @@ impl ModulationSnapshot {
         Self {
             values: Vec::new(),
             block_lens: Vec::new(),
+            block_topos: Vec::new(),
             master_count: 0,
             layer_shapes: Vec::new(),
         }
@@ -280,14 +288,17 @@ impl ModulationSnapshot {
     pub fn capture_into(&mut self, project: &Project) {
         self.values.clear();
         self.block_lens.clear();
+        self.block_topos.clear();
         self.layer_shapes.clear();
 
-        // Macros (block 0)
+        // Macros (block 0) — no ParamManifest; guarded per-slot on apply, so
+        // its topology slot is a sentinel that's never consulted.
         let macro_count = project.settings.macro_bank.slots.len();
         for slot in &project.settings.macro_bank.slots {
             self.values.push(slot.value);
         }
         self.block_lens.push(macro_count as u16);
+        self.block_topos.push(0);
 
         // Master effects — pack only `.value` from each ParamSlot;
         // exposure isn't a modulation concern and must not round-trip
@@ -297,6 +308,7 @@ impl ModulationSnapshot {
             let len = fx.params.len();
             self.values.extend(fx.params.iter().map(|p| p.value));
             self.block_lens.push(len as u16);
+            self.block_topos.push(fx.params.topology());
         }
 
         // Per-layer: effects + optional gen params
@@ -309,6 +321,7 @@ impl ModulationSnapshot {
                     let len = fx.params.len();
                     self.values.extend(fx.params.iter().map(|p| p.value));
                     self.block_lens.push(len as u16);
+                    self.block_topos.push(fx.params.topology());
                 }
             }
 
@@ -316,6 +329,7 @@ impl ModulationSnapshot {
                 let len = gp.params.len();
                 self.values.extend(gp.params.iter().map(|p| p.value));
                 self.block_lens.push(len as u16);
+                self.block_topos.push(gp.params.topology());
             }
 
             self.layer_shapes.push((effect_count as u16, has_gen));
@@ -343,7 +357,7 @@ impl ModulationSnapshot {
         for i in 0..self.master_count as usize {
             let len = *self.block_lens.get(block).unwrap_or(&0) as usize;
             if let Some(fx) = project.settings.master_effects.get_mut(i)
-                && fx.params.len() == len
+                && fx.params.topology() == self.block_topos.get(block).copied().unwrap_or(u32::MAX)
             {
                 for (slot, &v) in fx
                     .params
@@ -368,7 +382,7 @@ impl ModulationSnapshot {
                     let len = *self.block_lens.get(block).unwrap_or(&0) as usize;
                     if let Some(effects) = &mut layer.effects
                         && let Some(fx) = effects.get_mut(j)
-                        && fx.params.len() == len
+                        && fx.params.topology() == self.block_topos.get(block).copied().unwrap_or(u32::MAX)
                     {
                         for (slot, &v) in fx
                             .params
@@ -387,7 +401,7 @@ impl ModulationSnapshot {
                 if has_gen {
                     let len = *self.block_lens.get(block).unwrap_or(&0) as usize;
                     if let Some(gp) = layer.gen_params_mut()
-                        && gp.params.len() == len
+                        && gp.params.topology() == self.block_topos.get(block).copied().unwrap_or(u32::MAX)
                     {
                         for (slot, &v) in gp
                             .params
@@ -484,5 +498,108 @@ impl Default for ContentState {
             automation_latched_params: Vec::new(),
             automation_armed: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod modulation_topology_guard_tests {
+    use super::*;
+    use manifold_core::effect_graph_def::ParamSpecDef;
+    use manifold_core::effects::PresetInstance;
+    use manifold_core::params::{Param, ParamManifest};
+    use manifold_core::PresetTypeId;
+
+    fn spec(id: &str) -> ParamSpecDef {
+        ParamSpecDef {
+            id: id.to_string(),
+            name: id.to_string(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.0,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: manifold_core::macro_bank::MacroCurve::default(),
+            invert: false,
+        }
+    }
+
+    fn manifest(entries: &[(&str, f32)]) -> ParamManifest {
+        ParamManifest::from_params(
+            entries
+                .iter()
+                .map(|(id, v)| {
+                    let mut p = Param::bundled(spec(id));
+                    p.value = *v;
+                    p
+                })
+                .collect(),
+        )
+    }
+
+    fn project_with_master(params: ParamManifest) -> Project {
+        let mut project = Project::default();
+        let mut fx = PresetInstance::new(PresetTypeId::new("test.effect"));
+        fx.params = params;
+        project.settings.master_effects.push(fx);
+        project
+    }
+
+    /// D8 — the exact case the old `len == len` guard missed: a same-length
+    /// reorder between capture and apply must invalidate the block, so stale
+    /// captured modulation values are NOT written onto the reordered slots.
+    #[test]
+    fn apply_skips_block_on_same_length_reorder() {
+        let mut project = project_with_master(manifest(&[("a", 0.10), ("b", 0.20)]));
+
+        let mut snap = ModulationSnapshot::empty();
+        snap.capture_into(&project);
+
+        // Same-length reorder on the content side after capture → topology bump.
+        let m = &mut project.settings.master_effects[0].params;
+        let a = m.remove("a").unwrap();
+        m.push(a); // order is now [b, a], same length
+        // Live values also advanced (as modulation/edits would).
+        m.get_mut("a").unwrap().value = 0.90;
+        m.get_mut("b").unwrap().value = 0.80;
+
+        snap.apply(&mut project);
+
+        let m = &project.settings.master_effects[0].params;
+        assert_eq!(
+            m.get("a").unwrap().value,
+            0.90,
+            "reordered block must be skipped, not overwritten with stale capture"
+        );
+        assert_eq!(m.get("b").unwrap().value, 0.80);
+    }
+
+    /// Control — with no structural change the topology matches and the block
+    /// applies normally, overwriting live drift with captured values.
+    #[test]
+    fn apply_writes_block_when_topology_unchanged() {
+        let mut project = project_with_master(manifest(&[("a", 0.10), ("b", 0.20)]));
+
+        let mut snap = ModulationSnapshot::empty();
+        snap.capture_into(&project);
+
+        project.settings.master_effects[0]
+            .params
+            .get_mut("a")
+            .unwrap()
+            .value = 0.99;
+
+        snap.apply(&mut project);
+
+        let m = &project.settings.master_effects[0].params;
+        assert_eq!(
+            m.get("a").unwrap().value,
+            0.10,
+            "unchanged topology must apply the captured value"
+        );
+        assert_eq!(m.get("b").unwrap().value, 0.20);
     }
 }

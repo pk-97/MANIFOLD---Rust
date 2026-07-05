@@ -3715,15 +3715,6 @@ mod tests {
         p
     }
 
-    /// Like [`slot`] but `UserAdded` origin, so its spec rides the wire inline
-    /// and it round-trips without a registry template (the core test binary
-    /// doesn't link the renderer, so most types are unregistered here).
-    fn user_slot(id: &str, value: f32, exposed: bool) -> crate::params::Param {
-        let mut p = slot(id, value, exposed);
-        p.origin = crate::params::ParamOrigin::UserAdded;
-        p
-    }
-
     /// Build a manifest from positional `(value, exposed)` pairs, assigning
     /// synthetic ids `p0`, `p1`, … in card order — the value-only analogue of
     /// the old `param_values: vec![ParamSlot::exposed(..)]`.
