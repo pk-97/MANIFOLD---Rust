@@ -73,7 +73,7 @@ pub fn set_reduced_motion(v: bool) {
 /// `Transient` feedbacks (value flash, undo toast) — those still fire and are
 /// seen, just as designed.
 pub fn set_motion_enabled(enabled: bool) {
-    set_reduced_motion(!enabled);
+    set_reduced_motion(enabled);
 }
 
 // ── Curves ───────────────────────────────────────────────────────────────
