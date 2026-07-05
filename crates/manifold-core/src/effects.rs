@@ -459,11 +459,13 @@ pub fn apply_card_reshape(
 /// value (and any drivers/Ableton mappings addressing the slot —
 /// they continue to drive the value, just without a visible slider).
 ///
-/// Wire format:
-/// - On serialize: always `{ "value": f, "exposed": b }` for clarity.
-/// - On deserialize: accepts either a bare `f32` (V1.x / V1.2 wire
-///   format, exposed defaults to true) or `{ value, exposed? }` object
-///   (V1.3+). Polymorphic deserialization keeps loaders simple.
+/// In-memory only — `ParamSlot` no longer has its own wire shape. The
+/// V1.4 `params` map (PARAM_STORAGE_DESIGN.md §4) is built from/into
+/// slots by `ParamEntryWire` + `build_effect_param_values` /
+/// `build_generator_param_values`, not by serializing `ParamSlot`
+/// directly; the old hand-written bare-f32-or-object polymorphic
+/// (de)serialize impls this struct used to carry (for the legacy
+/// positional wire) are gone with the wire arms that needed them (D4).
 ///
 /// Type-enforced single struct per slot eliminates the parallel-array
 /// footgun of separate `Vec<f32>` + `Vec<bool>` collections.
@@ -474,9 +476,7 @@ pub struct ParamSlot {
     /// User-intended base (pre-modulation) value. Modulation reads `base`,
     /// computes the effective, and writes it to `value`; `reset_param_effectives`
     /// copies `base` back into `value` each frame before re-applying modulation.
-    /// Folded in from the former parallel `base_param_values: Option<Vec<f32>>`
-    /// (fork #16) — riding the slot eliminates the length-sync footgun. Whether
-    /// base is *tracked* (emitted to the wire) is the per-instance
+    /// Whether base is *tracked* (emitted to the wire) is the per-instance
     /// `PresetInstance.base_tracked` bit; until tracked, `get_base_param` falls
     /// through to `value`, so a stale `base` here is never observed.
     pub base: f32,
@@ -486,10 +486,8 @@ pub struct ParamSlot {
     /// — the single funnel every live hand (UI slider, Ableton macro, OSC,
     /// macro bank) writes through — so `manifold-playback`'s automation
     /// evaluator can detect "a hand touched this param since I last looked"
-    /// without a per-path hook. Never serialized: `ParamSlot` has hand-written
-    /// `Serialize`/`Deserialize` impls below that only ever read/write
-    /// `value` + `exposed`, so this field is dropped on the wire by
-    /// construction, no `#[serde(skip)]` needed. System-level base seeding
+    /// without a per-path hook. Never serialized (this struct carries no
+    /// wire shape at all now, see above). System-level base seeding
     /// (registry defaults via `create_default`) goes through the internal
     /// `write_base_param` instead of `set_base_param`, so a freshly-created
     /// instance's params start untouched.
@@ -549,96 +547,22 @@ pub struct RemovedExposure {
     audio_mods: Vec<crate::audio_mod::ParameterAudioMod>,
 }
 
-impl Serialize for ParamSlot {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("ParamSlot", 2)?;
-        s.serialize_field("value", &self.value)?;
-        s.serialize_field("exposed", &self.exposed)?;
-        s.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for ParamSlot {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        struct ParamValueVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for ParamValueVisitor {
-            type Value = ParamSlot;
-
-            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str("a number (legacy bare f32) or an object {value, exposed?}")
-            }
-
-            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<ParamSlot, E> {
-                // base seeded to value; the separate baseParamValues array (when
-                // present) overwrites base after the slots are built.
-                Ok(ParamSlot::exposed(v as f32))
-            }
-
-            fn visit_f32<E: serde::de::Error>(self, v: f32) -> Result<ParamSlot, E> {
-                Ok(ParamSlot::exposed(v))
-            }
-
-            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<ParamSlot, E> {
-                Ok(ParamSlot::exposed(v as f32))
-            }
-
-            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<ParamSlot, E> {
-                Ok(ParamSlot::exposed(v as f32))
-            }
-
-            fn visit_map<M>(self, mut map: M) -> Result<ParamSlot, M::Error>
-            where
-                M: serde::de::MapAccess<'de>,
-            {
-                let mut value: Option<f32> = None;
-                let mut exposed: Option<bool> = None;
-                while let Some(key) = map.next_key::<String>()? {
-                    match key.as_str() {
-                        "value" => value = Some(map.next_value()?),
-                        "exposed" => exposed = Some(map.next_value()?),
-                        _ => {
-                            let _: serde::de::IgnoredAny = map.next_value()?;
-                        }
-                    }
-                }
-                let v = value.unwrap_or(0.0);
-                Ok(ParamSlot {
-                    value: v,
-                    base: v,
-                    exposed: exposed.unwrap_or(true),
-                    touched: false,
-                })
-            }
-        }
-
-        deserializer.deserialize_any(ParamValueVisitor)
-    }
-}
-
 // ─── Effect Instance ───
 
 /// A single effect applied to a clip, layer, or master chain.
 ///
 /// Serialization (custom impls below):
 ///
-/// - `paramValues` accepts V1.0/1.1 positional `Array<f32>`,
-///   V1.2 keyed `Map<id, f32>`, V1.3 positional `Array<{value, exposed}>`,
-///   and V1.3 keyed `Map<id, {value, exposed}>`. The polymorphic
-///   `ParamSlot` deserializer handles the bare-vs-object distinction
-///   per-element. On save, V1.3+ canonical Map form is emitted when
-///   the effect's registry def is available; otherwise positional Array.
-/// - `baseParamValues` stays a `Vec<f32>` *on the wire* (modulation tracking
-///   only — exposure isn't meaningful for the pre-modulation snapshot). In
-///   memory it's folded into `ParamSlot.base` (fork #16); the wire round-trips
-///   byte-identically, emitted iff `base_tracked`.
+/// - `params` is one id-keyed V1.4 map (PARAM_STORAGE_DESIGN.md §4):
+///   `{ id: { value, exposed, base? } }`, `base` present iff
+///   `base_tracked`. This is the ONLY wire shape the typed (de)serialize
+///   understands — the historical positional/keyed value duo (a values
+///   container plus a parallel pre-modulation-base container) is gone;
+///   `manifold-io`'s `migrations::param_storage_v14` converts every
+///   legacy shape to `params` before typed deserialization ever runs.
+/// - `build_effect_param_values` places incoming `params` entries onto
+///   `[static prefix | user tail]` positional slots on load;
+///   `ParamsSer` walks the same order in reverse on save.
 ///
 /// In-memory storage stays positional (`Vec<ParamSlot>`) — the hot
 /// path reads/writes by index. The Map form only exists on the wire.
@@ -673,15 +597,14 @@ pub struct PresetInstance {
     /// [`Self::param_id_to_value_index`]; that helper is the single
     /// tier-aware lookup the rest of the codebase relies on.
     pub param_values: Vec<ParamSlot>,
-    /// Whether the pre-modulation base (now `ParamSlot.base`) is *tracked* —
-    /// the single presence bit that replaces the former
-    /// `base_param_values: Option<Vec<f32>>` (fork #16). Set on load when the
-    /// JSON carried `baseParamValues`, and by any base write
-    /// (`set_base_param` / `reset_param_effectives` / `init_defaults_for_type`).
-    /// While `false`, `get_base_param` falls through to the effective value, so
-    /// per-slot `base` is allowed to be stale; the field is also the
-    /// serialize-time gate that keeps `baseParamValues` byte-identical (emitted
-    /// iff tracked). Not serialized; derived on load.
+    /// Whether the pre-modulation base (`ParamSlot.base`) is *tracked* — the
+    /// single presence bit that gates the `base` key on each V1.4 `params`
+    /// entry. Set on load whenever ANY incoming entry carried `base`, and by
+    /// any base write (`set_base_param` / `reset_param_effectives` /
+    /// `init_defaults_for_type`). While `false`, `get_base_param` falls
+    /// through to the effective value, so per-slot `base` is allowed to be
+    /// stale; the field is also the serialize-time gate for whether `base`
+    /// appears on the wire at all. Not serialized; derived on load.
     pub base_tracked: bool,
     pub drivers: Option<Vec<ParameterDriver>>,
     /// Per-instance ADSR/Random envelopes, keyed by `param_id`. Envelope-home
@@ -740,449 +663,254 @@ pub struct PresetInstance {
     pub legacy_param_version: Option<i32>,
 }
 
-// ─── Wire-format helpers for paramValues ───
+// ─── Wire-format helpers for `params` (V1.4) ───
+//
+// PARAM_STORAGE_DESIGN.md D4: the typed loader understands ONLY the V1.4
+// id-keyed `params` shape. The four historical positional/keyed value
+// shapes, and the parallel pre-modulation-base value container that used
+// to ride alongside them, are gone from this file — `manifold-io`'s
+// `migrations::param_storage_v14` converts every
+// preset instance to this shape BEFORE typed deserialization ever runs,
+// for both the V1 JSON and V2 ZIP containers, so nothing here needs to
+// understand them anymore. That migration module is now the only place
+// positional param knowledge survives.
+//
+// In-memory storage stays positional (`Vec<ParamSlot>`) this phase — P1
+// changes the WIRE shape only; the storage swap to an id-keyed
+// `ParamManifest` is P2. See docs/PARAM_STORAGE_DESIGN.md §6.
 
-/// Wire-format shape for `PresetInstance.paramValues`. Accepts
-/// V1.0/1.1 positional `Array<f32>`, V1.2 keyed `Map<id, f32>`,
-/// V1.3 positional `Array<{value, exposed}>`, or V1.3 keyed
-/// `Map<id, {value, exposed}>` — the polymorphic [`ParamSlot`]
-/// deserializer normalizes per-element across versions.
-///
-/// Used only by `PresetInstance`. `PresetInstance` and
-/// `PresetInstance.baseParamValues` use [`FloatValuesWire`] which
-/// stays plain `Vec<f32>` (exposure is meaningless there).
-#[derive(Deserialize)]
-#[serde(untagged)]
-pub(crate) enum ParamValuesWire {
-    Positional(Vec<ParamSlot>),
-    Keyed(std::collections::BTreeMap<String, ParamSlot>),
+/// One entry in `PresetInstance.params` — the id is the map key, not a
+/// field on this struct. `base` is present iff the instance's
+/// `base_tracked` bit is set (D5: `base` rides inside the same entry now;
+/// there is no more parallel pre-modulation-base wire). `exposed` always
+/// serializes so the shape stays simple to read.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+struct ParamEntryWire {
+    value: f32,
+    #[serde(default = "default_true")]
+    exposed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    base: Option<f32>,
 }
 
-impl ParamValuesWire {
-    /// Convert to the in-memory positional `Vec<ParamSlot>` form
-    /// using the effect registry, with the effect instance's
-    /// per-instance user bindings tail.
-    ///
-    /// - `Positional`: passed through unchanged. (Length is assumed
-    ///   to already be `def.param_count + user_bindings.len()` if the
-    ///   producer was V1.2+ aware. Not validated here — `align_to_definition`
-    ///   fixes mismatches.)
-    /// - `Keyed`: looked up against the effect registry first, then
-    ///   against `user_bindings` for unknown ids. Each known
-    ///   `param_id` lands at its slot; unknown keys are dropped
-    ///   (orphan, same policy as drivers/envelopes/Ableton). Missing
-    ///   slots default to the registry's `default_value` (static
-    ///   prefix) or the user binding's `default_value` (user tail),
-    ///   both with `exposed: true`.
-    ///
-    /// If the registry lacks a def for this effect (e.g., test code
-    /// without `manifold-renderer` linked, or a forward-incompatible
-    /// type from a future version), returns `Vec::new()` for the
-    /// keyed case AND emits an `eprintln!` warning. In production this
-    /// branch is unreachable — the renderer always registers all
-    /// shipping effects — so a warning here means observability has
-    /// caught a real bug.
-    fn into_positional(
-        self,
-        effect_type: &PresetTypeId,
-        user_binding_ids: &[&str],
-        user_defaults: &[f32],
-    ) -> Vec<ParamSlot> {
-        match self {
-            ParamValuesWire::Positional(v) => v,
-            ParamValuesWire::Keyed(map) => {
-                let Some(def) = crate::preset_definition_registry::try_get(effect_type) else {
-                    eprintln!(
-                        "[manifold-core] WARNING: dropping {} V1.2+ paramValues for unregistered \
-                         effect type '{}' (Map keys: {:?}). align_to_definition will fill with \
-                         registry defaults if the type is registered later, but the saved values \
-                         are lost. In production this should never fire — the renderer registers \
-                         every shipping effect at startup.",
-                        map.len(),
-                        effect_type.as_str(),
-                        map.keys().collect::<Vec<_>>(),
-                    );
-                    return Vec::new();
-                };
-                let n_static = def.param_count;
-                let n_user = user_binding_ids.len();
-                let total = n_static + n_user;
-                let mut out = vec![ParamSlot::default(); total];
-                for (i, pd) in def.param_defs.iter().enumerate().take(n_static) {
-                    out[i] = ParamSlot::exposed(pd.default_value);
-                }
-                for (j, &dv) in user_defaults.iter().enumerate() {
-                    out[n_static + j] = ParamSlot::exposed(dv);
-                }
-                for (id, pv) in map {
-                    // Direct hit via the current id_to_index table (static).
-                    if let Some(&idx) = def.id_to_index.get(&id)
-                        && idx < out.len()
-                    {
-                        out[idx] = pv;
-                        continue;
-                    }
-                    // Static alias chain — old id (renamed) resolves to
-                    // a current id; dropped ids fall through.
-                    if let Some(resolved) = crate::effect_registration::resolve_param_alias(
-                        def.legacy_param_aliases,
-                        &id,
-                    ) && let Some(&idx) = def.id_to_index.get(resolved)
-                        && idx < out.len()
-                    {
-                        out[idx] = pv;
-                        continue;
-                    }
-                    // Per-instance user-added binding lookup (graph tail).
-                    if let Some(j) = user_binding_ids.iter().position(|bid| *bid == id) {
-                        out[n_static + j] = pv;
-                    }
-                }
-                out
-            }
-        }
-    }
-
-    /// Generator-registry counterpart to [`Self::into_positional`].
-    /// Produces `Vec<ParamSlot>` for `PresetInstance.paramValues`.
-    /// No user-binding tail parameter: generator user-added bindings
-    /// live in the graph's `preset_metadata` and, when present, push
-    /// `param_values.len()` past the registry count so the producer
-    /// emits the positional `Array` form, which round-trips through the
-    /// `Positional` arm here unchanged.
-    pub(crate) fn into_positional_for_generator(
-        self,
-        gen_type: &crate::PresetTypeId,
-    ) -> Vec<ParamSlot> {
-        match self {
-            ParamValuesWire::Positional(v) => v,
-            ParamValuesWire::Keyed(map) => {
-                let Some(def) = crate::preset_definition_registry::try_get(gen_type) else {
-                    eprintln!(
-                        "[manifold-core] WARNING: dropping {} V1.2+ paramValues for unregistered \
-                         generator type '{}' (Map keys: {:?}). In production this should never \
-                         fire — the renderer registers every shipping generator at startup.",
-                        map.len(),
-                        gen_type.as_str(),
-                        map.keys().collect::<Vec<_>>(),
-                    );
-                    return Vec::new();
-                };
-                let mut out = vec![ParamSlot::default(); def.param_count];
-                for (i, pd) in def.param_defs.iter().enumerate().take(def.param_count) {
-                    out[i] = ParamSlot::exposed(pd.default_value);
-                }
-                for (id, pv) in map {
-                    if let Some(&idx) = def.id_to_index.get(&id)
-                        && idx < out.len()
-                    {
-                        out[idx] = pv;
-                        continue;
-                    }
-                    if let Some(resolved) = crate::effect_registration::resolve_param_alias(
-                        def.legacy_param_aliases,
-                        &id,
-                    ) && let Some(&idx) = def.id_to_index.get(resolved)
-                        && idx < out.len()
-                    {
-                        out[idx] = pv;
-                    }
-                }
-                out
-            }
+impl ParamEntryWire {
+    fn from_slot(slot: &ParamSlot, base_tracked: bool) -> Self {
+        Self {
+            value: slot.value,
+            exposed: slot.exposed,
+            base: base_tracked.then_some(slot.base),
         }
     }
 }
 
-/// Wire-format shape for plain-float param vectors:
-/// `PresetInstance.baseParamValues` and `PresetInstance.paramValues`.
-/// Exposure isn't meaningful on these surfaces — base values are a
-/// pre-modulation snapshot, generators don't (yet) participate in the
-/// host-visible exposure surface.
-#[derive(Deserialize)]
-#[serde(untagged)]
-pub(crate) enum FloatValuesWire {
-    Positional(Vec<f32>),
-    Keyed(std::collections::BTreeMap<String, f32>),
+/// Serialize-side wrapper for an effect's `params`: the static (registry)
+/// prefix first, then the per-instance user-added tail — the same
+/// `[static prefix | user tail]` layout `param_values` has always used.
+/// A slot whose id can't be resolved (registry missing for this type —
+/// test contexts only, matching the historical `into_positional` warning)
+/// is simply not emitted; there is no positional fallback to catch it
+/// anymore, so an unregistered type's params are silently absent from the
+/// saved file rather than dumped as an unaddressable array.
+struct ParamsSer<'a> {
+    values: &'a [ParamSlot],
+    effect_type: &'a PresetTypeId,
+    user_binding_ids: &'a [&'a str],
+    base_tracked: bool,
 }
 
-impl FloatValuesWire {
-    /// Effect-side `baseParamValues` conversion. Same lookup semantics
-    /// as the rich [`ParamValuesWire::into_positional`] but emits plain
-    /// `Vec<f32>`.
-    fn into_positional_base(
-        self,
-        effect_type: &PresetTypeId,
-        user_binding_ids: &[&str],
-        user_defaults: &[f32],
-    ) -> Vec<f32> {
-        match self {
-            FloatValuesWire::Positional(v) => v,
-            FloatValuesWire::Keyed(map) => {
-                let Some(def) = crate::preset_definition_registry::try_get(effect_type) else {
-                    eprintln!(
-                        "[manifold-core] WARNING: dropping {} V1.2+ baseParamValues for \
-                         unregistered effect type '{}' (Map keys: {:?}).",
-                        map.len(),
-                        effect_type.as_str(),
-                        map.keys().collect::<Vec<_>>(),
-                    );
-                    return Vec::new();
+impl Serialize for ParamsSer<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        let def = crate::preset_definition_registry::try_get(self.effect_type);
+        let static_count = def.as_ref().map(|d| d.param_count).unwrap_or(0);
+        let mut map = serializer.serialize_map(None)?;
+        if let Some(def) = &def {
+            for (i, pv) in self.values.iter().take(static_count).enumerate() {
+                let Some(id) = def.param_ids.get(i).filter(|s| !s.is_empty()) else {
+                    continue;
                 };
-                let n_static = def.param_count;
-                let n_user = user_binding_ids.len();
-                let total = n_static + n_user;
-                let mut out = vec![0.0_f32; total];
-                for (i, pd) in def.param_defs.iter().enumerate().take(n_static) {
-                    out[i] = pd.default_value;
-                }
-                for (j, &dv) in user_defaults.iter().enumerate() {
-                    out[n_static + j] = dv;
-                }
-                for (id, value) in map {
-                    if let Some(&idx) = def.id_to_index.get(&id)
-                        && idx < out.len()
-                    {
-                        out[idx] = value;
-                        continue;
-                    }
-                    if let Some(resolved) = crate::effect_registration::resolve_param_alias(
-                        def.legacy_param_aliases,
-                        &id,
-                    ) && let Some(&idx) = def.id_to_index.get(resolved)
-                        && idx < out.len()
-                    {
-                        out[idx] = value;
-                        continue;
-                    }
-                    if let Some(j) = user_binding_ids.iter().position(|bid| *bid == id) {
-                        out[n_static + j] = value;
-                    }
-                }
-                out
+                map.serialize_entry(id, &ParamEntryWire::from_slot(pv, self.base_tracked))?;
             }
         }
-    }
-
-    /// Generator-registry counterpart for `PresetInstance.paramValues`.
-    pub(crate) fn into_positional_for_generator(
-        self,
-        gen_type: &crate::PresetTypeId,
-    ) -> Vec<f32> {
-        match self {
-            FloatValuesWire::Positional(v) => v,
-            FloatValuesWire::Keyed(map) => {
-                let Some(def) = crate::preset_definition_registry::try_get(gen_type) else {
-                    eprintln!(
-                        "[manifold-core] WARNING: dropping {} V1.2+ paramValues for unregistered \
-                         generator type '{}' (Map keys: {:?}). In production this should never \
-                         fire — the renderer registers every shipping generator at startup.",
-                        map.len(),
-                        gen_type.as_str(),
-                        map.keys().collect::<Vec<_>>(),
-                    );
-                    return Vec::new();
-                };
-                let mut out = vec![0.0_f32; def.param_count];
-                for (i, pd) in def.param_defs.iter().enumerate().take(def.param_count) {
-                    out[i] = pd.default_value;
-                }
-                for (id, value) in map {
-                    if let Some(&idx) = def.id_to_index.get(&id)
-                        && idx < out.len()
-                    {
-                        out[idx] = value;
-                        continue;
-                    }
-                    if let Some(resolved) = crate::effect_registration::resolve_param_alias(
-                        def.legacy_param_aliases,
-                        &id,
-                    ) && let Some(&idx) = def.id_to_index.get(resolved)
-                        && idx < out.len()
-                    {
-                        out[idx] = value;
-                    }
-                }
-                out
+        for (j, id) in self.user_binding_ids.iter().enumerate() {
+            if let Some(pv) = self.values.get(static_count + j) {
+                map.serialize_entry(id, &ParamEntryWire::from_slot(pv, self.base_tracked))?;
             }
-        }
-    }
-}
-
-/// Generator-registry counterpart to `serialize_param_values`.
-/// Routes through the generator registry's `param_ids` slice.
-pub(crate) fn serialize_param_values_for_generator<S>(
-    values: &[f32],
-    gen_type: &crate::PresetTypeId,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    use serde::ser::{SerializeMap, SerializeSeq};
-
-    let def = crate::preset_definition_registry::try_get(gen_type);
-    let can_emit_map = def.as_ref().is_some_and(|d| {
-        values.len() <= d.param_ids.len()
-            && d.param_ids
-                .iter()
-                .take(values.len())
-                .all(|id| !id.is_empty())
-    });
-
-    if can_emit_map {
-        let def = def.expect("checked above");
-        let mut map = serializer.serialize_map(Some(values.len()))?;
-        for (i, &v) in values.iter().enumerate() {
-            map.serialize_entry(&def.param_ids[i], &v)?;
         }
         map.end()
-    } else {
-        let mut seq = serializer.serialize_seq(Some(values.len()))?;
-        for &v in values {
-            seq.serialize_element(&v)?;
-        }
-        seq.end()
     }
 }
 
-/// `Vec<ParamSlot>` counterpart to [`serialize_param_values_for_generator`]
-/// — emits each generator param slot as a `{value, exposed}` object keyed
-/// by the generator registry's stable param id. Mirrors the effect-side
-/// [`serialize_param_values`] but against the generator registry and with
-/// no user-binding-tail parameter (generator user-added bindings live in
-/// the graph's `preset_metadata` and ride the positional-array fallback
-/// when `values.len()` exceeds the registry's param count).
-pub(crate) fn serialize_param_values_for_generator_slots<S>(
-    values: &[ParamSlot],
-    gen_type: &crate::PresetTypeId,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    use serde::ser::{SerializeMap, SerializeSeq};
+/// Serialize-side wrapper for a generator's `params`. Mirrors
+/// `align_to_definition`'s documented authority split: a graph-backed
+/// generator's own `graph.preset_metadata.params` is the full
+/// `[bundled | user-added]` order authority (self-contained — this is what
+/// used to force the positional-`Array` fallback for a generator with a
+/// user-added tail; now the keyed map just reads that same order
+/// directly). Otherwise the registry's static order is used.
+struct GenParamsSer<'a> {
+    values: &'a [ParamSlot],
+    gen_type: &'a PresetTypeId,
+    graph: &'a Option<EffectGraphDef>,
+    base_tracked: bool,
+}
 
-    let def = crate::preset_definition_registry::try_get(gen_type);
-    let can_emit_map = def.as_ref().is_some_and(|d| {
-        values.len() <= d.param_ids.len()
-            && d.param_ids
-                .iter()
-                .take(values.len())
-                .all(|id| !id.is_empty())
-    });
-
-    if can_emit_map {
-        let def = def.expect("checked above");
-        let mut map = serializer.serialize_map(Some(values.len()))?;
-        for (i, pv) in values.iter().enumerate() {
-            map.serialize_entry(&def.param_ids[i], pv)?;
+impl Serialize for GenParamsSer<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        if let Some(meta) = self.graph.as_ref().and_then(|g| g.preset_metadata.as_ref())
+            && !meta.params.is_empty()
+        {
+            for (i, spec) in meta.params.iter().enumerate() {
+                if spec.id.is_empty() {
+                    continue;
+                }
+                if let Some(pv) = self.values.get(i) {
+                    map.serialize_entry(
+                        &spec.id,
+                        &ParamEntryWire::from_slot(pv, self.base_tracked),
+                    )?;
+                }
+            }
+            return map.end();
+        }
+        if let Some(def) = crate::preset_definition_registry::try_get(self.gen_type) {
+            for (i, pv) in self.values.iter().take(def.param_count).enumerate() {
+                let Some(id) = def.param_ids.get(i).filter(|s| !s.is_empty()) else {
+                    continue;
+                };
+                map.serialize_entry(id, &ParamEntryWire::from_slot(pv, self.base_tracked))?;
+            }
         }
         map.end()
-    } else {
-        let mut seq = serializer.serialize_seq(Some(values.len()))?;
-        for pv in values {
-            seq.serialize_element(pv)?;
-        }
-        seq.end()
     }
 }
 
-/// Serialize a positional `Vec<ParamSlot>` as the V1.3 `Object`
-/// keyed by `param_id`, looking up ids via the effect registry. The
-/// tail past `def.param_count` is keyed by per-instance
-/// `user_bindings[j].id`. Each emitted entry is a `{value, exposed}`
-/// object via [`ParamSlot`]'s `Serialize` impl.
-///
-/// Falls back to the positional `Array` form when the registry is
-/// missing (test contexts) or any *static* `param_id` is empty.
-fn serialize_param_values<S>(
-    values: &[ParamSlot],
+/// Build an effect's `param_values` from its V1.4 `params` wire map: seed
+/// `[static prefix | user tail]` defaults, then overlay matching incoming
+/// entries. Static ids resolve alias-aware via `PresetDef::index_for_param`
+/// (so an id renamed in the registry after this project's last save still
+/// lands correctly); the user tail is a per-instance id list with no alias
+/// table, so it's a direct name match. An incoming id matching neither is
+/// dropped (orphan — same policy the old `Keyed` arm used).
+fn build_effect_param_values(
     effect_type: &PresetTypeId,
     user_binding_ids: &[&str],
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    use serde::ser::{SerializeMap, SerializeSeq};
-
+    user_defaults: &[f32],
+    wire: Option<std::collections::BTreeMap<String, ParamEntryWire>>,
+) -> (Vec<ParamSlot>, bool) {
     let def = crate::preset_definition_registry::try_get(effect_type);
     let static_count = def.as_ref().map(|d| d.param_count).unwrap_or(0);
-    let static_touch = values.len().min(static_count);
-    let can_emit_map = def.as_ref().is_some_and(|d| {
-        d.param_ids
-            .iter()
-            .take(static_touch)
-            .all(|id| !id.is_empty())
-    });
-
-    if can_emit_map {
-        let def = def.expect("checked above");
-        let mut map = serializer.serialize_map(Some(values.len()))?;
-        for (i, pv) in values.iter().take(static_touch).enumerate() {
-            map.serialize_entry(&def.param_ids[i], pv)?;
+    let n_user = user_binding_ids.len();
+    let mut values = vec![ParamSlot::default(); static_count + n_user];
+    if let Some(def) = &def {
+        for (i, pd) in def.param_defs.iter().enumerate().take(static_count) {
+            values[i] = ParamSlot::exposed(pd.default_value);
         }
-        for (j, id) in user_binding_ids.iter().enumerate() {
-            let idx = static_count + j;
-            if let Some(pv) = values.get(idx) {
-                map.serialize_entry(id, pv)?;
-            }
-        }
-        map.end()
-    } else {
-        let mut seq = serializer.serialize_seq(Some(values.len()))?;
-        for pv in values {
-            seq.serialize_element(pv)?;
-        }
-        seq.end()
     }
+    for (j, &dv) in user_defaults.iter().enumerate() {
+        values[static_count + j] = ParamSlot::exposed(dv);
+    }
+    let mut base_tracked = false;
+    if let Some(wire) = wire {
+        for (id, entry) in wire {
+            let idx = def
+                .as_ref()
+                .and_then(|d| d.index_for_param(&id))
+                .filter(|&i| i < static_count)
+                .or_else(|| {
+                    user_binding_ids
+                        .iter()
+                        .position(|bid| *bid == id)
+                        .map(|j| static_count + j)
+                });
+            let Some(idx) = idx else { continue };
+            if idx >= values.len() {
+                continue;
+            }
+            values[idx] = ParamSlot {
+                value: entry.value,
+                base: entry.base.unwrap_or(entry.value),
+                exposed: entry.exposed,
+                touched: false,
+            };
+            base_tracked |= entry.base.is_some();
+        }
+    }
+    (values, base_tracked)
 }
 
-/// Serialize a positional `Vec<f32>` for `baseParamValues` — same
-/// addressing rules as [`serialize_param_values`] but emits raw
-/// floats (exposure isn't meaningful on base values).
-fn serialize_base_param_values<S>(
-    values: &[f32],
-    effect_type: &PresetTypeId,
-    user_binding_ids: &[&str],
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    use serde::ser::{SerializeMap, SerializeSeq};
+/// Generator counterpart to [`build_effect_param_values`]. A graph-backed
+/// generator's `graph.preset_metadata.params` is the full ordered id
+/// authority (bundled + user-added unified, D2); otherwise the registry.
+fn build_generator_param_values(
+    gen_type: &PresetTypeId,
+    graph: &Option<EffectGraphDef>,
+    wire: Option<std::collections::BTreeMap<String, ParamEntryWire>>,
+) -> (Vec<ParamSlot>, bool) {
+    let graph_meta = graph
+        .as_ref()
+        .and_then(|g| g.preset_metadata.as_ref())
+        .filter(|m| !m.params.is_empty());
 
-    let def = crate::preset_definition_registry::try_get(effect_type);
-    let static_count = def.as_ref().map(|d| d.param_count).unwrap_or(0);
-    let static_touch = values.len().min(static_count);
-    let can_emit_map = def.as_ref().is_some_and(|d| {
-        d.param_ids
+    let mut base_tracked = false;
+
+    if let Some(meta) = graph_meta {
+        let mut values: Vec<ParamSlot> = meta
+            .params
             .iter()
-            .take(static_touch)
-            .all(|id| !id.is_empty())
-    });
-
-    if can_emit_map {
-        let def = def.expect("checked above");
-        let mut map = serializer.serialize_map(Some(values.len()))?;
-        for (i, &v) in values.iter().take(static_touch).enumerate() {
-            map.serialize_entry(&def.param_ids[i], &v)?;
-        }
-        for (j, id) in user_binding_ids.iter().enumerate() {
-            let idx = static_count + j;
-            if let Some(&v) = values.get(idx) {
-                map.serialize_entry(id, &v)?;
+            .map(|p| ParamSlot::exposed(p.default_value))
+            .collect();
+        if let Some(wire) = wire {
+            for (id, entry) in wire {
+                let Some(idx) = meta.params.iter().position(|p| p.id == id) else {
+                    continue;
+                };
+                values[idx] = ParamSlot {
+                    value: entry.value,
+                    base: entry.base.unwrap_or(entry.value),
+                    exposed: entry.exposed,
+                    touched: false,
+                };
+                base_tracked |= entry.base.is_some();
             }
         }
-        map.end()
-    } else {
-        let mut seq = serializer.serialize_seq(Some(values.len()))?;
-        for &v in values {
-            seq.serialize_element(&v)?;
-        }
-        seq.end()
+        return (values, base_tracked);
     }
+
+    let def = crate::preset_definition_registry::try_get(gen_type);
+    let static_count = def.as_ref().map(|d| d.param_count).unwrap_or(0);
+    let mut values = vec![ParamSlot::default(); static_count];
+    if let Some(def) = &def {
+        for (i, pd) in def.param_defs.iter().enumerate().take(static_count) {
+            values[i] = ParamSlot::exposed(pd.default_value);
+        }
+    }
+    if let Some(wire) = wire {
+        for (id, entry) in wire {
+            let Some(idx) = def.as_ref().and_then(|d| d.index_for_param(&id)) else {
+                continue;
+            };
+            if idx >= values.len() {
+                continue;
+            }
+            values[idx] = ParamSlot {
+                value: entry.value,
+                base: entry.base.unwrap_or(entry.value),
+                exposed: entry.exposed,
+                touched: false,
+            };
+            base_tracked |= entry.base.is_some();
+        }
+    }
+    (values, base_tracked)
 }
 
 // ─── Custom Serialize / Deserialize for PresetInstance ───
@@ -1201,14 +929,11 @@ impl Serialize for PresetInstance {
             return self.serialize_as_generator(serializer);
         }
 
-        // `param_values` always emits; `baseParamValues` is emitted iff base is
-        // tracked (the former `base_param_values.is_some()` gate). Other optional
-        // fields use the same `skip_if_none` policy as the previous
-        // derive(Serialize) impl.
-        let mut field_count = 5; // id, effectType, enabled, collapsed, paramValues
-        if self.base_tracked {
-            field_count += 1;
-        }
+        // `params` always emits (D5: `base` rides inside each entry now,
+        // gated by `base_tracked` — no more separate pre-modulation-base
+        // field). Other optional fields use the same `skip_if_none` policy
+        // as the previous derive(Serialize) impl.
+        let mut field_count = 5; // id, effectType, enabled, collapsed, params
         if self.drivers.is_some() {
             field_count += 1;
         }
@@ -1257,25 +982,14 @@ impl Serialize for PresetInstance {
         s.serialize_field("enabled", &self.enabled)?;
         s.serialize_field("collapsed", &self.collapsed)?;
         s.serialize_field(
-            "paramValues",
-            &ParamValuesSer {
+            "params",
+            &ParamsSer {
                 values: &self.param_values,
                 effect_type: &self.effect_type,
                 user_binding_ids: &user_binding_ids,
+                base_tracked: self.base_tracked,
             },
         )?;
-        if self.base_tracked {
-            // Reconstruct the wire's flat base array from each slot's `base`.
-            let base: Vec<f32> = self.param_values.iter().map(|s| s.base).collect();
-            s.serialize_field(
-                "baseParamValues",
-                &BaseParamValuesSer {
-                    values: &base,
-                    effect_type: &self.effect_type,
-                    user_binding_ids: &user_binding_ids,
-                },
-            )?;
-        }
         if let Some(d) = &self.drivers {
             s.serialize_field("drivers", d)?;
         }
@@ -1327,10 +1041,7 @@ impl PresetInstance {
     {
         use serde::ser::SerializeStruct;
 
-        let mut field_count = 2; // generatorType + paramValues
-        if self.base_tracked {
-            field_count += 1;
-        }
+        let mut field_count = 2; // generatorType + params
         if self.drivers.is_some() {
             field_count += 1;
         }
@@ -1356,22 +1067,14 @@ impl PresetInstance {
         let mut s = serializer.serialize_struct("PresetInstance", field_count)?;
         s.serialize_field("generatorType", &self.effect_type)?;
         s.serialize_field(
-            "paramValues",
-            &GenParamSlotValuesSer {
+            "params",
+            &GenParamsSer {
                 values: &self.param_values,
                 gen_type: &self.effect_type,
+                graph: &self.graph,
+                base_tracked: self.base_tracked,
             },
         )?;
-        if self.base_tracked {
-            let base: Vec<f32> = self.param_values.iter().map(|s| s.base).collect();
-            s.serialize_field(
-                "baseParamValues",
-                &GenParamValuesSer {
-                    values: &base,
-                    gen_type: &self.effect_type,
-                },
-            )?;
-        }
         if let Some(d) = &self.drivers {
             s.serialize_field("drivers", d)?;
         }
@@ -1397,80 +1100,6 @@ impl PresetInstance {
     }
 }
 
-/// Serialize-side wrapper for generator `baseParamValues` (plain `f32`).
-struct GenParamValuesSer<'a> {
-    values: &'a [f32],
-    gen_type: &'a PresetTypeId,
-}
-
-impl Serialize for GenParamValuesSer<'_> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serialize_param_values_for_generator(self.values, self.gen_type, serializer)
-    }
-}
-
-/// Serialize-side wrapper for generator `paramValues` (`ParamSlot`).
-struct GenParamSlotValuesSer<'a> {
-    values: &'a [ParamSlot],
-    gen_type: &'a PresetTypeId,
-}
-
-impl Serialize for GenParamSlotValuesSer<'_> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serialize_param_values_for_generator_slots(self.values, self.gen_type, serializer)
-    }
-}
-
-/// Serialize-side wrapper for `paramValues` that carries the parent's
-/// `effect_type` and per-instance user bindings so the field-level
-/// `Serialize` can route to `serialize_param_values`.
-struct ParamValuesSer<'a> {
-    values: &'a [ParamSlot],
-    effect_type: &'a PresetTypeId,
-    user_binding_ids: &'a [&'a str],
-}
-
-impl Serialize for ParamValuesSer<'_> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serialize_param_values(
-            self.values,
-            self.effect_type,
-            self.user_binding_ids,
-            serializer,
-        )
-    }
-}
-
-/// Serialize-side wrapper for `baseParamValues` (plain `Vec<f32>`).
-struct BaseParamValuesSer<'a> {
-    values: &'a [f32],
-    effect_type: &'a PresetTypeId,
-    user_binding_ids: &'a [&'a str],
-}
-
-impl Serialize for BaseParamValuesSer<'_> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serialize_base_param_values(
-            self.values,
-            self.effect_type,
-            self.user_binding_ids,
-            serializer,
-        )
-    }
-}
-
 impl<'de> Deserialize<'de> for PresetInstance {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -1488,9 +1117,7 @@ impl<'de> Deserialize<'de> for PresetInstance {
             #[serde(default)]
             collapsed: bool,
             #[serde(default)]
-            param_values: Option<ParamValuesWire>,
-            #[serde(default)]
-            base_param_values: Option<FloatValuesWire>,
+            params: Option<std::collections::BTreeMap<String, ParamEntryWire>>,
             #[serde(default)]
             drivers: Option<Vec<ParameterDriver>>,
             #[serde(default)]
@@ -1546,24 +1173,16 @@ impl<'de> Deserialize<'de> for PresetInstance {
                     .collect()
             })
             .unwrap_or_default();
-        // The Map → positional fold runs before `align_to_definition`, so
-        // registry-known but user-tail-empty cases land at zero and align
-        // fills user-binding defaults.
-        let mut param_values = raw
-            .param_values
-            .map(|w| w.into_positional(&raw.effect_type, &user_binding_ids, &user_defaults))
-            .unwrap_or_default();
-        // Fold the wire's separate `baseParamValues` into each slot's `base`
-        // (fork #16). Present → tracked; absent → base stays seeded to value.
-        let base_tracked = raw.base_param_values.is_some();
-        if let Some(base) = raw
-            .base_param_values
-            .map(|w| w.into_positional_base(&raw.effect_type, &user_binding_ids, &user_defaults))
-        {
-            for (slot, b) in param_values.iter_mut().zip(base.iter()) {
-                slot.base = *b;
-            }
-        }
+        // V1.4: one id-keyed `params` map replaces the old positional-fold
+        // dance entirely (D4/D5) — `build_effect_param_values` seeds
+        // `[static prefix | user tail]` defaults and overlays the incoming
+        // map (value/exposed/base together, no separate base-array zip).
+        let (param_values, base_tracked) = build_effect_param_values(
+            &raw.effect_type,
+            &user_binding_ids,
+            &user_defaults,
+            raw.params,
+        );
 
         Ok(PresetInstance {
             kind: crate::preset_def::PresetKind::Effect,
@@ -1603,9 +1222,7 @@ struct GeneratorInstanceRaw {
     )]
     generator_type: PresetTypeId,
     #[serde(default)]
-    param_values: Option<ParamValuesWire>,
-    #[serde(default)]
-    base_param_values: Option<FloatValuesWire>,
+    params: Option<std::collections::BTreeMap<String, ParamEntryWire>>,
     #[serde(default)]
     drivers: Option<Vec<ParameterDriver>>,
     #[serde(default)]
@@ -1628,20 +1245,12 @@ struct GeneratorInstanceRaw {
 
 impl GeneratorInstanceRaw {
     fn into_instance(self) -> PresetInstance {
-        let mut param_values = self
-            .param_values
-            .map(|w| w.into_positional_for_generator(&self.generator_type))
-            .unwrap_or_default();
-        // Fold the wire's separate `baseParamValues` into each slot's `base`.
-        let base_tracked = self.base_param_values.is_some();
-        if let Some(base) = self
-            .base_param_values
-            .map(|w| w.into_positional_for_generator(&self.generator_type))
-        {
-            for (slot, b) in param_values.iter_mut().zip(base.iter()) {
-                slot.base = *b;
-            }
-        }
+        // V1.4: `build_generator_param_values` resolves the graph-backed
+        // vs registry-backed id authority (mirrors `align_to_definition`'s
+        // documented split) and overlays the incoming `params` map in one
+        // pass — no more separate positional-fold + base-array zip.
+        let (param_values, base_tracked) =
+            build_generator_param_values(&self.generator_type, &self.graph, self.params);
         PresetInstance {
             kind: crate::preset_def::PresetKind::Generator,
             id: generate_effect_id(),
@@ -2432,9 +2041,16 @@ impl PresetInstance {
         }
     }
 
-    /// Resize paramValues and baseParamValues to match the current effect definition.
+    /// Resize `param_values` (value + base together, per slot) to match the current effect definition.
     /// New slots are filled with the definition's default values.
-    /// Includes migration for layout changes (e.g., WireframeDepth 14→12 params).
+    ///
+    /// The old WireframeDepth 14→12 legacy positional reorder that used to
+    /// be hardcoded here moved to a baked table in
+    /// `manifold-io`'s `migrations::param_storage_v14` (PARAM_STORAGE_DESIGN.md
+    /// D4) — that migration runs on the JSON `Value` before typed
+    /// deserialization, so by the time an instance reaches this function
+    /// its `param_values` is already sized against the CURRENT definition
+    /// (built from the V1.4 `params` map), never the old 14-slot shape.
     ///
     /// V2 user-binding awareness: the target length is
     /// `def.param_count + self.user_param_bindings.len()`. The static
@@ -2444,35 +2060,6 @@ impl PresetInstance {
     /// the user_param_bindings vec is the single source of truth for
     /// "how many user slots exist."
     pub fn align_to_definition(&mut self) {
-
-        // Migration: WireframeDepth 14-param (old) → 12-param (new).
-        // Old: Amount(0) Density(1) Width(2) ZScale(3) Smooth(4) Persist(5) Depth(6)
-        //      Subject(7) Blend(8) WireRes(9) MeshRate(10) CVFlow(11) Lock(12) Face(13)
-        // New: Amount(0) Density(1) Width(2) ZScale(3) Smooth(4) Subject(5) Blend(6)
-        //      WireRes(7) MeshRate(8) Flow(9) Lock(10) EdgeFollow(11)
-        // (User bindings didn't exist in V1.0 / V1.1, so the WireframeDepth
-        // legacy migration runs against the entire param_values Vec.)
-        if self.effect_type == PresetTypeId::WIREFRAME_DEPTH && self.param_values.len() == 14 {
-            let old = &self.param_values;
-            let migrated = vec![
-                old[0],                  // Amount → Amount
-                old[1],                  // Density → Density
-                old[2],                  // Width → Width
-                old[3],                  // ZScale → ZScale
-                old[4],                  // Smooth → Smooth
-                old[7],                  // Subject → Subject (was index 7)
-                old[8],                  // Blend → Blend (was index 8)
-                old[9],                  // WireRes → WireRes (was index 9)
-                old[10],                 // MeshRate → MeshRate (was index 10)
-                old[11],                 // CVFlow → Flow (was index 11)
-                old[12],                 // Lock → Lock (was index 12)
-                ParamSlot::exposed(0.5), // EdgeFollow default (Face was discrete toggle, not transferable)
-            ];
-            // base rides each slot now (fork #16), so the reorder above carries
-            // base alongside value; the new EdgeFollow slot seeds base = 0.5.
-            self.param_values = migrated;
-        }
-
         // Snapshot the user-added binding defaults up front (declaration
         // order) so the resize loops can pad without a borrow conflict
         // against `self.graph`.
@@ -4270,56 +3857,82 @@ mod tests {
         assert_eq!(back.legacy_param_index, None);
     }
 
-    // ── PresetInstance paramValues wire format (step 12) ──────────
+    // ── PresetInstance `params` wire format (V1.4, PARAM_STORAGE_DESIGN.md §4) ──
+    //
+    // The typed (de)serialize understands ONLY the id-keyed `params` map —
+    // the four historical `paramValues` shapes (positional/keyed × bare-f32/
+    // {value,exposed}) are deleted, not reimplemented here (D4); their
+    // conversion tests now live in `manifold-io`'s
+    // `migrations::param_storage_v14`, which runs before typed deserialize
+    // ever sees the JSON. These tests cover what's left on this side: the
+    // V1.4 shape itself, `base` folding, and unregistered-type degradation.
+    //
+    // "TestCreateDefaultUntouched" (registered below, single param
+    // "amount", default 0.42) and "TestTwoParamRoundTrip" (registered
+    // below, "alpha"/"beta") stand in for a real bundled effect — Rust
+    // module items are visible regardless of declaration order.
 
     #[test]
-    fn effect_instance_deserialize_legacy_array_param_values() {
-        // V1.0 / V1.1 wire format: paramValues is an Array.
+    fn effect_instance_deserialize_v14_params_map() {
         let json = r#"{
             "id": "abc12345",
-            "effectType": "ColorGrade",
+            "effectType": "TestCreateDefaultUntouched",
             "enabled": true,
             "collapsed": false,
-            "paramValues": [1.0, 1.0, 1.0, 0.0, 1.5, 0.0, 0.0, 1.0, 0.0],
-            "baseParamValues": [1.0, 1.0, 1.0, 0.0, 1.5, 0.0, 0.0, 1.0, 0.0]
+            "params": { "amount": { "value": 0.75, "exposed": true, "base": 0.5 } }
         }"#;
         let fx: PresetInstance = serde_json::from_str(json).unwrap();
-        assert_eq!(fx.param_values.len(), 9);
-        assert!((fx.param_values[4].value - 1.5).abs() < f32::EPSILON);
-        // Legacy bare-f32 wire format → exposed defaults to true.
-        assert!(fx.param_values.iter().all(|p| p.exposed));
-        // baseParamValues present → base tracked, folded into each slot's base.
+        assert_eq!(fx.param_values.len(), 1);
+        assert!((fx.param_values[0].value - 0.75).abs() < f32::EPSILON);
+        assert!(fx.param_values[0].exposed);
+        // `base` present on the entry → base_tracked, folded into the slot.
         assert!(fx.base_tracked);
-        assert_eq!(fx.param_values.len(), 9);
-        assert!((fx.param_values[4].base - 1.5).abs() < f32::EPSILON);
+        assert!((fx.param_values[0].base - 0.5).abs() < f32::EPSILON);
     }
 
     #[test]
-    fn effect_instance_deserialize_canonical_map_param_values_without_registry() {
-        // V1.2+ wire format: paramValues is an Object keyed by param_id.
-        // Without manifold-renderer linked, the registry has no def for
-        // "ColorGrade" → into_positional returns empty Vec, leaving
-        // align_to_definition / the resolver to fill in defaults later.
+    fn effect_instance_deserialize_v14_params_without_base_leaves_base_untracked() {
         let json = r#"{
-            "id": "abc12345",
-            "effectType": "ColorGrade",
+            "effectType": "TestCreateDefaultUntouched",
             "enabled": true,
             "collapsed": false,
-            "paramValues": { "amount": 0.7, "threshold": 0.5 }
+            "params": { "amount": { "value": 0.75 } }
         }"#;
         let fx: PresetInstance = serde_json::from_str(json).unwrap();
-        // No registry → empty Vec is the safe degraded result.
-        assert!(fx.param_values.is_empty() || fx.param_values.iter().all(|p| p.value == 0.0));
+        assert!(!fx.base_tracked);
+        // exposed defaults to true when the key is absent from the entry.
+        assert!(fx.param_values[0].exposed);
     }
 
     #[test]
-    fn effect_instance_serialize_falls_back_to_array_without_registry() {
-        // No registry def → Serialize must emit Array form so the
-        // value survives a round-trip through manifold-core's tests.
+    fn effect_instance_deserialize_params_without_registry_degrades_to_empty() {
+        // No registry def for this type → nothing to place the incoming
+        // entry onto (today's unregistered-type policy — this test binary
+        // doesn't link manifold-renderer, so most real effect ids hit this
+        // path too; see the other "_without_registry" tests below).
+        let json = r#"{
+            "effectType": "TotallyUnregisteredEffectType",
+            "enabled": true,
+            "collapsed": false,
+            "params": { "amount": { "value": 0.7 } }
+        }"#;
+        let fx: PresetInstance = serde_json::from_str(json).unwrap();
+        assert!(fx.param_values.is_empty());
+    }
+
+    #[test]
+    fn effect_instance_serialize_omits_params_without_registry() {
+        // No registry def and no user-added tail → `params` has nothing to
+        // key its entries by, so it serializes empty. This is the honest
+        // consequence of deleting the positional fallback (D4): an
+        // unregistered type's values are not addressable, so they are not
+        // written, rather than dumped into an array nothing can read back
+        // by id. In production this path is unreachable (every shipping
+        // effect is registered).
         let fx = PresetInstance {
             kind: crate::preset_def::PresetKind::Effect,
             id: EffectId::new("abc12345"),
-            effect_type: PresetTypeId::from_string("UnregisteredTestEffect".to_string()),
+            effect_type: PresetTypeId::from_string("TotallyUnregisteredEffectType".to_string()),
             enabled: true,
             collapsed: false,
             param_values: vec![
@@ -4344,40 +3957,18 @@ mod tests {
             legacy_param_version: None,
         };
         let json = serde_json::to_string(&fx).unwrap();
-        // V1.3 wire emits {value, exposed} objects per element.
         assert!(
-            json.contains("\"paramValues\":[{\"value\":0.1,\"exposed\":true}"),
-            "Serialize without registry must emit positional Array of ParamSlot; got: {json}"
+            json.contains("\"params\":{}"),
+            "unregistered type must serialize an empty params map, not lose the instance; got: {json}"
         );
-        let back: PresetInstance = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.param_values.len(), 3);
-        assert_eq!(back.param_values[0].value, 0.1);
-        assert!(back.param_values[0].exposed);
     }
 
     #[test]
-    fn param_value_deserialize_accepts_bare_f32_or_object() {
-        // Bare f32 (V1.x legacy) → exposed=true.
-        let pv: ParamSlot = serde_json::from_str("0.7").unwrap();
-        assert_eq!(pv.value, 0.7);
-        assert!(pv.exposed);
-        // Object form (V1.3 canonical).
-        let pv: ParamSlot = serde_json::from_str(r#"{"value": 0.42, "exposed": false}"#).unwrap();
-        assert_eq!(pv.value, 0.42);
-        assert!(!pv.exposed);
-        // Object with missing exposed defaults to true.
-        let pv: ParamSlot = serde_json::from_str(r#"{"value": 1.0}"#).unwrap();
-        assert_eq!(pv.value, 1.0);
-        assert!(pv.exposed);
-    }
-
-    #[test]
-    fn effect_instance_serialize_emits_v13_object_form_for_hidden_params() {
-        // Hidden param round-trips through positional Array{value,exposed}.
+    fn effect_instance_serialize_round_trips_hidden_and_visible_params() {
         let fx = PresetInstance {
             kind: crate::preset_def::PresetKind::Effect,
             id: EffectId::new("abc12345"),
-            effect_type: PresetTypeId::from_string("UnregisteredTestEffect".to_string()),
+            effect_type: PresetTypeId::from_string("TestTwoParamRoundTrip".to_string()),
             enabled: true,
             collapsed: false,
             param_values: vec![
@@ -4411,6 +4002,8 @@ mod tests {
             legacy_param_version: None,
         };
         let json = serde_json::to_string(&fx).unwrap();
+        assert!(json.contains("\"alpha\":{\"value\":0.1,\"exposed\":true}"));
+        assert!(json.contains("\"beta\":{\"value\":0.2,\"exposed\":false}"));
         let back: PresetInstance = serde_json::from_str(&json).unwrap();
         assert_eq!(back.param_values.len(), 2);
         assert_eq!(back.param_values[0].value, 0.1);
@@ -4421,14 +4014,14 @@ mod tests {
 
     #[test]
     fn effect_instance_legacy_param0_through_param3_round_trip() {
-        // V1.0 had flat param0..param3 fields alongside paramValues.
+        // V1.0 had flat param0..param3 fields alongside the param wire.
         // The custom Deserialize must continue to capture them so the
         // existing align_to_definition migration sees both shapes.
         let json = r#"{
-            "effectType": "ColorGrade",
+            "effectType": "TestCreateDefaultUntouched",
             "enabled": true,
             "collapsed": false,
-            "paramValues": [],
+            "params": {},
             "param0": 0.5,
             "param1": 1.0
         }"#;
@@ -4447,8 +4040,10 @@ mod tests {
     fn effect_instance_skip_serializing_optional_none() {
         let fx = PresetInstance::new(PresetTypeId::from_string("TestEffect".to_string()));
         let json = serde_json::to_string(&fx).unwrap();
-        // Verify optional None fields aren't emitted.
-        assert!(!json.contains("\"baseParamValues\""));
+        // `params` always emits (even empty); `base` never appears on any
+        // entry for a fresh, untouched instance.
+        assert!(json.contains("\"params\":{}"));
+        assert!(!json.contains("\"base\":"));
         assert!(!json.contains("\"drivers\""));
         assert!(!json.contains("\"abletonMappings\""));
         assert!(!json.contains("\"groupId\""));
@@ -4462,32 +4057,41 @@ mod tests {
 
     // ── Map deserialize alias-aware path (step 15) ────────────────
 
-    // Bloom is registered in this crate's tests with a single param
-    // `amount`. We use a synthetic alias table here to verify the
-    // chain runs through `into_positional` even though Bloom itself
-    // ships without aliases. The test mutates a static alias slice
-    // via the registry build path — but the registry is `LazyLock`-
-    // initialized, so mutating it post-init isn't possible. Instead,
-    // verify the alias-walking behavior by directly calling
-    // `resolve_param_alias` on a synthetic table — the integration
-    // path is covered indirectly by `resolve_param_alias_*` tests in
-    // `preset_definition_registry`.
-
     #[test]
-    fn into_positional_keyed_drops_unknown_id() {
+    fn params_map_deserialize_drops_unknown_id() {
         // Without any alias entries, an unknown id is silently dropped.
         // This is the orphan policy — same as drivers/envelopes/Ableton.
         let json = r#"{
             "id": "abc12345",
-            "effectType": "Bloom",
+            "effectType": "TestCreateDefaultUntouched",
             "enabled": true,
             "collapsed": false,
-            "paramValues": { "amount": 0.7, "old_phantom_param": 0.5 }
+            "params": { "amount": { "value": 0.7 }, "old_phantom_param": { "value": 0.5 } }
         }"#;
         let fx: PresetInstance = serde_json::from_str(json).unwrap();
-        // amount should land at index 0; old_phantom_param dropped.
+        // amount resolves via the registry; old_phantom_param has nowhere
+        // to go (not static, not a user-added tail id) and is dropped.
         assert_eq!(fx.param_values.len(), 1);
         assert!((fx.param_values[0].value - 0.7).abs() < f32::EPSILON);
+    }
+
+    inventory::submit! {
+        crate::effect_registration::EffectMetadata {
+            id: PresetTypeId::new("TestTwoParamRoundTrip"),
+            display_name: "Test Two Param Round Trip",
+            category: "Test",
+            available: true,
+            osc_prefix: "testTwoParamRoundTrip",
+            legacy_discriminant: None,
+            params: &[
+                crate::generator_registration::ParamSpec::continuous(
+                    "alpha", "Alpha", 0.0, 1.0, 0.0, "F2", "",
+                ),
+                crate::generator_registration::ParamSpec::continuous(
+                    "beta", "Beta", 0.0, 1.0, 0.0, "F2", "",
+                ),
+            ],
+        }
     }
 
     // ── User-exposed parameter bindings (Phase 3 step 20) ─────────
@@ -4987,7 +4591,7 @@ mod tests {
 
     #[test]
     fn deserialize_keyed_param_values_routes_user_ids_to_tail() {
-        // The key insight: paramValues comes in as a Map. The custom
+        // The key insight: `params` comes in as a Map. The custom
         // Deserialize must consult the graph's `user_added` bindings (the
         // single storage list after the unification) to route user ids to
         // the right tail slots — regardless of JSON key order in the Map.
@@ -4996,10 +4600,10 @@ mod tests {
             "effectType": "Bloom",
             "enabled": true,
             "collapsed": false,
-            "paramValues": {
-                "amount": 0.7,
-                "user.foo.bar.1": 0.3,
-                "user.baz.qux.1": 0.9
+            "params": {
+                "amount": { "value": 0.7 },
+                "user.foo.bar.1": { "value": 0.3 },
+                "user.baz.qux.1": { "value": 0.9 }
             },
             "graph": {
                 "version": 0,
@@ -5125,7 +4729,7 @@ mod tests {
             "effectType": "Mirror",
             "enabled": true,
             "collapsed": false,
-            "paramValues": [{"value": 1.0, "exposed": true}, {"value": 0.0, "exposed": true}]
+            "params": { "amount": { "value": 1.0, "exposed": true } }
         }"#;
         let fx: PresetInstance = serde_json::from_str(json).unwrap();
         assert!(fx.graph.is_none());
