@@ -463,10 +463,12 @@ fn liveschool_full_registry_resolution() {
 
 #[test]
 fn liveschool_gen_param_values_save_as_id_keyed_map() {
-    // Step 13: PresetInstance gets the same Map-shape wire
-    // format as PresetInstance. With the renderer registry linked,
-    // serializing a `gen_params` block must emit `paramValues` as a
-    // Map keyed by the generator's stable param ids.
+    // Step 13 (superseded by PARAM_STORAGE_DESIGN.md P1): PresetInstance
+    // gets the same id-keyed wire shape for both kinds. With the renderer
+    // registry linked, serializing a `gen_params` block must emit `params`
+    // as a Map keyed by the generator's stable param ids — the only wire
+    // shape the typed (de)serialize understands now (the old positional
+    // Array fallback is gone entirely, not just de-preferred).
     let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
     if !path.exists() {
         return;
@@ -486,12 +488,8 @@ fn liveschool_gen_param_values_save_as_id_keyed_map() {
 
     let json = serde_json::to_string(gp).expect("serialize PresetInstance");
     assert!(
-        json.contains("\"paramValues\":{"),
-        "registry-aware Serialize must emit gen paramValues as a Map; got: {json}"
-    );
-    assert!(
-        !json.contains("\"paramValues\":["),
-        "must NOT emit Array form for generator params when registry def is available; got: {json}"
+        json.contains("\"params\":{"),
+        "registry-aware Serialize must emit gen params as an id-keyed Map; got: {json}"
     );
 
     // A generator instance decodes through the generator-shape deserializer
@@ -510,13 +508,15 @@ fn liveschool_gen_param_values_save_as_id_keyed_map() {
 
 #[test]
 fn liveschool_param_values_save_as_id_keyed_map() {
-    // Step 12: with `manifold-renderer` linked, the registry IS
-    // populated, so saving an effect must emit `paramValues` as a
-    // Map<param_id, f32> (V1.2+ canonical), not as an Array (V1.0/1.1).
+    // Step 12 (superseded by PARAM_STORAGE_DESIGN.md P1): with
+    // `manifold-renderer` linked, the registry IS populated; saving an
+    // effect must emit `params` as an id-keyed Map. Loading Liveschool
+    // (a real V1.1-era fixture, positional Array on disk) exercises the
+    // full one-time migration path (`migrations::param_storage_v14`)
+    // before this typed round-trip.
     //
-    // Round-trip: load Liveschool (V1.x Array form), serialize one
-    // master effect (registry-aware → Map), deserialize back, assert
-    // the paramValues survive the trip with identical positional
+    // Round-trip: load Liveschool, serialize one master effect, deserialize
+    // back, assert the values survive the trip with identical positional
     // contents.
     let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
     if !path.exists() {
@@ -538,15 +538,11 @@ fn liveschool_param_values_save_as_id_keyed_map() {
         .expect("Liveschool must have at least one master effect with params");
     let original_values = fx.param_values.clone();
 
-    // Serialize → must be Map shape (registry is loaded).
+    // Serialize → must be an id-keyed Map (registry is loaded).
     let json = serde_json::to_string(fx).expect("serialize PresetInstance");
     assert!(
-        json.contains("\"paramValues\":{"),
-        "registry-aware Serialize must emit paramValues as a Map; got: {json}"
-    );
-    assert!(
-        !json.contains("\"paramValues\":["),
-        "must NOT emit Array form when registry def is available; got: {json}"
+        json.contains("\"params\":{"),
+        "registry-aware Serialize must emit params as an id-keyed Map; got: {json}"
     );
 
     // Deserialize back → values must land in identical positions.

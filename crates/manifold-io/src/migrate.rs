@@ -70,6 +70,22 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.10.0".to_string());
     }
 
+    // v1.10.0 -> v1.11.0: the param-storage redesign's V1.4 wire migration
+    // (docs/PARAM_STORAGE_DESIGN.md D4). Note the version-number mismatch:
+    // that design names the new param wire shape "V1.4" following the OLD
+    // per-param-value-shape-era numbering (which tracked this SAME
+    // `projectVersion` 1:1 through 1.3.0 — see the historical wire-shape
+    // doc comments in manifold-core's `effects.rs`), not realizing
+    // `projectVersion` had since marched on to 1.10.0 for unrelated shape
+    // changes (graph-home unification, envelope-home unification, etc).
+    // The migration's substance (§4) is unaffected — "V1.4" is the
+    // param-wire shape's own name, not this field's value; this is simply
+    // the next free slot in the one real version chain the project has.
+    if is_version_less_than(&version, "1.11.0") {
+        crate::migrations::param_storage_v14::migrate(&mut root);
+        root["projectVersion"] = Value::String("1.11.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
 }
 
@@ -386,7 +402,10 @@ fn migrate_v130_to_v140(root: &mut Value) {
 /// generator (`genParams`). The single per-instance traversal for load
 /// migrations: effects and generators are one type now, so a per-instance
 /// migration walks them here instead of a per-kind hand-rolled loop.
-fn for_each_preset_instance(root: &mut Value, mut f: impl FnMut(&mut Value)) {
+///
+/// `pub(crate)` (not private) so `crate::migrations::param_storage_v14`
+/// reuses the same walk instead of duplicating it.
+pub(crate) fn for_each_preset_instance(root: &mut Value, mut f: impl FnMut(&mut Value)) {
     if let Some(effects) = root
         .get_mut("settings")
         .and_then(|s| s.get_mut("masterEffects"))
@@ -586,19 +605,24 @@ fn default_preset_metadata() -> serde_json::Map<String, Value> {
     m
 }
 
-/// v1.2.0 → v1.3.0: per-param exposure (`ParamSlot { value, exposed }`)
-/// surfaces on `PresetInstance.paramValues`. The on-disk shape changes:
-/// V1.2 emitted bare `f32` per slot (positional Array or keyed Map);
-/// V1.3 emits `{ value, exposed }` objects.
+/// v1.2.0 → v1.3.0: per-param exposure (`{ value, exposed }`) surfaces on
+/// the legacy param-values field. The on-disk shape changes: V1.2 emitted
+/// bare `f32` per slot (positional Array or keyed Map); V1.3 emits
+/// `{ value, exposed }` objects.
 ///
-/// No JSON rewriting is required here — `ParamSlot`'s polymorphic
-/// `Deserialize` accepts the legacy bare-f32 shape natively (defaulting
-/// `exposed` to `true`), and the next save canonicalizes to the V1.3
-/// object form. `baseParamValues` continues to use plain f32 (exposure
-/// isn't meaningful on the pre-modulation snapshot), so nothing changes
-/// there. This migration only bumps the version stamp.
+/// No JSON rewriting was required historically — a polymorphic
+/// `Deserialize` on the per-slot value type accepted the legacy bare-f32
+/// shape natively (defaulting `exposed` to `true`), and the next save
+/// canonicalized to the V1.3 object form. That polymorphic handling is
+/// gone now (D4, PARAM_STORAGE_DESIGN.md): the later v1.10→v1.11 step in
+/// this same chain (`migrations::param_storage_v14`) uniformly converts
+/// every historical shape — this one included — to the id-keyed `params`
+/// map, so this step still only needs to bump the version stamp; the
+/// actual shape handling moved later in the chain instead of happening at
+/// typed-deserialize time.
 fn migrate_v120_to_v130(_root: &mut Value) {
-    // No-op. Polymorphic ParamSlot deserializer handles V1.2 wire shape.
+    // No-op. `migrations::param_storage_v14` (runs later in this same
+    // chain) handles the V1.2 wire shape uniformly with the other three.
 }
 
 /// v1.1.0 → v1.2.0: parameter addressing migration to stable
@@ -744,7 +768,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.10.0")
+            Some("1.11.0")
         );
     }
 
@@ -760,7 +784,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.10.0")
+            Some("1.11.0")
         );
     }
 
@@ -774,7 +798,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.10.0")
+            Some("1.11.0")
         );
     }
 
@@ -789,7 +813,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.10.0")
+            Some("1.11.0")
         );
     }
 
@@ -833,7 +857,7 @@ mod tests {
         // The "Ghost" envelope had no matching effect → dropped.
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.10.0")
+            Some("1.11.0")
         );
     }
 
@@ -1081,15 +1105,21 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v["projectVersion"].as_str(), Some("1.10.0"));
+        assert_eq!(v["projectVersion"].as_str(), Some("1.11.0"));
         assert_eq!(
             v["settings"]["masterEffects"][0]["effectType"].as_str(),
             Some("WireframeDepth")
         );
+        // The v1.6->v1.7 rename doesn't touch param values; by the end of
+        // the full chain (which now also runs the v1.10->v1.11 param-
+        // storage migration), the single positional entry has landed
+        // under "params" at WireframeDepth's index-0 id ("amount") —
+        // confirming the rename step didn't corrupt or drop it along the
+        // way.
         assert_eq!(
-            v["settings"]["masterEffects"][0]["paramValues"][0]["value"].as_f64(),
+            v["settings"]["masterEffects"][0]["params"]["amount"]["value"].as_f64(),
             Some(120.0),
-            "param values carry over untouched"
+            "param values carry over untouched through the rename, then through the params migration"
         );
         assert_eq!(
             v["settings"]["masterEffects"][1]["effectType"].as_str(),
@@ -1131,7 +1161,7 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v["projectVersion"].as_str(), Some("1.10.0"));
+        assert_eq!(v["projectVersion"].as_str(), Some("1.11.0"));
 
         // Corrupted generator: effectType → generatorType, effectType removed.
         let gp0 = &v["timeline"]["layers"][0]["genParams"];
@@ -1205,7 +1235,7 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v["projectVersion"].as_str(), Some("1.10.0"));
+        assert_eq!(v["projectVersion"].as_str(), Some("1.11.0"));
 
         let master = &v["settings"]["masterEffects"][0]["audioMods"];
         assert_eq!(master[0]["source"]["feature"]["kind"].as_str(), Some("centroid"));
@@ -1256,7 +1286,7 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v["projectVersion"].as_str(), Some("1.10.0"));
+        assert_eq!(v["projectVersion"].as_str(), Some("1.11.0"));
         let sends = v["audioSetup"]["sends"].as_array().unwrap();
 
         // Legacy layer → layer set.
