@@ -44,6 +44,7 @@ prerequisites aren't shipped, stop.
 | OVERLAY_SESSIONS_AND_PICKER_DESIGN (added 2026-07-04) | none (extends shipped overlay driver) | full |
 | PRESET_LIBRARY_DESIGN (added 2026-07-04) | P5 needs OVERLAY_SESSIONS P2; P6 verify-at-impl gated | full (P1–P4) / conformance (P5–P6) |
 | TIMELINE_INGEST_DESIGN (added 2026-07-04) | none | full |
+| GAUSSIAN_SPLATS_DESIGN (added 2026-07-05) | none (its P4 consumes shipped `render_scene`) | full |
 
 Not in the queue: **LIVE_AUDIO_TRIGGERS** is SHIPPED (phases 0–7, proven live,
 branch merged). **COMPETITIVE_STEAL_PASS** is a closed record.
@@ -209,7 +210,12 @@ release-content authoring capability.
    at all — a filler task for any session with slack.
 
 Then, still greenlit but second arc (order by judgment): REALTIME_3D P2 shadows →
-P3 atmosphere → P5 viewport navigate → P6 gizmos → P7 starter preset. Early
+P3 atmosphere → P5 viewport navigate → P6 gizmos → P7 starter preset.
+**GAUSSIAN_SPLATS_DESIGN (added 2026-07-05, Peter-flagged "will definitely be
+important") slots into this arc**: zero hard prerequisites (its P4 consumes the
+shipped `render_scene`), so its P1–P3 are startable any session; it is also
+release-content authoring (photoreal scan material), so it may be re-ranked ahead
+of the second-arc REALTIME_3D phases by judgment. Early
 placement before P5/P6 is inspector sliders + agent-edited preset JSON verified
 by headless PNG — workable, per Peter.
 
