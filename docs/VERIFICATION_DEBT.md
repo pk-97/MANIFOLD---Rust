@@ -105,9 +105,19 @@ correct slider when a neighbour param is deleted mid-modulation — is not exerc
 landing report (LFO on a slider, delete a neighbour, confirm the display stays put). Peter owns the
 L4 observation. This is the one P3 gate step headless tooling cannot reach.
 
+### VD-009 — PARAM_STORAGE P4 Ableton/OSC by-id resolution: real-hardware round-trip — L2 reached / L3 target
+Landed 2026-07-05 (`docs/landings/2026-07-05-param-storage-p4.md`). Both live-hardware input paths
+now resolve param mappings by manifest id against the live manifest, so user-added / glb-imported
+params are mappable (Ableton) and addressable (OSC) instead of being silently dropped. Unit-proven:
+the two repros, dispatch-by-id, and a guard that bundled OSC addresses are byte-identical to the old
+positional derivation. Not exercised with real hardware. Burn-down: (a) map an Ableton macro to a
+user-added / glb-generator param in the running app and confirm it moves; (b) send OSC to
+`/master/{prefix}/{user_param_id}` and confirm the param moves, and that a bundled param's existing
+address still lands byte-for-byte. Peter owns the L3 live observation.
+
 *(VD-001–004 seeded 2026-07-05 from the memory corpus plus Peter's in-app findings; VD-006 added
-2026-07-05, VD-007 at P2 landing, VD-008 at P3 landing. VD-005 closed at P2 landing. The full
-backfill pass over recent landings is still owed and will extend this list.)*
+2026-07-05, VD-007 at P2 landing, VD-008 at P3 landing, VD-009 at P4 landing. VD-005 closed at P2
+landing. The full backfill pass over recent landings is still owed and will extend this list.)*
 
 ## Closed
 
