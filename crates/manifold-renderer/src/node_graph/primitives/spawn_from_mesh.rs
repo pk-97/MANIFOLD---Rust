@@ -369,7 +369,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Real-GPU value-level tests. Multi-pass boundary primitive (like
     //! seed_particles_from_texture.rs) — no freeze/fusion codegen exists to

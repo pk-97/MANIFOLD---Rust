@@ -191,7 +191,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain parity oracle (freeze §12) — rotate_4d had no GPU test
     //! before the cutover. The generated kernel must reproduce the hand

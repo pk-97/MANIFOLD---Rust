@@ -211,7 +211,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Hardware tests for the per-pixel freq_tex / phase_tex shadow
     //! contract: when wired, each pixel's freq (or phase) is read from

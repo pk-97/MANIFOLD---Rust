@@ -440,7 +440,7 @@ inventory::submit! {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod channel_mix_gpu_tests {
     //! Hardware tests for the channel_mix 4x4 matrix transform.
     //! Verify the canonical use cases: identity (default), A→R swizzle

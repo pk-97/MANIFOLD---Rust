@@ -52,7 +52,21 @@ path = "src/bin/freeze_profile.rs"
 name = "generate-preset-thumbnails"
 path = "src/bin/generate_preset_thumbnails.rs"
 
+# GPU-proof integration binary: the alpha-contract sweep + generator smoke.
+# Gated behind `gpu-proofs` (see [features]) so it's excluded from the
+# default `cargo test` / `cargo nextest` sweep — run it deliberately with
+# `cargo test -p manifold-renderer --features gpu-proofs`.
+[[test]]
+name = "gpu_proofs"
+path = "tests/gpu_proofs/main.rs"
+required-features = ["gpu-proofs"]
+
 [features]
+# GPU-proof tests: slow, flaky, and need a real Metal device with synchronous
+# readback. Off by default so the workspace test sweep stays fast and
+# deterministic; opt in with `--features gpu-proofs`. Gates `test_device()`,
+# every `mod gpu_tests`, and the `gpu_proofs` integration binary above.
+gpu-proofs = []
 
 [lints]
 workspace = true

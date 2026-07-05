@@ -170,7 +170,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain SOURCE parity oracle (freeze §12) — generate_cube_mesh had
     //! no GPU test. The generated kernel (const cube tables inlined in the body)

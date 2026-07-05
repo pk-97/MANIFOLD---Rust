@@ -166,7 +166,7 @@ impl Primitive for Mix {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Real-GPU integration tests. These spin up a `manifold_gpu::GpuDevice`,
     //! a `MetalBackend`, and an actual `GpuEncoder`, then run the graph

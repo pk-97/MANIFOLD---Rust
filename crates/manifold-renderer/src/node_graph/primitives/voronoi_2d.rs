@@ -227,7 +227,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Hardware tests for the cell_hash A-channel contract:
     //! (1) per-cell stable — pixels deep inside the same cell share A,

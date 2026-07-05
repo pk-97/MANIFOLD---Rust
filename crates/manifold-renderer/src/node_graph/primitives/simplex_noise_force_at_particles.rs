@@ -359,7 +359,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain COINCIDENT + OPTIONAL-TEXTURE parity oracle (freeze §12).
     //! Two coincident array inputs (force [f32;2] + particles) plus an optional

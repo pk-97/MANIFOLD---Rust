@@ -292,7 +292,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain parity oracle (freeze §12) — apply_radial_burst had no GPU
     //! test. The generated kernel (bespoke simplex inlined; two derived fields;

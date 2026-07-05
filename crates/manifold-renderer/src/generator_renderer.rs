@@ -1133,7 +1133,7 @@ impl ClipRenderer for GeneratorRenderer {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod tests {
     use super::*;
     use crate::render_target::RenderTarget;

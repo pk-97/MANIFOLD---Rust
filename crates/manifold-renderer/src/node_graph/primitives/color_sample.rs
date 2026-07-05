@@ -160,7 +160,7 @@ impl Primitive for ColorSample {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Real-GPU smoke. No Vec3 consumer exists in the catalog today —
     //! FluidSim2D declares a Vec3 input port but its implementation is

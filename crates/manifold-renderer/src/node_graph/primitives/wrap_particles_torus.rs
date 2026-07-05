@@ -190,7 +190,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain coincident parity oracle (freeze §12). The GENERATED
     //! standalone kernel — built from `wrap_particles_torus_body.wgsl` by the

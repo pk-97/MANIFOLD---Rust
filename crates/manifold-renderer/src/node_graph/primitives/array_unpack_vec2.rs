@@ -189,7 +189,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain MULTI-OUTPUT parity oracle (freeze §12). The generated
     //! kernel's body returns a `BufferOutputs` struct the wrapper unpacks into

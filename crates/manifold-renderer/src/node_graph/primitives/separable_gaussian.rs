@@ -305,7 +305,7 @@ impl Primitive for GaussianBlur {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Real-GPU smoke tests. GaussianBlur is a new primitive
     //! (no 1:1 legacy effect) — validation is against analytical

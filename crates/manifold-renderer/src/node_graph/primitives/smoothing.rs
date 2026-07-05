@@ -209,7 +209,7 @@ inventory::submit! {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod tests {
     use super::*;
     use manifold_core::{Beats, Seconds};

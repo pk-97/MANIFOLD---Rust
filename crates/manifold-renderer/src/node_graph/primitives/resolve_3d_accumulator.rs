@@ -176,7 +176,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer→texture 3D resolve value oracle (freeze §12). Dispatches the
     //! generated kernel over a known u32 volume accumulator, reads back the

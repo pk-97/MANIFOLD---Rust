@@ -712,6 +712,7 @@ mod tests {
     /// Decode one IEEE-754 binary16 value to f32 (no `half` dependency).
     /// Copied from `mesh_snapshot.rs` (test-only, small, not worth a shared
     /// module for two call sites).
+    #[cfg(feature = "gpu-proofs")]
     fn half_to_f32(h: u16) -> f32 {
         let sign = if (h >> 15) & 1 == 1 { -1.0f32 } else { 1.0f32 };
         let exp = (h >> 10) & 0x1f;
@@ -726,12 +727,14 @@ mod tests {
         sign * mag
     }
 
+    #[cfg(feature = "gpu-proofs")]
     /// Reinhard-tonemap an HDR channel to 8-bit: `out = (v/(1+v)).clamp(0,1)*255`.
     fn tonemap_channel(v: f32) -> u8 {
         let ldr = (v / (1.0 + v)).clamp(0.0, 1.0);
         (ldr * 255.0).round() as u8
     }
 
+    #[cfg(feature = "gpu-proofs")]
     /// Render the assembled azalea graph through the PRODUCTION preset
     /// runtime (`PresetRuntime::from_def_with_device` + `render()`), the
     /// same path a real imported `.manifold` project's generator card
@@ -866,6 +869,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "gpu-proofs")]
     /// Stage-4 production-path proof: render the assembled azalea graph the way
     /// a real dropped-in generator LAYER renders it — through
     /// [`GeneratorRegistry::create_with_override`] with the import graph as the

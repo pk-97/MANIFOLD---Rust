@@ -53,19 +53,19 @@ pub mod uniform_arena;
 /// [`TestDevice`] guard for each test's lifetime so GPU work runs one test at a
 /// time. Reentrant: a single test may call [`test_device`] more than once on its
 /// own thread without deadlocking.
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 static GPU_TEST_LOCK: parking_lot::ReentrantMutex<()> = parking_lot::ReentrantMutex::new(());
 
 /// RAII handle returned by [`test_device`]. Derefs to the shared
 /// [`manifold_gpu::GpuDevice`] (so call sites use it exactly like the old
 /// `Arc<GpuDevice>`) and holds [`GPU_TEST_LOCK`] until it drops at end of test.
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) struct TestDevice {
     device: std::sync::Arc<manifold_gpu::GpuDevice>,
     _lock: parking_lot::ReentrantMutexGuard<'static, ()>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 impl std::ops::Deref for TestDevice {
     type Target = manifold_gpu::GpuDevice;
     fn deref(&self) -> &Self::Target {
@@ -73,7 +73,7 @@ impl std::ops::Deref for TestDevice {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) fn test_device() -> TestDevice {
     use std::sync::{Arc, OnceLock};
     static SHARED: OnceLock<Arc<manifold_gpu::GpuDevice>> = OnceLock::new();
@@ -100,7 +100,7 @@ pub(crate) fn test_device() -> TestDevice {
 ///
 /// Stalls the calling thread until the clear completes; meant for
 /// test setup, not hot-path work.
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) fn clear_texture_committed(
     device: &manifold_gpu::GpuDevice,
     target: &manifold_gpu::GpuTexture,

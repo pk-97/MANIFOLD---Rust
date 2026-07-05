@@ -150,6 +150,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "gpu-proofs")]
     /// Sweep guard: every bundled preset must chain-build cleanly.
     /// Parse + binding-resolution pass already cover the schema; this
     /// catches the deeper failure modes that only the chain builder
@@ -187,6 +188,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "gpu-proofs")]
     /// Sweep guard: every bundled generator preset must successfully
     /// execute one full frame against a real Metal backend. Parse +
     /// chain-build cover the load-time validators (`into_graph` +
@@ -287,6 +289,7 @@ mod tests {
     /// `panic::Any` is opaque, but the standard payload shapes are
     /// `String` (from `panic!("{...}")`) and `&'static str` (from
     /// `panic!("literal")`).
+    #[cfg(feature = "gpu-proofs")]
     fn panic_msg(panic: &Box<dyn std::any::Any + Send>) -> String {
         if let Some(s) = panic.downcast_ref::<String>() {
             s.clone()

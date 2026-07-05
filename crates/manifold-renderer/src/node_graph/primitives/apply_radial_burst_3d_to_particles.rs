@@ -262,7 +262,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain parity oracle (freeze §12) — apply_radial_burst_3d had no
     //! GPU test. The generated kernel (bespoke simplex + tetrahedron zone consts

@@ -2459,7 +2459,7 @@ fn chain_member_args(
     Ok(args)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
     use crate::node_graph::effect_node::EffectNode;

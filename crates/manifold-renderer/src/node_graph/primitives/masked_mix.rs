@@ -144,7 +144,7 @@ impl Primitive for MaskedMix {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! GPU correctness tests for `MaskedMix`.
     //!

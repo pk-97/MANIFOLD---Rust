@@ -1,0 +1,24 @@
+//! GPU-proof integration binary.
+//!
+//! Slow, GPU-bound integration tests that need a real Metal device and
+//! readback. Gated behind the `gpu-proofs` cargo feature so the default
+//! `cargo test` / `cargo nextest` sweep stays fast and non-flaky — run
+//! deliberately with `cargo test -p manifold-renderer --features gpu-proofs`.
+//!
+//! Two suites live here, both sharing one `harness::shared()` device so the
+//! ~5s `GpuDevice::new()` cost is paid once:
+//!
+//! - `alpha_contract` — the premultiplied-alpha invariant guard: every
+//!   texture→texture effect fed a transparent input must stay transparent.
+//! - `smoke` — every bundled generator preset renders one frame with no
+//!   NaN/Inf output.
+//!
+//! (The old per-effect *parity* suite — byte-exact graph-vs-legacy-shader
+//! comparisons — was migration scaffolding and was deleted once the legacy
+//! effect impls were gone. Nothing runs through a legacy path anymore, so
+//! there is nothing left to be "at parity" with.)
+
+mod harness;
+
+mod alpha_contract;
+mod smoke;

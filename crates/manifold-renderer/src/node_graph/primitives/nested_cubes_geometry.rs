@@ -417,7 +417,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Smoke tests on the real GPU. Verifies the new primitive produces
     //! non-trivial output (cubes visible, not a black frame) and that

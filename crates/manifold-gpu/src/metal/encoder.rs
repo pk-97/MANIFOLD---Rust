@@ -1655,10 +1655,43 @@ impl GpuEncoder {
     /// Commit and block until the GPU has fully completed the work.
     /// Required for synchronous texture readback — a copy to a shared buffer
     /// is only readable from the CPU once the GPU reports completion.
+    ///
+    /// After the wait, verifies the buffer actually reached `Completed`.
+    /// A GPU fault (page fault, timeout, invalid resource) leaves the
+    /// destination buffer holding garbage the caller would otherwise read
+    /// as valid pixels — the root of the parity/freeze-proof test flakes
+    /// (BUG-013). See [`Self::verify_completed`] for the dev-vs-release split.
     pub fn commit_and_wait_completed(mut self) {
         self.end_current();
         self.cmd_buf.commit();
         unsafe { self.cmd_buf.waitUntilCompleted() };
+        self.verify_completed("commit_and_wait_completed");
+    }
+
+    /// Assert the command buffer reached `Completed` after a blocking wait.
+    /// Dev/test builds panic so a GPU error surfaces as a loud, localized
+    /// failure instead of silent garbage in a readback; release builds (the
+    /// live show) log and carry on rather than crash mid-set.
+    fn verify_completed(&self, ctx: &str) {
+        use objc2_metal::MTLCommandBufferStatus;
+
+        let status = unsafe { self.cmd_buf.status() };
+        if status == MTLCommandBufferStatus::Completed {
+            return;
+        }
+        let (code, desc) = match unsafe { self.cmd_buf.error() } {
+            None => (-1i64, String::from("(no error object)")),
+            Some(err) => (err.code() as i64, err.localizedDescription().to_string()),
+        };
+        let msg = format!(
+            "[GPU] {ctx}: command buffer did not reach Completed (status={}, code={}): {}",
+            status.0, code, desc,
+        );
+        if cfg!(debug_assertions) {
+            panic!("{msg}");
+        } else {
+            log::error!("{msg}");
+        }
     }
 
     /// Commit, block until completion, and return the **true GPU execution

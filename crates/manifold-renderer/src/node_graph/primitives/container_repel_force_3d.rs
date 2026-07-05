@@ -246,7 +246,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain multi-input coincident parity oracle (freeze §12) — the
     //! generated kernel reads the force `in` + `particles`, adds the SDF-wall

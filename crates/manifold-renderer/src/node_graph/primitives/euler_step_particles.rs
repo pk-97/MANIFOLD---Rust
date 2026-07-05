@@ -231,7 +231,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain parity oracle (freeze §12) — the hardest coincident case:
     //! TWO coincident array inputs (Particle + [f32;2] forces), a DERIVED uniform

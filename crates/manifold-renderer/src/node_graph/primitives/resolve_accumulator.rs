@@ -159,7 +159,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer→texture resolve value oracle (freeze §12). Dispatches the generated
     //! kernel over a known u32 accumulator, reads back the density texture, and

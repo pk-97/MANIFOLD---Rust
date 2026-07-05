@@ -210,7 +210,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain TEXTURE-COINCIDENT (3D) parity oracle (freeze §12). The
     //! generated kernel binds a Texture3D + sampler into the buffer kernel and

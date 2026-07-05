@@ -383,6 +383,7 @@ fn encode_png(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "gpu-proofs")]
     /// Minimal bundled effect preset (Bloom, a real shipped effect) parsed
     /// from disk — exercises the real `system.source` → primitives →
     /// `system.final_output` shape, not a synthetic fixture.
@@ -395,6 +396,7 @@ mod tests {
         serde_json::from_str(&json).expect("parse Bloom.json")
     }
 
+    #[cfg(feature = "gpu-proofs")]
     fn blackhole_def() -> EffectGraphDef {
         let json = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -404,6 +406,7 @@ mod tests {
         serde_json::from_str(&json).expect("parse BlackHole.json")
     }
 
+    #[cfg(feature = "gpu-proofs")]
     /// Headless value-level gate (the orchestrator's Read-the-PNG check):
     /// renders a real stock effect over the standard gradient and asserts
     /// the output isn't flat/empty (a spread of distinct pixel values) —
@@ -432,6 +435,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "gpu-proofs")]
     #[test]
     #[ignore = "needs a real GPU device; run with --ignored"]
     fn render_generator_thumbnail_produces_non_trivial_png() {

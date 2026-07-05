@@ -228,7 +228,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain parity oracle (freeze §12) — euler_3d had no GPU test. Like
     //! euler (2D): two coincident inputs (Particle + [f32;3] forces), derived

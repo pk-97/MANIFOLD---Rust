@@ -717,7 +717,7 @@ impl Drop for MetalBackend {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod array_buffer_tests {
     //! Phase A.4 of `BUFFER_PORT_PLAN`. Covers `pre_bind_array` →
     //! `array_buffer` round-trip, idempotency of acquire on a
@@ -934,7 +934,7 @@ mod array_buffer_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod alias_tests {
     //! Regression tests for [`MetalBackend::alias_2d`] +
     //! [`MetalBackend::clear_skip_aliases`] — the zero-GPU-cost

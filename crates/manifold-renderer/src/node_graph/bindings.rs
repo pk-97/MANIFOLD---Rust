@@ -259,7 +259,7 @@ impl<'a> NodeOutputs<'a> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod array_accessor_tests {
     //! Phase A.5 of `BUFFER_PORT_PLAN`. Verifies the
     //! [`NodeInputs::array`] / [`NodeOutputs::array`] accessors

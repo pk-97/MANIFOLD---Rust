@@ -506,7 +506,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Real-GPU smoke test: with text="HELLO" the output texture should
     //! contain some non-black pixels (the glyph silhouette). The

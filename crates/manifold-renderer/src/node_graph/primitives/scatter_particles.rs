@@ -272,7 +272,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! GPU parity tests for the `boundary` mode added 2026-05-23.
     //! Wrap mode is the legacy FluidSim behaviour (toroidal); Discard
