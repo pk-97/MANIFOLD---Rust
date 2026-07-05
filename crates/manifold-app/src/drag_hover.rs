@@ -65,3 +65,67 @@ impl DragHoverTracker {
         self.first_hovered_audio_seconds
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::DragHoverTracker;
+    use std::path::PathBuf;
+
+    #[test]
+    fn fresh_tracker_is_inactive() {
+        let t = DragHoverTracker::default();
+        assert!(!t.is_active());
+        assert!(t.hovered_files().is_empty());
+        assert!(t.first_hovered_audio_seconds().is_none());
+    }
+
+    #[test]
+    fn hovering_a_file_activates_the_tracker() {
+        let mut t = DragHoverTracker::default();
+        t.on_hovered_file(PathBuf::from("/tmp/clip.mp4"));
+        assert!(t.is_active());
+        assert_eq!(t.hovered_files(), &[PathBuf::from("/tmp/clip.mp4")]);
+    }
+
+    #[test]
+    fn first_hovered_audio_file_sets_the_duration_probe() {
+        let mut t = DragHoverTracker::default();
+        t.on_hovered_file(PathBuf::from("/tmp/song.wav"));
+        // The path doesn't exist, so the probe itself reads zero — this
+        // asserts the CACHING decision (an audio file as the first hover
+        // triggers a probe at all), not the probe's numeric result.
+        assert!(t.first_hovered_audio_seconds().is_some());
+    }
+
+    #[test]
+    fn first_hovered_non_audio_file_never_probes_duration() {
+        let mut t = DragHoverTracker::default();
+        t.on_hovered_file(PathBuf::from("/tmp/clip.mp4"));
+        assert!(t.first_hovered_audio_seconds().is_none());
+    }
+
+    #[test]
+    fn only_the_first_hovered_file_is_probed() {
+        // A non-audio file hovers first (e.g. the OS reports files in drop
+        // order, not type order) — a LATER audio file in the same hover must
+        // not retroactively populate the probe. Matches the ghost's "v1
+        // shows the first file's target" contract (TIMELINE_INGEST_DESIGN
+        // §7 Deferred: multi-file hover preview).
+        let mut t = DragHoverTracker::default();
+        t.on_hovered_file(PathBuf::from("/tmp/clip.mp4"));
+        t.on_hovered_file(PathBuf::from("/tmp/song.wav"));
+        assert!(t.first_hovered_audio_seconds().is_none());
+        assert_eq!(t.hovered_files().len(), 2);
+    }
+
+    #[test]
+    fn drag_ended_clears_all_state() {
+        let mut t = DragHoverTracker::default();
+        t.on_hovered_file(PathBuf::from("/tmp/song.wav"));
+        assert!(t.is_active());
+        t.on_drag_ended();
+        assert!(!t.is_active());
+        assert!(t.hovered_files().is_empty());
+        assert!(t.first_hovered_audio_seconds().is_none());
+    }
+}
