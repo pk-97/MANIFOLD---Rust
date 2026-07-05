@@ -930,7 +930,7 @@ impl ContentThread {
                         })
                         .collect();
                     session.set_timeline_snapshot(manifold_profiler::TimelineSnapshot {
-                        bpm: p.settings.bpm,
+                        bpm: p.settings.bpm.0,
                         time_signature: p.settings.time_signature_numerator,
                         resolution: (
                             p.settings.output_width as u32,

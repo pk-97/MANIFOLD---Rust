@@ -851,7 +851,7 @@ impl ContentThread {
                 .engine
                 .project()
                 .map_or(4, |p| p.settings.time_signature_numerator.max(1));
-            let bar = (current_beat / time_sig as f32).floor() as u32;
+            let bar = (current_beat.as_f32() / time_sig as f32).floor() as u32;
             let budget_ms = 1000.0 / self.timer.target_fps();
             let active_layers = self.engine.project().map_or(0, |p| p.timeline.layers.len());
 
@@ -985,7 +985,7 @@ impl ContentThread {
 
             profiler.record_frame(manifold_profiler::FrameRecord {
                 index: self.frame_count - 1,
-                beat: current_beat,
+                beat: current_beat.as_f32(),
                 bar,
                 wall_time_ms: frame_wall_ms,
                 budget_exceeded: frame_wall_ms > budget_ms,

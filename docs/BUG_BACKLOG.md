@@ -129,7 +129,15 @@ per-tick sync path already restores the real volume via `set_volume(volume, decl
 so activation is unaffected. This kills the whole class including the race where an audio
 callback fires between play and pause. One-line-ish, `manifold-playback` only.
 
-### BUG-029 — `profiling` feature doesn't compile: rotted against the Beats/Bpm newtypes — LOW (parked)
+### BUG-029 — `profiling` feature doesn't compile: rotted against the Beats/Bpm newtypes — FIXED 2026-07-06
+
+**Fix** — the three newtype casts (`.as_f32()` / `.0`) applied; `cargo check -p manifold-app
+--features profiling` and clippy are clean, default build untouched. Un-parked because the
+profiler is the next oracle for BUG-035 (per-frame content-thread phase breakdown, LFO on vs
+off). Toggling the perf HUD starts/stops a session when built with `--features profiling`
+(input_host.rs `toggle_performance_hud`); sessions land in `profiling_sessions/`. Note: GPU
+pass-level numbers are still zero on native Metal (pre-migration profiler) — the CPU phase
+breakdown (engine tick / render_content / gpu_poll) is the usable signal.
 
 **Root cause** — the `#[cfg(feature = "profiling")]` blocks in `manifold-app` predate the
 `Beats`/`Bpm`/`Seconds` newtype migration and still treat those values as raw `f32`/`u32`.
