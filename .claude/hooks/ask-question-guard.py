@@ -119,6 +119,9 @@ def main():
         import common
 
         questions = tool_input.get("questions")
+        if not questions:
+            return
+
         key = _question_hash(questions)
         os.makedirs(BOUNCE_DIR, exist_ok=True)
         marker_path = os.path.join(BOUNCE_DIR, f"{key}.bounced")
@@ -127,8 +130,12 @@ def main():
             return
 
         reason = None
+        tier = None
         gate = None
+        confidence = None
+        error = None
         if common.detect_shortcut_fork(tool_input):
+            tier = "regex"
             gate = "shortcut-fork"
             reason = (
                 "This question offers a cheaper option marked (Recommended) alongside "
@@ -143,34 +150,38 @@ def main():
             # Semantic tier (wired 2026-07-05 with Peter's explicit sign-off).
             # Synchronous because a question is rare and already blocking;
             # any error/timeout/low-confidence verdict falls open.
+            tier = "semantic"
             verdict = common.call_classifier(
                 ASK_GATE_RUBRIC,
                 json.dumps(questions, indent=1, default=str),
                 timeout=ASK_GATE_TIMEOUT_S,
             )
             g = verdict.get("gate") if isinstance(verdict, dict) else None
-            conf = verdict.get("confidence") if isinstance(verdict, dict) else None
-            if g in ASK_GATE_REASONS and isinstance(conf, (int, float)) and conf >= 0.8:
-                gate = g
+            confidence = verdict.get("confidence") if isinstance(verdict, dict) else None
+            error = verdict.get("error") if isinstance(verdict, dict) else "no-verdict"
+            gate = g if isinstance(g, str) else None
+            if g in ASK_GATE_REASONS and isinstance(confidence, (int, float)) and confidence >= 0.8:
                 evidence = verdict.get("evidence")
                 quoted = f'\n\n(Flagged text: "{evidence}")' if evidence else ""
                 reason = ASK_GATE_REASONS[g] + quoted
-            try:
-                import valve
 
-                valve.append_telemetry(
-                    {
-                        "ts": time.time(),
-                        "session_id": session_id,
-                        "event": "ask_gate",
-                        "gate": g if isinstance(g, str) else None,
-                        "confidence": conf,
-                        "error": verdict.get("error") if isinstance(verdict, dict) else "no-verdict",
-                        "denied": bool(reason),
-                    }
-                )
-            except Exception:
-                pass
+        try:
+            import valve
+
+            valve.append_telemetry(
+                {
+                    "ts": time.time(),
+                    "session_id": session_id,
+                    "event": "ask_gate",
+                    "tier": tier,
+                    "gate": gate,
+                    "confidence": confidence,
+                    "error": error,
+                    "denied": bool(reason),
+                }
+            )
+        except Exception:
+            pass
 
         if not reason:
             return
