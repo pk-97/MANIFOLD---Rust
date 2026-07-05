@@ -1551,7 +1551,7 @@ impl UIRoot {
                         // Debug form, exactly as the old index→action map did
                         // (`format!("{:?}", BlendMode::from_index(i))`).
                         DropdownItem::new(m.display_name())
-                            .with_action(PanelAction::SetBlendMode(*idx, format!("{:?}", m)))
+                            .with_action(PanelAction::SetBlendMode(idx.clone(), format!("{:?}", m)))
                     })
                     .collect();
                 self.open_dropdown_typed(items, trigger);
@@ -1609,12 +1609,12 @@ impl UIRoot {
                 let mut items = Vec::with_capacity(sends.len() + 1);
                 items.push(
                     DropdownItem::new("No send")
-                        .with_action(PanelAction::SetLayerAudioSend(*idx, None)),
+                        .with_action(PanelAction::SetLayerAudioSend(idx.clone(), None)),
                 );
                 for (id, label) in sends {
                     items.push(
                         DropdownItem::new(&label)
-                            .with_action(PanelAction::SetLayerAudioSend(*idx, Some(id))),
+                            .with_action(PanelAction::SetLayerAudioSend(idx.clone(), Some(id))),
                     );
                 }
                 self.open_dropdown_typed(items, trigger);
@@ -1863,7 +1863,7 @@ impl UIRoot {
                 let items: Vec<DropdownItem> = (0..128)
                     .map(|n| {
                         DropdownItem::new(&manifold_core::midi::note_number_to_name(n))
-                            .with_action(PanelAction::SetMidiNote(*idx, n))
+                            .with_action(PanelAction::SetMidiNote(idx.clone(), n))
                     })
                     .collect();
                 self.open_dropdown_typed(items, trigger);
@@ -1871,11 +1871,12 @@ impl UIRoot {
             }
             PanelAction::MidiChannelClicked(idx) => {
                 // "All" (-1) then channels 0..15 (displayed 1..16).
-                let mut items: Vec<DropdownItem> =
-                    vec![DropdownItem::new("All").with_action(PanelAction::SetMidiChannel(*idx, -1))];
+                let mut items: Vec<DropdownItem> = vec![
+                    DropdownItem::new("All").with_action(PanelAction::SetMidiChannel(idx.clone(), -1)),
+                ];
                 items.extend((1..=16).map(|ch| {
                     DropdownItem::new(&format!("Ch {}", ch))
-                        .with_action(PanelAction::SetMidiChannel(*idx, ch - 1))
+                        .with_action(PanelAction::SetMidiChannel(idx.clone(), ch - 1))
                 }));
                 self.open_dropdown_typed(items, trigger);
                 true
@@ -1884,11 +1885,11 @@ impl UIRoot {
                 // "All Devices" (None) then each named device.
                 let mut items: Vec<DropdownItem> = vec![
                     DropdownItem::new("All Devices")
-                        .with_action(PanelAction::SetMidiDevice(*idx, None)),
+                        .with_action(PanelAction::SetMidiDevice(idx.clone(), None)),
                 ];
                 items.extend(self.midi_device_names.iter().map(|name| {
                     DropdownItem::new(name)
-                        .with_action(PanelAction::SetMidiDevice(*idx, Some(name.clone())))
+                        .with_action(PanelAction::SetMidiDevice(idx.clone(), Some(name.clone())))
                 }));
                 self.open_dropdown_typed(items, trigger);
                 true
@@ -1972,14 +1973,16 @@ impl UIRoot {
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
-            PanelAction::LayerHeaderRightClicked(layer_idx) => {
-                let layer_info = self.layer_headers.layer_info(*layer_idx);
+            PanelAction::LayerHeaderRightClicked(layer_id) => {
+                // The action carries a stable LayerId; resolve it to the current
+                // row for the still-positional context-menu items opened
+                // synchronously below (the Context*Layer family is a separate
+                // index-based cluster — follow-up BUG-031).
+                let Some(li) = self.layer_headers.index_of_layer(layer_id) else {
+                    return true;
+                };
+                let layer_info = self.layer_headers.layer_info(li);
                 let is_group = layer_info.is_some_and(|l| l.is_group);
-
-                // Typed (2b.11): each text item carries its layer action. The
-                // context is still set so the color swatches below (ColorSelected →
-                // dropdown_color_to_action) can recover the layer.
-                let li = *layer_idx;
                 let mut items =
                     vec![DropdownItem::new("Paste").with_action(PanelAction::ContextPasteAtLayer(li))];
                 if !is_group {
@@ -2028,7 +2031,7 @@ impl UIRoot {
                 if let Some(last) = items.last_mut() {
                     last.separator_after = true;
                 }
-                self.dropdown_context = Some(DropdownContext::LayerContext(*layer_idx));
+                self.dropdown_context = Some(DropdownContext::LayerContext(li));
                 self.dropdown.open_context_with_colors(
                     items,
                     manifold_ui::color::COLOR_GRID.to_vec(),

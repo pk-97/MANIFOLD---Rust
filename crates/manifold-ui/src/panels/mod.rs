@@ -205,39 +205,48 @@ pub enum PanelAction {
     SelectInspectorTab(InspectorTab),
 
     // Layer
-    ToggleMute(usize),
-    ToggleSolo(usize),
+    //
+    // These carry a stable `LayerId`, not a positional index: the panel
+    // resolves the row's id at emit time (against its own layer snapshot,
+    // the exact list the row was built from) and the bridge looks it up by
+    // id. A stale UI snapshot then resolves to the right layer or to a
+    // no-op — never the *wrong* layer. (Same reasoning that moved the
+    // per-effect-param actions off positional `pi` to `ParamId`.) The
+    // `LayerDrag*` variants below stay positional: reordering is inherently
+    // about positions and resolves within one gesture against one snapshot.
+    ToggleMute(LayerId),
+    ToggleSolo(LayerId),
     /// Toggle an audio layer's analysis-only output state (silent to master, still
-    /// feeding its send). Layer index. See LAYER_CONTROLS_DESIGN §5.3.
-    ToggleAnalysisOnly(usize),
-    ToggleLed(usize),
-    SetBlendMode(usize, String),
-    ExpandLayer(usize),
-    CollapseLayer(usize),
+    /// feeding its send). See LAYER_CONTROLS_DESIGN §5.3.
+    ToggleAnalysisOnly(LayerId),
+    ToggleLed(LayerId),
+    SetBlendMode(LayerId, String),
+    ExpandLayer(LayerId),
+    CollapseLayer(LayerId),
 
     // Layer header
-    LayerClicked(usize, crate::input::Modifiers),
-    LayerDoubleClicked(usize),
-    ChevronClicked(usize),
-    BlendModeClicked(usize),
-    FolderClicked(usize),
-    NewClipClicked(usize),
-    AddGenClipClicked(usize),
-    MidiInputClicked(usize),
-    MidiChannelClicked(usize),
-    MidiDeviceClicked(usize),
-    MidiTriggerModeClicked(usize),
-    /// Audio-layer Send dropdown clicked (layer index) — opens the send picker.
-    AudioSendClicked(usize),
-    /// Route an audio layer to a send (layer index, send id). `None` clears the
+    LayerClicked(LayerId, crate::input::Modifiers),
+    LayerDoubleClicked(LayerId),
+    ChevronClicked(LayerId),
+    BlendModeClicked(LayerId),
+    FolderClicked(LayerId),
+    NewClipClicked(LayerId),
+    AddGenClipClicked(LayerId),
+    MidiInputClicked(LayerId),
+    MidiChannelClicked(LayerId),
+    MidiDeviceClicked(LayerId),
+    MidiTriggerModeClicked(LayerId),
+    /// Audio-layer Send dropdown clicked — opens the send picker.
+    AudioSendClicked(LayerId),
+    /// Route an audio layer to a send (layer, send id). `None` clears the
     /// layer's send routing (reverts the previously-fed send to a capture source).
-    SetLayerAudioSend(usize, Option<AudioSendId>),
-    /// Audio-layer Gain slider drag begins (layer index) — snapshot for undo.
-    AudioGainSnapshot(usize),
-    /// Audio-layer Gain slider dragged to a new dB value (layer index, dB).
-    AudioGainChanged(usize, f32),
-    /// Audio-layer Gain slider released (layer index) — commit one undo step.
-    AudioGainCommit(usize),
+    SetLayerAudioSend(LayerId, Option<AudioSendId>),
+    /// Audio-layer Gain slider drag begins — snapshot for undo.
+    AudioGainSnapshot(LayerId),
+    /// Audio-layer Gain slider dragged to a new dB value (layer, dB).
+    AudioGainChanged(LayerId, f32),
+    /// Audio-layer Gain slider released — commit one undo step.
+    AudioGainCommit(LayerId),
     LayerDragStarted(usize),
     LayerDragMoved(usize, usize),
     LayerDragEnded(usize, usize),
@@ -752,7 +761,7 @@ pub enum PanelAction {
 
     // Layer management
     AddLayerClicked,
-    DeleteLayerClicked(usize),
+    DeleteLayerClicked(LayerId),
 
     // Effect management
     AddEffectClicked(InspectorTab),
@@ -764,11 +773,13 @@ pub enum PanelAction {
     // Unity: UIElementBuilder.CopyToClipboardLabel.
     CopyOscAddress(String),
 
-    // Dropdown results (context-routed from UIRoot)
-    SetMidiNote(usize, i32),              // layer_index, note (0-127)
-    SetMidiChannel(usize, i32),           // layer_index, channel (0-15 internal, displayed 1-16)
-    SetMidiDevice(usize, Option<String>), // layer_index, device name (None = any)
-    SetMidiTriggerMode(usize, MidiTriggerMode),
+    // Dropdown results (context-routed from UIRoot) — layer-keyed by stable
+    // `LayerId` (threaded through from the opening `Midi*Clicked` action), not
+    // a positional index, for the same reason as the layer-header family above.
+    SetMidiNote(LayerId, i32),              // layer, note (0-127)
+    SetMidiChannel(LayerId, i32),           // layer, channel (0-15 internal, displayed 1-16)
+    SetMidiDevice(LayerId, Option<String>), // layer, device name (None = any)
+    SetMidiTriggerMode(LayerId, MidiTriggerMode),
     SetResolution(usize),           // preset index
     SetDisplayResolution(i32, i32), // direct width, height (no undo, matches Unity)
     SetRenderScale(f32),            // render scale: 1.0 (native), 0.75 (quality), 0.5 (performance)
@@ -778,7 +789,7 @@ pub enum PanelAction {
     SetMidiClockDevice(i32),            // MIDI device index
 
     // Layer header right-click
-    LayerHeaderRightClicked(usize), // layer_index
+    LayerHeaderRightClicked(LayerId),
 
     // Context menu results
     ContextSplitAtPlayhead(String),  // clip_id

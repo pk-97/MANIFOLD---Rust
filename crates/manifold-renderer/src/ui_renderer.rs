@@ -287,8 +287,12 @@ struct ImageCommand {
     corner_radius: f32,
     handle: TextureHandle,
     depth: Depth,
-    /// Clip captured at draw time (the tree-traversal clip stack — images are
-    /// only ever emitted via `draw_node`, never the immediate API).
+    /// Source UV sub-rect `[u0, v0, u1, v1]`. `[0, 0, 1, 1]` samples the whole
+    /// texture (static browser thumbnails); a narrower rect samples one cell of
+    /// an atlas (graph-node output previews via the immediate `draw_image_uv`).
+    uv: [f32; 4],
+    /// Clip captured at draw time: the tree-traversal `clip_stack` for
+    /// `draw_node` images, or `immediate_clip` for the immediate `draw_image_uv`.
     clip: Option<Rect>,
 }
 
@@ -685,6 +689,16 @@ impl UIRenderer {
         true
     }
 
+    /// Install an already-GPU-resident texture under `handle`, replacing any
+    /// prior entry. Unlike [`Self::register_image`] (which uploads CPU RGBA to a
+    /// fresh texture), this shares an existing [`GpuTexture`] — a cheap
+    /// `Retained` clone, no GPU allocation — so it's called every frame to point
+    /// the graph node-preview handle at the current front of the rotating
+    /// IOSurface atlas (or, in the headless harness, at each node's output).
+    pub fn register_external_texture(&mut self, handle: TextureHandle, texture: GpuTexture) {
+        self.image_textures.insert(handle, texture);
+    }
+
     // ── Immediate-mode draw API ─────────────────────────────────────
 
     /// Clip subsequent immediate-mode draws (rects, lines, AND text) to
@@ -817,6 +831,39 @@ impl UIRenderer {
             color2: [0.0; 4],
             grad: NO_GRAD,
             transform: self.current_transform(),
+        });
+    }
+
+    /// Immediate-mode textured quad: sample `handle`'s `uv` sub-rect into the
+    /// rect, masked to a rounded rect. Queued at the current depth + immediate
+    /// clip, so it interleaves with the rects/text of the same depth (the
+    /// per-depth render loop draws rects, then images, then text). A graph
+    /// node's output preview drawn right after its body — inside the node's own
+    /// depth band — is therefore occluded correctly by any node stacked above
+    /// it, instead of the old flat post-pass blit that ignored node z-order.
+    /// `uv` is `[u0, v0, u1, v1]`: `[0, 0, 1, 1]` for a whole texture, a cell
+    /// rect for one node's slot in the shared preview atlas.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_image_uv(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        handle: TextureHandle,
+        uv: [f32; 4],
+        corner_radius: f32,
+    ) {
+        self.image_commands.push(ImageCommand {
+            x,
+            y,
+            w,
+            h,
+            corner_radius,
+            handle,
+            depth: self.current_depth(),
+            uv,
+            clip: self.immediate_clip,
         });
     }
 
@@ -1222,6 +1269,7 @@ impl UIRenderer {
                 corner_radius: style.corner_radius,
                 handle,
                 depth: self.current_depth(),
+                uv: [0.0, 0.0, 1.0, 1.0],
                 clip: self.clip_stack.last().copied(),
             });
         }
@@ -1695,22 +1743,23 @@ impl UIRenderer {
                 Vec::with_capacity(self.image_commands.len().min(MAX_IMAGE_QUADS) * 4);
             for cmd in self.image_commands.iter().take(MAX_IMAGE_QUADS) {
                 let rect_params = [cmd.w, cmd.h, cmd.corner_radius, 0.0];
+                let [u0, v0, u1, v1] = cmd.uv;
                 let vertex_offset =
                     (image_vertices.len() * std::mem::size_of::<ImageVertex>()) as u64;
-                image_vertices.push(ImageVertex { position: [cmd.x, cmd.y], uv: [0.0, 0.0], rect_params });
+                image_vertices.push(ImageVertex { position: [cmd.x, cmd.y], uv: [u0, v0], rect_params });
                 image_vertices.push(ImageVertex {
                     position: [cmd.x + cmd.w, cmd.y],
-                    uv: [1.0, 0.0],
+                    uv: [u1, v0],
                     rect_params,
                 });
                 image_vertices.push(ImageVertex {
                     position: [cmd.x + cmd.w, cmd.y + cmd.h],
-                    uv: [1.0, 1.0],
+                    uv: [u1, v1],
                     rect_params,
                 });
                 image_vertices.push(ImageVertex {
                     position: [cmd.x, cmd.y + cmd.h],
-                    uv: [0.0, 1.0],
+                    uv: [u0, v1],
                     rect_params,
                 });
                 self.prepared_image_draws.push(PreparedImageDraw {
@@ -1970,6 +2019,19 @@ impl manifold_ui::draw::Painter for UIRenderer {
 
     fn draw_text(&mut self, x: f32, y: f32, text: &str, font_size: f32, color: [u8; 4]) {
         self.draw_text(x, y, text, font_size, color);
+    }
+
+    fn draw_image_uv(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        handle: manifold_ui::node::TextureHandle,
+        uv: [f32; 4],
+        corner: f32,
+    ) {
+        self.draw_image_uv(x, y, w, h, handle, uv, corner);
     }
 
     fn push_immediate_clip(&mut self, x: f32, y: f32, w: f32, h: f32) {
