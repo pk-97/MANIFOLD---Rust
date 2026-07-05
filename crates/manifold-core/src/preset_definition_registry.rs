@@ -758,8 +758,8 @@ mod tests {
         let inst = create_default(&PresetTypeId::BLOOM);
         assert_eq!(*inst.effect_type(), PresetTypeId::BLOOM);
         assert!(inst.enabled);
-        assert_eq!(inst.param_values.len(), 1);
-        assert!((inst.param_values[0].value - 0.187).abs() < 1e-6);
+        assert_eq!(inst.params.len(), 1);
+        assert!((inst.params.get("amount").unwrap().value - 0.187).abs() < 1e-6);
     }
 
     #[test]

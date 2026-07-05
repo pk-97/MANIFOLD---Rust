@@ -3775,25 +3775,21 @@ mod tests {
         // user-binding tail values landing in the right param_values
         // slots regardless of JSON key ordering.
         let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-        fx.param_values = vec![ParamSlot::exposed(0.7)]; // static prefix
+        fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.7, true)]); // static prefix
         fx.append_user_binding(sample_user_binding(
             "user.uv_transform.translate.1",
             "uv_transform",
             "translate",
         ));
         fx.append_user_binding(sample_user_binding("user.mix.amount.1", "mix", "amount"));
-        // After append, param_values should be [0.7, 0.25, 0.25].
-        assert_eq!(
-            fx.param_values,
-            vec![
-                ParamSlot::exposed(0.7),
-                ParamSlot::exposed(0.25),
-                ParamSlot::exposed(0.25)
-            ]
-        );
+        // After append, the manifest should carry [amount=0.7, translate=0.25, mix.amount=0.25].
+        assert_eq!(fx.params.len(), 3);
+        assert_eq!(fx.params.get("amount").unwrap().value, 0.7);
+        assert_eq!(fx.params.get("user.uv_transform.translate.1").unwrap().value, 0.25);
+        assert_eq!(fx.params.get("user.mix.amount.1").unwrap().value, 0.25);
         // Tweak the user-tail values to verify they round-trip.
-        fx.param_values[1].value = 0.42;
-        fx.param_values[2].value = 0.91;
+        fx.params.get_mut("user.uv_transform.translate.1").unwrap().value = 0.42;
+        fx.params.get_mut("user.mix.amount.1").unwrap().value = 0.91;
 
         let json = serde_json::to_string(&fx).unwrap();
         // User bindings now ride out inside the per-instance `graph`
@@ -3811,33 +3807,26 @@ mod tests {
         assert_eq!(back_bindings.len(), 2);
         assert_eq!(back_bindings[0].id, "user.uv_transform.translate.1");
         assert_eq!(back_bindings[1].id, "user.mix.amount.1");
-        assert_eq!(
-            back.param_values,
-            vec![
-                ParamSlot::exposed(0.7),
-                ParamSlot::exposed(0.42),
-                ParamSlot::exposed(0.91)
-            ]
-        );
+        assert_eq!(back.params.len(), 3);
+        assert_eq!(back.params.get("amount").unwrap().value, 0.7);
+        assert_eq!(back.params.get("user.uv_transform.translate.1").unwrap().value, 0.42);
+        assert_eq!(back.params.get("user.mix.amount.1").unwrap().value, 0.91);
     }
 
     #[test]
     fn append_user_binding_grows_param_values_with_default() {
         let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-        fx.param_values = vec![ParamSlot::exposed(0.7)];
+        fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.7, true)]);
         fx.ensure_base_values();
 
         fx.append_user_binding(sample_user_binding("user.a.b.1", "a", "b"));
-        assert_eq!(
-            fx.param_values,
-            vec![ParamSlot::exposed(0.7), ParamSlot::exposed(0.25)]
-        );
+        assert_eq!(fx.params.len(), 2);
+        assert_eq!(fx.params.get("amount").unwrap().value, 0.7);
+        assert_eq!(fx.params.get("user.a.b.1").unwrap().value, 0.25);
         // base rides each slot now (fork #16).
         assert!(fx.base_tracked);
-        assert_eq!(
-            fx.param_values.iter().map(|s| s.base).collect::<Vec<_>>(),
-            vec![0.7, 0.25]
-        );
+        assert_eq!(fx.params.get("amount").unwrap().base, 0.7);
+        assert_eq!(fx.params.get("user.a.b.1").unwrap().base, 0.25);
         // The binding now lives in the graph (the single storage list).
         assert_eq!(fx.user_param_count(), 1);
     }
@@ -3845,43 +3834,42 @@ mod tests {
     #[test]
     fn remove_user_binding_drops_corresponding_value_slot() {
         let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-        fx.param_values = vec![ParamSlot::exposed(0.7)];
+        fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.7, true)]);
         fx.append_user_binding(sample_user_binding("user.a.b.1", "a", "b"));
         fx.append_user_binding(sample_user_binding("user.c.d.1", "c", "d"));
         // A real slider edit sets base + value together (fork #16); set both so
         // the surviving slot is coherent after compaction.
-        fx.set_base_param(1, 0.3);
-        fx.set_base_param(2, 0.6);
+        fx.set_base_param("user.a.b.1", 0.3);
+        fx.set_base_param("user.c.d.1", 0.6);
 
         let removed = fx.remove_user_binding_by_id("user.a.b.1");
         assert!(removed.is_some());
         assert_eq!(fx.user_param_count(), 1);
         // Static prefix preserved + user tail compacted around the gap.
-        // Slot 0 was seeded directly (never a `set_base_param` hand) so it
-        // stays untouched; slot 1's value came from `set_base_param(2, 0.6)`
-        // above, so it carries `touched: true` — the funnel every hand
-        // (including this test's own setup) writes through.
-        assert_eq!(
-            fx.param_values,
-            vec![
-                ParamSlot::exposed(0.7),
-                ParamSlot {
-                    value: 0.6,
-                    base: 0.6,
-                    exposed: true,
-                    touched: true,
-                },
-            ]
-        );
+        // "amount" was seeded directly (never a `set_base_param` hand) so it
+        // stays untouched; "user.c.d.1"'s value came from
+        // `set_base_param("user.c.d.1", 0.6)` above, so it carries
+        // `touched: true` — the funnel every hand (including this test's own
+        // setup) writes through.
+        assert_eq!(fx.params.len(), 2);
+        let amount = fx.params.get("amount").unwrap();
+        assert_eq!(amount.value, 0.7);
+        assert!(!amount.touched);
+        let cd = fx.params.get("user.c.d.1").unwrap();
+        assert_eq!(cd.value, 0.6);
+        assert_eq!(cd.base, 0.6);
+        assert!(cd.exposed);
+        assert!(cd.touched);
     }
 
     #[test]
     fn remove_user_binding_unknown_id_returns_none() {
         let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-        fx.param_values = vec![ParamSlot::exposed(0.7)];
+        fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.7, true)]);
         let removed = fx.remove_user_binding_by_id("user.nope.1");
         assert!(removed.is_none());
-        assert_eq!(fx.param_values, vec![ParamSlot::exposed(0.7)]);
+        assert_eq!(fx.params.len(), 1);
+        assert_eq!(fx.params.get("amount").unwrap().value, 0.7);
     }
 
 
@@ -3922,7 +3910,7 @@ mod tests {
         // positional values can't carry over, so reseed rebuilds them from the
         // def's defaults (declaration order, all exposed).
         let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-        fx.param_values = vec![ParamSlot::exposed(0.1), ParamSlot::exposed(0.2)];
+        fx.params = manifest(&[(0.1, true), (0.2, true)]);
 
         let mut donor = PresetInstance::new(PresetTypeId::BLOOM);
         donor.append_user_binding(sample_user_binding("user.x.y.1", "x", "y"));
@@ -3932,10 +3920,11 @@ mod tests {
 
         fx.reseed_param_values_from_def(&def);
         assert_eq!(
-            fx.param_values,
-            vec![ParamSlot::exposed(0.55)],
-            "reseed rebuilds param_values from the def's (snapshotted) defaults",
+            fx.params.len(),
+            1,
+            "reseed rebuilds the manifest from the def's (snapshotted) defaults",
         );
+        assert_eq!(fx.params.get("user.x.y.1").unwrap().value, 0.55);
     }
 
     #[test]
@@ -3949,28 +3938,33 @@ mod tests {
         fx.create_driver(ParamId::from("user.blur.radius.1"));
         fx.envelopes = Some(vec![ParamEnvelope::new("user.blur.radius.1")]);
 
-        let pre_params = fx.param_values.clone();
+        // Snapshot entry content (not the whole manifest — `topology` bumps on
+        // every push/remove/insert_at, so it legitimately differs after a
+        // remove+restore round trip even though every param's own state is
+        // back to identical).
+        let pre_entries: Vec<crate::params::Param> = fx.params.iter().cloned().collect();
 
         let removed = fx.remove_exposures_for_node(&NodeId::new("blur"));
         assert_eq!(removed.len(), 1, "one slider was bound to the deleted node");
 
         // Slider, slot, driver, envelope all gone; the unrelated slider survives.
-        assert!(fx.param_id_to_value_index("user.blur.radius.1").is_none());
+        assert!(!fx.params.contains("user.blur.radius.1"));
         assert!(fx.find_driver("user.blur.radius.1").is_none());
         assert!(
             fx.envelopes.is_none(),
             "pruning the last envelope collapses the list to None"
         );
-        assert!(fx.param_id_to_value_index("user.other.x.1").is_some());
+        assert!(fx.params.contains("user.other.x.1"));
 
         // Undo restores values, metadata, and automation.
         fx.restore_exposures(removed);
+        let post_entries: Vec<crate::params::Param> = fx.params.iter().cloned().collect();
         assert_eq!(
-            fx.param_values, pre_params,
+            post_entries, pre_entries,
             "value slots restored at their original positions"
         );
         assert!(
-            fx.param_id_to_value_index("user.blur.radius.1").is_some(),
+            fx.params.contains("user.blur.radius.1"),
             "binding + param spec restored"
         );
         assert!(fx.find_driver("user.blur.radius.1").is_some(), "driver restored");
@@ -4029,10 +4023,10 @@ mod tests {
     fn remove_exposures_for_node_is_noop_when_nothing_bound() {
         let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
         fx.append_user_binding(sample_user_binding("user.blur.radius.1", "blur", "radius"));
-        let before = fx.param_values.clone();
+        let before = fx.params.clone();
         let removed = fx.remove_exposures_for_node(&NodeId::new("nonexistent"));
         assert!(removed.is_empty(), "no binding targets that node");
-        assert_eq!(fx.param_values, before, "nothing changed");
+        assert_eq!(fx.params, before, "nothing changed");
     }
 
     #[test]
@@ -4058,7 +4052,7 @@ mod tests {
             offset: 0.0,
             value_labels: Vec::new(),
         });
-        let pd = ParamSource::get_param_def(&fx, 1);
+        let pd = ParamSource::get_param_def(&fx, "user.uv.translate.1");
         assert_eq!(pd.id, "user.uv.translate.1");
         assert_eq!(pd.name, "Translate");
         assert!((pd.min + 2.0).abs() < f32::EPSILON);
@@ -4105,10 +4099,10 @@ mod tests {
         }"#;
         let fx: PresetInstance = serde_json::from_str(json).unwrap();
         assert_eq!(fx.user_param_count(), 2);
-        assert_eq!(fx.param_values.len(), 3);
-        assert!((fx.param_values[0].value - 0.7).abs() < f32::EPSILON);
-        assert!((fx.param_values[1].value - 0.3).abs() < f32::EPSILON);
-        assert!((fx.param_values[2].value - 0.9).abs() < f32::EPSILON);
+        assert_eq!(fx.params.len(), 3);
+        assert!((fx.params.get("amount").unwrap().value - 0.7).abs() < f32::EPSILON);
+        assert!((fx.params.get("user.foo.bar.1").unwrap().value - 0.3).abs() < f32::EPSILON);
+        assert!((fx.params.get("user.baz.qux.1").unwrap().value - 0.9).abs() < f32::EPSILON);
     }
 
     // ─── Per-instance graph override (Phase 1) ──────────────────
@@ -4420,8 +4414,9 @@ mod tests {
         // The single funnel every live hand writes through — the automation
         // evaluator's touch-detection relies on this.
         let mut fx = PresetInstance::new(PresetTypeId::new("Mirror"));
-        fx.set_base_param(0, 0.5);
-        assert!(fx.param_values[0].touched, "set_base_param marks touched");
+        fx.params = manifest(&[(0.0, true)]);
+        fx.set_base_param("p0", 0.5);
+        assert!(fx.params.get("p0").unwrap().touched, "set_base_param marks touched");
     }
 
     #[test]
@@ -4429,13 +4424,14 @@ mod tests {
         // System-level seeding (registry defaults) must not look like a hand
         // touch — see `preset_definition_registry::create_default`.
         let mut fx = PresetInstance::new(PresetTypeId::new("Mirror"));
-        fx.write_base_param(0, 0.5);
+        fx.params = manifest(&[(0.0, true)]);
+        fx.write_base_param("p0", 0.5);
         assert!(
-            !fx.param_values[0].touched,
+            !fx.params.get("p0").unwrap().touched,
             "write_base_param must not set touched"
         );
-        assert_eq!(fx.param_values[0].base, 0.5);
-        assert_eq!(fx.param_values[0].value, 0.5);
+        assert_eq!(fx.params.get("p0").unwrap().base, 0.5);
+        assert_eq!(fx.params.get("p0").unwrap().value, 0.5);
     }
 
     #[test]
@@ -4443,13 +4439,14 @@ mod tests {
         // The automation evaluator's own write path — using the public
         // set_base_param here would self-latch the very next frame.
         let mut fx = PresetInstance::new(PresetTypeId::new("Mirror"));
-        fx.set_base_param_from_automation(0, 0.5);
+        fx.params = manifest(&[(0.0, true)]);
+        fx.set_base_param_from_automation("p0", 0.5);
         assert!(
-            !fx.param_values[0].touched,
+            !fx.params.get("p0").unwrap().touched,
             "set_base_param_from_automation must not set touched"
         );
-        assert_eq!(fx.param_values[0].base, 0.5);
-        assert_eq!(fx.param_values[0].value, 0.5);
+        assert_eq!(fx.params.get("p0").unwrap().base, 0.5);
+        assert_eq!(fx.params.get("p0").unwrap().value, 0.5);
     }
 
     // Registered via `inventory::submit!` at module scope (mirrors
@@ -4481,132 +4478,20 @@ mod tests {
             "TestCreateDefaultUntouched",
         ));
         assert!(
-            !inst.param_values[0].touched,
+            !inst.params.get("amount").unwrap().touched,
             "create_default must not mark freshly-seeded params touched"
         );
-        assert_eq!(inst.param_values[0].base, 0.42);
+        assert_eq!(inst.params.get("amount").unwrap().base, 0.42);
     }
 
-    // A generator whose registry def carries five bundled card sliders. The
-    // glb auto-import builds exactly this shape: many `user_added: false`
-    // bindings, one per material/camera knob, all in the static prefix.
-    inventory::submit! {
-        crate::generator_registration::GeneratorMetadata {
-            id: PresetTypeId::new("TestBundledSliderMisroute"),
-            display_name: "Test Bundled Slider Misroute",
-            is_line_based: false,
-            available: true,
-            osc_prefix: "testBundledSliderMisroute",
-            legacy_discriminant: None,
-            params: &[
-                crate::generator_registration::ParamSpec::continuous("a", "A", 0.0, 1.0, 0.0, "F2", ""),
-                crate::generator_registration::ParamSpec::continuous("b", "B", 0.0, 1.0, 0.0, "F2", ""),
-                crate::generator_registration::ParamSpec::continuous("c", "C", 0.0, 1.0, 0.0, "F2", ""),
-                crate::generator_registration::ParamSpec::continuous("d", "D", 0.0, 1.0, 0.0, "F2", ""),
-                crate::generator_registration::ParamSpec::continuous("e", "E", 0.0, 1.0, 0.0, "F2", ""),
-            ],
-        }
-    }
-
-    /// A bundled card slider (`user_added: false`) that the user deletes from a
-    /// per-instance generator graph must not misroute drivers/LFOs on the
-    /// *surviving* sliders. This is the glb-import bug: `param_id_to_value_index`
-    /// (card display + prune path) reads the LIVE `meta.params`, but the runtime
-    /// modulation resolver `resolve_param_in` resolves the static prefix through
-    /// the FROZEN registry `id_to_index`, which never tracks a per-instance graph
-    /// edit. After a middle slider is removed the two disagree, and a driver on a
-    /// later slider writes to a stale slot — the neighbouring param.
-    #[test]
-    fn bundled_slider_delete_does_not_misroute_survivor_drivers() {
-        use crate::effect_graph_def::{
-            BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
-        };
-
-        let ty = PresetTypeId::new("TestBundledSliderMisroute");
-        let mut inst = PresetInstance::new_generator(ty.clone());
-
-        // Post-delete live state: the user removed the "b" slider, so the
-        // per-instance graph now carries [a, c, d, e] — exactly what
-        // `remove_exposures_for_node` produces (it prunes meta.params +
-        // meta.bindings + the param_values slot in lockstep, by live position).
-        let live_ids = ["a", "c", "d", "e"];
-        let card_param = |id: &str| ParamSpecDef {
-            id: id.into(),
-            name: id.to_uppercase().into(),
-            min: 0.0,
-            max: 1.0,
-            default_value: 0.0,
-            whole_numbers: false,
-            is_toggle: false,
-            is_trigger: false,
-            value_labels: Vec::new(),
-            format_string: None,
-            osc_suffix: String::new(),
-            curve: Default::default(),
-            invert: false,
-        };
-        let card_binding = |id: &str| BindingDef {
-            id: id.into(),
-            label: id.to_uppercase().into(),
-            default_value: 0.0,
-            target: BindingTarget::Node {
-                node_id: crate::NodeId::new(id),
-                param: "x".into(),
-            },
-            convert: Default::default(),
-            user_added: false, // bundled — the whole point
-            scale: 1.0,
-            offset: 0.0,
-        };
-        let meta = PresetMetadata {
-            id: ty.clone(),
-            display_name: "Test Bundled Slider Misroute".into(),
-            category: String::new(),
-            osc_prefix: String::new(),
-            legacy_discriminant: None,
-            available: true,
-            is_line_based: false,
-            params: live_ids.iter().map(|id| card_param(id)).collect(),
-            bindings: live_ids.iter().map(|id| card_binding(id)).collect(),
-            skip_mode: Default::default(),
-            param_aliases: Vec::new(),
-            value_aliases: Vec::new(),
-            string_params: Vec::new(),
-            string_bindings: Vec::new(),
-        };
-        inst.graph = Some(EffectGraphDef {
-            version: 0,
-            name: None,
-            description: None,
-            preset_metadata: Some(meta),
-            nodes: Vec::new(),
-            wires: Vec::new(),
-        });
-        // Distinct values so a misroute is observable: slot i holds (i+1)*10.
-        inst.param_values = vec![
-            ParamSlot::exposed(10.0), // a
-            ParamSlot::exposed(20.0), // c
-            ParamSlot::exposed(30.0), // d
-            ParamSlot::exposed(40.0), // e
-        ];
-
-        // The card display + prune path resolves "d" to its LIVE slot (2).
-        assert_eq!(
-            inst.param_id_to_value_index("d"),
-            Some(2),
-            "live meta.params authority places surviving slider 'd' at slot 2"
-        );
-
-        // The runtime modulation resolver resolves "d" against the FROZEN
-        // registry, which still thinks 5 sliders exist and "d" is at slot 3.
-        let def = crate::preset_definition_registry::try_get(&ty).unwrap();
-        let resolved = resolve_param_in(&def, &inst, "d").unwrap();
-        assert_eq!(
-            resolved.idx, 2,
-            "runtime driver for 'd' must resolve to its LIVE slot 2, not the \
-             registry-stale slot {} — a stale slot modulates the neighbouring \
-             param 'e' (value 40) instead of 'd' (value 30)",
-            resolved.idx
-        );
-    }
+    // `bundled_slider_delete_does_not_misroute_survivor_drivers` (and its
+    // `TestBundledSliderMisroute` fixture registration) was DELETED
+    // (PARAM_STORAGE_DESIGN.md D3): it existed to prove a fix for a bug
+    // that only the OLD dual-resolution scheme could have — a live
+    // per-instance `meta.params` position (`param_id_to_value_index`)
+    // disagreeing with a frozen-registry position (`resolve_param_in`)
+    // after a bundled slider was deleted mid-array. Both mechanisms are
+    // gone; every param is now addressed by stable id everywhere (card
+    // display, pruning, and runtime modulation resolution alike), so
+    // there is no positional index to disagree in the first place.
 }

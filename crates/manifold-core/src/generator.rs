@@ -10,7 +10,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::effects::{ParamSlot, PresetInstance, deserialize_generator_instance};
+    use crate::effects::{PresetInstance, deserialize_generator_instance};
     use crate::generator_registration::{GeneratorMetadata, ParamSpec};
     use crate::preset_type_id::PresetTypeId;
 
@@ -43,88 +43,22 @@ mod tests {
         }
     }
 
-    /// Build a generator instance with the given type and a short param array
-    /// (simulating a project saved before the type grew more params).
-    fn gen_with_params(gt: PresetTypeId, values: Vec<f32>) -> PresetInstance {
-        let mut state = PresetInstance::new_generator(gt);
-        // ParamSlot::exposed seeds base = value; mark base tracked (fork #16).
-        state.param_values = values.iter().map(|v| ParamSlot::exposed(*v)).collect();
-        state.base_tracked = true;
-        state
-    }
-
-    #[test]
-    fn migrate_pads_short_param_arrays_with_defaults_preserving_existing() {
-        let gt = PresetTypeId::BLACK_HOLE;
-        let target_count = crate::preset_definition_registry::try_get(&gt)
-            .expect("BLACK_HOLE registered")
-            .param_count;
-        assert!(target_count >= 4, "test assumes BLACK_HOLE has at least 4 params");
-
-        let mut state = gen_with_params(gt.clone(), vec![1.5, 2.5, 3.5]);
-        state.migrate_to_registry_length();
-
-        assert_eq!(state.param_values.len(), target_count);
-        assert_eq!(state.param_values[0].value, 1.5);
-        assert_eq!(state.param_values[1].value, 2.5);
-        assert_eq!(state.param_values[2].value, 3.5);
-
-        let def = crate::preset_definition_registry::try_get(&gt).unwrap();
-        for i in 3..target_count {
-            assert_eq!(
-                state.param_values[i].value, def.param_defs[i].default_value,
-                "tail index {i} should be registry default"
-            );
-        }
-
-        assert!(state.base_tracked);
-        assert_eq!(state.param_values.len(), target_count);
-        assert_eq!(state.param_values[0].base, 1.5);
-        assert_eq!(state.param_values[1].base, 2.5);
-        assert_eq!(state.param_values[2].base, 3.5);
-    }
-
-    #[test]
-    fn set_param_after_registry_growth_does_not_wipe_existing_values() {
-        let gt = PresetTypeId::BLACK_HOLE;
-        let target_count = crate::preset_definition_registry::try_get(&gt)
-            .expect("BLACK_HOLE registered")
-            .param_count;
-
-        // Values inside each param's clamp range (Speed 0..5, Cam Dist 0.1..50, Tilt 0..90).
-        let mut state = gen_with_params(gt, vec![2.5, 8.0, 9.0]);
-        state.set_base_param(0, 2.5);
-
-        assert_eq!(state.param_values.len(), target_count);
-        assert_eq!(state.param_values[0].value, 2.5);
-        assert_eq!(state.param_values[1].value, 8.0);
-        assert_eq!(state.param_values[2].value, 9.0);
-    }
-
-    #[test]
-    fn set_base_param_writes_through_for_json_only_generator_with_no_registry_entry() {
-        let unknown_type = PresetTypeId::from_string("DoesNotExist".to_string());
-        assert!(
-            crate::preset_definition_registry::try_get(&unknown_type).is_none(),
-            "fixture relies on this type NOT being in the registry"
-        );
-
-        let mut state = gen_with_params(unknown_type, vec![0.0, 1.0]);
-        state.set_base_param(1, 0.75);
-
-        assert_eq!(state.param_values[1].value, 0.75, "write landed on bundled slot");
-        assert_eq!(state.param_values[1].base, 0.75);
-
-        state.set_base_param(2, 0.42);
-        assert_eq!(state.param_values.len(), 3, "param_values auto-extended");
-        assert_eq!(state.param_values[2].value, 0.42, "tail write landed");
-        assert_eq!(state.param_values[2].base, 0.42);
-    }
+    // `migrate_pads_short_param_arrays_with_defaults_preserving_existing`,
+    // `set_param_after_registry_growth_does_not_wipe_existing_values`, and
+    // `set_base_param_writes_through_for_json_only_generator_with_no_registry_entry`
+    // were DELETED (PARAM_STORAGE_DESIGN.md D3): all three exercised the old
+    // positional `param_values` auto-grow-on-write behavior
+    // (`migrate_to_registry_length` / the implicit align-to-registry-length
+    // triggered by an out-of-range `set_base_param` index). The id-keyed
+    // manifest is fully seeded at construction/load and never lazily grows —
+    // a write to an unknown id is a no-op — so there is no positional tail to
+    // pad or extend anymore. `gen_with_params` (their shared positional
+    // fixture builder) went with them.
 
     #[test]
     fn generator_serialize_round_trips_type_and_values() {
         let mut gp = PresetInstance::new_generator(PresetTypeId::BLACK_HOLE);
-        gp.set_base_param(0, 1.25);
+        gp.set_base_param("speed", 1.25);
         let json = serde_json::to_string(&gp).unwrap();
         assert!(json.contains("\"generatorType\":\"BlackHole\""), "{json}");
 
@@ -132,7 +66,7 @@ mod tests {
         let back = deserialize_generator_instance(&mut de).unwrap();
         assert_eq!(*back.generator_type(), PresetTypeId::BLACK_HOLE);
         assert!(back.is_generator());
-        assert_eq!(back.get_base_param(0), 1.25);
+        assert_eq!(back.get_base_param("speed"), 1.25);
     }
 
     /// docs/NODE_VOCABULARY_AUDIT.md §3 test (b): a project fixture carrying

@@ -1364,8 +1364,34 @@ fn default_version() -> String {
 mod tests {
     use super::*;
     use crate::PresetTypeId;
-    use crate::effects::{PresetInstance, ParamSlot, ParameterDriver};
+    use crate::effects::{PresetInstance, ParameterDriver};
     use crate::types::{BeatDivision, DriverWaveform};
+
+    /// Build a bundled test [`crate::params::Param`] (mirrors
+    /// `effects::tests::slot`, kept local since that helper is private to
+    /// `effects.rs`'s own test module).
+    fn slot(id: &str, value: f32, exposed: bool) -> crate::params::Param {
+        let spec = crate::effect_graph_def::ParamSpecDef {
+            id: id.to_string(),
+            name: String::new(),
+            min: 0.0,
+            max: 1.0,
+            default_value: value,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: Default::default(),
+            invert: false,
+        };
+        let mut p = crate::params::Param::bundled(spec);
+        p.value = value;
+        p.base = value;
+        p.exposed = exposed;
+        p
+    }
 
     fn graph_def_with_id(id: &str, name: &str) -> crate::effect_graph_def::EffectGraphDef {
         crate::effect_graph_def::EffectGraphDef {
@@ -1601,7 +1627,7 @@ mod tests {
     fn legacy_param_index_resolved_to_param_id_for_effect_drivers() {
         let mut p = Project::default();
         let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-        fx.param_values = vec![ParamSlot::exposed(0.5)];
+        fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
         // Construct a driver as if it came from legacy JSON: empty
         // param_id, legacy_param_index = Some(0).
         fx.drivers = Some(vec![ParameterDriver {
@@ -1634,7 +1660,7 @@ mod tests {
     fn legacy_resolution_idempotent_when_param_id_already_set() {
         let mut p = Project::default();
         let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-        fx.param_values = vec![ParamSlot::exposed(0.5)];
+        fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
         fx.drivers = Some(vec![ParameterDriver::new(
             "amount",
             BeatDivision::Quarter,
@@ -1662,7 +1688,7 @@ mod tests {
         let mut p = Project::default();
         let mut layer = Layer::new("test".to_string(), LayerType::Video, 0);
         let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-        fx.param_values = vec![ParamSlot::exposed(0.5)];
+        fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
         fx.envelopes = Some(vec![ParamEnvelope {
             param_id: std::borrow::Cow::Borrowed(""),
             enabled: true,
@@ -1692,7 +1718,7 @@ mod tests {
         // ignored at runtime (`param_id_to_index` returns None on "").
         let mut p = Project::default();
         let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-        fx.param_values = vec![ParamSlot::exposed(0.5)];
+        fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
         fx.drivers = Some(vec![ParameterDriver {
             param_id: std::borrow::Cow::Borrowed(""),
             beat_division: BeatDivision::Quarter,
@@ -1775,7 +1801,7 @@ mod tests {
         // registered in this test crate; pretend the driver was for it).
         let mut p = Project::default();
         let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-        fx.param_values = vec![ParamSlot::exposed(0.5)];
+        fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
         let mut driver_for_bloom = back.clone();
         // (In a real load, the driver lands inside an PresetInstance
         // from the deserialize tree; here we simulate by re-attaching.)
@@ -1811,11 +1837,11 @@ mod tests {
         // Synthetic effect type with no registry def in this test build.
         let unregistered = crate::PresetTypeId::from_string("not-a-real-effect-id".to_string());
         let mut fx = PresetInstance::new(unregistered);
-        fx.param_values = vec![
-            ParamSlot::exposed(0.5),
-            ParamSlot::exposed(0.5),
-            ParamSlot::exposed(0.5),
-        ];
+        fx.params = crate::params::ParamManifest::from_params(vec![
+            slot("p0", 0.5, true),
+            slot("p1", 0.5, true),
+            slot("p2", 0.5, true),
+        ]);
         fx.drivers = Some(vec![ParameterDriver {
             param_id: std::borrow::Cow::Borrowed(""),
             beat_division: BeatDivision::Quarter,
