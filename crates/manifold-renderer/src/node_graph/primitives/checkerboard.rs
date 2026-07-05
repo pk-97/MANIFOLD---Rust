@@ -2,6 +2,8 @@
 //! configurable scale. Output is binary {0, 1} broadcast to RGB,
 //! A = 1.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -27,7 +29,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "scale",
+            name: Cow::Borrowed("scale"),
             label: "Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(8.0),
@@ -35,7 +37,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "offset_x",
+            name: Cow::Borrowed("offset_x"),
             label: "Offset X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -43,7 +45,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "offset_y",
+            name: Cow::Borrowed("offset_y"),
             label: "Offset Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -143,7 +145,7 @@ mod tests {
 
     #[test]
     fn checkerboard_has_expected_params() {
-        let names: Vec<&str> = Checkerboard::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = Checkerboard::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["scale", "offset_x", "offset_y"]);
     }
 

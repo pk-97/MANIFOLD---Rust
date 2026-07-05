@@ -2,6 +2,8 @@
 //! normal + light + view. Pair with `node.matcap_two_tone` (base) +
 //! `node.rim_light` (rim) for full stylised PBR layering.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -43,7 +45,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "light_x",
+            name: Cow::Borrowed("light_x"),
             label: "Light X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.35),
@@ -51,7 +53,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "light_y",
+            name: Cow::Borrowed("light_y"),
             label: "Light Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.55),
@@ -59,7 +61,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "light_z",
+            name: Cow::Borrowed("light_z"),
             label: "Light Z",
             ty: ParamType::Float,
             default: ParamValue::Float(0.75),
@@ -67,7 +69,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "view_x",
+            name: Cow::Borrowed("view_x"),
             label: "View X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -75,7 +77,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "view_y",
+            name: Cow::Borrowed("view_y"),
             label: "View Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -83,7 +85,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "view_z",
+            name: Cow::Borrowed("view_z"),
             label: "View Z",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -91,7 +93,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "power",
+            name: Cow::Borrowed("power"),
             label: "Power",
             ty: ParamType::Float,
             default: ParamValue::Float(48.0),
@@ -99,7 +101,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "color",
+            name: Cow::Borrowed("color"),
             label: "Color",
             ty: ParamType::Color,
             default: ParamValue::Color([1.0, 0.95, 1.0, 1.0]),

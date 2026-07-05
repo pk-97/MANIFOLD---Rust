@@ -8,6 +8,8 @@
 //!     UV-displacing op (feedback loops, mirror, kaleidoscope) produces
 //!     at its boundary. The 3 feedback presets use this configuration.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -33,7 +35,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "shape",
+            name: Cow::Borrowed("shape"),
             label: "Shape",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -41,7 +43,7 @@ crate::primitive! {
             enum_values: VIGNETTE_SHAPES,
         },
         ParamDef {
-            name: "size",
+            name: Cow::Borrowed("size"),
             label: "Size",
             ty: ParamType::Float,
             default: ParamValue::Float(0.7),
@@ -49,7 +51,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "softness",
+            name: Cow::Borrowed("softness"),
             label: "Softness",
             ty: ParamType::Float,
             default: ParamValue::Float(0.3),
@@ -57,7 +59,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "strength",
+            name: Cow::Borrowed("strength"),
             label: "Strength",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),

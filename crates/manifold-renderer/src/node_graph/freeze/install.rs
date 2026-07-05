@@ -835,8 +835,8 @@ fn resolve_output_storage(
         .outputs()
         .iter()
         .find(|o| matches!(o.ty, PortType::Texture2D))
-        .map(|o| o.name);
-    match tex_out.and_then(|name| doc_node.output_formats.get(name)) {
+        .map(|o| o.name.clone());
+    match tex_out.as_ref().and_then(|name| doc_node.output_formats.get(name.as_ref())) {
         Some(s) if s.contains("32float") => "rgba32float",
         _ => "rgba16float",
     }
@@ -868,8 +868,8 @@ fn resolve_gather_sampler_mode(
         // Float or Enum value); covers every scalar param the finder admits.
         let mut params: crate::node_graph::effect_node::ParamValues = AHashMap::default();
         for p in node.parameters() {
-            if let Some(v) = effective_param_f32(doc_node.params.get(p.name), &p.default) {
-                params.insert(p.name, ParamValue::Float(v));
+            if let Some(v) = effective_param_f32(doc_node.params.get(p.name.as_ref()), &p.default) {
+                params.insert(p.name.clone(), ParamValue::Float(v));
             }
         }
         let m = node.fused_gather_sampler_mode(&params);
@@ -1290,7 +1290,7 @@ pub(crate) fn fuse_canonical_def_masked(
                     (stable.as_str().to_string(), p.name.to_string()),
                     (fused_id.clone(), field.clone()),
                 );
-                let value = effective_param_f32(doc_node.params.get(p.name), &p.default)?;
+                let value = effective_param_f32(doc_node.params.get(p.name.as_ref()), &p.default)?;
                 fused_params.insert(field.clone(), SerializedParamValue::Float { value });
 
                 // A control wire driving this param (LFO → gain.gain) is re-anchored
@@ -1936,7 +1936,8 @@ mod tests {
 
         let mut wc = WgslCompute::new();
         wc.set_wgsl_source(node.wgsl_source.as_deref().unwrap());
-        let param_names: AHashSet<&str> = wc.parameters().iter().map(|p| p.name).collect();
+        let param_names: AHashSet<&str> =
+            wc.parameters().iter().map(|p| p.name.as_ref()).collect();
 
         for field in node.params.keys() {
             assert!(

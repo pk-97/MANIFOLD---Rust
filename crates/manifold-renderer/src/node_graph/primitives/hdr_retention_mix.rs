@@ -20,6 +20,8 @@
 //! At `retention = 1` the highlights stay anchored to `reference`'s
 //! original level regardless of gain.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -49,7 +51,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "retention",
+            name: Cow::Borrowed("retention"),
             label: "HDR Retention",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),

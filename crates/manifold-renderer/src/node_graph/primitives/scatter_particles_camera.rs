@@ -20,6 +20,7 @@
 //! pixel-write behavior (perspective culls behind-camera particles; ortho
 //! wraps toroidally so edges connect seamlessly).
 
+use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::generators::compute_common::Particle;
@@ -82,7 +83,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "active_count",
+            name: Cow::Borrowed("active_count"),
             label: "Active Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
@@ -90,7 +91,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "disp_w",
+            name: Cow::Borrowed("disp_w"),
             label: "Display Width",
             ty: ParamType::Int,
             default: ParamValue::Float(1920.0),
@@ -98,7 +99,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "disp_h",
+            name: Cow::Borrowed("disp_h"),
             label: "Display Height",
             ty: ParamType::Int,
             default: ParamValue::Float(1080.0),
@@ -106,7 +107,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "mode",
+            name: Cow::Borrowed("mode"),
             label: "Projection",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -114,7 +115,7 @@ crate::primitive! {
             enum_values: SCATTER_CAMERA_MODES,
         },
         ParamDef {
-            name: "scaled_energy",
+            name: Cow::Borrowed("scaled_energy"),
             label: "Energy per Particle",
             ty: ParamType::Int,
             default: ParamValue::Float(4096.0),

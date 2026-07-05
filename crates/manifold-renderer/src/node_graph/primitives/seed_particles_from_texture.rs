@@ -30,6 +30,7 @@
 //! double-duties as a hazard barrier between previous-frame work and
 //! the current compact pass).
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuSamplerDesc};
 
 use crate::generators::compute_common::Particle;
@@ -73,7 +74,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "max_capacity",
+            name: Cow::Borrowed("max_capacity"),
             label: "Max Capacity",
             ty: ParamType::Int,
             default: ParamValue::Float(1_048_576.0),
@@ -81,7 +82,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "active_count",
+            name: Cow::Borrowed("active_count"),
             label: "Active Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
@@ -89,7 +90,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "output_width",
+            name: Cow::Borrowed("output_width"),
             label: "Output Width",
             ty: ParamType::Float,
             default: ParamValue::Float(1920.0),
@@ -97,7 +98,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "output_height",
+            name: Cow::Borrowed("output_height"),
             label: "Output Height",
             ty: ParamType::Float,
             default: ParamValue::Float(1080.0),
@@ -105,7 +106,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "frame_seed",
+            name: Cow::Borrowed("frame_seed"),
             label: "Frame Seed",
             ty: ParamType::Int,
             default: ParamValue::Float(0.0),
@@ -377,7 +378,7 @@ mod tests {
     fn seed_from_texture_has_full_param_surface() {
         let names: Vec<&str> = SeedParticlesFromTexture::PARAMS
             .iter()
-            .map(|p| p.name)
+            .map(|p| p.name.as_ref())
             .collect();
         assert_eq!(
             names,

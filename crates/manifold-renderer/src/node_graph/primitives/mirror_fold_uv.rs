@@ -11,6 +11,7 @@
 //! bit-for-bit. The affine half of `TransformFX` (translate / scale /
 //! rotate) is intentionally left to `node.transform`.
 
+use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -51,7 +52,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "mode",
+            name: Cow::Borrowed("mode"),
             label: "Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(6),

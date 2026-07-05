@@ -12115,7 +12115,7 @@
           "name": "objects",
           "range": [
             "1",
-            "8"
+            "64"
           ],
           "type": "int"
         },

@@ -5,6 +5,7 @@
 //! fuseable, Blur breaks fusion with its input but accepts pixel-local
 //! tail-fusion, and MipChain runs a series of passes regardless.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc, GpuTextureFormat};
 
 use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
@@ -13,14 +14,14 @@ use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortTy
 use crate::render_target::RenderTarget;
 
 const SOURCE_INPUT: NodeInput = NodePort {
-    name: "source",
+    name: Cow::Borrowed("source"),
     ty: PortType::Texture2D,
     kind: PortKind::Input,
     required: true,
 };
 
 const OUT_OUTPUT: NodeOutput = NodePort {
-    name: "out",
+    name: Cow::Borrowed("out"),
     ty: PortType::Texture2D,
     kind: PortKind::Output,
     required: false,
@@ -37,7 +38,7 @@ const THRESHOLD_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
 
 const THRESHOLD_PARAMS: [ParamDef; 2] = [
     ParamDef {
-        name: "level",
+        name: Cow::Borrowed("level"),
         label: "Threshold",
         ty: ParamType::Float,
         default: ParamValue::Float(0.5),
@@ -45,7 +46,7 @@ const THRESHOLD_PARAMS: [ParamDef; 2] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "softness",
+        name: Cow::Borrowed("softness"),
         label: "Softness",
         ty: ParamType::Float,
         default: ParamValue::Float(0.0),
@@ -192,7 +193,7 @@ const BLUR_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
 
 const BLUR_PARAMS: [ParamDef; 2] = [
     ParamDef {
-        name: "radius",
+        name: Cow::Borrowed("radius"),
         label: "Radius",
         ty: ParamType::Float,
         default: ParamValue::Float(4.0),
@@ -200,7 +201,7 @@ const BLUR_PARAMS: [ParamDef; 2] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "mode",
+        name: Cow::Borrowed("mode"),
         label: "Mode",
         ty: ParamType::Enum,
         default: ParamValue::Enum(0), // Gaussian

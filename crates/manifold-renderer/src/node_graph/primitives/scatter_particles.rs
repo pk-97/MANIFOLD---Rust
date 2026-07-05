@@ -14,6 +14,7 @@
 //! to lift the u32 grid into a float texture for downstream texture
 //! ops.
 
+use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::generators::compute_common::Particle;
@@ -60,7 +61,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "active_count",
+            name: Cow::Borrowed("active_count"),
             label: "Active Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
@@ -68,7 +69,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "scaled_energy",
+            name: Cow::Borrowed("scaled_energy"),
             label: "Energy per Particle",
             ty: ParamType::Int,
             default: ParamValue::Float(4096.0),
@@ -76,7 +77,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "boundary",
+            name: Cow::Borrowed("boundary"),
             label: "Boundary",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -322,7 +323,7 @@ mod gpu_tests {
                 type_id: EffectNodeType::new("test.particle_source"),
                 inputs: vec![],
                 outputs: vec![NodePort {
-                    name: "out",
+                    name: std::borrow::Cow::Borrowed("out"),
                     ty: PortType::Array(ArrayType::of_known::<Particle>()),
                     kind: PortKind::Output,
                     required: false,
@@ -372,7 +373,7 @@ mod gpu_tests {
             Self {
                 type_id: EffectNodeType::new("test.accum_sink"),
                 inputs: vec![NodePort {
-                    name: "in",
+                    name: std::borrow::Cow::Borrowed("in"),
                     ty: PortType::Array(ArrayType::of_known::<u32>()),
                     kind: PortKind::Input,
                     required: true,

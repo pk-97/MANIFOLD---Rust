@@ -16,6 +16,8 @@
 //! node.render_text → system.final_output` preset) so users can drill in
 //! from the editor.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -66,7 +68,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "size",
+            name: Cow::Borrowed("size"),
             label: "Size",
             ty: ParamType::Float,
             default: ParamValue::Float(0.25),
@@ -74,7 +76,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "pos_x",
+            name: Cow::Borrowed("pos_x"),
             label: "Position X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -82,7 +84,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "pos_y",
+            name: Cow::Borrowed("pos_y"),
             label: "Position Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -90,7 +92,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "scale",
+            name: Cow::Borrowed("scale"),
             label: "Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -98,7 +100,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "h_align",
+            name: Cow::Borrowed("h_align"),
             label: "H Align",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -106,7 +108,7 @@ crate::primitive! {
             enum_values: &["Left", "Center", "Right"],
         },
         ParamDef {
-            name: "v_align",
+            name: Cow::Borrowed("v_align"),
             label: "V Align",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -114,7 +116,7 @@ crate::primitive! {
             enum_values: &["Top", "Center", "Bottom"],
         },
         ParamDef {
-            name: "letter_spacing",
+            name: Cow::Borrowed("letter_spacing"),
             label: "Letter Spacing",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -122,7 +124,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "line_spacing",
+            name: Cow::Borrowed("line_spacing"),
             label: "Line Spacing",
             ty: ParamType::Float,
             default: ParamValue::Float(1.2),
@@ -130,7 +132,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "stroke_width",
+            name: Cow::Borrowed("stroke_width"),
             label: "Stroke Width",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -138,7 +140,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "fill_color",
+            name: Cow::Borrowed("fill_color"),
             label: "Fill Color",
             ty: ParamType::Color,
             default: ParamValue::Color([1.0, 1.0, 1.0, 1.0]),
@@ -146,7 +148,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "stroke_color",
+            name: Cow::Borrowed("stroke_color"),
             label: "Stroke Color",
             ty: ParamType::Color,
             default: ParamValue::Color([0.0, 0.0, 0.0, 1.0]),
@@ -154,7 +156,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "text",
+            name: Cow::Borrowed("text"),
             label: "Text",
             ty: ParamType::String,
             // String default supplied via stringBindings; this slot is never read.
@@ -163,7 +165,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "fontFamily",
+            name: Cow::Borrowed("fontFamily"),
             label: "Font",
             ty: ParamType::String,
             default: ParamValue::Float(0.0),
@@ -462,7 +464,10 @@ mod tests {
         assert_eq!(RenderText::OUTPUTS.len(), 1);
         assert_eq!(RenderText::OUTPUTS[0].ty, PortType::Texture2D);
 
-        let names: Vec<&str> = RenderText::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = RenderText::PARAMS
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect();
         assert_eq!(
             names,
             vec![
@@ -486,14 +491,14 @@ mod tests {
         let string_params: Vec<&str> = RenderText::PARAMS
             .iter()
             .filter(|p| matches!(p.ty, ParamType::String))
-            .map(|p| p.name)
+            .map(|p| p.name.as_ref())
             .collect();
         assert_eq!(string_params, vec!["text", "fontFamily"]);
 
         let color_params: Vec<&str> = RenderText::PARAMS
             .iter()
             .filter(|p| matches!(p.ty, ParamType::Color))
-            .map(|p| p.name)
+            .map(|p| p.name.as_ref())
             .collect();
         assert_eq!(color_params, vec!["fill_color", "stroke_color"]);
     }

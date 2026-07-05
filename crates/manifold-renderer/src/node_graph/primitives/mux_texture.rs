@@ -25,6 +25,7 @@
 //! Live-perform with an outer-card selector slider — the dominant case — uses
 //! inline params so the optimisation fires.
 
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc};
@@ -74,14 +75,14 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 ";
 
 const SELECTOR_INPUT: NodeInput = NodePort {
-    name: "selector",
+    name: Cow::Borrowed("selector"),
     ty: PortType::Scalar(ScalarType::F32),
     kind: PortKind::Input,
     required: true,
 };
 
 const MUX_OUTPUTS: [NodeOutput; 1] = [NodePort {
-    name: "out",
+    name: Cow::Borrowed("out"),
     ty: PortType::Texture2D,
     kind: PortKind::Output,
     required: false,
@@ -89,7 +90,7 @@ const MUX_OUTPUTS: [NodeOutput; 1] = [NodePort {
 
 const MUX_PARAMS: [ParamDef; 2] = [
     ParamDef {
-        name: "selector",
+        name: Cow::Borrowed("selector"),
         label: "Selector",
         ty: ParamType::Float,
         default: ParamValue::Float(0.0),
@@ -97,7 +98,7 @@ const MUX_PARAMS: [ParamDef; 2] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "num_inputs",
+        name: Cow::Borrowed("num_inputs"),
         label: "Input Count",
         ty: ParamType::Int,
         default: ParamValue::Float(DEFAULT_INPUTS as f32),
@@ -150,7 +151,7 @@ impl MuxTexture {
         ports.push(SELECTOR_INPUT);
         for &name in &IN_PORT_NAMES[..n] {
             ports.push(NodePort {
-                name,
+                name: std::borrow::Cow::Borrowed(name),
                 ty: PortType::Texture2D,
                 kind: PortKind::Input,
                 required: false,
@@ -377,8 +378,8 @@ mod tests {
 
     fn params_with(num_inputs: f32, selector: f32) -> ParamValues {
         let mut p = ParamValues::default();
-        p.insert("num_inputs", ParamValue::Float(num_inputs));
-        p.insert("selector", ParamValue::Float(selector));
+        p.insert(std::borrow::Cow::Borrowed("num_inputs"), ParamValue::Float(num_inputs));
+        p.insert(std::borrow::Cow::Borrowed("selector"), ParamValue::Float(selector));
         p
     }
 

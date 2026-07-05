@@ -18,6 +18,8 @@
 
 #![allow(private_interfaces)]
 
+use std::borrow::Cow;
+
 use manifold_gpu::{
     GpuBinding, GpuComputePipeline, GpuSamplerDesc, GpuTexture, GpuTextureDesc,
     GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
@@ -99,7 +101,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "analysis_max_dim",
+            name: Cow::Borrowed("analysis_max_dim"),
             label: "Analysis Max Dim",
             ty: ParamType::Int,
             default: ParamValue::Float(360.0),
@@ -107,7 +109,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "update_interval",
+            name: Cow::Borrowed("update_interval"),
             label: "Update Interval (frames)",
             ty: ParamType::Int,
             default: ParamValue::Float(2.0),
@@ -488,7 +490,7 @@ mod tests {
     fn optical_flow_estimate_has_analysis_and_interval_params() {
         let names: Vec<&str> = OpticalFlowEstimate::PARAMS
             .iter()
-            .map(|p| p.name)
+            .map(|p| p.name.as_ref())
             .collect();
         assert_eq!(names, vec!["analysis_max_dim", "update_interval"]);
     }

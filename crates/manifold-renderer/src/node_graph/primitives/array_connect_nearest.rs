@@ -15,6 +15,7 @@ use crate::generators::mesh_common::EdgePair;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use std::borrow::Cow;
 
 crate::primitive! {
     name: ArrayConnectNearest,
@@ -29,7 +30,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "max_distance",
+            name: Cow::Borrowed("max_distance"),
             label: "Max Distance",
             ty: ParamType::Float,
             default: ParamValue::Float(0.59),
@@ -37,7 +38,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "max_edges",
+            name: Cow::Borrowed("max_edges"),
             label: "Max Edges",
             ty: ParamType::Int,
             default: ParamValue::Float(32.0),
@@ -196,7 +197,7 @@ mod tests {
         assert!(matches!(ArrayConnectNearest::INPUTS[0].ty, PortType::Array(_)));
         assert_eq!(ArrayConnectNearest::OUTPUTS.len(), 1);
         assert_eq!(ArrayConnectNearest::OUTPUTS[0].name, "edges");
-        let names: Vec<&str> = ArrayConnectNearest::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = ArrayConnectNearest::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["max_distance", "max_edges"]);
     }
 

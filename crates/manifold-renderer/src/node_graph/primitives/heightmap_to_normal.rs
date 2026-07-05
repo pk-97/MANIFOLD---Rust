@@ -23,6 +23,8 @@
 //! Larger `z_scale` = flatter normals; smaller = steeper. Output is
 //! signed (range [-1, 1] per channel), alpha = 1.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -52,7 +54,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "z_scale",
+            name: Cow::Borrowed("z_scale"),
             label: "Z Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -60,7 +62,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "aspect",
+            name: Cow::Borrowed("aspect"),
             label: "Aspect",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -68,7 +70,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "coord_space",
+            name: Cow::Borrowed("coord_space"),
             label: "Coord Space",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),

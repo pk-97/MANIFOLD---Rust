@@ -442,12 +442,18 @@ pub enum PortKind {
 ///
 /// [`NodeInput`] and [`NodeOutput`] are type aliases that read more clearly at
 /// the call site. The underlying struct is the same.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct NodePort {
     /// Stable port name. Treated as public API once the node ships — the save
     /// format references ports by name when describing wires, so renames
     /// invalidate saved graphs.
-    pub name: &'static str,
+    ///
+    /// `Cow<'static, str>` so static primitives keep borrowing a `&'static str`
+    /// (zero cost, const-constructible in the `primitive!` macro's port
+    /// tables) while variadic nodes (`render_scene`, the muxes) can format an
+    /// owned name per dynamic port — no arbitrary port-count cap. This is why
+    /// `NodePort` is no longer `Copy`.
+    pub name: std::borrow::Cow<'static, str>,
 
     pub ty: PortType,
     pub kind: PortKind,

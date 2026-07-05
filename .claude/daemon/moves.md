@@ -209,12 +209,15 @@ tool call, so it's neither a clean classifier signature nor hook-catchable yet.)
   or a declaration that a design question or blocker is resolved ("I just
   resolved it", "turns out", "the way this works is"), where the account's
   specifics — names, mechanisms, parameters, defaults — appear for the first
-  time in that same text, and the LEDGER shows no read, search, or run of the
-  described artifact within the window. Do not flag when the text cites files
-  or symbols the LEDGER shows being examined, or when it explicitly marks
-  itself as a guess, proposal, or unverified ("I think", "proposal:", "not
-  checked"). The tell is authority without provenance: the description is
-  stated as fact and nothing in the window is where it could have come from.
+  time in that same text, and neither the LEDGER nor SESSION FACTS shows a
+  read, search, or run of the described artifact. Do not flag when the text
+  cites files or symbols the LEDGER or SESSION FACTS shows being examined —
+  for SESSION FACTS the "read <path>" clause must name the artifact the
+  account describes; an unrelated stale read is not provenance. Do not flag
+  when the text explicitly marks itself as a guess, proposal, or unverified
+  ("I think", "proposal:", "not checked"). The tell is authority without
+  provenance: the description is stated as fact and nothing in view is where
+  it could have come from.
 - **cooldown:** standard
 - **payload:**
 > That account exists only in this message so far — nothing in view checked it.
@@ -454,10 +457,16 @@ tool call, so it's neither a clean classifier signature nor hook-catchable yet.)
 > it? "There is no X" is a claim like any other — run the search that would
 > find X before saying it. When stuck, don't reword your last guess — change
 > the class of move: build a minimal pair, diff against a working case, ask
-> the history when it last worked. Before fixing, name the level the cause
-> lives at — symptom, mechanism, design — and fix at that level, not where
-> the error surfaced. Before starting anything long, state the observable
-> condition that ends it. At a fork your brief doesn't cover, spend one
+> the history when it last worked. Apply Occam's razor: reason through the
+> ordinary cause before the exotic one, and trade up to the elaborate theory
+> only when the simple one is genuinely ruled out, not when it merely feels
+> too easy. Before fixing, name the level the cause lives at — symptom,
+> mechanism, design — and fix at that level, not where the error surfaced.
+> Before starting anything long, state the observable condition that ends it.
+> Occam's razor on effort: scale the investigation to the stakes and the real
+> size of the question, not to how thorough you'd like to look — a small,
+> cheap-to-be-wrong task earns a shallow pass, and you stop the moment it's
+> genuinely answered. At a fork your brief doesn't cover, spend one
 > honest thought pricing both branches — most unknowns dissolve on contact,
 > and an escalation should arrive priced.
 

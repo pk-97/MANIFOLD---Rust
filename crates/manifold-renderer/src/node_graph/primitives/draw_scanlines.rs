@@ -4,6 +4,7 @@
 //! not a per-object marker), so it has no skip contract. Math ported
 //! verbatim from the Blob Track HUD's `scanline` wgsl_compute kernel.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -35,7 +36,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "color",
+            name: Cow::Borrowed("color"),
             label: "Color",
             ty: ParamType::Color,
             default: ParamValue::Color([0.85, 0.92, 1.0, 1.0]),
@@ -43,7 +44,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "alpha",
+            name: Cow::Borrowed("alpha"),
             label: "Alpha",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -51,7 +52,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "period_px",
+            name: Cow::Borrowed("period_px"),
             label: "Spacing",
             ty: ParamType::Float,
             default: ParamValue::Float(2.0),
@@ -59,7 +60,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "intensity",
+            name: Cow::Borrowed("intensity"),
             label: "Intensity",
             ty: ParamType::Float,
             default: ParamValue::Float(0.04),

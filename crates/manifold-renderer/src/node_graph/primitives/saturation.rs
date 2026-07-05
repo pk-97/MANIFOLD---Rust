@@ -9,6 +9,8 @@
 //! the two give visibly different mid-tones, so both are first-class
 //! atoms (TouchDesigner ships both: Level TOP saturation vs HSV Adjust).
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -37,7 +39,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "saturation",
+            name: Cow::Borrowed("saturation"),
             label: "Saturation",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),

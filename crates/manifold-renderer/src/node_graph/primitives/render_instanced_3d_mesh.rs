@@ -9,6 +9,8 @@
 //! inputs match `render_3d_mesh`'s contract exactly. See the doc on
 //! that primitive for the shared design rationale.
 
+use std::borrow::Cow;
+
 use ahash::AHashMap;
 use manifold_gpu::GpuBinding;
 
@@ -78,7 +80,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "instance_count",
+            name: Cow::Borrowed("instance_count"),
             label: "Instance Count",
             ty: ParamType::Int,
             default: ParamValue::Float(64.0),
@@ -520,7 +522,10 @@ mod tests {
     #[test]
     fn render_instanced_has_only_instance_count_param() {
         // Scattered light/colour scalars deleted in the Material migration.
-        let names: Vec<&str> = RenderInstanced3DMesh::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = RenderInstanced3DMesh::PARAMS
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect();
         assert_eq!(names, vec!["instance_count"]);
     }
 

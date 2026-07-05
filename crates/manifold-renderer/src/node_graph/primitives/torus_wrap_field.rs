@@ -15,6 +15,8 @@
 //! rotates the whole field around the X axis (drive from a time wire
 //! for continuous fold animation).
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::InstanceTransform;
@@ -52,7 +54,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "base_radius",
+            name: Cow::Borrowed("base_radius"),
             label: "Tube Radius",
             ty: ParamType::Float,
             default: ParamValue::Float(0.3),
@@ -60,7 +62,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "torus_radius",
+            name: Cow::Borrowed("torus_radius"),
             label: "Major Radius",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -68,7 +70,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "fold_angle",
+            name: Cow::Borrowed("fold_angle"),
             label: "Fold Angle",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -76,7 +78,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "instance_scale",
+            name: Cow::Borrowed("instance_scale"),
             label: "Instance Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),

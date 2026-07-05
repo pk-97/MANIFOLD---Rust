@@ -6,6 +6,8 @@
 //! `integrate_particles` boundary behaviour. Dead particles
 //! (`life <= 0`) pass through unchanged.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::generators::compute_common::Particle;
@@ -40,7 +42,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "active_count",
+            name: Cow::Borrowed("active_count"),
             label: "Active Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
@@ -163,7 +165,7 @@ mod tests {
         let particle_layout = ArrayType::of_known::<Particle>();
 
         assert_eq!(WrapParticlesTorus::TYPE_ID, "node.wrap_around");
-        let names: Vec<&str> = WrapParticlesTorus::INPUTS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = WrapParticlesTorus::INPUTS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["in", "active_count"]);
         assert_eq!(
             WrapParticlesTorus::INPUTS[0].ty,

@@ -14,6 +14,8 @@
 //! that an explicit rotation decomposition would require collapses
 //! into this one primitive plus a downstream channel pick.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -44,7 +46,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "angle",
+            name: Cow::Borrowed("angle"),
             label: "Angle",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
@@ -151,7 +153,10 @@ mod tests {
 
     #[test]
     fn rotate_2d_has_angle_param() {
-        let names: Vec<&str> = Rotate2D::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = Rotate2D::PARAMS
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect();
         assert_eq!(names, vec!["angle"]);
     }
 

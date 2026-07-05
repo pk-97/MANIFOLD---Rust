@@ -8,6 +8,7 @@
 //! pigment-pooling edge-pull that follows contrast contours. Reusable
 //! wherever a height-from-contrast displacement is wanted.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -36,7 +37,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "strength",
+            name: Cow::Borrowed("strength"),
             label: "Strength",
             ty: ParamType::Float,
             default: ParamValue::Float(5.0),
@@ -44,7 +45,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "step",
+            name: Cow::Borrowed("step"),
             label: "Step (px)",
             ty: ParamType::Float,
             default: ParamValue::Float(5.0),
@@ -52,7 +53,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "weight",
+            name: Cow::Borrowed("weight"),
             label: "Weight",
             ty: ParamType::Float,
             default: ParamValue::Float(0.001),

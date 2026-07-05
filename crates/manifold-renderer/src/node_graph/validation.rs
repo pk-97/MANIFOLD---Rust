@@ -683,7 +683,10 @@ pub fn validate(graph: &Graph) -> Result<(), GraphError> {
         }
         for input in inst.node.inputs() {
             if input.required {
-                let wired = graph.wires().iter().any(|w| w.to == (inst.id, input.name));
+                let wired = graph
+                    .wires()
+                    .iter()
+                    .any(|w| w.to == (inst.id, input.name.as_ref()));
                 if wired {
                     continue;
                 }
@@ -942,6 +945,8 @@ fn would_create_cycle(graph: &Graph, from: NodeInstanceId, to: NodeInstanceId) -
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use super::*;
     use crate::node_graph::effect_node::EffectNodeContext;
     use crate::node_graph::effect_node::EffectNodeType;
@@ -989,7 +994,7 @@ mod tests {
 
     fn input(name: &'static str, ty: PortType, required: bool) -> NodeInput {
         NodePort {
-            name,
+            name: Cow::Borrowed(name),
             ty,
             kind: PortKind::Input,
             required,
@@ -998,7 +1003,7 @@ mod tests {
 
     fn output(name: &'static str, ty: PortType) -> NodeOutput {
         NodePort {
-            name,
+            name: Cow::Borrowed(name),
             ty,
             kind: PortKind::Output,
             required: false,
@@ -1625,13 +1630,13 @@ mod tests {
             fn inputs(&self) -> &[NodeInput] {
                 static INPUTS: [NodeInput; 2] = [
                     NodePort {
-                        name: "in",
+                        name: Cow::Borrowed("in"),
                         ty: PortType::Texture2D,
                         kind: PortKind::Input,
                         required: true,
                     },
                     NodePort {
-                        name: "seed",
+                        name: Cow::Borrowed("seed"),
                         ty: PortType::Texture2D,
                         kind: PortKind::Input,
                         required: false,
@@ -1641,7 +1646,7 @@ mod tests {
             }
             fn outputs(&self) -> &[NodeOutput] {
                 static OUTPUTS: [NodeOutput; 1] = [NodePort {
-                    name: "out",
+                    name: Cow::Borrowed("out"),
                     ty: PortType::Texture2D,
                     kind: PortKind::Output,
                     required: false,
@@ -1817,13 +1822,13 @@ mod tests {
         fn inputs(&self) -> &[NodeInput] {
             const IN: &[NodeInput] = &[
                 NodePort {
-                    name: "material",
+                    name: Cow::Borrowed("material"),
                     ty: PortType::Material,
                     kind: PortKind::Input,
                     required: true,
                 },
                 NodePort {
-                    name: "light",
+                    name: Cow::Borrowed("light"),
                     ty: PortType::Light,
                     kind: PortKind::Input,
                     required: false,
@@ -1833,7 +1838,7 @@ mod tests {
         }
         fn outputs(&self) -> &[NodeOutput] {
             const OUT: &[NodeOutput] = &[NodePort {
-                name: "color",
+                name: Cow::Borrowed("color"),
                 ty: PortType::Texture2D,
                 kind: PortKind::Output,
                 required: false,

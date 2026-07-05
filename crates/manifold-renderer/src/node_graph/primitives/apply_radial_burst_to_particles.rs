@@ -22,6 +22,7 @@ use crate::generators::compute_common::Particle;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use std::borrow::Cow;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`point_x`,
 /// `point_y`, `amplitude`, `envelope`, `radius`, `active_count` Int → i32), then
@@ -63,7 +64,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "point_x",
+            name: Cow::Borrowed("point_x"),
             label: "Point X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -71,7 +72,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "point_y",
+            name: Cow::Borrowed("point_y"),
             label: "Point Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -79,7 +80,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "amplitude",
+            name: Cow::Borrowed("amplitude"),
             label: "Amplitude",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -87,7 +88,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "envelope",
+            name: Cow::Borrowed("envelope"),
             label: "Envelope",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -95,7 +96,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "radius",
+            name: Cow::Borrowed("radius"),
             label: "Radius",
             ty: ParamType::Float,
             default: ParamValue::Float(0.25),
@@ -103,7 +104,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "active_count",
+            name: Cow::Borrowed("active_count"),
             label: "Active Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
@@ -255,7 +256,7 @@ mod tests {
         );
         let names: Vec<&str> = ApplyRadialBurstToParticles::INPUTS
             .iter()
-            .map(|p| p.name)
+            .map(|p| p.name.as_ref())
             .collect();
         assert_eq!(
             names,

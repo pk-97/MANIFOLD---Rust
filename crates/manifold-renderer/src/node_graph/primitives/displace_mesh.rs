@@ -13,6 +13,8 @@
 //! regular grid, route through this primitive *before*
 //! TriangulateGrid.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::generators::mesh_common::MeshVertex;
@@ -50,7 +52,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "cols",
+            name: Cow::Borrowed("cols"),
             label: "Columns",
             ty: ParamType::Int,
             default: ParamValue::Float(256.0),
@@ -58,7 +60,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "rows",
+            name: Cow::Borrowed("rows"),
             label: "Rows",
             ty: ParamType::Int,
             default: ParamValue::Float(256.0),
@@ -66,7 +68,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "displacement",
+            name: Cow::Borrowed("displacement"),
             label: "Displacement",
             ty: ParamType::Float,
             default: ParamValue::Float(0.2),
@@ -74,7 +76,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "height_bias",
+            name: Cow::Borrowed("height_bias"),
             label: "Height Bias",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -226,7 +228,7 @@ mod tests {
 
     #[test]
     fn displace_mesh_has_grid_and_displacement_params() {
-        let names: Vec<&str> = DisplaceMesh::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = DisplaceMesh::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["cols", "rows", "displacement", "height_bias"]);
     }
 

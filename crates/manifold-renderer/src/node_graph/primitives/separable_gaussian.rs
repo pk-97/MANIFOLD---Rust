@@ -11,6 +11,7 @@
 //! per-pixel; DoF's variable-width variant needs a separate primitive
 //! when §6.4 lands).
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -54,7 +55,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "kernel_size",
+            name: Cow::Borrowed("kernel_size"),
             label: "Kernel Size",
             ty: ParamType::Enum,
             default: ParamValue::Enum(1),
@@ -62,7 +63,7 @@ crate::primitive! {
             enum_values: GAUSSIAN_BLUR_KERNELS,
         },
         ParamDef {
-            name: "axis",
+            name: Cow::Borrowed("axis"),
             label: "Axis",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -70,7 +71,7 @@ crate::primitive! {
             enum_values: GAUSSIAN_BLUR_AXES,
         },
         ParamDef {
-            name: "step",
+            name: Cow::Borrowed("step"),
             label: "Step",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -78,7 +79,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "radius_mode",
+            name: Cow::Borrowed("radius_mode"),
             label: "Radius Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -86,7 +87,7 @@ crate::primitive! {
             enum_values: GAUSSIAN_BLUR_RADIUS_MODES,
         },
         ParamDef {
-            name: "radius",
+            name: Cow::Borrowed("radius"),
             label: "Radius (px)",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -102,7 +103,7 @@ crate::primitive! {
         // to flow visually into uv=0 instead of piling up at the
         // edge. Mirror is the third sampler option, less common.
         ParamDef {
-            name: "address_mode",
+            name: Cow::Borrowed("address_mode"),
             label: "Address Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),

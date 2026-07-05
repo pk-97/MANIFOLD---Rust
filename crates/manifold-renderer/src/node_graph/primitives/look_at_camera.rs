@@ -9,6 +9,7 @@
 //! World up `(0,1,0)` is fixed in v1 — no up param. CPU-only — no GPU
 //! dispatch.
 
+use std::borrow::Cow;
 use crate::node_graph::camera::Camera;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -35,7 +36,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "pos_x",
+            name: Cow::Borrowed("pos_x"),
             label: "Pos X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -43,7 +44,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "pos_y",
+            name: Cow::Borrowed("pos_y"),
             label: "Pos Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -51,7 +52,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "pos_z",
+            name: Cow::Borrowed("pos_z"),
             label: "Pos Z",
             ty: ParamType::Float,
             default: ParamValue::Float(-3.0),
@@ -59,7 +60,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "target_x",
+            name: Cow::Borrowed("target_x"),
             label: "Target X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -67,7 +68,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "target_y",
+            name: Cow::Borrowed("target_y"),
             label: "Target Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -75,7 +76,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "target_z",
+            name: Cow::Borrowed("target_z"),
             label: "Target Z",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -83,7 +84,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "fov_y",
+            name: Cow::Borrowed("fov_y"),
             label: "FOV Y",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.9),
@@ -91,7 +92,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "near",
+            name: Cow::Borrowed("near"),
             label: "Near",
             ty: ParamType::Float,
             default: ParamValue::Float(0.05),
@@ -99,7 +100,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "far",
+            name: Cow::Borrowed("far"),
             label: "Far",
             ty: ParamType::Float,
             default: ParamValue::Float(200.0),
@@ -161,7 +162,7 @@ mod tests {
         use crate::node_graph::ports::{PortType, ScalarType};
 
         assert_eq!(LookAtCamera::TYPE_ID, "node.look_at_camera");
-        let in_names: Vec<&str> = LookAtCamera::INPUTS.iter().map(|p| p.name).collect();
+        let in_names: Vec<&str> = LookAtCamera::INPUTS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             in_names,
             vec!["pos_x", "pos_y", "pos_z", "target_x", "target_y", "target_z", "fov_y"]
@@ -181,7 +182,7 @@ mod tests {
 
     #[test]
     fn look_at_camera_has_full_param_surface() {
-        let names: Vec<&str> = LookAtCamera::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = LookAtCamera::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec![

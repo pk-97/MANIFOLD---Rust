@@ -12,6 +12,8 @@
 //! atom, the quantizer can be driven by ANY threshold texture — blue noise from
 //! `node.noise`, a custom ramp, a voronoi field, etc.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -37,7 +39,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "algorithm",
+            name: Cow::Borrowed("algorithm"),
             label: "Algorithm",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),

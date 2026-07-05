@@ -26,6 +26,8 @@
 //! reads garbage; the paired `polytope_edges` only references valid
 //! indices for the active shape.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::{MeshVertex, PLATONIC_MAX_VERTS, PLATONIC_SHAPES};
@@ -80,7 +82,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "shape",
+            name: Cow::Borrowed("shape"),
             label: "Shape",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -276,7 +278,7 @@ mod gpu_tests {
             Self {
                 type_id: EffectNodeType::new("test.vertex_sink"),
                 inputs: vec![NodePort {
-                    name: "in",
+                    name: std::borrow::Cow::Borrowed("in"),
                     ty: PortType::Array(ArrayType::of_known::<MeshVertex>()),
                     kind: PortKind::Input,
                     required: true,

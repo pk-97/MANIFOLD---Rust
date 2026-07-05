@@ -12,6 +12,8 @@
 //! accommodates this. The unwired-selected-slot case is a graph editor
 //! concern (separate work).
 
+use std::borrow::Cow;
+
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -40,7 +42,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "selector",
+            name: Cow::Borrowed("selector"),
             label: "Selector",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),

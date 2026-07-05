@@ -5,6 +5,7 @@
 //! the natural "average of N textures" shape (Plasma's contrast curve
 //! pre-step, multi-tap composites, signed-field merges).
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -36,7 +37,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "divisor",
+            name: Cow::Borrowed("divisor"),
             label: "Divisor",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -149,7 +150,7 @@ mod tests {
 
     #[test]
     fn texture_sum_5_has_divisor_param() {
-        let names: Vec<&str> = TextureSum5::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = TextureSum5::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["divisor"]);
     }
 

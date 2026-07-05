@@ -18,6 +18,8 @@
 //! The 6 specialized pipelines are lazily compiled on first use and
 //! cached. Defaults preserve the original behaviour (Medium + None).
 
+use std::borrow::Cow;
+
 use ahash::AHashMap;
 use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSamplerDesc};
 
@@ -51,7 +53,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "axis",
+            name: Cow::Borrowed("axis"),
             label: "Axis",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -59,7 +61,7 @@ crate::primitive! {
             enum_values: BLUR_VARIABLE_AXES,
         },
         ParamDef {
-            name: "max_radius",
+            name: Cow::Borrowed("max_radius"),
             label: "Max Radius",
             ty: ParamType::Float,
             default: ParamValue::Float(12.0),
@@ -67,7 +69,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "quality",
+            name: Cow::Borrowed("quality"),
             label: "Quality",
             ty: ParamType::Enum,
             default: ParamValue::Enum(1),
@@ -75,7 +77,7 @@ crate::primitive! {
             enum_values: BLUR_VARIABLE_QUALITIES,
         },
         ParamDef {
-            name: "weighting_mode",
+            name: Cow::Borrowed("weighting_mode"),
             label: "Weighting Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -236,7 +238,7 @@ mod tests {
 
     #[test]
     fn gaussian_blur_variable_width_has_axis_radius_quality_weighting_params() {
-        let names: Vec<&str> = GaussianBlurVariableWidth::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = GaussianBlurVariableWidth::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec!["axis", "max_radius", "quality", "weighting_mode"]

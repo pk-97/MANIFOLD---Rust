@@ -5,6 +5,8 @@
 //! vertex. Used by Wireframe-shaped graphs:
 //! polytope_vertices → Rotate3D → (project) → render.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::MeshVertex;
@@ -44,7 +46,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "angle_x",
+            name: Cow::Borrowed("angle_x"),
             label: "Angle X",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
@@ -52,7 +54,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "angle_y",
+            name: Cow::Borrowed("angle_y"),
             label: "Angle Y",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
@@ -60,7 +62,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "angle_z",
+            name: Cow::Borrowed("angle_z"),
             label: "Angle Z",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
@@ -183,7 +185,10 @@ mod tests {
 
     #[test]
     fn rotate_3d_has_three_angle_params() {
-        let names: Vec<&str> = Rotate3D::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = Rotate3D::PARAMS
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect();
         assert_eq!(names, vec!["angle_x", "angle_y", "angle_z"]);
     }
 

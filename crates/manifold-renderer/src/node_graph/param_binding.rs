@@ -411,7 +411,7 @@ impl ResolvedBinding {
             .parameters()
             .iter()
             .find(|p| p.name == core.inner_param.as_str())?;
-        let target_param = target_def.name;
+        let target_param = crate::node_graph::effect_node::intern_name(&target_def.name);
         let wraps_angle = matches!(target_def.ty, ParamType::Angle);
         let convert = match core.convert {
             manifold_core::effects::ParamConvert::Float => ParamConvert::Float,

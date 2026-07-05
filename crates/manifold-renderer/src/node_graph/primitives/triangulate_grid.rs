@@ -10,6 +10,8 @@
 //! consecutive vertices per quad in the canonical
 //! 0/1/2-0/2/3-shape used by the legacy MetallicGlass renderer.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::MeshVertex;
@@ -41,7 +43,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "src_cols",
+            name: Cow::Borrowed("src_cols"),
             label: "Source Columns",
             ty: ParamType::Int,
             default: ParamValue::Float(256.0),
@@ -49,7 +51,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "src_rows",
+            name: Cow::Borrowed("src_rows"),
             label: "Source Rows",
             ty: ParamType::Int,
             default: ParamValue::Float(256.0),
@@ -175,7 +177,7 @@ mod tests {
 
     #[test]
     fn triangulate_grid_has_cols_and_rows_params() {
-        let names: Vec<&str> = TriangulateGrid::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = TriangulateGrid::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["src_cols", "src_rows"]);
     }
 

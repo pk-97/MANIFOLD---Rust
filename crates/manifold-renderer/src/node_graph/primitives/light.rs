@@ -26,6 +26,7 @@
 //!
 //! CPU-only — no GPU dispatch.
 
+use std::borrow::Cow;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::light::{Light, ShadowSoftness};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -58,7 +59,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "mode",
+            name: Cow::Borrowed("mode"),
             label: "Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0), // Sun
@@ -66,7 +67,7 @@ crate::primitive! {
             enum_values: LIGHT_MODES,
         },
         ParamDef {
-            name: "pos_x",
+            name: Cow::Borrowed("pos_x"),
             label: "Position X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -74,7 +75,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "pos_y",
+            name: Cow::Borrowed("pos_y"),
             label: "Position Y",
             ty: ParamType::Float,
             default: ParamValue::Float(30.0),
@@ -82,7 +83,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "pos_z",
+            name: Cow::Borrowed("pos_z"),
             label: "Position Z",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -90,7 +91,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "aim_x",
+            name: Cow::Borrowed("aim_x"),
             label: "Aim X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -98,7 +99,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "aim_y",
+            name: Cow::Borrowed("aim_y"),
             label: "Aim Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -106,7 +107,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "aim_z",
+            name: Cow::Borrowed("aim_z"),
             label: "Aim Z",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -114,7 +115,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "color_r",
+            name: Cow::Borrowed("color_r"),
             label: "Colour R",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -122,7 +123,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "color_g",
+            name: Cow::Borrowed("color_g"),
             label: "Colour G",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -130,7 +131,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "color_b",
+            name: Cow::Borrowed("color_b"),
             label: "Colour B",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -138,7 +139,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "intensity",
+            name: Cow::Borrowed("intensity"),
             label: "Intensity",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -146,7 +147,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "range",
+            name: Cow::Borrowed("range"),
             label: "Range",
             ty: ParamType::Float,
             default: ParamValue::Float(30.0),
@@ -154,7 +155,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "cast_shadows",
+            name: Cow::Borrowed("cast_shadows"),
             label: "Cast Shadows",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -162,7 +163,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "shadow_softness",
+            name: Cow::Borrowed("shadow_softness"),
             label: "Shadow Softness",
             ty: ParamType::Enum,
             default: ParamValue::Enum(1), // Soft (5x5)
@@ -170,7 +171,7 @@ crate::primitive! {
             enum_values: SHADOW_SOFTNESS_LABELS,
         },
         ParamDef {
-            name: "shadow_bias",
+            name: Cow::Borrowed("shadow_bias"),
             label: "Shadow Bias",
             ty: ParamType::Float,
             default: ParamValue::Float(0.003),
@@ -178,7 +179,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "shadow_resolution",
+            name: Cow::Borrowed("shadow_resolution"),
             label: "Shadow Resolution",
             ty: ParamType::Int,
             default: ParamValue::Float(2048.0),
@@ -298,7 +299,7 @@ mod tests {
 
     #[test]
     fn light_has_mode_and_softness_enums_plus_full_scalar_surface() {
-        let names: Vec<&str> = LightNode::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = LightNode::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         for required in &[
             "mode",
             "pos_x",
@@ -355,22 +356,22 @@ mod tests {
 
         let mut params = ParamValues::default();
         // Default-driven: mode = Sun (0), intensity = 1.0, colour white.
-        params.insert("mode", ParamValue::Enum(0));
-        params.insert("pos_x", ParamValue::Float(0.0));
-        params.insert("pos_y", ParamValue::Float(10.0));
-        params.insert("pos_z", ParamValue::Float(0.0));
-        params.insert("aim_x", ParamValue::Float(0.0));
-        params.insert("aim_y", ParamValue::Float(0.0));
-        params.insert("aim_z", ParamValue::Float(0.0));
-        params.insert("color_r", ParamValue::Float(0.5));
-        params.insert("color_g", ParamValue::Float(0.4));
-        params.insert("color_b", ParamValue::Float(0.3));
-        params.insert("intensity", ParamValue::Float(2.0));
-        params.insert("range", ParamValue::Float(20.0));
-        params.insert("cast_shadows", ParamValue::Float(1.0));
-        params.insert("shadow_softness", ParamValue::Enum(1));
-        params.insert("shadow_bias", ParamValue::Float(0.005));
-        params.insert("shadow_resolution", ParamValue::Float(1024.0));
+        params.insert(std::borrow::Cow::Borrowed("mode"), ParamValue::Enum(0));
+        params.insert(std::borrow::Cow::Borrowed("pos_x"), ParamValue::Float(0.0));
+        params.insert(std::borrow::Cow::Borrowed("pos_y"), ParamValue::Float(10.0));
+        params.insert(std::borrow::Cow::Borrowed("pos_z"), ParamValue::Float(0.0));
+        params.insert(std::borrow::Cow::Borrowed("aim_x"), ParamValue::Float(0.0));
+        params.insert(std::borrow::Cow::Borrowed("aim_y"), ParamValue::Float(0.0));
+        params.insert(std::borrow::Cow::Borrowed("aim_z"), ParamValue::Float(0.0));
+        params.insert(std::borrow::Cow::Borrowed("color_r"), ParamValue::Float(0.5));
+        params.insert(std::borrow::Cow::Borrowed("color_g"), ParamValue::Float(0.4));
+        params.insert(std::borrow::Cow::Borrowed("color_b"), ParamValue::Float(0.3));
+        params.insert(std::borrow::Cow::Borrowed("intensity"), ParamValue::Float(2.0));
+        params.insert(std::borrow::Cow::Borrowed("range"), ParamValue::Float(20.0));
+        params.insert(std::borrow::Cow::Borrowed("cast_shadows"), ParamValue::Float(1.0));
+        params.insert(std::borrow::Cow::Borrowed("shadow_softness"), ParamValue::Enum(1));
+        params.insert(std::borrow::Cow::Borrowed("shadow_bias"), ParamValue::Float(0.005));
+        params.insert(std::borrow::Cow::Borrowed("shadow_resolution"), ParamValue::Float(1024.0));
 
         let mut prim = LightNode::new();
         let inputs_bindings: &[(&'static str, Slot)] = &[];
@@ -429,22 +430,22 @@ mod tests {
         let mut backend = MockBackend::new();
         let out_slot = backend.acquire(ResourceId(0), PortType::Light, None, (0, 0));
         let mut params = ParamValues::default();
-        params.insert("mode", ParamValue::Enum(1)); // Point
-        params.insert("pos_x", ParamValue::Float(1.0));
-        params.insert("pos_y", ParamValue::Float(2.0));
-        params.insert("pos_z", ParamValue::Float(3.0));
-        params.insert("aim_x", ParamValue::Float(0.0));
-        params.insert("aim_y", ParamValue::Float(0.0));
-        params.insert("aim_z", ParamValue::Float(0.0));
-        params.insert("color_r", ParamValue::Float(1.0));
-        params.insert("color_g", ParamValue::Float(1.0));
-        params.insert("color_b", ParamValue::Float(1.0));
-        params.insert("intensity", ParamValue::Float(1.0));
-        params.insert("range", ParamValue::Float(25.0));
-        params.insert("cast_shadows", ParamValue::Float(0.0));
-        params.insert("shadow_softness", ParamValue::Enum(2)); // VerySoft
-        params.insert("shadow_bias", ParamValue::Float(0.003));
-        params.insert("shadow_resolution", ParamValue::Float(2048.0));
+        params.insert(std::borrow::Cow::Borrowed("mode"), ParamValue::Enum(1)); // Point
+        params.insert(std::borrow::Cow::Borrowed("pos_x"), ParamValue::Float(1.0));
+        params.insert(std::borrow::Cow::Borrowed("pos_y"), ParamValue::Float(2.0));
+        params.insert(std::borrow::Cow::Borrowed("pos_z"), ParamValue::Float(3.0));
+        params.insert(std::borrow::Cow::Borrowed("aim_x"), ParamValue::Float(0.0));
+        params.insert(std::borrow::Cow::Borrowed("aim_y"), ParamValue::Float(0.0));
+        params.insert(std::borrow::Cow::Borrowed("aim_z"), ParamValue::Float(0.0));
+        params.insert(std::borrow::Cow::Borrowed("color_r"), ParamValue::Float(1.0));
+        params.insert(std::borrow::Cow::Borrowed("color_g"), ParamValue::Float(1.0));
+        params.insert(std::borrow::Cow::Borrowed("color_b"), ParamValue::Float(1.0));
+        params.insert(std::borrow::Cow::Borrowed("intensity"), ParamValue::Float(1.0));
+        params.insert(std::borrow::Cow::Borrowed("range"), ParamValue::Float(25.0));
+        params.insert(std::borrow::Cow::Borrowed("cast_shadows"), ParamValue::Float(0.0));
+        params.insert(std::borrow::Cow::Borrowed("shadow_softness"), ParamValue::Enum(2)); // VerySoft
+        params.insert(std::borrow::Cow::Borrowed("shadow_bias"), ParamValue::Float(0.003));
+        params.insert(std::borrow::Cow::Borrowed("shadow_resolution"), ParamValue::Float(2048.0));
 
         let mut prim = LightNode::new();
         let inputs_bindings: &[(&'static str, Slot)] = &[];

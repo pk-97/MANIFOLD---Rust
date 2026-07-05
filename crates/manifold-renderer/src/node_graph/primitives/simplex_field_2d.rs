@@ -15,6 +15,7 @@
 //! statistically uncorrelated channels — the FBM and color/velocity
 //! independence of the oily-fluid family rely on this.
 
+use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -52,7 +53,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "scale_x",
+            name: Cow::Borrowed("scale_x"),
             label: "Scale X",
             ty: ParamType::Float,
             default: ParamValue::Float(3.0),
@@ -60,7 +61,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "scale_y",
+            name: Cow::Borrowed("scale_y"),
             label: "Scale Y",
             ty: ParamType::Float,
             default: ParamValue::Float(3.0),
@@ -68,7 +69,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "offset_x",
+            name: Cow::Borrowed("offset_x"),
             label: "Offset X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -76,7 +77,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "offset_y",
+            name: Cow::Borrowed("offset_y"),
             label: "Offset Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -84,7 +85,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "z",
+            name: Cow::Borrowed("z"),
             label: "Z",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -92,7 +93,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "output_channel",
+            name: Cow::Borrowed("output_channel"),
             label: "Output Channel",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),

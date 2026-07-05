@@ -10,6 +10,8 @@
 //! brightness parameters are exposed for future generators that want a
 //! different aesthetic without authoring a new primitive.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
@@ -35,7 +37,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "width",
+            name: Cow::Borrowed("width"),
             label: "Width",
             ty: ParamType::Int,
             default: ParamValue::Float(512.0),
@@ -43,7 +45,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "height",
+            name: Cow::Borrowed("height"),
             label: "Height",
             ty: ParamType::Int,
             default: ParamValue::Float(256.0),
@@ -51,7 +53,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "horizon_strength",
+            name: Cow::Borrowed("horizon_strength"),
             label: "Horizon Strength",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -59,7 +61,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "azimuth_variation",
+            name: Cow::Borrowed("azimuth_variation"),
             label: "Azimuth Variation",
             ty: ParamType::Float,
             default: ParamValue::Float(0.12),
@@ -177,8 +179,8 @@ mod tests {
 
     fn params_at(width: f32, height: f32) -> ParamValues {
         let mut p = ahash::AHashMap::default();
-        p.insert("width", ParamValue::Float(width));
-        p.insert("height", ParamValue::Float(height));
+        p.insert(std::borrow::Cow::Borrowed("width"), ParamValue::Float(width));
+        p.insert(std::borrow::Cow::Borrowed("height"), ParamValue::Float(height));
         p
     }
 

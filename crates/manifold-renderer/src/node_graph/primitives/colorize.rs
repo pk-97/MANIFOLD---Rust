@@ -8,6 +8,8 @@
 //! it can stand in for that section in a decomposed graph and also be
 //! reused standalone for "push the highlights toward teal" looks.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -39,7 +41,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "amount",
+            name: Cow::Borrowed("amount"),
             label: "Amount",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -47,7 +49,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "hue",
+            name: Cow::Borrowed("hue"),
             label: "Tint Hue",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -55,7 +57,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "saturation",
+            name: Cow::Borrowed("saturation"),
             label: "Tint Saturation",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -63,7 +65,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "focus",
+            name: Cow::Borrowed("focus"),
             label: "Focus",
             ty: ParamType::Float,
             default: ParamValue::Float(0.75),

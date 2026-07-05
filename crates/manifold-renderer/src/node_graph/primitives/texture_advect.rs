@@ -10,6 +10,7 @@
 //! the shader divides by dims internally so a `dt = 1.0` knob means
 //! "displace by `velocity` pixels each frame" at any resolution.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuAddressMode, GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -41,7 +42,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "dt",
+            name: Cow::Borrowed("dt"),
             label: "Δt (pixels/frame)",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -49,7 +50,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "boundary",
+            name: Cow::Borrowed("boundary"),
             label: "Boundary",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),

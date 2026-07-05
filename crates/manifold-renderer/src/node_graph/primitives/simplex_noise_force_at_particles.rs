@@ -28,6 +28,7 @@
 //! Reusable for any per-particle force-augmentation pipeline that
 //! wants spatially-coherent jitter without paying canvas-area cost.
 
+use std::borrow::Cow;
 use manifold_gpu::{
     GpuBinding, GpuSamplerDesc, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
     GpuTextureUsage,
@@ -75,7 +76,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "amplitude",
+            name: Cow::Borrowed("amplitude"),
             label: "Amplitude",
             ty: ParamType::Float,
             default: ParamValue::Float(0.001),
@@ -83,7 +84,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "modulator_gain",
+            name: Cow::Borrowed("modulator_gain"),
             label: "Modulator Gain",
             ty: ParamType::Float,
             default: ParamValue::Float(2.0),
@@ -91,7 +92,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "z",
+            name: Cow::Borrowed("z"),
             label: "Z (Time)",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -99,7 +100,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "noise_scale",
+            name: Cow::Borrowed("noise_scale"),
             label: "Noise Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(2.0),
@@ -107,7 +108,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "active_count",
+            name: Cow::Borrowed("active_count"),
             label: "Active Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
@@ -292,7 +293,7 @@ mod tests {
         );
         let names: Vec<&str> = SimplexNoiseForceAtParticles::INPUTS
             .iter()
-            .map(|p| p.name)
+            .map(|p| p.name.as_ref())
             .collect();
         assert_eq!(
             names,

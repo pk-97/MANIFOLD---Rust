@@ -23,6 +23,7 @@
 //! `include_str!` — keeps the parity test honest (no risk of the
 //! primitive and legacy drifting on a shader edit).
 
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc, GpuTextureFormat};
@@ -194,7 +195,7 @@ impl Default for Watercolor {
 
 const WATERCOLOR_INPUTS: [NodeInput; 2] = [
     NodePort {
-        name: "in",
+        name: Cow::Borrowed("in"),
         ty: PortType::Texture2D,
         kind: PortKind::Input,
         required: true,
@@ -204,7 +205,7 @@ const WATERCOLOR_INPUTS: [NodeInput; 2] = [
     // this port — replaces the hardcoded `apply_ctx_params_at` time
     // injection on the chain runner.
     NodePort {
-        name: "time",
+        name: Cow::Borrowed("time"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: false,
@@ -212,7 +213,7 @@ const WATERCOLOR_INPUTS: [NodeInput; 2] = [
 ];
 
 const WATERCOLOR_OUTPUTS: [NodeOutput; 1] = [NodePort {
-    name: "out",
+    name: Cow::Borrowed("out"),
     ty: PortType::Texture2D,
     kind: PortKind::Output,
     required: false,
@@ -220,7 +221,7 @@ const WATERCOLOR_OUTPUTS: [NodeOutput; 1] = [NodePort {
 
 const WATERCOLOR_PARAMS: [ParamDef; 5] = [
     ParamDef {
-        name: "amount",
+        name: Cow::Borrowed("amount"),
         label: "Amount",
         ty: ParamType::Float,
         default: ParamValue::Float(0.5),
@@ -228,7 +229,7 @@ const WATERCOLOR_PARAMS: [ParamDef; 5] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "displace",
+        name: Cow::Borrowed("displace"),
         label: "Displace",
         ty: ParamType::Float,
         default: ParamValue::Float(0.001),
@@ -236,7 +237,7 @@ const WATERCOLOR_PARAMS: [ParamDef; 5] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "blur",
+        name: Cow::Borrowed("blur"),
         label: "Blur",
         ty: ParamType::Float,
         default: ParamValue::Float(2.0),
@@ -244,7 +245,7 @@ const WATERCOLOR_PARAMS: [ParamDef; 5] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "decay",
+        name: Cow::Borrowed("decay"),
         label: "Decay",
         ty: ParamType::Float,
         default: ParamValue::Float(0.99),
@@ -252,7 +253,7 @@ const WATERCOLOR_PARAMS: [ParamDef; 5] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "time",
+        name: Cow::Borrowed("time"),
         label: "Time",
         ty: ParamType::Float,
         default: ParamValue::Float(0.0),

@@ -11,6 +11,8 @@
 //! `slice_z` is in [0, 1]. UV scale + center re-frame the slice
 //! into the output texture's dimensions.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -38,7 +40,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "slice_z",
+            name: Cow::Borrowed("slice_z"),
             label: "Slice Z",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -46,7 +48,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "uv_scale",
+            name: Cow::Borrowed("uv_scale"),
             label: "UV Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -54,7 +56,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "center_x",
+            name: Cow::Borrowed("center_x"),
             label: "Center X Offset",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -62,7 +64,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "center_y",
+            name: Cow::Borrowed("center_y"),
             label: "Center Y Offset",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -182,7 +184,10 @@ mod tests {
 
     #[test]
     fn sample_volume_has_slice_uv_center_params() {
-        let names: Vec<&str> = SampleVolume2D::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = SampleVolume2D::PARAMS
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect();
         assert_eq!(names, vec!["slice_z", "uv_scale", "center_x", "center_y"]);
     }
 

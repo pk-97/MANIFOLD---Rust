@@ -67,8 +67,8 @@ pub use bundled_presets::{
     bundled_preset_def, bundled_preset_json, bundled_preset_type_ids, loaded_presets_from_bundled,
 };
 pub use effect_node::{
-    EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId, NodeRequires,
-    NodeWire, ParamValues,
+    intern_name, EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId,
+    NodeRequires, NodeWire, ParamValues,
 };
 pub use execution::{Executor, StepProfile};
 pub use execution_plan::{ExecutionPlan, ExecutionStep, ResourceId, compile};

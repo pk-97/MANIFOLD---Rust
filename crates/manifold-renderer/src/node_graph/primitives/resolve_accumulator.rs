@@ -11,6 +11,8 @@
 //! Texture2D wire family — downstream Mix / Blur / Feedback /
 //! display primitives can consume the result as a normal texture.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -43,7 +45,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "fixed_point_scale",
+            name: Cow::Borrowed("fixed_point_scale"),
             label: "Fixed-Point Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(4096.0),

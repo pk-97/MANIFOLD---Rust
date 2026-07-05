@@ -261,7 +261,7 @@ impl MeshSource {
             type_id: EffectNodeType::new("test.mesh_source"),
             inputs: vec![],
             outputs: vec![NodePort {
-                name: "out",
+                name: std::borrow::Cow::Borrowed("out"),
                 ty: PortType::Array(ArrayType::of_known::<MeshVertex>()),
                 kind: PortKind::Output,
                 required: false,

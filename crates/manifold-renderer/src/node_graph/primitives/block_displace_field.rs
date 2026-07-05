@@ -16,6 +16,8 @@
 //! block displace + scanline jitter + invert mask into one pass).
 //! `time` drives the hash — wired or read from `FrameTime.seconds`.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -54,7 +56,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "amount",
+            name: Cow::Borrowed("amount"),
             label: "Amount",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -62,7 +64,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "block_size",
+            name: Cow::Borrowed("block_size"),
             label: "Block Size",
             ty: ParamType::Float,
             default: ParamValue::Float(16.0),
@@ -70,7 +72,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "speed",
+            name: Cow::Borrowed("speed"),
             label: "Speed",
             ty: ParamType::Float,
             default: ParamValue::Float(2.0),
@@ -82,7 +84,7 @@ crate::primitive! {
         // gives the freeze codegen a uniform field to read (run() packs the
         // resolved time, so the default below is never the live value).
         ParamDef {
-            name: "time",
+            name: Cow::Borrowed("time"),
             label: "Time",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -199,7 +201,7 @@ mod tests {
 
     #[test]
     fn amount_speed_time_are_optional_scalar_inputs() {
-        let names: Vec<&str> = BlockDisplaceField::INPUTS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = BlockDisplaceField::INPUTS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["amount", "speed", "time"]);
         assert!(BlockDisplaceField::INPUTS.iter().all(|p| !p.required));
         assert!(

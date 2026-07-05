@@ -16,6 +16,8 @@
 //! at single-dispatch granularity); adding Pentagon / Hexagon / Star is
 //! a `case` addition to the WGSL switch + enum-table bump.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -58,7 +60,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "shape",
+            name: Cow::Borrowed("shape"),
             label: "Shape",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0), // Square
@@ -66,7 +68,7 @@ crate::primitive! {
             enum_values: BASIC_SHAPE_SHAPES,
         },
         ParamDef {
-            name: "aspect",
+            name: Cow::Borrowed("aspect"),
             label: "Aspect Ratio",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -74,7 +76,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "scale",
+            name: Cow::Borrowed("scale"),
             label: "Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -82,7 +84,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "line",
+            name: Cow::Borrowed("line"),
             label: "Line Thickness",
             ty: ParamType::Float,
             default: ParamValue::Float(0.015),
@@ -90,7 +92,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "rotation",
+            name: Cow::Borrowed("rotation"),
             label: "Rotation",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
@@ -98,7 +100,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "is_wireframe",
+            name: Cow::Borrowed("is_wireframe"),
             label: "Wireframe",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),

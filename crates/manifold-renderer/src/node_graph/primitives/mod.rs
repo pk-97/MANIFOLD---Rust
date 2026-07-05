@@ -690,9 +690,10 @@ mod tests {
                 continue;
             };
             // Synthesize a default-param bag matching `parameters()`.
-            let mut params: AHashMap<&'static str, ParamValue> = AHashMap::default();
+            let mut params: AHashMap<std::borrow::Cow<'static, str>, ParamValue> =
+                AHashMap::default();
             for def in node.parameters() {
-                params.insert(def.name, def.default.clone());
+                params.insert(def.name.clone(), def.default.clone());
             }
             // Pretend every Array input was bound at a large but finite
             // capacity. Same-as-input transforms should resolve against
@@ -700,7 +701,7 @@ mod tests {
             let mut synthetic_inputs: Vec<(&str, u32)> = Vec::new();
             for port in node.inputs() {
                 if matches!(port.ty, PortType::Array(_)) {
-                    synthetic_inputs.push((port.name, 1024));
+                    synthetic_inputs.push((port.name.as_ref(), 1024));
                 }
             }
 
@@ -715,10 +716,10 @@ mod tests {
                 if !matches!(port.ty, PortType::Array(_)) {
                     continue;
                 }
-                if canvas_sized.contains(port.name) {
+                if canvas_sized.contains(port.name.as_ref()) {
                     continue;
                 }
-                let cap = node.array_output_capacity(port.name, &params, &synthetic_inputs);
+                let cap = node.array_output_capacity(port.name.as_ref(), &params, &synthetic_inputs);
                 if cap.is_none() {
                     violations.push(format!(
                         "{type_id}: Array output `{}` — \
@@ -797,10 +798,10 @@ mod tests {
             };
 
             for port in node.inputs() {
-                check_port("input", port.name, &port.ty);
+                check_port("input", port.name.as_ref(), &port.ty);
             }
             for port in node.outputs() {
-                check_port("output", port.name, &port.ty);
+                check_port("output", port.name.as_ref(), &port.ty);
             }
         }
         assert!(

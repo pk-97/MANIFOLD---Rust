@@ -12,6 +12,8 @@
 //! (DNN depth, audio bins, MIDI, sensor data) extend the port
 //! signature per §6.2 or build Permissive output propagation infra.
 
+use std::borrow::Cow;
+
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -38,7 +40,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "min_cutoff",
+            name: Cow::Borrowed("min_cutoff"),
             label: "Min Cutoff (Hz)",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -46,7 +48,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "beta",
+            name: Cow::Borrowed("beta"),
             label: "Beta (speed coeff)",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -54,7 +56,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "d_cutoff",
+            name: Cow::Borrowed("d_cutoff"),
             label: "Derivative Cutoff (Hz)",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -207,7 +209,7 @@ mod tests {
         assert!(!OneEuroFilter::INPUTS[2].required);
         assert_eq!(OneEuroFilter::OUTPUTS.len(), 1);
         assert_eq!(OneEuroFilter::OUTPUTS[0].name, "out");
-        let names: Vec<&str> = OneEuroFilter::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = OneEuroFilter::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["min_cutoff", "beta", "d_cutoff"]);
     }
 

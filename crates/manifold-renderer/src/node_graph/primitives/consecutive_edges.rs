@@ -16,6 +16,8 @@
 //! `SENTINEL` so a polygon with N = 3 active edges drawn from a 64-slot
 //! buffer doesn't smear lines across 61 sentinel-padded vertices.
 
+use std::borrow::Cow;
+
 use crate::generators::mesh_common::EdgePair;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -39,7 +41,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "count",
+            name: Cow::Borrowed("count"),
             label: "Vertex Count",
             ty: ParamType::Int,
             default: ParamValue::Float(4.0),
@@ -47,7 +49,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "closed",
+            name: Cow::Borrowed("closed"),
             label: "Closed",
             ty: ParamType::Bool,
             default: ParamValue::Bool(true),
@@ -55,7 +57,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "max_capacity",
+            name: Cow::Borrowed("max_capacity"),
             label: "Edge Buffer Capacity",
             ty: ParamType::Int,
             default: ParamValue::Float(CONSECUTIVE_EDGES_MAX_CAPACITY as f32),
@@ -167,7 +169,7 @@ mod tests {
 
     #[test]
     fn declares_count_closed_and_max_capacity_params() {
-        let names: Vec<&str> = ConsecutiveEdges::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = ConsecutiveEdges::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["count", "closed", "max_capacity"]);
     }
 
@@ -177,7 +179,7 @@ mod tests {
         let prim = ConsecutiveEdges::new();
 
         let mut params = ParamValues::default();
-        params.insert("max_capacity", ParamValue::Float(32.0));
+        params.insert(std::borrow::Cow::Borrowed("max_capacity"), ParamValue::Float(32.0));
         assert_eq!(
             Primitive::array_output_capacity(&prim, "edges", &params, &[]),
             Some(32),
@@ -185,7 +187,7 @@ mod tests {
 
         // Clamped to the hard upper bound.
         let mut over = ParamValues::default();
-        over.insert("max_capacity", ParamValue::Float(128.0));
+        over.insert(std::borrow::Cow::Borrowed("max_capacity"), ParamValue::Float(128.0));
         assert_eq!(
             Primitive::array_output_capacity(&prim, "edges", &over, &[]),
             Some(CONSECUTIVE_EDGES_MAX_CAPACITY),

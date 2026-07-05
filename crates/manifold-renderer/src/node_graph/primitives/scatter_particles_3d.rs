@@ -8,6 +8,7 @@
 //! Pair with `node.resolve_scatter_3d` to lift the u32 grid into
 //! a float Texture3D for downstream volumetric primitives.
 
+use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::generators::compute_common::Particle;
@@ -50,7 +51,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "active_count",
+            name: Cow::Borrowed("active_count"),
             label: "Active Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
@@ -58,7 +59,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "vol_res",
+            name: Cow::Borrowed("vol_res"),
             label: "Volume Resolution",
             ty: ParamType::Int,
             default: ParamValue::Float(128.0),
@@ -66,7 +67,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "vol_depth",
+            name: Cow::Borrowed("vol_depth"),
             label: "Volume Depth",
             ty: ParamType::Int,
             default: ParamValue::Float(128.0),
@@ -74,7 +75,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "scaled_energy",
+            name: Cow::Borrowed("scaled_energy"),
             label: "Energy per Particle",
             ty: ParamType::Int,
             default: ParamValue::Float(4096.0),

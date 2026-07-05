@@ -18,6 +18,8 @@
 //! First consumer: Blob Track. Reusable for any sparse-position
 //! detection stream (face boxes, hand regions, motion blobs).
 
+use std::borrow::Cow;
+
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -47,7 +49,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "match_radius",
+            name: Cow::Borrowed("match_radius"),
             label: "Match Radius",
             ty: ParamType::Float,
             default: ParamValue::Float(0.283),
@@ -55,7 +57,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "grace_frames",
+            name: Cow::Borrowed("grace_frames"),
             label: "Grace Frames",
             ty: ParamType::Int,
             default: ParamValue::Float(3.0),
@@ -254,7 +256,7 @@ mod tests {
         assert!(matches!(TrackPersist::INPUTS[0].ty, PortType::Array(_)));
         assert_eq!(TrackPersist::OUTPUTS.len(), 1);
         assert_eq!(TrackPersist::OUTPUTS[0].name, "out");
-        let names: Vec<&str> = TrackPersist::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = TrackPersist::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["match_radius", "grace_frames"]);
     }
 

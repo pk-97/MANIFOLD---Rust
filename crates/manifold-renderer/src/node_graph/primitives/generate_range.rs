@@ -25,6 +25,8 @@
 //! via `mapped_ptr` without a frame-boundary GPU fence — that's the
 //! whole point of moving the curve-math atoms to CPU.
 
+use std::borrow::Cow;
+
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -43,7 +45,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "start",
+            name: Cow::Borrowed("start"),
             label: "Start",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -51,7 +53,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "end",
+            name: Cow::Borrowed("end"),
             label: "End",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -59,7 +61,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "max_capacity",
+            name: Cow::Borrowed("max_capacity"),
             label: "Sample Count",
             ty: ParamType::Int,
             default: ParamValue::Float(256.0),
@@ -67,7 +69,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "end_inclusive",
+            name: Cow::Borrowed("end_inclusive"),
             label: "End Inclusive",
             ty: ParamType::Bool,
             default: ParamValue::Bool(true),
@@ -163,7 +165,7 @@ mod tests {
             assert!(!port.required, "{} must be optional (port-shadow)", port.name);
             assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
         }
-        let input_names: Vec<&str> = GenerateRange::INPUTS.iter().map(|p| p.name).collect();
+        let input_names: Vec<&str> = GenerateRange::INPUTS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(input_names, vec!["start", "end", "active_count"]);
 
         let f32_layout = ArrayType::of_known::<f32>();
@@ -174,7 +176,7 @@ mod tests {
 
     #[test]
     fn params_cover_start_end_capacity_and_end_inclusive() {
-        let names: Vec<&str> = GenerateRange::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = GenerateRange::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["start", "end", "max_capacity", "end_inclusive"]);
     }
 

@@ -32,6 +32,7 @@ use crate::generators::compute_common::Particle;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use std::borrow::Cow;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`strength`
 /// f32, `active_count` Int → i32), then the derived `frame_count` (u32), then the
@@ -66,7 +67,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "strength",
+            name: Cow::Borrowed("strength"),
             label: "Strength",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -74,7 +75,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "active_count",
+            name: Cow::Borrowed("active_count"),
             label: "Active Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
@@ -240,7 +241,7 @@ mod tests {
         let particle_layout = ArrayType::of_known::<Particle>();
 
         assert_eq!(AntiClumpParticles::TYPE_ID, "node.anti_clump_particles");
-        let names: Vec<&str> = AntiClumpParticles::INPUTS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = AntiClumpParticles::INPUTS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec!["in", "strength_modulator", "strength", "active_count"]
