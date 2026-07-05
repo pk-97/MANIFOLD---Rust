@@ -216,9 +216,9 @@ speculative).
 - **Entry state:** clean main; `rg -n "self.cursor_pos" crates/manifold-app/src/app.rs` shows the DroppedFile/image arms reading it (re-verify the audit anchors app.rs:2388-2412, project_io.rs:605-694).
 - **Read-back:** this doc §2 D1/D2, §3, §4; `app.rs` WindowEvent arms for `HoveredFile`/`DroppedFile`/`HoveredFileCancelled`; the §3 verify step runs FIRST.
 - **Deliverables:** `drag_hover.rs` + tracker wired into the event loop (poll called in the per-frame tick while active); every drop arm (audio/MIDI at app.rs:2392, images at app.rs:2429) resolves position via `tracker.drop_position().unwrap_or(self.cursor_pos)`; objc2-app-kit dep added.
-- **Gate:** positive — Peter drags a file from Finder onto an existing audio lane and the log reads `Dropped 1 audio file(s) onto lane`; onto empty space reads `as new lane(s)`; an image drop lands on the lane under the pointer. Unit tests for the screen→window→px conversion (`cargo test -p manifold-app --lib drag_hover`). Negative — the DroppedFile arm no longer reads `self.cursor_pos` directly: `rg -n "cursor_pos" crates/manifold-app/src/app.rs` hits only the tracker fallback and unrelated arms.
+- **Gate:** positive — Peter drags a file from Finder onto an existing audio lane and the log reads `Dropped 1 audio file(s) onto lane`; onto empty space reads `as new lane(s)`; an image drop lands on the lane under the pointer. Unit tests for the screen→window→px conversion (`cargo test -p manifold-app drag_hover` — manifold-app is bin-only, so no `--lib` target exists). Negative — the DroppedFile arm no longer reads `self.cursor_pos` directly: `rg -n "cursor_pos" crates/manifold-app/src/app.rs` hits only the tracker fallback and unrelated arms.
 - **Forbidden moves:** patching/forking winit · runtime method injection into winit classes · any `Arc<Mutex>`/cross-thread position sharing · caching one position at hover-enter instead of polling.
-- **Test scope:** `cargo test -p manifold-app --lib` + clippy. No parity, no workspace sweep (no renderer/core surface).
+- **Test scope:** `cargo test -p manifold-app` (bin-only crate — no `--lib` target) + clippy. No parity, no workspace sweep (no renderer/core surface).
 
 ### P2 — Drop-target highlight *(ui, app)*
 - **Entry state:** P1 shipped (tracker exists, `is_active()` true during a Finder drag).
@@ -234,7 +234,7 @@ speculative).
 - **Deliverables:** `macos_pasteboard.rs`; changeCount snapshot recorded at internal `copy_clips` time; Cmd+V arbitration per D4 routing files through `process_dropped_files` (beat = playhead, join = active audio lane); audio arm in `paste_clips` per D9 with a test beside the existing mismatch test.
 - **Gate:** positive — unit test for the arbitration decision table (internal-empty/external-file, internal-fresh/external-stale, both-present-external-newer, text-only-pasteboard); `cargo test -p manifold-editing --lib` for the paste guard; manual — copy a .wav in Finder, Cmd+V, clip appears at playhead. Negative — `rg -n "NSPasteboard" crates/manifold-app/src | rg -v macos_pasteboard` returns zero hits (one module owns the pasteboard).
 - **Forbidden moves:** parsing pasteboard *text* as paths (file URLs only) · "external always wins" / "internal always wins" shortcuts · opening a file dialog as the paste implementation.
-- **Test scope:** `cargo test -p manifold-editing --lib` + `-p manifold-app --lib` + clippy.
+- **Test scope:** `cargo test -p manifold-editing --lib` + `-p manifold-app` (bin-only — no `--lib`) + clippy.
 
 ### P4 — Replace audio file *(editing, app, ui)*
 - **Entry state:** re-verify clip.rs:338 (SwapVideoCommand) and orchestrator clear walk (percussion_orchestrator.rs:800-853).
