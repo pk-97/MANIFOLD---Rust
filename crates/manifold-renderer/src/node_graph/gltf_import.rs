@@ -8,6 +8,12 @@
 //! shared synthesized framing camera (`node.orbit_camera`), a sun light
 //! (`node.light`), and an IBL envmap (`node.bake_environment`).
 //!
+//! Each object's three producers are wrapped in one named, tinted node **group**
+//! so a multi-mesh import reads as a few labelled boxes in the graph editor
+//! rather than a wall of loose nodes; the group flattens away at load to the
+//! exact same flat graph, so nothing the runtime sees changes (see
+//! [`build_import_graph`] and `docs/GROUPING_GRAPHS.md`).
+//!
 //! No GPU, no file I/O beyond the one [`gltf_load::gltf_import_summary`]
 //! parse this module drives — everything here is graph-shape assembly.
 //! The glb path itself never becomes a node `param` (there is no `String`
@@ -27,12 +33,14 @@ use std::path::Path;
 use manifold_core::NodeId;
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{
-    BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, ParamSpecDef,
-    PresetMetadata, SerializedParamValue, SkipModeDef, StringBindingDef, StringParamSpecDef,
+    BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID,
+    GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef, ParamSpecDef, PresetMetadata,
+    SerializedParamValue, SkipModeDef, StringBindingDef, StringParamSpecDef,
 };
 
 use super::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID};
 use super::gltf_load;
+use super::gltf_load::GltfImportSummary;
 
 /// Hard cap mirrored from `node.render_scene`'s own `MAX_OBJECTS` — the
 /// assembler cannot emit more objects than the renderer can host. Materials
@@ -198,6 +206,41 @@ fn sanitize_identifier(stem: &str) -> String {
     }
 }
 
+/// Display / namespace name for one object's group: the glTF material name when
+/// present (with the reserved `/` swapped for a space — the flattener uses `/`
+/// as the handle namespace separator), else `"Object N"`. Deduped against
+/// siblings — two same-named materials would otherwise collide in the flattened
+/// handle map — by appending an index until unique.
+fn unique_group_name(
+    material_name: Option<&str>,
+    index: usize,
+    used: &mut std::collections::HashSet<String>,
+) -> String {
+    let base = material_name
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.replace('/', " "))
+        .unwrap_or_else(|| format!("Object {}", index + 1));
+    let mut name = base.clone();
+    let mut n = index + 1;
+    while used.contains(&name) {
+        name = format!("{base} {n}");
+        n += 1;
+    }
+    used.insert(name.clone());
+    name
+}
+
+/// A distinct RGBA header tint for object `index`, spread around the hue wheel by
+/// the golden ratio (the same scheme `Layer::generate_layer_color` uses for
+/// timeline layers) at high saturation — so a multi-mesh import reads as a few
+/// colour-coded boxes, never a wall of same-coloured groups.
+fn group_tint(index: usize) -> [f32; 4] {
+    let hue = (index as f32 * 0.618_034) % 1.0;
+    let c = manifold_core::color::Color::hsv_to_rgb(hue, 0.7, 0.85);
+    [c.r, c.g, c.b, 1.0]
+}
+
 /// Parse `path` and assemble a generator [`EffectGraphDef`] that renders it
 /// faithfully: one `node.render_scene` object per distinct material
 /// (capped at [`MAX_RENDER_SCENE_OBJECTS`], largest-by-vertex-count first),
@@ -211,6 +254,27 @@ fn sanitize_identifier(stem: &str) -> String {
 /// propagated from [`gltf_load::gltf_import_summary`] or raised here.
 pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportReport), String> {
     let summary = gltf_load::gltf_import_summary(path)?;
+    build_import_graph(&summary, path)
+}
+
+/// Assemble the generator graph from an already-parsed [`GltfImportSummary`].
+/// Split from [`assemble_import_graph`] (which owns the single file parse) so the
+/// graph shape — including the per-object node **grouping** — is testable against
+/// a synthetic summary with no `.glb` fixture on disk.
+///
+/// Each distinct material becomes one node **group** (`GROUP_TYPE_ID`) named for
+/// the material: its `node.gltf_mesh_source` + `node.pbr_material` (+ optional
+/// `node.gltf_texture_source`) live inside, exposed through a `system.group_output`
+/// as `vertices` / `material` / `baseColor`, and the group's outputs wire to the
+/// shared `node.render_scene`. Grouping is a pure presentation layer: it flattens
+/// away at load (`manifold_core::flatten::flatten_groups`, run inside
+/// `instantiate_def`) to the exact same flat graph, and every inner node keeps its
+/// stable `node_id`, so the card/string bindings that target `mesh_k`/`mat_k`/
+/// `tex_k` by id resolve unchanged (see `docs/GROUPING_GRAPHS.md` §2).
+fn build_import_graph(
+    summary: &GltfImportSummary,
+    path: &Path,
+) -> Result<(EffectGraphDef, ImportReport), String> {
     if summary.materials.is_empty() {
         return Err(format!(
             "{}: no materials with geometry — nothing to import",
@@ -329,9 +393,21 @@ pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportRepor
     let mut textures_wired = 0usize;
     let multi = n > 1;
 
+    // Group names, deduped so two identically-named glTF materials don't collide
+    // in the flattened handle map (the flattener prefixes every inner handle with
+    // the group name).
+    let mut used_group_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     for (k, m) in materials.iter().enumerate() {
         let mesh_node_id = format!("mesh_{k}");
         let mat_node_id = format!("mat_{k}");
+
+        // This object's producer nodes live INSIDE its group; only the group box
+        // and the shared render / camera / lights / boundaries sit at the top
+        // level (the spine). Every inner node keeps its stable `node_id`, so the
+        // card + string bindings below still resolve after the load-time flatten.
+        let mut group_nodes: Vec<EffectGraphNode> = Vec::new();
+        let mut group_wires: Vec<EffectGraphWire> = Vec::new();
 
         let mesh_id = fresh_id();
         let mut mesh_node =
@@ -342,7 +418,7 @@ pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportRepor
         mesh_node
             .params
             .insert("max_capacity".to_string(), int(m.vertex_count.max(1) as i32));
-        nodes.push(mesh_node);
+        group_nodes.push(mesh_node);
 
         let mat_id = fresh_id();
         let mut mat_node = plain_node(mat_id, &mat_node_id, "node.pbr_material", &mat_node_id);
@@ -391,14 +467,15 @@ pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportRepor
         mat_node
             .params
             .insert("alpha_cutoff".to_string(), float(m.alpha_cutoff));
-        nodes.push(mat_node);
+        group_nodes.push(mat_node);
 
         // Per-object material knobs on the card: metallic + roughness, the
         // two live PBR controls. Suffixed with the object number only when
         // there's more than one, so a single-material model reads
         // "Metallic" / "Roughness" not "Metallic 1". Defaults mirror the
         // node params set just above, so the card reproduces the glTF's own
-        // material on first frame.
+        // material on first frame. These still target the material node by its
+        // stable `node_id`, which grouping preserves.
         let suffix = if multi { format!(" {}", k + 1) } else { String::new() };
         let metal_default = m.metallic;
         let rough_default = m.roughness.max(0.01);
@@ -415,12 +492,21 @@ pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportRepor
             &rough_id, &rough_name, rough_default, &mat_node_id, "roughness", 1.0,
         ));
 
-        wires.push(wire(mesh_id, "vertices", render_id, &format!("mesh_{k}")));
-        wires.push(wire(mat_id, "out", render_id, &format!("material_{k}")));
+        // The group's outward interface: the mesh geometry, the material, and
+        // (when present) the base-color texture, each exposed through the
+        // `system.group_output` and wired out to the shared render node.
+        let out_id = fresh_id();
+        let mut outputs = vec![
+            InterfacePortDef { name: "vertices".to_string(), port_type: "Array(Vertex)".to_string() },
+            InterfacePortDef { name: "material".to_string(), port_type: "Material".to_string() },
+        ];
+        group_wires.push(wire(mesh_id, "vertices", out_id, "vertices"));
+        group_wires.push(wire(mat_id, "out", out_id, "material"));
 
         // Recenter this object at the origin so the fixed-target orbit
         // camera frames the (not-recentered) gltf_mesh_source output —
         // same convention `gltf_mesh_source_renders_azalea_to_png` proves.
+        // (Transform params live on the shared render node, at the top level.)
         render_node
             .params
             .insert(format!("pos_x_{k}"), float(-center[0]));
@@ -441,6 +527,7 @@ pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportRepor
             },
         });
 
+        let has_tex = m.base_color_texture.is_some();
         if let Some(tex_index) = m.base_color_texture {
             let tex_node_id = format!("tex_{k}");
             let tex_id = fresh_id();
@@ -457,9 +544,13 @@ pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportRepor
             // doesn't resample.
             tex_node.params.insert("width".to_string(), int(1024));
             tex_node.params.insert("height".to_string(), int(1024));
-            nodes.push(tex_node);
+            group_nodes.push(tex_node);
 
-            wires.push(wire(tex_id, "out", render_id, &format!("base_color_map_{k}")));
+            outputs.push(InterfacePortDef {
+                name: "baseColor".to_string(),
+                port_type: "Texture2D".to_string(),
+            });
+            group_wires.push(wire(tex_id, "out", out_id, "baseColor"));
 
             string_bindings.push(StringBindingDef {
                 id: MODEL_FILE_PARAM_ID.to_string(),
@@ -472,6 +563,42 @@ pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportRepor
             });
 
             textures_wired += 1;
+        }
+
+        // `system.group_output` closes the body; its port names are the
+        // interface output names the inner wires above target. A boundary node
+        // carries no params and no title.
+        group_nodes.push(plain_node(
+            out_id,
+            &format!("object_{k}_out"),
+            GROUP_OUTPUT_TYPE_ID,
+            "output",
+        ));
+
+        // The group box itself, named for the material so the top level reads as
+        // labeled boxes a performer can navigate. Folded away at load; only its
+        // outputs cross to the top level.
+        let group_name = unique_group_name(m.name.as_deref(), k, &mut used_group_names);
+        let group_id = fresh_id();
+        let mut group_node =
+            plain_node(group_id, &format!("object_{k}"), GROUP_TYPE_ID, &group_name);
+        group_node.group = Some(Box::new(GroupDef {
+            interface: GroupInterface { inputs: Vec::new(), outputs, params: Vec::new() },
+            nodes: group_nodes,
+            wires: group_wires,
+            // A distinct high-saturation header tint per object so a multi-mesh
+            // import reads as a few colour-coded boxes at a glance.
+            tint: Some(group_tint(k)),
+        }));
+        nodes.push(group_node);
+
+        // Top-level wires: the group's outputs feed the shared render node —
+        // after flattening these become the exact `mesh_k.vertices → render.mesh_k`
+        // (etc.) wires the ungrouped assembler produced.
+        wires.push(wire(group_id, "vertices", render_id, &format!("mesh_{k}")));
+        wires.push(wire(group_id, "material", render_id, &format!("material_{k}")));
+        if has_tex {
+            wires.push(wire(group_id, "baseColor", render_id, &format!("base_color_map_{k}")));
         }
     }
 
@@ -703,6 +830,152 @@ mod tests {
         let registry = PrimitiveRegistry::with_builtin();
         PresetRuntime::from_def(def, &registry)
             .expect("assembled azalea graph must compile through PresetRuntime::from_def");
+    }
+
+    /// Grouping proof, fixture-free: each object's producers must live inside one
+    /// named, tinted group, and the grouped graph must flatten to the SAME flat
+    /// wiring the ungrouped assembler produced (compared in node_id space) with
+    /// every card/string binding still resolving. Uses a synthetic two-material
+    /// summary — one textured, one not — so it needs no `.glb` on disk.
+    #[test]
+    fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
+        use super::gltf_load::GltfMaterialInfo;
+        use manifold_core::effect_graph_def::GROUP_TYPE_ID;
+        use manifold_core::flatten::flatten_groups;
+
+        let mat = |material_index: u32, name: &str, verts: u32, tex: Option<u32>| GltfMaterialInfo {
+            material_index,
+            name: Some(name.to_string()),
+            base_color_factor: [0.5, 0.5, 0.5, 1.0],
+            metallic: 0.0,
+            roughness: 0.6,
+            emissive: [0.0, 0.0, 0.0],
+            alpha_mask: false,
+            alpha_cutoff: 0.5,
+            base_color_texture: tex,
+            vertex_count: verts,
+        };
+        let summary = GltfImportSummary {
+            // Largest-vertex-first sort makes object 0 = Leaf (textured), 1 = Bark.
+            materials: vec![mat(0, "Leaf", 1200, Some(0)), mat(1, "Bark", 800, None)],
+            bbox_min: [-1.0, -1.0, -1.0],
+            bbox_max: [1.0, 1.0, 1.0],
+            camera_count: 0,
+            default_material_vertex_count: 0,
+        };
+        let path = std::path::Path::new("/tmp/synthetic_model.glb");
+        let (def, report) = build_import_graph(&summary, path).expect("build grouped graph");
+        assert_eq!(report.object_count, 2);
+        assert_eq!(report.textures_wired, 1);
+
+        // Top level: exactly two group boxes, no bare producer nodes.
+        let groups: Vec<_> = def.nodes.iter().filter(|n| n.type_id == GROUP_TYPE_ID).collect();
+        assert_eq!(groups.len(), 2, "one group per object");
+        assert!(groups.iter().all(|g| g.group.is_some()));
+        for bare in ["node.gltf_mesh_source", "node.pbr_material", "node.gltf_texture_source"] {
+            assert!(
+                !def.nodes.iter().any(|n| n.type_id == bare),
+                "producer `{bare}` must live inside a group, not at the top level"
+            );
+        }
+        // Distinct tints per group (legibility).
+        let tints: Vec<_> = groups.iter().filter_map(|g| g.group.as_ref().unwrap().tint).collect();
+        assert_eq!(tints.len(), 2, "every group gets a tint");
+        assert_ne!(tints[0], tints[1], "each group gets its own tint");
+
+        // Flatten and prove the runtime sees the same flat wiring the ungrouped
+        // assembler produced — in node_id space (survives id renumbering + handle
+        // prefixing).
+        let flat = flatten_groups(&def).expect("grouped import graph flattens");
+        let id_of = |doc_id: u32| -> String {
+            flat.nodes
+                .iter()
+                .find(|n| n.id == doc_id)
+                .map(|n| n.node_id.as_str().to_string())
+                .unwrap_or_default()
+        };
+        let conn: std::collections::HashSet<(String, String, String, String)> = flat
+            .wires
+            .iter()
+            .map(|w| (id_of(w.from_node), w.from_port.clone(), id_of(w.to_node), w.to_port.clone()))
+            .collect();
+        for (from_id, from_port, to_port) in [
+            ("mesh_0", "vertices", "mesh_0"),
+            ("mat_0", "out", "material_0"),
+            ("tex_0", "out", "base_color_map_0"),
+            ("mesh_1", "vertices", "mesh_1"),
+            ("mat_1", "out", "material_1"),
+        ] {
+            assert!(
+                conn.contains(&(
+                    from_id.to_string(),
+                    from_port.to_string(),
+                    "render".to_string(),
+                    to_port.to_string(),
+                )),
+                "flattened graph missing wire {from_id}.{from_port} -> render.{to_port}"
+            );
+        }
+        // Bark has no texture — no base_color_map_1 wire.
+        assert!(
+            !conn.iter().any(|(_, _, _, tp)| tp == "base_color_map_1"),
+            "untextured object must not wire a base-color map"
+        );
+        // No group / boundary nodes survive flattening.
+        assert!(
+            !flat.nodes.iter().any(|n| {
+                n.type_id == GROUP_TYPE_ID || n.type_id.contains("group_output") || n.type_id.contains("group_input")
+            }),
+            "flattened graph must contain no group or boundary nodes"
+        );
+
+        // Every card + string binding still targets a node_id that exists post-flatten.
+        let meta = def.preset_metadata.as_ref().expect("v2 metadata");
+        let flat_ids: std::collections::HashSet<&str> =
+            flat.nodes.iter().map(|n| n.node_id.as_str()).collect();
+        for b in &meta.bindings {
+            if let BindingTarget::Node { node_id, .. } = &b.target {
+                assert!(
+                    flat_ids.contains(node_id.as_str()),
+                    "card binding `{}` targets `{}`, gone after flatten",
+                    b.id,
+                    node_id.as_str()
+                );
+            }
+        }
+        for b in &meta.string_bindings {
+            if let BindingTarget::Node { node_id, .. } = &b.target {
+                assert!(
+                    flat_ids.contains(node_id.as_str()),
+                    "string binding targets `{}`, gone after flatten",
+                    node_id.as_str()
+                );
+            }
+        }
+
+        // The editor's own data path (`GraphSnapshot::from_def`, which routes a
+        // grouped def through the group-preserving structural snapshot) must show
+        // the two groups as navigable boxes — each carrying its inner producers —
+        // not a flat wall of nodes. This is the legibility payoff, verified at the
+        // snapshot layer (the pixels still want Peter's eyes on a real model).
+        let snap = crate::node_graph::GraphSnapshot::from_def(&def)
+            .expect("editor snapshot builds from the grouped def");
+        let snap_groups: Vec<_> =
+            snap.nodes.iter().filter(|n| n.group.is_some()).collect();
+        assert_eq!(snap_groups.len(), 2, "editor snapshot shows two group boxes");
+        assert!(
+            snap_groups
+                .iter()
+                .all(|g| g.group.as_ref().unwrap().nodes.iter().any(|inner| inner
+                    .type_id
+                    == "node.pbr_material")),
+            "each group box must contain its material node"
+        );
+
+        // Finally, it must build through the production loader (which flattens).
+        let registry = PrimitiveRegistry::with_builtin();
+        PresetRuntime::from_def(def, &registry)
+            .expect("grouped import graph must build through PresetRuntime::from_def");
     }
 
     /// Regression for the glTF-import "unknown parameter 'pos_x_N'" load
