@@ -3457,12 +3457,13 @@ mod tests {
             "params": { "amount": { "value": 0.75, "exposed": true, "base": 0.5 } }
         }"#;
         let fx: PresetInstance = serde_json::from_str(json).unwrap();
-        assert_eq!(fx.param_values.len(), 1);
-        assert!((fx.param_values[0].value - 0.75).abs() < f32::EPSILON);
-        assert!(fx.param_values[0].exposed);
-        // `base` present on the entry → base_tracked, folded into the slot.
+        assert_eq!(fx.params.len(), 1);
+        let amount = fx.params.get("amount").unwrap();
+        assert!((amount.value - 0.75).abs() < f32::EPSILON);
+        assert!(amount.exposed);
+        // `base` present on the entry → base_tracked, folded into the entry.
         assert!(fx.base_tracked);
-        assert!((fx.param_values[0].base - 0.5).abs() < f32::EPSILON);
+        assert!((amount.base - 0.5).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -3476,7 +3477,7 @@ mod tests {
         let fx: PresetInstance = serde_json::from_str(json).unwrap();
         assert!(!fx.base_tracked);
         // exposed defaults to true when the key is absent from the entry.
-        assert!(fx.param_values[0].exposed);
+        assert!(fx.params.get("amount").unwrap().exposed);
     }
 
     #[test]
@@ -3492,7 +3493,7 @@ mod tests {
             "params": { "amount": { "value": 0.7 } }
         }"#;
         let fx: PresetInstance = serde_json::from_str(json).unwrap();
-        assert!(fx.param_values.is_empty());
+        assert!(fx.params.is_empty());
     }
 
     #[test]
@@ -3510,11 +3511,11 @@ mod tests {
             effect_type: PresetTypeId::from_string("TotallyUnregisteredEffectType".to_string()),
             enabled: true,
             collapsed: false,
-            param_values: vec![
-                ParamSlot::exposed(0.1),
-                ParamSlot::exposed(0.2),
-                ParamSlot::exposed(0.3),
-            ],
+            // Post-manifest (D4): there is no "unaddressable positional values"
+            // failure mode — every `Param` is self-describing by id. An
+            // unregistered type seeds an EMPTY manifest (no template), so
+            // `params` serializes empty; the instance is never lost.
+            params: crate::params::ParamManifest::default(),
             base_tracked: false,
             drivers: None,
             envelopes: None,
@@ -3546,20 +3547,10 @@ mod tests {
             effect_type: PresetTypeId::from_string("TestTwoParamRoundTrip".to_string()),
             enabled: true,
             collapsed: false,
-            param_values: vec![
-                ParamSlot {
-                    value: 0.1,
-                    base: 0.1,
-                    exposed: true,
-                    touched: false,
-                },
-                ParamSlot {
-                    value: 0.2,
-                    base: 0.2,
-                    exposed: false,
-                    touched: false,
-                },
-            ],
+            params: crate::params::ParamManifest::from_params(vec![
+                slot("alpha", 0.1, true),
+                slot("beta", 0.2, false),
+            ]),
             base_tracked: false,
             drivers: None,
             envelopes: None,
@@ -3580,11 +3571,13 @@ mod tests {
         assert!(json.contains("\"alpha\":{\"value\":0.1,\"exposed\":true}"));
         assert!(json.contains("\"beta\":{\"value\":0.2,\"exposed\":false}"));
         let back: PresetInstance = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.param_values.len(), 2);
-        assert_eq!(back.param_values[0].value, 0.1);
-        assert!(back.param_values[0].exposed);
-        assert_eq!(back.param_values[1].value, 0.2);
-        assert!(!back.param_values[1].exposed);
+        assert_eq!(back.params.len(), 2);
+        let a = back.params.get("alpha").unwrap();
+        assert_eq!(a.value, 0.1);
+        assert!(a.exposed);
+        let b = back.params.get("beta").unwrap();
+        assert_eq!(b.value, 0.2);
+        assert!(!b.exposed);
     }
 
     #[test]
@@ -3691,66 +3684,51 @@ mod tests {
         }
     }
 
-    /// Install a user-added binding into the effect's graph metadata
-    /// WITHOUT growing `param_values` — mimics what deserialize produces
-    /// (the binding lives in the graph; the value tail comes from
-    /// `paramValues`). Used to exercise `align_to_definition` directly.
-    fn push_user_binding_meta_only(fx: &mut PresetInstance, ub: &UserParamBinding) {
-        use crate::effect_graph_def::{
-            BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
-        };
-        let graph = fx.graph.get_or_insert_with(|| EffectGraphDef {
-            version: 0,
-            name: None,
-            description: None,
-            preset_metadata: None,
-            nodes: Vec::new(),
-            wires: Vec::new(),
-        });
-        let meta = graph.preset_metadata.get_or_insert_with(|| PresetMetadata {
-            id: PresetTypeId::new(""),
-            display_name: String::new(),
-            category: String::new(),
-            osc_prefix: String::new(),
-            legacy_discriminant: None,
-            available: true,
-            is_line_based: false,
-            params: Vec::new(),
-            bindings: Vec::new(),
-            skip_mode: Default::default(),
-            param_aliases: Vec::new(),
-            value_aliases: Vec::new(),
-            string_params: Vec::new(),
-            string_bindings: Vec::new(),
-        });
-        meta.params.push(ParamSpecDef {
-            id: ub.id.clone(),
-            name: ub.label.clone(),
-            min: ub.min,
-            max: ub.max,
-            default_value: ub.default_value,
+    /// Build a bundled test [`Param`] (value == base == `value`) with the given
+    /// id, exposure, and a 0..1 range. Replaces the old positional `ParamSlot`.
+    fn slot(id: &str, value: f32, exposed: bool) -> crate::params::Param {
+        let spec = crate::effect_graph_def::ParamSpecDef {
+            id: id.to_string(),
+            name: String::new(),
+            min: 0.0,
+            max: 1.0,
+            default_value: value,
             whole_numbers: false,
             is_toggle: false,
             is_trigger: false,
             value_labels: Vec::new(),
             format_string: None,
             osc_suffix: String::new(),
-            curve: ub.curve,
-            invert: ub.invert,
-        });
-        meta.bindings.push(BindingDef {
-            id: ub.id.clone(),
-            label: ub.label.clone(),
-            default_value: ub.default_value,
-            target: BindingTarget::Node {
-                node_id: ub.node_id.clone(),
-                param: ub.inner_param.clone(),
-            },
-            convert: ub.convert,
-            user_added: true,
-            scale: ub.scale,
-            offset: ub.offset,
-        });
+            curve: Default::default(),
+            invert: false,
+        };
+        let mut p = crate::params::Param::bundled(spec);
+        p.value = value;
+        p.base = value;
+        p.exposed = exposed;
+        p
+    }
+
+    /// Like [`slot`] but `UserAdded` origin, so its spec rides the wire inline
+    /// and it round-trips without a registry template (the core test binary
+    /// doesn't link the renderer, so most types are unregistered here).
+    fn user_slot(id: &str, value: f32, exposed: bool) -> crate::params::Param {
+        let mut p = slot(id, value, exposed);
+        p.origin = crate::params::ParamOrigin::UserAdded;
+        p
+    }
+
+    /// Build a manifest from positional `(value, exposed)` pairs, assigning
+    /// synthetic ids `p0`, `p1`, … in card order — the value-only analogue of
+    /// the old `param_values: vec![ParamSlot::exposed(..)]`.
+    fn manifest(slots: &[(f32, bool)]) -> crate::params::ParamManifest {
+        crate::params::ParamManifest::from_params(
+            slots
+                .iter()
+                .enumerate()
+                .map(|(i, &(v, e))| slot(&format!("p{i}"), v, e))
+                .collect(),
+        )
     }
 
     #[test]
