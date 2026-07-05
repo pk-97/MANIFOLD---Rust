@@ -26,38 +26,31 @@ pub(super) fn dispatch_layer(
     use crate::content_command::ContentCommand;
     match action {
         // ── Layer operations ───────────────────────────────────────
-        PanelAction::ToggleMute(idx) => {
+        PanelAction::ToggleMute(id) => {
             // If the clicked layer is part of a multi-selection, apply to all selected layers
-            let clicked_id = project
-                .timeline
-                .layers
-                .get(*idx)
-                .map(|l| l.layer_id.clone())
-                .unwrap_or_default();
             let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
-                && selection.is_layer_selected(&clicked_id)
+                && selection.is_layer_selected(id)
             {
                 selection.selected_layer_ids.iter().cloned().collect()
             } else {
-                vec![clicked_id]
+                vec![id.clone()]
             };
             // Determine new mute state from clicked layer (toggle)
             let new_muted = project
                 .timeline
-                .layers
-                .get(*idx)
-                .map(|l| !l.is_muted)
+                .find_layer_by_id(id)
+                .map(|(_, l)| !l.is_muted)
                 .unwrap_or(true);
-            for id in &target_ids {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(id) {
+            for lid in &target_ids {
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(lid) {
                     layer.is_muted = new_muted;
                 }
             }
             ContentCommand::send(
                 content_tx,
                 ContentCommand::MutateProject(Box::new(move |p| {
-                    for id in &target_ids {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(id) {
+                    for lid in &target_ids {
+                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
                             layer.is_muted = new_muted;
                         }
                     }
@@ -65,39 +58,32 @@ pub(super) fn dispatch_layer(
             );
             DispatchResult::handled()
         }
-        PanelAction::ToggleAnalysisOnly(idx) => {
+        PanelAction::ToggleAnalysisOnly(id) => {
             // Audio "analysis-only" output: silent to master, still feeding the
             // send. Direct dual-write (local + content thread) like mute/solo —
             // a live perform toggle, not an undo step. Multi-select aware.
-            let clicked_id = project
-                .timeline
-                .layers
-                .get(*idx)
-                .map(|l| l.layer_id.clone())
-                .unwrap_or_default();
             let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
-                && selection.is_layer_selected(&clicked_id)
+                && selection.is_layer_selected(id)
             {
                 selection.selected_layer_ids.iter().cloned().collect()
             } else {
-                vec![clicked_id]
+                vec![id.clone()]
             };
             let new_analysis = project
                 .timeline
-                .layers
-                .get(*idx)
-                .map(|l| !l.analysis_only)
+                .find_layer_by_id(id)
+                .map(|(_, l)| !l.analysis_only)
                 .unwrap_or(true);
-            for id in &target_ids {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(id) {
+            for lid in &target_ids {
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(lid) {
                     layer.analysis_only = new_analysis;
                 }
             }
             ContentCommand::send(
                 content_tx,
                 ContentCommand::MutateProject(Box::new(move |p| {
-                    for id in &target_ids {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(id) {
+                    for lid in &target_ids {
+                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
                             layer.analysis_only = new_analysis;
                         }
                     }
@@ -105,36 +91,29 @@ pub(super) fn dispatch_layer(
             );
             DispatchResult::handled()
         }
-        PanelAction::ToggleSolo(idx) => {
-            let clicked_id = project
-                .timeline
-                .layers
-                .get(*idx)
-                .map(|l| l.layer_id.clone())
-                .unwrap_or_default();
+        PanelAction::ToggleSolo(id) => {
             let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
-                && selection.is_layer_selected(&clicked_id)
+                && selection.is_layer_selected(id)
             {
                 selection.selected_layer_ids.iter().cloned().collect()
             } else {
-                vec![clicked_id]
+                vec![id.clone()]
             };
             let new_solo = project
                 .timeline
-                .layers
-                .get(*idx)
-                .map(|l| !l.is_solo)
+                .find_layer_by_id(id)
+                .map(|(_, l)| !l.is_solo)
                 .unwrap_or(true);
-            for id in &target_ids {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(id) {
+            for lid in &target_ids {
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(lid) {
                     layer.is_solo = new_solo;
                 }
             }
             ContentCommand::send(
                 content_tx,
                 ContentCommand::MutateProject(Box::new(move |p| {
-                    for id in &target_ids {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(id) {
+                    for lid in &target_ids {
+                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
                             layer.is_solo = new_solo;
                         }
                     }
@@ -142,36 +121,29 @@ pub(super) fn dispatch_layer(
             );
             DispatchResult::handled()
         }
-        PanelAction::ToggleLed(idx) => {
-            let clicked_id = project
-                .timeline
-                .layers
-                .get(*idx)
-                .map(|l| l.layer_id.clone())
-                .unwrap_or_default();
+        PanelAction::ToggleLed(id) => {
             let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
-                && selection.is_layer_selected(&clicked_id)
+                && selection.is_layer_selected(id)
             {
                 selection.selected_layer_ids.iter().cloned().collect()
             } else {
-                vec![clicked_id]
+                vec![id.clone()]
             };
             let new_led = project
                 .timeline
-                .layers
-                .get(*idx)
-                .map(|l| !l.blit_to_led)
+                .find_layer_by_id(id)
+                .map(|(_, l)| !l.blit_to_led)
                 .unwrap_or(true);
-            for id in &target_ids {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(id) {
+            for lid in &target_ids {
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(lid) {
                     layer.blit_to_led = new_led;
                 }
             }
             ContentCommand::send(
                 content_tx,
                 ContentCommand::MutateProject(Box::new(move |p| {
-                    for id in &target_ids {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(id) {
+                    for lid in &target_ids {
+                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
                             layer.blit_to_led = new_led;
                         }
                     }
@@ -179,14 +151,9 @@ pub(super) fn dispatch_layer(
             );
             DispatchResult::handled()
         }
-        PanelAction::LayerClicked(idx, modifiers) => {
+        PanelAction::LayerClicked(id, modifiers) => {
             // From Unity UIState.cs layer selection methods (lines 247-333).
-            let layer_id = project
-                .timeline
-                .layers
-                .get(*idx)
-                .map(|l| l.layer_id.clone())
-                .unwrap_or_default();
+            let layer_id = id.clone();
             *active_layer = Some(layer_id.clone());
 
             // Clear effect selection when switching focus to layer headers
@@ -208,40 +175,33 @@ pub(super) fn dispatch_layer(
 
             DispatchResult::structural()
         }
-        PanelAction::LayerDoubleClicked(_idx) => {
+        PanelAction::LayerDoubleClicked(_id) => {
             // Intercepted by app.rs — opens text input for layer rename
             DispatchResult::handled()
         }
-        PanelAction::ChevronClicked(idx) => {
-            let clicked_id = project
-                .timeline
-                .layers
-                .get(*idx)
-                .map(|l| l.layer_id.clone())
-                .unwrap_or_default();
+        PanelAction::ChevronClicked(id) => {
             let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
-                && selection.is_layer_selected(&clicked_id)
+                && selection.is_layer_selected(id)
             {
                 selection.selected_layer_ids.iter().cloned().collect()
             } else {
-                vec![clicked_id]
+                vec![id.clone()]
             };
             let new_collapsed = project
                 .timeline
-                .layers
-                .get(*idx)
-                .map(|l| !l.is_collapsed)
+                .find_layer_by_id(id)
+                .map(|(_, l)| !l.is_collapsed)
                 .unwrap_or(true);
-            for id in &target_ids {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(id) {
+            for lid in &target_ids {
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(lid) {
                     layer.is_collapsed = new_collapsed;
                 }
             }
             ContentCommand::send(
                 content_tx,
                 ContentCommand::MutateProject(Box::new(move |p| {
-                    for id in &target_ids {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(id) {
+                    for lid in &target_ids {
+                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
                             layer.is_collapsed = new_collapsed;
                         }
                     }
@@ -249,13 +209,13 @@ pub(super) fn dispatch_layer(
             );
             DispatchResult::structural()
         }
-        PanelAction::BlendModeClicked(_idx) => {
+        PanelAction::BlendModeClicked(_id) => {
             // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
             DispatchResult::handled()
         }
-        PanelAction::SetBlendMode(idx, mode_str) => {
+        PanelAction::SetBlendMode(id, mode_str) => {
             {
-                if let Some(layer) = project.timeline.layers.get(*idx) {
+                if let Some((_, layer)) = project.timeline.find_layer_by_id(id) {
                     let layer_id = layer.layer_id.clone();
                     let old_mode = layer.default_blend_mode;
                     if let Some(new_mode) = BlendMode::ALL
@@ -274,11 +234,11 @@ pub(super) fn dispatch_layer(
             }
             DispatchResult::structural()
         }
-        PanelAction::SetLayerAudioSend(idx, send_id) => {
+        PanelAction::SetLayerAudioSend(id, send_id) => {
             // Layer-centric routing: this layer feeds the chosen send (or none).
             // Additive — the target send keeps its capture flag, so routing a
             // layer onto a default send makes a live capture+layer mix.
-            if let Some(layer) = project.timeline.layers.get(*idx) {
+            if let Some((_, layer)) = project.timeline.find_layer_by_id(id) {
                 let layer_id = layer.layer_id.clone();
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                     Box::new(SetLayerAudioSendCommand::new(layer_id, send_id.clone()));
@@ -287,32 +247,26 @@ pub(super) fn dispatch_layer(
             }
             DispatchResult::structural()
         }
-        PanelAction::ExpandLayer(idx) => {
+        PanelAction::ExpandLayer(id) => {
             // Collapse/expand is a view-state toggle (MutateProject, not undoable),
             // multi-select aware — same pattern as ChevronClicked.
-            let clicked_id = project
-                .timeline
-                .layers
-                .get(*idx)
-                .map(|l| l.layer_id.clone())
-                .unwrap_or_default();
             let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
-                && selection.is_layer_selected(&clicked_id)
+                && selection.is_layer_selected(id)
             {
                 selection.selected_layer_ids.iter().cloned().collect()
             } else {
-                vec![clicked_id]
+                vec![id.clone()]
             };
-            for id in &target_ids {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(id) {
+            for lid in &target_ids {
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(lid) {
                     layer.is_collapsed = false;
                 }
             }
             ContentCommand::send(
                 content_tx,
                 ContentCommand::MutateProject(Box::new(move |p| {
-                    for id in &target_ids {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(id) {
+                    for lid in &target_ids {
+                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
                             layer.is_collapsed = false;
                         }
                     }
@@ -320,32 +274,26 @@ pub(super) fn dispatch_layer(
             );
             DispatchResult::structural()
         }
-        PanelAction::CollapseLayer(idx) => {
+        PanelAction::CollapseLayer(id) => {
             // Collapse/expand is a view-state toggle (MutateProject, not undoable),
             // multi-select aware — same pattern as ChevronClicked.
-            let clicked_id = project
-                .timeline
-                .layers
-                .get(*idx)
-                .map(|l| l.layer_id.clone())
-                .unwrap_or_default();
             let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
-                && selection.is_layer_selected(&clicked_id)
+                && selection.is_layer_selected(id)
             {
                 selection.selected_layer_ids.iter().cloned().collect()
             } else {
-                vec![clicked_id]
+                vec![id.clone()]
             };
-            for id in &target_ids {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(id) {
+            for lid in &target_ids {
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(lid) {
                     layer.is_collapsed = true;
                 }
             }
             ContentCommand::send(
                 content_tx,
                 ContentCommand::MutateProject(Box::new(move |p| {
-                    for id in &target_ids {
-                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(id) {
+                    for lid in &target_ids {
+                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
                             layer.is_collapsed = true;
                         }
                     }
@@ -353,39 +301,53 @@ pub(super) fn dispatch_layer(
             );
             DispatchResult::structural()
         }
-        PanelAction::FolderClicked(_idx) => {
+        PanelAction::FolderClicked(_id) => {
             log::info!("Folder clicked (file picker not yet implemented)");
             DispatchResult::handled()
         }
-        PanelAction::NewClipClicked(idx) => {
+        PanelAction::NewClipClicked(id) => {
             let beat = content_state.current_beat;
             let spb = 60.0 / project.settings.bpm.0.max(1.0);
-            if let Some((cmd, _)) =
-                EditingService::create_clip_at_position(project, beat, *idx, Beats(4.0), spb)
+            // create_clip_at_position takes a positional index; resolve the
+            // stable id to its current row against the live model.
+            if let Some((layer_idx, _)) = project.timeline.find_layer_by_id(id)
+                && let Some((cmd, _)) = EditingService::create_clip_at_position(
+                    project,
+                    beat,
+                    layer_idx,
+                    Beats(4.0),
+                    spb,
+                )
             {
                 ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
             }
             DispatchResult::structural()
         }
-        PanelAction::AddGenClipClicked(idx) => {
+        PanelAction::AddGenClipClicked(id) => {
             let beat = content_state.current_beat;
             let spb = 60.0 / project.settings.bpm.0.max(1.0);
-            if let Some((cmd, _)) =
-                EditingService::create_clip_at_position(project, beat, *idx, Beats(4.0), spb)
+            if let Some((layer_idx, _)) = project.timeline.find_layer_by_id(id)
+                && let Some((cmd, _)) = EditingService::create_clip_at_position(
+                    project,
+                    beat,
+                    layer_idx,
+                    Beats(4.0),
+                    spb,
+                )
             {
                 ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
             }
             DispatchResult::structural()
         }
-        PanelAction::MidiInputClicked(_idx) => {
+        PanelAction::MidiInputClicked(_id) => {
             // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
             DispatchResult::handled()
         }
-        PanelAction::MidiChannelClicked(_idx) => {
+        PanelAction::MidiChannelClicked(_id) => {
             // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
             DispatchResult::handled()
         }
-        PanelAction::MidiDeviceClicked(_idx) => {
+        PanelAction::MidiDeviceClicked(_id) => {
             // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
             DispatchResult::handled()
         }
@@ -542,10 +504,10 @@ pub(super) fn dispatch_layer(
             }
             DispatchResult::structural()
         }
-        PanelAction::DeleteLayerClicked(idx) => {
+        PanelAction::DeleteLayerClicked(id) => {
             {
                 if project.timeline.layers.len() > 1
-                    && let Some(layer) = project.timeline.layers.get(*idx)
+                    && let Some((_, layer)) = project.timeline.find_layer_by_id(id)
                 {
                     let layer_clone = layer.clone();
                     let cmd = DeleteLayerCommand::new(layer_clone);

@@ -502,19 +502,18 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         // ── Audio-layer gain slider (layer header) ─────────────────
-        PanelAction::AudioGainSnapshot(idx) => {
+        PanelAction::AudioGainSnapshot(id) => {
             *drag_snapshot = project
                 .timeline
-                .layers
-                .get(*idx)
-                .map(|l| l.audio_gain_db);
+                .find_layer_by_id(id)
+                .map(|(_, l)| l.audio_gain_db);
             DispatchResult::handled()
         }
-        PanelAction::AudioGainChanged(idx, db) => {
+        PanelAction::AudioGainChanged(id, db) => {
             let db = *db;
-            if let Some(layer) = project.timeline.layers.get_mut(*idx) {
+            if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(id) {
                 layer.audio_gain_db = db;
-                let id = layer.layer_id.clone();
+                let id = id.clone();
                 ContentCommand::send(
                     content_tx,
                     ContentCommand::MutateProjectLive(Box::new(move |p| {
@@ -526,9 +525,9 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::AudioGainCommit(idx) => {
+        PanelAction::AudioGainCommit(id) => {
             if let Some(old_db) = drag_snapshot.take()
-                && let Some(layer) = project.timeline.layers.get(*idx)
+                && let Some((_, layer)) = project.timeline.find_layer_by_id(id)
             {
                 let new_db = layer.audio_gain_db;
                 if (old_db - new_db).abs() > f32::EPSILON {

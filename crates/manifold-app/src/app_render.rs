@@ -1680,19 +1680,27 @@ impl Application {
                         });
                     continue;
                 }
-                PanelAction::LayerDoubleClicked(idx) => {
-                    // Open text input for layer rename
+                PanelAction::LayerDoubleClicked(id) => {
+                    // Open text input for layer rename. The action carries a
+                    // stable LayerId; resolve it to the current row for the
+                    // index-based `name_node_id` / `LayerName` field (the
+                    // text-input subsystem is still positional — a Copy enum
+                    // that would have to drop Copy to hold a LayerId; tracked
+                    // as a follow-up, BUG-031).
                     {
                         let project = &self.local_project;
-                        if let Some(layer) = project.timeline.layers.get(*idx) {
-                            let r = if let Some(nid) = self.ws.ui_root.layer_headers.name_node_id(*idx) {
+                        if let Some((pos, layer)) = project.timeline.find_layer_by_id(id) {
+                            let r = if let Some(nid) =
+                                self.ws.ui_root.layer_headers.name_node_id(pos)
+                            {
                                 self.ws.ui_root.tree.get_bounds(nid)
                             } else {
                                 manifold_ui::node::Rect::new(100.0, 100.0, 120.0, 20.0)
                             };
+                            let name = layer.name.clone();
                             self.text_input.begin(
-                                crate::text_input::TextInputField::LayerName(*idx),
-                                &layer.name,
+                                crate::text_input::TextInputField::LayerName(pos),
+                                &name,
                                 crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
                                 11.0,
                             );
