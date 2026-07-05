@@ -190,6 +190,17 @@ const PORT_RADIUS: f32 = 4.0;
 const PORT_COL_WIDTH: f32 = 10.0;
 const NODE_CORNER: f32 = 6.0;
 
+/// The one zoom range the canvas lives in — shared by scroll-wheel zoom AND
+/// zoom-to-fit, so the fit can never park the view at a zoom the user then
+/// can't reach (or scroll back to) by hand. The floor is deliberately low
+/// enough to frame a tall generator graph (e.g. an ~30-node glTF import
+/// column) on open; the ceiling is the manual magnify limit. Zoom-to-fit
+/// additionally never magnifies past 1.0 — a sparse graph shouldn't balloon —
+/// but every value it produces still sits inside `[MIN_ZOOM, MAX_ZOOM]`, so
+/// nothing it does is unreachable.
+pub(crate) const MIN_ZOOM: f32 = 0.05;
+pub(crate) const MAX_ZOOM: f32 = 4.0;
+
 // Auto-layout grid spacing: NODE_WIDTH + ~60px breathing room for the wires
 // between columns, so nodes never touch horizontally. Derived (not a
 // hardcoded literal) so a future NODE_WIDTH change can't silently collapse

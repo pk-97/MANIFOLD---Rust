@@ -242,6 +242,10 @@ impl GraphCanvas {
             scope_path: self.scope.clone(),
             positions,
         });
+        // Cmd+L reframes as well as reformats: the freshly laid-out graph is
+        // brought fully into view (the next viewport-aware present applies the
+        // fit), so "format" never leaves the tidy result scrolled off-screen.
+        self.fit_pending = true;
     }
 
     /// Lay the graph out as left-to-right layers (the Sugiyama framework):

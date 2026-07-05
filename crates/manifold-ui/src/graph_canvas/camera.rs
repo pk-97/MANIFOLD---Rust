@@ -101,15 +101,13 @@ impl GraphCanvas {
         const FIT_MARGIN: f32 = 40.0;
         let content_w = (viewport.w - 2.0 * FIT_MARGIN).max(1.0);
         let content_h = (viewport.h - HEADER_HEIGHT - 2.0 * FIT_MARGIN).max(1.0);
-        // Cap at 1.0 so a sparse graph doesn't balloon. The lower bound is far
-        // below the interactive scroll-zoom floor (0.25) ON PURPOSE: a "zoom to
-        // fit" that refuses to zoom out enough to show the whole graph isn't a
-        // fit at all — a tall generator (e.g. an 8-object glTF import, ~30 nodes
-        // in one column) needs ~0.1 to frame, and clamping to 0.25 stranded most
-        // of it below the viewport on open. FIT_MIN_ZOOM only bottoms out an
-        // absurdly large graph; the user zooms in from there.
-        const FIT_MIN_ZOOM: f32 = 0.05;
-        self.zoom = (content_w / bbox_w).min(content_h / bbox_h).clamp(FIT_MIN_ZOOM, 1.0);
+        // Never magnify past 1.0 (a sparse graph shouldn't balloon). The floor
+        // is the shared MIN_ZOOM — the same one scroll-wheel zoom bottoms out at
+        // — so the fit can't strand the view at a zoom the user can't reach by
+        // hand. A tall generator (e.g. an 8-object glTF import, ~30 nodes in one
+        // column) needs ~0.1 to frame; the old 0.25 floor left most of it below
+        // the viewport on open.
+        self.zoom = (content_w / bbox_w).min(content_h / bbox_h).clamp(MIN_ZOOM, 1.0);
         // Centre the bbox: invert `to_screen` so the bbox centre lands at the
         // canvas content centre. `screen = origin + (graph + pan) * zoom`.
         let bbox_cx = (min_x + max_x) * 0.5;
@@ -151,7 +149,7 @@ impl GraphCanvas {
     pub fn on_scroll(&mut self, viewport: Rect, dy: f32) {
         let (gx_before, gy_before) = self.to_graph(viewport, self.cursor.0, self.cursor.1);
         let factor = (dy * 0.0015).exp();
-        let new_zoom = (self.zoom * factor).clamp(0.25, 4.0);
+        let new_zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
         self.zoom = new_zoom;
         let (gx_after, gy_after) = self.to_graph(viewport, self.cursor.0, self.cursor.1);
         self.pan.0 += gx_after - gx_before;

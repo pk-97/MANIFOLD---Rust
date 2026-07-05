@@ -1532,6 +1532,107 @@ fn import_shaped_graph_fits_all_nodes_on_open() {
     );
 }
 
+/// A tall fan-in: `count` producer nodes all feeding one sink, then sink →
+/// final. Big `count` makes the graph tall enough that zoom-to-fit must go
+/// below the interactive scroll floor to frame it (the 8-object-import shape).
+fn tall_fan_in(count: u32) -> GraphSnapshot {
+    let mut nodes = vec![node(0, "system.generator_input", Some("input"))];
+    let mut wires = Vec::new();
+    let sink_id = count + 1;
+    let mut sink_inputs = Vec::new();
+    for i in 0..count {
+        let id = i + 1;
+        nodes.push(node(id, "node.producer", Some(&format!("p{i}"))));
+        let port_name = format!("in{i}");
+        wires.push(wire(id, "out", sink_id, &port_name));
+        sink_inputs.push(port_name);
+    }
+    let mut sink = node(sink_id, "node.sink", Some("sink"));
+    sink.inputs = sink_inputs.iter().map(|p| port(p)).collect();
+    sink.outputs = vec![port("out")];
+    nodes.push(sink);
+    let final_id = sink_id + 1;
+    nodes.push(node(final_id, "system.final_output", Some("final")));
+    wires.push(wire(sink_id, "out", final_id, "in"));
+    GraphSnapshot { nodes, wires, outer_routings: Vec::new() }
+}
+
+/// Peter's "on zoom it scrolls to an empty graph" report: after zoom-to-fit
+/// parks a tall graph below the interactive scroll-zoom floor, the very first
+/// scroll used to snap the zoom up to that floor (a ~5x jump) and re-anchor,
+/// leaping the view off the graph. Zoom-to-fit and scroll now share one range
+/// (`MIN_ZOOM`..`MAX_ZOOM`), so any fitted zoom is reachable and a scroll moves
+/// it proportionally instead of snapping.
+#[test]
+fn fitted_zoom_is_reachable_and_scroll_does_not_snap() {
+    let snap = tall_fan_in(24); // ~24-node column → fits well below the old 0.25 floor
+    let mut canvas = GraphCanvas::new();
+    canvas.set_snapshot(&snap);
+    let viewport = Rect::new(0.0, 0.0, 900.0, 800.0);
+    canvas.apply_pending_fit(viewport);
+
+    let fitted = canvas.zoom;
+    assert!(
+        fitted < 0.25,
+        "fixture must be tall enough to fit below the old floor (got zoom {fitted:.3})"
+    );
+    assert!(
+        (MIN_ZOOM..=MAX_ZOOM).contains(&fitted),
+        "a fitted zoom must be inside the interactive range so the user can reach it \
+         (zoom {fitted:.3}, range {MIN_ZOOM}..{MAX_ZOOM})"
+    );
+
+    // A small scroll from the fitted zoom must move proportionally, not snap to a
+    // higher floor. exp(dy*0.0015) for dy=20 is ~1.03, so the zoom should change
+    // by only a few percent — never the ~5x leap the old 0.25 clamp caused.
+    canvas.cursor = (450.0, 400.0);
+    canvas.on_scroll(viewport, 20.0);
+    let after = canvas.zoom;
+    assert!(
+        after > fitted && after < fitted * 1.2,
+        "scroll from a sub-floor fitted zoom must be proportional, not a snap: {fitted:.3} -> {after:.3}"
+    );
+}
+
+/// Peter's second ask: Cmd+L (`request_relayout`) must reframe as well as
+/// reformat — a format that leaves the tidy graph scrolled off-screen isn't
+/// much use. After scrolling far away, a relayout must arm the fit so the next
+/// present brings every node back into view.
+#[test]
+fn relayout_reframes_the_graph_into_view() {
+    let snap = tall_fan_in(6);
+    let mut canvas = GraphCanvas::new();
+    canvas.set_snapshot(&snap);
+    let viewport = Rect::new(0.0, 0.0, 900.0, 800.0);
+    canvas.apply_pending_fit(viewport);
+
+    // Scroll the view far off the graph, as if the user got lost.
+    canvas.pan = (-9000.0, -9000.0);
+    canvas.zoom = 1.0;
+    // Cmd+L.
+    canvas.request_relayout();
+    canvas.apply_pending_fit(viewport);
+
+    let offenders: Vec<&str> = canvas
+        .nodes
+        .iter()
+        .filter(|n| {
+            let (sx, sy) = canvas.to_screen(viewport, n.pos_graph.0, n.pos_graph.1);
+            let bottom = sy + n.height() * canvas.zoom;
+            let right = sx + NODE_WIDTH * canvas.zoom;
+            !(sx >= viewport.x - 1.0
+                && sy >= viewport.y - 1.0
+                && right <= viewport.x + viewport.w + 1.0
+                && bottom <= viewport.y + viewport.h + 1.0)
+        })
+        .map(|n| n.handle.as_deref().unwrap_or("?"))
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "Cmd+L relayout must bring every node into view, but these stayed off-screen: {offenders:?}"
+    );
+}
+
 /// BUG-027 fix: each node draws in its OWN increasing depth band, and its output
 /// preview is painted inline within that band — so a node stacked above (a
 /// higher band, drawn later) occludes the preview of one below it. A `Painter`
