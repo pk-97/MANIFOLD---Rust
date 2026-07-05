@@ -43,7 +43,7 @@ use crate::node_graph::backend::Backend;
 use crate::node_graph::boundary_nodes::{
     FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID, SOURCE_TYPE_ID,
 };
-use crate::node_graph::effect_node::NodeInstanceId;
+use crate::node_graph::effect_node::{NodeInstanceId, ParamValues};
 use crate::node_graph::execution_plan::{ExecutionPlan, ResourceId};
 use crate::node_graph::graph::Graph;
 use crate::node_graph::metal_backend::MetalBackend;
@@ -378,6 +378,37 @@ pub fn instantiate_def(
         // the common case.
         if let Some(source) = node_doc.wgsl_source.as_deref() {
             boxed.set_wgsl_source(source);
+        }
+
+        // Reconfigure dynamic-surface nodes from the doc's params BEFORE the
+        // snapshot below. `node.reconfigure` (a no-op for static-shape
+        // primitives) rebuilds a node's port/param surface from its
+        // reconfigure params — `objects`/`lights` for `node.render_scene`,
+        // `num_inputs` for `node.mux_texture`/`node.multi_blend`. The runtime
+        // already calls it after every node build (graph.rs, snapshot.rs,
+        // freeze/region.rs); the loader was the one path that didn't, so a
+        // node whose PARAM set grows with a reconfigure param (render_scene:
+        // `pos_x_2`.. exist only when `objects >= 3`) had those params
+        // validated against the default-count surface and rejected as unknown
+        // — the "unknown parameter 'pos_x_2'" glTF-import load failure. Seed
+        // the declared defaults, override with the doc's values, reconfigure;
+        // then the snapshot reflects the true surface. Mirrors snapshot.rs.
+        {
+            let seed: Vec<(&'static str, ParamValue)> = boxed
+                .parameters()
+                .iter()
+                .map(|p| (p.name, p.default.clone()))
+                .collect();
+            let mut reconfig_params: ParamValues = ahash::AHashMap::default();
+            for (name, default) in &seed {
+                reconfig_params.insert(name, default.clone());
+            }
+            for (key, value) in &node_doc.params {
+                if let Some((name, _)) = seed.iter().find(|(n, _)| *n == key.as_str()) {
+                    reconfig_params.insert(name, value.clone().into());
+                }
+            }
+            boxed.reconfigure(&reconfig_params);
         }
 
         // Snapshot the declared param surface BEFORE moving `boxed` into
