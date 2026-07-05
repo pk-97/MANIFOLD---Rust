@@ -260,7 +260,10 @@ struct PendingTransportState {
 #[derive(Debug, Clone)]
 struct WriteTarget {
     target: AbletonMappingTarget,
-    param_index: usize,
+    /// MANIFOLD param id (P4). Resolved from the mapping and written through the
+    /// id funnel — replaces the P2 positional `param_index` that could not
+    /// address user-added / registry-absent params.
+    param_id: String,
     /// Ableton parameter range — the raw value arrives in [ableton_min, ableton_max]
     /// and must be normalized to 0-1 before applying range_min/range_max trim.
     ableton_min: f32,
@@ -791,7 +794,7 @@ impl AbletonBridge {
                     let mapped = wt.range_min + (wt.range_max - wt.range_min) * normalized;
                     // Map into MANIFOLD parameter range.
                     let value = wt.param_min + (wt.param_max - wt.param_min) * mapped;
-                    Self::write_to_project(project, &wt.target, wt.param_index, value);
+                    Self::write_to_project(project, &wt.target, &wt.param_id, value);
                 }
                 wrote_any = true;
             }
@@ -845,22 +848,17 @@ impl AbletonBridge {
     fn write_to_project(
         project: &mut Project,
         target: &AbletonMappingTarget,
-        param_index: usize,
+        param_id: &str,
         value: f32,
     ) {
         // MacroSlot routes to the macro bank; the three host variants all
-        // locate their PresetInstance through the shared dispatch.
+        // locate their PresetInstance through the shared dispatch and write by
+        // param id (P4). If the id is absent on the instance, the funnel is a
+        // no-op — safe under a stale mapping.
         if let AbletonMappingTarget::MacroSlot { slot_index } = target {
             manifold_core::macro_bank::MacroBank::apply_macro(project, *slot_index, value);
         } else if let Some(fx) = project.find_preset_instance_mut(target) {
-            // P2 compile bridge: `WriteTarget` still carries a positional index
-            // (P4 replaces it with the mapping's `param_id`). Translate the
-            // index to its id through the manifest's transient positional view
-            // at this boundary, then write through the id funnel.
-            let id = fx.params.iter().nth(param_index).map(|p| p.id().to_string());
-            if let Some(id) = id {
-                fx.set_base_param(&id, value);
-            }
+            fx.set_base_param(param_id, value);
         }
     }
 
@@ -2102,18 +2100,13 @@ impl AbletonBridge {
                     );
                     needed.insert(key);
 
-                    let effect_def =
-                        manifold_core::preset_definition_registry::try_get(fx.effect_type());
-                    let resolved_idx = effect_def
-                        .as_ref()
-                        .and_then(|d| d.id_to_index.get(mapping.param_id.as_ref()).copied());
-                    let Some(resolved_idx) = resolved_idx else {
+                    // Resolve the param on the LIVE manifest (P4) — user-added
+                    // and registry-absent (glb-import) params resolve here where
+                    // the frozen registry's id_to_index would miss and drop them.
+                    let Some(param) = fx.params.get(mapping.param_id.as_ref()) else {
                         continue;
                     };
-                    let (pmin, pmax) = effect_def
-                        .as_ref()
-                        .and_then(|d| d.param_defs.get(resolved_idx).map(|pd| (pd.min, pd.max)))
-                        .unwrap_or((0.0, 1.0));
+                    let (pmin, pmax) = (param.spec.min, param.spec.max);
                     let (abl_min, abl_max) = self.ableton_param_range(
                         mapping.address.track_id,
                         mapping.address.device_id,
@@ -2125,7 +2118,7 @@ impl AbletonBridge {
                             effect_type: fx.effect_type().clone(),
                             param_id: mapping.param_id.clone(),
                         },
-                        param_index: resolved_idx,
+                        param_id: mapping.param_id.to_string(),
                         ableton_min: abl_min,
                         ableton_max: abl_max,
                         range_min: mapping.range_min,
@@ -2156,21 +2149,14 @@ impl AbletonBridge {
                             );
                             needed.insert(key);
 
-                            let effect_def = manifold_core::preset_definition_registry::try_get(
-                                fx.effect_type(),
-                            );
-                            let resolved_idx = effect_def.as_ref().and_then(|d| {
-                                d.id_to_index.get(mapping.param_id.as_ref()).copied()
-                            });
-                            let Some(resolved_idx) = resolved_idx else {
+                            // Live-manifest resolution (P4) — see master-effect
+                            // path; user-added / registry-absent params resolve
+                            // here instead of being dropped by an id_to_index miss.
+                            let Some(param) = fx.params.get(mapping.param_id.as_ref())
+                            else {
                                 continue;
                             };
-                            let (pmin, pmax) = effect_def
-                                .as_ref()
-                                .and_then(|d| {
-                                    d.param_defs.get(resolved_idx).map(|pd| (pd.min, pd.max))
-                                })
-                                .unwrap_or((0.0, 1.0));
+                            let (pmin, pmax) = (param.spec.min, param.spec.max);
                             let (abl_min, abl_max) = self.ableton_param_range(
                                 mapping.address.track_id,
                                 mapping.address.device_id,
@@ -2183,7 +2169,7 @@ impl AbletonBridge {
                                     effect_type: fx.effect_type().clone(),
                                     param_id: mapping.param_id.clone(),
                                 },
-                                param_index: resolved_idx,
+                                param_id: mapping.param_id.to_string(),
                                 ableton_min: abl_min,
                                 ableton_max: abl_max,
                                 range_min: mapping.range_min,
@@ -2211,18 +2197,12 @@ impl AbletonBridge {
                     );
                     needed.insert(key);
 
-                    let gen_def =
-                        manifold_core::preset_definition_registry::try_get(gp.generator_type());
-                    let resolved_idx = gen_def
-                        .as_ref()
-                        .and_then(|d| d.id_to_index.get(mapping.param_id.as_ref()).copied());
-                    let Some(resolved_idx) = resolved_idx else {
+                    // Live-manifest resolution (P4) — generator params, including
+                    // glb-import sliders absent from the registry, resolve here.
+                    let Some(param) = gp.params.get(mapping.param_id.as_ref()) else {
                         continue;
                     };
-                    let (pmin, pmax) = gen_def
-                        .as_ref()
-                        .and_then(|d| d.param_defs.get(resolved_idx).map(|pd| (pd.min, pd.max)))
-                        .unwrap_or((0.0, 1.0));
+                    let (pmin, pmax) = (param.spec.min, param.spec.max);
                     let (abl_min, abl_max) = self.ableton_param_range(
                         mapping.address.track_id,
                         mapping.address.device_id,
@@ -2234,7 +2214,7 @@ impl AbletonBridge {
                             layer_id: layer_id.clone(),
                             param_id: mapping.param_id.clone(),
                         },
-                        param_index: resolved_idx,
+                        param_id: mapping.param_id.to_string(),
                         ableton_min: abl_min,
                         ableton_max: abl_max,
                         range_min: mapping.range_min,
@@ -2267,7 +2247,8 @@ impl AbletonBridge {
 
                 new_write_targets.entry(key).or_default().push(WriteTarget {
                     target: AbletonMappingTarget::MacroSlot { slot_index: i },
-                    param_index: 0,
+                    // Macros route via slot_index; the id funnel is unused here.
+                    param_id: String::new(),
                     ableton_min: abl_min,
                     ableton_max: abl_max,
                     range_min: mapping.range_min,
@@ -2808,6 +2789,92 @@ mod tests {
         }
     }
 
+    // ── P4: manifest-id resolution fixtures ────────────────────────
+
+    fn user_spec(id: &str) -> manifold_core::effect_graph_def::ParamSpecDef {
+        manifold_core::effect_graph_def::ParamSpecDef {
+            id: id.to_string(),
+            name: id.to_string(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.0,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: manifold_core::macro_bank::MacroCurve::default(),
+            invert: false,
+        }
+    }
+
+    fn active_mapping_for(
+        param_id: &str,
+        track_id: i32,
+        device_id: i32,
+        aparam: i32,
+    ) -> AbletonParamMapping {
+        use manifold_core::ableton_mapping::{AbletonDeviceIdentity, AbletonMacroAddress};
+        AbletonParamMapping {
+            param_id: std::borrow::Cow::Owned(param_id.to_string()),
+            address: AbletonMacroAddress {
+                track_id,
+                device_id,
+                param_id: aparam,
+                device_identity: AbletonDeviceIdentity {
+                    device_class_name: "InstrumentGroupDevice".to_string(),
+                },
+                track_name: "T".to_string(),
+                device_name: "D".to_string(),
+                macro_name: "M".to_string(),
+            },
+            range_min: 0.0,
+            range_max: 1.0,
+            inverted: false,
+            legacy_param_index: None,
+            last_value: 0.0,
+            status: AbletonMappingStatus::Active,
+        }
+    }
+
+    /// REPRO — design acceptance (a): an Ableton mapping on a user-added param
+    /// must resolve to a write target. Before P4 the resolver looked the id up
+    /// in the frozen registry's `id_to_index` and `continue`d on miss, silently
+    /// dropping the mapping — the glb-generator "unmappable slider" bug.
+    /// (Runnable-red against pre-P4 code.)
+    #[test]
+    fn ableton_rebuild_creates_write_target_for_user_param() {
+        use manifold_core::effects::PresetInstance;
+        use manifold_core::params::{Param, ParamManifest};
+
+        let mut project = manifold_core::project::Project::default();
+        let mut fx = PresetInstance::new(manifold_core::PresetTypeId::BLOOM);
+        fx.params = ParamManifest::from_params(vec![Param::user_added(user_spec("user_glow"))]);
+        fx.ableton_mappings = Some(vec![active_mapping_for("user_glow", 3, 1, 2)]);
+        project.settings.master_effects.push(fx);
+
+        let mut bridge = AbletonBridge::new();
+        bridge.rebuild_listeners(&project);
+
+        assert!(
+            bridge.write_targets.contains_key(&(3, 1, 2)),
+            "user-added param mapping must produce a write target; keys = {:?}",
+            bridge.write_targets.keys().collect::<Vec<_>>()
+        );
+
+        // ...and the write reaches the user param through the id funnel.
+        let wt = &bridge.write_targets[&(3, 1, 2)][0];
+        assert_eq!(wt.param_id, "user_glow");
+        AbletonBridge::write_to_project(&mut project, &wt.target, &wt.param_id, 0.42);
+        let v = project.settings.master_effects[0]
+            .params
+            .get("user_glow")
+            .unwrap()
+            .value;
+        assert!((v - 0.42).abs() < 1e-6, "write must reach the user param; got {v}");
+    }
+
     // ── Resolver: canonical name path ──────────────────────────────
 
     #[test]
@@ -3096,7 +3163,7 @@ mod tests {
                 effect_type: manifold_core::PresetTypeId::BLOOM,
                 param_id: std::borrow::Cow::Borrowed("amount"),
             },
-            param_index: 0,
+            param_id: "amount".to_string(),
             // Rack macros send 0-127 from Ableton
             ableton_min: 0.0,
             ableton_max: 127.0,
