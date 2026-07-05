@@ -294,8 +294,8 @@ impl ModulationSnapshot {
         // through the per-frame fast path.
         self.master_count = project.settings.master_effects.len() as u16;
         for fx in &project.settings.master_effects {
-            let len = fx.param_values.len();
-            self.values.extend(fx.param_values.iter().map(|p| p.value));
+            let len = fx.params.len();
+            self.values.extend(fx.params.iter().map(|p| p.value));
             self.block_lens.push(len as u16);
         }
 
@@ -306,15 +306,15 @@ impl ModulationSnapshot {
 
             if let Some(effects) = &layer.effects {
                 for fx in effects {
-                    let len = fx.param_values.len();
-                    self.values.extend(fx.param_values.iter().map(|p| p.value));
+                    let len = fx.params.len();
+                    self.values.extend(fx.params.iter().map(|p| p.value));
                     self.block_lens.push(len as u16);
                 }
             }
 
             if has_gen && let Some(gp) = layer.gen_params() {
-                let len = gp.param_values.len();
-                self.values.extend(gp.param_values.iter().map(|p| p.value));
+                let len = gp.params.len();
+                self.values.extend(gp.params.iter().map(|p| p.value));
                 self.block_lens.push(len as u16);
             }
 
@@ -343,10 +343,10 @@ impl ModulationSnapshot {
         for i in 0..self.master_count as usize {
             let len = *self.block_lens.get(block).unwrap_or(&0) as usize;
             if let Some(fx) = project.settings.master_effects.get_mut(i)
-                && fx.param_values.len() == len
+                && fx.params.len() == len
             {
                 for (slot, &v) in fx
-                    .param_values
+                    .params
                     .iter_mut()
                     .zip(&self.values[cursor..cursor + len])
                 {
@@ -368,10 +368,10 @@ impl ModulationSnapshot {
                     let len = *self.block_lens.get(block).unwrap_or(&0) as usize;
                     if let Some(effects) = &mut layer.effects
                         && let Some(fx) = effects.get_mut(j)
-                        && fx.param_values.len() == len
+                        && fx.params.len() == len
                     {
                         for (slot, &v) in fx
-                            .param_values
+                            .params
                             .iter_mut()
                             .zip(&self.values[cursor..cursor + len])
                         {
@@ -387,10 +387,10 @@ impl ModulationSnapshot {
                 if has_gen {
                     let len = *self.block_lens.get(block).unwrap_or(&0) as usize;
                     if let Some(gp) = layer.gen_params_mut()
-                        && gp.param_values.len() == len
+                        && gp.params.len() == len
                     {
                         for (slot, &v) in gp
-                            .param_values
+                            .params
                             .iter_mut()
                             .zip(&self.values[cursor..cursor + len])
                         {

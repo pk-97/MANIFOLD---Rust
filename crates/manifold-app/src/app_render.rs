@@ -339,8 +339,7 @@ impl Application {
         match self.watched_graph_target.as_ref()? {
             manifold_core::GraphTarget::Effect(eid) => {
                 let fx = self.local_project.find_effect_by_id(eid)?;
-                let idx = fx.param_id_to_value_index(param_id)?;
-                fx.param_values.get(idx).map(|p| p.value)
+                fx.params.get(param_id).map(|p| p.value)
             }
             manifold_core::GraphTarget::Generator(lid) => {
                 let gp = self
@@ -350,10 +349,7 @@ impl Application {
                     .iter()
                     .find(|l| &l.layer_id == lid)?
                     .gen_params()?;
-                let def =
-                    manifold_core::preset_definition_registry::try_get(gp.generator_type())?;
-                let idx = *def.id_to_index.get(param_id)?;
-                gp.param_values.get(idx).map(|p| p.value)
+                gp.params.get(param_id).map(|p| p.value)
             }
         }
     }

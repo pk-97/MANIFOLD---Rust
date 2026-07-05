@@ -218,7 +218,7 @@ pub(super) fn dispatch_project(
                 if new_type != old_type {
                     let old_params: Vec<f32> = layer
                         .gen_params()
-                        .map(|gp| gp.param_values.iter().map(|s| s.value).collect())
+                        .map(|gp| gp.params.iter().map(|s| s.value).collect())
                         .unwrap_or_default();
                     let old_drivers = layer.gen_params().and_then(|gp| gp.drivers.clone());
                     let old_envelopes = layer.gen_params().and_then(|gp| gp.envelopes.clone());

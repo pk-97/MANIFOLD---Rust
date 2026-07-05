@@ -261,16 +261,12 @@ fn macro_mapping_target(
 /// over the registry, falling back to [`PresetInstance::resolve_param`] (and
 /// `(0.0, 1.0)` if unresolved). Unifies the old per-kind range lookups.
 fn resolve_param_range(inst: &PresetInstance, param_id: &str) -> (f32, f32) {
-    if let Some(spec) = inst
-        .graph
-        .as_ref()
-        .and_then(|g| g.preset_metadata.as_ref())
-        .and_then(|m| m.params.iter().find(|p| p.id == param_id))
-    {
-        return (spec.min, spec.max);
-    }
-    inst.resolve_param(param_id)
-        .map(|r| (r.min, r.max))
+    // The manifest entry is the single range authority: calibration edits
+    // `spec.min`/`spec.max` in place (D6), so the old override-then-catalog
+    // lookup collapses to reading the `Param.spec`.
+    inst.params
+        .get(param_id)
+        .map(|p| (p.spec.min, p.spec.max))
         .unwrap_or((0.0, 1.0))
 }
 
@@ -1168,10 +1164,13 @@ pub(super) fn dispatch_inspector(
             {
                 let changed = project
                     .with_preset_graph_mut(&target, |inst| {
-                        let slot = inst.param_id_to_value_index(param_id.as_ref())?;
-                        let old = inst.get_base_param(slot);
+                        let id = param_id.as_ref();
+                        if !inst.params.contains(id) {
+                            return None;
+                        }
+                        let old = inst.get_base_param(id);
                         if (old - *default_val).abs() > f32::EPSILON {
-                            inst.set_base_param(slot, *default_val);
+                            inst.set_base_param(id, *default_val);
                             Some(old)
                         } else {
                             None
@@ -1222,8 +1221,9 @@ pub(super) fn dispatch_inspector(
             {
                 let val = project
                     .with_preset_graph_mut(&target, |inst| {
-                        inst.param_id_to_value_index(param_id.as_ref())
-                            .map(|slot| inst.get_base_param(slot))
+                        inst.params
+                            .contains(param_id.as_ref())
+                            .then(|| inst.get_base_param(param_id.as_ref()))
                     })
                     .flatten();
                 if let Some(val) = val {
@@ -1242,9 +1242,7 @@ pub(super) fn dispatch_inspector(
                 resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
             {
                 project.with_preset_graph_mut(&target, |inst| {
-                    if let Some(slot) = inst.param_id_to_value_index(param_id.as_ref()) {
-                        inst.set_base_param(slot, *val);
-                    }
+                    inst.set_base_param(param_id.as_ref(), *val);
                 });
                 if let Some(crate::app::ActiveInspectorDrag::Param { value, .. }) =
                     active_inspector_drag
@@ -1258,9 +1256,7 @@ pub(super) fn dispatch_inspector(
                     content_tx,
                     ContentCommand::MutateProjectLive(Box::new(move |p| {
                         p.with_preset_graph_mut(&t, |inst| {
-                            if let Some(slot) = inst.param_id_to_value_index(pid.as_ref()) {
-                                inst.set_base_param(slot, v);
-                            }
+                            inst.set_base_param(pid.as_ref(), v);
                         });
                     })),
                 );
@@ -1274,8 +1270,9 @@ pub(super) fn dispatch_inspector(
             {
                 let new_val = project
                     .with_preset_graph_mut(&target, |inst| {
-                        inst.param_id_to_value_index(param_id.as_ref())
-                            .map(|slot| inst.get_base_param(slot))
+                        inst.params
+                            .contains(param_id.as_ref())
+                            .then(|| inst.get_base_param(param_id.as_ref()))
                     })
                     .flatten();
                 if let Some(new_val) = new_val
@@ -1310,11 +1307,7 @@ pub(super) fn dispatch_inspector(
                     .as_ref()
                     .and_then(|ds| ds.iter().position(|d| d.param_id == *param_id))
                     .map(|di| (di, inst.drivers.as_ref().unwrap()[di].enabled));
-                let base_value = inst
-                    .param_id_to_value_index(param_id.as_ref())
-                    .and_then(|slot| inst.param_values.get(slot))
-                    .map(|p| p.value)
-                    .unwrap_or(0.0);
+                let base_value = inst.get_param(param_id.as_ref());
                 (existing, base_value)
             }) else {
                 return DispatchResult::structural();
@@ -2654,13 +2647,12 @@ pub(super) fn dispatch_inspector(
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
             {
                 let layer_id = layer.layer_id.clone();
-                let slot = layer.gen_params().and_then(|gp| gp.param_id_to_value_index(param_id.as_ref()));
-                if let Some(slot) = slot
-                    && let Some(gp) = layer.gen_params_mut()
+                if let Some(gp) = layer.gen_params_mut()
+                    && gp.params.contains(param_id.as_ref())
                 {
-                    let old_val = gp.get_base_param(slot);
+                    let old_val = gp.get_base_param(param_id.as_ref());
                     let new_val = if old_val > 0.5 { 0.0 } else { 1.0 };
-                    gp.set_base_param(slot, new_val);
+                    gp.set_base_param(param_id.as_ref(), new_val);
                     let cmd = ChangeGraphParamCommand::new(
                         manifold_core::GraphTarget::Generator(layer_id),
                         param_id.clone(),
@@ -2681,13 +2673,12 @@ pub(super) fn dispatch_inspector(
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
             {
                 let layer_id = layer.layer_id.clone();
-                let slot = layer.gen_params().and_then(|gp| gp.param_id_to_value_index(param_id.as_ref()));
-                if let Some(slot) = slot
-                    && let Some(gp) = layer.gen_params_mut()
+                if let Some(gp) = layer.gen_params_mut()
+                    && gp.params.contains(param_id.as_ref())
                 {
-                    let old_val = gp.get_base_param(slot);
+                    let old_val = gp.get_base_param(param_id.as_ref());
                     let new_val = old_val + 1.0;
-                    gp.set_base_param(slot, new_val);
+                    gp.set_base_param(param_id.as_ref(), new_val);
                     let cmd = ChangeGraphParamCommand::new(
                         manifold_core::GraphTarget::Generator(layer_id),
                         param_id.clone(),
@@ -2707,7 +2698,7 @@ pub(super) fn dispatch_inspector(
             let effect_type = crate::ui_translate::preset_type_id_to_core(effect_type);
             let defaults = manifold_core::preset_definition_registry::get_defaults(&effect_type);
             let mut effect = PresetInstance::new(effect_type.clone());
-            effect.param_values = defaults;
+            effect.params = manifold_core::params::ParamManifest::from_params(defaults);
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let target = match tab {
                 InspectorTab::Master => EffectTarget::Master,

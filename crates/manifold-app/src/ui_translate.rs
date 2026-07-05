@@ -30,7 +30,8 @@ use manifold_core::ableton_mapping::{
 use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind};
 use manifold_core::audio_setup::{AudioDeviceRef, AudioSourceKind};
 use manifold_core::effect_graph_def::SerializedParamValue;
-use manifold_core::effects::{ParamConvert, ParamSlot, PresetInstance, SegmentShape, resolve_param_in};
+use manifold_core::effects::{ParamConvert, PresetInstance, SegmentShape};
+use manifold_core::params::{Param, ParamManifest};
 use manifold_core::layer::Layer;
 use manifold_core::macro_bank::MacroCurve;
 use manifold_core::marker::TimelineMarker;
@@ -294,26 +295,25 @@ fn push_instance_automation_lanes(
     if lanes.is_empty() {
         return;
     }
-    let Some(def) = manifold_core::preset_definition_registry::try_get(instance.effect_type())
-    else {
-        return;
-    };
     let effect_label = manifold_core::preset_type_registry::display_name(instance.effect_type());
     for lane in lanes {
         if !lane.enabled {
             continue;
         }
-        let Some(resolved) = resolve_param_in(&def, instance, lane.param_id.as_ref()) else {
+        // Range + integral-ness come straight off the manifest entry (D6:
+        // calibration edits `spec.min`/`spec.max` in place), no resolver.
+        let Some(p) = instance.params.get(lane.param_id.as_ref()) else {
             continue;
         };
-        let range = (resolved.max - resolved.min).abs().max(f32::EPSILON);
+        let (pmin, pmax, whole) = (p.spec.min, p.spec.max, p.whole_numbers());
+        let range = (pmax - pmin).abs().max(f32::EPSILON);
         let points = lane
             .points
             .iter()
-            .map(|p| UiAutomationPoint {
-                beat: p.beat,
-                value_norm: ((p.value - resolved.min) / range).clamp(0.0, 1.0),
-                shape: segment_shape_to_ui(p.shape),
+            .map(|pt| UiAutomationPoint {
+                beat: pt.beat,
+                value_norm: ((pt.value - pmin) / range).clamp(0.0, 1.0),
+                shape: segment_shape_to_ui(pt.shape),
             })
             .collect();
         out.push(UiAutomationLane {
@@ -322,9 +322,9 @@ fn push_instance_automation_lanes(
             target: target.clone(),
             label: format!("{effect_label}: {}", lane.param_id),
             points,
-            param_min: resolved.min,
-            param_max: resolved.max,
-            whole_numbers: resolved.whole_numbers,
+            param_min: pmin,
+            param_max: pmax,
+            whole_numbers: whole,
         });
     }
 }
@@ -350,16 +350,17 @@ pub fn markers_to_ui(markers: &[TimelineMarker]) -> Vec<UiMarker> {
     markers.iter().map(marker_to_ui).collect()
 }
 
-pub fn param_slot_to_ui(s: &ParamSlot) -> UiParamSlot {
+pub fn param_slot_to_ui(p: &Param) -> UiParamSlot {
     UiParamSlot {
-        value: s.value,
-        base: s.base,
-        exposed: s.exposed,
+        value: p.value,
+        base: p.base,
+        exposed: p.exposed,
     }
 }
 
-pub fn param_slots_to_ui(slots: &[ParamSlot]) -> Vec<UiParamSlot> {
-    slots.iter().map(param_slot_to_ui).collect()
+/// Project a manifest into the UI's positional slot view (card order).
+pub fn param_slots_to_ui(params: &ParamManifest) -> Vec<UiParamSlot> {
+    params.iter().map(param_slot_to_ui).collect()
 }
 
 // ── Selection region (UI → core; UIState owns the UI-side region) ─────────
