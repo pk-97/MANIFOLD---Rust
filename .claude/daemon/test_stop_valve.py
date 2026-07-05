@@ -65,16 +65,21 @@ def run_hook(stdin_obj, verdicts_dir):
 def with_temp_verdicts(fn):
     orig_verdicts = valve.VERDICTS_DIR
     orig_flag = valve.WORKER_NUDGES_FLAG
+    orig_telemetry = valve.TELEMETRY_PATH
     orig_payload_cache = valve._PAYLOAD_CACHE
     with tempfile.TemporaryDirectory() as td:
         valve.VERDICTS_DIR = td
         valve.WORKER_NUDGES_FLAG = os.path.join(td, "worker-nudges.enabled")
+        # Sleep pass 1: tests were writing `injected` records into the LIVE
+        # telemetry.jsonl (30 sess-* records polluted the graded week).
+        valve.TELEMETRY_PATH = os.path.join(td, "telemetry.jsonl")
         valve._PAYLOAD_CACHE = None  # force reload against real moves.md (unpatched path)
         try:
             fn(td)
         finally:
             valve.VERDICTS_DIR = orig_verdicts
             valve.WORKER_NUDGES_FLAG = orig_flag
+            valve.TELEMETRY_PATH = orig_telemetry
             valve._PAYLOAD_CACHE = orig_payload_cache
 
 

@@ -173,21 +173,24 @@ def ensure_observer(session_id, transcript_path):
 
 
 def pending_injection(session_id):
-    """Returns (block_text, seq) for an unconsumed, valid, fresh flag, or
-    (None, None) if there's nothing to deliver. Never raises."""
+    """Returns (block_text, seq, move_id) for an unconsumed, valid, fresh
+    flag, or (None, None, None) if there's nothing to deliver. move_id rides
+    along so the delivering hook can stamp it into the `injected` telemetry
+    record — sleep pass 1 had to recover move ids from surviving mailbox
+    files because delivery records lacked them. Never raises."""
     try:
         verdict = read_verdict(session_id)
         if not verdict:
-            return None, None
+            return None, None, None
         flag = verdict.get("flag")
         if not flag:
-            return None, None
+            return None, None, None
         seq = flag.get("seq")
         if seq is None or read_consumed(session_id) >= seq:
-            return None, None
+            return None, None, None
         block = build_block(flag)
         if not block:
-            return None, None
-        return block, seq
+            return None, None, None
+        return block, seq, flag.get("move_id")
     except Exception:
-        return None, None
+        return None, None, None

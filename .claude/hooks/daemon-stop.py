@@ -177,10 +177,10 @@ def main():
         # 1. An already-pending, undelivered flag — never wait, never
         # classify synchronously; this only drains what the observer already
         # decided (DESIGN.md §2, RULED).
-        block, seq = valve.pending_injection(mailbox_key)
+        block, seq, move_id = valve.pending_injection(mailbox_key)
         if block:
             valve.write_consumed(mailbox_key, seq)
-            _block(block, {"seq": seq})
+            _block(block, {"seq": seq, "move_id": move_id})
             return
 
         # 2. No pending flag: deterministic, valve-selected mechanical check.

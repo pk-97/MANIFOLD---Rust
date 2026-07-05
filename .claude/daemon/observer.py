@@ -136,6 +136,13 @@ class Daemon:
         self.next_seq = 1  # re-seeded in _run from the persistent consumed marker
         self.phase = "orienting"
         self.owns_pidfile = False
+        # Sleep pass 1: cooldown/escalation state was daemon-memory only, so
+        # an idle-exit + revive re-fired the same move on the same evidence
+        # (two confirmed redelivery pairs in the graded week). Persisted per
+        # session; event counts stay comparable across revives because
+        # catchup rebuilds the same event_count from the transcript.
+        self.fire_state_path = os.path.join(VERDICTS_DIR, f"{session_id}.firestate.json")
+        self._load_fire_state()
 
         # DESIGN.md §4b: outcome scoring + auto-mute.
         self.fire_records = {}  # seq -> move_id, for every flag *this instance* raised
@@ -539,6 +546,63 @@ class Daemon:
         except (OSError, ValueError):
             return 0
 
+    def _session_fp_grades(self):
+        """move_id -> count of this session's own self-grades marked FP, read
+        from the gitignored live_grades.session*.jsonl files. Used only to
+        discount the escalation counter — a whisper the session already judged
+        wrong shouldn't march it toward escalate/checkpoint. Fails open to {}."""
+        counts = {}
+        try:
+            import glob
+
+            for path in glob.glob(os.path.join(DAEMON_DIR, "eval", "live_grades.session*.jsonl")):
+                with open(path, encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            rec = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if rec.get("session_id") != self.session_id:
+                            continue
+                        if str(rec.get("correct", "")).upper() == "FP":
+                            mid = rec.get("move_id")
+                            if mid:
+                                counts[mid] = counts.get(mid, 0) + 1
+        except OSError:
+            pass
+        return counts
+
+    def _load_fire_state(self):
+        try:
+            with open(self.fire_state_path, encoding="utf-8") as f:
+                st = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return
+        self.last_fire_event = {k: int(v) for k, v in (st.get("last_fire_event") or {}).items()}
+        self.fire_count = {k: int(v) for k, v in (st.get("fire_count") or {}).items()}
+        self.fire_ordinal = {k: int(v) for k, v in (st.get("fire_ordinal") or {}).items()}
+        self.escalated = bool(st.get("escalated", False))
+
+    def _save_fire_state(self):
+        try:
+            tmp = f"{self.fire_state_path}.tmp.{os.getpid()}"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "last_fire_event": self.last_fire_event,
+                        "fire_count": self.fire_count,
+                        "fire_ordinal": self.fire_ordinal,
+                        "escalated": self.escalated,
+                    },
+                    f,
+                )
+            os.replace(tmp, self.fire_state_path)
+        except OSError:
+            pass
+
     def _resolve_fire(self, event_count, move_id, verdict, logf, mailbox=None):
         mb = mailbox if mailbox is not None else self
         if self._is_muted(move_id):
@@ -567,10 +631,15 @@ class Daemon:
         mb.fire_count[move_id] = mb.fire_count.get(move_id, 0) + 1
         effective_id = move_id
 
-        if mb.fire_count[move_id] > ESCALATE_AFTER and not mb.escalated and "escalate/checkpoint" in self.moves:
+        # Sleep pass 1: escalation counted raw fires, so three FPs escalated
+        # into a fourth FP (checkpoint inherits the precision of the fires
+        # beneath it). Discount fires this session already self-graded FP.
+        fp_graded = self._session_fp_grades()
+        effective_fires = mb.fire_count[move_id] - fp_graded.get(move_id, 0)
+        if effective_fires > ESCALATE_AFTER and not mb.escalated and "escalate/checkpoint" in self.moves:
             effective_id = "escalate/checkpoint"
             mb.escalated = True
-            _log(logf, f"escalating {move_id} -> escalate/checkpoint after {mb.fire_count[move_id]} fires")
+            _log(logf, f"escalating {move_id} -> escalate/checkpoint after {mb.fire_count[move_id]} fires ({fp_graded.get(move_id, 0)} self-graded FP, discounted)")
 
         # DESIGN.md §4c-3b: fatigue ordinal — nth fire of the move that's
         # actually recorded downstream (post-escalation), this session.
@@ -594,6 +663,7 @@ class Daemon:
             # across mailboxes.
             self.fire_records[seq] = effective_id
             self.fire_ordinals[seq] = ordinal
+            self._save_fire_state()  # survive idle-exit revives (redelivery fix)
         return {
             "move_id": effective_id,
             "evidence": verdict.get("evidence"),

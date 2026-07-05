@@ -31,7 +31,7 @@ def main():
         # Revive the observer if it idle-exited — a new prompt after a long
         # break is exactly when observation must be back.
         valve.ensure_observer(session_id, data.get("transcript_path"))
-        block, seq = valve.pending_injection(session_id)
+        block, seq, move_id = valve.pending_injection(session_id)
         if not block:
             return
         valve.write_consumed(session_id, seq)
@@ -43,6 +43,7 @@ def main():
                 "event": "injected",
                 "valve": "UserPromptSubmit",
                 "seq": seq,
+                "move_id": move_id,
             }
         )
         print(

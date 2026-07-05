@@ -26,7 +26,10 @@ grades and changes nothing is a valid pass; bias toward silence.
    input not verdict: `correct` (did the named drift actually exist? TP/FP)
    and `effective` (did behavior change in the direction the payload asks?
    y/n/unclear). Append to `eval/live_grades.jsonl`:
-   `{ts, session_id, seq, move_id, correct, effective, ordinal, notes}`.
+   `{ts, session_id, seq, move_id, correct, effective, ordinal, notes}` —
+   plus `agent_id` when the fire was a worker nudge: (session_id, seq) alone
+   collides across workers (pass-1 lesson: colliding grades attached to the
+   wrong fires and cost real attribution work).
    Sessions self-grade at fire time since 2026-07-04 (records with
    `"grader": "session"`, prompted by the supervised-mode sentence). Since
    2026-07-05 those land in `eval/live_grades.session*.jsonl` (gitignored),

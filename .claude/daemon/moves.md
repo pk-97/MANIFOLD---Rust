@@ -182,6 +182,12 @@ move it compiles: format output for the user's next action, not for reading.
   render, no screenshot, no look), or a claim about runtime behavior backed
   only by reading source, matches this signature even though checking occurred.
   The check must run where the failure would actually show.
+  The claim does not need to cite its check for the check to count: if the
+  LEDGER within the window shows the verifying event for the claim's subject
+  (the test run, the render read, the git command), the claim is verified —
+  never flag it. A commit message or closing summary that restates results
+  already verified earlier in the same window is a restatement, not a new
+  claim; never flag those.
 - **cooldown:** standard
 - **payload:**
 > That claim hasn't been checked yet. Run the verification in the medium where

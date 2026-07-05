@@ -51,7 +51,7 @@ def main():
         if agent_id and not valve.worker_nudges_enabled():
             return
         key = f"{session_id}.{agent_id}" if agent_id else session_id
-        block, seq = valve.pending_injection(key)
+        block, seq, move_id = valve.pending_injection(key)
         if not block:
             return
         valve.write_consumed(key, seq)
@@ -63,6 +63,7 @@ def main():
                 "event": "injected",
                 "valve": "PostToolUse",
                 "seq": seq,
+                "move_id": move_id,
             }
         )
         print(
