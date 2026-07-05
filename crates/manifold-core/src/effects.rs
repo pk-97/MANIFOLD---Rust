@@ -100,6 +100,53 @@ impl Default for ParamDef {
     }
 }
 
+impl ParamDef {
+    /// View this registry `ParamDef` as a [`crate::effect_graph_def::ParamSpecDef`]
+    /// — the manifest's descriptor type. Used to seed a bundled
+    /// [`crate::params::Param`] from the registry template at instantiation
+    /// (PARAM_STORAGE_DESIGN.md D2). The two structs carry the same slider
+    /// surface; only the optional-vs-empty representations of
+    /// `value_labels`/`osc_suffix` differ.
+    pub fn to_spec(&self) -> crate::effect_graph_def::ParamSpecDef {
+        crate::effect_graph_def::ParamSpecDef {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            min: self.min,
+            max: self.max,
+            default_value: self.default_value,
+            whole_numbers: self.whole_numbers,
+            is_toggle: self.is_toggle,
+            is_trigger: self.is_trigger,
+            value_labels: self.value_labels.clone().unwrap_or_default(),
+            format_string: self.format_string.clone(),
+            osc_suffix: self.osc_suffix.clone().unwrap_or_default(),
+            curve: self.curve,
+            invert: self.invert,
+        }
+    }
+}
+
+/// Inverse of [`ParamDef::to_spec`]: render a manifest descriptor back as a
+/// registry-shaped [`ParamDef`] for the [`ParamSource::get_param_def`] view,
+/// which several editor/inspector consumers still take by value.
+pub(crate) fn param_def_from_spec(s: &crate::effect_graph_def::ParamSpecDef) -> ParamDef {
+    ParamDef {
+        id: s.id.clone(),
+        name: s.name.clone(),
+        min: s.min,
+        max: s.max,
+        default_value: s.default_value,
+        whole_numbers: s.whole_numbers,
+        is_toggle: s.is_toggle,
+        is_trigger: s.is_trigger,
+        value_labels: (!s.value_labels.is_empty()).then(|| s.value_labels.clone()),
+        format_string: s.format_string.clone(),
+        osc_suffix: (!s.osc_suffix.is_empty()).then(|| s.osc_suffix.clone()),
+        curve: s.curve,
+        invert: s.invert,
+    }
+}
+
 // ─── Traits ───
 
 /// Shared contract for entities that own a modular effects list.
@@ -174,113 +221,14 @@ pub enum ParamConvert {
     Trigger,
 }
 
-/// Free-function form of [`PresetInstance::resolve_param`]. Takes the
-/// `PresetDef` and the effect instance directly so callers in
-/// borrow-tight closures (the modulation evaluators iterating
-/// `fx.drivers`) can resolve without going through the borrowing
-/// `&self` method.
-///
-/// The user tail is read from the instance's `graph.preset_metadata`
-/// (`user_added` bindings) — the single binding-storage list after the
-/// preset-unification step-3 fold-in. Allocation-free: it scans the
-/// graph's binding iterator rather than materializing a Vec, so it stays
-/// safe on the per-frame modulation path.
-pub fn resolve_param_in(
-    def: &crate::preset_def::PresetDef,
-    fx: &PresetInstance,
-    id: &str,
-) -> Option<ResolvedParam> {
-    // The per-instance reshape override — the recalibrated range the chevron
-    // popover writes into the graph's `preset_metadata`. This is the SAME
-    // authority the card slider (the state_sync overlay) and the inspector
-    // (`resolve_param_range`) already resolve from. The modulation resolver must
-    // read it too: returning the catalog range here is what let a driver /
-    // envelope / audio mod overshoot a recalibrated slider, since all three
-    // funnel through this one function. Override-first, catalog as the base.
-    let override_range = |id: &str| -> Option<(f32, f32)> {
-        fx.graph
-            .as_ref()
-            .and_then(|g| g.preset_metadata.as_ref())
-            .and_then(|m| m.params.iter().find(|p| p.id == id))
-            .map(|s| (s.min, s.max))
-    };
-
-    // Graph-backed generator: the per-instance graph's `meta.params` is the
-    // LIVE slot authority — the same one `param_id_to_value_index` (card
-    // display + prune path) and the `param_values` layout use. Resolve the
-    // slot here too, NOT through `def.id_to_index`: the registry `def` is
-    // frozen when the preset is installed (e.g. a glb auto-import) and never
-    // tracks a per-instance node delete, so its indices go stale the moment a
-    // bundled card slider is removed. Reading the frozen index is what made a
-    // driver on a surviving slider write to its neighbour's slot after a
-    // delete. Mirrors `param_id_to_value_index`'s generator branch exactly so
-    // the two resolvers can't disagree again.
-    if fx.is_generator()
-        && let Some(meta) = fx.graph.as_ref().and_then(|g| g.preset_metadata.as_ref())
-        && !meta.params.is_empty()
-    {
-        let idx = meta.params.iter().position(|p| p.id == id)?;
-        let spec = &meta.params[idx];
-        return Some(ResolvedParam {
-            idx,
-            min: spec.min,
-            max: spec.max,
-            whole_numbers: spec.whole_numbers || !spec.value_labels.is_empty(),
-        });
-    }
-
-    if let Some(&idx) = def.id_to_index.get(id) {
-        let pd = &def.param_defs[idx];
-        // Range from the override when present, else the registry def. idx and
-        // `whole_numbers` always come from the registry — the popover edits the
-        // range, never the slot position or the integral-ness.
-        let (min, max) = override_range(id).unwrap_or((pd.min, pd.max));
-        return Some(ResolvedParam {
-            idx,
-            min,
-            max,
-            whole_numbers: pd.whole_numbers || pd.value_labels.is_some(),
-        });
-    }
-    let (j, b) = fx.user_added_bindings().enumerate().find(|(_, b)| b.id == id)?;
-    // User-tail range comes from the binding's declared `ParamSpecDef` range (the
-    // preset is the single source now — the per-instance reshape note is gone),
-    // else 0..1.
-    let (min, max) = override_range(id).unwrap_or((0.0, 1.0));
-    Some(ResolvedParam {
-        idx: def.param_count + j,
-        min,
-        max,
-        whole_numbers: matches!(
-            b.convert,
-            ParamConvert::IntRound
-                | ParamConvert::EnumRound
-                | ParamConvert::BoolThreshold
-                | ParamConvert::Trigger
-        ),
-    })
-}
-
-/// Result of [`PresetInstance::resolve_param`]: slot index plus the
-/// metadata modulation evaluators need to map a normalized 0–1 driver
-/// or envelope output onto the target parameter's value range.
-///
-/// Lives at this layer (not in `manifold-playback`) because the
-/// resolution itself is pure data-model logic — it knows about static
-/// vs user-tail addressing and is unrelated to playback timing.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ResolvedParam {
-    /// Slot in `PresetInstance.param_values` to read/write.
-    pub idx: usize,
-    pub min: f32,
-    pub max: f32,
-    /// True when the parameter is integral (registry `whole_numbers`
-    /// or `value_labels` set, or user binding declares an integral
-    /// conversion). Modulation evaluators round the final value when
-    /// this is set.
-    pub whole_numbers: bool,
-}
-
+// `resolve_param_in` / `ResolvedParam` / the `override_range` closure are
+// DELETED (PARAM_STORAGE_DESIGN.md D3/D6/D7). Modulation no longer resolves an
+// id to a positional slot: the driver / envelope / audio-mod evaluators read
+// `fx.params.get_mut(id)` and take range + whole-number data straight off the
+// entry — `p.spec.min` / `p.spec.max` / `p.whole_numbers()`. Calibration edits
+// `Param.spec.min`/`max` in place, so a recalibrated slider's range IS the
+// entry's range; the old "read the graph override, else the catalog" split
+// (the driver-overshoot bug's home) is gone with the split.
 /// A user-exposed parameter on an [`PresetInstance`].
 ///
 /// V2 user-exposed-params surface (see `docs/EFFECT_RUNTIME_UNIFICATION.md`
@@ -451,96 +399,35 @@ pub fn apply_card_reshape(
 
 /// A single parameter slot's runtime state on an [`PresetInstance`].
 ///
-/// Wraps the effective (post-modulation) `value` together with the
-/// `exposed` flag that gates whether this slot surfaces as a slider
-/// on the effect card. `exposed` defaults to `true` — the historical
-/// behavior where every static slot was always-visible. Toggling
-/// `exposed` to `false` hides the slider but preserves the underlying
-/// value (and any drivers/Ableton mappings addressing the slot —
-/// they continue to drive the value, just without a visible slider).
-///
-/// In-memory only — `ParamSlot` no longer has its own wire shape. The
-/// V1.4 `params` map (PARAM_STORAGE_DESIGN.md §4) is built from/into
-/// slots by `ParamEntryWire` + `build_effect_param_values` /
-/// `build_generator_param_values`, not by serializing `ParamSlot`
-/// directly; the old hand-written bare-f32-or-object polymorphic
-/// (de)serialize impls this struct used to carry (for the legacy
-/// positional wire) are gone with the wire arms that needed them (D4).
-///
-/// Type-enforced single struct per slot eliminates the parallel-array
-/// footgun of separate `Vec<f32>` + `Vec<bool>` collections.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ParamSlot {
-    /// Effective (post-modulation) value — what the renderer reads.
-    pub value: f32,
-    /// User-intended base (pre-modulation) value. Modulation reads `base`,
-    /// computes the effective, and writes it to `value`; `reset_param_effectives`
-    /// copies `base` back into `value` each frame before re-applying modulation.
-    /// Whether base is *tracked* (emitted to the wire) is the per-instance
-    /// `PresetInstance.base_tracked` bit; until tracked, `get_base_param` falls
-    /// through to `value`, so a stale `base` here is never observed.
-    pub base: f32,
-    pub exposed: bool,
-    /// Runtime-only touch flag for the automation-lane override latch (see
-    /// `docs/AUTOMATION_LANES_DESIGN.md` §4). Set by [`PresetInstance::set_base_param`]
-    /// — the single funnel every live hand (UI slider, Ableton macro, OSC,
-    /// macro bank) writes through — so `manifold-playback`'s automation
-    /// evaluator can detect "a hand touched this param since I last looked"
-    /// without a per-path hook. Never serialized (this struct carries no
-    /// wire shape at all now, see above). System-level base seeding
-    /// (registry defaults via `create_default`) goes through the internal
-    /// `write_base_param` instead of `set_base_param`, so a freshly-created
-    /// instance's params start untouched.
-    pub touched: bool,
-}
-
-impl Default for ParamSlot {
-    fn default() -> Self {
-        Self {
-            value: 0.0,
-            base: 0.0,
-            exposed: true,
-            touched: false,
-        }
-    }
-}
-
-impl ParamSlot {
-    /// Convenience constructor for an exposed slot with the given value
-    /// (base seeded to the same value).
-    #[inline]
-    pub const fn exposed(value: f32) -> Self {
-        Self {
-            value,
-            base: value,
-            exposed: true,
-            touched: false,
-        }
-    }
-}
+// `ParamSlot` is DELETED (PARAM_STORAGE_DESIGN.md D1/D3). Its four fields
+// (`value`, `base`, `exposed`, `touched`) now live on `crate::params::Param`
+// alongside the descriptor (`spec`), `origin`, and `calibrated` — one struct,
+// one list, id as identity. Construct a param with `Param::bundled(spec)` /
+// `Param::user_added(spec)`; read/write value + base + exposed + touched
+// through the manifest (`params.get(id)` / `params.get_mut(id)`).
 
 /// Everything removed when an exposed card param is pruned from an instance:
-/// its `ParamSpecDef`, its `BindingDef`, its `param_values` slot, and any
-/// drivers / Ableton mappings / envelopes that referenced its id — plus the
-/// positions each occupied. Returned by
-/// [`PresetInstance::remove_exposures_for_node`] and handed back to
-/// [`PresetInstance::restore_exposures`] so an undo restores the pre-delete
-/// state byte-for-byte. Opaque to callers (the command stack just carries it).
+/// its manifest [`crate::params::Param`] entry (descriptor + state), its
+/// `BindingDef`, and any drivers / Ableton mappings / envelopes that
+/// referenced its id — plus the display position + binding position each
+/// occupied. Returned by [`PresetInstance::remove_exposures_for_node`] and
+/// handed back to [`PresetInstance::restore_exposures`] so an undo restores the
+/// pre-delete state byte-for-byte. Opaque to callers (the command stack just
+/// carries it).
 #[derive(Debug, Clone)]
 pub struct RemovedExposure {
-    /// Index in `preset_metadata.params` (where the spec lives). `None` for a
-    /// binding with no matching param spec (composite/fan-out).
-    meta_param_index: Option<usize>,
-    /// Index in `param_values` (where the value slot lives). Resolved tier-aware
-    /// via [`PresetInstance::param_id_to_value_index`], so it's correct whether
-    /// the param is a static-prefix slot or a user-tail one — which is NOT
-    /// generally the same as `meta_param_index`. `None` if the param has no slot.
-    value_index: Option<usize>,
-    /// Index in `preset_metadata.bindings`.
+    /// Display position in the [`crate::params::ParamManifest`] this entry
+    /// occupied — captured purely to restore card order via `insert_at`
+    /// (PARAM_STORAGE_DESIGN.md D10: a display-order snapshot, never an
+    /// identity). `None` when the pruned binding had no param entry
+    /// (composite / fan-out binding with no outer slider).
+    param_position: Option<usize>,
+    /// Index in `preset_metadata.bindings` the `BindingDef` occupied.
     binding_index: usize,
-    spec: Option<crate::effect_graph_def::ParamSpecDef>,
+    /// The removed manifest entry (descriptor + live state), or `None` for a
+    /// binding that had no matching param.
+    param: Option<crate::params::Param>,
     binding: crate::effect_graph_def::BindingDef,
-    slot: Option<ParamSlot>,
     drivers: Vec<ParameterDriver>,
     ableton_mappings: Vec<crate::ableton_mapping::AbletonParamMapping>,
     envelopes: Vec<ParamEnvelope>,
@@ -585,18 +472,15 @@ pub struct PresetInstance {
     effect_type: PresetTypeId,
     pub enabled: bool,
     pub collapsed: bool,
-    /// Positional parameter storage. The first
-    /// `crate::preset_definition_registry::get(&effect_type).param_count`
-    /// slots correspond to the effect's static-spec bindings in
-    /// declaration order; the remaining slots correspond to
-    /// [`Self::user_param_bindings`] in declaration order. After the
-    /// bindings unification (Phases 1–4 of
-    /// `docs/archive/BINDINGS_UNIFICATION_PLAN.md`) this layout maps directly
-    /// onto the renderer's `EffectSlot.bindings[i]` — no parallel
-    /// structure to keep in sync. Resolve `ParamId → index` via
-    /// [`Self::param_id_to_value_index`]; that helper is the single
-    /// tier-aware lookup the rest of the codebase relies on.
-    pub param_values: Vec<ParamSlot>,
+    /// Id-keyed parameter manifest (PARAM_STORAGE_DESIGN.md D1). Descriptor
+    /// + live state in one [`crate::params::Param`] per parameter, keyed by
+    /// id; insertion order is card display order. Replaces the former
+    /// positional `Vec<ParamSlot>` + three id→index resolvers — there is no
+    /// positional identity anymore, so nothing between creation and disk
+    /// resolves a param through an index or the registry. Address a param by
+    /// its stable id (`params.get(id)` / `params.get_mut(id)`); the renderer's
+    /// `EffectSlot.bindings` read the same manifest by `source_id`.
+    pub params: crate::params::ParamManifest,
     /// Whether the pre-modulation base (`ParamSlot.base`) is *tracked* — the
     /// single presence bit that gates the `base` key on each V1.4 `params`
     /// entry. Set on load whenever ANY incoming entry carried `base`, and by
@@ -1356,7 +1240,7 @@ impl PresetInstance {
             effect_type,
             enabled: true,
             collapsed: false,
-            param_values: Vec::new(),
+            params: crate::params::ParamManifest::default(),
             base_tracked: false,
             drivers: None,
             envelopes: None,
@@ -1385,7 +1269,7 @@ impl PresetInstance {
             effect_type: generator_type,
             enabled: true,
             collapsed: false,
-            param_values: Vec::new(),
+            params: crate::params::ParamManifest::default(),
             base_tracked: false,
             drivers: None,
             envelopes: None,
@@ -1466,141 +1350,113 @@ impl PresetInstance {
         copy
     }
 
-    /// Number of parameters currently allocated. Unity line 84.
+    /// Number of parameters on this instance (manifest length).
     pub fn param_count(&self) -> usize {
-        self.param_values.len()
+        self.params.len()
     }
 
-    /// Read effective (modulated) param value. Unity lines 86-91.
-    pub fn get_param(&self, index: usize) -> f32 {
-        self.param_values.get(index).map(|p| p.value).unwrap_or(0.0)
+    /// Read the effective (modulated) value of param `id`. Unknown id → 0.0.
+    pub fn get_param(&self, id: &str) -> f32 {
+        self.params.get(id).map(|p| p.value).unwrap_or(0.0)
     }
 
-    /// Read whether a param slot is exposed (visible as a slider on the
-    /// effect card). Unknown slots return `true` — the conservative
-    /// default that preserves historical "always-visible" behavior.
-    pub fn is_param_exposed(&self, index: usize) -> bool {
-        self.param_values
-            .get(index)
-            .map(|p| p.exposed)
-            .unwrap_or(true)
+    /// Whether param `id` is exposed (a visible card slider). Unknown id →
+    /// `true`, the conservative always-visible default.
+    pub fn is_param_exposed(&self, id: &str) -> bool {
+        self.params.get(id).map(|p| p.exposed).unwrap_or(true)
     }
 
-    /// Toggle a param slot's exposure flag. No-op if `index` is out of range.
-    pub fn set_param_exposed(&mut self, index: usize, exposed: bool) {
-        if let Some(slot) = self.param_values.get_mut(index) {
-            slot.exposed = exposed;
+    /// Toggle a param's exposure flag. No-op if `id` is unknown.
+    pub fn set_param_exposed(&mut self, id: &str, exposed: bool) {
+        if let Some(p) = self.params.get_mut(id) {
+            p.exposed = exposed;
         }
     }
 
-    /// Write to effective (modulated) param value. Unity lines 93-101.
-    ///
-    /// No registry clamp (Phase 5: the generator clamp WAS the hidden-max bug —
-    /// it capped the value at the stale catalog range even when the preset's
-    /// range was widened). The value is bounded by the slider range (UI) and the
-    /// modulation resolver (which reads the preset range); the renderer's reshape
-    /// is the single place range is enforced toward the inner node.
-    pub fn set_param(&mut self, index: usize, value: f32) {
-        while self.param_values.len() <= index {
-            self.param_values.push(ParamSlot::default());
+    /// Write the effective (modulated) value of param `id`. No-op if `id` is
+    /// unknown — a value write can't create a param (the manifest is seeded at
+    /// instantiation/load; there is no positional grow). No registry clamp
+    /// (the renderer reshape is the single place range is enforced toward the
+    /// inner node).
+    pub fn set_param(&mut self, id: &str, value: f32) {
+        if let Some(p) = self.params.get_mut(id) {
+            p.value = value;
         }
-        self.param_values[index].value = value;
     }
 
-    /// Read the user-set base value (before modulation). Unity lines 104-110.
-    pub fn get_base_param(&self, index: usize) -> f32 {
-        // While base isn't tracked, `ParamSlot.base` may be stale (an effective
-        // write via `set_param` doesn't touch it), so fall through to the
-        // effective value — exactly the former `base_param_values: None` behavior.
+    /// Read the user-set base value (before modulation) of param `id`. While
+    /// base isn't tracked, `Param.base` may be stale, so fall through to the
+    /// effective value.
+    pub fn get_base_param(&self, id: &str) -> f32 {
         if self.base_tracked
-            && let Some(slot) = self.param_values.get(index)
+            && let Some(p) = self.params.get(id)
         {
-            return slot.base;
+            return p.base;
         }
-        self.get_param(index)
+        self.get_param(id)
     }
 
-    /// Set the user-intended base value. Unity lines 113-126.
-    ///
-    /// The single base setter for both kinds (absorbed the former
-    /// generator-named `set_param_base`). A generator migrate-on-touch grows
-    /// `param_values` to the registry length before writing — generator-only,
-    /// because an effect's `param_values` is already aligned by
-    /// `align_to_definition`.
-    ///
-    /// **The single funnel** every live hand (UI slider, Ableton macro, OSC
-    /// param router, macro bank, editing commands) writes through — marks the
-    /// slot `touched` so the automation-lane override latch
-    /// (`docs/AUTOMATION_LANES_DESIGN.md` §4) can detect it. System-level base
-    /// seeding that is NOT a live gesture (registry default population,
-    /// automation-lane sampling) must go through [`Self::write_base_param`] /
-    /// [`Self::set_base_param_from_automation`] instead — see those docs for
-    /// why using this one there would be a bug (spurious self-latch).
-    pub fn set_base_param(&mut self, index: usize, value: f32) {
-        self.write_base_param(index, value);
-        if let Some(slot) = self.param_values.get_mut(index) {
-            slot.touched = true;
+    /// Set the user-intended base value of param `id`. **The single funnel**
+    /// every live hand (UI slider, Ableton macro, OSC, macro bank, editing
+    /// commands) writes through — marks the param `touched` so the
+    /// automation-lane override latch (`docs/AUTOMATION_LANES_DESIGN.md` §4) can
+    /// detect it. Returns whether `id` resolved. System-level seeding that is
+    /// NOT a live gesture uses [`Self::write_base_param`] /
+    /// [`Self::set_base_param_from_automation`] (no `touched`).
+    pub fn set_base_param(&mut self, id: &str, value: f32) -> bool {
+        if !self.write_base_param(id, value) {
+            return false;
         }
+        if let Some(p) = self.params.get_mut(id) {
+            p.touched = true;
+        }
+        true
     }
 
     /// Automation-lane-only sibling of [`Self::set_base_param`]: writes
-    /// `base`/`value` identically via [`Self::write_base_param`] but does
-    /// **not** set `touched`. Using `set_base_param` from the automation
-    /// evaluator would set `touched` on its own write, and the very next
-    /// frame's touch-check would read that back as "a hand just touched
-    /// this" and latch the lane as overridden — a same-frame self-trigger.
-    /// See `docs/AUTOMATION_LANES_DESIGN.md` §4. Callers outside
-    /// `manifold-playback`'s automation sampler should use `set_base_param`.
-    pub fn set_base_param_from_automation(&mut self, index: usize, value: f32) {
-        self.write_base_param(index, value);
+    /// `base`/`value` identically but does **not** set `touched` (using
+    /// `set_base_param` from the automation evaluator would self-latch the lane
+    /// as overridden the next frame). See `docs/AUTOMATION_LANES_DESIGN.md` §4.
+    pub fn set_base_param_from_automation(&mut self, id: &str, value: f32) {
+        self.write_base_param(id, value);
     }
 
-    /// Shared body for [`Self::set_base_param`] and
-    /// [`Self::set_base_param_from_automation`]: generator migrate-on-touch,
-    /// `ensure_base_values`, grow to `index`, write base + effective. Does
-    /// not touch the `touched` flag — callers decide that.
-    pub(crate) fn write_base_param(&mut self, index: usize, value: f32) {
-        if self.is_generator()
-            && let Some(def) = crate::preset_definition_registry::try_get(&self.effect_type)
-            && self.param_values.len() < def.param_count
-        {
-            self.migrate_to_registry_length();
-        }
+    /// Shared base writer: `ensure_base_values` then write base + effective on
+    /// param `id`. Does NOT set `touched` (callers decide). Returns whether
+    /// `id` resolved. No generator migrate-on-touch: the manifest is fully
+    /// seeded at instantiation/load, so there is no lazy positional tail to
+    /// grow.
+    pub(crate) fn write_base_param(&mut self, id: &str, value: f32) -> bool {
         self.ensure_base_values();
-        while self.param_values.len() <= index {
-            self.param_values.push(ParamSlot::default());
+        match self.params.get_mut(id) {
+            Some(p) => {
+                // Setting base also sets the effective; modulation later
+                // overrides value.
+                p.base = value;
+                p.value = value;
+                true
+            }
+            None => false,
         }
-        // Setting base also sets the effective; modulation later overrides value.
-        self.param_values[index].base = value;
-        self.param_values[index].value = value;
     }
 
-    /// Reset effective param values from base values.
+    /// Reset every param's effective value from its base value.
     pub fn reset_param_effectives(&mut self) {
         self.ensure_base_values();
-        for slot in &mut self.param_values {
-            slot.value = slot.base;
+        for p in self.params.iter_mut() {
+            p.value = p.base;
         }
     }
 
-    /// Begin tracking base: capture the current effective values as base (when
-    /// not already tracked) so subsequent modulation reads a stable pre-mod
-    /// value. Replaces the former lazy `Option<Vec<f32>>` create; per-slot base
-    /// removes the length-sync the old version had to re-derive on mismatch.
+    /// Begin tracking base: capture each param's current effective value as its
+    /// base (when not already tracked) so subsequent modulation reads a stable
+    /// pre-mod value.
     pub fn ensure_base_values(&mut self) {
         if !self.base_tracked {
-            for slot in &mut self.param_values {
-                slot.base = slot.value;
+            for p in self.params.iter_mut() {
+                p.base = p.value;
             }
             self.base_tracked = true;
-        }
-    }
-
-    /// Ensure paramValues has at least 'count' slots.
-    /// Unity PresetInstance.cs EnsureParamCapacity lines 152-158.
-    pub fn ensure_param_capacity(&mut self, count: usize) {
-        while self.param_values.len() < count {
-            self.param_values.push(ParamSlot::default());
         }
     }
 
