@@ -441,6 +441,7 @@ mod tests {
             osc_suffix: String::new(),
             curve: Default::default(),
             invert: false,
+            is_angle: false,
         });
         p.value = value;
         p.base = value;
@@ -475,6 +476,7 @@ mod tests {
                     osc_suffix: String::new(),
                     curve: MacroCurve::Linear,
                     invert: false,
+                    is_angle: false,
                 }],
                 bindings: Vec::new(),
                 skip_mode: Default::default(),

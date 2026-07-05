@@ -102,6 +102,7 @@ mod tests {
                     osc_suffix: "speed".to_string(),
                     curve: Default::default(),
                     invert: false,
+                    is_angle: false,
                 }],
                 bindings: vec![BindingDef {
                     id: "speed".to_string(),

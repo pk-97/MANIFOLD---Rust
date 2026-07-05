@@ -122,6 +122,11 @@ impl ParamDef {
             osc_suffix: self.osc_suffix.clone().unwrap_or_default(),
             curve: self.curve,
             invert: self.invert,
+            // Bundled/registry params carry no angle source (a `ParamDef` never
+            // recorded angle-ness — bundled presets that want degrees use
+            // `format_string`). Angle display is a user-expose concern, seeded
+            // onto the spec in `append_user_binding`.
+            is_angle: false,
         }
     }
 }
@@ -686,6 +691,9 @@ fn spec_from_binding(
         osc_suffix: String::new(),
         curve: Default::default(),
         invert: false,
+        // Pre-spec fallback: a `BindingDef` records no angle-ness, so the flag
+        // starts false. A later expose/edit reseeds it with the real value.
+        is_angle: false,
     }
 }
 
@@ -1473,11 +1481,11 @@ impl PresetInstance {
 
     /// Synthesize the in-memory [`UserParamBinding`] view for each
     /// user-added binding. Routing + affine (`scale`/`offset`) come from the
-    /// `user_added` [`BindingDef`]; the reshape (range / invert / curve) comes
-    /// from the matching `ParamSpecDef` — the single source after the
-    /// per-instance reshape note was deleted. `is_angle` has no home in the
-    /// unified shape (the generator side accepts the same gap), so it defaults
-    /// to `false`.
+    /// `user_added` [`BindingDef`]; the reshape (range / invert / curve /
+    /// `is_angle`) comes from the matching `ParamSpecDef` — the single source
+    /// after the per-instance reshape note was deleted. `is_angle` now has a
+    /// home on the spec (seeded at expose from the inner `ParamType::Angle`),
+    /// so it round-trips instead of being dead-fed `false`.
     ///
     /// Allocates a `Vec`; callers (renderer rebuild, state-sync, panels)
     /// hit this only on the boundary path (binding edit / card build), not
@@ -1515,7 +1523,7 @@ impl PresetInstance {
             max: spec.map(|s| s.max).unwrap_or(1.0),
             default_value: b.default_value,
             convert: b.convert,
-            is_angle: false,
+            is_angle: spec.map(|s| s.is_angle).unwrap_or(false),
             invert: spec.map(|s| s.invert).unwrap_or(false),
             curve: spec.map(|s| s.curve).unwrap_or_default(),
             scale: b.scale,
@@ -1583,6 +1591,10 @@ impl PresetInstance {
             osc_suffix: String::new(),
             curve: binding.curve,
             invert: binding.invert,
+            // Captured from the inner param's `ParamType::Angle` at expose time
+            // (rides `UserParamBinding.is_angle`). The spec is now the single
+            // home for the flag, so the card reads it straight off the manifest.
+            is_angle: binding.is_angle,
         };
 
         // The per-instance graph is the single binding-storage list.
@@ -1760,6 +1772,9 @@ impl PresetInstance {
             osc_suffix: String::new(),
             curve: binding.curve,
             invert: binding.invert,
+            // Position-aware reinstate (undo of an unexpose): preserve the
+            // angle flag off the captured binding, same as `append_user_binding`.
+            is_angle: binding.is_angle,
         });
 
         // Re-insert the manifest entry at its original display position among
@@ -3707,6 +3722,7 @@ mod tests {
             osc_suffix: String::new(),
             curve: Default::default(),
             invert: false,
+            is_angle: false,
         };
         let mut p = crate::params::Param::bundled(spec);
         p.value = value;
@@ -3808,6 +3824,50 @@ mod tests {
         assert_eq!(back.params.get("amount").unwrap().value, 0.7);
         assert_eq!(back.params.get("user.uv_transform.translate.1").unwrap().value, 0.42);
         assert_eq!(back.params.get("user.mix.amount.1").unwrap().value, 0.91);
+    }
+
+    #[test]
+    fn user_exposed_angle_param_carries_is_angle_through_manifest_and_synth() {
+        // Regression guard for the P5 inspector fix: before `is_angle` had a
+        // home on the spec, exposing an angle inner param dropped the flag at
+        // persistence and `synth_user_binding` rebuilt it as `false`, so the
+        // card never showed degrees. Now the flag is seeded onto the manifest
+        // spec at expose, survives a JSON round-trip, and synth reads it back.
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.7, true)]);
+
+        let mut angle = sample_user_binding("user.rotate.angle.1", "rotate", "angle");
+        angle.is_angle = true;
+        fx.append_user_binding(angle);
+        let plain = sample_user_binding("user.mix.amount.1", "mix", "amount"); // is_angle: false
+        fx.append_user_binding(plain);
+
+        // Seed: the flag reached the live manifest spec (single home).
+        assert!(fx.params.get("user.rotate.angle.1").unwrap().spec.is_angle);
+        assert!(!fx.params.get("user.mix.amount.1").unwrap().spec.is_angle);
+
+        // Read-back: synth (the card/renderer view) reflects the spec, not a
+        // hardcoded false.
+        let synth = fx.user_param_bindings();
+        let a = synth.iter().find(|b| b.id == "user.rotate.angle.1").unwrap();
+        let p = synth.iter().find(|b| b.id == "user.mix.amount.1").unwrap();
+        assert!(a.is_angle, "angle user param must synth is_angle=true");
+        assert!(!p.is_angle, "plain user param must stay is_angle=false");
+
+        // Persistence: `is_angle: true` is emitted (skip_serializing_if only
+        // skips false), so the flag survives save/load; false stays off disk.
+        let json = serde_json::to_string(&fx).unwrap();
+        assert!(json.contains("\"isAngle\":true"), "true angle flag must serialize");
+        let back: PresetInstance = serde_json::from_str(&json).unwrap();
+        assert!(back.params.get("user.rotate.angle.1").unwrap().spec.is_angle);
+        assert!(!back.params.get("user.mix.amount.1").unwrap().spec.is_angle);
+        assert!(
+            back.user_param_bindings()
+                .iter()
+                .find(|b| b.id == "user.rotate.angle.1")
+                .unwrap()
+                .is_angle
+        );
     }
 
     #[test]

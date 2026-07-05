@@ -2228,6 +2228,7 @@ mod tests {
             osc_suffix: String::new(),
             curve: Default::default(),
             invert: false,
+            is_angle: false,
         });
         p.value = value;
         p.base = value;
@@ -2759,6 +2760,7 @@ mod tests {
                 osc_suffix: String::new(),
                 curve: Default::default(),
                 invert: false,
+                is_angle: false,
             }],
             bindings: vec![BindingDef {
                 id: "amount".into(),
@@ -3406,6 +3408,7 @@ mod tests {
                         osc_suffix: String::new(),
                         curve: Default::default(),
                         invert: false,
+                        is_angle: false,
                     },
                     ParamSpecDef {
                         id: "scale".into(),
@@ -3420,6 +3423,7 @@ mod tests {
                         format_string: None,
                         osc_suffix: String::new(),
                         curve: Default::default(),
+                        is_angle: false,
                         invert: false,
                     },
                 ],
@@ -3662,6 +3666,7 @@ mod tests {
                         osc_suffix: String::new(),
                         curve: Default::default(),
                         invert: false,
+                        is_angle: false,
                     },
                     ParamSpecDef {
                         id: "user.render.animate.1".into(),
@@ -3677,6 +3682,7 @@ mod tests {
                         osc_suffix: String::new(),
                         curve: Default::default(),
                         invert: false,
+                        is_angle: false,
                     },
                 ],
                 bindings: vec![
@@ -4103,6 +4109,7 @@ mod tests {
                     osc_suffix: String::new(),
                     curve: Default::default(),
                     invert: false,
+                    is_angle: false,
                 }],
                 bindings: vec![BindingDef {
                     id: "pattern".into(),

@@ -2000,6 +2000,10 @@ fn preset_to_config(
                 row.max = spec.max;
                 row.name = spec.name.clone();
                 row.whole_numbers = spec.whole_numbers;
+                // The angle flag lives on the manifest/graph spec now (its single
+                // home), so the card shows degrees for a user-exposed angle param
+                // instead of the dead-fed `false` the row was built with above.
+                row.is_angle = spec.is_angle;
                 if !spec.value_labels.is_empty() {
                     row.value_labels = Some(spec.value_labels.clone());
                 }
@@ -2302,6 +2306,7 @@ mod param_label_tests {
             osc_suffix: String::new(),
             curve: manifold_core::macro_bank::MacroCurve::default(),
             invert: false,
+            is_angle: false,
         }
     }
 

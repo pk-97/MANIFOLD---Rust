@@ -1084,6 +1084,7 @@ mod tests {
                     osc_suffix: String::new(),
                     curve: MacroCurve::Linear,
                     invert: false,
+                    is_angle: false,
                 }],
                 bindings: vec![BindingDef {
                     id: param_id.to_string(),

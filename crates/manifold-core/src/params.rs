@@ -241,6 +241,7 @@ mod tests {
             osc_suffix: String::new(),
             curve: crate::macro_bank::MacroCurve::default(),
             invert: false,
+            is_angle: false,
         }
     }
 

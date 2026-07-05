@@ -2806,6 +2806,7 @@ mod tests {
             osc_suffix: String::new(),
             curve: manifold_core::macro_bank::MacroCurve::default(),
             invert: false,
+            is_angle: false,
         }
     }
 

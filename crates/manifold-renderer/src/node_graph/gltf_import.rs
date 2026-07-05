@@ -123,7 +123,7 @@ const DEG2RAD: f32 = std::f32::consts::PI / 180.0;
 /// [`assemble_import_graph`]'s metadata block. `default_value` must match
 /// the wired node param's value (through `scale`) so the card reproduces the
 /// assembler's look on first frame with no drift.
-fn card_param(id: &str, name: &str, min: f32, max: f32, default: f32) -> ParamSpecDef {
+fn card_param(id: &str, name: &str, min: f32, max: f32, default: f32, is_angle: bool) -> ParamSpecDef {
     ParamSpecDef {
         id: id.to_string(),
         name: name.to_string(),
@@ -138,6 +138,7 @@ fn card_param(id: &str, name: &str, min: f32, max: f32, default: f32) -> ParamSp
         osc_suffix: String::new(),
         curve: manifold_core::macro_bank::MacroCurve::default(),
         invert: false,
+        is_angle,
     }
 }
 
@@ -405,11 +406,11 @@ pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportRepor
         let rough_id = format!("rough_{k}");
         let metal_name = format!("Metallic{suffix}");
         let rough_name = format!("Roughness{suffix}");
-        card_params.push(card_param(&metal_id, &metal_name, 0.0, 1.0, metal_default));
+        card_params.push(card_param(&metal_id, &metal_name, 0.0, 1.0, metal_default, false));
         card_bindings.push(card_binding(
             &metal_id, &metal_name, metal_default, &mat_node_id, "metallic", 1.0,
         ));
-        card_params.push(card_param(&rough_id, &rough_name, 0.01, 1.0, rough_default));
+        card_params.push(card_param(&rough_id, &rough_name, 0.01, 1.0, rough_default, false));
         card_bindings.push(card_binding(
             &rough_id, &rough_name, rough_default, &mat_node_id, "roughness", 1.0,
         ));
@@ -490,11 +491,11 @@ pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportRepor
     // degrees (scale = DEG2RAD folds the conversion into the write boundary);
     // defaults mirror the `camera`/`sun`/`envmap` node params set above so
     // the card is a faithful mirror of the assembled look.
-    card_params.push(card_param("cam_orbit", "Camera Orbit", -180.0, 180.0, 0.7 / DEG2RAD));
+    card_params.push(card_param("cam_orbit", "Camera Orbit", -180.0, 180.0, 0.7 / DEG2RAD, true)); // angle
     card_bindings.push(card_binding(
         "cam_orbit", "Camera Orbit", 0.7 / DEG2RAD, "camera", "orbit", DEG2RAD,
     ));
-    card_params.push(card_param("cam_tilt", "Camera Tilt", -89.0, 89.0, 0.3 / DEG2RAD));
+    card_params.push(card_param("cam_tilt", "Camera Tilt", -89.0, 89.0, 0.3 / DEG2RAD, true)); // angle
     card_bindings.push(card_binding(
         "cam_tilt", "Camera Tilt", 0.3 / DEG2RAD, "camera", "tilt", DEG2RAD,
     ));
@@ -504,28 +505,29 @@ pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportRepor
         0.1,
         (distance * 4.0).max(1.0),
         distance,
+        false,
     ));
     card_bindings.push(card_binding(
         "cam_dist", "Camera Distance", distance, "camera", "distance", 1.0,
     ));
-    card_params.push(card_param("cam_fov", "Camera FOV", 20.0, 120.0, 0.9 / DEG2RAD));
+    card_params.push(card_param("cam_fov", "Camera FOV", 20.0, 120.0, 0.9 / DEG2RAD, true)); // angle
     card_bindings.push(card_binding(
         "cam_fov", "Camera FOV", 0.9 / DEG2RAD, "camera", "fov_y", DEG2RAD,
     ));
 
-    card_params.push(card_param("sun_int", "Sun Intensity", 0.0, 10.0, 3.5));
+    card_params.push(card_param("sun_int", "Sun Intensity", 0.0, 10.0, 3.5, false));
     card_bindings.push(card_binding("sun_int", "Sun Intensity", 3.5, "sun", "intensity", 1.0));
-    card_params.push(card_param("sun_x", "Sun X", -15.0, 15.0, 5.0));
+    card_params.push(card_param("sun_x", "Sun X", -15.0, 15.0, 5.0, false));
     card_bindings.push(card_binding("sun_x", "Sun X", 5.0, "sun", "pos_x", 1.0));
-    card_params.push(card_param("sun_y", "Sun Y", -15.0, 15.0, 2.0));
+    card_params.push(card_param("sun_y", "Sun Y", -15.0, 15.0, 2.0, false));
     card_bindings.push(card_binding("sun_y", "Sun Y", 2.0, "sun", "pos_y", 1.0));
-    card_params.push(card_param("sun_z", "Sun Z", -15.0, 15.0, 3.0));
+    card_params.push(card_param("sun_z", "Sun Z", -15.0, 15.0, 3.0, false));
     card_bindings.push(card_binding("sun_z", "Sun Z", 3.0, "sun", "pos_z", 1.0));
 
     // `node.bake_environment`'s `horizon_strength` is its brightness knob
     // (default 1.0, range 0..4) — the closest thing to "envmap intensity"
     // and what drives IBL reflection strength on the PBR materials.
-    card_params.push(card_param("env_bright", "Reflections", 0.0, 4.0, 1.0));
+    card_params.push(card_param("env_bright", "Reflections", 0.0, 4.0, 1.0, false));
     card_bindings.push(card_binding(
         "env_bright", "Reflections", 1.0, "envmap", "horizon_strength", 1.0,
     ));
