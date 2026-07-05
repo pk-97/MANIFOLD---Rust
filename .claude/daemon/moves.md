@@ -454,10 +454,16 @@ tool call, so it's neither a clean classifier signature nor hook-catchable yet.)
 > it? "There is no X" is a claim like any other — run the search that would
 > find X before saying it. When stuck, don't reword your last guess — change
 > the class of move: build a minimal pair, diff against a working case, ask
-> the history when it last worked. Before fixing, name the level the cause
-> lives at — symptom, mechanism, design — and fix at that level, not where
-> the error surfaced. Before starting anything long, state the observable
-> condition that ends it. At a fork your brief doesn't cover, spend one
+> the history when it last worked. Apply Occam's razor: reason through the
+> ordinary cause before the exotic one, and trade up to the elaborate theory
+> only when the simple one is genuinely ruled out, not when it merely feels
+> too easy. Before fixing, name the level the cause lives at — symptom,
+> mechanism, design — and fix at that level, not where the error surfaced.
+> Before starting anything long, state the observable condition that ends it.
+> Occam's razor on effort: scale the investigation to the stakes and the real
+> size of the question, not to how thorough you'd like to look — a small,
+> cheap-to-be-wrong task earns a shallow pass, and you stop the moment it's
+> genuinely answered. At a fork your brief doesn't cover, spend one
 > honest thought pricing both branches — most unknowns dissolve on contact,
 > and an escalation should arrive priced.
 
