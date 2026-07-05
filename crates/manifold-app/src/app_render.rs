@@ -2936,6 +2936,23 @@ impl Application {
             self.needs_rebuild = true;
         }
 
+        // 6·motion. Batch-2 popup entrance tweens (browser / ableton picker /
+        // settings — `UI_CRAFT_AND_MOTION_PLAN.md` §5 item 4). Same poll shape
+        // as `drawer_anim_active` above: these popups start their fade-in at
+        // t=0 (fully transparent background — `BrowserPopupPanel::build`) and
+        // tick the tween inside their own `update()`, but the dirty-driven
+        // renderer only re-runs `update()` while the frame stays dirty. Opening
+        // a popup dirties exactly one frame (drawing it invisible), so without
+        // this poll the fade never advances until an unrelated input re-dirties
+        // the frame — the "no background until mouseover" bug (BUG-026). Keeping
+        // needs_rebuild set while animating lets the tween settle on its own.
+        if self.ws.ui_root.browser_popup.is_animating()
+            || self.ws.ui_root.ableton_picker.is_animating()
+            || self.ws.ui_root.settings_popup.is_animating()
+        {
+            self.needs_rebuild = true;
+        }
+
         // 6·audio. Live per-send level meters in the Audio Setup modal — in-place
         // node resize from the latest content-state levels, no rebuild.
         if self.ws.ui_root.audio_setup_panel.is_open() {
