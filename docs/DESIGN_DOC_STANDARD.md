@@ -265,6 +265,18 @@ Written here once so docs don't repeat it; every doc's header points here.
    the 2026-07-05 baseline triage found ~16 such docs, including
    AUTOMATION_LANES_DESIGN still reading "Not implemented" after it shipped.
    Status truth is part of the definition of landed, not follow-up hygiene.
+10. **The landing report is a committed file (added 2026-07-05).** Everything
+    rules 8–9 require the landing report to carry — gate output verbatim, the
+    §10 level reached, the click-script, deviations from the brief, the quoted
+    status line, VD entries opened or carried — goes in
+    `docs/landings/YYYY-MM-DD-<slug>.md`, committed in the same push as the
+    landing. The chat message becomes a summary plus a pointer to that file.
+    Rationale: the ledger cross-references landing reports (VD IDs, `Escaped:`
+    lines), and until now those references pointed into chat transcripts that
+    evaporate with the session — the same decay path §10's ledger was built to
+    close, one level up. The click-scripts are the acute loss: VD-002's
+    burn-down *is* a click-script, and every one written before this rule is
+    gone. Template: `docs/landings/README.md`.
 
 ## 9. Hardening levels (for auditing existing docs)
 
