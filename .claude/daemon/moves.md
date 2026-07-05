@@ -21,6 +21,16 @@ anchor/unpackaged-deliverable — specimen: Opus delivered a Lane A worker
 prompt as prose paragraphs instead of one copyable fenced block. The general
 move it compiles: format output for the user's next action, not for reading.
 
+2026-07-05 (Opus, live sleep-pass with Peter): anchor/permission-creep —
+specimen: after Peter framed the live daemon as sleep-pass-in-the-moment and
+told me to record the misses, I still closed a message with "want me to add it,
+or leave it for the sleep pass?" on a step already sanctioned. Compiles: act on
+standing authorization; don't re-ask permission for a sanctioned step. (The same
+session's other gap — hedging on a conclusive observation by asking the user to
+confirm an obvious test action — stays a labels.jsonl specimen, expect_family
+null: its evidence often sits outside the observer's window and it's prose not a
+tool call, so it's neither a clean classifier signature nor hook-catchable yet.)
+
 ---
 
 ## coaching/model-first
@@ -341,6 +351,24 @@ move it compiles: format output for the user's next action, not for reading.
 > copies in one click. The general move: when your output's destination is
 > somewhere else — another session, a commit, a message — format it for the
 > destination, not for the reader.
+
+## anchor/permission-creep
+- **signature:** The assistant's reply in RECENT ends with a permission-seeking
+  question — "want me to…", "should I…", "…or leave it?", "shall I go ahead?" —
+  about an action the current TASK or an explicit earlier instruction in the
+  window already authorized, and which is in scope, reversible, and unchanged by
+  any new information. The tell: the standing instruction already answers the
+  question "yes". Never flag when the question raises a genuine fork the
+  instruction does not cover (a real choice between paths, or a new decision),
+  when new information in the window plausibly reopens the authorization, when
+  the action is destructive or irreversible (those should be confirmed), or when
+  the agent is asking a substantive design or clarification question rather than
+  permission to proceed with a sanctioned step.
+- **cooldown:** standard
+- **payload:**
+> You already have the go for this. Re-asking on a sanctioned step isn't caution,
+> it's friction — do it and report. Save the question for a real fork the
+> instruction doesn't cover, not one it already answered.
 
 ---
 
