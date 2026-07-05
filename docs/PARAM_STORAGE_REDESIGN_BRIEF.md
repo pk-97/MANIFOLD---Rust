@@ -1,7 +1,13 @@
 # Param Storage Redesign — Handoff Brief for Fable
 
-**Status:** brief for a SOTA redesign. Not a design doc — this is the grounded
-input Fable turns into one, following `docs/DESIGN_DOC_STANDARD.md` +
+**Status:** CLOSED 2026-07-05 — the design was written and approved:
+`docs/PARAM_STORAGE_DESIGN.md` (id-keyed per-instance param manifest; goes
+further than §7's sketch — registry demoted to a template, one-time migration
+deletes the positional arms). Execute from the design doc, not from this brief;
+this stays as the grounded census behind it.
+
+Original status: brief for a SOTA redesign. Not a design doc — this is the
+grounded input Fable turns into one, following `docs/DESIGN_DOC_STANDARD.md` +
 `docs/DESIGN_BUILD_ORDER.md`.
 
 **Author:** Opus (investigation session 2026-07-05), after fixing the immediate

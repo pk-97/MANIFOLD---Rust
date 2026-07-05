@@ -45,6 +45,7 @@ prerequisites aren't shipped, stop.
 | PRESET_LIBRARY_DESIGN (added 2026-07-04) | P5 needs OVERLAY_SESSIONS P2; P6 verify-at-impl gated | full (P1–P4) / conformance (P5–P6) |
 | TIMELINE_INGEST_DESIGN (added 2026-07-04) | none | full |
 | GAUSSIAN_SPLATS_DESIGN (added 2026-07-05) | none (its P4 consumes shipped `render_scene`) | full |
+| PARAM_STORAGE_DESIGN (added 2026-07-05) | none | full |
 
 Not in the queue: **LIVE_AUDIO_TRIGGERS** is SHIPPED (phases 0–7, proven live,
 branch merged). **COMPETITIVE_STEAL_PASS** is a closed record.
@@ -143,6 +144,15 @@ Grouped in waves; within a wave, items are independent and order is free.
     the release-content push directly; zero hard edges, re-rankable arbitrarily
     early like 13b/13c. P1 opens with a VERIFY-AT-IMPL prototype gate (§3 of the
     doc) — run that check before committing to the wave.
+13d2. PARAM_STORAGE_DESIGN P1–P5 (added 2026-07-05, Peter-driven). Id-keyed
+    per-instance param manifest; registry demoted to a load/instantiation
+    template; one-time migration kills the positional wire arms. Zero hard
+    edges, but Peter ranked it AHEAD of new authoring features (2026-07-05):
+    every card feature built before it inherits the positional-identity bug
+    class (driver misroutes, Ableton/OSC blind spots on imported generators),
+    so cost of delay is strictly increasing — run it before 13b–13e's
+    remaining phases where scheduling allows. P2 (the storage swap) is the
+    heavy session; strong-model executor recommended.
 13e. AUDIO_SENDS_UX_DESIGN P1–P5 (added 2026-07-04, Peter-driven: "sends work but
     they're awkward to use and tricky to understand"). Send-path view, per-send
     analysis gating (perf: one bound param currently analyzes all 16 sends,
