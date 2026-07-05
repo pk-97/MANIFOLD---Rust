@@ -121,6 +121,17 @@ fn main() {
         profile_pool_stats(&device);
         return;
     }
+    // `scene [glb-path] [param-substr]` → BUG-035 measurement gate: drive a
+    // real imported glTF scene through the production PresetRuntime::render
+    // path, static params vs one card param swept per frame (the LFO case),
+    // and report per-frame CPU encode wall time vs real GPU time — series
+    // stats, not just averages, so a sawtooth is distinguishable from a
+    // steady cost.
+    if args.first().map(String::as_str) == Some("scene") {
+        let rest: Vec<&str> = args[1..].iter().map(String::as_str).collect();
+        profile_scene(&registry, &device, &rest);
+        return;
+    }
 
     let source_type_id = Source::new().type_id().as_str().to_string();
 
@@ -568,6 +579,305 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
     println!(
         "speedup climbing with N → buffer fusion pays (saves re-reads/writes + dispatch overhead); \
          ~flat → in-place aliasing leaves no round-trip to remove (per design Phase-0)."
+    );
+}
+
+/// BUG-035 measurement gate: is the per-frame cost of an ANIMATED 3D scene
+/// CPU encode (incremental command encoding would fix it), GPU render
+/// (optimize the render instead), or spiky/sawtooth (pool churn or
+/// scheduling — different fix again)?
+///
+/// Drives the production import door (`assemble_import_graph`) + production
+/// `PresetRuntime::render`, two arms A/B:
+///   - **static**: card params untouched every frame (time still advances,
+///     exactly like a playing clip with no LFO);
+///   - **animated**: ONE card param (default `cam_orbit`) swept every frame
+///     through the manifest, exactly what an LFO binding does.
+///
+/// Per frame we record the CPU wall time of `render()` (= full param apply +
+/// uniform rebuild + command encoding; commit excluded) and the real GPU
+/// time (`commit_and_wait_completed_timed`). Reports p50/p95/max for both
+/// arms plus a spike census, so a steady delta and a sawtooth read
+/// differently. Fresh runtime per arm (no state bleed).
+fn profile_scene(registry: &PrimitiveRegistry, device: &GpuDevice, args: &[&str]) {
+    use manifold_core::params::Param;
+    use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
+
+    const SCENE_WARMUP: u32 = 60;
+    let scene_frames: usize =
+        args.get(2).and_then(|s| s.parse().ok()).unwrap_or(300);
+    let default_glb = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb"
+    );
+    let glb = args.first().copied().unwrap_or(default_glb);
+    let param_pref = args.get(1).copied().unwrap_or("cam_orbit");
+
+    let (def, _report) = match assemble_import_graph(std::path::Path::new(glb)) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("scene: import failed for {glb}: {e}");
+            return;
+        }
+    };
+    let Some(metadata) = def.preset_metadata.clone() else {
+        eprintln!("scene: imported def carries no metadata/card params");
+        return;
+    };
+    let manifest_base = ParamManifest::from_params(
+        metadata.params.iter().cloned().map(Param::bundled).collect(),
+    );
+    let swept_id = manifest_base
+        .iter()
+        .find(|p| p.id().contains(param_pref))
+        .map(|p| p.id().to_string());
+    let Some(swept_id) = swept_id else {
+        eprintln!(
+            "scene: no card param matching '{param_pref}' (have: {})",
+            manifest_base.iter().map(|p| p.id().to_string()).collect::<Vec<_>>().join(", ")
+        );
+        return;
+    };
+
+    println!(
+        "=== BUG-035 scene bench: {} ({} nodes), sweeping '{swept_id}' in the animated arm ===",
+        glb.rsplit('/').next().unwrap_or(glb),
+        def.nodes.len(),
+    );
+
+    // Raw f16 readback: fraction of non-black pixels + the raw bytes, via a
+    // separate encoder (same technique as gltf_import's PNG-faithfulness
+    // test). The scene converges ASYNCHRONOUSLY (background texture decode),
+    // so callers must loop until non-black before trusting any number.
+    let read_frame = |target: &RenderTarget, w: u32, h: u32| -> (f64, Vec<u8>) {
+        let bytes_per_row = w * 8;
+        let total_bytes = u64::from(h * bytes_per_row);
+        let buf = device.create_buffer_shared(total_bytes);
+        let mut enc = device.create_encoder("scene-readback");
+        enc.copy_texture_to_buffer(&target.texture, &buf, w, h, bytes_per_row);
+        enc.commit_and_wait_completed();
+        let ptr = buf.mapped_ptr().expect("shared readback");
+        let bytes: Vec<u8> = unsafe {
+            std::slice::from_raw_parts(ptr.cast::<u8>(), (w * h * 8) as usize).to_vec()
+        };
+        let halves: &[u16] = unsafe {
+            std::slice::from_raw_parts(bytes.as_ptr().cast::<u16>(), (w * h * 4) as usize)
+        };
+        let non_black = halves
+            .chunks_exact(4)
+            .filter(|px| px[0] != 0 || px[1] != 0 || px[2] != 0)
+            .count();
+        (non_black as f64 / f64::from(w * h), bytes)
+    };
+
+    // Sweep sanity: prove the swept param actually reaches the GPU — render
+    // at param-min until the scene converges (non-black), then compare
+    // against param-MID (not max: for angle params the extremes can be the
+    // same pose — orbit −180° == +180°). Zero differing bytes = the animated
+    // arm is a no-op and its numbers are void.
+    {
+        let (w, h) = (640u32, 360u32);
+        let mut generator =
+            match PresetRuntime::from_def_with_device(def.clone(), registry, device, w, h, FORMAT)
+            {
+                Ok(g) => g,
+                Err(e) => {
+                    eprintln!("scene: sanity runtime build failed: {e}");
+                    return;
+                }
+            };
+        let target = RenderTarget::new(device, w, h, FORMAT, "scene-sanity");
+        let mut params = ParamManifest::from_params(
+            metadata.params.iter().cloned().map(Param::bundled).collect(),
+        );
+        let (pmin, pmax) = {
+            let p = params.get(&swept_id).unwrap();
+            (p.spec.min, p.spec.max)
+        };
+        let mut shot = |params: &ParamManifest, frame: u32| {
+            let mut enc = device.create_encoder("scene-sanity");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+                let ctx = PresetContext {
+                    time: f64::from(frame) / 60.0,
+                    beat: f64::from(frame) / 30.0,
+                    dt: 1.0 / 60.0,
+                    width: w,
+                    height: h,
+                    output_width: w,
+                    output_height: h,
+                    aspect: w as f32 / h as f32,
+                    owner_key: 0,
+                    is_clip_level: false,
+                    frame_count: 0,
+                    anim_progress: 0.0,
+                    trigger_count: 0,
+                };
+                generator.render(&mut gpu, &target.texture, &ctx, params);
+            }
+            enc.commit_and_wait_completed();
+        };
+        params.get_mut(&swept_id).unwrap().value = pmin;
+        let mut fraction = 0.0f64;
+        let mut converged_at = None;
+        for i in 0..200u32 {
+            shot(&params, i);
+            let (f, _) = read_frame(&target, w, h);
+            fraction = f;
+            if f > 0.02 {
+                converged_at = Some(i);
+                break;
+            }
+        }
+        let Some(converged_at) = converged_at else {
+            println!(
+                "sweep sanity: scene NEVER converged (non-black {fraction:.4} after 200 \
+                 frames) — ALL numbers below are an empty-scene render, void"
+            );
+            return;
+        };
+        let (_, a) = read_frame(&target, w, h);
+        params.get_mut(&swept_id).unwrap().value = (pmin + pmax) * 0.5;
+        shot(&params, converged_at + 1);
+        let (_, b) = read_frame(&target, w, h);
+        let differing = a.iter().zip(b.iter()).filter(|(x, y)| x != y).count();
+        println!(
+            "sweep sanity @640x360: converged frame {converged_at} (non-black {fraction:.3}); \
+             '{swept_id}' min→mid changes {differing}/{} bytes {}",
+            a.len(),
+            if differing == 0 {
+                "— SWEEP IS A NO-OP, animated arm void"
+            } else {
+                "(sweep reaches the GPU)"
+            },
+        );
+        if scene_frames == 0 {
+            return; // sanity-only run
+        }
+    }
+
+    for &(w, h) in RESOLUTIONS {
+        for animated in [false, true] {
+            let mut generator = match PresetRuntime::from_def_with_device(
+                def.clone(),
+                registry,
+                device,
+                w,
+                h,
+                FORMAT,
+            ) {
+                Ok(g) => g,
+                Err(e) => {
+                    eprintln!("scene@{w}x{h}: runtime build failed: {e}");
+                    return;
+                }
+            };
+            let target = RenderTarget::new(device, w, h, FORMAT, "scene-bench");
+            let mut params = manifest_base.clone();
+            let (sweep_min, sweep_max) = {
+                let p = params.get(&swept_id).unwrap();
+                (p.spec.min, p.spec.max)
+            };
+            let mk = |i: u32| PresetContext {
+                time: f64::from(i) / 60.0,
+                beat: f64::from(i) / 30.0,
+                dt: 1.0 / 60.0,
+                width: w,
+                height: h,
+                output_width: w,
+                output_height: h,
+                aspect: w as f32 / h as f32,
+                owner_key: 0,
+                is_clip_level: false,
+                frame_count: 0,
+                anim_progress: 0.0,
+                trigger_count: 0,
+            };
+
+            // Warm until the scene actually renders content (async texture
+            // decode) — an empty-scene measurement is void.
+            let mut warm_frames = 0u32;
+            let mut warm_fraction;
+            loop {
+                for _ in 0..SCENE_WARMUP {
+                    let mut enc = device.create_encoder("scene-warmup");
+                    {
+                        let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+                        generator.render(&mut gpu, &target.texture, &mk(warm_frames), &params);
+                    }
+                    enc.commit_and_wait_completed();
+                    warm_frames += 1;
+                }
+                let (f, _) = read_frame(&target, w, h);
+                warm_fraction = f;
+                if f > 0.02 || warm_frames >= 600 {
+                    break;
+                }
+            }
+            if warm_fraction <= 0.02 {
+                println!(
+                    "{w}x{h}: scene never converged in {warm_frames} warmup frames \
+                     (non-black {warm_fraction:.4}) — skipping this arm"
+                );
+                continue;
+            }
+
+            let mut cpu_ms = vec![0.0f64; scene_frames];
+            let mut gpu_ms = vec![0.0f64; scene_frames];
+            for i in 0..scene_frames {
+                if animated {
+                    // 0.25 Hz sinusoidal sweep across the param's full range —
+                    // the shape an LFO binding produces.
+                    let phase = (i as f64 / 60.0) * 0.25 * std::f64::consts::TAU;
+                    let t = 0.5 + 0.5 * phase.sin();
+                    let p = params.get_mut(&swept_id).unwrap();
+                    p.value = sweep_min + (sweep_max - sweep_min) * t as f32;
+                }
+                let mut enc = device.create_encoder("scene-timed");
+                let t0 = std::time::Instant::now();
+                {
+                    let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+                    generator.render(
+                        &mut gpu,
+                        &target.texture,
+                        &mk(SCENE_WARMUP + i as u32),
+                        &params,
+                    );
+                }
+                cpu_ms[i] = t0.elapsed().as_secs_f64() * 1000.0;
+                gpu_ms[i] = enc.commit_and_wait_completed_timed() * 1000.0;
+            }
+
+            let stats = |xs: &[f64]| {
+                let mut s = xs.to_vec();
+                s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                (s[s.len() / 2], s[s.len() * 95 / 100], s[s.len() - 1])
+            };
+            let (c50, c95, cmax) = stats(&cpu_ms);
+            let (g50, g95, gmax) = stats(&gpu_ms);
+            let arm = if animated { "animated" } else { "static  " };
+            println!(
+                "{w}x{h} {arm}  cpu-encode p50 {c50:>7.3} p95 {c95:>7.3} max {cmax:>7.3} ms | \
+                 gpu p50 {g50:>7.3} p95 {g95:>7.3} max {gmax:>7.3} ms"
+            );
+            // Full spike census (CPU > 1ms, ~20× the p50) with indices, so
+            // periodicity is visible: an every-Nth-frame sawtooth reads
+            // differently from one-off stragglers.
+            let spikes: Vec<String> = (0..scene_frames)
+                .filter(|&i| cpu_ms[i] > 1.0)
+                .map(|i| format!("f{i}: {:.2}+{:.2}", cpu_ms[i], gpu_ms[i]))
+                .collect();
+            println!(
+                "    cpu spikes >1ms: {} of {scene_frames} — {}",
+                spikes.len(),
+                spikes.iter().take(24).cloned().collect::<Vec<_>>().join("  "),
+            );
+        }
+    }
+    println!(
+        "\nReading: animated-vs-static CPU delta ≫ GPU delta → re-encode/param-apply is the \
+         cost (incremental encoding pays). GPU delta dominates → the render itself is the \
+         cost. High p95/max over p50 → sawtooth (pool churn / allocation), not steady encode."
     );
 }
 

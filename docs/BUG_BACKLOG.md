@@ -28,7 +28,37 @@ or human can read it, and it needs no external tool.
 
 ## Open
 
-### BUG-035 — 3D scenes hitch when a camera/light param is animated (whole chain re-encoded per dirty frame) — MED — UNVERIFIED (reasoned, not measured)
+### BUG-035 — 3D scenes hitch when a camera/light param is animated — MED — re-encode hypothesis MEASURED AND REFUTED 2026-07-06; cause is app-side, still open
+
+**Measurement (2026-07-06, Fable)** — `freeze-profile scene <glb> [param] [frames]` (new bench
+arm): drives the production import door (`assemble_import_graph`) + production
+`PresetRuntime::render` on the azalea fixture, static params vs `cam_orbit` swept per frame
+(the LFO shape), with a convergence gate (async texture decode means the first ~120 frames
+render black — un-gated numbers are void) and a sweep-sanity readback (min→mid must change
+pixels; min→max on an angle param is a full circle, a no-op).
+
+Results (600 frames/arm, converged, sweep verified live):
+- **CPU encode of the whole chain: ~70µs p50, 0.35ms max, zero >1ms frames in 2400** —
+  static or animated, 1080p or 4K. The "full-chain re-encode grazes the 16ms deadline"
+  hypothesis is off by three orders of magnitude. Incremental command encoding would
+  recover ~0.07ms/frame — **do not build it for this bug.**
+- **No static-vs-animated delta**: CPU 0.067 vs 0.065ms p50 (1080p); GPU 2.23 vs 2.18ms.
+  The graph runtime prices an LFO'd scene identically to a static one.
+- Also refuted along the way: there is NO held-when-static gate at the compositor/layer
+  level (the occlusion skip is blend-only — content_pipeline.rs "Everything still
+  RENDERS"); the static-scene smoothness the original diagnosis leaned on comes from the
+  executor's pure-step memo, and render_scene/gltf_mesh_source re-run every frame anyway.
+- The mesh re-blit + per-object rebind "smaller shaves" live inside that 70µs envelope —
+  not worth building for this bug either.
+
+**Surviving suspects (all app-side, only run when a param animates):** the modulation/LFO
+evaluator on the content thread; UI redraw driven by visibly-changing values (inspector
+sliders, graph-editor canvas + thumbnail dump_set when the editor is watching); content↔UI
+GPU contention (see `ui-present-content-gpu-contention` memory); present/pacing path.
+
+**Next oracle** — in-app, LFO on vs off on a real glp scene, reading a per-frame breakdown
+of the content frame (not the chain — the chain is exonerated). Blocked on usable in-app
+instrumentation: the `profiling` feature is rotted (BUG-029, three newtype fix sites).
 
 **Symptom** — animating a 3D scene's camera or sun/light via LFO produces a slight, visible
 hitch — an uneven frame spike, not a clean framerate drop. Reported by Peter 2026-07-05 on
