@@ -228,7 +228,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain parity oracle (freeze §12) — flatten_to_camera_plane had no
     //! GPU test. The generated kernel (cam_fwd_x/y/z as three derived fields;

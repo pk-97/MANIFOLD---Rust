@@ -287,7 +287,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain multi-input coincident + Texture3D + derived parity oracle
     //! (freeze §12). The generated kernel reads force `in` + particles, samples

@@ -206,7 +206,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain parity oracle (freeze §12) — lerp_instance_fields had no GPU
     //! test. The generated kernel (two coincident InstanceTransform inputs a/b)

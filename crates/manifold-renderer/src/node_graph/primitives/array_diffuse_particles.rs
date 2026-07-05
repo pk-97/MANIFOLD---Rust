@@ -224,7 +224,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain parity oracle (freeze §12) — array_diffuse_particles had no
     //! GPU test. The generated kernel (self-contained hash; derived frame_count

@@ -260,6 +260,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "gpu-proofs")]
     /// Sweep guard: every bundled effect preset must successfully
     /// execute one full frame against a real Metal backend. Splices the
     /// preset into a minimal chain (Source → effect → FinalOutput),
@@ -663,6 +664,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "gpu-proofs")]
     /// Manual diagnostic, never run in CI. Pumps real photo frames
     /// through WireframeDepthGraph with the live DNN plugin and dumps
     /// every node output to /tmp/wd_diag/ as BMP plus channel stats,

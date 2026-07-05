@@ -135,7 +135,7 @@ impl Primitive for WetDry {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Real-GPU smoke tests. WetDry is a new primitive — no legacy
     //! effect to parity-check against directly — so we validate at the

@@ -464,7 +464,7 @@ impl Feedback {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Real-GPU regression test guarding the StateStore contract:
     //! dispatching `node.feedback` through an `Executor` requires a

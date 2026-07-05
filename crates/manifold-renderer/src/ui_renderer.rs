@@ -2008,7 +2008,7 @@ fn intersect_rects(a: Rect, b: Rect) -> Rect {
     Rect::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod tests {
     use super::*;
 

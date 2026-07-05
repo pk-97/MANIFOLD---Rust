@@ -245,7 +245,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain ATOMIC 3D SCATTER parity oracle (freeze §12). The generated
     //! standalone kernel must reproduce the shared `fluid_scatter_3d.wgsl`

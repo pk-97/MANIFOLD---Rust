@@ -188,7 +188,7 @@ impl TextureDiff {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
     use crate::render_target::RenderTarget;

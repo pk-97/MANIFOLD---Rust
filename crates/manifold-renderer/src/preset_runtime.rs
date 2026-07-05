@@ -2781,7 +2781,7 @@ impl PresetRuntime {
 
     /// Test-only handle to the executor's backend (post-rebuild canvas-dim
     /// assertions). Not on the hot path.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "gpu-proofs"))]
     pub(crate) fn backend_for_test(&self) -> &dyn crate::node_graph::Backend {
         self.executor.backend()
     }
@@ -3428,7 +3428,7 @@ fn assign_texture2d_slots(
 // route through `node_graph::graph_loader::pre_allocate_resources`
 // which adds Texture3D + canvas-sized + post-allocation audit.)
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod multi_segment_tests {
     //! Regression tests for the multi-segment wet/dry group support in
     //! `PresetRuntime::try_build`. A "multi-segment" group is one whose
@@ -3573,7 +3573,7 @@ mod multi_segment_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod binding_seed_tests {
     //! Regression: a freshly-built chain must plant each binding's
     //! declared `default_value` into its inner-node target. Otherwise
@@ -3708,6 +3708,7 @@ mod topology_hash_tests {
         );
     }
 
+    #[cfg(feature = "gpu-proofs")]
     #[test]
     fn disabled_effects_are_excluded_from_active_set_and_change_hash() {
         // The user-facing invariant for the on/off toggle: setting
@@ -3806,7 +3807,7 @@ mod topology_hash_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod user_binding_tests {
     //! Regression: a user-exposed inner-graph parameter must actually
     //! propagate its outer slot value to the inner node every frame.
@@ -4240,7 +4241,7 @@ mod persistent_slot_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod generator_input_tests {
     //! Regression for the effect-side `system.generator_input` surface.
     //! Effects that include a `system.generator_input` node in their
@@ -4508,7 +4509,7 @@ mod generator_input_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod chain_error_tests {
     //! The chain runner accumulates structured errors during build
     //! and per-frame run. Each entry carries the effect's identity
@@ -4935,6 +4936,7 @@ mod generator_runtime_tests {
         assert_eq!(preset.type_id().as_str(), "InfraSmoke");
     }
 
+    #[cfg(feature = "gpu-proofs")]
     #[test]
     fn bundled_strange_attractor_loads_and_compiles() {
         let device = crate::test_device();
@@ -4951,6 +4953,7 @@ mod generator_runtime_tests {
         assert_eq!(preset.type_id().as_str(), "StrangeAttractor");
     }
 
+    #[cfg(feature = "gpu-proofs")]
     #[test]
     fn bundled_plasma_loads_and_compiles() {
         let device = crate::test_device();
@@ -4967,6 +4970,7 @@ mod generator_runtime_tests {
         assert_eq!(preset.type_id().as_str(), "Plasma");
     }
 
+    #[cfg(feature = "gpu-proofs")]
     #[test]
     fn resize_re_pre_allocates_array_buffers() {
         use crate::node_graph::{Backend, PortType};
@@ -5028,6 +5032,7 @@ mod generator_runtime_tests {
         }
     }
 
+    #[cfg(feature = "gpu-proofs")]
     #[test]
     fn aliased_array_io_routes_in_and_out_to_one_physical_slot() {
         use crate::node_graph::Backend;
@@ -5098,6 +5103,7 @@ mod generator_runtime_tests {
         );
     }
 
+    #[cfg(feature = "gpu-proofs")]
     #[test]
     fn canvas_sized_array_outputs_scale_buffer_with_backend_canvas_dims() {
         use crate::node_graph::Backend;
@@ -5223,7 +5229,7 @@ mod generator_runtime_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod chain_fusion_tests {
     //! Cross-card chain fusion integration (docs/CHAIN_FUSION_DESIGN.md):
     //! the per-card build and the fused-segment build of the SAME two-card

@@ -206,7 +206,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! GPU parity for the hypercube corner bake. The reference is the
     //! closed-form `(sign(i&bit)) * 0.125 * clamp(dimension - axis, 0, 1)`

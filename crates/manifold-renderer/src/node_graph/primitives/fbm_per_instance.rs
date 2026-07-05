@@ -293,7 +293,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain parity oracle (freeze §12) — fbm_per_instance had no GPU
     //! test. The generated kernel (noise_common prepended for simplex3d, bare

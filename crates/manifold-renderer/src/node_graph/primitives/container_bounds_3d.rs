@@ -217,7 +217,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain parity oracle (freeze §12) — container_bounds_3d had no GPU
     //! test. The generated kernel (SDF helpers inlined; aliased in/out on slots 1

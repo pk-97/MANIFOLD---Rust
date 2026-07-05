@@ -164,7 +164,7 @@ moves the value. Latent — no shipped preset uses a `tex_`-prefixed param name.
 
 **Fix shape** — filter the rename to texture-typed ports, mirroring lines 549-561. One-line.
 
-### BUG-013 — `commit_and_wait_completed` never checks command-buffer status (likely the GPU-proof flake mechanism) — MED
+### BUG-013 — `commit_and_wait_completed` never checks command-buffer status (likely the GPU-proof flake mechanism) — FIXED 2026-07-05
 
 **Root cause** — [encoder.rs:1655-1662](../crates/manifold-gpu/src/metal/encoder.rs#L1655-L1662):
 `waitUntilCompleted()` returns on ANY terminal state including `Error`; no caller checks
@@ -182,6 +182,21 @@ oracle suite, so it blocks using the suite as a hard gate for agent work.
 panic in tests (fail loudly, retryable) and log in production. Then re-baseline the flake:
 if red runs now report command-buffer errors instead of pixel diffs, the mechanism is
 confirmed; if divergences persist with clean status, keep hunting.
+
+**FIXED 2026-07-05** — [encoder.rs](../crates/manifold-gpu/src/metal/encoder.rs) now calls a
+`verify_completed()` helper after `waitUntilCompleted()`: if the buffer's status isn't
+`Completed`, it reads `status`/`error()` and, in `debug_assertions` builds (tests + dev),
+panics with the code+message; in release (the live show) it logs and continues rather than
+crash mid-set. The dev-vs-release split via `cfg!(debug_assertions)` gives "loud in tests,
+survivable on stage" without a test-only cfg (the helper lives in `manifold-gpu`, whose tests
+aren't where the flake showed up). The `GPU_TEST_LOCK` "three unlocked sites" note above was
+partly stale: the lock is a `parking_lot` reentrant mutex inside `test_device()`, and every
+lib GPU test acquires it; the only unlocked device is the `gpu_proofs` integration binary's
+own `GpuDevice::new()`, which runs in a separate process. That cross-process contention is now
+self-reporting (a contended failure panics instead of reading stale pixels) rather than
+silent, so a dedicated cross-process lock is no longer needed. Landed alongside the GPU-test
+`gpu-proofs` feature gate (default `cargo test` is now GPU-free; run `--features gpu-proofs`
+to exercise the proofs).
 
 ### BUG-014 — Content key collapses NaN/±Inf param values to one hash — LOW (parked)
 

@@ -284,7 +284,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain parity oracle (freeze §12) — instance_position_jitter had no
     //! GPU test. The generated kernel (which prepends noise_common via

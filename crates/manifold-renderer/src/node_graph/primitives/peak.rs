@@ -89,7 +89,7 @@ impl Primitive for Peak {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Real-GPU correctness tests. A solid-color input reduces to its
     //! own luminance (peak of constant = that constant). The peak

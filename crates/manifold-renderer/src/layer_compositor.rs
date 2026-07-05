@@ -2481,7 +2481,7 @@ impl Compositor for LayerCompositor {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod chain_pool_tests {
     //! Regression tests for the LayerId-keyed chain/buf pools.
     //!

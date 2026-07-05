@@ -171,7 +171,7 @@ impl Primitive for Levels {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use half::f16;
     use manifold_core::{Beats, Seconds};

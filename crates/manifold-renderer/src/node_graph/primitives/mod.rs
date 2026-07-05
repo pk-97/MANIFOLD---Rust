@@ -129,7 +129,7 @@ mod phong_material;
 mod pbr_material;
 mod cel_material;
 mod multi_blend;
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod mesh_snapshot;
 mod mux_array;
 mod mux_scalar;

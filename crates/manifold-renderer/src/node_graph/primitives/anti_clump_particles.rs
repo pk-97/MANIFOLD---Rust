@@ -281,7 +281,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain OPTIONAL-TEXTURE parity oracle (freeze §12). The generated
     //! kernel binds the modulator Texture2D + sampler + an injected

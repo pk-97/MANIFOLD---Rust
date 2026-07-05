@@ -238,7 +238,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain COINCIDENT + REQUIRED-TEXTURE parity oracle (freeze §12).
     //! One coincident MeshVertex array input + a required height Texture2D, with

@@ -119,7 +119,7 @@ impl Primitive for Luminance {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Real-GPU smoke + correctness tests. A solid-color input texture
     //! should reduce to its own luminance; the value lands on the

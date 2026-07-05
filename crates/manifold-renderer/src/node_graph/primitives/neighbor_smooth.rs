@@ -185,7 +185,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain parity oracle (freeze §12, buffer path). The GENERATED
     //! standalone kernel — built from `neighbor_smooth_body.wgsl` by the buffer

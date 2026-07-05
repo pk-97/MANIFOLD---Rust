@@ -330,7 +330,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! The summing kernel is generated per input count, so no `include_str!`
     //! and no preset exercises it. Compile every variant on the real GPU —

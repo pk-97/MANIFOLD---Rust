@@ -188,7 +188,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod tests {
     use half::f16;
     use manifold_gpu::{GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};

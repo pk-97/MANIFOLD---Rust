@@ -222,7 +222,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain parity oracle (freeze §12) — project_3d had NO GPU test
     //! before the freeze cutover, so this is added with the conversion: the

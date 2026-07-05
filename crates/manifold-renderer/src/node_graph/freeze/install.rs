@@ -629,7 +629,7 @@ pub(crate) fn compile_segment_view(
 /// Test/tooling hook: compile a segment synchronously and seed the
 /// content-thread cache, so integration tests exercise the Ready path without
 /// the worker's asynchrony.
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) fn seed_segment_cache_for_test(
     cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
     registry: &PrimitiveRegistry,

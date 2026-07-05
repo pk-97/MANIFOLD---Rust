@@ -177,7 +177,7 @@ impl Primitive for ChromaKey {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! GPU correctness tests for `ChromaKey`.
     //!

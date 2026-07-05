@@ -233,7 +233,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! GPU parity tests against the legacy `WireframeZooGenerator`'s
     //! CPU pipeline — same shape as the previous wireframe_shape

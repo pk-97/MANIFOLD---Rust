@@ -211,7 +211,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain TEXTURE-COINCIDENT parity oracle (freeze §12) — the first
     //! atom exercising a texture bound INTO a buffer kernel. The generated kernel

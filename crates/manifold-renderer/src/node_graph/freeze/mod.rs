@@ -26,5 +26,5 @@ pub use diff::{DiffResult, TextureDiff};
 /// validated against the unfused chains through the oracle (correct fusion
 /// clears, wrong fusion fails). Test-only; the eventual codegen reuses this
 /// render-two-ways shape and the [`reference`] kernels as its targets.
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod proof;

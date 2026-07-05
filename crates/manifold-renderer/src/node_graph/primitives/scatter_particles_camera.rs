@@ -302,7 +302,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain ATOMIC SCATTER + CAMERA-PROJECTION parity oracle (freeze
     //! §12). The generated standalone kernel projects each particle through the

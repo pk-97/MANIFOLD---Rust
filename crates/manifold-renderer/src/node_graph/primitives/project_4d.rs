@@ -185,7 +185,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! GPU parity tests against `generators::generator_math::project_4d`.
     //! This module is the test that would have caught the "Tesseract

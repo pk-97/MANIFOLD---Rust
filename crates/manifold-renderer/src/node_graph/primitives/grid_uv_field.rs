@@ -182,7 +182,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain SOURCE parity oracle (freeze §12). The generated standalone
     //! kernel (buffer source path — 0 array inputs) must reproduce the hand

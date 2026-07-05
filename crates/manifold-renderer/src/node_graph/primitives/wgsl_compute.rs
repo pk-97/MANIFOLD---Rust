@@ -3083,7 +3083,7 @@ fn cs_main() { _ = as_in[0].life + bs_in[0].life; }
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! End-to-end GPU smoke for the dynamic node. Confirms the
     //! introspection-derived port shape actually flows through chain

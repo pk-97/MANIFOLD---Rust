@@ -293,7 +293,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain SOURCE parity oracle (freeze §12) — generate_instance_
     //! transforms had no GPU test. The generated kernel (self-contained
