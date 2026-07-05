@@ -29,7 +29,7 @@ SLICES_DIR = DAEMON_DIR / "eval" / "slices"
 PROJECT_DIR = Path.home() / ".claude" / "projects" / "-Users-peterkiemann-MANIFOLD---Rust"
 
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-DAEMON_BLOCK_RE = re.compile(r'<daemon move="([^"]+)"[^>]*>(.*?)</daemon>', re.DOTALL)
+DAEMON_BLOCK_RE = re.compile(r'<daemon(?:-advice)? move="([^"]+)"[^>]*>(.*?)</daemon(?:-advice)?>', re.DOTALL)
 
 TEXT_CLIP = 700
 RESULT_CLIP = 160

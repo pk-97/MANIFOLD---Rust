@@ -494,12 +494,16 @@ class Daemon:
     # moments — no detection, no classifier, no false-positive budget) ----
 
     def _check_primer(self, event_count, logf, mailbox=None):
-        """mechanical/reasoning-primer: fire once per target (main session or
-        worker) on its first live tool event. Cooldown "once" + persisted
-        firestate (main) make repeat calls no-ops; if another whisper is
-        pending, _resolve_fire declines and this retries on the next event."""
+        """mechanical/reasoning-primer: fire on the first live tool event of a
+        target (main session or worker), then re-arm every advice-recur events
+        (§2e, Peter 2026-07-05) so long orchestration/worker runs get the
+        advice back into context after it scrolls out. Firestate persistence
+        (main) keeps the gate across revives; if another whisper is pending,
+        _resolve_fire declines and this retries on the next event."""
         mb = mailbox if mailbox is not None else self
-        if mb.fire_count.get("mechanical/reasoning-primer"):
+        # Fast path only — _resolve_fire re-checks the same advice-recur gate.
+        prev = mb.last_fire_event.get("mechanical/reasoning-primer")
+        if prev is not None and (event_count - prev) < common.COOLDOWN_EVENTS["advice-recur"]:
             return
         verdict = {"evidence": "first live tool event (priming tier)", "confidence": 1.0}
         flag_out = self._resolve_fire(event_count, "mechanical/reasoning-primer", verdict, logf, mailbox=mailbox)
@@ -517,12 +521,14 @@ class Daemon:
     DESIGN_DOC_RE = re.compile(r"_(?:DESIGN|PLAN)\.md$")
 
     def _check_design_primer(self, name, input_, event_count, logf, mailbox=None):
-        """mechanical/design-primer: first live Write/Edit of a *_DESIGN.md or
-        *_PLAN.md this session — design-taste advice at the moment a design is
-        being authored. Cooldown "once" per target, retry semantics identical
-        to reasoning-primer."""
+        """mechanical/design-primer: a live Write/Edit of a *_DESIGN.md or
+        *_PLAN.md — design-taste advice at the moment a design is being
+        authored. Re-arms every advice-recur events per target (§2e); retry
+        semantics identical to reasoning-primer."""
         mb = mailbox if mailbox is not None else self
-        if mb.fire_count.get("mechanical/design-primer"):
+        # Fast path only — _resolve_fire re-checks the same advice-recur gate.
+        prev = mb.last_fire_event.get("mechanical/design-primer")
+        if prev is not None and (event_count - prev) < common.COOLDOWN_EVENTS["advice-recur"]:
             return
         if name not in ("Write", "Edit", "MultiEdit") or not isinstance(input_, dict):
             return
@@ -760,7 +766,10 @@ class Daemon:
         # beneath it). Discount fires this session already self-graded FP.
         fp_graded = self._session_fp_grades()
         effective_fires = mb.fire_count[move_id] - fp_graded.get(move_id, 0)
-        if effective_fires > ESCALATE_AFTER and not mb.escalated and "escalate/checkpoint" in self.moves:
+        # Advice-kind moves (§2e priming tier) recur by design — repeat fires
+        # are the schedule working, not habituation, so they never escalate.
+        is_advice = self.moves.get(move_id, {}).get("kind") == "advice"
+        if not is_advice and effective_fires > ESCALATE_AFTER and not mb.escalated and "escalate/checkpoint" in self.moves:
             effective_id = "escalate/checkpoint"
             mb.escalated = True
             _log(logf, f"escalating {move_id} -> escalate/checkpoint after {mb.fire_count[move_id]} fires ({fp_graded.get(move_id, 0)} self-graded FP, discounted)")

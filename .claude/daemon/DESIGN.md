@@ -314,6 +314,44 @@ TASK regex is crude. If shadow shows the phase labels themselves are noisy,
 fix the rubric's phase definitions first — do not tune rules on top of a
 broken signal.
 
+## 2e. Advice tier — framing + recurrence (Peter, 2026-07-05; built same conversation, Fable)
+
+The priming-tier moves (reasoning-primer, design-primer) are scheduled
+general advice, not detections — but they shipped wearing the alert wrapper,
+which has two costs. First, framing: a model receiving an alert it knows it
+didn't trigger learns "daemon notes are wallpaper", and that alert-blindness
+bleeds into the anchors that DO mean something — the tiers share one
+credibility budget. Second, cadence: once-per-session means the advice has
+scrolled far out of effective context long before a long orchestration run
+ends, exactly the sessions that need the prior most.
+
+Two changes, both keyed off a new `kind: advice` field in moves.md
+(parse_moves default: "alert"):
+
+- **Framing.** `valve.build_block` wraps advice moves in a distinct
+  `<daemon-advice>` tag with a frozen preamble stating explicitly: scheduled,
+  not a detection, nothing is wrong, nothing to acknowledge or grade. No
+  supervised-mode ack sentence, no habit-memory ordinal — both read as
+  accusation under an advice frame. Alert moves are untouched; the distinct
+  tag (not an attribute) is deliberate, so skimming models and RUNBOOK greps
+  can't conflate the tiers.
+- **Recurrence.** New cooldown class `advice-recur` (COOLDOWN_EVENTS: 300
+  tool events) replaces "once": first fire unchanged (first live tool event /
+  first design-doc edit), then the move re-arms per target — main session
+  and each worker — so a 1500-event orchestration gets the prior refreshed
+  roughly five times. `last_fire_event` is firestate-persisted for the main
+  session, so idle-exit revives don't double-fire; worker gates are
+  in-memory like the rest of worker state (known, accepted). Advice moves
+  never escalate to escalate/checkpoint — recurrence is the schedule
+  working, not habituation — and are exempt from session self-grades: the
+  sleep pass grades them from downstream behavior only (RUNBOOK step 2).
+
+Grading note for passes: an advice fire's `correct` is trivially TP (the
+trigger is mechanical), so precision denominators should exclude the advice
+tier or report it separately — its only meaningful metric is pass-judged
+effectiveness, and `effective: unclear` is the expected common case, not a
+defect.
+
 ## 3. Payload library (`moves.md`)
 
 Two families, one format. **Coaching moves** fire on phase transitions (hypothesis

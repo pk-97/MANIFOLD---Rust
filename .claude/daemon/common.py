@@ -75,7 +75,10 @@ def strip_preamble(text):
 
 
 def parse_moves(text):
-    """Parse moves.md into {move_id: {"signature": str, "cooldown": str, "payload": str}}."""
+    """Parse moves.md into {move_id: {"signature", "cooldown", "kind", "payload"}}.
+    `kind` is "alert" unless the entry carries `- **kind:** advice` (the
+    priming tier, §2e) — advice moves get the <daemon-advice> wrapper, no
+    supervised-mode ack, and never escalate."""
     moves = {}
     for block in re.split(r"(?m)^## ", text)[1:]:
         lines = block.splitlines()
@@ -83,13 +86,15 @@ def parse_moves(text):
         body = "\n".join(lines[1:])
         sig_m = re.search(r"-\s*\*\*signature:\*\*\s*(.*?)(?=\n-\s*\*\*cooldown:\*\*)", body, re.DOTALL)
         cd_m = re.search(r"-\s*\*\*cooldown:\*\*\s*(\S+)", body)
+        kind_m = re.search(r"-\s*\*\*kind:\*\*\s*(\S+)", body)
         pl_m = re.search(r"-\s*\*\*payload:\*\*\s*\n(.*)", body, re.DOTALL)
         signature = re.sub(r"\s+", " ", sig_m.group(1)).strip() if sig_m else ""
         cooldown = cd_m.group(1).strip() if cd_m else "standard"
+        kind = kind_m.group(1).strip() if kind_m else "alert"
         payload = pl_m.group(1).strip() if pl_m else ""
         # payload lines are blockquoted with "> " — strip that for the injected text
         payload = "\n".join(l[2:] if l.startswith("> ") else l for l in payload.splitlines()).strip()
-        moves[move_id] = {"signature": signature, "cooldown": cooldown, "payload": payload}
+        moves[move_id] = {"signature": signature, "cooldown": cooldown, "kind": kind, "payload": payload}
     return moves
 
 
@@ -629,7 +634,10 @@ class VerdictCache:
             f.write(json.dumps({"k": k, "v": verdict}) + "\n")
 
 
-COOLDOWN_EVENTS = {"standard": 20, "slow": 40}  # "once" handled separately (fire-at-most-once)
+# "once" handled separately (fire-at-most-once); "advice-recur" re-arms the
+# priming tier every N events so long runs get the advice back into context
+# after it scrolls out (§2e, Peter 2026-07-05).
+COOLDOWN_EVENTS = {"standard": 20, "slow": 40, "advice-recur": 300}
 
 
 def apply_cooldowns(fires, move_cooldowns):
