@@ -76,6 +76,7 @@ mod tests;
 // private to their file; test-only items (`LayeredLayout`, `ports_compatible`,
 // `rects_overlap`) are imported directly by `tests.rs` from their module.
 pub(crate) use hit::marquee_hits;
+pub use hit::GraphCanvasTargets;
 pub(crate) use interaction::DragMode;
 pub use mapping_popover::MappingPopover;
 // App-facing structural-walk helpers — the editor present path resolves the

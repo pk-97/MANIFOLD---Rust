@@ -41,6 +41,9 @@ pub struct LaidNode {
     /// for overlay anchoring (the "stable semantic addressing" the Chrome API
     /// gives panels in place of hand-stored `self.*_id` fields).
     pub key: Option<u64>,
+    /// Automation component name copied from [`View::name`] — applied to the
+    /// built node via `UITree::set_name` (`UI_AUTOMATION_DESIGN.md` D8/§3).
+    pub name: Option<&'static str>,
 }
 
 /// Resolve `root` within `rect`, returning every node laid out in DFS pre-order.
@@ -150,6 +153,7 @@ fn place(view: &View, rect: Rect, parent: Option<usize>, measure: &dyn TextMeasu
         intent: view.intent.clone(),
         slider: view.slider.clone(),
         key: view.key,
+        name: view.name,
     });
 
     if view.children.is_empty() {

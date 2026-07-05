@@ -9,6 +9,7 @@
 //! disagree with what's on screen (mirrors `ClipHitTester`'s "one source for
 //! draw and hit-test" discipline). See `docs/AUTOMATION_LANES_DESIGN.md` §7.
 
+use crate::hit_targets::{HitTargetEntry, HitTargets};
 use crate::node::{Rect, Vec2};
 use crate::panels::viewport::AutomationLaneScreen;
 use crate::view::automation_segment_bend;
@@ -144,6 +145,51 @@ pub fn dots_in_rect(rect: Rect, lanes: &[AutomationLaneScreen]) -> Vec<(usize, u
         }
     }
     out
+}
+
+// ── Automation surface (UI_AUTOMATION_DESIGN.md D5/§5) ───────────
+
+/// Stable text form of a lane's addressing target, shared by the strip and
+/// point payloads below (`"effect:<id>"` / `"generator:<id>"`).
+fn target_key(target: &crate::view::UiGraphTarget) -> String {
+    match target {
+        crate::view::UiGraphTarget::Effect(id) => format!("effect:{}", id.as_str()),
+        crate::view::UiGraphTarget::Generator(id) => format!("generator:{}", id.as_str()),
+    }
+}
+
+/// [`HitTargets`] over the currently-visible automation lane strips — the same
+/// [`AutomationLaneScreen`] list `hit_test_automation` and the lane-strip
+/// renderer both read (`TimelineViewportPanel::automation_lane_screens`), so an
+/// enumerated strip/point's rect can never disagree with what's on screen or
+/// what's clickable.
+pub struct AutomationHitTargets<'a>(pub &'a [AutomationLaneScreen]);
+
+impl HitTargets for AutomationHitTargets<'_> {
+    fn surface_id(&self) -> &'static str {
+        "automation_lanes"
+    }
+
+    fn enumerate(&self, out: &mut Vec<HitTargetEntry>) {
+        for lane in self.0 {
+            let key = target_key(&lane.target);
+            out.push(HitTargetEntry {
+                kind: "automation_strip",
+                label: lane.label.clone(),
+                rect: lane.strip_rect,
+                payload: format!("{key}|{}", lane.param_id.as_ref()),
+            });
+            for (dot_index, dot) in lane.dots.iter().enumerate() {
+                let d = DOT_HIT_RADIUS_PX;
+                out.push(HitTargetEntry {
+                    kind: "automation_point",
+                    label: format!("{} pt{dot_index}", lane.label),
+                    rect: Rect::new(dot.x - d, dot.y - d, d * 2.0, d * 2.0),
+                    payload: format!("{key}|{}|{dot_index}", lane.param_id.as_ref()),
+                });
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -352,5 +398,26 @@ mod tests {
         let lanes = vec![test_lane(Rect::new(0.0, 0.0, 100.0, 28.0), vec![dot(90.0, 14.0)])];
         let rect = Rect::new(0.0, 0.0, 10.0, 10.0);
         assert!(dots_in_rect(rect, &lanes).is_empty());
+    }
+
+    // ── HitTargets (UI_AUTOMATION_DESIGN.md P1) ──────────────────────
+
+    #[test]
+    fn automation_hit_targets_enumerates_strips_and_points_with_payloads() {
+        let lanes = vec![test_lane(
+            Rect::new(0.0, 0.0, 100.0, 28.0),
+            vec![dot(10.0, 14.0), dot(60.0, 14.0)],
+        )];
+        let targets = AutomationHitTargets(&lanes);
+        assert_eq!(targets.surface_id(), "automation_lanes");
+        let mut out = Vec::new();
+        targets.enumerate(&mut out);
+        // One strip entry + one entry per dot.
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].kind, "automation_strip");
+        assert_eq!(out[0].payload, "effect:fx|amount");
+        assert_eq!(out[1].kind, "automation_point");
+        assert_eq!(out[1].payload, "effect:fx|amount|0");
+        assert_eq!(out[2].payload, "effect:fx|amount|1");
     }
 }

@@ -115,6 +115,8 @@ impl GraphEditorPanel {
             checkbox_style(self.normalize_preview, true),
             if self.normalize_preview { "✓" } else { "" },
         );
+        // Naming pass (UI_AUTOMATION_DESIGN.md D8/§3): graph-editor chrome.
+        tree.set_name(cb_id, "graph_editor.smart_preview_toggle");
         let label_x = region.x + CHECKBOX_W + CHECKBOX_GAP;
         tree.add_label(
             None,

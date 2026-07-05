@@ -2186,6 +2186,12 @@ impl ParamCardPanel {
                     "\u{203A}", // ›
                     ((i as u64) << 8) | ROW_ROLE_CHEVRON,
                 ));
+                // Naming pass (UI_AUTOMATION_DESIGN.md D8/§3): one static name for
+                // every row's chevron — which row comes from the selector's
+                // `under_text` query, not a per-row name string.
+                if let Some(id) = self.mapping_chevron_ids[i] {
+                    tree.set_name(id, "inspector.param_card.mapping_chevron");
+                }
             }
             cy = row.new_cy;
         }
