@@ -1,0 +1,29 @@
+[
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": { "Surface": { "surface": "automation_lanes", "kind": "automation_point", "label": "Mirror: amount pt1" } },
+      "check": { "RectWithin": { "x": 607.0, "y": 607.88, "width": 14.0, "height": 14.0 } }
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Surface": { "surface": "automation_lanes", "kind": "automation_point", "label": "Mirror: amount pt1" } },
+      "gesture": {
+        "Drag": {
+          "to": { "Point": { "x": 614.0, "y": 632.0 } },
+          "steps": 6
+        }
+      }
+    }
+  },
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": { "Surface": { "surface": "automation_lanes", "kind": "automation_point", "label": "Mirror: amount pt1" } },
+      "check": { "RectWithin": { "x": 607.0, "y": 622.55, "width": 14.0, "height": 14.0 } }
+    }
+  }
+]

@@ -289,6 +289,16 @@ impl BrowserPopupPanel {
         self.session.is_some()
     }
 
+    /// True while the entrance tween is still settling. The app polls this
+    /// after `UIRoot::update()` to keep forcing a per-frame rebuild until the
+    /// fade-in completes — without it the dirty-driven renderer draws the
+    /// popup once at `t=0` (fully transparent background, see `build`) and
+    /// never ticks the tween again until an unrelated input re-dirties the
+    /// frame. Mirrors `InspectorCompositePanel::drawer_anim_active`.
+    pub fn is_animating(&self) -> bool {
+        self.session.as_ref().is_some_and(|s| s.enter_anim.is_animating())
+    }
+
     pub fn set_screen_size(&mut self, w: f32, h: f32) {
         self.screen_w = w;
         self.screen_h = h;

@@ -1395,8 +1395,15 @@ fn azalea_glb_renders_lit_through_render_scene() {
     // Workspace-root-relative fixture, resolved off `CARGO_MANIFEST_DIR`
     // (`cargo test`'s cwd is the package dir, not the workspace root) —
     // same convention as `preset_loader.rs` / `bundled_presets.rs`.
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb");
+    // Input fixture is overridable via `MESH_SNAP_GLB` (mirrors the
+    // `MESH_SNAP_OUT` output override below) so the same proven render-scene
+    // harness can be pointed at held-out `.glb` fixtures for the VD-003
+    // import-correctness gate, not just the azalea dev fixture.
+    let path = match std::env::var("MESH_SNAP_GLB") {
+        Ok(p) => std::path::PathBuf::from(p),
+        Err(_) => std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb"),
+    };
     if !path.exists() {
         eprintln!(
             "azalea_glb_renders_lit_through_render_scene: fixture not found at {}, skipping",

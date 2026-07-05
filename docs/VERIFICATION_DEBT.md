@@ -24,43 +24,69 @@ Rules (normative home: `DESIGN_DOC_STANDARD.md` §10):
 
 ## Open
 
-### VD-001 — Automation lanes P1–P4: runtime pointer→command editing path — L1 reached / L4 target
-Landed 2026-07-04 @ `8b306de0`. The full Ableton-style automation timeline UI
-shipped; the live editing path (pointer → command → lane redraw in the running app)
-was never observed — flagged at landing, then decayed. Peter hit it in the app
-2026-07-05 (lanes/buttons present, lanes not visibly working; exact repro untriaged).
-Burn-down: **now runnable at L3** (UI_AUTOMATION P1–P2 landed 2026-07-05) — write a
-`scripts/ui-flows/` flow that resolves an automation-lane breakpoint by its
-`automation_lanes` surface target (P1 enumerates strips + points) and drags it through
-the driver, asserting the moved point; that exercises the pointer→command→redraw path
-headless. The L4 running-app "visibly working" observation Peter owns is still the
-ultimate target above L3.
+### VD-001 — Automation lanes P1–P4: runtime pointer→command editing path — **L3 reached** / L4 target
+Landed 2026-07-04 @ `8b306de0`. **L3 burned down 2026-07-05 (Opus):**
+`scripts/ui-flows/drag-automation-point.json` resolves Mirror's middle breakpoint by its
+`automation_lanes` surface target and drags it through the real input path (pointer →
+viewport events → `InteractionOverlay` → `AppEditingHost` → automation command on the scene
+Project); the re-dump confirms the point moved 607.88 → 622.55px, x/beat and the other points
+unchanged. The runtime pointer→command→redraw automation-editing core **works headless**.
+**Consequence for the in-app bug:** since the core edit path is functional, the "lanes present
+but not visibly working" Peter hit is downstream of this core — live-app rendering/visibility or
+a live-only wiring the headless overlay path bypasses. **L4 (Peter watching a lane edit take
+effect in the running app) remains the target** and is where the real symptom must be triaged.
 
-### VD-002 — Preset library + picker P0–P6: interactive GUI matrix — L2 reached / L3 target
+### VD-002 — Preset library + picker P0–P6: interactive GUI matrix — L2 reached / L3 target — **BLOCKED on driver reach**
 Landed 2026-07-04/05 (last `4c860cad`). Drag-drop, search-clear, the management
 matrix, and thumbnail display are physically unautomatable headless today.
-Burn-down: **now runnable at L3** (UI_AUTOMATION P1–P2 landed 2026-07-05, unblocking
-this) — write `scripts/ui-flows/` flows for the four interactions (drag-drop a preset,
-search-then-clear, the mgmt matrix, thumbnail presence) resolving picker widgets by
-name/text; the P2 `select-and-inspect.json` flow is the copy precedent. Interim Peter
-click-script (L4) still valid until those flows exist.
+**Correction 2026-07-05 (Opus): NOT runnable at L3 via the current P2 `--script` driver.**
+The earlier "now runnable" note assumed the driver could open and drive the picker; it can't.
+Opening the Add-Effect browser / preset picker routes through app-level `PanelAction`s that the
+driver's `apply_panel_actions` deliberately does **not** implement (it handles only
+`LayerClicked`; the rest need `ui_bridge::dispatch` + `UserPrefs::load()`, breaking headless
+determinism). The picker panel lives in `UIRoot` but nothing in the two proving scripts opens
+it, and there is no `AutomationAction` to open a popup. So the four picker flows need one of:
+(a) a P3 live door into a running app, (b) new scene fixtures that pre-open the picker (single
+frame only — no animation, no search text since `AutomationAction::Text` has no headless seam),
+or (c) a driver extension that implements the open-picker dispatch headlessly. Until then the
+interim Peter click-script (L4) is the only path. Same reach gap blocks the BUG-026 frame-0
+repro (see VD-006).
 
-### VD-003 — glTF import: correctness beyond the development fixture — L1 reached / L2 target
+### VD-003 — glTF import: correctness beyond the development fixture — **L2 reached (geometry)** / L2 target; textured + production-drop path still owed
 Landed with the glTF wave (foundation @ `47c878d7` + follow-ups). Peter reports
-in-app import behavior "hard-coded or buggy" (2026-07-05, exact repro not yet
-triaged). Burn-down: held-out-input gate — the two untracked fixtures already in
-`tests/fixtures/gltf/` (`lowe.glb`, `cc0__japanese_apricot_prunus_mume.glb`) are the
-held-out set; import each headless, render to PNG, look. Triage findings go to
-BUG_BACKLOG with `Escaped:` lines.
+in-app import behavior "hard-coded or buggy" (2026-07-05, exact repro not yet triaged).
+**Held-out geometry gate DONE 2026-07-05 (Opus):** both held-out fixtures rendered through
+the `render_scene` mesh-snapshot harness (input now overridable via `MESH_SNAP_GLB`, commit
+`e7560cb4`) and were **looked at**, not just pixel-counted:
+- `lowe.glb` (1.9M verts) → a clean, correctly-formed lion statue on its plinth.
+- `cc0__japanese_apricot_prunus_mume.glb` (4.3M verts) → faithful blossom branches, PLUS a
+  stray small cube beside the model. Triaged: the cube is a leftover Blender default-cube
+  (`Material.001`) baked into that source asset — lowe (a different pipeline) has none — so it
+  is a data problem in the asset, **not** an import bug.
+Conclusion: glTF **geometry** import is faithful and not hard-coded; the "hard-coded or buggy"
+symptom is NOT in the geometry path. **Still owed** (does not gate L2, but keeps this open as a
+lens on Peter's report): (a) the *textured* path (this harness applies a default green material,
+no albedo — see the separate `gltf_textured_azalea…` proof for the textured route), and (b) the
+*production drop-import* UI path (dragging a `.glb` into a layer), which is what Peter actually
+exercised. **Fixtures are large** (lowe 43 MB, apricot 85 MB) and remain untracked — committing
+127 MB of binaries is Peter's call (recommend git-lfs or keep them as local held-out assets).
 
 ### VD-004 — Audio layer export mixdown — L1 reached / L2 target
 `audio_mixdown.rs` offline mix is unverified on a real export (recorded in memory as
 "unverified on real export" since it shipped). Burn-down: one real export of a
 stem-bearing project; listen to / inspect the output file.
 
-*(VD-001–004 seeded 2026-07-05 from the memory corpus plus Peter's in-app findings;
-the full backfill pass over recent landings is still owed and will extend this
-list.)*
+### VD-006 — BUG-026 batch-2 popup entrance-tween fix: running-app confirmation — L2 reached / L4 target
+Fix landed 2026-07-05 (commit `01c15213`) for the "no popup background until mouseover" bug —
+root-caused as a missing animation-poll (see BUG-026). Gate green (clippy; `manifold-ui --lib`
+604/604), but the headless `--script` driver has no frame loop and ticks `enter_anim` off
+wall-clock, so it **cannot** exercise this timing bug. Burn-down: open the Add Effect browser in
+the running app and confirm the dark background panel is present immediately, before moving the
+mouse (and that the fade-in reads smoothly). Peter owns this L4 observation.
+
+*(VD-001–004 seeded 2026-07-05 from the memory corpus plus Peter's in-app findings; VD-006 added
+2026-07-05. VD-005 closed at P2 landing. The full backfill pass over recent landings is still
+owed and will extend this list.)*
 
 ## Closed
 
