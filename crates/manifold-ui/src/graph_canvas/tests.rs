@@ -1434,6 +1434,104 @@ fn expanded_canvas_from(snap: GraphSnapshot) -> (GraphCanvas, Rect) {
     (canvas, Rect::new(0.0, 0.0, 1200.0, 800.0))
 }
 
+/// REPRO (glTF import "have to scroll down to see the graph on open"): an
+/// import-shaped generator graph — a wide fan-in where many producer nodes all
+/// feed one `render` node — with every node at `editor_pos: None` (the state an
+/// import leaves). On editor open the canvas must frame the WHOLE graph in the
+/// viewport (`apply_pending_fit`), so every node lands on-screen. Reproduces the
+/// off-screen symptom if any node's fitted screen box falls outside the viewport.
+#[test]
+fn import_shaped_graph_fits_all_nodes_on_open() {
+    // input + envmap + camera + sun + (mesh,mat,tex)×2 = 10 producers, all at
+    // depth 0, feeding `render` (depth 1) → `final` (depth 2). Mirrors
+    // gltf_import::assemble_import_graph's shape.
+    // A node with a caller-chosen set of input/output ports (the bare `node()`
+    // helper hard-codes one `in`/`out`, which would make the fan-in wires target
+    // ports that don't exist on `render` — an artifact that exaggerates the
+    // layout drift). Here `render` gets its real 9 inputs so port offsets are
+    // legitimate.
+    let ported = |id: u32, ty: &str, handle: &str, ins: &[&str], outs: &[&str]| {
+        let mut n = node(id, ty, Some(handle));
+        n.inputs = ins.iter().map(|p| port(p)).collect();
+        n.outputs = outs.iter().map(|p| port(p)).collect();
+        n.title = handle.to_string();
+        n
+    };
+    let nodes = vec![
+        ported(0, "system.generator_input", "input", &[], &["out"]),
+        ported(1, "node.bake_environment", "envmap", &[], &["envmap"]),
+        ported(2, "node.orbit_camera", "camera", &[], &["out"]),
+        ported(3, "node.light", "sun", &[], &["out"]),
+        ported(4, "node.gltf_mesh_source", "mesh_0", &[], &["vertices"]),
+        ported(5, "node.pbr_material", "mat_0", &[], &["out"]),
+        ported(6, "node.gltf_texture_source", "tex_0", &[], &["out"]),
+        ported(7, "node.gltf_mesh_source", "mesh_1", &[], &["vertices"]),
+        ported(8, "node.pbr_material", "mat_1", &[], &["out"]),
+        ported(9, "node.gltf_texture_source", "tex_1", &[], &["out"]),
+        ported(
+            10,
+            "node.render_scene",
+            "render",
+            &[
+                "camera", "envmap", "light_0", "mesh_0", "material_0", "base_color_map_0",
+                "mesh_1", "material_1", "base_color_map_1",
+            ],
+            &["color"],
+        ),
+        ported(11, "system.final_output", "final", &["in"], &[]),
+    ];
+    // Every node keeps editor_pos: None — the import's state (asserted here so a
+    // future helper default change doesn't silently defeat the repro).
+    assert!(nodes.iter().all(|n| n.editor_pos.is_none()));
+    let wires = vec![
+        wire(2, "out", 10, "camera"),
+        wire(1, "envmap", 10, "envmap"),
+        wire(3, "out", 10, "light_0"),
+        wire(4, "vertices", 10, "mesh_0"),
+        wire(5, "out", 10, "material_0"),
+        wire(6, "out", 10, "base_color_map_0"),
+        wire(7, "vertices", 10, "mesh_1"),
+        wire(8, "out", 10, "material_1"),
+        wire(9, "out", 10, "base_color_map_1"),
+        wire(10, "color", 11, "in"),
+    ];
+    let snap = GraphSnapshot { nodes, wires, outer_routings: Vec::new() };
+
+    let mut canvas = GraphCanvas::new();
+    canvas.set_snapshot(&snap);
+    // Realistic editor canvas viewport (window minus sidebar + card lane).
+    let viewport = Rect::new(0.0, 0.0, 900.0, 800.0);
+    canvas.apply_pending_fit(viewport);
+
+    // Every laid-out node's screen box must sit inside the viewport.
+    let offenders: Vec<String> = canvas
+        .nodes
+        .iter()
+        .filter_map(|n| {
+            let (sx, sy) = canvas.to_screen(viewport, n.pos_graph.0, n.pos_graph.1);
+            let bottom = sy + n.height() * canvas.zoom;
+            let right = sx + NODE_WIDTH * canvas.zoom;
+            let inside = sx >= viewport.x - 1.0
+                && sy >= viewport.y - 1.0
+                && right <= viewport.x + viewport.w + 1.0
+                && bottom <= viewport.y + viewport.h + 1.0;
+            (!inside).then(|| {
+                format!("{} screen=({sx:.0},{sy:.0}..{bottom:.0})", n.handle.as_deref().unwrap_or("?"))
+            })
+        })
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "apply_pending_fit left {} node(s) outside the {}×{} viewport (zoom={:.3}); a dangling \
+         node must not balloon the bbox past what the fit can frame:\n  {}",
+        offenders.len(),
+        viewport.w,
+        viewport.h,
+        canvas.zoom,
+        offenders.join("\n  "),
+    );
+}
+
 /// BUG-027 fix: each node draws in its OWN increasing depth band, and its output
 /// preview is painted inline within that band — so a node stacked above (a
 /// higher band, drawn later) occludes the preview of one below it. A `Painter`

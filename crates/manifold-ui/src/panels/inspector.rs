@@ -143,6 +143,15 @@ pub struct InspectorCompositePanel {
     /// `update()` once `ParamCardPanel::is_delete_finished` is true.
     master_dying: Vec<ParamCardPanel>,
     layer_dying: Vec<ParamCardPanel>,
+    /// The layer whose effects `layer_effects` currently holds. When
+    /// `configure_layer_effects` is called for a DIFFERENT scope (a different
+    /// selected layer, or none), that's navigation — not an edit of the
+    /// current chain — so the old cards are dropped instantly rather than
+    /// routed through the `layer_dying` delete-collapse (their effects weren't
+    /// deleted, just navigated away from). Only a same-scope reconcile keeps
+    /// the exit animation. Twin of `configure_gen_params`, which already keys
+    /// panel reuse on the layer id.
+    layer_effects_scope: Option<LayerId>,
 
     // ── Tabs ──
     /// The single scope currently shown. Drives the section-visibility bools
@@ -247,6 +256,7 @@ impl InspectorCompositePanel {
             gen_params: None,
             master_dying: Vec::new(),
             layer_dying: Vec::new(),
+            layer_effects_scope: None,
             active_tab: InspectorTab::Master,
             available_tabs: vec![InspectorTab::Master],
             tab_node_ids: Vec::new(),
@@ -538,7 +548,20 @@ impl InspectorCompositePanel {
         self.master_effects = Self::reconcile_cards(existing, configs, &mut self.master_dying);
     }
 
-    pub fn configure_layer_effects(&mut self, configs: &[ParamCardConfig]) {
+    pub fn configure_layer_effects(&mut self, configs: &[ParamCardConfig], scope: Option<&LayerId>) {
+        // A change of scope is navigation, not an edit of the current chain:
+        // the previously-shown layer's effects weren't removed from the model,
+        // so they must not play the delete-collapse exit animation.
+        // `reconcile_cards` can't tell the difference — on a switch none of the
+        // old cards match the new layer's effect IDs, so it would move every
+        // one of them into `layer_dying` and the whole stale chain would linger
+        // mid-collapse over the new selection. Drop them instantly instead, and
+        // abandon any in-flight death carried over from the old scope.
+        if scope != self.layer_effects_scope.as_ref() {
+            self.layer_effects.clear();
+            self.layer_dying.clear();
+            self.layer_effects_scope = scope.cloned();
+        }
         let existing = std::mem::take(&mut self.layer_effects);
         self.layer_effects = Self::reconcile_cards(existing, configs, &mut self.layer_dying);
     }
@@ -2481,7 +2504,7 @@ mod tests {
 
         // Frame 2: layer active (gen + layer effect). Master chrome is NOT built,
         // so the up-front reset must leave its range empty (not stale).
-        panel.configure_layer_effects(&[mk_config(ParamCardKind::Effect, "LayerFX", 2)]);
+        panel.configure_layer_effects(&[mk_config(ParamCardKind::Effect, "LayerFX", 2)], None);
         let mut text_gen = mk_config(ParamCardKind::Generator, "Text", 3);
         text_gen.string_params = vec![super::super::param_card::ParamCardStringInfo {
             name: "Text".into(),
@@ -2636,7 +2659,7 @@ mod tests {
             l.inspector_width = 500.0;
             l
         };
-        panel.configure_layer_effects(&[mk_config(ParamCardKind::Effect, "LayerFX", 2)]);
+        panel.configure_layer_effects(&[mk_config(ParamCardKind::Effect, "LayerFX", 2)], None);
         let mut text_gen = mk_config(ParamCardKind::Generator, "Text", 3);
         text_gen.string_params = vec![super::super::param_card::ParamCardStringInfo {
             name: "Text".into(),
@@ -2752,7 +2775,7 @@ mod tests {
         let effects: Vec<_> = (0..12)
             .map(|i| mk_config(ParamCardKind::Effect, &format!("FX{i}"), 3))
             .collect();
-        panel.configure_layer_effects(&effects);
+        panel.configure_layer_effects(&effects, None);
         panel.configure_tabs(
             &[InspectorTab::Layer, InspectorTab::Master],
             InspectorTab::Layer,
@@ -2815,7 +2838,7 @@ mod tests {
         let effects: Vec<_> = (0..12)
             .map(|i| mk_config(ParamCardKind::Effect, &format!("FX{i}"), 3))
             .collect();
-        panel.configure_layer_effects(&effects);
+        panel.configure_layer_effects(&effects, None);
         panel.configure_tabs(
             &[InspectorTab::Layer, InspectorTab::Master],
             InspectorTab::Layer,
@@ -2929,7 +2952,7 @@ mod tests {
         assert!(panel.master_effects[0].node_count() > 0);
 
         // Switch to Layer with a layer effect; the master effect is not built.
-        panel.configure_layer_effects(&[mk_config(ParamCardKind::Effect, "LayerFX", 2)]);
+        panel.configure_layer_effects(&[mk_config(ParamCardKind::Effect, "LayerFX", 2)], None);
         panel.configure_tabs(
             &[InspectorTab::Layer, InspectorTab::Master],
             InspectorTab::Layer,
@@ -3021,5 +3044,53 @@ mod tests {
             panel.master_dying[0].tick_drawers(20.0);
         }
         assert!(panel.master_dying[0].is_delete_finished(), "exit animation completes");
+    }
+
+    #[test]
+    fn switching_layers_drops_old_cards_instantly_without_the_delete_collapse() {
+        use super::super::param_card::ParamCardKind;
+        let layer_a = manifold_foundation::LayerId::new("layer-a");
+        let layer_b = manifold_foundation::LayerId::new("layer-b");
+
+        let mut panel = InspectorCompositePanel::new();
+        // Layer A: a two-effect chain, settled.
+        panel.configure_layer_effects(
+            &[
+                mk_config(ParamCardKind::Effect, "A1", 2),
+                mk_config(ParamCardKind::Effect, "A2", 2),
+            ],
+            Some(&layer_a),
+        );
+        for _ in 0..20 {
+            for c in &mut panel.layer_effects {
+                c.tick_drawers(20.0);
+            }
+        }
+        assert_eq!(panel.layer_effects.len(), 2);
+        assert!(panel.layer_dying.is_empty());
+
+        // Navigate to layer B (a different scope, a different chain). Layer A's
+        // effects were NOT removed from the model — just navigated away from —
+        // so they must vanish instantly, never entering the delete-collapse
+        // `dying` list (which is what left the stale chain lingering over the
+        // new selection for a few frames).
+        panel.configure_layer_effects(
+            &[mk_config(ParamCardKind::Effect, "B1", 2)],
+            Some(&layer_b),
+        );
+        assert_eq!(panel.layer_effects.len(), 1, "now showing layer B's chain");
+        assert!(
+            panel.layer_dying.is_empty(),
+            "a layer switch drops the old cards instantly — no stale collapse"
+        );
+
+        // Contrast: a same-scope removal (still layer B) DOES collapse — the
+        // exit animation is reserved for genuine in-place deletions.
+        panel.configure_layer_effects(&[], Some(&layer_b));
+        assert_eq!(
+            panel.layer_dying.len(),
+            1,
+            "removing an effect in-place still routes through the collapse"
+        );
     }
 }

@@ -101,7 +101,15 @@ impl GraphCanvas {
         const FIT_MARGIN: f32 = 40.0;
         let content_w = (viewport.w - 2.0 * FIT_MARGIN).max(1.0);
         let content_h = (viewport.h - HEADER_HEIGHT - 2.0 * FIT_MARGIN).max(1.0);
-        self.zoom = (content_w / bbox_w).min(content_h / bbox_h).clamp(0.25, 1.0);
+        // Cap at 1.0 so a sparse graph doesn't balloon. The lower bound is far
+        // below the interactive scroll-zoom floor (0.25) ON PURPOSE: a "zoom to
+        // fit" that refuses to zoom out enough to show the whole graph isn't a
+        // fit at all — a tall generator (e.g. an 8-object glTF import, ~30 nodes
+        // in one column) needs ~0.1 to frame, and clamping to 0.25 stranded most
+        // of it below the viewport on open. FIT_MIN_ZOOM only bottoms out an
+        // absurdly large graph; the user zooms in from there.
+        const FIT_MIN_ZOOM: f32 = 0.05;
+        self.zoom = (content_w / bbox_w).min(content_h / bbox_h).clamp(FIT_MIN_ZOOM, 1.0);
         // Centre the bbox: invert `to_screen` so the bbox centre lands at the
         // canvas content centre. `screen = origin + (graph + pan) * zoom`.
         let bbox_cx = (min_x + max_x) * 0.5;

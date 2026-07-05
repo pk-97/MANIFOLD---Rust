@@ -183,3 +183,64 @@ fn saved_tier_still_overrides_disk_like_before_p2() {
 
     clear_project_presets();
 }
+
+/// REPRO (glTF import "editor shows no nodes"): a generator whose graph exists
+/// ONLY in the Saved project overlay (exactly the state a `.glb` import leaves —
+/// the layer TRACKS an embedded preset by id, `graph: None`) must resolve
+/// through BOTH the render path (`bundled_preset_json`) AND the editor path
+/// (`loaded_preset_view_by_id` → `snapshot_for_view`), and the editor snapshot
+/// must carry the graph's nodes. Uses a real known-good generator graph
+/// (Tesseract's) re-stamped with an overlay-only id, so any empty snapshot is
+/// the overlay→view path's fault, not a broken graph.
+#[test]
+fn overlay_only_generator_produces_nonempty_editor_snapshot() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let id = "TestImportedGen_overlay";
+    let preset_id = PresetTypeId::from_string(id.to_string());
+
+    // Take Tesseract's real graph and re-stamp its id to an overlay-only id.
+    let tess_json = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/generator-presets/Tesseract.json"),
+    )
+    .expect("read Tesseract.json");
+    let mut def: manifold_core::effect_graph_def::EffectGraphDef =
+        serde_json::from_str(&tess_json).expect("parse Tesseract def");
+    if let Some(m) = def.preset_metadata.as_mut() {
+        m.id = preset_id.clone();
+        m.display_name = "Imported Repro".to_string();
+    }
+    let node_count = def.nodes.len();
+    assert!(node_count > 0, "fixture graph must have nodes");
+    let json = serde_json::to_string(&def).expect("re-serialize def");
+
+    assert!(
+        GENERATOR_CATALOG.load().json(id).is_none(),
+        "fixture id must not exist before the overlay"
+    );
+
+    set_project_presets(
+        Vec::new(),
+        vec![(id.to_string(), json, EmbeddedOrigin::Saved)],
+    );
+
+    // Render path: resolves the tracking layer's def by id.
+    assert!(
+        manifold_renderer::node_graph::bundled_preset_json(&preset_id).is_some(),
+        "RENDER path: overlay generator must resolve via bundled_preset_json"
+    );
+
+    // Editor path (content_thread::graph_snapshot's pristine-generator branch):
+    // loaded_preset_view_by_id → snapshot_for_view.
+    let view = manifold_renderer::node_graph::loaded_preset_view_by_id(&preset_id)
+        .expect("EDITOR path: overlay generator must resolve a LoadedPresetView");
+    let snap = manifold_renderer::node_graph::snapshot_for_view(view)
+        .expect("EDITOR path: snapshot_for_view must build a snapshot");
+    assert!(
+        !snap.nodes.is_empty(),
+        "EDITOR path: snapshot must carry the graph's nodes (got {} of {node_count})",
+        snap.nodes.len(),
+    );
+
+    clear_project_presets();
+}

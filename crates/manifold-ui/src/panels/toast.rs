@@ -286,10 +286,10 @@ mod tests {
     #[test]
     fn showing_again_replaces_rather_than_queues() {
         let mut toast = ToastPanel::new();
-        toast.show("Undid: Move Clip");
+        toast.show("Undo: Move Clip");
         toast.tick(ENTER_MS + HOLD_MS * 0.5); // mid-hold
-        toast.show("Redid: Move Clip"); // latest wins — restarts the timeline
-        assert_eq!(toast.message, "Redid: Move Clip");
+        toast.show("Redo: Move Clip"); // latest wins — restarts the timeline
+        assert_eq!(toast.message, "Redo: Move Clip");
         assert_eq!(toast.alpha(), 0.0, "replacing restarts the ramp-in, not the hold");
     }
 
@@ -308,7 +308,7 @@ mod tests {
         };
 
         let mut toast = ToastPanel::new();
-        toast.show("Undid: Move Clip");
+        toast.show("Undo: Move Clip");
         toast.build_at(&mut tree, placement);
         assert!(tree.get_node(toast.bg_id.unwrap()).is_some());
 
@@ -321,7 +321,7 @@ mod tests {
 
         // Undo fires again in the same frame `push_state` runs, before the
         // overlay driver rebuilds the toast's nodes into the new tree.
-        toast.show("Redid: Move Clip");
+        toast.show("Redo: Move Clip");
         toast.update(&mut tree); // must not panic
     }
 

@@ -58,6 +58,12 @@ mod window_registry;
 mod workspace;
 
 fn main() {
+    // UI motion layer OFF (experimental — evaluating whether the chrome
+    // micro-animations earn their keep). Collapses every AnimF32/FlipList tween
+    // to an instant snap; the motion code stays in place behind the flag, so
+    // flipping this back to `true` restores it. See `manifold_ui::anim`.
+    manifold_ui::anim::set_motion_enabled(false);
+
     // Headless UI snapshot subcommand (feature `ui-snapshot`): render the real
     // UI tree to a PNG + tree dump with no window, then exit before winit.
     #[cfg(feature = "ui-snapshot")]

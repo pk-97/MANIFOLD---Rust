@@ -369,7 +369,41 @@ impl GraphCanvas {
             down_edges,
         };
         layout.minimise_crossings();
-        let y = layout.assign_y();
+        let mut y = layout.assign_y();
+
+        // Re-seat fully-disconnected real nodes against their column's connected
+        // block. A node with no wires at this level has no port to align, so the
+        // coordinate passes leave it wherever its column's initial stack put it —
+        // and once the connected nodes have drifted to line up with a high-fan-in
+        // node's tightly-packed port stack (e.g. `render_scene`'s 9+ inputs), the
+        // dangling node is stranded thousands of px away, ballooning the bounding
+        // box so zoom-to-fit can't frame the graph on editor open. The common
+        // trigger is a synthesis generator's unwired `generator_input`. Stacking
+        // each disconnected node just above its column's connected block keeps the
+        // whole graph compact; a node with no alignment role loses nothing by it.
+        for c in 0..num_cols {
+            let is_disconnected =
+                |v: usize| layout.up_edges[v].is_empty() && layout.down_edges[v].is_empty();
+            let conn_top = (0..n)
+                .filter(|&v| layout.column[v] == c && !is_disconnected(v))
+                .map(|v| y[v])
+                .fold(f32::INFINITY, f32::min);
+            if !conn_top.is_finite() {
+                // No connected node in this column (all-disconnected or empty) —
+                // its initial stack is already compact; leave it.
+                continue;
+            }
+            let mut disc: Vec<usize> =
+                (0..n).filter(|&v| layout.column[v] == c && is_disconnected(v)).collect();
+            // Keep their relative order (topmost stays topmost), then stack the
+            // block upward from just above the connected nodes.
+            disc.sort_by(|&a, &b| y[a].partial_cmp(&y[b]).unwrap_or(core::cmp::Ordering::Equal));
+            let mut cursor = conn_top;
+            for &v in disc.iter().rev() {
+                cursor -= LAYOUT_VGAP + layout.height[v];
+                y[v] = cursor;
+            }
+        }
 
         // Shift so the topmost real node sits at the layout origin, then
         // write back. Waypoints are dropped — only real nodes have a position.

@@ -38,7 +38,7 @@ pub struct ExportFinishedEvent {
 }
 
 /// D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — the real command
-/// description, so the toast reads "Undid: Move Clip" instead of a generic
+/// description, so the toast reads "Undo: Move Clip" instead of a generic
 /// "Undo". Unlike `ExportFinishedEvent` (a rare, out-of-band send from a
 /// blocking export thread), undo/redo run inline on every normal content-tick
 /// loop iteration, so this rides the REGULAR per-tick `ContentState` build
