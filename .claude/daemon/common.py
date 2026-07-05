@@ -26,7 +26,11 @@ MODEL = "claude-haiku-4-5-20251001"
 # v4: TASK/RECENT hard-capped + harness-injected texts excluded from TASK.
 # v5 (§2f): SESSION FACTS block (last verification per class, latest
 # TASK-set context switch, edited-path last-read) appended to window text.
-WINDOW_VERSION = 5
+# v6 (§2f): recent plain-Read facts ("read <path>: event N, M events ago")
+# added to SESSION FACTS — grounding reads scroll out of the ~8-event ledger
+# and ungrounded-resolution was FP-firing on claims that were in fact
+# grounded by a Read (live FP 2026-07-05, session a5b78b70 seq 2).
+WINDOW_VERSION = 6
 
 # Window-size discipline (2026-07-04 orchestrator incident, session cadd7aad):
 # a <task-notification> embedding a worker's full report became current_task
@@ -36,6 +40,11 @@ WINDOW_VERSION = 5
 # TASK/RECENT are context for a judgment call, not an archive: hard-cap them.
 TASK_MAX_CHARS = 800
 RECENT_MAX_CHARS = 1500
+
+# §2f v6: how many most-recent Read paths render in SESSION FACTS. Small on
+# purpose — the clause exists to keep a *recent* grounding read visible just
+# past the ledger horizon, not to archive every file the session opened.
+READ_FACTS_MAX = 5
 
 # Harness-injected user texts — subagent completion notifications, hook
 # reminders, slash-command echoes — are not instructions from the human and
@@ -436,8 +445,9 @@ def format_session_facts(state, current_event_count):
     (sleep-pass-1's dominant FP class — "the verifying event existed but sat
     beyond the window ledger") stays visible here for the rest of the
     session. Bounded regardless of session length: at most one clause per
-    verification class, only the single latest context switch, and only
-    paths edited in the window that's closing right now."""
+    verification class, at most READ_FACTS_MAX recent reads, only the single
+    latest context switch, and only paths edited in the window that's
+    closing right now."""
     parts = []
     for cls in ("test-run", "lint", "script-run", "render-read"):
         fact = state.last_verification.get(cls)
@@ -445,6 +455,12 @@ def format_session_facts(state, current_event_count):
             continue
         ec, label = fact
         parts.append(f"last {cls}: event {ec}, {current_event_count - ec} events ago ({label})")
+    # Recent plain reads (v6): a claim grounded by a Read that scrolled past
+    # the ledger horizon needs its provenance visible, or ungrounded-resolution
+    # FP-fires on it. Path stays in the clause so a stale unrelated read never
+    # becomes a blanket alibi — the classifier must match claim subject to path.
+    for path, ec in sorted(state.last_read_event.items(), key=lambda kv: -kv[1])[:READ_FACTS_MAX]:
+        parts.append(f"read {path}: event {ec}, {current_event_count - ec} events ago")
     if state.context_switches:
         ec, label = state.context_switches[-1]
         parts.append(f"TASK set by user at event {ec}" + (f' ("{label}")' if label else ""))

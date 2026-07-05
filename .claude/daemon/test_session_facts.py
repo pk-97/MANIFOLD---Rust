@@ -1,7 +1,8 @@
 """Tests for the session-fact store (DESIGN.md §2f): last-verification-per-
-class, the latest TASK-set context switch, and edited-path last-read facts,
-all rendered as a SESSION FACTS: block appended to the window text so they
-outlive the ~8-event ledger horizon. Regex-tier extraction only, same as
+class, the latest TASK-set context switch, edited-path last-read facts, and
+(v6) the most-recent plain-Read facts, all rendered as a SESSION FACTS:
+block appended to the window text so they outlive the ~8-event ledger
+horizon. Regex-tier extraction only, same as
 STOPGAP_MARKERS — no classifier calls.
 
 Run: python3 test_session_facts.py
@@ -158,6 +159,58 @@ def test_edit_with_read_fact_scoped_to_the_closing_window():
     check("edit-read fact does not leak into a later, unrelated window", "last read event" not in closed["text"], closed["text"])
 
 
+# ---- recent-read facts (v6: ungrounded-resolution grounding provenance) ----
+
+
+def test_read_fact_survives_past_ledger_horizon():
+    """The FP class this kills: a claim grounded by a Read whose event
+    scrolled out of the ~8-event ledger. The read clause must still be in
+    SESSION FACTS so the classifier sees the provenance and doesn't fire."""
+    state = common.WindowState()
+    tool_result(state, "r", "Read", {"file_path": "src/scheduler.rs"})
+    for i in range(12):
+        tool_result(state, f"t{i}", "Bash", {"command": "ls"})
+    closed = state._close_window(2.0)
+    check(
+        "grounding read visible past the ledger horizon",
+        "read src/scheduler.rs: event 1, 12 events ago" in closed["text"],
+        closed["text"],
+    )
+
+
+def test_read_clause_names_its_path_no_blanket_alibi():
+    """A stale read of an UNRELATED file must not suppress a real fire: the
+    clause carries its path, so a window describing src/claimed.rs shows no
+    read clause for it when only src/other.rs was read."""
+    state = common.WindowState()
+    tool_result(state, "r", "Read", {"file_path": "src/other.rs"})
+    tool_result(state, "t", "Bash", {"command": "ls"})
+    closed = state._close_window(2.0)
+    check("the read that happened renders with its own path", "read src/other.rs: event 1," in closed["text"], closed["text"])
+    check("no clause exists for the never-read path", "src/claimed.rs" not in closed["text"], closed["text"])
+
+
+def test_read_facts_bounded_to_most_recent():
+    state = common.WindowState()
+    for i in range(common.READ_FACTS_MAX + 5):
+        tool_result(state, f"r{i}", "Read", {"file_path": f"src/f{i}.rs"})
+    closed = state._close_window(2.0)
+    n = closed["text"].count("read src/f")
+    check("at most READ_FACTS_MAX read clauses render", n == common.READ_FACTS_MAX, closed["text"])
+    check("most recent read kept", f"read src/f{common.READ_FACTS_MAX + 4}.rs:" in closed["text"], closed["text"])
+    check("oldest read dropped", "read src/f0.rs:" not in closed["text"], closed["text"])
+
+
+def test_reread_updates_read_fact_event():
+    state = common.WindowState()
+    tool_result(state, "r1", "Read", {"file_path": "src/lib.rs"})
+    tool_result(state, "t", "Bash", {"command": "ls"})
+    tool_result(state, "r2", "Read", {"file_path": "src/lib.rs"})
+    closed = state._close_window(2.0)
+    check("re-read renders the latest event only", "read src/lib.rs: event 3, 0 events ago" in closed["text"], closed["text"])
+    check("stale read event not rendered", "read src/lib.rs: event 1," not in closed["text"], closed["text"])
+
+
 # ---- task_addressed unchanged ----
 
 
@@ -174,7 +227,7 @@ def test_task_addressed_bit_unaffected():
 
 
 def test_window_version_bumped():
-    check("WINDOW_VERSION is at least 5", common.WINDOW_VERSION >= 5, common.WINDOW_VERSION)
+    check("WINDOW_VERSION is at least 6", common.WINDOW_VERSION >= 6, common.WINDOW_VERSION)
 
 
 # ---- catchup-replay durability (no firestate needed — see common.py comment) ----
