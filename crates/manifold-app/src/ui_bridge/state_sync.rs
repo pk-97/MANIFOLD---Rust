@@ -275,7 +275,7 @@ pub fn push_state(
         if let Some(ev) = &content_state.undo_redo_event {
             let key = content_state.data_version;
             if ui.last_undo_redo_toast_key != Some(key) {
-                let verb = if ev.is_redo { "Redid" } else { "Undid" };
+                let verb = if ev.is_redo { "Redo" } else { "Undo" };
                 ui.toast.show(format!("{verb}: {}", ev.description));
                 ui.last_undo_redo_toast_key = Some(key);
             }
@@ -1446,7 +1446,8 @@ pub fn sync_inspector_data(
                 .map(|e| effects_to_configs(e, OscScope::Layer(lid), automation_latched))
                 .unwrap_or_default();
             attach_audio_sends(&mut layer_effects, &project.audio_setup);
-            ui.inspector.configure_layer_effects(&layer_effects);
+            ui.inspector
+                .configure_layer_effects(&layer_effects, Some(&layer.layer_id));
 
             // Generator params — find clip's string_params for text fields.
             // Use selected clip if on this layer, otherwise first clip.
@@ -1475,11 +1476,11 @@ pub fn sync_inspector_data(
             ui.inspector
                 .configure_gen_params(gen_config.as_ref(), Some(layer_id));
         } else {
-            ui.inspector.configure_layer_effects(&[]);
+            ui.inspector.configure_layer_effects(&[], None);
             ui.inspector.configure_gen_params(None, None);
         }
     } else {
-        ui.inspector.configure_layer_effects(&[]);
+        ui.inspector.configure_layer_effects(&[], None);
         ui.inspector.configure_gen_params(None, None);
     }
 
