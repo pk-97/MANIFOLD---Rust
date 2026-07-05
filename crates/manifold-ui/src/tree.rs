@@ -458,15 +458,12 @@ impl UITree {
         idx < self.count && self.generations[idx] == id.generation()
     }
 
-    pub fn get_node(&self, id: NodeId) -> &UINode {
-        debug_assert!(
-            self.is_live(id),
-            "get_node on a stale/invalid NodeId (index {} gen {}) — re-capture the \
-             id after a rebuild",
-            id.index(),
-            id.generation()
-        );
-        &self.nodes[id.index()]
+    /// `None` if `id` is stale or invalid — the same inertness every other
+    /// accessor here gives a stale id (`get_bounds` → `ZERO`, `set_style` →
+    /// no-op). Callers that cache a `NodeId` across a rebuild must handle
+    /// `None`; a stale id must never be able to reach `&self.nodes[..]`.
+    pub fn get_node(&self, id: NodeId) -> Option<&UINode> {
+        self.is_live(id).then(|| &self.nodes[id.index()])
     }
 
     /// Read-only view of every node in insertion order (`NodeId` == index).
@@ -476,15 +473,9 @@ impl UITree {
         &self.nodes
     }
 
-    pub fn get_node_mut(&mut self, id: NodeId) -> &mut UINode {
-        debug_assert!(
-            self.is_live(id),
-            "get_node_mut on a stale/invalid NodeId (index {} gen {}) — re-capture \
-             the id after a rebuild",
-            id.index(),
-            id.generation()
-        );
-        &mut self.nodes[id.index()]
+    /// `None` if `id` is stale or invalid — see [`Self::get_node`].
+    pub fn get_node_mut(&mut self, id: NodeId) -> Option<&mut UINode> {
+        self.is_live(id).then(|| &mut self.nodes[id.index()])
     }
 
     pub fn get_bounds(&self, id: NodeId) -> Rect {
@@ -1111,7 +1102,7 @@ mod tests {
         // Different text → dirty
         tree.set_text(id, "World");
         assert!(tree.has_dirty());
-        assert_eq!(tree.get_node(id).text.as_deref(), Some("World"));
+        assert_eq!(tree.get_node(id).unwrap().text.as_deref(), Some("World"));
     }
 
     #[test]
@@ -1182,7 +1173,7 @@ mod tests {
 
         // Panel A nodes intact
         assert_eq!(tree.get_bounds(tree.id_at(0)).y, 0.0);
-        assert_eq!(tree.get_node(tree.id_at(1)).text.as_deref(), Some("A"));
+        assert_eq!(tree.get_node(tree.id_at(1)).unwrap().text.as_deref(), Some("A"));
 
         // Can re-add after truncation — indices continue from the truncation point
         let new_id = tree.add_panel(None, 0.0, 100.0, 100.0, 50.0, default_style());
@@ -1285,12 +1276,33 @@ mod tests {
 
         // Writes through the stale id are no-ops — the new occupant is untouched.
         tree.set_text(doomed, "hijacked");
-        assert_eq!(tree.get_node(reused).text.as_deref(), Some("new"));
+        assert_eq!(tree.get_node(reused).unwrap().text.as_deref(), Some("new"));
         tree.set_bounds(doomed, Rect::new(99.0, 99.0, 1.0, 1.0));
         assert_eq!(tree.get_bounds(reused).y, 20.0);
 
         // The untouched earlier node still validates.
         assert!(tree.is_live(keep));
+    }
+
+    /// `get_node`/`get_node_mut` are the accessors a cached `NodeId` field
+    /// goes through (e.g. `ToastPanel::bg_id`/`text_id` repainted every frame
+    /// while animating) — the one place a stale id used to be able to reach
+    /// `&self.nodes[..]` directly via a release-only `debug_assert`. They must
+    /// give the same `None`/no-op inertness as every other accessor here.
+    #[test]
+    fn get_node_on_stale_id_is_none_not_a_panic() {
+        let mut tree = UITree::new();
+        let boundary = 0;
+        let doomed = tree.add_label(None, 0.0, 0.0, 10.0, 10.0, "old", default_style());
+        tree.truncate_from(boundary);
+
+        assert!(tree.get_node(doomed).is_none());
+        assert!(tree.get_node_mut(doomed).is_none());
+        // Also out-of-range entirely (index never minted) — same inertness.
+        assert!(tree.get_node(NodeId::PLACEHOLDER).is_none());
+
+        let live = tree.add_label(None, 0.0, 0.0, 10.0, 10.0, "new", default_style());
+        assert!(tree.get_node(live).is_some());
     }
 
     #[test]

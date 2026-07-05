@@ -706,6 +706,6 @@ mod tests {
         tree.clear_dirty();
         BitmapSlider::update_value(&mut tree, &ids, 0.25, "0.25");
         assert!(tree.has_dirty());
-        assert_eq!(tree.get_node(ids.value_text).text.as_deref(), Some("0.25"));
+        assert_eq!(tree.get_node(ids.value_text).unwrap().text.as_deref(), Some("0.25"));
     }
 }

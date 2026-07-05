@@ -535,7 +535,7 @@ mod tests {
 
     fn buttons(tree: &UITree) -> Vec<(String, Rect)> {
         (0..tree.count())
-            .map(|i| tree.get_node(tree.id_at(i)))
+            .filter_map(|i| tree.get_node(tree.id_at(i)))
             .filter(|n| n.node_type == UINodeType::Button)
             .map(|n| (n.text.clone().unwrap_or_default(), n.bounds))
             .collect()
@@ -577,7 +577,7 @@ mod tests {
 
         let id_of = |t: &str| {
             (0..tree.count())
-                .map(|i| tree.get_node(tree.id_at(i)))
+                .filter_map(|i| tree.get_node(tree.id_at(i)))
                 .find(|n| n.text.as_deref() == Some(t))
                 .map(|n| n.id)
         };
@@ -619,7 +619,7 @@ mod tests {
 
         fn node<'a>(tree: &'a UITree, t: &str) -> &'a UINode {
             (0..tree.count())
-                .map(|i| tree.get_node(tree.id_at(i)))
+                .filter_map(|i| tree.get_node(tree.id_at(i)))
                 .find(|n| n.text.as_deref() == Some(t))
                 .unwrap()
         }
@@ -657,7 +657,7 @@ mod tests {
 
         let node = |t: &str| {
             (0..tree.count())
-                .map(|i| tree.get_node(tree.id_at(i)))
+                .filter_map(|i| tree.get_node(tree.id_at(i)))
                 .find(|n| n.text.as_deref() == Some(t))
                 .unwrap()
                 .id
@@ -680,7 +680,7 @@ mod tests {
         panel.update(&mut tree);
 
         let r = (0..tree.count())
-            .map(|i| tree.get_node(tree.id_at(i)))
+            .filter_map(|i| tree.get_node(tree.id_at(i)))
             .find(|n| n.text.as_deref() == Some("R"))
             .unwrap()
             .id;
@@ -700,7 +700,7 @@ mod tests {
         panel.update(&mut tree);
 
         let play = (0..tree.count())
-            .map(|i| tree.get_node(tree.id_at(i)))
+            .filter_map(|i| tree.get_node(tree.id_at(i)))
             .find(|n| n.text.as_deref() == Some("PAUSE"))
             .expect("PLAY became PAUSE in place");
         assert_eq!(tree.structure_version(), sv);

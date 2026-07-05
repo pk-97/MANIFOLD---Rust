@@ -1422,7 +1422,9 @@ impl ParamCardPanel {
             // Read-modify-write on the node's existing style so bg/radius/font
             // (which differ between the effect and generator sliders) are
             // never guessed at here — only `text_color` changes.
-            let mut style = tree.get_node(ids.value_text).style;
+            let Some(mut style) = tree.get_node(ids.value_text).map(|n| n.style) else {
+                continue;
+            };
             style.text_color = if still_active {
                 color::ACCENT_BLUE_C32
             } else {
@@ -1442,7 +1444,10 @@ impl ParamCardPanel {
             // Re-derive the (already-settled) value text rather than touch
             // it — only the fill/thumb position eases; `update_value` writes
             // all three, so pass the unchanged text back through unmodified.
-            let text = tree.get_node(ids.value_text).text.clone().unwrap_or_default();
+            let Some(text) = tree.get_node(ids.value_text).map(|n| n.text.clone().unwrap_or_default())
+            else {
+                continue;
+            };
             BitmapSlider::update_value(tree, ids, anim.value(), &text);
         }
         any
@@ -3834,10 +3839,10 @@ mod tests {
         assert!(!panel.is_drag_handle(drag_icon));
 
         // update_selection_visual must not repaint when the card isn't live.
-        let before = tree.get_node(border).style.bg_color;
+        let before = tree.get_node(border).unwrap().style.bg_color;
         panel.update_selection_visual(&mut tree, true);
         assert_eq!(
-            tree.get_node(border).style.bg_color,
+            tree.get_node(border).unwrap().style.bg_color,
             before,
             "a non-live card must not repaint its border"
         );
@@ -4083,14 +4088,14 @@ mod tests {
         // untouched (font/bg/align), only `text_color` moves.
         let value_text_id = panel.slider_ids[0].as_ref().unwrap().value_text;
         panel.tick_value_flash(&mut tree, 1.0);
-        assert_eq!(tree.get_node(value_text_id).style.text_color, color::ACCENT_BLUE_C32);
+        assert_eq!(tree.get_node(value_text_id).unwrap().style.text_color, color::ACCENT_BLUE_C32);
 
         for _ in 0..30 {
             panel.tick_value_flash(&mut tree, color::MOTION_SLOW_MS / 20.0);
         }
         assert!(panel.value_flash[0].progress().is_none(), "flash finishes");
         assert_eq!(
-            tree.get_node(value_text_id).style.text_color,
+            tree.get_node(value_text_id).unwrap().style.text_color,
             color::SLIDER_TEXT_C32,
             "reverted to the normal slider text color once finished"
         );
@@ -4278,7 +4283,7 @@ mod tests {
         let mut tree = UITree::new();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
         let chevron_id = panel.chevron_node_id().expect("chevron built");
-        let transform = tree.get_node(chevron_id).style.transform.expect("chevron carries a transform");
+        let transform = tree.get_node(chevron_id).unwrap().style.transform.expect("chevron carries a transform");
         // `Affine2::rotate` populates `b = sin(theta)`; recover theta and
         // compare against the panel's own mid-flight angle.
         assert!(

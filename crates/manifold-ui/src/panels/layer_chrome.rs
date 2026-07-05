@@ -348,7 +348,7 @@ mod tests {
         assert_eq!(tree.structure_version(), sv);
         // Name node carries the new text.
         let found = (0..tree.count())
-            .map(|i| tree.get_node(tree.id_at(i)))
+            .filter_map(|i| tree.get_node(tree.id_at(i)))
             .any(|n| n.text.as_deref() == Some("Drums Layer"));
         assert!(found);
     }

@@ -979,7 +979,9 @@ impl LayerHeaderPanel {
             let Some(mute_id) = self.rows[i].id(LayerControl::Mute) else {
                 continue;
             };
-            let flags = tree.get_node(mute_id).flags;
+            let Some(flags) = tree.get_node(mute_id).map(|n| n.flags) else {
+                continue;
+            };
             let hovered = flags.contains(UIFlags::HOVERED);
             let pressed = flags.contains(UIFlags::PRESSED);
             let motion = &mut self.mute_motion[i];
@@ -2671,13 +2673,13 @@ mod tests {
         panel.build(&mut tree, &layout, &mapper, 0.0);
 
         let mute_id = panel.rows[0].id(LayerControl::Mute).expect("mute chip built");
-        let rest_bg = tree.get_node(mute_id).style.bg_color;
+        let rest_bg = tree.get_node(mute_id).unwrap().style.bg_color;
         let rest_y = tree.get_bounds(mute_id).y;
 
         // Hover in: background eases partway, not an instant jump.
         tree.set_flag(mute_id, UIFlags::HOVERED);
         panel.tick_mute_motion(&mut tree, 45.0); // halfway through MOTION_FAST (90ms)
-        let mid_bg = tree.get_node(mute_id).style.bg_color;
+        let mid_bg = tree.get_node(mute_id).unwrap().style.bg_color;
         assert_ne!(mid_bg, rest_bg, "background should have moved partway toward hover");
 
         panel.tick_mute_motion(&mut tree, 45.0); // finishes the hover-in tween
@@ -2701,7 +2703,7 @@ mod tests {
             "must return exactly to rest Y, no drift"
         );
         assert_eq!(
-            tree.get_node(mute_id).style.bg_color,
+            tree.get_node(mute_id).unwrap().style.bg_color,
             rest_bg,
             "background returns exactly to rest"
         );

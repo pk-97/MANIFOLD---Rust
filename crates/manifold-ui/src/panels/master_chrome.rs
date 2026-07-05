@@ -489,7 +489,7 @@ mod tests {
 
         panel.sync_exit_path(&mut tree, "Additive");
         let exit = panel.host.node_id_for_key(KEY_EXIT_PATH).unwrap();
-        assert_eq!(tree.get_node(exit).text.as_deref(), Some("Additive"));
+        assert_eq!(tree.get_node(exit).unwrap().text.as_deref(), Some("Additive"));
         assert_eq!(tree.structure_version(), sv, "value change must not rebuild");
     }
 
