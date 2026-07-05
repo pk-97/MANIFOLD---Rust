@@ -614,17 +614,24 @@ fn build_import_graph(
 
     // Shared framing / light / environment card knobs. These come LAST in
     // `card_params` (after the per-object material knobs) but read first on
-    // the card as the primary performance controls. Angle sliders are in
-    // degrees (scale = DEG2RAD folds the conversion into the write boundary);
-    // defaults mirror the `camera`/`sun`/`envmap` node params set above so
-    // the card is a faithful mirror of the assembled look.
-    card_params.push(card_param("cam_orbit", "Camera Orbit", -180.0, 180.0, 0.7 / DEG2RAD, true)); // angle
+    // the card as the primary performance controls. Angle sliders store
+    // RADIANS and carry `is_angle` (the app-wide convention — the slider
+    // shows/edits degrees, storage is radians), so the binding is a
+    // pass-through (`scale = 1.0`); mixing a degrees store with an `is_angle`
+    // formatter double-converts (40° → 2298°). Defaults mirror the
+    // `camera`/`sun`/`envmap` node params set above so the card is a faithful
+    // mirror of the assembled look.
+    card_params.push(card_param(
+        "cam_orbit", "Camera Orbit", -180.0 * DEG2RAD, 180.0 * DEG2RAD, 0.7, true,
+    )); // angle (radians)
     card_bindings.push(card_binding(
-        "cam_orbit", "Camera Orbit", 0.7 / DEG2RAD, "camera", "orbit", DEG2RAD,
+        "cam_orbit", "Camera Orbit", 0.7, "camera", "orbit", 1.0,
     ));
-    card_params.push(card_param("cam_tilt", "Camera Tilt", -89.0, 89.0, 0.3 / DEG2RAD, true)); // angle
+    card_params.push(card_param(
+        "cam_tilt", "Camera Tilt", -89.0 * DEG2RAD, 89.0 * DEG2RAD, 0.3, true,
+    )); // angle (radians)
     card_bindings.push(card_binding(
-        "cam_tilt", "Camera Tilt", 0.3 / DEG2RAD, "camera", "tilt", DEG2RAD,
+        "cam_tilt", "Camera Tilt", 0.3, "camera", "tilt", 1.0,
     ));
     card_params.push(card_param(
         "cam_dist",
@@ -637,9 +644,11 @@ fn build_import_graph(
     card_bindings.push(card_binding(
         "cam_dist", "Camera Distance", distance, "camera", "distance", 1.0,
     ));
-    card_params.push(card_param("cam_fov", "Camera FOV", 20.0, 120.0, 0.9 / DEG2RAD, true)); // angle
+    card_params.push(card_param(
+        "cam_fov", "Camera FOV", 20.0 * DEG2RAD, 120.0 * DEG2RAD, 0.9, true,
+    )); // angle (radians)
     card_bindings.push(card_binding(
-        "cam_fov", "Camera FOV", 0.9 / DEG2RAD, "camera", "fov_y", DEG2RAD,
+        "cam_fov", "Camera FOV", 0.9, "camera", "fov_y", 1.0,
     ));
 
     card_params.push(card_param("sun_int", "Sun Intensity", 0.0, 10.0, 3.5, false));
@@ -802,11 +811,18 @@ mod tests {
         for id in ["cam_orbit", "cam_dist", "sun_int", "env_bright", "metal_0", "rough_1"] {
             assert!(meta.params.iter().any(|p| p.id == id), "missing card param `{id}`");
         }
-        // Camera angle sliders convert degrees→radians at the write boundary.
+        // Camera angle sliders store radians (app-wide `is_angle` convention),
+        // so the binding is a pass-through — no unit fold at the write boundary.
+        let orbit_param = meta.params.iter().find(|p| p.id == "cam_orbit").unwrap();
+        assert!(orbit_param.is_angle, "camera orbit slider is an angle param");
+        assert!(
+            (orbit_param.default_value - 0.7).abs() < 1e-6,
+            "camera orbit default is stored in radians"
+        );
         let orbit = meta.bindings.iter().find(|b| b.id == "cam_orbit").unwrap();
         assert!(
-            (orbit.scale - std::f32::consts::PI / 180.0).abs() < 1e-6,
-            "camera angle bindings fold DEG2RAD into `scale`"
+            (orbit.scale - 1.0).abs() < 1e-6,
+            "camera angle bindings pass radians straight through"
         );
     }
 
