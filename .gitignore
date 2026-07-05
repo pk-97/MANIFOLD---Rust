@@ -33,3 +33,8 @@ __pycache__/
 # reads these, confirms/overrides against transcripts, folds verdicts into
 # live_grades.jsonl, then clears them (RUNBOOK steps 2 + 8).
 .claude/daemon/eval/live_grades.session*.jsonl
+# Retrospective end-of-session review findings (miss-candidates, notes) —
+# never a second grade line for an already-graded fire. Same lifecycle as
+# the session grade files above: sleep pass folds them in, then clears them
+# (RUNBOOK steps 2/3 + 8).
+.claude/daemon/eval/observations.session.jsonl

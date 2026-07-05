@@ -17,6 +17,7 @@ DAEMON_DIR = os.path.dirname(os.path.abspath(__file__))
 VERDICTS_DIR = os.path.join(DAEMON_DIR, "verdicts")
 MOVES_PATH = os.path.join(DAEMON_DIR, "moves.md")
 TELEMETRY_PATH = os.path.join(DAEMON_DIR, "telemetry.jsonl")
+EVAL_DIR = os.path.join(DAEMON_DIR, "eval")
 WORKER_NUDGES_FLAG = os.path.join(VERDICTS_DIR, "worker-nudges.enabled")
 
 VERDICT_MAX_AGE = 300  # 5 min — DESIGN.md invariant 1: a stale verdict is treated as absent
@@ -121,6 +122,12 @@ def build_block(flag):
         import common
 
         habit_note = f"\n\n({common.ordinal(weekly_count)} fire of this move across sessions this week.)"
+    # 2026-07-05 addressability fix: 55/74 self-graded records carried
+    # seq:null because this sentence never told the session its own fire's
+    # seq — the sleep pass then can't join the grade back to the exact fire
+    # it was for. Only the numeral varies (habit-memory ordinal precedent);
+    # everything else in this sentence is frozen, same invariant.
+    seq = flag.get("seq")
     return (
         f'<daemon move="{move_id}">\n'
         f"{payload}"
@@ -129,11 +136,11 @@ def build_block(flag):
         f"(Supervised mode: briefly acknowledge this note out loud in your next "
         f'message — one sentence, e.g. "daemon nudged me about {move_id} — '
         f'checking" — so Peter can judge whether the nudge was right. Before the '
-        f"session ends, also append one self-grade line per fire to "
-        f".claude/daemon/eval/live_grades.session.jsonl (gitignored, so it "
-        f"never dirties the shared tree) — format in RUNBOOK.md step 2, "
-        f'with "grader": "session"; the sleep pass reads these as provisional '
-        f"and may override.)\n"
+        f"session ends, also append one self-grade line per fire (this fire: "
+        f"seq {seq}) to .claude/daemon/eval/live_grades.session.jsonl "
+        f"(gitignored, so it never dirties the shared tree) — format in "
+        f'RUNBOOK.md step 2, with "grader": "session" and "seq": {seq}; the '
+        f"sleep pass reads these as provisional and may override.)\n"
         f"</daemon>"
     )
 

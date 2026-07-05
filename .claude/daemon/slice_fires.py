@@ -74,14 +74,73 @@ def load_fires():
     return fires, skipped
 
 
+# 2026-07-05 addressability fix: sessions self-graded with stray vocabulary
+# (TP/FP, y/n) because RUNBOOK's format description used those words as
+# examples and they leaked into the actual corpus. Normalize only what's
+# named here — anything else (already-bool, "miss", "unclear", or an
+# unrecognized string like "hit"/"n/a") passes through untouched rather than
+# guessing meaning nobody defined.
+_TRUE_SYNONYMS = {"tp", "true", "y"}
+_FALSE_SYNONYMS = {"fp", "false", "n"}
+
+
+def _normalize_grade_field(value):
+    """Fold TP/true/y -> True and FP/false/n -> False (case-insensitive).
+    Returns (value, changed)."""
+    if isinstance(value, str):
+        low = value.strip().lower()
+        if low in _TRUE_SYNONYMS:
+            return True, True
+        if low in _FALSE_SYNONYMS:
+            return False, True
+    return value, False
+
+
 def load_grades():
-    """(session_id, seq) -> list of grade records, from all live_grades files."""
-    grades = {}
+    """Split every grade record (from all live_grades*.jsonl files) into the
+    two join targets the addressability fix needs: `by_seq` for records that
+    carry the fire's own seq (the exact join), `by_move_null` for records
+    that don't — keyed on (session_id, move_id), the fallback join, safe only
+    when that move fired exactly once in the session (see `join_grades`).
+    correct/effective are normalized in place via `_normalize_grade_field`.
+
+    Returns (by_seq, by_move_null, normalized_count, total_count) — both
+    counts are printed by main(), never silently dropped."""
+    by_seq, by_move_null = {}, {}
+    normalized = total = 0
     for path in sorted((DAEMON_DIR / "eval").glob("live_grades*.jsonl")):
         for rec in load_jsonl(path):
-            key = (rec.get("session_id"), rec.get("seq"))
-            grades.setdefault(key, []).append(rec)
-    return grades
+            total += 1
+            for field in ("correct", "effective"):
+                if field in rec:
+                    new, changed = _normalize_grade_field(rec[field])
+                    rec[field] = new
+                    if changed:
+                        normalized += 1
+            sid, seq, move = rec.get("session_id"), rec.get("seq"), rec.get("move_id")
+            if seq is not None:
+                by_seq.setdefault((sid, seq), []).append(rec)
+            else:
+                by_move_null.setdefault((sid, move), []).append(rec)
+    return by_seq, by_move_null, normalized, total
+
+
+def join_grades(sid, seq, move, by_seq, by_move_null, move_counts):
+    """Attach grade records to one fire: exact (session_id, seq) match first;
+    else the (session_id, move_id) fallback for seq:null records, flagged
+    AMBIGUOUS when that move fired more than once in the session
+    (`move_counts`, built from the real telemetry fires, not the grades) —
+    nothing else distinguishes which fallback grade belongs to which firing.
+    Returns (grade_records, ambiguous_bool)."""
+    exact = by_seq.get((sid, seq), [])
+    if exact:
+        return exact, False
+    if not move:
+        return [], False
+    fallback = by_move_null.get((sid, move), [])
+    if not fallback:
+        return [], False
+    return fallback, move_counts.get((sid, move), 0) > 1
 
 
 def load_scored():
@@ -214,28 +273,32 @@ def main():
     args = ap.parse_args()
 
     fires, skipped_test = load_fires()
-    grades, scored = load_grades(), load_scored()
+    by_seq, by_move_null, normalized_count, total_grades = load_grades()
+    scored = load_scored()
     SLICES_DIR.mkdir(parents=True, exist_ok=True)
     for old in SLICES_DIR.glob("*.md"):
         old.unlink()
 
-    index, cache = [], {}
-    for n, fire in enumerate(fires, 1):
+    # Pass 1: resolve each fire's move_id (transcript block / mailbox /
+    # observer log, same fallback chain as before) and count real fires per
+    # (session_id, move_id) — the ambiguity criterion `join_grades` needs for
+    # the seq:null fallback join (2026-07-05 addressability fix).
+    cache, resolved, move_counts = {}, [], {}
+    for fire in fires:
         sid, seq, aid = fire["session_id"], fire.get("seq"), fire.get("agent_id")
         if aid:
             transcript = PROJECT_DIR / sid / "subagents" / f"agent-{aid}.jsonl"
         else:
             transcript = PROJECT_DIR / f"{sid}.jsonl"
-        when = datetime.fromtimestamp(fire["ts"], tz=timezone.utc).strftime("%m-%d %H:%M")
         if not transcript.exists():
-            index.append((n, sid, seq, "?", when, "TRANSCRIPT MISSING", None))
+            resolved.append(None)
             continue
         ckey = (sid, aid)
         if ckey not in cache:
             cache[ckey] = render_events(transcript)
         lines, how, move = slice_for_fire(cache[ckey], fire, args.before, args.after)
         if lines is None:
-            index.append((n, sid, seq, "?", when, how, None))
+            resolved.append((None, how, None, None))
             continue
         evidence = None
         if move is None:
@@ -246,9 +309,26 @@ def main():
             move = move_from_log(load_log_fires(sid), fire["ts"])
             if move:
                 how += "+move-from-observer-log"
+        resolved.append((lines, how, move, evidence))
+        if move:
+            move_counts[(sid, move)] = move_counts.get((sid, move), 0) + 1
+
+    index, ambiguous_count = [], 0
+    for n, (fire, res) in enumerate(zip(fires, resolved), 1):
+        sid, seq, aid = fire["session_id"], fire.get("seq"), fire.get("agent_id")
+        when = datetime.fromtimestamp(fire["ts"], tz=timezone.utc).strftime("%m-%d %H:%M")
+        if res is None:
+            index.append((n, sid, seq, "?", when, "TRANSCRIPT MISSING", None))
+            continue
+        lines, how, move, evidence = res
+        if lines is None:
+            index.append((n, sid, seq, "?", when, how, None))
+            continue
 
         srec = scored.get((sid, seq))
-        grecs = grades.get((sid, seq), [])
+        grecs, ambiguous = join_grades(sid, seq, move, by_seq, by_move_null, move_counts)
+        if ambiguous:
+            ambiguous_count += len(grecs)
         who = f"worker-{aid[:6]}" if aid else "main"
         name = f"{n:02d}_{sid[:8]}_{who}_seq{seq}_{(move or 'unknown').replace('/', '-')}.md"
         header = [
@@ -259,8 +339,9 @@ def main():
         if evidence:
             header.append(f"- classifier evidence: {clip(evidence, 300)}")
         for g in grecs:
+            tag = "AMBIGUOUS fallback (no seq, move fired >1x this session) — " if ambiguous else ""
             header.append(
-                f"- prior grade ({g.get('grader') or 'pass'}): correct={g.get('correct')} "
+                f"- prior grade ({g.get('grader') or 'pass'}): {tag}correct={g.get('correct')} "
                 f"effective={g.get('effective')} — {clip(g.get('notes', ''), 200)}"
             )
         (SLICES_DIR / name).write_text("\n".join(header) + "\n\n```\n" + "\n\n".join(lines) + "\n```\n")
@@ -270,6 +351,12 @@ def main():
         "# Fire slices — sleep-pass grading input",
         f"{len(fires)} live fires ({skipped_test} test-fixture records skipped). "
         f"Grades already attached where they exist.",
+        f"Grade vocab normalized: {normalized_count} field value(s) across {total_grades} "
+        f"grade records (TP/true/y -> true, FP/false/n -> false; everything else "
+        f"passes through unchanged).",
+        f"Ambiguous seq:null fallback grades: {ambiguous_count} (move fired more than "
+        f"once in the session — joining by move_id alone couldn't tell them apart; "
+        f"see the AMBIGUOUS tags above).",
         "",
     ]
     for n, sid, seq, move, when, how, name in index:
@@ -277,6 +364,10 @@ def main():
         idx_lines.append(f"- {n:02d} · {when} · `{sid[:8]}` seq {seq} · {move} · {target}")
     (SLICES_DIR / "index.md").write_text("\n".join(idx_lines) + "\n")
     print(f"{len([i for i in index if i[6]])}/{len(fires)} fires sliced -> {SLICES_DIR}")
+    print(
+        f"grade normalization: {normalized_count}/{total_grades} field values folded; "
+        f"{ambiguous_count} ambiguous fallback grades — never silently shrunk, see index.md"
+    )
     unmatched = [i for i in index if not i[6] or "UNMATCHED" in i[5]]
     if unmatched:
         print(f"{len(unmatched)} need attention (missing transcript / unmatched anchor) — see index.md")
