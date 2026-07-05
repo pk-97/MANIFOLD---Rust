@@ -210,6 +210,14 @@ pub struct Application {
     // Effect clipboard (Unity: static EffectClipboard singleton, Rust: instance)
     pub(crate) effect_clipboard: manifold_editing::clipboard::EffectClipboard,
 
+    /// D4 (docs/TIMELINE_INGEST_DESIGN.md): the general pasteboard's
+    /// `changeCount` at the moment the app last copied clips internally.
+    /// `None` until the first internal copy — the D4 arbitration treats
+    /// that the same as "internal clipboard empty" (Finder file always
+    /// wins over a clipboard that was never populated).
+    #[cfg(target_os = "macos")]
+    pub(crate) internal_clipboard_change_count: Option<i64>,
+
     // Rendering
     /// Shared reference to the content pipeline's output dimensions.
     pub(crate) content_pipeline_output: Option<Arc<crate::content_pipeline::SharedOutputView>>,
@@ -580,6 +588,8 @@ impl Application {
             mapping_affine_snapshot: None,
             active_inspector_drag: None,
             effect_clipboard: manifold_editing::clipboard::EffectClipboard::new(),
+            #[cfg(target_os = "macos")]
+            internal_clipboard_change_count: None,
             content_pipeline_output: None,
             last_preview_node: None,
             #[cfg(target_os = "macos")]

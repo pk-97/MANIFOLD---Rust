@@ -37,6 +37,16 @@ pub struct AppInputHost<'a> {
     pub pending_close_output: &'a mut bool,
     pub pending_export: &'a mut bool,
     pub effect_clipboard: &'a mut manifold_editing::clipboard::EffectClipboard,
+    /// D5 (docs/TIMELINE_INGEST_DESIGN.md): Finder-pasted files route through
+    /// the same ingest path a Finder drag-drop uses.
+    pub project_io: &'a mut crate::project_io::ProjectIOService,
+    /// D4: the general pasteboard's changeCount snapshotted at the last
+    /// internal clip copy. Read/written only on macOS — the underlying
+    /// AppKit pasteboard type doesn't exist elsewhere, and the arbitration
+    /// always keeps the internal path on other platforms (see
+    /// `pasteboard_change_count`).
+    #[cfg(target_os = "macos")]
+    pub internal_clipboard_change_count: &'a mut Option<i64>,
 }
 
 impl TimelineInputHost for AppInputHost<'_> {
@@ -496,6 +506,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 region,
             },
         );
+        self.snapshot_pasteboard_change_count();
     }
 
     fn cut_clips(&mut self, clip_ids: &[ClipId], has_region: bool) {
@@ -535,6 +546,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             );
         }
         self.selection.clear_selection();
+        self.snapshot_pasteboard_change_count();
     }
 
     fn paste_clips(&mut self, target_beat: f32, target_layer: i32) {
@@ -1566,6 +1578,98 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn automation_mode_visible(&self) -> bool {
         self.selection.automation_mode_visible
+    }
+
+    // ── D4/D5 Finder-paste arbitration (docs/TIMELINE_INGEST_DESIGN.md §2) ──
+
+    fn pasteboard_file_urls(&self) -> Vec<std::path::PathBuf> {
+        #[cfg(target_os = "macos")]
+        {
+            crate::macos_pasteboard::file_urls_on_general_pasteboard()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Vec::new()
+        }
+    }
+
+    fn pasteboard_change_count(&self) -> i64 {
+        #[cfg(target_os = "macos")]
+        {
+            crate::macos_pasteboard::general_change_count()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            0
+        }
+    }
+
+    fn internal_clipboard_snapshot(&self) -> Option<i64> {
+        #[cfg(target_os = "macos")]
+        {
+            *self.internal_clipboard_change_count
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+    }
+
+    fn paste_pasteboard_files(&mut self, file_paths: &[std::path::PathBuf], target_beat: f32) {
+        // D5: same target resolution as a Finder drag-drop onto the active
+        // lane (app.rs's DroppedFile arm) — the active layer if it exists,
+        // joined only when it's audio; never auto-creates a typed lane
+        // beyond what `process_dropped_files` already does for drops.
+        let drop_layer_index = self
+            .active_layer
+            .as_ref()
+            .and_then(|id| self.project.timeline.find_layer_index_by_id(id))
+            .unwrap_or(0) as i32;
+        let join_audio_layer = self.active_layer.as_ref().and_then(|id| {
+            self.project
+                .timeline
+                .layers
+                .iter()
+                .find(|l| l.layer_id == *id && l.is_audio())
+                .map(|l| l.layer_id.clone())
+        });
+        let spb = 60.0 / self.project.settings.bpm.0.max(1.0);
+        let action = self.project_io.process_dropped_files(
+            file_paths,
+            target_beat,
+            drop_layer_index,
+            join_audio_layer,
+            self.project,
+            spb,
+        );
+        if action.needs_clip_sync {
+            *self.needs_rebuild = true;
+        }
+        if !action.record_commands.is_empty() {
+            if action.record_commands.len() == 1 {
+                let cmd = action.record_commands.into_iter().next().unwrap();
+                ContentCommand::send(self.content_tx, ContentCommand::Execute(cmd));
+            } else {
+                ContentCommand::send(
+                    self.content_tx,
+                    ContentCommand::ExecuteBatch(action.record_commands, "Paste files".into()),
+                );
+            }
+        }
+    }
+}
+
+impl AppInputHost<'_> {
+    /// D4: record the general pasteboard's current changeCount as the
+    /// baseline for "how recent is the internal clipboard". Called after
+    /// every internal copy/cut — never after paste, which doesn't change
+    /// what the internal clipboard holds.
+    fn snapshot_pasteboard_change_count(&mut self) {
+        #[cfg(target_os = "macos")]
+        {
+            *self.internal_clipboard_change_count =
+                Some(crate::macos_pasteboard::general_change_count());
+        }
     }
 }
 
