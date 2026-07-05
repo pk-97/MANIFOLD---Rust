@@ -21,4 +21,5 @@
 mod harness;
 
 mod alpha_contract;
+mod fragment_storage;
 mod smoke;

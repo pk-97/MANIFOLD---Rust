@@ -31,7 +31,7 @@ sun/point derivation, material response) is untouched.
 | Shader `Uniforms.lights: array<vec4<f32>, 8>`; three fragment loops `u.lights[i*2u]`, count from `u.scene_params.x` | [render_scene.wgsl:86](../crates/manifold-renderer/src/node_graph/primitives/shaders/render_scene.wgsl#L86), :183, :229, :285 | array moves to `@binding(8) var<storage, read>`; loops repoint; count source unchanged |
 | Vertex-stage storage buffer already shipping in this pipeline | render_scene.wgsl:87 (`@binding(1) var<storage, read> verts`) | proof the render pipeline handles `var<storage>` in the VERTEX stage |
 | `GpuBinding::Bytes` on render pipelines → `setVertexBytes` + `setFragmentBytes`, slot-map indexed, missing slot skipped (`continue`) | [encoder.rs:1223-1240](../crates/manifold-gpu/src/metal/encoder.rs#L1223-L1240) | the binding mechanism; stripped-binding safe |
-| Fragment-stage `var<storage, read>` precedent | — | **NONE SHIPS.** `blob_overlay_render.wgsl`'s storage array is a `@compute` kernel; no fragment entry point in the repo reads a storage buffer. This is the design's single unproven mechanic — see D7. |
+| Fragment-stage `var<storage, read>` precedent | [tests/gpu_proofs/fragment_storage.rs](../crates/manifold-renderer/tests/gpu_proofs/fragment_storage.rs) | **PROVEN 2026-07-06** (was: none shipped — `blob_overlay_render.wgsl`'s storage array is a `@compute` kernel). Isolated proof: uniform@0 + `var<storage>`@8, both `Bytes`-backed, read per-pixel from a fragment entry point, byte-correct through SPIRV-Cross → MSL. See D7. |
 | Objects generalization (the sibling change) | shipped on main (feat/render-scene-generalize) | the Rust-side template for every naming/cap change here |
 
 Extend, don't redesign: every change above is the objects change replayed on the
@@ -66,18 +66,16 @@ lights axis, plus one new GPU binding.
   one loop below it. Serialized wire names are unchanged (`light_0`… already), so
   **no project migration**: old projects load as-is, their `lights` value (≤4) is
   inside the new range.
-- **D7 — The unproven mechanic is named, probed first, and escalates on failure.**
-  No fragment entry point in this repo has ever read a `var<storage>` buffer through
-  the SPIRV-Cross → MSL render path (the audit's precedent claim died on
-  verification — the nearest candidate is a compute kernel). The encoder side is
-  proven (Bytes → `setFragmentBytes` + slot map, encoder.rs:1223-1240); the
-  shader-compiler/reflection side is not. ⚠ VERIFY-AT-IMPL: the FIRST action of the
-  phase is the shader+binding change compiled and run through the render_scene GPU
-  parity test — pixel-identical output for ≤4 lights proves the mechanic end to end.
-  If output goes black/garbage or pipeline reflection fails: **stop and escalate to
-  Peter** with the priced fallback (grow the fixed uniform array 4 → 64: zero
-  unproven mechanics, but re-bakes a hard cap and +2KB uniform per draw). Do not
-  ship the fallback silently.
+- **D7 — The once-unproven mechanic is now PROVEN in isolation (2026-07-06).**
+  At design time no fragment entry point in the repo had ever read a `var<storage>`
+  buffer through the SPIRV-Cross → MSL render path. The isolated proof now ships:
+  `gpu_proofs::fragment_storage::fragment_reads_storage_buffer_via_bytes_binding` —
+  uniform@0 + storage@8, both `GpuBinding::Bytes`, fragment-read, byte-correct
+  (run: `cargo test -p manifold-renderer --features gpu-proofs --test gpu_proofs
+  fragment_storage`). The phase still runs the render_scene ≤4-light pixel-parity
+  gate FIRST — no longer as a mechanic probe, but as the refactor-correctness proof.
+  A parity failure now indicts the render_scene change itself, not the platform:
+  debug the change; the uniform-array-64 fallback is dead and must not be reached for.
 
 ## 3. Design body
 
