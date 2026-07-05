@@ -673,12 +673,19 @@ fn compute_audio_row(
 #[derive(Clone, Copy)]
 struct LayerRowIds {
     id: [Option<NodeId>; N_CONTROLS],
+    /// The per-row `ClipRegion` node (subregion-scissor-invariant, D4) that
+    /// every control in this row is parented under. Stored so the in-place
+    /// vertical-scroll fast-path (`try_update_vertical_scroll`) can shift the
+    /// clip rect in lockstep with the controls — without it, the controls
+    /// slide out from under a stationary clip and get cut/greyed mid-scroll.
+    clip: Option<NodeId>,
 }
 
 impl Default for LayerRowIds {
     fn default() -> Self {
         Self {
             id: [None; N_CONTROLS],
+            clip: None,
         }
     }
 }
@@ -1506,6 +1513,7 @@ impl LayerHeaderPanel {
             None,
             UIFlags::VISIBLE | UIFlags::CLIPS_CHILDREN,
         );
+        ids.clip = Some(row_clip);
         let clip_parent = Some(row_clip);
 
         // One build arm per control kind, shared by every layer type. Walk the
@@ -2075,11 +2083,21 @@ impl LayerHeaderPanel {
             return true;
         }
 
-        // Update all node positions (and their children) by delta_y
+        // Update all node positions (and their children) by delta_y. Each
+        // row's clip rect (`row.clip`) moves with its controls — it is a
+        // sibling-of-content anchor, not a parent whose offset cascades here,
+        // so it needs its own self-only shift (mirrors the insert-indicator
+        // shift below). Missing this is what let controls scroll out from
+        // under a stationary clip and render greyed/cut (BUG-025).
         for row in &self.rows {
             row.for_each_id(|id| {
                 tree.offset_node_and_children(id, delta_y);
             });
+            if let Some(clip_id) = row.clip {
+                let mut bounds = tree.get_bounds(clip_id);
+                bounds.y += delta_y;
+                tree.set_bounds(clip_id, bounds);
+            }
         }
 
         // Also shift insert indicator
@@ -2486,6 +2504,37 @@ mod tests {
         assert_eq!(panel.rows[2].id(LayerControl::AddGenClip), None);
         // Insert indicator
         assert!(panel.insert_indicator_id.is_some());
+    }
+
+    /// BUG-025 regression: the in-place vertical-scroll fast-path must shift
+    /// each row's clip rect in lockstep with its controls. Before the fix the
+    /// clip stayed put while the controls moved, so controls slid out from
+    /// under a stationary clip and rendered greyed/cut mid-scroll.
+    #[test]
+    fn in_place_scroll_moves_row_clip_with_its_controls() {
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 2160.0);
+        let mut panel = LayerHeaderPanel::new();
+        let layers = vec![make_video_layer("Layer 1"), make_video_layer("Layer 2")];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
+
+        let clip0 = panel.rows[0].clip.expect("row 0 has a clip node");
+        let mute0 = panel.rows[0].id(LayerControl::Mute).expect("row 0 has a mute control");
+        let clip_y0 = tree.get_bounds(clip0).y;
+        let mute_y0 = tree.get_bounds(mute0).y;
+
+        // Scroll down 50px; in-place path shifts everything by -50.
+        assert!(panel.try_update_vertical_scroll(&mut tree, &layout, 50.0));
+
+        let clip_dy = tree.get_bounds(clip0).y - clip_y0;
+        let mute_dy = tree.get_bounds(mute0).y - mute_y0;
+        assert!((mute_dy - -50.0).abs() < 0.01, "control shifted by {mute_dy}, expected -50");
+        assert!(
+            (clip_dy - mute_dy).abs() < 0.01,
+            "clip shifted by {clip_dy} but its controls by {mute_dy} — clip must track content"
+        );
     }
 
     #[test]
