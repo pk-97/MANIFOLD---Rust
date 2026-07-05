@@ -48,6 +48,17 @@ sys.path.insert(0, DAEMON_DIR)
 
 STOPBLOCK_MAX_AGE = 24 * 60 * 60  # sentinels older than a day are stale, sweep them
 
+# Grade-backstop (2026-07-05 review): self-grades can't be joined to fires
+# when sessions never write them at all. Deterministic, mirrors the
+# announced-not-started check below — main-session only, fires at most ONCE
+# per session (its own sentinel, not the per-turn stopblock, since nagging
+# every turn until the backlog clears would defeat "before the session
+# ends"). No moves.md entry: this is valve plumbing, not a drift move, so
+# the reminder text is authored directly here.
+GRADEABLE_MOVE_PREFIXES = ("anchor/", "coaching/", "escalate/")
+GRADE_BACKSTOP_STALE_EVENTS = 40  # matches §2d's oscillation-span convention
+GRADE_BACKSTOP_MOVE_ID = "mechanical/grade-backstop"
+
 # Conservative imminent-action triggers (moves.md mechanical/announced-not-started).
 # Matched against the LAST sentence of the last assistant text only. A
 # trailing "?" always disqualifies first — a question to the user is never
@@ -133,6 +144,114 @@ def _sweep_stale_sentinels(verdicts_dir):
                 pass
     except OSError:
         pass
+
+
+def _session_gradeable_fires(telemetry_path, session_id):
+    """(seq, move_id, ts) for every gradeable (anchor/coaching/escalate) fire
+    delivered to THIS session's own mailbox (never a worker's — same
+    session-only scope as §4b's scoring), oldest first. Reads telemetry.jsonl
+    directly rather than needing a new field; never raises."""
+    fires = []
+    try:
+        with open(telemetry_path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("event") != "injected" or rec.get("agent_id"):
+                    continue
+                if rec.get("session_id") != session_id:
+                    continue
+                move_id = rec.get("move_id") or ""
+                if not move_id.startswith(GRADEABLE_MOVE_PREFIXES):
+                    continue
+                if rec.get("seq") is None:
+                    continue
+                fires.append((rec["seq"], move_id, rec.get("ts")))
+    except OSError:
+        return []
+    fires.sort(key=lambda t: t[0])
+    return fires
+
+
+def _session_grade_count(eval_dir, session_id):
+    """How many grade lines (any file matching live_grades*.jsonl) this
+    session has already written — a coarse backstop count, not the precise
+    per-fire join slice_fires.py does for the sleep pass."""
+    import glob
+
+    count = 0
+    for path in glob.glob(os.path.join(eval_dir, "live_grades*.jsonl")):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if rec.get("session_id") == session_id:
+                        count += 1
+        except OSError:
+            continue
+    return count
+
+
+def _events_since(transcript_path, since_ts):
+    """Count tool_result blocks (the same 'event' unit common.py's
+    WindowState counts — one completed tool call) whose containing message
+    postdates `since_ts`. Reads the transcript directly so this needs no new
+    telemetry field."""
+    if since_ts is None:
+        return 0
+    import common
+
+    count = 0
+    try:
+        with open(transcript_path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if d.get("type") != "user":
+                    continue
+                ts = common.parse_ts(d.get("timestamp"))
+                if ts is not None and ts <= since_ts:
+                    continue
+                content = (d.get("message") or {}).get("content")
+                if not isinstance(content, list):
+                    continue
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        count += 1
+    except OSError:
+        return count
+    return count
+
+
+def _grade_backstop_reason(ungraded_count, oldest_events_ago):
+    return (
+        f'<daemon move="{GRADE_BACKSTOP_MOVE_ID}">\n'
+        f"This session delivered {ungraded_count} gradeable daemon fire(s) "
+        f"(anchor/coaching/escalate) with no self-grade recorded yet, and the "
+        f"oldest is {oldest_events_ago} tool events old. Before the session "
+        f"ends, append one self-grade line per ungraded fire to "
+        f".claude/daemon/eval/live_grades.session.jsonl — canonical "
+        f"correct/effective values and format in RUNBOOK.md step 2, and "
+        f'include each fire\'s own "seq" so the sleep pass can join the grade '
+        f"back to the exact fire it belongs to.\n"
+        f"</daemon>"
+    )
 
 
 def main():
@@ -246,6 +365,38 @@ def main():
             if not reason:
                 return
             _block(reason, {"move_id": "mechanical/announced-not-started"})
+            return
+
+        # 3. Grade-backstop (2026-07-05 review). Main-session only, fires at
+        # most once per session (its own sentinel below, distinct from the
+        # per-turn stopblock).
+        if agent_id:
+            return
+        backstop_sentinel = os.path.join(valve.VERDICTS_DIR, f"{session_id}.grade-backstop-fired")
+        if os.path.exists(backstop_sentinel):
+            return
+        fires = _session_gradeable_fires(valve.TELEMETRY_PATH, session_id)
+        if not fires:
+            return
+        graded = _session_grade_count(valve.EVAL_DIR, session_id)
+        if len(fires) <= graded:
+            return
+        events_ago = _events_since(transcript_path, fires[0][2])
+        if events_ago <= GRADE_BACKSTOP_STALE_EVENTS:
+            return
+        try:
+            os.makedirs(valve.VERDICTS_DIR, exist_ok=True)
+            open(backstop_sentinel, "w").close()
+        except OSError:
+            pass
+        _block(
+            _grade_backstop_reason(len(fires) - graded, events_ago),
+            {
+                "move_id": GRADE_BACKSTOP_MOVE_ID,
+                "ungraded_count": len(fires) - graded,
+                "oldest_events_ago": events_ago,
+            },
+        )
     except Exception:
         return
 

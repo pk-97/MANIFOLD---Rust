@@ -14,6 +14,9 @@ grades and changes nothing is a valid pass; bias toward silence.
 - provisional session self-grades: `.claude/daemon/eval/live_grades.session*.jsonl`
   (gitignored, `grader:session`; a session appends its own fires here so the tracked
   corpus never goes dirty mid-session — see step 2)
+- retrospective session findings: `.claude/daemon/eval/observations.session.jsonl`
+  (gitignored; a miss noticed on end-of-session review, or a note that doesn't fit
+  a fire — never a second grade line for an already-graded fire — see step 2/3)
 
 ## Procedure
 
@@ -24,31 +27,53 @@ grades and changes nothing is a valid pass; bias toward silence.
    authoritative.
 2. **Grade each injection.** Read the transcript around it (the window before,
    ~40 events after). Two labels, human-judgment level, mechanical score is
-   input not verdict: `correct` (did the named drift actually exist? TP/FP)
-   and `effective` (did behavior change in the direction the payload asks?
-   y/n/unclear). Append to `eval/live_grades.jsonl`:
+   input not verdict: `correct` — did the named drift actually exist? Canonical
+   values ONLY: `true`, `false`, or `"miss"` (step 3) — never free-text like
+   `"TP"`/`"FP"`/`"y"`/`"n"`. `effective` — did behavior change in the direction
+   the payload asks? Canonical values ONLY: `true`, `false`, or `"unclear"`.
+   Append to `eval/live_grades.jsonl`:
    `{ts, session_id, seq, move_id, correct, effective, ordinal, notes}` —
    plus `agent_id` when the fire was a worker nudge: (session_id, seq) alone
    collides across workers (pass-1 lesson: colliding grades attached to the
    wrong fires and cost real attribution work).
    Sessions self-grade at fire time since 2026-07-04 (records with
-   `"grader": "session"`, prompted by the supervised-mode sentence). Since
-   2026-07-05 those land in `eval/live_grades.session*.jsonl` (gitignored),
-   not the tracked corpus — read every session file for them. Advice-kind
-   fires (`<daemon-advice>` blocks, DESIGN §2e) carry no ack and no session
-   self-grade BY DESIGN — grade them pass-level only, on whether the
-   session's downstream behavior shows the payload's patterns, and expect
-   `effective: unclear` to be common rather than a defect. Treat them as
-   provisional input, not verdicts — confirm or override each with your own
-   transcript read; on disagreement write a pass-graded record for the same
-   (session_id, seq) into `live_grades.jsonl` rather than editing the
-   session's line.
+   `"grader": "session"`, prompted by the supervised-mode sentence, which since
+   2026-07-05 names the fire's own `seq` directly in the sentence — `"seq"` is
+   REQUIRED on every session-graded record; a record without one can only be
+   joined by move_id, and reads as AMBIGUOUS whenever that move fired more than
+   once in the session). Since 2026-07-05 those land in
+   `eval/live_grades.session*.jsonl` (gitignored), not the tracked corpus —
+   read every session file for them. `slice_fires.py`'s reader
+   (`load_grades`/`join_grades`) normalizes stray vocabulary onto the canonical
+   values (`TP`/`true`/`y` → `true`, `FP`/`false`/`n` → `false`; anything else
+   passes through untouched rather than guessing) and joins by
+   (session_id, seq) when seq is present, falling back to (session_id, move_id)
+   — flagged AMBIGUOUS — only when seq is missing; it prints the
+   normalization/ambiguity counts before you trust the joined corpus, and never
+   silently drops a record. Advice-kind fires (`<daemon-advice>` blocks, DESIGN
+   §2e) carry no ack and no session self-grade BY DESIGN — grade them
+   pass-level only, on whether the session's downstream behavior shows the
+   payload's patterns, and expect `effective: unclear` to be common rather than
+   a defect. Treat session self-grades as provisional input, not verdicts —
+   confirm or override each with your own transcript read; on disagreement
+   write a pass-graded record for the same (session_id, seq) into
+   `live_grades.jsonl` rather than editing the session's line. End-of-session
+   retrospective findings (a miss noticed on review, a note that doesn't fit a
+   fire) are NOT a second grade line for an already-graded fire — they go to
+   `eval/observations.session.jsonl` instead
+   (`{ts, session_id, kind: "miss-candidate"|"note", move_id or expect_family,
+   evidence, note}`); step 3 folds these in alongside Peter's corrections.
 3. **Count misses.** Recall can't be read off telemetry. Scan the graded
    week's human messages for correction-shaped turns (the user catching
-   drift the daemon didn't flag); each is a FN with a timestamp. Ask Peter
+   drift the daemon didn't flag); each is a FN with a timestamp. Read every
+   `eval/observations.session.jsonl` `"miss-candidate"` record from the graded
+   window alongside these — sessions log a miss there the moment they notice
+   one on end-of-session review, rather than waiting for the pass. Ask Peter
    for ones that never hit the transcript. Log FNs in live_grades with
    `correct: "miss"` and which move SHOULD have fired (or `family: null` —
-   those are new-move candidates).
+   those are new-move candidates). Once folded in, delete the consumed
+   `observations.session.jsonl` records the same way step 8 clears session
+   grade files.
 4. **Score the gates** (DESIGN §4): precision = TP/(TP+FP) over graded fires;
    noise = FP per clean session; recall = TP/(TP+FN). State them with the n.
    With n < 10, write "insufficient data", don't tune wording from it.
@@ -69,7 +94,8 @@ grades and changes nothing is a valid pass; bias toward silence.
    this file if procedure changed) with a `daemon: sleep pass N` message
    listing gates + actions. Once the session grades are folded into
    `live_grades.jsonl`, delete the consumed `eval/live_grades.session*.jsonl`
-   files (gitignored, so nothing to commit) so they don't re-grade next pass.
+   and `eval/observations.session.jsonl` records (gitignored, so nothing to
+   commit) so they don't re-grade / re-surface next pass.
    SIGTERM all `verdicts/*.pid` so daemons reload. Update the `daemon` memory
    (gates, catalog count, open decisions).
 

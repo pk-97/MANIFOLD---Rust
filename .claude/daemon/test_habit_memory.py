@@ -153,6 +153,23 @@ def test_build_block_omits_habit_line_when_weekly_count_none():
     check("no habit line when weekly_count is None", "fire of this move across sessions this week." not in block, block)
 
 
+def test_build_block_supervised_ack_names_the_fires_own_seq():
+    # 2026-07-05 addressability fix: 55/74 self-graded records carried
+    # seq:null because this sentence never told the session its own fire's
+    # seq — the sleep pass couldn't join the grade back to the fire.
+    flag = {"move_id": "anchor/verify-claim", "confidence": 0.9, "seq": 7}
+    block = valve.build_block(flag)
+    check("ack sentence names this fire's seq", "this fire: seq 7" in block, block)
+    check('grade-line instruction includes "seq": 7 verbatim', '"seq": 7' in block, block)
+
+
+def test_build_block_supervised_ack_seq_varies_with_the_flag():
+    block5 = valve.build_block({"move_id": "anchor/verify-claim", "confidence": 0.9, "seq": 5})
+    block12 = valve.build_block({"move_id": "anchor/verify-claim", "confidence": 0.9, "seq": 12})
+    check("seq 5 fire names seq 5, not another", "this fire: seq 5" in block5 and "this fire: seq 12" not in block5, block5)
+    check("seq 12 fire names seq 12, not another", "this fire: seq 12" in block12 and "this fire: seq 5" not in block12, block12)
+
+
 def main():
     tests = [
         test_rollup_counts_scored_within_window,
@@ -163,6 +180,8 @@ def main():
         test_build_block_appends_frozen_template,
         test_build_block_omits_habit_line_when_weekly_count_absent,
         test_build_block_omits_habit_line_when_weekly_count_none,
+        test_build_block_supervised_ack_names_the_fires_own_seq,
+        test_build_block_supervised_ack_seq_varies_with_the_flag,
     ]
     for t in tests:
         t()
