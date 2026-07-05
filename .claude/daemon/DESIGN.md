@@ -261,6 +261,59 @@ shortcut-fork question with no matching keyword pair, or no `(Recommended)`
 marker at all, passes through unguarded. Whether a classifier-side move is
 worth adding for that residue is sleep-pass-1 work, noted in the label.
 
+## 2d. Phase-transition tier (SPECCED 2026-07-05, Fable, during sleep pass 1 — Sonnet builds shadow mode; pass 2 gates delivery)
+
+**Why.** Pass-1 grades: the three coaching fires of the week went 3/3 TP, but
+coaching moves almost never fire — the rubric's evidence contract (verbatim
+quote, confidence ≥0.8, observable markers only) structurally excludes
+situations whose evidence is an ABSENCE: no investigation ever happened, no
+verification ever ran. You cannot quote an absence. Meanwhile the classifier
+already emits a `phase` judgment on every window and nothing consumes the
+sequence. This tier makes that dormant stream load-bearing: deterministic
+rules over phase *transitions* fire predictively — before the damage, not
+after the artifact — and each rule carries a natural scoring oracle, which
+kills the "predictive moves are ungradeable" objection.
+
+**Mechanism.** The observer keeps a per-mailbox `phase_history` — (window
+end_event_count, phase) appended at each verdict in `_handle_window`,
+persisted in the session firestate so revives don't amnesia it. Rules run
+after each append and fire through `_resolve_fire` like every mechanical
+move: same cooldowns, same one-whisper invariant, same mailbox routing.
+Zero new classifier calls; the tier is free.
+
+**Initial rules (each a `phase/*` move — note: `validate_move_id` and the
+catalog parser must learn the new family):**
+1. `phase/implementing-without-investigating` — TASK is diagnosis-shaped
+   (cheap regex: fix|bug|broken|why|crash|wrong) AND phase enters
+   `implementing` with zero `investigating` windows since TASK was set.
+   The "building before you've looked" moment, caught before the wrong fix.
+2. `phase/no-verify-before-reporting` — phase enters `reporting` with zero
+   `verifying` windows since the last `implementing` window. Fires on the
+   transition, before the done-claim text exists (verify-claim's blind spot).
+3. `phase/stuck-oscillation` — implementing↔stuck alternates ≥3 flips inside
+   a short window span. This is coaching/differential's moment, detected
+   structurally; reuse that payload rather than authoring a new one.
+
+**Scoring oracle.** Mechanical, per fire: did the missing phase appear within
+K=6 windows after delivery? Appeared → success; never → failure; session
+ended first → unscored. Extends §4b's family table — unlike the coaching
+moves, these are NOT permanently unscored, so auto-mute and utility gating
+apply from day one.
+
+**Shadow mode first — the gate.** Ship the rules logging `phase_fire`
+telemetry WITHOUT delivering anything for the first week. Pass 2 hand-grades
+the shadow fires (they double as the payload-authoring specimens, satisfying
+the ≥1-specimen rule) and flips delivery on per-rule at ≥60% shadow
+precision. Costs nothing to run; burns no trust while untuned.
+
+**What NOT to build:** no task-state model, no goal tracking, no extra
+classifier calls — the phase stream plus a TASK-shape regex is the whole
+input. Known risks, all measured by shadow mode before delivery: phase
+labels have never been graded; cadence windows make transitions coarse; the
+TASK regex is crude. If shadow shows the phase labels themselves are noisy,
+fix the rubric's phase definitions first — do not tune rules on top of a
+broken signal.
+
 ## 3. Payload library (`moves.md`)
 
 Two families, one format. **Coaching moves** fire on phase transitions (hypothesis
