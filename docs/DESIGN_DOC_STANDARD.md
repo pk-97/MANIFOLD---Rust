@@ -182,11 +182,38 @@ brief is not executable — that's the definition.
   P1–P2 landed (2026-07-05), a phase whose surface the flow driver can reach targets
   **L3, not L2** — write a `scripts/ui-flows/` flow that drives the real input path,
   don't stop at a PNG a reviewer merely looks at.
+- **Round-trip gate (added 2026-07-06, from BUG-036).** Any phase that touches
+  serialized or persistent state gates on the ROUND TRIP, not just the create path:
+  save → reload → verify the feature still behaves (for params/bindings: modulate
+  *after* reload, not only after creation). The observed escape: the param-storage
+  wave gated on freshly-created state; every reloaded project silently dropped its
+  imported card params, and modulation died only on the reload path nobody drove.
+  Create-path green is HALF a gate for stateful features. Corollary: a loader that
+  cannot resolve data it deserialized must keep it inert-but-present or fail loudly —
+  silent dropping is the forbidden move of load paths.
+- **Content-thread work gate (added 2026-07-06, from BUG-035).** Any phase adding
+  per-frame OR periodic/debounced work to the content thread gates with a
+  `MANIFOLD_RENDER_TRACE=1` run (spike-triggered section breakdown; any frame >20ms
+  fails the gate) — measured, not argued from code. A comment or doc claiming work is
+  "off-thread" must enumerate what remains ON the thread (the observed escape claimed
+  "all disk IO is off-thread", truthfully — the 59ms f16 conversion feeding that IO
+  ran on-thread). Sibling rule: first-use of any resource on a per-frame path
+  (pipeline, mesh upload, decode) is prewarmed at load/schedule time or the phase
+  brief justifies the first-frame cost (BUG-037).
+- **Performer-gesture line (added 2026-07-06).** Every phase brief with a
+  performance-surface deliverable names ONE gesture a performer will actually try
+  with it, and the gate exercises that gesture. The observed gap: rotation params
+  shipped range-clamped — correct to every test, unusable with the first thing a VJ
+  does (saw LFO for a full spin, BUG-039). The gesture line is the phase-scale
+  version of DESIGN_AUTHORING §3's instrument test.
 - **Forbidden moves** — the specific shortcuts THIS phase invites, named. Drawn from
   the observed failure catalog: fuse-for-parity · silent fallback / parallel old path
   kept alive · TODO-as-deferral · "temporary" flags · adapters/shims around a misfit
   call site · synthesizing code from memory instead of reading it · inventing infra
-  that exists (inventory first) · widening scope to "improve" adjacent code.
+  that exists (inventory first) · widening scope to "improve" adjacent code ·
+  silently dropping unresolvable data on a load path · landing a wave with a red test
+  it caused (a red test is either fixed before landing or gets a BUG entry + explicit
+  Peter ping — "another session owns it" is not a landing state).
 - **Test scope** — which tier per the CLAUDE.md scope rule (focused vs full workspace
   sweep), stated per phase so the executor doesn't decide. Calibrate it to the failure
   class the phase can actually produce (an id rename can't change pixels → no parity
