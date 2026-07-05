@@ -110,7 +110,9 @@ pub fn scale_nodes_about(tree: &mut UITree, first_node: usize, center: (f32, f32
     let (cx, cy) = center;
     for i in first_node..tree.count() {
         let id = tree.id_at(i);
-        let b = tree.get_node(id).bounds;
+        let Some(b) = tree.get_node(id).map(|n| n.bounds) else {
+            continue;
+        };
         let new_b = Rect::new(
             cx + (b.x - cx) * scale,
             cy + (b.y - cy) * scale,
@@ -135,12 +137,12 @@ mod tests {
             &PopupStyle::MODAL,
         );
         // Scrim is full-screen + interactive (catches outside clicks).
-        let scrim = tree.get_node(shell.backdrop);
+        let scrim = tree.get_node(shell.backdrop).unwrap();
         assert_eq!(scrim.node_type, UINodeType::Button);
         assert!(scrim.flags.contains(UIFlags::INTERACTIVE));
         assert_eq!(scrim.bounds.width, 1920.0);
         // Container carries the modal palette + the popup radius.
-        let c = tree.get_node(shell.container);
+        let c = tree.get_node(shell.container).unwrap();
         assert_eq!(c.style.bg_color, crate::color::MODAL_BG);
         assert_eq!(c.style.border_color, crate::color::MODAL_BORDER);
         assert_eq!(c.style.corner_radius, crate::color::POPUP_RADIUS);

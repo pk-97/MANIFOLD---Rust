@@ -83,6 +83,14 @@ impl ToastPanel {
         // Reset so the very next `update()` ticks a small real dt, not the
         // (possibly huge) gap since the last toast.
         self.last_tick = None;
+        // Drop the previous nodes' ids: `show()` can fire in the same frame a
+        // rebuild already tore the tree down (e.g. undo → toast fires from
+        // push_state, after the rebuild ran with the toast still closed), so
+        // these ids may already be stale. `build_at` re-mints fresh ones; until
+        // then `update()`'s `Some/Some` guard below correctly treats the toast
+        // as not-yet-built rather than reading a dead id.
+        self.bg_id = None;
+        self.text_id = None;
     }
 
     /// D17 "export-complete green sweep": same one-slot toast, tinted toward
@@ -93,6 +101,9 @@ impl ToastPanel {
         self.accent = Some(accent);
         self.transient.fire(TOTAL_MS);
         self.last_tick = None;
+        // See `show()` — same stale-id reset.
+        self.bg_id = None;
+        self.text_id = None;
     }
 
     /// Eased 0..1 alpha for the transient's current progress: ramps 0→1 over
@@ -136,11 +147,15 @@ impl ToastPanel {
         let (Some(bg), Some(text)) = (self.bg_id, self.text_id) else {
             return;
         };
+        let (Some(mut bg_style), Some(mut text_style)) = (
+            tree.get_node(bg).map(|n| n.style),
+            tree.get_node(text).map(|n| n.style),
+        ) else {
+            return;
+        };
         let a = self.alpha();
-        let mut bg_style = tree.get_node(bg).style;
         bg_style.bg_color = with_alpha(color::BG_2, 235.0 * a);
         tree.set_style(bg, bg_style);
-        let mut text_style = tree.get_node(text).style;
         text_style.text_color = with_alpha(self.accent.unwrap_or(color::TEXT_PRIMARY_C32), 255.0 * a);
         tree.set_style(text, text_style);
     }
@@ -276,6 +291,38 @@ mod tests {
         toast.show("Redid: Move Clip"); // latest wins — restarts the timeline
         assert_eq!(toast.message, "Redid: Move Clip");
         assert_eq!(toast.alpha(), 0.0, "replacing restarts the ramp-in, not the hold");
+    }
+
+    /// Reproduces the BUG-028-class crash: undo fires the toast the same frame
+    /// a rebuild already shrank the tree (the toast's own nodes weren't built
+    /// into it, since it was closed at rebuild time), leaving `bg_id`/`text_id`
+    /// pointing one-past-the-end of the new, smaller tree. Before the
+    /// `show()` id-reset + `get_node`-returns-`Option` fix, `update()` would
+    /// index out of bounds in release builds (the guard was a `debug_assert`).
+    #[test]
+    fn re_show_across_shrinking_rebuild_never_panics() {
+        let mut tree = UITree::new();
+        let placement = OverlayPlacement {
+            rect: Rect::new(0.0, 0.0, 300.0, 34.0),
+            screen: Vec2::new(1920.0, 1080.0),
+        };
+
+        let mut toast = ToastPanel::new();
+        toast.show("Undid: Move Clip");
+        toast.build_at(&mut tree, placement);
+        assert!(tree.get_node(toast.bg_id.unwrap()).is_some());
+
+        // Simulate a rebuild that runs while the toast is closed (idle between
+        // shows) and lands a much smaller tree — the toast's old nodes are
+        // gone, but `bg_id`/`text_id` still hold the old (now stale) ids.
+        toast.tick(TOTAL_MS); // finish the toast, back to idle
+        tree.clear();
+        tree.add_panel(None, 0.0, 0.0, 10.0, 10.0, UIStyle::default());
+
+        // Undo fires again in the same frame `push_state` runs, before the
+        // overlay driver rebuilds the toast's nodes into the new tree.
+        toast.show("Redid: Move Clip");
+        toast.update(&mut tree); // must not panic
     }
 
     #[test]

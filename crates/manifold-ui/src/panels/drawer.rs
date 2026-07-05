@@ -518,8 +518,8 @@ mod tests {
         let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
         let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec);
         assert_eq!(ids.button_count(), 8);
-        let w0 = tree.get_node(ids.button_ids[0]).bounds.width;
-        let w7 = tree.get_node(ids.button_ids[7]).bounds.width;
+        let w0 = tree.get_node(ids.button_ids[0]).unwrap().bounds.width;
+        let w7 = tree.get_node(ids.button_ids[7]).unwrap().bounds.width;
         assert!((w0 - w7).abs() < 0.001, "uniform row keeps equal widths");
     }
 

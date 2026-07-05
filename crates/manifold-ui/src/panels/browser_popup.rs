@@ -476,8 +476,9 @@ impl BrowserPopupPanel {
             &popup_shell::PopupStyle::MODAL,
         );
         session.layout.backdrop_id = Some(shell.backdrop);
-        if t < 0.999 {
-            let mut cs = tree.get_node(shell.container).style;
+        if t < 0.999
+            && let Some(mut cs) = tree.get_node(shell.container).map(|n| n.style)
+        {
             cs.bg_color = color::with_alpha(cs.bg_color, (cs.bg_color.a as f32 * t) as u8);
             cs.border_color = color::with_alpha(cs.border_color, (cs.border_color.a as f32 * t) as u8);
             tree.set_style(shell.container, cs);
