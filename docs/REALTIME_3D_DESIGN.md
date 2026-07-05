@@ -1,6 +1,6 @@
 # Realtime 3D — Scenes, Lighting, Viewport
 
-**Status: APPROVED design, not built · 2026-07-03 · Fable (final Fable design)**
+**Status: IN PROGRESS (status corrected + baseline-reviewed 2026-07-05).** Shipped: P0 (MATERIAL M1–M6, all verified in-tree), P1 `node.render_scene` @ `8daa89fc`, P4 camera atoms (both `node.free_camera` + `node.look_at_camera` in-tree), §9 `node.spawn_from_mesh`. **As-built P1 deviation from D3: object transforms are NOT port-shadowed yet** (`render_scene.rs` header states it) — P2+ must check that header before assuming beat-addressable transforms. Remaining: P2 shadows, P3 atmosphere, P5 viewport navigate, P6 gizmos, P7 scene starter preset. · designed 2026-07-03 · Fable
 **Prerequisites: MATERIAL_SYSTEM_DESIGN M1–M5 (un-held by this doc — its contract is
 unchanged; this design consumes its extension points). Vocab-audit apply should land
 first (this doc uses post-rename ids: `node.render_mesh`, `node.render_copies`).**

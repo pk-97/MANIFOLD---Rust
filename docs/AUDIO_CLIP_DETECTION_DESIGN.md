@@ -234,7 +234,7 @@ Each phase compiles and is testable. Branch off current HEAD.
 
 ## 10. Open / watch
 
-- **Concurrency** — the orchestrator runs one detection at a time. Keep that: a Detect on clip B while A is running queues or rejects (status: "detection busy"). No parallel demucs.
+- **Concurrency — DECIDED (Peter, 2026-07-05, baseline review):** the orchestrator runs one detection at a time, and a Detect on clip B while A is running **blocks/rejects** — the button disabled with a visible "detection busy" state. Peter: "It should probably block for safety and UX so the user knows they can't auto-populate multiple audio files at once." Rejected: queueing the second job (silently auto-populating multiple clips hides what the system is doing). No parallel demucs.
 - **Target-layer auto-create vs explicit** — when `target_layer == None`, fall back to the current by-name auto-create (Kick → "Kick" layer). Explicit routing overrides.
 - **Hash/stem cache** — `compute_audio_hash` reads the whole file on the content thread (pre-existing). Per-clip detection calls it more often; consider hashing off-thread or by path+mtime. Pre-existing issue, flagged not fixed.
 - **Group container UI** (§8.2) — "expanded, stays open" is only viable if the layer group renders as a visually contained, collapsible, drag-as-one object with mute-all / solo-all on the header. If the group UI can't carry those, revisit the reveal decision. This is a dependency, not an afterthought.
