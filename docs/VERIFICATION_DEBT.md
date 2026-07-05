@@ -115,9 +115,18 @@ user-added / glb-generator param in the running app and confirm it moves; (b) se
 `/master/{prefix}/{user_param_id}` and confirm the param moves, and that a bundled param's existing
 address still lands byte-for-byte. Peter owns the L3 live observation.
 
+### VD-010 — PARAM_STORAGE P5 inspector single-source: angle-card degree readout in a running app — L2 reached / L4 target
+Landed 2026-07-05 (`docs/landings/2026-07-05-param-storage-p5-inspector.md`). `is_angle` now has a
+single home on the manifest spec; an exposed angle param's card is proven to carry the flag through
+the manifest + synth + JSON round-trip by unit test. Not observed rendering. Burn-down: in the graph
+editor expose an inner `ParamType::Angle` param (or load a glTF and open its camera-orbit/tilt/FOV
+card), confirm the card slider reads out `NN°` (not radians), and that a text edit round-trips
+degrees↔radians without drift. Peter owns the L4 live observation.
+
 *(VD-001–004 seeded 2026-07-05 from the memory corpus plus Peter's in-app findings; VD-006 added
-2026-07-05, VD-007 at P2 landing, VD-008 at P3 landing, VD-009 at P4 landing. VD-005 closed at P2
-landing. The full backfill pass over recent landings is still owed and will extend this list.)*
+2026-07-05, VD-007 at P2 landing, VD-008 at P3 landing, VD-009 at P4 landing, VD-010 at P5-inspector
+landing. VD-005 closed at P2 landing. The full backfill pass over recent landings is still owed and
+will extend this list.)*
 
 ## Closed
 
