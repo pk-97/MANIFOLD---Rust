@@ -29,13 +29,21 @@ Landed 2026-07-04 @ `8b306de0`. The full Ableton-style automation timeline UI
 shipped; the live editing path (pointer → command → lane redraw in the running app)
 was never observed — flagged at landing, then decayed. Peter hit it in the app
 2026-07-05 (lanes/buttons present, lanes not visibly working; exact repro untriaged).
-Burn-down: running-app smoke check (L4 today; L3 once UI_AUTOMATION P1–P2 lands).
+Burn-down: **now runnable at L3** (UI_AUTOMATION P1–P2 landed 2026-07-05) — write a
+`scripts/ui-flows/` flow that resolves an automation-lane breakpoint by its
+`automation_lanes` surface target (P1 enumerates strips + points) and drags it through
+the driver, asserting the moved point; that exercises the pointer→command→redraw path
+headless. The L4 running-app "visibly working" observation Peter owns is still the
+ultimate target above L3.
 
 ### VD-002 — Preset library + picker P0–P6: interactive GUI matrix — L2 reached / L3 target
 Landed 2026-07-04/05 (last `4c860cad`). Drag-drop, search-clear, the management
 matrix, and thumbnail display are physically unautomatable headless today.
-Burn-down: blocked on UI_AUTOMATION P1–P2 for L3; interim = a Peter click-script
-(L4) covering the four flows.
+Burn-down: **now runnable at L3** (UI_AUTOMATION P1–P2 landed 2026-07-05, unblocking
+this) — write `scripts/ui-flows/` flows for the four interactions (drag-drop a preset,
+search-then-clear, the mgmt matrix, thumbnail presence) resolving picker widgets by
+name/text; the P2 `select-and-inspect.json` flow is the copy precedent. Interim Peter
+click-script (L4) still valid until those flows exist.
 
 ### VD-003 — glTF import: correctness beyond the development fixture — L1 reached / L2 target
 Landed with the glTF wave (foundation @ `47c878d7` + follow-ups). Peter reports
@@ -50,22 +58,20 @@ BUG_BACKLOG with `Escaped:` lines.
 "unverified on real export" since it shipped). Burn-down: one real export of a
 stem-bearing project; listen to / inspect the output file.
 
-### VD-005 — UI_AUTOMATION P1 selector surface: dumps read, no scripted drive yet — L2 reached / L3 target
-Landed 2026-07-05 @ `3294eb9d`. The extended dump (widget/name + `custom_surfaces`
-enumeration) was read at landing and all four target categories confirmed present with
-payload ids — but nothing yet *drives* the surface: resolving a selector and
-synthesizing a gesture against it is P2. Burn-down: lands with P2 — the two proving
-flows (`select-and-inspect.json`, `drag-clip.json`) exercise the resolver against this
-dump, taking the surface to L3. Minor open coverage gap folded in here: the
-`editor` scene dump surfaces zero *named* widgets (graph-editor chrome names don't
-appear in the headless editor scene — the naming pass covered transport/layer-header,
-which show in the `timeline` scene); grow naming coverage organically as flows need it,
-per §3 ("coverage grows organically").
-
 *(VD-001–004 seeded 2026-07-05 from the memory corpus plus Peter's in-app findings;
 the full backfill pass over recent landings is still owed and will extend this
 list.)*
 
 ## Closed
+
+### VD-005 — UI_AUTOMATION P1 selector surface: no scripted drive — CLOSED 2026-07-05 (L3 reached)
+Opened at P1 landing (`3294eb9d`, L2). **Closed by P2 landing** — the `drag-clip.json`
+flow resolves a `timeline_clips` surface target and drives it through the real input
+path (clip moved 230→314px), and `select-and-inspect.json` resolves a widget by
+name/text and clicks it: the selector surface is now scripted-driven end-to-end (L3).
+Residual carried as an organic-growth item, NOT debt: the `editor` scene still surfaces
+zero *named* widgets (graph-editor chrome unnamed headless) — name points as flows need
+them, per §3 ("coverage grows organically"). Landing report:
+`docs/landings/2026-07-05-ui-automation-p2.md`.
 
 *(none yet)*
