@@ -28,6 +28,26 @@ or human can read it, and it needs no external tool.
 
 ## Open
 
+### BUG-031 — Audible blip when an audio clip's voice is built (play-then-pause leaks ~10ms of the file's start) — LOW
+
+**Symptom** — a very subtle pop/click from the speakers at the moment an audio file is
+loaded onto the timeline (e.g. Finder drag-drop). Reported by Peter 2026-07-05.
+
+**Root cause** — [audio_layer_playback.rs:171-179](../crates/manifold-playback/src/audio_layer_playback.rs#L171-L179):
+`make_voice` calls `manager.play(data)` at full volume and only then
+`handle.pause(Tween::default())`. kira's `pause` is a fade-out — and `Tween::default()`
+is a **10ms** linear fade (kira-0.9.6 `tween.rs:110`), not instantaneous — so the first
+~10ms of the file renders audibly before the voice reaches its "start paused at 0" state.
+Any file whose first samples carry signal produces the blip. (The 5ms `declick()` tween
+used everywhere else in this module doesn't apply here; this is the one edge built on
+kira's default tween.)
+
+**Fix shape** — build the voice silent instead of pausing it after the fact: apply
+`.volume(0.0)` to the `StaticSoundData` before `manager.play`, keep the pause+seek. The
+per-tick sync path already restores the real volume via `set_volume(volume, declick())`,
+so activation is unaffected. This kills the whole class including the race where an audio
+callback fires between play and pause. One-line-ish, `manifold-playback` only.
+
 ### BUG-029 — `profiling` feature doesn't compile: rotted against the Beats/Bpm newtypes — LOW (parked)
 
 **Root cause** — the `#[cfg(feature = "profiling")]` blocks in `manifold-app` predate the
