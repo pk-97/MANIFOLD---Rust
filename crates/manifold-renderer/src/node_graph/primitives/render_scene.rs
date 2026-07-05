@@ -792,7 +792,12 @@ impl EffectNode for RenderScene {
             .iter()
             .zip(&binding_sets)
             .map(|(draw, bindings)| {
-                manifold_gpu::GpuEncoder::depth_msaa_draw(&draw.pipeline, bindings, vertex_count(draw))
+                manifold_gpu::GpuEncoder::depth_msaa_draw(
+                    &draw.pipeline,
+                    bindings,
+                    vertex_count(draw),
+                    1,
+                )
             })
             .collect();
 

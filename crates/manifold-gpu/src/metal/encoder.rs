@@ -124,6 +124,7 @@ pub struct DepthMsaaDraw<'a> {
     pipeline: &'a GpuRenderPipeline,
     bindings: &'a [GpuBinding<'a>],
     vertex_count: u32,
+    instance_count: u32,
 }
 
 impl GpuEncoder {
@@ -707,11 +708,13 @@ impl GpuEncoder {
         pipeline: &'a GpuRenderPipeline,
         bindings: &'a [GpuBinding<'a>],
         vertex_count: u32,
+        instance_count: u32,
     ) -> DepthMsaaDraw<'a> {
         DepthMsaaDraw {
             pipeline,
             bindings,
             vertex_count,
+            instance_count,
         }
     }
 
@@ -777,7 +780,7 @@ impl GpuEncoder {
         }
 
         for draw in draws {
-            if draw.vertex_count == 0 {
+            if draw.vertex_count == 0 || draw.instance_count == 0 {
                 continue;
             }
             unsafe {
@@ -789,7 +792,7 @@ impl GpuEncoder {
                     MTLPrimitiveType::Triangle,
                     0,
                     draw.vertex_count as usize,
-                    1,
+                    draw.instance_count as usize,
                 );
             }
         }

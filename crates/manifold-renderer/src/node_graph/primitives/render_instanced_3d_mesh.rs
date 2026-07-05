@@ -10,7 +10,7 @@
 //! that primitive for the shared design rationale.
 
 use ahash::AHashMap;
-use manifold_gpu::{GpuBinding, GpuLoadAction};
+use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 use crate::node_graph::camera::Camera;
@@ -96,6 +96,9 @@ crate::primitive! {
     extra_fields: {
         pipelines: AHashMap<MaterialKind, manifold_gpu::GpuRenderPipeline> = AHashMap::new(),
         depth_stencil: Option<manifold_gpu::GpuDepthStencilState> = None,
+        // Memoryless 4x-MSAA color + depth for the antialiased instanced
+        // pass; the color resolves out to the single-sample output.
+        msaa_color: Option<manifold_gpu::GpuTexture> = None,
         depth_texture: Option<manifold_gpu::GpuTexture> = None,
         depth_width: u32 = 0,
         depth_height: u32 = 0,
@@ -103,24 +106,35 @@ crate::primitive! {
     },
 }
 
+/// 4x MSAA for the instanced pass. Memoryless multisample color + depth
+/// are tile-resident on Apple Silicon and resolve on-chip — no VRAM cost.
+/// Paired with alpha-to-coverage so glTF `Mask` cutout edges antialias too.
+const MSAA_SAMPLES: u32 = 4;
+
 impl RenderInstanced3DMesh {
-    fn ensure_depth_texture(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+    /// Memoryless 4x-MSAA color + depth targets sized to the render target.
+    fn ensure_msaa_targets(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
         if self.depth_width == width
             && self.depth_height == height
             && self.depth_texture.is_some()
+            && self.msaa_color.is_some()
         {
             return;
         }
-        self.depth_texture = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+        self.msaa_color = Some(device.create_texture_msaa_memoryless(
             width,
             height,
-            depth: 1,
-            format: manifold_gpu::GpuTextureFormat::Depth32Float,
-            dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET,
-            label: "node.render_copies depth",
-            mip_levels: 1,
-        }));
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            MSAA_SAMPLES,
+            "node.render_copies msaa color",
+        ));
+        self.depth_texture = Some(device.create_texture_msaa_memoryless(
+            width,
+            height,
+            manifold_gpu::GpuTextureFormat::Depth32Float,
+            MSAA_SAMPLES,
+            "node.render_copies msaa depth",
+        ));
         self.depth_width = width;
         self.depth_height = height;
     }
@@ -166,14 +180,15 @@ impl RenderInstanced3DMesh {
             MaterialKind::Cel => "fs_cel",
         };
         self.pipelines.entry(kind).or_insert_with(|| {
-            device.create_render_pipeline_depth(
+            device.create_render_pipeline_depth_msaa(
                 include_str!("shaders/render_instanced_3d_mesh.wgsl"),
                 "vs_main",
                 fs_entry,
                 manifold_gpu::GpuTextureFormat::Rgba16Float,
                 manifold_gpu::GpuTextureFormat::Depth32Float,
                 None,
-                1,
+                MSAA_SAMPLES,
+                true, // alpha-to-coverage: antialias the cutout `discard` edge too
                 "node.render_copies",
             )
         })
@@ -351,13 +366,14 @@ impl Primitive for RenderInstanced3DMesh {
                     }),
             );
         }
-        self.ensure_depth_texture(gpu.device, width, height);
+        self.ensure_msaa_targets(gpu.device, width, height);
         self.ensure_sampler(gpu.device);
         self.ensure_dummy_envmap(gpu.device);
         let pipeline = self.pipeline_for(gpu.device, material.kind).clone();
 
         let depth_stencil = self.depth_stencil.as_ref().expect("just inserted");
         let depth_tex = self.depth_texture.as_ref().expect("just inserted");
+        let msaa_color = self.msaa_color.as_ref().expect("just inserted");
         let sampler = self.sampler.as_ref().expect("just inserted");
         let dummy_envmap = self.dummy_envmap.as_ref().expect("just inserted");
         // Unwired texture inputs bind the 1×1 dummy. texture_flags
@@ -369,54 +385,60 @@ impl Primitive for RenderInstanced3DMesh {
         let base_color_map_texture = base_color_map_wired.unwrap_or(dummy_envmap);
         let metallic_map_texture = metallic_map_wired.unwrap_or(dummy_envmap);
 
-        gpu.native_enc.draw_instanced_depth(
+        let bindings = [
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: vertices,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: instances,
+                offset: 0,
+            },
+            GpuBinding::Texture {
+                binding: 3,
+                texture: envmap_texture,
+            },
+            GpuBinding::Sampler {
+                binding: 4,
+                sampler,
+            },
+            GpuBinding::Texture {
+                binding: 5,
+                texture: normal_map_texture,
+            },
+            GpuBinding::Texture {
+                binding: 6,
+                texture: roughness_map_texture,
+            },
+            GpuBinding::Texture {
+                binding: 7,
+                texture: base_color_map_texture,
+            },
+            GpuBinding::Texture {
+                binding: 8,
+                texture: metallic_map_texture,
+            },
+        ];
+        // Antialiased instanced pass: one 4x-MSAA pass (memoryless
+        // color+depth) resolving out to `target`.
+        let draw = manifold_gpu::GpuEncoder::depth_msaa_draw(
             &pipeline,
+            &bindings,
+            vertex_count,
+            instance_count,
+        );
+        gpu.native_enc.draw_instanced_depth_msaa_batch(
+            msaa_color,
             target,
             depth_tex,
             depth_stencil,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: vertices,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 2,
-                    buffer: instances,
-                    offset: 0,
-                },
-                GpuBinding::Texture {
-                    binding: 3,
-                    texture: envmap_texture,
-                },
-                GpuBinding::Sampler {
-                    binding: 4,
-                    sampler,
-                },
-                GpuBinding::Texture {
-                    binding: 5,
-                    texture: normal_map_texture,
-                },
-                GpuBinding::Texture {
-                    binding: 6,
-                    texture: roughness_map_texture,
-                },
-                GpuBinding::Texture {
-                    binding: 7,
-                    texture: base_color_map_texture,
-                },
-                GpuBinding::Texture {
-                    binding: 8,
-                    texture: metallic_map_texture,
-                },
-            ],
-            vertex_count,
-            instance_count,
-            GpuLoadAction::Clear,
+            std::slice::from_ref(&draw),
             "node.render_copies",
         );
     }
