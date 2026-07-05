@@ -339,6 +339,13 @@ def plant_observer(td, session, drained_offset):
         f.write(str(drained_offset))
 
 
+def plant_observation_prompt_fired(td, session):
+    """Pre-consume the (unrelated) observation-review-prompt's one-shot
+    sentinel so a test can exercise another Stop mechanism in isolation on a
+    long (>=40-event) transcript without the prompt also firing."""
+    open(os.path.join(td, f"{session}.observation-prompt-fired"), "w").close()
+
+
 def test_stop_wait_delivers_verdict_when_observer_catches_up():
     def run(td):
         session = "sess-catchup"
@@ -512,6 +519,10 @@ def test_grade_backstop_fires_when_ungraded_and_stale():
         check("reason states the ungraded count", d1 and "1 gradeable" in d1.get("reason", ""), d1)
         check("session-level sentinel written", os.path.exists(os.path.join(td, f"{session}.grade-backstop-fired")))
 
+        # Isolate: the (unrelated) observation-review prompt also clears its
+        # own >=40-event gate on this transcript — pre-consume its sentinel
+        # so this assertion is about the grade backstop alone.
+        plant_observation_prompt_fired(td, session)
         out2 = run_hook({"session_id": session, "prompt_id": "p2", "transcript_path": transcript}, td)
         check("second turn stays silent (once per session, not per turn)", out2 == "", out2)
 
@@ -544,6 +555,7 @@ def test_grade_backstop_skips_when_already_graded():
         write_grade_records([{"session_id": session, "seq": 1, "move_id": "anchor/verify-claim", "correct": True, "effective": True, "grader": "session"}])
         transcript = os.path.join(td, "t.jsonl")
         write_transcript_with_events(transcript, 45, base)
+        plant_observation_prompt_fired(td, session)  # isolate: unrelated 40-event gate
         out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
         check("backstop stays silent once the fire is graded", out == "", out)
 
@@ -579,8 +591,59 @@ def test_grade_backstop_ignores_non_gradeable_move_families():
         )
         transcript = os.path.join(td, "t.jsonl")
         write_transcript_with_events(transcript, 45, base)
+        plant_observation_prompt_fired(td, session)  # isolate: unrelated 40-event gate
         out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
         check("advice/phase fires never require a self-grade", out == "", out)
+
+    with_temp_verdicts(run)
+
+
+# ---- observation review prompt (Peter, 2026-07-05): a standing invitation
+# to log anything worth the next sleep pass's attention. Fires once per
+# session, only once the session has done enough to be worth reviewing —
+# never a repeated demand, since most sessions have nothing to add. ----
+
+
+def test_observation_prompt_stays_silent_on_a_short_session():
+    def run(td):
+        session = "sess-obs-short"
+        transcript = os.path.join(td, "t.jsonl")
+        write_transcript_with_events(transcript, 5, 1783200000)
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        check("a short session (< 40 events) isn't asked yet", out == "", out)
+        check("no sentinel written when it doesn't fire", not os.path.exists(os.path.join(td, f"{session}.observation-prompt-fired")))
+
+    with_temp_verdicts(run)
+
+
+def test_observation_prompt_fires_once_on_a_substantial_session():
+    def run(td):
+        session = "sess-obs-fire"
+        transcript = os.path.join(td, "t.jsonl")
+        write_transcript_with_events(transcript, 45, 1783200000)
+        out1 = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        d1 = json.loads(out1) if out1 else None
+        check("substantial session gets asked", d1 is not None and d1.get("decision") == "block", out1)
+        check("reason names the observation-prompt move", d1 and 'move="mechanical/observation-prompt"' in d1.get("reason", ""), d1)
+        check("reason says it asks once, not every turn", d1 and "once per session" in d1.get("reason", ""), d1)
+        check("reason never demands a filler record", d1 and "no action needed" in d1.get("reason", ""), d1)
+        check("sentinel written", os.path.exists(os.path.join(td, f"{session}.observation-prompt-fired")))
+
+        out2 = run_hook({"session_id": session, "prompt_id": "p2", "transcript_path": transcript}, td)
+        check("second turn stays silent — one ask per session, no logged record required", out2 == "", out2)
+
+    with_temp_verdicts(run)
+
+
+def test_observation_prompt_never_fires_for_worker_stop():
+    def run(td):
+        with open(valve.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
+            f.write("1")
+        session, agent = "sess-obs-worker", "wk1"
+        transcript = os.path.join(td, "t.jsonl")
+        write_transcript_with_events(transcript, 45, 1783200000)
+        out = run_hook({"session_id": session, "prompt_id": "p1", "agent_id": agent, "transcript_path": transcript}, td)
+        check("worker-tagged Stop never triggers the main-session observation prompt", out == "", out)
 
     with_temp_verdicts(run)
 
@@ -611,6 +674,9 @@ def main():
         test_grade_backstop_skips_when_already_graded,
         test_grade_backstop_never_fires_for_worker_stop,
         test_grade_backstop_ignores_non_gradeable_move_families,
+        test_observation_prompt_stays_silent_on_a_short_session,
+        test_observation_prompt_fires_once_on_a_substantial_session,
+        test_observation_prompt_never_fires_for_worker_stop,
     ]
     for t in tests:
         t()

@@ -28,6 +28,57 @@ or human can read it, and it needs no external tool.
 
 ## Open
 
+### BUG-035 — 3D scenes hitch when a camera/light param is animated (whole chain re-encoded per dirty frame) — MED — UNVERIFIED (reasoned, not measured)
+
+**Symptom** — animating a 3D scene's camera or sun/light via LFO produces a slight, visible
+hitch — an uneven frame spike, not a clean framerate drop. Reported by Peter 2026-07-05 on
+glTF ("glp") scenes; suspected across all `render_scene` / 3D-mesh output. A static 3D scene
+is smooth, and the *same* LFO on a 2D effect param is smooth (Peter confirmed 2D is fine).
+
+**Root cause (hypothesis, reasoned from code — NOT yet measured)** — when a layer is dirty
+it re-executes its whole effect chain, re-encoding every node's GPU commands into a fresh
+command buffer each frame. There is no incremental "encode once, patch the changed uniform"
+path. A static scene is held/composited without re-running the chain (this held-when-static
+behavior is *inferred* from observed smoothness — the exact gate was not located in code and
+should be confirmed during design). An LFO makes the layer dirty every frame, so the full 3D
+chain re-runs 60×/s. That re-encode is the suspected fixed per-frame cost that grazes the
+16ms deadline on the heavier 3D path while staying invisible on cheap 2D chains.
+
+Confirmed by reading:
+- `render_scene` and `gltf_mesh_source` are both non-pure (`PURE` defaults false,
+  [primitive.rs:104](../crates/manifold-renderer/src/node_graph/primitive.rs#L104);
+  neither overrides it), so the executor's memo-skip
+  ([execution.rs:189](../crates/manifold-renderer/src/node_graph/execution.rs#L189)) never
+  spares them — they re-run every frame the chain runs. The still-scene savings are NOT at
+  the node-memo level.
+- Per animated frame `render_scene` recomposes each object's model matrix, rebuilds its
+  uniform struct, looks up the pipeline, and re-binds all 8 texture/buffer slots
+  ([render_scene.rs:605-680](../crates/manifold-renderer/src/node_graph/primitives/render_scene.rs#L605-L680)),
+  and `gltf_mesh_source` re-blits the whole mesh buffer
+  ([gltf_mesh_source.rs:213-222](../crates/manifold-renderer/src/node_graph/primitives/gltf_mesh_source.rs#L213-L222))
+  even though geometry never changed.
+- NOT the freeze compiler: render nodes are `Boundary` (non-fusable) and its recompile keys
+  on structural content, "never per frame" ([freeze/install.rs:195-205](../crates/manifold-renderer/src/node_graph/freeze/install.rs#L195-L205)).
+  Exposed-param modulation flows as runtime uniforms and never changes the content key.
+
+**Fix shape** — incremental command encoding for the graph runtime: cache a layer's command
+buffer and only re-record when the graph *structure* changes, patching camera/light (and
+other exposed) uniforms in place between frames. System-wide upgrade (every animated layer
+benefits; payoff concentrated on expensive chains — 3D scenes, long stacks, many bindings).
+Orthogonal to, and layers on top of, the existing memo system (skips pure nodes) and freeze
+compiler (fuses pointwise passes) — an *addition*, not a rewrite. It sits on the hot render
+path where a stale-uniform bug becomes the show, so this is HIGH-risk-to-touch. Smaller
+shaves that reduce (not eliminate) the re-encode cost: persistent mesh buffer to kill the
+per-frame re-blit; trim `render_scene`'s per-object rebind.
+
+**Before building** — confirm the CPU re-encode is actually where the ms go: add per-frame
+timing around the 3D chain execution and watch it under a running LFO. Steady ~X ms → render
+cost, optimize the render; sawtooth → scheduling/overhead, and incremental encoding is the
+fix. (Not run this session — the app isn't headless and Peter didn't want the round-trip.)
+
+**Design owner** — queued to Fable for a proper design doc (`docs/*_DESIGN.md`), per
+[[fable-priority-queue]]. Reasoned diagnosis only; verify the measurement first.
+
 ### BUG-031 — Audible blip when an audio clip's voice is built (play-then-pause leaks ~10ms of the file's start) — LOW
 
 **Symptom** — a very subtle pop/click from the speakers at the moment an audio file is
