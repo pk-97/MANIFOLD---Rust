@@ -66,6 +66,21 @@ around with a temporary local stub (reverted) to get the render.
 (mirror whatever `lane_param_range`'s live-app equivalent now does). Owner: PARAM_STORAGE P2 (its
 refactor moved the range); ~1 site. Unrelated to the LayerId / node-preview work in this session.
 
+### BUG-034 — Headless preview verification doesn't cover the live atlas UV path — LOW (test-coverage gap, follow-up to BUG-027)
+
+**Gap** — the inline node-preview fix (BUG-027) is pixel-verified headless only through the
+per-node-texture path (`ui_snapshot/render.rs`, whole-texture UV `[0,0,1,1]`). The LIVE app packs
+every preview into one rotating atlas and samples a per-cell UV with letterbox/aspect trim; that
+cell-picking math lives inline in [app_render.rs](../crates/manifold-app/src/app_render.rs) and is
+NOT exercised by any headless render (the atlas is filled by the content thread). So a subtle cell
+or aspect error would show wrong/offset/squashed previews in the running editor but pass every test.
+
+**Fix shape** — (1) factor the atlas-cell-UV math out of `app_render.rs` into one shared helper;
+(2) in the harness, pack the already-rendered per-node textures into a synthetic atlas + build the
+matching `node_atlas_layout`, register it under the atlas handle, and drive previews through that
+shared helper. Then a single graph PNG proves the live cell math, not a copy of it. Not large.
+Gated behind BUG-033 (the `ui-snapshot` harness doesn't compile on trunk).
+
 ### BUG-030 — Design-token ratchet red on trunk: raw `Color32::new(` count 201 vs baseline 200 — LOW (parked, not param-storage)
 
 **Root cause** — a UI landing added one raw `Color32::new(` literal in `crates/manifold-ui/src`
