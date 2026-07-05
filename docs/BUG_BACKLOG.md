@@ -559,6 +559,34 @@ arms; or fork winit to forward it. Overrides TIMELINE_INGEST_DESIGN §2 D1. Queu
 dedicated Fable session. Blocks P1 (drop targeting) and P2 (drop-target ghost — reads the same
 position). Full write-up: TIMELINE_INGEST_DESIGN.md §3.
 
+### BUG-029 — glTF import: a model with >2 materials fails to load ("unknown parameter 'pos_x_2'") and renders black — HIGH — FIXED 2026-07-05 (`dc97bbe6`)
+
+**Symptom** — Peter, 2026-07-05: importing `cc0__japanese_apricot_prunus_mume.glb` (4 distinct
+materials) produced a black viewport and a repeating log flood: `Generator … failed to load from
+def: graph load error: node 4 (node.render_scene): unknown parameter 'pos_x_2'` +
+`Generator type … not found in the preset catalog`. Escaped: glTF wave / PRESET_LIBRARY P0 ·
+caught-by: **held-out input in the running app** (the VD-003 mesh-snapshot render harness looked
+green because it exercises `gltf::import` directly, NOT the production `PresetRuntime::from_def`
+load path where the failure lives — a wrong-path verification, see VERIFICATION_DEBT VD-003).
+
+**Root cause** — `node.render_scene` is the first primitive whose PARAM set (not just its ports)
+grows with a reconfigure param: per-object transforms `pos_x_N`/`pos_y_N`/… exist only after the
+node reconfigures to `objects >= N+1`. The def loader (`graph_loader::instantiate_def`)
+snapshotted the declared param surface ONCE at the node's default 2-object count, then validated
+every def param against that stale snapshot — so `pos_x_2` (object index 2, present for the
+apricot's 4 objects) was rejected as unknown before the node ever reconfigured. The runtime calls
+`node.reconfigure(&params)` after every build (graph.rs, snapshot.rs, freeze/region.rs); the
+loader was the one path that didn't. mux_texture/multi_blend hid the gap because their reconfigure
+grows PORTS (validated at wire time), not params; the azalea dev fixture hid it because it has
+exactly 2 objects.
+
+**Fix** — call `boxed.reconfigure(&doc_params)` before the `param_defs` snapshot in the loader
+(mirrors snapshot.rs: seed declared defaults, override with doc values, reconfigure). No-op for
+static-shape nodes; general across every reconfigure-param node. Verified on the REAL path: the
+apricot `.glb` (4 objects) now loads clean through `PresetRuntime::from_def`. Regression tests:
+`render_scene_with_three_objects_loads_per_object_transform_params` (synthetic, portable) +
+`held_out_gltf_generator_loads_through_from_def` (`#[ignore]`, env-gated on a >2-material `.glb`).
+
 ## Fixed
 
 All five entries below were fixed 2026-06-23, with a test per path:

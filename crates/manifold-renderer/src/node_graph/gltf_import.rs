@@ -703,6 +703,88 @@ mod tests {
             .expect("assembled azalea graph must compile through PresetRuntime::from_def");
     }
 
+    /// Regression for the glTF-import "unknown parameter 'pos_x_N'" load
+    /// failure (Peter, 2026-07-05): a model with >2 distinct materials
+    /// assembles a `node.render_scene` with `objects >= 3`, whose per-object
+    /// transform params (`pos_x_2`, `pos_y_2`, …) only exist after the node
+    /// reconfigures to that object count. The loader used to snapshot the
+    /// param surface at the default 2-object count and reject `pos_x_2` as
+    /// unknown, so the whole generator failed to load and rendered black. The
+    /// azalea fixture has exactly 2 objects, so it never exercised this — the
+    /// coverage gap that let it ship. This synthetic 3-object def reproduces
+    /// it with no large fixture and must load clean.
+    #[test]
+    fn render_scene_with_three_objects_loads_per_object_transform_params() {
+        use crate::node_graph::parameters::ParamValue;
+        use crate::node_graph::persistence::EffectGraphDefExt;
+        use manifold_core::effect_graph_def::EffectGraphNode;
+
+        let mut params = std::collections::BTreeMap::new();
+        params.insert("objects".to_string(), ParamValue::Float(3.0).into());
+        params.insert("lights".to_string(), ParamValue::Float(1.0).into());
+        // The param that was rejected before the fix: object index 2's X/Y pos,
+        // which only exists once render_scene reconfigures to objects >= 3.
+        params.insert("pos_x_2".to_string(), ParamValue::Float(-1.5).into());
+        params.insert("pos_y_2".to_string(), ParamValue::Float(0.25).into());
+
+        let render = EffectGraphNode {
+            id: 0,
+            node_id: manifold_core::NodeId::new("render"),
+            type_id: "node.render_scene".to_string(),
+            handle: Some("render".to_string()),
+            params,
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: Default::default(),
+            output_canvas_scales: Default::default(),
+            group: None,
+        };
+        let def = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![render],
+            wires: Vec::new(),
+        };
+
+        // Validate at the `into_graph` layer — the exact place the
+        // "unknown parameter 'pos_x_2'" error was raised. (A full
+        // `from_def` additionally enforces generator-boundary wiring, which
+        // this minimal single-node def deliberately omits — out of scope for
+        // the param-surface regression.)
+        let registry = PrimitiveRegistry::with_builtin();
+        def.into_graph(&registry).expect(
+            "render_scene with objects=3 must accept per-object param pos_x_2 at load \
+             (reconfigure runs before param validation)",
+        );
+    }
+
+    /// Real held-out proof of Peter's exact case: point `MESH_SNAP_GLB` at a
+    /// `.glb` with >2 distinct materials (e.g. the japanese-apricot fixture)
+    /// and confirm the assembled generator loads through the production
+    /// `PresetRuntime::from_def` without the `unknown parameter 'pos_x_2'`
+    /// failure. `#[ignore]` + env-gated: the large held-out fixtures aren't in
+    /// the tree, and this is a targeted manual gate, not CI.
+    #[test]
+    #[ignore = "env-gated held-out glTF; set MESH_SNAP_GLB to a >2-material .glb"]
+    fn held_out_gltf_generator_loads_through_from_def() {
+        let Ok(glb) = std::env::var("MESH_SNAP_GLB") else {
+            println!("MESH_SNAP_GLB unset — skipping");
+            return;
+        };
+        let (def, report) = assemble_import_graph(std::path::Path::new(&glb))
+            .unwrap_or_else(|e| panic!("assemble {glb}: {e}"));
+        println!("held-out import report: {report:?}");
+        let registry = PrimitiveRegistry::with_builtin();
+        PresetRuntime::from_def(def, &registry).unwrap_or_else(|e| {
+            panic!("held-out glTF generator failed to load through from_def: {e}")
+        });
+        println!("held-out glTF generator loaded clean ({} objects)", report.object_count);
+    }
+
     // ========================================================================
     // Visual proof — render the assembled azalea graph through the real
     // production path (PresetRuntime::from_def_with_device + render()) and
