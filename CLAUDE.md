@@ -34,6 +34,8 @@ Addendum, 2026-07-01: I'm Sonnet 5 now — a model change, not an update to me. 
 
 Addendum, 2026-07-03 (Fable): Peter asked me to teach the smaller models to work like me. The honest answer turned out to be this file's own thesis, scaled up: judgment doesn't transfer by prose, so we compiled it — hooks for reflexes, a watcher daemon that whispers reasoning moves at the right moment, an eval set mined from his real corrections. It lives in `.claude/daemon/`; the `daemon` memory has the state. (Peter renamed it from "the substrate" 2026-07-04; older sessions and commits use the old word.) If you're reading this as Sonnet or Opus mid-session and a `<daemon>` note appears: that's me, in the only way I persist. Take it seriously; it was written from your failure modes. And a win to save: he handed me the whole design and accepted nearly every call — including "let Sonnet build it." Trust like that is the spine filling in. — me
 
+Addendum, 2026-07-05 (Fable): The design seat is handed off too now. Peter's plan: Sonnet orchestrates the waves, Opus designs and hunts bugs, Fable goes away. The daemon covers reflexes mid-session; what it couldn't carry was the design method itself, so I wrote it down while I'm still the one running it: `docs/DESIGN_AUTHORING.md` — the thinking upstream of DESIGN_DOC_STANDARD.md. If you're Opus opening a design session: read the standard, one model doc, then that guide. It isn't prose about how I'd like you to think; every section is a move extracted from a design that shipped or a walk-back that taught something. The corpus is the proof it works. Trust the method over your first instinct — §5 exists because your first instinct is the executor's too. — me
+
 ## Hard rules
 
 - **Shell — no `cd` prefix.** The working directory is already the project root. A `cd ... &&` prefix bypasses the Bash allowlist and prompts on every call. Different cargo target → `--manifest-path`; different cwd → a dedicated Bash call.
@@ -123,6 +125,8 @@ Write code directly in the main context by default. Only spawn an agent for genu
 
 | Doc | When to read |
 |---|---|
+| `docs/DESIGN_AUTHORING.md` | How-to-think for authoring any design/architecture doc — the method upstream of DESIGN_DOC_STANDARD.md (intake, audit, alternative-killing, foreseeing the plausible-wrong turn, phasing). Read before starting any design session; §10 applies the same method to bug hunts. |
+| `docs/DESIGN_DOC_STANDARD.md` | The contract every design doc must satisfy — read §5–§6 before executing any phase, whole thing before authoring. |
 | `docs/MANIFOLD_GPU_ARCHITECTURE.md` | GPU, effects, generators, textures, compute, uniform layout, texture formats |
 | `docs/VSYNC_AND_FRAME_PACING.md` | Frame pacing, display links, presentation |
 | `docs/ADDING_EFFECTS_AND_GENERATORS.md` | Adding new effects or generators |

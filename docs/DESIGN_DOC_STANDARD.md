@@ -17,6 +17,11 @@ Two audiences, one document: Peter (deciding, remembering why) and the executing
 (building, phase by phase). Write for both — decisions carry rationale, phases carry
 briefs.
 
+**Companion:** this standard governs the artifact. The method that produces its
+content — the audit, the alternative-killing, how to find the plausible-wrong
+architecture §4 requires you to name — is [DESIGN_AUTHORING.md](DESIGN_AUTHORING.md).
+Authors read both; executors only need this one.
+
 ---
 
 ## 1. Doc types
