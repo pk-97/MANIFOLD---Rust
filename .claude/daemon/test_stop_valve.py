@@ -258,6 +258,90 @@ def test_real_hook_process_smoke():
             pass
 
 
+# ---- conditional Stop-wait (sleep pass 1: the chat-lag race) ----
+
+
+def test_stop_wait_delivers_verdict_that_lands_mid_wait():
+    def run(td):
+        session = "sess-waitwin"
+        # Fresh classifying marker, no verdict yet.
+        marker = os.path.join(td, f"{session}.classifying")
+        with open(marker, "w", encoding="utf-8") as f:
+            f.write(str(time.time()))
+        # Simulate the classifier finishing 0.5s in: a helper thread writes
+        # the verdict and removes the marker while the hook is waiting.
+        import threading
+
+        def land_verdict():
+            time.sleep(0.5)
+            write_verdict(td, session, "anchor/verify-claim", seq=1)
+            os.remove(marker)
+
+        t = threading.Thread(target=land_verdict)
+        t.start()
+        start = time.time()
+        out = run_hook({"session_id": session, "prompt_id": "pw1", "transcript_path": "/dev/null"}, td)
+        elapsed = time.time() - start
+        t.join()
+        d = json.loads(out) if out else None
+        check("stop-wait delivered the landing verdict", d and d.get("decision") == "block", out)
+        check("wait was bounded and short", elapsed < 3.0, elapsed)
+
+    with_temp_verdicts(run)
+
+
+def test_stop_wait_skips_stale_marker():
+    def run(td):
+        session = "sess-waitstale"
+        marker = os.path.join(td, f"{session}.classifying")
+        with open(marker, "w", encoding="utf-8") as f:
+            f.write("0")
+        old = time.time() - 120  # 2 min old = throttled classifier
+        os.utime(marker, (old, old))
+        start = time.time()
+        out = run_hook({"session_id": session, "prompt_id": "pw2", "transcript_path": "/dev/null"}, td)
+        elapsed = time.time() - start
+        check("stale marker: no wait, fast return", elapsed < 0.5, elapsed)
+        check("stale marker: no block", not out, out)
+
+    with_temp_verdicts(run)
+
+
+def test_stop_wait_bounded_when_classifier_hangs():
+    def run(td):
+        session = "sess-waithang"
+        marker = os.path.join(td, f"{session}.classifying")
+        with open(marker, "w", encoding="utf-8") as f:
+            f.write(str(time.time()))
+        # Marker stays, verdict never lands: must give up at the cap.
+        start = time.time()
+        out = run_hook({"session_id": session, "prompt_id": "pw3", "transcript_path": "/dev/null"}, td)
+        elapsed = time.time() - start
+        check("hang: returns within cap + slack", elapsed < 5.5, elapsed)
+        check("hang: no block", not out, out)
+
+    with_temp_verdicts(run)
+
+
+def test_stop_wait_never_runs_for_workers():
+    def run(td):
+        with open(valve.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
+            f.write("1")
+        session, agent = "sess-waitagent", "agw1"
+        marker = os.path.join(td, f"{session}.classifying")
+        with open(marker, "w", encoding="utf-8") as f:
+            f.write(str(time.time()))
+        start = time.time()
+        out = run_hook(
+            {"session_id": session, "agent_id": agent, "prompt_id": "pw4", "transcript_path": "/dev/null"}, td
+        )
+        elapsed = time.time() - start
+        check("worker stop never waits", elapsed < 0.5, elapsed)
+        check("worker stop no block", not out, out)
+
+    with_temp_verdicts(run)
+
+
 def main():
     tests = [
         test_pending_flag_blocks_once_and_sentinel_guards_repeat,
@@ -271,6 +355,10 @@ def main():
         test_malformed_stdin_and_missing_transcript_exit_clean,
         test_stale_stopblock_sentinel_is_swept,
         test_real_hook_process_smoke,
+        test_stop_wait_delivers_verdict_that_lands_mid_wait,
+        test_stop_wait_skips_stale_marker,
+        test_stop_wait_bounded_when_classifier_hangs,
+        test_stop_wait_never_runs_for_workers,
     ]
     for t in tests:
         t()

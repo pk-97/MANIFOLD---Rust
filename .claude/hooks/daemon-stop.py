@@ -183,6 +183,43 @@ def main():
             _block(block, {"seq": seq, "move_id": move_id})
             return
 
+        # 1b. Conditional Stop-wait (sleep pass 1): the chat-lag race —
+        # turn-final text closes a window, Haiku is mid-judgment at the exact
+        # moment the turn ends, and the verdict misses the exit and lands on
+        # the user's NEXT prompt (after the bad message already spent their
+        # attention). Wait ONLY when the observer's classifying marker is
+        # both present and fresh: a stale marker means throttling — fail
+        # open immediately, don't tax the turn. Median cost ~0 (the marker
+        # is rarely present at Stop); worst case CLASSIFY_WAIT_S on the
+        # exact turns where the whisper matters most. Main session only —
+        # the observer never writes the marker for worker windows.
+        CLASSIFY_WAIT_S = 4.0
+        MARKER_FRESH_S = 20.0  # healthy classify is 1-3s; older = throttled
+        if not agent_id:
+            marker = os.path.join(valve.VERDICTS_DIR, f"{session_id}.classifying")
+            try:
+                marker_age = time.time() - os.path.getmtime(marker)
+            except OSError:
+                marker_age = None
+            if marker_age is not None and marker_age < MARKER_FRESH_S:
+                deadline = time.time() + CLASSIFY_WAIT_S
+                while time.time() < deadline:
+                    time.sleep(0.25)
+                    block, seq, move_id = valve.pending_injection(mailbox_key)
+                    if block:
+                        valve.write_consumed(mailbox_key, seq)
+                        _block(block, {"seq": seq, "move_id": move_id, "stop_wait": True})
+                        return
+                    if not os.path.exists(marker):
+                        # Classification finished — one last read; deliver
+                        # and stop either way.
+                        block, seq, move_id = valve.pending_injection(mailbox_key)
+                        if block:
+                            valve.write_consumed(mailbox_key, seq)
+                            _block(block, {"seq": seq, "move_id": move_id, "stop_wait": True})
+                            return
+                        break
+
         # 2. No pending flag: deterministic, valve-selected mechanical check.
         transcript_path = data.get("transcript_path")
         if not transcript_path or not os.path.exists(transcript_path):

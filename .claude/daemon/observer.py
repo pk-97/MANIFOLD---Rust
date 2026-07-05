@@ -606,7 +606,27 @@ class Daemon:
         forked — the two paths cannot drift apart the way separately
         maintained copies would."""
         mb = mailbox if mailbox is not None else self
-        verdict = common.call_classifier(self.system_prompt, window["text"])
+        # Conditional Stop-wait (sleep pass 1): mark "classification in
+        # flight" so the Stop hook can wait a couple of seconds ONLY when a
+        # verdict is genuinely about to land — the chat-lag fix Peter asked
+        # for, without the flat per-turn wait he rejected. Main session only
+        # (chat lag is a main-turn phenomenon; worker Stops shouldn't pay).
+        marker = None
+        if mailbox is None:
+            marker = os.path.join(VERDICTS_DIR, f"{self.session_id}.classifying")
+            try:
+                with open(marker, "w", encoding="utf-8") as f:
+                    f.write(str(time.time()))
+            except OSError:
+                marker = None
+        try:
+            verdict = common.call_classifier(self.system_prompt, window["text"])
+        finally:
+            if marker:
+                try:
+                    os.remove(marker)
+                except OSError:
+                    pass
         if "error" in verdict:
             _log(logf, f"classifier error: {verdict['error']}")
             return  # fail open — leave the verdict file as it was
