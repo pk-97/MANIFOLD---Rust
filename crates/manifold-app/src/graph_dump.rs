@@ -373,9 +373,10 @@ mod tests {
         use manifold_gpu::{GpuDevice, GpuTextureFormat};
         use manifold_renderer::preset_runtime::PresetRuntime;
         use manifold_renderer::gpu_encoder::GpuEncoder as RGpuEncoder;
-        use manifold_renderer::preset_context::{MAX_GEN_PARAMS, PresetContext};
+        use manifold_renderer::preset_context::PresetContext;
         use manifold_renderer::node_graph::PrimitiveRegistry;
         use manifold_renderer::render_target::RenderTarget;
+        use manifold_core::params::ParamManifest;
 
         const FMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
         let (w, h) = (1280u32, 720u32);
@@ -391,6 +392,7 @@ mod tests {
             PresetRuntime::from_json_str_with_device(&json, &registry, &device, w, h, FMT)
                 .expect("build BlackHole generator");
         let target = RenderTarget::new(&device, w, h, FMT, "dump-target");
+        let params = ParamManifest::default();
 
         let mk_ctx = |t: f64| PresetContext {
             time: t,
@@ -406,8 +408,6 @@ mod tests {
             frame_count: 0,
             anim_progress: 0.0,
             trigger_count: 0,
-            params: [0.0; MAX_GEN_PARAMS],
-            param_count: 0,
         };
 
         // Warm up so the 800k-particle sim populates the disk (particles
@@ -416,7 +416,12 @@ mod tests {
             let mut enc = device.create_encoder("dump-warmup");
             {
                 let mut gpu = RGpuEncoder::new(&mut enc, &device);
-                generator.render(&mut gpu, &target.texture, &mk_ctx(f64::from(i) / 60.0));
+                generator.render(
+                    &mut gpu,
+                    &target.texture,
+                    &mk_ctx(f64::from(i) / 60.0),
+                    &params,
+                );
             }
             enc.commit_and_wait_completed();
         }
@@ -427,7 +432,7 @@ mod tests {
             let mut enc = device.create_encoder("dump-frame");
             {
                 let mut gpu = RGpuEncoder::new(&mut enc, &device);
-                generator.render(&mut gpu, &target.texture, &mk_ctx(90.0 / 60.0));
+                generator.render(&mut gpu, &target.texture, &mk_ctx(90.0 / 60.0), &params);
             }
             enc.commit_and_wait_completed();
         }
@@ -466,9 +471,10 @@ mod tests {
         use manifold_gpu::{GpuDevice, GpuTextureFormat};
         use manifold_renderer::preset_runtime::PresetRuntime;
         use manifold_renderer::gpu_encoder::GpuEncoder as RGpuEncoder;
-        use manifold_renderer::preset_context::{MAX_GEN_PARAMS, PresetContext};
+        use manifold_renderer::preset_context::PresetContext;
         use manifold_renderer::node_graph::PrimitiveRegistry;
         use manifold_renderer::render_target::RenderTarget;
+        use manifold_core::params::ParamManifest;
 
         // Set a node param's `value` (preserving its type tag) by numeric id.
         fn set_val(doc: &mut serde_json::Value, id: u64, key: &str, v: serde_json::Value) {
@@ -538,6 +544,7 @@ mod tests {
             )
             .expect("build variant");
             let target = RenderTarget::new(&device, w, h, FMT, "sweep-target");
+            let params = ParamManifest::default();
             let mk = |t: f64| PresetContext {
                 time: t,
                 beat: t * 2.0,
@@ -552,14 +559,17 @@ mod tests {
                 frame_count: 0,
                 anim_progress: 0.0,
                 trigger_count: 0,
-                params: [0.0; MAX_GEN_PARAMS],
-                param_count: 0,
             };
             for i in 0..90 {
                 let mut enc = device.create_encoder("sweep");
                 {
                     let mut gpu = RGpuEncoder::new(&mut enc, &device);
-                    generator.render(&mut gpu, &target.texture, &mk(f64::from(i) / 60.0));
+                    generator.render(
+                        &mut gpu,
+                        &target.texture,
+                        &mk(f64::from(i) / 60.0),
+                        &params,
+                    );
                 }
                 enc.commit_and_wait_completed();
             }

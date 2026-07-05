@@ -796,7 +796,7 @@ pub fn push_state(
                     manifold_core::preset_type_registry::display_name(effect.effect_type()),
                 );
                 card.sync_enabled(tree, effect.enabled);
-                card.sync_values(tree, &crate::ui_translate::param_slots_to_ui(&effect.param_values));
+                card.sync_values(tree, &crate::ui_translate::param_slots_to_ui(&effect.params));
             }
         }
 
@@ -812,7 +812,7 @@ pub fn push_state(
                         manifold_core::preset_type_registry::display_name(effect.effect_type()),
                     );
                     card.sync_enabled(tree, effect.enabled);
-                    card.sync_values(tree, &crate::ui_translate::param_slots_to_ui(&effect.param_values));
+                    card.sync_values(tree, &crate::ui_translate::param_slots_to_ui(&effect.params));
                 }
             }
         }
@@ -827,7 +827,7 @@ pub fn push_state(
                 tree,
                 manifold_core::preset_type_registry::display_name(gp_state.generator_type()),
             );
-            gp.sync_values(tree, &crate::ui_translate::param_slots_to_ui(&gp_state.param_values));
+            gp.sync_values(tree, &crate::ui_translate::param_slots_to_ui(&gp_state.params));
         }
     }
 }
@@ -1900,12 +1900,10 @@ fn preset_to_config(
         PresetKind::Effect => {
             // Effects: registry static prefix + per-instance user-tail bindings.
             let reg_def = reg_def.as_deref()?; // skip cards for def-less effects
-            let static_count = reg_def.param_count;
             let mut rows: Vec<SpecRow> = reg_def
                 .param_defs
                 .iter()
-                .enumerate()
-                .map(|(pi, pd)| SpecRow {
+                .map(|pd| SpecRow {
                     id: pd.id.clone(),
                     name: pd.name.clone(),
                     min: pd.min,
@@ -1917,10 +1915,10 @@ fn preset_to_config(
                     is_toggle: false,
                     is_trigger: false,
                     value_labels: pd.value_labels.clone(),
-                    exposed: inst.is_param_exposed(pi),
+                    exposed: inst.is_param_exposed(pd.id.as_ref()),
                 })
                 .collect();
-            for (j, ub) in inst.user_param_bindings().iter().enumerate() {
+            for ub in inst.user_param_bindings().iter() {
                 rows.push(SpecRow {
                     id: ub.id.clone(),
                     name: ub.label.clone(),
@@ -1936,7 +1934,7 @@ fn preset_to_config(
                     is_toggle: false,
                     is_trigger: false,
                     value_labels: None,
-                    exposed: inst.is_param_exposed(static_count + j),
+                    exposed: inst.is_param_exposed(ub.id.as_ref()),
                 });
             }
             rows

@@ -45,7 +45,7 @@ pub fn clip_content_hash(clip: &TimelineClip, layer: &Layer) -> u64 {
         // Generator: type + authored params + per-clip string params.
         1u8.hash(&mut h);
         gp.generator_type().as_str().hash(&mut h);
-        for v in &gp.param_values {
+        for v in gp.params.iter() {
             v.value.to_bits().hash(&mut h);
         }
         if let Some(sp) = &clip.string_params {

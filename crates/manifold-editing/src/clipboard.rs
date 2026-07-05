@@ -78,12 +78,12 @@ impl GeneratorClipboard {
             generator_type: state.generator_type().clone(),
             // Clipboard carries effective float values; exposure is host
             // state and doesn't travel with a copy/paste.
-            param_values: state.param_values.iter().map(|s| s.value).collect(),
-            // base rides each slot now (fork #16); snapshot it as the former
+            param_values: state.params.iter().map(|p| p.value).collect(),
+            // base rides each Param now; snapshot it as the former
             // Option<Vec<f32>> shape, present iff base is tracked.
             base_param_values: state
                 .base_tracked
-                .then(|| state.param_values.iter().map(|s| s.base).collect()),
+                .then(|| state.params.iter().map(|p| p.base).collect()),
             drivers: state.drivers.clone(),
             envelopes: state.envelopes.clone(),
         });

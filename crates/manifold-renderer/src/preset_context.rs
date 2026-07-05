@@ -15,10 +15,12 @@ pub const MAX_GEN_PARAMS: usize = 32;
 /// Copy + fixed-size array = zero allocation on the hot path.
 ///
 /// Effect construction sites set the generator-only fields
-/// (`aspect`, `anim_progress`, `trigger_count`, `params`, `param_count`)
-/// to sensible defaults; generator construction sites set the effect-only
-/// fields (`owner_key`, `is_clip_level`, `frame_count`) to their generator
-/// semantics (owner 0, not clip-level, frame_count 0 unless available).
+/// (`aspect`, `anim_progress`, `trigger_count`) to sensible defaults;
+/// generator construction sites set the effect-only fields (`owner_key`,
+/// `is_clip_level`, `frame_count`) to their generator semantics (owner 0,
+/// not clip-level, frame_count 0 unless available). Card param values are no
+/// longer staged here — the generator's [`ParamManifest`] is passed directly
+/// to [`crate::preset_runtime::PresetRuntime::render`].
 #[derive(Clone, Copy)]
 pub struct PresetContext {
     pub time: f64,
@@ -42,7 +44,4 @@ pub struct PresetContext {
     pub frame_count: i64,
     pub anim_progress: f32,
     pub trigger_count: u32,
-    /// Generator params copied from Layer.gen_params.param_values.
-    pub params: [f32; MAX_GEN_PARAMS],
-    pub param_count: u32,
 }

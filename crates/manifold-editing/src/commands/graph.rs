@@ -968,6 +968,12 @@ pub struct RevertEffectGraphCommand {
     /// that were hung on user-added params the cleared graph carried. Captured
     /// for undo; empty when the graph had no such params.
     removed_automation: manifold_core::effects::RemovedAutomation,
+    /// User-added params the cleared graph carried, captured at their original
+    /// display positions so undo can re-insert them exactly. Removing them is
+    /// what makes `prune_orphaned_automation` see the driver's target gone and
+    /// prune it (PARAM_STORAGE_DESIGN.md D3); without it the manifest still
+    /// holds the orphaned param and the sweep is a no-op.
+    removed_params: Vec<(usize, manifold_core::params::Param)>,
 }
 
 impl RevertEffectGraphCommand {
@@ -976,6 +982,7 @@ impl RevertEffectGraphCommand {
             target,
             previous: None,
             removed_automation: Default::default(),
+            removed_params: Vec::new(),
         }
     }
 }
@@ -990,10 +997,36 @@ impl Command for RevertEffectGraphCommand {
             // Re-execute (after undo): clear without re-capturing.
             install_target_graph(project, &self.target, None);
         }
-        // The graph (and any user-added bindings it carried) is gone, so
-        // automation that targeted those params no longer resolves. Sweep it,
-        // capturing the rows once so undo can re-attach them with the graph.
+        // The graph (and any user-added bindings it carried) is gone, so the
+        // manifest's user-added params are now orphaned. Remove them BEFORE the
+        // automation sweep — that is what makes `prune_orphaned_automation` see
+        // the driver's target gone and prune it. Capture them at their original
+        // positions so undo re-inserts exactly. Automation is captured once too.
         if let Some(inst) = project.preset_instance_mut(&self.target) {
+            if first {
+                self.removed_params.clear();
+                // Original positions first — removal shifts indices, so record
+                // them before removing anything, then remove by id.
+                let to_remove: Vec<(usize, String)> = inst
+                    .params
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| {
+                        p.origin == manifold_core::params::ParamOrigin::UserAdded
+                    })
+                    .map(|(i, p)| (i, p.id().to_string()))
+                    .collect();
+                for (pos, id) in &to_remove {
+                    if let Some(p) = inst.params.remove(id) {
+                        self.removed_params.push((*pos, p));
+                    }
+                }
+            } else {
+                // Redo without an intervening undo: re-remove the same params.
+                for (_, p) in &self.removed_params {
+                    inst.params.remove(p.id());
+                }
+            }
             let pruned = inst.prune_orphaned_automation();
             if first {
                 self.removed_automation = pruned;
@@ -1007,7 +1040,13 @@ impl Command for RevertEffectGraphCommand {
         };
         install_target_graph(project, &self.target, prev);
         let restored = std::mem::take(&mut self.removed_automation);
+        let params = std::mem::take(&mut self.removed_params);
         if let Some(inst) = project.preset_instance_mut(&self.target) {
+            // Re-insert the removed params at their captured positions (ascending
+            // order) before re-attaching automation.
+            for (pos, p) in params {
+                inst.params.insert_at(pos, p);
+            }
             inst.restore_automation(restored);
         }
     }
@@ -1122,9 +1161,9 @@ enum NodeExposeReverse {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 enum EffectMirrorReverse {
-    /// The (handle, param) maps to a static-block slot; we flipped
-    /// `param_values[slot].exposed`. Undo restores `prev_exposed`.
-    StaticSlot { slot: usize, prev_exposed: bool },
+    /// The (handle, param) maps to a bundled-prefix param; we flipped its
+    /// exposure via `set_param_exposed`. Undo restores `prev_exposed`.
+    StaticSlot { param_id: String, prev_exposed: bool },
     /// The (handle, param) is a non-preset param; we appended a
     /// `UserParamBinding`. Undo removes it by id.
     AppendedUserBinding {
@@ -1132,13 +1171,13 @@ enum EffectMirrorReverse {
     },
     /// The (handle, param) is a non-preset param; we removed an
     /// existing `UserParamBinding`. Undo reinserts it at `position`
-    /// with the captured slot value, plus re-attaches any orphaned
+    /// with the captured manifest entry, plus re-attaches any orphaned
     /// drivers / Ableton mappings / envelopes that referenced the
     /// binding's id.
     RemovedUserBinding {
         binding: manifold_core::effects::UserParamBinding,
         position: usize,
-        slot_value: manifold_core::effects::ParamSlot,
+        param: manifold_core::params::Param,
         /// Drivers pruned from `PresetInstance.drivers` because their
         /// `param_id` matched the removed binding's id. Without this
         /// pruning the rows would survive in the project file but
@@ -1471,19 +1510,22 @@ fn mirror_effect_side(
     inner_is_angle: bool,
     inner_value_labels: &[String],
 ) -> EffectMirrorReverse {
-    use manifold_core::effects::{ParamSlot, UserParamBinding};
+    use manifold_core::effects::UserParamBinding;
 
     if let Some(slot) = static_slot {
-        // Static-block path: flip param_values[slot].exposed.
-        let Some(s) = effect.param_values.get_mut(slot) else {
+        // Bundled-prefix path: flip the exposure flag on the slot-th manifest
+        // entry (bundled params occupy the prefix, in card order). Resolve the
+        // positional slot to its stable id so undo re-addresses the same param.
+        let Some(param_id) = effect.params.iter().nth(slot).map(|p| p.id().to_string())
+        else {
             return EffectMirrorReverse::NoOp;
         };
-        if s.exposed == expose {
+        let prev_exposed = effect.is_param_exposed(&param_id);
+        if prev_exposed == expose {
             return EffectMirrorReverse::NoOp;
         }
-        let prev_exposed = s.exposed;
-        s.exposed = expose;
-        return EffectMirrorReverse::StaticSlot { slot, prev_exposed };
+        effect.set_param_exposed(&param_id, expose);
+        return EffectMirrorReverse::StaticSlot { param_id, prev_exposed };
     }
 
     // Non-static path: append / remove a user-added binding (stored in
@@ -1531,16 +1573,16 @@ fn mirror_effect_side(
         };
         let binding = user_bindings[position].clone();
         let binding_id = binding.id.clone();
-        // Capture the slot value BEFORE removal (the slot lives at
-        // static_count + position). Kind-aware so a generator instance routes
-        // through here too (mirror collapse).
-        let static_count = effect.static_param_count();
-        let slot_idx = static_count + position;
-        let slot_value = effect
-            .param_values
-            .get(slot_idx)
-            .copied()
-            .unwrap_or(ParamSlot::exposed(inner_default));
+        // Capture the full manifest entry BEFORE removal so undo reinstates
+        // the exact snapshot (value + base + calibration). The entry is
+        // coupled to the binding by id (append/remove keep them in lockstep),
+        // so there is no positional slot to compute — a generator instance
+        // routes through here too (mirror collapse).
+        let param = effect
+            .params
+            .get(&binding_id)
+            .cloned()
+            .expect("manifest entry present for a live user binding");
         // Prune any effect-local automation that referenced this
         // binding's id. After removal the id stops resolving anywhere
         // and the rows would silently never apply — capture them on
@@ -1598,7 +1640,7 @@ fn mirror_effect_side(
         EffectMirrorReverse::RemovedUserBinding {
             binding,
             position,
-            slot_value,
+            param,
             removed_drivers,
             removed_ableton_mappings,
             removed_envelopes,
@@ -1612,10 +1654,8 @@ fn unmirror_effect_side(
 ) {
     match mirror {
         EffectMirrorReverse::NoOp => {}
-        EffectMirrorReverse::StaticSlot { slot, prev_exposed } => {
-            if let Some(s) = effect.param_values.get_mut(slot) {
-                s.exposed = prev_exposed;
-            }
+        EffectMirrorReverse::StaticSlot { param_id, prev_exposed } => {
+            effect.set_param_exposed(&param_id, prev_exposed);
         }
         EffectMirrorReverse::AppendedUserBinding { user_param_id } => {
             let _ = effect.remove_user_binding_by_id(&user_param_id);
@@ -1623,18 +1663,18 @@ fn unmirror_effect_side(
         EffectMirrorReverse::RemovedUserBinding {
             binding,
             position,
-            slot_value,
+            param,
             removed_drivers,
             removed_ableton_mappings,
             removed_envelopes,
         } => {
             // Restore the binding (graph metadata + reshape note) and its
-            // value slot at the original tail position so other user
-            // bindings keep their slot indices.
-            effect.restore_user_binding_at(binding, position, slot_value);
+            // manifest entry at the original tail position so other user
+            // bindings keep their card order.
+            effect.restore_user_binding_at(binding, position, param);
             // Restore the automation rows that referenced this binding.
-            // The same id now resolves through `param_id_to_value_index`
-            // since we re-inserted the binding above.
+            // The same id resolves through the manifest again since we
+            // re-inserted the binding above.
             if !removed_drivers.is_empty() {
                 effect
                     .drivers
@@ -2173,6 +2213,28 @@ mod tests {
     use manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION;
     use manifold_core::effects::PresetInstance;
 
+    fn slot(id: &str, value: f32, exposed: bool) -> manifold_core::params::Param {
+        let mut p = manifold_core::params::Param::bundled(manifold_core::effect_graph_def::ParamSpecDef {
+            id: id.into(),
+            name: id.into(),
+            min: 0.0,
+            max: 1.0,
+            default_value: value,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: vec![],
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: Default::default(),
+            invert: false,
+        });
+        p.value = value;
+        p.base = value;
+        p.exposed = exposed;
+        p
+    }
+
     // ── node groups: group / ungroup commands ──
 
     fn abc_graph() -> EffectGraphDef {
@@ -2670,7 +2732,6 @@ mod tests {
         use manifold_core::effect_graph_def::{
             BindingDef, BindingTarget, ParamSpecDef, PresetMetadata,
         };
-        use manifold_core::effects::ParamSlot;
         use manifold_core::NodeId;
 
         let (mut project, id) = project_with_one_master_effect();
@@ -2721,7 +2782,7 @@ mod tests {
         {
             let fx = project.find_effect_by_id_mut(&id).unwrap();
             fx.graph = Some(def);
-            fx.param_values = vec![ParamSlot::exposed(0.5)];
+            fx.params = manifold_core::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
         }
 
         let mut cmd = RemoveGraphNodeCommand::new(
@@ -2739,7 +2800,7 @@ mod tests {
         let meta = fx.graph.as_ref().unwrap().preset_metadata.as_ref().unwrap();
         assert!(meta.bindings.is_empty(), "bound slider's binding pruned");
         assert!(meta.params.is_empty(), "bound slider's param spec pruned");
-        assert!(fx.param_values.is_empty(), "its value slot pruned");
+        assert!(fx.params.is_empty(), "its value slot pruned");
 
         cmd.undo(&mut project);
         let fx = project.find_effect_by_id(&id).unwrap();
@@ -2750,11 +2811,11 @@ mod tests {
         let meta = fx.graph.as_ref().unwrap().preset_metadata.as_ref().unwrap();
         assert_eq!(meta.bindings.len(), 1, "binding restored");
         assert_eq!(meta.params.len(), 1, "param spec restored");
-        assert_eq!(
-            fx.param_values,
-            vec![ParamSlot::exposed(0.5)],
-            "value slot restored"
-        );
+        assert_eq!(fx.params.len(), 1, "value slot restored");
+        let restored = fx.params.get("amount").unwrap();
+        assert_eq!(restored.value, 0.5);
+        assert_eq!(restored.base, 0.5);
+        assert!(restored.exposed);
     }
 
     #[test]
@@ -3425,11 +3486,11 @@ mod tests {
             // Override values after init — the registry doesn't know
             // about our synthetic preset, so init may leave the vec
             // empty. Force the bundled slot count to match the preset.
-            gp.param_values = vec![
-                manifold_core::effects::ParamSlot::exposed(0.0),
-                manifold_core::effects::ParamSlot::exposed(1.0),
-            ];
-            // ParamSlot::exposed seeds base = value; mark base tracked (fork #16).
+            gp.params = manifold_core::params::ParamManifest::from_params(vec![
+                slot("shape", 0.0, true),
+                slot("scale", 1.0, true),
+            ]);
+            // slot() seeds base = value; mark base tracked (fork #16).
             gp.base_tracked = true;
         }
 
@@ -3490,12 +3551,12 @@ mod tests {
             "id follows the user.<handle>.<param>.<n> convention, got `{user_param_id}`"
         );
 
-        // gp.param_values grew by one to match.
+        // gp.params grew by one to match.
         let gp = layer.gen_params().unwrap();
         assert_eq!(
-            gp.param_values.len(),
+            gp.params.len(),
             3,
-            "param_values grew by one slot for the user-added binding"
+            "params grew by one slot for the user-added binding"
         );
 
         // exposed_params on the render node now contains "animate".
@@ -3521,7 +3582,7 @@ mod tests {
             "undo removes the user-added binding"
         );
         let gp = layer.gen_params().unwrap();
-        assert_eq!(gp.param_values.len(), 2, "undo pops the user-added slot");
+        assert_eq!(gp.params.len(), 2, "undo pops the user-added slot");
         let render_node = def
             .nodes
             .iter()
@@ -3681,10 +3742,10 @@ mod tests {
             gp.init_defaults_for_type(PresetTypeId::from_string(
                 "test.wireframe".to_string(),
             ));
-            gp.param_values = vec![
-                manifold_core::effects::ParamSlot::exposed(0.0),
-                manifold_core::effects::ParamSlot::exposed(0.75),
-            ]; // bundled `shape` + user-added `animate`
+            gp.params = manifold_core::params::ParamManifest::from_params(vec![
+                slot("shape", 0.0, true),
+                slot("user.render.animate.1", 0.75, true),
+            ]); // bundled `shape` + user-added `animate`
             gp.base_tracked = true;
             // Attach a driver + envelope on the user-added id — they
             // should get pruned on unexpose and restored on undo.
@@ -3733,8 +3794,12 @@ mod tests {
         assert_eq!(meta.bindings[0].id, "shape", "bundled binding survives");
 
         let gp = layer.gen_params().unwrap();
-        assert_eq!(gp.param_values.len(), 1, "user-added slot removed");
-        assert_eq!(gp.param_values[0].value, 0.0, "bundled `shape` value intact");
+        assert_eq!(gp.params.len(), 1, "user-added slot removed");
+        assert_eq!(
+            gp.params.get("shape").unwrap().value,
+            0.0,
+            "bundled `shape` value intact"
+        );
         assert!(
             gp.drivers.is_none() || gp.drivers.as_ref().unwrap().is_empty(),
             "driver referencing user-added id pruned"
@@ -3755,9 +3820,9 @@ mod tests {
         assert!(meta.bindings[1].user_added);
 
         let gp = layer.gen_params().unwrap();
-        assert_eq!(gp.param_values.len(), 2, "undo restores the slot");
+        assert_eq!(gp.params.len(), 2, "undo restores the slot");
         assert!(
-            (gp.param_values[1].value - 0.75).abs() < f32::EPSILON,
+            (gp.params.get("user.render.animate.1").unwrap().value - 0.75).abs() < f32::EPSILON,
             "slot value (0.75) restored"
         );
         assert_eq!(

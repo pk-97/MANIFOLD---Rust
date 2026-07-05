@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 214 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 216 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -97,7 +97,7 @@ _Generated from the node registry. Do not hand-edit. 214 nodes registered, group
 | Vignette | `node.vignette` | Filter | Darkens the edges of the frame to pull the eye inward, with a circle, oval, or rectangular falloff. The cinematic edge fade. |
 | — | `node.watercolor` | Filter | A watercolor look built from a seven-pass feedback simulation, with grain, flow, diffusion, and soft bleeding edges. A legacy bundle still waiting to be decomp… |
 
-### Generate (9)
+### Generate (10)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -105,6 +105,7 @@ _Generated from the node registry. Do not hand-edit. 214 nodes registered, group
 | Checkerboard | `node.checkerboard` | Source | Lays down an alternating black and white checker grid at any scale. Handy as a test pattern, a mask, or a base for tiled looks. |
 | Draw Lines | `node.draw_lines` | Filter | Draws a set of smooth anti-aliased lines onto the image from a list of points. Used for wireframes, paths, and curve overlays. |
 | Draw Rectangles | `node.draw_rectangles` | Filter | Draws a batch of filled rectangles onto the image from a list of positions and sizes. Good for bars, blocks, and data overlays. |
+| glTF Texture | `node.gltf_texture_source` | Source | Loads an embedded image from a glTF/.glb file as a texture, so an imported model's baked-in albedo/alpha map flows into the render pipeline like any other text… |
 | Gradient | `node.gradient` | Source | Builds a colour gradient as a strip you can use as a lookup table or feed into Gradient Map. Add as many colour stops as you like. |
 | Image Folder | `node.image_folder` | Source | Plays through a folder of images with a single position knob, so you can scrub or sequence stills. Point it at a folder and drive the position. |
 | Linear Gradient | `node.linear_gradient` | Source | A straight light-to-dark ramp across the frame at any angle. The simplest gradient, good for fades, masks, and ramps to drive other effects. |
@@ -145,7 +146,7 @@ _Generated from the node registry. Do not hand-edit. 214 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (28)
+### 3D Geometry (29)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -158,6 +159,7 @@ _Generated from the node registry. Do not hand-edit. 214 nodes registered, group
 | Flatten 3D → 2D | `node.flatten_3d` | Filter | Flattens a 3D mesh down to 2D points using a camera, so you can draw it as lines. The projection step for wireframe rendering. |
 | Flatten 4D → 3D | `node.flatten_4d` | Filter | Flattens 4D geometry like a tesseract down toward 3D, the first step in drawing a four-dimensional shape. |
 | Free Camera | `node.free_camera` | Source | A free-look camera positioned and aimed directly with Euler angles, instead of orbiting a target. Gizmo- and import-friendly. |
+| glTF Mesh | `node.gltf_mesh_source` | Source | Loads a glTF/.glb model file from disk as mesh geometry, so imported 3D assets flow into the render pipeline like any other shape primitive. |
 | Grid Edges | `node.grid_edges` | Source | Outputs the wireframe edges that connect a grid of points, so you can draw the grid as a mesh of lines. |
 | Grid Mesh | `node.grid_mesh` | Source | Builds a flat grid of points as a 3D mesh, the base for terrain, cloth, and displacement looks. Pair it with Surface Bumps or Push Mesh. |
 | Grid Points (UV) | `node.grid_points` | Source | Outputs a grid of U and V values sampling a parametric surface, the input for building curved meshes and wireframes. |

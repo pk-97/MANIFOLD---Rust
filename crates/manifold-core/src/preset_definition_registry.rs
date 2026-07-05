@@ -359,9 +359,14 @@ pub fn create_default(type_id: &PresetTypeId) -> crate::effects::PresetInstance 
         PresetKind::Generator => crate::effects::PresetInstance::new_generator(type_id.clone()),
         PresetKind::Effect => {
             let mut inst = crate::effects::PresetInstance::new(type_id.clone());
-            for (i, pd) in def.param_defs.iter().enumerate() {
-                inst.write_base_param(i, pd.default_value);
-            }
+            // Seed the manifest whole from the registry template (D2).
+            inst.params = crate::params::ParamManifest::from_params(
+                def.param_defs
+                    .iter()
+                    .map(|pd| crate::params::Param::bundled(pd.to_spec()))
+                    .collect(),
+            );
+            inst.base_tracked = true;
             inst
         }
     }
@@ -421,12 +426,13 @@ pub fn get_osc_address_for_layer(
     Some(format!("/layer/{}/{}/{}", layer_id, prefix, param_id))
 }
 
-/// Default parameter values as freshly-allocated `ParamSlot`s, all exposed.
-pub fn get_defaults(type_id: &PresetTypeId) -> Vec<crate::effects::ParamSlot> {
+/// Default parameters as freshly-seeded bundled [`crate::params::Param`]s, all
+/// exposed, value = base = default.
+pub fn get_defaults(type_id: &PresetTypeId) -> Vec<crate::params::Param> {
     let def = get(type_id);
     def.param_defs
         .iter()
-        .map(|p| crate::effects::ParamSlot::exposed(p.default_value))
+        .map(|pd| crate::params::Param::bundled(pd.to_spec()))
         .collect()
 }
 
@@ -752,8 +758,8 @@ mod tests {
         let inst = create_default(&PresetTypeId::BLOOM);
         assert_eq!(*inst.effect_type(), PresetTypeId::BLOOM);
         assert!(inst.enabled);
-        assert_eq!(inst.param_values.len(), 1);
-        assert!((inst.param_values[0].value - 0.187).abs() < 1e-6);
+        assert_eq!(inst.params.len(), 1);
+        assert!((inst.params.get("amount").unwrap().value - 0.187).abs() < 1e-6);
     }
 
     #[test]

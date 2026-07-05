@@ -56,7 +56,7 @@
 use std::borrow::Cow;
 
 use manifold_core::NodeId;
-use manifold_core::effects::ParamSlot;
+use manifold_core::params::ParamManifest;
 
 use crate::node_graph::composites::CompositeHandle;
 use crate::node_graph::effect_node::NodeInstanceId;
@@ -215,25 +215,20 @@ pub enum ResolvedTarget {
 /// Fully-resolved per-effect binding. One per outer→inner *routing*
 /// (static or user-exposed) on the slot's effect.
 ///
-/// Stored in `EffectSlot.bindings` as a flat vector. Today every entry
-/// in this list corresponds 1:1 with one outer slot in
-/// `PresetInstance.param_values` — static bindings in
-/// `bindings[0..n_static]` matching `param_values[0..n_static]`, user
-/// bindings in `bindings[n_static..]` matching `param_values[n_static..]`.
+/// Stored in `EffectSlot.bindings` as a flat vector. Each entry reads its
+/// value from `PresetInstance.params` (the id-keyed manifest) by
+/// [`Self::source_id`] — static and user bindings alike, no positional
+/// prefix/tail split.
 ///
-/// **`source_index` is the load-bearing invariant.** It records which
-/// `param_values` slot this binding reads from. The per-frame
-/// [`apply_bindings`] loop indexes `values[binding.source_index]`,
-/// NOT `values[i]`. Today every value of `source_index` happens to
-/// equal the binding's own position — the 1:1 architectural shape
-/// makes that automatic — but the apply path no longer assumes it.
-/// Future fan-out (one outer slot driving multiple inner params, the
-/// way Lissajous's `clip_trigger` drives two `mux.selector` targets on
-/// the generator side) becomes expressible by pushing two bindings
-/// with the same `source_index`, and the apply loop handles it without
-/// further plumbing. This closes the "binding position silently
-/// strands a fan-out target on its default_value" bug class
-/// architecturally, not just on the generator side.
+/// **`source_id` is the load-bearing invariant.** It records which manifest
+/// param this binding reads from. The per-frame [`apply_bindings`] loop does
+/// `values.get(&binding.source_id)`, NOT `values[i]` — the id is the identity,
+/// so a reorder or a neighbour delete can't misroute it (the exact bug class
+/// the manifest redesign kills). Fan-out (one outer param driving multiple
+/// inner targets, the way Lissajous's `clip_trigger` drives two `mux.selector`
+/// targets on the generator side) is expressible by pushing two bindings with
+/// the same `source_id`, and the apply loop handles it without further
+/// plumbing.
 #[derive(Debug, Clone)]
 pub struct ResolvedBinding {
     pub id: ParamId,
@@ -242,11 +237,11 @@ pub struct ResolvedBinding {
     pub target: ResolvedTarget,
     pub convert: ParamConvert,
     pub source: BindingSource,
-    /// Position in `PresetInstance.param_values` this binding reads
-    /// from. See struct doc for the invariant — distinct from the
-    /// binding's own position in `EffectSlot.bindings` once fan-out
-    /// is expressed.
-    pub source_index: usize,
+    /// Manifest id this binding reads its value from. Usually equal to
+    /// [`Self::id`] (1:1); a fan-out pushes two bindings with the same
+    /// `source_id`. The value is `values.get(&source_id).value`, falling back
+    /// to `default_value` when the id isn't in the manifest.
+    pub source_id: ParamId,
     /// `Some` only for User bindings with a non-identity card mapping
     /// (invert or a non-Linear curve); `None` for static bindings and
     /// identity User bindings, which then pay nothing and stay 1:1.
@@ -349,10 +344,9 @@ impl ResolvedBinding {
     /// other variants pass through. Returns `None` when the binding's
     /// id isn't in `node_map` — caller logs and drops the orphan binding.
     ///
-    /// `source_index` is the position in `PresetInstance.param_values`
-    /// this binding reads from. Callers building the 1:1 static prefix
-    /// pass the binding's enumerate position; a future caller wiring
-    /// fan-out would pass the matching outer slot's position.
+    /// `source_id` is the manifest id this binding reads from — the binding's
+    /// own id for the 1:1 case (a fan-out caller would pass the shared driver
+    /// id instead).
     ///
     /// The reshape is built from the PRESET's own slider response
     /// (`ParamSpecDef.curve`/`.invert` + range, carried on `ParamBinding`)
@@ -364,7 +358,6 @@ impl ResolvedBinding {
     pub fn from_static(
         b: &ParamBinding,
         node_map: &[(NodeId, NodeInstanceId)],
-        source_index: usize,
     ) -> Option<Self> {
         let target = match &b.target {
             ParamTarget::Composite { outer_name } => ResolvedTarget::Composite {
@@ -385,7 +378,7 @@ impl ResolvedBinding {
             target,
             b.convert,
             BindingSource::Static,
-            source_index,
+            b.id.clone(),
             reshape,
             false,
         ))
@@ -399,15 +392,12 @@ impl ResolvedBinding {
     /// and skips — orphan bindings remain in the project file but render
     /// inert until they re-bind.
     ///
-    /// `source_index` is the position in `PresetInstance.param_values`
-    /// this binding reads from — for the user tail, that's
-    /// `n_static + j` where `j` is the binding's position within
-    /// `PresetInstance.user_param_bindings`.
+    /// `source_id` is the manifest id this binding reads from — the user
+    /// binding's own id (`core.id`).
     pub fn from_user(
         core: &manifold_core::effects::UserParamBinding,
         graph: &Graph,
         node_map: &[(NodeId, NodeInstanceId)],
-        source_index: usize,
     ) -> Option<Self> {
         let target_node = resolve_node_id(node_map, &core.node_id)?;
         let inst = graph.get_node(target_node)?;
@@ -458,7 +448,7 @@ impl ResolvedBinding {
             },
             convert,
             BindingSource::User,
-            source_index,
+            Cow::Owned(core.id.clone()),
             reshape,
             wraps_angle,
         ))
@@ -479,7 +469,7 @@ impl ResolvedBinding {
         target: ResolvedTarget,
         convert: ParamConvert,
         source: BindingSource,
-        source_index: usize,
+        source_id: ParamId,
         reshape: Option<Reshape>,
         wraps_angle: bool,
     ) -> Self {
@@ -490,7 +480,7 @@ impl ResolvedBinding {
             target,
             convert,
             source,
-            source_index,
+            source_id,
             reshape,
             wraps_angle,
         }
@@ -538,26 +528,23 @@ impl ResolvedBinding {
 
 // ─── Apply loop + cache ──────────────────────────────────────────────
 
-/// Apply every binding in the unified slice against the corresponding
-/// `values` slot. **One walk, one slice, one cache.** Static bindings
-/// live in `bindings[0..n_static]`, user bindings in
-/// `bindings[n_static..]`; the apply loop doesn't care which is which,
-/// it just walks the unified list and pulls each binding's source via
-/// `values[binding.source_index]`.
+/// Apply every binding in the unified slice against its manifest param.
+/// **One walk, one manifest, one cache.** Static and user bindings share
+/// the list; the apply loop doesn't care which is which — it pulls each
+/// binding's value via `values.get(&binding.source_id)`.
 ///
-/// **Why `source_index` rather than positional.** A position-keyed walk
-/// only works under the 1:1 invariant (one binding per outer slot).
-/// The mirror code path on the generator side (`JsonGraphGenerator`)
-/// hit a real bug there — Lissajous's single `clip_trigger` toggle
-/// fan-outs to two inner targets, the second was indexed past the
-/// end of `values`, and stayed pinned at its default forever. Effects
-/// don't currently express fan-out, but routing through
-/// `source_index` closes the bug class architecturally on both sides
-/// so a future fan-out shape is correct by construction.
+/// **Why `source_id` rather than positional.** A position-keyed walk only
+/// works under the 1:1 invariant (one binding per outer slot). The mirror
+/// code path on the generator side (`JsonGraphGenerator`) hit a real bug
+/// there — Lissajous's single `clip_trigger` toggle fan-outs to two inner
+/// targets, the second was indexed past the end of the value array and
+/// stayed pinned at its default forever. Routing through `source_id` (the
+/// manifest is id-keyed) closes the bug class architecturally on both sides,
+/// and a neighbour delete or reorder can no longer misroute a binding.
 ///
-/// If a binding's `source_index` is past the end of `values` (host
-/// truncated the slot array, project file pre-dates an outer slot
-/// addition), the binding falls back to its own `default_value`.
+/// If a binding's `source_id` isn't in the manifest (the param was removed,
+/// or a project file pre-dates an outer param addition), the binding falls
+/// back to its own `default_value`.
 ///
 /// **Per-binding failures are logged, not fatal.** A routing error
 /// means the graph has been mutated out from under the binding (target
@@ -570,7 +557,7 @@ pub fn apply_bindings(
     bindings: &[ResolvedBinding],
     graph: &mut Graph,
     handle: Option<&CompositeHandle>,
-    values: &[ParamSlot],
+    values: &ParamManifest,
     last_applied: &mut LastAppliedCache,
 ) {
     last_applied
@@ -578,7 +565,7 @@ pub fn apply_bindings(
         .resize(bindings.len(), BindingCacheEntry::Unset);
     for (i, binding) in bindings.iter().enumerate() {
         let value = values
-            .get(binding.source_index)
+            .get(binding.source_id.as_ref())
             .map(|p| p.value)
             .unwrap_or(binding.default_value);
         match last_applied.entries[i] {
@@ -749,15 +736,15 @@ impl LastAppliedCache {
 ///
 /// Used by effects that need to inspect a param value outside the
 /// normal [`apply_bindings`] flow (e.g. `should_skip` predicates).
-/// Returns `None` if the id matches nothing or the values slice is
-/// shorter than the resolved index.
+/// Returns `None` if the id matches no binding or the binding's
+/// `source_id` isn't in the manifest.
 pub fn binding_value(
     bindings: &[ResolvedBinding],
-    values: &[ParamSlot],
+    values: &ParamManifest,
     id: &str,
 ) -> Option<f32> {
-    let idx = bindings.iter().position(|b| b.id == id)?;
-    values.get(idx).map(|p| p.value)
+    let b = bindings.iter().find(|b| b.id == id)?;
+    values.get(b.source_id.as_ref()).map(|p| p.value)
 }
 
 /// Walk the slot's unified bindings, a composite handle, and the live
@@ -824,6 +811,33 @@ pub fn outer_routings_from_bindings(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::effect_graph_def::ParamSpecDef;
+    use manifold_core::params::Param;
+
+    /// Build a single id-keyed manifest param for test [`ParamManifest`]
+    /// literals — mirrors the outer-card slot the binding runtime now
+    /// reads by id instead of by position.
+    fn slot(id: &str, value: f32, exposed: bool) -> Param {
+        let mut p = Param::bundled(ParamSpecDef {
+            id: id.into(),
+            name: id.into(),
+            min: 0.0,
+            max: 1.0,
+            default_value: value,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: vec![],
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: Default::default(),
+            invert: false,
+        });
+        p.value = value;
+        p.base = value;
+        p.exposed = exposed;
+        p
+    }
 
     #[test]
     fn from_static_folds_scale_offset_into_reshape() {
@@ -832,7 +846,7 @@ mod tests {
         // Identity scale/offset → no reshape, so every un-folded preset
         // binding stays byte-identical.
         let plain = static_amount_binding();
-        let rb = ResolvedBinding::from_static(&plain, &node_map, 0).unwrap();
+        let rb = ResolvedBinding::from_static(&plain, &node_map).unwrap();
         assert!(
             rb.reshape.is_none(),
             "identity scale/offset must carry no reshape"
@@ -842,7 +856,7 @@ mod tests {
         // consumer must see 85·π/180 rad, byte-identical to the old node.
         let mut folded = static_amount_binding();
         folded.scale = std::f32::consts::PI / 180.0;
-        let rb = ResolvedBinding::from_static(&folded, &node_map, 0).unwrap();
+        let rb = ResolvedBinding::from_static(&folded, &node_map).unwrap();
         let reshape = rb.reshape.expect("non-identity scale carries a reshape");
         let expected = 85.0_f32 * std::f32::consts::PI / 180.0;
         assert!(
@@ -1026,7 +1040,7 @@ mod tests {
             },
             convert: ParamConvert::Float,
             source: BindingSource::Static,
-            source_index: 0,
+            source_id: Cow::Borrowed("amount"),
             reshape: None,
             wraps_angle: false,
         }
@@ -1037,7 +1051,7 @@ mod tests {
         let mut g = Graph::new();
         let _src = g.add_node(Box::new(Source::new()));
         let feedback = add_feedback_node(&mut g);
-        let rb = ResolvedBinding::from_static(&static_amount_binding(), &node_map_for(feedback), 0)
+        let rb = ResolvedBinding::from_static(&static_amount_binding(), &node_map_for(feedback))
             .expect("node id present");
         match rb.target {
             ResolvedTarget::Node { node, param } => {
@@ -1057,7 +1071,7 @@ mod tests {
         let mut g = Graph::new();
         let _feedback = add_feedback_node(&mut g);
         let nope: Vec<(NodeId, NodeInstanceId)> = vec![];
-        assert!(ResolvedBinding::from_static(&static_amount_binding(), &nope, 0).is_none());
+        assert!(ResolvedBinding::from_static(&static_amount_binding(), &nope).is_none());
     }
 
     #[test]
@@ -1081,7 +1095,7 @@ mod tests {
             offset: 0.0,
             value_labels: Vec::new(),
         };
-        let rb = ResolvedBinding::from_user(&core, &g, &node_map_for(feedback), 0)
+        let rb = ResolvedBinding::from_user(&core, &g, &node_map_for(feedback))
             .expect("user binding hydrates");
         match rb.target {
             ResolvedTarget::Node { node, param } => {
@@ -1115,7 +1129,7 @@ mod tests {
             value_labels: Vec::new(),
         };
         let node_map: Vec<(NodeId, NodeInstanceId)> = vec![];
-        assert!(ResolvedBinding::from_user(&core, &g, &node_map, 0).is_none());
+        assert!(ResolvedBinding::from_user(&core, &g, &node_map).is_none());
     }
 
     #[test]
@@ -1139,7 +1153,7 @@ mod tests {
             offset: 0.0,
             value_labels: Vec::new(),
         };
-        assert!(ResolvedBinding::from_user(&core, &g, &node_map_for(feedback), 0).is_none());
+        assert!(ResolvedBinding::from_user(&core, &g, &node_map_for(feedback)).is_none());
     }
 
     // ---- apply() routing tests ----
@@ -1177,7 +1191,7 @@ mod tests {
             },
             convert: ParamConvert::Float,
             source: BindingSource::Static,
-            source_index: 0,
+            source_id: Cow::Borrowed("nonexistent"),
             reshape: None,
             wraps_angle: false,
         };
@@ -1202,7 +1216,7 @@ mod tests {
             },
             convert: ParamConvert::EnumRound,
             source: BindingSource::Static,
-            source_index: 0,
+            source_id: Cow::Borrowed("mode"),
             reshape: None,
             wraps_angle: false,
         };
@@ -1236,7 +1250,7 @@ mod tests {
             },
             convert: ParamConvert::Float,
             source: BindingSource::Static,
-            source_index: 0,
+            source_id: Cow::Borrowed("blend_strength"),
             reshape: None,
             wraps_angle: false,
         };
@@ -1273,7 +1287,7 @@ mod tests {
             },
             convert: ParamConvert::Float,
             source: BindingSource::User,
-            source_index: 0,
+            source_id: Cow::Borrowed("rot"),
             reshape: None,
             wraps_angle: true,
         };
@@ -1321,18 +1335,19 @@ mod tests {
                 },
                 convert: ParamConvert::Float,
                 source: BindingSource::Static,
-                source_index: 1,
+                source_id: Cow::Borrowed("zoom"),
                 reshape: None,
                 wraps_angle: false,
             },
         ];
 
-        // Provide only one value — second falls back to default 0.95.
+        // Provide only one value — second falls back to default 0.95
+        // (its `source_id`, "zoom", isn't in the manifest at all).
         apply_bindings(
             &bindings,
             &mut g,
             None,
-            &[ParamSlot::exposed(0.5)],
+            &ParamManifest::from_params(vec![slot("amount", 0.5, true)]),
             &mut LastAppliedCache::new(),
         );
         let inst = g.get_node(feedback).unwrap();
@@ -1366,15 +1381,18 @@ mod tests {
             offset: 0.0,
             value_labels: Vec::new(),
         };
-        let user_rb = ResolvedBinding::from_user(&core_ub, &g, &node_map_for(feedback), 1).unwrap();
+        let user_rb = ResolvedBinding::from_user(&core_ub, &g, &node_map_for(feedback)).unwrap();
         let bindings = vec![static_rb, user_rb];
 
-        // values slice: [static.amount, user.zoom] = [0.5, 1.05]
+        // manifest: amount=0.5, user.feedback.zoom.1=1.05
         apply_bindings(
             &bindings,
             &mut g,
             None,
-            &[ParamSlot::exposed(0.5), ParamSlot::exposed(1.05)],
+            &ParamManifest::from_params(vec![
+                slot("amount", 0.5, true),
+                slot("user.feedback.zoom.1", 1.05, true),
+            ]),
             &mut LastAppliedCache::new(),
         );
         let inst = g.get_node(feedback).unwrap();
@@ -1404,16 +1422,16 @@ mod tests {
             offset: 0.0,
             value_labels: Vec::new(),
         };
-        let user_rb = ResolvedBinding::from_user(&core_ub, &g, &node_map_for(feedback), 1).unwrap();
+        let user_rb = ResolvedBinding::from_user(&core_ub, &g, &node_map_for(feedback)).unwrap();
         let bindings = vec![static_rb, user_rb];
 
-        // values shorter than bindings: user tail falls back to
+        // manifest lacks the user id entirely: user tail falls back to
         // binding's `default_value` (0.97).
         apply_bindings(
             &bindings,
             &mut g,
             None,
-            &[ParamSlot::exposed(0.5)],
+            &ParamManifest::from_params(vec![slot("amount", 0.5, true)]),
             &mut LastAppliedCache::new(),
         );
         let inst = g.get_node(feedback).unwrap();
@@ -1442,9 +1460,12 @@ mod tests {
             offset: 0.0,
             value_labels: Vec::new(),
         };
-        let user_rb = ResolvedBinding::from_user(&core_ub, &g, &node_map_for(feedback), 1).unwrap();
+        let user_rb = ResolvedBinding::from_user(&core_ub, &g, &node_map_for(feedback)).unwrap();
         let bindings = vec![static_rb, user_rb];
-        let values = [ParamSlot::exposed(0.5), ParamSlot::exposed(1.07)];
+        let values = ParamManifest::from_params(vec![
+            slot("amount", 0.5, true),
+            slot("user.feedback.zoom.1", 1.07, true),
+        ]);
         assert_eq!(binding_value(&bindings, &values, "amount"), Some(0.5));
         assert_eq!(
             binding_value(&bindings, &values, "user.feedback.zoom.1"),
@@ -1460,13 +1481,14 @@ mod tests {
     /// construction today. But the apply loop must not assume binding
     /// position equals source position, so a future shape change can't
     /// silently strand a fan-out target on its default. This test
-    /// constructs two bindings sharing a `source_index` and proves
-    /// both inner targets receive the same outer value from one slot.
+    /// constructs two bindings sharing a `source_id` and proves
+    /// both inner targets receive the same outer value from one manifest
+    /// param.
     #[test]
     fn apply_bindings_supports_fan_out_when_two_bindings_share_source_index() {
         let mut g = Graph::new();
         let feedback = g.add_node(Box::new(AffineTransform::new()));
-        // Two distinct inner targets, both reading from `values[0]`.
+        // Two distinct inner targets, both reading from the "amount" param.
         let bindings = vec![
             ResolvedBinding {
                 id: Cow::Borrowed("amount"),
@@ -1478,7 +1500,7 @@ mod tests {
                 },
                 convert: ParamConvert::Float,
                 source: BindingSource::Static,
-                source_index: 0,
+                source_id: Cow::Borrowed("amount"),
                 reshape: None,
                 wraps_angle: false,
             },
@@ -1492,7 +1514,7 @@ mod tests {
                 },
                 convert: ParamConvert::Float,
                 source: BindingSource::Static,
-                source_index: 0, // same outer slot as `amount`
+                source_id: Cow::Borrowed("amount"), // same manifest param as `amount`
                 reshape: None,
                 wraps_angle: false,
             },
@@ -1502,7 +1524,7 @@ mod tests {
             &bindings,
             &mut g,
             None,
-            &[ParamSlot::exposed(0.42)],
+            &ParamManifest::from_params(vec![slot("amount", 0.42, true)]),
             &mut LastAppliedCache::new(),
         );
         let inst = g.get_node(feedback).unwrap();
@@ -1529,7 +1551,7 @@ mod tests {
         let mut g = Graph::new();
         let feedback = g.add_node(Box::new(AffineTransform::new()));
         let bindings = vec![resolved_feedback_amount(feedback)];
-        let values = [ParamSlot::exposed(0.5)];
+        let values = ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
         let mut cache = LastAppliedCache::new();
 
         // 1st apply: write should land — amount goes from 0.0 default
@@ -1570,7 +1592,7 @@ mod tests {
             &bindings,
             &mut g,
             None,
-            &[ParamSlot::exposed(0.5)],
+            &ParamManifest::from_params(vec![slot("amount", 0.5, true)]),
             &mut cache,
         );
         // Inner edit.
@@ -1581,7 +1603,7 @@ mod tests {
             &bindings,
             &mut g,
             None,
-            &[ParamSlot::exposed(0.25)],
+            &ParamManifest::from_params(vec![slot("amount", 0.25, true)]),
             &mut cache,
         );
         assert_eq!(
@@ -1607,7 +1629,7 @@ mod tests {
                 &bindings,
                 &mut g,
                 None,
-                &[ParamSlot::exposed(*v)],
+                &ParamManifest::from_params(vec![slot("amount", *v, true)]),
                 &mut cache,
             );
             assert_eq!(
@@ -1643,7 +1665,7 @@ mod tests {
             &bindings,
             &mut g,
             None,
-            &[ParamSlot::exposed(0.5)],
+            &ParamManifest::from_params(vec![slot("amount", 0.5, true)]),
             &mut cache,
         );
         assert_eq!(
@@ -1670,7 +1692,7 @@ mod tests {
             &bindings,
             &mut g,
             None,
-            &[ParamSlot::exposed(0.5)],
+            &ParamManifest::from_params(vec![slot("amount", 0.5, true)]),
             &mut cache,
         );
         // Outer moves to 0.2 → cache says last applied was 0.5,
@@ -1679,7 +1701,7 @@ mod tests {
             &bindings,
             &mut g,
             None,
-            &[ParamSlot::exposed(0.2)],
+            &ParamManifest::from_params(vec![slot("amount", 0.2, true)]),
             &mut cache,
         );
         assert_eq!(
@@ -1707,7 +1729,7 @@ mod tests {
             &bindings,
             &mut g,
             None,
-            &[ParamSlot::exposed(0.7)],
+            &ParamManifest::from_params(vec![slot("amount", 0.7, true)]),
             &mut cache,
         );
         assert_eq!(
@@ -1720,7 +1742,7 @@ mod tests {
             &bindings,
             &mut g,
             None,
-            &[ParamSlot::exposed(0.7)],
+            &ParamManifest::from_params(vec![slot("amount", 0.7, true)]),
             &mut cache,
         );
         assert_eq!(

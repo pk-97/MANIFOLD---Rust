@@ -52,10 +52,7 @@
 
 use ahash::AHashMap;
 
-use manifold_core::effects::{
-    AutomationPoint, PresetInstance, SegmentShape, resolve_param_in,
-};
-use manifold_core::preset_definition_registry;
+use manifold_core::effects::{AutomationPoint, PresetInstance, SegmentShape};
 use manifold_core::project::Project;
 use manifold_core::{Beats, EffectId, GraphTarget};
 use manifold_editing::command::Command;
@@ -184,47 +181,37 @@ fn evaluate_instance_automation(
         return false;
     }
     let has_lanes = fx.automation_lanes.as_ref().is_some_and(|v| !v.is_empty());
-    let any_touched = fx.param_values.iter().any(|s| s.touched);
+    let any_touched = fx.params.iter().any(|p| p.touched);
     // Nothing to do unless there's an existing lane to sample/latch/continue
     // recording, or (armed) a touch that might be starting a brand new
     // gesture — see docs/AUTOMATION_LANES_DESIGN.md §5 "arm creates a lane".
     if !(has_lanes || (armed && any_touched)) {
         return false;
     }
-    let def = match preset_definition_registry::try_get(fx.effect_type()) {
-        Some(d) => d,
-        None => return false,
-    };
     let fx_id = fx.id.clone();
 
     // Pass 1 (immutable): classify every enabled lane's param — continue an
     // open gesture (handled below via the touched flag, not here), start a
     // new one (armed touch), latch (unarmed touch), stay latched, or sample.
-    let mut to_latch: Vec<(usize, ParamId)> = Vec::new();
-    let mut to_write: Vec<(usize, f32)> = Vec::new();
-    let mut to_record: Vec<(usize, ParamId, f32)> = Vec::new();
-    let mut handled_idx: Vec<usize> = Vec::new();
+    let mut to_latch: Vec<ParamId> = Vec::new();
+    let mut to_write: Vec<(ParamId, f32)> = Vec::new();
+    let mut to_record: Vec<(ParamId, f32)> = Vec::new();
+    let mut handled_ids: Vec<ParamId> = Vec::new();
 
     if has_lanes {
         let lanes = fx.automation_lanes.as_ref().unwrap();
         for lane in lanes.iter().filter(|l| l.enabled) {
-            let Some(resolved) = resolve_param_in(&def, fx, lane.param_id.as_ref()) else {
+            // Resolve directly against the id-keyed manifest — range +
+            // integral-ness ride each `Param.spec`, no registry consultation.
+            let Some(p) = fx.params.get(lane.param_id.as_ref()) else {
                 continue;
             };
-            if resolved.idx >= fx.param_values.len() {
-                continue;
-            }
-            handled_idx.push(resolved.idx);
-            let touched = fx.param_values[resolved.idx].touched;
-            if touched {
+            handled_ids.push(lane.param_id.clone());
+            if p.touched {
                 if armed {
-                    to_record.push((
-                        resolved.idx,
-                        lane.param_id.clone(),
-                        fx.param_values[resolved.idx].base,
-                    ));
+                    to_record.push((lane.param_id.clone(), p.base));
                 } else {
-                    to_latch.push((resolved.idx, lane.param_id.clone()));
+                    to_latch.push(lane.param_id.clone());
                 }
                 continue;
             }
@@ -239,7 +226,7 @@ fn evaluate_instance_automation(
                 continue; // still overridden
             }
             let raw = lane.value_at(current_beat);
-            to_write.push((resolved.idx, raw.clamp(resolved.min, resolved.max)));
+            to_write.push((lane.param_id.clone(), raw.clamp(p.spec.min, p.spec.max)));
         }
     }
 
@@ -249,15 +236,15 @@ fn evaluate_instance_automation(
     // + the gesture-start lookup below treat the same as "not currently
     // automated" from the touch's perspective.
     if armed {
-        for idx in 0..fx.param_values.len() {
-            if !fx.param_values[idx].touched || handled_idx.contains(&idx) {
+        for p in fx.params.iter() {
+            if !p.touched {
                 continue;
             }
-            let Some(param_id) = param_id_for_idx(&def, fx, idx) else {
+            let param_id = ParamId::from(p.id().to_string());
+            if handled_ids.contains(&param_id) {
                 continue;
-            };
-            let base = fx.param_values[idx].base;
-            to_record.push((idx, param_id, base));
+            }
+            to_record.push((param_id, p.base));
         }
     }
 
@@ -266,17 +253,21 @@ fn evaluate_instance_automation(
     // automation write path (using `set_base_param` here would set
     // `touched` on our own write and self-latch the very next frame — see
     // `docs/AUTOMATION_LANES_DESIGN.md` §4), then feed recording gestures.
-    for (idx, param_id) in to_latch {
-        fx.param_values[idx].touched = false;
+    for param_id in to_latch {
+        if let Some(p) = fx.params.get_mut(param_id.as_ref()) {
+            p.touched = false;
+        }
         latches.insert((fx_id.clone(), param_id), ());
     }
     let mut any_wrote = false;
-    for (idx, value) in to_write {
-        fx.set_base_param_from_automation(idx, value);
+    for (param_id, value) in to_write {
+        fx.set_base_param_from_automation(param_id.as_ref(), value);
         any_wrote = true;
     }
-    for (idx, param_id, applied_base) in to_record {
-        fx.param_values[idx].touched = false;
+    for (param_id, applied_base) in to_record {
+        if let Some(p) = fx.params.get_mut(param_id.as_ref()) {
+            p.touched = false;
+        }
         // Recording supersedes any stale override latch from before arm was
         // engaged — once the hand is recording, the param isn't "overridden"
         // in the Back-to-Arrangement sense, it's authoring new automation.
@@ -312,26 +303,6 @@ fn evaluate_instance_automation(
         any_wrote = true;
     }
     any_wrote
-}
-
-/// Reverse-resolve a slot index to its `param_id` — the id-based key that
-/// `AutomationLane` / `AutomationLatches` / `AutomationGestures` all address
-/// by. Base params come straight from the registry's `param_ids` (indexed
-/// 1:1 with `param_defs`); user-tail (graph-exposed) params come from
-/// `user_added_bindings()`, offset by `param_count` — the same forward
-/// mapping `resolve_param_in` computes, run in reverse.
-fn param_id_for_idx(
-    def: &manifold_core::preset_def::PresetDef,
-    fx: &PresetInstance,
-    idx: usize,
-) -> Option<ParamId> {
-    if idx < def.param_count {
-        def.param_ids.get(idx).cloned().map(ParamId::from)
-    } else {
-        fx.user_added_bindings()
-            .nth(idx - def.param_count)
-            .map(|b| ParamId::from(b.id.clone()))
-    }
 }
 
 /// Close every gesture that has gone `GESTURE_INACTIVITY_BEATS` without a
@@ -478,9 +449,9 @@ mod tests {
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         // Halfway between beat 0 (0.2) and beat 4 (0.8) -> 0.5.
         assert!(
-            (fx.param_values[0].base - 0.5).abs() < 1e-6,
+            (fx.params.get("amount").unwrap().base - 0.5).abs() < 1e-6,
             "base sampled at the midpoint, got {}",
-            fx.param_values[0].base
+            fx.params.get("amount").unwrap().base
         );
     }
 
@@ -501,10 +472,10 @@ mod tests {
 
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         assert!(
-            (fx.param_values[0].value - 0.8).abs() < 1e-6,
+            (fx.params.get("amount").unwrap().value - 0.8).abs() < 1e-6,
             "reset_all_effectives must copy the automation-sampled base into \
              value, proving automation ran first; got {}",
-            fx.param_values[0].value
+            fx.params.get("amount").unwrap().value
         );
     }
 
@@ -515,7 +486,7 @@ mod tests {
         fx.automation_lanes = Some(vec![amount_lane()]);
         // Simulate a live hand touching the param this frame (a UI slider,
         // Ableton macro, or OSC write all funnel through set_base_param).
-        fx.set_base_param(0, 0.99);
+        fx.set_base_param("amount", 0.99);
         let mut project = project_with(layer);
         let mut latches = AutomationLatches::default();
 
@@ -524,11 +495,11 @@ mod tests {
         assert!(!wrote, "a freshly-touched param is not sampled this frame");
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         assert!(
-            (fx.param_values[0].base - 0.99).abs() < 1e-6,
+            (fx.params.get("amount").unwrap().base - 0.99).abs() < 1e-6,
             "the hand's write wins, untouched by automation"
         );
         assert!(
-            !fx.param_values[0].touched,
+            !fx.params.get("amount").unwrap().touched,
             "the evaluator clears touched once it has latched"
         );
         assert_eq!(latches.len(), 1, "the touch latches the param as overridden");
@@ -539,7 +510,7 @@ mod tests {
         let mut layer = layer_with_one_effect();
         let fx = &mut layer.effects.as_mut().unwrap()[0];
         fx.automation_lanes = Some(vec![amount_lane()]);
-        fx.set_base_param(0, 0.99);
+        fx.set_base_param("amount", 0.99);
         let mut project = project_with(layer);
         let mut latches = AutomationLatches::default();
 
@@ -550,7 +521,7 @@ mod tests {
         let wrote = eval_unarmed(&mut project, Beats(2.0), &mut latches);
         assert!(!wrote, "a still-latched param stays overridden");
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
-        assert!((fx.param_values[0].base - 0.99).abs() < 1e-6);
+        assert!((fx.params.get("amount").unwrap().base - 0.99).abs() < 1e-6);
     }
 
     #[test]
@@ -579,7 +550,7 @@ mod tests {
         let mut layer = layer_with_one_effect();
         let fx = &mut layer.effects.as_mut().unwrap()[0];
         fx.automation_lanes = Some(vec![amount_lane()]);
-        fx.set_base_param(0, 0.99);
+        fx.set_base_param("amount", 0.99);
         let mut project = project_with(layer);
         let mut latches = AutomationLatches::default();
 
@@ -596,9 +567,9 @@ mod tests {
         assert!(wrote, "clearing the latch resumes the lane's writes");
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         assert!(
-            (fx.param_values[0].base - 0.5).abs() < 1e-6,
+            (fx.params.get("amount").unwrap().base - 0.5).abs() < 1e-6,
             "lane resumes sampling at the current beat, got {}",
-            fx.param_values[0].base
+            fx.params.get("amount").unwrap().base
         );
     }
 
@@ -613,7 +584,7 @@ mod tests {
 
         assert!(!eval_unarmed(&mut project, Beats(2.0), &mut latches));
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
-        assert_eq!(fx.param_values[0].base, 0.0, "untouched, still the default");
+        assert_eq!(fx.params.get("amount").unwrap().base, 0.0, "untouched, still the default");
     }
 
     #[test]
@@ -678,7 +649,7 @@ mod tests {
         let wrote = eval_unarmed(&mut project, Beats(4.0), &mut latches);
         assert!(wrote);
         let gp = project.timeline.layers[0].gen_params().unwrap();
-        assert!((gp.param_values[0].base - 0.8).abs() < 1e-6);
+        assert!((gp.params.get("amount").unwrap().base - 0.8).abs() < 1e-6);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -692,7 +663,7 @@ mod tests {
         let mut layer = layer_with_one_effect();
         let fx = &mut layer.effects.as_mut().unwrap()[0];
         fx.automation_lanes = Some(vec![amount_lane()]);
-        fx.set_base_param(0, 0.42);
+        fx.set_base_param("amount", 0.42);
         let mut project = project_with(layer);
         let mut latches = AutomationLatches::default();
         let mut gestures = AutomationGestures::default();
@@ -711,7 +682,7 @@ mod tests {
         let mut layer = layer_with_one_effect();
         let fx = &mut layer.effects.as_mut().unwrap()[0];
         fx.automation_lanes = Some(vec![amount_lane()]);
-        fx.set_base_param(0, 0.42);
+        fx.set_base_param("amount", 0.42);
         let mut project = project_with(layer);
         let mut latches = AutomationLatches::default();
         let mut gestures = AutomationGestures::default();
@@ -725,7 +696,7 @@ mod tests {
         assert_eq!(gestures.len(), 1, "the touch opened one gesture");
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         assert!(
-            !fx.param_values[0].touched,
+            !fx.params.get("amount").unwrap().touched,
             "recording consumes the touch flag same as latching does"
         );
     }
@@ -737,7 +708,7 @@ mod tests {
         // yields a commit whose `old_points` is `None` (lane creation).
         let mut layer = layer_with_one_effect();
         let fx = &mut layer.effects.as_mut().unwrap()[0];
-        fx.set_base_param(0, 0.55); // no automation_lanes at all yet
+        fx.set_base_param("amount", 0.55); // no automation_lanes at all yet
         let mut project = project_with(layer);
         let mut latches = AutomationLatches::default();
         let mut gestures = AutomationGestures::default();
@@ -815,7 +786,7 @@ mod tests {
             .effects
             .as_mut()
             .unwrap()[0]
-            .set_base_param(0, 0.6);
+            .set_base_param("amount", 0.6);
         evaluate_all_automation(&mut project, Beats(1.0), &mut latches, true, &mut gestures);
 
         // Close the gesture (>= 2 beats quiet).
@@ -859,7 +830,7 @@ mod tests {
     fn inactivity_under_two_beats_keeps_the_gesture_open() {
         let mut layer = layer_with_one_effect();
         let fx = &mut layer.effects.as_mut().unwrap()[0];
-        fx.set_base_param(0, 0.3);
+        fx.set_base_param("amount", 0.3);
         let mut project = project_with(layer);
         let mut latches = AutomationLatches::default();
         let mut gestures = AutomationGestures::default();

@@ -35,9 +35,9 @@ pub struct ForkPresetCommand {
     reseed_values: bool,
     /// Captured on first execute so undo restores the pre-fork preset id.
     old_type: Option<PresetTypeId>,
-    /// Pre-fork `param_values`, captured on first execute when `reseed_values`
-    /// is set so undo restores them (Make Unique never touches them).
-    old_param_values: Option<Vec<manifold_core::effects::ParamSlot>>,
+    /// Pre-fork param manifest, captured on first execute when `reseed_values`
+    /// is set so undo restores it (Make Unique never touches it).
+    old_param_values: Option<manifold_core::params::ParamManifest>,
     /// The created embedded preset (with its minted id), captured on first
     /// execute so redo re-inserts the SAME preset deterministically.
     forked: Option<EmbeddedPreset>,
@@ -113,7 +113,7 @@ impl Command for ForkPresetCommand {
             && let Some(inst) = project.preset_instance_mut(&self.target)
         {
             if self.old_param_values.is_none() {
-                self.old_param_values = Some(inst.param_values.clone());
+                self.old_param_values = Some(inst.params.clone());
             }
             inst.reseed_param_values_from_def(&fp.def);
         }
@@ -131,7 +131,7 @@ impl Command for ForkPresetCommand {
         if let Some(vals) = self.old_param_values.clone()
             && let Some(inst) = project.preset_instance_mut(&self.target)
         {
-            inst.param_values = vals;
+            inst.params = vals;
         }
     }
 
@@ -426,6 +426,28 @@ mod tests {
     use manifold_core::effect_graph_def::{EffectGraphDef, ParamSpecDef, PresetMetadata};
     use manifold_core::macro_bank::MacroCurve;
 
+    fn slot(id: &str, value: f32, exposed: bool) -> manifold_core::params::Param {
+        let mut p = manifold_core::params::Param::bundled(manifold_core::effect_graph_def::ParamSpecDef {
+            id: id.into(),
+            name: id.into(),
+            min: 0.0,
+            max: 1.0,
+            default_value: value,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: vec![],
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: Default::default(),
+            invert: false,
+        });
+        p.value = value;
+        p.base = value;
+        p.exposed = exposed;
+        p
+    }
+
     fn def_with_param(id: &str, param: &str, min: f32, max: f32) -> EffectGraphDef {
         EffectGraphDef {
             version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
@@ -505,14 +527,12 @@ mod tests {
 
     #[test]
     fn import_reseeds_param_values_from_def_and_undo_restores() {
-        use manifold_core::effects::ParamSlot;
-
         let mut project = Project::default();
         let mut fx = manifold_core::effects::PresetInstance::new(PresetTypeId::OILY_FLUID);
         // Prior card state: one value the user had dialed in. The imported
         // preset has a *different* saved default, so a correct import must
         // replace this, not keep it (the source of the black-render bug).
-        fx.param_values = vec![ParamSlot::exposed(0.9)];
+        fx.params = manifold_core::params::ParamManifest::from_params(vec![slot("speed", 0.9, true)]);
         let fx_id = fx.id.clone();
         project.settings.master_effects.push(fx);
         let target = GraphTarget::Effect(fx_id.clone());
@@ -526,17 +546,19 @@ mod tests {
         cmd.execute(&mut project);
 
         let inst = project.preset_instance(&target).expect("instance");
+        assert_eq!(inst.params.len(), 1);
         assert_eq!(
-            inst.param_values,
-            vec![ParamSlot::exposed(2.0)],
+            inst.params.get("speed").unwrap().value,
+            2.0,
             "import must re-seed param_values from the imported def's defaults",
         );
 
         cmd.undo(&mut project);
         let inst = project.preset_instance(&target).expect("instance");
+        assert_eq!(inst.params.len(), 1);
         assert_eq!(
-            inst.param_values,
-            vec![ParamSlot::exposed(0.9)],
+            inst.params.get("speed").unwrap().value,
+            0.9,
             "undo must restore the pre-import param_values",
         );
     }

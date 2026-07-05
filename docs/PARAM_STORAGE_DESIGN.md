@@ -1,6 +1,6 @@
 # Param Manifest — id-keyed per-instance parameter storage
 
-**Status:** IN PROGRESS — **P1 SHIPPED @ `c7ae831f` (2026-07-05)**: V1.4 id-keyed wire + quarantined migration landed, positional arms deleted from effects.rs; P2–P5 remain (P2 = the compile-driven storage swap, strong-model session). Baseline-reviewed 2026-07-05: the §1 resolver anchors have drifted ~−390 lines in effects.rs post-P1 — trust the §1 re-derivation commands, not the baked numbers. · approved 2026-07-05 · Fable 5
+**Status:** IN PROGRESS — **P2 SHIPPED (2026-07-05)**: positional Vec<ParamSlot> + three resolvers deleted; per-instance params now the id-keyed ParamManifest end to end (storage, funnels, renderer bind seam, modulation/automation, serde). bench_resolve 72.38 ns/op (≤271.5 ceiling). Three production migration gaps the test-pass surfaced — revert-prunes-user-params, edit-mapping-writes-live-manifest-spec (D6), restore-honors-snapshot-arity — fixed at the root. P3–P5 remain (P3 = transport-block topology guard). See `docs/landings/2026-07-05-param-storage-p2.md`; P1 SHIPPED @ `c7ae831f`. · approved 2026-07-05 · Fable 5
 **Prerequisites:** none
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 before starting any phase.
 

@@ -27,8 +27,9 @@ use crate::node_graph::{
     EffectGraphDefExt, Executor, FrameTime, MetalBackend, NodeInstanceId, PrimitiveRegistry,
     ResourceId, StateStore, compile,
 };
-use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+use crate::preset_context::PresetContext;
 use crate::preset_runtime::PresetRuntime;
+use manifold_core::params::ParamManifest;
 use crate::render_target::RenderTarget;
 
 /// The one render surface size every save-time thumbnail uses (D7: "renders a
@@ -156,8 +157,6 @@ fn render_generator(device: &GpuDevice, def: &EffectGraphDef, size: u32) -> Resu
             // Sweep 0→1 across the warm-up so loop-driven anims land developed.
             anim_progress: (frame as f32 / WARMUP_FRAMES as f32).min(1.0),
             trigger_count: 0,
-            params: [0.0; MAX_GEN_PARAMS],
-            param_count: 0,
         }
     };
 
@@ -166,7 +165,9 @@ fn render_generator(device: &GpuDevice, def: &EffectGraphDef, size: u32) -> Resu
         let mut enc = device.create_encoder("preset-thumb-gen-warmup");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, device);
-            runtime.render(&mut gpu, &target.texture, &ctx);
+            // Thumbnails render every binding at its declared default — no card
+            // overrides — so an empty manifest is exactly right.
+            runtime.render(&mut gpu, &target.texture, &ctx, &ParamManifest::default());
         }
         // Commit each frame so state-accumulating generators see the prior
         // frame's GPU writes before computing the next.

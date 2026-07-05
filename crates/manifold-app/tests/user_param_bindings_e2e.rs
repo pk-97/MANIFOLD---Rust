@@ -11,11 +11,12 @@
 //! 1. `ToggleEffectParamExposeCommand` appends a `UserParamBinding`
 //!    with the canonical id form `user.<short_handle>.<inner_param>.<n>`.
 //! 2. Drivers and Ableton mappings created against that user id
-//!    address the right slot via `PresetInstance.param_id_to_value_index`.
+//!    address the right entry via `PresetInstance.params` (id-keyed
+//!    `ParamManifest`).
 //! 3. Serializing the project to JSON and reloading preserves:
 //!    - the `user_param_bindings` entry verbatim (id, label, handle,
 //!      inner_param, min/max/default, convert),
-//!    - the per-instance `param_values` tail slot at its expected
+//!    - the per-instance user-tail param entry at its expected card
 //!      position, with whatever value was last written,
 //!    - the driver and Ableton mapping referencing the user id by
 //!      name.
@@ -60,8 +61,8 @@ fn expose_mirror_inner_param_survives_save_reload_with_driver_and_ableton() {
     // static state. Mirror has 2 static params (amount, mode).
     let mut project = Project::default();
     let fx = preset_definition_registry::create_default(&PresetTypeId::MIRROR);
-    // create_default lands param_values at registry defaults; verify.
-    assert_eq!(fx.param_values.len(), 2, "Mirror has 2 static params");
+    // create_default lands params at registry defaults; verify.
+    assert_eq!(fx.params.len(), 2, "Mirror has 2 static params");
     project.settings.master_effects.push(fx);
     let effect_id = project.settings.master_effects[0].id.clone();
 
@@ -86,16 +87,15 @@ fn expose_mirror_inner_param_survives_save_reload_with_driver_and_ableton() {
         assert_eq!(ub.id, user_id);
         assert_eq!(ub.node_id, "uv_transform");
         assert_eq!(ub.inner_param, "translate");
-        // param_values gained one slot at index 2 (n_static + 0).
-        assert_eq!(fx.param_values.len(), 3);
-        assert_eq!(fx.param_id_to_value_index(user_id), Some(2));
+        // params gained one entry at index 2 (n_static + 0), card order.
+        assert_eq!(fx.params.len(), 3);
+        assert_eq!(fx.params.index_of(user_id), Some(2));
     }
 
     // 2. Drag the slider — write a non-default value into the user-tail slot.
     {
         let fx = &mut project.settings.master_effects[0];
-        let idx = fx.param_id_to_value_index(user_id).unwrap();
-        fx.set_base_param(idx, 0.42);
+        fx.set_base_param(user_id, 0.42);
     }
 
     // 3. Add a driver mapped to the user id.
@@ -142,7 +142,9 @@ fn expose_mirror_inner_param_survives_save_reload_with_driver_and_ableton() {
     // Sanity: after the binding-storage unification the user binding rides
     // out inside the per-instance graph (presetMetadata.bindings,
     // userAdded), not a separate userParamBindings array. The user-tail
-    // slot value still lands in the paramValues map keyed by the id.
+    // entry still lands in the id-keyed `params` map, now as a structured
+    // `{value, exposed, base, ...}` object (ParamEntryWire) rather than a
+    // bare scalar.
     assert!(
         !json.contains("\"userParamBindings\""),
         "userParamBindings must no longer be emitted (folded into the graph)"
@@ -151,9 +153,14 @@ fn expose_mirror_inner_param_survives_save_reload_with_driver_and_ableton() {
         json.contains("\"userAdded\": true"),
         "user binding must be in graph.presetMetadata.bindings as userAdded"
     );
+    let wire: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    let user_entry = &wire["settings"]["masterEffects"][0]["params"]["user.uv_transform.translate.1"];
+    let user_value = user_entry["value"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("user-tail entry must be in the params map (pretty-printed JSON): {json}"));
     assert!(
-        json.contains("\"user.uv_transform.translate.1\": 0.42"),
-        "user-tail slot value must be in the paramValues map (pretty-printed JSON): {json}"
+        (user_value - 0.42).abs() < 1e-4,
+        "user-tail slot value must be 0.42, got {user_value} (pretty-printed JSON): {json}"
     );
 
     let reloaded: Project = manifold_io::loader::load_project_from_json(&json).expect("reload");
@@ -174,13 +181,14 @@ fn expose_mirror_inner_param_survives_save_reload_with_driver_and_ableton() {
 
     // 7. The user-tail slot is still addressable by id and still holds 0.42.
     let value_idx = fx
-        .param_id_to_value_index(user_id)
+        .params
+        .index_of(user_id)
         .expect("user id resolves after reload");
     assert_eq!(value_idx, 2);
-    assert!((fx.param_values[value_idx].value - 0.42).abs() < f32::EPSILON);
-    // base (folded into the slot, fork #16) matches.
+    assert!((fx.get_param(user_id) - 0.42).abs() < f32::EPSILON);
+    // base (folded into the entry, fork #16) matches.
     assert!(fx.base_tracked, "base values present");
-    assert!((fx.param_values[value_idx].base - 0.42).abs() < f32::EPSILON);
+    assert!((fx.get_base_param(user_id) - 0.42).abs() < f32::EPSILON);
 
     // 8. The driver is intact and references the user id.
     let drivers = fx.drivers.as_ref().expect("drivers present");
