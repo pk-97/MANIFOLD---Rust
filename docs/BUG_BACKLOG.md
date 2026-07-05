@@ -31,6 +31,7 @@ or human can read it, and it needs no external tool.
 | ID | Nickname | One line |
 |---|---|---|
 | BUG-036 | **dead-LFO-on-reload** | imported card params dropped at project load; modulation targets vanish (MED, root-caused) |
+| BUG-039 | **saw-rotation-wrap** | angle params clamp instead of wrapping; saw LFO can't spin a full rotation (MED, mechanism pinned) |
 | BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
 | BUG-037 | **glp-first-render-stall** | ~37ms warm-up on a glTF clip's first rendered frame (MED) |
 | BUG-038 | **ableton-log-spam** | bridge warns every 1.5s forever when Live absent (LOW) |
@@ -52,6 +53,32 @@ or human can read it, and it needs no external tool.
 | BUG-019 / 020 / 021 | deferred | group-fold gap · gen-card collapse · snap-back gap |
 
 ## Open
+
+### BUG-039 (saw-rotation-wrap) — Angle params clamp at range ends, so a saw LFO / automation can't drive a smooth full rotation — MED (enhancement, performer-facing)
+
+**Symptom** (Peter, 2026-07-06) — binding a saw LFO or an automation ramp to a rotation
+param and sweeping 0→360° hitches at the wrap point: the effective value clamps at the
+range end instead of wrapping, so continuous rotation — the most common motion move in a
+VJ set — can't be played with a saw. Affects default card slider bindings across effects
+and generators.
+
+**Fix shape (mechanism pinned; Sonnet-executable, no design doc needed):**
+- Add `wraps: bool` (serde default false) to `ParamSpecDef` — explicit tag, not inferred
+  from `is_angle` (per `hidden-field-dependencies`; angle-typed ≠ periodic, e.g. FOV).
+  Every existing project/preset loads unchanged.
+- Apply wrap at the single point where modulation already post-processes effective values
+  (where `whole_numbers` rounding lives): for wrapping params,
+  `value = min + (v - min).rem_euclid(max - min)` instead of clamp. Base/undo semantics
+  untouched — wrap applies to the effective only. Slider wrap-drag UX = later, not this pass.
+- Mechanical sweep: every angle/degree-range param across primitive `ParamDef`s and the
+  ~45 preset JSON card params; tag `wraps: true` ONLY where truly periodic (rotation,
+  orbit, hue-angle, kaleidoscope angle). Clamped-for-a-reason params (FOV, ±89° tilt, arc
+  extents) stay unwrapped. List every tag decision in the PR body.
+- Gate: unit test on the wrap math (incl. negative saw), plus one preset smoke proving a
+  saw 0→360 on a tagged param renders identical frames at phase 0 and phase 1.
+
+**Sequencing** — AFTER the param-system post-refactor audit (Fable queue item 1): same
+code region; land the audit's verified ground first.
 
 ### BUG-037 (glp-first-render-stall) — First render of a glTF scene layer stalls the content thread ~37ms (warm-up on the frame, not at load) — MED
 
