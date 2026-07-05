@@ -3726,12 +3726,25 @@ mod user_binding_tests {
     use crate::node_graph::ParamValue;
     use manifold_core::PresetTypeId;
     use manifold_core::effects::{
-        PresetInstance, ParamSlot, UserParamBinding, ParamConvert,
+        PresetInstance, UserParamBinding, ParamConvert,
     };
 
 
     fn make_default(ty: PresetTypeId) -> PresetInstance {
         manifold_core::preset_definition_registry::create_default(&ty)
+    }
+
+    /// Set an existing manifest param's live + base value by id, marking it
+    /// exposed — the id-keyed replacement for the old positional
+    /// `fx.param_values[i] = ParamSlot::exposed(v)` write.
+    fn set_slot(fx: &mut PresetInstance, id: &str, value: f32) {
+        let p = fx
+            .params
+            .get_mut(id)
+            .unwrap_or_else(|| panic!("param `{id}` exists in the manifest"));
+        p.value = value;
+        p.base = value;
+        p.exposed = true;
     }
 
     /// Clone the canonical preset def for `ty` and set a non-identity
@@ -3785,22 +3798,22 @@ mod user_binding_tests {
         let primitives = PrimitiveRegistry::with_builtin();
 
         // Mirror the per-frame apply `run()` performs: push the live
-        // `param_values` through the slot's bindings into the graph.
-        fn apply(cg: &mut PresetRuntime, values: &[ParamSlot]) {
+        // `params` manifest through the slot's bindings into the graph.
+        fn apply(cg: &mut PresetRuntime, values: &ParamManifest) {
             let slot = &mut cg.effect_nodes[0];
             slot.bound.apply(&mut cg.graph, values);
         }
 
         // Control: same effect, zoom = 0.3, identity binding → inner sees 0.3.
         let mut control = make_default(PresetTypeId::STYLIZED_FEEDBACK);
-        control.param_values[1] = ParamSlot::exposed(0.3); // zoom is static slot 1
+        set_slot(&mut control, "zoom", 0.3);
         // Build unfused (pass the effect as the watched preview) so the inner
         // affine node survives for inspection — region fusion would otherwise
         // fold it into a single kernel and the handle would vanish.
         let mut cg0 =
             PresetRuntime::try_build(std::slice::from_ref(&control), &[], &primitives, &device, None, 256, 256, Some(&control.id), None)
                 .expect("control chain builds");
-        apply(&mut cg0, &control.param_values);
+        apply(&mut cg0, &control.params);
         let slot0 = &cg0.effect_nodes[0];
         assert_eq!(
             affine_scale(&cg0, slot0),
@@ -3811,7 +3824,7 @@ mod user_binding_tests {
         // With a ×2 reshape on the `zoom` binding: inner sees 0.6, slot
         // still reads 0.3.
         let mut fx = make_default(PresetTypeId::STYLIZED_FEEDBACK);
-        fx.param_values[1] = ParamSlot::exposed(0.3);
+        set_slot(&mut fx, "zoom", 0.3);
         fx.graph = Some(def_with_binding_scale(
             PresetTypeId::STYLIZED_FEEDBACK,
             "zoom",
@@ -3822,7 +3835,7 @@ mod user_binding_tests {
         let mut cg =
             PresetRuntime::try_build(std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256, Some(&fx.id), None)
                 .expect("reshaped chain builds");
-        apply(&mut cg, &fx.param_values);
+        apply(&mut cg, &fx.params);
         let slot = &cg.effect_nodes[0];
         assert_eq!(
             affine_scale(&cg, slot),
@@ -3832,7 +3845,8 @@ mod user_binding_tests {
         // The invariant: the value slot the modulation surface writes is
         // byte-identical with and without the reshape.
         assert_eq!(
-            fx.param_values[1].value, 0.3,
+            fx.params.get("zoom").unwrap().value,
+            0.3,
             "the reshape must NEVER rewrite the value slot — that slot \
              is what Ableton / drivers / OSC / envelopes address every frame",
         );
@@ -3864,15 +3878,14 @@ mod user_binding_tests {
             value_labels: Vec::new(),
         });
         // Drag the user-tail slider to `translate_value`. With static
-        // count = 3 (amount, zoom, rotate) the user binding's slot lives
-        // at index 3.
-        let slot_index = 3;
+        // count = 3 (amount, zoom, rotate) the user binding is the 4th
+        // manifest entry, keyed by its binding id.
         assert_eq!(
-            fx.param_values.len(),
+            fx.params.len(),
             4,
             "StylizedFeedback with 3 static + 1 user-tail = 4 param slots",
         );
-        fx.param_values[slot_index] = ParamSlot::exposed(translate_value);
+        set_slot(&mut fx, "user.affine.translate_x.1", translate_value);
         fx
     }
 
@@ -3893,12 +3906,21 @@ mod user_binding_tests {
             .effect_nodes
             .first()
             .expect("StylizedFeedback contributes one effect slot");
+        // `EffectSlot` no longer stores a static count; the static prefix is
+        // the run of `BindingSource::Static` entries at the head of the
+        // unified bindings list.
+        let n_static = slot
+            .bound
+            .bindings
+            .iter()
+            .filter(|b| matches!(b.source, crate::node_graph::BindingSource::Static))
+            .count();
         assert_eq!(
             slot.bound.bindings.len(),
-            slot.n_static + 1,
+            n_static + 1,
             "user-tail binding for affine.translate_x must hydrate at build time",
         );
-        let user_rb = &slot.bound.bindings[slot.n_static];
+        let user_rb = &slot.bound.bindings[n_static];
         assert_eq!(user_rb.source, crate::node_graph::BindingSource::User);
         match &user_rb.target {
             crate::node_graph::ResolvedTarget::Node { param, .. } => {
@@ -3931,9 +3953,9 @@ mod user_binding_tests {
         .expect("StylizedFeedback chain with one user binding builds");
 
         // Mirror the per-frame apply that `run()` would execute:
-        // walk the slot's unified bindings against fx.param_values.
+        // walk the slot's unified bindings against fx.params.
         let slot = &mut cg.effect_nodes[0];
-        slot.bound.apply(&mut cg.graph, &fx.param_values);
+        slot.bound.apply(&mut cg.graph, &fx.params);
 
         // Inspect the inner affine node's `translate_x` param — it
         // must reflect the user-tail slot's value, not its primitive
@@ -3997,9 +4019,8 @@ mod user_binding_tests {
         // Leave the outer slot at its declared default so the test
         // depends on the seed pass, not on the apply-with-divergent-
         // value path.
-        let slot_index = 3;
-        assert_eq!(fx.param_values.len(), 4);
-        fx.param_values[slot_index] = ParamSlot::exposed(0.42);
+        assert_eq!(fx.params.len(), 4);
+        set_slot(&mut fx, "user.affine.translate_x.1", 0.42);
 
         let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None, None)
             .expect("StylizedFeedback chain with one user binding builds");
@@ -4257,7 +4278,7 @@ mod generator_input_tests {
     /// `boundary_nodes.rs`.
     #[test]
     fn run_pushes_frame_context_into_generator_input_params() {
-        use crate::preset_context::{PresetContext, MAX_GEN_PARAMS};
+        use crate::preset_context::PresetContext;
         use crate::gpu_encoder::GpuEncoder;
 
         let device = crate::test_device();
@@ -4300,8 +4321,6 @@ mod generator_input_tests {
             frame_count: 0,
             anim_progress: 0.0,
             trigger_count: 0,
-            params: [0.0; MAX_GEN_PARAMS],
-            param_count: 0,
         };
 
         cg.run(&mut gpu, &input.texture, &[fx], &[], &ctx);
@@ -4333,7 +4352,7 @@ mod generator_input_tests {
     /// output texture. This is what puts the optimised fused kernel on screen.
     #[test]
     fn colorgrade_chain_renders_via_fused_node() {
-        use crate::preset_context::{PresetContext, MAX_GEN_PARAMS};
+        use crate::preset_context::PresetContext;
         use crate::gpu_encoder::GpuEncoder;
 
         // Honor the kill-switch: when MANIFOLD_FREEZE is off this path is
@@ -4394,8 +4413,6 @@ mod generator_input_tests {
             frame_count: 0,
             anim_progress: 0.0,
             trigger_count: 0,
-            params: [0.0; MAX_GEN_PARAMS],
-            param_count: 0,
         };
         let mut native_enc = device.create_encoder("cg-fused-run");
         {
@@ -5209,7 +5226,7 @@ mod chain_fusion_tests {
     use crate::gpu_encoder::GpuEncoder;
     use crate::node_graph::freeze::TextureDiff;
     use crate::node_graph::freeze::install as freeze_install;
-    use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+    use crate::preset_context::PresetContext;
     use half::f16;
     use manifold_core::PresetTypeId;
     use manifold_core::effects::PresetInstance;
@@ -5222,13 +5239,13 @@ mod chain_fusion_tests {
     }
 
     fn set_param(fx: &mut PresetInstance, id: &str, v: f32) {
-        let idx = manifold_core::preset_definition_registry::param_id_to_index(
-            fx.effect_type(),
-            id,
-        )
-        .unwrap_or_else(|| panic!("param id `{id}` on {:?}", fx.effect_type()));
-        fx.param_values[idx].value = v;
-        fx.param_values[idx].base = v;
+        let ty = fx.effect_type().clone();
+        let p = fx
+            .params
+            .get_mut(id)
+            .unwrap_or_else(|| panic!("param id `{id}` on {ty:?}"));
+        p.value = v;
+        p.base = v;
     }
 
     fn ctx(w: u32, h: u32) -> PresetContext {
@@ -5246,8 +5263,6 @@ mod chain_fusion_tests {
             frame_count: 0,
             anim_progress: 0.0,
             trigger_count: 0,
-            params: [0.0; MAX_GEN_PARAMS],
-            param_count: 0,
         }
     }
 

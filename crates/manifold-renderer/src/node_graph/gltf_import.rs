@@ -751,7 +751,7 @@ mod tests {
     #[ignore]
     fn imported_azalea_renders_faithfully_to_png() {
         use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-        use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+        use crate::preset_context::PresetContext;
         use crate::render_target::RenderTarget;
         use manifold_gpu::GpuTextureFormat;
 
@@ -801,7 +801,12 @@ mod tests {
                 let mut enc = device.create_encoder("imported-azalea-render");
                 {
                     let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
-                    generator.render(&mut gpu, &target.texture, &ctx);
+                    generator.render(
+                        &mut gpu,
+                        &target.texture,
+                        &ctx,
+                        &manifold_core::params::ParamManifest::default(),
+                    );
                 }
                 enc.commit_and_wait_completed();
             }
@@ -889,7 +894,7 @@ mod tests {
     fn imported_azalea_renders_through_create_with_override_to_png() {
         use crate::generators::registry::GeneratorRegistry;
         use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-        use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+        use crate::preset_context::PresetContext;
         use crate::render_target::RenderTarget;
         use manifold_gpu::GpuTextureFormat;
 
@@ -952,7 +957,12 @@ mod tests {
                 let mut enc = device.create_encoder("imported-azalea-layer-render");
                 {
                     let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
-                    generator.render(&mut gpu, &target.texture, &ctx);
+                    generator.render(
+                        &mut gpu,
+                        &target.texture,
+                        &ctx,
+                        &manifold_core::params::ParamManifest::default(),
+                    );
                 }
                 enc.commit_and_wait_completed();
             }
