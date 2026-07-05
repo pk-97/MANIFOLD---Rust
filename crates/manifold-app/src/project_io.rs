@@ -968,7 +968,7 @@ pub fn is_supported_audio_extension(path: &Path) -> bool {
 /// Decoded length of an audio file in seconds (0 on failure / empty). This is the
 /// clip's `source_duration` — the bound for right-edge trimming — and, divided by
 /// seconds-per-beat, its initial timeline length.
-fn audio_source_duration(path: &str) -> manifold_core::Seconds {
+pub(crate) fn audio_source_duration(path: &str) -> manifold_core::Seconds {
     match manifold_playback::audio_decoder::decode_audio_to_pcm(path) {
         Ok(d) if d.channels > 0 && d.sample_rate > 0 => {
             let frames = d.samples.len() / d.channels;

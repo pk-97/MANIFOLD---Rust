@@ -168,13 +168,26 @@ impl InputHandler {
         }
 
         // ── Paste: Cmd+V (context-sensitive) (Unity line 308) ──
+        // D4 (docs/TIMELINE_INGEST_DESIGN.md §2): arbitrate Finder-file
+        // paste against the internal clip clipboard via AppKit's pasteboard
+        // changeCount before falling through to the existing clip paste.
         if matches!(logical_key, Key::Character(c) if c.as_str() == "v") && m.is_command_only() {
             if self.inspector_has_focus && host.handle_effect_paste() {
                 return true;
             }
             let target_beat = host.insert_cursor_beat().unwrap_or(host.current_beat());
             let target_layer = host.insert_cursor_layer_index().unwrap_or(0) as i32;
-            host.paste_clips(target_beat, target_layer);
+
+            let file_urls = host.pasteboard_file_urls();
+            if should_paste_pasteboard_files(
+                !file_urls.is_empty(),
+                host.pasteboard_change_count(),
+                host.internal_clipboard_snapshot(),
+            ) {
+                host.paste_pasteboard_files(&file_urls, target_beat);
+            } else {
+                host.paste_clips(target_beat, target_layer);
+            }
             return true;
         }
 
@@ -435,6 +448,25 @@ impl InputHandler {
     }
 }
 
+/// D4 (docs/TIMELINE_INGEST_DESIGN.md §2): pure Cmd+V arbitration between a
+/// Finder file copy and the internal clip clipboard.
+///
+/// `internal_snapshot` is the pasteboard `changeCount` recorded the last
+/// time this app copied clips internally (`None` if it never has). Ingest
+/// the pasteboard's files when it holds file URLs AND either the internal
+/// clipboard has never been populated, or the pasteboard's changeCount has
+/// moved since — i.e. a Finder copy happened more recently than our last
+/// internal copy. Neither side "always wins": an internal clipboard that's
+/// still current beats a stale file URL left over from an earlier Finder
+/// copy, and a fresh Finder copy beats a stale internal clipboard.
+fn should_paste_pasteboard_files(
+    has_file_urls: bool,
+    pasteboard_change_count: i64,
+    internal_snapshot: Option<i64>,
+) -> bool {
+    has_file_urls && internal_snapshot != Some(pasteboard_change_count)
+}
+
 #[cfg(test)]
 mod b14_keyboard_layer_tests {
     //! B14 dispatch tests (`docs/TIMELINE_INTERACTION_P1_SPEC.md` §5 P1.6) —
@@ -455,6 +487,12 @@ mod b14_keyboard_layer_tests {
         split_calls: Vec<Vec<ClipId>>,
         zoom_to_selection_calls: u32,
         zoom_back_calls: u32,
+        // D4 Finder-paste arbitration (docs/TIMELINE_INGEST_DESIGN.md §2).
+        pasteboard_files_val: Vec<std::path::PathBuf>,
+        pasteboard_change_count_val: i64,
+        internal_snapshot_val: Option<i64>,
+        paste_pasteboard_files_calls: Vec<(Vec<std::path::PathBuf>, f32)>,
+        paste_clips_calls: Vec<(f32, i32)>,
     }
 
     impl TimelineInputHost for MockHost {
@@ -521,7 +559,22 @@ mod b14_keyboard_layer_tests {
         fn select_all_clips(&mut self) {}
         fn copy_clips(&mut self, _clip_ids: &[ClipId]) {}
         fn cut_clips(&mut self, _clip_ids: &[ClipId], _has_region: bool) {}
-        fn paste_clips(&mut self, _target_beat: f32, _target_layer: i32) {}
+        fn paste_clips(&mut self, target_beat: f32, target_layer: i32) {
+            self.paste_clips_calls.push((target_beat, target_layer));
+        }
+        fn pasteboard_file_urls(&self) -> Vec<std::path::PathBuf> {
+            self.pasteboard_files_val.clone()
+        }
+        fn pasteboard_change_count(&self) -> i64 {
+            self.pasteboard_change_count_val
+        }
+        fn internal_clipboard_snapshot(&self) -> Option<i64> {
+            self.internal_snapshot_val
+        }
+        fn paste_pasteboard_files(&mut self, file_paths: &[std::path::PathBuf], target_beat: f32) {
+            self.paste_pasteboard_files_calls
+                .push((file_paths.to_vec(), target_beat));
+        }
         fn duplicate_clips(&mut self, _clip_ids: &[ClipId]) {}
         fn delete_clips(&mut self, _clip_ids: &[ClipId], _has_region: bool) {}
         fn delete_layer(&mut self, _layer_index: usize) {}
@@ -721,5 +774,81 @@ mod b14_keyboard_layer_tests {
         );
         assert_eq!(host.zoom_to_selection_calls, 0);
         assert_eq!(host.zoom_back_calls, 0);
+    }
+
+    // ── D4 Finder-paste arbitration (docs/TIMELINE_INGEST_DESIGN.md §2) ──
+    // Decision table: internal-empty/external-file, internal-fresh/
+    // external-stale, both-present-external-newer, text-only-pasteboard.
+
+    #[test]
+    fn arbitration_internal_empty_external_file_ingests_files() {
+        // No internal copy has ever happened; the pasteboard holds a file.
+        // Finder wins by default — an internal clipboard that was never
+        // populated can't block a paste forever.
+        assert!(should_paste_pasteboard_files(true, 7, None));
+    }
+
+    #[test]
+    fn arbitration_internal_fresh_external_stale_pastes_internal() {
+        // Internal copy snapshotted changeCount 7; the pasteboard is still
+        // at 7 (no Finder copy since) — the internal clipboard is current.
+        assert!(!should_paste_pasteboard_files(true, 7, Some(7)));
+    }
+
+    #[test]
+    fn arbitration_both_present_external_newer_ingests_files() {
+        // Internal copy snapshotted changeCount 7; the pasteboard has since
+        // moved to 9 (a Finder copy happened after) — Finder is fresher.
+        assert!(should_paste_pasteboard_files(true, 9, Some(7)));
+    }
+
+    #[test]
+    fn arbitration_text_only_pasteboard_pastes_internal() {
+        // No file URLs on the pasteboard at all (e.g. copied text) —
+        // regardless of changeCount, there is nothing to ingest.
+        assert!(!should_paste_pasteboard_files(false, 9, Some(7)));
+        assert!(!should_paste_pasteboard_files(false, 9, None));
+    }
+
+    #[test]
+    fn cmd_v_ingests_finder_files_over_stale_internal_clipboard() {
+        let (mut handler, mut host) = selected_host();
+        host.pasteboard_files_val = vec![std::path::PathBuf::from("/tmp/song.wav")];
+        host.pasteboard_change_count_val = 9;
+        host.internal_snapshot_val = Some(7);
+
+        let m = Modifiers {
+            command: true,
+            ..Modifiers::NONE
+        };
+        let consumed = handler.handle_keyboard_input(
+            &Key::Character(winit::keyboard::SmolStr::new("v")),
+            m,
+            &mut host,
+        );
+        assert!(consumed);
+        assert_eq!(host.paste_pasteboard_files_calls.len(), 1);
+        assert!(host.paste_clips_calls.is_empty());
+    }
+
+    #[test]
+    fn cmd_v_pastes_internal_clipboard_when_pasteboard_is_stale() {
+        let (mut handler, mut host) = selected_host();
+        host.pasteboard_files_val = vec![std::path::PathBuf::from("/tmp/song.wav")];
+        host.pasteboard_change_count_val = 7;
+        host.internal_snapshot_val = Some(7);
+
+        let m = Modifiers {
+            command: true,
+            ..Modifiers::NONE
+        };
+        let consumed = handler.handle_keyboard_input(
+            &Key::Character(winit::keyboard::SmolStr::new("v")),
+            m,
+            &mut host,
+        );
+        assert!(consumed);
+        assert!(host.paste_pasteboard_files_calls.is_empty());
+        assert_eq!(host.paste_clips_calls.len(), 1);
     }
 }

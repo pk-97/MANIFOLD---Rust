@@ -127,6 +127,29 @@ pub trait TimelineInputHost {
     /// Paste clips at target position.
     fn paste_clips(&mut self, target_beat: f32, target_layer: i32);
 
+    // ── Finder-paste arbitration (docs/TIMELINE_INGEST_DESIGN.md §2 D4) ──
+    // These four stay platform-neutral on purpose: `macos_pasteboard.rs` is
+    // the only module allowed to name NSPasteboard, so this trait exposes
+    // its results (file URLs, a changeCount, a snapshot) rather than the
+    // AppKit types themselves. The arbitration decision itself is a pure
+    // function in `input_handler.rs`, unit-tested without any pasteboard.
+
+    /// File URLs currently on the general pasteboard (empty if none — text,
+    /// an image, or nothing copied).
+    fn pasteboard_file_urls(&self) -> Vec<std::path::PathBuf>;
+
+    /// AppKit's `NSPasteboard.generalPasteboard.changeCount` right now.
+    fn pasteboard_change_count(&self) -> i64;
+
+    /// The pasteboard changeCount snapshotted the last time this app copied
+    /// clips internally. `None` if no internal copy has happened yet.
+    fn internal_clipboard_snapshot(&self) -> Option<i64>;
+
+    /// D5: ingest external files (e.g. a Finder Cmd+C) at `target_beat`,
+    /// joining the active layer if it is audio. Routes through the same
+    /// `process_dropped_files` path a Finder drag-drop uses.
+    fn paste_pasteboard_files(&mut self, file_paths: &[std::path::PathBuf], target_beat: f32);
+
     /// Duplicate selected clips.
     fn duplicate_clips(&mut self, clip_ids: &[ClipId]);
 

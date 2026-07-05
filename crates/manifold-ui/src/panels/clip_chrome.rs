@@ -53,6 +53,7 @@ const KEY_CLEAR: u64 = 5;
 const KEY_QUANTIZE: u64 = 6;
 const KEY_ONSET: u64 = 7;
 const KEY_PROGRESS_SLOT: u64 = 8;
+const KEY_REPLACE_AUDIO: u64 = 9;
 const KEY_INSTR_ENABLE_BASE: u64 = 100;
 const KEY_INSTR_SLIDER_BASE: u64 = 200;
 const KEY_INSTR_LAYER_BASE: u64 = 300;
@@ -333,13 +334,20 @@ impl ClipChromePanel {
 
     fn audio_section(&self, children: &mut Vec<View>) {
         children.push(Self::section_label("Source"));
+        // The filename row is a button: click opens a file dialog and replaces
+        // the clip's audio source (ReplaceAudioFileCommand), keeping the clip,
+        // its lane, and its detection config/routing. See TIMELINE_INGEST_DESIGN D6/D7.
         children.push(
-            View::label(self.cached_source_name.as_str())
+            View::button(self.cached_source_name.as_str())
                 .fill_w()
                 .h(Sizing::Fixed(SMALL_ROW_H))
-                .font(FONT_SIZE)
-                .text_color(color::TEXT_DIMMED_C32)
-                .align_text(TextAlign::Left),
+                .style(UIStyle {
+                    font_size: FONT_SIZE,
+                    ..components::button_secondary_style()
+                })
+                .align_text(TextAlign::Left)
+                .inert()
+                .key(KEY_REPLACE_AUDIO),
         );
         children.push(Self::toggle_button(
             if self.cached_warp_enabled { "Warp ON" } else { "Warp OFF" },
@@ -733,6 +741,9 @@ impl ClipChromePanel {
         if key_is(KEY_CLEAR) && self.mode_audio {
             return vec![PanelAction::ClipClearTriggersClicked];
         }
+        if key_is(KEY_REPLACE_AUDIO) && self.mode_audio {
+            return vec![PanelAction::ClipReplaceAudioClicked];
+        }
         if key_is(KEY_QUANTIZE) && self.mode_audio {
             return vec![PanelAction::ClipDetectQuantizeClicked];
         }
@@ -901,6 +912,11 @@ mod tests {
         assert!(matches!(
             panel.handle_click(clear).as_slice(),
             [PanelAction::ClipClearTriggersClicked]
+        ));
+        let replace = panel.host.node_id_for_key(KEY_REPLACE_AUDIO).unwrap();
+        assert!(matches!(
+            panel.handle_click(replace).as_slice(),
+            [PanelAction::ClipReplaceAudioClicked]
         ));
     }
 
