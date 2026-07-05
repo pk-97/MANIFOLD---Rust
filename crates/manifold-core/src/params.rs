@@ -336,4 +336,62 @@ mod tests {
         s2.value_labels = vec!["off".into(), "on".into()];
         assert!(Param::bundled(s2).whole_numbers());
     }
+
+    /// New-storage replacement for the deleted `bench_old_resolve_param_in_baseline`
+    /// (PARAM_STORAGE_DESIGN §5). Measures `ParamManifest::get(id)` worst-case: a
+    /// 40-param manifest, the target id LAST, and every id sharing a long common
+    /// prefix so each non-matching compare does realistic work (real ids look like
+    /// `user.mix.amount.1`). The old positional resolver (`resolve_param_in`, which
+    /// also scanned + consulted the frozen registry) measured 135.73 ns/op; the
+    /// design ceiling is 2× = 271.5 ns/op. `get` is a bare scan with no registry
+    /// consult, so it should beat the baseline outright. Min-of-N rounds so a
+    /// transient scheduler stall on a loaded machine can't flake the default
+    /// `cargo test --workspace` sweep. Run with `-- --nocapture` to see the number.
+    #[test]
+    fn bench_resolve() {
+        const N: usize = 40;
+        const ITERS: u64 = 1_000_000;
+        const ROUNDS: usize = 5;
+
+        let params: Vec<Param> = (0..N)
+            .map(|i| param(&format!("preset.instance.param.slot_{i:02}"), i as f32 / N as f32))
+            .collect();
+        let manifest = ParamManifest::from_params(params);
+        // Worst case: the id the scan reaches last.
+        let worst_id = format!("preset.instance.param.slot_{:02}", N - 1);
+
+        // Warm up (page-in, branch predictor) — not timed.
+        let mut acc = 0.0f32;
+        for _ in 0..ITERS {
+            acc += manifest
+                .get(std::hint::black_box(&worst_id))
+                .map(|p| p.value)
+                .unwrap_or(0.0);
+        }
+        std::hint::black_box(acc);
+
+        let mut best_ns_per_op = f64::INFINITY;
+        for _ in 0..ROUNDS {
+            let start = std::time::Instant::now();
+            let mut acc = 0.0f32;
+            for _ in 0..ITERS {
+                acc += manifest
+                    .get(std::hint::black_box(&worst_id))
+                    .map(|p| p.value)
+                    .unwrap_or(0.0);
+            }
+            std::hint::black_box(acc);
+            let ns_per_op = start.elapsed().as_nanos() as f64 / ITERS as f64;
+            best_ns_per_op = best_ns_per_op.min(ns_per_op);
+        }
+
+        println!(
+            "ParamManifest::get worst-case ({N} params, id last): {best_ns_per_op:.2} ns/op \
+             (old resolve_param_in baseline 135.73 ns/op; ceiling 271.5)"
+        );
+        assert!(
+            best_ns_per_op <= 271.5,
+            "ParamManifest::get regressed past the 2× ceiling: {best_ns_per_op:.2} ns/op > 271.5"
+        );
+    }
 }
