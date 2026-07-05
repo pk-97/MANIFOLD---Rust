@@ -35,7 +35,7 @@ MOVES_PATH = os.path.join(DAEMON_DIR, "moves.md")
 RUBRIC_PATH = os.path.join(DAEMON_DIR, "rubric.md")
 MUTES_DIR = os.path.join(VERDICTS_DIR, "mutes")
 
-POLL_SECONDS = 3
+POLL_SECONDS = 1  # 1s, not 3: bounds the Stop hook's catch-up wait (DESIGN.md §2, re-ruled 2026-07-05) — the loop body is one stat when idle, so the extra polls are ~free
 IDLE_TIMEOUT_S = 600  # DESIGN.md §1: idle > 10 min ends the daemon
 ESCALATE_AFTER = 2  # "flagged again after two injections" -> the 3rd fire escalates
 
@@ -142,6 +142,13 @@ class Daemon:
         self.stop_path = os.path.join(VERDICTS_DIR, f"{session_id}.stop")
         self.consumed_path = os.path.join(VERDICTS_DIR, f"{session_id}.consumed")
         self.log_path = os.path.join(VERDICTS_DIR, f"{session_id}.log")
+        # Drained-through byte offset, published for the Stop hook's catch-up
+        # wait (DESIGN.md §2, re-ruled 2026-07-05). Written AFTER a drain
+        # returns, so once it reaches the transcript size at Stop time, every
+        # window that drain closed has already been classified and its
+        # verdict written — "offset caught up" means "nothing more is coming
+        # for this turn", no separate in-flight marker needed.
+        self.offset_path = os.path.join(VERDICTS_DIR, f"{session_id}.offset")
 
         self.moves = common.parse_moves(common.read(MOVES_PATH))
         self.system_prompt = common.build_system_prompt(common.read(RUBRIC_PATH), self.moves)
@@ -221,7 +228,7 @@ class Daemon:
         # concurrent tailer with colliding seq numbers.
         if not self.owns_pidfile:
             return
-        for p in (self.pid_path, self.stop_path):
+        for p in (self.pid_path, self.stop_path, self.offset_path):
             try:
                 os.remove(p)
             except OSError:
@@ -272,6 +279,7 @@ class Daemon:
         )
 
         offset = self._catchup(logf)
+        self._publish_offset(offset)
         last_activity = time.time()
 
         while True:
@@ -284,6 +292,7 @@ class Daemon:
                 size = offset
             if size > offset:
                 offset = self._drain(offset, logf, classify=True)
+                self._publish_offset(offset)
                 last_activity = time.time()
             elif time.time() - last_activity > IDLE_TIMEOUT_S:
                 _log(logf, "idle timeout, exiting")
@@ -388,6 +397,18 @@ class Daemon:
             self._handle_window(closed, logf, mailbox=worker)
 
     # ---- transcript reading ----
+
+    def _publish_offset(self, offset):
+        """Heartbeat for the Stop hook: the byte offset this observer has
+        drained (and therefore classified) through. tmp+replace so the hook
+        never reads a torn value; failure is fine — the hook fails open."""
+        try:
+            tmp = f"{self.offset_path}.tmp.{os.getpid()}"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(str(offset))
+            os.replace(tmp, self.offset_path)
+        except OSError:
+            pass
 
     def _catchup(self, logf):
         """Replay everything already on disk to rebuild window state (task,
@@ -635,27 +656,12 @@ class Daemon:
         forked — the two paths cannot drift apart the way separately
         maintained copies would."""
         mb = mailbox if mailbox is not None else self
-        # Conditional Stop-wait (sleep pass 1): mark "classification in
-        # flight" so the Stop hook can wait a couple of seconds ONLY when a
-        # verdict is genuinely about to land — the chat-lag fix Peter asked
-        # for, without the flat per-turn wait he rejected. Main session only
-        # (chat lag is a main-turn phenomenon; worker Stops shouldn't pay).
-        marker = None
-        if mailbox is None:
-            marker = os.path.join(VERDICTS_DIR, f"{self.session_id}.classifying")
-            try:
-                with open(marker, "w", encoding="utf-8") as f:
-                    f.write(str(time.time()))
-            except OSError:
-                marker = None
-        try:
-            verdict = common.call_classifier(self.system_prompt, window["text"])
-        finally:
-            if marker:
-                try:
-                    os.remove(marker)
-                except OSError:
-                    pass
+        # The `.classifying` in-flight marker that used to live here was
+        # superseded 2026-07-05 by the `.offset` heartbeat: classification
+        # runs synchronously inside _drain, and the heartbeat is published
+        # only after _drain returns, so "offset caught up" already means
+        # "no classification in flight" — the Stop hook waits on that instead.
+        verdict = common.call_classifier(self.system_prompt, window["text"])
         if "error" in verdict:
             _log(logf, f"classifier error: {verdict['error']}")
             return  # fail open — leave the verdict file as it was

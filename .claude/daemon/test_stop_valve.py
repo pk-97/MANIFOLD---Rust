@@ -258,67 +258,104 @@ def test_real_hook_process_smoke():
             pass
 
 
-# ---- conditional Stop-wait (sleep pass 1: the chat-lag race) ----
+# ---- catch-up Stop-wait (re-ruled 2026-07-05: wait for the observer's
+# .offset heartbeat to reach the transcript size at Stop, instead of the
+# old classifying-marker race) ----
 
 
-def test_stop_wait_delivers_verdict_that_lands_mid_wait():
+def plant_observer(td, session, drained_offset):
+    """A 'live' observer for the hook's liveness gate: a pid file holding
+    OUR pid (always alive) plus a heartbeat at the given offset."""
+    with open(os.path.join(td, f"{session}.pid"), "w", encoding="utf-8") as f:
+        f.write(str(os.getpid()))
+    with open(os.path.join(td, f"{session}.offset"), "w", encoding="utf-8") as f:
+        f.write(str(drained_offset))
+
+
+def test_stop_wait_delivers_verdict_when_observer_catches_up():
     def run(td):
-        session = "sess-waitwin"
-        # Fresh classifying marker, no verdict yet.
-        marker = os.path.join(td, f"{session}.classifying")
-        with open(marker, "w", encoding="utf-8") as f:
-            f.write(str(time.time()))
-        # Simulate the classifier finishing 0.5s in: a helper thread writes
-        # the verdict and removes the marker while the hook is waiting.
+        session = "sess-catchup"
+        transcript = os.path.join(td, "t.jsonl")
+        write_transcript(transcript, "The fix is in and the tests pass.")
+        size = os.path.getsize(transcript)
+        plant_observer(td, session, 0)  # observer alive but behind
+        # Simulate the observer draining the turn-final text 0.5s in: verdict
+        # first (written inside the drain), then the heartbeat catches up.
         import threading
 
-        def land_verdict():
+        def observer_drains():
             time.sleep(0.5)
             write_verdict(td, session, "anchor/verify-claim", seq=1)
-            os.remove(marker)
+            with open(os.path.join(td, f"{session}.offset"), "w", encoding="utf-8") as f:
+                f.write(str(size))
 
-        t = threading.Thread(target=land_verdict)
+        t = threading.Thread(target=observer_drains)
         t.start()
         start = time.time()
-        out = run_hook({"session_id": session, "prompt_id": "pw1", "transcript_path": "/dev/null"}, td)
+        out = run_hook({"session_id": session, "prompt_id": "pw1", "transcript_path": transcript}, td)
         elapsed = time.time() - start
         t.join()
         d = json.loads(out) if out else None
-        check("stop-wait delivered the landing verdict", d and d.get("decision") == "block", out)
-        check("wait was bounded and short", elapsed < 3.0, elapsed)
+        check("catch-up wait delivered the landing verdict", d and d.get("decision") == "block", out)
+        check("catch-up wait was short", elapsed < 3.0, elapsed)
 
     with_temp_verdicts(run)
 
 
-def test_stop_wait_skips_stale_marker():
+def test_stop_wait_fast_when_observer_already_caught_up():
     def run(td):
-        session = "sess-waitstale"
-        marker = os.path.join(td, f"{session}.classifying")
-        with open(marker, "w", encoding="utf-8") as f:
+        session = "sess-caughtup"
+        transcript = os.path.join(td, "t.jsonl")
+        write_transcript(transcript, "Here is the summary of what I found.")
+        plant_observer(td, session, os.path.getsize(transcript))
+        start = time.time()
+        out = run_hook({"session_id": session, "prompt_id": "pw2", "transcript_path": transcript}, td)
+        elapsed = time.time() - start
+        check("caught-up observer: no wait", elapsed < 0.5, elapsed)
+        check("caught-up observer: no block", not out, out)
+
+    with_temp_verdicts(run)
+
+
+def test_stop_wait_skips_when_observer_dead_or_no_heartbeat():
+    def run(td):
+        # Dead observer (no pid file) with a lagging heartbeat: no wait.
+        session = "sess-deadobs"
+        transcript = os.path.join(td, "t.jsonl")
+        write_transcript(transcript, "Here is the summary of what I found.")
+        with open(os.path.join(td, f"{session}.offset"), "w", encoding="utf-8") as f:
             f.write("0")
-        old = time.time() - 120  # 2 min old = throttled classifier
-        os.utime(marker, (old, old))
         start = time.time()
-        out = run_hook({"session_id": session, "prompt_id": "pw2", "transcript_path": "/dev/null"}, td)
+        out = run_hook({"session_id": session, "prompt_id": "pw3", "transcript_path": transcript}, td)
         elapsed = time.time() - start
-        check("stale marker: no wait, fast return", elapsed < 0.5, elapsed)
-        check("stale marker: no block", not out, out)
+        check("dead observer: no wait", elapsed < 0.5, elapsed)
+        check("dead observer: no block", not out, out)
+
+        # Live pid but no heartbeat file (pre-heartbeat observer): no wait.
+        session2 = "sess-nohb"
+        with open(os.path.join(td, f"{session2}.pid"), "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+        start = time.time()
+        out2 = run_hook({"session_id": session2, "prompt_id": "pw4", "transcript_path": transcript}, td)
+        elapsed = time.time() - start
+        check("missing heartbeat: no wait", elapsed < 0.5, elapsed)
+        check("missing heartbeat: no block", not out2, out2)
 
     with_temp_verdicts(run)
 
 
-def test_stop_wait_bounded_when_classifier_hangs():
+def test_stop_wait_bounded_when_observer_stalls():
     def run(td):
-        session = "sess-waithang"
-        marker = os.path.join(td, f"{session}.classifying")
-        with open(marker, "w", encoding="utf-8") as f:
-            f.write(str(time.time()))
-        # Marker stays, verdict never lands: must give up at the cap.
+        session = "sess-stall"
+        transcript = os.path.join(td, "t.jsonl")
+        write_transcript(transcript, "Here is the summary of what I found.")
+        plant_observer(td, session, 0)  # alive, heartbeat never moves
         start = time.time()
-        out = run_hook({"session_id": session, "prompt_id": "pw3", "transcript_path": "/dev/null"}, td)
+        out = run_hook({"session_id": session, "prompt_id": "pw5", "transcript_path": transcript}, td)
         elapsed = time.time() - start
-        check("hang: returns within cap + slack", elapsed < 5.5, elapsed)
-        check("hang: no block", not out, out)
+        check("stalled observer: returns within cap + slack", elapsed < 7.5, elapsed)
+        check("stalled observer: waited to the cap, not less", elapsed > 5.0, elapsed)
+        check("stalled observer: no block", not out, out)
 
     with_temp_verdicts(run)
 
@@ -328,12 +365,12 @@ def test_stop_wait_never_runs_for_workers():
         with open(valve.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
             f.write("1")
         session, agent = "sess-waitagent", "agw1"
-        marker = os.path.join(td, f"{session}.classifying")
-        with open(marker, "w", encoding="utf-8") as f:
-            f.write(str(time.time()))
+        transcript = os.path.join(td, "t.jsonl")
+        write_transcript(transcript, "Here is the summary of what I found.")
+        plant_observer(td, session, 0)  # lagging heartbeat must not matter
         start = time.time()
         out = run_hook(
-            {"session_id": session, "agent_id": agent, "prompt_id": "pw4", "transcript_path": "/dev/null"}, td
+            {"session_id": session, "agent_id": agent, "prompt_id": "pw6", "transcript_path": transcript}, td
         )
         elapsed = time.time() - start
         check("worker stop never waits", elapsed < 0.5, elapsed)
@@ -355,9 +392,10 @@ def main():
         test_malformed_stdin_and_missing_transcript_exit_clean,
         test_stale_stopblock_sentinel_is_swept,
         test_real_hook_process_smoke,
-        test_stop_wait_delivers_verdict_that_lands_mid_wait,
-        test_stop_wait_skips_stale_marker,
-        test_stop_wait_bounded_when_classifier_hangs,
+        test_stop_wait_delivers_verdict_when_observer_catches_up,
+        test_stop_wait_fast_when_observer_already_caught_up,
+        test_stop_wait_skips_when_observer_dead_or_no_heartbeat,
+        test_stop_wait_bounded_when_observer_stalls,
         test_stop_wait_never_runs_for_workers,
     ]
     for t in tests:

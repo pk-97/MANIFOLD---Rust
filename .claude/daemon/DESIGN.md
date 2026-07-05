@@ -114,6 +114,23 @@ versioned. History on the daemon is non-negotiable — the sleep pass edits it.
   like the PostToolUse valve. Judgment: a one-beat extension carrying a
   pending whisper is delivery, not blocking; waiting or classifying
   synchronously at Stop would be blocking and stays forbidden. Sonnet-buildable.
+  **RE-RULED (Peter, 2026-07-05): the accepted race is no longer accepted.**
+  Turn-final flags landing on the NEXT prompt defeated the valve's purpose
+  (Peter kept having to send a follow-up prompt before the correction fired).
+  The Stop hook now waits — bounded — for the observer to catch up: the
+  observer publishes a `verdicts/<session>.offset` heartbeat (drained-through
+  byte offset, written AFTER each drain returns; classification is synchronous
+  inside the drain, so heartbeat ≥ transcript-size-at-Stop ⇒ every verdict the
+  turn can produce is on disk), `POLL_SECONDS` dropped 3→1 to bound the wait,
+  and the hook polls `pending_injection` while waiting (cap 6s), delivering
+  the instant a whisper appears. Fail-open is preserved at the gate rather
+  than by refusing to wait: dead observer, missing heartbeat (pre-heartbeat
+  observer still running), or unreadable transcript ⇒ no wait at all. Typical
+  cost ≈ one observer poll (~1s); the cap only binds when a classification is
+  genuinely in flight. The sleep-pass-1 `.classifying` marker (a narrower wait
+  that only caught a classification already in flight at Stop — almost never
+  the case for turn-final text) is superseded and removed. The one-block-per-
+  turn sentinel, stop_hook_active guard, and worker gating are unchanged.
 - **Subagent rule (2026-07-04, verified by live probe):** PostToolUse also fires
   for tool calls made *inside* subagents, carrying the MAIN session's id and
   transcript_path plus an `agent_id` field. The valve must not deliver when
