@@ -455,6 +455,70 @@ on that line (count back to 200), or (c) bump `COLOR_BASELINE` to 201 if it's ac
 fixed this session — the gate confirms the diff at hand is P6-clean; picking apart an unrelated
 pre-existing count belongs to whoever next touches `manifold-ui/src`'s colour call sites.
 
+### BUG-025 — Timeline layer/header scissoring: clip content bleeds across row bounds — MED (repro needed)
+
+**Symptom** — reported by Peter 2026-07-05 (screenshot in session transcript) as "layer and
+header scissoring": in the arrangement view, the bottom layer's purple clip body renders far
+beyond its row — a solid block filling the timeline from its row down to the window edge —
+while the layer-header column at bottom-left shows the Plasma MIDI drawer (MIDI / CHANNEL /
+DEVICE) overlapping into that region. Clip content and header-column content are not being
+mutually clipped to their rows/panes.
+
+**Root cause** — unknown. Suspect surface: the per-row scissor rect for clip bodies (last or
+expanded row), the `track-header-invariant` / `single-source-y-layout` class, or a stale
+subregion scissor (`subregion-scissor-invariant`). Likely same family as BUG-015 (inspector
+sections at stale offsets) — both smell like Y-layout/scissor divergence after the recent
+timeline waves.
+
+**Repro** — not pinned. Suspect it involves a layer with an open header drawer plus a tall
+clip on the last row. Now automatable: a `scripts/ui-flows/` timeline flow with a RectWithin
+assert on the clip body vs. its row rect would pin it headless.
+
+**Fix shape** — TBD after repro. If it's the invariant class, fix at the single Y-layout
+source, not per-widget patches.
+
+### BUG-026 — Effect browser popup draws cells with NO background panel until first mouseover — MED
+
+**Symptom** — reported by Peter 2026-07-05 (before/after screenshots in session transcript):
+opening the Add Effect browser renders the search field, filter chips, and preset cells
+floating directly over the timeline — the popup's dark background panel is missing. Moving
+the mouse over the popup makes the background appear and it then looks correct.
+
+**Root cause** — unknown. The trigger pattern (wrong on first open, correct after a
+hover-driven redraw) points at the first-frame draw missing the background batch: the popup's
+background rect only entering the draw list on a dirty/hover repaint, or the overlay's cached
+sub-region not being invalidated at open (`per-window-resource-writes` / subregion-cache
+class). Surface: `browser_popup.rs` + the overlay render path from OVERLAY_SESSIONS P1–P2.
+
+**Repro** — expected deterministic: open the browser, look before moving the mouse. Headless:
+a picker flow that opens the browser and screenshots frame 0 would show it (VD-002's flows
+are the natural home — this is exactly the interactive class VD-002 exists to catch).
+
+**Fix shape** — make open mark the whole popup surface dirty (or draw the background in the
+same pass as the cells) so frame 0 and frame N draw identically. Fix at the invalidation
+point, not by forcing an extra redraw.
+
+### BUG-027 — Graph-editor node previews composite on the wrong z-layer vs. node chrome — MED
+
+**Symptom** — reported by Peter 2026-07-05 (screenshot in session transcript): node preview
+thumbnails overlap neighbouring nodes inconsistently — a preview (e.g. Luma to Color) draws
+OVER another node's body/ports while that node's own chrome draws over the preview, so
+stacking order disagrees within a single node pair. Previews look like they live on a
+separate layer that ignores node z-order.
+
+**Root cause** — unknown, but the shape is classic split-pipeline compositing: preview
+textured quads render in a different batch/pipeline than the solid-rect node chrome, and the
+two batches aren't interleaved by node draw order (`compositor-layer-ordering` class).
+Surface: `graph_canvas/render.rs` preview draw vs. node body/port pass ordering.
+
+**Repro** — overlap two nodes with live previews in the graph editor; the ordering
+disagreement should be immediate. Headless `editor`-scene PNG should capture it (editor
+widgets are unnamed headless, but this is a screenshot-and-look bug, no selectors needed).
+
+**Fix shape** — one z-ordered draw sequence per node: interleave the textured preview quads
+into the same node-order pass as chrome (or bump batch boundaries per node), rather than
+patching individual overlap cases.
+
 ## Fixed
 
 All five entries below were fixed 2026-06-23, with a test per path:
