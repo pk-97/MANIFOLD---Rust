@@ -655,7 +655,7 @@ per-node output textures with full UV), and delete BOTH flat blit passes. Real i
 renderer change (Painter trait + UIRenderer + canvas render + both blit-pass deletions), but
 headless-verifiable. Not a "patch the overlap cases" job.
 
-### BUG-028 — File-drop targeting can't read the live pointer during a Finder drag (both AppKit poll sources frozen) — MED (parked, Fable follow-up)
+### BUG-028 — File-drop targeting can't read the live pointer during a Finder drag (both AppKit poll sources frozen) — MED — FIXED 2026-07-05 (`wave/timeline-drop`, unlanded pending Peter's live-drag gate)
 
 **Symptom** — dragging an audio file onto an existing audio lane lands it on a NEW lane
 instead of the target lane. Verified 2026-07-05 (Peter, live drag test).
@@ -669,11 +669,31 @@ the pointer was actively moving. The poll site (`about_to_wait`) runs during the
 loop isn't starved — the position APIs simply don't update while macOS owns the drag. Polling
 is a dead end.
 
-**Fix shape** — intercept `draggingUpdated:` on winit's content view (subclass/swizzle) and
-stash `[sender draggingLocation]` (live, window coords, flip to logical top-left) for the drop
-arms; or fork winit to forward it. Overrides TIMELINE_INGEST_DESIGN §2 D1. Queued for a
-dedicated Fable session. Blocks P1 (drop targeting) and P2 (drop-target ghost — reads the same
-position). Full write-up: TIMELINE_INGEST_DESIGN.md §3.
+**Fix (as built)** — `crates/manifold-app/src/drag_interpose.rs`: winit's macOS drag
+destination is its `NSWindow`'s window delegate (not a view), and that delegate implements
+`draggingEntered:`/`performDragOperation:`/etc. but NOT `draggingUpdated:`. At startup we
+`class_addMethod` a fresh `draggingUpdated:` onto the delegate's class (returns
+`NSDragOperationCopy`) and swizzle the existing `performDragOperation:` (so the drop position
+is captured even if the pointer never moves again after entry), both stashing
+`[sender draggingLocation]` — converted window-point → view-point (`convertPoint:fromView:nil`)
+→ flipped to `cursor_pos`'s logical top-left convention — into a UI-thread-only cell. New
+`crates/manifold-app/src/drag_hover.rs` (`DragHoverTracker`) wraps it; all three `DroppedFile`
+arms (audio/MIDI, image, glTF) in `app.rs` now read
+`drag_tracker.drop_position().unwrap_or(cursor_pos)`. P2 (drop-target ghost): a full-length
+translucent preview clip renders on the target audio lane during the drag
+(`app_render.rs`, reusing the existing `ClipBody`/`emit_clips`/ghost-alpha pipeline that
+in-app clip-move drags already use); the "New lane: ⟨filename⟩" label and a discrete beat-line
+for the non-audio-lane case were **not** built — no existing floating-text-over-viewport
+primitive to reuse, out of scope for this pass. Overrides TIMELINE_INGEST_DESIGN §2 D1 (see
+its §3 for the full poll-failure writeup, now superseded).
+
+**Verification** — clean compile + clippy (`-D warnings`) + full `manifold-app` test suite,
+plus 4 new unit tests for the coordinate flip (`drag_interpose::macos::tests`). The one thing
+that can't be verified headless: whether `NSWindow` actually forwards `draggingUpdated:` to a
+delegate that only gained the method at runtime (documented AppKit behavior, `respondsToSelector:`
+is checked per-message — but only a live drag proves it). Gate: drag a Finder audio file over an
+existing audio lane → joins that lane at the pointer's beat, ghost clip shows lane+length before
+drop; an image drop lands under the pointer.
 
 ### BUG-032 — glTF import: a model with >2 materials fails to load ("unknown parameter 'pos_x_2'") and renders black — HIGH — FIXED 2026-07-05 (`dc97bbe6`)
 

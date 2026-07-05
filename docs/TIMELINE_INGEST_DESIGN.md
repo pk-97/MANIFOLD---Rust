@@ -157,6 +157,29 @@ image, glTF), and the target coordinate convention is **logical, top-left origin
 stores `cursor_pos` post-`logical_cursor`, so any live source must flip AppKit's
 bottom-left view point by view-height). Tracked as BUG-028.
 
+**BUILT 2026-07-05 (Sonnet, `wave/timeline-drop`, pending Peter's live-drag gate before
+landing).** Fable's investigation (same session, brief at
+`.claude/briefs/TIMELINE_INGEST_P1P2_DROP_BRIEF.md`) found the actual interception point:
+winit's macOS drag destination is the `NSWindow`'s **window delegate**, not a view, and
+that delegate implements `draggingEntered:`/`performDragOperation:`/etc. but NOT
+`draggingUpdated:`. So the fix is a fresh `class_addMethod(draggingUpdated:)` on the
+delegate's class (returns `NSDragOperationCopy`, no swizzle needed since the method didn't
+exist) plus a swizzle of the existing `performDragOperation:` (captures the drop position
+even if the pointer never moves again after entry) — both writing
+`[sender draggingLocation]`, converted window-point → view-point
+(`convertPoint:fromView:nil`) → flipped to `cursor_pos`'s logical top-left convention, into
+a UI-thread-only cell. See `crates/manifold-app/src/drag_interpose.rs` for the full
+mechanism and its doc comment (which also states the one assumption a live drag alone can
+prove: that `NSWindow` forwards a dragging message to a delegate that only gained the
+method at runtime). `crates/manifold-app/src/drag_hover.rs`'s `DragHoverTracker` wraps it
+per D2; all three `DroppedFile` arms read `drop_position().unwrap_or(cursor_pos)` per the
+pattern above. P2 shipped as a full-length translucent ghost clip on the target audio lane
+(`app_render.rs`, reusing the `ClipBody`/`emit_clips`/ghost-alpha pipeline in-app clip-move
+drags already use) — the D3 "New lane: ⟨filename⟩" label and a discrete beat-line were
+**not** built (no existing floating-text-over-viewport primitive to reuse; scoped out of
+this pass, not silently dropped). Compiles clean, clippy clean, full `manifold-app` test
+suite green, 4 new unit tests for the coordinate flip. Tracked as BUG-028 (updated).
+
 ## 4. New pieces (committed shapes)
 
 ```rust

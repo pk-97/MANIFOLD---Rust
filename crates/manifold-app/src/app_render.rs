@@ -4077,7 +4077,50 @@ impl Application {
                 .ui_root
                 .viewport
                 .visible_clip_rects(&mut self.clip_rect_scratch);
-            if !self.clip_rect_scratch.is_empty() {
+            // BUG-028 P2: while an audio file is being dragged in from
+            // Finder, show a full-length ghost clip at the lane/beat it
+            // would land on — the same targeting the DroppedFile arm in
+            // app.rs resolves, computed independently here (read-only
+            // geometry, deliberately not shared with that gate-critical
+            // code so this cosmetic addition can't regress it). Deferred:
+            // a "New lane: <filename>" floating label for the non-audio-lane
+            // case — no existing floating-text-over-viewport primitive to
+            // reuse, and inventing one wasn't in scope for this pass.
+            let ghost_body = self.drag_tracker.first_hovered_audio_seconds().and_then(|source_secs| {
+                let pos = self.drag_tracker.drop_position().unwrap_or(self.cursor_pos);
+                let vp = &self.ws.ui_root.viewport;
+                let in_tracks = vp.get_tracks_rect().contains(pos);
+                if !in_tracks {
+                    return None;
+                }
+                let layer_index = vp.layer_at_y(pos.y)?;
+                let layer = self.local_project.timeline.layers.get(layer_index)?;
+                if !layer.is_audio() {
+                    return None;
+                }
+                let start_beat = vp.pixel_to_beat(pos.x).as_f32().max(0.0);
+                let spb = manifold_core::tempo::TempoMapConverter::seconds_per_beat_from_bpm(
+                    self.local_project.settings.bpm.0,
+                );
+                let duration_beats =
+                    if spb > 0.0 { source_secs.as_f32() / spb } else { 0.0 };
+                Some(manifold_renderer::clip_draw::ClipBody {
+                    rect: manifold_ui::node::Rect::new(
+                        vp.beat_to_pixel(manifold_core::Beats::from_f32(start_beat)),
+                        vp.track_y(layer_index),
+                        vp.beat_duration_to_width(duration_beats),
+                        vp.track_height(layer_index),
+                    ),
+                    base_color: manifold_ui::color::AUDIO_TRIM_BAR_C32,
+                    selected: true,
+                    hovered: false,
+                    muted: false,
+                    locked: false,
+                    generator: false,
+                    alpha: 0.5,
+                })
+            });
+            if !self.clip_rect_scratch.is_empty() || ghost_body.is_some() {
                 // Resolve per-clip selection (incl. the marquee case: when the
                 // region IS the selection, clips it covers style as selected —
                 // same overlap test the bitmap path used, kept WYSIWYG).
@@ -4127,6 +4170,9 @@ impl Application {
                             generator: cr.is_generator,
                             alpha: if is_drag_visual { ghost_alpha } else { 1.0 },
                         });
+                }
+                if let Some(ghost) = ghost_body {
+                    self.clip_body_scratch.push(ghost);
                 }
 
                 let tracks = self.ws.ui_root.viewport.get_tracks_rect();

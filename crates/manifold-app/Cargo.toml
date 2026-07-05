@@ -55,7 +55,10 @@ io-surface = "0.16"
 core-foundation = "0.10"
 raw-window-handle = "0.6"
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString", "NSNotification", "NSURL", "NSArray"] }
+# "objc2-core-foundation": pulls in NSPoint/NSRect (CGPoint/CGRect aliases),
+# needed by drag_interpose.rs to convert draggingLocation into cursor_pos's
+# logical top-left convention. Already in Cargo.lock (transitive via winit).
+objc2-foundation = { version = "0.3", features = ["NSString", "NSNotification", "NSURL", "NSArray", "objc2-core-foundation"] }
 # P3 (docs/TIMELINE_INGEST_DESIGN.md §4): general-pasteboard access for the
 # Finder-paste arbitration. macos_pasteboard.rs is the sole module allowed
 # to name these types.
