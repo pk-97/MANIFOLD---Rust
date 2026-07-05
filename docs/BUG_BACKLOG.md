@@ -28,6 +28,34 @@ or human can read it, and it needs no external tool.
 
 ## Open
 
+### BUG-037 — First render of a glTF scene layer stalls the content thread ~37ms (warm-up on the frame, not at load) — MED
+
+**Symptom** — trace run 2026-07-06 (`meshImportTests.manifold`): the first frame after the
+project's glp layer became active showed `generators=37.1ms` (RENDER_TRACE frame=421) —
+one-off, distinct from the recurring BUG-035 spike. On stage this means launching a glp
+clip mid-set drops ~2 frames on its first render.
+
+**Root cause (probable, unmeasured beyond the one trace line)** — first-touch work in the
+generator path: glTF texture decode hand-off / mesh buffer upload / pipeline+PSO creation
+happens lazily on the first rendered frame instead of at load/schedule time. The repo
+already has the machinery pattern for this class (`plugin_prewarm.rs`, generator pipeline
+pre-warm at startup, pipeline archive).
+
+**Fix shape** — pre-warm at project-load / clip-schedule time: when a glp generator clip
+is loaded (or armed on a timeline), run its first-frame resource creation off the hot
+path so frame 1 of the clip renders at steady-state cost. Verify with the same
+MANIFOLD_RENDER_TRACE run: no >20ms frame on first clip render.
+
+### BUG-038 — AbletonBridge retries + WARN-spams every ~1.5s forever when Live isn't running — LOW (log hygiene)
+
+**Symptom** — any session without Ableton running logs
+`[AbletonBridge] OSC send failed for /live/song/get/num_tracks: Connection refused` at
+WARN level every ~1.5s indefinitely (see any 2026-07-06 trace-run log).
+
+**Fix shape** — warn once on first failure, then downgrade repeats to debug until a send
+succeeds (state flip logs "reconnected" at info). Optionally back off the poll while
+refused. `manifold-playback/src/ableton_bridge.rs`, small.
+
 ### BUG-036 — LFO on an imported-glb generator's card param is dead after project reload; re-importing the same .glb revives it — MED
 
 **Symptom** (Peter, 2026-07-06, `~/Downloads/meshImportTests.manifold`) — a project saved
