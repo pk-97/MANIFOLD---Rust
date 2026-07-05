@@ -214,28 +214,16 @@ impl GeneratorMetadata {
     /// Convert to the unified `PresetDef` (kind = `Generator`).
     pub fn to_generator_def(&self) -> PresetDef {
         let param_defs: Vec<ParamDef> = self.params.iter().map(|p| p.to_param_def()).collect();
-        let param_count = param_defs.len();
-        let id_to_index = self
-            .params
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| !p.id.is_empty())
-            .map(|(i, p)| (p.id.to_string(), i))
-            .collect();
-        let param_ids: Vec<String> = self.params.iter().map(|p| p.id.to_string()).collect();
         PresetDef {
             kind: PresetKind::Generator,
             display_name: self.display_name.to_string(),
             is_line_based: self.is_line_based,
-            param_count,
             param_defs,
             // Outer-card string params are owned by the disk JSON preset
             // (`stringParams`), which overrides this inventory def in the
             // registry. The inventory path carries none.
             string_param_defs: Vec::new(),
             osc_prefix: Some(self.osc_prefix.to_string()),
-            id_to_index,
-            param_ids,
             legacy_param_aliases: &[],
             legacy_value_aliases: &[],
         }

@@ -13,7 +13,7 @@ use manifold_core::preset_definition_registry;
 #[test]
 fn generator_param_count_plasma() {
     assert_eq!(
-        preset_definition_registry::get(&PresetTypeId::PLASMA).param_count,
+        preset_definition_registry::get(&PresetTypeId::PLASMA).param_defs.len(),
         6
     );
 }
@@ -31,49 +31,49 @@ fn generator_param_count_concentric_tunnel() {
     // clip_trigger, trigger_mode (Shape/Spawn/Both, restored from the legacy
     // `clip_trigger_mode`). JSON: `assets/generator-presets/ConcentricTunnel.json`.
     assert_eq!(
-        preset_definition_registry::get(&PresetTypeId::CONCENTRIC_TUNNEL).param_count,
+        preset_definition_registry::get(&PresetTypeId::CONCENTRIC_TUNNEL).param_defs.len(),
         6
     );
 }
 #[test]
 fn generator_param_count_tesseract() {
     assert_eq!(
-        preset_definition_registry::get(&PresetTypeId::TESSERACT).param_count,
+        preset_definition_registry::get(&PresetTypeId::TESSERACT).param_defs.len(),
         11
     );
 }
 #[test]
 fn generator_param_count_duocylinder() {
     assert_eq!(
-        preset_definition_registry::get(&PresetTypeId::DUOCYLINDER).param_count,
+        preset_definition_registry::get(&PresetTypeId::DUOCYLINDER).param_defs.len(),
         11
     );
 }
 #[test]
 fn generator_param_count_lissajous() {
     assert_eq!(
-        preset_definition_registry::get(&PresetTypeId::LISSAJOUS).param_count,
+        preset_definition_registry::get(&PresetTypeId::LISSAJOUS).param_defs.len(),
         11
     );
 }
 #[test]
 fn generator_param_count_wireframe_zoo() {
     assert_eq!(
-        preset_definition_registry::get(&PresetTypeId::WIREFRAME_ZOO).param_count,
+        preset_definition_registry::get(&PresetTypeId::WIREFRAME_ZOO).param_defs.len(),
         9
     );
 }
 #[test]
 fn generator_param_count_fluid_sim() {
     assert_eq!(
-        preset_definition_registry::get(&PresetTypeId::FLUID_SIMULATION).param_count,
+        preset_definition_registry::get(&PresetTypeId::FLUID_SIMULATION).param_defs.len(),
         14
     );
 }
 #[test]
 fn generator_param_count_fluid_sim_3d() {
     assert_eq!(
-        preset_definition_registry::get(&PresetTypeId::FLUID_SIMULATION_3D).param_count,
+        preset_definition_registry::get(&PresetTypeId::FLUID_SIMULATION_3D).param_defs.len(),
         20
     );
 }
@@ -84,7 +84,7 @@ fn generator_all_types_have_params() {
     use manifold_core::{preset_def::PresetKind, preset_type_registry};
     for reg in preset_type_registry::all_of_kind(PresetKind::Generator) {
         assert!(
-            preset_definition_registry::get(&reg.id).param_count > 0,
+            !preset_definition_registry::get(&reg.id).param_defs.is_empty(),
             "{:?} has no param definitions",
             reg.id
         );
@@ -97,7 +97,7 @@ fn generator_max_param_count() {
     use manifold_core::{preset_def::PresetKind, preset_type_registry};
     let max = preset_type_registry::all_of_kind(PresetKind::Generator)
         .iter()
-        .map(|reg| preset_definition_registry::get(&reg.id).param_count)
+        .map(|reg| preset_definition_registry::get(&reg.id).param_defs.len())
         .max()
         .unwrap_or(0);
     assert_eq!(max, 20);

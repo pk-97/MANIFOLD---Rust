@@ -2028,13 +2028,16 @@ fn preset_to_config(
             id_to_index.insert(row.id.clone(), pi);
             let osc_address = match osc_scope {
                 OscScope::Master => {
-                    manifold_core::preset_definition_registry::get_osc_address(preset_type, pi)
+                    manifold_core::preset_definition_registry::get_osc_address_by_id(
+                        preset_type,
+                        &row.id,
+                    )
                 }
                 OscScope::Layer(lid) => {
-                    manifold_core::preset_definition_registry::get_osc_address_for_layer(
+                    manifold_core::preset_definition_registry::get_osc_address_for_layer_by_id(
                         preset_type,
                         lid,
-                        pi,
+                        &row.id,
                     )
                 }
             };

@@ -149,25 +149,13 @@ impl EffectMetadata {
     /// Convert to the unified `PresetDef` (kind = `Effect`).
     pub fn to_effect_def(&self) -> PresetDef {
         let param_defs: Vec<ParamDef> = self.params.iter().map(|p| p.to_param_def()).collect();
-        let param_count = param_defs.len();
-        let id_to_index = self
-            .params
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| !p.id.is_empty())
-            .map(|(i, p)| (p.id.to_string(), i))
-            .collect();
-        let param_ids: Vec<String> = self.params.iter().map(|p| p.id.to_string()).collect();
         PresetDef {
             kind: PresetKind::Effect,
             display_name: self.display_name.to_string(),
-            param_count,
             param_defs,
             string_param_defs: Vec::new(),
             osc_prefix: Some(self.osc_prefix.to_string()),
             is_line_based: false,
-            id_to_index,
-            param_ids,
             legacy_param_aliases: &[],
             legacy_value_aliases: &[],
         }
