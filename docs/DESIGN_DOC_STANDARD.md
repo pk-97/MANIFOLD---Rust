@@ -76,6 +76,17 @@ Section-by-section requirements:
 - **Deferred** — everything consciously excluded, each with what would revive it.
   An executor finding a gap checks here before escalating: if it's listed, it's not
   a gap, it's a decision.
+- **Open questions — no unlabeled forks (added 2026-07-05).** A design contract may
+  not contain an undecided "or". Every open question is exactly one of three things:
+  **decided** — moved into Decisions with rationale; **defaulted** — the doc names
+  the default the executor takes AND the observable trigger that would make it wrong
+  ("assume 48k; if the device reports otherwise, stop and escalate"), so a worker
+  proceeds safely; or **blocking** — named in the entry state of every phase it
+  gates, with a named decider (almost always Peter), and no such phase gets briefed
+  until it's answered. The failure this kills: prose that reads as settled but hides
+  an alternative — an orchestrator hits the fork mid-wave with nobody in the room
+  and improvises, which is where hard-coded paths and silent stubs come from.
+  Review tells: "or we could", "TBD", "open question", "?" in design-body prose.
 
 ## 3. Reality anchoring
 
@@ -144,12 +155,25 @@ brief is not executable — that's the definition.
 - **Deliverables** — files, types, tests, by name.
 - **Gate** — commands with expected results. Two kinds, use both:
   - *Positive:* named tests that must pass, PNG parity diffs, packet-byte captures,
-    a measured number to report.
+    a measured number to report. For features that parse or import external data:
+    at least one **held-out input** the builder did not develop against —
+    fixture-overfitting (an importer shaped around the one file in the brief) is an
+    observed failure mode.
   - *Negative:* `rg` patterns that must return **zero hits** — proving the old path
     is deleted, not paralleled; proving no `unwrap()` landed on a fallible path;
     proving no new `Arc<Mutex>`.
   "Works correctly" is banned as a gate. Self-reported success is not a gate result;
-  gates are run by Peter or CI (§8).
+  gates are run by Peter, CI, or the orchestrating session (§8).
+- **Acceptance demo (added 2026-07-05)** — the observable artifact proving the
+  phase's behavior end-to-end: the exact command(s) that produce it, and the
+  verification level it reaches (§10). Mandatory for any phase with a user-visible
+  surface (UI, rendering, import, playback, export), gated at **L2 minimum** — an
+  artifact a reviewer *looks at*, not a green test. "The buttons exist" is not a
+  demo; the lane visibly rendering in the PNG is. A phase with no observable surface
+  states `Demo: none — L1` explicitly. The demo is what forces the vertical path
+  (model → command → UI → pixels) to be exercised at least once before landing;
+  horizontal slices each passing their own gate while the seam between them never
+  runs is the observed root of "built but invisible in the app".
 - **Forbidden moves** — the specific shortcuts THIS phase invites, named. Drawn from
   the observed failure catalog: fuse-for-parity · silent fallback / parallel old path
   kept alive · TODO-as-deferral · "temporary" flags · adapters/shims around a misfit
@@ -212,10 +236,24 @@ Written here once so docs don't repeat it; every doc's header points here.
    inventory into the session, proceed against that.
 4. **Escalations pause the phase.** An escalated phase is not failed; it's paused
    with a written question. Resume when answered.
-5. **Gates are run by Peter or CI**, from the doc's commands. The executor's own
-   "all tests pass" is a claim, not a gate result.
+5. **Gates are run by Peter, CI, or the orchestrating session — never solely the
+   executor**, from the doc's commands. The executor's own "all tests pass" is a
+   claim, not a gate result.
 6. **Commit only at gate-pass**, per the repo's commit discipline. A phase that
    can't pass its gate ends as an escalation, never as a "mostly done" commit.
+7. **Reports confess (added 2026-07-05).** Every phase report carries two mandatory
+   fields: `Shortcuts taken:` — every stub, hard-code, assumption, and
+   approximation, or the explicit word "none" — and `Demo artifact:` — the path, or
+   `none — L1` per §5. A confessed shortcut is a one-line fix; a hunted one is a
+   debugging session — the field exists to make confession cheaper than concealment.
+   An omitted field means the report is incomplete, not that there was nothing to
+   confess.
+8. **Landing runs the demo (added 2026-07-05).** Before merging to main, the
+   orchestrating session runs the acceptance-demo command itself in the main
+   checkout (worktrees lack the gitignored fixtures) and reads the artifact. The
+   landing report states the level reached (§10), ends with a ≤2-minute
+   click-script for Peter (numbered steps, expected observation per step), and
+   appends one line per unclosed gap to `docs/VERIFICATION_DEBT.md`.
 
 ## 9. Hardening levels (for auditing existing docs)
 
@@ -227,3 +265,31 @@ Written here once so docs don't repeat it; every doc's header points here.
   `⚠ VERIFY-AT-IMPL` where upstream phases may reshape them.
 
 The build order that decides which is which: `docs/DESIGN_BUILD_ORDER.md`.
+
+## 10. Verification levels, the debt ledger, and escapes (added 2026-07-05)
+
+"Done" means *observed*. Every claim of doneness carries its level:
+
+- **L0** — compiles, clippy clean.
+- **L1** — tests green (unit / integration / headless).
+- **L2** — behavior observed: the acceptance demo's artifact (PNG, packet capture,
+  log trace) was produced and actually read by a reviewer.
+- **L3** — scripted interaction: an automation-layer flow drives the real UI input
+  path (unavailable until `UI_AUTOMATION_DESIGN.md` P1–P2 lands).
+- **L4** — human-in-app: Peter, live.
+
+Rules:
+
+- **Landing reports state the level reached.** "Shipped" with no level is banned;
+  L1-shipped may never be announced as "working".
+- **The gap between the level reached and the phase's target is verification
+  debt:** one line in `docs/VERIFICATION_DEBT.md` at landing, burned down or
+  consciously carried every wave. The pre-ledger failure mode this replaces:
+  "unverified interactively" notes in landing reports and memory decayed silently
+  into "shipped" (automation lanes, preset picker — both gaps were recorded,
+  neither was acted on, both were found by Peter in the app on 2026-07-05).
+- **Escape analysis:** a bug found in the app after an orchestrated landing gets an
+  `Escaped:` line in its BUG_BACKLOG entry naming the wave and the stage that would
+  have caught it (brief / gate / demo / held-out input / review). The
+  countermeasures in this standard were designed from anecdotes; the escape ledger
+  replaces anecdote with evidence about which stage actually leaks.
