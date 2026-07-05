@@ -58,8 +58,8 @@ pub(super) fn dispatch_project(
         }
 
         // ── Dropdown results (context-routed from UIRoot) ────────────
-        PanelAction::SetMidiNote(layer_idx, note) => {
-            if let Some(layer) = project.timeline.layers.get(*layer_idx) {
+        PanelAction::SetMidiNote(id, note) => {
+            if let Some((_, layer)) = project.timeline.find_layer_by_id(id) {
                 let layer_id = layer.layer_id.clone();
                 let old_note = layer.midi_note;
                 let cmd = manifold_editing::commands::settings::ChangeLayerMidiNoteCommand::new(
@@ -74,8 +74,8 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
-        PanelAction::SetMidiChannel(layer_idx, channel) => {
-            if let Some(layer) = project.timeline.layers.get(*layer_idx) {
+        PanelAction::SetMidiChannel(id, channel) => {
+            if let Some((_, layer)) = project.timeline.find_layer_by_id(id) {
                 let layer_id = layer.layer_id.clone();
                 let old_channel = layer.midi_channel;
                 let cmd = manifold_editing::commands::settings::ChangeLayerMidiChannelCommand::new(
@@ -92,8 +92,8 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
-        PanelAction::SetMidiDevice(layer_idx, device) => {
-            if let Some(layer) = project.timeline.layers.get(*layer_idx) {
+        PanelAction::SetMidiDevice(id, device) => {
+            if let Some((_, layer)) = project.timeline.find_layer_by_id(id) {
                 let layer_id = layer.layer_id.clone();
                 let old_device = layer.midi_device.clone();
                 let cmd = manifold_editing::commands::settings::ChangeLayerMidiDeviceCommand::new(
@@ -107,9 +107,9 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
-        PanelAction::MidiTriggerModeClicked(layer_idx) => {
+        PanelAction::MidiTriggerModeClicked(id) => {
             use manifold_core::types::MidiTriggerMode;
-            if let Some(layer) = project.timeline.layers.get(*layer_idx) {
+            if let Some((_, layer)) = project.timeline.find_layer_by_id(id) {
                 let layer_id = layer.layer_id.clone();
                 let old_mode = layer.midi_trigger_mode;
                 let new_mode = match old_mode {
@@ -126,8 +126,8 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
-        PanelAction::SetMidiTriggerMode(layer_idx, new_mode) => {
-            if let Some(layer) = project.timeline.layers.get(*layer_idx) {
+        PanelAction::SetMidiTriggerMode(id, new_mode) => {
+            if let Some((_, layer)) = project.timeline.find_layer_by_id(id) {
                 let layer_id = layer.layer_id.clone();
                 let old_mode = layer.midi_trigger_mode;
                 let cmd =

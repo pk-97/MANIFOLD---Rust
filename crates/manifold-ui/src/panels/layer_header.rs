@@ -895,6 +895,15 @@ impl LayerHeaderPanel {
         self.layers.get(index)
     }
 
+    /// Current row index of the layer with this id, in this panel's snapshot.
+    /// The right-click handler resolves a stable `LayerId` back to an index for
+    /// the still-positional context-menu actions it opens synchronously.
+    pub fn index_of_layer(&self, id: &LayerId) -> Option<usize> {
+        self.layers
+            .iter()
+            .position(|l| LayerId::new(&l.layer_id) == *id)
+    }
+
     /// Set the active (focused) layer by LayerId. Applied in update() via dirty-check.
     pub fn set_active_layer(&mut self, layer_id: Option<LayerId>) {
         self.active_layer = layer_id;
@@ -1272,9 +1281,12 @@ impl LayerHeaderPanel {
         for i in 0..self.gain_sliders.len() {
             if let Some(val) = self.gain_sliders[i].try_start_drag(node_id, pos_x) {
                 self.active_gain_drag = i as i32;
+                let Some(lid) = self.layer_id_at(i) else {
+                    return Vec::new();
+                };
                 return vec![
-                    PanelAction::AudioGainSnapshot(i),
-                    PanelAction::AudioGainChanged(i, val),
+                    PanelAction::AudioGainSnapshot(lid.clone()),
+                    PanelAction::AudioGainChanged(lid, val),
                 ];
             }
         }
@@ -1288,8 +1300,10 @@ impl LayerHeaderPanel {
             return Vec::new();
         }
         let i = self.active_gain_drag as usize;
-        if let Some(val) = self.gain_sliders[i].apply_drag(pos_x, tree, &gain_db_text) {
-            return vec![PanelAction::AudioGainChanged(i, val)];
+        if let Some(val) = self.gain_sliders[i].apply_drag(pos_x, tree, &gain_db_text)
+            && let Some(lid) = self.layer_id_at(i)
+        {
+            return vec![PanelAction::AudioGainChanged(lid, val)];
         }
         Vec::new()
     }
@@ -1301,8 +1315,10 @@ impl LayerHeaderPanel {
         }
         let i = self.active_gain_drag as usize;
         self.active_gain_drag = -1;
-        if self.gain_sliders[i].end_drag() {
-            return vec![PanelAction::AudioGainCommit(i)];
+        if self.gain_sliders[i].end_drag()
+            && let Some(lid) = self.layer_id_at(i)
+        {
+            return vec![PanelAction::AudioGainCommit(lid)];
         }
         Vec::new()
     }
@@ -1983,6 +1999,14 @@ impl LayerHeaderPanel {
         self.rows[index] = ids;
     }
 
+    /// Stable `LayerId` for row `i`, resolved against this panel's own layer
+    /// snapshot — the exact list every row was built from, so it can't be stale
+    /// relative to the row index. Actions carry this id, not `i`, so a bridge
+    /// resolving against a newer model snapshot never hits the wrong layer.
+    fn layer_id_at(&self, i: usize) -> Option<LayerId> {
+        self.layers.get(i).map(|l| LayerId::new(&l.layer_id))
+    }
+
     fn handle_click(&self, node_id: NodeId, modifiers: crate::input::Modifiers) -> Vec<PanelAction> {
         // Record Live button
         if self.record_btn_id == Some(node_id) {
@@ -2002,23 +2026,26 @@ impl LayerHeaderPanel {
                 if row.id(c) != Some(node_id) {
                     continue;
                 }
+                let Some(lid) = self.layer_id_at(i) else {
+                    return Vec::new();
+                };
                 return match c {
-                    C::Mute => vec![PanelAction::ToggleMute(i)],
-                    C::Solo => vec![PanelAction::ToggleSolo(i)],
-                    C::Analysis => vec![PanelAction::ToggleAnalysisOnly(i)],
-                    C::Led => vec![PanelAction::ToggleLed(i)],
-                    C::Chevron => vec![PanelAction::ChevronClicked(i)],
-                    C::Blend => vec![PanelAction::BlendModeClicked(i)],
-                    C::Folder => vec![PanelAction::FolderClicked(i)],
-                    C::NewClip => vec![PanelAction::NewClipClicked(i)],
-                    C::AddGenClip => vec![PanelAction::AddGenClipClicked(i)],
-                    C::MidiInput => vec![PanelAction::MidiInputClicked(i)],
-                    C::MidiMode => vec![PanelAction::MidiTriggerModeClicked(i)],
-                    C::ChDropdown => vec![PanelAction::MidiChannelClicked(i)],
-                    C::DevDropdown => vec![PanelAction::MidiDeviceClicked(i)],
-                    C::Send => vec![PanelAction::AudioSendClicked(i)],
+                    C::Mute => vec![PanelAction::ToggleMute(lid)],
+                    C::Solo => vec![PanelAction::ToggleSolo(lid)],
+                    C::Analysis => vec![PanelAction::ToggleAnalysisOnly(lid)],
+                    C::Led => vec![PanelAction::ToggleLed(lid)],
+                    C::Chevron => vec![PanelAction::ChevronClicked(lid)],
+                    C::Blend => vec![PanelAction::BlendModeClicked(lid)],
+                    C::Folder => vec![PanelAction::FolderClicked(lid)],
+                    C::NewClip => vec![PanelAction::NewClipClicked(lid)],
+                    C::AddGenClip => vec![PanelAction::AddGenClipClicked(lid)],
+                    C::MidiInput => vec![PanelAction::MidiInputClicked(lid)],
+                    C::MidiMode => vec![PanelAction::MidiTriggerModeClicked(lid)],
+                    C::ChDropdown => vec![PanelAction::MidiChannelClicked(lid)],
+                    C::DevDropdown => vec![PanelAction::MidiDeviceClicked(lid)],
+                    C::Send => vec![PanelAction::AudioSendClicked(lid)],
                     C::Name | C::Background | C::DragHandle => {
-                        vec![PanelAction::LayerClicked(i, modifiers)]
+                        vec![PanelAction::LayerClicked(lid, modifiers)]
                     }
                     // Labels, separators, accent visuals, and the gain track
                     // (drag, not click) have no click action.
@@ -2031,8 +2058,10 @@ impl LayerHeaderPanel {
 
     fn handle_double_click(&self, node_id: NodeId) -> Vec<PanelAction> {
         for (i, row) in self.rows.iter().enumerate() {
-            if row.id(LayerControl::Name) == Some(node_id) {
-                return vec![PanelAction::LayerDoubleClicked(i)];
+            if row.id(LayerControl::Name) == Some(node_id)
+                && let Some(lid) = self.layer_id_at(i)
+            {
+                return vec![PanelAction::LayerDoubleClicked(lid)];
             }
         }
         Vec::new()
@@ -2047,11 +2076,14 @@ impl LayerHeaderPanel {
     /// former manual X-bounds guard is gone. See `docs/NODE_INTENT_DISPATCH.md`.
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         for (i, row) in self.rows.iter().enumerate() {
+            let Some(lid) = self.layer_id_at(i) else {
+                continue;
+            };
             row.for_each_id(|id| {
                 intents.on(
                     id,
                     crate::intent::Gesture::RightClick,
-                    PanelAction::LayerHeaderRightClicked(i),
+                    PanelAction::LayerHeaderRightClicked(lid.clone()),
                 );
             });
         }
@@ -2552,14 +2584,14 @@ mod tests {
             crate::input::Modifiers::NONE,
         );
         assert_eq!(a.len(), 1);
-        assert!(matches!(a[0], PanelAction::ToggleMute(0)));
+        assert!(matches!(&a[0], PanelAction::ToggleMute(id) if *id == LayerId::new("L1")));
 
         let a = panel.handle_click(
             panel.rows[0].id(LayerControl::Solo).unwrap(),
             crate::input::Modifiers::NONE,
         );
         assert_eq!(a.len(), 1);
-        assert!(matches!(a[0], PanelAction::ToggleSolo(0)));
+        assert!(matches!(&a[0], PanelAction::ToggleSolo(id) if *id == LayerId::new("L1")));
     }
 
     #[test]
@@ -2582,7 +2614,7 @@ mod tests {
             let node = panel.rows[1].id(ctrl);
             let action = intents.resolve(&tree, node, Gesture::RightClick);
             assert!(
-                matches!(action, Some(PanelAction::LayerHeaderRightClicked(1))),
+                matches!(&action, Some(PanelAction::LayerHeaderRightClicked(id)) if *id == LayerId::new("L1")),
                 "node {node:?} ({ctrl:?}) should resolve to layer 1's menu, got {action:?}"
             );
         }
@@ -2602,7 +2634,7 @@ mod tests {
             panel.rows[0].id(LayerControl::Chevron).unwrap(),
             crate::input::Modifiers::NONE,
         );
-        assert!(matches!(a[0], PanelAction::ChevronClicked(0)));
+        assert!(matches!(&a[0], PanelAction::ChevronClicked(id) if *id == LayerId::new("L1")));
     }
 
     #[test]
@@ -2753,7 +2785,7 @@ mod tests {
         };
         let a = panel.handle_event(&event, &tree);
         assert_eq!(a.len(), 1);
-        assert!(matches!(a[0], PanelAction::LayerDoubleClicked(0)));
+        assert!(matches!(&a[0], PanelAction::LayerDoubleClicked(id) if *id == LayerId::new("L1")));
     }
 
     #[test]
@@ -2981,7 +3013,9 @@ mod tests {
             panel.rows[0].id(LayerControl::Send).unwrap(),
             crate::input::Modifiers::NONE,
         );
-        assert!(matches!(a.as_slice(), [PanelAction::AudioSendClicked(0)]));
+        assert!(
+            matches!(a.as_slice(), [PanelAction::AudioSendClicked(id)] if *id == LayerId::new("Drums In"))
+        );
     }
 
     // ── P0.5 gate: generator label, both states ───────────────────────

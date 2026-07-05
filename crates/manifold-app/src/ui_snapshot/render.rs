@@ -203,6 +203,31 @@ pub fn render_graph_to_png(
     // structure-only canvas (black placeholders) instead of failing.
     let node_textures = render_graph_node_textures(&device, def);
 
+    // Register each visible node's real output texture and hand the canvas its
+    // preview source, so the canvas paints previews INLINE at each node's depth
+    // band (BUG-027) — the same inline path the live editor uses. Replaces the
+    // old flat post-chrome blit that ignored node z-order.
+    if let Some(nt) = node_textures.as_ref() {
+        let mut src: ahash::AHashMap<
+            manifold_core::NodeId,
+            (manifold_ui::node::TextureHandle, [f32; 4]),
+        > = ahash::AHashMap::new();
+        for (node_id, _, _, _, _) in canvas.visible_node_thumbnails(viewport) {
+            let Some(tex) = nt.texture_for(node_id.as_str()) else {
+                continue;
+            };
+            // A render-target-only output can't be sampled — skip it (the live
+            // atlas path guards the same way).
+            if !tex.is_shader_readable() {
+                continue;
+            }
+            let handle = manifold_ui::node::texture_handle_for_key(node_id.as_str());
+            renderer.register_external_texture(handle, tex.clone());
+            src.insert(node_id, (handle, [0.0, 0.0, 1.0, 1.0]));
+        }
+        canvas.set_node_preview_src(src);
+    }
+
     // Clear to the editor backdrop (the live editor clears the offscreen to this
     // before the canvas paints with Load).
     {
@@ -222,40 +247,10 @@ pub fn render_graph_to_png(
     }
     assert!(drew, "graph canvas produced no draws (empty snapshot?)");
 
-    // Composite each node's real output texture over its placeholder. The canvas
-    // reports a screen rect per image-emitting node (`visible_node_thumbnails`),
-    // keyed by the same stable NodeId the dump uses.
-    if let Some(nt) = node_textures.as_ref() {
-        let blit = make_blit_pipeline(&device);
-        let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
-            min_filter: manifold_gpu::GpuFilterMode::Linear,
-            mag_filter: manifold_gpu::GpuFilterMode::Linear,
-            ..Default::default()
-        });
-        let mut enc = device.create_encoder("ui-snap-graph-thumbs");
-        for (node_id, x, y, w, h) in canvas.visible_node_thumbnails(viewport) {
-            let Some(tex) = nt.texture_for(node_id.as_str()) else {
-                continue;
-            };
-            // A render-target-only output can't be sampled — binding it crashes
-            // AGX (the live atlas path guards the same way). Skip its cell.
-            if !tex.is_shader_readable() {
-                continue;
-            }
-            enc.draw_fullscreen_viewport(
-                &blit,
-                &target.texture,
-                &[
-                    GpuBinding::Texture { binding: 0, texture: tex },
-                    GpuBinding::Sampler { binding: 1, sampler: &sampler },
-                ],
-                (x, y, w, h),
-                GpuLoadAction::Load,
-                "Node Thumbnail Blit",
-            );
-        }
-        enc.commit_and_wait_completed();
-    }
+    // Node previews were painted INLINE by `canvas.render` above (each at its
+    // node's depth band, via `set_node_preview_src`), so the old flat
+    // post-chrome blit — which drew every thumbnail over the finished chrome and
+    // ignored node z-order (BUG-027) — is gone.
 
     let bytes = readback(&device, &target.texture, tex_w, tex_h);
     image::save_buffer(path, &bytes, tex_w, tex_h, image::ExtendedColorType::Rgba8)
@@ -418,6 +413,28 @@ pub fn render_graph_editor_to_png(
         println!("ui-snap: wrote {}", dump_path.display());
     }
 
+    // Register each visible node's output texture + preview source so the canvas
+    // paints previews INLINE at each node's depth band (BUG-027), same as the
+    // live editor — replacing the old flat post-chrome blit that ignored z-order.
+    if let Some(nt) = node_textures.as_ref() {
+        let mut src: ahash::AHashMap<
+            manifold_core::NodeId,
+            (manifold_ui::node::TextureHandle, [f32; 4]),
+        > = ahash::AHashMap::new();
+        for (node_id, _, _, _, _) in canvas.visible_node_thumbnails(viewport) {
+            let Some(tex) = nt.texture_for(node_id.as_str()) else {
+                continue;
+            };
+            if !tex.is_shader_readable() {
+                continue;
+            }
+            let handle = manifold_ui::node::texture_handle_for_key(node_id.as_str());
+            renderer.register_external_texture(handle, tex.clone());
+            src.insert(node_id, (handle, [0.0, 0.0, 1.0, 1.0]));
+        }
+        canvas.set_node_preview_src(src);
+    }
+
     {
         let mut enc = device.create_encoder("ui-snap-editor-clear");
         enc.clear_texture(&target_tex.texture, 0.10, 0.10, 0.12, 1.0);
@@ -459,35 +476,9 @@ pub fn render_graph_editor_to_png(
     }
     assert!(drew, "graph editor window produced no draws (empty snapshot?)");
 
-    if let Some(nt) = node_textures.as_ref() {
-        let blit = make_blit_pipeline(&device);
-        let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
-            min_filter: manifold_gpu::GpuFilterMode::Linear,
-            mag_filter: manifold_gpu::GpuFilterMode::Linear,
-            ..Default::default()
-        });
-        let mut enc = device.create_encoder("ui-snap-editor-thumbs");
-        for (node_id, x, y, w, h) in canvas.visible_node_thumbnails(viewport) {
-            let Some(tex) = nt.texture_for(node_id.as_str()) else {
-                continue;
-            };
-            if !tex.is_shader_readable() {
-                continue;
-            }
-            enc.draw_fullscreen_viewport(
-                &blit,
-                &target_tex.texture,
-                &[
-                    GpuBinding::Texture { binding: 0, texture: tex },
-                    GpuBinding::Sampler { binding: 1, sampler: &sampler },
-                ],
-                (x, y, w, h),
-                GpuLoadAction::Load,
-                "Node Thumbnail Blit",
-            );
-        }
-        enc.commit_and_wait_completed();
-    }
+    // Node previews were painted INLINE by `canvas.render` above (each at its
+    // node's depth band, via `set_node_preview_src`) — the old flat post-chrome
+    // blit that ignored node z-order (BUG-027) is gone.
 
     let bytes = readback(&device, &target_tex.texture, tex_w, tex_h);
     image::save_buffer(path, &bytes, tex_w, tex_h, image::ExtendedColorType::Rgba8)

@@ -72,6 +72,25 @@ pub trait Painter {
     /// Text at a position. `color` is sRGB `[r, g, b, a]`.
     fn draw_text(&mut self, x: f32, y: f32, text: &str, font_size: f32, color: [u8; 4]);
 
+    /// Draw a texture's `uv` sub-rect (`[u0, v0, u1, v1]`) into the rect, masked
+    /// to a rounded rect, at the current depth and immediate clip. `handle` must
+    /// already be registered on the renderer (the graph node-preview atlas, or a
+    /// node's output texture). This is how the canvas paints each node's live
+    /// output preview inline with its body, so node stacking occludes previews
+    /// correctly — `[0, 0, 1, 1]` samples a whole texture, a narrower rect one
+    /// atlas cell.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_image_uv(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        handle: crate::node::TextureHandle,
+        uv: [f32; 4],
+        corner: f32,
+    );
+
     /// Push an immediate-mode scissor rect; nested draws are clipped to it
     /// (intersected with any outer clip) until [`Painter::pop_immediate_clip`].
     fn push_immediate_clip(&mut self, x: f32, y: f32, w: f32, h: f32);

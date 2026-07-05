@@ -168,54 +168,65 @@ impl GraphCanvas {
             self.draw_wire_flow_pulse(ui, p);
         }
 
-        // Nodes draw at CONTENT depth so they sit *above* the wires (BASE).
-        // The renderer batches all of a depth's rects before its lines, so
-        // node bodies (rects) and wires (lines) at the same depth would force
-        // every wire to paint over every body — the over-draw that made
-        // connections cross the face of a node and its preview. Splitting them
-        // across depths makes wires route behind nodes, the standard
-        // node-editor read. The node-output thumbnail blit (a later present
-        // pass) is already topmost, so it stays correctly over wires.
-        ui.push_depth(Depth::CONTENT);
-
-        // Nodes: everything else first, then the hovered node, then the
-        // selected nodes last, so the node(s) you're working on are never
-        // buried under their neighbours in a dense graph.
+        // Nodes draw ABOVE the wires (BASE) — but each node now gets its OWN
+        // increasing depth band (CONTENT+1, +2, …) in draw order, not one shared
+        // CONTENT depth. Within a band the renderer draws the body (rect), then
+        // the output preview (image), then labels (text); across bands a node
+        // drawn later sits entirely above an earlier one. A single shared depth
+        // would batch every body before every preview — putting all previews on
+        // top of all bodies regardless of node stacking, which was BUG-027. Wires
+        // stay below CONTENT, so they still route behind every node.
+        //
+        // Draw order (low band → high band): everything else first, then the
+        // hovered node, then the selected nodes last, so the node(s) you're
+        // working on are never buried under their neighbours. Bands are capped
+        // just below OVERLAY(200); in a graph past ~98 nodes the overflow shares
+        // the top band and falls back to submission-order stacking (bodies were
+        // always submission-ordered; only previews degrade, and only that far out).
+        const MAX_NODE_BANDS: usize = (Depth::OVERLAY.0 - Depth::CONTENT.0 - 1) as usize;
+        let mut order: Vec<&NodeView> = Vec::with_capacity(self.nodes.len());
         for node in &self.nodes {
             if !self.selected.contains(&node.id) && self.hovered != Some(node.id) {
-                self.draw_node(ui, viewport, canvas, node);
+                order.push(node);
             }
         }
         if let Some(h) = self.hovered
             && !self.selected.contains(&h)
             && let Some(node) = self.find_node(h)
         {
-            self.draw_node(ui, viewport, canvas, node);
+            order.push(node);
         }
         for &s in &self.selected {
             if let Some(node) = self.find_node(s) {
-                self.draw_node(ui, viewport, canvas, node);
+                order.push(node);
             }
         }
+        for (i, node) in order.iter().enumerate() {
+            let band = Depth::CONTENT.0 + 1 + i.min(MAX_NODE_BANDS) as i32;
+            ui.push_depth(Depth(band));
+            self.draw_node(ui, viewport, canvas, node);
+            ui.pop_depth();
+        }
 
-        // Live rubber-band rectangle while marquee-selecting — over the nodes.
-        // D17 "marquee fade in/out": `marquee_alpha` eases 0..1 (see
+        // Live rubber-band rectangle while marquee-selecting — above every node
+        // band. D17 "marquee fade in/out": `marquee_alpha` eases 0..1 (see
         // `GraphCanvas::tick`), so the rect fades in on press and fades out
         // after release instead of popping/vanishing instantly.
-        // `marquee_last_rect` is what keeps the geometry available for the
-        // fade-OUT frames, after `drag_mode` has already reset to `None`.
+        // `marquee_last_rect` keeps the geometry available for the fade-OUT
+        // frames, after `drag_mode` has already reset to `None`.
         let alpha = self.marquee_alpha.value();
         if alpha > 0.001
             && let Some((x, y, w, h)) = self.marquee_last_rect
         {
+            let top_band = Depth::CONTENT.0 + 1 + order.len().min(MAX_NODE_BANDS) as i32;
+            ui.push_depth(Depth(top_band));
             // Scale each color's OWN baked-in alpha by the fraction — not
             // replace it — so the fully-faded-in state matches the original
             // (already-subtle) fill/border alpha exactly, not full opacity.
             let scale = |c: Color32| color::with_alpha(c, (c.a as f32 * alpha).round() as u8);
             ui.draw_bordered_rect(x, y, w, h, scale(MARQUEE_FILL), 0.0, 1.0, scale(MARQUEE_BORDER));
+            ui.pop_depth();
         }
-
-        ui.pop_depth();
 
         // Hover tooltip: the node's friendly summary, or — when the cursor is
         // over a param row — that param's help line. Drawn above the nodes, and
@@ -672,16 +683,30 @@ impl GraphCanvas {
             let sw_z = screen_w * self.zoom;
             let sh_z = screen_h * self.zoom;
             let screen_x = sx + pad + (PREVIEW_IMG_W * self.zoom - sw_z) * 0.5;
+            let screen_y = sy + header_h + pad;
+            let corner = 2.0 * self.zoom;
             ui.draw_bordered_rect(
                 screen_x,
-                sy + header_h + pad,
+                screen_y,
                 sw_z,
                 sh_z,
                 PREVIEW_SCREEN_BG,
-                2.0 * self.zoom,
+                corner,
                 1.0,
                 PREVIEW_SCREEN_BORDER,
             );
+            // The live output preview, painted inline over the recessed screen at
+            // this node's depth band — so a node stacked above occludes it (the
+            // whole point of BUG-027's fix). The host populates `node_preview_src`
+            // each frame; `None` leaves just the recessed placeholder, exactly as
+            // before the first atlas frame lands. Edge-straddle clipping is the
+            // canvas viewport scissor (`push_immediate_clip` in `render`), so no
+            // per-node UV cropping is needed here.
+            if let Some(capture_id) = node.preview_node_id.as_ref()
+                && let Some((handle, uv)) = self.node_preview_src.get(capture_id)
+            {
+                ui.draw_image_uv(screen_x, screen_y, sw_z, sh_z, *handle, *uv, corner);
+            }
         }
         // Top of the param/summary body — below the header and the preview band.
         let body_top = sy + header_h + preview_h;
