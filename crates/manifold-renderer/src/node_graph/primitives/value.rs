@@ -11,6 +11,8 @@
 //! constant-only for now. LFOs, math operators, beat-locked sources
 //! and audio bridges land in subsequent slices.
 
+use std::borrow::Cow;
+
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -25,7 +27,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "value",
+            name: Cow::Borrowed("value"),
             label: "Value",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -90,7 +92,7 @@ mod tests {
             }
             fn inputs(&self) -> &[NodeInput] {
                 static INPUTS: [NodeInput; 1] = [NodePort {
-                    name: "in",
+                    name: Cow::Borrowed("in"),
                     ty: PortType::Scalar(ScalarType::F32),
                     kind: PortKind::Input,
                     required: true,

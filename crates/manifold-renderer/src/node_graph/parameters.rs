@@ -233,7 +233,11 @@ impl ParamValue {
 pub struct ParamDef {
     /// Stable parameter name. Wire-key for modulation bindings and the
     /// save format. Treated as public API once shipped — never rename in place.
-    pub name: &'static str,
+    ///
+    /// `Cow<'static, str>` so static param tables keep borrowing `&'static str`
+    /// while variadic nodes (`render_scene`) can format an owned per-object
+    /// param name (`pos_x_0`, `pos_x_1`, …) with no arbitrary object cap.
+    pub name: std::borrow::Cow<'static, str>,
 
     /// Human-readable label for the effect card UI. Free to change.
     pub label: &'static str,

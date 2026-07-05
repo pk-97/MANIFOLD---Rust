@@ -15,6 +15,7 @@
 //! graph-level pattern: wire `node.math(operation=Negate) → low` if
 //! you want a symmetric-around-zero curve from a single `high` slider.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -47,7 +48,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "low",
+            name: Cow::Borrowed("low"),
             label: "Low",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -55,7 +56,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "high",
+            name: Cow::Borrowed("high"),
             label: "High",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -165,7 +166,7 @@ mod tests {
         // negate math node. If a future commit reintroduces a mode
         // here, that's a §7 invariant violation; this test pins the
         // shape.
-        let names: Vec<&str> = SmoothstepTexture::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = SmoothstepTexture::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["low", "high"]);
     }
 

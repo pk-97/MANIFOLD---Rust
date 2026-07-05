@@ -27,6 +27,8 @@
 //! instances, and the `num_edges` uniform tells the shader the
 //! boundary.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuLoadAction};
 
 use crate::generators::mesh_common::{EdgePair, CurvePoint};
@@ -98,7 +100,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "edge_thickness",
+            name: Cow::Borrowed("edge_thickness"),
             label: "Edge Thickness",
             ty: ParamType::Float,
             default: ParamValue::Float(0.002),
@@ -106,7 +108,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "closed_loop",
+            name: Cow::Borrowed("closed_loop"),
             label: "Closed Loop",
             ty: ParamType::Bool,
             default: ParamValue::Bool(true),
@@ -114,7 +116,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "show_verts",
+            name: Cow::Borrowed("show_verts"),
             label: "Show Vertices",
             ty: ParamType::Bool,
             default: ParamValue::Bool(false),
@@ -122,7 +124,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "vert_size",
+            name: Cow::Borrowed("vert_size"),
             label: "Vertex Size",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -130,7 +132,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "animate",
+            name: Cow::Borrowed("animate"),
             label: "Animate",
             ty: ParamType::Bool,
             default: ParamValue::Bool(false),
@@ -138,7 +140,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "speed",
+            name: Cow::Borrowed("speed"),
             label: "Speed",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -146,7 +148,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "window",
+            name: Cow::Borrowed("window"),
             label: "Window",
             ty: ParamType::Float,
             default: ParamValue::Float(0.1),
@@ -154,7 +156,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "beat_flash_amount",
+            name: Cow::Borrowed("beat_flash_amount"),
             label: "Beat Flash",
             ty: ParamType::Float,
             default: ParamValue::Float(0.4),
@@ -162,7 +164,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "color_r",
+            name: Cow::Borrowed("color_r"),
             label: "Color R",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -170,7 +172,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "color_g",
+            name: Cow::Borrowed("color_g"),
             label: "Color G",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -178,7 +180,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "color_b",
+            name: Cow::Borrowed("color_b"),
             label: "Color B",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -186,7 +188,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "color_a",
+            name: Cow::Borrowed("color_a"),
             label: "Color A",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -726,7 +728,10 @@ mod tests {
 
     #[test]
     fn params_cover_thickness_animation_dots_color_and_flash() {
-        let names: Vec<&str> = RenderLines::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = RenderLines::PARAMS
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect();
         assert_eq!(
             names,
             vec![

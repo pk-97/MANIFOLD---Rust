@@ -25,6 +25,8 @@
 //! filters per range; convert the background by depth to particles
 //! that flow on optical flow; etc.).
 
+use std::borrow::Cow;
+
 use manifold_gpu::{
     GpuBinding, GpuComputePipeline, GpuSamplerDesc, GpuTexture, GpuTextureDesc,
     GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
@@ -82,7 +84,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "analysis_max_dim",
+            name: Cow::Borrowed("analysis_max_dim"),
             label: "Analysis Max Dim",
             ty: ParamType::Int,
             default: ParamValue::Float(360.0),
@@ -90,7 +92,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "update_interval",
+            name: Cow::Borrowed("update_interval"),
             label: "Update Interval (frames)",
             ty: ParamType::Int,
             default: ParamValue::Float(2.0),
@@ -395,7 +397,7 @@ mod tests {
     fn depth_estimate_midas_has_analysis_and_interval_params() {
         let names: Vec<&str> = DepthEstimateMidas::PARAMS
             .iter()
-            .map(|p| p.name)
+            .map(|p| p.name.as_ref())
             .collect();
         assert_eq!(names, vec!["analysis_max_dim", "update_interval"]);
     }

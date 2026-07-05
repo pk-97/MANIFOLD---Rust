@@ -17,6 +17,8 @@
 //! State: `last_trigger: Option<i32>`, `held: f32` in [`StateStore`].
 //! Cleared on seek / pause so re-entered clips start fresh.
 
+use std::borrow::Cow;
+
 use crate::node_graph::effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, NodeRequires,
 };
@@ -35,13 +37,13 @@ impl NodeState for HoldState {}
 
 const SAMPLE_AND_HOLD_INPUTS: [NodeInput; 2] = [
     NodePort {
-        name: "value",
+        name: Cow::Borrowed("value"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: true,
     },
     NodePort {
-        name: "trigger",
+        name: Cow::Borrowed("trigger"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: true,
@@ -49,7 +51,7 @@ const SAMPLE_AND_HOLD_INPUTS: [NodeInput; 2] = [
 ];
 
 const SAMPLE_AND_HOLD_OUTPUTS: [NodeOutput; 1] = [NodePort {
-    name: "out",
+    name: Cow::Borrowed("out"),
     ty: PortType::Scalar(ScalarType::F32),
     kind: PortKind::Output,
     required: false,

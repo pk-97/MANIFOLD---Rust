@@ -19,6 +19,8 @@
 //! polyline stackers) can read same-frame writes via `mapped_ptr`
 //! without a GPU→CPU fence.
 
+use std::borrow::Cow;
+
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -106,7 +108,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "op",
+            name: Cow::Borrowed("op"),
             label: "Operation",
             ty: ParamType::Enum,
             default: ParamValue::Enum(2), // Multiply — most useful default
@@ -114,7 +116,7 @@ crate::primitive! {
             enum_values: ARRAY_MATH_OPS,
         },
         ParamDef {
-            name: "scale",
+            name: Cow::Borrowed("scale"),
             label: "Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -122,7 +124,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "offset",
+            name: Cow::Borrowed("offset"),
             label: "Offset",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -130,7 +132,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "exp",
+            name: Cow::Borrowed("exp"),
             label: "Exponent",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -138,7 +140,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "bias",
+            name: Cow::Borrowed("bias"),
             label: "Bias",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),

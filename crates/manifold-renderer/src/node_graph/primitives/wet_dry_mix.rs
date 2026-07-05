@@ -8,6 +8,8 @@
 //! make the dataflow direction explicit for composite authors, and the
 //! shader carries only the lerp math — no mode switch overhead.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -28,7 +30,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "wet_dry",
+            name: Cow::Borrowed("wet_dry"),
             label: "Wet/Dry",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),

@@ -1,6 +1,8 @@
 //! `node.power` — per-pixel `pow(max(input.rgb, 0), exponent)`.
 //! Alpha pass-through.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -32,7 +34,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "exponent",
+            name: Cow::Borrowed("exponent"),
             label: "Exponent",
             ty: ParamType::Float,
             default: ParamValue::Float(2.0),
@@ -133,7 +135,7 @@ mod tests {
 
     #[test]
     fn power_texture_has_exponent_param() {
-        let names: Vec<&str> = PowerTexture::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = PowerTexture::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["exponent"]);
     }
 

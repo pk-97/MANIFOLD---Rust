@@ -8,6 +8,8 @@
 //! Clamp downstream (`node.clamp`) if a consumer needs bounded
 //! input. This is the contrast stage of a decomposed Color Grade.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -36,7 +38,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "contrast",
+            name: Cow::Borrowed("contrast"),
             label: "Contrast",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),

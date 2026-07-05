@@ -9,6 +9,8 @@
 //! `beat` scalar). Wire into any scalar input (gain, opacity, a mask
 //! multiplier) for a beat-synced attack.
 
+use std::borrow::Cow;
+
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -25,7 +27,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "rate",
+            name: Cow::Borrowed("rate"),
             label: "Rate (cycles/beat)",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -33,7 +35,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "attack",
+            name: Cow::Borrowed("attack"),
             label: "Attack",
             ty: ParamType::Float,
             default: ParamValue::Float(0.15),

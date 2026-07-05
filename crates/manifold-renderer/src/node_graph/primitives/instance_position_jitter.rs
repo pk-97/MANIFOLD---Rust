@@ -20,6 +20,7 @@
 //! `simplex3d` from `noise_common.wgsl` (same file the legacy reads
 //! from), so the noise samples agree byte-for-byte.
 
+use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::InstanceTransform;
@@ -64,7 +65,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "frequency",
+            name: Cow::Borrowed("frequency"),
             label: "Frequency",
             ty: ParamType::Float,
             default: ParamValue::Float(10.0),
@@ -72,7 +73,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "amplitude",
+            name: Cow::Borrowed("amplitude"),
             label: "Amplitude",
             ty: ParamType::Float,
             default: ParamValue::Float(0.01),
@@ -80,7 +81,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "time_uvx_drift",
+            name: Cow::Borrowed("time_uvx_drift"),
             label: "Time UV.x Drift",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -88,7 +89,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "z_coord",
+            name: Cow::Borrowed("z_coord"),
             label: "Z Coord",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -96,7 +97,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "axis_seed",
+            name: Cow::Borrowed("axis_seed"),
             label: "Axis Seed",
             ty: ParamType::Float,
             default: ParamValue::Float(100.0),

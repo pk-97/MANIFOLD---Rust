@@ -12,6 +12,8 @@
 //! Rec. 709 luminance from RGB to produce a grayscale image — a
 //! channel reshape, not a magnitude change.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -40,7 +42,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "gain",
+            name: Cow::Borrowed("gain"),
             label: "Gain",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),

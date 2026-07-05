@@ -13,6 +13,8 @@
 //! source for clip-trigger-stepped harmonic variety per retrigger, or
 //! pin it as a constant param when authoring a fixed shape.
 
+use std::borrow::Cow;
+
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -49,7 +51,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "index",
+            name: Cow::Borrowed("index"),
             label: "Index",
             ty: ParamType::Int,
             default: ParamValue::Float(0.0),
@@ -135,7 +137,7 @@ mod tests {
         }
         fn inputs(&self) -> &[NodeInput] {
             static INPUTS: [NodeInput; 1] = [NodePort {
-                name: "in",
+                name: Cow::Borrowed("in"),
                 ty: PortType::Scalar(ScalarType::F32),
                 kind: PortKind::Input,
                 required: true,

@@ -24,6 +24,7 @@
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use std::borrow::Cow;
 
 crate::primitive! {
     name: ArrayFilterDetections,
@@ -40,7 +41,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "min_width",
+            name: Cow::Borrowed("min_width"),
             label: "Min Width",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -48,7 +49,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "max_width",
+            name: Cow::Borrowed("max_width"),
             label: "Max Width",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -56,7 +57,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "min_height",
+            name: Cow::Borrowed("min_height"),
             label: "Min Height",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -64,7 +65,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "max_height",
+            name: Cow::Borrowed("max_height"),
             label: "Max Height",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -72,7 +73,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "min_aspect",
+            name: Cow::Borrowed("min_aspect"),
             label: "Min Aspect",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -80,7 +81,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "max_aspect",
+            name: Cow::Borrowed("max_aspect"),
             label: "Max Aspect",
             ty: ParamType::Float,
             default: ParamValue::Float(1000.0),
@@ -88,7 +89,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "max_area_frac",
+            name: Cow::Borrowed("max_area_frac"),
             label: "Max Area Fraction",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -247,7 +248,7 @@ mod tests {
         assert_eq!(ArrayFilterDetections::OUTPUTS.len(), 1);
         assert_eq!(ArrayFilterDetections::OUTPUTS[0].name, "out");
         let names: Vec<&str> =
-            ArrayFilterDetections::PARAMS.iter().map(|p| p.name).collect();
+            ArrayFilterDetections::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec![

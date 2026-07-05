@@ -1,6 +1,8 @@
 //! `node.wrap` — per-pixel `fract(input.rgb * scale)`,
 //! alpha pass-through.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -28,7 +30,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "scale",
+            name: Cow::Borrowed("scale"),
             label: "Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -126,7 +128,7 @@ mod tests {
 
     #[test]
     fn fract_texture_has_scale_param() {
-        let names: Vec<&str> = FractTexture::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = FractTexture::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["scale"]);
     }
 

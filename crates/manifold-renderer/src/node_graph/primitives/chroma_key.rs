@@ -14,6 +14,8 @@
 //! That's the simplest predictable model; HSV-distance (better for
 //! hue selection irrespective of brightness) is a future variant.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -39,7 +41,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "key_color",
+            name: Cow::Borrowed("key_color"),
             label: "Key Colour",
             ty: ParamType::Vec3,
             default: ParamValue::Vec3([1.0, 0.0, 0.0]),
@@ -47,7 +49,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "tolerance",
+            name: Cow::Borrowed("tolerance"),
             label: "Tolerance",
             ty: ParamType::Float,
             default: ParamValue::Float(0.3),
@@ -59,7 +61,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "softness",
+            name: Cow::Borrowed("softness"),
             label: "Softness",
             ty: ParamType::Float,
             default: ParamValue::Float(0.1),
@@ -67,7 +69,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "mode",
+            name: Cow::Borrowed("mode"),
             label: "Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),

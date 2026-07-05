@@ -806,7 +806,7 @@ macro_rules! primitive {
             const INPUTS: &'static [$crate::node_graph::ports::NodeInput] = &[
                 $(
                     $crate::node_graph::ports::NodePort {
-                        name: stringify!($in_name),
+                        name: ::std::borrow::Cow::Borrowed(stringify!($in_name)),
                         ty: $crate::__primitive_port_type!(
                             $in_ty
                             $(, $in_param)?
@@ -821,7 +821,7 @@ macro_rules! primitive {
             const OUTPUTS: &'static [$crate::node_graph::ports::NodeOutput] = &[
                 $(
                     $crate::node_graph::ports::NodePort {
-                        name: stringify!($out_name),
+                        name: ::std::borrow::Cow::Borrowed(stringify!($out_name)),
                         ty: $crate::__primitive_port_type!(
                             $out_ty
                             $(, $out_param)?
@@ -1233,7 +1233,7 @@ mod tests {
         },
         params: [
             ParamDef {
-                name: "amount",
+                name: std::borrow::Cow::Borrowed("amount"),
                 label: "Amount",
                 ty: ParamType::Float,
                 default: ParamValue::Float(0.5),

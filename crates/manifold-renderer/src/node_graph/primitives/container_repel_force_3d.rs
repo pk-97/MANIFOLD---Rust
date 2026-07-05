@@ -13,6 +13,8 @@
 //! Torus); compose this one before `node.move_particles_3d` and
 //! the bounds atom after it.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::generators::compute_common::Particle;
@@ -51,7 +53,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "container",
+            name: Cow::Borrowed("container"),
             label: "Container",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -59,7 +61,7 @@ crate::primitive! {
             enum_values: CONTAINER_3D_MODES,
         },
         ParamDef {
-            name: "ctr_scale",
+            name: Cow::Borrowed("ctr_scale"),
             label: "Container Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(0.8),
@@ -67,7 +69,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "active_count",
+            name: Cow::Borrowed("active_count"),
             label: "Active Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
@@ -213,7 +215,7 @@ mod tests {
         );
         let names: Vec<&str> = ContainerRepelForce3D::INPUTS
             .iter()
-            .map(|p| p.name)
+            .map(|p| p.name.as_ref())
             .collect();
         assert_eq!(names, vec!["in", "particles", "ctr_scale", "active_count"]);
         assert_eq!(

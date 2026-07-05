@@ -18,6 +18,8 @@
 
 #![allow(private_interfaces)]
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler};
 use manifold_native::blob_detector::BlobDetector;
 
@@ -105,7 +107,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "max_capacity",
+            name: Cow::Borrowed("max_capacity"),
             label: "Max Capacity",
             ty: ParamType::Int,
             default: ParamValue::Float(8.0),
@@ -113,7 +115,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "threshold",
+            name: Cow::Borrowed("threshold"),
             label: "Threshold",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -121,7 +123,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "sensitivity",
+            name: Cow::Borrowed("sensitivity"),
             label: "Sensitivity",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -129,7 +131,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "analysis_max_dim",
+            name: Cow::Borrowed("analysis_max_dim"),
             label: "Analysis Max Dim",
             ty: ParamType::Int,
             default: ParamValue::Float(320.0),
@@ -137,7 +139,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "update_interval",
+            name: Cow::Borrowed("update_interval"),
             label: "Update Interval (frames)",
             ty: ParamType::Int,
             default: ParamValue::Float(2.0),
@@ -456,7 +458,7 @@ mod tests {
 
     #[test]
     fn blob_detect_ffi_has_full_param_surface() {
-        let names: Vec<&str> = BlobDetectFfi::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = BlobDetectFfi::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec![

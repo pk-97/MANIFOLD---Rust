@@ -5,6 +5,8 @@
 //! Same input/output/param shape regardless of mode — authors don't pick
 //! the wrong primitive or need to swap nodes when iterating on a pattern.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -45,7 +47,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "freq",
+            name: Cow::Borrowed("freq"),
             label: "Frequency",
             ty: ParamType::Float,
             default: ParamValue::Float(std::f32::consts::TAU),
@@ -53,7 +55,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "phase",
+            name: Cow::Borrowed("phase"),
             label: "Phase",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
@@ -61,7 +63,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "mode",
+            name: Cow::Borrowed("mode"),
             label: "Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0), // Sin
@@ -199,7 +201,7 @@ mod tests {
 
     #[test]
     fn trig_texture_has_freq_phase_mode_params() {
-        let names: Vec<&str> = TrigTexture::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = TrigTexture::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["freq", "phase", "mode"]);
     }
 

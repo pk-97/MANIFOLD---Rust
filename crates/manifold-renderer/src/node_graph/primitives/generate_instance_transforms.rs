@@ -8,6 +8,8 @@
 //! mesh. Unlocks NestedCubes, DigitalPlants, and any future
 //! "many small objects in a pattern" generator.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::InstanceTransform;
@@ -50,7 +52,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "max_capacity",
+            name: Cow::Borrowed("max_capacity"),
             label: "Max Capacity",
             ty: ParamType::Int,
             default: ParamValue::Float(65_536.0),
@@ -58,7 +60,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "active_count",
+            name: Cow::Borrowed("active_count"),
             label: "Active Count",
             ty: ParamType::Int,
             default: ParamValue::Float(64.0),
@@ -66,7 +68,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "layout",
+            name: Cow::Borrowed("layout"),
             label: "Layout",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -74,7 +76,7 @@ crate::primitive! {
             enum_values: INSTANCE_LAYOUTS,
         },
         ParamDef {
-            name: "seed",
+            name: Cow::Borrowed("seed"),
             label: "Seed",
             ty: ParamType::Int,
             default: ParamValue::Float(0.0),
@@ -82,7 +84,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "extent_x",
+            name: Cow::Borrowed("extent_x"),
             label: "Extent X",
             ty: ParamType::Float,
             default: ParamValue::Float(4.0),
@@ -90,7 +92,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "extent_y",
+            name: Cow::Borrowed("extent_y"),
             label: "Extent Y",
             ty: ParamType::Float,
             default: ParamValue::Float(4.0),
@@ -98,7 +100,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "extent_z",
+            name: Cow::Borrowed("extent_z"),
             label: "Extent Z",
             ty: ParamType::Float,
             default: ParamValue::Float(4.0),
@@ -106,7 +108,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "base_scale",
+            name: Cow::Borrowed("base_scale"),
             label: "Base Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -114,7 +116,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "rot_x",
+            name: Cow::Borrowed("rot_x"),
             label: "Rotation X",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
@@ -122,7 +124,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "rot_y",
+            name: Cow::Borrowed("rot_y"),
             label: "Rotation Y",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
@@ -130,7 +132,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "rot_z",
+            name: Cow::Borrowed("rot_z"),
             label: "Rotation Z",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.0),

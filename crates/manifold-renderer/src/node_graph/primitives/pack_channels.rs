@@ -9,6 +9,8 @@
 //! data (PBR material samplers, packed vector fields, HSL → RGB
 //! recomposition).
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -30,7 +32,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "default_r",
+            name: Cow::Borrowed("default_r"),
             label: "Default R",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -38,7 +40,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "default_g",
+            name: Cow::Borrowed("default_g"),
             label: "Default G",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -46,7 +48,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "default_b",
+            name: Cow::Borrowed("default_b"),
             label: "Default B",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -54,7 +56,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "default_a",
+            name: Cow::Borrowed("default_a"),
             label: "Default A",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -205,7 +207,7 @@ mod tests {
     fn declares_four_optional_texture_inputs() {
         use crate::node_graph::ports::PortType;
         assert_eq!(PackChannels::TYPE_ID, "node.pack_rgba");
-        let names: Vec<&str> = PackChannels::INPUTS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = PackChannels::INPUTS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["r", "g", "b", "a"]);
         for input in PackChannels::INPUTS {
             assert!(!input.required, "{} should be optional", input.name);

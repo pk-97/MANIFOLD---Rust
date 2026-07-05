@@ -598,7 +598,7 @@ mod tests {
         assert!(
             Render3DMesh::PARAMS.is_empty(),
             "render_3d_mesh should expose no scalar params after Material migration; got {:?}",
-            Render3DMesh::PARAMS.iter().map(|p| p.name).collect::<Vec<_>>()
+            Render3DMesh::PARAMS.iter().map(|p| p.name.as_ref()).collect::<Vec<_>>()
         );
     }
 

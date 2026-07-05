@@ -11,6 +11,8 @@
 //!
 //! One frame of latency on the readback, same as the other bridges.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuBuffer};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -45,7 +47,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "uv",
+            name: Cow::Borrowed("uv"),
             label: "UV",
             ty: ParamType::Vec2,
             default: ParamValue::Vec2([0.5, 0.5]),
@@ -53,7 +55,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "radius_px",
+            name: Cow::Borrowed("radius_px"),
             label: "Region Radius (px)",
             ty: ParamType::Int,
             // 0 = single-pixel read (backward compatible). Larger
@@ -218,7 +220,7 @@ mod gpu_tests {
         }
         fn inputs(&self) -> &[NodeInput] {
             static INPUTS: [NodeInput; 1] = [NodePort {
-                name: "in",
+                name: std::borrow::Cow::Borrowed("in"),
                 ty: PortType::Scalar(ScalarType::Vec3),
                 kind: PortKind::Input,
                 required: true,
@@ -248,7 +250,7 @@ mod gpu_tests {
         }
         fn inputs(&self) -> &[NodeInput] {
             static INPUTS: [NodeInput; 1] = [NodePort {
-                name: "in",
+                name: std::borrow::Cow::Borrowed("in"),
                 ty: PortType::Scalar(ScalarType::F32),
                 kind: PortKind::Input,
                 required: true,

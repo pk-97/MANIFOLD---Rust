@@ -24,6 +24,8 @@
 //! overhead and lands the data in shared MTLBuffer for downstream
 //! CPU consumers (`pack_vec4`, `edges_from_grid_uv`) to read same-frame.
 
+use std::borrow::Cow;
+
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -46,7 +48,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "grid_size",
+            name: Cow::Borrowed("grid_size"),
             label: "Grid Size",
             ty: ParamType::Int,
             default: ParamValue::Float(GRID_UV_DEFAULT_SIZE as f32),
@@ -54,7 +56,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "u_max",
+            name: Cow::Borrowed("u_max"),
             label: "U Max",
             ty: ParamType::Float,
             default: ParamValue::Float(TAU),
@@ -62,7 +64,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "v_max",
+            name: Cow::Borrowed("v_max"),
             label: "V Max",
             ty: ParamType::Float,
             default: ParamValue::Float(TAU),
@@ -200,14 +202,14 @@ mod tests {
         );
 
         let mut custom = ParamValues::default();
-        custom.insert("grid_size", ParamValue::Float(16.0));
+        custom.insert(std::borrow::Cow::Borrowed("grid_size"), ParamValue::Float(16.0));
         assert_eq!(
             Primitive::array_output_capacity(&prim, "u_values", &custom, &[]),
             Some(16 * 16),
         );
 
         let mut huge = ParamValues::default();
-        huge.insert("grid_size", ParamValue::Float(128.0));
+        huge.insert(std::borrow::Cow::Borrowed("grid_size"), ParamValue::Float(128.0));
         assert_eq!(
             Primitive::array_output_capacity(&prim, "u_values", &huge, &[]),
             Some(GRID_UV_MAX_SIZE * GRID_UV_MAX_SIZE),

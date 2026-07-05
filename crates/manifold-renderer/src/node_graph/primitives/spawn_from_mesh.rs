@@ -32,6 +32,7 @@
 //! `seed_particles_from_texture.rs` — seeding happens once per trigger
 //! edge (+ the first frame), never every frame.
 
+use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::generators::compute_common::Particle;
@@ -75,7 +76,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "max_capacity",
+            name: Cow::Borrowed("max_capacity"),
             label: "Max Capacity",
             ty: ParamType::Int,
             default: ParamValue::Float(1_048_576.0),
@@ -83,7 +84,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "active_count",
+            name: Cow::Borrowed("active_count"),
             label: "Active Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
@@ -91,7 +92,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "frame_seed",
+            name: Cow::Borrowed("frame_seed"),
             label: "Frame Seed",
             ty: ParamType::Int,
             default: ParamValue::Float(0.0),
@@ -99,7 +100,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "mode",
+            name: Cow::Borrowed("mode"),
             label: "Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0), // vertices
@@ -337,7 +338,7 @@ mod tests {
 
     #[test]
     fn spawn_from_mesh_has_full_param_surface_with_mode_enum() {
-        let names: Vec<&str> = SpawnFromMesh::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = SpawnFromMesh::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec!["max_capacity", "active_count", "frame_seed", "mode"]

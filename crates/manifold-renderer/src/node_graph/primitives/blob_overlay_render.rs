@@ -8,6 +8,8 @@
 //! draw primitives, OR by using the legacy wrapper for that
 //! full visual treatment.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -43,7 +45,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "color",
+            name: Cow::Borrowed("color"),
             label: "Color",
             ty: ParamType::Color,
             default: ParamValue::Color([0.0, 1.0, 0.5, 1.0]),
@@ -51,7 +53,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "alpha",
+            name: Cow::Borrowed("alpha"),
             label: "Alpha",
             ty: ParamType::Float,
             default: ParamValue::Float(0.8),
@@ -59,7 +61,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "border_width",
+            name: Cow::Borrowed("border_width"),
             label: "Border Width",
             ty: ParamType::Float,
             default: ParamValue::Float(0.003),
@@ -67,7 +69,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "blob_count",
+            name: Cow::Borrowed("blob_count"),
             label: "Blob Count",
             ty: ParamType::Int,
             default: ParamValue::Float(32.0),
@@ -199,7 +201,7 @@ mod tests {
 
     #[test]
     fn blob_overlay_render_has_color_alpha_border_count_params() {
-        let names: Vec<&str> = BlobOverlayRender::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = BlobOverlayRender::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec!["color", "alpha", "border_width", "blob_count"]

@@ -19,6 +19,8 @@
 //! `input_edges_capacity * max_rings` so the chain build pre-allocates
 //! the full stack regardless of the runtime ring count.
 
+use std::borrow::Cow;
+
 use crate::generators::mesh_common::{CurvePoint, EdgePair};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -50,7 +52,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "max_rings",
+            name: Cow::Borrowed("max_rings"),
             label: "Max Rings",
             ty: ParamType::Int,
             default: ParamValue::Float(16.0),
@@ -323,7 +325,7 @@ mod tests {
 
         // Clamped to REPLICATE_MAX_RINGS = 32 when the param exceeds it.
         let mut huge = ParamValues::default();
-        huge.insert("max_rings", ParamValue::Float(128.0));
+        huge.insert(std::borrow::Cow::Borrowed("max_rings"), ParamValue::Float(128.0));
         assert_eq!(
             Primitive::array_output_capacity(&prim, "outline", &huge, &inputs),
             Some(64 * REPLICATE_MAX_RINGS),

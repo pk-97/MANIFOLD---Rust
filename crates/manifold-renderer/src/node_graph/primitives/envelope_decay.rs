@@ -16,6 +16,7 @@
 //!
 //! [`StateStore`]: crate::node_graph::StateStore
 
+use std::borrow::Cow;
 use crate::node_graph::effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, NodeRequires,
 };
@@ -34,7 +35,7 @@ impl NodeState for DecayState {}
 
 const ENVELOPE_DECAY_INPUTS: [NodeInput; 2] = [
     NodePort {
-        name: "trigger",
+        name: Cow::Borrowed("trigger"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: true,
@@ -43,7 +44,7 @@ const ENVELOPE_DECAY_INPUTS: [NodeInput; 2] = [
     // or another node (e.g. tying the decay rate to BPM for tempo-
     // synced strobe envelopes).
     NodePort {
-        name: "decay_rate",
+        name: Cow::Borrowed("decay_rate"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: false,
@@ -51,14 +52,14 @@ const ENVELOPE_DECAY_INPUTS: [NodeInput; 2] = [
 ];
 
 const ENVELOPE_DECAY_OUTPUTS: [NodeOutput; 1] = [NodePort {
-    name: "out",
+    name: Cow::Borrowed("out"),
     ty: PortType::Scalar(ScalarType::F32),
     kind: PortKind::Output,
     required: false,
 }];
 
 const ENVELOPE_DECAY_PARAMS: [ParamDef; 1] = [ParamDef {
-    name: "decay_rate",
+    name: Cow::Borrowed("decay_rate"),
     label: "Decay Rate",
     ty: ParamType::Float,
     default: ParamValue::Float(12.0),
@@ -200,7 +201,7 @@ mod tests {
     #[test]
     fn envelope_decay_has_decay_rate_param() {
         let node = EnvelopeDecay::new();
-        let names: Vec<&str> = node.parameters().iter().map(|p| p.name).collect();
+        let names: Vec<&str> = node.parameters().iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["decay_rate"]);
     }
 

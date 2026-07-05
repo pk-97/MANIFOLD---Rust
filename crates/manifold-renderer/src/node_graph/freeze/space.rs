@@ -67,7 +67,7 @@ pub fn resolve_output_spaces(
         let Some(&doc_id) = runtime_to_doc.get(&step.node) else {
             continue;
         };
-        for &(port, res) in &step.outputs {
+        for &(ref port, res) in &step.outputs {
             if !plan.resource_type(res).is_some_and(|t| t.is_texture_2d()) {
                 continue;
             }

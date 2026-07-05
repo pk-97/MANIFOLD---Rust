@@ -6,6 +6,7 @@
 //! `node.surface_bumps` and downstream with `node.rim_light`
 //! + `node.shininess` summed for the full PBR look.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -33,7 +34,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "color_y_low",
+            name: Cow::Borrowed("color_y_low"),
             label: "Y Low (shadow)",
             ty: ParamType::Color,
             default: ParamValue::Color([0.08, 0.05, 0.22, 1.0]),
@@ -41,7 +42,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "color_y_high",
+            name: Cow::Borrowed("color_y_high"),
             label: "Y High (highlight)",
             ty: ParamType::Color,
             default: ParamValue::Color([0.55, 0.75, 0.95, 1.0]),
@@ -49,7 +50,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "color_x_low",
+            name: Cow::Borrowed("color_x_low"),
             label: "X Low (left)",
             ty: ParamType::Color,
             default: ParamValue::Color([0.25, 0.10, 0.45, 1.0]),
@@ -57,7 +58,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "color_x_high",
+            name: Cow::Borrowed("color_x_high"),
             label: "X High (right)",
             ty: ParamType::Color,
             default: ParamValue::Color([0.15, 0.55, 0.60, 1.0]),

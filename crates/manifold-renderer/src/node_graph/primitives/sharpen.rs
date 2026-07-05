@@ -11,6 +11,7 @@
 //! when applied to a grayscale source; the per-channel math
 //! generalises to RGBA without changing the grayscale result.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -39,7 +40,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "amount",
+            name: Cow::Borrowed("amount"),
             label: "Amount",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -146,7 +147,10 @@ mod tests {
 
     #[test]
     fn sharpen_has_one_amount_param() {
-        let names: Vec<&str> = Sharpen::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = Sharpen::PARAMS
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect();
         assert_eq!(names, vec!["amount"]);
     }
 

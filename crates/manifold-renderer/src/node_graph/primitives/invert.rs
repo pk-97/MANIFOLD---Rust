@@ -12,6 +12,7 @@
 //! See `docs/ADDING_PRIMITIVES.md` for the authoring template this
 //! primitive follows.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -30,7 +31,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "intensity",
+            name: Cow::Borrowed("intensity"),
             label: "Intensity",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),

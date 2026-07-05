@@ -14,6 +14,7 @@
 //! Other settings extend the family — fewer octaves for cheaper
 //! computation, larger lacunarity for sparser cells, etc.
 
+use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -55,7 +56,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "scale",
+            name: Cow::Borrowed("scale"),
             label: "Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -63,7 +64,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "z",
+            name: Cow::Borrowed("z"),
             label: "Z",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -71,7 +72,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "offset_x",
+            name: Cow::Borrowed("offset_x"),
             label: "Offset X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -79,7 +80,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "offset_y",
+            name: Cow::Borrowed("offset_y"),
             label: "Offset Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -87,7 +88,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "octaves",
+            name: Cow::Borrowed("octaves"),
             label: "Octaves",
             ty: ParamType::Int,
             default: ParamValue::Float(5.0),
@@ -95,7 +96,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "lacunarity",
+            name: Cow::Borrowed("lacunarity"),
             label: "Lacunarity",
             ty: ParamType::Float,
             default: ParamValue::Float(1.5),
@@ -103,7 +104,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "gain",
+            name: Cow::Borrowed("gain"),
             label: "Gain",
             ty: ParamType::Float,
             default: ParamValue::Float(0.8),
@@ -248,7 +249,7 @@ mod tests {
     fn fbm_per_instance_defaults_match_legacy_noise_common() {
         let by_name: std::collections::HashMap<&str, &ParamDef> = FbmPerInstance::PARAMS
             .iter()
-            .map(|p| (p.name, p))
+            .map(|p| (p.name.as_ref(), p))
             .collect();
         let oct = by_name.get("octaves").expect("octaves param missing");
         let lac = by_name.get("lacunarity").expect("lacunarity param missing");

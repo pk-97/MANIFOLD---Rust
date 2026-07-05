@@ -10,6 +10,8 @@
 //! splits (oily-fluid Oil Slick), signed-field chromatic trails,
 //! anywhere the offset direction is data not symmetry.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -39,7 +41,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "amount",
+            name: Cow::Borrowed("amount"),
             label: "Amount (pixels)",
             ty: ParamType::Float,
             default: ParamValue::Float(2.0),

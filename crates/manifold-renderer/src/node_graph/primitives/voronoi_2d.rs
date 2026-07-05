@@ -14,6 +14,8 @@
 //!   The foundation for per-cell variation: density threshold,
 //!   per-cell colour, per-cell timing, twinkle frequency, etc.)
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -54,7 +56,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "scale",
+            name: Cow::Borrowed("scale"),
             label: "Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(8.0),
@@ -62,7 +64,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "offset_x",
+            name: Cow::Borrowed("offset_x"),
             label: "Offset X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -70,7 +72,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "offset_y",
+            name: Cow::Borrowed("offset_y"),
             label: "Offset Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -78,7 +80,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "jitter",
+            name: Cow::Borrowed("jitter"),
             label: "Jitter",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -86,7 +88,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "out_scale",
+            name: Cow::Borrowed("out_scale"),
             label: "Output Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -194,7 +196,7 @@ mod tests {
         use crate::node_graph::ports::{PortType, ScalarType};
         assert_eq!(Voronoi2D::TYPE_ID, "node.voronoi_2d");
         let ins = Voronoi2D::INPUTS;
-        let names: Vec<&str> = ins.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = ins.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec!["scale", "offset_x", "offset_y", "jitter", "out_scale"]
@@ -203,7 +205,7 @@ mod tests {
             assert!(!port.required, "all voronoi_2d inputs are optional");
             assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
         }
-        let out_names: Vec<&str> = Voronoi2D::OUTPUTS.iter().map(|p| p.name).collect();
+        let out_names: Vec<&str> = Voronoi2D::OUTPUTS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(out_names, vec!["out", "cell_id"]);
         for port in Voronoi2D::OUTPUTS {
             assert_eq!(port.ty, PortType::Texture2D);
@@ -212,7 +214,7 @@ mod tests {
 
     #[test]
     fn voronoi_2d_has_expected_params() {
-        let names: Vec<&str> = Voronoi2D::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = Voronoi2D::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec!["scale", "offset_x", "offset_y", "jitter", "out_scale"]

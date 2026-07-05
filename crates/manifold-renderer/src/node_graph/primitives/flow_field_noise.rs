@@ -7,6 +7,7 @@
 //! displacement primitives that read `.rb` as a flow vector
 //! compose cleanly. Animated over `time` (slow evolution).
 
+use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -56,7 +57,7 @@ crate::primitive! {
         // Backing param for time (run() packs FrameTime.seconds). First so the
         // generated uniform layout matches the hand {time, z_scale, warp_scale}.
         ParamDef {
-            name: "time",
+            name: Cow::Borrowed("time"),
             label: "Time",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -64,7 +65,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "z_scale",
+            name: Cow::Borrowed("z_scale"),
             label: "Time Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(0.01),
@@ -72,7 +73,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "warp_scale",
+            name: Cow::Borrowed("warp_scale"),
             label: "Domain Warp",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -80,7 +81,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "resolution",
+            name: Cow::Borrowed("resolution"),
             label: "Resolution",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -198,7 +199,7 @@ mod tests {
         // `time` leads the list: the freeze fusion regularized the frame-time
         // input as a port-shadowed `time` param (the time-param pattern) so the
         // generated kernel can read it as a uniform field.
-        let names: Vec<&str> = FlowFieldNoise::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = FlowFieldNoise::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["time", "z_scale", "warp_scale", "resolution"]);
     }
 
@@ -213,7 +214,7 @@ mod tests {
             (2, Some((1u32, 4u32))),
         ] {
             let mut params = ahash::AHashMap::default();
-            params.insert("resolution", ParamValue::Enum(enum_v));
+            params.insert(std::borrow::Cow::Borrowed("resolution"), ParamValue::Enum(enum_v));
             assert_eq!(
                 node.output_canvas_scale("flow", &params),
                 expected,

@@ -27,6 +27,8 @@
 //!
 //! [`StateStore`]: crate::node_graph::StateStore
 
+use std::borrow::Cow;
+
 use crate::node_graph::effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, NodeRequires,
 };
@@ -51,13 +53,13 @@ impl NodeState for EaseState {}
 
 const TRIGGER_EASE_TO_INPUTS: [NodeInput; 3] = [
     NodePort {
-        name: "target",
+        name: Cow::Borrowed("target"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: true,
     },
     NodePort {
-        name: "trigger",
+        name: Cow::Borrowed("trigger"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: true,
@@ -66,7 +68,7 @@ const TRIGGER_EASE_TO_INPUTS: [NodeInput; 3] = [
     // tempo-adjusted wire (e.g. a sustained-note pattern that wants a
     // half-beat glide instead of a quarter).
     NodePort {
-        name: "window_beats",
+        name: Cow::Borrowed("window_beats"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: false,
@@ -74,14 +76,14 @@ const TRIGGER_EASE_TO_INPUTS: [NodeInput; 3] = [
 ];
 
 const TRIGGER_EASE_TO_OUTPUTS: [NodeOutput; 1] = [NodePort {
-    name: "out",
+    name: Cow::Borrowed("out"),
     ty: PortType::Scalar(ScalarType::F32),
     kind: PortKind::Output,
     required: false,
 }];
 
 const TRIGGER_EASE_TO_PARAMS: [ParamDef; 1] = [ParamDef {
-    name: "window_beats",
+    name: Cow::Borrowed("window_beats"),
     label: "Window (beats)",
     ty: ParamType::Float,
     default: ParamValue::Float(DEFAULT_WINDOW_BEATS),

@@ -5,6 +5,7 @@
 //! ported verbatim from the Blob Track HUD's `size_gauge` wgsl_compute
 //! kernel.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -39,7 +40,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "color",
+            name: Cow::Borrowed("color"),
             label: "Color",
             ty: ParamType::Color,
             default: ParamValue::Color([0.85, 0.92, 1.0, 1.0]),
@@ -47,7 +48,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "alpha",
+            name: Cow::Borrowed("alpha"),
             label: "Alpha",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -55,7 +56,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "bottom_offset_px",
+            name: Cow::Borrowed("bottom_offset_px"),
             label: "Offset",
             ty: ParamType::Float,
             default: ParamValue::Float(50.0),
@@ -63,7 +64,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "bar_height_px",
+            name: Cow::Borrowed("bar_height_px"),
             label: "Bar Height",
             ty: ParamType::Float,
             default: ParamValue::Float(8.0),
@@ -71,7 +72,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "min_bar_width_px",
+            name: Cow::Borrowed("min_bar_width_px"),
             label: "Min Width",
             ty: ParamType::Float,
             default: ParamValue::Float(80.0),
@@ -79,7 +80,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "fill_scale",
+            name: Cow::Borrowed("fill_scale"),
             label: "Fill Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(20.0),
@@ -87,7 +88,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "thickness_px",
+            name: Cow::Borrowed("thickness_px"),
             label: "Thickness",
             ty: ParamType::Float,
             default: ParamValue::Float(1.5),

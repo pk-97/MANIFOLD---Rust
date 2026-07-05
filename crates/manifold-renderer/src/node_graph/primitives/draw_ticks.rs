@@ -5,6 +5,7 @@
 //! the look, not a control). Math ported verbatim from the Blob Track
 //! HUD's `tick_marks` wgsl_compute kernel.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -37,7 +38,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "color",
+            name: Cow::Borrowed("color"),
             label: "Color",
             ty: ParamType::Color,
             default: ParamValue::Color([0.85, 0.92, 1.0, 1.0]),
@@ -45,7 +46,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "alpha",
+            name: Cow::Borrowed("alpha"),
             label: "Alpha",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -53,7 +54,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "right_offset_px",
+            name: Cow::Borrowed("right_offset_px"),
             label: "Offset",
             ty: ParamType::Float,
             default: ParamValue::Float(8.0),
@@ -61,7 +62,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "long_tick_px",
+            name: Cow::Borrowed("long_tick_px"),
             label: "Long Tick",
             ty: ParamType::Float,
             default: ParamValue::Float(12.0),
@@ -69,7 +70,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "short_tick_px",
+            name: Cow::Borrowed("short_tick_px"),
             label: "Short Tick",
             ty: ParamType::Float,
             default: ParamValue::Float(6.0),
@@ -77,7 +78,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "thickness_px",
+            name: Cow::Borrowed("thickness_px"),
             label: "Thickness",
             ty: ParamType::Float,
             default: ParamValue::Float(1.5),

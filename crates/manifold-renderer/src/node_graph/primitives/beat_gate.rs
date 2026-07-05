@@ -15,6 +15,8 @@
 //! scales the on-state value, so a wired `amount` lets an external
 //! envelope or audio level modulate strobe depth.
 
+use std::borrow::Cow;
+
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -37,7 +39,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "rate",
+            name: Cow::Borrowed("rate"),
             label: "Rate",
             ty: ParamType::Enum,
             default: ParamValue::Enum(6), // "1/16" — matches Strobe's default
@@ -45,7 +47,7 @@ crate::primitive! {
             enum_values: BEAT_GATE_RATE_LABELS,
         },
         ParamDef {
-            name: "amount",
+            name: Cow::Borrowed("amount"),
             label: "Amount",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -53,7 +55,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "duty",
+            name: Cow::Borrowed("duty"),
             label: "Duty",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -61,7 +63,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "phase",
+            name: Cow::Borrowed("phase"),
             label: "Phase",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -145,7 +147,7 @@ mod tests {
         }
         fn inputs(&self) -> &[NodeInput] {
             static INPUTS: [NodeInput; 1] = [NodePort {
-                name: "in",
+                name: Cow::Borrowed("in"),
                 ty: PortType::Scalar(ScalarType::F32),
                 kind: PortKind::Input,
                 required: true,

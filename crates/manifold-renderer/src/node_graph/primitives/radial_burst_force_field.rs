@@ -17,6 +17,8 @@
 //! point" use case — snaps, beat shoves, audio splashes, future
 //! fluid sims.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -59,7 +61,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "point_x",
+            name: Cow::Borrowed("point_x"),
             label: "Point X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -67,7 +69,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "point_y",
+            name: Cow::Borrowed("point_y"),
             label: "Point Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -75,7 +77,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "amplitude",
+            name: Cow::Borrowed("amplitude"),
             label: "Amplitude",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -83,7 +85,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "envelope",
+            name: Cow::Borrowed("envelope"),
             label: "Envelope",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -91,7 +93,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "radius",
+            name: Cow::Borrowed("radius"),
             label: "Radius",
             ty: ParamType::Float,
             default: ParamValue::Float(0.25),
@@ -99,7 +101,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "time",
+            name: Cow::Borrowed("time"),
             label: "Time",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -184,7 +186,10 @@ mod tests {
         use crate::node_graph::ports::PortType;
 
         assert_eq!(RadialBurstForceField::TYPE_ID, "node.explosion_force");
-        let names: Vec<&str> = RadialBurstForceField::INPUTS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = RadialBurstForceField::INPUTS
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect();
         assert_eq!(
             names,
             vec!["point_x", "point_y", "amplitude", "envelope", "radius", "time"]
@@ -201,8 +206,14 @@ mod tests {
     fn every_input_port_shadows_a_param() {
         // Standard port-shadow convention: scalar input + same-named
         // ParamDef. Both must exist for all six knobs.
-        let port_names: Vec<&str> = RadialBurstForceField::INPUTS.iter().map(|p| p.name).collect();
-        let param_names: Vec<&str> = RadialBurstForceField::PARAMS.iter().map(|p| p.name).collect();
+        let port_names: Vec<&str> = RadialBurstForceField::INPUTS
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect();
+        let param_names: Vec<&str> = RadialBurstForceField::PARAMS
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect();
         for name in &port_names {
             assert!(
                 param_names.contains(name),

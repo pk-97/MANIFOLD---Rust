@@ -17,6 +17,7 @@
 //! `angle = 0` mirrors across the horizontal centerline (bottom half =
 //! mirror of top). `angle = π/4` mirrors across the +45° diagonal.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -45,7 +46,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "angle",
+            name: Cow::Borrowed("angle"),
             label: "Angle",
             ty: ParamType::Angle,
             default: ParamValue::Float(std::f32::consts::FRAC_PI_4),

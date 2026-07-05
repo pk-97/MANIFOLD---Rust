@@ -10,6 +10,8 @@
 //! rects). Reusable for any rect-shaped overlay: selection boxes,
 //! debug regions, VU meters, status bars, beat-grid markers.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuLoadAction,
     GpuRenderPipeline, GpuTextureFormat};
 
@@ -39,7 +41,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "color",
+            name: Cow::Borrowed("color"),
             label: "Color",
             ty: ParamType::Color,
             default: ParamValue::Color([0.85, 0.92, 1.0, 1.0]),
@@ -47,7 +49,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "alpha",
+            name: Cow::Borrowed("alpha"),
             label: "Alpha",
             ty: ParamType::Float,
             default: ParamValue::Float(0.8),
@@ -55,7 +57,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "rect_count",
+            name: Cow::Borrowed("rect_count"),
             label: "Rect Count",
             ty: ParamType::Int,
             default: ParamValue::Float(32.0),

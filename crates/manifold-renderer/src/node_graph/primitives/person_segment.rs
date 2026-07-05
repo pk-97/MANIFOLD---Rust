@@ -28,6 +28,8 @@
 
 #![allow(private_interfaces)]
 
+use std::borrow::Cow;
+
 use manifold_gpu::{
     GpuBinding, GpuComputePipeline, GpuSamplerDesc, GpuTexture, GpuTextureDesc,
     GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
@@ -85,7 +87,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "analysis_max_dim",
+            name: Cow::Borrowed("analysis_max_dim"),
             label: "Analysis Max Dim",
             ty: ParamType::Int,
             default: ParamValue::Float(360.0),
@@ -93,7 +95,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "update_interval",
+            name: Cow::Borrowed("update_interval"),
             label: "Update Interval (frames)",
             ty: ParamType::Int,
             default: ParamValue::Float(2.0),
@@ -101,7 +103,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "smoothing",
+            name: Cow::Borrowed("smoothing"),
             label: "Temporal Smoothing",
             ty: ParamType::Float,
             // Matches legacy WireframeDepth's hardcoded BLEND = 0.55
@@ -422,7 +424,7 @@ mod tests {
 
     #[test]
     fn person_segment_has_three_params() {
-        let names: Vec<&str> = PersonSegment::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = PersonSegment::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["analysis_max_dim", "update_interval", "smoothing"]);
     }
 

@@ -2085,7 +2085,7 @@ impl PresetRuntime {
             return crate::node_graph::PreviewEncoding::Color;
         };
         let port = port_override
-            .or_else(|| n.node.outputs().first().map(|p| p.name))
+            .or_else(|| n.node.outputs().first().map(|p| p.name.as_ref()))
             .unwrap_or("out");
         crate::node_graph::PreviewEncoding::derive(n.node.type_id().as_str(), port)
     }
@@ -2131,12 +2131,12 @@ impl PresetRuntime {
                     .map(|pd| {
                         let v = n
                             .params
-                            .get(pd.name)
+                            .get(pd.name.as_ref())
                             .map(crate::node_graph::param_default_to_f32)
                             .unwrap_or_else(|| {
                                 crate::node_graph::param_default_to_f32(&pd.default)
                             });
-                        (pd.name, v)
+                        (crate::node_graph::intern_name(&pd.name), v)
                     })
                     .collect();
                 Some((node_id.clone(), values))
@@ -2489,7 +2489,7 @@ impl PresetRuntime {
                         .node
                         .parameters()
                         .iter()
-                        .map(|p| p.name)
+                        .map(|p| crate::node_graph::intern_name(&p.name))
                         .find(|name| *name == param.as_str())
                         .or_else(|| {
                             log::warn!(

@@ -70,7 +70,7 @@ mod tests {
 
         let outs = TextureDimensions::OUTPUTS;
         assert_eq!(outs.len(), 3);
-        let names: Vec<&str> = outs.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = outs.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["width", "height", "aspect"]);
         for port in outs {
             assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));

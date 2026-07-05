@@ -13,6 +13,8 @@
 //!
 //! CPU-only — no GPU dispatch.
 
+use std::borrow::Cow;
+
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::material::{AlphaMode, Material, MaterialKind};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -42,7 +44,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "color_r",
+            name: Cow::Borrowed("color_r"),
             label: "Colour R",
             ty: ParamType::Float,
             default: ParamValue::Float(0.36),
@@ -50,7 +52,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "color_g",
+            name: Cow::Borrowed("color_g"),
             label: "Colour G",
             ty: ParamType::Float,
             default: ParamValue::Float(0.56),
@@ -58,7 +60,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "color_b",
+            name: Cow::Borrowed("color_b"),
             label: "Colour B",
             ty: ParamType::Float,
             default: ParamValue::Float(0.24),
@@ -66,7 +68,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "color_a",
+            name: Cow::Borrowed("color_a"),
             label: "Opacity",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -74,7 +76,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "cel_bands",
+            name: Cow::Borrowed("cel_bands"),
             label: "Cel Bands",
             ty: ParamType::Int,
             default: ParamValue::Float(4.0),
@@ -82,7 +84,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "band_low",
+            name: Cow::Borrowed("band_low"),
             label: "Band Low",
             ty: ParamType::Float,
             default: ParamValue::Float(0.08),
@@ -90,7 +92,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "band_high",
+            name: Cow::Borrowed("band_high"),
             label: "Band High",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -98,7 +100,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "emission_r",
+            name: Cow::Borrowed("emission_r"),
             label: "Emission R",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -106,7 +108,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "emission_g",
+            name: Cow::Borrowed("emission_g"),
             label: "Emission G",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -114,7 +116,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "emission_b",
+            name: Cow::Borrowed("emission_b"),
             label: "Emission B",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -122,7 +124,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "emission_intensity",
+            name: Cow::Borrowed("emission_intensity"),
             label: "Emission Intensity",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -130,7 +132,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "alpha_mode",
+            name: Cow::Borrowed("alpha_mode"),
             label: "Alpha Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0), // Opaque
@@ -138,7 +140,7 @@ crate::primitive! {
             enum_values: ALPHA_MODES,
         },
         ParamDef {
-            name: "alpha_cutoff",
+            name: Cow::Borrowed("alpha_cutoff"),
             label: "Alpha Cutoff",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -253,18 +255,18 @@ mod tests {
         let mut backend = MockBackend::new();
         let out_slot = backend.acquire(ResourceId(0), PortType::Material, None, (0, 0));
         let mut params = ParamValues::default();
-        params.insert("color_r", ParamValue::Float(0.4));
-        params.insert("color_g", ParamValue::Float(0.6));
-        params.insert("color_b", ParamValue::Float(0.3));
-        params.insert("color_a", ParamValue::Float(1.0));
+        params.insert(std::borrow::Cow::Borrowed("color_r"), ParamValue::Float(0.4));
+        params.insert(std::borrow::Cow::Borrowed("color_g"), ParamValue::Float(0.6));
+        params.insert(std::borrow::Cow::Borrowed("color_b"), ParamValue::Float(0.3));
+        params.insert(std::borrow::Cow::Borrowed("color_a"), ParamValue::Float(1.0));
         // Above the design's [2,16] cap — the constructor must clamp.
-        params.insert("cel_bands", ParamValue::Float(99.0));
-        params.insert("band_low", ParamValue::Float(0.1));
-        params.insert("band_high", ParamValue::Float(0.95));
-        params.insert("emission_r", ParamValue::Float(0.0));
-        params.insert("emission_g", ParamValue::Float(0.0));
-        params.insert("emission_b", ParamValue::Float(0.0));
-        params.insert("emission_intensity", ParamValue::Float(0.0));
+        params.insert(std::borrow::Cow::Borrowed("cel_bands"), ParamValue::Float(99.0));
+        params.insert(std::borrow::Cow::Borrowed("band_low"), ParamValue::Float(0.1));
+        params.insert(std::borrow::Cow::Borrowed("band_high"), ParamValue::Float(0.95));
+        params.insert(std::borrow::Cow::Borrowed("emission_r"), ParamValue::Float(0.0));
+        params.insert(std::borrow::Cow::Borrowed("emission_g"), ParamValue::Float(0.0));
+        params.insert(std::borrow::Cow::Borrowed("emission_b"), ParamValue::Float(0.0));
+        params.insert(std::borrow::Cow::Borrowed("emission_intensity"), ParamValue::Float(0.0));
 
         let mut prim = CelMaterial::new();
         let inputs_bindings: &[(&'static str, Slot)] = &[];

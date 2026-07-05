@@ -8,6 +8,8 @@
 //! 9-tap pattern with hardcoded weights — this primitive lifts that
 //! shape into a reusable building block where the kernel is data.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -36,17 +38,17 @@ crate::primitive! {
         out: Texture2D,
     },
     params: [
-        ParamDef { name: "k0", label: "Kernel[0]", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-16.0, 16.0)), enum_values: &[] },
-        ParamDef { name: "k1", label: "Kernel[1]", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-16.0, 16.0)), enum_values: &[] },
-        ParamDef { name: "k2", label: "Kernel[2]", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-16.0, 16.0)), enum_values: &[] },
-        ParamDef { name: "k3", label: "Kernel[3]", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-16.0, 16.0)), enum_values: &[] },
-        ParamDef { name: "k4", label: "Kernel[4] (center)", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-16.0, 16.0)), enum_values: &[] },
-        ParamDef { name: "k5", label: "Kernel[5]", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-16.0, 16.0)), enum_values: &[] },
-        ParamDef { name: "k6", label: "Kernel[6]", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-16.0, 16.0)), enum_values: &[] },
-        ParamDef { name: "k7", label: "Kernel[7]", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-16.0, 16.0)), enum_values: &[] },
-        ParamDef { name: "k8", label: "Kernel[8]", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-16.0, 16.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("k0"), label: "Kernel[0]", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-16.0, 16.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("k1"), label: "Kernel[1]", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-16.0, 16.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("k2"), label: "Kernel[2]", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-16.0, 16.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("k3"), label: "Kernel[3]", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-16.0, 16.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("k4"), label: "Kernel[4] (center)", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((-16.0, 16.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("k5"), label: "Kernel[5]", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-16.0, 16.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("k6"), label: "Kernel[6]", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-16.0, 16.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("k7"), label: "Kernel[7]", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-16.0, 16.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("k8"), label: "Kernel[8]", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-16.0, 16.0)), enum_values: &[] },
         ParamDef {
-            name: "bias",
+            name: Cow::Borrowed("bias"),
             label: "Bias",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -54,7 +56,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "normalise",
+            name: Cow::Borrowed("normalise"),
             label: "Normalise",
             ty: ParamType::Bool,
             default: ParamValue::Bool(false),
@@ -178,7 +180,7 @@ mod tests {
 
     #[test]
     fn convolution_2d_9tap_has_nine_kernel_weights_bias_and_normalise() {
-        let names: Vec<&str> = Convolution2D9Tap::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = Convolution2D9Tap::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         for k in &["k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "bias", "normalise"] {
             assert!(names.contains(k), "missing param {}", k);
         }

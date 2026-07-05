@@ -6,6 +6,8 @@
 //! 4 grid neighbors; scale (.w) and rotation pass through unchanged.
 //! Border instances fall back to self for missing neighbors.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::InstanceTransform;
@@ -39,7 +41,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "grid_size",
+            name: Cow::Borrowed("grid_size"),
             label: "Grid Size",
             ty: ParamType::Int,
             default: ParamValue::Float(400.0),
@@ -47,7 +49,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "center_weight",
+            name: Cow::Borrowed("center_weight"),
             label: "Center Weight",
             ty: ParamType::Float,
             default: ParamValue::Float(0.6),
@@ -173,7 +175,7 @@ mod tests {
 
     #[test]
     fn neighbor_smooth_has_grid_and_center_weight_params() {
-        let names: Vec<&str> = NeighborSmooth::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = NeighborSmooth::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["grid_size", "center_weight"]);
     }
 

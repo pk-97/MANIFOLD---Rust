@@ -14,6 +14,8 @@
 //! (scale its `amount`/`weight`); this node emits the unit-ish direction
 //! (|dir| ≤ 1) only.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -42,7 +44,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "mode",
+            name: Cow::Borrowed("mode"),
             label: "Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -50,7 +52,7 @@ crate::primitive! {
             enum_values: &["Radial", "Linear"],
         },
         ParamDef {
-            name: "angle",
+            name: Cow::Borrowed("angle"),
             label: "Angle",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -58,7 +60,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "falloff",
+            name: Cow::Borrowed("falloff"),
             label: "Falloff",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),

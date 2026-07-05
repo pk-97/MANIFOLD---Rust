@@ -12,6 +12,7 @@
 //! a 2-input blend and an 8-input blend each compile a tight kernel with no
 //! dead taps.
 
+use std::borrow::Cow;
 use ahash::AHashMap;
 use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc};
 
@@ -35,7 +36,7 @@ const IN_PORT_NAMES: [&str; MAX_INPUTS] = [
 ];
 
 const MULTI_BLEND_OUTPUTS: [NodeOutput; 1] = [NodePort {
-    name: "out",
+    name: Cow::Borrowed("out"),
     ty: PortType::Texture2D,
     kind: PortKind::Output,
     required: false,
@@ -43,7 +44,7 @@ const MULTI_BLEND_OUTPUTS: [NodeOutput; 1] = [NodePort {
 
 const MULTI_BLEND_PARAMS: [ParamDef; 2] = [
     ParamDef {
-        name: "num_inputs",
+        name: Cow::Borrowed("num_inputs"),
         label: "Input Count",
         ty: ParamType::Int,
         default: ParamValue::Float(DEFAULT_INPUTS as f32),
@@ -51,7 +52,7 @@ const MULTI_BLEND_PARAMS: [ParamDef; 2] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "divisor",
+        name: Cow::Borrowed("divisor"),
         label: "Divisor",
         ty: ParamType::Float,
         default: ParamValue::Float(1.0),
@@ -87,7 +88,7 @@ impl MultiBlend {
         let mut ports = Vec::with_capacity(n);
         for &name in &IN_PORT_NAMES[..n] {
             ports.push(NodePort {
-                name,
+                name: std::borrow::Cow::Borrowed(name),
                 ty: PortType::Texture2D,
                 kind: PortKind::Input,
                 required: false,
@@ -282,7 +283,7 @@ mod tests {
 
     fn params_with(num_inputs: f32) -> ParamValues {
         let mut p = ParamValues::default();
-        p.insert("num_inputs", ParamValue::Float(num_inputs));
+        p.insert(std::borrow::Cow::Borrowed("num_inputs"), ParamValue::Float(num_inputs));
         p
     }
 

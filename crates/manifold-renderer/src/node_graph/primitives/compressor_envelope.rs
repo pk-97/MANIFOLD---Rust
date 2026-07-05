@@ -22,6 +22,8 @@
 //! First frame returns gain = 1.0 and seeds both envelopes to the
 //! first measured value — same first-frame behaviour as the legacy.
 
+use std::borrow::Cow;
+
 use crate::node_graph::effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, NodeRequires,
 };
@@ -41,31 +43,31 @@ impl NodeState for CompressorEnvelopeState {}
 
 const COMPRESSOR_ENVELOPE_INPUTS: [NodeInput; 5] = [
     NodePort {
-        name: "in",
+        name: Cow::Borrowed("in"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: true,
     },
     NodePort {
-        name: "ratio",
+        name: Cow::Borrowed("ratio"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: false,
     },
     NodePort {
-        name: "sensitivity",
+        name: Cow::Borrowed("sensitivity"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: false,
     },
     NodePort {
-        name: "target",
+        name: Cow::Borrowed("target"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: false,
     },
     NodePort {
-        name: "reset_trigger",
+        name: Cow::Borrowed("reset_trigger"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Input,
         required: false,
@@ -73,7 +75,7 @@ const COMPRESSOR_ENVELOPE_INPUTS: [NodeInput; 5] = [
 ];
 
 const COMPRESSOR_ENVELOPE_OUTPUTS: [NodeOutput; 1] = [NodePort {
-    name: "out",
+    name: Cow::Borrowed("out"),
     ty: PortType::Scalar(ScalarType::F32),
     kind: PortKind::Output,
     required: false,
@@ -81,7 +83,7 @@ const COMPRESSOR_ENVELOPE_OUTPUTS: [NodeOutput; 1] = [NodePort {
 
 const COMPRESSOR_ENVELOPE_PARAMS: [ParamDef; 3] = [
     ParamDef {
-        name: "ratio",
+        name: Cow::Borrowed("ratio"),
         label: "Ratio",
         ty: ParamType::Float,
         default: ParamValue::Float(0.5),
@@ -89,7 +91,7 @@ const COMPRESSOR_ENVELOPE_PARAMS: [ParamDef; 3] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "sensitivity",
+        name: Cow::Borrowed("sensitivity"),
         label: "Sensitivity",
         ty: ParamType::Float,
         default: ParamValue::Float(0.5),
@@ -97,7 +99,7 @@ const COMPRESSOR_ENVELOPE_PARAMS: [ParamDef; 3] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "target",
+        name: Cow::Borrowed("target"),
         label: "Target",
         ty: ParamType::Float,
         default: ParamValue::Float(0.5),
@@ -294,20 +296,20 @@ mod tests {
     #[test]
     fn declares_in_three_modulation_ports_reset_and_out() {
         let node = CompressorEnvelope::new();
-        let ins: Vec<&str> = node.inputs().iter().map(|p| p.name).collect();
+        let ins: Vec<&str> = node.inputs().iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(ins, vec!["in", "ratio", "sensitivity", "target", "reset_trigger"]);
         assert!(node.inputs()[0].required);
         for i in 1..5 {
             assert!(!node.inputs()[i].required);
         }
-        let outs: Vec<&str> = node.outputs().iter().map(|p| p.name).collect();
+        let outs: Vec<&str> = node.outputs().iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(outs, vec!["out"]);
     }
 
     #[test]
     fn has_ratio_sensitivity_target_params() {
         let node = CompressorEnvelope::new();
-        let names: Vec<&str> = node.parameters().iter().map(|p| p.name).collect();
+        let names: Vec<&str> = node.parameters().iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["ratio", "sensitivity", "target"]);
     }
 }

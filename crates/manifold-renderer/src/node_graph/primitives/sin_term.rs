@@ -10,6 +10,7 @@
 //! for non-linear projections where the defaults a=1, b=0, c=0 read
 //! the broadcast R channel directly.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -48,7 +49,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "a",
+            name: Cow::Borrowed("a"),
             label: "X Coefficient",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -56,7 +57,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "b",
+            name: Cow::Borrowed("b"),
             label: "Y Coefficient",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -64,7 +65,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "c",
+            name: Cow::Borrowed("c"),
             label: "Constant Offset",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -72,7 +73,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "freq",
+            name: Cow::Borrowed("freq"),
             label: "Frequency (base)",
             ty: ParamType::Float,
             default: ParamValue::Float(std::f32::consts::TAU),
@@ -80,7 +81,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "freq_scale",
+            name: Cow::Borrowed("freq_scale"),
             label: "Frequency Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -88,7 +89,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "time",
+            name: Cow::Borrowed("time"),
             label: "Time (base)",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -96,7 +97,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "time_scale",
+            name: Cow::Borrowed("time_scale"),
             label: "Time Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -221,7 +222,7 @@ mod tests {
 
     #[test]
     fn sin_term_has_seven_params() {
-        let names: Vec<&str> = SinTerm::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = SinTerm::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec!["a", "b", "c", "freq", "freq_scale", "time", "time_scale"],

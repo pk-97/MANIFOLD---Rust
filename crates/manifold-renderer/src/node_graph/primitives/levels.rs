@@ -11,6 +11,7 @@
 //! inspect intermediates; `node.levels` is what you reach for once the
 //! shape is settled.
 
+use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -47,7 +48,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "scale",
+            name: Cow::Borrowed("scale"),
             label: "Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -55,7 +56,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "offset",
+            name: Cow::Borrowed("offset"),
             label: "Offset",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -63,7 +64,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "lo",
+            name: Cow::Borrowed("lo"),
             label: "Lo",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -71,7 +72,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "hi",
+            name: Cow::Borrowed("hi"),
             label: "Hi",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -79,7 +80,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "gamma",
+            name: Cow::Borrowed("gamma"),
             label: "Gamma",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),

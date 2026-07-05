@@ -19,12 +19,13 @@
 use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use std::borrow::Cow;
 
 pub const FLUID_SIM_2D_TYPE_ID: &str = "atomic.fluid_sim_2d";
 
 const FLUID_SIM_2D_INPUTS: [NodeInput; 4] = [
     NodePort {
-        name: "source",
+        name: Cow::Borrowed("source"),
         ty: PortType::Texture2D,
         kind: PortKind::Input,
         // Optional: when wired, FluidSim acts as an effect on the source
@@ -32,13 +33,13 @@ const FLUID_SIM_2D_INPUTS: [NodeInput; 4] = [
         required: false,
     },
     NodePort {
-        name: "force_field",
+        name: Cow::Borrowed("force_field"),
         ty: PortType::Texture2D,
         kind: PortKind::Input,
         required: false,
     },
     NodePort {
-        name: "spawn_mask",
+        name: Cow::Borrowed("spawn_mask"),
         ty: PortType::Texture2D,
         kind: PortKind::Input,
         required: false,
@@ -46,7 +47,7 @@ const FLUID_SIM_2D_INPUTS: [NodeInput; 4] = [
     NodePort {
         // Scalar input: per-frame dye colour, possibly driven by audio /
         // another node's output. Falls back to the parameter when unwired.
-        name: "dye_color",
+        name: Cow::Borrowed("dye_color"),
         ty: PortType::Scalar(ScalarType::Vec3),
         kind: PortKind::Input,
         required: false,
@@ -56,25 +57,25 @@ const FLUID_SIM_2D_INPUTS: [NodeInput; 4] = [
 const FLUID_SIM_2D_OUTPUTS: [NodeOutput; 4] = [
     NodePort {
         // Default output. Most users only wire this.
-        name: "composited",
+        name: Cow::Borrowed("composited"),
         ty: PortType::Texture2D,
         kind: PortKind::Output,
         required: false,
     },
     NodePort {
-        name: "density",
+        name: Cow::Borrowed("density"),
         ty: PortType::Texture2D,
         kind: PortKind::Output,
         required: false,
     },
     NodePort {
-        name: "velocity",
+        name: Cow::Borrowed("velocity"),
         ty: PortType::Texture2D,
         kind: PortKind::Output,
         required: false,
     },
     NodePort {
-        name: "pressure",
+        name: Cow::Borrowed("pressure"),
         ty: PortType::Texture2D,
         kind: PortKind::Output,
         required: false,
@@ -83,7 +84,7 @@ const FLUID_SIM_2D_OUTPUTS: [NodeOutput; 4] = [
 
 const FLUID_SIM_2D_PARAMS: [ParamDef; 5] = [
     ParamDef {
-        name: "viscosity",
+        name: Cow::Borrowed("viscosity"),
         label: "Viscosity",
         ty: ParamType::Float,
         default: ParamValue::Float(0.0001),
@@ -91,7 +92,7 @@ const FLUID_SIM_2D_PARAMS: [ParamDef; 5] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "dissipation",
+        name: Cow::Borrowed("dissipation"),
         label: "Dissipation",
         ty: ParamType::Float,
         default: ParamValue::Float(0.99),
@@ -99,7 +100,7 @@ const FLUID_SIM_2D_PARAMS: [ParamDef; 5] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "vorticity",
+        name: Cow::Borrowed("vorticity"),
         label: "Vorticity",
         ty: ParamType::Float,
         default: ParamValue::Float(0.0),
@@ -107,7 +108,7 @@ const FLUID_SIM_2D_PARAMS: [ParamDef; 5] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "jacobi_iterations",
+        name: Cow::Borrowed("jacobi_iterations"),
         label: "Pressure Iterations",
         ty: ParamType::Int,
         default: ParamValue::Float(20.0),
@@ -116,7 +117,7 @@ const FLUID_SIM_2D_PARAMS: [ParamDef; 5] = [
     },
     ParamDef {
         // Fallback dye colour when the `dye_color` input port is unwired.
-        name: "dye_color_default",
+        name: Cow::Borrowed("dye_color_default"),
         label: "Dye Colour (default)",
         ty: ParamType::Vec3,
         default: ParamValue::Vec3([1.0, 0.5, 0.2]),

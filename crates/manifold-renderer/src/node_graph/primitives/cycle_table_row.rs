@@ -14,6 +14,8 @@
 //! Index advances via `ClipTriggerCycle::step(trigger_count, rows)`
 //! so the cycle is idempotent across same-frame retriggers.
 
+use std::borrow::Cow;
+
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -30,7 +32,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "table",
+            name: Cow::Borrowed("table"),
             label: "Table",
             ty: ParamType::Table,
             // Tables can't live in static-const ParamValue (Arc isn't
@@ -164,7 +166,7 @@ mod tests {
                 .unwrap(),
         );
         let mut params = ParamValues::default();
-        params.insert("table", ParamValue::Table(table));
+        params.insert(std::borrow::Cow::Borrowed("table"), ParamValue::Table(table));
         let cap = Primitive::array_output_capacity(&prim, "row", &params, &[]);
         assert_eq!(cap, Some(5));
     }

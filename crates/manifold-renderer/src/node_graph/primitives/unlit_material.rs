@@ -12,6 +12,8 @@
 //! CPU-only — no GPU dispatch. Industry-standard Blender / TouchDesigner
 //! shape (Blender's "Background" / TD's "Constant" MAT).
 
+use std::borrow::Cow;
+
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::material::{AlphaMode, Material, MaterialKind};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -39,7 +41,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "color_r",
+            name: Cow::Borrowed("color_r"),
             label: "Colour R",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -47,7 +49,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "color_g",
+            name: Cow::Borrowed("color_g"),
             label: "Colour G",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -55,7 +57,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "color_b",
+            name: Cow::Borrowed("color_b"),
             label: "Colour B",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -63,7 +65,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "color_a",
+            name: Cow::Borrowed("color_a"),
             label: "Opacity",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -71,7 +73,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "emission_r",
+            name: Cow::Borrowed("emission_r"),
             label: "Emission R",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -79,7 +81,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "emission_g",
+            name: Cow::Borrowed("emission_g"),
             label: "Emission G",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -87,7 +89,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "emission_b",
+            name: Cow::Borrowed("emission_b"),
             label: "Emission B",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -95,7 +97,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "emission_intensity",
+            name: Cow::Borrowed("emission_intensity"),
             label: "Emission Intensity",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -103,7 +105,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "alpha_mode",
+            name: Cow::Borrowed("alpha_mode"),
             label: "Alpha Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0), // Opaque
@@ -111,7 +113,7 @@ crate::primitive! {
             enum_values: ALPHA_MODES,
         },
         ParamDef {
-            name: "alpha_cutoff",
+            name: Cow::Borrowed("alpha_cutoff"),
             label: "Alpha Cutoff",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -206,14 +208,14 @@ mod tests {
         let mut backend = MockBackend::new();
         let out_slot = backend.acquire(ResourceId(0), PortType::Material, None, (0, 0));
         let mut params = ParamValues::default();
-        params.insert("color_r", ParamValue::Float(0.5));
-        params.insert("color_g", ParamValue::Float(0.6));
-        params.insert("color_b", ParamValue::Float(0.7));
-        params.insert("color_a", ParamValue::Float(1.0));
-        params.insert("emission_r", ParamValue::Float(0.5));
-        params.insert("emission_g", ParamValue::Float(0.4));
-        params.insert("emission_b", ParamValue::Float(0.3));
-        params.insert("emission_intensity", ParamValue::Float(2.0));
+        params.insert(std::borrow::Cow::Borrowed("color_r"), ParamValue::Float(0.5));
+        params.insert(std::borrow::Cow::Borrowed("color_g"), ParamValue::Float(0.6));
+        params.insert(std::borrow::Cow::Borrowed("color_b"), ParamValue::Float(0.7));
+        params.insert(std::borrow::Cow::Borrowed("color_a"), ParamValue::Float(1.0));
+        params.insert(std::borrow::Cow::Borrowed("emission_r"), ParamValue::Float(0.5));
+        params.insert(std::borrow::Cow::Borrowed("emission_g"), ParamValue::Float(0.4));
+        params.insert(std::borrow::Cow::Borrowed("emission_b"), ParamValue::Float(0.3));
+        params.insert(std::borrow::Cow::Borrowed("emission_intensity"), ParamValue::Float(2.0));
 
         let mut prim = UnlitMaterial::new();
         let inputs_bindings: &[(&'static str, Slot)] = &[];

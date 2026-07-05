@@ -29,6 +29,7 @@
 use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
 use crate::node_graph::parameters::{ParamDef, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use std::borrow::Cow;
 
 /// Stable type ID for [`Source`].
 pub const SOURCE_TYPE_ID: &str = "system.source";
@@ -41,7 +42,7 @@ pub const GENERATOR_INPUT_TYPE_ID: &str = "system.generator_input";
 
 const GENERATOR_INPUT_OUTPUTS: [NodeOutput; 9] = [
     NodePort {
-        name: "time",
+        name: Cow::Borrowed("time"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Output,
         required: false,
@@ -54,7 +55,7 @@ const GENERATOR_INPUT_OUTPUTS: [NodeOutput; 9] = [
     // chain bit-for-bit. The buffer-fusion installer wires member `dt_scaled`
     // fields here.
     NodePort {
-        name: "frame_delta",
+        name: Cow::Borrowed("frame_delta"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Output,
         required: false,
@@ -63,43 +64,43 @@ const GENERATOR_INPUT_OUTPUTS: [NodeOutput; 9] = [
     // Drives per-frame hash reseeding (anti-clump, diffusion). Sourced from the
     // frame clock for the same fused/unfused parity reason as `frame_delta`.
     NodePort {
-        name: "frame_count",
+        name: Cow::Borrowed("frame_count"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Output,
         required: false,
     },
     NodePort {
-        name: "beat",
+        name: Cow::Borrowed("beat"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Output,
         required: false,
     },
     NodePort {
-        name: "aspect",
+        name: Cow::Borrowed("aspect"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Output,
         required: false,
     },
     NodePort {
-        name: "trigger_count",
+        name: Cow::Borrowed("trigger_count"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Output,
         required: false,
     },
     NodePort {
-        name: "anim_progress",
+        name: Cow::Borrowed("anim_progress"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Output,
         required: false,
     },
     NodePort {
-        name: "output_width",
+        name: Cow::Borrowed("output_width"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Output,
         required: false,
     },
     NodePort {
-        name: "output_height",
+        name: Cow::Borrowed("output_height"),
         ty: PortType::Scalar(ScalarType::F32),
         kind: PortKind::Output,
         required: false,
@@ -107,14 +108,14 @@ const GENERATOR_INPUT_OUTPUTS: [NodeOutput; 9] = [
 ];
 
 const SOURCE_OUTPUTS: [NodeOutput; 1] = [NodePort {
-    name: "out",
+    name: Cow::Borrowed("out"),
     ty: PortType::Texture2D,
     kind: PortKind::Output,
     required: false,
 }];
 
 const FINAL_OUTPUT_INPUTS: [NodeInput; 1] = [NodePort {
-    name: "in",
+    name: Cow::Borrowed("in"),
     ty: PortType::Texture2D,
     kind: PortKind::Input,
     required: true,
@@ -220,7 +221,7 @@ inventory::submit! {
 
 const GENERATOR_INPUT_PARAMS: [ParamDef; 7] = [
     ParamDef {
-        name: "time",
+        name: Cow::Borrowed("time"),
         label: "Time (s)",
         ty: crate::node_graph::parameters::ParamType::Float,
         default: ParamValue::Float(0.0),
@@ -228,7 +229,7 @@ const GENERATOR_INPUT_PARAMS: [ParamDef; 7] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "beat",
+        name: Cow::Borrowed("beat"),
         label: "Beat",
         ty: crate::node_graph::parameters::ParamType::Float,
         default: ParamValue::Float(0.0),
@@ -236,7 +237,7 @@ const GENERATOR_INPUT_PARAMS: [ParamDef; 7] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "aspect",
+        name: Cow::Borrowed("aspect"),
         label: "Aspect Ratio",
         ty: crate::node_graph::parameters::ParamType::Float,
         default: ParamValue::Float(1.0),
@@ -244,7 +245,7 @@ const GENERATOR_INPUT_PARAMS: [ParamDef; 7] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "trigger_count",
+        name: Cow::Borrowed("trigger_count"),
         label: "Trigger Count",
         ty: crate::node_graph::parameters::ParamType::Float,
         default: ParamValue::Float(0.0),
@@ -252,7 +253,7 @@ const GENERATOR_INPUT_PARAMS: [ParamDef; 7] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "anim_progress",
+        name: Cow::Borrowed("anim_progress"),
         label: "Anim Progress",
         ty: crate::node_graph::parameters::ParamType::Float,
         default: ParamValue::Float(0.0),
@@ -260,7 +261,7 @@ const GENERATOR_INPUT_PARAMS: [ParamDef; 7] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "output_width",
+        name: Cow::Borrowed("output_width"),
         label: "Output Width",
         ty: crate::node_graph::parameters::ParamType::Float,
         default: ParamValue::Float(1920.0),
@@ -268,7 +269,7 @@ const GENERATOR_INPUT_PARAMS: [ParamDef; 7] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "output_height",
+        name: Cow::Borrowed("output_height"),
         label: "Output Height",
         ty: crate::node_graph::parameters::ParamType::Float,
         default: ParamValue::Float(1080.0),
@@ -441,7 +442,7 @@ mod tests {
         assert_eq!(g.inputs().len(), 0);
         let outs = g.outputs();
         assert_eq!(outs.len(), 9);
-        let names: Vec<&str> = outs.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = outs.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec![
@@ -468,8 +469,8 @@ mod tests {
     #[test]
     fn frame_delta_and_frame_count_are_clock_sourced_not_params() {
         let g = GeneratorInput::new();
-        let out_names: Vec<&str> = g.outputs().iter().map(|p| p.name).collect();
-        let param_names: Vec<&str> = g.parameters().iter().map(|p| p.name).collect();
+        let out_names: Vec<&str> = g.outputs().iter().map(|p| p.name.as_ref()).collect();
+        let param_names: Vec<&str> = g.parameters().iter().map(|p| p.name.as_ref()).collect();
         assert!(out_names.contains(&"frame_delta"));
         assert!(out_names.contains(&"frame_count"));
         assert!(!param_names.contains(&"frame_delta"));
@@ -493,7 +494,7 @@ mod tests {
     #[test]
     fn generator_input_declares_seven_float_params() {
         let g = GeneratorInput::new();
-        let names: Vec<&str> = g.parameters().iter().map(|p| p.name).collect();
+        let names: Vec<&str> = g.parameters().iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec![

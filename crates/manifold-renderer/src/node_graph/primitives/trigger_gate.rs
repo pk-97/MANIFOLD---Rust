@@ -13,6 +13,8 @@
 //! number of consumers downstream — `cycle_table_row`,
 //! `scalar_array_accumulator`, `nested_cubes_geometry`, etc.
 
+use std::borrow::Cow;
+
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -30,7 +32,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "enable",
+            name: Cow::Borrowed("enable"),
             label: "Enable",
             ty: ParamType::Bool,
             default: ParamValue::Bool(true),

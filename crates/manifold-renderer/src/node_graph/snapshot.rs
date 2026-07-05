@@ -421,7 +421,7 @@ impl GraphSnapshot {
                         // graphs, but harmless if it does).
                         let current = inst
                             .params
-                            .get(pd.name)
+                            .get(pd.name.as_ref())
                             .cloned()
                             .unwrap_or_else(|| pd.default.clone());
                         let summary = match &current {
@@ -456,7 +456,7 @@ impl GraphSnapshot {
                             } else {
                                 None
                             },
-                            exposed: inst.exposed_params.contains(pd.name),
+                            exposed: inst.exposed_params.contains(pd.name.as_ref()),
                             summary,
                             vec_value: param_vec_value(&current),
                             string_value,
@@ -673,12 +673,16 @@ fn snapshot_level(
             // rebuild their port list, then read the resolved ports.
             let mut params: ParamValues = ahash::AHashMap::default();
             for pd in boxed.parameters() {
-                params.insert(pd.name, pd.default.clone());
+                params.insert(pd.name.clone(), pd.default.clone());
             }
-            let static_names: Vec<&'static str> = boxed.parameters().iter().map(|p| p.name).collect();
+            let static_names: Vec<&'static str> = boxed
+                .parameters()
+                .iter()
+                .map(|p| crate::node_graph::effect_node::intern_name(&p.name))
+                .collect();
             for (k, v) in &dn.params {
                 if let Some(&name) = static_names.iter().find(|n| **n == k.as_str()) {
-                    params.insert(name, v.clone().into());
+                    params.insert(std::borrow::Cow::Borrowed(name), v.clone().into());
                 }
             }
             boxed.reconfigure(&params);
@@ -750,7 +754,7 @@ fn node_snapshot_from_constructed(
         .parameters()
         .iter()
         .map(|pd| {
-            let current = params.get(pd.name).cloned().unwrap_or_else(|| pd.default.clone());
+            let current = params.get(pd.name.as_ref()).cloned().unwrap_or_else(|| pd.default.clone());
             let summary = match &current {
                 ParamValue::Table(t) => Some(format!("{}×{}", t.row_count(), t.col_count())),
                 ParamValue::String(s) => Some(string_summary(s)),
@@ -776,7 +780,7 @@ fn node_snapshot_from_constructed(
                 } else {
                     None
                 },
-                exposed: exposed.contains(pd.name),
+                exposed: exposed.contains(pd.name.as_ref()),
                 summary,
                 vec_value: param_vec_value(&current),
                 string_value,
@@ -923,6 +927,8 @@ pub(crate) fn param_default_to_f32(value: &ParamValue) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use super::*;
     use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
     use crate::node_graph::parameters::ParamDef;
@@ -1047,7 +1053,7 @@ mod tests {
 
     fn input(name: &'static str) -> NodeInput {
         NodePort {
-            name,
+            name: Cow::Borrowed(name),
             ty: PortType::Texture2D,
             kind: PortKind::Input,
             required: true,
@@ -1055,7 +1061,7 @@ mod tests {
     }
     fn output(name: &'static str) -> NodeOutput {
         NodePort {
-            name,
+            name: Cow::Borrowed(name),
             ty: PortType::Texture2D,
             kind: PortKind::Output,
             required: false,
@@ -1131,7 +1137,7 @@ mod tests {
                 outputs: vec![output("out")],
                 params: vec![
                     ParamDef {
-                        name: "translate",
+                        name: Cow::Borrowed("translate"),
                         label: "Translate",
                         ty: ParamType::Float,
                         default: ParamValue::Float(0.0),
@@ -1139,7 +1145,7 @@ mod tests {
                         enum_values: &[],
                     },
                     ParamDef {
-                        name: "mode",
+                        name: Cow::Borrowed("mode"),
                         label: "Mode",
                         ty: ParamType::Enum,
                         default: ParamValue::Enum(0),

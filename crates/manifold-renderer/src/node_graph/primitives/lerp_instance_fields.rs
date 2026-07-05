@@ -13,6 +13,7 @@
 //! selector). For the canonical DigitalPlants morph (cyl ↔ tor), `t
 //! = morph` is wired from the outer card.
 
+use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::InstanceTransform;
@@ -45,7 +46,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "t",
+            name: Cow::Borrowed("t"),
             label: "Mix",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),

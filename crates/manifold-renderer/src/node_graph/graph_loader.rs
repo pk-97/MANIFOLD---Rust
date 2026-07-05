@@ -394,18 +394,18 @@ pub fn instantiate_def(
         // the declared defaults, override with the doc's values, reconfigure;
         // then the snapshot reflects the true surface. Mirrors snapshot.rs.
         {
-            let seed: Vec<(&'static str, ParamValue)> = boxed
+            let seed: Vec<(std::borrow::Cow<'static, str>, ParamValue)> = boxed
                 .parameters()
                 .iter()
-                .map(|p| (p.name, p.default.clone()))
+                .map(|p| (p.name.clone(), p.default.clone()))
                 .collect();
             let mut reconfig_params: ParamValues = ahash::AHashMap::default();
             for (name, default) in &seed {
-                reconfig_params.insert(name, default.clone());
+                reconfig_params.insert(name.clone(), default.clone());
             }
             for (key, value) in &node_doc.params {
                 if let Some((name, _)) = seed.iter().find(|(n, _)| *n == key.as_str()) {
-                    reconfig_params.insert(name, value.clone().into());
+                    reconfig_params.insert(name.clone(), value.clone().into());
                 }
             }
             boxed.reconfigure(&reconfig_params);
@@ -417,7 +417,7 @@ pub fn instantiate_def(
         let param_defs: Vec<(&'static str, ParamType)> = boxed
             .parameters()
             .iter()
-            .map(|p| (p.name, p.ty))
+            .map(|p| (crate::node_graph::effect_node::intern_name(&p.name), p.ty))
             .collect();
 
         let runtime_id = match handle_scope {
@@ -870,7 +870,7 @@ fn resolve_input_port(graph: &Graph, node: NodeInstanceId, name: &str) -> Option
         .inputs()
         .iter()
         .find(|p| p.name == name)
-        .map(|p| p.name)
+        .map(|p| crate::node_graph::effect_node::intern_name(&p.name))
 }
 
 fn resolve_output_port(graph: &Graph, node: NodeInstanceId, name: &str) -> Option<&'static str> {
@@ -880,7 +880,7 @@ fn resolve_output_port(graph: &Graph, node: NodeInstanceId, name: &str) -> Optio
         .outputs()
         .iter()
         .find(|p| p.name == name)
-        .map(|p| p.name)
+        .map(|p| crate::node_graph::effect_node::intern_name(&p.name))
 }
 
 // ---------------------------------------------------------------------------

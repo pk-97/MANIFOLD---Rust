@@ -17,6 +17,7 @@
 //! canvas. Wire `node.texture_size.aspect → math(Divide) →
 //! radius_x` if you want a true circle regardless of canvas shape.
 
+use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -53,7 +54,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "cx",
+            name: Cow::Borrowed("cx"),
             label: "Center X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -61,7 +62,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "cy",
+            name: Cow::Borrowed("cy"),
             label: "Center Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -69,7 +70,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "radius_x",
+            name: Cow::Borrowed("radius_x"),
             label: "Radius X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.25),
@@ -77,7 +78,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "radius_y",
+            name: Cow::Borrowed("radius_y"),
             label: "Radius Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.25),
@@ -85,7 +86,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "rotation",
+            name: Cow::Borrowed("rotation"),
             label: "Rotation",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
@@ -93,7 +94,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "softness",
+            name: Cow::Borrowed("softness"),
             label: "Softness",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -181,7 +182,7 @@ mod tests {
         assert_eq!(EllipseMask::TYPE_ID, "node.circle_mask");
         let ins = EllipseMask::INPUTS;
         assert_eq!(ins.len(), 6);
-        let names: Vec<&str> = ins.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = ins.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec!["cx", "cy", "radius_x", "radius_y", "rotation", "softness"]
@@ -197,7 +198,7 @@ mod tests {
 
     #[test]
     fn ellipse_mask_has_all_six_params() {
-        let names: Vec<&str> = EllipseMask::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = EllipseMask::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec!["cx", "cy", "radius_x", "radius_y", "rotation", "softness"]

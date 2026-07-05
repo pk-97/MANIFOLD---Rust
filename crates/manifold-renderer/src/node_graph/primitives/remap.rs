@@ -9,6 +9,8 @@
 //! `coordinate-math → remap → blend` graph instead of a bespoke
 //! single-effect shader. `wrap` sets the out-of-[0,1] sampling policy.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -40,7 +42,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "wrap",
+            name: Cow::Borrowed("wrap"),
             label: "Wrap",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -48,7 +50,7 @@ crate::primitive! {
             enum_values: REMAP_WRAP_MODES,
         },
         ParamDef {
-            name: "mode",
+            name: Cow::Borrowed("mode"),
             label: "Field Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),

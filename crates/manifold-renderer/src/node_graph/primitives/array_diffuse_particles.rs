@@ -21,6 +21,7 @@ use crate::generators::compute_common::Particle;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use std::borrow::Cow;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`diffusion`
 /// f32, `active_count` Int → i32), then the derived `frame_count` (u32, an exact
@@ -49,7 +50,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "diffusion",
+            name: Cow::Borrowed("diffusion"),
             label: "Diffusion",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -57,7 +58,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "active_count",
+            name: Cow::Borrowed("active_count"),
             label: "Active Count",
             ty: ParamType::Int,
             default: ParamValue::Float(500_000.0),

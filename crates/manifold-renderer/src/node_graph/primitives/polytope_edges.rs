@@ -9,6 +9,8 @@
 //! (`node.draw_lines`'s `build_instances_from_edges`) to consume it
 //! same-frame without a GPU→CPU fence.
 
+use std::borrow::Cow;
+
 use crate::generators::mesh_common::{
     EdgePair, PLATONIC_MAX_EDGES, PLATONIC_SHAPES, platonic_edges,
 };
@@ -32,7 +34,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "shape",
+            name: Cow::Borrowed("shape"),
             label: "Shape",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),

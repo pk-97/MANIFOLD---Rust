@@ -19,6 +19,8 @@
 //! one adds to the force buffer so the kick is integrated through
 //! `speed * dt` by `node.move_particles_3d`.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::generators::compute_common::Particle;
@@ -54,7 +56,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "diffusion",
+            name: Cow::Borrowed("diffusion"),
             label: "Diffusion",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0166),
@@ -62,7 +64,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "active_count",
+            name: Cow::Borrowed("active_count"),
             label: "Active Count",
             ty: ParamType::Int,
             default: ParamValue::Float(100_000.0),
@@ -221,7 +223,7 @@ mod tests {
         );
         let names: Vec<&str> = DiffuseForce3DAtParticles::INPUTS
             .iter()
-            .map(|p| p.name)
+            .map(|p| p.name.as_ref())
             .collect();
         assert_eq!(
             names,

@@ -22,7 +22,7 @@
 
 use ahash::AHashMap;
 
-use crate::node_graph::effect_node::{NodeInstanceId, NodeRequires, NodeWire};
+use crate::node_graph::effect_node::{intern_name, NodeInstanceId, NodeRequires, NodeWire};
 use crate::node_graph::graph::Graph;
 use crate::node_graph::ports::PortType;
 use crate::node_graph::validation::{GraphError, topological_sort, validate};
@@ -42,7 +42,9 @@ pub struct ExecutionStep {
 
     /// `(input_port_name, resource_id)` for every wired input port. Optional
     /// inputs that aren't wired are omitted. Order follows the node's
-    /// declared input ports.
+    /// declared input ports. `&'static str` (interned from the port's
+    /// `Cow` name via `intern_name` at plan-build) so the per-frame executor
+    /// reads names with zero allocation — Peter's Option-B call, 2026-07-05.
     pub inputs: Vec<(&'static str, ResourceId)>,
 
     /// `(output_port_name, resource_id)` for every output port. Order follows
@@ -290,10 +292,13 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
 
     // Index wires by their target (input) port for O(1) lookup during
     // input-binding construction.
-    let mut wire_by_target: AHashMap<(NodeInstanceId, &'static str), &NodeWire> =
+    // Keyed by `Cow<'static, str>` port name so lookups by a variadic node's
+    // owned port name (`mesh_37`) and by a wire's `&'static` name share one
+    // key type. Wire names come in as `&'static str` → `Cow::Borrowed` (free).
+    let mut wire_by_target: AHashMap<(NodeInstanceId, std::borrow::Cow<'static, str>), &NodeWire> =
         AHashMap::default();
     for w in graph.wires() {
-        wire_by_target.insert(w.to, w);
+        wire_by_target.insert((w.to.0, std::borrow::Cow::Borrowed(w.to.1)), w);
     }
 
     // Set of (node, output_port) pairs that have at least one downstream
@@ -303,10 +308,10 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     // (e.g. `render_3d_mesh`'s G-buffer attachments) only pay their cost
     // when actually wired. Primitive `run()` code that handles `texture_2d`
     // returning None for unused outputs gets the skip for free.
-    let mut consumed_outputs: ahash::AHashSet<(NodeInstanceId, &'static str)> =
+    let mut consumed_outputs: ahash::AHashSet<(NodeInstanceId, std::borrow::Cow<'static, str>)> =
         ahash::AHashSet::default();
     for w in graph.wires() {
-        consumed_outputs.insert(w.from);
+        consumed_outputs.insert((w.from.0, std::borrow::Cow::Borrowed(w.from.1)));
     }
 
     // First pass: assign a fresh ResourceId to every output port of every
@@ -321,7 +326,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     // the producer means "use the default policy" — max of texture
     // input dims, or canvas (left as `None` here, resolved by the
     // executor at acquire-time against the live backend's canvas).
-    let mut output_resources: AHashMap<(NodeInstanceId, &'static str), ResourceId> =
+    let mut output_resources: AHashMap<(NodeInstanceId, std::borrow::Cow<'static, str>), ResourceId> =
         AHashMap::default();
     let mut resource_types: Vec<PortType> = Vec::new();
     let mut resource_formats: Vec<Option<manifold_gpu::GpuTextureFormat>> = Vec::new();
@@ -331,10 +336,6 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     // see the field doc on `ExecutionPlan::resource_canvas_scales`.
     // Non-Texture2D resources always get `None`.
     let mut resource_canvas_scales: Vec<Option<(u32, u32)>> = Vec::new();
-    // Scratch reused across nodes for the `output_dims` call's
-    // `input_dims` argument. Pre-frame-time allocation only; the
-    // executor's hot path doesn't see this.
-    let mut input_dims_scratch: Vec<(&'static str, (u32, u32))> = Vec::new();
     for &node_id in &order {
         let inst = graph
             .get_node(node_id)
@@ -353,7 +354,10 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         // res while feedback's state was canvas, so the per-frame
         // blit faulted with "source extent out of bounds" and state
         // never updated.
-        input_dims_scratch.clear();
+        // Fresh per node so the `&str` names can borrow this node's ports
+        // (port names are `Cow`, not `&'static`, since variadic nodes format
+        // them). Plan-build time only — the executor's hot path never sees it.
+        let mut input_dims_scratch: Vec<(&str, (u32, u32))> = Vec::new();
         // Per-input categorization, mutually exclusive:
         //   - input_dims_scratch: input has a concrete (w, h)
         //   - input_canvas_scales: input has a canvas-relative scale
@@ -377,10 +381,12 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             ) {
                 continue;
             }
-            let Some(wire) = wire_by_target.get(&(node_id, input_port.name)) else {
+            let Some(wire) = wire_by_target.get(&(node_id, input_port.name.clone())) else {
                 continue; // optional unwired input doesn't count
             };
-            let Some(&src_res) = output_resources.get(&wire.from) else {
+            let Some(&src_res) =
+                output_resources.get(&(wire.from.0, std::borrow::Cow::Borrowed(wire.from.1)))
+            else {
                 // Producer hasn't been processed yet — state-capture
                 // back-edge. Its dim will be resolved when the writer
                 // is visited later in topo; for the purposes of THIS
@@ -391,7 +397,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             let dims = resource_dims.get(src_res.0 as usize).copied().flatten();
             let scale = resource_canvas_scales.get(src_res.0 as usize).copied().flatten();
             match (dims, scale) {
-                (Some(d), _) => input_dims_scratch.push((input_port.name, d)),
+                (Some(d), _) => input_dims_scratch.push((input_port.name.as_ref(), d)),
                 (None, Some(s)) => input_canvas_scales.push(s),
                 (None, None) => any_canvas_input = true,
             }
@@ -405,18 +411,18 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             // returns None — gated passes inside the primitive's
             // `run()` are skipped naturally. This is the source-of-truth
             // for "don't pay for what nobody reads."
-            if !consumed_outputs.contains(&(node_id, output_port.name)) {
+            if !consumed_outputs.contains(&(node_id, output_port.name.clone())) {
                 continue;
             }
             let id = ResourceId(resource_types.len() as u32);
-            output_resources.insert((node_id, output_port.name), id);
+            output_resources.insert((node_id, output_port.name.clone()), id);
             resource_types.push(output_port.ty);
             // Format declaration is only meaningful for Texture2D
             // outputs; other port types ignore it. Query the producer
             // even for non-textures so the parallel arrays stay
             // aligned — the runtime normalizes non-texture formats to
             // `None` when constructing the pool key.
-            resource_formats.push(inst.node.output_format(output_port.name));
+            resource_formats.push(inst.node.output_format(output_port.name.as_ref()));
 
             // Dims: only meaningful for Texture2D outputs. Query the
             // producer first; if it has no opinion, apply the default
@@ -432,7 +438,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
                 // scalar input instead. Mostly only downsample-style
                 // primitives care, and they only need INPUT dims.
                 inst.node
-                    .output_dims(output_port.name, (0, 0), &input_dims_scratch, &inst.params)
+                    .output_dims(output_port.name.as_ref(), (0, 0), &input_dims_scratch, &inst.params)
                     .or_else(|| {
                         if any_canvas_input {
                             // Propagate canvas: any None input means
@@ -473,7 +479,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
                 && dims.is_none()
             {
                 inst.node
-                    .output_canvas_scale(output_port.name, &inst.params)
+                    .output_canvas_scale(output_port.name.as_ref(), &inst.params)
                     .or_else(|| {
                         // Only propagate when ALL wired inputs are
                         // canvas-scaled (none canvas-default, none
@@ -545,12 +551,12 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
 
         let mut step_inputs = Vec::new();
         for input_port in inst.node.inputs() {
-            if let Some(wire) = wire_by_target.get(&(node_id, input_port.name)) {
+            if let Some(wire) = wire_by_target.get(&(node_id, input_port.name.clone())) {
                 let res_id = *output_resources
-                    .get(&wire.from)
+                    .get(&(wire.from.0, std::borrow::Cow::Borrowed(wire.from.1)))
                     .expect("connect() guarantees the wire's source has a resource");
-                step_inputs.push((input_port.name, res_id));
-                if state_capture_ports.contains(&input_port.name) {
+                step_inputs.push((intern_name(&input_port.name), res_id));
+                if state_capture_ports.contains(&input_port.name.as_ref()) {
                     if persistent_seen.insert(res_id) {
                         persistent.push(res_id);
                     }
@@ -569,19 +575,19 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             // render passes / compute dispatches when a multi-output
             // primitive's optional outputs aren't wired (G-buffer outputs
             // on `render_3d_mesh` for shaded-only consumers, e.g.).
-            if !consumed_outputs.contains(&(node_id, output_port.name)) {
+            if !consumed_outputs.contains(&(node_id, output_port.name.clone())) {
                 continue;
             }
             let res_id = *output_resources
-                .get(&(node_id, output_port.name))
+                .get(&(node_id, output_port.name.clone()))
                 .expect("output resource was assigned in the first pass");
-            step_outputs.push((output_port.name, res_id));
+            step_outputs.push((intern_name(&output_port.name), res_id));
             // A node-declared persistent output (feedback's `out` — the
             // emit half of the zero-copy ping-pong) joins the persistent
             // set: pre-acquired before the step loop, never pool-released,
             // its texture survives across frames so a late-capture swap
             // with the back-edge slot carries state with no copies.
-            if inst.node.persistent_output_ports().contains(&output_port.name)
+            if inst.node.persistent_output_ports().contains(&output_port.name.as_ref())
                 && persistent_seen.insert(res_id)
             {
                 persistent.push(res_id);
@@ -630,7 +636,8 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         // extension — the planner can't know which `in_N` the selector
         // picks at runtime.
         if let Some(out_port) = inst.node.variadic_skip_passthrough_out() {
-            let Some(&r_out) = output_resources.get(&(node_id, out_port)) else {
+            let Some(&r_out) = output_resources.get(&(node_id, std::borrow::Cow::Borrowed(out_port)))
+            else {
                 continue;
             };
             let r_out_last = *last_reader.get(&r_out).unwrap_or(&step_idx);
@@ -639,8 +646,12 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
                     continue;
                 }
                 let r_in = wire_by_target
-                    .get(&(node_id, input.name))
-                    .and_then(|w| output_resources.get(&w.from).copied());
+                    .get(&(node_id, input.name.clone()))
+                    .and_then(|w| {
+                        output_resources
+                            .get(&(w.from.0, std::borrow::Cow::Borrowed(w.from.1)))
+                            .copied()
+                    });
                 let Some(r_in) = r_in else {
                     continue;
                 };
@@ -659,13 +670,19 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         // port is unwired (optional), skip_passthrough can't fire
         // at runtime either, so no extension needed.
         let r_in = wire_by_target
-            .get(&(node_id, in_port))
-            .and_then(|w| output_resources.get(&w.from).copied());
+            .get(&(node_id, std::borrow::Cow::Borrowed(in_port)))
+            .and_then(|w| {
+                output_resources
+                    .get(&(w.from.0, std::borrow::Cow::Borrowed(w.from.1)))
+                    .copied()
+            });
         let Some(r_in) = r_in else {
             continue;
         };
         // R(out_port): the resource N produces on the output port.
-        let Some(&r_out) = output_resources.get(&(node_id, out_port)) else {
+        let Some(&r_out) =
+            output_resources.get(&(node_id, std::borrow::Cow::Borrowed(out_port)))
+        else {
             continue;
         };
         // Last reader of R(out) — the deepest step that consumes it.
@@ -804,7 +821,7 @@ mod tests {
 
     fn input(name: &'static str, ty: PortType, required: bool) -> NodeInput {
         NodePort {
-            name,
+            name: std::borrow::Cow::Borrowed(name),
             ty,
             kind: PortKind::Input,
             required,
@@ -813,7 +830,7 @@ mod tests {
 
     fn output(name: &'static str, ty: PortType) -> NodeOutput {
         NodePort {
-            name,
+            name: std::borrow::Cow::Borrowed(name),
             ty,
             kind: PortKind::Output,
             required: false,
@@ -1149,7 +1166,7 @@ mod tests {
             }
             fn outputs(&self) -> &[NodePort] {
                 static OUTPUTS: [NodePort; 1] = [NodePort {
-                    name: "out",
+                    name: std::borrow::Cow::Borrowed("out"),
                     ty: PortType::Texture2D,
                     kind: PortKind::Output,
                     required: false,
@@ -1248,7 +1265,7 @@ mod tests {
             fn inputs(&self) -> &[NodePort] { &[] }
             fn outputs(&self) -> &[NodePort] {
                 static OUTPUTS: [NodePort; 1] = [NodePort {
-                    name: "out",
+                    name: std::borrow::Cow::Borrowed("out"),
                     ty: PortType::Texture2D,
                     kind: PortKind::Output,
                     required: false,
@@ -1328,7 +1345,7 @@ mod tests {
             fn inputs(&self) -> &[NodePort] { &[] }
             fn outputs(&self) -> &[NodePort] {
                 static OUTPUTS: [NodePort; 1] = [NodePort {
-                    name: "out",
+                    name: std::borrow::Cow::Borrowed("out"),
                     ty: PortType::Texture2D,
                     kind: PortKind::Output,
                     required: false,

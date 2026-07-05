@@ -12,6 +12,8 @@
 //! SDR-only. For multi-curve / HDR-aware tone mapping (ACES, AgX,
 //! Khronos PBR, PQ / EDR output), use `node.tone_map` instead.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -41,7 +43,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "intensity",
+            name: Cow::Borrowed("intensity"),
             label: "Intensity",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -49,7 +51,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "contrast",
+            name: Cow::Borrowed("contrast"),
             label: "Contrast",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -57,7 +59,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "curve",
+            name: Cow::Borrowed("curve"),
             label: "Curve",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -180,7 +182,10 @@ mod tests {
 
     #[test]
     fn reinhard_has_intensity_and_contrast_params() {
-        let names: Vec<&str> = ReinhardToneMap::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = ReinhardToneMap::PARAMS
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect();
         assert_eq!(names, vec!["intensity", "contrast", "curve"]);
     }
 

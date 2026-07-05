@@ -178,7 +178,7 @@ fn port_row(p: &crate::node_graph::ports::NodePort) -> PortRow {
 
 fn param_row(p: &crate::node_graph::parameters::ParamDef) -> ParamRow {
     ParamRow {
-        name: p.name,
+        name: crate::node_graph::effect_node::intern_name(&p.name),
         label: p.label,
         ty: p.ty,
         default: param_default_str(&p.default),

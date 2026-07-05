@@ -15,6 +15,8 @@
 //! primitive and slices out the channels it wants via `field_combine`,
 //! `distance_to_point`, etc.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -50,7 +52,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "cx",
+            name: Cow::Borrowed("cx"),
             label: "Center X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -58,7 +60,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "cy",
+            name: Cow::Borrowed("cy"),
             label: "Center Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -66,7 +68,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "scale_x",
+            name: Cow::Borrowed("scale_x"),
             label: "Scale X",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -74,7 +76,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "scale_y",
+            name: Cow::Borrowed("scale_y"),
             label: "Scale Y",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -156,7 +158,7 @@ mod tests {
         assert_eq!(CenteredUv::TYPE_ID, "node.centered_uv");
         let ins = CenteredUv::INPUTS;
         assert_eq!(ins.len(), 4);
-        let names: Vec<&str> = ins.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = ins.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["cx", "cy", "scale_x", "scale_y"]);
         for port in ins {
             assert!(!port.required);
@@ -168,7 +170,7 @@ mod tests {
 
     #[test]
     fn centered_uv_has_cx_cy_scale_x_scale_y_params() {
-        let names: Vec<&str> = CenteredUv::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = CenteredUv::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(names, vec!["cx", "cy", "scale_x", "scale_y"]);
     }
 

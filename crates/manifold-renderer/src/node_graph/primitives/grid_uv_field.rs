@@ -11,6 +11,8 @@
 //! build time from the `grid_size` param. The dispatch is a cheap
 //! write-only pass (8 bytes × N² per frame); no state is carried.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -38,7 +40,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "grid_size",
+            name: Cow::Borrowed("grid_size"),
             label: "Grid Size",
             ty: ParamType::Int,
             default: ParamValue::Float(400.0),
@@ -151,12 +153,12 @@ mod tests {
         use crate::node_graph::effect_node::ParamValues;
         let prim = GridUvField::new();
         let mut params = ParamValues::default();
-        params.insert("grid_size", ParamValue::Float(400.0));
+        params.insert(std::borrow::Cow::Borrowed("grid_size"), ParamValue::Float(400.0));
         assert_eq!(
             Primitive::array_output_capacity(&prim, "uv", &params, &[]),
             Some(160_000),
         );
-        params.insert("grid_size", ParamValue::Float(64.0));
+        params.insert(std::borrow::Cow::Borrowed("grid_size"), ParamValue::Float(64.0));
         assert_eq!(
             Primitive::array_output_capacity(&prim, "uv", &params, &[]),
             Some(4_096),

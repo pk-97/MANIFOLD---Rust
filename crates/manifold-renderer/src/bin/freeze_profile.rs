@@ -1142,8 +1142,9 @@ fn profile_synthetic_pointwise(device: &GpuDevice) {
 
     // Port names from a throwaway probe (avoid hardcoding "in"/"out").
     let probe = Gain::new();
-    let in_port = probe.inputs()[0].name;
-    let out_port = probe.outputs()[0].name;
+    let in_port: &'static str = manifold_renderer::node_graph::intern_name(&probe.inputs()[0].name);
+    let out_port: &'static str =
+        manifold_renderer::node_graph::intern_name(&probe.outputs()[0].name);
     drop(probe);
 
     let mut prev = 0.0_f64;

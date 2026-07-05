@@ -24,6 +24,8 @@
 //! get the same even, smoke-like eddies). The wobbled axis stays
 //! unit-length, so swirl magnitude still tracks `curl_strength`.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -64,7 +66,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "vol_res",
+            name: Cow::Borrowed("vol_res"),
             label: "Volume Resolution",
             ty: ParamType::Int,
             default: ParamValue::Float(128.0),
@@ -72,7 +74,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "vol_depth",
+            name: Cow::Borrowed("vol_depth"),
             label: "Volume Depth",
             ty: ParamType::Int,
             default: ParamValue::Float(128.0),
@@ -80,7 +82,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "curl_strength",
+            name: Cow::Borrowed("curl_strength"),
             label: "Curl Strength",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -88,7 +90,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "slope_strength",
+            name: Cow::Borrowed("slope_strength"),
             label: "Slope Strength",
             ty: ParamType::Float,
             default: ParamValue::Float(-500.0),
@@ -96,7 +98,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "ref_axis_x",
+            name: Cow::Borrowed("ref_axis_x"),
             label: "Ref Axis X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -104,7 +106,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "ref_axis_y",
+            name: Cow::Borrowed("ref_axis_y"),
             label: "Ref Axis Y",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -112,7 +114,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "ref_axis_z",
+            name: Cow::Borrowed("ref_axis_z"),
             label: "Ref Axis Z",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),

@@ -15,6 +15,8 @@
 //! shorter buffers leave the trailing instances at zero, longer buffers
 //! are truncated.
 
+use std::borrow::Cow;
+
 use crate::generators::mesh_pipeline::{look_at_rh, mat4_mul, ortho_rh};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -59,7 +61,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "filter",
+            name: Cow::Borrowed("filter"),
             label: "Filter",
             ty: ParamType::Float,
             default: ParamValue::Float(2.0),
@@ -67,7 +69,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "scale",
+            name: Cow::Borrowed("scale"),
             label: "Scale",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
@@ -75,7 +77,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "scatter",
+            name: Cow::Borrowed("scatter"),
             label: "Scatter",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -83,7 +85,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "decay_rate",
+            name: Cow::Borrowed("decay_rate"),
             label: "Kick Decay",
             ty: ParamType::Float,
             default: ParamValue::Float(10.0),
@@ -394,7 +396,7 @@ mod tests {
     fn declares_four_params() {
         let names: Vec<_> = NestedCubesGeometry::PARAMS
             .iter()
-            .map(|p| p.name)
+            .map(|p| p.name.as_ref())
             .collect();
         assert_eq!(names, ["filter", "scale", "scatter", "decay_rate"]);
     }

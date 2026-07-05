@@ -7,6 +7,8 @@
 //! extraction, height-to-normal pipelines, and any per-pixel
 //! finite-difference math.
 
+use std::borrow::Cow;
+
 use manifold_gpu::{GpuAddressMode, GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -50,7 +52,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "channel",
+            name: Cow::Borrowed("channel"),
             label: "Channel",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -58,7 +60,7 @@ crate::primitive! {
             enum_values: GRADIENT_CHANNELS,
         },
         ParamDef {
-            name: "scale_mode",
+            name: Cow::Borrowed("scale_mode"),
             label: "Scale Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -66,7 +68,7 @@ crate::primitive! {
             enum_values: GRADIENT_SCALE_MODES,
         },
         ParamDef {
-            name: "wrap_mode",
+            name: Cow::Borrowed("wrap_mode"),
             label: "Wrap Mode",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),

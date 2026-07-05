@@ -17,6 +17,8 @@
 //! `node.invert` downstream (CoC wants outside=1, mask atom convention
 //! is inside=1).
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
@@ -53,7 +55,7 @@ crate::primitive! {
     },
     params: [
         ParamDef {
-            name: "cx",
+            name: Cow::Borrowed("cx"),
             label: "Center X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -61,7 +63,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "cy",
+            name: Cow::Borrowed("cy"),
             label: "Center Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.5),
@@ -69,7 +71,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "half_width",
+            name: Cow::Borrowed("half_width"),
             label: "Half Width",
             ty: ParamType::Float,
             default: ParamValue::Float(0.25),
@@ -77,7 +79,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "half_height",
+            name: Cow::Borrowed("half_height"),
             label: "Half Height",
             ty: ParamType::Float,
             default: ParamValue::Float(0.25),
@@ -85,7 +87,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "rotation",
+            name: Cow::Borrowed("rotation"),
             label: "Rotation",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
@@ -93,7 +95,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "softness",
+            name: Cow::Borrowed("softness"),
             label: "Softness",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
@@ -181,7 +183,7 @@ mod tests {
         assert_eq!(BoxMask::TYPE_ID, "node.rectangle_mask");
         let ins = BoxMask::INPUTS;
         assert_eq!(ins.len(), 6);
-        let names: Vec<&str> = ins.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = ins.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec!["cx", "cy", "half_width", "half_height", "rotation", "softness"]
@@ -197,7 +199,7 @@ mod tests {
 
     #[test]
     fn box_mask_has_all_six_params() {
-        let names: Vec<&str> = BoxMask::PARAMS.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = BoxMask::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
             vec!["cx", "cy", "half_width", "half_height", "rotation", "softness"]
