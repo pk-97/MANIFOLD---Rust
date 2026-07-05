@@ -3591,11 +3591,11 @@ mod topology_hash_tests {
         // amount off zero, so we can't rely on the default for this
         // fixture.
         let mut fx = make_default(PresetTypeId::VORONOI_PRISM);
-        fx.set_base_param(0, 0.0);
+        fx.set_base_param("amount", 0.0);
 
         let hash_at_zero = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
 
-        fx.set_base_param(0, 0.5);
+        fx.set_base_param("amount", 0.5);
         let hash_at_half = compute_topology_hash(&[fx], &[], 256, 256, None);
 
         assert_ne!(
@@ -4512,6 +4512,40 @@ mod generator_runtime_tests {
     use crate::node_graph::PrimitiveRegistry;
     use manifold_core::Beats;
     use manifold_core::Seconds;
+    use manifold_core::effect_graph_def::ParamSpecDef;
+    use manifold_core::params::Param;
+
+    /// Build a single id-keyed manifest param for test [`ParamManifest`]
+    /// literals — the id-keyed replacement for the old positional `&[f32]`
+    /// slice `apply_param_values` used to take.
+    fn slot(id: &str, value: f32) -> Param {
+        let mut p = Param::bundled(ParamSpecDef {
+            id: id.into(),
+            name: id.into(),
+            min: 0.0,
+            max: 1.0,
+            default_value: value,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: vec![],
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: Default::default(),
+            invert: false,
+        });
+        p.value = value;
+        p.base = value;
+        p.exposed = true;
+        p
+    }
+
+    /// Build a [`ParamManifest`] from `(id, value)` pairs, in the order
+    /// given — mirrors the positional `&[f32]` slices these tests used to
+    /// pass to `apply_param_values` before the id-keyed manifest replaced it.
+    fn manifest(pairs: &[(&str, f32)]) -> ParamManifest {
+        ParamManifest::from_params(pairs.iter().map(|(id, v)| slot(id, *v)).collect())
+    }
 
     /// Regression for the "Lissajous repeats back-to-back in clip-trigger mode"
     /// bug: two bindings keyed by the same outer-card id (`clip_trigger`) must
@@ -4533,9 +4567,19 @@ mod generator_runtime_tests {
             .instance_by_node_id(&manifold_core::NodeId::new("mux_y"))
             .expect("Lissajous declares a `mux_y` node");
 
-        g.apply_param_values(&[
-            0.13, 0.09, 0.07, 0.002, 1.0, 1.0, 0.0, 1.0, 0.1, 1.0, 1.0,
-        ]);
+        g.apply_param_values(&manifest(&[
+            ("freq_x_rate", 0.13),
+            ("freq_y_rate", 0.09),
+            ("phase_rate", 0.07),
+            ("line", 0.002),
+            ("show_verts", 1.0),
+            ("vert_size", 1.0),
+            ("animate", 0.0),
+            ("speed", 1.0),
+            ("window", 0.1),
+            ("scale", 1.0),
+            ("clip_trigger", 1.0),
+        ]));
 
         let mux_x = g.graph.get_node(mux_x_id).unwrap();
         assert!(
@@ -4572,7 +4616,14 @@ mod generator_runtime_tests {
             .map(|(_, id)| id)
             .expect("Plasma preset declares a node with handle `plasma`");
 
-        g.apply_param_values(&[3.0, 0.75, 0.42, 2.5, 1.5, 1.0]);
+        g.apply_param_values(&manifest(&[
+            ("pattern", 3.0),
+            ("complexity", 0.75),
+            ("contrast", 0.42),
+            ("speed", 2.5),
+            ("scale", 1.5),
+            ("clip_trigger", 1.0),
+        ]));
 
         let inst = g.graph.get_node(plasma_id).unwrap();
         assert!(matches!(
@@ -4609,7 +4660,14 @@ mod generator_runtime_tests {
             .map(|(_, id)| id)
             .expect("plasma handle");
 
-        let card_values = [3.0_f32, 0.75, 0.42, 2.5, 1.5, 1.0];
+        let card_values = manifest(&[
+            ("pattern", 3.0),
+            ("complexity", 0.75),
+            ("contrast", 0.42),
+            ("speed", 2.5),
+            ("scale", 1.5),
+            ("clip_trigger", 1.0),
+        ]);
         g.apply_param_values(&card_values);
         assert!(matches!(
             g.graph.get_node(plasma_id).unwrap().params.get("speed"),
@@ -4650,7 +4708,14 @@ mod generator_runtime_tests {
                 .map(|(_, id)| id)
                 .expect("plasma handle")
         };
-        let values = [3.0_f32, 0.75, 0.42, 2.5, 1.5, 1.0];
+        let values = manifest(&[
+            ("pattern", 3.0),
+            ("complexity", 0.75),
+            ("contrast", 0.42),
+            ("speed", 2.5),
+            ("scale", 1.5),
+            ("clip_trigger", 1.0),
+        ]);
 
         let mut g0 = PresetRuntime::from_json_str(json, &registry).expect("load");
         g0.apply_param_values(&values);
@@ -4683,7 +4748,11 @@ mod generator_runtime_tests {
             "a ×2 reshape must scale plasma.complexity 0.75 -> 1.5, got {:?}",
             g.graph.get_node(id).unwrap().params.get("complexity"),
         );
-        assert_eq!(values[1], 0.75, "the host value slice is never mutated");
+        assert_eq!(
+            values.get("complexity").unwrap().value,
+            0.75,
+            "the host manifest is never mutated"
+        );
     }
 
     /// Regression for the on-stage FluidSim2D Curl bug: a binding's `scale`
@@ -4729,7 +4798,7 @@ mod generator_runtime_tests {
             .map(|(_, id)| id)
             .expect("preset declares a `so` handle");
 
-        g.apply_param_values(&[4.0]);
+        g.apply_param_values(&manifest(&[("amt", 4.0)]));
 
         let inst = g.graph.get_node(so_id).unwrap();
         assert!(

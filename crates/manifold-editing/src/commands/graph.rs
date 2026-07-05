@@ -2174,6 +2174,28 @@ mod tests {
     use manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION;
     use manifold_core::effects::PresetInstance;
 
+    fn slot(id: &str, value: f32, exposed: bool) -> manifold_core::params::Param {
+        let mut p = manifold_core::params::Param::bundled(manifold_core::effect_graph_def::ParamSpecDef {
+            id: id.into(),
+            name: id.into(),
+            min: 0.0,
+            max: 1.0,
+            default_value: value,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: vec![],
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: Default::default(),
+            invert: false,
+        });
+        p.value = value;
+        p.base = value;
+        p.exposed = exposed;
+        p
+    }
+
     // ── node groups: group / ungroup commands ──
 
     fn abc_graph() -> EffectGraphDef {
@@ -2671,7 +2693,6 @@ mod tests {
         use manifold_core::effect_graph_def::{
             BindingDef, BindingTarget, ParamSpecDef, PresetMetadata,
         };
-        use manifold_core::effects::ParamSlot;
         use manifold_core::NodeId;
 
         let (mut project, id) = project_with_one_master_effect();
@@ -2722,7 +2743,7 @@ mod tests {
         {
             let fx = project.find_effect_by_id_mut(&id).unwrap();
             fx.graph = Some(def);
-            fx.param_values = vec![ParamSlot::exposed(0.5)];
+            fx.params = manifold_core::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
         }
 
         let mut cmd = RemoveGraphNodeCommand::new(
@@ -2740,7 +2761,7 @@ mod tests {
         let meta = fx.graph.as_ref().unwrap().preset_metadata.as_ref().unwrap();
         assert!(meta.bindings.is_empty(), "bound slider's binding pruned");
         assert!(meta.params.is_empty(), "bound slider's param spec pruned");
-        assert!(fx.param_values.is_empty(), "its value slot pruned");
+        assert!(fx.params.is_empty(), "its value slot pruned");
 
         cmd.undo(&mut project);
         let fx = project.find_effect_by_id(&id).unwrap();
@@ -2751,11 +2772,11 @@ mod tests {
         let meta = fx.graph.as_ref().unwrap().preset_metadata.as_ref().unwrap();
         assert_eq!(meta.bindings.len(), 1, "binding restored");
         assert_eq!(meta.params.len(), 1, "param spec restored");
-        assert_eq!(
-            fx.param_values,
-            vec![ParamSlot::exposed(0.5)],
-            "value slot restored"
-        );
+        assert_eq!(fx.params.len(), 1, "value slot restored");
+        let restored = fx.params.get("amount").unwrap();
+        assert_eq!(restored.value, 0.5);
+        assert_eq!(restored.base, 0.5);
+        assert!(restored.exposed);
     }
 
     #[test]
@@ -3426,11 +3447,11 @@ mod tests {
             // Override values after init — the registry doesn't know
             // about our synthetic preset, so init may leave the vec
             // empty. Force the bundled slot count to match the preset.
-            gp.param_values = vec![
-                manifold_core::effects::ParamSlot::exposed(0.0),
-                manifold_core::effects::ParamSlot::exposed(1.0),
-            ];
-            // ParamSlot::exposed seeds base = value; mark base tracked (fork #16).
+            gp.params = manifold_core::params::ParamManifest::from_params(vec![
+                slot("shape", 0.0, true),
+                slot("scale", 1.0, true),
+            ]);
+            // slot() seeds base = value; mark base tracked (fork #16).
             gp.base_tracked = true;
         }
 
@@ -3491,12 +3512,12 @@ mod tests {
             "id follows the user.<handle>.<param>.<n> convention, got `{user_param_id}`"
         );
 
-        // gp.param_values grew by one to match.
+        // gp.params grew by one to match.
         let gp = layer.gen_params().unwrap();
         assert_eq!(
-            gp.param_values.len(),
+            gp.params.len(),
             3,
-            "param_values grew by one slot for the user-added binding"
+            "params grew by one slot for the user-added binding"
         );
 
         // exposed_params on the render node now contains "animate".
@@ -3522,7 +3543,7 @@ mod tests {
             "undo removes the user-added binding"
         );
         let gp = layer.gen_params().unwrap();
-        assert_eq!(gp.param_values.len(), 2, "undo pops the user-added slot");
+        assert_eq!(gp.params.len(), 2, "undo pops the user-added slot");
         let render_node = def
             .nodes
             .iter()
@@ -3682,10 +3703,10 @@ mod tests {
             gp.init_defaults_for_type(PresetTypeId::from_string(
                 "test.wireframe".to_string(),
             ));
-            gp.param_values = vec![
-                manifold_core::effects::ParamSlot::exposed(0.0),
-                manifold_core::effects::ParamSlot::exposed(0.75),
-            ]; // bundled `shape` + user-added `animate`
+            gp.params = manifold_core::params::ParamManifest::from_params(vec![
+                slot("shape", 0.0, true),
+                slot("user.render.animate.1", 0.75, true),
+            ]); // bundled `shape` + user-added `animate`
             gp.base_tracked = true;
             // Attach a driver + envelope on the user-added id — they
             // should get pruned on unexpose and restored on undo.
@@ -3734,8 +3755,12 @@ mod tests {
         assert_eq!(meta.bindings[0].id, "shape", "bundled binding survives");
 
         let gp = layer.gen_params().unwrap();
-        assert_eq!(gp.param_values.len(), 1, "user-added slot removed");
-        assert_eq!(gp.param_values[0].value, 0.0, "bundled `shape` value intact");
+        assert_eq!(gp.params.len(), 1, "user-added slot removed");
+        assert_eq!(
+            gp.params.get("shape").unwrap().value,
+            0.0,
+            "bundled `shape` value intact"
+        );
         assert!(
             gp.drivers.is_none() || gp.drivers.as_ref().unwrap().is_empty(),
             "driver referencing user-added id pruned"
@@ -3756,9 +3781,9 @@ mod tests {
         assert!(meta.bindings[1].user_added);
 
         let gp = layer.gen_params().unwrap();
-        assert_eq!(gp.param_values.len(), 2, "undo restores the slot");
+        assert_eq!(gp.params.len(), 2, "undo restores the slot");
         assert!(
-            (gp.param_values[1].value - 0.75).abs() < f32::EPSILON,
+            (gp.params.get("user.render.animate.1").unwrap().value - 0.75).abs() < f32::EPSILON,
             "slot value (0.75) restored"
         );
         assert_eq!(

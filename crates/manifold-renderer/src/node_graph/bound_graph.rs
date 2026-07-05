@@ -140,14 +140,36 @@ mod tests {
 
     use manifold_core::NodeId;
     use manifold_core::effect_graph_def::{
-        EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode, SerializedParamValue,
+        EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode, ParamSpecDef, SerializedParamValue,
     };
-    use manifold_core::effects::ParamSlot;
+    use manifold_core::params::{Param, ParamManifest};
 
     use crate::node_graph::param_binding::{BindingSource, ResolvedBinding, ResolvedTarget};
     use crate::node_graph::parameters::ParamValue;
     use crate::node_graph::primitives::AffineTransform;
     use crate::node_graph::{Graph, ParamConvert};
+
+    fn slot(id: &str, value: f32, exposed: bool) -> Param {
+        let mut p = Param::bundled(ParamSpecDef {
+            id: id.into(),
+            name: id.into(),
+            min: 0.0,
+            max: 1.0,
+            default_value: value,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: vec![],
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: Default::default(),
+            invert: false,
+        });
+        p.value = value;
+        p.base = value;
+        p.exposed = exposed;
+        p
+    }
 
     fn scale_of(graph: &Graph, inst: NodeInstanceId) -> ParamValue {
         graph
@@ -207,14 +229,17 @@ mod tests {
             },
             convert: ParamConvert::Float,
             source: BindingSource::Static,
-            source_index: 0,
+            source_id: Cow::Borrowed("amount"),
             reshape: None,
             wraps_angle: false,
         };
         let mut bound = BoundGraph::new(vec![binding], &mut graph);
 
         // Card drives scale to 0.3.
-        bound.apply(&mut graph, &[ParamSlot::exposed(0.3)]);
+        bound.apply(
+            &mut graph,
+            &ParamManifest::from_params(vec![slot("amount", 0.3, true)]),
+        );
         assert_eq!(scale_of(&graph, feedback), ParamValue::Float(0.3));
 
         // An editor value/position edit pushes the baked def value (0.9) into
@@ -230,7 +255,10 @@ mod tests {
         // `apply_inner_overrides`, so the binding re-writes 0.3 even though the
         // outer slot didn't move. Without the clear this would skip and the
         // slider would be stuck at 0.9 — the snap-back.
-        bound.apply(&mut graph, &[ParamSlot::exposed(0.3)]);
+        bound.apply(
+            &mut graph,
+            &ParamManifest::from_params(vec![slot("amount", 0.3, true)]),
+        );
         assert_eq!(
             scale_of(&graph, feedback),
             ParamValue::Float(0.3),

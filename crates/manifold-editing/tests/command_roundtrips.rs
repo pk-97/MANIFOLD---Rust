@@ -84,6 +84,28 @@ inventory::submit! {
         ],    }
 }
 
+fn slot(id: &str, value: f32, exposed: bool) -> manifold_core::params::Param {
+    let mut p = manifold_core::params::Param::bundled(manifold_core::effect_graph_def::ParamSpecDef {
+        id: id.into(),
+        name: id.into(),
+        min: 0.0,
+        max: 1.0,
+        default_value: value,
+        whole_numbers: false,
+        is_toggle: false,
+        is_trigger: false,
+        value_labels: vec![],
+        format_string: None,
+        osc_suffix: String::new(),
+        curve: Default::default(),
+        invert: false,
+    });
+    p.value = value;
+    p.base = value;
+    p.exposed = exposed;
+    p
+}
+
 fn fixture_path(name: &str) -> std::path::PathBuf {
     let mut p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     p.push("../../tests/fixtures");
@@ -695,7 +717,7 @@ fn add_effect_undo_roundtrip() {
     let target = EffectTarget::Master;
 
     let mut effect = PresetInstance::new(PresetTypeId::BLOOM);
-    effect.param_values = vec![ParamSlot::exposed(0.5)];
+    effect.params = manifold_core::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
 
     let mut cmd = AddEffectCommand::new(target, effect, 0);
 
@@ -711,7 +733,7 @@ fn remove_effect_undo_roundtrip() {
     let mut project = make_test_project();
     {
         let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-        fx.param_values = vec![ParamSlot::exposed(0.5)];
+        fx.params = manifold_core::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
         project.settings.master_effects.push(fx);
     }
 
@@ -749,7 +771,10 @@ fn change_effect_param_undo_roundtrip() {
     let mut project = make_test_project();
     {
         let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-        fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(0.3)];
+        fx.params = manifold_core::params::ParamManifest::from_params(vec![
+            slot("amount", 0.5, true),
+            slot("threshold", 0.3, true),
+        ]);
         fx.base_tracked = true; // slots already carry base = value (fork #16)
         project.settings.master_effects.push(fx);
     }
@@ -764,10 +789,16 @@ fn change_effect_param_undo_roundtrip() {
     );
 
     cmd.execute(&mut project);
-    assert!((project.settings.master_effects[0].param_values[0].value - 0.9).abs() < 0.001);
+    assert!(
+        (project.settings.master_effects[0].params.get("amount").unwrap().value - 0.9).abs()
+            < 0.001
+    );
 
     cmd.undo(&mut project);
-    assert!((project.settings.master_effects[0].param_values[0].value - 0.5).abs() < 0.001);
+    assert!(
+        (project.settings.master_effects[0].params.get("amount").unwrap().value - 0.5).abs()
+            < 0.001
+    );
 
     // Targets `threshold` (index 1) — confirm id-based addressing
     // routes to the right slot, not just index 0.
@@ -778,9 +809,15 @@ fn change_effect_param_undo_roundtrip() {
         0.7,
     );
     cmd2.execute(&mut project);
-    assert!((project.settings.master_effects[0].param_values[1].value - 0.7).abs() < 0.001);
+    assert!(
+        (project.settings.master_effects[0].params.get("threshold").unwrap().value - 0.7).abs()
+            < 0.001
+    );
     cmd2.undo(&mut project);
-    assert!((project.settings.master_effects[0].param_values[1].value - 0.3).abs() < 0.001);
+    assert!(
+        (project.settings.master_effects[0].params.get("threshold").unwrap().value - 0.3).abs()
+            < 0.001
+    );
 }
 
 #[test]
@@ -790,7 +827,10 @@ fn change_effect_param_unknown_id_is_no_op() {
     // and must NOT scribble random indices. It silently no-ops.
     let mut project = make_test_project();
     let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-    fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(0.3)];
+    fx.params = manifold_core::params::ParamManifest::from_params(vec![
+        slot("amount", 0.5, true),
+        slot("threshold", 0.3, true),
+    ]);
     fx.base_tracked = true; // slots already carry base = value (fork #16)
     project.settings.master_effects.push(fx);
 
@@ -802,32 +842,44 @@ fn change_effect_param_unknown_id_is_no_op() {
         0.9,
     );
 
+    let expected: Vec<manifold_core::params::Param> =
+        vec![slot("amount", 0.5, true), slot("threshold", 0.3, true)];
+
     cmd.execute(&mut project);
     // Unchanged — no slot was matched.
     assert_eq!(
-        project.settings.master_effects[0].param_values,
-        vec![ParamSlot::exposed(0.5), ParamSlot::exposed(0.3)]
+        project.settings.master_effects[0]
+            .params
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>(),
+        expected
     );
     cmd.undo(&mut project);
     assert_eq!(
-        project.settings.master_effects[0].param_values,
-        vec![ParamSlot::exposed(0.5), ParamSlot::exposed(0.3)]
+        project.settings.master_effects[0]
+            .params
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>(),
+        expected
     );
 }
 
 #[test]
 fn change_effect_param_undo_roundtrip_on_user_tail_binding() {
-    // Regression: a user-exposed inner-node param lives at the tail of
-    // `param_values` (past the static prefix) and is addressed by an
-    // id like `user.<handle>.<param>.<n>`. The command must resolve
-    // that through the *instance*'s `param_id_to_value_index`, which
-    // consults both the static registry and the per-instance user
-    // bindings. The earlier registry-only lookup returned `None` for
-    // user-tail ids, making undo/redo a silent no-op for any slider
-    // exposed from an inner node.
+    // Regression: a user-exposed inner-node param is addressed by an id like
+    // `user.<handle>.<param>.<n>`, appended to the instance's id-keyed
+    // manifest alongside the static (bundled) entries. The command must
+    // resolve that id directly through the manifest — the earlier
+    // registry-only lookup returned `None` for user-added ids, making
+    // undo/redo a silent no-op for any slider exposed from an inner node.
     let mut project = make_test_project();
     let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-    fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(0.3)];
+    fx.params = manifold_core::params::ParamManifest::from_params(vec![
+        slot("amount", 0.5, true),
+        slot("threshold", 0.3, true),
+    ]);
     fx.base_tracked = true; // slots already carry base = value (fork #16)
     fx.append_user_binding(UserParamBinding {
         id: "user.uv.translate.1".to_string(),
@@ -848,10 +900,10 @@ fn change_effect_param_undo_roundtrip_on_user_tail_binding() {
     project.settings.master_effects.push(fx);
 
     let user_id = "user.uv.translate.1";
-    let tail_idx = project.settings.master_effects[0]
-        .param_id_to_value_index(user_id)
-        .expect("user binding resolves to a slot");
-    assert_eq!(tail_idx, 2, "user binding lands past the 2-param static prefix");
+    assert!(
+        project.settings.master_effects[0].params.get(user_id).is_some(),
+        "user binding resolves to a manifest entry"
+    );
 
     let effect_id = project.settings.master_effects[0].id.clone();
     let mut cmd = ChangeGraphParamCommand::new(
@@ -861,11 +913,11 @@ fn change_effect_param_undo_roundtrip_on_user_tail_binding() {
         0.42,
     );
     cmd.execute(&mut project);
-    let v = project.settings.master_effects[0].param_values[tail_idx].value;
+    let v = project.settings.master_effects[0].params.get(user_id).unwrap().value;
     assert!((v - 0.42).abs() < 0.001, "execute writes the user-tail slot");
 
     cmd.undo(&mut project);
-    let v = project.settings.master_effects[0].param_values[tail_idx].value;
+    let v = project.settings.master_effects[0].params.get(user_id).unwrap().value;
     assert!((v - 0.0).abs() < 0.001, "undo restores the user-tail slot");
 }
 
@@ -1499,7 +1551,10 @@ fn expose_effect_param_command_undo_roundtrip() {
     // assert state, undo, assert state.
     let mut project = make_test_project();
     let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-    fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
+    fx.params = manifold_core::params::ParamManifest::from_params(vec![
+        slot("amount", 0.5, true),
+        slot("threshold", 1.0, true),
+    ]);
     fx.base_tracked = true; // slots already carry base = value (fork #16)
     project.settings.master_effects.push(fx);
 
@@ -1522,29 +1577,27 @@ fn expose_effect_param_command_undo_roundtrip() {
     assert_eq!(binding.node_id, "uv_transform");
     assert_eq!(binding.inner_param, "translate");
     assert_eq!(binding.label, "Translate");
-    // param_values: [0.5 (amount), 1.0 (threshold), 0.0 (user binding default)].
+    // params: [0.5 (amount), 1.0 (threshold), 0.0 (user binding default)].
+    assert_eq!(fx.params.len(), 3);
+    assert_eq!(fx.params.get("amount").unwrap().value, 0.5);
+    assert_eq!(fx.params.get("threshold").unwrap().value, 1.0);
     assert_eq!(
-        fx.param_values,
-        vec![
-            ParamSlot::exposed(0.5),
-            ParamSlot::exposed(1.0),
-            ParamSlot::exposed(0.0)
-        ]
+        fx.params.get("user.uv_transform.translate.1").unwrap().value,
+        0.0
     );
     assert_eq!(
-        fx.param_values.iter().map(|s| s.base).collect::<Vec<_>>(),
+        fx.params.iter().map(|p| p.base).collect::<Vec<_>>(),
         vec![0.5, 1.0, 0.0]
     );
 
     cmd.undo(&mut project);
     let fx = &project.settings.master_effects[0];
     assert!(fx.user_param_bindings().is_empty());
+    assert_eq!(fx.params.len(), 2);
+    assert_eq!(fx.params.get("amount").unwrap().value, 0.5);
+    assert_eq!(fx.params.get("threshold").unwrap().value, 1.0);
     assert_eq!(
-        fx.param_values,
-        vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)]
-    );
-    assert_eq!(
-        fx.param_values.iter().map(|s| s.base).collect::<Vec<_>>(),
+        fx.params.iter().map(|p| p.base).collect::<Vec<_>>(),
         vec![0.5, 1.0]
     );
 
@@ -1565,7 +1618,10 @@ fn expose_already_exposed_is_idempotent_noop() {
     // pre-existing binding).
     let mut project = make_test_project();
     let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-    fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
+    fx.params = manifold_core::params::ParamManifest::from_params(vec![
+        slot("amount", 0.5, true),
+        slot("threshold", 1.0, true),
+    ]);
     fx.base_tracked = true; // slots already carry base = value (fork #16)
     fx.append_user_binding(UserParamBinding {
         id: "user.uv_transform.translate.1".to_string(),
@@ -1613,7 +1669,10 @@ fn expose_already_exposed_is_idempotent_noop() {
 fn unexpose_effect_param_command_undo_roundtrip() {
     let mut project = make_test_project();
     let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-    fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
+    fx.params = manifold_core::params::ParamManifest::from_params(vec![
+        slot("amount", 0.5, true),
+        slot("threshold", 1.0, true),
+    ]);
     fx.base_tracked = true; // slots already carry base = value (fork #16)
     fx.append_user_binding(UserParamBinding {
         id: "user.uv_transform.translate.1".to_string(),
@@ -1631,9 +1690,12 @@ fn unexpose_effect_param_command_undo_roundtrip() {
         offset: 0.0,
         value_labels: Vec::new(),
     });
-    // Drag the slider — user-tail at index 2 (n_static=2 + j=0) changed.
-    fx.param_values[2].value = 0.42;
-    fx.param_values[2].base = 0.42;
+    // Drag the slider — the user-tail entry changed.
+    {
+        let p = fx.params.get_mut("user.uv_transform.translate.1").unwrap();
+        p.value = 0.42;
+        p.base = 0.42;
+    }
     project.settings.master_effects.push(fx);
 
     let effect_id = project.settings.master_effects[0].id.clone();
@@ -1649,10 +1711,9 @@ fn unexpose_effect_param_command_undo_roundtrip() {
     cmd.execute(&mut project);
     let fx = &project.settings.master_effects[0];
     assert!(fx.user_param_bindings().is_empty());
-    assert_eq!(
-        fx.param_values,
-        vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)]
-    );
+    assert_eq!(fx.params.len(), 2);
+    assert_eq!(fx.params.get("amount").unwrap().value, 0.5);
+    assert_eq!(fx.params.get("threshold").unwrap().value, 1.0);
 
     cmd.undo(&mut project);
     let fx = &project.settings.master_effects[0];
@@ -1660,9 +1721,10 @@ fn unexpose_effect_param_command_undo_roundtrip() {
     assert_eq!(ub.len(), 1);
     assert_eq!(ub[0].id, "user.uv_transform.translate.1");
     // Slot value restored — including the dragged 0.42, NOT the binding default.
-    assert!((fx.param_values[2].value - 0.42).abs() < f32::EPSILON);
+    let restored = fx.params.get("user.uv_transform.translate.1").unwrap();
+    assert!((restored.value - 0.42).abs() < f32::EPSILON);
     assert!(
-        (fx.param_values[2].base - 0.42).abs() < f32::EPSILON,
+        (restored.base - 0.42).abs() < f32::EPSILON,
         "base value also restored"
     );
 }
@@ -1671,7 +1733,10 @@ fn unexpose_effect_param_command_undo_roundtrip() {
 fn unexpose_when_not_exposed_is_noop() {
     let mut project = make_test_project();
     let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-    fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
+    fx.params = manifold_core::params::ParamManifest::from_params(vec![
+        slot("amount", 0.5, true),
+        slot("threshold", 1.0, true),
+    ]);
     project.settings.master_effects.push(fx);
 
     let effect_id = project.settings.master_effects[0].id.clone();
@@ -1690,10 +1755,10 @@ fn unexpose_when_not_exposed_is_noop() {
             .user_param_bindings()
             .is_empty()
     );
-    assert_eq!(
-        project.settings.master_effects[0].param_values,
-        vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)]
-    );
+    let fx = &project.settings.master_effects[0];
+    assert_eq!(fx.params.len(), 2);
+    assert_eq!(fx.params.get("amount").unwrap().value, 0.5);
+    assert_eq!(fx.params.get("threshold").unwrap().value, 1.0);
 }
 
 #[test]
@@ -1753,7 +1818,10 @@ fn generate_user_param_id_collision_probe() {
 fn unexpose_prunes_orphan_drivers_and_undo_restores_them() {
     let mut project = make_test_project();
     let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-    fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
+    fx.params = manifold_core::params::ParamManifest::from_params(vec![
+        slot("amount", 0.5, true),
+        slot("threshold", 1.0, true),
+    ]);
     fx.append_user_binding(UserParamBinding {
         id: "user.uv_transform.translate.1".to_string(),
         label: "Translate".to_string(),
@@ -1854,7 +1922,10 @@ fn unexpose_prunes_orphan_ableton_mappings_and_undo_restores_them() {
     };
     let mut project = make_test_project();
     let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-    fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
+    fx.params = manifold_core::params::ParamManifest::from_params(vec![
+        slot("amount", 0.5, true),
+        slot("threshold", 1.0, true),
+    ]);
     fx.append_user_binding(UserParamBinding {
         id: "user.uv_transform.translate.1".to_string(),
         label: "Translate".to_string(),
@@ -1927,7 +1998,10 @@ fn unexpose_prunes_orphan_ableton_mappings_and_undo_restores_them() {
 fn unexpose_prunes_orphan_envelopes_and_undo_restores_them() {
     let mut project = make_test_project();
     let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-    fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
+    fx.params = manifold_core::params::ParamManifest::from_params(vec![
+        slot("amount", 0.5, true),
+        slot("threshold", 1.0, true),
+    ]);
     fx.append_user_binding(UserParamBinding {
         id: "user.uv_transform.translate.1".to_string(),
         label: "Translate".to_string(),

@@ -449,9 +449,9 @@ mod tests {
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         // Halfway between beat 0 (0.2) and beat 4 (0.8) -> 0.5.
         assert!(
-            (fx.param_values[0].base - 0.5).abs() < 1e-6,
+            (fx.params.get("amount").unwrap().base - 0.5).abs() < 1e-6,
             "base sampled at the midpoint, got {}",
-            fx.param_values[0].base
+            fx.params.get("amount").unwrap().base
         );
     }
 
@@ -472,10 +472,10 @@ mod tests {
 
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         assert!(
-            (fx.param_values[0].value - 0.8).abs() < 1e-6,
+            (fx.params.get("amount").unwrap().value - 0.8).abs() < 1e-6,
             "reset_all_effectives must copy the automation-sampled base into \
              value, proving automation ran first; got {}",
-            fx.param_values[0].value
+            fx.params.get("amount").unwrap().value
         );
     }
 
@@ -486,7 +486,7 @@ mod tests {
         fx.automation_lanes = Some(vec![amount_lane()]);
         // Simulate a live hand touching the param this frame (a UI slider,
         // Ableton macro, or OSC write all funnel through set_base_param).
-        fx.set_base_param(0, 0.99);
+        fx.set_base_param("amount", 0.99);
         let mut project = project_with(layer);
         let mut latches = AutomationLatches::default();
 
@@ -495,11 +495,11 @@ mod tests {
         assert!(!wrote, "a freshly-touched param is not sampled this frame");
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         assert!(
-            (fx.param_values[0].base - 0.99).abs() < 1e-6,
+            (fx.params.get("amount").unwrap().base - 0.99).abs() < 1e-6,
             "the hand's write wins, untouched by automation"
         );
         assert!(
-            !fx.param_values[0].touched,
+            !fx.params.get("amount").unwrap().touched,
             "the evaluator clears touched once it has latched"
         );
         assert_eq!(latches.len(), 1, "the touch latches the param as overridden");
@@ -510,7 +510,7 @@ mod tests {
         let mut layer = layer_with_one_effect();
         let fx = &mut layer.effects.as_mut().unwrap()[0];
         fx.automation_lanes = Some(vec![amount_lane()]);
-        fx.set_base_param(0, 0.99);
+        fx.set_base_param("amount", 0.99);
         let mut project = project_with(layer);
         let mut latches = AutomationLatches::default();
 
@@ -521,7 +521,7 @@ mod tests {
         let wrote = eval_unarmed(&mut project, Beats(2.0), &mut latches);
         assert!(!wrote, "a still-latched param stays overridden");
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
-        assert!((fx.param_values[0].base - 0.99).abs() < 1e-6);
+        assert!((fx.params.get("amount").unwrap().base - 0.99).abs() < 1e-6);
     }
 
     #[test]
@@ -550,7 +550,7 @@ mod tests {
         let mut layer = layer_with_one_effect();
         let fx = &mut layer.effects.as_mut().unwrap()[0];
         fx.automation_lanes = Some(vec![amount_lane()]);
-        fx.set_base_param(0, 0.99);
+        fx.set_base_param("amount", 0.99);
         let mut project = project_with(layer);
         let mut latches = AutomationLatches::default();
 
@@ -567,9 +567,9 @@ mod tests {
         assert!(wrote, "clearing the latch resumes the lane's writes");
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         assert!(
-            (fx.param_values[0].base - 0.5).abs() < 1e-6,
+            (fx.params.get("amount").unwrap().base - 0.5).abs() < 1e-6,
             "lane resumes sampling at the current beat, got {}",
-            fx.param_values[0].base
+            fx.params.get("amount").unwrap().base
         );
     }
 
@@ -584,7 +584,7 @@ mod tests {
 
         assert!(!eval_unarmed(&mut project, Beats(2.0), &mut latches));
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
-        assert_eq!(fx.param_values[0].base, 0.0, "untouched, still the default");
+        assert_eq!(fx.params.get("amount").unwrap().base, 0.0, "untouched, still the default");
     }
 
     #[test]
@@ -649,7 +649,7 @@ mod tests {
         let wrote = eval_unarmed(&mut project, Beats(4.0), &mut latches);
         assert!(wrote);
         let gp = project.timeline.layers[0].gen_params().unwrap();
-        assert!((gp.param_values[0].base - 0.8).abs() < 1e-6);
+        assert!((gp.params.get("amount").unwrap().base - 0.8).abs() < 1e-6);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -663,7 +663,7 @@ mod tests {
         let mut layer = layer_with_one_effect();
         let fx = &mut layer.effects.as_mut().unwrap()[0];
         fx.automation_lanes = Some(vec![amount_lane()]);
-        fx.set_base_param(0, 0.42);
+        fx.set_base_param("amount", 0.42);
         let mut project = project_with(layer);
         let mut latches = AutomationLatches::default();
         let mut gestures = AutomationGestures::default();
@@ -682,7 +682,7 @@ mod tests {
         let mut layer = layer_with_one_effect();
         let fx = &mut layer.effects.as_mut().unwrap()[0];
         fx.automation_lanes = Some(vec![amount_lane()]);
-        fx.set_base_param(0, 0.42);
+        fx.set_base_param("amount", 0.42);
         let mut project = project_with(layer);
         let mut latches = AutomationLatches::default();
         let mut gestures = AutomationGestures::default();
@@ -696,7 +696,7 @@ mod tests {
         assert_eq!(gestures.len(), 1, "the touch opened one gesture");
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         assert!(
-            !fx.param_values[0].touched,
+            !fx.params.get("amount").unwrap().touched,
             "recording consumes the touch flag same as latching does"
         );
     }
@@ -708,7 +708,7 @@ mod tests {
         // yields a commit whose `old_points` is `None` (lane creation).
         let mut layer = layer_with_one_effect();
         let fx = &mut layer.effects.as_mut().unwrap()[0];
-        fx.set_base_param(0, 0.55); // no automation_lanes at all yet
+        fx.set_base_param("amount", 0.55); // no automation_lanes at all yet
         let mut project = project_with(layer);
         let mut latches = AutomationLatches::default();
         let mut gestures = AutomationGestures::default();
@@ -786,7 +786,7 @@ mod tests {
             .effects
             .as_mut()
             .unwrap()[0]
-            .set_base_param(0, 0.6);
+            .set_base_param("amount", 0.6);
         evaluate_all_automation(&mut project, Beats(1.0), &mut latches, true, &mut gestures);
 
         // Close the gesture (>= 2 beats quiet).
@@ -830,7 +830,7 @@ mod tests {
     fn inactivity_under_two_beats_keeps_the_gesture_open() {
         let mut layer = layer_with_one_effect();
         let fx = &mut layer.effects.as_mut().unwrap()[0];
-        fx.set_base_param(0, 0.3);
+        fx.set_base_param("amount", 0.3);
         let mut project = project_with(layer);
         let mut latches = AutomationLatches::default();
         let mut gestures = AutomationGestures::default();
