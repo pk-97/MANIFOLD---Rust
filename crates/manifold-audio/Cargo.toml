@@ -24,5 +24,12 @@ block2 = "0.6"
 # CFString/CFArray/CFDictionary for the device directory + aggregate-device descriptions.
 core-foundation = "0.10"
 
+[dev-dependencies]
+# mod_harness example only: file decode (WAV/AIFF/MP3/FLAC via symphonia) and
+# PNG output for the offline feature-grading harness. Dev-only — the crate's
+# standalone build stays free of playback/kira and image codecs.
+manifold-playback = { path = "../manifold-playback" }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 [lints]
 workspace = true
