@@ -97,6 +97,15 @@
             "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/workflow-gate.py\""
           }
         ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/agent-model-guard.py\""
+          }
+        ]
       }
     ],
     "PostToolUse": [
