@@ -185,6 +185,123 @@ threshold floor, possibly gating flux through the tracker's known-object motion)
 redesign; if tuning can't reach the gate, escalate with the sweep results rather than
 widening scope.
 
+**D9 — Causal HPSS at the ODF seam: designed, prototyped, and MEASURED
+INSUFFICIENT (BUG-046, 2026-07-06 — P6a verdict below; the section is kept as
+the record of what was tried and why each family fails).** On bass-heavy full mixes the Low band is near-deaf to kicks
+(bad_guy mix Low 6 fires vs drums-stem 46; feel 7 vs 36; apricots 6 vs 13): the
+sustained bassline owns the Low band's ODF baseline — median AND recent max —
+so a kick can't out-shout it in the very band bound for kick triggering, and
+BUG-044's novelty criterion can't help because bass notes are themselves novel
+in that band. Threshold tuning in the band is exhausted (BUG-044's session).
+The structural fix is harmonic/percussive separation on the columns we already
+stream, applied at exactly one seam:
+
+- **Where the split sits:** inside the per-hop loop in
+  `StreamingSendAnalyzer::push`, after the floor is applied, before
+  `reduce_send`. A percussive-enhanced copy of the tilted, floored column
+  (`perc_col`, with its own `prev_perc_col`) is computed per hop; **only the
+  SuperFlux ODF reads it** (`band_reduce`'s `superflux` accumulates from the
+  perc pair instead of `col`/`prev_col`). Everything else — amplitude,
+  brightness, noisiness, liveliness (plain flux), the D1 salience, the D5
+  tracker, the scope column — keeps reading the untouched columns,
+  **byte-identical to today**. Rationale: BUG-046's mechanism lives entirely in
+  the onset detector, and every other consumer was calibrated this same week
+  (BUG-042/043/044) against the untouched column; feeding them separated input
+  would silently invalidate that calibration.
+- **The mask (causal, both estimates from data we already have):** per bin,
+  `h_est[k]` = trailing median of `col[k]` over the last `HPSS_H_HOPS` hops (a
+  sustained bass tone is a horizontal ridge — its trailing median ≈ its level;
+  a kick's low-band body is transient — its trailing median stays low), and
+  `p_est[k]` = median of the current column over `k ± HPSS_P_BINS` (a kick is a
+  vertical broadband event — the frequency median around it stays high; a bass
+  harmonic is narrow — its frequency median is its low flanks). Soft mask
+  `m[k] = p²/(p²+h²)`; ODF input = `col[k]·m[k]`. Exact mask shape, window
+  lengths, and any mask smoothing are **prototype outputs** (P6a sweeps them;
+  the committed constants land with the P6a plateau table cited). A cheaper
+  sibling is swept in the same prototype and kept only if it wins: per-bin dB
+  novelty vs the bin's own trailing median (no frequency median) — same state,
+  weaker discrimination at the attack instant, where only the vertical-vs-
+  horizontal evidence separates a kick thump from a bass note onset.
+- **Lag budget: zero future hops, committed.** The trailing time median and the
+  same-hop frequency median are fully causal — the fire path gains no latency.
+  A quasi-centered median (k hops of lookahead) is priced at 5.3 ms of live
+  kick-trigger latency per hop and may be swept in P6a for information, but
+  ships only if recovery gains are dramatic (≥10 points on the recovery rate)
+  and never past 4 hops (~21 ms). Default position: don't.
+- **All four bands get the same masked ODF.** No per-band special case (P3's
+  forbidden move). The dive/riser/growl zero-false-fire guards and the
+  kicks/busymix/densemix count gates hold the other bands honest.
+- **Activation/config surface: none.** This is a detector fix, same class as
+  P3's threshold raise — always on, no flag, no fallback path (per
+  no-silent-fallbacks / no-transitional-states). Transients is the ONE feature
+  whose values may change for existing projects; the other five plus
+  pitch/presence are byte-identical (gate: the existing
+  byte-identity test extended to assert it, plus tracker lines bit-identical
+  in the selftest).
+- **Warm-up:** `has_prev` already blocks fires until the analysis window fills
+  (16 hops = `ODF_MEDIAN_HOPS`); the column-history ring fills over that same
+  period (median over the filled prefix before that).
+- **Cost:** one `HPSS_H_HOPS × num_bins` f32 ring + two `num_bins` scratch
+  columns in `SendState`, pre-allocated (~35 KB/send at H=32, 266 bins);
+  per-hop work is two median passes over 266 bins — measured in P6a, expected
+  well under the VQT transform's own per-hop cost. No allocations on the path.
+
+**P6a VERDICT (2026-07-06, prototype `examples/hpss_proto.rs`, replica
+validated fire-count-exact against mod_harness on all 25 fixtures × 4 bands).**
+Four mechanism families swept, bounded grids, all measured against recovery
+(drums-stem-Low fires matched within ±35 ms), spurious, stem retention, and
+the six fire-gated selftest guards replayed offline. None reached the ~50%
+bad_guy recovery bar guard-green; per the phase gate, NOT integrated:
+
+1. *Column masks (subtraction / hard gate)* — recover up to 24/45 bad_guy but
+   only via mask flutter: bins toggling across the mask edge read as ±59 dB
+   events (growl 16–73 false fires, spurious 30–70/clip). Dead.
+2. *Wiener soft mask* — changes almost nothing: dB flux is scale-invariant,
+   so any smooth rescaling is invisible to the ODF unless it crosses the
+   `db_min` clamp (~30 dB of suppression needed; a soft mask never gets
+   there). Dead, and the reason recorded because it kills the whole
+   "mask the ODF input" idea class.
+3. *Per-bin dB novelty floor as replacement ODF* — real recovery (bad_guy
+   16(21)/45, feel 24/35, apricots 13/13) but collapses the adaptive median's
+   context: with the sustained flux zeroed, whatever spikes remain fire
+   against the δ floor — growl went 0→62-73. The baseline detector's guard
+   behavior structurally depends on continuous false flux raising its own
+   threshold.
+4. *OR'd floored-novelty criterion (the BUG-044 move repeated)* — baseline
+   path untouched, guards green by construction, drums retention 1.00. Best
+   guard-green result and a real partial win: apricots 5→12/13, feel 4→16/35,
+   tears 8→12/25 — but bad_guy 0→8/45, because the floored kick candidates
+   are simply small (31/39 under 160 units; instrumented per-kick).
+   RECORDED AS THE SHIPPABLE PARTIAL if Peter wants it despite the bar.
+
+**The load-bearing discovery (from reading the PNGs, not the numbers):** in a
+bass-occupied Low band, a mix kick's surviving evidence is its descending FM
+sweep (120→45 Hz over ~90 ms ≈ 2 bins/hop — plainly visible crossing the
+bassline in the bad_guy mix spectrogram), and SuperFlux's max-filter exists
+precisely to null bin-sliding energy. The kick fires on stems via its
+attack-from-silence; in the mix the attack is masked and only the motion
+remains. **No flux-family detector can see it — this is a mechanism limit,
+not a tuning limit.** A v0 descending-apex-run criterion (round 4) confirmed
+the direction is real but needs ridge tracking, not argmax: the apex sticks
+to the louder bass mid-sweep (4-5/45), real bass portamento false-fires
+(spurious 17–34), and attack+body double-fire needs cross-criterion
+refractory. The honest fix is a percussive-sweep EVENT read from ridge
+motion — D5-tracker-adjacent machinery — and that is a new design, not a
+constant. Integration note for whoever builds it: extra Low fires feed D5
+step 4's onset re-acquire, so the tracker gate lines must be re-run, not
+assumed.
+
+**Rejected: full HPSS ahead of the band split** (harmonic → features + tracker,
+percussive → ODF) — the textbook shape, and the plausible-wrong turn here. It
+breaks byte-identity for all five features, silently re-opens the
+BUG-042/043/044 calibrations, and buys nothing for BUG-046 itself. Harmonic →
+tracker is *deferred with a revival trigger* (§10), not dead.
+**Rejected: sub-band thresholding** — kick and bass share the same bins; a
+threshold can't separate co-located energy (backlog entry, measured).
+**Rejected: Full-band as the kick binding** — fires on hats and spams kick
+visuals (Peter, 2026-07-06, verbatim in the backlog: not an interim
+substitute).
+
 ## 3. Data model (committed)
 
 ```rust
@@ -404,7 +521,13 @@ kicks fire in Low.
 detector on tracker state (coupling direction is tracker←onset per §6.2, never both
 ways in v1).
 
-**P4 — Modulation surface + serde. ✅ SHIPPED 2026-07-06 (`586d2bac`).**
+**P4 — Modulation surface + serde. ✅ SHIPPED 2026-07-06 (`586d2bac`; drawer
+mirror escape fixed same day `00e9fd19`).** Escaped: P4 main-context build ·
+caught-by: Peter, live build (the UI crate's MIRROR AudioFeatureKind behind the
+translation boundary was never extended — drawer stayed at five buttons, saved
+Pitch mods displayed as Amplitude; serde/runtime were fine). Two regression pins
+now hold the seam: `feature_row_carries_pitch_and_presence` (manifold-ui) and
+`ui_feature_kind_mirror_matches_core_in_order` (manifold-app/ui_translate).
 Pitch/Presence kinds live in the drawer matrix (kind row + AUDIO_KIND_COUNT now
 derive from `AudioFeatureKind::ALL` — a future kind cannot leave the drawer
 stale); legacy `pitch`/`pitchDelta` retarget onto the tracker (D3); D7
@@ -440,6 +563,22 @@ reference); workspace sweep (final phase).
 *Demo:* app scope showing the pitch trace riding a played bassline — L4 (Peter, live;
 this is the "what you see is what modulates" moment). L2 floor: harness PNG parity.
 *Forbidden:* a second scalar ring; re-deriving pitch display-side from `pitch_hz`.
+
+**P6 — Causal HPSS for the ODF (BUG-046, D9). ⛔ P6a RAN 2026-07-06 — GATE
+FAILED, STOPPED per its own rule; P6b NOT ISSUED.** The offline prototype
+(`crates/manifold-audio/examples/hpss_proto.rs`, kept as the re-runnable sweep
+instrument: `--family sub|gate|wiener|nov|or|sweep|all`, `--validate-only`,
+`--dump <label>`) validated fire-count-exact against mod_harness on all 25
+fixtures × 4 bands, then swept four mechanism families against the gate
+(bad_guy mix-Low recovery ≥ ~50% guard-green). Best guard-green: ~20%
+(OR'd floored-novelty; full verdict + per-family failure mechanisms in D9).
+All four rounds' raw sweep tables:
+`docs/evidence/audio_modulation/BUG046_P6A_SWEEPS.md`. Original P6a metric
+definitions and the P6b gate list are preserved in git history
+(`git log -- docs/AUDIO_OBJECT_TRACKING_DESIGN.md`); the successor
+direction — a percussive-sweep event read from ridge motion — needs its own
+short design against this doc's D5 machinery and MUST re-run the tracker gate
+lines (extra fires feed D5 step 4's re-acquire).
 
 ## 8. Relation to the offline pipeline (contract)
 
@@ -481,3 +620,8 @@ built against this doc's invariants.
   AUDIO_MODULATION §11.5) — revive with P4 if trivial, else stays panel backlog.
 - **Real-clip eval fixtures** — when Peter exports them; they extend the CSV/PNG set,
   gates stay synthetic.
+- **Harmonic component → salience/tracker** (D9's other half) — revive only if
+  real-mix pitch tracking measurably stalls AFTER HPSS ships and a harness
+  experiment shows the harmonic column cleans salience; requires a full rerun
+  of the BUG-042/043 gate set (it re-opens their calibration) and its own
+  short design. Never land it as a rider on unrelated work.

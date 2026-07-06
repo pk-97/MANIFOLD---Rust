@@ -48,6 +48,7 @@ prerequisites aren't shipped, stop.
 | PARAM_STORAGE_DESIGN (added 2026-07-05; **P1–P5 SHIPPED 2026-07-05**) | none | full |
 | PARAM_STORAGE_BOUNDARIES_DESIGN (added 2026-07-06) | PARAM_STORAGE P1–P5 (shipped) | full |
 | SCENE_BUILD_AND_GROUP_PARAMS_DESIGN (added 2026-07-06) | its P3 needs PARAM_STORAGE_BOUNDARIES P1–P2; REALTIME_3D P6 now needs its P2 (amended D3/D8) | full |
+| APP_SHELL_DESIGN (added 2026-07-06) | none for P1–P3; its §8 slots bind their own waves | full (P1–P3) / conformance (§8 slots) |
 
 Not in the queue: **LIVE_AUDIO_TRIGGERS** is SHIPPED (phases 0–7, proven live,
 branch merged). **COMPETITIVE_STEAL_PASS** is a closed record.
@@ -161,6 +162,13 @@ Grouped in waves; within a wave, items are independent and order is free.
     ~1 ms/tick on the content thread), non-dim right-anchored panel, Send→Source
     string rename, drawer presets. Zero hard edges, re-rankable arbitrarily early
     like 13b/13c; P1 (gating + doc truth pass) is a small standalone win.
+13f. APP_SHELL_DESIGN P1–P3 (added 2026-07-06, Peter-driven design session: menus,
+    settings taxonomy, shell furniture). Command table + full menu (P1), Project
+    Settings window (P2), Settings window + typed AppPrefs (P3). Zero hard edges;
+    re-rankable arbitrarily early. Two soft synergies: its §8 slots are what
+    MULTI_DISPLAY/PROJECTION/LED/COMMERCIALIZATION config surfaces land into, so
+    shipping it before those waves start saves them idiom-inventing; and P1's
+    command table is what MCP_INTERFACE's command surface reads.
 14. COMPONENT_LIBRARY → 15. MCP_INTERFACE (in that order — MCP consumes components).
 16. AUTOMATION_LANES.
 17. ML_NODES Vision/CoreML tier.

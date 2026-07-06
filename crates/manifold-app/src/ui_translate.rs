@@ -122,6 +122,8 @@ pub fn audio_feature_kind_to_core(v: UiAudioFeatureKind) -> AudioFeatureKind {
         UiAudioFeatureKind::Noisiness => AudioFeatureKind::Noisiness,
         UiAudioFeatureKind::Flux => AudioFeatureKind::Flux,
         UiAudioFeatureKind::Transients => AudioFeatureKind::Transients,
+        UiAudioFeatureKind::Pitch => AudioFeatureKind::Pitch,
+        UiAudioFeatureKind::Presence => AudioFeatureKind::Presence,
     }
 }
 
@@ -562,5 +564,30 @@ fn category_to_ui(c: rg::Category) -> gv::Category {
         rg::Category::MathAndConvert => gv::Category::MathAndConvert,
         rg::Category::Routing => gv::Category::Routing,
         rg::Category::FieldsAndCoordinates => gv::Category::FieldsAndCoordinates,
+    }
+}
+
+#[cfg(test)]
+mod feature_kind_parity {
+    use super::*;
+
+    /// P4 regression (2026-07-06, found by Peter on a live build): the UI
+    /// mirror of `AudioFeatureKind` and core's enum must agree in length AND
+    /// order — the drawer state fill passes core's `kind.index()` straight
+    /// into the mirror's `ALL`, so a silent drift shows the WRONG selected
+    /// feature (a Presence mod displayed as Amplitude). The click path is
+    /// covered by `audio_feature_kind_to_core` being an exhaustive match.
+    #[test]
+    fn ui_feature_kind_mirror_matches_core_in_order() {
+        let core_all = AudioFeatureKind::ALL;
+        let ui_all = UiAudioFeatureKind::ALL;
+        assert_eq!(ui_all.len(), core_all.len(), "mirror length must match core");
+        for (u, c) in ui_all.iter().zip(core_all.iter()) {
+            assert_eq!(
+                audio_feature_kind_to_core(*u),
+                *c,
+                "mirror order must match core (drawer indices are exchanged numerically)"
+            );
+        }
     }
 }

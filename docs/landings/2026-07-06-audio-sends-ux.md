@@ -1,7 +1,7 @@
 # AUDIO_SENDS_UX P1–P4 — landed 2026-07-06 @ <merge SHA filled at push>
 
 **Branch:** `feat/audio-sends-ux` · **Level reached:** L2 (P2/P3/P4 PNG-verified by orchestrator; P1 L1 + shipped trace instrument) / targets: L2 per doc, L4 residue queued (§10)
-**Doc status line (quoted verbatim):** "**Status:** SHIPPED P1–P4 2026-07-06 (orchestrated wave, Fable + Sonnet workers, branch `feat/audio-sends-ux`; landing report `docs/landings/2026-07-06-audio-sends-ux.md`) · **P5 DROPPED by Peter 2026-07-06 (\"I don't want them. Not useful\") — do not build, do not re-propose** · L4 residue: Peter's in-app pass owed (P1 trace-count run, P3 drag feel + undo-step check) · BUG-046 logged (panel overflow past SCOPE_H_MIN floor, LOW) · approved by Peter 2026-07-04 · Fable · D5 word confirmed: \"Source\" · **baseline-reviewed 2026-07-05, cleared**"
+**Doc status line (quoted verbatim):** "**Status:** SHIPPED P1–P4 2026-07-06 (orchestrated wave, Fable + Sonnet workers, branch `feat/audio-sends-ux`; landing report `docs/landings/2026-07-06-audio-sends-ux.md`) · **P5 DROPPED by Peter 2026-07-06 (\"I don't want them. Not useful\") — do not build, do not re-propose** · L4 residue: Peter's in-app pass owed (P1 trace-count run, P3 drag feel + undo-step check) · BUG-047 logged (panel overflow past SCOPE_H_MIN floor, LOW) · approved by Peter 2026-07-04 · Fable · D5 word confirmed: \"Source\" · **baseline-reviewed 2026-07-05, cleared**"
 
 Wave shape: Fable (high) orchestrating, one Sonnet worker per phase, sequential in one worktree.
 Phase commits: P1 `9ba1f6e1` · P2 `bc7a63fc` + `ebd43428` (orchestrator-directed legibility fixes:
@@ -60,7 +60,7 @@ read after merge.
 
 - **VD-011 opened** — P1 trace-count run with real audio (L1 reached / L2 target).
 - **VD-012 opened** — P3 drag feel + one-undo-step + no-capture-restart (L1/L2 reached / L4 target).
-- **BUG-046 logged** — panel sections can still clip past SCOPE_H_MIN floor on a source with ~18+
+- **BUG-047 logged** — panel sections can still clip past SCOPE_H_MIN floor on a source with ~18+
   combined input/consumer rows (LOW; fix shape is a deliberate UX call — cap+"+N more" or
   ScrollContainer — not improvised here).
 - Carried, unchanged: none from this wave's scope.

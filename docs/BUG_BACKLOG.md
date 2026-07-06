@@ -30,7 +30,8 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
-| BUG-046 | **setup-panel-overflow** | Audio Setup sections clip past bottom when a source has many input/consumer rows (LOW) |
+| BUG-046 | **low-band-kick-deafness-on-mixes** | Low=kick binding near-deaf on bass-heavy full mixes; HPSS measured DEAD 2026-07-06, successor = ridge-motion sweep event; partial (OR'd floored-novelty) on the shelf (HIGH) |
+| BUG-047 | **setup-panel-overflow** | Audio Setup sections clip past bottom when a source has many input/consumer rows (LOW) |
 | BUG-039 | **saw-rotation-wrap** | angle params clamp instead of wrapping; saw LFO can't spin a full rotation (MED, mechanism pinned) |
 | BUG-045 | **gap-ring-down-chase** | tracker follows kernel ring-down down ~2-4 bins in note gaps; notes gate 87.6 vs 90 (LOW) |
 | BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
@@ -56,7 +57,7 @@ or human can read it, and it needs no external tool.
 
 ## Open
 
-### BUG-046 (setup-panel-overflow) — Audio Setup panel content clips past the bottom edge when chrome exceeds viewport − SCOPE_H_MIN — LOW (needs ~18 combined input/consumer rows on one source at full height; ~5 extra rows at a 720px window)
+### BUG-047 (setup-panel-overflow) — Audio Setup panel content clips past the bottom edge when chrome exceeds viewport − SCOPE_H_MIN — LOW (needs ~18 combined input/consumer rows on one source at full height; ~5 extra rows at a 720px window)
 
 **Found 2026-07-06 during AUDIO_SENDS_UX P3 review** (orchestrated wave, found by the
 worker's own analysis after an orchestrator-caught clipping defect was root-caused —
@@ -72,6 +73,48 @@ summary row, or wrap the sections in the existing ScrollContainer (see
 don't improvise it inside an unrelated wave. **Oracle:** `audio_setup_panel.rs`
 test `consumers_fit_within_panel_on_first_build_after_configure` guards the fixed
 ordering bug; no executable test for this clamp overflow yet.
+
+### BUG-046 (low-band-kick-deafness-on-mixes) — The canonical Low=kick binding is near-deaf on full mixes with active basslines — HIGH for the streaming/live-trigger use case
+
+**Found 2026-07-06 (post-BUG-044 measurement, prompted by Peter):** on full mixes,
+the Low band catches almost no kicks while Full catches plenty — bad_guy mix Low 6
+vs drums-stem Low 46 (mix Full: 82); feel 7 vs 36; apricots 6 vs 13. inhale (29 vs
+23) and tears (32 vs 26) are healthy — arrangement-dependent. Peter's use model is
+per-band by design (Low = kicks/bass, Mid = vocals/synths, High = hats), so this is
+the primary binding for kick-triggering being broken on bass-heavy genres.
+
+**Mechanism (high confidence):** the Low band of a mix is where the sustained,
+note-active bassline lives; the kick's low-frequency energy competes with the bass
+IN the very band bound for it, keeping that band's ODF baseline (median AND recent
+max) elevated. Full recovers kicks via their broadband attack click in mid/high —
+which is why mixes fire well on Full but not Low. BUG-044's novelty criterion can't
+help: bass notes are themselves novel events in the Low band.
+
+**Fix direction (REVISED 2026-07-06 evening — HPSS-at-the-ODF measured and
+exhausted; do NOT re-try it):** the P6a offline campaign
+(AUDIO_OBJECT_TRACKING_DESIGN.md D9/P6; instrument kept at
+`crates/manifold-audio/examples/hpss_proto.rs`, replica validated
+fire-count-exact on all 25 fixtures) swept four causal families — column masks
+(flutter manufactures ±59 dB events; growl 16–73 false fires), Wiener (dB flux
+is scale-invariant; no effect), dB-novelty-floor replacement (collapses the
+adaptive median's context; growl 0→62-73), OR'd floored-novelty (guard-green,
+drums retention 1.00, apricots 5→12/13, feel 4→16/35, tears 8→12/25 — but
+bad_guy 0→8/45). None reached the ~50% bad_guy bar; not integrated. **Measured
+mechanism limit:** in a bass-occupied Low band the mix kick's surviving
+evidence is its descending FM sweep (~2 bins/hop, plainly visible in the
+bad_guy mix PNG crossing the bassline), which SuperFlux's max-filter nulls BY
+DESIGN — no flux-family detector or threshold can recover it. **Successor
+direction:** a percussive-sweep EVENT read from ridge motion (D5-tracker-
+adjacent; v0 argmax-run prototype confirmed the signal exists but needs real
+ridge tracking — apex sticks to the louder bass, bass portamento must be
+discriminated by rate/extent, and cross-criterion refractory is needed or
+attack+body double-fires). Needs its own short design; re-run the tracker gate
+lines (extra Low fires feed D5 step 4 re-acquire). **Shippable partial on the
+shelf:** the OR'd floored-novelty criterion, if Peter wants 2-3× recovery on
+4/5 mixes now despite bad_guy. Oracle unchanged: the mix-Low vs drums-Low
+table; bad_guy sharpest. Full-band is still NOT a substitute (hats spam —
+Peter). Crossover-defaults sweep: independent report-only task; does not
+address this bug (kick and bass share bins — re-confirmed at the bin level).
 
 ### BUG-045 (gap-ring-down-chase) — Tracker chases the transform's kernel ring-down during inter-note gaps — LOW (2.4 points on the notes gate; real-clip impact small)
 
