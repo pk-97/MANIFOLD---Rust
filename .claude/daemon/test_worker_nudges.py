@@ -166,6 +166,141 @@ def test_session_mailbox_unaffected_by_agent_activity():
     with_temp_dirs(run)
 
 
+def test_scan_agents_discovers_workflow_dir_agent_when_enabled():
+    """DESIGN.md §2h.3: workflow runs live one directory level deeper —
+    <subagents_dir>/workflows/<run_id>/agent-*.jsonl. Real nested layout,
+    no session_dir override, same discipline as the top-level test above."""
+    def run(td):
+        with open(observer.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
+            f.write("1")
+        session_dir = os.path.join(td, "session")
+        run_dir = os.path.join(session_dir, "sess1", "subagents", "workflows", "run-001")
+        os.makedirs(run_dir)
+        write_agent_transcript(
+            os.path.join(run_dir, "agent-wf001.jsonl"),
+            "run stage one of the workflow",
+            "Here is a sufficiently long reply that would close a window if fed.",
+        )
+        d = observer.Daemon("sess1", os.path.join(session_dir, "sess1.jsonl"))
+        logf = io.StringIO()
+        d._scan_agents(logf)
+        check("workflow-dir agent discovered", "wf001" in d.agents, sorted(d.agents))
+        worker = d.agents.get("wf001")
+        check(
+            "workflow agent mailbox uses the same <session>.<agent_id> key",
+            worker and worker.verdict_path.endswith("sess1.wf001.json"),
+            worker and worker.verdict_path,
+        )
+        check(
+            "workflow agent task captured from catchup",
+            worker and worker.state.current_task and "run stage one" in worker.state.current_task,
+            getattr(worker, "state", None) and worker.state.current_task,
+        )
+    with_temp_dirs(run)
+
+
+def test_scan_agents_discovers_top_level_and_workflow_agents_together():
+    """A session can have BOTH a plain Agent-tool worker and a workflow run
+    live at once — the flat self.agents dict must hold both without one
+    masking the other."""
+    def run(td):
+        with open(observer.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
+            f.write("1")
+        session_dir = os.path.join(td, "session")
+        subagents_dir = os.path.join(session_dir, "sess1", "subagents")
+        run_dir = os.path.join(subagents_dir, "workflows", "run-001")
+        os.makedirs(run_dir)
+        write_agent_transcript(
+            os.path.join(subagents_dir, "agent-top1.jsonl"),
+            "top-level agent task", "top-level agent reply, long enough to close a window here",
+        )
+        write_agent_transcript(
+            os.path.join(run_dir, "agent-wf001.jsonl"),
+            "workflow agent task", "workflow agent reply, long enough to close a window here",
+        )
+        d = observer.Daemon("sess1", os.path.join(session_dir, "sess1.jsonl"))
+        logf = io.StringIO()
+        d._scan_agents(logf)
+        check("top-level agent discovered", "top1" in d.agents, sorted(d.agents))
+        check("workflow agent discovered", "wf001" in d.agents, sorted(d.agents))
+        check("exactly two agents tracked, no cross-talk", len(d.agents) == 2, sorted(d.agents))
+    with_temp_dirs(run)
+
+
+def test_scan_agents_finds_workflow_run_dir_appearing_after_first_scan():
+    """DESIGN.md §2h.3: "workflow run directories appear mid-session" — a
+    workflow launched well after the observer started must be picked up on
+    the NEXT poll, not require a restart. First scan sees only a top-level
+    agent (no workflows/ dir exists yet); the run dir is created afterward;
+    a second scan must discover it."""
+    def run(td):
+        with open(observer.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
+            f.write("1")
+        session_dir = os.path.join(td, "session")
+        subagents_dir = os.path.join(session_dir, "sess1", "subagents")
+        os.makedirs(subagents_dir)
+        write_agent_transcript(
+            os.path.join(subagents_dir, "agent-early1.jsonl"),
+            "an early plain agent", "a reply long enough to close a window right here",
+        )
+        d = observer.Daemon("sess1", os.path.join(session_dir, "sess1.jsonl"))
+        logf = io.StringIO()
+        d._scan_agents(logf)
+        check("only the early agent is known before the workflow launches", sorted(d.agents) == ["early1"], sorted(d.agents))
+
+        # The workflow launches later: its run directory appears mid-session.
+        run_dir = os.path.join(subagents_dir, "workflows", "run-002")
+        os.makedirs(run_dir)
+        write_agent_transcript(
+            os.path.join(run_dir, "agent-late1.jsonl"),
+            "a late workflow agent", "a reply long enough to close a window right here too",
+        )
+        d._scan_agents(logf)
+        check(
+            "the newly-appeared workflow run dir is discovered on the next poll",
+            "late1" in d.agents,
+            sorted(d.agents),
+        )
+        check("the early agent is still tracked too", "early1" in d.agents, sorted(d.agents))
+    with_temp_dirs(run)
+
+
+def test_scan_agents_ignores_non_agent_files_in_workflow_dir():
+    def run(td):
+        with open(observer.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
+            f.write("1")
+        session_dir = os.path.join(td, "session")
+        run_dir = os.path.join(session_dir, "sess1", "subagents", "workflows", "run-001")
+        os.makedirs(run_dir)
+        with open(os.path.join(run_dir, "meta.json"), "w", encoding="utf-8") as f:
+            f.write("{}")
+        d = observer.Daemon("sess1", os.path.join(session_dir, "sess1.jsonl"))
+        logf = io.StringIO()
+        d._scan_agents(logf)
+        check("non agent-*.jsonl files in a workflow run dir are ignored", d.agents == {})
+    with_temp_dirs(run)
+
+
+def test_scan_agents_tolerates_missing_workflows_dir():
+    """No workflow has ever run this session -> workflows/ doesn't exist at
+    all. Must not raise, and must not disturb ordinary top-level discovery."""
+    def run(td):
+        with open(observer.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
+            f.write("1")
+        session_dir = os.path.join(td, "session")
+        os.makedirs(os.path.join(session_dir, "sess1", "subagents"))
+        write_agent_transcript(
+            os.path.join(session_dir, "sess1", "subagents", "agent-only1.jsonl"),
+            "just a plain agent, no workflows involved",
+            "a reply long enough to close a window right here",
+        )
+        d = observer.Daemon("sess1", os.path.join(session_dir, "sess1.jsonl"))
+        logf = io.StringIO()
+        d._scan_agents(logf)  # must not raise despite no workflows/ dir existing
+        check("top-level discovery unaffected by an absent workflows/ dir", "only1" in d.agents, sorted(d.agents))
+    with_temp_dirs(run)
+
+
 def test_posttooluse_hook_agent_event_quiet_without_planted_verdict():
     """End-to-end against the REAL repo state (deliberately not sandboxed —
     the hook subprocess imports its own fresh `valve`, reading the real
@@ -209,6 +344,11 @@ def main():
         test_scan_agents_discovers_and_catches_up_when_enabled,
         test_agent_window_closes_and_classifies_independently,
         test_session_mailbox_unaffected_by_agent_activity,
+        test_scan_agents_discovers_workflow_dir_agent_when_enabled,
+        test_scan_agents_discovers_top_level_and_workflow_agents_together,
+        test_scan_agents_finds_workflow_run_dir_appearing_after_first_scan,
+        test_scan_agents_ignores_non_agent_files_in_workflow_dir,
+        test_scan_agents_tolerates_missing_workflows_dir,
         test_posttooluse_hook_agent_event_quiet_without_planted_verdict,
     ]
     for t in tests:

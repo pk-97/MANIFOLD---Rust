@@ -319,20 +319,31 @@ class Daemon:
         try:
             names = os.listdir(subdir)
         except OSError:
-            return
-        for name in sorted(names):
-            if not (name.startswith("agent-") and name.endswith(".jsonl")):
-                continue
-            agent_id = name[len("agent-") : -len(".jsonl")]
-            if agent_id in self.agents:
-                continue
-            worker = AgentWorker(agent_id, self.session_id, os.path.join(subdir, name))
-            self.agents[agent_id] = worker
+            names = None
+        if names is not None:
+            self._discover_agents_in(subdir, names, logf)
+        # DESIGN.md §2h.3: workflow runs live one directory level deeper —
+        # <subagents_dir>/workflows/<run_id>/agent-*.jsonl — and a run
+        # directory can appear mid-session (a Workflow tool call launches it
+        # well after the observer started), so `workflows/` itself is
+        # re-listed every poll, same as the top-level scan above. If
+        # `subdir` doesn't exist yet, `workflows/` can't either (it's a
+        # child of it) — nothing to do.
+        if names is not None:
+            workflows_dir = os.path.join(subdir, "workflows")
             try:
-                worker.offset = self._agent_drain(worker, logf, classify=False)
-                _log(logf, f"worker-nudges: discovered agent {agent_id}, catchup offset={worker.offset}")
-            except Exception:
-                _log(logf, f"worker-nudges: catchup failed for {agent_id}:\n" + traceback.format_exc())
+                run_names = os.listdir(workflows_dir)
+            except OSError:
+                run_names = []
+            for run_name in sorted(run_names):
+                run_path = os.path.join(workflows_dir, run_name)
+                if not os.path.isdir(run_path):
+                    continue
+                try:
+                    run_entries = os.listdir(run_path)
+                except OSError:
+                    continue
+                self._discover_agents_in(run_path, run_entries, logf)
         for agent_id, worker in list(self.agents.items()):
             try:
                 size = os.path.getsize(worker.transcript_path)
@@ -343,6 +354,27 @@ class Daemon:
                     worker.offset = self._agent_drain(worker, logf, classify=True)
                 except Exception:
                     _log(logf, f"worker-nudges: drain failed for {agent_id}:\n" + traceback.format_exc())
+
+    def _discover_agents_in(self, directory, names, logf):
+        """Register + catch up any not-yet-tracked `agent-*.jsonl` file in
+        `directory` (its listing already taken by the caller). Shared by the
+        top-level subagents dir and each `workflows/<run_id>/` dir (DESIGN.md
+        §2h.3) — agent_id is taken from the filename exactly as before in
+        both cases; ids are unique hex, collision-free across runs, so one
+        flat `self.agents` dict serves both sources."""
+        for name in sorted(names):
+            if not (name.startswith("agent-") and name.endswith(".jsonl")):
+                continue
+            agent_id = name[len("agent-") : -len(".jsonl")]
+            if agent_id in self.agents:
+                continue
+            worker = AgentWorker(agent_id, self.session_id, os.path.join(directory, name))
+            self.agents[agent_id] = worker
+            try:
+                worker.offset = self._agent_drain(worker, logf, classify=False)
+                _log(logf, f"worker-nudges: discovered agent {agent_id} in {directory}, catchup offset={worker.offset}")
+            except Exception:
+                _log(logf, f"worker-nudges: catchup failed for {agent_id}:\n" + traceback.format_exc())
 
     def _agent_drain(self, worker, logf, classify):
         """Mirrors `_drain`, reading `worker.transcript_path` into
