@@ -269,7 +269,7 @@ pub struct LayerInfo {
     /// Audio layer gain in dB (audio layers only).
     pub audio_gain_db: f32,
     /// Name of the modulation send this audio layer feeds, if any. `None` shows
-    /// "No send".
+    /// "No source".
     pub audio_send_name: Option<String>,
     pub is_selected: bool,
     /// Layer color (auto-assigned or user-set).
@@ -1972,7 +1972,7 @@ impl LayerHeaderPanel {
                     track
                 }
                 C::Send => {
-                    let send_text = layer.audio_send_name.as_deref().unwrap_or("No send");
+                    let send_text = layer.audio_send_name.as_deref().unwrap_or("No source");
                     tree.add_button(
                         clip_parent,
                         r.x,

@@ -1614,13 +1614,13 @@ impl UIRoot {
                 true
             }
             PanelAction::AudioSendClicked(idx) => {
-                // "No send" first, then every named send from Audio Setup so the
+                // "No source" first, then every named send from Audio Setup so the
                 // layer dropdown and the setup panel can never disagree — each
                 // carries its SetLayerAudioSend directly.
                 let sends = self.audio_setup_panel.send_options();
                 let mut items = Vec::with_capacity(sends.len() + 1);
                 items.push(
-                    DropdownItem::new("No send")
+                    DropdownItem::new("No source")
                         .with_action(PanelAction::SetLayerAudioSend(idx.clone(), None)),
                 );
                 for (id, label) in sends {

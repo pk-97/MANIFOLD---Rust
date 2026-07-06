@@ -946,7 +946,7 @@ impl AudioSetupPanel {
             inner_w,
             ROW_H,
             btn_style(false),
-            "+ Add Send",
+            "+ Add Source",
         );
         cy += ROW_H;
 
