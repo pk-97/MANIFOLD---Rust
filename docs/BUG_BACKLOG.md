@@ -54,6 +54,27 @@ or human can read it, and it needs no external tool.
 
 ## Open
 
+### BUG-043 (deep-bass-floor-anchor) — Tracker anchors at the bottom of the spectrum on deep sub-bass stems — HIGH for the bass use case
+
+**Symptom** (found 2026-07-06, real-clip review, CSVs + PNGs in
+`tests/fixtures/audio/renders/`): on bad_guy (house, deep sub) the Full/Low tracker
+sits at 10–18 Hz for the ENTIRE clip — below the actual ~40–80 Hz bass fundamental,
+riding the spectral floor under the visible energy. On apricots (sustained sub) the
+tracker rides the true fundamental for ~3 bars (presence 0.4, pitch display engaged —
+the system fully working on real material), then drifts below it and presence
+collapses for the rest of the clip. Mixes inherit the same behavior from their bass
+content (bad_guy mix: 10–40 Hz range).
+
+**Mechanism: UNRESOLVED — two hypotheses, needs a column-level look, do not fix
+blind:** (a) sub-octave ghost inside the Low window — S[f0/4] collects the true
+fundamental as its 4th harmonic, and for f0 ≈ 45 Hz the ghost at ~11 Hz is above
+fmin=10 Hz, in-window; (b) bottom-octave kernel smear — at fmin 10 Hz the 4096-sample
+window holds <1 cycle, the lowest ~24 bins are broadband-leaky, and salience over
+smeared bins may beat the true peak. Both predict floor-anchoring; they need
+different fixes (subharmonic penalty vs raising the tracker's effective fmin /
+excluding unreliable bottom bins). Oracle: bad_guy + apricots bass CSVs; a synthetic
+40 Hz sub scenario would pin it.
+
 ### BUG-042 (onset-settle-grab) — Tracker re-acquires garbage pitch during the transform's post-attack settle window — MED (blocks presence on real basslines)
 
 **Symptom** (found 2026-07-06, `notes` selftest + Tears bass stem): on a note attack,
