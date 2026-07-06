@@ -30,7 +30,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
-| BUG-046 | **low-band-kick-deafness-on-mixes** | Low=kick binding near-deaf on bass-heavy full mixes; HPSS is the structural candidate (HIGH) |
+| BUG-046 | **low-band-kick-deafness-on-mixes** | Low=kick binding near-deaf on bass-heavy full mixes; HPSS measured DEAD 2026-07-06, successor = ridge-motion sweep event; partial (OR'd floored-novelty) on the shelf (HIGH) |
 | BUG-039 | **saw-rotation-wrap** | angle params clamp instead of wrapping; saw LFO can't spin a full rotation (MED, mechanism pinned) |
 | BUG-045 | **gap-ring-down-chase** | tracker follows kernel ring-down down ~2-4 bins in note gaps; notes gate 87.6 vs 90 (LOW) |
 | BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
@@ -72,22 +72,31 @@ max) elevated. Full recovers kicks via their broadband attack click in mid/high 
 which is why mixes fire well on Full but not Low. BUG-044's novelty criterion can't
 help: bass notes are themselves novel events in the Low band.
 
-**Fix direction:** threshold tuning is exhausted in this band (BUG-044's session).
-The structural candidate is harmonic/percussive separation (HPSS) ahead of the band
-split — the percussive component's Low band = kicks without the bassline; the
-harmonic component would feed the pitch tracker (cleaner for both consumers).
-Causal variants exist (median filtering over time vs frequency on the VQT columns
-we already stream, a few hops of lag). Sub-band thresholding does NOT address this
-one — kick and bass share the same bins. Needs a design doc + offline harness
-prototype first (replay the 25 clips, count recovered kicks against drums-stem Low
-as ground truth). Oracle: the mix-Low vs drums-Low table above; bad_guy is the
-sharpest case. NOTE (Peter, same day): Full-band triggering is NOT an interim
-substitute — Full fires on any prominent transient anywhere in the spectrum, so a
-"kick visual" bound to it triggers off hi-hats and spams. Until this is fixed
-there is no good kick trigger on bass-heavy full mixes at all, which is why this
-is HIGH. Secondary idea for the fix session (Peter): a cheap Sonnet sweep over
-the default band crossovers (250/2000 Hz) against the 25-clip fixture set to
-data-pick better defaults.
+**Fix direction (REVISED 2026-07-06 evening — HPSS-at-the-ODF measured and
+exhausted; do NOT re-try it):** the P6a offline campaign
+(AUDIO_OBJECT_TRACKING_DESIGN.md D9/P6; instrument kept at
+`crates/manifold-audio/examples/hpss_proto.rs`, replica validated
+fire-count-exact on all 25 fixtures) swept four causal families — column masks
+(flutter manufactures ±59 dB events; growl 16–73 false fires), Wiener (dB flux
+is scale-invariant; no effect), dB-novelty-floor replacement (collapses the
+adaptive median's context; growl 0→62-73), OR'd floored-novelty (guard-green,
+drums retention 1.00, apricots 5→12/13, feel 4→16/35, tears 8→12/25 — but
+bad_guy 0→8/45). None reached the ~50% bad_guy bar; not integrated. **Measured
+mechanism limit:** in a bass-occupied Low band the mix kick's surviving
+evidence is its descending FM sweep (~2 bins/hop, plainly visible in the
+bad_guy mix PNG crossing the bassline), which SuperFlux's max-filter nulls BY
+DESIGN — no flux-family detector or threshold can recover it. **Successor
+direction:** a percussive-sweep EVENT read from ridge motion (D5-tracker-
+adjacent; v0 argmax-run prototype confirmed the signal exists but needs real
+ridge tracking — apex sticks to the louder bass, bass portamento must be
+discriminated by rate/extent, and cross-criterion refractory is needed or
+attack+body double-fires). Needs its own short design; re-run the tracker gate
+lines (extra Low fires feed D5 step 4 re-acquire). **Shippable partial on the
+shelf:** the OR'd floored-novelty criterion, if Peter wants 2-3× recovery on
+4/5 mixes now despite bad_guy. Oracle unchanged: the mix-Low vs drums-Low
+table; bad_guy sharpest. Full-band is still NOT a substitute (hats spam —
+Peter). Crossover-defaults sweep: independent report-only task; does not
+address this bug (kick and bass share bins — re-confirmed at the bin level).
 
 ### BUG-045 (gap-ring-down-chase) — Tracker chases the transform's kernel ring-down during inter-note gaps — LOW (2.4 points on the notes gate; real-clip impact small)
 
