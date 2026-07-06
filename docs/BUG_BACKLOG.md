@@ -54,6 +54,33 @@ or human can read it, and it needs no external tool.
 
 ## Open
 
+### BUG-042 (onset-settle-grab) — Tracker re-acquires garbage pitch during the transform's post-attack settle window — MED (blocks presence on real basslines)
+
+**Symptom** (found 2026-07-06, `notes` selftest + Tears bass stem): on a note attack,
+the D5 onset re-acquire teleports to `strongest_peak()` on the fire hop, but the VQT
+needs ~12 hops to settle after an attack (low-frequency kernels), so the instant
+estimate is wrong for ~70 ms on EVERY note (CSV: 329→301→300 Hz over 13 hops on a
+150 Hz note). `P2c notes` gates document it: pitch accuracy 61.9% (gate 90), presence
+43.6% (gate 60) — presence never accumulates across a real bassline's re-attacks, so
+the pitch display stays dark on real material even though tracking between attacks is
+correct.
+
+**Two fix shapes already tried and REJECTED (do not re-attempt — traces in
+AUDIO_OBJECT_TRACKING_DESIGN P2c/P2d record):** (1) the instant teleport itself (the
+current shipped state — wrong for the settle duration); (2) an onset re-acquire
+window reusing CHALLENGE_HOPS as both window length and required consistency streak —
+structurally broken (zero slack: settle noise eats 1–3 hops, window closes short,
+pos freezes on a wrong bin PERMANENTLY because a weak residual keeps continuation
+alive). Regressed accuracy to 15.1%.
+
+**Key measured fact for the next design:** the true peak's POSITION stabilizes ~3
+hops post-attack (±0.3 bin); it is the relative STRENGTH that needs the full ~12.
+Candidate shape (untested): position-consistency accrual that is strength-agnostic,
+with slack between window length and streak requirement — or deleting the onset
+coupling and allowing consistency-only challenger accrual during held-dropout
+(riser/kicks gates are the guards). Oracle: the `notes` scenario CSV + Tears bass
+stem in `tests/fixtures/audio/` (gitignored, 5 tracks × mix+4 stems).
+
 ### BUG-039 (saw-rotation-wrap) — Angle params clamp at range ends, so a saw LFO / automation can't drive a smooth full rotation — MED (enhancement, performer-facing)
 
 **Symptom** (Peter, 2026-07-06) — binding a saw LFO or an automation ramp to a rotation

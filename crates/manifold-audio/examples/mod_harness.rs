@@ -12,18 +12,31 @@
 //! ```text
 //! cargo run -p manifold-audio --example mod_harness -- <clip.(wav|aiff|mp3|flac)> \
 //!     [--out out.png] [--low 250] [--mid 2000] [--floor -120] [--start s] [--dur s] \
-//!     [--csv dir]
+//!     [--bpm 128] [--csv dir]
 //! cargo run -p manifold-audio --example mod_harness -- --selftest [--out out.png] [--csv dir]
 //! ```
 //!
-//! `--selftest` synthesizes six known scenarios, ONE PNG EACH (suffixes
-//! `_dive`, `_wobble`, `_kicks`, `_busymix`, `_riser`, `_growl`), so the
-//! harness verifies itself without a clip: the centroid trace must follow the
-//! dive, the amplitude lane must oscillate at the wobble rate, the transients
-//! lane must tick with the kicks, the riser must show a swept noise band with
-//! no stable harmonic peak (the presence-null case), and the growl must show
-//! a fixed 150 Hz fundamental with a moving spectral tilt (the constant-pitch
-//! case). The spectrogram is drawn with the scope shader's exact display
+//! `--bpm <f32>` draws beat/bar gridlines (faint per-beat, bolder every-4-
+//! beats bar lines, `B1 B2...` labels on the time axis) over the spectrogram
+//! and every lane. If omitted, the BPM is auto-parsed from `<digits>bpm` in
+//! the file stem or its immediate parent directory name (case-insensitive,
+//! e.g. `tears_140bpm/bass.wav` -> 140) — an explicit `--bpm` always wins.
+//! No gridlines draw when neither source yields a BPM.
+//!
+//! `--selftest` synthesizes seven known scenarios, ONE PNG EACH (suffixes
+//! `_dive`, `_wobble`, `_kicks`, `_busymix`, `_riser`, `_growl`, `_notes`), so
+//! the harness verifies itself without a clip: the centroid trace must follow
+//! the dive, the amplitude lane must oscillate at the wobble rate, the
+//! transients lane must tick with the kicks, the riser must show a swept
+//! noise band with no stable harmonic peak (the presence-null case), the
+//! growl must show a fixed 150 Hz fundamental with a moving spectral tilt
+//! (the constant-pitch case), and `notes` — a 140 BPM 8th-note bassline
+//! re-attacking 150 Hz on every note but for one octave-jump note in bar 2 —
+//! must show presence surviving the re-attacks and the tracked pitch jumping
+//! to 300 Hz and back (the D6 unified-stability real-clip case,
+//! `docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P2c). `notes` always renders with
+//! its own 140 BPM gridlines even without `--bpm`, proving the known-BPM
+//! path. The spectrogram is drawn with the scope shader's exact display
 //! transform and jet colormap (ported from `spectrogram.wgsl`), so it reads
 //! as the same instrument as the app's Audio Setup scope.
 //!
@@ -121,6 +134,9 @@ struct Args {
     dur_s: f32,
     selftest: bool,
     csv_dir: Option<String>,
+    /// Explicit `--bpm` override; always wins over path auto-parse or a
+    /// selftest scenario's own known tempo (task 3, BPM gridlines).
+    bpm: Option<f32>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -134,6 +150,7 @@ fn parse_args() -> Result<Args, String> {
         dur_s: f32::INFINITY,
         selftest: false,
         csv_dir: None,
+        bpm: None,
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -151,13 +168,14 @@ fn parse_args() -> Result<Args, String> {
             "--dur" => args.dur_s = next(&mut i)?.parse().map_err(|e| format!("--dur: {e}"))?,
             "--selftest" => args.selftest = true,
             "--csv" => args.csv_dir = Some(next(&mut i)?),
+            "--bpm" => args.bpm = Some(next(&mut i)?.parse().map_err(|e| format!("--bpm: {e}"))?),
             s if s.starts_with("--") => return Err(format!("unknown flag {s}")),
             s => args.input = Some(s.to_string()),
         }
         i += 1;
     }
     if !args.selftest && args.input.is_none() {
-        return Err("usage: mod_harness <clip> [--out out.png] [--low hz] [--mid hz] [--floor db] [--start s] [--dur s] [--csv dir] | --selftest [--csv dir]".into());
+        return Err("usage: mod_harness <clip> [--out out.png] [--low hz] [--mid hz] [--floor db] [--start s] [--dur s] [--bpm f32] [--csv dir] | --selftest [--csv dir]".into());
     }
     if args.out.is_empty() {
         args.out = match &args.input {
@@ -167,6 +185,49 @@ fn parse_args() -> Result<Args, String> {
     }
     Ok(args)
 }
+
+/// Auto-parse a BPM from `<digits>bpm` in the file stem or its immediate
+/// parent directory name (case-insensitive) — e.g. `tears_140bpm/bass.wav`
+/// or `mix_98bpm.wav`. `None` if no such pattern is found (gridlines simply
+/// don't draw); an explicit `--bpm` always wins over this (task 3).
+fn parse_bpm_from_path(path: &str) -> Option<f32> {
+    let p = std::path::Path::new(path);
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let parent = p.parent().and_then(|d| d.file_name()).and_then(|s| s.to_str()).unwrap_or("");
+    parse_bpm_from_str(stem).or_else(|| parse_bpm_from_str(parent))
+}
+
+/// Finds the FIRST `bpm` (case-insensitive) preceded immediately by a run of
+/// digits (optionally with one `.`) and parses that run — the shared scan
+/// `parse_bpm_from_path` runs over both the stem and the parent dir name.
+fn parse_bpm_from_str(s: &str) -> Option<f32> {
+    let lower = s.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    if bytes.len() < 3 {
+        return None;
+    }
+    for i in 0..=(bytes.len() - 3) {
+        if &bytes[i..i + 3] == b"bpm" {
+            let mut j = i;
+            while j > 0 && (bytes[j - 1].is_ascii_digit() || bytes[j - 1] == b'.') {
+                j -= 1;
+            }
+            if j < i
+                && let Ok(v) = lower[j..i].parse::<f32>()
+                && v > 0.0
+            {
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
+/// One analysis job: (label, mono samples, sample rate, output PNG path,
+/// ground-truth fn, resolved BPM). The BPM is resolved once per job (task 3):
+/// explicit `--bpm` always wins; failing that, a selftest scenario's own
+/// known tempo (`notes` -> 140), or a file job's path auto-parse.
+type Job = (String, Vec<f32>, u32, String, GroundTruthFn, Option<f32>);
 
 fn main() {
     let args = match parse_args() {
@@ -179,16 +240,17 @@ fn main() {
 
     // ── Source: decode file (downmix all channels, same mean the live path
     //    uses) or synthesize the self-test scenarios. One PNG per job.
-    let jobs: Vec<(String, Vec<f32>, u32, String, GroundTruthFn)> = if args.selftest {
+    let jobs: Vec<Job> = if args.selftest {
         synth_selftests()
             .into_iter()
-            .map(|(name, mono, gt)| {
+            .map(|(name, mono, gt, scenario_bpm)| {
                 let out = args
                     .out
                     .strip_suffix(".png")
                     .map(|stem| format!("{stem}_{name}.png"))
                     .unwrap_or_else(|| format!("{}_{name}.png", args.out));
-                (name.to_string(), mono, SELFTEST_SR, out, gt)
+                let bpm = args.bpm.or(scenario_bpm);
+                (name.to_string(), mono, SELFTEST_SR, out, gt, bpm)
             })
             .collect()
     } else {
@@ -218,19 +280,23 @@ fn main() {
             eprintln!("empty excerpt (start/dur out of range)");
             std::process::exit(1);
         }
-        // File inputs carry no known ground truth.
-        vec![(path, mono[start..start + len].to_vec(), sr, args.out.clone(), gt_none as GroundTruthFn)]
+        // File inputs carry no known ground truth; BPM auto-parses from the
+        // path unless `--bpm` was given.
+        let bpm = args.bpm.or_else(|| parse_bpm_from_path(&path));
+        vec![(path, mono[start..start + len].to_vec(), sr, args.out.clone(), gt_none as GroundTruthFn, bpm)]
     };
 
-    for (label, mono, sr, out, gt) in &jobs {
-        analyze_and_render(label, mono, *sr, out, &args, *gt);
+    for (label, mono, sr, out, gt, bpm) in &jobs {
+        analyze_and_render(label, mono, *sr, out, &args, *gt, *bpm);
     }
 }
 
 /// Run the live analysis over one mono clip and write its PNG + jitter report
 /// (+ CSV, if `--csv` was passed). `ground_truth(time_s)` is the scenario's
 /// own known f0 curve, or `gt_none` (NaN) when there is no single tracked
-/// fundamental / the input is a file.
+/// fundamental / the input is a file. `bpm` is this job's resolved tempo
+/// (explicit `--bpm`, a selftest scenario's own known tempo, or a file
+/// path's auto-parse) — `None` draws no gridlines (task 3).
 fn analyze_and_render(
     label: &str,
     mono: &[f32],
@@ -238,6 +304,7 @@ fn analyze_and_render(
     out: &str,
     args: &Args,
     ground_truth: GroundTruthFn,
+    bpm: Option<f32>,
 ) {
     // ── Analysis: the exact live path, fed causally one hop at a time so
     //    `latest()` is sampled at hop rate — what the modulation evaluator sees.
@@ -403,13 +470,23 @@ fn analyze_and_render(
         print_p3_fires(label, &records);
         print_p2_gates(label, &records, dt, ground_truth);
         print_p2b_gates(label, &records, dt, ground_truth);
+        if label == "notes" {
+            print_p2c_gates(&records, dt, ground_truth);
+        }
     }
 
     if let Some(dir) = &args.csv_dir {
         write_csv(dir, label, &records, dt, ground_truth);
     }
 
-    render_png(out, &records, &cfg, sr, args.low_hz, args.mid_hz);
+    // Task 3: report the resolved BPM (explicit / scenario / path
+    // auto-parse) so the gridline path is verifiable from stdout alone.
+    match bpm {
+        Some(b) => println!("{label}: bpm={b:.1} (beat/bar gridlines drawn)"),
+        None => println!("{label}: bpm=unknown (no gridlines)"),
+    }
+
+    render_png(out, &records, &cfg, sr, args.low_hz, args.mid_hz, bpm);
     println!("wrote {out}");
 }
 
@@ -629,6 +706,82 @@ fn print_p2b_gates(label: &str, records: &[HopRecord], dt: f32, ground_truth: Gr
     }
 }
 
+/// P2c gates (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P2c — the D6 unified-
+/// stability real-clip finding: presence never accumulated on NOTE-based
+/// material because every legitimate re-attack reset trust to 0). `notes`
+/// is the note-attack regression the six original tones (all continuous
+/// tones) never exercised. One `P2c notes: <metric>=<value> (gate <op>
+/// <bound>) PASS|FAIL` line per criterion, plus the octave note's own
+/// max-tracked-f0 report line.
+fn print_p2c_gates(records: &[HopRecord], dt: f32, ground_truth: GroundTruthFn) {
+    const FULL: usize = 0;
+    let gate = |metric: &str, value: f64, op: &str, bound: f64, pass: bool| {
+        println!("P2c notes: {metric}={value:.4} (gate {op} {bound}) {}", if pass { "PASS" } else { "FAIL" });
+    };
+
+    let grid = notes_eighth_s();
+
+    // Phrase-trust criterion: skip the first two notes (initial-acquisition
+    // churn), then presence must clear 0.4 on most SOUNDING hops — the whole
+    // point of the D6 unification is that re-attacks at the same pitch stop
+    // resetting trust to 0, so presence should now survive a real bassline.
+    let warmup_t = 2.0 * grid;
+    let sounding_after_warmup: Vec<&HopRecord> = records
+        .iter()
+        .enumerate()
+        .filter(|&(idx, _)| {
+            let t = idx as f32 * dt;
+            t >= warmup_t && ground_truth(t).is_finite()
+        })
+        .map(|(_, r)| r)
+        .collect();
+    let hot = sounding_after_warmup.iter().filter(|r| r.raw[PRESENCE_IDX][FULL] >= 0.4).count();
+    let hot_pct = 100.0 * hot as f64 / sounding_after_warmup.len().max(1) as f64;
+    gate("pct_sounding_hops_full_presence_ge_0.4_after_note2", hot_pct, ">=", 60.0, hot_pct >= 60.0);
+
+    // Pitch accuracy: within +/-1 st of ground truth on sounding hops, from
+    // the Full tracker's first acquisition onward.
+    let first_acq = records.iter().position(|r| r.tracked_f0_hz.is_finite());
+    let (mut total, mut within) = (0usize, 0usize);
+    if let Some(acq_idx) = first_acq {
+        for (idx, r) in records.iter().enumerate().skip(acq_idx) {
+            let gt = ground_truth(idx as f32 * dt);
+            if !gt.is_finite() {
+                continue;
+            }
+            total += 1;
+            if r.tracked_f0_hz.is_finite() && semitones_vs(r.tracked_f0_hz, gt).abs() <= 1.0 {
+                within += 1;
+            }
+        }
+    }
+    let within_pct = 100.0 * within as f64 / total.max(1) as f64;
+    gate("pct_sounding_hops_within_1st_of_gt_post_acquisition", within_pct, ">=", 90.0, within_pct >= 90.0);
+
+    // The octave note (bar 2): tracked pitch must reach within +/-1 st of
+    // 300 Hz somewhere inside that note's sounding window (the re-acquire
+    // jump working) — printed max tracked f0 during it either way.
+    let jump_start = NOTES_JUMP_NOTE_INDEX as f32 * grid;
+    let jump_end = jump_start + notes_sound_s();
+    let mut max_tracked = f32::NEG_INFINITY;
+    let mut reached = false;
+    for (idx, r) in records.iter().enumerate() {
+        let t = idx as f32 * dt;
+        if t < jump_start || t >= jump_end || !r.tracked_f0_hz.is_finite() {
+            continue;
+        }
+        max_tracked = max_tracked.max(r.tracked_f0_hz);
+        if semitones_vs(r.tracked_f0_hz, 300.0).abs() <= 1.0 {
+            reached = true;
+        }
+    }
+    println!(
+        "P2c notes: max_tracked_f0_hz_during_jump_note={}",
+        if max_tracked.is_finite() { format!("{max_tracked:.2}") } else { "NaN".to_string() }
+    );
+    gate("octave_note_reaches_within_1st_of_300hz", if reached { 1.0 } else { 0.0 }, "==", 1.0, reached);
+}
+
 /// One `<dir>/<label>.csv`, one row per hop: hop index, time, ground-truth
 /// f0 (or NaN), the P1 salience-peak f0 estimate (or NaN), then the five raw
 /// features for each of the four bands — see the module header comment for
@@ -683,7 +836,7 @@ const SELFTEST_SECS: usize = 4;
 /// for file jobs, where ground truth is simply unknown) — see `gt_none`.
 type GroundTruthFn = fn(f32) -> f32;
 
-/// Six isolated scenarios, one PNG each — what each picture must show:
+/// Seven isolated scenarios, one PNG each — what each picture must show:
 /// `dive` — supersaw glide 1200→150 Hz; the centroid trace follows it down.
 /// `wobble` — 150 Hz bass, 3 Hz amplitude LFO; the amplitude lane oscillates.
 /// `kicks` — kick every 0.5 s on silence; transients tick at exactly 2 Hz.
@@ -692,14 +845,21 @@ type GroundTruthFn = fn(f32) -> f32;
 /// content; the presence-null case (no stable harmonic peak at any hop).
 /// `growl` — 150 Hz saw at CONSTANT pitch with a 2 Hz spectral-tilt wobble;
 /// the constant-pitch-moving-timbre case (approximated formant motion).
-fn synth_selftests() -> Vec<(&'static str, Vec<f32>, GroundTruthFn)> {
+/// `notes` — 150 Hz saw 8th notes on a 140 BPM grid, re-attacking the SAME
+/// pitch every note except one octave jump in bar 2; the real-clip case
+/// (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P2c) the other six never
+/// exercise — presence must survive the re-attacks, and the tracked pitch
+/// must jump to 300 Hz and back for the one jump note. Carries its own known
+/// 140 BPM (task 3) so its PNG always shows gridlines, proving the path.
+fn synth_selftests() -> Vec<(&'static str, Vec<f32>, GroundTruthFn, Option<f32>)> {
     vec![
-        ("dive", soft_clip(synth_dive()), gt_dive),
-        ("wobble", soft_clip(synth_wobble()), gt_const_150),
-        ("kicks", soft_clip(synth_kicks(Vec::new())), gt_none),
-        ("busymix", soft_clip(synth_kicks(synth_busy_pad())), gt_none),
-        ("riser", soft_clip(synth_riser()), gt_none),
-        ("growl", soft_clip(synth_growl()), gt_const_150),
+        ("dive", soft_clip(synth_dive()), gt_dive as GroundTruthFn, None),
+        ("wobble", soft_clip(synth_wobble()), gt_const_150, None),
+        ("kicks", soft_clip(synth_kicks(Vec::new())), gt_none, None),
+        ("busymix", soft_clip(synth_kicks(synth_busy_pad())), gt_none, None),
+        ("riser", soft_clip(synth_riser()), gt_none, None),
+        ("growl", soft_clip(synth_growl()), gt_const_150, None),
+        ("notes", soft_clip(synth_notes()), gt_notes, Some(NOTES_BPM)),
     ]
 }
 
@@ -719,6 +879,42 @@ fn gt_const_150(_t: f32) -> f32 {
 /// (kicks/busymix/riser) and for file inputs (unknown ground truth).
 fn gt_none(_t: f32) -> f32 {
     f32::NAN
+}
+
+/// `notes`' own tempo (P2c) — also its selftest-default BPM for the
+/// gridline path (task 3): 140 BPM, 8th-note grid.
+const NOTES_BPM: f32 = 140.0;
+/// The 0-based 8th-note index (within bar 2, an 8-note bar at 4/4) that
+/// jumps an octave to 300 Hz then returns — the re-acquire-jump case.
+const NOTES_JUMP_NOTE_INDEX: usize = 10;
+/// 8th-note grid spacing in seconds at [`NOTES_BPM`], 4/4.
+fn notes_eighth_s() -> f32 {
+    60.0 / NOTES_BPM / 2.0
+}
+/// How long each note actually sounds (attack+sustain+release), leaving a
+/// gap to the next 8th on the grid.
+fn notes_sound_s() -> f32 {
+    0.180
+}
+/// Linear attack/release ramp length — click-free note edges.
+fn notes_ramp_s() -> f32 {
+    0.005
+}
+/// `150 Hz` for every note except [`NOTES_JUMP_NOTE_INDEX`], which jumps an
+/// octave to `300 Hz`.
+fn note_freq(i: usize) -> f32 {
+    if i == NOTES_JUMP_NOTE_INDEX { 300.0 } else { 150.0 }
+}
+/// Ground truth for `notes`: the sounding note's f0 while a note is playing,
+/// `NaN` in the gap between notes (a real bassline isn't always sounding).
+fn gt_notes(t: f32) -> f32 {
+    if t < 0.0 {
+        return f32::NAN;
+    }
+    let grid = notes_eighth_s();
+    let i = (t / grid) as usize;
+    let note_start = i as f32 * grid;
+    if t < note_start + notes_sound_s() { note_freq(i) } else { f32::NAN }
 }
 
 fn selftest_buf() -> Vec<f32> {
@@ -855,6 +1051,46 @@ fn synth_growl() -> Vec<f32> {
     out
 }
 
+/// Note-based bassline (P2c, the D6 unified-stability real-clip case): a
+/// 150 Hz saw on an 8th-note grid at [`NOTES_BPM`], each note sounding
+/// [`notes_sound_s`] with a [`notes_ramp_s`] linear attack/release (click-
+/// free), then silence to the next 8th. Every note is 150 Hz except
+/// [`NOTES_JUMP_NOTE_INDEX`] (bar 2), which jumps an octave to 300 Hz then
+/// returns — the tracker must re-acquire the jump AND recognize every other
+/// re-attack as the SAME object, not a new one.
+fn synth_notes() -> Vec<f32> {
+    let mut out = selftest_buf();
+    let srf = SELFTEST_SR as f32;
+    let grid = notes_eighth_s();
+    let dur = notes_sound_s();
+    let ramp = notes_ramp_s();
+    let n_notes = (SELFTEST_SECS as f32 / grid).floor() as usize;
+    for i in 0..n_notes {
+        let f0 = note_freq(i);
+        let start_sample = (i as f32 * grid * srf) as usize;
+        let n_samples = (dur * srf) as usize;
+        let mut p = 0.0f32;
+        for j in 0..n_samples {
+            let idx = start_sample + j;
+            if idx >= out.len() {
+                break;
+            }
+            let tj = j as f32 / srf;
+            p = (p + f0 / srf).fract();
+            let saw = 2.0 * p - 1.0;
+            let env = if tj < ramp {
+                tj / ramp
+            } else if tj > dur - ramp {
+                ((dur - tj) / ramp).max(0.0)
+            } else {
+                1.0
+            };
+            out[idx] += 0.6 * env * saw;
+        }
+    }
+    out
+}
+
 fn soft_clip(mut v: Vec<f32>) -> Vec<f32> {
     for s in &mut v {
         *s = s.tanh();
@@ -880,6 +1116,7 @@ fn render_png(
     sr: u32,
     low_hz: f32,
     mid_hz: f32,
+    bpm: Option<f32>,
 ) {
     // Both derivable from cfg + sr; recomputing beats threading them through.
     let num_bins = cfg.num_bins(sr as f32).max(1);
@@ -914,6 +1151,9 @@ fn render_png(
     ), [180, 180, 190]);
     // Legend swatches after the text (positions chosen to sit over the trailing words).
     y += TITLE_H;
+    // Top of the spectrogram — also the top of the BPM gridline overlay
+    // (task 3), which spans down through every lane.
+    let content_top = y;
 
     // ── Spectrogram: the scope shader's exact display transform, ported from
     //    `spectrogram.wgsl` fs_main — 2-tap blend between adjacent log bins in
@@ -1053,6 +1293,30 @@ fn render_png(
         y += LANE_H + LANE_GAP;
     }
 
+    // ── BPM gridlines (task 3): beat (faint) + bar-every-4-beats (bolder)
+    //    verticals, drawn as a final overlay so they read against both the
+    //    spectrogram and every lane — same time->x mapping the axis below
+    //    uses. `content_top..y` is the full spectrogram+lanes span.
+    let content_bottom = y;
+    if let Some(bpm) = bpm {
+        let beat_s = 60.0 / bpm.max(1e-3);
+        let mut k = 0usize;
+        loop {
+            let t = k as f32 * beat_s;
+            let hop_idx = (t / dt) as usize;
+            if hop_idx >= n {
+                break;
+            }
+            let x = hop_idx * w / n;
+            let is_bar = k.is_multiple_of(4);
+            let alpha = if is_bar { 0.35 } else { 0.15 };
+            for py in content_top..content_bottom {
+                blend_pixel(&mut img, x0 + x, py, [255, 255, 255], alpha);
+            }
+            k += 1;
+        }
+    }
+
     // ── Time axis: tick + label every second.
     let hops_per_sec = 1.0 / dt;
     let mut sec = 0usize;
@@ -1067,6 +1331,21 @@ fn render_png(
         }
         draw_text(&mut img, x0 + x + 2, y + 6, &format!("{sec}S"), [140, 140, 150]);
         sec += 1;
+    }
+    // Bar labels ("B1 B2 ...") on the time axis, directly under the
+    // per-second ticks — only when a BPM is known (task 3).
+    if let Some(bpm) = bpm {
+        let bar_s = 60.0 / bpm.max(1e-3) * 4.0;
+        let mut bar = 0usize;
+        loop {
+            let hop_idx = (bar as f32 * bar_s / dt) as usize;
+            if hop_idx >= n {
+                break;
+            }
+            let x = hop_idx * w / n;
+            draw_text(&mut img, x0 + x + 2, y + 12, &format!("B{}", bar + 1), [230, 230, 240]);
+            bar += 1;
+        }
     }
 
     img.save(path).unwrap_or_else(|e| {

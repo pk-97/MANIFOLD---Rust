@@ -825,13 +825,25 @@ struct RidgeTracker {
     /// False until the first acquisition (D5 step 6) — no continuation or
     /// takeover runs before then, only the acquisition test.
     active: bool,
-    /// Position stability 0..1 from the last matched hop: `1 − |Δpos|/MAX_SLEW`
-    /// on continuation, 0 on acquisition/takeover/onset-re-acquire (a jump
-    /// must re-earn trust). Multiplies the presence target (D6, 2026-07-06):
-    /// noise makes the tracked position wander at the slew limit while a real
-    /// tone holds still — temporal continuity is the discriminator the per-hop
-    /// salience ratio structurally can't provide (a swept-noise column shows
-    /// genuine octave-contrast spikes on ~35% of hops at any radius).
+    /// Position stability 0..1 from the last matched hop: unified distance
+    /// law `1 − |Δpos|/MAX_SLEW` (clamped 0..1), `Δpos` = new pos − previous
+    /// pos, applied on EVERY hop that moves `pos` — continuation, takeover,
+    /// AND onset re-acquire alike (unified 2026-07-06, real-clip finding,
+    /// `docs/AUDIO_OBJECT_TRACKING_DESIGN.md` D6/P2c: a bassline re-attacking
+    /// the SAME note on a fresh onset is the SAME tracked object, not a new
+    /// one, so it must keep trust, not reset it — the old unconditional 0 on
+    /// onset re-acquire meant presence never accumulated on real note
+    /// material, only on the synthetics' continuous tones). Acquisition from
+    /// `!active` is the one exception, unconditionally 0 — there is no prior
+    /// `pos` to be near. The unified law still crushes takeover trust in
+    /// practice (a takeover challenger is by construction > `SLEW_RADIUS`,
+    /// hence > `MAX_SLEW`, bins away, so it still reads 0) and still crushes
+    /// noise-following jitter at the slew limit; only a genuine re-attack at
+    /// (about) the same pitch newly keeps trust across a jump. Multiplies the
+    /// presence target (D6): temporal continuity is the discriminator the
+    /// per-hop salience ratio structurally can't provide (a swept-noise
+    /// column shows genuine octave-contrast spikes on ~35% of hops at any
+    /// radius).
     stability: f32,
 }
 
@@ -871,7 +883,9 @@ impl RidgeTracker {
                 self.active = true;
                 self.hold = 0;
                 self.challenger_hops = 0;
-                self.stability = 0.0; // a fresh acquisition re-earns trust
+                // The one exception to the unified distance law below: no
+                // prior `pos` exists yet to measure Δ against.
+                self.stability = 0.0;
             }
             let target = if self.active {
                 self.stability * presence_target(salience, col, self.pos, bpo)
@@ -886,10 +900,16 @@ impl RidgeTracker {
         // for this hop; the strongest window peak wins outright.
         if transient_fired {
             if let Some((bin, _)) = strongest_peak(&peaks) {
+                let delta = bin - self.pos;
                 self.pos = bin;
                 self.hold = 0;
                 self.challenger_hops = 0;
-                self.stability = 0.0; // a jump re-earns trust
+                // Unified distance law (D6/P2c, 2026-07-06): a re-attack near
+                // the current position is the SAME object (a bassline
+                // re-striking the same note) and keeps trust; only a jump
+                // across the window (Δ > MAX_SLEW) re-earns it, same as
+                // continuation below.
+                self.stability = (1.0 - (delta.abs() / MAX_SLEW)).clamp(0.0, 1.0);
             }
             let target = self.stability * presence_target(salience, col, self.pos, bpo);
             self.step_presence(target, dt);
@@ -919,10 +939,15 @@ impl RidgeTracker {
                     }
                     self.challenger_bin = xbin;
                     if self.challenger_hops >= CHALLENGE_HOPS {
+                        let delta = xbin - self.pos;
                         self.pos = xbin; // no slew clamp on the takeover hop itself
                         self.hold = 0;
                         self.challenger_hops = 0;
-                        self.stability = 0.0; // a jump re-earns trust
+                        // Same unified distance law as onset re-acquire — a
+                        // takeover challenger is by construction outside
+                        // SLEW_RADIUS (> MAX_SLEW), so this reads 0 in
+                        // practice; it's one law, not a special case.
+                        self.stability = (1.0 - (delta.abs() / MAX_SLEW)).clamp(0.0, 1.0);
                         took_over = true;
                     }
                 } else {
@@ -2629,6 +2654,65 @@ mod tests {
         let sal = impulse(n, 95, 50.0);
         t.update(&sal, &sal, 0, n, true, SAL_BPO, TRACKER_DT);
         assert_eq!(t.pos, 95.0, "onset fire must re-acquire immediately");
+    }
+
+    /// D6/P2c unification (2026-07-06, real-clip finding): the onset
+    /// re-acquire path must distinguish a re-attack NEAR the current position
+    /// (a bassline re-striking the SAME note — same object, keep trust) from
+    /// one FAR from it (a genuinely new note — new object, reset trust). The
+    /// old unconditional `stability = 0.0` on every onset fire treated both
+    /// identically, which meant presence never accumulated on note-based
+    /// material: every attack, however close in pitch, reset trust to 0.
+    #[test]
+    fn tracker_onset_reacquire_near_pos_keeps_stability_far_resets_it() {
+        let n = 120;
+        let mut t = RidgeTracker::new();
+        for _ in 0..5 {
+            let sal = impulse(n, 40, 10.0);
+            t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
+        }
+        assert_eq!(t.pos, 40.0);
+        assert!(
+            t.stability > 0.99,
+            "continuation on a static peak should already read ~full stability: {}",
+            t.stability
+        );
+
+        // (i) Re-acquire NEAR the current pos (Δ=0): a fresh, stronger onset
+        // at the SAME bin — the re-attack case. Stability must be preserved,
+        // and presence must keep rising across it, not dip.
+        let presence_before_near = t.presence;
+        let sal = impulse(n, 40, 50.0);
+        t.update(&sal, &sal, 0, n, true, SAL_BPO, TRACKER_DT);
+        assert_eq!(t.pos, 40.0, "onset fire must re-acquire immediately");
+        assert_eq!(t.stability, 1.0, "re-acquire at Δpos=0 must read full stability (same object)");
+        for hop in 0..10 {
+            t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
+            assert!(
+                t.presence >= presence_before_near - 1e-6,
+                "presence must not dip below its pre-re-attack value while re-earning nothing (same object), hop {hop}"
+            );
+        }
+        assert!(
+            t.presence > presence_before_near,
+            "presence must have kept rising through the same-pitch re-attack: {presence_before_near} -> {}",
+            t.presence
+        );
+
+        // (ii) Re-acquire FAR from the current pos: a brand-new note far
+        // outside SLEW_RADIUS. Stability must reset to 0, and presence must
+        // fall (re-earning trust from scratch), never hold or rise on the
+        // re-acquire hop itself.
+        let presence_before_far = t.presence;
+        let sal_far = impulse(n, 95, 50.0);
+        t.update(&sal_far, &sal_far, 0, n, true, SAL_BPO, TRACKER_DT);
+        assert_eq!(t.pos, 95.0, "onset fire must re-acquire immediately even far away");
+        assert_eq!(t.stability, 0.0, "re-acquire far from the previous pos must read 0 stability (new object)");
+        assert!(
+            t.presence < presence_before_far,
+            "presence must fall on a far re-acquire before it can re-earn trust: {presence_before_far} -> {}",
+            t.presence
+        );
     }
 
     /// D6 recalibration — the ghost case named in the task brief: a peak

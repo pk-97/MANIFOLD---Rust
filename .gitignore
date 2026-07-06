@@ -38,3 +38,6 @@ __pycache__/
 # the session grade files above: sleep pass folds them in, then clears them
 # (RUNBOOK steps 2/3 + 8).
 .claude/daemon/eval/observations.session.jsonl
+
+# Real-audio eval fixtures for the mod_harness (copyrighted clips — never commit)
+tests/fixtures/audio/
