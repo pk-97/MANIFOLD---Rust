@@ -404,7 +404,13 @@ kicks fire in Low.
 detector on tracker state (coupling direction is tracker←onset per §6.2, never both
 ways in v1).
 
-**P4 — Modulation surface + serde. ✅ SHIPPED 2026-07-06 (`586d2bac`).**
+**P4 — Modulation surface + serde. ✅ SHIPPED 2026-07-06 (`586d2bac`; drawer
+mirror escape fixed same day `00e9fd19`).** Escaped: P4 main-context build ·
+caught-by: Peter, live build (the UI crate's MIRROR AudioFeatureKind behind the
+translation boundary was never extended — drawer stayed at five buttons, saved
+Pitch mods displayed as Amplitude; serde/runtime were fine). Two regression pins
+now hold the seam: `feature_row_carries_pitch_and_presence` (manifold-ui) and
+`ui_feature_kind_mirror_matches_core_in_order` (manifold-app/ui_translate).
 Pitch/Presence kinds live in the drawer matrix (kind row + AUDIO_KIND_COUNT now
 derive from `AudioFeatureKind::ALL` — a future kind cannot leave the drawer
 stale); legacy `pitch`/`pitchDelta` retarget onto the tracker (D3); D7

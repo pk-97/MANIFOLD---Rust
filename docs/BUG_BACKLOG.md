@@ -81,8 +81,13 @@ we already stream, a few hops of lag). Sub-band thresholding does NOT address th
 one — kick and bass share the same bins. Needs a design doc + offline harness
 prototype first (replay the 25 clips, count recovered kicks against drums-stem Low
 as ground truth). Oracle: the mix-Low vs drums-Low table above; bad_guy is the
-sharpest case. Interim guidance (recorded for the perform surface): trigger from
-Full on mixes; Low only on stems or bass-light material.
+sharpest case. NOTE (Peter, same day): Full-band triggering is NOT an interim
+substitute — Full fires on any prominent transient anywhere in the spectrum, so a
+"kick visual" bound to it triggers off hi-hats and spams. Until this is fixed
+there is no good kick trigger on bass-heavy full mixes at all, which is why this
+is HIGH. Secondary idea for the fix session (Peter): a cheap Sonnet sweep over
+the default band crossovers (250/2000 Hz) against the 25-clip fixture set to
+data-pick better defaults.
 
 ### BUG-045 (gap-ring-down-chase) — Tracker chases the transform's kernel ring-down during inter-note gaps — LOW (2.4 points on the notes gate; real-clip impact small)
 
