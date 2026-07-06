@@ -290,6 +290,9 @@ struct SendState {
     /// hop from the untilted, floored column, shared read-only by all four
     /// window trackers below (D4, `docs/AUDIO_OBJECT_TRACKING_DESIGN.md`).
     salience: Vec<f32>,
+    /// Apex-masked column scratch for `salience_into` (BUG-043), `num_bins`
+    /// long — pre-allocated here so the hot path stays allocation-free.
+    salience_peaks: Vec<f32>,
     /// Per-window D5 ridge trackers, order [Full, Low, Mid, High] (D4).
     trackers: [RidgeTracker; 4],
 }
@@ -654,26 +657,72 @@ pub fn tilt_weights(cfg: &SpectrogramConfig, sample_rate: f32, num_bins: usize) 
 /// harmonic) — starting values, tuned against the eval set in P1.
 const SALIENCE_WEIGHTS: [f32; 5] = [1.0, 0.8, 0.6, 0.45, 0.35];
 
-/// Harmonic-sum salience (D1): `S[k] = Σ_{h=1..5} w_h · col[k + off_h]`, where
+/// Apex-mask radius (bins) for [`salience_into`]'s peak pass (BUG-043): a
+/// bin survives into the comb's input only if it is within one bin of a
+/// local maximum over ±this radius. 4 = half the comb's minimum tooth
+/// spacing at bpo 24 (`off_5 − off_4` = 8 bins) — the smallest radius that
+/// still guarantees one smeared mound can't hand two adjacent teeth two
+/// "independent" readings — while leaving simultaneous objects a minor
+/// third apart (6 bins) both standing.
+const PEAK_MASK_RADIUS: usize = 4;
+
+/// Harmonic-sum salience (D1): `S[k] = Σ_{h=1..5} w_h · P[k + off_h]`, where
 /// `off_h = round(bpo · log2(h))` — bins are geometric, so harmonic `h` above
 /// bin `k` is a *fixed* bin offset regardless of `k` (0, 24, 38, 48, 56 at
-/// `bpo` 24). `col` must be the tilted, floored column
-/// ([`form_tilted_column`] + the caller's floor pass) — the same data the
-/// user sees and the bands read. Bins beyond `col`'s end contribute 0
-/// (saturating access, no wraparound). `out.len()` must equal `col.len()`.
+/// `bpo` 24). `col` must be the untilted, floored column — the same data the
+/// bands read. Bins beyond `col`'s end contribute 0 (saturating access, no
+/// wraparound). `peaks` is caller-provided scratch; both it and `out` must
+/// equal `col.len()`.
+///
+/// `P` is `col` **apex-masked** (BUG-043, 2026-07-06): `P[j] = col[j]` where
+/// `j` lies within one bin of a strict local maximum over ±[`PEAK_MASK_RADIUS`],
+/// else 0 — the comb reads spectral PEAKS, never skirt. The sum's founding
+/// assumption is that each tooth samples an independent spectral object; at
+/// the transform's bottom octaves the 4096-sample kernels are far under-Q
+/// (a 45 Hz fundamental smears over ~40 bins at >50% magnitude), so a
+/// subharmonic candidate's teeth — spaced only 8–14 bins — could all land
+/// inside the ONE smeared mound and out-sum the true bin (measured: S[15 Hz
+/// ghost] 0.70 vs S[45 Hz true] 0.52, `sub_45hz` test). Masking to apexes
+/// restores the property that makes the harmonic sum correct at all: a
+/// sub-octave ghost collects each true harmonic at strictly LOWER weight
+/// than the true fundamental collects it (`w_{2h} < w_h`), so the true bin
+/// always wins. The ±1 dilation keeps the apex's own two neighbours so
+/// [`refine_peak`]'s parabolic fit still sees the true peak shape, and
+/// covers the ≤0.5-bin rounding of `off_h`.
 ///
 /// Deliberately **not normalized** per hop — the absolute scale is what lets
-/// a later presence feature read `salience ÷ window energy` (D6); normalizing
-/// here would erase that signal before it exists.
-pub fn salience_into(col: &[f32], bpo: usize, out: &mut [f32]) {
+/// the presence feature read tracked-bin salience against its neighbourhood
+/// (D6); normalizing here would erase that signal before it exists.
+pub fn salience_into(col: &[f32], bpo: usize, peaks: &mut [f32], out: &mut [f32]) {
     debug_assert_eq!(col.len(), out.len(), "salience_into: out must match col in length");
+    debug_assert_eq!(col.len(), peaks.len(), "salience_into: peaks scratch must match col in length");
+    let n = col.len();
+    peaks.fill(0.0);
+    for k in 0..n {
+        let v = col[k];
+        if v <= 0.0 {
+            continue;
+        }
+        let lo = k.saturating_sub(PEAK_MASK_RADIUS);
+        let hi = (k + PEAK_MASK_RADIUS + 1).min(n);
+        let is_apex = (lo..hi).all(|j| j == k || col[j] <= v);
+        if is_apex {
+            if k > 0 {
+                peaks[k - 1] = col[k - 1];
+            }
+            peaks[k] = v;
+            if k + 1 < n {
+                peaks[k + 1] = col[k + 1];
+            }
+        }
+    }
     let bpof = bpo as f32;
     for (k, s) in out.iter_mut().enumerate() {
         let mut sum = 0.0f32;
         for (i, &w) in SALIENCE_WEIGHTS.iter().enumerate() {
             let h = (i + 1) as f32;
             let off = (bpof * h.log2()).round() as usize;
-            if let Some(&v) = col.get(k + off) {
+            if let Some(&v) = peaks.get(k + off) {
                 sum += w * v;
             }
         }
@@ -845,6 +894,11 @@ struct RidgeTracker {
     /// column shows genuine octave-contrast spikes on ~35% of hops at any
     /// radius).
     stability: f32,
+    /// The window's memoryless salience argmax last hop (fractional bin) —
+    /// the apex-consistency factor's sole state (see `update`). Unlike `pos`
+    /// it follows nothing and holds nothing: it is wherever the window's
+    /// strongest peak actually was.
+    last_apex: f32,
 }
 
 impl RidgeTracker {
@@ -860,6 +914,10 @@ impl RidgeTracker {
             challenger_hops: 0,
             active: false,
             stability: 0.0,
+            // Same trick as `challenger_bin`: the first observed apex always
+            // reads inconsistent (one hop of zero presence target), never
+            // accidentally consistent with bin 0.
+            last_apex: f32::NEG_INFINITY,
         }
     }
 
@@ -875,10 +933,34 @@ impl RidgeTracker {
     fn update(&mut self, salience: &[f32], col: &[f32], lo: usize, hi: usize, transient_fired: bool, bpo: usize, dt: f32) {
         let peaks = local_peaks(salience, lo, hi);
 
+        // Apex position-consistency (BUG-043 riser follow-up, 2026-07-06):
+        // is the window's memoryless argmax still where it was last hop
+        // (within the existing MAX_SLEW motion bound)? A real object's apex
+        // is self-consistent hop to hop (measured: sub/growl < 0.3 bins/hop,
+        // a gliding dive ~0.2); band-noise's apex is not, at ANY frequency
+        // (measured on the riser: 10-20 bins/hop, every window of the clip).
+        // This is the discriminator the tracked `pos` structurally cannot
+        // provide: continuation parks `pos` on nearby residue (small delta,
+        // HIGH stability) while the window's real maximum jumps around
+        // elsewhere. Binary, judged fresh each hop with an apex - a genuine
+        // note-jump reads inconsistent for exactly one hop (a ~3% one-pole
+        // dip), noise reads inconsistent nearly every hop and presence never
+        // accumulates. Silent hops pass no judgment: the dropout path below
+        // already decays presence on its own.
+        let apex = strongest_peak(&peaks);
+        let consistency = match apex {
+            Some((bin, _)) => {
+                let ok = (bin - self.last_apex).abs() <= MAX_SLEW;
+                self.last_apex = bin;
+                if ok { 1.0 } else { 0.0 }
+            }
+            None => 1.0,
+        };
+
         // Step 6: acquisition (inactive → active). Requires salience > 0,
         // already guaranteed by `local_peaks`.
         if !self.active {
-            if let Some((bin, _)) = strongest_peak(&peaks) {
+            if let Some((bin, _)) = apex {
                 self.pos = bin;
                 self.active = true;
                 self.hold = 0;
@@ -888,7 +970,7 @@ impl RidgeTracker {
                 self.stability = 0.0;
             }
             let target = if self.active {
-                self.stability * presence_target(salience, col, self.pos, bpo)
+                self.stability * dominance(salience, self.pos, lo, hi) * consistency * presence_target(salience, col, self.pos, bpo)
             } else {
                 0.0
             };
@@ -899,7 +981,7 @@ impl RidgeTracker {
         // Step 4: onset re-acquire — bypasses hysteresis and slew entirely
         // for this hop; the strongest window peak wins outright.
         if transient_fired {
-            if let Some((bin, _)) = strongest_peak(&peaks) {
+            if let Some((bin, _)) = apex {
                 let delta = bin - self.pos;
                 self.pos = bin;
                 self.hold = 0;
@@ -911,7 +993,7 @@ impl RidgeTracker {
                 // continuation below.
                 self.stability = (1.0 - (delta.abs() / MAX_SLEW)).clamp(0.0, 1.0);
             }
-            let target = self.stability * presence_target(salience, col, self.pos, bpo);
+            let target = self.stability * dominance(salience, self.pos, lo, hi) * consistency * presence_target(salience, col, self.pos, bpo);
             self.step_presence(target, dt);
             return;
         }
@@ -984,7 +1066,7 @@ impl RidgeTracker {
         }
 
         let target = if self.active {
-            self.stability * presence_target(salience, col, self.pos, bpo)
+            self.stability * dominance(salience, self.pos, lo, hi) * consistency * presence_target(salience, col, self.pos, bpo)
         } else {
             0.0
         };
@@ -1080,6 +1162,38 @@ impl RidgeTracker {
 /// absorbs isolated spikes; whether it absorbs ENOUGH of them to clear the
 /// riser gate is a real measurement, reported with the other P2/P2b numbers,
 /// not asserted here.
+/// Window-dominance factor on the presence target (BUG-043 follow-up,
+/// 2026-07-06): `S[pos] / max(S over [lo, hi))`, clamped 0..1 — presence
+/// requires the tracked peak to BE the window's dominant salience object.
+/// No new tuned constant: it is a pure ratio against the window's own max.
+///
+/// Why it exists: apex-masking the comb input (see [`salience_into`]) fixed
+/// the sub-octave ghost but made salience sparse for EVERY input, so the D6
+/// neighbourhood-contrast ratio alone stopped discriminating noise — a
+/// broadband mound (riser) also yields one sharp salience spike now.
+/// Measured on the riser: the memoryless window apex wanders ~20 bins/hop
+/// (vs < 0.3 for sub/growl), but the tracker doesn't follow it — continuation
+/// keeps it parked on small noise residue near its old pos (small Δpos, so
+/// the stability term stays HIGH — stability measures motion of the tracked
+/// pos, not whether that pos matters). The wandering true apex is exactly
+/// what this ratio sees: a tracker sitting on residue while the window's
+/// real maximum jumps around elsewhere reads ~0 most hops, and the presence
+/// one-pole never accumulates. A genuine lock (sub, growl, notes, dive) IS
+/// the window max, ratio ≈ 1, unchanged. A brief out-dominance (a kick hop
+/// inside busymix's Full window) dips the target for a hop or two and the
+/// one-pole absorbs it — the same masking-tolerance argument as D5's
+/// hold-then-release.
+fn dominance(salience: &[f32], pos: f32, lo: usize, hi: usize) -> f32 {
+    let k = (pos.round().max(0.0) as usize).min(salience.len().saturating_sub(1));
+    let s_pos = salience.get(k).copied().unwrap_or(0.0);
+    if s_pos <= 0.0 {
+        return 0.0;
+    }
+    let hi = hi.min(salience.len());
+    let win_max = salience[lo.min(hi)..hi].iter().copied().fold(0.0f32, f32::max);
+    if win_max <= 0.0 { 0.0 } else { (s_pos / win_max).clamp(0.0, 1.0) }
+}
+
 fn presence_target(salience: &[f32], col: &[f32], pos: f32, bpo: usize) -> f32 {
     let k = (pos.round().max(0.0) as usize).min(salience.len().saturating_sub(1));
     let peak_col = col.get(k).copied().unwrap_or(0.0);
@@ -1401,6 +1515,7 @@ fn new_send_state(num_bins: usize) -> SendState {
         centroid_yfb: [-1.0; 4],
         features: SendFeatures::default(),
         salience: vec![0.0; num_bins],
+        salience_peaks: vec![0.0; num_bins],
         trackers: [RidgeTracker::new(); 4],
     }
 }
@@ -1679,7 +1794,7 @@ impl StreamingSendAnalyzer {
             // features are unaffected either way (this never touches
             // `state.col`/`prev_col`/the existing band fields).
             if pitch_tracking && have_prev {
-                salience_into(vqt_raw, spec_config.bpo, &mut state.salience);
+                salience_into(vqt_raw, spec_config.bpo, &mut state.salience_peaks, &mut state.salience);
                 update_trackers(state, vqt_raw, nb, *low_bin, *mid_bin, spec_config.bpo, spec_config.fmin, dt);
             }
 
@@ -2060,6 +2175,7 @@ mod tests {
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
             salience: vec![0.0; nb],
+            salience_peaks: vec![0.0; nb],
             trackers: [RidgeTracker::new(); 4],
         };
 
@@ -2117,6 +2233,7 @@ mod tests {
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
             salience: vec![0.0; nb],
+            salience_peaks: vec![0.0; nb],
             trackers: [RidgeTracker::new(); 4],
         };
         // Settle the followers on the sustained bass floor.
@@ -2169,6 +2286,7 @@ mod tests {
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
             salience: vec![0.0; nb],
+            salience_peaks: vec![0.0; nb],
             trackers: [RidgeTracker::new(); 4],
         };
         for _ in 0..40 {
@@ -2459,7 +2577,8 @@ mod tests {
             col[b + off] = w;
         }
         let mut sal = vec![0.0f32; n];
-        salience_into(&col, SAL_BPO, &mut sal);
+        let mut pk = vec![0.0f32; sal.len()];
+        salience_into(&col, SAL_BPO, &mut pk, &mut sal);
         let (peak_bin, peak_val) = salience_peak(&sal).expect("harmonic series is not all-zero");
         assert!(
             (peak_bin - b as f32).abs() < 1.0,
@@ -2487,7 +2606,8 @@ mod tests {
         }
         assert_eq!(col[b], 0.0, "fundamental bin itself carries no energy");
         let mut sal = vec![0.0f32; n];
-        salience_into(&col, SAL_BPO, &mut sal);
+        let mut pk = vec![0.0f32; sal.len()];
+        salience_into(&col, SAL_BPO, &mut pk, &mut sal);
         let (argmax_k, _) =
             sal.iter().enumerate().fold((0usize, f32::MIN), |(bk, bv), (k, &v)| if v > bv { (k, v) } else { (bk, bv) });
         assert_eq!(argmax_k, b, "missing-fundamental argmax should still land on B");
@@ -2639,6 +2759,104 @@ mod tests {
         assert_eq!(t.pos, 70.0, "must jump exactly at CHALLENGE_HOPS consecutive hops");
     }
 
+    /// BUG-043 mechanism regression (2026-07-06): a 45 Hz deep sub through
+    /// the real analyzer path — the salience argmax must land ON the
+    /// fundamental bin, not on the sub-octave ghosts (~11-15 Hz) the
+    /// pre-apex-mask comb manufactured. The pinned failure: at the bottom
+    /// octaves the under-Q kernels smear one peak over ~40 bins, so a
+    /// ghost's comb teeth (spaced 8-14 bins) all landed inside the ONE
+    /// mound and out-summed the true bin (S[15 Hz] 0.70 vs S[45 Hz] 0.52).
+    /// The apex mask in `salience_into` is the fix; the `sub` harness
+    /// scenario is the end-to-end gate. Prints the contribution breakdown
+    /// with --nocapture for column-level archaeology.
+    #[test]
+    fn sub_45hz_salience_argmax_on_fundamental_not_subharmonic_ghost() {
+        let n = SR as usize * 2;
+        let mono: Vec<f32> = (0..n)
+            .map(|i| {
+                let ph = std::f32::consts::TAU * 45.0 * i as f32 / SR as f32;
+                (0.5 * ph.sin() + 0.06 * (2.0 * ph).sin() + 0.03 * (3.0 * ph).sin()).tanh()
+            })
+            .collect();
+        let mut an = StreamingSendAnalyzer::new(SR, 250.0, 2000.0);
+        an.set_scope(true);
+        an.set_pitch_tracking(true);
+        let mut cols: Vec<Vec<f32>> = Vec::new();
+        for chunk in mono.chunks(256) {
+            an.push(chunk);
+            an.drain_scope_columns(|c| cols.push(c.to_vec()));
+        }
+        let col = &cols[cols.len() - 10]; // deep steady state
+        let bpo = an.spec_config.bpo;
+        let fmin = an.spec_config.fmin;
+        let mut sal = vec![0.0f32; col.len()];
+        let mut pk = vec![0.0f32; sal.len()];
+        salience_into(col, bpo, &mut pk, &mut sal);
+
+        let hz_of = |bin: f32| fmin * 2f32.powf(bin / bpo as f32);
+        let breakdown = |k: usize| {
+            let bpof = bpo as f32;
+            print!("  bin {k:3} ({:6.2} Hz): S={:9.4}  own col[k]={:9.4}  terms:", hz_of(k as f32), sal[k], col[k]);
+            for (i, &w) in SALIENCE_WEIGHTS.iter().enumerate() {
+                let h = (i + 1) as f32;
+                let off = (bpof * h.log2()).round() as usize;
+                let v = col.get(k + off).copied().unwrap_or(0.0);
+                print!("  h{}[bin {}, {:5.1} Hz]: {:.4}*{:.4}={:.4}", i + 1, k + off, hz_of((k + off) as f32), w, v, w * v);
+            }
+            println!();
+        };
+
+        // Top 5 salience bins + the true bin's breakdown.
+        let mut idx: Vec<usize> = (0..sal.len()).collect();
+        idx.sort_by(|&a, &b| sal[b].partial_cmp(&sal[a]).unwrap());
+        println!("== top-5 salience bins ==");
+        for &k in idx.iter().take(5) {
+            breakdown(k);
+        }
+        let true_bin = (bpo as f32 * (45.0f32 / fmin).log2()).round() as usize;
+        println!("== true fundamental bin ==");
+        breakdown(true_bin);
+        println!("== raw col around bottom two octaves (bins 0..60, magnitude) ==");
+        for k in 0..60 {
+            println!("  col[{k:2}] {:6.2} Hz = {:.5}", hz_of(k as f32), col[k]);
+        }
+
+        let (argmax_bin, _) = salience_peak(&sal).expect("a loud sub is not an all-floored column");
+        assert!(
+            (argmax_bin - true_bin as f32).abs() <= 1.0,
+            "salience argmax must sit on the 45 Hz fundamental (bin {true_bin}), got bin {argmax_bin} ({:.1} Hz)",
+            hz_of(argmax_bin)
+        );
+    }
+
+    /// BUG-043 riser follow-up (2026-07-06): a window whose strongest peak
+    /// JUMPS around hop-to-hop (band-noise: measured 10-20 bins/hop on the
+    /// riser, vs < 0.3 for any real object) must never accumulate presence,
+    /// even though continuation keeps the tracker itself moving smoothly on
+    /// nearby residue (small Δpos = HIGH stability - stability alone cannot
+    /// catch this). The apex-consistency factor is what kills it.
+    #[test]
+    fn tracker_wandering_apex_reads_no_presence() {
+        let n = 120;
+        let mut t = RidgeTracker::new();
+        // Strong apex alternating between bins 40 and 70 (30 bins apart)
+        // every hop, plus a faint static residue peak at bin 55 the tracker
+        // can park on. 200 hops ≈ 1 s.
+        for hop in 0..200 {
+            let apex_bin = if hop % 2 == 0 { 40 } else { 70 };
+            let mut sal = vec![0.0f32; n];
+            sal[apex_bin] = 10.0;
+            sal[55] = 2.0;
+            let col = sal.clone();
+            t.update(&sal, &col, 0, n, false, SAL_BPO, TRACKER_DT);
+        }
+        assert!(
+            t.presence < 0.1,
+            "a hop-to-hop wandering apex is noise, not an object: presence {}",
+            t.presence
+        );
+    }
+
     #[test]
     fn tracker_onset_reacquires_immediately_bypassing_hysteresis() {
         let n = 120;
@@ -2735,7 +2953,8 @@ mod tests {
         let mut col = vec![0.0f32; n];
         col[100] = 10.0;
         let mut sal = vec![0.0f32; n];
-        salience_into(&col, SAL_BPO, &mut sal);
+        let mut pk = vec![0.0f32; sal.len()];
+        salience_into(&col, SAL_BPO, &mut pk, &mut sal);
         assert!(sal[44] > 0.0, "the ghost bin must show nonzero borrowed salience (test setup check)");
         assert_eq!(col[44], 0.0, "the ghost bin itself carries no real energy (test setup check)");
 
@@ -2770,7 +2989,8 @@ mod tests {
             col[b + off] = w;
         }
         let mut sal = vec![0.0f32; n];
-        salience_into(&col, SAL_BPO, &mut sal);
+        let mut pk = vec![0.0f32; sal.len()];
+        salience_into(&col, SAL_BPO, &mut pk, &mut sal);
 
         let mut t = RidgeTracker::new();
         let mut last = 0.0f32;

@@ -328,6 +328,7 @@ fn analyze_and_render(
     // (measured on the dive: 22.3% tilted -> 66.4% untilted per-hop hit rate).
     let tilt_w = tilt_weights(&cfg, sr as f32, num_bins);
     let mut salience_scratch = vec![0.0f32; num_bins];
+    let mut peaks_scratch = vec![0.0f32; num_bins];
 
     let shape = AudioModShape::default();
     let mut smooth_state = [[0.0f32; 4]; 7];
@@ -365,7 +366,7 @@ fn analyze_and_render(
             // Salience reads the UNTILTED floored column (D1 as amended
             // 2026-07-06 — the raw scope column is already floored, so this is
             // exactly the analyzer's `vqt_raw` post-floor).
-            salience_into(&col, bpo, &mut salience_scratch);
+            salience_into(&col, bpo, &mut peaks_scratch, &mut salience_scratch);
             let salience_f0_hz = match salience_peak(&salience_scratch) {
                 Some((bin, _peak_val)) => fmin * 2f32.powf(bin / bpo as f32),
                 None => f32::NAN,
@@ -620,14 +621,26 @@ fn print_p2_gates(label: &str, records: &[HopRecord], dt: f32, ground_truth: Gro
             let quiet = post.iter().filter(|r| r.raw[PRESENCE_IDX][FULL] <= 0.15).count();
             let quiet_pct = 100.0 * quiet as f64 / post.len().max(1) as f64;
 
+            // Schmitt counter (BUG-043 follow-up, 2026-07-06): an
+            // "acquisition" = presence rising through the DISPLAY bar after
+            // having been below ACQUIRE_PRESENCE - i.e. the pitch lane
+            // visibly lighting afresh, the chatter this gate was written
+            // against. The old single-threshold edge count at 0.02 now
+            // measures scalar noise instead: with the dominance and
+            // apex-consistency presence factors, presence on band-noise
+            // legitimately HOVERS around 0.02 (that is the fix working),
+            // the tracker's internal state never flaps, and the display
+            // never lights.
             let mut acquisitions = 0usize;
-            let mut was_acquired = false;
+            let mut armed = true;
             for r in post {
-                let acquired = r.raw[PRESENCE_IDX][FULL] >= ACQUIRE_PRESENCE;
-                if acquired && !was_acquired {
+                let p = r.raw[PRESENCE_IDX][FULL];
+                if armed && p >= PITCH_DISPLAY_PRESENCE {
                     acquisitions += 1;
+                    armed = false;
+                } else if !armed && p < ACQUIRE_PRESENCE {
+                    armed = true;
                 }
-                was_acquired = acquired;
             }
 
             gate("pct_hops_full_presence_le_0.15", quiet_pct, ">=", 90.0, quiet_pct >= 90.0);
@@ -638,6 +651,32 @@ fn print_p2_gates(label: &str, records: &[HopRecord], dt: f32, ground_truth: Gro
             let hot = post.iter().filter(|r| r.raw[PRESENCE_IDX][LOW] > 0.5).count();
             let hot_pct = 100.0 * hot as f64 / post.len().max(1) as f64;
             gate("pct_hops_low_presence_gt_0.5", hot_pct, "<=", 20.0, hot_pct <= 20.0);
+        }
+        "sub" => {
+            // BUG-043 floor-anchor oracle: the Full tracker must sit ON the
+            // 45 Hz fundamental, not the subharmonic comb / smeared floor
+            // below it. Accuracy is measured against ground truth (an anchor
+            // parked STABLY at ~11 Hz would pass a stddev gate — it must not
+            // pass this one), and presence must clear the display bar: a
+            // sustained sub is the bass use case's easiest possible input.
+            let (mut total_gt, mut within) = (0usize, 0usize);
+            for (idx, r) in records.iter().enumerate().skip(WARMUP_HOPS) {
+                let gt = ground_truth(idx as f32 * dt);
+                if !gt.is_finite() {
+                    continue;
+                }
+                total_gt += 1;
+                if r.tracked_f0_hz.is_finite() && semitones_vs(r.tracked_f0_hz, gt).abs() <= 1.0 {
+                    within += 1;
+                }
+            }
+            let within_pct = 100.0 * within as f64 / total_gt.max(1) as f64;
+            gate("pct_within_1st_of_gt", within_pct, ">=", 95.0, within_pct >= 95.0);
+
+            let post = &records[WARMUP_HOPS.min(records.len())..];
+            let hot = post.iter().filter(|r| r.raw[PRESENCE_IDX][LOW] >= 0.25).count();
+            let hot_pct = 100.0 * hot as f64 / post.len().max(1) as f64;
+            gate("pct_hops_low_presence_ge_0.25", hot_pct, ">=", 90.0, hot_pct >= 90.0);
         }
         _ => {}
     }
@@ -851,6 +890,10 @@ type GroundTruthFn = fn(f32) -> f32;
 /// exercise — presence must survive the re-attacks, and the tracked pitch
 /// must jump to 300 Hz and back for the one jump note. Carries its own known
 /// 140 BPM (task 3) so its PNG always shows gridlines, proving the path.
+/// `sub` — sustained 45 Hz near-sine deep sub (BUG-043's oracle): the
+/// bottom-octave case the other seven never reach. The tracker must sit ON
+/// the 45 Hz fundamental, not ride the spectral floor / subharmonic comb
+/// below it the way real deep-sub stems (bad_guy, apricots bass) showed.
 fn synth_selftests() -> Vec<(&'static str, Vec<f32>, GroundTruthFn, Option<f32>)> {
     vec![
         ("dive", soft_clip(synth_dive()), gt_dive as GroundTruthFn, None),
@@ -860,6 +903,7 @@ fn synth_selftests() -> Vec<(&'static str, Vec<f32>, GroundTruthFn, Option<f32>)
         ("riser", soft_clip(synth_riser()), gt_none, None),
         ("growl", soft_clip(synth_growl()), gt_const_150, None),
         ("notes", soft_clip(synth_notes()), gt_notes, Some(NOTES_BPM)),
+        ("sub", soft_clip(synth_sub()), gt_const_45, None),
     ]
 }
 
@@ -873,6 +917,11 @@ fn gt_dive(t: f32) -> f32 {
 /// Ground truth for `wobble`/`growl`: fixed 150 Hz fundamental throughout.
 fn gt_const_150(_t: f32) -> f32 {
     150.0
+}
+
+/// Ground truth for `sub`: fixed 45 Hz fundamental throughout (BUG-043).
+fn gt_const_45(_t: f32) -> f32 {
+    45.0
 }
 
 /// Ground truth for scenarios with no single tracked fundamental
@@ -1087,6 +1136,24 @@ fn synth_notes() -> Vec<f32> {
             };
             out[idx] += 0.6 * env * saw;
         }
+    }
+    out
+}
+
+/// Deep sub (BUG-043's minimal reproduction): a sustained 45 Hz sine with a
+/// touch of 2nd/3rd harmonic (the mild saturation every real sub carries —
+/// bad_guy's and apricots' bass stems are near-sinusoidal, not pure), at the
+/// kind of level a bass stem runs. No note structure: the real clips anchor
+/// to the floor even on fully sustained material, so the minimal scenario is
+/// sustained too.
+fn synth_sub() -> Vec<f32> {
+    let mut out = selftest_buf();
+    let srf = SELFTEST_SR as f32;
+    let mut p = 0.0f32;
+    for s_out in out.iter_mut() {
+        p = (p + 45.0 / srf).fract();
+        let ph = std::f32::consts::TAU * p;
+        *s_out += 0.5 * ph.sin() + 0.06 * (2.0 * ph).sin() + 0.03 * (3.0 * ph).sin();
     }
     out
 }

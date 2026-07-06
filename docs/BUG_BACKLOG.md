@@ -80,27 +80,6 @@ per-band median windows, a density-normalized delta floor, or a dual criterion
 feel/apricots mixes are the oracle, dive/riser/growl remain the false-fire guards.
 No tuning done this round per Peter (review-only pass).
 
-### BUG-043 (deep-bass-floor-anchor) — Tracker anchors at the bottom of the spectrum on deep sub-bass stems — HIGH for the bass use case
-
-**Symptom** (found 2026-07-06, real-clip review, CSVs + PNGs in
-`tests/fixtures/audio/renders/`): on bad_guy (house, deep sub) the Full/Low tracker
-sits at 10–18 Hz for the ENTIRE clip — below the actual ~40–80 Hz bass fundamental,
-riding the spectral floor under the visible energy. On apricots (sustained sub) the
-tracker rides the true fundamental for ~3 bars (presence 0.4, pitch display engaged —
-the system fully working on real material), then drifts below it and presence
-collapses for the rest of the clip. Mixes inherit the same behavior from their bass
-content (bad_guy mix: 10–40 Hz range).
-
-**Mechanism: UNRESOLVED — two hypotheses, needs a column-level look, do not fix
-blind:** (a) sub-octave ghost inside the Low window — S[f0/4] collects the true
-fundamental as its 4th harmonic, and for f0 ≈ 45 Hz the ghost at ~11 Hz is above
-fmin=10 Hz, in-window; (b) bottom-octave kernel smear — at fmin 10 Hz the 4096-sample
-window holds <1 cycle, the lowest ~24 bins are broadband-leaky, and salience over
-smeared bins may beat the true peak. Both predict floor-anchoring; they need
-different fixes (subharmonic penalty vs raising the tracker's effective fmin /
-excluding unreliable bottom bins). Oracle: bad_guy + apricots bass CSVs; a synthetic
-40 Hz sub scenario would pin it.
-
 ### BUG-042 (onset-settle-grab) — Tracker re-acquires garbage pitch during the transform's post-attack settle window — MED (blocks presence on real basslines)
 
 **Symptom** (found 2026-07-06, `notes` selftest + Tears bass stem): on a note attack,
@@ -1100,6 +1079,47 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-043 (deep-bass-floor-anchor) — Tracker anchored at the spectrum bottom on deep sub-bass — FIXED 2026-07-06 (apex-masked salience comb)
+
+**Was:** on real deep-sub stems (bad_guy, apricots bass) the Full/Low tracker sat at
+10–18 Hz under the real ~40–80 Hz fundamental for whole clips; presence dark.
+
+**Mechanism (pinned by the `sub` synthetic + column-level breakdown,
+`sub_45hz_salience_argmax_on_fundamental_not_subharmonic_ghost`):** BOTH original
+hypotheses, coupled. At the transform's bottom octaves the 4096-sample kernels are far
+under-Q — a 45 Hz peak smears over ~40 bins at >50% magnitude — so a subharmonic
+candidate's comb teeth (spaced only 8–14 bins) ALL land inside the one smeared mound:
+h3 collects the true peak (ghost), h2/h4 collect its skirt (smear). Measured: S[15 Hz
+ghost] 0.70 vs S[45 Hz true] 0.52. The memoryless salience argmax itself was wrong —
+upstream of the tracker.
+
+**Fix (at the mechanism):** the harmonic comb reads only spectral APEXES — `salience_into`
+masks the column to local maxima ±`PEAK_MASK_RADIUS` (4 = half the minimum tooth
+spacing) dilated ±1 bin, so a tooth landing on skirt collects 0. Restores the dominance
+property that makes harmonic-sum salience correct: a sub-octave ghost collects each true
+harmonic at strictly lower weight than the true fundamental does. Frequency-independent
+(no fmin raise; a 22.5 Hz f0/2 ghost of a 45 Hz sub dies the same way).
+
+**Follow-up the mask forced (riser presence-null regressed 100%→14.5%, fixed same
+session):** sparse salience gave EVERYTHING neighbourhood contrast, so presence needed
+two new multiplicative factors, both constant-free: **dominance** (`S[pos] / window max`
+— presence requires being ON the window's dominant object; a tracker parked on residue
+reads ~0) and **apex position-consistency** (window argmax within MAX_SLEW of last
+hop's argmax — a real object's apex is self-consistent, band-noise's wanders; measured
+10–20 bins/hop on the riser vs <0.3 on any real object, at every frequency). Dead ends
+measured so they aren't retried: dominance² (pressure-tuned, still 88%), kernel-
+normalized mound width (band-noise apex rides narrow chi-square structure — width does
+NOT separate noise from tone). Riser's `distinct_full_acquisitions` gate became a
+Schmitt counter (light display bar 0.25 / re-arm below 0.02) because presence now
+legitimately hovers near the old 0.02 edge-count threshold on noise.
+
+**Verified:** `sub` scenario gates 100%/100%; all selftest lines green except BUG-042's
+known-failing notes-accuracy line; 25-clip scan — apricots bass median 66 Hz, 0 octave
+jumps, presence 0.83 (was 3-bars-then-collapse); bad_guy/feel/tears/inhale bass at true
+36–44 Hz fundamentals, presence 0.52–0.71; vocals/others unchanged. Side effect: notes
+presence oracle (BUG-042's) went 43.6%→95.2% PASS; notes accuracy baseline moved
+61.9%→56.4% (still the open BUG-042 target).
 
 ### BUG-041 (superflux-glide-fire) — Transients fire continuously through a pure pitch glide — FIXED 2026-07-06 (AUDIO_OBJECT_TRACKING P3)
 

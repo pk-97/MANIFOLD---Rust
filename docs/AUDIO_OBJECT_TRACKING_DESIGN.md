@@ -350,6 +350,19 @@ sustained acquisition (≤ 20% of hops).
 *Forbidden:* smoothing pitch anywhere but the D5 state machine; reading `latest()`
 features into the tracker (it consumes the column, not its own outputs).
 
+**BUG-043 record (2026-07-06, later the same day):** the `sub` scenario (45 Hz
+deep sub, the bottom-octave case none of the first seven exercised) pinned and fixed
+deep-bass-floor-anchor at the mechanism: D1's comb now reads an APEX-MASKED column
+(`salience_into` — local maxima ±PEAK_MASK_RADIUS, dilated ±1), because at the bottom
+octaves the under-Q kernels smear one peak across more bins than the comb's tooth
+spacing, letting a subharmonic ghost out-sum the true fundamental (S[15 Hz] 0.70 vs
+S[45 Hz] 0.52, measured). D6's presence target gained two constant-free factors the
+sparse salience made necessary (riser regression, fixed same session): dominance
+(S[pos]/window-max) and apex position-consistency (argmax within MAX_SLEW of last
+hop's argmax; band-noise wanders 10–20 bins/hop, real objects <0.3). Dead ends
+measured and recorded in the backlog Fixed entry: dominance², kernel-normalized
+mound width. Full trail: BUG_BACKLOG.md Fixed → BUG-043.
+
 **P2c/P2d record (2026-07-06, same day):** P2c shipped the unified stability
 distance law, the `notes` scenario (the note-based fixture class the six
 continuous-tone scenarios missed — found via real Skrillex bass stems), and `--bpm`

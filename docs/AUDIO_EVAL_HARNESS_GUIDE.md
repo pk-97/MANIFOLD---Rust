@@ -9,7 +9,7 @@ Written so a session with NO prior context can run, read, and judge results.
 ## 1. Running it
 
 ```
-# All seven synthetic scenarios, one PNG each + numeric gate lines on stdout:
+# All eight synthetic scenarios, one PNG each + numeric gate lines on stdout:
 cargo run -p manifold-audio --example mod_harness -- --selftest --out /tmp/st.png
 
 # A real clip (WAV/AIFF/MP3/FLAC; stereo downmixed like the live path):
@@ -74,9 +74,11 @@ liveliness, transients`, then `tracked_f0_hz`, then per band `pitch, presence`.
 `P2 <scenario>:` tracker trajectory gates · `P2b:` presence gates ·
 `P2c notes:` note-based material gates · `P3:` transient fire-count gates.
 Each line prints its own bound and PASS/FAIL. **Known-failing by design as of
-2026-07-06:** the two `P2c notes` lines (61.9% / 43.6%) — they are the oracle for
-BUG-042, not a regression. Everything else green is the entry state; a change that
-reddens any other line is a regression regardless of what it improves.
+2026-07-06 (post-BUG-043 fix):** ONE line — `P2c notes` pitch accuracy (56.4%, gate
+90) — the oracle for BUG-042. (The notes PRESENCE line went green with the BUG-043
+apex-mask work, 43.6%→95.2%; accuracy shifted 61.9%→56.4% and remains the open
+target.) Everything else green is the entry state; a change that reddens any other
+line is a regression regardless of what it improves.
 
 ## 5. Current state + the open-bug oracles (2026-07-06)
 
@@ -89,7 +91,7 @@ on real note-based basslines is effectively dark.
 | Bug | One line | Oracle |
 |---|---|---|
 | BUG-042 onset-settle-grab | attacks re-acquire garbage for ~12 hops; two fix shapes already rejected with traces — read the entry before designing | `notes` scenario CSV + tears bass |
-| BUG-043 deep-bass-floor-anchor | tracker rides 10–18 Hz under real ~45 Hz subs; ghost-vs-smear unresolved | bad_guy + apricots bass; add a synthetic 40 Hz sub scenario to pin it |
+| ~~BUG-043~~ FIXED 2026-07-06 | apex-masked salience comb + dominance/consistency presence factors (see backlog Fixed entry) | `sub` scenario gates are the permanent regression guard |
 | BUG-044 mix-trigger-deafness | dense mixes self-raise the ODF median threshold; timing is grid-accurate when firing | feel + apricots mixes (dead) vs their drums stems (healthy) |
 
 **Floor experiment (2026-07-06, 25 clips, off vs −28 dB):** a raised analysis floor
