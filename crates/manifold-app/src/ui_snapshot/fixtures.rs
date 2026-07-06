@@ -38,8 +38,17 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "automation" => Some(automation_scene()),
         "selectionclips" => Some(selection_clips_scene()),
         "audiosends" => Some(audio_sends_scene()),
+        "empty" => Some(empty_scene()),
         _ => None,
     }
+}
+
+/// Zero-layer scene: what a user sees on File → New before doing anything.
+/// Exists so the UX audit can look at the empty state itself (what, if any,
+/// affordance points at creating the first layer).
+fn empty_scene() -> SceneData {
+    let project = Project::default();
+    SceneData { project, content: ContentState::default(), active: None, selection: UIState::default() }
 }
 
 /// Real-project scene (`project:<abs-or-relative-path>`): loads an actual

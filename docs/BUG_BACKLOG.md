@@ -44,10 +44,11 @@ or human can read it, and it needs no external tool.
 | BUG-009 | **stateless-gate-miss** | harvest skip resets StateStore-held scalar state (HIGH) |
 | BUG-010 | **wgsl-first-entry** | multi-entry wgsl_compute silently dispatches the first (MED) |
 | BUG-011 | **fused-output-oversize** | fused output buffer sized to max of all inputs (MED) |
-| BUG-015 | **inspector-overlap** | sections at stale offsets after scroll (MED, repro needed) |
-| BUG-025 | **timeline-scissor-bleed** | clip content bleeds across row bounds (MED, repro needed) |
+| BUG-015 | **inspector-overlap** | sections at stale offsets after scroll (MED, repro needed — headless attempt 07-07 clean, fixture too short) |
+| BUG-025 | **timeline-scissor-bleed** | clip content bleeds across row bounds (MED, repro needed — scrolled headless render 07-07 clean) |
 | BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
-| BUG-033 | **ui-snapshot-broken** | headless UI harness feature doesn't build (MED) |
+| BUG-033 | **ui-snapshot-broken** | FIXED — verified in-tree 2026-07-07 (harness builds + runs) |
+| BUG-048 | **arm-two-reds** | ARM idle/armed both red, shade-only difference (LOW, UX call) |
 | BUG-012 | **tex-rename-corrupt** | fragment `tex_` port-rename corrupts `tex_*` scalars (LOW) |
 | BUG-018 | **catalog-stale** | node_catalog.json out of sync test red (LOW) |
 | BUG-031 | **audio-load-blip** | ~10ms of audio leaks when a voice is built (LOW) ⚠ id collides with the positional-layer-menu entry under Fixed — first free id is BUG-042 |
@@ -56,6 +57,20 @@ or human can read it, and it needs no external tool.
 | BUG-019 / 020 / 021 | deferred | group-fold gap · gen-card collapse · snap-back gap |
 
 ## Open
+
+### BUG-048 (arm-two-reds) — Automation ARM idle vs armed are both red, distinguished only by shade — LOW (stage-legibility; behavior-changing mode)
+
+**Found 2026-07-07 (timeline-ux headless audit).** `transport.rs::automation_group`:
+idle ARM = `RECORD_RED`, armed = `RECORD_ACTIVE` — a deliberate mirror of the REC
+active/idle pair. But REC's two states are "recording or not", while ARM's decide what
+touching a param DOES (override the lane vs punch automation INTO the arrangement) —
+a wrong read on stage silently writes automation into the show. Headless renders show
+the two reds are close at 1× (timeline vs automation scenes). **Fix shape:** give the
+armed state a non-red or clearly distinct treatment (AUTOMATION_LINE_COLOR family per
+the audit doc), or Peter rules the REC-pair consistency wins. UX call, not mechanical —
+see `docs/TIMELINE_UX_AUDIT_2026-07-07.md` item 2.5. **Oracle:** the
+`automation_state_toggles_update_styles_in_place` test pins current colors; it changes
+with the fix.
 
 ### BUG-047 (setup-panel-overflow) — Audio Setup panel content clips past the bottom edge when chrome exceeds viewport − SCOPE_H_MIN — LOW (needs ~18 combined input/consumer rows on one source at full height; ~5 extra rows at a 720px window)
 
@@ -437,7 +452,13 @@ in the same blocks).
 **Fix shape** — wrap each site in the Beats/Bpm accessor instead of a raw cast (~3 one-line
 fixes). Unrelated to param storage, so parked here rather than folded into P2.
 
-### BUG-033 — `ui-snapshot` feature build broken: `manifold_core::effects::resolve_param_in` no longer exists — MED (blocks the headless UI harness)
+### BUG-033 — `ui-snapshot` feature build broken: `manifold_core::effects::resolve_param_in` no longer exists — FIXED (verified in-tree 2026-07-07)
+
+**Fixed note (2026-07-07, timeline-ux pass)** — `lane_param_range` now reads
+`param.spec.min/max` directly (interact.rs:497), the broken `resolve_param_in` call is gone,
+and the harness builds AND runs on the 2026-07-07 tip (`cargo build -p manifold-app --features
+ui-snapshot` clean; all scenes + `--script` flows rendered this session). Fixed by a landing
+between 07-05 and 07-07 that didn't close this entry; closing on direct evidence.
 
 **Root cause** — [interact.rs:500](../crates/manifold-app/src/ui_snapshot/interact.rs#L500) (`lane_param_range`, an
 automation-lane interact verb) calls `manifold_core::effects::resolve_param_in(&def, fx, param_id)`
@@ -698,6 +719,13 @@ section overlap.
 **Fix shape** — TBD after repro. If it's the known invariant class, the fix is at the layout
 single-source, not per-section patches.
 
+**Repro attempt 2026-07-07 (timeline-ux headless audit)** — scroll-seeded `states` render
+(101px) + driven inspector scroll on the `inspector` scene: sections stay correctly laid
+out in both. Not reproduced. The missing ingredient per the symptom is timeline churn
+DURING a scrolled state (rebuild-while-scrolled); the `--script` driver can now interleave
+scroll + clip-drag + snapshot in one flow (post real-dispatch fix, this branch), so a
+dedicated repro flow is now writable when this bug is next picked up.
+
 ### BUG-016 — Imported .glb layers are black boxes: no card params, no Model File picker, edit paths silently no-op — FIXED 2026-07-04 (`2d5e4dc6`)
 
 **Resolution** — PRESET_LIBRARY P0 (D9) shipped: the drop now registers the assembled
@@ -941,6 +969,13 @@ state-specific. Triage narrows it to a config the fixtures don't hit — most li
 *last* row being a selected generator whose clip fills the remaining viewport height, and/or a
 live scroll offset. Pin it with either a targeted fixture (selected generator as the final
 layer) or a running-app repro from Peter's project.
+
+**Repro attempt 2026-07-07 (timeline-ux audit)** — the 07-05 note's "scroll may not be fully
+wired in the headless tracks path" is now explained: `--scroll` was seeded AFTER the base
+render (fixed this branch), so every prior "scrolled" base PNG was actually unscrolled. With
+scroll genuinely applied (via the interact after-render), headers + lanes offset together and
+clip bodies stay scissored to their rows — still not reproduced. The state-specific triage
+above stands.
 
 **Fix shape** — TBD after repro. If it's the invariant class (likely, given BUG-015 is the same
 family), fix at the single Y-layout source, not per-widget patches.

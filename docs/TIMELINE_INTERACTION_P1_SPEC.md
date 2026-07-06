@@ -2,7 +2,7 @@
 
 # Timeline Interaction P1 — one geometry, one selection, previews that tell the truth
 
-**Status: SHIPPED 2026-07-05 @ `62a0f01e` (merge of `wave/timeline-fixes`: TimelineSelection enum, S5 overlap-enforcement root fix, edge autoscroll/snap, keyboard layer). Peter's running-app feel-pass owed; re-hook the dormant motion-P2 landing-flash during it. Approved Peter 2026-07-04 — scope confirmed: structural fixes as
+**Status: SHIPPED 2026-07-05 @ `62a0f01e` (merge of `wave/timeline-fixes`: TimelineSelection enum, S5 overlap-enforcement root fix, edge autoscroll/snap, keyboard layer). Landing-flash RE-HOOKED 2026-07-07 (timeline-ux pass): fires at the Move-commit drag end, unit-tested; keep/kill/timing rides Peter's feel-pass list (`docs/TIMELINE_UX_AUDIT_2026-07-07.md` §3.1) with the rest of the still-owed running-app feel-pass. S1 multi-select chrome re-verified headless 2026-07-07 (driven render: per-clip borders, no region band). Approved Peter 2026-07-04 — scope confirmed: structural fixes as
 must-ship, behavior contract as the checklist; "Nice let's build that doc".**
 **Prerequisites: TIMELINE_LAYOUT_P0 (shipped 2026-07-04 — single Y source).
 Blocks: UI_CRAFT_AND_MOTION_PLAN (same files; motion must not animate lying
