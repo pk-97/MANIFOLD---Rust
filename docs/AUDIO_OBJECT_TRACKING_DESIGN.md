@@ -272,7 +272,17 @@ bad_guy recovery bar guard-green; per the phase gate, NOT integrated:
    guard-green result and a real partial win: apricots 5→12/13, feel 4→16/35,
    tears 8→12/25 — but bad_guy 0→8/45, because the floored kick candidates
    are simply small (31/39 under 160 units; instrumented per-kick).
-   RECORDED AS THE SHIPPABLE PARTIAL if Peter wants it despite the bar.
+   **SHIPPED 2026-07-06 late (Peter: "might as well use it and set that as
+   the baseline") @ `61c2b0fd`** as the masked-novelty third criterion in
+   `reduce_send` (constants `MASKED_ONSET_MARGIN_DB 3.0` / `MASKED_ONSET_DELTA
+   80.0` / `SUSTAIN_MEDIAN_HOPS 16`; delta plateau-swept 40–200, guards hold
+   70–200, cliff at 60). Integration reproduced the prototype's 25-fixture
+   fire counts exactly (100/100); all selftest lines green minus the BUG-045
+   known failure; PNGs read (bad_guy + feel mixes gained beat-locked Low
+   fires; untouched clip byte-stable). Behavior change shipped knowingly:
+   Low transients now also fire on bass-note attacks (they are real attacks;
+   on a bass send that is arguably the wanted behavior). The 25-clip
+   before/after fire tables ARE the baseline for the successor detector.
 
 **The load-bearing discovery (from reading the PNGs, not the numbers):** in a
 bass-occupied Low band, a mix kick's surviving evidence is its descending FM

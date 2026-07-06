@@ -109,10 +109,13 @@ adjacent; v0 argmax-run prototype confirmed the signal exists but needs real
 ridge tracking — apex sticks to the louder bass, bass portamento must be
 discriminated by rate/extent, and cross-criterion refractory is needed or
 attack+body double-fires). Needs its own short design; re-run the tracker gate
-lines (extra Low fires feed D5 step 4 re-acquire). **Shippable partial on the
-shelf:** the OR'd floored-novelty criterion, if Peter wants 2-3× recovery on
-4/5 mixes now despite bad_guy. Oracle unchanged: the mix-Low vs drums-Low
-table; bad_guy sharpest. Full-band is still NOT a substitute (hats spam —
+lines (extra Low fires feed D5 step 4 re-acquire). **Partial SHIPPED 2026-07-06 late @ `61c2b0fd`**
+(Peter approved; masked-novelty third criterion in `reduce_send`; exact-match
+gate vs the prototype 100/100, selftest green minus BUG-045's line): recovery
+now apricots 12/13, feel 16/35, tears 12/25, inhale 17/22 — **bad_guy 8/45
+keeps this bug OPEN** for the ridge-motion successor. Behavior change shipped
+knowingly: Low transients also fire on bass-note attacks now. Oracle
+unchanged: the mix-Low vs drums-Low table; bad_guy sharpest. Full-band is still NOT a substitute (hats spam —
 Peter). Crossover-defaults sweep: independent report-only task; does not
 address this bug (kick and bass share bins — re-confirmed at the bin level).
 
