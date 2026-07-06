@@ -13,11 +13,11 @@
 //! rename lands; multi-channel downmix and the v2 analysis toggles are future.
 
 use crate::types::{AudioBand, AudioDeviceRef};
-use manifold_foundation::AudioSendId;
+use manifold_foundation::{AudioSendId, LayerId};
 
 use crate::chrome::{ChromeHost, Pad, Sizing, View};
 use crate::color;
-use crate::input::{Key, UIEvent};
+use crate::input::{Key, Modifiers, UIEvent};
 use crate::node::*;
 use crate::tree::UITree;
 
@@ -84,6 +84,30 @@ pub struct AudioSendRow {
     /// band with no route reads as a disabled default), so the inspector renders
     /// a fixed four-row matrix. Built by `state_sync` from the send's routes.
     pub triggers: Vec<TriggerRouteRow>,
+    /// Audio layers feeding this send (id + name), for the Inputs section's
+    /// per-layer remove row. Built by `state_sync` from the send's
+    /// `source.layers` — the single source of truth for the layer↔send
+    /// binding (`docs/AUDIO_SENDS_UX_DESIGN.md` D1/D2).
+    pub feeding_layers: Vec<(LayerId, String)>,
+    /// This send's consumers — one row per enabled audio mod reading it plus
+    /// one per enabled trigger route on it — for the Consumers section.
+    /// Navigational only (D3): clicking a row selects the owning layer, it
+    /// never edits. Built by `state_sync`.
+    pub consumers: Vec<SendConsumerRow>,
+}
+
+/// One consumer row in the Audio Setup modal's Consumers section: a named
+/// audio mod ("LayerName · EffectName · ParamName") or an enabled trigger
+/// route ("Low → LayerName"), each clickable to jump to the owning layer.
+/// See `docs/AUDIO_SENDS_UX_DESIGN.md` §3.1.
+#[derive(Clone, Debug)]
+pub struct SendConsumerRow {
+    pub label: String,
+    /// Jump target — the layer the mod/route lives on (or fires into).
+    /// `None` if unresolvable (e.g. the route's "Auto" target couldn't be
+    /// matched to a layer by name), in which case the row still shows but
+    /// doesn't navigate on click.
+    pub layer_id: Option<LayerId>,
 }
 
 /// One band's trigger row in the Audio Setup modal — the display state of a
@@ -357,6 +381,14 @@ pub struct AudioSetupPanel {
     /// Per-band trigger-row node ids for the selected send (Whole/Low/Mid/High
     /// order). Rebuilt with the panel; clicks map back via [`TRIG_BANDS`].
     trigger_row_ids: Vec<TriggerRowIds>,
+    /// Inputs section (selected send): one remove (×) button per feeding
+    /// layer, index-aligned with that send's `feeding_layers`, plus the
+    /// "+ layer" add-row trigger. Rebuilt with the panel.
+    inputs_remove_ids: Vec<NodeId>,
+    add_layer_id: NodeId,
+    /// Consumers section (selected send): one row button per consumer,
+    /// index-aligned with that send's `consumers`. Rebuilt with the panel.
+    consumer_row_ids: Vec<NodeId>,
 }
 
 impl Default for AudioSetupPanel {
@@ -389,6 +421,9 @@ impl Default for AudioSetupPanel {
             dragging_band: None,
             band_meter_ids: [(None, None, None); 3],
             trigger_row_ids: Vec::new(),
+            inputs_remove_ids: Vec::new(),
+            add_layer_id: NodeId::PLACEHOLDER,
+            consumer_row_ids: Vec::new(),
         }
     }
 }
@@ -404,6 +439,13 @@ impl AudioSetupPanel {
 
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// Open the modal (idempotent) — the headless harness's `open:audio_setup`
+    /// interact verb uses this so a repeated call can't accidentally close it,
+    /// unlike [`Self::toggle`].
+    pub fn open(&mut self) {
+        self.open = true;
     }
 
     pub fn toggle(&mut self) {
@@ -483,9 +525,39 @@ impl AudioSetupPanel {
             + warning
             + (ROW_H + ROW_GAP) * rows as f32
             + ROW_H // add-send button
+            + self.inputs_section_height()
             + scope_chrome
             + self.trigger_section_height()
+            + self.consumers_section_height()
             + PAD * 2.0
+    }
+
+    /// The selected send's row data, if any — the shared lookup the Inputs
+    /// and Consumers sections (and their height accounting) read from.
+    fn selected_send_row(&self) -> Option<&AudioSendRow> {
+        self.selected_send.as_ref().and_then(|id| self.sends.iter().find(|s| &s.id == id))
+    }
+
+    /// Height of the Inputs section (title + one row per feeding layer of the
+    /// selected send + the "+ layer" add row). Zero when there are no sends
+    /// (nothing selected, so nothing to route).
+    fn inputs_section_height(&self) -> f32 {
+        if self.sends.is_empty() {
+            return 0.0;
+        }
+        let n = self.selected_send_row().map_or(0, |s| s.feeding_layers.len());
+        ROW_GAP + TRIG_TITLE_H + (ROW_H + ROW_GAP) * (n as f32 + 1.0) // +1 = "+ layer" row
+    }
+
+    /// Height of the Consumers section (title + one row per consumer of the
+    /// selected send, or a single "no consumers" row when it has none). Zero
+    /// when there are no sends.
+    fn consumers_section_height(&self) -> f32 {
+        if self.sends.is_empty() {
+            return 0.0;
+        }
+        let n = self.selected_send_row().map_or(0, |s| s.consumers.len()).max(1);
+        ROW_GAP + TRIG_TITLE_H + (ROW_H + ROW_GAP) * n as f32
     }
 
     /// Height of the trigger section (title + four band rows) under the scope.
@@ -814,6 +886,7 @@ impl AudioSetupPanel {
         self.band_meter_ids = [(None, None, None); 3];
         if !self.sends.is_empty() {
             cy += ROW_GAP;
+            cy = self.build_inputs_section(tree, inner_x, inner_w, cy);
             let sel_label = self
                 .selected_send
                 .as_ref()
@@ -1038,7 +1111,10 @@ impl AudioSetupPanel {
 
             // ── Live triggers (selected send) — laid out below the scope ──
             cy += self.scope_h + ROW_GAP;
-            self.build_trigger_section(tree, inner_x, inner_w, cy);
+            cy = self.build_trigger_section(tree, inner_x, inner_w, cy);
+
+            // ── Consumers (selected send) — below the trigger matrix ──
+            self.build_consumers_section(tree, inner_x, inner_w, cy);
         }
     }
 
@@ -1047,7 +1123,13 @@ impl AudioSetupPanel {
     /// colour matches the scope's per-band transient ticks (Whole = neutral), so
     /// the legend reads across the scope and the routes. Click-only controls,
     /// consistent with the panel's gain stepper and channel dropdown — no drag.
-    fn build_trigger_section(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32) {
+    fn build_trigger_section(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        mut cy: f32,
+    ) -> f32 {
         self.trigger_row_ids.clear();
 
         let sel_label = self
@@ -1264,11 +1346,153 @@ impl AudioSetupPanel {
             self.trigger_row_ids.push(ids);
             cy += TRIG_ROW_H + ROW_GAP;
         }
+        cy
+    }
+
+    /// Build the Inputs section for the selected send: one row per feeding
+    /// layer (name + × remove, `SetLayerAudioSend(layer, None)`) plus a final
+    /// "+ Layer" row that opens a dropdown of audio layers not already
+    /// feeding this send (`AudioSendAddLayerClicked`, itemized with
+    /// `SetLayerAudioSend(layer, Some(send))` — the SAME command the layer
+    /// header's Send dropdown fires; D2). Returns the y past the section.
+    fn build_inputs_section(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32) -> f32 {
+        self.inputs_remove_ids.clear();
+        let feeding: Vec<(LayerId, String)> = self
+            .selected_send
+            .as_ref()
+            .and_then(|id| self.sends.iter().find(|s| &s.id == id))
+            .map(|s| s.feeding_layers.clone())
+            .unwrap_or_default();
+
+        tree.add_label(
+            Some(self.bg_id),
+            inner_x,
+            cy,
+            inner_w,
+            TRIG_TITLE_H,
+            "Inputs",
+            UIStyle {
+                text_color: Color32::new(170, 170, 180, 255),
+                font_size: color::FONT_LABEL,
+                text_align: TextAlign::Left,
+                ..UIStyle::default()
+            },
+        );
+        cy += TRIG_TITLE_H;
+
+        for (_layer_id, name) in &feeding {
+            tree.add_label(
+                Some(self.bg_id),
+                inner_x,
+                cy,
+                inner_w - STEP_W,
+                ROW_H,
+                name,
+                label_style(),
+            );
+            let remove_id = tree.add_button(
+                Some(self.bg_id),
+                inner_x + inner_w - STEP_W,
+                cy,
+                STEP_W,
+                ROW_H,
+                btn_style(false),
+                "\u{00D7}", // ×
+            );
+            self.inputs_remove_ids.push(remove_id);
+            cy += ROW_H + ROW_GAP;
+        }
+
+        self.add_layer_id = tree.add_button(
+            Some(self.bg_id),
+            inner_x,
+            cy,
+            inner_w,
+            ROW_H,
+            btn_style(false),
+            "+ Layer",
+        );
+        cy += ROW_H + ROW_GAP;
+        cy
+    }
+
+    /// Build the Consumers section for the selected send: one plain-button
+    /// row per consumer (or a dim "no consumers yet" line when there are
+    /// none). Click emits [`PanelAction::LayerClicked`] for the owning layer —
+    /// navigational only, never editable (D3). Returns the y past the section.
+    fn build_consumers_section(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32) -> f32 {
+        self.consumer_row_ids.clear();
+        let consumers: Vec<SendConsumerRow> = self
+            .selected_send
+            .as_ref()
+            .and_then(|id| self.sends.iter().find(|s| &s.id == id))
+            .map(|s| s.consumers.clone())
+            .unwrap_or_default();
+
+        tree.add_label(
+            Some(self.bg_id),
+            inner_x,
+            cy,
+            inner_w,
+            TRIG_TITLE_H,
+            "Consumers",
+            UIStyle {
+                text_color: Color32::new(170, 170, 180, 255),
+                font_size: color::FONT_LABEL,
+                text_align: TextAlign::Left,
+                ..UIStyle::default()
+            },
+        );
+        cy += TRIG_TITLE_H;
+
+        if consumers.is_empty() {
+            tree.add_label(
+                Some(self.bg_id),
+                inner_x,
+                cy,
+                inner_w,
+                ROW_H,
+                "No consumers yet",
+                UIStyle {
+                    text_color: Color32::new(120, 120, 130, 255),
+                    font_size: color::FONT_LABEL,
+                    text_align: TextAlign::Left,
+                    ..UIStyle::default()
+                },
+            );
+            cy += ROW_H + ROW_GAP;
+        } else {
+            for c in &consumers {
+                let id = tree.add_button(
+                    Some(self.bg_id),
+                    inner_x,
+                    cy,
+                    inner_w,
+                    ROW_H,
+                    label_button_style(),
+                    &c.label,
+                );
+                self.consumer_row_ids.push(id);
+                cy += ROW_H + ROW_GAP;
+            }
+        }
+        cy
     }
 
     /// The send the scope is showing, if any.
     pub fn selected_send(&self) -> Option<&AudioSendId> {
         self.selected_send.as_ref()
+    }
+
+    /// LayerIds currently feeding `send` — used by
+    /// [`PanelAction::AudioSendAddLayerClicked`]'s dropdown to exclude layers
+    /// already routed here. Empty if the send is unknown.
+    pub fn feeding_layer_ids(&self, send: &AudioSendId) -> Vec<LayerId> {
+        self.sends
+            .iter()
+            .find(|s| &s.id == send)
+            .map(|s| s.feeding_layers.iter().map(|(id, _)| id.clone()).collect())
+            .unwrap_or_default()
     }
 
     /// The routing lines for `send` (device + layers), for the read-only routings
@@ -1388,6 +1612,7 @@ impl AudioSetupPanel {
             || id == self.close_id
             || id == self.device_dropdown_id
             || id == self.add_send_id
+            || id == self.add_layer_id
             || self.floor_minus_id == Some(id)
             || self.floor_plus_id == Some(id)
         {
@@ -1405,14 +1630,17 @@ impl AudioSetupPanel {
         }) {
             return true;
         }
-        self.trigger_row_ids.iter().any(|r| {
+        if self.trigger_row_ids.iter().any(|r| {
             id == r.enable
                 || id == r.sens_minus
                 || id == r.sens_plus
                 || id == r.len_minus
                 || id == r.len_plus
                 || id == r.layer
-        })
+        }) {
+            return true;
+        }
+        self.inputs_remove_ids.contains(&id) || self.consumer_row_ids.contains(&id)
     }
 
     /// Resize each send's meter fill from live levels (RMS 0..1). Called every
@@ -1564,6 +1792,42 @@ impl AudioSetupPanel {
             let send = self.selected_send.clone()?;
             let delta = if self.floor_plus_id == Some(id) { 6.0 } else { -6.0 };
             return Some(PanelAction::AudioSendFloorStep(send, delta));
+        }
+        // Inputs section: "+ Layer" opens a dropdown of audio layers not
+        // already feeding the selected send (D2 — the host itemizes it with
+        // `SetLayerAudioSend(layer, Some(send))`, the same command the layer
+        // header's Send dropdown fires).
+        if self.add_layer_id == id {
+            self.delete_armed = None;
+            let send = self.selected_send.clone()?;
+            return Some(PanelAction::AudioSendAddLayerClicked(send));
+        }
+        // Inputs section: remove (×) a feeding layer — routes straight to
+        // `SetLayerAudioSend(layer, None)`, the same command, no new mutation
+        // path (D2).
+        if let Some(i) = self.inputs_remove_ids.iter().position(|&r| r == id) {
+            self.delete_armed = None;
+            let feeding = self
+                .selected_send
+                .as_ref()
+                .and_then(|sid| self.sends.iter().find(|s| &s.id == sid))
+                .map(|s| s.feeding_layers.clone())
+                .unwrap_or_default();
+            let layer_id = feeding.get(i)?.0.clone();
+            return Some(PanelAction::SetLayerAudioSend(layer_id, None));
+        }
+        // Consumers section: navigate to the owning layer — read-only, no
+        // edit (D3).
+        if let Some(i) = self.consumer_row_ids.iter().position(|&r| r == id) {
+            self.delete_armed = None;
+            let consumers = self
+                .selected_send
+                .as_ref()
+                .and_then(|sid| self.sends.iter().find(|s| &s.id == sid))
+                .map(|s| s.consumers.clone())
+                .unwrap_or_default();
+            let layer_id = consumers.get(i)?.layer_id.clone()?;
+            return Some(PanelAction::LayerClicked(layer_id, Modifiers::NONE));
         }
         // Find which send row + control was hit (clone out so we don't hold a
         // borrow across the delete-arm mutation).
@@ -1890,6 +2154,8 @@ mod tests {
                     layer_fed: false,
                     routings: vec!["Capture: Channel 1".into()],
                     triggers: Vec::new(),
+                    feeding_layers: Vec::new(),
+                    consumers: Vec::new(),
                 },
                 AudioSendRow {
                     id: AudioSendId::new("s2"),
@@ -1903,6 +2169,8 @@ mod tests {
                     layer_fed: false,
                     routings: vec!["Capture: Channel 1".into()],
                     triggers: Vec::new(),
+                    feeding_layers: Vec::new(),
+                    consumers: Vec::new(),
                 },
             ],
             None,
@@ -2086,5 +2354,64 @@ mod tests {
         );
         assert!(matches!(resp, OverlayResponse::Consumed(_)));
         assert!(!p.is_open(), "Escape should self-close the modal");
+    }
+
+    // ─── Inputs / Consumers sections (AUDIO_SENDS_UX_DESIGN Phase 2) ───
+
+    #[test]
+    fn add_layer_row_opens_add_layer_dropdown_for_selected_send() {
+        let mut p = panel_with_two_sends();
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+
+        match p.handle_click(p.add_layer_id) {
+            Some(PanelAction::AudioSendAddLayerClicked(id)) => assert_eq!(id.as_str(), "s1"),
+            other => panic!("expected AudioSendAddLayerClicked, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn remove_feeding_layer_emits_set_layer_audio_send_none() {
+        let mut p = panel_with_two_sends();
+        p.sends[0].feeding_layers = vec![(LayerId::new("kick"), "KICK".to_string())];
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+        assert_eq!(p.inputs_remove_ids.len(), 1, "one remove button per feeding layer");
+
+        match p.handle_click(p.inputs_remove_ids[0]) {
+            Some(PanelAction::SetLayerAudioSend(layer, None)) => {
+                assert_eq!(layer.as_str(), "kick");
+            }
+            other => panic!("expected SetLayerAudioSend(_, None), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn consumer_row_click_selects_owning_layer_and_does_not_edit() {
+        let mut p = panel_with_two_sends();
+        p.sends[0].consumers = vec![SendConsumerRow {
+            label: "BLOOM LAYER \u{2022} Bloom \u{2022} Intensity".to_string(),
+            layer_id: Some(LayerId::new("bloom-layer")),
+        }];
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+        assert_eq!(p.consumer_row_ids.len(), 1);
+
+        match p.handle_click(p.consumer_row_ids[0]) {
+            Some(PanelAction::LayerClicked(layer, modifiers)) => {
+                assert_eq!(layer.as_str(), "bloom-layer");
+                assert!(!modifiers.shift && !modifiers.ctrl && !modifiers.command);
+            }
+            other => panic!("expected LayerClicked (navigate, not edit), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn feeding_layer_ids_accessor_reflects_configured_send() {
+        let mut p = panel_with_two_sends();
+        p.sends[0].feeding_layers = vec![(LayerId::new("kick"), "KICK".to_string())];
+        let ids = p.feeding_layer_ids(&AudioSendId::new("s1"));
+        assert_eq!(ids, vec![LayerId::new("kick")]);
+        assert!(p.feeding_layer_ids(&AudioSendId::new("s2")).is_empty());
     }
 }

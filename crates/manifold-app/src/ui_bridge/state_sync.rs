@@ -1277,17 +1277,35 @@ pub fn sync_inspector_data(
                 // One trigger row per band (Whole/Low/Mid/High), defaulting when
                 // the send carries no route for that band yet. The target label
                 // resolves to the layer's name, or "Auto" (route by send name).
-                let triggers = AudioBand::ALL
+                // Also the single pass that feeds the Consumers section's
+                // trigger rows below — an enabled route's resolved layer +
+                // label are exactly what a "Low → LayerName" consumer row needs.
+                let mut consumers: Vec<manifold_ui::panels::audio_setup_panel::SendConsumerRow> =
+                    project
+                        .audio_mod_consumers(&s.id)
+                        .into_iter()
+                        .map(|(layer_id, label)| {
+                            manifold_ui::panels::audio_setup_panel::SendConsumerRow { label, layer_id }
+                        })
+                        .collect();
+                let triggers: Vec<TriggerRouteRow> = AudioBand::ALL
                     .iter()
-                    .map(|&band| {
+                    .zip(["Whole", "Low", "Mid", "High"])
+                    .map(|(&band, band_label)| {
                         let route = s.trigger_for(band);
-                        let layer_label = route
-                            .and_then(|r| r.target_layer.as_ref())
+                        let target_layer = route.and_then(|r| r.target_layer.as_ref());
+                        let layer_label = target_layer
                             .and_then(|lid| {
                                 project.timeline.layers.iter().find(|l| &l.layer_id == lid)
                             })
                             .map(|l| l.name.clone())
                             .unwrap_or_else(|| "Auto".to_string());
+                        if route.is_some_and(|r| r.enabled) {
+                            consumers.push(manifold_ui::panels::audio_setup_panel::SendConsumerRow {
+                                label: format!("{band_label} \u{2192} {layer_label}"),
+                                layer_id: target_layer.cloned(),
+                            });
+                        }
                         TriggerRouteRow {
                             enabled: route.is_some_and(|r| r.enabled),
                             sensitivity: route.map_or(0.5, |r| r.sensitivity),
@@ -1303,6 +1321,10 @@ pub fn sync_inspector_data(
                         }
                     })
                     .collect();
+                // Inputs section: audio layers feeding this send (id + name).
+                let feeding_layers: Vec<(manifold_core::LayerId, String)> =
+                    s.layers().iter().map(|lid| (lid.clone(), layer_name(lid))).collect();
+
                 AudioSendRow {
                     id: s.id.clone(),
                     label: s.label.clone(),
@@ -1315,6 +1337,8 @@ pub fn sync_inspector_data(
                     layer_fed,
                     routings,
                     triggers,
+                    feeding_layers,
+                    consumers,
                 }
             })
             .collect();
@@ -1365,6 +1389,19 @@ pub fn sync_inspector_data(
             .map(|l| (l.layer_id.clone(), l.name.clone()))
             .collect();
         ui.set_audio_trigger_layers(trigger_layers);
+
+        // Candidate audio layers for the Inputs section's "+ Layer" dropdown
+        // (`AudioSendAddLayerClicked`) — every `LayerType::Audio` layer, id +
+        // name. The click handler filters out whichever already feed the
+        // clicked send via `AudioSetupPanel::feeding_layer_ids`.
+        let audio_layers: Vec<(manifold_core::LayerId, String)> = project
+            .timeline
+            .layers
+            .iter()
+            .filter(|l| l.layer_type == manifold_core::types::LayerType::Audio)
+            .map(|l| (l.layer_id.clone(), l.name.clone()))
+            .collect();
+        ui.set_audio_layers(audio_layers);
     }
 
     // ── Inspector tabs: the selection's ownership rungs (local→global) ──

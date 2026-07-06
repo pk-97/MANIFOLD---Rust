@@ -1189,6 +1189,51 @@ impl Project {
         count
     }
 
+    /// Every ENABLED audio mod reading `send_id`, resolved to a legible
+    /// `(owning layer, "LayerName \u{2022} EffectName \u{2022} ParamName")` pair — the
+    /// Audio Setup panel's Consumers section (`docs/AUDIO_SENDS_UX_DESIGN.md`
+    /// D1/D3). `layer_id` is `None` for a master-effects mod (nothing to jump
+    /// to; the label reads "Master" instead). Walks the same instance set
+    /// [`Self::audio_send_usage_count`] does.
+    pub fn audio_mod_consumers(&self, send_id: &crate::id::AudioSendId) -> Vec<(Option<crate::id::LayerId>, String)> {
+        fn collect(
+            layer_id: Option<crate::id::LayerId>,
+            layer_name: &str,
+            fx: &crate::effects::PresetInstance,
+            send_id: &crate::id::AudioSendId,
+            out: &mut Vec<(Option<crate::id::LayerId>, String)>,
+        ) {
+            let Some(mods) = fx.audio_mods.as_ref() else { return };
+            for m in mods.iter().filter(|m| m.enabled && &m.source.send_id == send_id) {
+                let effect_name = crate::preset_type_registry::display_name(fx.effect_type());
+                let param_name = fx
+                    .params
+                    .get(&m.param_id)
+                    .map(|p| p.spec.name.clone())
+                    .unwrap_or_else(|| m.param_id.to_string());
+                out.push((
+                    layer_id.clone(),
+                    format!("{layer_name} \u{2022} {effect_name} \u{2022} {param_name}"),
+                ));
+            }
+        }
+        let mut out = Vec::new();
+        for fx in &self.settings.master_effects {
+            collect(None, "Master", fx, send_id, &mut out);
+        }
+        for layer in &self.timeline.layers {
+            if let Some(effects) = layer.effects.as_ref() {
+                for fx in effects {
+                    collect(Some(layer.layer_id.clone()), &layer.name, fx, send_id, &mut out);
+                }
+            }
+            if let Some(gp) = layer.gen_params() {
+                collect(Some(layer.layer_id.clone()), &layer.name, gp, send_id, &mut out);
+            }
+        }
+        out
+    }
+
     /// Run `f` against the [`crate::effects::PresetInstance`] that a
     /// [`crate::graph_target::GraphTarget`] resolves to, returning its
     /// result (`None` if the target doesn't resolve). The one entry point
@@ -2085,5 +2130,52 @@ mod tests {
         p.audio_setup.sends.push(send_a);
 
         assert!(p.analysis_consumed_sends().is_empty());
+    }
+
+    // ─── audio_mod_consumers (AUDIO_SENDS_UX_DESIGN Phase 2, Consumers section) ───
+
+    #[test]
+    fn audio_mod_consumers_resolves_layer_effect_and_param_names() {
+        let mut p = Project::default();
+        let send_a = send_with_id("A", "send-a");
+        p.audio_setup.sends.push(send_a.clone());
+
+        let mut layer = crate::layer::Layer::new("BLOOM LAYER".into(), crate::types::LayerType::Video, 0);
+        layer.layer_id = crate::LayerId::new("bloom-layer");
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.audio_mods_mut().push(amplitude_mod(send_a.id.clone()));
+        layer.effects = Some(vec![fx]);
+        p.timeline.layers.push(layer);
+
+        let consumers = p.audio_mod_consumers(&send_a.id);
+        assert_eq!(consumers.len(), 1);
+        assert_eq!(consumers[0].0, Some(crate::LayerId::new("bloom-layer")));
+        assert!(
+            consumers[0].1.starts_with("BLOOM LAYER \u{2022} Bloom \u{2022} "),
+            "label should read 'LayerName \u{2022} EffectName \u{2022} ParamName', got {}",
+            consumers[0].1
+        );
+    }
+
+    #[test]
+    fn audio_mod_consumers_excludes_disabled_mods_and_other_sends() {
+        let mut p = Project::default();
+        let send_a = send_with_id("A", "send-a");
+        let send_b = send_with_id("B", "send-b");
+        p.audio_setup.sends.push(send_a.clone());
+        p.audio_setup.sends.push(send_b.clone());
+
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        let mods = fx.audio_mods_mut();
+        mods.push(amplitude_mod(send_a.id.clone()));
+        mods[0].enabled = false;
+        mods.push(amplitude_mod(send_b.id.clone()));
+        p.settings.master_effects.push(fx);
+
+        assert!(p.audio_mod_consumers(&send_a.id).is_empty(), "disabled mod excluded");
+        let b_consumers = p.audio_mod_consumers(&send_b.id);
+        assert_eq!(b_consumers.len(), 1);
+        assert_eq!(b_consumers[0].0, None, "master-effects mod has no owning layer");
+        assert!(b_consumers[0].1.starts_with("Master \u{2022} "));
     }
 }

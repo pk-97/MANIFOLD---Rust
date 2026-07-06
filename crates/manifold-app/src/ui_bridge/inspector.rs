@@ -1779,6 +1779,12 @@ pub(super) fn dispatch_inspector(
             // dispatch; reaching here (e.g. no candidate layers) is a no-op.
             DispatchResult::structural()
         }
+        PanelAction::AudioSendAddLayerClicked(_) => {
+            // The "+ Layer" dropdown is opened by UIRoot::try_open_dropdown
+            // before dispatch; reaching here (e.g. no candidate layers) is a
+            // no-op.
+            DispatchResult::structural()
+        }
         PanelAction::AudioCrossoverDragBegin => {
             // Snapshot the pre-drag crossovers so the commit records one undo step.
             *audio_crossover_snapshot =

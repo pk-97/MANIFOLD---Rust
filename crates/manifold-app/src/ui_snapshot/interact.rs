@@ -43,6 +43,10 @@ fn apply_one(ui: &mut UIRoot, data: &mut SceneData, spec: &str) -> String {
             ui.settings_popup.open();
             "open -> settings popup".to_string()
         }
+        Some(("open", "audio_setup")) => {
+            ui.audio_setup_panel.open();
+            "open -> audio setup panel".to_string()
+        }
         Some(("automation_add", rest)) => automation_add_point(data, rest),
         Some(("automation_move", rest)) => automation_move_point(data, rest),
         Some(("automation_bend", rest)) => automation_bend_segment(data, rest),

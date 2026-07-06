@@ -443,6 +443,11 @@ pub enum PanelAction {
     AudioSetSendChannels(AudioSendId, Vec<u16>),
     /// Toggle a send between mono (one channel) and stereo (a channel pair).
     AudioSendStereoToggle(AudioSendId),
+    /// Open the Inputs section's "+ Layer" dropdown for a send — audio layers
+    /// not already feeding it, each item carrying `SetLayerAudioSend(layer,
+    /// Some(send))` (the SAME command the layer header's Send dropdown fires;
+    /// `docs/AUDIO_SENDS_UX_DESIGN.md` D2).
+    AudioSendAddLayerClicked(AudioSendId),
     /// Open the read-only routings dropdown for a send — a non-editable list of
     /// where the send is fed from (the capture device + each feeding layer). The
     /// host opens a dropdown anchored to the source chip; nothing is selectable.

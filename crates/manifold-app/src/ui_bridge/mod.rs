@@ -327,6 +327,7 @@ pub fn dispatch(
         | PanelAction::AudioRenameSend(..)
         | PanelAction::AudioSetSendChannels(..)
         | PanelAction::AudioSendStereoToggle(..)
+        | PanelAction::AudioSendAddLayerClicked(..)
         | PanelAction::AudioSendRoutingsClicked(..)
         | PanelAction::AudioSetupDeviceClicked
         | PanelAction::AudioSendChannelClicked(..)
