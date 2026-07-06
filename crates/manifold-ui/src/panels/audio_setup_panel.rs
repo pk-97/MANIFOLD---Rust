@@ -971,7 +971,7 @@ impl AudioSetupPanel {
                 SCOPE_TITLE_H,
                 &format!("Spectrogram — {sel_label}"),
                 UIStyle {
-                    text_color: Color32::new(170, 170, 180, 255),
+                    text_color: color::TEXT_DIMMED,
                     font_size: color::FONT_LABEL,
                     text_align: TextAlign::Left,
                     ..UIStyle::default()
@@ -1216,7 +1216,7 @@ impl AudioSetupPanel {
             TRIG_TITLE_H,
             &format!("Triggers — {sel_label}"),
             UIStyle {
-                text_color: Color32::new(170, 170, 180, 255),
+                text_color: color::TEXT_DIMMED,
                 font_size: color::FONT_LABEL,
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
@@ -1452,7 +1452,7 @@ impl AudioSetupPanel {
             TRIG_TITLE_H,
             &format!("Inputs — {sel_label}"),
             UIStyle {
-                text_color: Color32::new(170, 170, 180, 255),
+                text_color: color::TEXT_DIMMED,
                 font_size: color::FONT_LABEL,
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
@@ -1524,7 +1524,7 @@ impl AudioSetupPanel {
             TRIG_TITLE_H,
             &format!("Consumers — {sel_label}"),
             UIStyle {
-                text_color: Color32::new(170, 170, 180, 255),
+                text_color: color::TEXT_DIMMED,
                 font_size: color::FONT_LABEL,
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
