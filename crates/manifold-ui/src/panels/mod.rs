@@ -443,6 +443,11 @@ pub enum PanelAction {
     AudioSetSendChannels(AudioSendId, Vec<u16>),
     /// Toggle a send between mono (one channel) and stereo (a channel pair).
     AudioSendStereoToggle(AudioSendId),
+    /// Open the Inputs section's "+ Layer" dropdown for a send — audio layers
+    /// not already feeding it, each item carrying `SetLayerAudioSend(layer,
+    /// Some(send))` (the SAME command the layer header's Send dropdown fires;
+    /// `docs/AUDIO_SENDS_UX_DESIGN.md` D2).
+    AudioSendAddLayerClicked(AudioSendId),
     /// Open the read-only routings dropdown for a send — a non-editable list of
     /// where the send is fed from (the capture device + each feeding layer). The
     /// host opens a dropdown anchored to the source chip; nothing is selectable.
@@ -451,6 +456,17 @@ pub enum PanelAction {
     /// The host reads the send's current gain, applies the delta, clamps, and
     /// commits — so the project stays the single source of truth.
     AudioSendGainStep(AudioSendId, f32),
+    /// Begin dragging a send's gain value label (D7) — snapshot the pre-drag
+    /// gain so the commit records one undo step. Same pattern as
+    /// `AudioCrossoverDragBegin`, per-send.
+    AudioSendGainDragBegin(AudioSendId),
+    /// Live gain change while dragging the value label: the absolute candidate
+    /// dB (1 px = 0.1 dB, computed by the panel from pointer movement; the
+    /// host clamps to the trim range). Applied immediately via
+    /// `MutateProjectLive` — no per-frame undo.
+    AudioSendGainDragChanged(AudioSendId, f32),
+    /// Commit the gain drag as one undo step (`SetAudioSendGainCommand`).
+    AudioSendGainDragCommit(AudioSendId),
     /// Step the selected send's pre-analysis noise floor by a dB delta (the
     /// spectrogram's Floor −/＋). Off ⇄ engaged is handled host-side.
     AudioSendFloorStep(AudioSendId, f32),
@@ -471,6 +487,18 @@ pub enum PanelAction {
     /// Step a band route's sensitivity by a delta (the row's −/＋ buttons). The
     /// host reads the current value, applies + clamps, and commits.
     AudioTriggerSensitivityStep(AudioSendId, AudioBand, f32),
+    /// Begin dragging a band route's sensitivity value label (D7) — snapshot
+    /// the selected send's pre-drag trigger routes so the commit records one
+    /// undo step. Same pattern as `AudioCrossoverDragBegin`, per-send-and-band.
+    AudioSendSensitivityDragBegin(AudioSendId, AudioBand),
+    /// Live sensitivity change while dragging the value label: the absolute
+    /// candidate fraction (1 px = 0.5%, computed by the panel from pointer
+    /// movement; the host clamps to 0..1). Applied immediately via
+    /// `MutateProjectLive` — no per-frame undo.
+    AudioSendSensitivityDragChanged(AudioSendId, AudioBand, f32),
+    /// Commit the sensitivity drag as one undo step
+    /// (`SetAudioSendTriggersCommand`).
+    AudioSendSensitivityDragCommit(AudioSendId, AudioBand),
     /// Scale a band route's one-shot length by a factor (the row's −/＋ buttons,
     /// musical halve/double). The host reads the current length, applies + clamps.
     AudioTriggerLengthStep(AudioSendId, AudioBand, f32),

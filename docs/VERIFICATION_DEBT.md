@@ -123,6 +123,21 @@ editor expose an inner `ParamType::Angle` param (or load a glTF and open its cam
 card), confirm the card slider reads out `NN°` (not radians), and that a text edit round-trips
 degrees↔radians without drift. Peter owns the L4 live observation.
 
+### VD-011 — AUDIO_SENDS_UX P1 per-send gating: trace-count run with real audio — L1 reached / L2 target
+Landed 2026-07-06 (`docs/landings/2026-07-06-audio-sends-ux.md`). The consumed-set walk is
+unit-proven (4 tests on `Project::analysis_consumed_sends`) and the per-send skip is in the tick
+path, but the doc's own P1 gate — `MANIFOLD_AUDIO_TRACE=1`, 16 sends, one bound param, log shows
+"analyzed 1 send(s)" (2 with the scope open) — needs a running app with a capture device. The
+instrument is shipped and env-gated. Burn-down: Peter (or a future L3 flow) runs the trace launch
+per the landing report's click-script step 5. Peter owns the L2 observation.
+
+### VD-012 — AUDIO_SENDS_UX P3 calibration drags: live feel + undo-step + no-capture-restart — L1/L2 reached / L4 target
+Landed 2026-07-06 (same landing report). Drag arm/commit sequences and the dB/fraction math are
+unit-proven (3 on_event tests); the layout and non-dim anchoring are PNG-verified (L2). Not
+observed: meter following a gain drag against live audio, absence of capture-restart glitch, and
+exactly one undo step per drag gesture — all inherently running-app. Burn-down: click-script step 4.
+Peter owns the L4 feel-pass; it is the acceptance gate for the panel per the wave brief.
+
 *(VD-001–004 seeded 2026-07-05 from the memory corpus plus Peter's in-app findings; VD-006 added
 2026-07-05, VD-007 at P2 landing, VD-008 at P3 landing, VD-009 at P4 landing, VD-010 at P5-inspector
 landing. VD-005 closed at P2 landing. The full backfill pass over recent landings is still owed and

@@ -45,6 +45,11 @@ use super::{resolve_effects_mut, resolve_effects_read};
 use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
 
+/// Send gain trim range (dB) — shared by the stepper (`AudioSendGainStep`) and
+/// the D7 drag (`AudioSendGainDragChanged`/`Commit`).
+const AUDIO_SEND_GAIN_MIN_DB: f32 = -24.0;
+const AUDIO_SEND_GAIN_MAX_DB: f32 = 24.0;
+
 /// Apply `edit` to the envelope matched by `param_id` on `target`, in both the
 /// local UI project and the content thread (the next snapshot must not stomp
 /// the live tweak). Edits the existing envelope only — no create. The unified
@@ -374,6 +379,8 @@ pub(super) fn dispatch_inspector(
     decay_snapshot: &mut Option<f32>,
     audio_shape_snapshot: &mut Option<manifold_core::audio_mod::AudioModShape>,
     audio_crossover_snapshot: &mut Option<(f32, f32)>,
+    audio_send_gain_drag_snapshot: &mut Option<f32>,
+    audio_send_sensitivity_drag_snapshot: &mut Option<Vec<manifold_core::audio_trigger::TriggerRoute>>,
     active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
     editor_target: Option<&manifold_core::GraphTarget>,
 ) -> DispatchResult {
@@ -1677,14 +1684,12 @@ pub(super) fn dispatch_inspector(
             // The project is the source of truth: read current gain, apply the
             // delta, clamp to a sensible trim range, commit old→new. Capture
             // restart is avoided — the worker reads gain live (AudioModRuntime).
-            const GAIN_MIN_DB: f32 = -24.0;
-            const GAIN_MAX_DB: f32 = 24.0;
             let old = project
                 .audio_setup
                 .find_send(id)
                 .map(|s| s.gain_db)
                 .unwrap_or(0.0);
-            let new = (old + delta_db).clamp(GAIN_MIN_DB, GAIN_MAX_DB);
+            let new = (old + delta_db).clamp(AUDIO_SEND_GAIN_MIN_DB, AUDIO_SEND_GAIN_MAX_DB);
             if (new - old).abs() < f32::EPSILON {
                 return DispatchResult::structural();
             }
@@ -1693,6 +1698,51 @@ pub(super) fn dispatch_inspector(
                 content_tx,
                 Box::new(SetAudioSendGainCommand::new(id.clone(), old, new)),
             )
+        }
+        PanelAction::AudioSendGainDragBegin(id) => {
+            // Snapshot the pre-drag gain so the commit records one undo step —
+            // the `AudioCrossoverDragBegin` pattern, per-send (D7).
+            *audio_send_gain_drag_snapshot = Some(
+                project
+                    .audio_setup
+                    .find_send(id)
+                    .map(|s| s.gain_db)
+                    .unwrap_or(0.0),
+            );
+            DispatchResult::handled()
+        }
+        PanelAction::AudioSendGainDragChanged(id, db) => {
+            // Live edit (no per-frame undo): clamp to the stepper's trim range,
+            // then apply to the local project and the content thread so the
+            // label + `GainBank` track the cursor — no capture restart.
+            let clamped = db.clamp(AUDIO_SEND_GAIN_MIN_DB, AUDIO_SEND_GAIN_MAX_DB);
+            if let Some(s) = project.audio_setup.find_send_mut(id) {
+                s.gain_db = clamped;
+            }
+            let id = id.clone();
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::MutateProjectLive(Box::new(move |p| {
+                    if let Some(s) = p.audio_setup.find_send_mut(&id) {
+                        s.gain_db = clamped;
+                    }
+                })),
+            );
+            DispatchResult::handled()
+        }
+        PanelAction::AudioSendGainDragCommit(id) => {
+            // One undo step: snapshot (old) → current gain (new).
+            if let Some(old) = audio_send_gain_drag_snapshot.take() {
+                let new = project.audio_setup.find_send(id).map(|s| s.gain_db).unwrap_or(old);
+                if (new - old).abs() > f32::EPSILON {
+                    return audio_setup_command(
+                        project,
+                        content_tx,
+                        Box::new(SetAudioSendGainCommand::new(id.clone(), old, new)),
+                    );
+                }
+            }
+            DispatchResult::handled()
         }
         PanelAction::AudioSendFloorStep(id, delta_db) => {
             // Pre-analysis squelch (dB). Off is a sentinel below the usable range:
@@ -1746,6 +1796,58 @@ pub(super) fn dispatch_inspector(
                 Box::new(SetAudioSendTriggersCommand::new(id.clone(), old, new)),
             )
         }
+        PanelAction::AudioSendSensitivityDragBegin(id, _band) => {
+            // Snapshot the selected send's pre-drag trigger routes (whole
+            // vec — `SetAudioSendTriggersCommand`'s unit) so the commit
+            // records one undo step (D7).
+            *audio_send_sensitivity_drag_snapshot =
+                project.audio_setup.find_send(id).map(|s| s.triggers.clone());
+            DispatchResult::handled()
+        }
+        PanelAction::AudioSendSensitivityDragChanged(id, band, frac) => {
+            // Live edit (no per-frame undo): clamp 0..1, upsert the dragged
+            // band's route, apply to the local project and the content thread
+            // — the trigger evaluator reads sensitivity live, no capture
+            // restart.
+            let Some(send) = project.audio_setup.find_send(id) else {
+                return DispatchResult::handled();
+            };
+            let clamped = frac.clamp(0.0, 1.0);
+            let new = send.triggers_with_route(crate::ui_translate::audio_band_to_core(*band), |r| {
+                r.sensitivity = clamped;
+            });
+            if let Some(s) = project.audio_setup.find_send_mut(id) {
+                s.triggers = new.clone();
+            }
+            let id = id.clone();
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::MutateProjectLive(Box::new(move |p| {
+                    if let Some(s) = p.audio_setup.find_send_mut(&id) {
+                        s.triggers = new.clone();
+                    }
+                })),
+            );
+            DispatchResult::handled()
+        }
+        PanelAction::AudioSendSensitivityDragCommit(id, _band) => {
+            // One undo step: snapshot (old routes) → current routes (new).
+            if let Some(old) = audio_send_sensitivity_drag_snapshot.take() {
+                let new = project
+                    .audio_setup
+                    .find_send(id)
+                    .map(|s| s.triggers.clone())
+                    .unwrap_or_else(|| old.clone());
+                if new != old {
+                    return audio_setup_command(
+                        project,
+                        content_tx,
+                        Box::new(SetAudioSendTriggersCommand::new(id.clone(), old, new)),
+                    );
+                }
+            }
+            DispatchResult::handled()
+        }
         PanelAction::AudioTriggerLengthStep(id, band, factor) => {
             let Some(send) = project.audio_setup.find_send(id) else {
                 return DispatchResult::structural();
@@ -1777,6 +1879,12 @@ pub(super) fn dispatch_inspector(
         PanelAction::AudioTriggerLayerClicked(_, _) => {
             // The layer dropdown is opened by UIRoot::try_open_dropdown before
             // dispatch; reaching here (e.g. no candidate layers) is a no-op.
+            DispatchResult::structural()
+        }
+        PanelAction::AudioSendAddLayerClicked(_) => {
+            // The "+ Layer" dropdown is opened by UIRoot::try_open_dropdown
+            // before dispatch; reaching here (e.g. no candidate layers) is a
+            // no-op.
             DispatchResult::structural()
         }
         PanelAction::AudioCrossoverDragBegin => {

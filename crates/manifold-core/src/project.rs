@@ -1124,6 +1124,44 @@ impl Project {
         false
     }
 
+    /// Send ids the analysis runtime should actually spend cycles on: every
+    /// send with at least one ENABLED audio mod reading it, plus every send
+    /// with at least one enabled trigger route. Walks the same instance set
+    /// [`Self::has_active_audio_mods`] does (master effects, layer effects,
+    /// layer generator params — NOT clip effects, mirroring that function).
+    /// `AudioModRuntime` recomputes this only on a data-version change and
+    /// skips every send outside the set (unless it's the scope-tapped send) —
+    /// see `docs/AUDIO_SENDS_UX_DESIGN.md` D4/§3.2.
+    pub fn analysis_consumed_sends(&self) -> ahash::AHashSet<crate::AudioSendId> {
+        let mut out = ahash::AHashSet::new();
+        let mut collect = |fx: &crate::effects::PresetInstance| {
+            if let Some(mods) = fx.audio_mods.as_ref() {
+                for m in mods.iter().filter(|m| m.enabled) {
+                    out.insert(m.source.send_id.clone());
+                }
+            }
+        };
+        for fx in &self.settings.master_effects {
+            collect(fx);
+        }
+        for layer in &self.timeline.layers {
+            if let Some(effects) = layer.effects.as_ref() {
+                for fx in effects {
+                    collect(fx);
+                }
+            }
+            if let Some(gp) = layer.gen_params() {
+                collect(gp);
+            }
+        }
+        for send in &self.audio_setup.sends {
+            if send.has_active_triggers() {
+                out.insert(send.id.clone());
+            }
+        }
+        out
+    }
+
     /// Number of parameters whose modulation references `send_id` (enabled or
     /// not), across master effects, layer effects, and generator params. Used to
     /// warn before deleting a send that sliders still depend on.
@@ -1149,6 +1187,51 @@ impl Project {
             }
         }
         count
+    }
+
+    /// Every ENABLED audio mod reading `send_id`, resolved to a legible
+    /// `(owning layer, "LayerName \u{2022} EffectName \u{2022} ParamName")` pair — the
+    /// Audio Setup panel's Consumers section (`docs/AUDIO_SENDS_UX_DESIGN.md`
+    /// D1/D3). `layer_id` is `None` for a master-effects mod (nothing to jump
+    /// to; the label reads "Master" instead). Walks the same instance set
+    /// [`Self::audio_send_usage_count`] does.
+    pub fn audio_mod_consumers(&self, send_id: &crate::id::AudioSendId) -> Vec<(Option<crate::id::LayerId>, String)> {
+        fn collect(
+            layer_id: Option<crate::id::LayerId>,
+            layer_name: &str,
+            fx: &crate::effects::PresetInstance,
+            send_id: &crate::id::AudioSendId,
+            out: &mut Vec<(Option<crate::id::LayerId>, String)>,
+        ) {
+            let Some(mods) = fx.audio_mods.as_ref() else { return };
+            for m in mods.iter().filter(|m| m.enabled && &m.source.send_id == send_id) {
+                let effect_name = crate::preset_type_registry::display_name(fx.effect_type());
+                let param_name = fx
+                    .params
+                    .get(&m.param_id)
+                    .map(|p| p.spec.name.clone())
+                    .unwrap_or_else(|| m.param_id.to_string());
+                out.push((
+                    layer_id.clone(),
+                    format!("{layer_name} \u{2022} {effect_name} \u{2022} {param_name}"),
+                ));
+            }
+        }
+        let mut out = Vec::new();
+        for fx in &self.settings.master_effects {
+            collect(None, "Master", fx, send_id, &mut out);
+        }
+        for layer in &self.timeline.layers {
+            if let Some(effects) = layer.effects.as_ref() {
+                for fx in effects {
+                    collect(Some(layer.layer_id.clone()), &layer.name, fx, send_id, &mut out);
+                }
+            }
+            if let Some(gp) = layer.gen_params() {
+                collect(Some(layer.layer_id.clone()), &layer.name, gp, send_id, &mut out);
+            }
+        }
+        out
     }
 
     /// Run `f` against the [`crate::effects::PresetInstance`] that a
@@ -1400,7 +1483,7 @@ fn default_version() -> String {
 mod tests {
     use super::*;
     use crate::PresetTypeId;
-    use crate::effects::{PresetInstance, ParameterDriver};
+    use crate::effects::{ParamId, ParameterDriver, PresetInstance};
     use crate::types::{BeatDivision, DriverWaveform};
 
     /// Build a bundled test [`crate::params::Param`] (mirrors
@@ -1972,4 +2055,127 @@ mod tests {
         );
     }
 
+    // ─── analysis_consumed_sends (AUDIO_SENDS_UX_DESIGN D4) ───
+
+    fn send_with_id(label: &str, id: &str) -> crate::audio_setup::AudioSend {
+        let mut s = crate::audio_setup::AudioSend::new(label);
+        s.id = crate::AudioSendId::new(id);
+        s
+    }
+
+    fn amplitude_mod(send_id: crate::AudioSendId) -> crate::audio_mod::ParameterAudioMod {
+        crate::audio_mod::ParameterAudioMod::new(
+            ParamId::from("amount"),
+            send_id,
+            crate::audio_mod::AudioFeature::new(
+                crate::audio_mod::AudioFeatureKind::Amplitude,
+                crate::audio_mod::AudioBand::Full,
+            ),
+        )
+    }
+
+    #[test]
+    fn analysis_consumed_sends_includes_only_the_send_with_an_enabled_mod() {
+        let mut p = Project::default();
+        let send_a = send_with_id("A", "send-a");
+        let send_b = send_with_id("B", "send-b");
+        p.audio_setup.sends.push(send_a.clone());
+        p.audio_setup.sends.push(send_b.clone());
+
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.audio_mods_mut().push(amplitude_mod(send_a.id.clone()));
+        p.settings.master_effects.push(fx);
+
+        let consumed = p.analysis_consumed_sends();
+        assert_eq!(consumed.len(), 1);
+        assert!(consumed.contains(&send_a.id));
+        assert!(!consumed.contains(&send_b.id));
+    }
+
+    #[test]
+    fn analysis_consumed_sends_is_empty_when_the_only_mod_is_disabled() {
+        let mut p = Project::default();
+        let send_a = send_with_id("A", "send-a");
+        p.audio_setup.sends.push(send_a.clone());
+
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        let m = fx.audio_mods_mut();
+        m.push(amplitude_mod(send_a.id.clone()));
+        m[0].enabled = false;
+        p.settings.master_effects.push(fx);
+
+        assert!(p.analysis_consumed_sends().is_empty());
+    }
+
+    #[test]
+    fn analysis_consumed_sends_includes_send_with_enabled_trigger_route_and_no_mod() {
+        let mut p = Project::default();
+        let mut send_a = send_with_id("A", "send-a");
+        let mut route = crate::audio_trigger::TriggerRoute::new(crate::audio_mod::AudioBand::Low);
+        route.enabled = true;
+        send_a.triggers.push(route);
+        p.audio_setup.sends.push(send_a.clone());
+
+        let consumed = p.analysis_consumed_sends();
+        assert_eq!(consumed.len(), 1);
+        assert!(consumed.contains(&send_a.id));
+    }
+
+    #[test]
+    fn analysis_consumed_sends_excludes_send_with_disabled_trigger_route() {
+        let mut p = Project::default();
+        let mut send_a = send_with_id("A", "send-a");
+        // TriggerRoute::new is disabled by default.
+        send_a.triggers.push(crate::audio_trigger::TriggerRoute::new(crate::audio_mod::AudioBand::Low));
+        p.audio_setup.sends.push(send_a);
+
+        assert!(p.analysis_consumed_sends().is_empty());
+    }
+
+    // ─── audio_mod_consumers (AUDIO_SENDS_UX_DESIGN Phase 2, Consumers section) ───
+
+    #[test]
+    fn audio_mod_consumers_resolves_layer_effect_and_param_names() {
+        let mut p = Project::default();
+        let send_a = send_with_id("A", "send-a");
+        p.audio_setup.sends.push(send_a.clone());
+
+        let mut layer = crate::layer::Layer::new("BLOOM LAYER".into(), crate::types::LayerType::Video, 0);
+        layer.layer_id = crate::LayerId::new("bloom-layer");
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.audio_mods_mut().push(amplitude_mod(send_a.id.clone()));
+        layer.effects = Some(vec![fx]);
+        p.timeline.layers.push(layer);
+
+        let consumers = p.audio_mod_consumers(&send_a.id);
+        assert_eq!(consumers.len(), 1);
+        assert_eq!(consumers[0].0, Some(crate::LayerId::new("bloom-layer")));
+        assert!(
+            consumers[0].1.starts_with("BLOOM LAYER \u{2022} Bloom \u{2022} "),
+            "label should read 'LayerName \u{2022} EffectName \u{2022} ParamName', got {}",
+            consumers[0].1
+        );
+    }
+
+    #[test]
+    fn audio_mod_consumers_excludes_disabled_mods_and_other_sends() {
+        let mut p = Project::default();
+        let send_a = send_with_id("A", "send-a");
+        let send_b = send_with_id("B", "send-b");
+        p.audio_setup.sends.push(send_a.clone());
+        p.audio_setup.sends.push(send_b.clone());
+
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        let mods = fx.audio_mods_mut();
+        mods.push(amplitude_mod(send_a.id.clone()));
+        mods[0].enabled = false;
+        mods.push(amplitude_mod(send_b.id.clone()));
+        p.settings.master_effects.push(fx);
+
+        assert!(p.audio_mod_consumers(&send_a.id).is_empty(), "disabled mod excluded");
+        let b_consumers = p.audio_mod_consumers(&send_b.id);
+        assert_eq!(b_consumers.len(), 1);
+        assert_eq!(b_consumers[0].0, None, "master-effects mod has no owning layer");
+        assert!(b_consumers[0].1.starts_with("Master \u{2022} "));
+    }
 }

@@ -33,6 +33,7 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "hairlineclips" => Some(hairline_clips_scene()),
         "automation" => Some(automation_scene()),
         "selectionclips" => Some(selection_clips_scene()),
+        "audiosends" => Some(audio_sends_scene()),
         _ => None,
     }
 }
@@ -232,6 +233,80 @@ fn automation_scene() -> SceneData {
 
     data.content.automation_latched_params = vec![(bloom_id, bloom_param.into())];
     data
+}
+
+/// AUDIO_SENDS_UX_DESIGN Phase 2 gate scene: two sends, one fully wired (fed
+/// by an audio layer, consumed by an enabled audio mod on a named layer's
+/// effect param AND an enabled trigger route to a named layer) and one left
+/// completely empty — so the Audio Setup panel's Inputs/Consumers sections
+/// (`--interact "open:audio_setup"`) have real content on both sides. Send A
+/// is pushed first so the panel's default-select picks it with no extra
+/// interact step.
+fn audio_sends_scene() -> SceneData {
+    use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, ParameterAudioMod};
+    use manifold_core::audio_setup::AudioSend;
+    use manifold_core::audio_trigger::TriggerRoute;
+
+    // 0: KICK — audio layer, feeds Send A.
+    let mut kick = Layer::new("KICK".into(), LayerType::Audio, 0);
+    kick.layer_id = lid("kick");
+
+    // 1: BLOOM LAYER — carries the Bloom effect whose first param has the
+    // enabled audio mod that consumes Send A.
+    let mut bloom_layer = Layer::new("BLOOM LAYER".into(), LayerType::Video, 1);
+    bloom_layer.layer_id = lid("bloom-layer");
+    bloom_layer.clips.push(TimelineClip::new_video(
+        "bloom_loop.mov".into(),
+        Beats(0.0),
+        Beats(48.0),
+        Seconds::ZERO,
+    ));
+
+    // 2: STROBE LAYER — the enabled Low trigger route's target.
+    let mut strobe_layer = Layer::new("STROBE LAYER".into(), LayerType::Video, 2);
+    strobe_layer.layer_id = lid("strobe-layer");
+    strobe_layer.clips.push(TimelineClip::new_video(
+        "strobe.mov".into(),
+        Beats(0.0),
+        Beats(48.0),
+        Seconds::ZERO,
+    ));
+
+    let mut project = Project::default();
+
+    let mut send_a = AudioSend::new("Kick");
+    send_a.source.layers.push(lid("kick"));
+    let mut low_route = TriggerRoute::new(AudioBand::Low);
+    low_route.enabled = true;
+    low_route.target_layer = Some(lid("strobe-layer"));
+    send_a.triggers.push(low_route);
+    let send_a_id = send_a.id.clone();
+
+    // Send B: no capture, no layers, no mods, no triggers — fully empty.
+    let send_b = AudioSend::new("Amb");
+
+    project.audio_setup.sends.push(send_a);
+    project.audio_setup.sends.push(send_b);
+
+    let mut bloom = effect("Bloom");
+    let bloom_param = manifold_core::preset_definition_registry::try_get(bloom.effect_type())
+        .and_then(|def| def.param_defs.first().map(|pd| pd.id.clone()))
+        .expect("Bloom has at least one param");
+    // `ParameterAudioMod::new` defaults `enabled: true` (audio_mod.rs) — no
+    // separate enable step needed.
+    bloom
+        .audio_mods_mut()
+        .push(ParameterAudioMod::new(
+            bloom_param.into(),
+            send_a_id,
+            AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Full),
+        ));
+    bloom_layer.effects = Some(vec![bloom]);
+
+    project.timeline.layers = vec![kick, bloom_layer, strobe_layer];
+
+    let content = ContentState { current_beat: Beats(0.0), is_playing: false, ..Default::default() };
+    SceneData { project, content, active: Some(1), selection: UIState::default() }
 }
 
 /// P0.3 evidence scene for `docs/TIMELINE_LAYOUT_P0_SPEC.md`: one lane of many

@@ -124,7 +124,7 @@ fn render_ui_scene(
 ) {
     let Some(mut data) = fixtures::build(scene) else {
         eprintln!(
-            "ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, scrollshrink, hairlineclips, automation, graph, editor, transform, all)"
+            "ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, scrollshrink, hairlineclips, automation, selectionclips, audiosends, graph, editor, transform, all)"
         );
         std::process::exit(2);
     };

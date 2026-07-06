@@ -267,6 +267,11 @@ pub struct UIRoot {
     /// trigger layer dropdowns. Refreshed by `state_sync` while the modal is
     /// open; read when a trigger row's layer dropdown opens.
     audio_trigger_layers: Vec<(manifold_core::LayerId, String)>,
+    /// Every `LayerType::Audio` layer (id + name), for the Audio Setup modal's
+    /// Inputs section "+ Layer" dropdown — candidates are these minus
+    /// whichever already feed the clicked send. Refreshed by `state_sync`
+    /// while the modal is open.
+    audio_layers: Vec<(manifold_core::LayerId, String)>,
 
     // Inspector resize state
     pub inspector_resize_dragging: bool,
@@ -421,6 +426,7 @@ impl UIRoot {
             audio_setup_apps: Vec::new(),
             clip_detect_layers: Vec::new(),
             audio_trigger_layers: Vec::new(),
+            audio_layers: Vec::new(),
             inspector_resize_dragging: false,
             inspector_drag_start_x: 0.0,
             inspector_drag_start_width: 0.0,
@@ -1174,6 +1180,12 @@ impl UIRoot {
         self.audio_trigger_layers = layers;
     }
 
+    /// Cache every `LayerType::Audio` layer for the Audio Setup modal's Inputs
+    /// section "+ Layer" dropdown. Set by `state_sync` while the modal is open.
+    pub fn set_audio_layers(&mut self, layers: Vec<(manifold_core::LayerId, String)>) {
+        self.audio_layers = layers;
+    }
+
     /// Refresh the embedded-preset list surfaced into the Add pickers from the
     /// project snapshot. Change-gated by the embedded-preset fingerprint so the
     /// Vec rebuilds only when a fork / import / remove actually changed the set,
@@ -1602,13 +1614,13 @@ impl UIRoot {
                 true
             }
             PanelAction::AudioSendClicked(idx) => {
-                // "No send" first, then every named send from Audio Setup so the
+                // "No source" first, then every named send from Audio Setup so the
                 // layer dropdown and the setup panel can never disagree — each
                 // carries its SetLayerAudioSend directly.
                 let sends = self.audio_setup_panel.send_options();
                 let mut items = Vec::with_capacity(sends.len() + 1);
                 items.push(
-                    DropdownItem::new("No send")
+                    DropdownItem::new("No source")
                         .with_action(PanelAction::SetLayerAudioSend(idx.clone(), None)),
                 );
                 for (id, label) in sends {
@@ -1616,6 +1628,24 @@ impl UIRoot {
                         DropdownItem::new(&label)
                             .with_action(PanelAction::SetLayerAudioSend(idx.clone(), Some(id))),
                     );
+                }
+                self.open_dropdown_typed(items, trigger);
+                true
+            }
+            PanelAction::AudioSendAddLayerClicked(send_id) => {
+                // Inputs section "+ Layer" (AUDIO_SENDS_UX_DESIGN D2): every
+                // audio layer minus whichever already feed this send, each
+                // carrying the SAME `SetLayerAudioSend` command the layer
+                // header's Send dropdown fires.
+                let already = self.audio_setup_panel.feeding_layer_ids(send_id);
+                let mut items = Vec::with_capacity(self.audio_layers.len());
+                for (id, name) in &self.audio_layers {
+                    if already.contains(id) {
+                        continue;
+                    }
+                    items.push(DropdownItem::new(name).with_action(
+                        PanelAction::SetLayerAudioSend(id.clone(), Some(send_id.clone())),
+                    ));
                 }
                 self.open_dropdown_typed(items, trigger);
                 true

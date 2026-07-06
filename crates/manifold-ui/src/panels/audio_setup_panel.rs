@@ -1,23 +1,28 @@
 //! Audio Setup panel — the central place to route audio in and manage the
 //! named sends that the per-slider audio drawers reference.
 //!
-//! A floating modal (over the main UI) with an input-device picker and one row
-//! per send: channel, gain, and delete, plus an "Add send" button. Self-
-//! contained like [`super::browser_popup`]: it builds `UITree` nodes from data
-//! handed in via [`AudioSetupPanel::configure`] and maps a clicked node id back
-//! to a [`PanelAction`] (the project-level audio-setup actions, already routed
-//! through `ui_bridge`). See `docs/AUDIO_MODULATION_DESIGN.md` §10.1.
+//! A non-dimming overlay docked to the viewport's right edge (D6 —
+//! `docs/AUDIO_SENDS_UX_DESIGN.md` §2/§3.3), full height, with an input-device
+//! picker and one row per send: channel, gain, and delete, plus an "Add send"
+//! button. The show stays visible underneath and outside clicks pass through
+//! (it's a calibration surface used while performing — accidental dismissal
+//! is the failure mode); Escape and the header Audio button still close it.
+//! Self-contained like [`super::browser_popup`]: it builds `UITree` nodes from
+//! data handed in via [`AudioSetupPanel::configure`] and maps a clicked node
+//! id back to a [`PanelAction`] (the project-level audio-setup actions,
+//! already routed through `ui_bridge`). See
+//! `docs/AUDIO_MODULATION_DESIGN.md` §10.1.
 //!
 //! v1 scope: device cycle, add/remove send, per-send single-channel routing and
 //! gain trim. Per-send labels are auto-assigned ("Audio N") until a text-field
 //! rename lands; multi-channel downmix and the v2 analysis toggles are future.
 
 use crate::types::{AudioBand, AudioDeviceRef};
-use manifold_foundation::AudioSendId;
+use manifold_foundation::{AudioSendId, LayerId};
 
 use crate::chrome::{ChromeHost, Pad, Sizing, View};
 use crate::color;
-use crate::input::{Key, UIEvent};
+use crate::input::{Key, Modifiers, UIEvent};
 use crate::node::*;
 use crate::tree::UITree;
 
@@ -27,17 +32,23 @@ use super::{BandDivider, PanelAction};
 const KEY_BG: u64 = 70_001;
 const KEY_CLOSE: u64 = 70_002;
 use super::overlay::{
-    Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse, SizePolicy, compute_overlay_rect,
+    Anchor, Corner, Modality, Overlay, OverlayPlacement, OverlayResponse, SizePolicy,
+    compute_overlay_rect,
 };
 
 // ── Layout ──
-/// Minimum panel width (small screens / compact fallback). The modal targets a
-/// fraction of the viewport (see [`AudioSetupPanel::resize_to_viewport`]) but
+/// Minimum panel width (small screens / compact fallback). The overlay targets
+/// a fraction of the viewport (see [`Overlay::size_policy`] and
+/// [`AudioSetupPanel::build_at`], which resizes the scope to fill it) but
 /// never shrinks below this.
 const PANEL_W_MIN: f32 = 460.0;
-/// Fraction of the viewport the enlarged modal fills, width and height.
-const PANEL_W_FRAC: f32 = 0.8;
-const PANEL_H_FRAC: f32 = 0.8;
+/// Fraction of the viewport width the right-anchored panel fills (D6 — a
+/// calibration surface docked beside the live output, not a centered modal
+/// that dims the show).
+const PANEL_W_FRAC: f32 = 0.38;
+/// Fraction of the viewport height the panel fills — full height, so the
+/// scope + trigger rows have room without the panel floating mid-screen.
+const PANEL_H_FRAC: f32 = 1.0;
 const TITLE_H: f32 = 26.0;
 const ROW_H: f32 = 24.0;
 const ROW_GAP: f32 = 4.0;
@@ -84,6 +95,30 @@ pub struct AudioSendRow {
     /// band with no route reads as a disabled default), so the inspector renders
     /// a fixed four-row matrix. Built by `state_sync` from the send's routes.
     pub triggers: Vec<TriggerRouteRow>,
+    /// Audio layers feeding this send (id + name), for the Inputs section's
+    /// per-layer remove row. Built by `state_sync` from the send's
+    /// `source.layers` — the single source of truth for the layer↔send
+    /// binding (`docs/AUDIO_SENDS_UX_DESIGN.md` D1/D2).
+    pub feeding_layers: Vec<(LayerId, String)>,
+    /// This send's consumers — one row per enabled audio mod reading it plus
+    /// one per enabled trigger route on it — for the Consumers section.
+    /// Navigational only (D3): clicking a row selects the owning layer, it
+    /// never edits. Built by `state_sync`.
+    pub consumers: Vec<SendConsumerRow>,
+}
+
+/// One consumer row in the Audio Setup modal's Consumers section: a named
+/// audio mod ("LayerName · EffectName · ParamName") or an enabled trigger
+/// route ("Low → LayerName"), each clickable to jump to the owning layer.
+/// See `docs/AUDIO_SENDS_UX_DESIGN.md` §3.1.
+#[derive(Clone, Debug)]
+pub struct SendConsumerRow {
+    pub label: String,
+    /// Jump target — the layer the mod/route lives on (or fires into).
+    /// `None` if unresolvable (e.g. the route's "Auto" target couldn't be
+    /// matched to a layer by name), in which case the row still shows but
+    /// doesn't navigate on click.
+    pub layer_id: Option<LayerId>,
 }
 
 /// One band's trigger row in the Audio Setup modal — the display state of a
@@ -204,6 +239,10 @@ struct TriggerRowIds {
     enable: NodeId,
     sens_minus: NodeId,
     sens_plus: NodeId,
+    /// The sensitivity value label between the steppers — a D7 horizontal
+    /// drag zone (`pointer-down` arms
+    /// [`AudioSetupPanel::sensitivity_drag_target`]).
+    sens_value: NodeId,
     len_minus: NodeId,
     len_plus: NodeId,
     layer: NodeId,
@@ -230,6 +269,7 @@ impl Default for TriggerRowIds {
             enable: NodeId::PLACEHOLDER,
             sens_minus: NodeId::PLACEHOLDER,
             sens_plus: NodeId::PLACEHOLDER,
+            sens_value: NodeId::PLACEHOLDER,
             len_minus: NodeId::PLACEHOLDER,
             len_plus: NodeId::PLACEHOLDER,
             layer: NodeId::PLACEHOLDER,
@@ -263,6 +303,9 @@ struct SendRowIds {
     ch_dropdown: NodeId,
     gain_minus: NodeId,
     gain_plus: NodeId,
+    /// The gain value label between the steppers — a D7 horizontal drag zone
+    /// (`pointer-down` arms [`AudioSetupPanel::gain_drag_target`]).
+    gain_value: NodeId,
     stereo: NodeId,
     delete: NodeId,
     /// Level-meter fill node + its full-scale geometry, resized in place each
@@ -283,6 +326,7 @@ impl Default for SendRowIds {
             ch_dropdown: NodeId::PLACEHOLDER,
             gain_minus: NodeId::PLACEHOLDER,
             gain_plus: NodeId::PLACEHOLDER,
+            gain_value: NodeId::PLACEHOLDER,
             stereo: NodeId::PLACEHOLDER,
             delete: NodeId::PLACEHOLDER,
             meter_fill: NodeId::PLACEHOLDER,
@@ -292,6 +336,28 @@ impl Default for SendRowIds {
             meter_h: 0.0,
         }
     }
+}
+
+/// A D7 calibration drag armed by pointer-down on a gain or trigger
+/// sensitivity value label. Carries the pre-drag pointer x + value so
+/// `on_event`'s `Drag` arm can compute the live absolute value from
+/// horizontal movement alone (1 px = 0.1 dB / 0.5%, see
+/// `docs/AUDIO_SENDS_UX_DESIGN.md` §3.4) without re-deriving it from the
+/// project each frame. Exactly one drag (crossover OR calibration) is ever
+/// armed at a time.
+#[derive(Clone)]
+enum CalibrationDrag {
+    Gain {
+        send: AudioSendId,
+        start_x: f32,
+        start_db: f32,
+    },
+    Sensitivity {
+        send: AudioSendId,
+        band: AudioBand,
+        start_x: f32,
+        start_frac: f32,
+    },
 }
 
 /// The Audio Setup modal panel.
@@ -315,9 +381,10 @@ pub struct AudioSetupPanel {
     /// The present pass blits the spectrogram texture here. `None` when closed.
     scope_rect: Option<Rect>,
     /// Resolved panel width and waterfall height for the current viewport, set by
-    /// [`AudioSetupPanel::resize_to_viewport`]. The modal targets
-    /// [`PANEL_W_FRAC`]×[`PANEL_H_FRAC`] of the screen; the control rows are
-    /// fixed-height, so the scope absorbs the extra vertical space.
+    /// [`AudioSetupPanel::build_at`]. The overlay targets
+    /// [`PANEL_W_FRAC`]×[`PANEL_H_FRAC`] of the screen, right-anchored (D6); the
+    /// control rows are fixed-height, so the scope absorbs the extra vertical
+    /// space.
     panel_w: f32,
     scope_h: f32,
     /// Host for the declarative modal chrome (background + title strip). The
@@ -349,6 +416,10 @@ pub struct AudioSetupPanel {
     scope_fmax: f32,
     /// Which divider line is currently being dragged, if any.
     dragging_band: Option<BandDivider>,
+    /// The D7 calibration drag currently armed (gain or trigger sensitivity
+    /// value label), if any — mirrors `dragging_band` but per-send since gain
+    /// and sensitivity are per-row, not panel-global like the crossovers.
+    calibration_drag: Option<CalibrationDrag>,
     /// Per-band (Low/Mid/High) level-meter nodes `(track, fill, label)` in the
     /// scope's right margin. Created by `build`, repositioned + resized every
     /// frame by [`AudioSetupPanel::update_band_meters`] so they track the moving
@@ -357,6 +428,14 @@ pub struct AudioSetupPanel {
     /// Per-band trigger-row node ids for the selected send (Whole/Low/Mid/High
     /// order). Rebuilt with the panel; clicks map back via [`TRIG_BANDS`].
     trigger_row_ids: Vec<TriggerRowIds>,
+    /// Inputs section (selected send): one remove (×) button per feeding
+    /// layer, index-aligned with that send's `feeding_layers`, plus the
+    /// "+ layer" add-row trigger. Rebuilt with the panel.
+    inputs_remove_ids: Vec<NodeId>,
+    add_layer_id: NodeId,
+    /// Consumers section (selected send): one row button per consumer,
+    /// index-aligned with that send's `consumers`. Rebuilt with the panel.
+    consumer_row_ids: Vec<NodeId>,
 }
 
 impl Default for AudioSetupPanel {
@@ -387,8 +466,12 @@ impl Default for AudioSetupPanel {
             scope_fmin: 0.0,
             scope_fmax: 0.0,
             dragging_band: None,
+            calibration_drag: None,
             band_meter_ids: [(None, None, None); 3],
             trigger_row_ids: Vec::new(),
+            inputs_remove_ids: Vec::new(),
+            add_layer_id: NodeId::PLACEHOLDER,
+            consumer_row_ids: Vec::new(),
         }
     }
 }
@@ -404,6 +487,13 @@ impl AudioSetupPanel {
 
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// Open the modal (idempotent) — the headless harness's `open:audio_setup`
+    /// interact verb uses this so a repeated call can't accidentally close it,
+    /// unlike [`Self::toggle`].
+    pub fn open(&mut self) {
+        self.open = true;
     }
 
     pub fn toggle(&mut self) {
@@ -444,6 +534,26 @@ impl AudioSetupPanel {
         self.current_device = current_device;
         self.sends = sends;
         self.status_warning = status_warning;
+        self.normalize_selection();
+    }
+
+    /// Default the scope selection to the first send when it is unset or no
+    /// longer refers to a configured send. Runs in [`configure`] — the only
+    /// place the send list changes — so every later reader sees the same
+    /// effective selection: [`chrome_height`]'s inputs/consumers row
+    /// accounting (consulted by `size_policy` and `build_at` to size the
+    /// scope) and `build_nodes` itself. This used to happen inside
+    /// `build_nodes`, AFTER `build_at` had already sized the scope from
+    /// `chrome_height()` — so the first build after a configure saw no
+    /// selection, under-counted the inputs/consumers rows, and let the scope
+    /// swallow their space, clipping the panel's bottom sections.
+    ///
+    /// [`configure`]: Self::configure
+    /// [`chrome_height`]: Self::chrome_height
+    fn normalize_selection(&mut self) {
+        if !self.sends.iter().any(|s| Some(&s.id) == self.selected_send.as_ref()) {
+            self.selected_send = self.sends.first().map(|s| s.id.clone());
+        }
     }
 
     fn device_label(&self) -> String {
@@ -483,9 +593,39 @@ impl AudioSetupPanel {
             + warning
             + (ROW_H + ROW_GAP) * rows as f32
             + ROW_H // add-send button
+            + self.inputs_section_height()
             + scope_chrome
             + self.trigger_section_height()
+            + self.consumers_section_height()
             + PAD * 2.0
+    }
+
+    /// The selected send's row data, if any — the shared lookup the Inputs
+    /// and Consumers sections (and their height accounting) read from.
+    fn selected_send_row(&self) -> Option<&AudioSendRow> {
+        self.selected_send.as_ref().and_then(|id| self.sends.iter().find(|s| &s.id == id))
+    }
+
+    /// Height of the Inputs section (title + one row per feeding layer of the
+    /// selected send + the "+ layer" add row). Zero when there are no sends
+    /// (nothing selected, so nothing to route).
+    fn inputs_section_height(&self) -> f32 {
+        if self.sends.is_empty() {
+            return 0.0;
+        }
+        let n = self.selected_send_row().map_or(0, |s| s.feeding_layers.len());
+        ROW_GAP + TRIG_TITLE_H + (ROW_H + ROW_GAP) * (n as f32 + 1.0) // +1 = "+ layer" row
+    }
+
+    /// Height of the Consumers section (title + one row per consumer of the
+    /// selected send, or a single "no consumers" row when it has none). Zero
+    /// when there are no sends.
+    fn consumers_section_height(&self) -> f32 {
+        if self.sends.is_empty() {
+            return 0.0;
+        }
+        let n = self.selected_send_row().map_or(0, |s| s.consumers.len()).max(1);
+        ROW_GAP + TRIG_TITLE_H + (ROW_H + ROW_GAP) * n as f32
     }
 
     /// Height of the trigger section (title + four band rows) under the scope.
@@ -614,10 +754,10 @@ impl AudioSetupPanel {
             cy += ROW_H + ROW_GAP;
         }
 
-        // Default the scope selection to the first send; keep it if still valid.
-        if !self.sends.iter().any(|s| Some(&s.id) == self.selected_send.as_ref()) {
-            self.selected_send = self.sends.first().map(|s| s.id.clone());
-        }
+        // Selection is normalized in `configure` (it must be settled BEFORE
+        // `build_at` sizes the scope from `chrome_height()`); re-assert here as
+        // a belt for callers that mutate `sends` directly (tests).
+        self.normalize_selection();
 
         // Send rows: [swatch] label | [ channel name ▼ ] | ×
         const SWATCH_W: f32 = 8.0;
@@ -712,7 +852,9 @@ impl AudioSetupPanel {
                 btn_style(false),
                 "\u{2212}", // −
             );
-            tree.add_label(
+            // Value label doubles as a D7 horizontal drag zone — pointer-down
+            // arms `gain_drag_target`, matching the crossover-drag pattern.
+            self.send_ids[i].gain_value = tree.add_label(
                 Some(self.bg_id),
                 gain_x + GAIN_BTN_W,
                 cy,
@@ -804,7 +946,7 @@ impl AudioSetupPanel {
             inner_w,
             ROW_H,
             btn_style(false),
-            "+ Add Send",
+            "+ Add Source",
         );
         cy += ROW_H;
 
@@ -814,6 +956,7 @@ impl AudioSetupPanel {
         self.band_meter_ids = [(None, None, None); 3];
         if !self.sends.is_empty() {
             cy += ROW_GAP;
+            cy = self.build_inputs_section(tree, inner_x, inner_w, cy);
             let sel_label = self
                 .selected_send
                 .as_ref()
@@ -828,7 +971,7 @@ impl AudioSetupPanel {
                 SCOPE_TITLE_H,
                 &format!("Spectrogram — {sel_label}"),
                 UIStyle {
-                    text_color: Color32::new(170, 170, 180, 255),
+                    text_color: color::TEXT_DIMMED,
                     font_size: color::FONT_LABEL,
                     text_align: TextAlign::Left,
                     ..UIStyle::default()
@@ -1038,7 +1181,10 @@ impl AudioSetupPanel {
 
             // ── Live triggers (selected send) — laid out below the scope ──
             cy += self.scope_h + ROW_GAP;
-            self.build_trigger_section(tree, inner_x, inner_w, cy);
+            cy = self.build_trigger_section(tree, inner_x, inner_w, cy);
+
+            // ── Consumers (selected send) — below the trigger matrix ──
+            self.build_consumers_section(tree, inner_x, inner_w, cy);
         }
     }
 
@@ -1047,7 +1193,13 @@ impl AudioSetupPanel {
     /// colour matches the scope's per-band transient ticks (Whole = neutral), so
     /// the legend reads across the scope and the routes. Click-only controls,
     /// consistent with the panel's gain stepper and channel dropdown — no drag.
-    fn build_trigger_section(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32) {
+    fn build_trigger_section(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        mut cy: f32,
+    ) -> f32 {
         self.trigger_row_ids.clear();
 
         let sel_label = self
@@ -1064,7 +1216,7 @@ impl AudioSetupPanel {
             TRIG_TITLE_H,
             &format!("Triggers — {sel_label}"),
             UIStyle {
-                text_color: Color32::new(170, 170, 180, 255),
+                text_color: color::TEXT_DIMMED,
                 font_size: color::FONT_LABEL,
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
@@ -1130,7 +1282,10 @@ impl AudioSetupPanel {
                 btn_style(false),
                 "\u{2212}",
             );
-            tree.add_label(
+            // Value label doubles as a D7 horizontal drag zone — pointer-down
+            // arms `sensitivity_drag_target`, matching the crossover-drag
+            // pattern.
+            ids.sens_value = tree.add_label(
                 Some(self.bg_id),
                 x + TRIG_SENS_BTN_W,
                 cy,
@@ -1264,11 +1419,186 @@ impl AudioSetupPanel {
             self.trigger_row_ids.push(ids);
             cy += TRIG_ROW_H + ROW_GAP;
         }
+        cy
+    }
+
+    /// Build the Inputs section for the selected send: one row per feeding
+    /// layer (name + × remove, `SetLayerAudioSend(layer, None)`) plus a final
+    /// "+ Layer" row that opens a dropdown of audio layers not already
+    /// feeding this send (`AudioSendAddLayerClicked`, itemized with
+    /// `SetLayerAudioSend(layer, Some(send))` — the SAME command the layer
+    /// header's Send dropdown fires; D2). Returns the y past the section.
+    fn build_inputs_section(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32) -> f32 {
+        self.inputs_remove_ids.clear();
+        let feeding: Vec<(LayerId, String)> = self
+            .selected_send
+            .as_ref()
+            .and_then(|id| self.sends.iter().find(|s| &s.id == id))
+            .map(|s| s.feeding_layers.clone())
+            .unwrap_or_default();
+
+        // Per-send section header, matching "Spectrogram — X" / "Triggers — X".
+        let sel_label = self
+            .selected_send
+            .as_ref()
+            .and_then(|id| self.sends.iter().find(|s| &s.id == id))
+            .map(|s| s.label.as_str())
+            .unwrap_or("—");
+        tree.add_label(
+            Some(self.bg_id),
+            inner_x,
+            cy,
+            inner_w,
+            TRIG_TITLE_H,
+            &format!("Inputs — {sel_label}"),
+            UIStyle {
+                text_color: color::TEXT_DIMMED,
+                font_size: color::FONT_LABEL,
+                text_align: TextAlign::Left,
+                ..UIStyle::default()
+            },
+        );
+        cy += TRIG_TITLE_H;
+
+        for (_layer_id, name) in &feeding {
+            tree.add_label(
+                Some(self.bg_id),
+                inner_x,
+                cy,
+                inner_w - STEP_W,
+                ROW_H,
+                name,
+                label_style(),
+            );
+            let remove_id = tree.add_button(
+                Some(self.bg_id),
+                inner_x + inner_w - STEP_W,
+                cy,
+                STEP_W,
+                ROW_H,
+                btn_style(false),
+                "\u{00D7}", // ×
+            );
+            self.inputs_remove_ids.push(remove_id);
+            cy += ROW_H + ROW_GAP;
+        }
+
+        self.add_layer_id = tree.add_button(
+            Some(self.bg_id),
+            inner_x,
+            cy,
+            inner_w,
+            ROW_H,
+            btn_style(false),
+            "+ Layer",
+        );
+        cy += ROW_H + ROW_GAP;
+        cy
+    }
+
+    /// Build the Consumers section for the selected send: one plain-button
+    /// row per consumer (or a dim "no consumers yet" line when there are
+    /// none). Click emits [`PanelAction::LayerClicked`] for the owning layer —
+    /// navigational only, never editable (D3). Returns the y past the section.
+    fn build_consumers_section(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32) -> f32 {
+        self.consumer_row_ids.clear();
+        let consumers: Vec<SendConsumerRow> = self
+            .selected_send
+            .as_ref()
+            .and_then(|id| self.sends.iter().find(|s| &s.id == id))
+            .map(|s| s.consumers.clone())
+            .unwrap_or_default();
+
+        // Per-send section header, matching "Spectrogram — X" / "Triggers — X".
+        let sel_label = self
+            .selected_send
+            .as_ref()
+            .and_then(|id| self.sends.iter().find(|s| &s.id == id))
+            .map(|s| s.label.as_str())
+            .unwrap_or("—");
+        tree.add_label(
+            Some(self.bg_id),
+            inner_x,
+            cy,
+            inner_w,
+            TRIG_TITLE_H,
+            &format!("Consumers — {sel_label}"),
+            UIStyle {
+                text_color: color::TEXT_DIMMED,
+                font_size: color::FONT_LABEL,
+                text_align: TextAlign::Left,
+                ..UIStyle::default()
+            },
+        );
+        cy += TRIG_TITLE_H;
+
+        if consumers.is_empty() {
+            tree.add_label(
+                Some(self.bg_id),
+                inner_x,
+                cy,
+                inner_w,
+                ROW_H,
+                "No consumers yet",
+                UIStyle {
+                    text_color: Color32::new(120, 120, 130, 255),
+                    font_size: color::FONT_LABEL,
+                    text_align: TextAlign::Left,
+                    ..UIStyle::default()
+                },
+            );
+            cy += ROW_H + ROW_GAP;
+        } else {
+            for c in &consumers {
+                let id = tree.add_button(
+                    Some(self.bg_id),
+                    inner_x,
+                    cy,
+                    inner_w,
+                    ROW_H,
+                    label_button_style(),
+                    &c.label,
+                );
+                // Jump affordance: a muted "›" at the row's right edge (same
+                // muted tone as the panel's dropdown chevrons), so the only
+                // navigational rows in the panel read as "click to jump".
+                // A plain label drawn over the button — non-interactive, so
+                // the button under it stays the hit target.
+                tree.add_label(
+                    Some(self.bg_id),
+                    inner_x + inner_w - STEP_W,
+                    cy,
+                    STEP_W,
+                    ROW_H,
+                    "\u{203A}", // ›
+                    UIStyle {
+                        text_color: Color32::new(150, 150, 160, 255),
+                        font_size: color::FONT_LABEL,
+                        text_align: TextAlign::Center,
+                        ..UIStyle::default()
+                    },
+                );
+                self.consumer_row_ids.push(id);
+                cy += ROW_H + ROW_GAP;
+            }
+        }
+        cy
     }
 
     /// The send the scope is showing, if any.
     pub fn selected_send(&self) -> Option<&AudioSendId> {
         self.selected_send.as_ref()
+    }
+
+    /// LayerIds currently feeding `send` — used by
+    /// [`PanelAction::AudioSendAddLayerClicked`]'s dropdown to exclude layers
+    /// already routed here. Empty if the send is unknown.
+    pub fn feeding_layer_ids(&self, send: &AudioSendId) -> Vec<LayerId> {
+        self.sends
+            .iter()
+            .find(|s| &s.id == send)
+            .map(|s| s.feeding_layers.iter().map(|(id, _)| id.clone()).collect())
+            .unwrap_or_default()
     }
 
     /// The routing lines for `send` (device + layers), for the read-only routings
@@ -1380,6 +1710,34 @@ impl AudioSetupPanel {
         }
     }
 
+    /// Send id + current gain (dB) for a gain-value label node, if `id` is
+    /// one — arms the D7 gain drag on `PointerDown`.
+    fn gain_drag_target(&self, id: NodeId) -> Option<(AudioSendId, f32)> {
+        self.send_ids
+            .iter()
+            .zip(self.sends.iter())
+            .find(|(ids, _)| ids.gain_value == id)
+            .map(|(_, send)| (send.id.clone(), send.gain_db))
+    }
+
+    /// Selected send id + band + current sensitivity (0..1) for a trigger
+    /// sensitivity-value label node, if `id` is one — arms the D7
+    /// sensitivity drag on `PointerDown`. The row's band is positional
+    /// ([`TRIG_BANDS`] order), matching how `build_trigger_section` reads it.
+    fn sensitivity_drag_target(&self, id: NodeId) -> Option<(AudioSendId, AudioBand, f32)> {
+        let send_id = self.selected_send.clone()?;
+        let i = self.trigger_row_ids.iter().position(|ids| ids.sens_value == id)?;
+        let band = TRIG_BANDS.get(i).map(|(b, _)| *b)?;
+        let frac = self
+            .sends
+            .iter()
+            .find(|s| s.id == send_id)
+            .and_then(|s| s.triggers.get(i))
+            .map(|r| r.sensitivity)
+            .unwrap_or(0.0);
+        Some((send_id, band, frac))
+    }
+
     /// Whether `id` is any node this panel owns (background or an interactive
     /// control) — the caller swallows such clicks so they don't fall through to
     /// the canvas behind the modal.
@@ -1388,6 +1746,7 @@ impl AudioSetupPanel {
             || id == self.close_id
             || id == self.device_dropdown_id
             || id == self.add_send_id
+            || id == self.add_layer_id
             || self.floor_minus_id == Some(id)
             || self.floor_plus_id == Some(id)
         {
@@ -1400,19 +1759,24 @@ impl AudioSetupPanel {
                 || id == r.ch_dropdown
                 || id == r.gain_minus
                 || id == r.gain_plus
+                || id == r.gain_value
                 || id == r.stereo
                 || id == r.delete
         }) {
             return true;
         }
-        self.trigger_row_ids.iter().any(|r| {
+        if self.trigger_row_ids.iter().any(|r| {
             id == r.enable
                 || id == r.sens_minus
                 || id == r.sens_plus
+                || id == r.sens_value
                 || id == r.len_minus
                 || id == r.len_plus
                 || id == r.layer
-        })
+        }) {
+            return true;
+        }
+        self.inputs_remove_ids.contains(&id) || self.consumer_row_ids.contains(&id)
     }
 
     /// Resize each send's meter fill from live levels (RMS 0..1). Called every
@@ -1565,6 +1929,42 @@ impl AudioSetupPanel {
             let delta = if self.floor_plus_id == Some(id) { 6.0 } else { -6.0 };
             return Some(PanelAction::AudioSendFloorStep(send, delta));
         }
+        // Inputs section: "+ Layer" opens a dropdown of audio layers not
+        // already feeding the selected send (D2 — the host itemizes it with
+        // `SetLayerAudioSend(layer, Some(send))`, the same command the layer
+        // header's Send dropdown fires).
+        if self.add_layer_id == id {
+            self.delete_armed = None;
+            let send = self.selected_send.clone()?;
+            return Some(PanelAction::AudioSendAddLayerClicked(send));
+        }
+        // Inputs section: remove (×) a feeding layer — routes straight to
+        // `SetLayerAudioSend(layer, None)`, the same command, no new mutation
+        // path (D2).
+        if let Some(i) = self.inputs_remove_ids.iter().position(|&r| r == id) {
+            self.delete_armed = None;
+            let feeding = self
+                .selected_send
+                .as_ref()
+                .and_then(|sid| self.sends.iter().find(|s| &s.id == sid))
+                .map(|s| s.feeding_layers.clone())
+                .unwrap_or_default();
+            let layer_id = feeding.get(i)?.0.clone();
+            return Some(PanelAction::SetLayerAudioSend(layer_id, None));
+        }
+        // Consumers section: navigate to the owning layer — read-only, no
+        // edit (D3).
+        if let Some(i) = self.consumer_row_ids.iter().position(|&r| r == id) {
+            self.delete_armed = None;
+            let consumers = self
+                .selected_send
+                .as_ref()
+                .and_then(|sid| self.sends.iter().find(|s| &s.id == sid))
+                .map(|s| s.consumers.clone())
+                .unwrap_or_default();
+            let layer_id = consumers.get(i)?.layer_id.clone()?;
+            return Some(PanelAction::LayerClicked(layer_id, Modifiers::NONE));
+        }
         // Find which send row + control was hit (clone out so we don't hold a
         // borrow across the delete-arm mutation).
         let hit = self.send_ids.iter().enumerate().find_map(|(i, ids)| {
@@ -1716,16 +2116,22 @@ impl Overlay for AudioSetupPanel {
     }
 
     fn modality(&self) -> Modality {
-        Modality::Modal { dim_background: true }
+        // D6: a calibration surface used while performing, not a dialog — no
+        // dim, and it never self-closes on an outside click (see the `Click`
+        // arm below). Escape and the header Audio button are the close paths.
+        Modality::Modeless
     }
 
     fn anchor(&self) -> Anchor {
-        Anchor::Centered
+        // D6: docked to the right edge, full height, so the show stays visible
+        // to its left instead of being centered over it.
+        Anchor::Corner { corner: Corner::TopRight, margin: 0.0 }
     }
 
     fn size_policy(&self) -> SizePolicy {
-        // 80% of the viewport, never below the compact minimums. The min height
-        // is the fixed control chrome plus the smallest useful waterfall.
+        // 38% width × full height (D6), never below the compact minimums. The
+        // min height is the fixed control chrome plus the smallest useful
+        // waterfall.
         SizePolicy::Fraction {
             frac: Vec2::new(PANEL_W_FRAC, PANEL_H_FRAC),
             min: Vec2::new(PANEL_W_MIN, self.chrome_height() + SCOPE_H_MIN),
@@ -1766,19 +2172,43 @@ impl Overlay for AudioSetupPanel {
                     // (a tap on the scope must not close the modal) — swallow.
                     OverlayResponse::Consumed(Vec::new())
                 } else {
-                    // Click landed on the dim backdrop / outside the panel — close.
-                    self.open = false;
-                    OverlayResponse::Consumed(Vec::new())
+                    // Modeless (D6): a click outside the panel passes through to
+                    // the UI beneath instead of dismissing — this is a
+                    // calibration surface used while performing, and accidental
+                    // dismissal is the failure mode. Escape and the header Audio
+                    // button remain the close paths.
+                    OverlayResponse::Ignored
                 }
             }
-            // ── Band-divider drag (Low/Mid/High crossovers) ──────────
-            // Arm on press if it lands on a divider line; thereafter the drag
-            // owns the gesture until release. The lines are drawn shader-side,
-            // so this only hit-tests their positions (see `set_scope_bands`).
-            UIEvent::PointerDown { pos, .. } => {
+            // ── Band-divider drag (Low/Mid/High crossovers) + D7 calibration
+            // drags (gain / trigger sensitivity value labels) ──────────
+            // Arm on press if it lands on a divider line or a value label;
+            // thereafter the drag owns the gesture until release. Divider
+            // lines are drawn shader-side (hit-test by position); value
+            // labels are real nodes (hit-test by node id).
+            UIEvent::PointerDown { node_id, pos, .. } => {
                 if let Some(band) = self.divider_at(*pos) {
                     self.dragging_band = Some(band);
                     OverlayResponse::Consumed(vec![PanelAction::AudioCrossoverDragBegin])
+                } else if let Some((send, start_db)) = self.gain_drag_target(*node_id) {
+                    self.calibration_drag = Some(CalibrationDrag::Gain {
+                        send: send.clone(),
+                        start_x: pos.x,
+                        start_db,
+                    });
+                    OverlayResponse::Consumed(vec![PanelAction::AudioSendGainDragBegin(send)])
+                } else if let Some((send, band, start_frac)) =
+                    self.sensitivity_drag_target(*node_id)
+                {
+                    self.calibration_drag = Some(CalibrationDrag::Sensitivity {
+                        send: send.clone(),
+                        band,
+                        start_x: pos.x,
+                        start_frac,
+                    });
+                    OverlayResponse::Consumed(vec![PanelAction::AudioSendSensitivityDragBegin(
+                        send, band,
+                    )])
                 } else {
                     OverlayResponse::Ignored
                 }
@@ -1791,6 +2221,23 @@ impl Overlay for AudioSetupPanel {
                         ]),
                         None => OverlayResponse::Consumed(Vec::new()),
                     }
+                } else if let Some(drag) = self.calibration_drag.clone() {
+                    // 1 px = 0.1 dB / 0.5% (D7, `docs/AUDIO_SENDS_UX_DESIGN.md`
+                    // §3.4); the host clamps the candidate to the real range.
+                    match drag {
+                        CalibrationDrag::Gain { send, start_x, start_db } => {
+                            let new_db = start_db + (pos.x - start_x) * 0.1;
+                            OverlayResponse::Consumed(vec![PanelAction::AudioSendGainDragChanged(
+                                send, new_db,
+                            )])
+                        }
+                        CalibrationDrag::Sensitivity { send, band, start_x, start_frac } => {
+                            let new_frac = start_frac + (pos.x - start_x) * 0.005;
+                            OverlayResponse::Consumed(vec![
+                                PanelAction::AudioSendSensitivityDragChanged(send, band, new_frac),
+                            ])
+                        }
+                    }
                 } else {
                     OverlayResponse::Ignored
                 }
@@ -1798,6 +2245,15 @@ impl Overlay for AudioSetupPanel {
             UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
                 if self.dragging_band.take().is_some() {
                     OverlayResponse::Consumed(vec![PanelAction::AudioCrossoverCommit])
+                } else if let Some(drag) = self.calibration_drag.take() {
+                    OverlayResponse::Consumed(vec![match drag {
+                        CalibrationDrag::Gain { send, .. } => {
+                            PanelAction::AudioSendGainDragCommit(send)
+                        }
+                        CalibrationDrag::Sensitivity { send, band, .. } => {
+                            PanelAction::AudioSendSensitivityDragCommit(send, band)
+                        }
+                    }])
                 } else {
                     OverlayResponse::Ignored
                 }
@@ -1890,6 +2346,8 @@ mod tests {
                     layer_fed: false,
                     routings: vec!["Capture: Channel 1".into()],
                     triggers: Vec::new(),
+                    feeding_layers: Vec::new(),
+                    consumers: Vec::new(),
                 },
                 AudioSendRow {
                     id: AudioSendId::new("s2"),
@@ -1903,6 +2361,8 @@ mod tests {
                     layer_fed: false,
                     routings: vec!["Capture: Channel 1".into()],
                     triggers: Vec::new(),
+                    feeding_layers: Vec::new(),
+                    consumers: Vec::new(),
                 },
             ],
             None,
@@ -2086,5 +2546,266 @@ mod tests {
         );
         assert!(matches!(resp, OverlayResponse::Consumed(_)));
         assert!(!p.is_open(), "Escape should self-close the modal");
+    }
+
+    // ─── D6/D7: non-dim right-anchored panel + calibration drags ───
+
+    #[test]
+    fn outside_click_passes_through_instead_of_closing() {
+        // Modeless (D6): a click outside the panel's owned nodes and the scope
+        // must fall through to the UI beneath, not dismiss the panel.
+        let mut p = panel_with_two_sends();
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+        assert!(p.is_open());
+
+        let resp = p.on_event(
+            &UIEvent::Click {
+                node_id: NodeId::PLACEHOLDER,
+                pos: Vec2::new(1.0, 1.0),
+                modifiers: crate::input::Modifiers::default(),
+            },
+            &mut tree,
+        );
+        assert!(matches!(resp, OverlayResponse::Ignored), "outside click must pass through");
+        assert!(p.is_open(), "panel must not self-close on outside click (D6)");
+    }
+
+    #[test]
+    fn gain_drag_begin_changed_commit_sequence() {
+        let mut p = panel_with_two_sends();
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+        let gain_value = p.send_ids[0].gain_value;
+        let modifiers = crate::input::Modifiers::default();
+
+        match p.on_event(
+            &UIEvent::PointerDown { node_id: gain_value, pos: Vec2::new(100.0, 50.0), modifiers },
+            &mut tree,
+        ) {
+            OverlayResponse::Consumed(actions) => {
+                assert_eq!(actions.len(), 1);
+                assert!(matches!(
+                    &actions[0],
+                    PanelAction::AudioSendGainDragBegin(id) if id.as_str() == "s1"
+                ));
+            }
+            other => panic!("expected Consumed(Begin), got {}", as_debug(&other)),
+        }
+
+        // 20 px right at 0.1 dB/px, starting from send 1's 0 dB.
+        match p.on_event(
+            &UIEvent::Drag { node_id: gain_value, pos: Vec2::new(120.0, 50.0), delta: Vec2::new(20.0, 0.0) },
+            &mut tree,
+        ) {
+            OverlayResponse::Consumed(actions) => {
+                assert_eq!(actions.len(), 1);
+                match &actions[0] {
+                    PanelAction::AudioSendGainDragChanged(id, db) => {
+                        assert_eq!(id.as_str(), "s1");
+                        assert!((db - 2.0).abs() < 1e-4, "expected +2.0 dB, got {db}");
+                    }
+                    other => panic!("expected AudioSendGainDragChanged, got {other:?}"),
+                }
+            }
+            other => panic!("expected Consumed(Changed), got {}", as_debug(&other)),
+        }
+
+        match p.on_event(&UIEvent::PointerUp { node_id: Some(gain_value), pos: Vec2::new(120.0, 50.0) }, &mut tree)
+        {
+            OverlayResponse::Consumed(actions) => {
+                assert_eq!(actions.len(), 1);
+                assert!(matches!(
+                    &actions[0],
+                    PanelAction::AudioSendGainDragCommit(id) if id.as_str() == "s1"
+                ));
+            }
+            other => panic!("expected Consumed(Commit), got {}", as_debug(&other)),
+        }
+        assert!(!p.is_dragging_band(), "gain drag must not arm the crossover drag flag");
+    }
+
+    #[test]
+    fn sensitivity_drag_begin_changed_commit_sequence() {
+        let mut p = panel_with_two_sends();
+        p.sends[0].triggers = vec![TriggerRouteRow::default(); 4]; // all 0% sensitivity
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+        // TRIG_BANDS order is [Full, Low, Mid, High] — row 1 is Low.
+        let sens_value = p.trigger_row_ids[1].sens_value;
+        let modifiers = crate::input::Modifiers::default();
+
+        match p.on_event(
+            &UIEvent::PointerDown { node_id: sens_value, pos: Vec2::new(200.0, 60.0), modifiers },
+            &mut tree,
+        ) {
+            OverlayResponse::Consumed(actions) => {
+                assert_eq!(actions.len(), 1);
+                assert!(matches!(
+                    &actions[0],
+                    PanelAction::AudioSendSensitivityDragBegin(id, band)
+                        if id.as_str() == "s1" && *band == AudioBand::Low
+                ));
+            }
+            other => panic!("expected Consumed(Begin), got {}", as_debug(&other)),
+        }
+
+        // 40 px right at 0.5%/px (0.005/px), starting from 0.0.
+        match p.on_event(
+            &UIEvent::Drag { node_id: sens_value, pos: Vec2::new(240.0, 60.0), delta: Vec2::new(40.0, 0.0) },
+            &mut tree,
+        ) {
+            OverlayResponse::Consumed(actions) => {
+                assert_eq!(actions.len(), 1);
+                match &actions[0] {
+                    PanelAction::AudioSendSensitivityDragChanged(id, band, frac) => {
+                        assert_eq!(id.as_str(), "s1");
+                        assert_eq!(*band, AudioBand::Low);
+                        assert!((frac - 0.2).abs() < 1e-4, "expected 0.2, got {frac}");
+                    }
+                    other => panic!("expected AudioSendSensitivityDragChanged, got {other:?}"),
+                }
+            }
+            other => panic!("expected Consumed(Changed), got {}", as_debug(&other)),
+        }
+
+        match p.on_event(
+            &UIEvent::PointerUp { node_id: Some(sens_value), pos: Vec2::new(240.0, 60.0) },
+            &mut tree,
+        ) {
+            OverlayResponse::Consumed(actions) => {
+                assert_eq!(actions.len(), 1);
+                assert!(matches!(
+                    &actions[0],
+                    PanelAction::AudioSendSensitivityDragCommit(id, band)
+                        if id.as_str() == "s1" && *band == AudioBand::Low
+                ));
+            }
+            other => panic!("expected Consumed(Commit), got {}", as_debug(&other)),
+        }
+    }
+
+    /// `OverlayResponse` has no `Debug` — this renders just enough for a panic
+    /// message.
+    fn as_debug(resp: &OverlayResponse) -> &'static str {
+        match resp {
+            OverlayResponse::Ignored => "Ignored",
+            OverlayResponse::Consumed(_) => "Consumed(_)",
+        }
+    }
+
+    #[test]
+    fn consumers_fit_within_panel_on_first_build_after_configure() {
+        // Regression: `chrome_height()` (which sizes the scope in `build_at`)
+        // must see the SAME selected send as `build_nodes`. Before the fix the
+        // selection was only defaulted inside `build_nodes` — after the scope
+        // was already sized — so the first build after `configure` counted
+        // zero feeding-layer rows and one consumer row, oversizing the scope
+        // and pushing the Consumers section past the panel's bottom edge.
+        let mut p = AudioSetupPanel::new();
+        p.toggle(); // open
+        p.configure(
+            None,
+            vec![AudioSendRow {
+                id: AudioSendId::new("s1"),
+                label: "Kick".into(),
+                channels: vec![0],
+                channel_label: "Channel 1".into(),
+                gain_db: 0.0,
+                floor_db: crate::types::FLOOR_DB_OFF,
+                driven_count: 0,
+                source_label: "Cap".into(),
+                layer_fed: true,
+                routings: vec!["Capture: Channel 1".into()],
+                triggers: vec![TriggerRouteRow::default(); 4],
+                feeding_layers: vec![(LayerId::new("kick"), "KICK".to_string())],
+                consumers: vec![
+                    SendConsumerRow {
+                        label: "BLOOM LAYER \u{2022} Bloom \u{2022} Amount".into(),
+                        layer_id: Some(LayerId::new("bloom")),
+                    },
+                    SendConsumerRow {
+                        label: "Low \u{2192} STROBE LAYER".into(),
+                        layer_id: Some(LayerId::new("strobe")),
+                    },
+                ],
+            }],
+            Some("Microphone access blocked".into()),
+        );
+
+        let (vw, vh) = (1280.0, 720.0);
+        let mut tree = UITree::new();
+        p.build(&mut tree, vw, vh);
+
+        assert_eq!(p.consumer_row_ids.len(), 2);
+        let last = *p.consumer_row_ids.last().unwrap();
+        let b = tree.get_bounds(last);
+        assert!(
+            b.y + b.height <= vh + 0.5,
+            "last consumer row must fit inside the panel: bottom {} > viewport {vh}",
+            b.y + b.height,
+        );
+        // And the scope still got its floor.
+        let scope = p.scope_rect().expect("scope present while open");
+        assert!(scope.height >= SCOPE_H_MIN - SCOPE_PAD_Y * 2.0 - 0.5);
+    }
+
+    // ─── Inputs / Consumers sections (AUDIO_SENDS_UX_DESIGN Phase 2) ───
+
+    #[test]
+    fn add_layer_row_opens_add_layer_dropdown_for_selected_send() {
+        let mut p = panel_with_two_sends();
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+
+        match p.handle_click(p.add_layer_id) {
+            Some(PanelAction::AudioSendAddLayerClicked(id)) => assert_eq!(id.as_str(), "s1"),
+            other => panic!("expected AudioSendAddLayerClicked, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn remove_feeding_layer_emits_set_layer_audio_send_none() {
+        let mut p = panel_with_two_sends();
+        p.sends[0].feeding_layers = vec![(LayerId::new("kick"), "KICK".to_string())];
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+        assert_eq!(p.inputs_remove_ids.len(), 1, "one remove button per feeding layer");
+
+        match p.handle_click(p.inputs_remove_ids[0]) {
+            Some(PanelAction::SetLayerAudioSend(layer, None)) => {
+                assert_eq!(layer.as_str(), "kick");
+            }
+            other => panic!("expected SetLayerAudioSend(_, None), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn consumer_row_click_selects_owning_layer_and_does_not_edit() {
+        let mut p = panel_with_two_sends();
+        p.sends[0].consumers = vec![SendConsumerRow {
+            label: "BLOOM LAYER \u{2022} Bloom \u{2022} Intensity".to_string(),
+            layer_id: Some(LayerId::new("bloom-layer")),
+        }];
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+        assert_eq!(p.consumer_row_ids.len(), 1);
+
+        match p.handle_click(p.consumer_row_ids[0]) {
+            Some(PanelAction::LayerClicked(layer, modifiers)) => {
+                assert_eq!(layer.as_str(), "bloom-layer");
+                assert!(!modifiers.shift && !modifiers.ctrl && !modifiers.command);
+            }
+            other => panic!("expected LayerClicked (navigate, not edit), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn feeding_layer_ids_accessor_reflects_configured_send() {
+        let mut p = panel_with_two_sends();
+        p.sends[0].feeding_layers = vec![(LayerId::new("kick"), "KICK".to_string())];
+        let ids = p.feeding_layer_ids(&AudioSendId::new("s1"));
+        assert_eq!(ids, vec![LayerId::new("kick")]);
+        assert!(p.feeding_layer_ids(&AudioSendId::new("s2")).is_empty());
     }
 }
