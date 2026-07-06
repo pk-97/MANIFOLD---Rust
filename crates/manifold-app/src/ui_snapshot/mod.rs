@@ -31,6 +31,14 @@ fn out_dir(scene: &str) -> PathBuf {
     PathBuf::from("target/ui-snapshots").join(scene)
 }
 
+/// A scene name safe to use as a single path component. Only `project:<path>`
+/// scenes need this (the path half contains `/`); every built-in scene name is
+/// already a bare identifier, so this is a no-op for them and their output
+/// paths stay byte-identical.
+fn sanitize_scene_name(scene: &str) -> String {
+    scene.chars().map(|c| if c == '/' || c == ':' || c == ' ' { '_' } else { c }).collect()
+}
+
 /// Entry dispatched from `main()` when `argv[1] == "ui-snap"`. `args` is the
 /// argument slice starting at `"ui-snap"`.
 pub fn run(args: &[String]) {
@@ -124,13 +132,20 @@ fn render_ui_scene(
 ) {
     let Some(mut data) = fixtures::build(scene) else {
         eprintln!(
-            "ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, scrollshrink, hairlineclips, automation, selectionclips, audiosends, graph, editor, transform, all)"
+            "ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, scrollshrink, hairlineclips, automation, selectionclips, audiosends, graph, editor, transform, all, project:<path>)"
         );
         std::process::exit(2);
     };
 
     let zoom_ppb: f32 = zoom_ppb_for_scene(scene);
 
+    // `scene` itself becomes the output dir name and every dumped file's stem
+    // below; a `project:<path>` scene carries `/`/`:`/` ` that would otherwise
+    // land as extra directories (or, if the path is absolute, silently replace
+    // `dir` entirely — `Path::join` drops the base on an absolute join). Every
+    // built-in scene name is untouched by sanitization, so their output paths
+    // stay byte-identical.
+    let scene = &sanitize_scene_name(scene);
     let dir = out_dir(scene);
     std::fs::create_dir_all(&dir).expect("create ui-snapshots dir");
 
