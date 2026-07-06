@@ -350,6 +350,15 @@ sustained acquisition (≤ 20% of hops).
 *Forbidden:* smoothing pitch anywhere but the D5 state machine; reading `latest()`
 features into the tracker (it consumes the column, not its own outputs).
 
+**P2c/P2d record (2026-07-06, same day):** P2c shipped the unified stability
+distance law, the `notes` scenario (the note-based fixture class the six
+continuous-tone scenarios missed — found via real Skrillex bass stems), and `--bpm`
+gridlines. Its two `notes` gates ship KNOWN-FAILING against **BUG-041's successor,
+BUG-042 (onset-settle-grab)** — full trace, two rejected fix shapes (instant
+teleport; zero-slack settle window that froze pos permanently and regressed to
+15.1%), and the next candidate design live in the BUG-042 backlog entry. Do not
+re-attempt either rejected shape.
+
 **P3 — Onset hardening vs. the dive (BUG-041). ✅ SHIPPED 2026-07-06.** Sweep of ~150
 configs found the threshold, not the max-filter, was the defect: `SUPERFLUX_THRESH_FACTOR`
 2.0→7.0, `SUPERFLUX_DELTA` 3.0→48.0 (real kicks survive delta 30–300; 48 sits
