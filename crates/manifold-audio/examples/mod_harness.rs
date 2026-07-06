@@ -11,21 +11,44 @@
 //!
 //! ```text
 //! cargo run -p manifold-audio --example mod_harness -- <clip.(wav|aiff|mp3|flac)> \
-//!     [--out out.png] [--low 250] [--mid 2000] [--floor -120] [--start s] [--dur s]
-//! cargo run -p manifold-audio --example mod_harness -- --selftest [--out out.png]
+//!     [--out out.png] [--low 250] [--mid 2000] [--floor -120] [--start s] [--dur s] \
+//!     [--csv dir]
+//! cargo run -p manifold-audio --example mod_harness -- --selftest [--out out.png] [--csv dir]
 //! ```
 //!
-//! `--selftest` synthesizes four known scenarios, ONE PNG EACH (suffixes
-//! `_dive`, `_wobble`, `_kicks`, `_busymix`), so the harness verifies itself
-//! without a clip: the centroid trace must follow the dive, the amplitude lane
-//! must oscillate at the wobble rate, and the transients lane must tick with
-//! the kicks. The spectrogram is drawn with the scope shader's exact display
+//! `--selftest` synthesizes six known scenarios, ONE PNG EACH (suffixes
+//! `_dive`, `_wobble`, `_kicks`, `_busymix`, `_riser`, `_growl`), so the
+//! harness verifies itself without a clip: the centroid trace must follow the
+//! dive, the amplitude lane must oscillate at the wobble rate, the transients
+//! lane must tick with the kicks, the riser must show a swept noise band with
+//! no stable harmonic peak (the presence-null case), and the growl must show
+//! a fixed 150 Hz fundamental with a moving spectral tilt (the constant-pitch
+//! case). The spectrogram is drawn with the scope shader's exact display
 //! transform and jet colormap (ported from `spectrogram.wgsl`), so it reads
 //! as the same instrument as the app's Audio Setup scope.
 //!
 //! Also prints a per-feature jitter index (mean |Δ| per hop, raw vs smoothed)
 //! so successive analysis iterations can be compared with a number as well as
 //! by eye.
+//!
+//! `--csv <dir>` additionally writes one `<dir>/<label>.csv` per analyzed clip
+//! (label = selftest scenario name, or the input path for file jobs), one row
+//! per hop, columns:
+//! ```text
+//! hop_index,time_s,ground_truth_f0_hz,
+//!   full_amplitude,full_brightness,full_noisiness,full_liveliness,full_transients,
+//!   low_amplitude,low_brightness,low_noisiness,low_liveliness,low_transients,
+//!   mid_amplitude,mid_brightness,mid_noisiness,mid_liveliness,mid_transients,
+//!   high_amplitude,high_brightness,high_noisiness,high_liveliness,high_transients
+//! ```
+//! Feature values are the RAW per-hop values (`HopRecord::raw`), not the
+//! shaped/smoothed follower output — the CSV is the ground-truth-comparison
+//! surface for tracker/salience work, not a performer-feel preview (that's
+//! what the PNG's bright trace is for). `ground_truth_f0_hz` is each
+//! scenario's own known f0 curve (dive = the exponential glide formula,
+//! wobble/growl = constant 150.0) or `NaN` where there is no single tracked
+//! fundamental (kicks, busymix, riser) or for file inputs (unknown ground
+//! truth).
 
 use manifold_audio::analysis::StreamingSendAnalyzer;
 use manifold_core::audio_mod::AudioModShape;
@@ -68,6 +91,7 @@ struct Args {
     start_s: f32,
     dur_s: f32,
     selftest: bool,
+    csv_dir: Option<String>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -80,6 +104,7 @@ fn parse_args() -> Result<Args, String> {
         start_s: 0.0,
         dur_s: f32::INFINITY,
         selftest: false,
+        csv_dir: None,
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -96,13 +121,14 @@ fn parse_args() -> Result<Args, String> {
             "--start" => args.start_s = next(&mut i)?.parse().map_err(|e| format!("--start: {e}"))?,
             "--dur" => args.dur_s = next(&mut i)?.parse().map_err(|e| format!("--dur: {e}"))?,
             "--selftest" => args.selftest = true,
+            "--csv" => args.csv_dir = Some(next(&mut i)?),
             s if s.starts_with("--") => return Err(format!("unknown flag {s}")),
             s => args.input = Some(s.to_string()),
         }
         i += 1;
     }
     if !args.selftest && args.input.is_none() {
-        return Err("usage: mod_harness <clip> [--out out.png] [--low hz] [--mid hz] [--floor db] [--start s] [--dur s] | --selftest".into());
+        return Err("usage: mod_harness <clip> [--out out.png] [--low hz] [--mid hz] [--floor db] [--start s] [--dur s] [--csv dir] | --selftest [--csv dir]".into());
     }
     if args.out.is_empty() {
         args.out = match &args.input {
@@ -124,16 +150,16 @@ fn main() {
 
     // ── Source: decode file (downmix all channels, same mean the live path
     //    uses) or synthesize the self-test scenarios. One PNG per job.
-    let jobs: Vec<(String, Vec<f32>, u32, String)> = if args.selftest {
+    let jobs: Vec<(String, Vec<f32>, u32, String, GroundTruthFn)> = if args.selftest {
         synth_selftests()
             .into_iter()
-            .map(|(name, mono)| {
+            .map(|(name, mono, gt)| {
                 let out = args
                     .out
                     .strip_suffix(".png")
                     .map(|stem| format!("{stem}_{name}.png"))
                     .unwrap_or_else(|| format!("{}_{name}.png", args.out));
-                (name.to_string(), mono, SELFTEST_SR, out)
+                (name.to_string(), mono, SELFTEST_SR, out, gt)
             })
             .collect()
     } else {
@@ -163,16 +189,27 @@ fn main() {
             eprintln!("empty excerpt (start/dur out of range)");
             std::process::exit(1);
         }
-        vec![(path, mono[start..start + len].to_vec(), sr, args.out.clone())]
+        // File inputs carry no known ground truth.
+        vec![(path, mono[start..start + len].to_vec(), sr, args.out.clone(), gt_none as GroundTruthFn)]
     };
 
-    for (label, mono, sr, out) in &jobs {
-        analyze_and_render(label, mono, *sr, out, &args);
+    for (label, mono, sr, out, gt) in &jobs {
+        analyze_and_render(label, mono, *sr, out, &args, *gt);
     }
 }
 
-/// Run the live analysis over one mono clip and write its PNG + jitter report.
-fn analyze_and_render(label: &str, mono: &[f32], sr: u32, out: &str, args: &Args) {
+/// Run the live analysis over one mono clip and write its PNG + jitter report
+/// (+ CSV, if `--csv` was passed). `ground_truth(time_s)` is the scenario's
+/// own known f0 curve, or `gt_none` (NaN) when there is no single tracked
+/// fundamental / the input is a file.
+fn analyze_and_render(
+    label: &str,
+    mono: &[f32],
+    sr: u32,
+    out: &str,
+    args: &Args,
+    ground_truth: GroundTruthFn,
+) {
     // ── Analysis: the exact live path, fed causally one hop at a time so
     //    `latest()` is sampled at hop rate — what the modulation evaluator sees.
     let cfg = SpectrogramConfig::default();
@@ -243,8 +280,46 @@ fn analyze_and_render(label: &str, mono: &[f32], sr: u32, out: &str, args: &Args
         println!("{line}");
     }
 
+    if let Some(dir) = &args.csv_dir {
+        write_csv(dir, label, &records, dt, ground_truth);
+    }
+
     render_png(out, &records, &cfg, sr, args.low_hz, args.mid_hz);
     println!("wrote {out}");
+}
+
+/// One `<dir>/<label>.csv`, one row per hop: hop index, time, ground-truth
+/// f0 (or NaN), then the five raw features for each of the four bands — see
+/// the module header comment for the exact column layout this must match.
+fn write_csv(dir: &str, label: &str, records: &[HopRecord], dt: f32, ground_truth: GroundTruthFn) {
+    std::fs::create_dir_all(dir).unwrap_or_else(|e| {
+        eprintln!("failed to create csv dir {dir}: {e}");
+        std::process::exit(1);
+    });
+    let path = format!("{dir}/{label}.csv");
+    let mut csv = String::from("hop_index,time_s,ground_truth_f0_hz");
+    for band in BAND_NAMES {
+        let band_lc = band.to_ascii_lowercase();
+        for feat in FEATURE_NAMES {
+            csv.push_str(&format!(",{band_lc}_{}", feat.to_ascii_lowercase()));
+        }
+    }
+    csv.push('\n');
+    for (idx, r) in records.iter().enumerate() {
+        let t = idx as f32 * dt;
+        csv.push_str(&format!("{idx},{t:.6},{}", ground_truth(t)));
+        for b in 0..4 {
+            for fi in 0..5 {
+                csv.push_str(&format!(",{}", r.raw[fi][b]));
+            }
+        }
+        csv.push('\n');
+    }
+    std::fs::write(&path, &csv).unwrap_or_else(|e| {
+        eprintln!("failed to write {path}: {e}");
+        std::process::exit(1);
+    });
+    println!("wrote {path}");
 }
 
 // ── Self-test signals ────────────────────────────────────────────────────
@@ -252,18 +327,47 @@ fn analyze_and_render(label: &str, mono: &[f32], sr: u32, out: &str, args: &Args
 const SELFTEST_SR: u32 = 48_000;
 const SELFTEST_SECS: usize = 4;
 
-/// Four isolated scenarios, one PNG each — what each picture must show:
+/// A scenario's own known f0 curve, sampled at a hop's time-since-start
+/// (seconds). `f32::NAN` where there is no single tracked fundamental (or,
+/// for file jobs, where ground truth is simply unknown) — see `gt_none`.
+type GroundTruthFn = fn(f32) -> f32;
+
+/// Six isolated scenarios, one PNG each — what each picture must show:
 /// `dive` — supersaw glide 1200→150 Hz; the centroid trace follows it down.
 /// `wobble` — 150 Hz bass, 3 Hz amplitude LFO; the amplitude lane oscillates.
 /// `kicks` — kick every 0.5 s on silence; transients tick at exactly 2 Hz.
 /// `busymix` — saw + noise pad + kicks; the stress case where features fight.
-fn synth_selftests() -> Vec<(&'static str, Vec<f32>)> {
+/// `riser` — band-limited noise whose center sweeps 200 Hz→8 kHz, no tonal
+/// content; the presence-null case (no stable harmonic peak at any hop).
+/// `growl` — 150 Hz saw at CONSTANT pitch with a 2 Hz spectral-tilt wobble;
+/// the constant-pitch-moving-timbre case (approximated formant motion).
+fn synth_selftests() -> Vec<(&'static str, Vec<f32>, GroundTruthFn)> {
     vec![
-        ("dive", soft_clip(synth_dive())),
-        ("wobble", soft_clip(synth_wobble())),
-        ("kicks", soft_clip(synth_kicks(Vec::new()))),
-        ("busymix", soft_clip(synth_kicks(synth_busy_pad()))),
+        ("dive", soft_clip(synth_dive()), gt_dive),
+        ("wobble", soft_clip(synth_wobble()), gt_const_150),
+        ("kicks", soft_clip(synth_kicks(Vec::new())), gt_none),
+        ("busymix", soft_clip(synth_kicks(synth_busy_pad())), gt_none),
+        ("riser", soft_clip(synth_riser()), gt_none),
+        ("growl", soft_clip(synth_growl()), gt_const_150),
     ]
+}
+
+/// Ground truth for `dive`: the same exponential glide formula `synth_dive`
+/// synthesizes from, evaluated at time-since-start.
+fn gt_dive(t: f32) -> f32 {
+    let secs = SELFTEST_SECS as f32;
+    1200.0 * (150.0f32 / 1200.0).powf(t / secs)
+}
+
+/// Ground truth for `wobble`/`growl`: fixed 150 Hz fundamental throughout.
+fn gt_const_150(_t: f32) -> f32 {
+    150.0
+}
+
+/// Ground truth for scenarios with no single tracked fundamental
+/// (kicks/busymix/riser) and for file inputs (unknown ground truth).
+fn gt_none(_t: f32) -> f32 {
+    f32::NAN
 }
 
 fn selftest_buf() -> Vec<f32> {
@@ -340,6 +444,62 @@ fn synth_kicks(base: Vec<f32>) -> Vec<f32> {
             ph += f / srf;
             out[idx] += 0.8 * (-tj / 0.03).exp() * (std::f32::consts::TAU * ph).sin();
         }
+    }
+    out
+}
+
+/// Filtered-noise riser: white LCG noise through a swept two-one-pole
+/// bandpass (high-pass then low-pass, both tracking a moving center that
+/// sweeps 200 Hz→8 kHz exponentially over the clip) — no tonal content at
+/// any hop, so no salience peak should ever look stable. Amplitude grows
+/// slightly over the clip, the way a riser builds.
+fn synth_riser() -> Vec<f32> {
+    let mut out = selftest_buf();
+    let srf = SELFTEST_SR as f32;
+    let secs = SELFTEST_SECS as f32;
+    let nyquist = srf * 0.45;
+    let mut seed = 0xACE1_u32;
+    let mut hp_lp_state = 0.0f32; // internal lowpass whose complement is the highpass
+    let mut bp_state = 0.0f32; // final lowpass stage, yields the bandpass output
+    for (i, s_out) in out.iter_mut().enumerate() {
+        let t = i as f32 / srf;
+        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+        let noise = (seed >> 8) as f32 / (1 << 24) as f32 * 2.0 - 1.0;
+        let center = 200.0 * (8000.0f32 / 200.0).powf(t / secs);
+        let fc_hp = (center * 0.6).min(nyquist);
+        let fc_lp = (center * 1.6).min(nyquist);
+        let a_hp = 1.0 - (-std::f32::consts::TAU * fc_hp / srf).exp();
+        hp_lp_state += a_hp * (noise - hp_lp_state);
+        let high_passed = noise - hp_lp_state;
+        let a_lp = 1.0 - (-std::f32::consts::TAU * fc_lp / srf).exp();
+        bp_state += a_lp * (high_passed - bp_state);
+        let amp = 0.25 + 0.15 * (t / secs);
+        *s_out += amp * bp_state;
+    }
+    out
+}
+
+/// Growl: 150 Hz saw held at CONSTANT pitch, mixed with a one-pole low-passed
+/// copy whose cutoff oscillates at 2 Hz between ~300 Hz and ~3 kHz (moving
+/// spectral tilt = brightness/energy motion, approximating formant motion),
+/// plus a mild 2 Hz amplitude wobble (depth ~0.3). The fundamental never
+/// moves — only the timbre does.
+fn synth_growl() -> Vec<f32> {
+    let mut out = selftest_buf();
+    let srf = SELFTEST_SR as f32;
+    let mut p = 0.0f32;
+    let mut lp_state = 0.0f32;
+    for (i, s_out) in out.iter_mut().enumerate() {
+        let t = i as f32 / srf;
+        p = (p + 150.0 / srf).fract();
+        let saw = 2.0 * p - 1.0;
+        let tilt_lfo = 0.5 + 0.5 * (std::f32::consts::TAU * 2.0 * t).sin();
+        let fc = 300.0 + (3000.0 - 300.0) * tilt_lfo;
+        let a = 1.0 - (-std::f32::consts::TAU * fc / srf).exp();
+        lp_state += a * (saw - lp_state);
+        let mixed = 0.5 * saw + 0.5 * lp_state;
+        let amp = 1.0 + 0.3 * (std::f32::consts::TAU * 2.0 * t).sin();
+        *s_out += 0.5 * amp * mixed;
     }
     out
 }
