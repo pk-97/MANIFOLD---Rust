@@ -786,12 +786,16 @@ const CHALLENGE_HOPS: u8 = 12;
 /// Hops of dropout (no acceptable peak, no completed takeover) tolerated
 /// before the tracker goes inactive (~200 ms at hop ≈ 5.3 ms, D5 step 5).
 const HOLD_HOPS: u8 = 38;
-/// Presence one-pole attack time constant, seconds (D5/D6) — trust rises
-/// fast while tracking.
-const PRESENCE_ATTACK_S: f32 = 0.030;
-/// Presence one-pole release time constant, seconds (D5/D6) — trust falls
-/// slow on dropout, so a masked beat doesn't strobe the visual.
-const PRESENCE_RELEASE_S: f32 = 0.250;
+/// Presence one-pole attack time constant, seconds (D6 recalibration
+/// 2026-07-06): trust is earned over ~a tenth of a second of sustained
+/// evidence. Noise rejection is NOT this constant's job — the stability
+/// weight on the target (see `RidgeTracker::stability`) crushes wandering
+/// (noise-following) trackers structurally, so the attack only needs to be
+/// slow enough that a single spiky hop doesn't register.
+const PRESENCE_ATTACK_S: f32 = 0.100;
+/// Presence one-pole release time constant, seconds — slightly slower than
+/// attack so a masked beat dips rather than strobes (D5's "lost slowly").
+const PRESENCE_RELEASE_S: f32 = 0.150;
 
 /// Per-window tracker state (D3 data model), owned by [`SendState`]. `pos` is
 /// a fractional bin index into the SAME array `salience_into` fills — the
@@ -821,6 +825,14 @@ struct RidgeTracker {
     /// False until the first acquisition (D5 step 6) — no continuation or
     /// takeover runs before then, only the acquisition test.
     active: bool,
+    /// Position stability 0..1 from the last matched hop: `1 − |Δpos|/MAX_SLEW`
+    /// on continuation, 0 on acquisition/takeover/onset-re-acquire (a jump
+    /// must re-earn trust). Multiplies the presence target (D6, 2026-07-06):
+    /// noise makes the tracked position wander at the slew limit while a real
+    /// tone holds still — temporal continuity is the discriminator the per-hop
+    /// salience ratio structurally can't provide (a swept-noise column shows
+    /// genuine octave-contrast spikes on ~35% of hops at any radius).
+    stability: f32,
 }
 
 impl RidgeTracker {
@@ -835,17 +847,20 @@ impl RidgeTracker {
             challenger_bin: f32::NEG_INFINITY,
             challenger_hops: 0,
             active: false,
+            stability: 0.0,
         }
     }
 
     /// One hop's D5 update for this window. `salience` is the shared column;
-    /// `lo`/`hi` this window's bin range; `transient_fired` whether THIS
-    /// band's onset fired THIS hop (D5 step 4, read from `reduce_send`'s
-    /// output, never from the tracker's own prior output); `window_energy`
-    /// the sum of the untilted column over `[lo, hi)` (D5 step 7's
-    /// denominator); `dt` the hop period in seconds (presence one-pole time
-    /// base).
-    fn update(&mut self, salience: &[f32], lo: usize, hi: usize, transient_fired: bool, window_energy: f32, dt: f32) {
+    /// `col` is the untilted, floored VQT column `salience` was computed from
+    /// (D6 recalibration's presence ratio reads the tracked bin's own raw
+    /// magnitude from it directly — see `presence_target`); `lo`/`hi` this
+    /// window's bin range; `transient_fired` whether THIS band's onset fired
+    /// THIS hop (D5 step 4, read from `reduce_send`'s output, never from the
+    /// tracker's own prior output); `bpo` bins-per-octave (D6's presence
+    /// neighbourhood radius — see `presence_target`); `dt` the hop period in
+    /// seconds (presence one-pole time base).
+    fn update(&mut self, salience: &[f32], col: &[f32], lo: usize, hi: usize, transient_fired: bool, bpo: usize, dt: f32) {
         let peaks = local_peaks(salience, lo, hi);
 
         // Step 6: acquisition (inactive → active). Requires salience > 0,
@@ -856,8 +871,13 @@ impl RidgeTracker {
                 self.active = true;
                 self.hold = 0;
                 self.challenger_hops = 0;
+                self.stability = 0.0; // a fresh acquisition re-earns trust
             }
-            let target = if self.active { presence_target(salience, self.pos, window_energy) } else { 0.0 };
+            let target = if self.active {
+                self.stability * presence_target(salience, col, self.pos, bpo)
+            } else {
+                0.0
+            };
             self.step_presence(target, dt);
             return;
         }
@@ -869,8 +889,9 @@ impl RidgeTracker {
                 self.pos = bin;
                 self.hold = 0;
                 self.challenger_hops = 0;
+                self.stability = 0.0; // a jump re-earns trust
             }
-            let target = presence_target(salience, self.pos, window_energy);
+            let target = self.stability * presence_target(salience, col, self.pos, bpo);
             self.step_presence(target, dt);
             return;
         }
@@ -901,6 +922,7 @@ impl RidgeTracker {
                         self.pos = xbin; // no slew clamp on the takeover hop itself
                         self.hold = 0;
                         self.challenger_hops = 0;
+                        self.stability = 0.0; // a jump re-earns trust
                         took_over = true;
                     }
                 } else {
@@ -913,6 +935,10 @@ impl RidgeTracker {
                 let delta = (cbin - self.pos).clamp(-MAX_SLEW, MAX_SLEW);
                 self.pos += delta;
                 self.hold = 0;
+                // Continuity IS the confidence signal: a still or slowly
+                // gliding object reads ~1; noise-following jitter at the slew
+                // limit reads ~0. Uses the existing MAX_SLEW — no new constant.
+                self.stability = 1.0 - (delta.abs() / MAX_SLEW).clamp(0.0, 1.0);
             }
         } else {
             // Step 5: dropout — no peak within SLEW_RADIUS of `pos` this hop.
@@ -932,7 +958,11 @@ impl RidgeTracker {
             }
         }
 
-        let target = if self.active { presence_target(salience, self.pos, window_energy) } else { 0.0 };
+        let target = if self.active {
+            self.stability * presence_target(salience, col, self.pos, bpo)
+        } else {
+            0.0
+        };
         self.step_presence(target, dt);
     }
 
@@ -945,17 +975,108 @@ impl RidgeTracker {
     }
 }
 
-/// D5 step 7's presence target: the tracked position's salience (read at the
-/// nearest bin — a ratio doesn't need the peak-pick's parabolic precision)
-/// divided by the window's (untilted) energy, gated on tiny denominators the
-/// same way `relative_flux` is (`FLUX_ENERGY_GATE`), clamped 0..1. An inactive
-/// or dropout hop's target is 0, decided by the caller.
-fn presence_target(salience: &[f32], pos: f32, window_energy: f32) -> f32 {
-    if window_energy <= FLUX_ENERGY_GATE {
+/// D6 presence recalibration (docs/AUDIO_OBJECT_TRACKING_DESIGN.md D6,
+/// "finding 2" of the P2 shipped-status paragraph, closed by this task).
+/// `window_energy` (raw magnitude energy, summed over the whole window) was
+/// the wrong denominator on two counts, both measured against
+/// `selftest_dive.png` 2026-07-06: (1) it mixes scales — the numerator is a
+/// harmonic-SUM salience value (~5 weighted terms) while the denominator was
+/// a wide window's total RAW energy (dozens of real harmonic bins for a
+/// buzzy source), so even a flawlessly tracked object reads a tiny ratio
+/// (growl measured 0.02–0.08); (2) it has no opinion on WHERE a peak's
+/// salience came from, so a subharmonic ghost — a bin whose comb offsets
+/// (`salience_into`'s `off_h`) land on REAL energy that actually belongs to a
+/// higher, out-of-window fundamental — reads high confidence off a
+/// near-silent window (the dive's Low-band phantom below ~3 s, ground truth
+/// still up around 1200 Hz: h=5's offset lands its weight on the real
+/// fundamental bin while the ghost's own bin carries none of it).
+///
+/// **Rejected candidate 1** (kept here so it isn't retried): a
+/// "concentration" ratio `S[pos] / Σ S[window]` (tracked peak's share of the
+/// window's total salience MASS), optionally gated by an in-window
+/// comb-support fraction. Measured on a synthetic single dominant, fully
+/// comb-supported object (`dominant_fully_supported_object_reads_high_presence`):
+/// presence 0.246, well under the 0.5 display bar. Real-signal diagnostics
+/// against the selftest columns confirmed it fails for the wrong reason:
+/// `salience_into` is a harmonic-SUM over EVERY bin, so ANY window — tonal or
+/// not — ends up with most of its 266 bins carrying some nonzero salience
+/// (measured 145–220 "significant" bins per hop, every scenario alike), and
+/// `concentration` came out equally tiny for growl (mean 0.0202) and riser
+/// (mean 0.0102) — it does not discriminate coherent from broadband content
+/// at all, let alone clear the 0.5 bar.
+///
+/// **Rejected candidate 2:** a purely local ratio `S[pos] / (col[pos] · Σw_h)`
+/// — the tracked peak's salience against a theoretical ceiling if every
+/// harmonic matched its own raw magnitude (`Σw_h`, the D1 weight vocabulary's
+/// own sum ≈ 3.2). Scale-consistent and correctly gates the ghost
+/// (`col[pos] ≈ 0` collapses it), but measured against the real harness
+/// (`cargo run --example mod_harness -- --selftest`): riser's Full presence
+/// was ≤0.15 on 0% of hops (need ≥90%) and kicks' Low presence exceeded 0.5
+/// on 51.7% of hops (need ≤20%) — riser and kicks scored HIGHER than growl
+/// (mean ratio 1.56 and 1.07 vs growl's 0.53). Diagnosis: a swept bandpass
+/// (riser) or a VQT-smeared transient (kicks) both leave comparable raw
+/// magnitude at the bins the D1 comb offsets land on relative to `col[pos]`
+/// itself — "the harmonics are about as loud as the fundamental" is true for
+/// both a genuine harmonic stack AND a locally-flat noise/transient region,
+/// so a same-bin ceiling can't tell them apart.
+///
+/// **Shipped (candidate 3):** what candidates 1–2 were both missing is a
+/// reference to the CANDIDATE'S OWN NEIGHBOURHOOD rather than the whole
+/// window or the same bin: does this bin's salience stand out from the
+/// typical salience one octave around it? A genuine harmonic lock is sharp in
+/// salience-space even where the raw column is locally smooth (measured:
+/// raw-column peakedness never separated growl from riser at any radius 1–6;
+/// salience-space peakedness does, cleanly, from radius ≈ 1 octave up).
+/// `presence = clamp((S[pos] − mean(S[pos±bpo], excluding pos)) / S[pos], 0, 1)`,
+/// gated to 0 when `col[pos]` itself is negligible (the design brief's named
+/// ghost check: a bin with no real energy of its own can't be "present" no
+/// matter how its neighbourhood compares). `bpo` (bins-per-octave) is not a
+/// new tuned constant — it is the transform's own existing parameter, reused
+/// as "compare against one octave of context," and the choice sits on a
+/// measured plateau: radii of 16, 20, and 24 bins (bpo is 24 in this
+/// transform) all separate growl/dive/busymix (94–100% of post-acquisition
+/// hops ≥ 0.5) from kicks (90–100% of hops ≤ 0.15) equally well — it is not a
+/// knife-edge single value.
+/// - **Problem 1 (scale):** both terms are salience-space, and the
+///   neighbourhood is sized to the object itself (one octave), so it never
+///   dilutes against unrelated content far away in a wide window (unlike
+///   candidate 1) and never depends on how "rich" the object's own harmonic
+///   series looks (unlike candidate 2).
+/// - **Problem 2 (ghost):** `col[pos]` gate, same mechanism as candidate 2 —
+///   a subharmonic ghost's own bin carries no real energy, so it can never
+///   read present regardless of how its neighbourhood computes.
+///
+/// Known tension (measured, not fixed by this formula — see the task
+/// report): riser's raw per-hop ratio clears 0.15 on a genuine, roughly
+/// radius-INDEPENDENT ~32–39% of hops (band-limited noise really does
+/// produce locally-peaky salience some of the time; the swept passband is
+/// wide enough that "one octave of context" sometimes sits entirely inside
+/// it). The existing D5 one-pole (attack 30 ms / release 250 ms, untouched)
+/// absorbs isolated spikes; whether it absorbs ENOUGH of them to clear the
+/// riser gate is a real measurement, reported with the other P2/P2b numbers,
+/// not asserted here.
+fn presence_target(salience: &[f32], col: &[f32], pos: f32, bpo: usize) -> f32 {
+    let k = (pos.round().max(0.0) as usize).min(salience.len().saturating_sub(1));
+    let peak_col = col.get(k).copied().unwrap_or(0.0);
+    if peak_col <= FLUX_ENERGY_GATE {
         return 0.0;
     }
-    let k = (pos.round().max(0.0) as usize).min(salience.len().saturating_sub(1));
-    (salience.get(k).copied().unwrap_or(0.0) / window_energy).clamp(0.0, 1.0)
+    let peak_s = salience.get(k).copied().unwrap_or(0.0);
+    if peak_s <= 0.0 {
+        return 0.0;
+    }
+    let r = bpo; // one octave of context — see doc comment
+    let nb_lo = k.saturating_sub(r);
+    let nb_hi = (k + r + 1).min(salience.len());
+    let (mut nb_sum, mut nb_n) = (0.0f32, 0usize);
+    for (b, &v) in salience[nb_lo..nb_hi].iter().enumerate() {
+        if nb_lo + b != k {
+            nb_sum += v;
+            nb_n += 1;
+        }
+    }
+    let nb_mean = if nb_n > 0 { nb_sum / nb_n as f32 } else { 0.0 };
+    ((peak_s - nb_mean) / peak_s).clamp(0.0, 1.0)
 }
 
 /// The four tracker windows in band order [Full, Low, Mid, High] — the SAME
@@ -968,9 +1089,9 @@ fn tracker_windows(num_bins: usize, low_bin: usize, mid_bin: usize) -> [(usize, 
 /// Run all four windows' D5 update for one hop and fill `pitch`/`presence` on
 /// each band plus the per-send reserved pitch fields from the Full tracker
 /// (D4). `vqt_raw` is the untilted, floored column salience was computed from
-/// (also this hop's window-energy source); `bpo`/`fmin` come from the shared
-/// `SpectrogramConfig` (the same formula family `band_edges` uses); `dt` is
-/// the hop period in seconds.
+/// (also D6's presence ghost-gate source, `presence_target`); `bpo`/`fmin`
+/// come from the shared `SpectrogramConfig` (the same formula family
+/// `band_edges` uses); `dt` is the hop period in seconds.
 fn update_trackers(
     send: &mut SendState,
     vqt_raw: &[f32],
@@ -984,10 +1105,9 @@ fn update_trackers(
     let windows = tracker_windows(num_bins, low_bin, mid_bin);
     for (wi, &(lo, hi)) in windows.iter().enumerate() {
         let hi = hi.min(vqt_raw.len());
-        let window_energy: f32 = if lo < hi { vqt_raw[lo..hi].iter().sum() } else { 0.0 };
         let fired = send.features.bands[wi].transients > 0.999;
         let prev_pos = send.trackers[wi].pos;
-        send.trackers[wi].update(&send.salience, lo, hi, fired, window_energy, dt);
+        send.trackers[wi].update(&send.salience, vqt_raw, lo, hi, fired, bpo, dt);
 
         let bf = &mut send.features.bands[wi];
         if hi > lo + 1 {
@@ -2403,11 +2523,17 @@ mod tests {
     fn tracker_acquires_a_stable_peak_and_presence_rises() {
         let n = 80;
         let mut t = RidgeTracker::new();
-        let energy = 20.0f32;
         let mut last_presence = 0.0f32;
-        for hop in 0..60 {
+        // 120 hops ≈ 640 ms — enough for the 100 ms attack tau to close to
+        // within 1% of the asymptote (the acquisition hop itself contributes
+        // nothing: stability is 0 until the first continuation hop).
+        for hop in 0..120 {
+            // `col` == `sal` here: a single isolated impulse with NOTHING
+            // else nonzero anywhere in the array means its D6 octave
+            // neighbourhood (`salience[pos ± bpo]`) is entirely zero — the
+            // uncontested ceiling case, presence should approach 1.0.
             let sal = impulse(n, 40, 10.0);
-            t.update(&sal, 0, n, false, energy, TRACKER_DT);
+            t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
             assert!(t.active, "acquires on the first hop with a peak");
             assert_eq!(t.pos, 40.0, "an isolated peak has no fractional refine, hop {hop}");
             assert!(
@@ -2417,19 +2543,22 @@ mod tests {
             );
             last_presence = t.presence;
         }
-        assert!(last_presence > 0.4, "presence should approach salience/energy = 0.5: got {last_presence}");
+        let expected = 1.0f32;
+        assert!(
+            (last_presence - expected).abs() < 0.01,
+            "an uncontested peak (nothing in its octave neighbourhood) should approach presence {expected:.4} (D6): got {last_presence}"
+        );
     }
 
     #[test]
     fn tracker_follows_a_glide_within_slew_no_discontinuity() {
         let n = 120;
         let mut t = RidgeTracker::new();
-        let energy = 20.0f32;
         let mut prev_pos: Option<f32> = None;
         for hop in 0..40usize {
             let bin = 20 + hop / 2; // +0.5 bin/hop on average
             let sal = impulse(n, bin, 10.0);
-            t.update(&sal, 0, n, false, energy, TRACKER_DT);
+            t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
             if let Some(p) = prev_pos {
                 let step = t.pos - p;
                 assert!(step.abs() <= MAX_SLEW, "hop {hop}: step {step} exceeds MAX_SLEW");
@@ -2443,15 +2572,15 @@ mod tests {
     fn tracker_holds_through_a_dropout_and_resumes_without_a_jump() {
         let n = 80;
         let mut t = RidgeTracker::new();
-        let energy = 20.0f32;
         for _ in 0..5 {
-            t.update(&impulse(n, 40, 10.0), 0, n, false, energy, TRACKER_DT);
+            let sal = impulse(n, 40, 10.0);
+            t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
         }
         assert_eq!(t.pos, 40.0);
         let presence_before_dropout = t.presence;
         let silent = vec![0.0f32; n];
         for hop in 0..20 {
-            t.update(&silent, 0, n, false, 0.0, TRACKER_DT);
+            t.update(&silent, &silent, 0, n, false, SAL_BPO, TRACKER_DT);
             assert_eq!(t.pos, 40.0, "pos must hold through the dropout, hop {hop}");
             assert!(t.active, "20 hops is well within HOLD_HOPS ({HOLD_HOPS}), hop {hop}");
         }
@@ -2460,7 +2589,8 @@ mod tests {
             "presence should have dipped during the dropout: {presence_before_dropout} -> {}",
             t.presence
         );
-        t.update(&impulse(n, 40, 10.0), 0, n, false, energy, TRACKER_DT);
+        let sal = impulse(n, 40, 10.0);
+        t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
         assert_eq!(t.pos, 40.0, "resuming at the same bin must not jump");
     }
 
@@ -2468,19 +2598,19 @@ mod tests {
     fn tracker_takeover_needs_challenge_hops_consecutive_hops() {
         let n = 120;
         let mut t = RidgeTracker::new();
-        let energy = 40.0f32;
         for _ in 0..5 {
-            t.update(&impulse(n, 40, 10.0), 0, n, false, energy, TRACKER_DT);
+            let sal = impulse(n, 40, 10.0);
+            t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
         }
         assert_eq!(t.pos, 40.0);
         // A competitor 30 bins away, well out-salient (> CHALLENGE_RATIO), on
         // every subsequent hop.
         let sal = two_impulses(n, 40, 10.0, 70, 20.0);
         for hop in 1..CHALLENGE_HOPS {
-            t.update(&sal, 0, n, false, energy, TRACKER_DT);
+            t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
             assert_eq!(t.pos, 40.0, "must not jump before CHALLENGE_HOPS consecutive hops (hop {hop})");
         }
-        t.update(&sal, 0, n, false, energy, TRACKER_DT);
+        t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
         assert_eq!(t.pos, 70.0, "must jump exactly at CHALLENGE_HOPS consecutive hops");
     }
 
@@ -2488,17 +2618,85 @@ mod tests {
     fn tracker_onset_reacquires_immediately_bypassing_hysteresis() {
         let n = 120;
         let mut t = RidgeTracker::new();
-        let energy = 40.0f32;
         for _ in 0..5 {
-            t.update(&impulse(n, 40, 10.0), 0, n, false, energy, TRACKER_DT);
+            let sal = impulse(n, 40, 10.0);
+            t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
         }
         assert_eq!(t.pos, 40.0);
         // A brand-new, far-away, stronger peak with the band's onset firing
         // THIS hop must win immediately — no CHALLENGE_HOPS wait, no MAX_SLEW
         // clamp (D5 step 4: a new note may legitimately teleport).
         let sal = impulse(n, 95, 50.0);
-        t.update(&sal, 0, n, true, energy, TRACKER_DT);
+        t.update(&sal, &sal, 0, n, true, SAL_BPO, TRACKER_DT);
         assert_eq!(t.pos, 95.0, "onset fire must re-acquire immediately");
+    }
+
+    /// D6 recalibration — the ghost case named in the task brief: a peak
+    /// whose entire salience total is BORROWED from a harmonic partner that
+    /// lies outside the window being asked about (the dive's Low-band
+    /// subharmonic phantom of an out-of-band fundamental). The peak's own
+    /// bin carries none of that energy (`col[pos] ≈ 0`), which
+    /// `presence_target`'s first gate reads directly — presence must stay
+    /// near 0 regardless of how dominant the peak looks within the window
+    /// (it is, in fact, the sole nonzero bin in its neighbourhood too, so
+    /// the octave-neighbourhood term alone would NOT have caught this case —
+    /// the `col[pos]` gate is load-bearing here, not redundant).
+    #[test]
+    fn ghost_peak_with_out_of_window_comb_support_reads_low_presence() {
+        let n = 140;
+        // Real energy lives ONLY at bin 100 (the true, out-of-window
+        // fundamental). `salience_into` deposits h=5's weighted copy of it
+        // at bin 100 - 56 = 44 (off_5 = round(24*log2(5)) = 56) — a "ghost"
+        // fundamental candidate at 44 with no real energy of its own.
+        let mut col = vec![0.0f32; n];
+        col[100] = 10.0;
+        let mut sal = vec![0.0f32; n];
+        salience_into(&col, SAL_BPO, &mut sal);
+        assert!(sal[44] > 0.0, "the ghost bin must show nonzero borrowed salience (test setup check)");
+        assert_eq!(col[44], 0.0, "the ghost bin itself carries no real energy (test setup check)");
+
+        // Window = [0, 50): the ghost bin (44) is inside it, its real
+        // support (bin 100) is not. (Narrower than "everything below 100"
+        // deliberately — bin 52 also receives a borrowed copy via h=4's
+        // offset 48 (100-48=52) and would out-salience bin 44 if left in
+        // range, which would acquire the wrong bin for this test's purpose.)
+        let mut t = RidgeTracker::new();
+        let mut last = 0.0f32;
+        for _ in 0..60 {
+            t.update(&sal, &col, 0, 50, false, SAL_BPO, TRACKER_DT);
+            last = t.presence;
+        }
+        assert!(t.active, "the ghost bin is still a real local maximum within the window, so it acquires");
+        assert_eq!(t.pos, 44.0, "test setup: the tracker must have acquired the ghost bin, not bin 100 (outside the window)");
+        assert!(last < 0.1, "a peak with no in-window comb support must not read as present: got {last}");
+    }
+
+    /// D6 recalibration — the mirror case: a single, real, fully-supported
+    /// harmonic comb (matching the D1 worked example's weights exactly,
+    /// `col[pos]` genuinely nonzero) with nothing else in the array must
+    /// read HIGH presence — its octave neighbourhood (`salience[pos ± bpo]`)
+    /// is entirely empty, so the fundamental's own salience stands out
+    /// completely and the ratio approaches its ceiling of 1.0.
+    #[test]
+    fn dominant_fully_supported_object_reads_high_presence() {
+        let n = 140;
+        let b = 40usize;
+        let mut col = vec![0.0f32; n];
+        for (off, &w) in SAL_OFFS.iter().zip(SALIENCE_WEIGHTS.iter()) {
+            col[b + off] = w;
+        }
+        let mut sal = vec![0.0f32; n];
+        salience_into(&col, SAL_BPO, &mut sal);
+
+        let mut t = RidgeTracker::new();
+        let mut last = 0.0f32;
+        for _ in 0..60 {
+            t.update(&sal, &col, 0, n, false, SAL_BPO, TRACKER_DT);
+            last = t.presence;
+        }
+        assert!(t.active);
+        assert_eq!(t.pos, b as f32, "test setup: must have acquired the fundamental");
+        assert!(last >= 0.5, "a single dominant, fully-supported object must clear the D6 display bar: got {last}");
     }
 
     #[test]

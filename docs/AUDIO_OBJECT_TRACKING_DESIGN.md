@@ -145,11 +145,27 @@ Starting constants (tuned in P2, committed in code as consts with this doc refer
 `SLEW_RADIUS 6`, `MAX_SLEW 3.0`, `CHALLENGE_RATIO 1.5`, `CHALLENGE_HOPS 12` (~64 ms),
 `HOLD_HOPS 38` (~200 ms), `PRESENCE_ATTACK/RELEASE` as one-pole taus 30 ms / 250 ms.
 
-**D6 — Presence gates pitch, and is itself a feature.** `presence = tracked ridge
-salience ÷ window energy` (the §6.3 commitment), one-pole smoothed per D5. The pitch
-*feature* freezes on low presence rather than reading 0 (0 is a position). `Presence`
-as a drawer kind is the "fade the effect in as the bass asserts itself" control Peter
-asked for, and doubles as the debug meter for "why isn't pitch moving".
+**D6 — Presence gates pitch, and is itself a feature (recalibrated 2026-07-06, all
+gates green).** The original formula (salience ÷ window energy) failed in both
+directions, measured: a flawless growl lock read 0.02–0.08 (one harmonic ÷ whole
+spectrum), and a near-empty Low window read a subharmonic ghost as HIGH confidence
+(tiny denominator) — Peter read both defects off the dive PNG. Shipped formula, three
+structural terms, zero fitted constants:
+`presence_target = octave_contrast × stability`, where `octave_contrast =
+clamp((S[pos] − mean(S[pos±bpo] excl. pos)) / S[pos], 0, 1)` gated to 0 unless
+`col[pos]` carries real energy (how dominant is this peak against its own octave
+neighbourhood — radius is the transform's own `bpo`), and `stability = 1 −
+|Δpos|/MAX_SLEW` from the last matched hop (0 on any jump: acquisition, takeover,
+onset re-acquire — a jump re-earns trust). Stability is the discriminator the per-hop
+ratio can't be: swept noise shows genuine octave-contrast spikes on ~35% of hops at
+any radius, but noise-following wanders at the slew limit while a real tone holds
+still — continuity IS confidence (the Bregman old-plus-new intuition, mechanized).
+One-pole taus rebalanced 100 ms attack / 150 ms release (the original 30/250 held
+noise spikes UP — backwards). Two rejected formulas and the evidence live in the P2b
+gate history. The pitch *feature* freezes on low presence rather than reading 0 (0 is
+a position). `Presence` as a drawer kind is the "fade the effect in as the bass
+asserts itself" control Peter asked for, and doubles as the debug meter for "why
+isn't pitch moving".
 
 **D7 — Runs inside `StreamingSendAnalyzer`, gated per send.** The tracker is a new
 struct owned by `SendState` — same thread (content), same cadence (per hop), same
@@ -296,8 +312,10 @@ PASS after P3 landed the same day** (dive max Δ 0.383 st / mean 0.057 / 100% wi
 ±1 st; wobble stddev 0.318 st; kicks/riser/growl as below). The paragraph that follows
 records the mid-phase state for archaeology: P2's code shipped with dive/wobble
 blocked on BUG-041, and P3's sweep alone closed both — the D5 step-4 softening was
-NOT needed. The D6 presence-scale recalibration (finding 2 below) remains OPEN, owed
-before P4 exposes Presence in the drawer. Shipped: D5 tracker
+NOT needed. The D6 presence-scale recalibration (finding 2 below) CLOSED same day — see D6's
+recalibrated formula and the P2b gate lines (all green, incl. Peter's two
+dive-PNG-derived criteria: no ghost draws on an empty band, real locks stay above
+the display bar). Shipped: D5 tracker
 (all six unit-tested behaviors), BandFeatures pitch/presence, `set_pitch_tracking`
 (default off; other five features bit-identical when off — tested), harness lanes +
 CSV + self-printing gate lines. Passing: kicks (0% spurious low-presence), riser (100%

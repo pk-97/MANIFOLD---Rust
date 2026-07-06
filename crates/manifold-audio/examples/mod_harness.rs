@@ -402,6 +402,7 @@ fn analyze_and_render(
     if args.selftest {
         print_p3_fires(label, &records);
         print_p2_gates(label, &records, dt, ground_truth);
+        print_p2b_gates(label, &records, dt, ground_truth);
     }
 
     if let Some(dir) = &args.csv_dir {
@@ -560,6 +561,69 @@ fn print_p2_gates(label: &str, records: &[HopRecord], dt: f32, ground_truth: Gro
             let hot = post.iter().filter(|r| r.raw[PRESENCE_IDX][LOW] > 0.5).count();
             let hot_pct = 100.0 * hot as f64 / post.len().max(1) as f64;
             gate("pct_hops_low_presence_gt_0.5", hot_pct, "<=", 20.0, hot_pct <= 20.0);
+        }
+        _ => {}
+    }
+}
+
+/// D6 presence-recalibration gates (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md` D6,
+/// the task that closed P2's "finding 2" — presence mis-scale). These are
+/// Peter's acceptance criteria read directly off `selftest_dive.png`:
+/// presence must clear the `PITCH_DISPLAY_PRESENCE` display bar for a
+/// genuinely tracked object, and must NOT clear it for a near-empty band
+/// (the dive's Low-band subharmonic ghost). One `P2b <scenario>: <metric>=
+/// <value> (gate <op> <bound>) PASS|FAIL` line per criterion, dive/growl
+/// only (the two scenarios these criteria name) — riser/kicks/wobble/busymix
+/// keep their unchanged P2 lines as the regression guard.
+fn print_p2b_gates(label: &str, records: &[HopRecord], dt: f32, ground_truth: GroundTruthFn) {
+    const FULL: usize = 0;
+    const LOW: usize = 1;
+    const MID: usize = 2;
+
+    let gate = |metric: &str, value: f64, op: &str, bound: f64, pass: bool| {
+        println!("P2b {label}: {metric}={value:.4} (gate {op} {bound}) {}", if pass { "PASS" } else { "FAIL" });
+    };
+
+    match label {
+        "dive" => {
+            // A near-empty band must read near-zero presence: the Low-band
+            // subharmonic ghost (fundamental still up around 1200 Hz) must
+            // not read as present in the clip's first 2.0 s.
+            let early: Vec<&HopRecord> =
+                records.iter().enumerate().filter(|&(idx, _)| (idx as f32 * dt) < 2.0).map(|(_, r)| r).collect();
+            let quiet_low = early.iter().filter(|r| r.raw[PRESENCE_IDX][LOW] < 0.25).count();
+            let quiet_low_pct = 100.0 * quiet_low as f64 / early.len().max(1) as f64;
+            gate("pct_hops_low_presence_lt_0.25_first_2s", quiet_low_pct, ">=", 95.0, quiet_low_pct >= 95.0);
+
+            // A correctly tracked in-band object must clear the display bar
+            // while it's genuinely inside that band: Mid = 250-2000 Hz,
+            // which the dive's glide occupies for roughly its first 3.0 s.
+            let mid_band: Vec<&HopRecord> = records
+                .iter()
+                .enumerate()
+                .filter(|&(idx, _)| {
+                    let f0 = ground_truth(idx as f32 * dt);
+                    f0.is_finite() && (250.0..2000.0).contains(&f0)
+                })
+                .map(|(_, r)| r)
+                .collect();
+            let hot_mid = mid_band.iter().filter(|r| r.raw[PRESENCE_IDX][MID] >= 0.25).count();
+            let hot_mid_pct = 100.0 * hot_mid as f64 / mid_band.len().max(1) as f64;
+            gate("pct_hops_mid_presence_ge_0.25_while_f0_in_mid", hot_mid_pct, ">=", 90.0, hot_mid_pct >= 90.0);
+
+            // Full presence must stay high once the Full tracker has
+            // genuinely acquired the glide (same "post-acquisition" filter
+            // the P2 dive gate above uses: `tracked_f0_hz` finite).
+            let acquired: Vec<&HopRecord> = records.iter().filter(|r| r.tracked_f0_hz.is_finite()).collect();
+            let hot_full = acquired.iter().filter(|r| r.raw[PRESENCE_IDX][FULL] >= 0.5).count();
+            let hot_full_pct = 100.0 * hot_full as f64 / acquired.len().max(1) as f64;
+            gate("pct_hops_full_presence_ge_0.5_post_acquisition", hot_full_pct, ">=", 90.0, hot_full_pct >= 90.0);
+        }
+        "growl" => {
+            let acquired: Vec<&HopRecord> = records.iter().filter(|r| r.tracked_f0_hz.is_finite()).collect();
+            let hot_full = acquired.iter().filter(|r| r.raw[PRESENCE_IDX][FULL] >= 0.5).count();
+            let hot_full_pct = 100.0 * hot_full as f64 / acquired.len().max(1) as f64;
+            gate("pct_hops_full_presence_ge_0.5_post_acquisition", hot_full_pct, ">=", 90.0, hot_full_pct >= 90.0);
         }
         _ => {}
     }
