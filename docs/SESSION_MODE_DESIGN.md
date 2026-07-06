@@ -198,6 +198,11 @@ Grid integrity: layer deletion must remove that layer's slots inside the same co
 
 New dock panel "Session" — grid of layers (columns, arrangement order) × scenes (rows). Per cell: slot name/color, play state (stopped / pending-flash / playing with loop progress), click = launch, empty cell click = stop. Scene-launch button per row, Back to Arrangement per column + global. Reuse timeline header identity colors (`prefer-high-saturation-identity-colors`). Follow the existing dock/panel infra from the graph-editor redesign; no new UI primitives expected. Drag interactions (timeline↔grid) are v2; v1 conversion happens via commands on selection/marker range.
 
+**Cell ruling (2026-07-06, Peter):** a grid cell is a **static thumbnail + strong
+identity-color band + name overlay** — legibility from the band, content recognition
+from the frame. Not Ableton-flat colored cells, not live/ticking thumbnails (a wall
+of moving images competes with the show). Chosen from the three explicitly.
+
 ## 9. What does NOT change
 
 - `sync_clips_to_time` remains sole playback authority; session adds an input, not an authority.

@@ -136,6 +136,15 @@ addresses the island, the venue profile knows the copper.
   examples, cue names in the venue profile. Acceptance: **fire a chase from a MIDI pad on
   the real rig with zero code edits** — patched entirely through UI.
 
+## 5a. UX home addendum (2026-07-06, Peter-ruled)
+
+The fixture patch surface lives on the unified Stage surface (MULTI_DISPLAY §5a):
+fixtures are objects on the same venue canvas as displays and projectors. Selecting
+a fixture shows patch summary + test controls in the side flap; deep patch detail
+(universe/channel routing, per-fixture test patterns) opens as the focused per-object
+mode with breadcrumb back. The Project Settings ▸ LED page stays a summary + entry
+link (APP_SHELL §6.2). Data model, protocols, and phasing below are untouched.
+
 ## 6. Decided — do not reopen
 
 1. Strips = accent instrument; stage pass-through as the system is rejected (gimmick).

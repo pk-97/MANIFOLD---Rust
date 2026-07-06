@@ -152,6 +152,24 @@ The mental model is **macOS display arrangement, on a stage plan, in real units*
 The slicing/packing layer exists internally — **generated from the stage view, never
 hand-edited**.
 
+### 5a. UX addendum (2026-07-06, Peter-ruled) — ONE Stage surface for the whole app
+
+The stage view above is the app's single physical-stage surface, not a displays-only
+panel. Projector outputs (PROJECTION_MAPPING) and LED fixtures (LED_STRIPS) appear as
+objects on the same venue canvas alongside displays — one physical stage, one surface,
+one venue profile. Committed interaction pattern:
+
+- Selecting any object shows its properties in the side flap (the per-output advanced
+  flap above generalizes to all object kinds).
+- Deep per-object tools — projector warp/masks/blend, LED patch detail — open as a
+  **focused mode**: full-canvas editor for that one object, live content running,
+  breadcrumb back to the stage plan. Same enter/exit idiom as graph-editor groups.
+  Ruled over inline-flap editing (precision work happens tiny) and over separate
+  dock panels (splits one physical stage across three UIs).
+- Scope: this amends the *surface home* only. PROJECTION_MAPPING's and LED_STRIPS'
+  data models, math, and phasing are untouched; those docs carry matching addenda.
+  APP_SHELL §8's slot rows are updated to match.
+
 ### Data model
 
 New module `manifold-core/src/stage.rs`. Serialized inside `ProjectSettings` (serde

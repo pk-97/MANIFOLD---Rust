@@ -184,8 +184,12 @@ every mapping tool's "blend curve" knob.
 
 ## 6. Calibration UX
 
-New **Mapping** dock panel (editor surface; usable while content runs — that's the
-point). Per output:
+**Home amendment (2026-07-06, Peter-ruled):** the Mapping surface is no longer its
+own dock panel. It is the **focused mode** entered from the unified Stage surface
+(MULTI_DISPLAY §5a) by selecting a projector output and hitting Edit — full-canvas,
+usable while content runs (that's the point), breadcrumb back to the stage plan.
+Everything below — tabs, handles, nudge keys, math — is unchanged; only where it
+lives moved. Per output:
 
 - **Canvas** shows the output's frame (what the projector shows) with handles drawn on
   top. Tabs: **Warp / Masks / Blend**.
