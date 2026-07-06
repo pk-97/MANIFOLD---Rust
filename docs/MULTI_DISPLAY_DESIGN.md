@@ -1,6 +1,6 @@
 # Multi-Display / Totem Canvas Model
 
-**Status: IN PROGRESS — P1 built + merged into `feat/timeline-ui-redesign` (2026-07-03, commit `0cb5114f`). P2 BLOCKED 2026-07-03 pending a §6.1 seam-hardening pass — see `docs/DESIGN_HARDENING_QUEUE.md` item 2 (Peter: "harden the doc first"; the per-island state seam has no old→new brief). P3–P5 not implemented.** Written 2026-07-02 (Fable). **v2, same
+**Status: IN PROGRESS — P1 built + merged (2026-07-03, commit `0cb5114f`). §6.1a hardening addendum resolved 2026-07-06 (per-island state seam committed: isolation by chain-runtime instance, seam brief in §6.1a) — P2 is RE-ISSUABLE. P3–P5 not implemented.** Written 2026-07-02 (Fable). **v2, same
 day:** the v1 "render the gaps" pixel canvas was rejected by Peter — a super-wide stage
 must not spend its frame budget on invisible air. v2 replaces it with the island atlas
 model. Execution is a Sonnet apply pass — every decision needed is in here; don't
@@ -229,13 +229,163 @@ Consequences, stated honestly:
   islands (6+ totem stages) will want the pointwise-fusion path to collapse per-island
   loops into single atlas-wide dispatches for pointwise nodes; that's the existing
   fusion-compiler direction, noted as the optimization escape hatch, not v1.
-- **Stateful effect state keys extend to (node, island)** — the state store and chain
-  caches key per island. Per-island feedback/trails are semantically correct
-  (physically separate surfaces). Reset paths must walk both caches per the existing
-  two-cache rule.
+- **Stateful effect state is isolated per island** — mechanism committed in §6.1a
+  (2026-07-06): per-`(layer, island)` chain-runtime instances, NOT a StateStore key
+  change. Per-island feedback/trails are semantically correct (physically separate
+  surfaces). Reset paths must walk both caches per the existing two-cache rule — now
+  across all of a layer's island entries.
 - Layer domain (§4) enters as the content coordinate mapping per island: Stage domain
   = island's stage window drives generator coordinates / clip placement; Every-display
   domain = island-local 0–1. Pointwise/compositing behavior is identical either way.
+
+### 6.1a Hardening addendum (2026-07-06) — the per-island state seam, committed
+
+Resolves `DESIGN_HARDENING_QUEUE.md` item 2 (parked 2026-07-03). **The queue's
+inventory is stale in a way that changes the answer**: since it was written, the
+StateStore migration landed (commits `d254f79a`, `47f08354` — verified at
+`482f554a`). Every control/feedback primitive's cross-frame *value* state — Feedback
+(`temporal.rs` `FeedbackState`), ArrayFeedback, Smoothing, EnvelopeDecay,
+EnvelopeFollowerAr, CompressorEnvelope, TriggerEaseTo, SampleAndHold, SeedParticles,
+InjectBurst — now lives in a `StateStore` keyed `(NodeInstanceId, OwnerKey)`
+(`node_graph/state_store.rs:57`), and **each `PresetRuntime` owns its own
+`StateStore`** (`preset_runtime.rs:195`) plus its own node instances
+(`node_graph/graph.rs:27`). What still lives on node structs: the DNN worker state
+(`optical_flow_estimate.rs:58` `FlowState`, `person_segment.rs` `MaskState`,
+`depth_estimate_midas.rs` `DepthState`) and the small `last_reset_trigger` edge
+detectors (`smoothing.rs:84`, `envelope_follower_ar.rs:94`,
+`compressor_envelope.rs:114`). Both classes are **per-runtime-instance** state.
+
+### The three decisions
+
+**B1 — No StateStore key change. Isolation is by runtime instance.** The "key widen"
+happens one level up, in the compositor's chain pool: every per-owner chain map keys
+by `(LayerId, IslandId)` instead of `LayerId`, and the master chain becomes
+per-island. One island = one `PresetRuntime` = its own `StateStore`, its own node
+instances, its own intermediates. `StateStore`'s public `(NodeInstanceId, OwnerKey)`
+and `OwnerKey = i64` (`state_store.rs:34`) are untouched; `PresetContext::owner_key`
+semantics (0 = master, layer_index+1, hash(clip_id) — `preset_context.rs:38-40`) are
+untouched. The in-repo precedent is the LED path's *stronger* half:
+`led_group_effect_chains` is a separate field from `group_effect_chains`, and the
+code comment at `layer_compositor.rs:465-469` names the property this buys —
+cross-path state bleed is "physically impossible because they are different fields."
+That is exactly the guarantee the hard constraint demands, now per island.
+
+Rejected alternatives, for the record:
+
+- *Widen the StateStore key to a 3-tuple `(node, owner, island)`.* Touches all 132
+  `StateStore|state_cache` sites across 25 files (re-derived 2026-07-06), and still
+  covers **nothing held on node structs** — the DNN state and edge detectors would
+  each need hand-widening to per-island maps: the exact "half-widened set, silent
+  bleed" failure the queue forbids.
+- *Mix island into the `OwnerKey` i64 (the `led_group_owner_key` mixing precedent,
+  `layer_compositor.rs:550`).* Same struct-state hole as above, plus it breaks
+  `cleanup_owner` precision — cleanup sites compute keys from layer/clip identity
+  and would have to enumerate islands or leak. The mixing half of the LED precedent
+  exists *in addition to* separate chain instances, not instead of them.
+- *One shared chain scissored across islands.* The queue's named forbidden shortcut:
+  every stateful node shares one history across islands — feedback trails smear
+  between physically separate surfaces.
+
+**B2 — The "13 primitives" need zero edits.** Under per-island runtime instances,
+StateStore-backed state, DNN struct state, and edge detectors are all isolated by
+construction — there is no primitive-by-primitive widening to do, so there is no
+set to half-do. The edge-detector convention (struct field resets on chain rebuild,
+re-arms without firing) behaves correctly per island: each island's instance
+observes the shared trigger stream independently and resets only its own state.
+
+**B3 — LED stays on its legacy path in P2; it joins the stage model at P6.** The LED
+path is already a parallel composite at its own resolution
+(`frame.led_composite_size`, `layer_compositor.rs:1237`/`:2278`) with its own chains
+(`led_master_ec` at `:455`, `led_group_effect_chains` at `:472`) — none of it reads
+the atlas. P2 does not touch `led_main`, `led_master_ec`, `led_group_*`, or
+`LED_MASTER_OWNER_KEY`. Single-island projects (including every current LED project)
+stay byte-identical under the existing P2 gate. The combination *multi-island stage
+layout + LED output* is *out of contract until P6* (LED strips become placements,
+§10 P6): P2 emits one loud `log::warn` at stage-activation when both are present —
+announced, not silent, not per-frame. This matches the doc's own phasing; pulling
+LED into the atlas loop now would redesign a path P6 replaces anyway.
+
+### Committed shapes
+
+```rust
+// manifold-core/src/stage.rs (P2 adds)
+
+/// Stable island identity across re-derives: the island's lowest member
+/// OutputId — `derive_stage` already sorts islands by exactly this
+/// (stage.rs:305), so it costs nothing to expose. An island keeps its id
+/// while its lowest member stays; a merge/split changes the id and the
+/// per-island chain state drops via trim — correct, the physical surface
+/// changed. Unrelated stage edits (move totem B) never reset totem A.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct IslandId(pub OutputId);
+
+impl IslandId {
+    /// The legacy single-canvas path (empty stage layout sentinel).
+    pub const LEGACY: IslandId = IslandId(OutputId(u64::MAX));
+}
+
+impl Island {
+    pub fn id(&self) -> IslandId { IslandId(self.display_ids[0]) }
+}
+```
+
+### Seam brief — P2 state seam (old → new, per DESIGN_DOC_STANDARD §6)
+
+All in `layer_compositor.rs`; every map's companion `*_last_used_frame` map widens
+identically. Screen path only — the four `led_*` fields are explicitly NOT in this
+table (B3).
+
+| Old (field : line) | New |
+|---|---|
+| `effect_chains: AHashMap<LayerId, Option<PresetRuntime>>` (`:362`) | `AHashMap<(LayerId, IslandId), Option<PresetRuntime>>` |
+| `group_effect_chains: AHashMap<LayerId, Option<PresetRuntime>>` (`:431`) | `AHashMap<(LayerId, IslandId), Option<PresetRuntime>>` |
+| `master_effect_chain: Option<PresetRuntime>` (`:385`) | `AHashMap<IslandId, Option<PresetRuntime>>` (legacy = one `IslandId::LEGACY` entry) |
+| `layer_bufs: AHashMap<LayerId, PingPong>` (`:345`) | `AHashMap<(LayerId, IslandId), PingPong>`, allocated at **island** resolution |
+
+Layer buffers widen with the chains because they are the chains' canvases: a chain
+instance processes a whole texture at `PresetContext` dims (today's semantics, zero
+node changes — §6.1's entire point), so each island's instance gets an island-sized
+buffer and the composite scissors it into the atlas region. Precedent for
+non-full-res chains driven by context dims: the LED master chain already
+auto-allocates at half-res via `ensure_buffers` (`layer_compositor.rs:449-452`).
+Intermediate memory totals ≈ sum of island pixels ≈ one canvas — the atlas's own
+arithmetic. (D2's "one texture" rejection binds the FINAL composite target that
+preview/LED/export sample, which remains the single atlas; per-layer intermediates
+were always per-layer.)
+
+Mechanics, all mechanical rewrites: key construction gains the island id from the
+per-island execution loop; eviction (`CHAIN_GRACE_FRAMES` `:516` + event trim) drops
+an entry when its layer disappears **or** its island id vanishes after a per-action
+stage re-derive; state reset walks both caches (`feedback_effect_chain_state_caches`)
+across all of a layer's island entries; the serial-vs-parallel composite split
+(`composite_serial` `:1669` / `composite_parallel` `:1706`) iterates islands inside
+its existing layer loop. `PresetContext` gets island-local `width/height` — which it
+already gets today per chain (that is what `ensure_buffers` reads); no new field
+needed for state. **Re-derivation command:** `rg -n
+'effect_chains|group_effect_chains|master_effect_chain|layer_bufs|last_used_frame'
+crates/manifold-renderer/src/layer_compositor.rs` — re-run at execution time; if the
+field set differs from this table, stop and list before touching. Compiler-driven:
+change the field types first; red is the checklist. **Negative gate:** after P2, no
+chain map keyed by bare `LayerId` remains on the screen path — `rg -n
+'AHashMap<LayerId, Option<PresetRuntime>>' crates/manifold-renderer/` returns only
+the two `led_group_*` fields.
+
+### Consequences, stated honestly
+
+- Chain instances multiply by islands **for layers that span islands**; a
+  Stage-domain layer placed on one totem stays one instance. Intermediates are
+  island-sized, so pixel memory stays ≈ one canvas; the real added cost is per-chain
+  fixed state (pipelines, small buffers) × islands, bounded by the existing eviction.
+- The DNN primitives run inference **per island** for a spanning layer. That is
+  semantically required — the islands show different pixels — but it is real cost
+  (2–4× worst case at 2–4 islands). First-frame pipeline/instance warm-up per island
+  falls under the existing prewarm rule (BUG-037 sibling rule in
+  DESIGN_DOC_STANDARD §5).
+- `render()` (`layer_compositor.rs:2128`) is not one canvas even today — fixed main
+  composite + tonemap + master chain + the independent LED path + the serial/parallel
+  CB split. The queue was right that §2's inventory understates this; this addendum
+  and the P2 re-issue brief carry the corrected picture so the executor reads the
+  real structure before the loop change.
 
 ### 6.2 Present
 
@@ -515,15 +665,20 @@ serialized — D3); shader changes for island support (§6.1's whole point is ze
   export/import (it's serialization — lands here). Read-back: §3, §5 whole. Gate:
   derive_stage unit tests; empty-layout project loads and renders byte-identically
   (existing tests green); `cargo test -p manifold-core --lib`.
-- **P2 — island rendering.** Atlas render target, per-island scissored execution loop,
-  (node, island) state keying, layer `spatial_domain` field (Stage | EveryDisplay) +
-  coordinate mapping. Read-back: §6.1 whole + `feedback_effect_chain_state_caches`
-  (reset walks BOTH caches, now per island) + `feedback_state_capture_is_per_port`.
-  Seam: state keys widen from node-scoped to (node, island) — re-derive the key
-  sites with `rg -n 'StateStore|state_cache' crates/manifold-renderer/` before
-  touching them; count in the session, escalate on surprises. Gate: **single-island
+- **P2 — island rendering (re-issued against §6.1a).** Atlas render target,
+  per-island scissored execution loop, per-island chain-runtime instances (§6.1a B1
+  — NOT a StateStore key change), `IslandId`, layer `spatial_domain` field (Stage |
+  EveryDisplay) + coordinate mapping, the one-shot multi-island+LED warning (§6.1a
+  B3). Read-back: §6.1 + §6.1a whole (including the corrected state inventory and
+  the honest `render()` structure note) + `feedback_effect_chain_state_caches`
+  (reset walks BOTH caches, now across a layer's island entries) +
+  `feedback_state_capture_is_per_port`. Seam: §6.1a's table governs — re-derive
+  with its command before touching; escalate on surprises. Forbidden: touching
+  `StateStore`'s key type or `PresetContext::owner_key` semantics; scissoring one
+  shared chain across islands; touching any `led_*` field. Gate: **single-island
   path provably identical to today — headless PNG diff over the bundled presets,
-  zero diffs**; full workspace sweep (graph runtime = infrastructure).
+  zero diffs**; §6.1a's negative gate (no bare-`LayerId` chain map on the screen
+  path); full workspace sweep (graph runtime = infrastructure).
 - **P3 — multi-output present.** Surface vec + in-flight counters + non-blocking
   acquire; per-output blit with region/rotation/trim/keystone; attach/detach; output
   window creation per placement ("Output" menu); identity matching + unassigned
@@ -569,8 +724,10 @@ Full workspace test sweep gates P2 and P3 (graph runtime + present path = infra)
 4. Per-layer spatial domain: **Stage** (default) | **Every display**. The only new
    performer-facing concept; invisible on single-display projects.
 5. Effects execute per-island with viewport scissor — today's shader semantics, zero
-   shader changes; state keyed by (node, island). Cross-gap neighborhood bleed is
-   intentionally impossible; abutting continuity is preserved by island merging.
+   shader changes; state isolated per island (mechanism committed 2026-07-06 in
+   §6.1a: per-island chain-runtime instances, StateStore key untouched). Cross-gap
+   neighborhood bleed is intentionally impossible; abutting continuity is preserved
+   by island merging.
 6. Stage view = macOS-display-arrangement mental model, real units, EDID prefill,
    snap-to-merge islands, advanced flap closed by default.
 7. Outputs present at independent cadence from the content thread's direct-present
