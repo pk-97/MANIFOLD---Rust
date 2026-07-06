@@ -581,6 +581,35 @@ grade backstop and observation prompt are explicitly main-session-only.
   days (`.stopblock.*`, orphan `.stop`, any pre-v2 residue). Conservative:
   age-keyed only, never touch live pidfiles/mailboxes/firestate.
 
+### 2h.6 Late-fire forensics + the three delivery fixes (added 2026-07-07 after the diagnosis run)
+All 17 next-prompt fires since stop-wait v2 were classified against the
+transcript's `stop_hook_summary.hookInfos[].durationMs` field — the measured
+Stop-hook wall time, a direct oracle for whether the wait engaged (record
+this oracle; pass 2 should use it instead of inference). Split: 11 TEXT-ONLY-
+RACE (wait engaged, ran to the 6.0s cap, durations clustered 6130–6250ms —
+genuine classifier latency; 8 of the 11 are done-claim family, structurally
+turn-final), 5 VERDICT-AFTER-TURN (durationMs 27–44ms with the flagged text
+landing 27–77ms before Stop: the hook's transcript-size snapshot raced the
+final text's write, read a stale size, concluded drained >= target, and
+skipped the wait with the observer provably alive — a DEFECT), 1 anomaly
+(110-min transcript stall, unexplained, logged only). Zero pre-v2, zero
+dead-observer fail-opens, zero mid-turn misses. Fixes, all in daemon-stop.py:
+- **(a) Snapshot race fix:** stat the transcript twice ~200ms apart at Stop,
+  target = the max (re-stat once more if still growing). Costs ~0.2s per
+  turn end; converts the 5 VERDICT-AFTER-TURN fires. Root fix, not tuning.
+- **(b) `STOP_WAIT_CAP_S` 6.0 → 10.0.** The 11 capped waits sat exactly at
+  the cap, so the classifier was close behind. Peter's 2026-07-07 metric
+  ruling (corrections land before his next message, "otherwise it's
+  pointless") re-prices the latency trade the 6s cap froze. Throttling
+  degradation unchanged: dead/stale observer still means no wait at all.
+- **(c) `mechanical/unverified-done-claim`** per its moves.md signature —
+  the zero-latency tier for the done-claim family (8/11 of the capped
+  class). Shares 2h.1's turn parse; verification-class detection imported
+  from common.py. Delivery priority at Stop: pending whisper >
+  announced-not-started > ungrounded-chat-claim > this. Scoring oracle: a
+  verification-class event within ~10 events of delivery, or the claim
+  restated as unverified; UNVALIDATED, pull if pass 2 grades it noisy.
+
 ## 3. Payload library (`moves.md`)
 
 Two families, one format. **Coaching moves** fire on phase transitions (hypothesis

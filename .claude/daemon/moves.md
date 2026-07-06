@@ -554,6 +554,36 @@ pattern including the retroactive tell, and the ask-gate's semantic tier holds
 > repo. Open the thing before the human acts on the claim, or mark the
 > sentence as unverified recall.
 
+## mechanical/unverified-done-claim
+- **signature:** Deterministic, valve-selected at Stop time — never the
+  classifier. Fires when ALL hold: the turn's final assistant text contains a
+  first-person completion claim about this turn's work ("done", "fixed",
+  "landed", "shipped", "pushed", "implemented", "complete", "works now",
+  "resolved" — as a report of finished work, matched case-insensitively as
+  leading words or standalone claim sentences); the turn contains at least one
+  mutating tool event (Edit/Write/MultiEdit, or a Bash command that is not
+  read-only); the turn contains ZERO verification-class events (common.py's
+  detect_verification_class table: test-run, lint, script-run, render-read);
+  and the final text does not already confess ("unverified", "not verified",
+  "haven't run", "still needs", "owed", "untested"). Never fires when the
+  turn's only mutating events are git commands (a commit/push-only turn's
+  claim is usually about the git action itself, which its own success output
+  verifies), or on turns with no mutating work (retrospective chat mentions
+  of past completions belong to the classifier). Crude by design: this is the
+  zero-latency tier for the anchor/verify-claim family — the 2026-07-07
+  forensics showed 8 of the 11 classifier-latency late fires were done-claim
+  family, and a completion claim is structurally the last text of its turn,
+  so it always races the Stop wait. The classifier keeps the nuanced cases
+  (bundled claims, wrong-medium evidence); this catches the literal form
+  instantly. UNVALIDATED; pass 2 scores it and pulls it if noisy.
+- **cooldown:** standard
+- **payload:**
+> The turn is ending on a done-claim, and nothing in this turn ran where that
+> claim could fail — no test, no lint, no script, no render read. Run the
+> check now, in the medium where failure would show, or end with "unverified"
+> instead of "done". An unchecked claim that outlives its turn becomes
+> tomorrow's stale fact.
+
 ## mechanical/landing-doc-reflex
 - **signature:** Deterministic, observer-selected on live Bash events — never
   the classifier: a Bash command lands work on main — `git merge` executed on
