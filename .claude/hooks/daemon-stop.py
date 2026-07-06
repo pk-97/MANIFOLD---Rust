@@ -45,6 +45,10 @@ import time
 HOOKS_DIR = os.path.dirname(os.path.abspath(__file__))
 DAEMON_DIR = os.path.normpath(os.path.join(HOOKS_DIR, "..", "daemon"))
 sys.path.insert(0, DAEMON_DIR)
+# Same derivation style as DAEMON_DIR above, one level further up: .claude/hooks
+# -> .claude -> repo root. Used by mechanical/ungrounded-chat-claim (DESIGN.md
+# §2h.1) to resolve ALL-CAPS doc-token candidates against docs/<token>.md.
+REPO_ROOT = os.path.normpath(os.path.join(HOOKS_DIR, "..", ".."))
 
 STOPBLOCK_MAX_AGE = 24 * 60 * 60  # sentinels older than a day are stale, sweep them
 
@@ -58,6 +62,15 @@ STOPBLOCK_MAX_AGE = 24 * 60 * 60  # sentinels older than a day are stale, sweep 
 GRADEABLE_MOVE_PREFIXES = ("anchor/", "coaching/", "escalate/")
 GRADE_BACKSTOP_STALE_EVENTS = 40  # matches §2d's oscillation-span convention
 GRADE_BACKSTOP_MOVE_ID = "mechanical/grade-backstop"
+
+# DESIGN.md §2h.4: workers run far shorter than the main session, so the
+# main-session gates above (GRADE_BACKSTOP_STALE_EVENTS / OBSERVATION_PROMPT_
+# MIN_EVENTS below, both 40) would exempt nearly every real worker from ever
+# tripping either one. One lower constant covers both roles for a worker
+# mailbox: how stale an ungraded fire must be before the grade backstop nags,
+# and how much activity a worker needs before the observation prompt is worth
+# asking at all.
+WORKER_ACTIVITY_MIN_EVENTS = 20
 
 # Observation review prompt (2026-07-05, Peter's ask): a standing invitation
 # to log anything worth the next sleep pass's attention, asked at most ONCE
@@ -98,6 +111,198 @@ def _is_announcement(sentence):
         or _BEGINNING_RE.match(sentence)
         or _LET_ME_NOW_RE.match(sentence)
     )
+
+
+
+# ---- mechanical/ungrounded-chat-claim (DESIGN.md §2h.1) ----
+#
+# Deterministic, valve-selected at Stop time — never the classifier: chat
+# turns are exactly where the classifier's Stop catch-up wait has nothing to
+# catch (zero tool events means no window ever closes for it to judge). The
+# moves.md signature is the contract this block implements verbatim.
+
+_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+
+# Known repo roots and code/doc extensions an assertion can name. Purely
+# syntactic — no existence check for these two forms (moves.md's signature
+# only requires resolution for the ALL-CAPS form below); grounding is the
+# actual safety net, checked separately against earlier tool-call INPUTS.
+_ARTIFACT_ROOTS = ("docs/", "crates/", "src/", "assets/", "scripts/", ".claude/")
+_ARTIFACT_EXTENSIONS = ("rs", "md", "py", "json", "wgsl", "toml")
+_SLASH_ARTIFACT_RE = re.compile(
+    "(?:" + "|".join(re.escape(r) for r in _ARTIFACT_ROOTS) + r")[\w./-]*[\w]"
+)
+_EXT_ARTIFACT_RE = re.compile(r"[\w][\w./-]*\.(?:" + "|".join(_ARTIFACT_EXTENSIONS) + r")\b")
+
+# ALL-CAPS underscore-joined tokens: only a candidate, membership requires
+# os.path.exists(docs/<token>.md) against the repo root (below) — the regex
+# alone is not enough per moves.md's signature.
+_ALLCAPS_ARTIFACT_RE = re.compile(r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b")
+
+# Self-marked recall/proposal text: skip the whole detection, not just the
+# named artifact — moves.md: "the text does not mark itself as recall or
+# proposal".
+_RECALL_MARKER_RE = re.compile(
+    r"\bi think\b|\bfrom memory\b|\bif i recall\b|\bprobably\b|\bproposal\b|"
+    r"\bnot checked\b|\bunverified\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_chat_artifacts(text, repo_root):
+    """Candidate repo artifacts named in `text`, fenced code blocks stripped
+    first (deliverables and quoted prompts inside a fence are cargo, not a
+    claim about repo state)."""
+    stripped = _FENCE_RE.sub(" ", text or "")
+    found = set()
+    for pattern in (_SLASH_ARTIFACT_RE, _EXT_ARTIFACT_RE):
+        found.update(m.group(0) for m in pattern.finditer(stripped))
+    for m in _ALLCAPS_ARTIFACT_RE.finditer(stripped):
+        token = m.group(0)
+        if os.path.exists(os.path.join(repo_root, "docs", f"{token}.md")):
+            found.add(token)
+    return found
+
+
+def _human_prompt_text(content):
+    """Text of a genuine human chat message, or None if this 'user' JSONL
+    entry is actually a tool_result carrier (harness-generated in response to
+    a tool call, not a new human turn)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        texts = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_result":
+                return None
+            if block.get("type") == "text":
+                texts.append(block.get("text", ""))
+        return "\n".join(texts) if texts else None
+    return None
+
+
+def _last_turn_zero_tool_calls(transcript_path):
+    """Finds the LAST genuine human prompt (a 'user' entry that isn't a
+    tool_result carrier) and, from there to the end of the transcript,
+    whether the turn contains any tool call at all. This is turn-WIDE — every
+    assistant JSONL entry after the boundary, not just the final one — unlike
+    mechanical/announced-not-started's check, which only looks at the last
+    assistant message's own trailing content. moves.md's signature for this
+    move is "the turn contains zero tool calls", a different and broader
+    question. Returns (final_text, user_prompt_text); final_text is None
+    when there's no usable boundary, no assistant text after it, or any tool
+    call anywhere in the turn."""
+    entries = []
+    try:
+        with open(transcript_path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return None, None
+
+    boundary = None
+    user_prompt_text = ""
+    for i in range(len(entries) - 1, -1, -1):
+        d = entries[i]
+        if d.get("type") != "user":
+            continue
+        text = _human_prompt_text(d.get("message", {}).get("content"))
+        if text is not None:
+            boundary, user_prompt_text = i, text
+            break
+    if boundary is None:
+        return None, None
+
+    final_text = None
+    for d in entries[boundary + 1 :]:
+        if d.get("type") != "assistant":
+            continue
+        content = d.get("message", {}).get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use":
+                return None, None  # a tool call anywhere in the turn: not this signature
+            if block.get("type") == "text":
+                t = block.get("text", "")
+                if t.strip():
+                    final_text = t
+    return final_text, user_prompt_text
+
+
+def _flatten_strings_into(value, out):
+    if isinstance(value, str):
+        out.append(value)
+    elif isinstance(value, dict):
+        for v in value.values():
+            _flatten_strings_into(v, out)
+    elif isinstance(value, list):
+        for v in value:
+            _flatten_strings_into(v, out)
+
+
+def _collect_tool_input_strings(transcript_path):
+    """Every string value nested anywhere inside a tool_use call's `input`,
+    across the WHOLE transcript, joined into one blob — Read/Edit/Write/Grep/
+    Glob/LSP file arguments, Bash command strings, and so on (catchup counts:
+    this is a plain linear scan, not bounded to live-tailed events). Tool
+    OUTPUTS (tool_result content) are never read here — a mention inside a
+    read's output is the stale-memory failure this move exists to catch, not
+    provenance for it."""
+    parts = []
+    try:
+        with open(transcript_path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if d.get("type") != "assistant":
+                    continue
+                content = d.get("message", {}).get("content")
+                if not isinstance(content, list):
+                    continue
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        _flatten_strings_into(block.get("input"), parts)
+    except OSError:
+        pass
+    return "\n".join(parts)
+
+
+def _ungrounded_chat_claim(transcript_path, repo_root=REPO_ROOT):
+    """Returns the (sorted-first) ungrounded artifact name if
+    mechanical/ungrounded-chat-claim's signature holds for the turn at the
+    end of `transcript_path`, else None. Never raises (caught by main()'s
+    top-level try/except, same fail-open contract as every other check
+    here)."""
+    final_text, user_prompt_text = _last_turn_zero_tool_calls(transcript_path)
+    if not final_text:
+        return None
+    if _RECALL_MARKER_RE.search(final_text):
+        return None
+    artifacts = _extract_chat_artifacts(final_text, repo_root)
+    if not artifacts:
+        return None
+    artifacts = {a for a in artifacts if a not in (user_prompt_text or "")}
+    if not artifacts:
+        return None
+    grounded_blob = _collect_tool_input_strings(transcript_path)
+    ungrounded = sorted(a for a in artifacts if a not in grounded_blob)
+    return ungrounded[0] if ungrounded else None
 
 
 def _last_assistant_content(transcript_path):
@@ -158,11 +363,12 @@ def _sweep_stale_sentinels(verdicts_dir):
         pass
 
 
-def _session_gradeable_fires(telemetry_path, session_id):
+def _session_gradeable_fires(telemetry_path, session_id, agent_id=None):
     """(seq, move_id, ts) for every gradeable (anchor/coaching/escalate) fire
-    delivered to THIS session's own mailbox (never a worker's — same
-    session-only scope as §4b's scoring), oldest first. Reads telemetry.jsonl
-    directly rather than needing a new field; never raises."""
+    delivered to THIS mailbox — the session's own (agent_id=None, same scope
+    as §4b's scoring) or, per DESIGN.md §2h.4, one worker's own mailbox
+    (agent_id set) — oldest first. Reads telemetry.jsonl directly rather than
+    needing a new field; never raises."""
     fires = []
     try:
         with open(telemetry_path, encoding="utf-8", errors="replace") as f:
@@ -174,7 +380,7 @@ def _session_gradeable_fires(telemetry_path, session_id):
                     rec = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if rec.get("event") != "injected" or rec.get("agent_id"):
+                if rec.get("event") != "injected" or rec.get("agent_id") != agent_id:
                     continue
                 if rec.get("session_id") != session_id:
                     continue
@@ -190,10 +396,13 @@ def _session_gradeable_fires(telemetry_path, session_id):
     return fires
 
 
-def _session_grade_count(eval_dir, session_id):
+def _session_grade_count(eval_dir, session_id, agent_id=None):
     """How many grade lines (any file matching live_grades*.jsonl) this
-    session has already written — a coarse backstop count, not the precise
-    per-fire join slice_fires.py does for the sleep pass."""
+    mailbox — session-level (agent_id=None) or one worker's own (agent_id
+    set, DESIGN.md §2h.4) — has already written. A coarse backstop count, not
+    the precise per-fire join slice_fires.py does for the sleep pass. Records
+    with no "agent_id" key at all read as agent_id=None via .get, matching
+    every pre-§2h.4 session self-grade line on disk."""
     import glob
 
     count = 0
@@ -208,8 +417,11 @@ def _session_grade_count(eval_dir, session_id):
                         rec = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    if rec.get("session_id") == session_id:
-                        count += 1
+                    if rec.get("session_id") != session_id:
+                        continue
+                    if rec.get("agent_id") != agent_id:
+                        continue
+                    count += 1
         except OSError:
             continue
     return count
@@ -251,7 +463,18 @@ def _events_since(transcript_path, since_ts):
     return count
 
 
-def _grade_backstop_reason(ungraded_count, oldest_events_ago):
+def _grade_backstop_reason(ungraded_count, oldest_events_ago, agent_id=None):
+    # DESIGN.md §2h.4: a worker's grade lines need "agent_id" too — RUNBOOK.md
+    # step 2: "(session_id, seq) alone collides across workers". Only this
+    # clause varies with the mailbox; the rest of the sentence is frozen
+    # (same invariant-5 precedent as the seq numeral elsewhere).
+    agent_note = (
+        f' Since this fire belongs to a worker, also include "agent_id": '
+        f'"{agent_id}" on its line — (session_id, seq) alone collides across '
+        f"workers."
+        if agent_id
+        else ""
+    )
     return (
         f'<daemon move="{GRADE_BACKSTOP_MOVE_ID}">\n'
         f"This session delivered {ungraded_count} gradeable daemon fire(s) "
@@ -261,12 +484,13 @@ def _grade_backstop_reason(ungraded_count, oldest_events_ago):
         f".claude/daemon/eval/live_grades.session.jsonl — canonical "
         f"correct/effective values and format in RUNBOOK.md step 2, and "
         f'include each fire\'s own "seq" so the sleep pass can join the grade '
-        f"back to the exact fire it belongs to.\n"
+        f"back to the exact fire it belongs to.{agent_note}\n"
         f"</daemon>"
     )
 
 
-def _observation_prompt_reason():
+def _observation_prompt_reason(agent_id=None):
+    agent_note = f', "agent_id": "{agent_id}"' if agent_id else ""
     return (
         f'<daemon move="{OBSERVATION_PROMPT_MOVE_ID}">\n'
         f"Before this session goes further: is there anything worth logging "
@@ -277,10 +501,65 @@ def _observation_prompt_reason():
         f"worth logging, append one record to "
         f".claude/daemon/eval/observations.session.jsonl: {{ts, session_id, "
         f'kind: "miss-candidate"|"note", move_id or expect_family, evidence, '
-        f"note}} (schema in RUNBOOK.md step 2/3). This asks once per "
-        f"session, not every turn.\n"
+        f"note{agent_note}}} (schema in RUNBOOK.md step 2/3). This asks once "
+        f"per session, not every turn.\n"
         f"</daemon>"
     )
+
+
+def _try_grade_backstop(verdicts_dir, telemetry_path, eval_dir, session_id, agent_id, transcript_path, stale_threshold):
+    """One (reason, telemetry_extra) pair if the grade backstop should fire
+    for this mailbox right now, else None. Shared by the main-session path
+    (agent_id=None, stale_threshold=GRADE_BACKSTOP_STALE_EVENTS) and the
+    worker path (DESIGN.md §2h.4: agent_id set, stale_threshold=
+    WORKER_ACTIVITY_MIN_EVENTS) — same logic, own sentinel per mailbox, own
+    threshold. Never raises (caught by main()'s top-level try/except)."""
+    mailbox_key = f"{session_id}.{agent_id}" if agent_id else session_id
+    sentinel = os.path.join(verdicts_dir, f"{mailbox_key}.grade-backstop-fired")
+    if os.path.exists(sentinel):
+        return None
+    fires = _session_gradeable_fires(telemetry_path, session_id, agent_id)
+    if not fires:
+        return None
+    graded = _session_grade_count(eval_dir, session_id, agent_id)
+    if len(fires) <= graded:
+        return None
+    events_ago = _events_since(transcript_path, fires[0][2])
+    if events_ago <= stale_threshold:
+        return None
+    try:
+        os.makedirs(verdicts_dir, exist_ok=True)
+        open(sentinel, "w").close()
+    except OSError:
+        pass
+    return (
+        _grade_backstop_reason(len(fires) - graded, events_ago, agent_id),
+        {
+            "move_id": GRADE_BACKSTOP_MOVE_ID,
+            "ungraded_count": len(fires) - graded,
+            "oldest_events_ago": events_ago,
+        },
+    )
+
+
+def _try_observation_prompt(verdicts_dir, session_id, agent_id, transcript_path, min_events):
+    """One (reason, telemetry_extra) pair if the observation-review prompt
+    should fire for this mailbox right now, else None. Shared by the main-
+    session path (agent_id=None, min_events=OBSERVATION_PROMPT_MIN_EVENTS)
+    and the worker path (DESIGN.md §2h.4: agent_id set, min_events=
+    WORKER_ACTIVITY_MIN_EVENTS). Never raises."""
+    mailbox_key = f"{session_id}.{agent_id}" if agent_id else session_id
+    sentinel = os.path.join(verdicts_dir, f"{mailbox_key}.observation-prompt-fired")
+    if os.path.exists(sentinel):
+        return None
+    if _events_since(transcript_path, 0) < min_events:
+        return None
+    try:
+        os.makedirs(verdicts_dir, exist_ok=True)
+        open(sentinel, "w").close()
+    except OSError:
+        pass
+    return _observation_prompt_reason(agent_id), {"move_id": OBSERVATION_PROMPT_MOVE_ID}
 
 
 def main():
@@ -333,7 +612,7 @@ def main():
         # 1. An already-pending, undelivered flag — never wait, never
         # classify synchronously; this only drains what the observer already
         # decided (DESIGN.md §2, RULED).
-        block, seq, move_id = valve.pending_injection(mailbox_key)
+        block, seq, move_id = valve.pending_injection(mailbox_key, agent_id=agent_id)
         if block:
             valve.write_consumed(mailbox_key, seq)
             _block(block, {"seq": seq, "move_id": move_id})
@@ -365,7 +644,7 @@ def main():
                     # Verdicts land inside the drain, before the heartbeat
                     # moves — check the mailbox first so a whisper delivers
                     # the moment it exists, not a poll later.
-                    block, seq, move_id = valve.pending_injection(mailbox_key)
+                    block, seq, move_id = valve.pending_injection(mailbox_key, agent_id=agent_id)
                     if block:
                         valve.write_consumed(mailbox_key, seq)
                         _block(block, {"seq": seq, "move_id": move_id, "stop_wait": True})
@@ -380,7 +659,7 @@ def main():
                     time.sleep(0.25)
                 # Caught up (or capped): one final mailbox read for a verdict
                 # written by the drain that closed the gap.
-                block, seq, move_id = valve.pending_injection(mailbox_key)
+                block, seq, move_id = valve.pending_injection(mailbox_key, agent_id=agent_id)
                 if block:
                     valve.write_consumed(mailbox_key, seq)
                     _block(block, {"seq": seq, "move_id": move_id, "stop_wait": True})
@@ -390,64 +669,50 @@ def main():
         if not transcript_path or not os.path.exists(transcript_path):
             return
         if _announced_not_started(transcript_path):
-            reason = valve.build_block({"move_id": "mechanical/announced-not-started"})
+            reason = valve.build_block({"move_id": "mechanical/announced-not-started"}, agent_id=agent_id)
             if not reason:
                 return
             _block(reason, {"move_id": "mechanical/announced-not-started"})
             return
 
-        # Steps 3 and 4 below are both main-session-only soft reminders (never
-        # a real drift correction) — neither applies to a worker's Stop.
-        if agent_id:
+        # 2b. mechanical/ungrounded-chat-claim (DESIGN.md §2h.1): a zero-
+        # tool-call turn asserting repo facts this session never opened.
+        # Deterministic, never the classifier — chat turns are exactly where
+        # the classifier's Stop catch-up wait has nothing to catch (no tool
+        # events means no window ever closes to judge). Priority behind the
+        # pending-whisper and announced-not-started checks above (one
+        # whisper per Stop). Applies to main session and, behind the
+        # worker-nudges flag already gated above, worker Stop events alike —
+        # same reach as announced-not-started just above.
+        ungrounded = _ungrounded_chat_claim(transcript_path)
+        if ungrounded:
+            reason = valve.build_block({"move_id": "mechanical/ungrounded-chat-claim"}, agent_id=agent_id)
+            if reason:
+                _block(reason, {"move_id": "mechanical/ungrounded-chat-claim", "artifact": ungrounded})
+                return
+
+        # 3/4. Grade-backstop + observation-review prompt. DESIGN.md §2h.4
+        # extends both to worker Stop events (agent_id set, already gated on
+        # the worker-nudges flag above) with their own per-(session, agent_id)
+        # sentinels and a lower activity threshold — workers run far shorter
+        # than the main session, so the main-session gates (both 40 events)
+        # would exempt nearly every real worker. Main session keeps its
+        # original constants and sentinel names (agent_id=None collapses the
+        # mailbox key back to session_id) — byte-identical behavior to before
+        # this section existed.
+        stale_threshold = WORKER_ACTIVITY_MIN_EVENTS if agent_id else GRADE_BACKSTOP_STALE_EVENTS
+        min_events = WORKER_ACTIVITY_MIN_EVENTS if agent_id else OBSERVATION_PROMPT_MIN_EVENTS
+
+        result = _try_grade_backstop(
+            valve.VERDICTS_DIR, valve.TELEMETRY_PATH, valve.EVAL_DIR, session_id, agent_id, transcript_path, stale_threshold
+        )
+        if result:
+            _block(*result)
             return
 
-        # 3. Grade-backstop (2026-07-05 review). Fires at most once per
-        # session (its own sentinel below, distinct from the per-turn
-        # stopblock) — if it doesn't fire, fall through to step 4 rather than
-        # returning, so a session with no gradeable backlog still reaches the
-        # observation prompt.
-        backstop_fired = False
-        backstop_sentinel = os.path.join(valve.VERDICTS_DIR, f"{session_id}.grade-backstop-fired")
-        if not os.path.exists(backstop_sentinel):
-            fires = _session_gradeable_fires(valve.TELEMETRY_PATH, session_id)
-            if fires:
-                graded = _session_grade_count(valve.EVAL_DIR, session_id)
-                if len(fires) > graded:
-                    events_ago = _events_since(transcript_path, fires[0][2])
-                    if events_ago > GRADE_BACKSTOP_STALE_EVENTS:
-                        try:
-                            os.makedirs(valve.VERDICTS_DIR, exist_ok=True)
-                            open(backstop_sentinel, "w").close()
-                        except OSError:
-                            pass
-                        _block(
-                            _grade_backstop_reason(len(fires) - graded, events_ago),
-                            {
-                                "move_id": GRADE_BACKSTOP_MOVE_ID,
-                                "ungraded_count": len(fires) - graded,
-                                "oldest_events_ago": events_ago,
-                            },
-                        )
-                        backstop_fired = True
-        if backstop_fired:
-            return
-
-        # 4. Observation review prompt (Peter, 2026-07-05). Fires at most
-        # once per session (its own sentinel, like the grade backstop), and
-        # only once the session has done enough to have something worth
-        # reviewing — most sessions have nothing to log, so this is a single
-        # standing invitation, not a repeated demand for a written record.
-        observation_sentinel = os.path.join(valve.VERDICTS_DIR, f"{session_id}.observation-prompt-fired")
-        if os.path.exists(observation_sentinel):
-            return
-        if _events_since(transcript_path, 0) < OBSERVATION_PROMPT_MIN_EVENTS:
-            return
-        try:
-            os.makedirs(valve.VERDICTS_DIR, exist_ok=True)
-            open(observation_sentinel, "w").close()
-        except OSError:
-            pass
-        _block(_observation_prompt_reason(), {"move_id": OBSERVATION_PROMPT_MOVE_ID})
+        result = _try_observation_prompt(valve.VERDICTS_DIR, session_id, agent_id, transcript_path, min_events)
+        if result:
+            _block(*result)
     except Exception:
         return
 

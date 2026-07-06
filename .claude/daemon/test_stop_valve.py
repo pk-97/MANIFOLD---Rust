@@ -162,6 +162,59 @@ def write_verdict(verdicts_dir, key, move_id, seq, ts=None):
         )
 
 
+def write_chat_claim_transcript(path, final_text, user_prompt_text="continue with the plan", prior_tool_calls=None):
+    """A transcript ending in one zero-tool-call turn — mechanical/ungrounded-
+    chat-claim's target shape. `prior_tool_calls` is a list of (name, input_)
+    or (name, input_, result_text) items rendered as an earlier, already-
+    completed turn: each becomes an assistant tool_use + a matching user
+    tool_result, giving the grounding scan something to find in the CALL'S
+    INPUT (or, for the un-grounded tests, deliberately nothing) — and
+    `result_text` lets a test put an artifact in the tool's OUTPUT instead,
+    to prove output mentions never ground anything. The real turn under test
+    is a genuine user prompt followed by one assistant message containing
+    ONLY a text block — no tool_use at all."""
+    lines = []
+    ts = 0
+
+    def next_ts():
+        nonlocal ts
+        ts += 1
+        return f"2026-07-04T00:{ts // 60:02d}:{ts % 60:02d}Z"
+
+    for i, spec in enumerate(prior_tool_calls or []):
+        name, input_ = spec[0], spec[1]
+        result_text = spec[2] if len(spec) > 2 else "some tool output text"
+        lines.append(json.dumps({
+            "type": "assistant",
+            "timestamp": next_ts(),
+            "message": {
+                "role": "assistant",
+                "model": "claude-sonnet-5",
+                "content": [{"type": "tool_use", "id": f"tu{i}", "name": name, "input": input_}],
+            },
+        }))
+        lines.append(json.dumps({
+            "type": "user",
+            "timestamp": next_ts(),
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": f"tu{i}", "content": result_text}],
+            },
+        }))
+    lines.append(json.dumps({
+        "type": "user",
+        "timestamp": next_ts(),
+        "message": {"role": "user", "content": user_prompt_text},
+    }))
+    lines.append(json.dumps({
+        "type": "assistant",
+        "timestamp": next_ts(),
+        "message": {"role": "assistant", "model": "claude-sonnet-5", "content": [{"type": "text", "text": final_text}]},
+    }))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
 def write_transcript(path, final_text, tool_use_after_text=False):
     """A minimal transcript whose LAST line is a single assistant message.
     If tool_use_after_text, a tool_use block follows the text block within
@@ -257,6 +310,231 @@ def test_handoff_and_question_endings_do_not_fire():
     with_temp_verdicts(run)
 
 
+# ---- mechanical/ungrounded-chat-claim (DESIGN.md §2h.1) ----
+
+
+def test_chat_claim_fires_on_ungrounded_artifact():
+    def run(td):
+        session = "sess-chatclaim-fire"
+        transcript = os.path.join(td, "t.jsonl")
+        write_chat_claim_transcript(
+            transcript,
+            "The fix lives in docs/TOTALLY_UNSEEN_FILE.md and should be straightforward.",
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        d = json.loads(out) if out else None
+        check("ungrounded artifact in a zero-tool-call turn fires", d is not None and d.get("decision") == "block", out)
+        check("reason carries the chat-claim move id", d and 'move="mechanical/ungrounded-chat-claim"' in d.get("reason", ""), d)
+    with_temp_verdicts(run)
+
+
+def test_chat_claim_silent_when_grounded_by_earlier_tool_input():
+    def run(td):
+        session = "sess-chatclaim-grounded"
+        transcript = os.path.join(td, "t.jsonl")
+        write_chat_claim_transcript(
+            transcript,
+            "The fix lives in docs/TOTALLY_UNSEEN_FILE.md and should be straightforward.",
+            prior_tool_calls=[("Read", {"file_path": "docs/TOTALLY_UNSEEN_FILE.md"})],
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        check("an earlier tool call's INPUT grounds the artifact — stays silent", out == "", out)
+    with_temp_verdicts(run)
+
+
+def test_chat_claim_tool_output_never_grounds():
+    def run(td):
+        session = "sess-chatclaim-output-only"
+        transcript = os.path.join(td, "t.jsonl")
+        write_chat_claim_transcript(
+            transcript,
+            "The fix lives in docs/TOTALLY_UNSEEN_FILE.md and should be straightforward.",
+            prior_tool_calls=[
+                ("Bash", {"command": "cargo test --workspace"}, "note: docs/TOTALLY_UNSEEN_FILE.md was referenced in the log"),
+            ],
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        d = json.loads(out) if out else None
+        check(
+            "a mention inside a tool's OUTPUT does not ground it — still fires",
+            d is not None and d.get("decision") == "block" and 'move="mechanical/ungrounded-chat-claim"' in d.get("reason", ""),
+            out,
+        )
+    with_temp_verdicts(run)
+
+
+def test_chat_claim_silent_for_fenced_artifact():
+    def run(td):
+        session = "sess-chatclaim-fenced"
+        transcript = os.path.join(td, "t.jsonl")
+        write_chat_claim_transcript(
+            transcript,
+            "```\ndocs/TOTALLY_UNSEEN_FILE.md\n```\nEverything here looks fine.",
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        check("an artifact only inside a fenced block is not extracted", out == "", out)
+    with_temp_verdicts(run)
+
+
+def test_chat_claim_silent_when_user_echoed_artifact_this_turn():
+    def run(td):
+        session = "sess-chatclaim-echo"
+        transcript = os.path.join(td, "t.jsonl")
+        write_chat_claim_transcript(
+            transcript,
+            "docs/TOTALLY_UNSEEN_FILE.md looks fine to me.",
+            user_prompt_text="can you check docs/TOTALLY_UNSEEN_FILE.md",
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        check("an artifact the user's own message introduced this turn is excluded", out == "", out)
+    with_temp_verdicts(run)
+
+
+def test_chat_claim_silent_with_recall_marker():
+    def run(td):
+        session = "sess-chatclaim-recall"
+        transcript = os.path.join(td, "t.jsonl")
+        write_chat_claim_transcript(
+            transcript,
+            "I think the fix is in docs/TOTALLY_UNSEEN_FILE.md.",
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        check("a self-marked recall/proposal skips the whole detection", out == "", out)
+    with_temp_verdicts(run)
+
+
+def test_chat_claim_silent_when_turn_has_any_tool_call():
+    def run(td):
+        # A tool call happens EARLIER in the turn (not the final message) —
+        # moves.md's "turn contains zero tool calls" is turn-wide, not just a
+        # check on the last assistant message's own trailing content (that
+        # narrower question is mechanical/announced-not-started's, not this
+        # move's).
+        session = "sess-chatclaim-turnwide"
+        transcript = os.path.join(td, "t.jsonl")
+        lines = [
+            json.dumps({"type": "user", "timestamp": "2026-07-04T00:00:00Z", "message": {"role": "user", "content": "please fix this"}}),
+            json.dumps({
+                "type": "assistant",
+                "timestamp": "2026-07-04T00:00:01Z",
+                "message": {"role": "assistant", "model": "claude-sonnet-5", "content": [
+                    {"type": "tool_use", "id": "tu0", "name": "Read", "input": {"file_path": "src/lib.rs"}},
+                ]},
+            }),
+            json.dumps({
+                "type": "user",
+                "timestamp": "2026-07-04T00:00:02Z",
+                "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu0", "content": "ok"}]},
+            }),
+            json.dumps({
+                "type": "assistant",
+                "timestamp": "2026-07-04T00:00:03Z",
+                "message": {"role": "assistant", "model": "claude-sonnet-5", "content": [
+                    {"type": "text", "text": "The fix lives in docs/TOTALLY_UNSEEN_FILE.md and should be straightforward."},
+                ]},
+            }),
+        ]
+        with open(transcript, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        check("a tool call anywhere in the turn (not just after the final text) suppresses the fire", out == "", out)
+    with_temp_verdicts(run)
+
+
+def test_chat_claim_allcaps_token_resolves_against_real_docs():
+    def run(td):
+        # Uses a real doc in THIS repo (docs/DESIGN_DOC_STANDARD.md) so the
+        # end-to-end hook run exercises the real REPO_ROOT derivation, not a
+        # monkeypatched one.
+        session = "sess-chatclaim-allcaps-real"
+        transcript = os.path.join(td, "t.jsonl")
+        write_chat_claim_transcript(
+            transcript,
+            "Everything about DESIGN_DOC_STANDARD is already implemented, no changes needed.",
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        d = json.loads(out) if out else None
+        check(
+            "an ALL-CAPS token resolving to a real docs/<token>.md fires when ungrounded",
+            d is not None and d.get("decision") == "block" and 'move="mechanical/ungrounded-chat-claim"' in d.get("reason", ""),
+            out,
+        )
+    with_temp_verdicts(run)
+
+
+def test_chat_claim_allcaps_token_that_does_not_resolve_is_not_an_artifact():
+    def run(td):
+        session = "sess-chatclaim-allcaps-fake"
+        transcript = os.path.join(td, "t.jsonl")
+        write_chat_claim_transcript(
+            transcript,
+            "TOTALLY_MADE_UP_TOKEN_XYZ handles this correctly already.",
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        check("an ALL-CAPS token with no matching docs/<token>.md is never a candidate", out == "", out)
+    with_temp_verdicts(run)
+
+
+def test_chat_claim_loses_priority_to_announced_not_started():
+    def run(td):
+        session = "sess-chatclaim-priority-announce"
+        transcript = os.path.join(td, "t.jsonl")
+        write_transcript(transcript, "The bug lives in docs/TOTALLY_UNSEEN_FILE.md. Starting the fix now.")
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        d = json.loads(out) if out else None
+        check(
+            "announced-not-started wins when a turn matches both signatures",
+            d is not None and 'move="mechanical/announced-not-started"' in d.get("reason", ""),
+            out,
+        )
+        check("chat-claim did not also fire in the same block", d and 'move="mechanical/ungrounded-chat-claim"' not in d.get("reason", ""), d)
+    with_temp_verdicts(run)
+
+
+def test_chat_claim_loses_priority_to_pending_whisper():
+    def run(td):
+        session = "sess-chatclaim-priority-pending"
+        transcript = os.path.join(td, "t.jsonl")
+        write_verdict(td, session, "anchor/verify-claim", seq=1)
+        write_chat_claim_transcript(transcript, "The fix lives in docs/TOTALLY_UNSEEN_FILE.md.")
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        d = json.loads(out) if out else None
+        check(
+            "an already-pending whisper wins over the chat-claim check",
+            d is not None and 'move="anchor/verify-claim"' in d.get("reason", ""),
+            out,
+        )
+    with_temp_verdicts(run)
+
+
+def test_chat_claim_applies_to_worker_when_flag_enabled():
+    def run(td):
+        with open(valve.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
+            f.write("1")
+        session, agent = "sess-chatclaim-worker", "wk9"
+        transcript = os.path.join(td, "t.jsonl")
+        write_chat_claim_transcript(transcript, "The fix lives in docs/TOTALLY_UNSEEN_FILE.md.")
+        out = run_hook({"session_id": session, "prompt_id": "p1", "agent_id": agent, "transcript_path": transcript}, td)
+        d = json.loads(out) if out else None
+        check(
+            "chat-claim reaches a worker Stop event when the worker-nudges flag is on",
+            d is not None and 'move="mechanical/ungrounded-chat-claim"' in d.get("reason", ""),
+            out,
+        )
+        check("the ack sentence names this worker's agent_id", d and f'"agent_id": "{agent}"' in d.get("reason", ""), d)
+    with_temp_verdicts(run)
+
+
+def test_chat_claim_silent_for_worker_when_flag_disabled():
+    def run(td):
+        session, agent = "sess-chatclaim-worker-off", "wk10"
+        transcript = os.path.join(td, "t.jsonl")
+        write_chat_claim_transcript(transcript, "The fix lives in docs/TOTALLY_UNSEEN_FILE.md.")
+        out = run_hook({"session_id": session, "prompt_id": "p1", "agent_id": agent, "transcript_path": transcript}, td)
+        check("worker Stop stays fully dark without the flag, even with a clear chat-claim signature", out == "", out)
+    with_temp_verdicts(run)
+
+
 def test_agent_id_routes_to_agent_mailbox():
     def run(td):
         session, agent = "sess-agent", "abc123"
@@ -268,6 +546,10 @@ def test_agent_id_routes_to_agent_mailbox():
         check("agent-tagged Stop reads the agent's own mailbox", d is not None and d.get("decision") == "block", out)
         check("agent mailbox consumed marker written under session.agent key", valve.read_consumed(f"{session}.{agent}") == 1)
         check("session-level mailbox untouched", valve.read_consumed(session) == 0)
+        # DESIGN.md §2h.4: build_block's supervised ack must carry this
+        # worker's agent_id too, since (session_id, seq) alone collides
+        # across workers (RUNBOOK.md step 2).
+        check("delivered ack sentence names this worker's agent_id", d and f'"agent_id": "{agent}"' in d.get("reason", ""), d)
     with_temp_verdicts(run)
 
 
@@ -339,11 +621,22 @@ def plant_observer(td, session, drained_offset):
         f.write(str(drained_offset))
 
 
-def plant_observation_prompt_fired(td, session):
+def plant_observation_prompt_fired(td, session, agent_id=None):
     """Pre-consume the (unrelated) observation-review-prompt's one-shot
     sentinel so a test can exercise another Stop mechanism in isolation on a
-    long (>=40-event) transcript without the prompt also firing."""
-    open(os.path.join(td, f"{session}.observation-prompt-fired"), "w").close()
+    long (>=40-event, or >=WORKER_ACTIVITY_MIN_EVENTS for a worker) transcript
+    without the prompt also firing. `agent_id` targets a worker's own
+    sentinel (DESIGN.md §2h.4) instead of the main session's."""
+    key = f"{session}.{agent_id}" if agent_id else session
+    open(os.path.join(td, f"{key}.observation-prompt-fired"), "w").close()
+
+
+def plant_grade_backstop_fired(td, session, agent_id=None):
+    """Pre-consume the grade-backstop's own one-shot sentinel for a mailbox
+    (DESIGN.md §2h.4: a worker's own key when agent_id is given), so a test
+    can isolate the observation prompt without the backstop also firing."""
+    key = f"{session}.{agent_id}" if agent_id else session
+    open(os.path.join(td, f"{key}.grade-backstop-fired"), "w").close()
 
 
 def test_stop_wait_delivers_verdict_when_observer_catches_up():
@@ -563,6 +856,12 @@ def test_grade_backstop_skips_when_already_graded():
 
 
 def test_grade_backstop_never_fires_for_worker_stop():
+    """A telemetry record attributed to the MAIN session's own mailbox
+    (agent_id=None) must never leak into a worker's grade backstop — the two
+    mailboxes are scored independently (DESIGN.md §2h.4). Isolates the
+    (unrelated, and now worker-reachable — see the §2h.4 tests below)
+    observation prompt so this assertion is about backstop cross-attribution
+    alone."""
     def run(td):
         with open(valve.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
             f.write("1")
@@ -573,8 +872,77 @@ def test_grade_backstop_never_fires_for_worker_stop():
         )
         transcript = os.path.join(td, "t.jsonl")
         write_transcript_with_events(transcript, 45, base)
+        plant_observation_prompt_fired(td, session, agent_id=agent)  # isolate: worker's own 20-event gate
         out = run_hook({"session_id": session, "prompt_id": "p1", "agent_id": agent, "transcript_path": transcript}, td)
-        check("worker-tagged Stop never triggers the main-session grade backstop", out == "", out)
+        check("a main-session-attributed fire never triggers a worker's own grade backstop", out == "", out)
+
+    with_temp_verdicts(run)
+
+
+def test_worker_grade_backstop_fires_for_own_attributed_fires():
+    def run(td):
+        with open(valve.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
+            f.write("1")
+        session, agent = "sess-worker-backstop-fire", "wk2"
+        base = 1783200000
+        write_telemetry_records(
+            [{"ts": base, "session_id": session, "agent_id": agent, "event": "injected", "valve": "PostToolUse", "seq": 1, "move_id": "anchor/thrash"}]
+        )
+        transcript = os.path.join(td, "t.jsonl")
+        write_transcript_with_events(transcript, 25, base)  # > WORKER_ACTIVITY_MIN_EVENTS (20), < main's 40
+        out = run_hook({"session_id": session, "prompt_id": "p1", "agent_id": agent, "transcript_path": transcript}, td)
+        d = json.loads(out) if out else None
+        check("a worker's own ungraded gradeable fire trips its own backstop", d is not None and d.get("decision") == "block", out)
+        check("reason names the backstop move", d and 'move="mechanical/grade-backstop"' in d.get("reason", ""), d)
+        check("reason tells the worker to include agent_id on its grade line", d and f'"agent_id": "{agent}"' in d.get("reason", ""), d)
+        check(
+            "worker gets its own per-(session, agent_id) sentinel",
+            os.path.exists(os.path.join(td, f"{session}.{agent}.grade-backstop-fired")),
+        )
+        check(
+            "the main session's own sentinel is untouched",
+            not os.path.exists(os.path.join(td, f"{session}.grade-backstop-fired")),
+        )
+
+    with_temp_verdicts(run)
+
+
+def test_worker_grade_backstop_skips_when_own_fires_already_graded():
+    def run(td):
+        with open(valve.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
+            f.write("1")
+        session, agent = "sess-worker-backstop-graded", "wk3"
+        base = 1783200000
+        write_telemetry_records(
+            [{"ts": base, "session_id": session, "agent_id": agent, "event": "injected", "valve": "PostToolUse", "seq": 1, "move_id": "anchor/thrash"}]
+        )
+        write_grade_records([{"session_id": session, "agent_id": agent, "seq": 1, "move_id": "anchor/thrash", "correct": True, "effective": True, "grader": "session"}])
+        transcript = os.path.join(td, "t.jsonl")
+        write_transcript_with_events(transcript, 25, base)
+        plant_observation_prompt_fired(td, session, agent_id=agent)  # isolate: unrelated 20-event gate
+        out = run_hook({"session_id": session, "prompt_id": "p1", "agent_id": agent, "transcript_path": transcript}, td)
+        check("a worker's own grade line silences its own backstop", out == "", out)
+
+    with_temp_verdicts(run)
+
+
+def test_worker_grade_backstop_uses_lower_activity_threshold_than_main():
+    def run(td):
+        with open(valve.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
+            f.write("1")
+        session, agent = "sess-worker-backstop-threshold", "wk4"
+        base = 1783200000
+        write_telemetry_records(
+            [{"ts": base, "session_id": session, "agent_id": agent, "event": "injected", "valve": "PostToolUse", "seq": 1, "move_id": "anchor/thrash"}]
+        )
+        transcript = os.path.join(td, "t.jsonl")
+        # 25 events: below the main session's 40-event staleness gate, above
+        # the worker's own (lower) 20-event one — proves the threshold really
+        # differs, not just that some threshold exists.
+        write_transcript_with_events(transcript, 25, base)
+        out = run_hook({"session_id": session, "prompt_id": "p1", "agent_id": agent, "transcript_path": transcript}, td)
+        d = json.loads(out) if out else None
+        check("25 events is stale enough for a worker's own 20-event gate", d is not None and d.get("decision") == "block", out)
 
     with_temp_verdicts(run)
 
@@ -635,15 +1003,76 @@ def test_observation_prompt_fires_once_on_a_substantial_session():
     with_temp_verdicts(run)
 
 
-def test_observation_prompt_never_fires_for_worker_stop():
+def test_observation_prompt_worker_silent_below_activity_threshold():
+    """DESIGN.md §2h.4 extends the observation prompt to workers — it is no
+    longer true that a worker Stop event never triggers it (see the
+    above-threshold test below). What must still hold: a worker with too
+    little activity (< WORKER_ACTIVITY_MIN_EVENTS) isn't asked yet, same
+    shape as the main session's own short-session test."""
     def run(td):
         with open(valve.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
             f.write("1")
-        session, agent = "sess-obs-worker", "wk1"
+        session, agent = "sess-obs-worker-short", "wk1"
         transcript = os.path.join(td, "t.jsonl")
-        write_transcript_with_events(transcript, 45, 1783200000)
+        write_transcript_with_events(transcript, 5, 1783200000)
         out = run_hook({"session_id": session, "prompt_id": "p1", "agent_id": agent, "transcript_path": transcript}, td)
-        check("worker-tagged Stop never triggers the main-session observation prompt", out == "", out)
+        check("a worker below its own 20-event threshold isn't asked yet", out == "", out)
+        check(
+            "no worker-scoped sentinel written when it doesn't fire",
+            not os.path.exists(os.path.join(td, f"{session}.{agent}.observation-prompt-fired")),
+        )
+
+    with_temp_verdicts(run)
+
+
+def test_observation_prompt_fires_for_worker_above_lower_threshold():
+    def run(td):
+        with open(valve.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
+            f.write("1")
+        session, agent = "sess-obs-worker-fire", "wk2"
+        transcript = os.path.join(td, "t.jsonl")
+        # 25 events: below the main session's 40-event gate, above the
+        # worker's own (lower) 20-event one.
+        write_transcript_with_events(transcript, 25, 1783200000)
+        out1 = run_hook({"session_id": session, "prompt_id": "p1", "agent_id": agent, "transcript_path": transcript}, td)
+        d1 = json.loads(out1) if out1 else None
+        check("a worker above its own lower threshold gets asked", d1 is not None and d1.get("decision") == "block", out1)
+        check("reason names the observation-prompt move", d1 and 'move="mechanical/observation-prompt"' in d1.get("reason", ""), d1)
+        check("reason still says nothing-to-add is fine — no filler required", d1 and "no action needed" in d1.get("reason", ""), d1)
+        check("reason schema mentions this worker's agent_id", d1 and f'"agent_id": "{agent}"' in d1.get("reason", ""), d1)
+        check(
+            "worker gets its own per-(session, agent_id) sentinel",
+            os.path.exists(os.path.join(td, f"{session}.{agent}.observation-prompt-fired")),
+        )
+        check(
+            "the main session's own sentinel is untouched",
+            not os.path.exists(os.path.join(td, f"{session}.observation-prompt-fired")),
+        )
+
+        out2 = run_hook({"session_id": session, "prompt_id": "p2", "agent_id": agent, "transcript_path": transcript}, td)
+        check("second turn for the same worker stays silent — one ask per (session, agent_id)", out2 == "", out2)
+
+    with_temp_verdicts(run)
+
+
+def test_observation_prompt_worker_sentinel_independent_of_main_session():
+    """A worker firing its own observation prompt must never block the main
+    session from independently getting its own — own sentinels per mailbox,
+    per DESIGN.md §2h.4's 'own sentinels' requirement."""
+    def run(td):
+        with open(valve.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
+            f.write("1")
+        session, agent = "sess-obs-worker-vs-main", "wk3"
+        transcript = os.path.join(td, "t.jsonl")
+        write_transcript_with_events(transcript, 45, 1783200000)  # clears both gates
+
+        out_worker = run_hook({"session_id": session, "prompt_id": "p1", "agent_id": agent, "transcript_path": transcript}, td)
+        d_worker = json.loads(out_worker) if out_worker else None
+        check("worker's own prompt fires first", d_worker is not None and d_worker.get("decision") == "block", out_worker)
+
+        out_main = run_hook({"session_id": session, "prompt_id": "p2", "transcript_path": transcript}, td)
+        d_main = json.loads(out_main) if out_main else None
+        check("the main session still gets its own independent ask", d_main is not None and d_main.get("decision") == "block", out_main)
 
     with_temp_verdicts(run)
 
@@ -656,6 +1085,19 @@ def main():
         test_beginning_and_let_me_now_variants_fire,
         test_tool_use_after_text_does_not_fire,
         test_handoff_and_question_endings_do_not_fire,
+        test_chat_claim_fires_on_ungrounded_artifact,
+        test_chat_claim_silent_when_grounded_by_earlier_tool_input,
+        test_chat_claim_tool_output_never_grounds,
+        test_chat_claim_silent_for_fenced_artifact,
+        test_chat_claim_silent_when_user_echoed_artifact_this_turn,
+        test_chat_claim_silent_with_recall_marker,
+        test_chat_claim_silent_when_turn_has_any_tool_call,
+        test_chat_claim_allcaps_token_resolves_against_real_docs,
+        test_chat_claim_allcaps_token_that_does_not_resolve_is_not_an_artifact,
+        test_chat_claim_loses_priority_to_announced_not_started,
+        test_chat_claim_loses_priority_to_pending_whisper,
+        test_chat_claim_applies_to_worker_when_flag_enabled,
+        test_chat_claim_silent_for_worker_when_flag_disabled,
         test_agent_id_routes_to_agent_mailbox,
         test_agent_id_silent_when_worker_nudges_disabled,
         test_malformed_stdin_and_missing_transcript_exit_clean,
@@ -673,10 +1115,15 @@ def main():
         test_grade_backstop_skips_when_not_stale_enough,
         test_grade_backstop_skips_when_already_graded,
         test_grade_backstop_never_fires_for_worker_stop,
+        test_worker_grade_backstop_fires_for_own_attributed_fires,
+        test_worker_grade_backstop_skips_when_own_fires_already_graded,
+        test_worker_grade_backstop_uses_lower_activity_threshold_than_main,
         test_grade_backstop_ignores_non_gradeable_move_families,
         test_observation_prompt_stays_silent_on_a_short_session,
         test_observation_prompt_fires_once_on_a_substantial_session,
-        test_observation_prompt_never_fires_for_worker_stop,
+        test_observation_prompt_worker_silent_below_activity_threshold,
+        test_observation_prompt_fires_for_worker_above_lower_threshold,
+        test_observation_prompt_worker_sentinel_independent_of_main_session,
     ]
     for t in tests:
         t()
