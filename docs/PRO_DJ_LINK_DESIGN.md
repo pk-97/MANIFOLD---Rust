@@ -93,7 +93,14 @@ replace the derivation where present.
 - **D8 — Simulator-first testing.** A loopback Pro DJ Link simulator (replaying
   captured packet fixtures) drives all CI gates; real hardware is a bring-up
   checklist, not a test dependency. First gig: record packet captures →
-  fixtures for regression.
+  fixtures for regression. **No-CDJ dev rig (noted 2026-07-06, verify at impl):**
+  rekordbox in performance mode with a controller speaks Pro DJ Link on the LAN
+  (announces as a device, broadcasts beat packets, serves metadata/beat grids —
+  beat-link-documented; ShowKontrol supports it as an input) and is the expected
+  desk-testing + fixture-capture rig. Caveats: packets are not byte-identical to
+  CDJ packets (own compatibility target); no on-air flags without a DJM (dev
+  override needed); run MANIFOLD on a separate machine — rekordbox binds the
+  Link ports, same-host virtual-device coexistence is known-flaky.
 
 ## 3. What it buys on stage
 
