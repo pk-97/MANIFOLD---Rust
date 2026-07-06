@@ -501,6 +501,86 @@ re-enter PreToolUse (covered only insofar as the parent script text is
 parsed); name-only saved workflows can't be model-checked (announce-once
 still applies). Tests: `.claude/hooks/test_workflow_gate.py` (27 checks).
 
+## 2h. Final-window extensions (SPECCED 2026-07-07, Fable, final Fable session — Sonnet builds all of it)
+
+Context: Peter's two directives from the final-window session. (1) "The daemon
+must fire BEFORE my next message — otherwise it's pointless." Telemetry since
+stop-wait v2: 52 corrective fires in-turn vs 16 a prompt late; the largest late
+class is text-only turns (ungrounded-resolution ×7 of the 16). (2) 100% worker
+coverage — observed, whispered, self-grading, end-of-session reviewing.
+Verified gaps 2026-07-07: workflow agents entirely unobserved (transcripts one
+directory below the scan); zero worker self-grade records ever; the Stop-hook
+grade backstop and observation prompt are explicitly main-session-only.
+
+### 2h.1 Chat tier: `mechanical/ungrounded-chat-claim` (Stop valve)
+- Lives in `daemon-stop.py` beside announced-not-started — same turn parse
+  (final assistant text + turn tool-call presence). The moves.md signature IS
+  the contract: implement exactly its ALL-hold conditions and never-fire list.
+- Artifact extraction: slash paths under `docs/ crates/ src/ assets/ scripts/
+  .claude/` or tokens ending `.rs .md .py .json .wgsl .toml`; plus ALL-CAPS
+  underscore-joined tokens resolved via `os.path.exists("docs/<token>.md")`.
+  Strip fenced code blocks BEFORE extraction; exclude artifacts appearing in
+  the user's message this turn.
+- Grounding scan: one pass over the session transcript's tool_use events
+  collecting INPUT strings (file_path / command / pattern arguments); an
+  artifact is grounded iff some earlier tool call's input contains it. Tool
+  OUTPUTS never ground anything — a mention inside a read's output is the
+  stale-memory failure this move exists to catch.
+- Delivery priority at Stop: existing pending whisper > announced-not-started
+  > this. One-whisper invariant intact. Applies to main session and (behind
+  the worker flag) worker Stop events alike.
+- Scoring oracle for pass 2: within ~10 events of delivery, either a grounding
+  event for the named artifact appears (success) or the next assistant text
+  re-marks the claim unverified (success); neither = fail.
+
+### 2h.2 `mechanical/landing-doc-reflex` (observer Bash tier)
+- Lives beside `_check_stopgap` in `observer.py` — live-tailed Bash events
+  only, never catchup. Trigger per the moves.md signature; PORT the
+  merge/push-to-main command matching from `preToolUseBash.py`'s
+  landing-protocol guard (read the mechanism, don't re-derive it).
+- Docs-only suppression, honest approximation (the observer runs no git): use
+  §2f's per-path edit facts — suppress when every Edit/Write in the trailing
+  window touched only `docs/`, memory, or `.claude/` paths. Note the
+  approximation in code.
+- Standard cooldown covers the merge+push pair (one fire per landing).
+- Scoring oracle: a Status-line edit to a `*_DESIGN.md` and/or a
+  `docs/landings/` write appears in the ledger before the push completes or
+  within ~10 events after the fire.
+
+### 2h.3 Workflow-agent observation (extends §2b)
+- `_scan_agents` additionally lists `subagents/workflows/*/` for
+  `agent-*.jsonl` (workflow run dirs appear mid-session; one extra directory
+  level). agent_id from filename as today — ids are unique hex, collision-free
+  across runs. Mailbox key `<session>.<agent_id>` and valve routing unchanged.
+- MANDATORY step-0 probe before wiring delivery (same method as §2b's
+  2026-07-04 probe, temporary instrumentation + one trivial 1-agent workflow):
+  confirm (a) PostToolUse fires for workflow-agent tool calls with agent_id
+  set, (b) additionalContext lands in the workflow agent's own context. (a)
+  holds but (b) fails → ship observation+telemetry only, record the residue
+  here. (a) fails → transcript observation still works, delivery impossible,
+  record. The worker-nudges flag gates delivery exactly as for Agent workers.
+
+### 2h.4 Worker self-grade + end-of-session review (Stop valve, workers)
+- Seam: `daemon-stop.py` already receives worker Stop events (agent_id set).
+  Behind the worker-nudges flag, add worker-scoped grade backstop +
+  observation prompt: at most once per (session, agent_id), own sentinels;
+  activity threshold ≥20 tool events (workers run shorter than the main
+  session — 40 would exempt most real workers); grade backstop only when
+  telemetry shows that agent_id actually received delivered gradeable fires.
+- Worker ack: verify `valve.py`'s supervised ack + "this fire: seq N" line
+  reaches worker deliveries too; parameterize if main-only. Worker grade
+  lines carry `agent_id` per RUNBOOK step 2.
+- Non-negotiable escape valve (the observation-prompt lesson, 2026-07-05):
+  reason text says nothing-to-add is fine, no filler entries, never blocks a
+  clean worker more than once.
+- Scoring oracle: count of agent_id-bearing grade lines rises from its
+  current all-time value of zero.
+
+### 2h.5 Hygiene (fold into whichever build touches verdicts/)
+- Startup sweep in the observer: delete `verdicts/` sentinels older than 7
+  days (`.stopblock.*`, orphan `.stop`, any pre-v2 residue). Conservative:
+  age-keyed only, never touch live pidfiles/mailboxes/firestate.
+
 ## 3. Payload library (`moves.md`)
 
 Two families, one format. **Coaching moves** fire on phase transitions (hypothesis

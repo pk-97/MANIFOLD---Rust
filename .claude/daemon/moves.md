@@ -31,6 +31,16 @@ confirm an obvious test action — stays a labels.jsonl specimen, expect_family
 null: its evidence often sits outside the observer's window and it's prose not a
 tool call, so it's neither a clean classifier signature nor hook-catchable yet.)
 
+2026-07-07 (Fable, final-window session with Peter): the chat-tier pair —
+mechanical/ungrounded-chat-claim (zero-latency Stop-tier sibling of
+anchor/ungrounded-resolution: 16 of 68 corrective fires since stop-wait v2
+landed a prompt late, and text-only turns asserting repo state were the
+largest class) + mechanical/landing-doc-reflex (DESIGN_DOC_STANDARD §8 rules
+9–10, Peter's 2026-07-05 detection-gap flag). The queued "mispriced-fork"
+candidate was found already covered — coaching/price-the-fork carries the full
+pattern including the retroactive tell, and the ask-gate's semantic tier holds
+"mispriced" as a deny reason — marked stale, not re-authored.
+
 ---
 
 ## coaching/model-first
@@ -512,6 +522,60 @@ tool call, so it's neither a clean classifier signature nor hook-catchable yet.)
 > You're editing a file you haven't read this session. The mechanism you're
 > changing may not be the mechanism you remember — read it first, whole, then
 > edit.
+
+## mechanical/ungrounded-chat-claim
+- **signature:** Deterministic, valve-selected at Stop time — never the
+  classifier (chat turns are exactly where the classifier races the Stop
+  catch-up wait and loses; per the tempo-tier rule, coverage that must land on
+  a text-only turn goes deterministic). Fires when ALL hold: the turn contains
+  zero tool calls; the turn's final assistant text names at least one concrete
+  repo artifact — a slash path under a known root (docs/, crates/, src/,
+  assets/, scripts/, .claude/) or ending in a code/doc extension, or an
+  ALL-CAPS underscore-joined token that resolves to an existing docs/<token>.md
+  — outside fenced code blocks; no earlier tool CALL in the session transcript
+  names that artifact in its inputs (Read/Edit/Write/Grep/Glob/LSP file
+  arguments, or a Bash command string containing it — catchup counts; a
+  mention inside another read's OUTPUT is not provenance, that is exactly the
+  stale-memory failure this move exists for); and the text does not mark
+  itself as recall or proposal ("I think", "from memory", "if I recall",
+  "probably", "proposal", "not checked", "unverified"). Never fires on paths
+  inside fenced blocks (deliverables and quoted prompts are cargo, not
+  claims), on artifacts the user's own message introduced this turn (echoing
+  is not asserting), or on turns with any tool call — those belong to
+  anchor/ungrounded-resolution. Specimen: 2026-07-07 meta-session — "six
+  vocab label changes still awaiting Peter's yes/no (NODE_VOCABULARY_AUDIT)"
+  asserted from a stale handoff memory in a toolless turn; all six had been
+  approved and shipped five days earlier, and the classifier-tier anchor
+  caught it one message late.
+- **cooldown:** standard
+- **payload:**
+> That reply states repo facts — naming things this session has never opened —
+> in a turn that looked at nothing. Memory of a repo is a hypothesis about the
+> repo. Open the thing before the human acts on the claim, or mark the
+> sentence as unverified recall.
+
+## mechanical/landing-doc-reflex
+- **signature:** Deterministic, observer-selected on live Bash events — never
+  the classifier: a Bash command lands work on main — `git merge` executed on
+  main, or `git push` whose refspec or current branch is main (the same
+  command class preToolUseBash.py's landing-protocol guard recognizes;
+  prefer firing on the merge so the whisper arrives before the push). Should
+  not fire when the landed range touches only docs/, memory, or `.claude/`
+  paths — those pushes usually ARE the paper-trail update this move demands.
+  Compiles DESIGN_DOC_STANDARD §8 rules 9–10 (Peter's rule, 2026-07-05;
+  flagged as a detection gap the same day): a landing that completes, starts,
+  or blocks any phase updates that design doc's Status line and phase markers
+  in the same landing, before the push, plus the committed landing report —
+  the 07-05 baseline triage found ~16 docs claiming "not built" over shipped
+  code, which is how workers rebuild existing work.
+- **cooldown:** standard
+- **payload:**
+> You're landing on main. A landing isn't done until the paper trail is true
+> in the same push (standard §8 rules 9–10): the design doc's Status line and
+> phase markers updated, the project memory updated, the landing report
+> committed under docs/landings/. Next sessions route by those lines — a doc
+> still saying "not built" over shipped code is how work gets rebuilt. If
+> they're not in this landing, add them before you push.
 
 ## escalate/checkpoint
 - **signature:** Selected by the daemon, not the rubric: the same drift anchor has
