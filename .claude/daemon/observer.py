@@ -329,6 +329,18 @@ class Daemon:
         # re-listed every poll, same as the top-level scan above. If
         # `subdir` doesn't exist yet, `workflows/` can't either (it's a
         # child of it) — nothing to do.
+        #
+        # OBSERVATION ONLY (§2h.3): this discovers + tails workflow-agent
+        # transcripts exactly like top-level Agent-tool workers, feeding the
+        # same self.agents dict, so whisper delivery rides the existing
+        # agent_id-keyed valve routing automatically IF the harness actually
+        # threads a workflow agent's own additionalContext back into that
+        # agent's context (unconfirmed here). §2h.3's mandatory step-0 probe
+        # — plant a verdict for a real workflow agent, confirm PostToolUse
+        # fires with agent_id set AND the injected context lands in the
+        # workflow agent's own transcript, not the parent's — is left for
+        # whoever wires delivery to run before flipping anything on; it is
+        # NOT run by this change.
         if names is not None:
             workflows_dir = os.path.join(subdir, "workflows")
             try:
