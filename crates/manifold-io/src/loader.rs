@@ -1,8 +1,24 @@
 use crate::migrate;
 use crate::path_resolver::PathResolver;
-use manifold_core::project::Project;
+use manifold_core::project::{EmbeddedPreset, Project};
 use std::io::Read;
 use std::path::Path;
+
+/// Pre-pass view of the project file: just the project-scoped preset defs.
+///
+/// The V1.4 param loader resolves every instance's params against the global
+/// preset-definition registry *while `Project` deserializes* — so a project's
+/// embedded (forked / imported) presets must be registered BEFORE the full
+/// deserialize, or every param keyed to a project-local preset type resolves
+/// to "no template" (BUG-036: dropped params, dead modulation targets on
+/// reload). The `_with` loader variants extract this subset first and hand it
+/// to the caller's installer, then deserialize.
+#[derive(Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EmbeddedPresetsPrePass {
+    #[serde(default)]
+    embedded_presets: Vec<EmbeddedPreset>,
+}
 
 /// Load a .manifold project file with full post-load validation.
 ///
@@ -21,6 +37,19 @@ use std::path::Path;
 /// 6. ValidateClips — missing file detection
 /// 7. PurgeOrphanedReferences — stale clip/MIDI cleanup
 pub fn load_project(path: &Path) -> Result<Project, LoadError> {
+    load_project_with(path, |_| {})
+}
+
+/// [`load_project`] with a pre-deserialize hook: `register_embedded_presets`
+/// receives the file's project-scoped presets BEFORE the `Project` itself
+/// deserializes, so the caller (the app — the one seam that reaches both the
+/// project and the renderer's catalog) can install them into the catalog
+/// overlay + core definition registry in time for the V1.4 param loader to
+/// resolve project-local preset types. See [`EmbeddedPresetsPrePass`].
+pub fn load_project_with(
+    path: &Path,
+    register_embedded_presets: impl FnOnce(&[EmbeddedPreset]),
+) -> Result<Project, LoadError> {
     let file_bytes = std::fs::read(path).map_err(|e| LoadError::Io(e.to_string()))?;
 
     // Try V2 ZIP format first
@@ -34,7 +63,7 @@ pub fn load_project(path: &Path) -> Result<Project, LoadError> {
         }
     };
 
-    let mut project = load_project_from_json(&json)?;
+    let mut project = load_project_from_json_with(&json, register_embedded_presets)?;
 
     // Step 3: Duration mode migration — V1 ONLY
     // Unity: ProjectSerializer.cs lines 46-50 (V1 path only)
@@ -69,11 +98,22 @@ pub fn load_project(path: &Path) -> Result<Project, LoadError> {
 /// opened project. Snapshot hashes come from the archive manifest
 /// (`crate::archive::read_manifest`).
 pub fn load_project_snapshot(archive_path: &Path, hash: &str) -> Result<Project, LoadError> {
+    load_project_snapshot_with(archive_path, hash, |_| {})
+}
+
+/// [`load_project_snapshot`] with the same pre-deserialize hook as
+/// [`load_project_with`] — a snapshot's embedded presets must be registered
+/// before its layers deserialize, exactly like a normal open.
+pub fn load_project_snapshot_with(
+    archive_path: &Path,
+    hash: &str,
+    register_embedded_presets: impl FnOnce(&[EmbeddedPreset]),
+) -> Result<Project, LoadError> {
     let path_str = archive_path.to_string_lossy().to_string();
     let json =
         crate::archive::read_history_snapshot(&path_str, hash).map_err(LoadError::Io)?;
 
-    let mut project = load_project_from_json(&json)?;
+    let mut project = load_project_from_json_with(&json, register_embedded_presets)?;
     log::info!(
         "[Loader] Loaded history snapshot {hash} from {}",
         archive_path.display()
@@ -113,9 +153,31 @@ fn extract_json_from_zip(bytes: &[u8]) -> Result<String, LoadError> {
 /// are run by load_project after the file path is set. Callers using this directly
 /// should call run_post_load_validation() separately.
 pub fn load_project_from_json(json: &str) -> Result<Project, LoadError> {
+    load_project_from_json_with(json, |_| {})
+}
+
+/// [`load_project_from_json`] with the pre-deserialize embedded-presets hook
+/// (see [`load_project_with`]). The hook runs on the migrated JSON, before
+/// the typed `Project` deserialize that needs the registry populated.
+pub fn load_project_from_json_with(
+    json: &str,
+    register_embedded_presets: impl FnOnce(&[EmbeddedPreset]),
+) -> Result<Project, LoadError> {
     // Run version migration
     let migrated =
         migrate::migrate_if_needed(json).map_err(|e| LoadError::Migration(e.to_string()))?;
+
+    // Pre-pass: hand the project-scoped presets to the caller BEFORE the
+    // typed deserialize below resolves params against the registry. A
+    // pre-pass parse failure is logged loud, not fatal — if the JSON is
+    // genuinely broken the full deserialize below reports the real error.
+    match serde_json::from_str::<EmbeddedPresetsPrePass>(&migrated) {
+        Ok(pre) => register_embedded_presets(&pre.embedded_presets),
+        Err(e) => log::warn!(
+            "[Loader] embedded-presets pre-pass failed ({e}); project-local preset \
+             types may not resolve during this load"
+        ),
+    }
 
     // Deserialize
     let mut project: Project =

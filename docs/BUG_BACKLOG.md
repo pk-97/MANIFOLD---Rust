@@ -30,7 +30,6 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
-| BUG-036 | **dead-LFO-on-reload** | imported card params dropped at project load; modulation targets vanish (MED, root-caused) |
 | BUG-039 | **saw-rotation-wrap** | angle params clamp instead of wrapping; saw LFO can't spin a full rotation (MED, mechanism pinned) |
 | BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
 | BUG-037 | **glp-first-render-stall** | ~37ms warm-up on a glTF clip's first rendered frame (MED) |
@@ -108,7 +107,29 @@ WARN level every ~1.5s indefinitely (see any 2026-07-06 trace-run log).
 succeeds (state flip logs "reconnected" at info). Optionally back off the poll while
 refused. `manifold-playback/src/ableton_bridge.rs`, small.
 
-### BUG-036 (dead-LFO-on-reload) — LFO on an imported-glb generator's card param is dead after project reload; re-importing the same .glb revives it — MED
+### BUG-036 (dead-LFO-on-reload) — LFO on an imported-glb generator's card param is dead after project reload; re-importing the same .glb revives it — MED — FIXED 2026-07-06
+
+**FIXED 2026-07-06** — both halves of the fix shape below, plus two siblings the audit
+found in the same class:
+- **Ordering (root):** `manifold_io::loader` gained `_with` variants that hand the file's
+  `embeddedPresets` to an installer BEFORE the typed `Project` deserialize
+  ([loader.rs](../crates/manifold-io/src/loader.rs) `EmbeddedPresetsPrePass`); the app
+  passes `install_embedded_presets` so the overlay + core registry are populated when the
+  V1.4 param loader resolves each instance ([project_io.rs](../crates/manifold-app/src/project_io.rs)).
+- **Keep-don't-drop (class-kill):** `build_param_manifest` now only drops an unknown id
+  when the template actually RESOLVED and says the id is gone (informed deprecation).
+  With no template at all, the entry is kept on a placeholder spec — state is never lost
+  to a missing template ([effects.rs](../crates/manifold-core/src/effects.rs)).
+- **Sibling 1:** history-snapshot restore/open-copy never installed the snapshot's
+  overlay at all (params dropped AND stale overlay left live) — now go through
+  `load_project_snapshot_with` + an unconditional overlay install at the
+  `apply_project_io_action` seam.
+- **Sibling 2:** New Project never cleared the previous project's overlay (fork leak) —
+  covered by the same apply-seam install.
+Verified against the real repro: `meshImportTests.manifold` loads with all 17 imported
+card params present and the saved `cam_orbit` driver resolving; regression test
+`crates/manifold-app/tests/project_local_preset_reload.rs` proves both defenses
+independently.
 
 **Symptom** (Peter, 2026-07-06, `~/Downloads/meshImportTests.manifold`) — a project saved
 with a glb auto-built graph (the `assemble_import_graph` door) reloads fine visually, but
@@ -138,10 +159,6 @@ assert zero drops).
 
 **Repro** — load `meshImportTests.manifold`, press play: Camera Orbit LFO inert. Delete
 layer, drag the .glb back in, rebind: runs.
-
-**Fix shape** — unknown until the binding-resolution path is compared import-vs-reload.
-Start by diffing `Layer.gen_params` + modulation bindings between the saved project and a
-fresh import of the same file.
 
 ### BUG-035 (authoring-hitch) — 3D scenes hitch when a camera/light param is animated — MED — re-encode hypothesis MEASURED AND REFUTED 2026-07-06; cause is app-side, still open
 

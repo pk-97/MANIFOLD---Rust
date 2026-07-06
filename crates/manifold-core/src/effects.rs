@@ -697,6 +697,32 @@ fn spec_from_binding(
     }
 }
 
+/// Placeholder descriptor for a wire entry whose preset template is
+/// unresolvable at load (see `build_param_manifest`'s keep-don't-drop
+/// branch): identity + state preserved, range 0..1 unless the entry carries
+/// a calibration block (which `apply_to` overlays afterward).
+fn placeholder_spec(
+    id: &str,
+    entry: &ParamEntryWire,
+) -> crate::effect_graph_def::ParamSpecDef {
+    crate::effect_graph_def::ParamSpecDef {
+        id: id.to_string(),
+        name: id.to_string(),
+        min: 0.0,
+        max: 1.0,
+        default_value: entry.value,
+        whole_numbers: false,
+        is_toggle: false,
+        is_trigger: false,
+        value_labels: Vec::new(),
+        format_string: None,
+        osc_suffix: String::new(),
+        curve: Default::default(),
+        invert: false,
+        is_angle: false,
+    }
+}
+
 /// Template + user-added descriptors a fresh manifest is seeded from at load,
 /// in card order. Bundled descriptors: a graph-backed generator's own
 /// `meta.params`, else the registry `param_defs`. User-added descriptors: the
@@ -791,6 +817,23 @@ fn build_param_manifest(
         }
     }
 
+    // Whether a descriptor authority was actually available for this
+    // instance: an inline generator graph's `meta.params`, or a registry
+    // template. Only an *informed* drop is allowed — when the template is
+    // resolvable and says the id is gone, that's a deliberate deprecation
+    // (today's unknown-id policy). When NO template resolves (e.g. a
+    // project-local import whose def isn't registered at deserialize time),
+    // dropping is silent data loss (BUG-036), so the entry is kept on a
+    // placeholder spec instead: state (value/base/exposed/calibration) is
+    // everything the file stores for a bundled param, and the next load
+    // with the template present reconciles it against the real descriptor.
+    let template_known = (is_generator
+        && graph
+            .as_ref()
+            .and_then(|g| g.preset_metadata.as_ref())
+            .is_some_and(|m| !m.params.is_empty()))
+        || crate::preset_definition_registry::try_get(effect_type).is_some();
+
     let mut base_tracked = false;
     if let Some(wire) = wire {
         for (raw_id, entry) in wire {
@@ -803,6 +846,19 @@ fn build_param_manifest(
                 base_tracked |= entry.apply_to(p);
             } else if let Some(spec) = &entry.spec {
                 let mut p = Param::user_added(spec.clone());
+                base_tracked |= entry.apply_to(&mut p);
+                entries.push(p);
+            } else if !template_known {
+                eprintln!(
+                    "[manifold-core] keeping param {id:?} on {effect_type:?} load with a \
+                     placeholder spec (preset template unresolved — project-local preset \
+                     not registered yet?)"
+                );
+                // Bundled origin: the placeholder spec never serializes
+                // (only state does), so the real descriptor wins on the
+                // next resolvable load. Card position is tail-appended in
+                // wire order — acceptable for this recovery path.
+                let mut p = Param::bundled(placeholder_spec(&id, &entry));
                 base_tracked |= entry.apply_to(&mut p);
                 entries.push(p);
             } else {
@@ -3502,11 +3558,13 @@ mod tests {
     }
 
     #[test]
-    fn effect_instance_deserialize_params_without_registry_degrades_to_empty() {
-        // No registry def for this type → nothing to place the incoming
-        // entry onto (today's unregistered-type policy — this test binary
-        // doesn't link manifold-renderer, so most real effect ids hit this
-        // path too; see the other "_without_registry" tests below).
+    fn effect_instance_deserialize_params_without_registry_keeps_state() {
+        // No registry def for this type → the template is UNRESOLVABLE,
+        // which is not the same as "this id was deprecated by its template".
+        // Dropping here was the BUG-036 class (a project-local preset's
+        // template registers after layer deserialize under the wrong load
+        // order); the entry is kept on a placeholder spec instead, so no
+        // param state is ever lost to a missing template.
         let json = r#"{
             "effectType": "TotallyUnregisteredEffectType",
             "enabled": true,
@@ -3514,7 +3572,13 @@ mod tests {
             "params": { "amount": { "value": 0.7 } }
         }"#;
         let fx: PresetInstance = serde_json::from_str(json).unwrap();
-        assert!(fx.params.is_empty());
+        assert_eq!(fx.params.len(), 1, "entry kept despite missing template");
+        let p = fx.params.get("amount").unwrap();
+        assert!((p.value - 0.7).abs() < f32::EPSILON);
+        // Placeholder spec carries identity; a later load with the template
+        // present reconciles the real descriptor (only state serializes for
+        // a bundled-origin param).
+        assert_eq!(p.spec.id, "amount");
     }
 
     #[test]

@@ -676,6 +676,11 @@ impl Application {
             // Update local_project BEFORE sending to content thread so UI
             // can rebuild the timeline in this same frame.
             self.local_project = project.clone();
+            // Sync the global preset overlay to THIS project's embedded
+            // presets on every apply — open, snapshot restore, and New
+            // Project all pass here, so a previous project's forks never
+            // leak into the next one (New Project used to skip the install).
+            crate::project_io::install_project_preset_overlay(&self.local_project);
             // Suppress content thread snapshots until it processes the LoadProject
             // command (which will bump data_version above current).
             self.suppress_snapshot_until = self.content_state.data_version + 1;
@@ -827,7 +832,11 @@ impl Application {
         let Some(path) = self.current_project_path.clone() else {
             return;
         };
-        match manifold_io::loader::load_project_snapshot(&path, hash) {
+        match manifold_io::loader::load_project_snapshot_with(
+            &path,
+            hash,
+            crate::project_io::install_embedded_presets,
+        ) {
             Ok(project) => {
                 log::info!("[ProjectIO] Restored history snapshot {hash}");
                 self.apply_project_io_action(ProjectIOAction {
@@ -853,7 +862,11 @@ impl Application {
         let Some(path) = self.current_project_path.clone() else {
             return;
         };
-        match manifold_io::loader::load_project_snapshot(&path, hash) {
+        match manifold_io::loader::load_project_snapshot_with(
+            &path,
+            hash,
+            crate::project_io::install_embedded_presets,
+        ) {
             Ok(mut project) => {
                 project.project_name = format!("{} (snapshot)", project.project_name);
                 // Detach from the source archive so a save can't clobber it.

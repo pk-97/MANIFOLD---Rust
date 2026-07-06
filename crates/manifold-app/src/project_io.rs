@@ -31,9 +31,18 @@ use crate::user_prefs::UserPrefs;
 /// content thread whenever an editing command forks a preset or recalibrates an
 /// embedded one (see `ContentThread::refresh_preset_overlay_if_changed`).
 pub(crate) fn install_project_preset_overlay(project: &Project) {
+    install_embedded_presets(&project.embedded_presets);
+}
+
+/// List-based form of [`install_project_preset_overlay`], shaped to plug into
+/// the loader's pre-deserialize hook (`manifold_io::loader::load_project_with`
+/// and friends): the overlay + core definition registry must be populated
+/// BEFORE the project's layers deserialize, or the V1.4 param loader drops
+/// every param keyed to a project-local preset type (BUG-036).
+pub(crate) fn install_embedded_presets(presets: &[manifold_core::project::EmbeddedPreset]) {
     let mut effect = Vec::new();
     let mut generator = Vec::new();
-    for p in &project.embedded_presets {
+    for p in presets {
         let Some(id) = p.id() else { continue };
         let Ok(json) = serde_json::to_string(&p.def) else {
             log::error!("[ProjectIO] failed to serialize embedded preset `{}`", id);
@@ -338,7 +347,14 @@ impl ProjectIOService {
             return ProjectIOAction::default();
         }
 
-        let load_result = manifold_io::loader::load_project(path);
+        // The pre-deserialize hook installs this project's embedded presets
+        // into the catalog overlay + core registry BEFORE the layers
+        // deserialize — the V1.4 param loader resolves each instance's params
+        // against the registry at deserialize time, so installing after the
+        // load (the pre-BUG-036 order) dropped every param keyed to a
+        // project-local preset type.
+        let load_result =
+            manifold_io::loader::load_project_with(path, install_embedded_presets);
 
         match load_result {
             Ok(mut project) => {
@@ -352,11 +368,10 @@ impl ProjectIOService {
                     &mut project,
                 );
 
-                // Phase 4: install this project's embedded ("forked") presets
-                // into the catalog overlay so they resolve by id through the
-                // same path as stock/user presets. Called unconditionally (even
-                // when empty) so a previous project's forks never leak in.
-                install_project_preset_overlay(&project);
+                // Overlay install happened in the pre-deserialize hook above;
+                // `apply_project_io_action` re-installs on every project apply
+                // (unconditionally, even when empty) so a previous project's
+                // forks never leak into the next one.
 
                 let path_str = path.to_string_lossy().to_string();
                 let was_v1 = !manifold_io::archive::is_v2_archive(&path_str);
