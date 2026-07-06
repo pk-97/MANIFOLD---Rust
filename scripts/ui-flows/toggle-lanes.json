@@ -1,0 +1,35 @@
+[
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Surface": { "surface": "automation_lanes", "kind": "automation_strip", "label": "Mirror: amount" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "LANES", "type": "Button" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Surface": { "surface": "automation_lanes", "kind": "automation_strip", "label": "Mirror: amount" } },
+      "check": { "Count": 0 }
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "LANES", "type": "Button" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Surface": { "surface": "automation_lanes", "kind": "automation_strip", "label": "Mirror: amount" } },
+      "check": "Exists"
+    }
+  }
+]

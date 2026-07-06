@@ -74,6 +74,18 @@ impl UserPrefs {
         Self { data, file_path }
     }
 
+    /// Prefs that never touch the real config file — the headless
+    /// ui-snapshot driver's seam. Reads resolve to caller defaults (empty
+    /// map, deterministic on any host); a stray `save()` from a dispatched
+    /// action lands in the OS temp dir, not the user's prefs.
+    #[cfg(feature = "ui-snapshot")]
+    pub fn in_memory() -> Self {
+        Self {
+            data: HashMap::new(),
+            file_path: std::env::temp_dir().join("manifold-ui-snap-prefs.json"),
+        }
+    }
+
     /// Get a string value by key, returning `default` if the key doesn't exist.
     /// Equivalent to `PlayerPrefs.GetString(key, default)`.
     pub fn get_string(&self, key: &str, default: &str) -> String {
