@@ -15,10 +15,13 @@
 //! cargo run -p manifold-audio --example mod_harness -- --selftest [--out out.png]
 //! ```
 //!
-//! `--selftest` synthesizes a known signal (supersaw pitch dive → wobble bass →
-//! busy mix, kicks throughout) so the harness verifies itself without a clip:
-//! the centroid trace must follow the dive, the amplitude lane must oscillate
-//! at the wobble rate, and the transients lane must tick with the kicks.
+//! `--selftest` synthesizes four known scenarios, ONE PNG EACH (suffixes
+//! `_dive`, `_wobble`, `_kicks`, `_busymix`), so the harness verifies itself
+//! without a clip: the centroid trace must follow the dive, the amplitude lane
+//! must oscillate at the wobble rate, and the transients lane must tick with
+//! the kicks. The spectrogram is drawn with the scope shader's exact display
+//! transform and jet colormap (ported from `spectrogram.wgsl`), so it reads
+//! as the same instrument as the app's Audio Setup scope.
 //!
 //! Also prints a per-feature jitter index (mean |Δ| per hop, raw vs smoothed)
 //! so successive analysis iterations can be compared with a number as well as
@@ -30,11 +33,15 @@ use manifold_core::audio_setup::{DEFAULT_LOW_HZ, DEFAULT_MID_HZ, FLOOR_DB_OFF};
 use manifold_spectral::SpectrogramConfig;
 
 const BAND_NAMES: [&str; 4] = ["FULL", "LOW", "MID", "HIGH"];
+/// Band identity colors, matched to the scope shader's centroid traces
+/// (`spectrogram.wgsl` `centroid_line` call sites) so the harness reads with
+/// the same legend as the app: Full = magenta, Low = red, Mid = green,
+/// High = blue.
 const BAND_COLORS: [[u8; 3]; 4] = [
-    [235, 235, 235], // Full — white
-    [255, 92, 92],   // Low — red
-    [92, 224, 112],  // Mid — green
-    [96, 156, 255],  // High — blue
+    [255, 64, 217],  // Full — magenta (1.0, 0.25, 0.85)
+    [255, 115, 77],  // Low — red (1.0, 0.45, 0.30)
+    [102, 255, 128], // Mid — green (0.40, 1.0, 0.50)
+    [115, 184, 255], // High — blue (0.45, 0.72, 1.0)
 ];
 const FEATURE_NAMES: [&str; 5] = ["AMPLITUDE", "BRIGHTNESS", "NOISINESS", "LIVELINESS", "TRANSIENTS"];
 
@@ -115,11 +122,20 @@ fn main() {
         }
     };
 
-    // ── Source: decode file (downmix all channels, same mean the live path uses)
-    //    or synthesize the self-test signal. Mono at `sr`.
-    let (mono, sr, label) = if args.selftest {
-        let (m, sr) = synth_selftest();
-        (m, sr, "selftest".to_string())
+    // ── Source: decode file (downmix all channels, same mean the live path
+    //    uses) or synthesize the self-test scenarios. One PNG per job.
+    let jobs: Vec<(String, Vec<f32>, u32, String)> = if args.selftest {
+        synth_selftests()
+            .into_iter()
+            .map(|(name, mono)| {
+                let out = args
+                    .out
+                    .strip_suffix(".png")
+                    .map(|stem| format!("{stem}_{name}.png"))
+                    .unwrap_or_else(|| format!("{}_{name}.png", args.out));
+                (name.to_string(), mono, SELFTEST_SR, out)
+            })
+            .collect()
     } else {
         let path = args.input.clone().unwrap();
         let decoded = match manifold_playback::audio_decoder::decode_audio_to_pcm(&path) {
@@ -135,22 +151,28 @@ fn main() {
             .chunks_exact(ch)
             .map(|f| f.iter().sum::<f32>() / ch as f32)
             .collect();
-        (mono, decoded.sample_rate, path)
+        // Optional excerpt (file input only).
+        let sr = decoded.sample_rate;
+        let start = ((args.start_s.max(0.0) * sr as f32) as usize).min(mono.len());
+        let len = if args.dur_s.is_finite() {
+            ((args.dur_s.max(0.0) * sr as f32) as usize).min(mono.len() - start)
+        } else {
+            mono.len() - start
+        };
+        if len == 0 {
+            eprintln!("empty excerpt (start/dur out of range)");
+            std::process::exit(1);
+        }
+        vec![(path, mono[start..start + len].to_vec(), sr, args.out.clone())]
     };
 
-    // Optional excerpt.
-    let start = ((args.start_s.max(0.0) * sr as f32) as usize).min(mono.len());
-    let len = if args.dur_s.is_finite() {
-        ((args.dur_s.max(0.0) * sr as f32) as usize).min(mono.len() - start)
-    } else {
-        mono.len() - start
-    };
-    let mono = &mono[start..start + len];
-    if mono.is_empty() {
-        eprintln!("empty excerpt (start/dur out of range)");
-        std::process::exit(1);
+    for (label, mono, sr, out) in &jobs {
+        analyze_and_render(label, mono, *sr, out, &args);
     }
+}
 
+/// Run the live analysis over one mono clip and write its PNG + jitter report.
+fn analyze_and_render(label: &str, mono: &[f32], sr: u32, out: &str, args: &Args) {
     // ── Analysis: the exact live path, fed causally one hop at a time so
     //    `latest()` is sampled at hop rate — what the modulation evaluator sees.
     let cfg = SpectrogramConfig::default();
@@ -221,29 +243,44 @@ fn main() {
         println!("{line}");
     }
 
-    render_png(&args.out, &records, &cfg, sr, args.low_hz, args.mid_hz);
-    println!("wrote {}", args.out);
+    render_png(out, &records, &cfg, sr, args.low_hz, args.mid_hz);
+    println!("wrote {out}");
 }
 
-// ── Self-test signal ─────────────────────────────────────────────────────
+// ── Self-test signals ────────────────────────────────────────────────────
 
-/// 8 s @ 48 kHz: 0-3 s supersaw dive 1200→150 Hz; 3-5.5 s wobble bass (150 Hz,
-/// 3 Hz amplitude LFO); 5.5-8 s busy mix (saw + noise pad); kick every 0.5 s
-/// throughout. Exercises the three things the picture must show: a centroid
-/// trace following the dive, an amplitude lane oscillating at 3 Hz, and
-/// transient ticks at 2 Hz.
-fn synth_selftest() -> (Vec<f32>, u32) {
-    let sr = 48_000u32;
-    let n = 8 * sr as usize;
-    let mut out = vec![0.0f32; n];
-    let srf = sr as f32;
+const SELFTEST_SR: u32 = 48_000;
+const SELFTEST_SECS: usize = 4;
 
-    // Supersaw: 7 naive saws detuned ±12 cents (aliasing is irrelevant for eval).
+/// Four isolated scenarios, one PNG each — what each picture must show:
+/// `dive` — supersaw glide 1200→150 Hz; the centroid trace follows it down.
+/// `wobble` — 150 Hz bass, 3 Hz amplitude LFO; the amplitude lane oscillates.
+/// `kicks` — kick every 0.5 s on silence; transients tick at exactly 2 Hz.
+/// `busymix` — saw + noise pad + kicks; the stress case where features fight.
+fn synth_selftests() -> Vec<(&'static str, Vec<f32>)> {
+    vec![
+        ("dive", soft_clip(synth_dive())),
+        ("wobble", soft_clip(synth_wobble())),
+        ("kicks", soft_clip(synth_kicks(Vec::new()))),
+        ("busymix", soft_clip(synth_kicks(synth_busy_pad()))),
+    ]
+}
+
+fn selftest_buf() -> Vec<f32> {
+    vec![0.0f32; SELFTEST_SECS * SELFTEST_SR as usize]
+}
+
+/// Supersaw: 7 naive saws detuned ±12 cents (aliasing is irrelevant for eval),
+/// gliding exponentially 1200→150 Hz over the clip.
+fn synth_dive() -> Vec<f32> {
+    let mut out = selftest_buf();
+    let srf = SELFTEST_SR as f32;
+    let secs = SELFTEST_SECS as f32;
     let detunes: [f32; 7] = [-0.12, -0.08, -0.04, 0.0, 0.04, 0.08, 0.12];
     let mut phases = [0.0f32; 7];
-    for (i, s_out) in out.iter_mut().take(3 * sr as usize).enumerate() {
+    for (i, s_out) in out.iter_mut().enumerate() {
         let t = i as f32 / srf;
-        let f0 = 1200.0 * (150.0f32 / 1200.0).powf(t / 3.0); // exponential glide
+        let f0 = 1200.0 * (150.0f32 / 1200.0).powf(t / secs);
         let mut s = 0.0;
         for (p, det) in phases.iter_mut().zip(detunes) {
             let f = f0 * 2.0f32.powf(det / 12.0);
@@ -252,33 +289,48 @@ fn synth_selftest() -> (Vec<f32>, u32) {
         }
         *s_out += 0.12 * s;
     }
+    out
+}
 
-    // Wobble bass: 150 Hz saw, amplitude LFO at 3 Hz.
+/// Wobble bass: 150 Hz saw, amplitude LFO at 3 Hz.
+fn synth_wobble() -> Vec<f32> {
+    let mut out = selftest_buf();
+    let srf = SELFTEST_SR as f32;
     let mut p = 0.0f32;
-    let wobble_start = 3 * sr as usize;
-    let wobble_end = 5 * sr as usize + sr as usize / 2;
-    for (j, s_out) in out[wobble_start..wobble_end].iter_mut().enumerate() {
-        let t = (wobble_start + j) as f32 / srf;
+    for (i, s_out) in out.iter_mut().enumerate() {
+        let t = i as f32 / srf;
         p = (p + 150.0 / srf).fract();
         let lfo = 0.5 + 0.5 * (std::f32::consts::TAU * 3.0 * t).sin();
         *s_out += 0.5 * lfo * (2.0 * p - 1.0);
     }
+    out
+}
 
-    // Busy mix: saw + white-ish noise pad (LCG noise).
+/// Saw + white-ish noise pad (LCG noise) across the whole clip.
+fn synth_busy_pad() -> Vec<f32> {
+    let mut out = selftest_buf();
+    let srf = SELFTEST_SR as f32;
     let mut seed = 0x2545F491u32;
-    let mut p2 = 0.0f32;
-    for s_out in out[wobble_end..].iter_mut() {
+    let mut p = 0.0f32;
+    for s_out in out.iter_mut() {
         seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
         let noise = (seed >> 8) as f32 / (1 << 24) as f32 * 2.0 - 1.0;
-        p2 = (p2 + 220.0 / srf).fract();
-        *s_out += 0.25 * (2.0 * p2 - 1.0) + 0.15 * noise;
+        p = (p + 220.0 / srf).fract();
+        *s_out += 0.25 * (2.0 * p - 1.0) + 0.15 * noise;
     }
+    out
+}
 
-    // Kicks: every 0.5 s, 90 ms pitch-swept sine 120→45 Hz with exp decay.
-    for k in 0..16 {
-        let start = k * sr as usize / 2;
+/// Kick every 0.5 s — a 90 ms pitch-swept sine 120→45 Hz with exp decay —
+/// added onto `base` (empty ⇒ kicks on silence).
+fn synth_kicks(base: Vec<f32>) -> Vec<f32> {
+    let mut out = if base.is_empty() { selftest_buf() } else { base };
+    let n = out.len();
+    let srf = SELFTEST_SR as f32;
+    for k in 0..(2 * SELFTEST_SECS) {
+        let start = k * SELFTEST_SR as usize / 2;
         let mut ph = 0.0f32;
-        for j in 0..(sr as usize * 9 / 100) {
+        for j in 0..(SELFTEST_SR as usize * 9 / 100) {
             let idx = start + j;
             if idx >= n {
                 break;
@@ -289,12 +341,14 @@ fn synth_selftest() -> (Vec<f32>, u32) {
             out[idx] += 0.8 * (-tj / 0.03).exp() * (std::f32::consts::TAU * ph).sin();
         }
     }
+    out
+}
 
-    // Soft clip to keep it sane.
-    for s in &mut out {
+fn soft_clip(mut v: Vec<f32>) -> Vec<f32> {
+    for s in &mut v {
         *s = s.tanh();
     }
-    (out, sr)
+    v
 }
 
 // ── Rendering ────────────────────────────────────────────────────────────
@@ -350,27 +404,31 @@ fn render_png(
     // Legend swatches after the text (positions chosen to sit over the trailing words).
     y += TITLE_H;
 
-    // ── Spectrogram: tilted dB through a 5-stop ramp, bin 0 at the bottom.
+    // ── Spectrogram: the scope shader's exact display transform, ported from
+    //    `spectrogram.wgsl` fs_main — 2-tap blend between adjacent log bins in
+    //    the POWER domain (smooth, not blocky), dB, pink tilt in display-y form,
+    //    fixed db_min..db_max window, jet ramp. Bin 0 at the bottom. The only
+    //    departure: each pixel column takes the bucket MAX per bin when hops
+    //    are decimated, so peaks stay visible.
     let tilt_range = (cfg.effective_fmax(sr as f32) / cfg.fmin.max(1.0)).log2();
-    let inv_nb = if num_bins > 1 { 1.0 / (num_bins - 1) as f32 } else { 0.0 };
     for x in 0..w {
         let (lo, hi) = bucket(x);
         for py in 0..SPEC_H {
-            // Pixel row → fractional bin (bottom = bin 0).
-            let bin_f = (SPEC_H - 1 - py) as f32 / (SPEC_H - 1) as f32 * (num_bins - 1) as f32;
-            let bin = bin_f as usize;
-            let mut mag = 0.0f32;
+            let uv_y = py as f32 / (SPEC_H - 1) as f32; // 0 top → 1 bottom
+            let log_bin_f = ((1.0 - uv_y) * (num_bins - 1) as f32).clamp(0.0, (num_bins - 1) as f32);
+            let b_lo = log_bin_f as usize;
+            let b_hi = (b_lo + 1).min(num_bins - 1);
+            let frac = log_bin_f - b_lo as f32;
+            let (mut mag_lo, mut mag_hi) = (0.0f32, 0.0f32);
             for r in &records[lo..hi] {
-                mag = mag.max(r.col[bin.min(num_bins - 1)]);
+                mag_lo = mag_lo.max(r.col[b_lo]);
+                mag_hi = mag_hi.max(r.col[b_hi]);
             }
-            let v = if mag <= 0.0 {
-                0.0
-            } else {
-                let tilt_db = cfg.tilt_slope * tilt_range * (bin as f32 * inv_nb - 0.5);
-                let db = 20.0 * mag.max(1e-9).log10() + tilt_db;
-                ((db - cfg.db_min) / (cfg.db_max - cfg.db_min)).clamp(0.0, 1.0)
-            };
-            img.put_pixel((x0 + x) as u32, (y + py) as u32, image::Rgb(colormap(v)));
+            let power = mag_lo * mag_lo + (mag_hi * mag_hi - mag_lo * mag_lo) * frac;
+            let db = 10.0 * (power + 1e-18).log10();
+            let tilt = cfg.tilt_slope * tilt_range * (0.5 - uv_y);
+            let norm = ((db + tilt - cfg.db_min) / (cfg.db_max - cfg.db_min)).clamp(0.0, 1.0);
+            img.put_pixel((x0 + x) as u32, (y + py) as u32, image::Rgb(colormap(norm)));
         }
     }
     // Band divider lines at the same geometric mapping the analysis uses.
@@ -378,10 +436,12 @@ fn render_png(
         ((cfg.bpo as f32 * (hz / cfg.fmin.max(1.0)).max(1e-6).log2()).round() as i64)
             .clamp(1, num_bins as i64 - 1) as usize
     };
+    let inv_nb = if num_bins > 1 { 1.0 / (num_bins - 1) as f32 } else { 0.0 };
     for hz in [low_hz, mid_hz] {
         let py = SPEC_H - 1 - (bin_of(hz) as f32 * inv_nb * (SPEC_H - 1) as f32) as usize;
         for x in 0..w {
-            blend_pixel(&mut img, x0 + x, y + py, [255, 255, 255], 0.25);
+            // Divider color/alpha from the shader's `divider()` (line, unhovered).
+            blend_pixel(&mut img, x0 + x, y + py, [224, 224, 237], 0.6);
         }
     }
     // Centroid traces (band colors) + onset ticks (top of spectrogram, band color).
@@ -394,10 +454,19 @@ fn render_png(
                 blend_pixel(&mut img, x0 + x, y + py, color, 0.9);
             }
         }
-        for oi in 0..3 {
+        // Transient ticks: three stacked lanes at the BOTTOM edge, Low lowest —
+        // same layout, colors, and alpha as the shader's onset lanes.
+        const TICK_COLORS: [[u8; 3]; 3] = [
+            [255, 89, 77],   // Low (1.0, 0.35, 0.30)
+            [89, 255, 115],  // Mid (0.35, 1.0, 0.45)
+            [102, 158, 255], // High (0.40, 0.62, 1.0)
+        ];
+        let lane_px = (SPEC_H as f32 * 0.014) as usize;
+        for (oi, &tick_color) in TICK_COLORS.iter().enumerate() {
             if records[lo..hi].iter().any(|rec| rec.onset_fired[oi] > 0.5) {
-                for py in 0..8 {
-                    blend_pixel(&mut img, x0 + x, y + 2 + oi * 9 + py, BAND_COLORS[oi + 1], 0.9);
+                let lane_bottom = SPEC_H - oi * lane_px;
+                for py in (lane_bottom - lane_px)..lane_bottom {
+                    blend_pixel(&mut img, x0 + x, y + py, tick_color, 0.85);
                 }
             }
         }
@@ -462,29 +531,33 @@ fn render_png(
     });
 }
 
-/// 5-stop magma-ish ramp: black → deep purple → magenta → orange → near-white.
-fn colormap(v: f32) -> [u8; 3] {
-    const STOPS: [(f32, [f32; 3]); 5] = [
-        (0.00, [0.0, 0.0, 0.0]),
-        (0.25, [45.0, 15.0, 80.0]),
-        (0.50, [160.0, 40.0, 130.0]),
-        (0.75, [245.0, 125.0, 50.0]),
-        (1.00, [252.0, 245.0, 210.0]),
+/// The scope's jet ramp, ported LINE-FOR-LINE from `spectrogram.wgsl`
+/// `colormap()` (manifold-spectral) — black → navy → blue → cyan → green →
+/// yellow → red → white, same non-uniform stops — so the harness spectrogram
+/// is pixel-comparable with the app's. If the shader's ramp is ever retuned,
+/// retune this copy with it (the shader carries the matching cross-reference).
+fn colormap(t_in: f32) -> [u8; 3] {
+    const STOPS: [(f32, f32, [f32; 3], [f32; 3]); 7] = [
+        (0.00, 0.15, [0.00, 0.00, 0.00], [0.00, 0.00, 0.45]), // black → deep navy
+        (0.15, 0.35, [0.00, 0.00, 0.45], [0.00, 0.10, 0.95]), // → blue
+        (0.35, 0.55, [0.00, 0.10, 0.95], [0.00, 0.80, 0.95]), // → cyan
+        (0.55, 0.70, [0.00, 0.80, 0.95], [0.20, 0.95, 0.20]), // → green
+        (0.70, 0.80, [0.20, 0.95, 0.20], [0.95, 0.95, 0.00]), // → yellow
+        (0.80, 0.90, [0.95, 0.95, 0.00], [0.95, 0.00, 0.00]), // → red
+        (0.90, 1.00, [0.95, 0.00, 0.00], [1.00, 1.00, 1.00]), // → white (peaks)
     ];
-    let v = v.clamp(0.0, 1.0);
-    for pair in STOPS.windows(2) {
-        let (t0, c0) = pair[0];
-        let (t1, c1) = pair[1];
-        if v <= t1 {
-            let t = (v - t0) / (t1 - t0);
+    let t = t_in.clamp(0.0, 1.0);
+    for &(t0, t1, c0, c1) in &STOPS {
+        if t < t1 || t1 >= 1.0 {
+            let f = ((t - t0) / (t1 - t0)).clamp(0.0, 1.0);
             return [
-                (c0[0] + (c1[0] - c0[0]) * t) as u8,
-                (c0[1] + (c1[1] - c0[1]) * t) as u8,
-                (c0[2] + (c1[2] - c0[2]) * t) as u8,
+                (255.0 * (c0[0] + (c1[0] - c0[0]) * f)) as u8,
+                (255.0 * (c0[1] + (c1[1] - c0[1]) * f)) as u8,
+                (255.0 * (c0[2] + (c1[2] - c0[2]) * f)) as u8,
             ];
         }
     }
-    [252, 245, 210]
+    [255, 255, 255]
 }
 
 fn blend_pixel(img: &mut image::RgbImage, x: usize, y: usize, color: [u8; 3], alpha: f32) {

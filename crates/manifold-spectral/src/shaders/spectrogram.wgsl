@@ -69,6 +69,9 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
 // loudest peaks separate clearly from merely-loud content (solves jet's
 // classic red-vs-darker-red crush at the top end). Stops are non-uniform —
 // kept verbatim from the VST's `spectrum_line.wgsl` so the two read identical.
+// Also ported to CPU by the offline grading harness
+// (manifold-audio/examples/mod_harness.rs `colormap`) — retune that copy with
+// this one so harness PNGs keep reading as the same instrument.
 fn colormap(t_in: f32) -> vec3<f32> {
     let t = clamp(t_in, 0.0, 1.0);
     let c0 = vec3<f32>(0.00, 0.00, 0.00); // black
