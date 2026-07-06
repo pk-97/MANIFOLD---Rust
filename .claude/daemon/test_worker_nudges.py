@@ -338,6 +338,67 @@ def test_posttooluse_hook_agent_event_quiet_without_planted_verdict():
                 pass
 
 
+def test_posttooluse_hook_agent_delivery_includes_agent_id_in_ack():
+    """DESIGN.md §2h.4: build_block's supervised ack must reach worker
+    deliveries through PostToolUse too (the main worker-delivery channel —
+    Stop only fires once per turn) with the worker's own agent_id folded
+    into the grade-line instruction. Deliberately not sandboxed (matches
+    test_posttooluse_hook_agent_event_quiet_without_planted_verdict just
+    above): the hook subprocess imports its own fresh `valve`, reading the
+    real verdicts dir, so a verdict is planted there directly."""
+    import subprocess
+
+    real_verdicts = os.path.join(DAEMON_DIR, "verdicts")
+    fake_session = "test-session-for-hook-agent-ack"
+    fake_agent = "agent-ack-probe"
+    os.makedirs(real_verdicts, exist_ok=True)
+    fake_pidfile = os.path.join(real_verdicts, f"{fake_session}.pid")
+    with open(fake_pidfile, "w", encoding="utf-8") as f:
+        f.write(str(os.getpid()))
+    mailbox_key = f"{fake_session}.{fake_agent}"
+    verdict_path = os.path.join(real_verdicts, f"{mailbox_key}.json")
+    with open(verdict_path, "w", encoding="utf-8") as f:
+        json.dump({"ts": time.time(), "flag": {"move_id": "anchor/circling", "seq": 1, "evidence": "test", "confidence": 0.9}}, f)
+    # The real repo ships worker-nudges OFF by default (nobody creates this
+    # sentinel) — flip it on for just this call, then remove it, so this
+    # test doesn't leave the flag enabled for whatever else touches the real
+    # verdicts dir afterward. Only remove it if WE created it.
+    real_flag_path = os.path.join(real_verdicts, "worker-nudges.enabled")
+    we_created_flag = not os.path.exists(real_flag_path)
+    if we_created_flag:
+        with open(real_flag_path, "w", encoding="utf-8") as f:
+            f.write("1")
+    try:
+        payload = json.dumps({
+            "tool_name": "Bash",
+            "session_id": fake_session,
+            "agent_id": fake_agent,
+            "transcript_path": "/dev/null",
+        })
+        hook_path = DAEMON_DIR.parent / "hooks" / "daemon-posttooluse.py"
+        r = subprocess.run([sys.executable, str(hook_path)], input=payload, capture_output=True, text=True)
+        check("real subprocess exits 0", r.returncode == 0, r.returncode)
+        out = json.loads(r.stdout) if r.stdout.strip() else None
+        ctx = (out or {}).get("hookSpecificOutput", {}).get("additionalContext", "")
+        check("worker delivery via PostToolUse carries this agent_id in the ack", f'"agent_id": "{fake_agent}"' in ctx, ctx)
+    finally:
+        if we_created_flag:
+            try:
+                os.remove(real_flag_path)
+            except OSError:
+                pass
+        for suffix in (".pid", ".log"):
+            try:
+                os.remove(os.path.join(real_verdicts, f"{fake_session}{suffix}"))
+            except OSError:
+                pass
+        for suffix in (".json", ".consumed"):
+            try:
+                os.remove(os.path.join(real_verdicts, f"{mailbox_key}{suffix}"))
+            except OSError:
+                pass
+
+
 def main():
     tests = [
         test_scan_agents_noop_when_flag_absent,
@@ -350,6 +411,7 @@ def main():
         test_scan_agents_ignores_non_agent_files_in_workflow_dir,
         test_scan_agents_tolerates_missing_workflows_dir,
         test_posttooluse_hook_agent_event_quiet_without_planted_verdict,
+        test_posttooluse_hook_agent_delivery_includes_agent_id_in_ack,
     ]
     for t in tests:
         t()

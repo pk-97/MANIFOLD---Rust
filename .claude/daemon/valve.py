@@ -83,7 +83,7 @@ def write_consumed(session_id, seq):
         pass
 
 
-def build_block(flag):
+def build_block(flag, agent_id=None):
     move_id = flag.get("move_id")
     entry = _payloads().get(move_id) or {}
     payload = entry.get("payload")
@@ -128,6 +128,12 @@ def build_block(flag):
     # it was for. Only the numeral varies (habit-memory ordinal precedent);
     # everything else in this sentence is frozen, same invariant.
     seq = flag.get("seq")
+    # DESIGN.md §2h.4: this same ack reaches worker deliveries too (both
+    # PostToolUse and Stop route through here regardless of agent_id) — a
+    # worker's grade line needs "agent_id" alongside "seq", or (session_id,
+    # seq) alone collides across workers (RUNBOOK.md step 2). Only this
+    # clause varies with the mailbox; the rest of the sentence is frozen.
+    agent_note = f', "agent_id": "{agent_id}"' if agent_id else ""
     return (
         f'<daemon move="{move_id}">\n'
         f"{payload}"
@@ -139,8 +145,8 @@ def build_block(flag):
         f"session ends, also append one self-grade line per fire (this fire: "
         f"seq {seq}) to .claude/daemon/eval/live_grades.session.jsonl "
         f"(gitignored, so it never dirties the shared tree) — format in "
-        f'RUNBOOK.md step 2, with "grader": "session" and "seq": {seq}; the '
-        f"sleep pass reads these as provisional and may override.)\n"
+        f'RUNBOOK.md step 2, with "grader": "session" and "seq": {seq}{agent_note}; '
+        f"the sleep pass reads these as provisional and may override.)\n"
         f"</daemon>"
     )
 
@@ -198,12 +204,16 @@ def ensure_observer(session_id, transcript_path):
         pass
 
 
-def pending_injection(session_id):
+def pending_injection(session_id, agent_id=None):
     """Returns (block_text, seq, move_id) for an unconsumed, valid, fresh
     flag, or (None, None, None) if there's nothing to deliver. move_id rides
     along so the delivering hook can stamp it into the `injected` telemetry
     record — sleep pass 1 had to recover move ids from surviving mailbox
-    files because delivery records lacked them. Never raises."""
+    files because delivery records lacked them. `agent_id` (DESIGN.md §2h.4)
+    only affects the ack sentence build_block appends — it plays no part in
+    which mailbox is read; the caller already resolved that into `session_id`
+    (which is actually the mailbox key: bare session id, or `<session>.
+    <agent_id>` for a worker). Never raises."""
     try:
         verdict = read_verdict(session_id)
         if not verdict:
@@ -214,7 +224,7 @@ def pending_injection(session_id):
         seq = flag.get("seq")
         if seq is None or read_consumed(session_id) >= seq:
             return None, None, None
-        block = build_block(flag)
+        block = build_block(flag, agent_id=agent_id)
         if not block:
             return None, None, None
         return block, seq, flag.get("move_id")
