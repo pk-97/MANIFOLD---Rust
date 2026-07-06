@@ -1,6 +1,6 @@
 # Realtime 3D — Scenes, Lighting, Viewport
 
-**Status: IN PROGRESS (status corrected + baseline-reviewed 2026-07-05).** Shipped: P0 (MATERIAL M1–M6, all verified in-tree), P1 `node.render_scene` @ `8daa89fc`, P4 camera atoms (both `node.free_camera` + `node.look_at_camera` in-tree), §9 `node.spawn_from_mesh`. **As-built P1 deviation from D3: object transforms are NOT port-shadowed yet** (`render_scene.rs` header states it) — P2+ must check that header before assuming beat-addressable transforms. Remaining: P2 shadows, P3 atmosphere, P5 viewport navigate, P6 gizmos, P7 scene starter preset. · designed 2026-07-03 · Fable
+**Status: IN PROGRESS (status corrected + baseline-reviewed 2026-07-05; D3/D8 AMENDED 2026-07-06 by `SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` — read its §8 before P6).** Shipped: P0 (MATERIAL M1–M6, all verified in-tree), P1 `node.render_scene` @ `8daa89fc`, P4 camera atoms (both `node.free_camera` + `node.look_at_camera` in-tree), §9 `node.spawn_from_mesh`. **The P1 "transforms not port-shadowed" deviation is retired by amendment, not by shadows: per-object transforms move to `node.transform_3d` atoms feeding `transform_n: Transform` ports** (SCENE_BUILD P2). Remaining: P2 shadows, P3 atmosphere, P5 viewport navigate, P6 gizmos, P7 scene starter preset. · designed 2026-07-03 · Fable
 **Prerequisites: MATERIAL_SYSTEM_DESIGN M1–M5 (un-held by this doc — its contract is
 unchanged; this design consumes its extension points). Vocab-audit apply should land
 first (this doc uses post-rename ids: `node.render_mesh`, `node.render_copies`).**
@@ -53,7 +53,11 @@ between this doc and execution.
   groups. `node.render_mesh` / `node.render_copies` stay for the single-object fast
   path; existing presets untouched.
 - **D3 — Object port group = `mesh_n` (Array(MeshVertex)) + `transform_n` (TRS params,
-  port-shadowed) + `material_n` (Material).** v1 caps: **8 objects, 4 lights**
+  port-shadowed) + `material_n` (Material).**
+  **[AMENDED 2026-07-06 — SCENE_BUILD_AND_GROUP_PARAMS_DESIGN §8: the transform member
+  is `transform_n: Transform` (CPU-struct port fed by `node.transform_3d`, whose own
+  scalar params are port-shadowed); render_scene carries no per-object params.]**
+  v1 caps: **8 objects, 4 lights**
   (`light_0..3` dynamic ports — Light is a CPU struct; no `Array<Light>` port type
   is invented). Caps are constants, bumpable later. Rejected: a `SceneObject` bundle
   port carrying a GPU-buffer reference + CPU material in one wire — new port
@@ -85,7 +89,12 @@ between this doc and execution.
   params (or a light's pos/aim, a camera's pos) **through `EditingService` like any
   slider** — undoable, bindable, nothing new in the mutation model. **If the param is
   wired** (transform driven by upstream animation), the gizmo shows locked — the
-  viewport never fights the graph. Consequence of gizmos-as-params: anything you can
+  viewport never fights the graph.
+  **[AMENDED 2026-07-06 — semantics unchanged, substrate moved: the params a gizmo
+  writes are the object's `node.transform_3d` params (found by following the
+  `transform_n` wire); a wired scalar port on that atom locks that gizmo AXIS.
+  P6 entry state: SCENE_BUILD P2 landed; unwired `transform_n` → gizmo offers to
+  create the atom (briefed in P6, not in SCENE_BUILD).]** Consequence of gizmos-as-params: anything you can
   grab in the viewport, you can perform from a knob.
 - **D9 — Show path never pays for the viewport.** Editor camera, overlays, and pick
   passes run only in the editor preview context. The content-thread render is
@@ -168,9 +177,11 @@ feature is unwired (unwired = zero cost, checked, not assumed).
   preview infra, D9. Gate: headless PNG of viewport with overlays; content-thread
   output byte-identical with viewport open (the D9 proof — diff the show render).
 - **P6 — Viewport Tier 2 (gizmos).** ID-buffer picking, move/rotate/scale gizmos →
-  `EditingService` param commands, wired-param lock state. Gate: gizmo drag
-  round-trips undo/redo; dragging a wired transform is refused visibly; headless PNG
-  of gizmo states.
+  `EditingService` param commands, wired-param lock state. **Entry state (amended
+  2026-07-06): SCENE_BUILD_AND_GROUP_PARAMS P2 landed — gizmos write `node.transform_3d`
+  params per the amended D8; brief the unwired-`transform_n` auto-create command
+  here.** Gate: gizmo drag round-trips undo/redo; dragging a wire-driven axis is
+  refused visibly; headless PNG of gizmo states.
 - **P7 — Scene starter preset + polish.** Bundled preset (D10), perf HUD shadow-pass
   cost line, component entries when the component library lands.
 

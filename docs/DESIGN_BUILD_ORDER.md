@@ -45,7 +45,9 @@ prerequisites aren't shipped, stop.
 | PRESET_LIBRARY_DESIGN (added 2026-07-04) | P5 needs OVERLAY_SESSIONS P2; P6 verify-at-impl gated | full (P1–P4) / conformance (P5–P6) |
 | TIMELINE_INGEST_DESIGN (added 2026-07-04) | none | full |
 | GAUSSIAN_SPLATS_DESIGN (added 2026-07-05) | none (its P4 consumes shipped `render_scene`) | full |
-| PARAM_STORAGE_DESIGN (added 2026-07-05) | none | full |
+| PARAM_STORAGE_DESIGN (added 2026-07-05; **P1–P5 SHIPPED 2026-07-05**) | none | full |
+| PARAM_STORAGE_BOUNDARIES_DESIGN (added 2026-07-06) | PARAM_STORAGE P1–P5 (shipped) | full |
+| SCENE_BUILD_AND_GROUP_PARAMS_DESIGN (added 2026-07-06) | its P3 needs PARAM_STORAGE_BOUNDARIES P1–P2; REALTIME_3D P6 now needs its P2 (amended D3/D8) | full |
 
 Not in the queue: **LIVE_AUDIO_TRIGGERS** is SHIPPED (phases 0–7, proven live,
 branch merged). **COMPETITIVE_STEAL_PASS** is a closed record.
@@ -221,6 +223,13 @@ release-content authoring capability.
 
 Then, still greenlit but second arc (order by judgment): REALTIME_3D P2 shadows →
 P3 atmosphere → P5 viewport navigate → P6 gizmos → P7 starter preset.
+**SCENE_BUILD_AND_GROUP_PARAMS (added 2026-07-06) slots INSIDE this arc, ahead of
+P6:** its P1–P2 (Transform port + `node.transform_3d`, render_scene swap + migration
++ importer) are a hard prerequisite of P6 gizmos (REALTIME_3D D3/D8 amended — gizmos
+write the transform atom's params). Its P3 (card sections) additionally needs
+PARAM_STORAGE_BOUNDARIES P1–P2 first; P4/P5 hang off its own P2/P3 only. It is also
+release-content authoring (scene-building UX for the August push), so by judgment it
+runs EARLY in the arc.
 **GAUSSIAN_SPLATS_DESIGN (added 2026-07-05, Peter-flagged "will definitely be
 important") slots into this arc**: zero hard prerequisites (its P4 consumes the
 shipped `render_scene`), so its P1–P3 are startable any session; it is also
