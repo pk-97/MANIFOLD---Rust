@@ -283,6 +283,27 @@ pub(crate) fn audio_kind_labels() -> [&'static str; AUDIO_KIND_COUNT] {
     crate::types::AudioFeatureKind::ALL.map(|k| k.label())
 }
 
+#[cfg(test)]
+mod audio_row_tests {
+    use super::*;
+
+    /// P4 regression (2026-07-06, found by Peter on a live build): the UI
+    /// crate holds a MIRROR of core's `AudioFeatureKind` behind the
+    /// translation boundary, and P4 initially extended only core — the
+    /// drawer stayed at five buttons while serde/runtime shipped. This pins
+    /// the row that actually feeds pixels.
+    #[test]
+    fn feature_row_carries_pitch_and_presence() {
+        let labels = audio_kind_labels();
+        assert_eq!(labels.len(), 7);
+        assert_eq!(labels[5], "Pitch");
+        assert_eq!(labels[6], "Presence");
+        assert_eq!(AUDIO_KIND_COUNT, 7);
+        // Order-parity with core lives in manifold-app's ui_translate tests —
+        // this crate deliberately cannot see manifold-core.
+    }
+}
+
 /// Band-row button labels, in `AudioBand::ALL` order.
 pub(crate) fn audio_band_labels() -> [&'static str; 4] {
     [

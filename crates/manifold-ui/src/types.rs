@@ -181,16 +181,23 @@ pub enum AudioFeatureKind {
     Noisiness,
     Flux,
     Transients,
+    /// Tracked pitch of the band's dominant object (P4). Holds on dropout;
+    /// gate with Presence.
+    Pitch,
+    /// Confidence the tracked pitch is a real object, 0..1 (P4).
+    Presence,
 }
 
 impl AudioFeatureKind {
     /// All kinds in drawer-button order.
-    pub const ALL: [AudioFeatureKind; 5] = [
+    pub const ALL: [AudioFeatureKind; 7] = [
         AudioFeatureKind::Amplitude,
         AudioFeatureKind::Centroid,
         AudioFeatureKind::Noisiness,
         AudioFeatureKind::Flux,
         AudioFeatureKind::Transients,
+        AudioFeatureKind::Pitch,
+        AudioFeatureKind::Presence,
     ];
 
     /// Position in `ALL`.
@@ -206,6 +213,8 @@ impl AudioFeatureKind {
             AudioFeatureKind::Noisiness => "Noisiness",
             AudioFeatureKind::Flux => "Flux",
             AudioFeatureKind::Transients => "Transients",
+            AudioFeatureKind::Pitch => "Pitch",
+            AudioFeatureKind::Presence => "Presence",
         }
     }
 }
