@@ -534,6 +534,26 @@ impl AudioSetupPanel {
         self.current_device = current_device;
         self.sends = sends;
         self.status_warning = status_warning;
+        self.normalize_selection();
+    }
+
+    /// Default the scope selection to the first send when it is unset or no
+    /// longer refers to a configured send. Runs in [`configure`] — the only
+    /// place the send list changes — so every later reader sees the same
+    /// effective selection: [`chrome_height`]'s inputs/consumers row
+    /// accounting (consulted by `size_policy` and `build_at` to size the
+    /// scope) and `build_nodes` itself. This used to happen inside
+    /// `build_nodes`, AFTER `build_at` had already sized the scope from
+    /// `chrome_height()` — so the first build after a configure saw no
+    /// selection, under-counted the inputs/consumers rows, and let the scope
+    /// swallow their space, clipping the panel's bottom sections.
+    ///
+    /// [`configure`]: Self::configure
+    /// [`chrome_height`]: Self::chrome_height
+    fn normalize_selection(&mut self) {
+        if !self.sends.iter().any(|s| Some(&s.id) == self.selected_send.as_ref()) {
+            self.selected_send = self.sends.first().map(|s| s.id.clone());
+        }
     }
 
     fn device_label(&self) -> String {
@@ -734,10 +754,10 @@ impl AudioSetupPanel {
             cy += ROW_H + ROW_GAP;
         }
 
-        // Default the scope selection to the first send; keep it if still valid.
-        if !self.sends.iter().any(|s| Some(&s.id) == self.selected_send.as_ref()) {
-            self.selected_send = self.sends.first().map(|s| s.id.clone());
-        }
+        // Selection is normalized in `configure` (it must be settled BEFORE
+        // `build_at` sizes the scope from `chrome_height()`); re-assert here as
+        // a belt for callers that mutate `sends` directly (tests).
+        self.normalize_selection();
 
         // Send rows: [swatch] label | [ channel name ▼ ] | ×
         const SWATCH_W: f32 = 8.0;
@@ -2672,6 +2692,62 @@ mod tests {
             OverlayResponse::Ignored => "Ignored",
             OverlayResponse::Consumed(_) => "Consumed(_)",
         }
+    }
+
+    #[test]
+    fn consumers_fit_within_panel_on_first_build_after_configure() {
+        // Regression: `chrome_height()` (which sizes the scope in `build_at`)
+        // must see the SAME selected send as `build_nodes`. Before the fix the
+        // selection was only defaulted inside `build_nodes` — after the scope
+        // was already sized — so the first build after `configure` counted
+        // zero feeding-layer rows and one consumer row, oversizing the scope
+        // and pushing the Consumers section past the panel's bottom edge.
+        let mut p = AudioSetupPanel::new();
+        p.toggle(); // open
+        p.configure(
+            None,
+            vec![AudioSendRow {
+                id: AudioSendId::new("s1"),
+                label: "Kick".into(),
+                channels: vec![0],
+                channel_label: "Channel 1".into(),
+                gain_db: 0.0,
+                floor_db: crate::types::FLOOR_DB_OFF,
+                driven_count: 0,
+                source_label: "Cap".into(),
+                layer_fed: true,
+                routings: vec!["Capture: Channel 1".into()],
+                triggers: vec![TriggerRouteRow::default(); 4],
+                feeding_layers: vec![(LayerId::new("kick"), "KICK".to_string())],
+                consumers: vec![
+                    SendConsumerRow {
+                        label: "BLOOM LAYER \u{2022} Bloom \u{2022} Amount".into(),
+                        layer_id: Some(LayerId::new("bloom")),
+                    },
+                    SendConsumerRow {
+                        label: "Low \u{2192} STROBE LAYER".into(),
+                        layer_id: Some(LayerId::new("strobe")),
+                    },
+                ],
+            }],
+            Some("Microphone access blocked".into()),
+        );
+
+        let (vw, vh) = (1280.0, 720.0);
+        let mut tree = UITree::new();
+        p.build(&mut tree, vw, vh);
+
+        assert_eq!(p.consumer_row_ids.len(), 2);
+        let last = *p.consumer_row_ids.last().unwrap();
+        let b = tree.get_bounds(last);
+        assert!(
+            b.y + b.height <= vh + 0.5,
+            "last consumer row must fit inside the panel: bottom {} > viewport {vh}",
+            b.y + b.height,
+        );
+        // And the scope still got its floor.
+        let scope = p.scope_rect().expect("scope present while open");
+        assert!(scope.height >= SCOPE_H_MIN - SCOPE_PAD_Y * 2.0 - 0.5);
     }
 
     // ─── Inputs / Consumers sections (AUDIO_SENDS_UX_DESIGN Phase 2) ───
