@@ -64,6 +64,12 @@ TASK_DIAGNOSIS_RE = re.compile(r"\b(?:fix|bug|broken|why|crash|wrong)\b", re.IGN
 PHASE_OSCILLATION_SPAN_EVENTS = 40
 PHASE_OSCILLATION_MIN_FLIPS = 3
 
+# DESIGN.md §2h.2: "the trailing window" for the landing-doc-reflex
+# docs-only suppression is not numerically specced either — same
+# placeholder-judgment-call status as PHASE_OSCILLATION_SPAN_EVENTS above;
+# pass 2 tunes it from real fires rather than a guess made now.
+LANDING_DOCS_WINDOW_EVENTS = 30
+
 
 def _move_family(move_id):
     if move_id == "anchor/verify-claim":
@@ -389,6 +395,9 @@ class Daemon:
                     # generic, primer last (it retries until delivered).
                     if classify:
                         self._check_stopgap(name, input_, event_count, logf, mailbox=worker)
+                        self._check_landing_doc_reflex(
+                            name, input_, event_count, logf, d.get("cwd"), d.get("gitBranch"), mailbox=worker
+                        )
                         self._check_design_primer(name, input_, event_count, logf, mailbox=worker)
                     self._check_unread_edit(name, input_, event_count, logf, mailbox=worker, live=classify)
                     if classify:
@@ -485,6 +494,9 @@ class Daemon:
                     if classify:
                         self._check_stopgap(name, input_, event_count, logf)
                         self._check_git_landing(name, input_, event_count, logf)
+                        self._check_landing_doc_reflex(
+                            name, input_, event_count, logf, d.get("cwd"), d.get("gitBranch")
+                        )
                         self._check_design_primer(name, input_, event_count, logf)
                     # live=classify: catchup populates paths_seen, never fires
                     self._check_unread_edit(name, input_, event_count, logf, live=classify)
@@ -533,6 +545,55 @@ class Daemon:
         }
         _atomic_write_json(mb.verdict_path, record)
         _log(logf, f"mechanical/confessed-stopgap fired: {name} {common.tool_target(input_)} hits={hits}")
+
+    # ---- landing-doc-reflex (DESIGN.md §2h.2) ----
+
+    def _landing_docs_only_suppresses(self, mb, event_count):
+        """DESIGN.md §2h.2: honest approximation of "the landed range is
+        docs-only" — the observer runs no git subprocesses, so it cannot
+        diff the commits actually about to land. Uses §2f's per-path edit
+        facts instead (`state.last_edit_event`, session-durable: one
+        event_count per path, the path's MOST RECENT edit): if every path
+        this target has edited within the trailing LANDING_DOCS_WINDOW_EVENTS
+        tool events is itself under docs/, memory, or .claude/, this landing
+        is very likely the paper-trail update itself, so suppress. Zero
+        qualifying edits in the window is NOT treated as docs-only —
+        nothing is established either way, so the reflex still fires
+        (over-reminding beats silently missing a real code landing)."""
+        window_start = event_count - LANDING_DOCS_WINDOW_EVENTS
+        touched = [p for p, ec in mb.state.last_edit_event.items() if window_start < ec <= event_count]
+        if not touched:
+            return False
+        return all(common.is_docs_memory_or_claude_path(p) for p in touched)
+
+    def _check_landing_doc_reflex(self, name, input_, event_count, logf, cwd, git_branch, mailbox=None):
+        """mechanical/landing-doc-reflex (DESIGN.md §2h.2): deterministic,
+        never the classifier — a live-tailed (never catchup) Bash command
+        lands work on main (merge run on main, or push whose refspec/current
+        branch is main; common.detect_landing_on_main ports
+        preToolUseBash.py's landing-protocol command recognition rather than
+        re-deriving it). Docs-only suppression per §2f facts above. Fires
+        through the normal mailbox/cooldown path exactly like every other
+        mechanical move."""
+        hits = common.detect_landing_on_main(name, input_, cwd, git_branch)
+        if not hits:
+            return
+        mb = mailbox if mailbox is not None else self
+        if self._landing_docs_only_suppresses(mb, event_count):
+            _log(logf, f"mechanical/landing-doc-reflex suppressed (docs-only trailing window): {hits}")
+            return
+        verdict = {"evidence": f"{name}: {', '.join(hits)}", "confidence": 1.0}
+        flag_out = self._resolve_fire(event_count, "mechanical/landing-doc-reflex", verdict, logf, mailbox=mailbox)
+        if not flag_out:
+            return
+        record = {
+            "ts": time.time(),
+            "phase": mb.phase,
+            "window_version": common.WINDOW_VERSION,
+            "flag": flag_out,
+        }
+        _atomic_write_json(mb.verdict_path, record)
+        _log(logf, f"mechanical/landing-doc-reflex fired: {hits}")
 
     # ---- priming tier (sleep pass 1: pre-authored advice at predictable
     # moments — no detection, no classifier, no false-positive budget) ----
