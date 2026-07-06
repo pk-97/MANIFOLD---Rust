@@ -31,7 +31,6 @@ or human can read it, and it needs no external tool.
 | ID | Nickname | One line |
 |---|---|---|
 | BUG-039 | **saw-rotation-wrap** | angle params clamp instead of wrapping; saw LFO can't spin a full rotation (MED, mechanism pinned) |
-| BUG-041 | **superflux-glide-fire** | transients fire continuously through a pure pitch glide (supersaw dive); fix owned by AUDIO_OBJECT_TRACKING P3 (MED) |
 | BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
 | BUG-037 | **glp-first-render-stall** | ~37ms warm-up on a glTF clip's first rendered frame (MED) |
 | BUG-040 | **v13-import-migration-drop** | V1.3→V1.4 migration drops positional params of imported generators; 1-day save window (LOW) |
@@ -54,30 +53,6 @@ or human can read it, and it needs no external tool.
 | BUG-019 / 020 / 021 | deferred | group-fold gap · gen-card collapse · snap-back gap |
 
 ## Open
-
-### BUG-041 (superflux-glide-fire) — Transients fire continuously through a pure pitch glide — MED (modulation quality, performer-facing)
-
-**Symptom** (found 2026-07-06, mod_harness selftest) — the `dive` scenario (7-voice
-supersaw gliding 1200→150 Hz, no attacks anywhere in the signal) lights the Transients
-lane continuously in all bands: `docs/evidence/audio_modulation/selftest_dive.png`.
-SuperFlux's frequency max-filter exists precisely to suppress pitch slides, and it
-works for a single slide — the suspected mechanism is the supersaw's 7-voice detune
-beating: per-harmonic amplitude modulation reads as genuine broadband dB flux that a
-±1-bin max-filter (at bpo 24) cannot cover. Unconfirmed; needs the parameter sweep.
-
-**Root cause:** unknown — suspects: `MAXFILTER_RADIUS` (1 bin) too narrow for detuned
-stacks; `SUPERFLUX_DELTA`/threshold floor too low for dense sustained material
-(`crates/manifold-audio/src/analysis.rs`, superflux consts ~line 540).
-
-**Fix shape:** parameter sweep against the harness CSV gates (dive = 0 fires, kicks =
-exactly 8, busymix ≥ 7 of 8) — owned by `docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P3,
-which carries the full brief. If no sweep point passes, that phase escalates with the
-table rather than redesigning the detector.
-
-**Blast radius grew 2026-07-06 (P2):** the false fires also break the D5 ridge
-tracker — onset re-acquire (D5 step 4) teleports the tracked pitch on every false
-fire, so P2's dive/wobble gates (max Δ 24 st, wobble stddev 7.25 st) are BLOCKED on
-this bug. P3's exit gate now includes re-running the P2 gate lines to PASS.
 
 ### BUG-039 (saw-rotation-wrap) — Angle params clamp at range ends, so a saw LFO / automation can't drive a smooth full rotation — MED (enhancement, performer-facing)
 
@@ -1051,6 +1026,41 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-041 (superflux-glide-fire) — Transients fire continuously through a pure pitch glide — FIXED 2026-07-06 (AUDIO_OBJECT_TRACKING P3)
+
+**Symptom** (found 2026-07-06, mod_harness selftest) — the `dive` scenario (7-voice
+supersaw gliding 1200→150 Hz, no attacks anywhere in the signal) lights the Transients
+lane continuously in all bands: `docs/evidence/audio_modulation/selftest_dive.png`.
+SuperFlux's frequency max-filter exists precisely to suppress pitch slides, and it
+works for a single slide — the suspected mechanism is the supersaw's 7-voice detune
+beating: per-harmonic amplitude modulation reads as genuine broadband dB flux that a
+±1-bin max-filter (at bpo 24) cannot cover. Unconfirmed; needs the parameter sweep.
+
+**Root cause:** unknown — suspects: `MAXFILTER_RADIUS` (1 bin) too narrow for detuned
+stacks; `SUPERFLUX_DELTA`/threshold floor too low for dense sustained material
+(`crates/manifold-audio/src/analysis.rs`, superflux consts ~line 540).
+
+**Fix shape:** parameter sweep against the harness CSV gates (dive = 0 fires, kicks =
+exactly 8, busymix ≥ 7 of 8) — owned by `docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P3,
+which carries the full brief. If no sweep point passes, that phase escalates with the
+table rather than redesigning the detector.
+
+**Blast radius grew 2026-07-06 (P2):** the false fires also break the D5 ridge
+tracker — onset re-acquire (D5 step 4) teleports the tracked pitch on every false
+fire, so P2's dive/wobble gates (max Δ 24 st, wobble stddev 7.25 st) are BLOCKED on
+this bug. P3's exit gate now includes re-running the P2 gate lines to PASS.
+
+**Fixed 2026-07-06** — root cause confirmed by the P3 parameter sweep (~150 configs):
+the adaptive threshold was simply far too permissive for dense sustained material, not
+the max-filter width (radius 1/2/3 indistinguishable). `SUPERFLUX_THRESH_FACTOR`
+2.0→7.0, `SUPERFLUX_DELTA` 3.0→48.0 (mid-plateau: real kicks survive delta 30–300).
+Result: dive/riser/growl 0 false fires, kicks exactly 8, busymix 8, and the P2
+tracker gates all PASS (dive max Δ 0.38 st, wobble stddev 7.25→0.32 st) with NO D5
+softening needed. ⚠ Sensitivity caveat: tuned on synthetics only — the raised
+threshold makes the live Transients feature stricter everywhere; validate soft-onset
+material (ghost notes, quiet hats) when Peter’s reference clips arrive.
+
 
 All five entries below were fixed 2026-06-23, with a test per path:
 - BUG-001–004 — commit `2e3dc4f3` (`PresetInstance::duplicated()`, both paste paths, `Clip::clone_with_new_id`, `Layer::clone_with_new_ids`).

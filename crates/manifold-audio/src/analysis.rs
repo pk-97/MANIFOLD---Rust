@@ -543,17 +543,29 @@ fn form_tilted_column(
 
 /// How far the ODF must exceed its adaptive baseline (the rolling MEDIAN) to fire.
 /// THE sensitivity knob — lower catches softer onsets, higher is stricter.
-const SUPERFLUX_THRESH_FACTOR: f32 = 2.0;
+/// Raised 2.0 → 7.0 by the P3 sweep (2026-07-06,
+/// `docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P3, BUG-041): at 2.0 the dive/riser/
+/// growl scenarios false-fired continuously (their timbre/tilt motion reads as
+/// broadband dB flux even after the frequency max-filter); 7.0 is the minimal
+/// value (paired with `SUPERFLUX_DELTA` 48.0) that silences all three while
+/// leaving every real kick in `kicks`/`busymix` untouched — see the phase
+/// report's sweep table for the full grid.
+const SUPERFLUX_THRESH_FACTOR: f32 = 7.0;
 /// Absolute floor on the adaptive threshold, in the ODF's units (the band sum of
 /// positive dB-rise — a real attack is tens to hundreds; faint quiet-passage
 /// flicker is a few units). The median × factor does the per-band self-scaling;
 /// this δ is just the floor that stops near-silent flux from firing on the
 /// multiplicative term when the median baseline is ≈ 0 (the old 1e-3 was dead in
 /// these units). Active only in quiet passages, where band width barely differs,
-/// so one value works across bands. Tune against a real recording.
-const SUPERFLUX_DELTA: f32 = 3.0;
+/// so one value works across bands.
+/// Raised 3.0 → 48.0 by the same P3 sweep — the plateau that clears the false
+/// fires runs from ~30 to ~300 (real kicks start dropping out above ~400), so
+/// 48.0 sits with margin on both sides against denser real material.
+const SUPERFLUX_DELTA: f32 = 48.0;
 /// Frequency max-filter radius (bins) for vibrato suppression. The SuperFlux
 /// paper uses ±1 bin at 24 bins/octave — wide enough to cover a semitone wobble.
+/// P3 sweep (2026-07-06) tried 1/2/3: radius 1 always matched or beat wider
+/// radii at the same threshold/delta, so it is unchanged.
 const MAXFILTER_RADIUS: usize = 1;
 /// Length of the rolling ODF history per band (~85 ms at hop ≈ 5.3 ms). Its MEDIAN
 /// is the adaptive threshold baseline — robust to the onset spikes it is measured
@@ -564,6 +576,8 @@ const ODF_MEDIAN_HOPS: usize = 16;
 /// 1-hop turnover fired on every small 2-hop bump a noisy ODF throws on a busy mix;
 /// requiring the candidate to top the last few hops rejects those. Past-only data,
 /// so it costs no latency — the fire still lands one hop after the true peak.
+/// P3 sweep (2026-07-06) tried 4/8: no measurable effect at the chosen
+/// threshold/delta, so left unchanged.
 const ODF_PEAK_LOOKBACK: usize = 4;
 /// Per-hop decay of the transient impulse (~100 ms settle at hop ≈ 5.3 ms).
 const ONSET_DECAY: f32 = 0.85;

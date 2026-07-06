@@ -291,8 +291,13 @@ D1 amendment (untilted column) is recorded in D1; do not re-try tilted input.
 *Forbidden:* normalizing salience per hop (kills the presence ratio later); subharmonic
 "corrections" bolted on before the tracker exists.
 
-**P2 — Tracker + features + harness lanes. ⚙ CODE SHIPPED 2026-07-06; 6/9 gate lines
-PASS; the dive/wobble gates are BLOCKED ON P3, by measurement.** Shipped: D5 tracker
+**P2 — Tracker + features + harness lanes. ✅ SHIPPED 2026-07-06 — ALL gate lines
+PASS after P3 landed the same day** (dive max Δ 0.383 st / mean 0.057 / 100% within
+±1 st; wobble stddev 0.318 st; kicks/riser/growl as below). The paragraph that follows
+records the mid-phase state for archaeology: P2's code shipped with dive/wobble
+blocked on BUG-041, and P3's sweep alone closed both — the D5 step-4 softening was
+NOT needed. The D6 presence-scale recalibration (finding 2 below) remains OPEN, owed
+before P4 exposes Presence in the drawer. Shipped: D5 tracker
 (all six unit-tested behaviors), BandFeatures pitch/presence, `set_pitch_tracking`
 (default off; other five features bit-identical when off — tested), harness lanes +
 CSV + self-printing gate lines. Passing: kicks (0% spurious low-presence), riser (100%
@@ -327,7 +332,14 @@ sustained acquisition (≤ 20% of hops).
 *Forbidden:* smoothing pitch anywhere but the D5 state machine; reading `latest()`
 features into the tracker (it consumes the column, not its own outputs).
 
-**P3 — Onset hardening vs. the dive (BUG-041).** Parameter sweep in the harness
+**P3 — Onset hardening vs. the dive (BUG-041). ✅ SHIPPED 2026-07-06.** Sweep of ~150
+configs found the threshold, not the max-filter, was the defect: `SUPERFLUX_THRESH_FACTOR`
+2.0→7.0, `SUPERFLUX_DELTA` 3.0→48.0 (real kicks survive delta 30–300; 48 sits
+mid-plateau); radius and lookback unchanged (no measurable effect). Dive/riser/growl
+0 false fires, kicks exactly 8, busymix 8; P2 gates all green with no D5 softening.
+⚠ Tuned on synthetics — the stricter threshold applies to the live Transients feature
+everywhere; validate soft-onset material against Peter's reference clips (VD: the
+one open verification debt of P2/P3). Original brief follows. Parameter sweep in the harness
 (max-filter radius, `SUPERFLUX_DELTA`, lookback) against dive/kicks/busymix CSVs;
 commit the winning constants with the sweep table in the phase report. If no point in
 the sweep passes, escalate with the table — do not invent new detector architecture in

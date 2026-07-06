@@ -81,6 +81,9 @@ const FEATURE_NAMES: [&str; 7] =
 /// outputs, appended below the original five (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P2).
 const PITCH_IDX: usize = 5;
 const PRESENCE_IDX: usize = 6;
+/// Index of `TRANSIENTS` in [`FEATURE_NAMES`] — the P3 fire-count instrument
+/// reads this directly (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P3).
+const TRANSIENTS_IDX: usize = 4;
 /// The doc's display rule (D6): the PITCH lane only draws where the SAME
 /// band's presence has cleared this bar — a low-confidence pitch reading is a
 /// held/stale position, not a real one. PRESENCE itself always draws.
@@ -397,6 +400,7 @@ fn analyze_and_render(
     // ── P2 gates (docs/AUDIO_OBJECT_TRACKING_DESIGN.md P2): the D5 tracker's
     // numeric acceptance bar, one line per metric, selftest only.
     if args.selftest {
+        print_p3_fires(label, &records);
         print_p2_gates(label, &records, dt, ground_truth);
     }
 
@@ -425,6 +429,37 @@ fn naive_argmax_bin(tilted: &[f32]) -> Option<f32> {
 /// `f_hz` in semitones relative to `ref_hz` (signed, `12 * log2(f/ref)`).
 fn semitones_vs(f_hz: f32, ref_hz: f32) -> f32 {
     12.0 * (f_hz / ref_hz.max(1e-6)).log2()
+}
+
+/// P3 sweep instrument (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P3, BUG-041):
+/// counts hops (after warm-up) where a band's `Transients` feature hit its
+/// fired value (`> 0.999` — the same threshold `update_trackers` reads to
+/// treat a hop as "this band's onset fired this hop", not the decayed tail).
+/// Only Full and Low are counted — the two bands the P3 gates and the dive/
+/// riser/growl/kicks/busymix scenarios care about. Wobble prints its count
+/// with no gate attached (its LFO re-attacks are arguably genuine onsets;
+/// its real gate is the P2 `pitch_stddev_st` line). This is a raw count, not
+/// a PASS/FAIL judgment — the sweep script reads the numbers against the
+/// gates named in the printed reminder.
+///
+/// `WARMUP_HOPS` here is deliberately SMALLER than the P1/P2 reports' 32 (a
+/// pitch-tracker fade-in guard, unrelated to onsets): every selftest scenario
+/// throws exactly one unavoidable cold-start fire around hop 17-19, the
+/// structural artifact of the first real column being compared against the
+/// zero-seeded `prev_col` before any real predecessor exists — not part of
+/// BUG-041's continuous false-firing. 20 clears that single artifact while
+/// still counting `kicks`' own first kick (hop ~21, a real onset the P3
+/// "exactly 8" gate requires) — verified against the sweep CSVs.
+fn print_p3_fires(label: &str, records: &[HopRecord]) {
+    const WARMUP_HOPS: usize = 20;
+    const FULL: usize = 0;
+    const LOW: usize = 1;
+    let post = &records[WARMUP_HOPS.min(records.len())..];
+    let full_fires = post.iter().filter(|r| r.raw[TRANSIENTS_IDX][FULL] > 0.999).count();
+    let low_fires = post.iter().filter(|r| r.raw[TRANSIENTS_IDX][LOW] > 0.999).count();
+    println!(
+        "P3 {label}: full_fires={full_fires} low_fires={low_fires} (gates: dive full 0, kicks low == 8, busymix low >= 7, riser full 0, growl full 0)"
+    );
 }
 
 /// P2 numeric gates (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P2's phase-report
