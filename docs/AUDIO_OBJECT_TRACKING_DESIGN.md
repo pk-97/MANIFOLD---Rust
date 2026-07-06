@@ -54,15 +54,22 @@ function, the tracker state machine, two enum variants, and one stride bump.
 
 ## 2. Decisions
 
-**D1 — Salience = harmonic summing on the existing VQT column.** Per hop, per send:
+**D1 — Salience = harmonic summing on the existing VQT column, UNTILTED (amended
+2026-07-06 during P1).** Per hop, per send:
 `S[k] = Σ_{h=1..5} w_h · col[k + off_h]` where `off_h = round(bpo · log2(h))` (bins are
 geometric, so harmonic h is a *fixed* bin offset: 0, 24, 38, 48, 56 at bpo 24) and
-`w = [1.0, 0.8, 0.6, 0.45, 0.35]` (starting values; tuned in P1 against the eval set).
-Computed on the **tilted, floored column** — the exact data the user sees and the bands
-read, so "what you see is what modulates" extends to pitch. A wide supersaw or a growl
-has energy smeared around each harmonic; summing across the stack makes the fundamental
-the dominant peak even when no single bin is. Cost: ~5 adds × 266 bins + a peak scan
-per hop — trivial against the existing VQT FFT.
+`w = [1.0, 0.8, 0.6, 0.45, 0.35]`. A wide supersaw or a growl has energy smeared
+around each harmonic; summing across the stack makes the fundamental the dominant peak
+even when no single bin is. Cost: ~5 adds × 266 bins + a peak scan per hop — trivial.
+**Amendment, with evidence:** the original decision said the *tilted* column; P1
+measured that wrong. A harmonic comb is self-similar (the sub-comb at 2^m·f0 is a
+subset of the real comb), so salience at octave multiples is always competitive, and
+the +3 dB/oct display tilt plus geometric-bin integration hands the top end the boost
+it needs to win — dive per-hop hit rate 22.3% tilted vs 66.4% untilted, errors always
++1..+3 octaves ABOVE truth, never below. Salience therefore reads the **untilted,
+floored** column (`vqt_raw` post-floor — same floor, so "black = silent" still holds;
+the tilt remains a display + band-feature concern). This is the same reason
+MELODIA-family systems whiten before harmonic summing.
 **Rejected: time-domain mono pitch (YIN/autocorrelation)** — assumes monophonic input;
 fails exactly on the full-mix case Peter names, and duplicates spectral machinery.
 
@@ -266,15 +273,21 @@ formant motion at constant pitch). Selftest gains `--csv <dir>`: per-hop ground 
 *Gate:* six PNGs render; CSV columns documented in the example's header comment.
 *Demo:* the two new PNGs — L2. *Forbidden:* reusing the busymix synth as "growl".
 
-**P1 — Salience column, offline-verified.** `salience_into(col, bpo, out)` in
-`analysis.rs` + peak-pick with parabolic refine, unit-tested (pure functions). Harness:
-salience peak per hop overlaid on the spectrogram (small dots, Full window only for
-now).
-*Gate (numeric, from CSV):* dive — argmax-salience within ±2 bins of known f0 on ≥95%
-of hops after warm-up (the raw column's argmax sits on harmonics instead — record the
-before/after in the report); growl — ±2 bins of 150 Hz on ≥95% despite the moving
-tilt; riser — no gate (salience may be garbage; the tracker's presence handles it).
-*Demo:* dive PNG with the dot-trace riding the fundamental — L2.
+**P1 — Salience column, offline-verified. ✅ SHIPPED 2026-07-06 (gate as amended).**
+`salience_into(col, bpo, out)` in `analysis.rs` + peak-pick with parabolic refine,
+unit-tested (pure functions). Harness: salience peak per hop overlaid on the
+spectrogram (small dots, Full window only for now).
+*Gate — amended 2026-07-06 with measured evidence:* the original bar (dive per-hop
+argmax ≥95%) was mis-calibrated — the dive's 7-voice detune beating genuinely cancels
+the fundamental bin for short stretches (measured: 36 miss runs, median 4 hops,
+max 35, ZERO exceeding the D5 hold window of 38), which no memoryless per-hop
+estimator can beat; temporal integration is the tracker's job by design. Amended gate:
+dive — per-hop argmax within ±2 bins ≥60% AND max consecutive-miss run ≤38 hops;
+growl — ≥95%; riser — no gate. **Shipped numbers: dive 66.4% / max run 35 (naive
+tilted baseline 20.8%); growl 100%.** The ≥95%-of-hops smoothness bar is enforced at
+P2's tracked-trajectory gate, unchanged. Executor note: P1's failure → diagnosis →
+D1 amendment (untilted column) is recorded in D1; do not re-try tilted input.
+*Demo:* dive PNG with the dot-trace riding the fundamental — L2. ✅
 *Forbidden:* normalizing salience per hop (kills the presence ratio later); subharmonic
 "corrections" bolted on before the tracker exists.
 

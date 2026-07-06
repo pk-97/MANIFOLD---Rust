@@ -603,7 +603,12 @@ fn band_edges(
 /// Slope is the single [`SpectrogramConfig::tilt_slope`] the display shader also
 /// reads, so applying it once to the raw magnitudes makes every reduction — and
 /// the floor — read the exact tilted dB the user sees painted.
-fn tilt_weights(cfg: &SpectrogramConfig, sample_rate: f32, num_bins: usize) -> Vec<f32> {
+///
+/// Public so `examples/mod_harness.rs` can form the exact tilted column from
+/// the (floored, untilted) scope column it drains, without duplicating this
+/// formula — see the harness's per-hop salience overlay
+/// (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P1).
+pub fn tilt_weights(cfg: &SpectrogramConfig, sample_rate: f32, num_bins: usize) -> Vec<f32> {
     let nb = num_bins.max(1);
     let fmin = cfg.fmin.max(1.0);
     let flr = (cfg.effective_fmax(sample_rate) / fmin).log2();
@@ -614,6 +619,78 @@ fn tilt_weights(cfg: &SpectrogramConfig, sample_rate: f32, num_bins: usize) -> V
             10.0f32.powf(tilt_db / 20.0)
         })
         .collect()
+}
+
+// ── Salience — D1, docs/AUDIO_OBJECT_TRACKING_DESIGN.md ─────────────────────
+//
+// "Which peak is the perceptual fundamental" over the exact tilted, floored
+// VQT column the scope draws and the bands reduce (P1's whole point: no
+// second transform, no divergence between what's seen and what modulates).
+// A wide supersaw or a growl smears energy around each harmonic; summing
+// across the harmonic stack makes the fundamental dominant even when no
+// single bin is the loudest.
+
+/// D1 harmonic weights `w_h` for `h = 1..=5` (fundamental through 5th
+/// harmonic) — starting values, tuned against the eval set in P1.
+const SALIENCE_WEIGHTS: [f32; 5] = [1.0, 0.8, 0.6, 0.45, 0.35];
+
+/// Harmonic-sum salience (D1): `S[k] = Σ_{h=1..5} w_h · col[k + off_h]`, where
+/// `off_h = round(bpo · log2(h))` — bins are geometric, so harmonic `h` above
+/// bin `k` is a *fixed* bin offset regardless of `k` (0, 24, 38, 48, 56 at
+/// `bpo` 24). `col` must be the tilted, floored column
+/// ([`form_tilted_column`] + the caller's floor pass) — the same data the
+/// user sees and the bands read. Bins beyond `col`'s end contribute 0
+/// (saturating access, no wraparound). `out.len()` must equal `col.len()`.
+///
+/// Deliberately **not normalized** per hop — the absolute scale is what lets
+/// a later presence feature read `salience ÷ window energy` (D6); normalizing
+/// here would erase that signal before it exists.
+pub fn salience_into(col: &[f32], bpo: usize, out: &mut [f32]) {
+    debug_assert_eq!(col.len(), out.len(), "salience_into: out must match col in length");
+    let bpof = bpo as f32;
+    for (k, s) in out.iter_mut().enumerate() {
+        let mut sum = 0.0f32;
+        for (i, &w) in SALIENCE_WEIGHTS.iter().enumerate() {
+            let h = (i + 1) as f32;
+            let off = (bpof * h.log2()).round() as usize;
+            if let Some(&v) = col.get(k + off) {
+                sum += w * v;
+            }
+        }
+        *s = sum;
+    }
+}
+
+/// The dominant salience peak: the global maximum, refined to a fractional
+/// bin by parabolic interpolation over its two neighbours (clamped to the
+/// valid range at the array edges). Returns `(fractional_bin, peak_value)`,
+/// or `None` when the column is fully floored (all-zero salience — every
+/// magnitude non-negative, so the max is exactly 0 only in that case).
+pub fn salience_peak(salience: &[f32]) -> Option<(f32, f32)> {
+    if salience.is_empty() {
+        return None;
+    }
+    let (mut best_k, mut best_v) = (0usize, salience[0]);
+    for (k, &v) in salience.iter().enumerate().skip(1) {
+        if v > best_v {
+            best_k = k;
+            best_v = v;
+        }
+    }
+    if best_v <= 0.0 {
+        return None;
+    }
+    let n = salience.len();
+    let km1 = best_k.saturating_sub(1);
+    let kp1 = (best_k + 1).min(n - 1);
+    let delta = if km1 != best_k && kp1 != best_k {
+        let (y0, y1, y2) = (salience[km1], salience[best_k], salience[kp1]);
+        let denom = y0 - 2.0 * y1 + y2;
+        if denom.abs() > 1e-12 { (0.5 * (y0 - y2) / denom).clamp(-1.0, 1.0) } else { 0.0 }
+    } else {
+        0.0
+    };
+    Some((best_k as f32 + delta, best_v))
 }
 
 /// One band's reductions from a tilted VQT column plus the previous column.
@@ -1857,5 +1934,82 @@ mod tests {
         let mut after = 0;
         a.drain_scope_columns(|_| after += 1);
         assert_eq!(after, 0, "disabling scope clears buffered columns");
+    }
+
+    // ── Salience (D1) — synthetic columns, no FFT ────────────────────────
+
+    /// bpo 24 harmonic offsets, matching the D1 worked example in the design
+    /// doc: fundamental + 2nd..5th harmonic land at +0, +24, +38, +48, +56.
+    const SAL_BPO: usize = 24;
+    const SAL_OFFS: [usize; 5] = [0, 24, 38, 48, 56];
+
+    #[test]
+    fn salience_argmax_lands_on_fundamental_not_a_harmonic() {
+        // A full harmonic series (fundamental at B, decaying harmonics at
+        // B + off_h) — salience must peak at B, not at any harmonic bin.
+        let b = 40usize;
+        let n = b + SAL_OFFS[4] + 20;
+        let mut col = vec![0.0f32; n];
+        for (off, &w) in SAL_OFFS.iter().zip(SALIENCE_WEIGHTS.iter()) {
+            col[b + off] = w;
+        }
+        let mut sal = vec![0.0f32; n];
+        salience_into(&col, SAL_BPO, &mut sal);
+        let (peak_bin, peak_val) = salience_peak(&sal).expect("harmonic series is not all-zero");
+        assert!(
+            (peak_bin - b as f32).abs() < 1.0,
+            "salience argmax should land on the fundamental bin {b}, got {peak_bin}"
+        );
+        // The fundamental sums every harmonic; no other bin can do that, so
+        // its raw (un-refined) value must strictly beat every other bin.
+        let (argmax_k, _) =
+            sal.iter().enumerate().fold((0usize, f32::MIN), |(bk, bv), (k, &v)| if v > bv { (k, v) } else { (bk, bv) });
+        assert_eq!(argmax_k, b, "argmax bin");
+        assert!(peak_val > 0.0);
+    }
+
+    #[test]
+    fn salience_survives_a_missing_fundamental() {
+        // Energy ONLY at the 2nd..5th harmonic bins (nothing at B itself) —
+        // salience must still argmax at B, because summing the harmonics
+        // that ARE present still out-scores treating any single harmonic as
+        // its own fundamental.
+        let b = 60usize;
+        let n = b + SAL_OFFS[4] + 20;
+        let mut col = vec![0.0f32; n];
+        for (off, &w) in SAL_OFFS.iter().zip(SALIENCE_WEIGHTS.iter()).skip(1) {
+            col[b + off] = w;
+        }
+        assert_eq!(col[b], 0.0, "fundamental bin itself carries no energy");
+        let mut sal = vec![0.0f32; n];
+        salience_into(&col, SAL_BPO, &mut sal);
+        let (argmax_k, _) =
+            sal.iter().enumerate().fold((0usize, f32::MIN), |(bk, bv), (k, &v)| if v > bv { (k, v) } else { (bk, bv) });
+        assert_eq!(argmax_k, b, "missing-fundamental argmax should still land on B");
+    }
+
+    #[test]
+    fn salience_peak_parabolic_refine_leans_toward_taller_neighbour() {
+        // Asymmetric 3-point peak: y0=1.0, y1=3.0 (argmax), y2=2.0 — the
+        // taller neighbour is to the right, so the refined bin must sit
+        // strictly between k and k+1 (biased right of the integer peak).
+        let k = 10usize;
+        let mut sal = vec![0.0f32; 21];
+        sal[k - 1] = 1.0;
+        sal[k] = 3.0;
+        sal[k + 1] = 2.0;
+        let (refined, val) = salience_peak(&sal).expect("has a positive peak");
+        assert_eq!(val, 3.0);
+        assert!(
+            refined > k as f32 && refined < (k + 1) as f32,
+            "refined bin {refined} should lie strictly between {k} and {}",
+            k + 1
+        );
+    }
+
+    #[test]
+    fn salience_peak_none_on_all_zero_column() {
+        let sal = vec![0.0f32; 32];
+        assert_eq!(salience_peak(&sal), None, "fully floored column has no peak");
     }
 }

@@ -35,7 +35,7 @@
 //! (label = selftest scenario name, or the input path for file jobs), one row
 //! per hop, columns:
 //! ```text
-//! hop_index,time_s,ground_truth_f0_hz,
+//! hop_index,time_s,ground_truth_f0_hz,salience_f0_hz,
 //!   full_amplitude,full_brightness,full_noisiness,full_liveliness,full_transients,
 //!   low_amplitude,low_brightness,low_noisiness,low_liveliness,low_transients,
 //!   mid_amplitude,mid_brightness,mid_noisiness,mid_liveliness,mid_transients,
@@ -48,9 +48,11 @@
 //! scenario's own known f0 curve (dive = the exponential glide formula,
 //! wobble/growl = constant 150.0) or `NaN` where there is no single tracked
 //! fundamental (kicks, busymix, riser) or for file inputs (unknown ground
-//! truth).
+//! truth). `salience_f0_hz` is the P1 harmonic-sum salience peak (Full window
+//! only, `docs/AUDIO_OBJECT_TRACKING_DESIGN.md` D1) converted to Hz, or `NaN`
+//! on a fully-floored column.
 
-use manifold_audio::analysis::StreamingSendAnalyzer;
+use manifold_audio::analysis::{StreamingSendAnalyzer, salience_into, salience_peak, tilt_weights};
 use manifold_core::audio_mod::AudioModShape;
 use manifold_core::audio_setup::{DEFAULT_LOW_HZ, DEFAULT_MID_HZ, FLOOR_DB_OFF};
 use manifold_spectral::SpectrogramConfig;
@@ -80,6 +82,10 @@ struct HopRecord {
     raw: [[f32; 4]; 5],
     /// Same, after the default AudioModShape follower (what a param would receive).
     smoothed: [[f32; 4]; 5],
+    /// P1 salience peak (Full window only), D1 harmonic-sum over the tilted,
+    /// floored column: `fmin · 2^(refined_bin / bpo)`. `NaN` when the column
+    /// is fully floored (no peak) — see `manifold_audio::analysis::salience_peak`.
+    salience_f0_hz: f32,
 }
 
 struct Args {
@@ -220,6 +226,14 @@ fn analyze_and_render(
     an.set_scope(true);
     let num_bins = an.num_bins();
     let (fmin, fmax) = an.freq_range();
+    let bpo = cfg.bpo;
+    // Tilt weights are kept ONLY for the naive "before" baseline print — the
+    // display column. Salience itself reads the UNTILTED floored column (D1 as
+    // amended 2026-07-06): the +3dB/oct tilt hands the self-similar sub-comb
+    // at 4x/8x f0 exactly the boost it needs to out-salience the fundamental
+    // (measured on the dive: 22.3% tilted -> 66.4% untilted per-hop hit rate).
+    let tilt_w = tilt_weights(&cfg, sr as f32, num_bins);
+    let mut salience_scratch = vec![0.0f32; num_bins];
 
     let shape = AudioModShape::default();
     let mut smooth_state = [[0.0f32; 4]; 5];
@@ -246,7 +260,22 @@ fn analyze_and_render(
                         shape.apply(v, dt, &mut smooth_state[fi][b], &mut prev_raw[fi][b]);
                 }
             }
-            records.push(HopRecord { col, centroid_yfb: centroid, onset_fired: onsets, raw, smoothed });
+            // Salience reads the UNTILTED floored column (D1 as amended
+            // 2026-07-06 — the raw scope column is already floored, so this is
+            // exactly the analyzer's `vqt_raw` post-floor).
+            salience_into(&col, bpo, &mut salience_scratch);
+            let salience_f0_hz = match salience_peak(&salience_scratch) {
+                Some((bin, _peak_val)) => fmin * 2f32.powf(bin / bpo as f32),
+                None => f32::NAN,
+            };
+            records.push(HopRecord {
+                col,
+                centroid_yfb: centroid,
+                onset_fired: onsets,
+                raw,
+                smoothed,
+                salience_f0_hz,
+            });
         }
     }
 
@@ -280,6 +309,55 @@ fn analyze_and_render(
         println!("{line}");
     }
 
+    // ── P1 report: naive argmax (no harmonic sum) vs salience argmax,
+    //    percentage of hops (after warm-up) within ±2 bins of the scenario's
+    //    own known f0 — the numeric gate from
+    //    docs/AUDIO_OBJECT_TRACKING_DESIGN.md P1. dive/growl only: they carry
+    //    a real ground-truth curve; wobble/kicks/busymix/riser and file jobs
+    //    don't (no gate at P1 — see the doc's P1 section).
+    if args.selftest && (label == "dive" || label == "growl") {
+        // P1 gate, as amended 2026-07-06 (see AUDIO_OBJECT_TRACKING_DESIGN P1):
+        // per-hop argmax is "trackable", not near-perfect — the dive's 7-voice
+        // beating genuinely cancels the fundamental for ~4-hop stretches, which
+        // no memoryless estimator can beat; the D5 tracker's hold (38 hops)
+        // absorbs it. Gate: dive >= 60% AND max miss-run <= 38 hops; growl
+        // (no beating) >= 95%. The >= 95% smoothness bar lives in P2's tracked
+        // trajectory, where temporal integration exists.
+        const WARMUP_HOPS: usize = 32;
+        let bpo_f = bpo as f32;
+        let gt_bin = |f0_hz: f32| bpo_f * (f0_hz / fmin).max(1e-6).log2();
+        let (mut naive_hits, mut sal_hits, mut total) = (0usize, 0usize, 0usize);
+        let (mut miss_run, mut max_miss_run) = (0usize, 0usize);
+        for (idx, r) in records.iter().enumerate().skip(WARMUP_HOPS) {
+            let f0 = ground_truth(idx as f32 * dt);
+            if !f0.is_finite() {
+                continue;
+            }
+            let want = gt_bin(f0);
+            total += 1;
+            let tilted: Vec<f32> = r.col.iter().zip(tilt_w.iter()).map(|(&c, &w)| c * w).collect();
+            if let Some(nb) = naive_argmax_bin(&tilted)
+                && (nb - want).abs() <= 2.0
+            {
+                naive_hits += 1;
+            }
+            let hit = r.salience_f0_hz.is_finite() && (gt_bin(r.salience_f0_hz) - want).abs() <= 2.0;
+            if hit {
+                sal_hits += 1;
+                miss_run = 0;
+            } else {
+                miss_run += 1;
+                max_miss_run = max_miss_run.max(miss_run);
+            }
+        }
+        let naive_pct = 100.0 * naive_hits as f64 / total.max(1) as f64;
+        let sal_pct = 100.0 * sal_hits as f64 / total.max(1) as f64;
+        let gate_pct = if label == "dive" { 60.0 } else { 95.0 };
+        println!(
+            "{label}: naive {naive_pct:.1}% -> salience {sal_pct:.1}% (gate >= {gate_pct}%), max miss-run {max_miss_run} hops (gate <= 38)"
+        );
+    }
+
     if let Some(dir) = &args.csv_dir {
         write_csv(dir, label, &records, dt, ground_truth);
     }
@@ -288,16 +366,31 @@ fn analyze_and_render(
     println!("wrote {out}");
 }
 
+/// Naive argmax (no D1 harmonic sum): the loudest bin of a tilted column as-
+/// is, the P1 report's "before" baseline. `None` on a fully-floored column
+/// (mirrors [`salience_peak`]'s convention).
+fn naive_argmax_bin(tilted: &[f32]) -> Option<f32> {
+    let (mut bk, mut bv) = (0usize, *tilted.first()?);
+    for (k, &v) in tilted.iter().enumerate().skip(1) {
+        if v > bv {
+            bk = k;
+            bv = v;
+        }
+    }
+    (bv > 0.0).then_some(bk as f32)
+}
+
 /// One `<dir>/<label>.csv`, one row per hop: hop index, time, ground-truth
-/// f0 (or NaN), then the five raw features for each of the four bands — see
-/// the module header comment for the exact column layout this must match.
+/// f0 (or NaN), the P1 salience-peak f0 estimate (or NaN), then the five raw
+/// features for each of the four bands — see the module header comment for
+/// the exact column layout this must match.
 fn write_csv(dir: &str, label: &str, records: &[HopRecord], dt: f32, ground_truth: GroundTruthFn) {
     std::fs::create_dir_all(dir).unwrap_or_else(|e| {
         eprintln!("failed to create csv dir {dir}: {e}");
         std::process::exit(1);
     });
     let path = format!("{dir}/{label}.csv");
-    let mut csv = String::from("hop_index,time_s,ground_truth_f0_hz");
+    let mut csv = String::from("hop_index,time_s,ground_truth_f0_hz,salience_f0_hz");
     for band in BAND_NAMES {
         let band_lc = band.to_ascii_lowercase();
         for feat in FEATURE_NAMES {
@@ -307,7 +400,7 @@ fn write_csv(dir: &str, label: &str, records: &[HopRecord], dt: f32, ground_trut
     csv.push('\n');
     for (idx, r) in records.iter().enumerate() {
         let t = idx as f32 * dt;
-        csv.push_str(&format!("{idx},{t:.6},{}", ground_truth(t)));
+        csv.push_str(&format!("{idx},{t:.6},{},{}", ground_truth(t), r.salience_f0_hz));
         for b in 0..4 {
             for fi in 0..5 {
                 csv.push_str(&format!(",{}", r.raw[fi][b]));
@@ -612,6 +705,20 @@ fn render_png(
             if cy >= 0.0 {
                 let py = SPEC_H - 1 - (cy * (SPEC_H - 1) as f32) as usize;
                 blend_pixel(&mut img, x0 + x, y + py, color, 0.9);
+            }
+        }
+        // P1 salience-peak dot (Full window only, D1 harmonic-sum fundamental):
+        // small bright marker riding the fundamental, same global-display-y
+        // mapping as the centroid traces above. Only drawn where a peak
+        // exists (fully-floored hops carry NaN — nothing to draw).
+        if r.salience_f0_hz.is_finite() {
+            let sal_bin = cfg.bpo as f32 * (r.salience_f0_hz / cfg.fmin.max(1.0)).max(1e-6).log2();
+            let sal_yfb = (sal_bin * inv_nb).clamp(0.0, 1.0);
+            let py = SPEC_H - 1 - (sal_yfb * (SPEC_H - 1) as f32) as usize;
+            for dy in 0..2usize {
+                for dx in 0..2usize {
+                    blend_pixel(&mut img, x0 + x + dx, y + py.saturating_sub(dy), [255, 250, 235], 0.95);
+                }
             }
         }
         // Transient ticks: three stacked lanes at the BOTTOM edge, Low lowest —
