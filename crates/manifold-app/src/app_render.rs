@@ -4453,12 +4453,12 @@ impl Application {
                 }
                 // D15 "landing-line flash" — a brief vertical line at the beat a
                 // move-drag settled to, spanning the dragged selection's layer
-                // range; drawn through the D7 lane-content scissor. NOTE (P1
-                // merge, 2026-07-04): dormant under the P1.4 per-frame-snap model
-                // — its trigger lived in `finalize_move_snap`, which P1.4 deleted
-                // (snap is continuous now, so there is no discrete snap moment to
-                // flash). Preserved so Peter's motion pass can re-hook the fire at
-                // drag-end if wanted. See `docs/UI_CRAFT_AND_MOTION_PLAN.md` D15.
+                // range; drawn through the D7 lane-content scissor. Re-hooked
+                // 2026-07-07: `InteractionOverlay::on_end_drag` fires it on a
+                // Move commit that actually landed (P1.4's continuous snap had
+                // deleted the old `finalize_move_snap` trigger and left this
+                // drawer dormant). Feel sign-off owed to Peter
+                // (`docs/UI_CRAFT_AND_MOTION_PLAN.md` D15 gate).
                 if let Some((progress, beat, min_layer, max_layer)) = self.overlay.landing_flash() {
                     let x = self.ws.ui_root.viewport.beat_to_pixel(beat);
                     let y0 = self.ws.ui_root.viewport.track_y(min_layer);
