@@ -404,6 +404,19 @@ kicks fire in Low.
 detector on tracker state (coupling direction is tracker←onset per §6.2, never both
 ways in v1).
 
+**P4 — Modulation surface + serde. ✅ SHIPPED 2026-07-06 (`586d2bac`).**
+Pitch/Presence kinds live in the drawer matrix (kind row + AUDIO_KIND_COUNT now
+derive from `AudioFeatureKind::ALL` — a future kind cannot leave the drawer
+stale); legacy `pitch`/`pitchDelta` retarget onto the tracker (D3); D7
+activation set = `Project::sends_with_pitch_mods()`, recomputed on
+data-version change only, toggling each send analyzer's `set_pitch_tracking`.
+Gates green: round-trip integration test (manifold-io `load_project`), serde
+names over ALL kinds, legacy cases, `rg PitchDelta` = migration arm only,
+workspace sweep + clippy. VERIFICATION_DEBT (L2 floor per the brief): drawer
+row is now 7 uniform buttons — label fit needs a running-app look (BUG-033
+blocks headless UI); runtime activation needs one running-app smoke with a
+bound Pitch mod driving a param. Original brief follows.
+
 **P4 — Modulation surface + serde.** `Pitch`/`Presence` kinds, drawer rows (two more
 entries in the existing feature `DrawerSpec` — precedent §10.2), legacy migration
 retarget (D3), activation set runtime wiring if P2 deferred it.
