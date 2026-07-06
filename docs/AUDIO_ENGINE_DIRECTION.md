@@ -63,7 +63,8 @@ flattened.
   Note the embryo already exists: `render_export_mix` (audio_mixdown.rs) is a
   hand-rolled mixer (sum, gain, varispeed resample); the custom engine is
   roughly that, in a CoreAudio callback, with lock-free parameter delivery.
-- **Swap timing (asked and answered 2026-07-07): not before Stage 1.** Measured
+- **Swap timing (Fable's recommendation 2026-07-07 — Peter has NOT ratified;
+  the whole thread was discussion, not decisions): not before Stage 1.** Measured
   footprint: kira is confined to manifold-playback, effectively one file
   (`audio_layer_playback.rs`, ~600 lines) — the swap is a phase, not an epic.
   But pre-Stage-1 it buys nothing user-visible while re-owning what kira gives
