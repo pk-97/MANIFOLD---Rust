@@ -1,12 +1,17 @@
 //! Audio Setup panel — the central place to route audio in and manage the
 //! named sends that the per-slider audio drawers reference.
 //!
-//! A floating modal (over the main UI) with an input-device picker and one row
-//! per send: channel, gain, and delete, plus an "Add send" button. Self-
-//! contained like [`super::browser_popup`]: it builds `UITree` nodes from data
-//! handed in via [`AudioSetupPanel::configure`] and maps a clicked node id back
-//! to a [`PanelAction`] (the project-level audio-setup actions, already routed
-//! through `ui_bridge`). See `docs/AUDIO_MODULATION_DESIGN.md` §10.1.
+//! A non-dimming overlay docked to the viewport's right edge (D6 —
+//! `docs/AUDIO_SENDS_UX_DESIGN.md` §2/§3.3), full height, with an input-device
+//! picker and one row per send: channel, gain, and delete, plus an "Add send"
+//! button. The show stays visible underneath and outside clicks pass through
+//! (it's a calibration surface used while performing — accidental dismissal
+//! is the failure mode); Escape and the header Audio button still close it.
+//! Self-contained like [`super::browser_popup`]: it builds `UITree` nodes from
+//! data handed in via [`AudioSetupPanel::configure`] and maps a clicked node
+//! id back to a [`PanelAction`] (the project-level audio-setup actions,
+//! already routed through `ui_bridge`). See
+//! `docs/AUDIO_MODULATION_DESIGN.md` §10.1.
 //!
 //! v1 scope: device cycle, add/remove send, per-send single-channel routing and
 //! gain trim. Per-send labels are auto-assigned ("Audio N") until a text-field
@@ -27,17 +32,23 @@ use super::{BandDivider, PanelAction};
 const KEY_BG: u64 = 70_001;
 const KEY_CLOSE: u64 = 70_002;
 use super::overlay::{
-    Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse, SizePolicy, compute_overlay_rect,
+    Anchor, Corner, Modality, Overlay, OverlayPlacement, OverlayResponse, SizePolicy,
+    compute_overlay_rect,
 };
 
 // ── Layout ──
-/// Minimum panel width (small screens / compact fallback). The modal targets a
-/// fraction of the viewport (see [`AudioSetupPanel::resize_to_viewport`]) but
+/// Minimum panel width (small screens / compact fallback). The overlay targets
+/// a fraction of the viewport (see [`Overlay::size_policy`] and
+/// [`AudioSetupPanel::build_at`], which resizes the scope to fill it) but
 /// never shrinks below this.
 const PANEL_W_MIN: f32 = 460.0;
-/// Fraction of the viewport the enlarged modal fills, width and height.
-const PANEL_W_FRAC: f32 = 0.8;
-const PANEL_H_FRAC: f32 = 0.8;
+/// Fraction of the viewport width the right-anchored panel fills (D6 — a
+/// calibration surface docked beside the live output, not a centered modal
+/// that dims the show).
+const PANEL_W_FRAC: f32 = 0.38;
+/// Fraction of the viewport height the panel fills — full height, so the
+/// scope + trigger rows have room without the panel floating mid-screen.
+const PANEL_H_FRAC: f32 = 1.0;
 const TITLE_H: f32 = 26.0;
 const ROW_H: f32 = 24.0;
 const ROW_GAP: f32 = 4.0;
@@ -228,6 +239,10 @@ struct TriggerRowIds {
     enable: NodeId,
     sens_minus: NodeId,
     sens_plus: NodeId,
+    /// The sensitivity value label between the steppers — a D7 horizontal
+    /// drag zone (`pointer-down` arms
+    /// [`AudioSetupPanel::sensitivity_drag_target`]).
+    sens_value: NodeId,
     len_minus: NodeId,
     len_plus: NodeId,
     layer: NodeId,
@@ -254,6 +269,7 @@ impl Default for TriggerRowIds {
             enable: NodeId::PLACEHOLDER,
             sens_minus: NodeId::PLACEHOLDER,
             sens_plus: NodeId::PLACEHOLDER,
+            sens_value: NodeId::PLACEHOLDER,
             len_minus: NodeId::PLACEHOLDER,
             len_plus: NodeId::PLACEHOLDER,
             layer: NodeId::PLACEHOLDER,
@@ -287,6 +303,9 @@ struct SendRowIds {
     ch_dropdown: NodeId,
     gain_minus: NodeId,
     gain_plus: NodeId,
+    /// The gain value label between the steppers — a D7 horizontal drag zone
+    /// (`pointer-down` arms [`AudioSetupPanel::gain_drag_target`]).
+    gain_value: NodeId,
     stereo: NodeId,
     delete: NodeId,
     /// Level-meter fill node + its full-scale geometry, resized in place each
@@ -307,6 +326,7 @@ impl Default for SendRowIds {
             ch_dropdown: NodeId::PLACEHOLDER,
             gain_minus: NodeId::PLACEHOLDER,
             gain_plus: NodeId::PLACEHOLDER,
+            gain_value: NodeId::PLACEHOLDER,
             stereo: NodeId::PLACEHOLDER,
             delete: NodeId::PLACEHOLDER,
             meter_fill: NodeId::PLACEHOLDER,
@@ -316,6 +336,28 @@ impl Default for SendRowIds {
             meter_h: 0.0,
         }
     }
+}
+
+/// A D7 calibration drag armed by pointer-down on a gain or trigger
+/// sensitivity value label. Carries the pre-drag pointer x + value so
+/// `on_event`'s `Drag` arm can compute the live absolute value from
+/// horizontal movement alone (1 px = 0.1 dB / 0.5%, see
+/// `docs/AUDIO_SENDS_UX_DESIGN.md` §3.4) without re-deriving it from the
+/// project each frame. Exactly one drag (crossover OR calibration) is ever
+/// armed at a time.
+#[derive(Clone)]
+enum CalibrationDrag {
+    Gain {
+        send: AudioSendId,
+        start_x: f32,
+        start_db: f32,
+    },
+    Sensitivity {
+        send: AudioSendId,
+        band: AudioBand,
+        start_x: f32,
+        start_frac: f32,
+    },
 }
 
 /// The Audio Setup modal panel.
@@ -339,9 +381,10 @@ pub struct AudioSetupPanel {
     /// The present pass blits the spectrogram texture here. `None` when closed.
     scope_rect: Option<Rect>,
     /// Resolved panel width and waterfall height for the current viewport, set by
-    /// [`AudioSetupPanel::resize_to_viewport`]. The modal targets
-    /// [`PANEL_W_FRAC`]×[`PANEL_H_FRAC`] of the screen; the control rows are
-    /// fixed-height, so the scope absorbs the extra vertical space.
+    /// [`AudioSetupPanel::build_at`]. The overlay targets
+    /// [`PANEL_W_FRAC`]×[`PANEL_H_FRAC`] of the screen, right-anchored (D6); the
+    /// control rows are fixed-height, so the scope absorbs the extra vertical
+    /// space.
     panel_w: f32,
     scope_h: f32,
     /// Host for the declarative modal chrome (background + title strip). The
@@ -373,6 +416,10 @@ pub struct AudioSetupPanel {
     scope_fmax: f32,
     /// Which divider line is currently being dragged, if any.
     dragging_band: Option<BandDivider>,
+    /// The D7 calibration drag currently armed (gain or trigger sensitivity
+    /// value label), if any — mirrors `dragging_band` but per-send since gain
+    /// and sensitivity are per-row, not panel-global like the crossovers.
+    calibration_drag: Option<CalibrationDrag>,
     /// Per-band (Low/Mid/High) level-meter nodes `(track, fill, label)` in the
     /// scope's right margin. Created by `build`, repositioned + resized every
     /// frame by [`AudioSetupPanel::update_band_meters`] so they track the moving
@@ -419,6 +466,7 @@ impl Default for AudioSetupPanel {
             scope_fmin: 0.0,
             scope_fmax: 0.0,
             dragging_band: None,
+            calibration_drag: None,
             band_meter_ids: [(None, None, None); 3],
             trigger_row_ids: Vec::new(),
             inputs_remove_ids: Vec::new(),
@@ -784,7 +832,9 @@ impl AudioSetupPanel {
                 btn_style(false),
                 "\u{2212}", // −
             );
-            tree.add_label(
+            // Value label doubles as a D7 horizontal drag zone — pointer-down
+            // arms `gain_drag_target`, matching the crossover-drag pattern.
+            self.send_ids[i].gain_value = tree.add_label(
                 Some(self.bg_id),
                 gain_x + GAIN_BTN_W,
                 cy,
@@ -1212,7 +1262,10 @@ impl AudioSetupPanel {
                 btn_style(false),
                 "\u{2212}",
             );
-            tree.add_label(
+            // Value label doubles as a D7 horizontal drag zone — pointer-down
+            // arms `sensitivity_drag_target`, matching the crossover-drag
+            // pattern.
+            ids.sens_value = tree.add_label(
                 Some(self.bg_id),
                 x + TRIG_SENS_BTN_W,
                 cy,
@@ -1637,6 +1690,34 @@ impl AudioSetupPanel {
         }
     }
 
+    /// Send id + current gain (dB) for a gain-value label node, if `id` is
+    /// one — arms the D7 gain drag on `PointerDown`.
+    fn gain_drag_target(&self, id: NodeId) -> Option<(AudioSendId, f32)> {
+        self.send_ids
+            .iter()
+            .zip(self.sends.iter())
+            .find(|(ids, _)| ids.gain_value == id)
+            .map(|(_, send)| (send.id.clone(), send.gain_db))
+    }
+
+    /// Selected send id + band + current sensitivity (0..1) for a trigger
+    /// sensitivity-value label node, if `id` is one — arms the D7
+    /// sensitivity drag on `PointerDown`. The row's band is positional
+    /// ([`TRIG_BANDS`] order), matching how `build_trigger_section` reads it.
+    fn sensitivity_drag_target(&self, id: NodeId) -> Option<(AudioSendId, AudioBand, f32)> {
+        let send_id = self.selected_send.clone()?;
+        let i = self.trigger_row_ids.iter().position(|ids| ids.sens_value == id)?;
+        let band = TRIG_BANDS.get(i).map(|(b, _)| *b)?;
+        let frac = self
+            .sends
+            .iter()
+            .find(|s| s.id == send_id)
+            .and_then(|s| s.triggers.get(i))
+            .map(|r| r.sensitivity)
+            .unwrap_or(0.0);
+        Some((send_id, band, frac))
+    }
+
     /// Whether `id` is any node this panel owns (background or an interactive
     /// control) — the caller swallows such clicks so they don't fall through to
     /// the canvas behind the modal.
@@ -1658,6 +1739,7 @@ impl AudioSetupPanel {
                 || id == r.ch_dropdown
                 || id == r.gain_minus
                 || id == r.gain_plus
+                || id == r.gain_value
                 || id == r.stereo
                 || id == r.delete
         }) {
@@ -1667,6 +1749,7 @@ impl AudioSetupPanel {
             id == r.enable
                 || id == r.sens_minus
                 || id == r.sens_plus
+                || id == r.sens_value
                 || id == r.len_minus
                 || id == r.len_plus
                 || id == r.layer
@@ -2013,16 +2096,22 @@ impl Overlay for AudioSetupPanel {
     }
 
     fn modality(&self) -> Modality {
-        Modality::Modal { dim_background: true }
+        // D6: a calibration surface used while performing, not a dialog — no
+        // dim, and it never self-closes on an outside click (see the `Click`
+        // arm below). Escape and the header Audio button are the close paths.
+        Modality::Modeless
     }
 
     fn anchor(&self) -> Anchor {
-        Anchor::Centered
+        // D6: docked to the right edge, full height, so the show stays visible
+        // to its left instead of being centered over it.
+        Anchor::Corner { corner: Corner::TopRight, margin: 0.0 }
     }
 
     fn size_policy(&self) -> SizePolicy {
-        // 80% of the viewport, never below the compact minimums. The min height
-        // is the fixed control chrome plus the smallest useful waterfall.
+        // 38% width × full height (D6), never below the compact minimums. The
+        // min height is the fixed control chrome plus the smallest useful
+        // waterfall.
         SizePolicy::Fraction {
             frac: Vec2::new(PANEL_W_FRAC, PANEL_H_FRAC),
             min: Vec2::new(PANEL_W_MIN, self.chrome_height() + SCOPE_H_MIN),
@@ -2063,19 +2152,43 @@ impl Overlay for AudioSetupPanel {
                     // (a tap on the scope must not close the modal) — swallow.
                     OverlayResponse::Consumed(Vec::new())
                 } else {
-                    // Click landed on the dim backdrop / outside the panel — close.
-                    self.open = false;
-                    OverlayResponse::Consumed(Vec::new())
+                    // Modeless (D6): a click outside the panel passes through to
+                    // the UI beneath instead of dismissing — this is a
+                    // calibration surface used while performing, and accidental
+                    // dismissal is the failure mode. Escape and the header Audio
+                    // button remain the close paths.
+                    OverlayResponse::Ignored
                 }
             }
-            // ── Band-divider drag (Low/Mid/High crossovers) ──────────
-            // Arm on press if it lands on a divider line; thereafter the drag
-            // owns the gesture until release. The lines are drawn shader-side,
-            // so this only hit-tests their positions (see `set_scope_bands`).
-            UIEvent::PointerDown { pos, .. } => {
+            // ── Band-divider drag (Low/Mid/High crossovers) + D7 calibration
+            // drags (gain / trigger sensitivity value labels) ──────────
+            // Arm on press if it lands on a divider line or a value label;
+            // thereafter the drag owns the gesture until release. Divider
+            // lines are drawn shader-side (hit-test by position); value
+            // labels are real nodes (hit-test by node id).
+            UIEvent::PointerDown { node_id, pos, .. } => {
                 if let Some(band) = self.divider_at(*pos) {
                     self.dragging_band = Some(band);
                     OverlayResponse::Consumed(vec![PanelAction::AudioCrossoverDragBegin])
+                } else if let Some((send, start_db)) = self.gain_drag_target(*node_id) {
+                    self.calibration_drag = Some(CalibrationDrag::Gain {
+                        send: send.clone(),
+                        start_x: pos.x,
+                        start_db,
+                    });
+                    OverlayResponse::Consumed(vec![PanelAction::AudioSendGainDragBegin(send)])
+                } else if let Some((send, band, start_frac)) =
+                    self.sensitivity_drag_target(*node_id)
+                {
+                    self.calibration_drag = Some(CalibrationDrag::Sensitivity {
+                        send: send.clone(),
+                        band,
+                        start_x: pos.x,
+                        start_frac,
+                    });
+                    OverlayResponse::Consumed(vec![PanelAction::AudioSendSensitivityDragBegin(
+                        send, band,
+                    )])
                 } else {
                     OverlayResponse::Ignored
                 }
@@ -2088,6 +2201,23 @@ impl Overlay for AudioSetupPanel {
                         ]),
                         None => OverlayResponse::Consumed(Vec::new()),
                     }
+                } else if let Some(drag) = self.calibration_drag.clone() {
+                    // 1 px = 0.1 dB / 0.5% (D7, `docs/AUDIO_SENDS_UX_DESIGN.md`
+                    // §3.4); the host clamps the candidate to the real range.
+                    match drag {
+                        CalibrationDrag::Gain { send, start_x, start_db } => {
+                            let new_db = start_db + (pos.x - start_x) * 0.1;
+                            OverlayResponse::Consumed(vec![PanelAction::AudioSendGainDragChanged(
+                                send, new_db,
+                            )])
+                        }
+                        CalibrationDrag::Sensitivity { send, band, start_x, start_frac } => {
+                            let new_frac = start_frac + (pos.x - start_x) * 0.005;
+                            OverlayResponse::Consumed(vec![
+                                PanelAction::AudioSendSensitivityDragChanged(send, band, new_frac),
+                            ])
+                        }
+                    }
                 } else {
                     OverlayResponse::Ignored
                 }
@@ -2095,6 +2225,15 @@ impl Overlay for AudioSetupPanel {
             UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
                 if self.dragging_band.take().is_some() {
                     OverlayResponse::Consumed(vec![PanelAction::AudioCrossoverCommit])
+                } else if let Some(drag) = self.calibration_drag.take() {
+                    OverlayResponse::Consumed(vec![match drag {
+                        CalibrationDrag::Gain { send, .. } => {
+                            PanelAction::AudioSendGainDragCommit(send)
+                        }
+                        CalibrationDrag::Sensitivity { send, band, .. } => {
+                            PanelAction::AudioSendSensitivityDragCommit(send, band)
+                        }
+                    }])
                 } else {
                     OverlayResponse::Ignored
                 }
@@ -2387,6 +2526,152 @@ mod tests {
         );
         assert!(matches!(resp, OverlayResponse::Consumed(_)));
         assert!(!p.is_open(), "Escape should self-close the modal");
+    }
+
+    // ─── D6/D7: non-dim right-anchored panel + calibration drags ───
+
+    #[test]
+    fn outside_click_passes_through_instead_of_closing() {
+        // Modeless (D6): a click outside the panel's owned nodes and the scope
+        // must fall through to the UI beneath, not dismiss the panel.
+        let mut p = panel_with_two_sends();
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+        assert!(p.is_open());
+
+        let resp = p.on_event(
+            &UIEvent::Click {
+                node_id: NodeId::PLACEHOLDER,
+                pos: Vec2::new(1.0, 1.0),
+                modifiers: crate::input::Modifiers::default(),
+            },
+            &mut tree,
+        );
+        assert!(matches!(resp, OverlayResponse::Ignored), "outside click must pass through");
+        assert!(p.is_open(), "panel must not self-close on outside click (D6)");
+    }
+
+    #[test]
+    fn gain_drag_begin_changed_commit_sequence() {
+        let mut p = panel_with_two_sends();
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+        let gain_value = p.send_ids[0].gain_value;
+        let modifiers = crate::input::Modifiers::default();
+
+        match p.on_event(
+            &UIEvent::PointerDown { node_id: gain_value, pos: Vec2::new(100.0, 50.0), modifiers },
+            &mut tree,
+        ) {
+            OverlayResponse::Consumed(actions) => {
+                assert_eq!(actions.len(), 1);
+                assert!(matches!(
+                    &actions[0],
+                    PanelAction::AudioSendGainDragBegin(id) if id.as_str() == "s1"
+                ));
+            }
+            other => panic!("expected Consumed(Begin), got {}", as_debug(&other)),
+        }
+
+        // 20 px right at 0.1 dB/px, starting from send 1's 0 dB.
+        match p.on_event(
+            &UIEvent::Drag { node_id: gain_value, pos: Vec2::new(120.0, 50.0), delta: Vec2::new(20.0, 0.0) },
+            &mut tree,
+        ) {
+            OverlayResponse::Consumed(actions) => {
+                assert_eq!(actions.len(), 1);
+                match &actions[0] {
+                    PanelAction::AudioSendGainDragChanged(id, db) => {
+                        assert_eq!(id.as_str(), "s1");
+                        assert!((db - 2.0).abs() < 1e-4, "expected +2.0 dB, got {db}");
+                    }
+                    other => panic!("expected AudioSendGainDragChanged, got {other:?}"),
+                }
+            }
+            other => panic!("expected Consumed(Changed), got {}", as_debug(&other)),
+        }
+
+        match p.on_event(&UIEvent::PointerUp { node_id: Some(gain_value), pos: Vec2::new(120.0, 50.0) }, &mut tree)
+        {
+            OverlayResponse::Consumed(actions) => {
+                assert_eq!(actions.len(), 1);
+                assert!(matches!(
+                    &actions[0],
+                    PanelAction::AudioSendGainDragCommit(id) if id.as_str() == "s1"
+                ));
+            }
+            other => panic!("expected Consumed(Commit), got {}", as_debug(&other)),
+        }
+        assert!(!p.is_dragging_band(), "gain drag must not arm the crossover drag flag");
+    }
+
+    #[test]
+    fn sensitivity_drag_begin_changed_commit_sequence() {
+        let mut p = panel_with_two_sends();
+        p.sends[0].triggers = vec![TriggerRouteRow::default(); 4]; // all 0% sensitivity
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+        // TRIG_BANDS order is [Full, Low, Mid, High] — row 1 is Low.
+        let sens_value = p.trigger_row_ids[1].sens_value;
+        let modifiers = crate::input::Modifiers::default();
+
+        match p.on_event(
+            &UIEvent::PointerDown { node_id: sens_value, pos: Vec2::new(200.0, 60.0), modifiers },
+            &mut tree,
+        ) {
+            OverlayResponse::Consumed(actions) => {
+                assert_eq!(actions.len(), 1);
+                assert!(matches!(
+                    &actions[0],
+                    PanelAction::AudioSendSensitivityDragBegin(id, band)
+                        if id.as_str() == "s1" && *band == AudioBand::Low
+                ));
+            }
+            other => panic!("expected Consumed(Begin), got {}", as_debug(&other)),
+        }
+
+        // 40 px right at 0.5%/px (0.005/px), starting from 0.0.
+        match p.on_event(
+            &UIEvent::Drag { node_id: sens_value, pos: Vec2::new(240.0, 60.0), delta: Vec2::new(40.0, 0.0) },
+            &mut tree,
+        ) {
+            OverlayResponse::Consumed(actions) => {
+                assert_eq!(actions.len(), 1);
+                match &actions[0] {
+                    PanelAction::AudioSendSensitivityDragChanged(id, band, frac) => {
+                        assert_eq!(id.as_str(), "s1");
+                        assert_eq!(*band, AudioBand::Low);
+                        assert!((frac - 0.2).abs() < 1e-4, "expected 0.2, got {frac}");
+                    }
+                    other => panic!("expected AudioSendSensitivityDragChanged, got {other:?}"),
+                }
+            }
+            other => panic!("expected Consumed(Changed), got {}", as_debug(&other)),
+        }
+
+        match p.on_event(
+            &UIEvent::PointerUp { node_id: Some(sens_value), pos: Vec2::new(240.0, 60.0) },
+            &mut tree,
+        ) {
+            OverlayResponse::Consumed(actions) => {
+                assert_eq!(actions.len(), 1);
+                assert!(matches!(
+                    &actions[0],
+                    PanelAction::AudioSendSensitivityDragCommit(id, band)
+                        if id.as_str() == "s1" && *band == AudioBand::Low
+                ));
+            }
+            other => panic!("expected Consumed(Commit), got {}", as_debug(&other)),
+        }
+    }
+
+    /// `OverlayResponse` has no `Debug` — this renders just enough for a panic
+    /// message.
+    fn as_debug(resp: &OverlayResponse) -> &'static str {
+        match resp {
+            OverlayResponse::Ignored => "Ignored",
+            OverlayResponse::Consumed(_) => "Consumed(_)",
+        }
     }
 
     // ─── Inputs / Consumers sections (AUDIO_SENDS_UX_DESIGN Phase 2) ───

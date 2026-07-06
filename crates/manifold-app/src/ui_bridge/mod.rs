@@ -163,6 +163,8 @@ pub fn dispatch(
     decay_snapshot: &mut Option<f32>,
     audio_shape_snapshot: &mut Option<manifold_core::audio_mod::AudioModShape>,
     audio_crossover_snapshot: &mut Option<(f32, f32)>,
+    audio_send_gain_drag_snapshot: &mut Option<f32>,
+    audio_send_sensitivity_drag_snapshot: &mut Option<Vec<manifold_core::audio_trigger::TriggerRoute>>,
     user_prefs: &mut UserPrefs,
     active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
     // `Some(GraphTarget)` when the graph editor dispatches one of its left-lane
@@ -320,6 +322,9 @@ pub fn dispatch(
         | PanelAction::AudioAddSend
         | PanelAction::AudioRemoveSend(..)
         | PanelAction::AudioSendGainStep(..)
+        | PanelAction::AudioSendGainDragBegin(..)
+        | PanelAction::AudioSendGainDragChanged(..)
+        | PanelAction::AudioSendGainDragCommit(..)
         | PanelAction::AudioSendFloorStep(..)
         | PanelAction::AudioCrossoverDragBegin
         | PanelAction::AudioCrossoverChanged(..)
@@ -333,6 +338,9 @@ pub fn dispatch(
         | PanelAction::AudioSendChannelClicked(..)
         | PanelAction::AudioTriggerToggled(..)
         | PanelAction::AudioTriggerSensitivityStep(..)
+        | PanelAction::AudioSendSensitivityDragBegin(..)
+        | PanelAction::AudioSendSensitivityDragChanged(..)
+        | PanelAction::AudioSendSensitivityDragCommit(..)
         | PanelAction::AudioTriggerLengthStep(..)
         | PanelAction::AudioTriggerLayerClicked(..)
         | PanelAction::AudioTriggerSetLayer(..)
@@ -411,6 +419,8 @@ pub fn dispatch(
             decay_snapshot,
             audio_shape_snapshot,
             audio_crossover_snapshot,
+            audio_send_gain_drag_snapshot,
+            audio_send_sensitivity_drag_snapshot,
             active_inspector_drag,
             editor_target,
         ),

@@ -193,6 +193,16 @@ pub struct Application {
     /// `AudioCrossoverDragBegin`, committed as one `SetAudioCrossoversCommand`
     /// on `AudioCrossoverCommit`.
     pub(crate) audio_crossover_snapshot: Option<(f32, f32)>,
+    /// Send-gain drag snapshot (old dB) for undo (D7). Captured on
+    /// `AudioSendGainDragBegin`, committed as one `SetAudioSendGainCommand` on
+    /// `AudioSendGainDragCommit`.
+    pub(crate) audio_send_gain_drag_snapshot: Option<f32>,
+    /// Trigger-sensitivity drag snapshot (the selected send's old trigger
+    /// routes, whole vec) for undo (D7). Captured on
+    /// `AudioSendSensitivityDragBegin`, committed as one
+    /// `SetAudioSendTriggersCommand` on `AudioSendSensitivityDragCommit`.
+    pub(crate) audio_send_sensitivity_drag_snapshot:
+        Option<Vec<manifold_core::audio_trigger::TriggerRoute>>,
     /// User param-binding mapping range drag snapshot `(min, max)` for
     /// undo. Captured on `EffectMappingRangeSnapshot`, committed as one
     /// `EditUserParamBindingCommand` on `EffectMappingRangeCommit`.
@@ -587,6 +597,8 @@ impl Application {
             decay_snapshot: None,
             audio_shape_snapshot: None,
             audio_crossover_snapshot: None,
+            audio_send_gain_drag_snapshot: None,
+            audio_send_sensitivity_drag_snapshot: None,
             mapping_range_snapshot: None,
             mapping_affine_snapshot: None,
             active_inspector_drag: None,
@@ -988,6 +1000,8 @@ impl Application {
                                 &mut self.decay_snapshot,
                                 &mut self.audio_shape_snapshot,
                                 &mut self.audio_crossover_snapshot,
+                                &mut self.audio_send_gain_drag_snapshot,
+                                &mut self.audio_send_sensitivity_drag_snapshot,
                                 &mut self.user_prefs,
                                 &mut self.active_inspector_drag,
                                 None,
@@ -1031,6 +1045,8 @@ impl Application {
                             &mut self.decay_snapshot,
                             &mut self.audio_shape_snapshot,
                             &mut self.audio_crossover_snapshot,
+                            &mut self.audio_send_gain_drag_snapshot,
+                            &mut self.audio_send_sensitivity_drag_snapshot,
                             &mut self.user_prefs,
                             &mut self.active_inspector_drag,
                             None,
