@@ -784,6 +784,21 @@ fn main() {
                 }
             }
         }
+        // Fine plateau scan around the round-3 winner (m=3, H=16): delta
+        // 80→125 was a cliff (feel 16→5), so 80 needs plateau evidence on
+        // its low side before it ships as a constant.
+        if family == "or-plateau" {
+            for &delta in &[40.0f32, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0] {
+                masks.push(Mask::OrFloor { margin_db: 3.0, delta, h: 16 });
+            }
+        }
+        // The shipping config (BUG-046 partial, Peter-approved 2026-07-06):
+        // prints the exact per-clip per-band fire counts the runtime
+        // integration must reproduce (the prototype is the reference
+        // implementation — the integration gate is an EXACT match).
+        if family == "or-final" {
+            masks.push(Mask::OrFloor { margin_db: 3.0, delta: 80.0, h: 16 });
+        }
         if all || family == "sweep" {
             for &drop_bins in &[6.0f32, 8.0, 12.0] {
                 for &step_max in &[4.0f32, 6.0] {
@@ -856,6 +871,15 @@ fn main() {
     }
     if validate_only {
         return;
+    }
+    // Single-config runs (e.g. --family or-final): print that config's full
+    // per-band fire counts in the same format — the integration's reference.
+    if masks.len() == 2 {
+        println!("\n== REFERENCE ({}, fire counts, all hops: full/low/mid/high) ==", masks[1].name());
+        for (label, _, _) in &clip_meta {
+            let f = &results[label][1];
+            println!("{label}: {} {} {} {}", f[0].len(), f[1].len(), f[2].len(), f[3].len());
+        }
     }
 
     // ── Ground truth per track: BASELINE drums-stem fires ───────────────────
