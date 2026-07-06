@@ -27,6 +27,16 @@ pub struct BandFeatures {
     /// Transient trigger — a 0..1 impulse that decays, from an adaptive
     /// threshold on the band's flux. `Transients` on `Low` is a kick detector.
     pub transients: f32,
+    /// Tracked dominant-object log-frequency position within this band's bin
+    /// window, 0..1 (same mapping as `brightness`). HOLDS its last value on
+    /// dropout — gate with `presence`, never read 0 as "low pitch". Filled by
+    /// the D5 ridge tracker (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md`), one per
+    /// band window (Full/Low/Mid/High), all four run over one shared salience
+    /// column (D4).
+    pub pitch: f32,
+    /// Tracker confidence 0..1 (ridge salience / window energy, smoothed) —
+    /// see D5/D6 in `docs/AUDIO_OBJECT_TRACKING_DESIGN.md`.
+    pub presence: f32,
 }
 
 /// Extracted features for one send at one analysis instant.

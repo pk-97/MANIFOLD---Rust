@@ -291,7 +291,27 @@ D1 amendment (untilted column) is recorded in D1; do not re-try tilted input.
 *Forbidden:* normalizing salience per hop (kills the presence ratio later); subharmonic
 "corrections" bolted on before the tracker exists.
 
-**P2 — Tracker + features + harness lanes.** D5 state machine, 4 windows, D4/D6
+**P2 — Tracker + features + harness lanes. ⚙ CODE SHIPPED 2026-07-06; 6/9 gate lines
+PASS; the dive/wobble gates are BLOCKED ON P3, by measurement.** Shipped: D5 tracker
+(all six unit-tested behaviors), BandFeatures pitch/presence, `set_pitch_tracking`
+(default off; other five features bit-identical when off — tested), harness lanes +
+CSV + self-printing gate lines. Passing: kicks (0% spurious low-presence), riser (100%
+presence-null, 1 acquisition), growl (0.019 st stddev — the tracker itself is sound).
+Failing: dive (max Δ 24 st, 82.5% within ±1 st) and wobble (7.25 st stddev) — every
+discontinuity co-occurs with `full_transients == 1.0` in the CSV: BUG-041's false
+fires reach the tracker through D5 step 4's unconditional re-acquire bypass, which no
+D5 constant can bound (verified: CHALLENGE_HOPS 6/12/20 leave max Δ unchanged).
+**Therefore P3 is a prerequisite for P2's sign-off, not an independent phase — P3's
+exit gate now includes re-running these P2 lines to PASS.** Two findings for that
+session, recorded so they aren't rediscovered: (1) if detector hardening alone doesn't
+close wobble (its LFO re-attacks are arguably *genuine* onsets), the sanctioned D5
+amendment is to keep CHALLENGE_RATIO on onset hops and drop only the time requirement
+— an onset lets a *dominant* new peak in immediately, never a merely-present one;
+(2) D6's presence denominator (window energy) is mis-scaled — a perfectly tracked
+growl reads 0.02–0.08, far under the 0.25 display bar, so presence is not yet a usable
+performer signal; recalibrate (candidate: salience-concentration ratio — tracked peak
+÷ total window salience) with the riser gate as the regression guard. Original brief
+follows. D5 state machine, 4 windows, D4/D6
 feature fill, per-send reserved fields, warm-up guard, activation OR-gate (D7 —
 runtime side may land as always-on-in-harness + config-gated-in-app if the runtime
 wiring is thin; the byte-identical-when-inactive property is the gate). Harness: PITCH

@@ -39,7 +39,10 @@
 //!   full_amplitude,full_brightness,full_noisiness,full_liveliness,full_transients,
 //!   low_amplitude,low_brightness,low_noisiness,low_liveliness,low_transients,
 //!   mid_amplitude,mid_brightness,mid_noisiness,mid_liveliness,mid_transients,
-//!   high_amplitude,high_brightness,high_noisiness,high_liveliness,high_transients
+//!   high_amplitude,high_brightness,high_noisiness,high_liveliness,high_transients,
+//!   tracked_f0_hz,
+//!   full_pitch,full_presence,low_pitch,low_presence,
+//!   mid_pitch,mid_presence,high_pitch,high_presence
 //! ```
 //! Feature values are the RAW per-hop values (`HopRecord::raw`), not the
 //! shaped/smoothed follower output — the CSV is the ground-truth-comparison
@@ -50,7 +53,11 @@
 //! fundamental (kicks, busymix, riser) or for file inputs (unknown ground
 //! truth). `salience_f0_hz` is the P1 harmonic-sum salience peak (Full window
 //! only, `docs/AUDIO_OBJECT_TRACKING_DESIGN.md` D1) converted to Hz, or `NaN`
-//! on a fully-floored column.
+//! on a fully-floored column. `tracked_f0_hz` is the P2 D5 Full-tracker's
+//! `pitch_hz`, `NaN` until the Full tracker has acquired at least once
+//! (`pitch_confidence` still exactly 0). `<band>_pitch`/`<band>_presence` are
+//! the D5 tracker's per-band `BandFeatures::pitch`/`presence`, RAW (unshaped)
+//! per hop, same as the other per-band columns.
 
 use manifold_audio::analysis::{StreamingSendAnalyzer, salience_into, salience_peak, tilt_weights};
 use manifold_core::audio_mod::AudioModShape;
@@ -68,7 +75,16 @@ const BAND_COLORS: [[u8; 3]; 4] = [
     [102, 255, 128], // Mid — green (0.40, 1.0, 0.50)
     [115, 184, 255], // High — blue (0.45, 0.72, 1.0)
 ];
-const FEATURE_NAMES: [&str; 5] = ["AMPLITUDE", "BRIGHTNESS", "NOISINESS", "LIVELINESS", "TRANSIENTS"];
+const FEATURE_NAMES: [&str; 7] =
+    ["AMPLITUDE", "BRIGHTNESS", "NOISINESS", "LIVELINESS", "TRANSIENTS", "PITCH", "PRESENCE"];
+/// Index of `PITCH`/`PRESENCE` in [`FEATURE_NAMES`] — the P2 D5 tracker
+/// outputs, appended below the original five (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P2).
+const PITCH_IDX: usize = 5;
+const PRESENCE_IDX: usize = 6;
+/// The doc's display rule (D6): the PITCH lane only draws where the SAME
+/// band's presence has cleared this bar — a low-confidence pitch reading is a
+/// held/stale position, not a real one. PRESENCE itself always draws.
+const PITCH_DISPLAY_PRESENCE: f32 = 0.25;
 
 /// One hop's worth of everything we plot.
 struct HopRecord {
@@ -79,13 +95,17 @@ struct HopRecord {
     /// Per-band onset fire flags (1.0 on the fired hop). [Low, Mid, High].
     onset_fired: [f32; 3],
     /// features[feature][band], feature order per FEATURE_NAMES, band order per BAND_NAMES.
-    raw: [[f32; 4]; 5],
+    raw: [[f32; 4]; 7],
     /// Same, after the default AudioModShape follower (what a param would receive).
-    smoothed: [[f32; 4]; 5],
+    smoothed: [[f32; 4]; 7],
     /// P1 salience peak (Full window only), D1 harmonic-sum over the tilted,
     /// floored column: `fmin · 2^(refined_bin / bpo)`. `NaN` when the column
     /// is fully floored (no peak) — see `manifold_audio::analysis::salience_peak`.
     salience_f0_hz: f32,
+    /// P2 D5 Full-tracker `pitch_hz`, `NaN` until the Full tracker has
+    /// acquired at least once this clip (`pitch_confidence` still exactly 0 —
+    /// see the module doc's CSV column note).
+    tracked_f0_hz: f32,
 }
 
 struct Args {
@@ -224,6 +244,10 @@ fn analyze_and_render(
     let mut an = StreamingSendAnalyzer::new(sr, args.low_hz, args.mid_hz);
     an.set_floor_db(args.floor_db);
     an.set_scope(true);
+    // P2: the harness always runs with the D5 tracker on (D7's runtime
+    // activation OR-gate is app-side, P4's job — the harness is the eval
+    // loop, not a project, so it always exercises the tracker).
+    an.set_pitch_tracking(true);
     let num_bins = an.num_bins();
     let (fmin, fmax) = an.freq_range();
     let bpo = cfg.bpo;
@@ -236,8 +260,8 @@ fn analyze_and_render(
     let mut salience_scratch = vec![0.0f32; num_bins];
 
     let shape = AudioModShape::default();
-    let mut smooth_state = [[0.0f32; 4]; 5];
-    let mut prev_raw = [[0.0f32; 4]; 5];
+    let mut smooth_state = [[0.0f32; 4]; 7];
+    let mut prev_raw = [[0.0f32; 4]; 7];
     let mut records: Vec<HopRecord> = Vec::with_capacity(mono.len() / hop + 1);
 
     for chunk in mono.chunks(hop) {
@@ -249,11 +273,19 @@ fn analyze_and_render(
         let f = an.latest();
         // One hop in → one column out (a short final chunk emits none).
         for (col, (centroid, onsets)) in cols.into_iter().zip(scalars) {
-            let mut raw = [[0.0f32; 4]; 5];
-            let mut smoothed = [[0.0f32; 4]; 5];
+            let mut raw = [[0.0f32; 4]; 7];
+            let mut smoothed = [[0.0f32; 4]; 7];
             for b in 0..4 {
                 let bf = &f.bands[b];
-                let vals = [bf.amplitude, bf.brightness, bf.noisiness, bf.liveliness, bf.transients];
+                let vals = [
+                    bf.amplitude,
+                    bf.brightness,
+                    bf.noisiness,
+                    bf.liveliness,
+                    bf.transients,
+                    bf.pitch,
+                    bf.presence,
+                ];
                 for (fi, &v) in vals.iter().enumerate() {
                     raw[fi][b] = v;
                     smoothed[fi][b] =
@@ -268,6 +300,9 @@ fn analyze_and_render(
                 Some((bin, _peak_val)) => fmin * 2f32.powf(bin / bpo as f32),
                 None => f32::NAN,
             };
+            // P2: the Full tracker's Hz reading, NaN until it has acquired at
+            // least once this clip (see the module doc's CSV column note).
+            let tracked_f0_hz = if f.pitch_confidence > 0.0 { f.pitch_hz } else { f32::NAN };
             records.push(HopRecord {
                 col,
                 centroid_yfb: centroid,
@@ -275,6 +310,7 @@ fn analyze_and_render(
                 raw,
                 smoothed,
                 salience_f0_hz,
+                tracked_f0_hz,
             });
         }
     }
@@ -358,6 +394,12 @@ fn analyze_and_render(
         );
     }
 
+    // ── P2 gates (docs/AUDIO_OBJECT_TRACKING_DESIGN.md P2): the D5 tracker's
+    // numeric acceptance bar, one line per metric, selftest only.
+    if args.selftest {
+        print_p2_gates(label, &records, dt, ground_truth);
+    }
+
     if let Some(dir) = &args.csv_dir {
         write_csv(dir, label, &records, dt, ground_truth);
     }
@@ -380,6 +422,114 @@ fn naive_argmax_bin(tilted: &[f32]) -> Option<f32> {
     (bv > 0.0).then_some(bk as f32)
 }
 
+/// `f_hz` in semitones relative to `ref_hz` (signed, `12 * log2(f/ref)`).
+fn semitones_vs(f_hz: f32, ref_hz: f32) -> f32 {
+    12.0 * (f_hz / ref_hz.max(1e-6)).log2()
+}
+
+/// P2 numeric gates (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P2's phase-report
+/// bar), one `P2 <scenario>: <metric>=<value> (gate <op> <bound>) PASS|FAIL`
+/// line per metric, per selftest scenario. Reads only `HopRecord::raw`
+/// (RAW, unshaped values — the ground-truth-comparison surface, same
+/// convention as the CSV) and `tracked_f0_hz`.
+fn print_p2_gates(label: &str, records: &[HopRecord], dt: f32, ground_truth: GroundTruthFn) {
+    // Same warm-up skip as the P1 report — the zero-padded fade-in never
+    // carries a real reading, on either side of the comparison.
+    const WARMUP_HOPS: usize = 32;
+    // Presence threshold for counting a DISTINCT acquisition event (an
+    // interior harness choice, not part of D5 itself — the tracker's own
+    // presence never returns to *exactly* 0 after a real dropout within a
+    // few-second clip, so a small-but-decisive bar is what makes "how many
+    // times did this reacquire" countable at all).
+    const ACQUIRE_PRESENCE: f32 = 0.02;
+    const FULL: usize = 0;
+    const LOW: usize = 1;
+
+    let gate = |metric: &str, value: f64, op: &str, bound: f64, pass: bool| {
+        println!("P2 {label}: {metric}={value:.4} (gate {op} {bound}) {}", if pass { "PASS" } else { "FAIL" });
+    };
+
+    match label {
+        "dive" => {
+            let acquired: Vec<&HopRecord> = records.iter().skip(WARMUP_HOPS).filter(|r| r.tracked_f0_hz.is_finite()).collect();
+            if acquired.len() < 2 {
+                gate("max_delta_st", f64::NAN, "<=", 1.0, false);
+                gate("mean_delta_st_per_hop", f64::NAN, "<=", 0.15, false);
+                gate("pct_within_1st_of_gt", 0.0, ">=", 95.0, false);
+                return;
+            }
+            let (mut max_delta, mut sum_delta) = (0.0f32, 0.0f64);
+            for w in acquired.windows(2) {
+                let d = semitones_vs(w[1].tracked_f0_hz, w[0].tracked_f0_hz).abs();
+                max_delta = max_delta.max(d);
+                sum_delta += d as f64;
+            }
+            let mean_delta = sum_delta / (acquired.len() - 1) as f64;
+
+            // Denominator is every hop with a KNOWN ground truth, not just the
+            // acquired subset — a hop the tracker never reached is a miss,
+            // not an exclusion.
+            let (mut total_gt, mut within) = (0usize, 0usize);
+            for (idx, r) in records.iter().enumerate().skip(WARMUP_HOPS) {
+                let gt = ground_truth(idx as f32 * dt);
+                if !gt.is_finite() {
+                    continue;
+                }
+                total_gt += 1;
+                if r.tracked_f0_hz.is_finite() && semitones_vs(r.tracked_f0_hz, gt).abs() <= 1.0 {
+                    within += 1;
+                }
+            }
+            let within_pct = 100.0 * within as f64 / total_gt.max(1) as f64;
+
+            gate("max_delta_st", max_delta as f64, "<=", 1.0, max_delta <= 1.0);
+            gate("mean_delta_st_per_hop", mean_delta, "<=", 0.15, mean_delta <= 0.15);
+            gate("pct_within_1st_of_gt", within_pct, ">=", 95.0, within_pct >= 95.0);
+        }
+        "wobble" | "growl" => {
+            let semis: Vec<f64> = records
+                .iter()
+                .skip(WARMUP_HOPS)
+                .filter(|r| r.tracked_f0_hz.is_finite())
+                .map(|r| semitones_vs(r.tracked_f0_hz, 150.0) as f64)
+                .collect();
+            if semis.is_empty() {
+                gate("pitch_stddev_st", f64::NAN, "<=", 0.5, false);
+                return;
+            }
+            let mean = semis.iter().sum::<f64>() / semis.len() as f64;
+            let var = semis.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / semis.len() as f64;
+            let stddev = var.sqrt();
+            gate("pitch_stddev_st", stddev, "<=", 0.5, stddev <= 0.5);
+        }
+        "riser" => {
+            let post = &records[WARMUP_HOPS.min(records.len())..];
+            let quiet = post.iter().filter(|r| r.raw[PRESENCE_IDX][FULL] <= 0.15).count();
+            let quiet_pct = 100.0 * quiet as f64 / post.len().max(1) as f64;
+
+            let mut acquisitions = 0usize;
+            let mut was_acquired = false;
+            for r in post {
+                let acquired = r.raw[PRESENCE_IDX][FULL] >= ACQUIRE_PRESENCE;
+                if acquired && !was_acquired {
+                    acquisitions += 1;
+                }
+                was_acquired = acquired;
+            }
+
+            gate("pct_hops_full_presence_le_0.15", quiet_pct, ">=", 90.0, quiet_pct >= 90.0);
+            gate("distinct_full_acquisitions", acquisitions as f64, "<=", 2.0, acquisitions <= 2);
+        }
+        "kicks" => {
+            let post = &records[WARMUP_HOPS.min(records.len())..];
+            let hot = post.iter().filter(|r| r.raw[PRESENCE_IDX][LOW] > 0.5).count();
+            let hot_pct = 100.0 * hot as f64 / post.len().max(1) as f64;
+            gate("pct_hops_low_presence_gt_0.5", hot_pct, "<=", 20.0, hot_pct <= 20.0);
+        }
+        _ => {}
+    }
+}
+
 /// One `<dir>/<label>.csv`, one row per hop: hop index, time, ground-truth
 /// f0 (or NaN), the P1 salience-peak f0 estimate (or NaN), then the five raw
 /// features for each of the four bands — see the module header comment for
@@ -393,9 +543,14 @@ fn write_csv(dir: &str, label: &str, records: &[HopRecord], dt: f32, ground_trut
     let mut csv = String::from("hop_index,time_s,ground_truth_f0_hz,salience_f0_hz");
     for band in BAND_NAMES {
         let band_lc = band.to_ascii_lowercase();
-        for feat in FEATURE_NAMES {
+        for feat in &FEATURE_NAMES[..5] {
             csv.push_str(&format!(",{band_lc}_{}", feat.to_ascii_lowercase()));
         }
+    }
+    csv.push_str(",tracked_f0_hz");
+    for band in BAND_NAMES {
+        let band_lc = band.to_ascii_lowercase();
+        csv.push_str(&format!(",{band_lc}_pitch,{band_lc}_presence"));
     }
     csv.push('\n');
     for (idx, r) in records.iter().enumerate() {
@@ -405,6 +560,10 @@ fn write_csv(dir: &str, label: &str, records: &[HopRecord], dt: f32, ground_trut
             for fi in 0..5 {
                 csv.push_str(&format!(",{}", r.raw[fi][b]));
             }
+        }
+        csv.push_str(&format!(",{}", r.tracked_f0_hz));
+        for b in 0..4 {
+            csv.push_str(&format!(",{},{}", r.raw[PITCH_IDX][b], r.raw[PRESENCE_IDX][b]));
         }
         csv.push('\n');
     }
@@ -754,22 +913,41 @@ fn render_png(
         for (b, &color) in BAND_COLORS.iter().enumerate() {
             for x in 0..w {
                 let (lo, hi) = bucket(x);
+                // D6 display rule: the PITCH lane draws a band's trace only
+                // where that SAME band's presence has cleared the bar — a
+                // low-confidence pitch reading is a held/stale position, not
+                // a real one. PRESENCE (and every other lane) always draws.
+                let visible = |r: &HopRecord| fi != PITCH_IDX || r.raw[PRESENCE_IDX][b] >= PITCH_DISPLAY_PRESENCE;
+
                 // Raw: min..max span, dim — the honest jitter.
                 let (mut mn, mut mx) = (f32::MAX, f32::MIN);
+                let mut any = false;
                 for r in &records[lo..hi] {
+                    if !visible(r) {
+                        continue;
+                    }
+                    any = true;
                     mn = mn.min(r.raw[fi][b]);
                     mx = mx.max(r.raw[fi][b]);
+                }
+                if !any {
+                    continue;
                 }
                 let py_of = |v: f32| LANE_H - 1 - ((v.clamp(0.0, 1.0)) * (LANE_H - 1) as f32) as usize;
                 for py in py_of(mx)..=py_of(mn) {
                     blend_pixel(&mut img, x0 + x, y + py, color, 0.22);
                 }
-                // Smoothed: single bright trace (bucket mean).
-                let mut sm = 0.0;
+                // Smoothed: single bright trace (bucket mean over the visible
+                // hops only).
+                let (mut sm, mut cnt) = (0.0f32, 0usize);
                 for r in &records[lo..hi] {
+                    if !visible(r) {
+                        continue;
+                    }
                     sm += r.smoothed[fi][b];
+                    cnt += 1;
                 }
-                let sm = sm / (hi - lo) as f32;
+                let sm = sm / cnt.max(1) as f32;
                 blend_pixel(&mut img, x0 + x, y + py_of(sm), color, 0.95);
             }
         }

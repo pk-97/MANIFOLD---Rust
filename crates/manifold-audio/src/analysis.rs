@@ -286,6 +286,12 @@ struct SendState {
     /// global display y so each band's centroid draws within its own region.
     centroid_yfb: [f32; 4],
     features: SendFeatures,
+    /// D1 harmonic-sum salience scratch, `num_bins` long — computed ONCE per
+    /// hop from the untilted, floored column, shared read-only by all four
+    /// window trackers below (D4, `docs/AUDIO_OBJECT_TRACKING_DESIGN.md`).
+    salience: Vec<f32>,
+    /// Per-window D5 ridge trackers, order [Full, Low, Mid, High] (D4).
+    trackers: [RidgeTracker; 4],
 }
 
 /// The capture downmix worker. Drains the device ring, deinterleaves it, and
@@ -661,6 +667,25 @@ pub fn salience_into(col: &[f32], bpo: usize, out: &mut [f32]) {
     }
 }
 
+/// Parabolic-refine bin `k` against its immediate neighbours (clamped at the
+/// array edges), returning `(fractional_bin, value)`. Shared by
+/// [`salience_peak`] (the global peak) and [`local_peaks`] (the tracker's
+/// per-window peak-pick, D5 step 1) — one refine formula, two callers.
+fn refine_peak(salience: &[f32], k: usize) -> (f32, f32) {
+    let n = salience.len();
+    let v = salience[k];
+    let km1 = k.saturating_sub(1);
+    let kp1 = (k + 1).min(n - 1);
+    let delta = if km1 != k && kp1 != k {
+        let (y0, y1, y2) = (salience[km1], salience[k], salience[kp1]);
+        let denom = y0 - 2.0 * y1 + y2;
+        if denom.abs() > 1e-12 { (0.5 * (y0 - y2) / denom).clamp(-1.0, 1.0) } else { 0.0 }
+    } else {
+        0.0
+    };
+    (k as f32 + delta, v)
+}
+
 /// The dominant salience peak: the global maximum, refined to a fractional
 /// bin by parabolic interpolation over its two neighbours (clamped to the
 /// valid range at the array edges). Returns `(fractional_bin, peak_value)`,
@@ -680,17 +705,294 @@ pub fn salience_peak(salience: &[f32]) -> Option<(f32, f32)> {
     if best_v <= 0.0 {
         return None;
     }
-    let n = salience.len();
-    let km1 = best_k.saturating_sub(1);
-    let kp1 = (best_k + 1).min(n - 1);
-    let delta = if km1 != best_k && kp1 != best_k {
-        let (y0, y1, y2) = (salience[km1], salience[best_k], salience[kp1]);
-        let denom = y0 - 2.0 * y1 + y2;
-        if denom.abs() > 1e-12 { (0.5 * (y0 - y2) / denom).clamp(-1.0, 1.0) } else { 0.0 }
-    } else {
-        0.0
-    };
-    Some((best_k as f32 + delta, best_v))
+    Some(refine_peak(salience, best_k))
+}
+
+/// Local maxima of `salience` within the half-open range `[lo, hi)`, refined
+/// to fractional bins (D5 step 1 — a tracker's window peak-pick). A bin
+/// qualifies if it is strictly positive (a floored column reads 0 — a local
+/// max of 0 isn't a peak) and strictly greater than each in-window neighbour;
+/// at a window edge the missing outer neighbour doesn't disqualify it, so a
+/// genuine peak riding the window boundary is still found. The parabolic
+/// refine itself may reach one bin outside `[lo, hi)` (the true neighbour),
+/// which only sharpens the estimate — it never changes which bins qualify.
+fn local_peaks(salience: &[f32], lo: usize, hi: usize) -> Vec<(f32, f32)> {
+    let hi = hi.min(salience.len());
+    let mut out = Vec::new();
+    if lo >= hi {
+        return out;
+    }
+    for k in lo..hi {
+        let v = salience[k];
+        if v <= 0.0 {
+            continue;
+        }
+        let is_left_peak = k == lo || salience[k - 1] < v;
+        let is_right_peak = k + 1 >= hi || salience[k + 1] < v;
+        if is_left_peak && is_right_peak {
+            out.push(refine_peak(salience, k));
+        }
+    }
+    out
+}
+
+/// The peak with the greatest value in a `local_peaks` result, or `None` if
+/// empty. Ties keep the first (lowest-bin) candidate.
+fn strongest_peak(peaks: &[(f32, f32)]) -> Option<(f32, f32)> {
+    peaks.iter().copied().fold(None, |best, cand| match best {
+        None => Some(cand),
+        Some((_, bv)) if cand.1 > bv => Some(cand),
+        _ => best,
+    })
+}
+
+// ── Tracker — D5, docs/AUDIO_OBJECT_TRACKING_DESIGN.md ──────────────────────
+//
+// Bounded slew, challenger hysteresis, hold-then-release. One `RidgeTracker`
+// per window (Full/Low/Mid/High, D4) runs over the ONE shared salience column
+// computed above — the tracker never re-derives salience, and never reads its
+// own past *output* features, only this hop's salience + this hop's transient
+// fire (docs §6: "no second transform", "not reading latest()").
+
+/// Continuation radius (bins): a peak within this of `pos` is "the same
+/// object moving", eligible for slewed continuation (D5 step 2) rather than
+/// challenger/takeover treatment (D5 step 3).
+const SLEW_RADIUS: f32 = 6.0;
+/// Max bins a single hop's continuation snap may move `pos` (D5 step 2) — a
+/// 2-octave/s glide at a ~5.3 ms hop is ~0.5 bins/hop, so this bounds
+/// teleports, not real motion.
+const MAX_SLEW: f32 = 3.0;
+/// A challenger elsewhere must out-salience the continuation peak by this
+/// ratio to start the takeover clock (D5 step 3).
+const CHALLENGE_RATIO: f32 = 1.5;
+/// Consecutive hops a challenger must hold `CHALLENGE_RATIO` before the
+/// tracker jumps to it (~64 ms at hop ≈ 5.3 ms) — kills one-hop flicker to a
+/// passing element without adding lag to a real takeover.
+const CHALLENGE_HOPS: u8 = 12;
+/// Hops of dropout (no acceptable peak, no completed takeover) tolerated
+/// before the tracker goes inactive (~200 ms at hop ≈ 5.3 ms, D5 step 5).
+const HOLD_HOPS: u8 = 38;
+/// Presence one-pole attack time constant, seconds (D5/D6) — trust rises
+/// fast while tracking.
+const PRESENCE_ATTACK_S: f32 = 0.030;
+/// Presence one-pole release time constant, seconds (D5/D6) — trust falls
+/// slow on dropout, so a masked beat doesn't strobe the visual.
+const PRESENCE_RELEASE_S: f32 = 0.250;
+
+/// Per-window tracker state (D3 data model), owned by [`SendState`]. `pos` is
+/// a fractional bin index into the SAME array `salience_into` fills — the
+/// window's `[lo, hi)` bounds only scope which peaks this tracker may
+/// continue/takeover to; the position itself lives in the shared column's
+/// coordinate space so the per-send Full-tracker Hz conversion
+/// (`fmin · 2^(pos/bpo)`) needs no window offset.
+#[derive(Clone, Copy, Debug)]
+struct RidgeTracker {
+    /// Fractional bin, HOLDS its last value on dropout — pitch is a position,
+    /// never a null (D5/D6).
+    pos: f32,
+    /// Tracker confidence 0..1, one-pole smoothed (D6).
+    presence: f32,
+    /// Hops since the last accepted peak (continuation, onset re-acquire, or
+    /// a completed takeover). `active` clears once this exceeds `HOLD_HOPS`.
+    hold: u8,
+    /// Bin of the current takeover challenger, carried across hops so
+    /// `challenger_hops` counts CONSECUTIVE hops from (about) the same
+    /// challenger, not any peak that momentarily clears the ratio.
+    challenger_bin: f32,
+    /// Consecutive hops the challenger has out-scored the continuation peak
+    /// by `CHALLENGE_RATIO`. Resets on takeover, on the challenger moving more
+    /// than `SLEW_RADIUS` bins from `challenger_bin`, or when nothing clears
+    /// the ratio this hop.
+    challenger_hops: u8,
+    /// False until the first acquisition (D5 step 6) — no continuation or
+    /// takeover runs before then, only the acquisition test.
+    active: bool,
+}
+
+impl RidgeTracker {
+    fn new() -> Self {
+        Self {
+            pos: 0.0,
+            presence: 0.0,
+            hold: 0,
+            // Guarantees the FIRST real challenger is always treated as new
+            // (an unconditional distance-reset), rather than accidentally
+            // matching the zero-valued default bin.
+            challenger_bin: f32::NEG_INFINITY,
+            challenger_hops: 0,
+            active: false,
+        }
+    }
+
+    /// One hop's D5 update for this window. `salience` is the shared column;
+    /// `lo`/`hi` this window's bin range; `transient_fired` whether THIS
+    /// band's onset fired THIS hop (D5 step 4, read from `reduce_send`'s
+    /// output, never from the tracker's own prior output); `window_energy`
+    /// the sum of the untilted column over `[lo, hi)` (D5 step 7's
+    /// denominator); `dt` the hop period in seconds (presence one-pole time
+    /// base).
+    fn update(&mut self, salience: &[f32], lo: usize, hi: usize, transient_fired: bool, window_energy: f32, dt: f32) {
+        let peaks = local_peaks(salience, lo, hi);
+
+        // Step 6: acquisition (inactive → active). Requires salience > 0,
+        // already guaranteed by `local_peaks`.
+        if !self.active {
+            if let Some((bin, _)) = strongest_peak(&peaks) {
+                self.pos = bin;
+                self.active = true;
+                self.hold = 0;
+                self.challenger_hops = 0;
+            }
+            let target = if self.active { presence_target(salience, self.pos, window_energy) } else { 0.0 };
+            self.step_presence(target, dt);
+            return;
+        }
+
+        // Step 4: onset re-acquire — bypasses hysteresis and slew entirely
+        // for this hop; the strongest window peak wins outright.
+        if transient_fired {
+            if let Some((bin, _)) = strongest_peak(&peaks) {
+                self.pos = bin;
+                self.hold = 0;
+                self.challenger_hops = 0;
+            }
+            let target = presence_target(salience, self.pos, window_energy);
+            self.step_presence(target, dt);
+            return;
+        }
+
+        // Step 2: continuation — the strongest peak within `SLEW_RADIUS`.
+        let continuation = strongest_peak(
+            &peaks.iter().copied().filter(|&(bin, _)| (bin - self.pos).abs() <= SLEW_RADIUS).collect::<Vec<_>>(),
+        );
+
+        if let Some((cbin, cont_val)) = continuation {
+            // Step 3: takeover — a stronger peak OUTSIDE the radius must
+            // out-salience THIS hop's real continuation value (never a
+            // trivial pass against nothing — see the note below) for
+            // `CHALLENGE_HOPS` consecutive hops.
+            let challenger = strongest_peak(
+                &peaks.iter().copied().filter(|&(bin, _)| (bin - self.pos).abs() > SLEW_RADIUS).collect::<Vec<_>>(),
+            );
+            let mut took_over = false;
+            if let Some((xbin, xval)) = challenger {
+                if xval > cont_val * CHALLENGE_RATIO {
+                    if (xbin - self.challenger_bin).abs() > SLEW_RADIUS {
+                        self.challenger_hops = 1;
+                    } else {
+                        self.challenger_hops = self.challenger_hops.saturating_add(1);
+                    }
+                    self.challenger_bin = xbin;
+                    if self.challenger_hops >= CHALLENGE_HOPS {
+                        self.pos = xbin; // no slew clamp on the takeover hop itself
+                        self.hold = 0;
+                        self.challenger_hops = 0;
+                        took_over = true;
+                    }
+                } else {
+                    self.challenger_hops = 0;
+                }
+            } else {
+                self.challenger_hops = 0;
+            }
+            if !took_over {
+                let delta = (cbin - self.pos).clamp(-MAX_SLEW, MAX_SLEW);
+                self.pos += delta;
+                self.hold = 0;
+            }
+        } else {
+            // Step 5: dropout — no peak within SLEW_RADIUS of `pos` this hop.
+            // `pos` HOLDS; presence decays below. Deliberately does NOT touch
+            // `challenger_hops`: with no live continuation value there is
+            // nothing real to out-salience, so a challenger cannot accrue
+            // credit from beating "nothing" (that was the bug this comment
+            // replaces — an empty continuation used to make ANY peak,
+            // however faint, an unconditional challenger). A single flickered
+            // hop mid-takeover doesn't lose progress either; a genuinely
+            // vanished object still surfaces via HOLD_HOPS → inactive →
+            // acquisition, or via onset re-acquire (step 4), never via this
+            // path.
+            self.hold = self.hold.saturating_add(1);
+            if self.hold > HOLD_HOPS {
+                self.active = false;
+            }
+        }
+
+        let target = if self.active { presence_target(salience, self.pos, window_energy) } else { 0.0 };
+        self.step_presence(target, dt);
+    }
+
+    /// One-pole toward `target`: attack tau while rising, release tau while
+    /// falling (D5/D6) — trust is earned fast, lost slowly.
+    fn step_presence(&mut self, target: f32, dt: f32) {
+        let tau = if target > self.presence { PRESENCE_ATTACK_S } else { PRESENCE_RELEASE_S };
+        let alpha = if tau > 0.0 { 1.0 - (-dt / tau).exp() } else { 1.0 };
+        self.presence += (target - self.presence) * alpha;
+    }
+}
+
+/// D5 step 7's presence target: the tracked position's salience (read at the
+/// nearest bin — a ratio doesn't need the peak-pick's parabolic precision)
+/// divided by the window's (untilted) energy, gated on tiny denominators the
+/// same way `relative_flux` is (`FLUX_ENERGY_GATE`), clamped 0..1. An inactive
+/// or dropout hop's target is 0, decided by the caller.
+fn presence_target(salience: &[f32], pos: f32, window_energy: f32) -> f32 {
+    if window_energy <= FLUX_ENERGY_GATE {
+        return 0.0;
+    }
+    let k = (pos.round().max(0.0) as usize).min(salience.len().saturating_sub(1));
+    (salience.get(k).copied().unwrap_or(0.0) / window_energy).clamp(0.0, 1.0)
+}
+
+/// The four tracker windows in band order [Full, Low, Mid, High] — the SAME
+/// bin ranges `reduce_send`'s band split uses (D4: "the band cell scopes the
+/// tracker's search window").
+fn tracker_windows(num_bins: usize, low_bin: usize, mid_bin: usize) -> [(usize, usize); 4] {
+    [(0, num_bins), (0, low_bin), (low_bin, mid_bin), (mid_bin, num_bins)]
+}
+
+/// Run all four windows' D5 update for one hop and fill `pitch`/`presence` on
+/// each band plus the per-send reserved pitch fields from the Full tracker
+/// (D4). `vqt_raw` is the untilted, floored column salience was computed from
+/// (also this hop's window-energy source); `bpo`/`fmin` come from the shared
+/// `SpectrogramConfig` (the same formula family `band_edges` uses); `dt` is
+/// the hop period in seconds.
+fn update_trackers(
+    send: &mut SendState,
+    vqt_raw: &[f32],
+    num_bins: usize,
+    low_bin: usize,
+    mid_bin: usize,
+    bpo: usize,
+    fmin: f32,
+    dt: f32,
+) {
+    let windows = tracker_windows(num_bins, low_bin, mid_bin);
+    for (wi, &(lo, hi)) in windows.iter().enumerate() {
+        let hi = hi.min(vqt_raw.len());
+        let window_energy: f32 = if lo < hi { vqt_raw[lo..hi].iter().sum() } else { 0.0 };
+        let fired = send.features.bands[wi].transients > 0.999;
+        let prev_pos = send.trackers[wi].pos;
+        send.trackers[wi].update(&send.salience, lo, hi, fired, window_energy, dt);
+
+        let bf = &mut send.features.bands[wi];
+        if hi > lo + 1 {
+            bf.pitch = ((send.trackers[wi].pos - lo as f32) / (hi - 1 - lo) as f32).clamp(0.0, 1.0);
+        }
+        bf.presence = send.trackers[wi].presence;
+
+        if wi == 0 {
+            // Full tracker fills the per-send reserved fields (D4).
+            let bpof = bpo as f32;
+            send.features.pitch_hz = fmin * 2f32.powf(send.trackers[wi].pos / bpof);
+            let delta_bins = send.trackers[wi].pos - prev_pos;
+            let hops_per_sec = if dt > 0.0 { 1.0 / dt } else { 0.0 };
+            let bins_per_semitone = bpof / 12.0;
+            send.features.pitch_delta_st =
+                if bins_per_semitone > 0.0 { delta_bins * hops_per_sec / bins_per_semitone } else { 0.0 };
+            send.features.pitch_confidence = send.trackers[wi].presence;
+        }
+    }
 }
 
 /// One band's reductions from a tilted VQT column plus the previous column.
@@ -939,6 +1241,8 @@ fn new_send_state(num_bins: usize) -> SendState {
         has_prev: false,
         centroid_yfb: [-1.0; 4],
         features: SendFeatures::default(),
+        salience: vec![0.0; num_bins],
+        trackers: [RidgeTracker::new(); 4],
     }
 }
 
@@ -977,6 +1281,11 @@ pub struct StreamingSendAnalyzer {
     scope: bool,
     scope_cols: Vec<f32>,
     scope_scalars: Vec<f32>,
+    /// D7 (simplified for P2): gates the D5 tracker on/off. Default OFF so an
+    /// untouched project's analysis is byte-identical to the pre-tracker path
+    /// (checked by `pitch_tracking_disabled_matches_untouched_path` below);
+    /// the harness turns it on. The in-app activation OR-gate is P4's job.
+    pitch_tracking: bool,
     /// The single audio floor (dB). Bins whose TILTED magnitude is below this are
     /// zeroed in BOTH the scope and feature column before display and reduction, so
     /// what you see (black) is exactly what every algorithm reads (silence). It is a
@@ -1016,6 +1325,7 @@ impl StreamingSendAnalyzer {
             scope: false,
             scope_cols: Vec::new(),
             scope_scalars: Vec::new(),
+            pitch_tracking: false,
             floor_db: manifold_core::audio_setup::FLOOR_DB_OFF,
         }
     }
@@ -1024,6 +1334,14 @@ impl StreamingSendAnalyzer {
     /// `FLOOR_DB_OFF` (or anything at/below it) resolves to the config `db_min`.
     pub fn set_floor_db(&mut self, floor_db: f32) {
         self.floor_db = floor_db;
+    }
+
+    /// Turn the D5 pitch/presence tracker on/off (D7, simplified for P2).
+    /// Default OFF: an untouched project's analysis stays byte-identical to
+    /// the pre-tracker path. When off, salience and all four trackers are
+    /// skipped entirely each hop — `pitch`/`presence` stay 0.
+    pub fn set_pitch_tracking(&mut self, on: bool) {
+        self.pitch_tracking = on;
     }
 
 
@@ -1093,6 +1411,8 @@ impl StreamingSendAnalyzer {
             return;
         }
         let floor_db = self.floor_db;
+        let sample_rate = self.sample_rate;
+        let pitch_tracking = self.pitch_tracking;
         let Self {
             cqt,
             spec_config,
@@ -1112,6 +1432,8 @@ impl StreamingSendAnalyzer {
             ..
         } = self;
         let (n_fft, hop, nb) = (*n_fft, *hop, *num_bins);
+        // Hop period in seconds — the D5 presence one-pole's time base.
+        let dt = hop as f32 / sample_rate.max(1.0);
 
         for &s in mono {
             state.window.push(s);
@@ -1179,10 +1501,28 @@ impl StreamingSendAnalyzer {
                 }
             }
             reduce_send(state, nb, *low_bin, *mid_bin, db_min, db_max);
+            // Same guard `reduce_send` used internally for flux/transients
+            // (captured before the has_prev update just below) — the D5
+            // tracker's warm-up gate (D4: "so the zero-padded fade-in never
+            // acquires a ghost").
+            let have_prev = state.has_prev;
             state.prev_col.copy_from_slice(&state.col);
             // Flux/transients arm only once the window has filled, so the warm-up
             // ramp never reads as a transient (matches the live worker).
             state.has_prev = state.window.len() >= n_fft;
+
+            // D5 tracker (docs/AUDIO_OBJECT_TRACKING_DESIGN.md P2): salience is
+            // computed ONCE per hop from the untilted, floored column (D1 as
+            // amended), then each of the four windows' trackers update from
+            // that one shared array (D4). Gated on `pitch_tracking` (D7,
+            // simplified for P2 — off by default, the harness turns it on) and
+            // `have_prev` — an untouched/disabled project's other five
+            // features are unaffected either way (this never touches
+            // `state.col`/`prev_col`/the existing band fields).
+            if pitch_tracking && have_prev {
+                salience_into(vqt_raw, spec_config.bpo, &mut state.salience);
+                update_trackers(state, vqt_raw, nb, *low_bin, *mid_bin, spec_config.bpo, spec_config.fmin, dt);
+            }
 
             // Scope capture: buffer the raw (untilted) column + overlay scalars,
             // exactly what the live worker pushes to its scope rings — the shader
@@ -1560,6 +1900,8 @@ mod tests {
             has_prev: true,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
+            salience: vec![0.0; nb],
+            trackers: [RidgeTracker::new(); 4],
         };
 
         // Hold the tone for many hops: exactly one onset at the start, then the
@@ -1615,6 +1957,8 @@ mod tests {
             has_prev: true,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
+            salience: vec![0.0; nb],
+            trackers: [RidgeTracker::new(); 4],
         };
         // Settle the followers on the sustained bass floor.
         for _ in 0..40 {
@@ -1665,6 +2009,8 @@ mod tests {
             has_prev: true,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
+            salience: vec![0.0; nb],
+            trackers: [RidgeTracker::new(); 4],
         };
         for _ in 0..40 {
             s.col.copy_from_slice(&bass);
@@ -2011,5 +2357,166 @@ mod tests {
     fn salience_peak_none_on_all_zero_column() {
         let sal = vec![0.0f32; 32];
         assert_eq!(salience_peak(&sal), None, "fully floored column has no peak");
+    }
+
+    // ── Tracker (D5) — synthetic salience columns, no FFT ────────────────
+
+    /// A hop period matching the real transform's (~5.3 ms at hop 256 / 48 kHz)
+    /// — only the numeric scale of `dt` matters here, not the exact transform
+    /// config (these tests drive `RidgeTracker::update` directly).
+    const TRACKER_DT: f32 = 256.0 / 48_000.0;
+
+    /// An isolated impulse of `val` at `bin` in an `n`-bin column, zero
+    /// elsewhere — the simplest possible "one clear peak" salience column.
+    fn impulse(n: usize, bin: usize, val: f32) -> Vec<f32> {
+        let mut v = vec![0.0f32; n];
+        if bin < n {
+            v[bin] = val;
+        }
+        v
+    }
+
+    /// Two isolated impulses — "the tracked object plus a competitor".
+    fn two_impulses(n: usize, bin_a: usize, val_a: f32, bin_b: usize, val_b: f32) -> Vec<f32> {
+        let mut v = impulse(n, bin_a, val_a);
+        if bin_b < n {
+            v[bin_b] += val_b;
+        }
+        v
+    }
+
+    #[test]
+    fn tracker_acquires_a_stable_peak_and_presence_rises() {
+        let n = 80;
+        let mut t = RidgeTracker::new();
+        let energy = 20.0f32;
+        let mut last_presence = 0.0f32;
+        for hop in 0..60 {
+            let sal = impulse(n, 40, 10.0);
+            t.update(&sal, 0, n, false, energy, TRACKER_DT);
+            assert!(t.active, "acquires on the first hop with a peak");
+            assert_eq!(t.pos, 40.0, "an isolated peak has no fractional refine, hop {hop}");
+            assert!(
+                t.presence >= last_presence - 1e-6,
+                "presence must not fall while tracking a stable peak: hop {hop} {last_presence} -> {}",
+                t.presence
+            );
+            last_presence = t.presence;
+        }
+        assert!(last_presence > 0.4, "presence should approach salience/energy = 0.5: got {last_presence}");
+    }
+
+    #[test]
+    fn tracker_follows_a_glide_within_slew_no_discontinuity() {
+        let n = 120;
+        let mut t = RidgeTracker::new();
+        let energy = 20.0f32;
+        let mut prev_pos: Option<f32> = None;
+        for hop in 0..40usize {
+            let bin = 20 + hop / 2; // +0.5 bin/hop on average
+            let sal = impulse(n, bin, 10.0);
+            t.update(&sal, 0, n, false, energy, TRACKER_DT);
+            if let Some(p) = prev_pos {
+                let step = t.pos - p;
+                assert!(step.abs() <= MAX_SLEW, "hop {hop}: step {step} exceeds MAX_SLEW");
+            }
+            prev_pos = Some(t.pos);
+        }
+        assert_eq!(t.pos, 39.0, "tracker should have followed the glide to its final bin");
+    }
+
+    #[test]
+    fn tracker_holds_through_a_dropout_and_resumes_without_a_jump() {
+        let n = 80;
+        let mut t = RidgeTracker::new();
+        let energy = 20.0f32;
+        for _ in 0..5 {
+            t.update(&impulse(n, 40, 10.0), 0, n, false, energy, TRACKER_DT);
+        }
+        assert_eq!(t.pos, 40.0);
+        let presence_before_dropout = t.presence;
+        let silent = vec![0.0f32; n];
+        for hop in 0..20 {
+            t.update(&silent, 0, n, false, 0.0, TRACKER_DT);
+            assert_eq!(t.pos, 40.0, "pos must hold through the dropout, hop {hop}");
+            assert!(t.active, "20 hops is well within HOLD_HOPS ({HOLD_HOPS}), hop {hop}");
+        }
+        assert!(
+            t.presence < presence_before_dropout,
+            "presence should have dipped during the dropout: {presence_before_dropout} -> {}",
+            t.presence
+        );
+        t.update(&impulse(n, 40, 10.0), 0, n, false, energy, TRACKER_DT);
+        assert_eq!(t.pos, 40.0, "resuming at the same bin must not jump");
+    }
+
+    #[test]
+    fn tracker_takeover_needs_challenge_hops_consecutive_hops() {
+        let n = 120;
+        let mut t = RidgeTracker::new();
+        let energy = 40.0f32;
+        for _ in 0..5 {
+            t.update(&impulse(n, 40, 10.0), 0, n, false, energy, TRACKER_DT);
+        }
+        assert_eq!(t.pos, 40.0);
+        // A competitor 30 bins away, well out-salient (> CHALLENGE_RATIO), on
+        // every subsequent hop.
+        let sal = two_impulses(n, 40, 10.0, 70, 20.0);
+        for hop in 1..CHALLENGE_HOPS {
+            t.update(&sal, 0, n, false, energy, TRACKER_DT);
+            assert_eq!(t.pos, 40.0, "must not jump before CHALLENGE_HOPS consecutive hops (hop {hop})");
+        }
+        t.update(&sal, 0, n, false, energy, TRACKER_DT);
+        assert_eq!(t.pos, 70.0, "must jump exactly at CHALLENGE_HOPS consecutive hops");
+    }
+
+    #[test]
+    fn tracker_onset_reacquires_immediately_bypassing_hysteresis() {
+        let n = 120;
+        let mut t = RidgeTracker::new();
+        let energy = 40.0f32;
+        for _ in 0..5 {
+            t.update(&impulse(n, 40, 10.0), 0, n, false, energy, TRACKER_DT);
+        }
+        assert_eq!(t.pos, 40.0);
+        // A brand-new, far-away, stronger peak with the band's onset firing
+        // THIS hop must win immediately — no CHALLENGE_HOPS wait, no MAX_SLEW
+        // clamp (D5 step 4: a new note may legitimately teleport).
+        let sal = impulse(n, 95, 50.0);
+        t.update(&sal, 0, n, true, energy, TRACKER_DT);
+        assert_eq!(t.pos, 95.0, "onset fire must re-acquire immediately");
+    }
+
+    #[test]
+    fn pitch_tracking_disabled_matches_untouched_path() {
+        // The tracker must be pure plumbing when off: the pre-existing five
+        // features must be bit-identical whether the tracker ran or not, and
+        // pitch/presence must stay exactly 0 when disabled (D7, simplified).
+        let mono = sine(1000.0, nfft() * 6);
+        let mut off = StreamingSendAnalyzer::new(SR, 250.0, 2000.0);
+        let mut on = StreamingSendAnalyzer::new(SR, 250.0, 2000.0);
+        on.set_pitch_tracking(true);
+        for chunk in mono.chunks(257) {
+            off.push(chunk);
+            on.push(chunk);
+        }
+        let (fo, fon) = (off.latest(), on.latest());
+        for b in 0..4 {
+            assert_eq!(fo.bands[b].amplitude, fon.bands[b].amplitude, "band {b} amplitude diverged");
+            assert_eq!(fo.bands[b].brightness, fon.bands[b].brightness, "band {b} brightness diverged");
+            assert_eq!(fo.bands[b].noisiness, fon.bands[b].noisiness, "band {b} noisiness diverged");
+            assert_eq!(fo.bands[b].liveliness, fon.bands[b].liveliness, "band {b} liveliness diverged");
+            assert_eq!(fo.bands[b].transients, fon.bands[b].transients, "band {b} transients diverged");
+            assert_eq!(fo.bands[b].pitch, 0.0, "disabled tracker must read pitch 0, band {b}");
+            assert_eq!(fo.bands[b].presence, 0.0, "disabled tracker must read presence 0, band {b}");
+        }
+        assert_eq!(fo.pitch_hz, 0.0);
+        assert_eq!(fo.pitch_confidence, 0.0);
+        // Sanity: tracking ON over several hundred ms of a loud steady tone
+        // should actually have acquired something on some band.
+        assert!(
+            fon.bands.iter().any(|b| b.presence > 0.0),
+            "tracking on: some band should show nonzero presence on a loud tone"
+        );
     }
 }

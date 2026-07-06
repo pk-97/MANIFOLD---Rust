@@ -74,6 +74,11 @@ exactly 8, busymix ≥ 7 of 8) — owned by `docs/AUDIO_OBJECT_TRACKING_DESIGN.m
 which carries the full brief. If no sweep point passes, that phase escalates with the
 table rather than redesigning the detector.
 
+**Blast radius grew 2026-07-06 (P2):** the false fires also break the D5 ridge
+tracker — onset re-acquire (D5 step 4) teleports the tracked pitch on every false
+fire, so P2's dive/wobble gates (max Δ 24 st, wobble stddev 7.25 st) are BLOCKED on
+this bug. P3's exit gate now includes re-running the P2 gate lines to PASS.
+
 ### BUG-039 (saw-rotation-wrap) — Angle params clamp at range ends, so a saw LFO / automation can't drive a smooth full rotation — MED (enhancement, performer-facing)
 
 **Symptom** (Peter, 2026-07-06) — binding a saw LFO or an automation ramp to a rotation
