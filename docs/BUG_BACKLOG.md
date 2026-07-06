@@ -31,6 +31,7 @@ or human can read it, and it needs no external tool.
 | ID | Nickname | One line |
 |---|---|---|
 | BUG-039 | **saw-rotation-wrap** | angle params clamp instead of wrapping; saw LFO can't spin a full rotation (MED, mechanism pinned) |
+| BUG-045 | **gap-ring-down-chase** | tracker follows kernel ring-down down ~2-4 bins in note gaps; notes gate 87.6 vs 90 (LOW) |
 | BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
 | BUG-037 | **glp-first-render-stall** | ~37ms warm-up on a glTF clip's first rendered frame (MED) |
 | BUG-040 | **v13-import-migration-drop** | V1.3→V1.4 migration drops positional params of imported generators; 1-day save window (LOW) |
@@ -80,32 +81,28 @@ per-band median windows, a density-normalized delta floor, or a dual criterion
 feel/apricots mixes are the oracle, dive/riser/growl remain the false-fire guards.
 No tuning done this round per Peter (review-only pass).
 
-### BUG-042 (onset-settle-grab) — Tracker re-acquires garbage pitch during the transform's post-attack settle window — MED (blocks presence on real basslines)
+### BUG-045 (gap-ring-down-chase) — Tracker chases the transform's kernel ring-down during inter-note gaps — LOW (2.4 points on the notes gate; real-clip impact small)
 
-**Symptom** (found 2026-07-06, `notes` selftest + Tears bass stem): on a note attack,
-the D5 onset re-acquire teleports to `strongest_peak()` on the fire hop, but the VQT
-needs ~12 hops to settle after an attack (low-frequency kernels), so the instant
-estimate is wrong for ~70 ms on EVERY note (CSV: 329→301→300 Hz over 13 hops on a
-150 Hz note). `P2c notes` gates document it: pitch accuracy 61.9% (gate 90), presence
-43.6% (gate 60) — presence never accumulates across a real bassline's re-attacks, so
-the pitch display stays dark on real material even though tracking between attacks is
-correct.
+**Found 2026-07-06 while fixing BUG-042** (its remaining accuracy misses after the
+re-acquire-window fix). After every note release, the VQT's kernel memory presents a
+DESCENDING salience artifact (energy decays slower in lower/longer kernels, so the
+apex slides down: measured 149→144→133→118→100 Hz over ~6 hops on `notes`). The
+early part of that slide moves at ≤ MAX_SLEW bins/hop, so continuation legitimately
+follows it 2–4 bins down during the gap; the next attack then starts ~1–4 st low
+until the onset re-acquire window rescues (~5 hops). Two partial guards shipped with
+BUG-042: super-slew+moving continuation candidates are refused (hold instead of
+clamp-chase), and a static super-slew peak in the MAX_SLEW..SLEW_RADIUS dead zone is
+snapped to (tremolo-trough recovery). What remains is the sub-slew early chase.
 
-**Two fix shapes already tried and REJECTED (do not re-attempt — traces in
-AUDIO_OBJECT_TRACKING_DESIGN P2c/P2d record):** (1) the instant teleport itself (the
-current shipped state — wrong for the settle duration); (2) an onset re-acquire
-window reusing CHALLENGE_HOPS as both window length and required consistency streak —
-structurally broken (zero slack: settle noise eats 1–3 hops, window closes short,
-pos freezes on a wrong bin PERMANENTLY because a weak residual keeps continuation
-alive). Regressed accuracy to 15.1%.
-
-**Key measured fact for the next design:** the true peak's POSITION stabilizes ~3
-hops post-attack (±0.3 bin); it is the relative STRENGTH that needs the full ~12.
-Candidate shape (untested): position-consistency accrual that is strength-agnostic,
-with slack between window length and streak requirement — or deleting the onset
-coupling and allowing consistency-only challenger accrual during held-dropout
-(riser/kicks gates are the guards). Oracle: the `notes` scenario CSV + Tears bass
-stem in `tests/fixtures/audio/` (gitignored, 5 tracks × mix+4 stems).
+**Oracle:** `P2c notes` accuracy line (87.6% vs gate 90 — the only known-failing
+selftest line). **Fix direction (untried):** a value-trend discriminator —
+ring-down decays ~0.90/hop at kernel rate while tremolo decays ~0.985/hop and a
+real glide holds value — but that bar is a NEW tuned constant between two measured
+distributions with ~2× separation, and a genuine fade-out slide (musical) sits on
+the wrong side of it. Declined this session as knife-edge; needs either a
+plateau-demonstrated sweep on real material or a smarter shape. Do NOT re-try:
+raising SETTLE_STREAK (swept 2/3/4 — 69.2/87.6/86.1, K=3 is the plateau), or
+re-clamping super-slew continuation (resurrects the 7-st gap-chase).
 
 ### BUG-039 (saw-rotation-wrap) — Angle params clamp at range ends, so a saw LFO / automation can't drive a smooth full rotation — MED (enhancement, performer-facing)
 
@@ -1079,6 +1076,37 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-042 (onset-settle-grab) — Tracker re-acquired garbage pitch during the post-attack settle window — FIXED 2026-07-06 (third design: position-anchored re-acquire window)
+
+**Was:** D5's onset re-acquire teleported to `strongest_peak()` on the fire hop; the
+VQT needs ~12 hops to settle post-attack, so the estimate was wrong ~70 ms on EVERY
+note. Two prior fix shapes rejected with traces (instant teleport; zero-slack settle
+window) — see the design doc P2c record.
+
+**Fix (third design, honoring the measured 3-hop position / 12-hop strength split):**
+an onset now OPENS a re-acquire window (CHALLENGE_HOPS long) instead of teleporting.
+`pos` holds through the attack (correct for same-pitch re-attacks, the dominant real
+case), continuation/takeover keep running (nothing freezes — rejected shape 2's flaw),
+and the jump fires on position evidence: SETTLE_STREAK (3, plateau-swept 2/3/4 =
+69.2/87.6/86.1) consecutive hops with the memoryless apex parked within MAX_SLEW of
+the streak's ANCHOR (anchored, not hop-to-hop — the post-attack splash drifts 1–3
+bins/hop and reads hop-to-hop-consistent), PLUS the apex must out-value the held
+bin by CHALLENGE_RATIO — the window is an accelerated takeover clock (3 parked hops
+instead of 12), never a lowered strength bar (without that clause a warm-up-artifact
+fire teleported the dive 19 st onto a fade-in harmonic). Two sibling continuation
+fixes shipped with it: super-slew+moving candidates are refused (hold, not
+clamp-chase — kills the 7-st gap ring-down drag), and static peaks in the
+MAX_SLEW..SLEW_RADIUS dead zone snap (tremolo-trough recovery; the hole the refusal
+would otherwise open — wobble regressed 0.34→0.52 st before the snap, 0.39 after).
+Also fixed: `gt_notes` claimed a phantom 19th note (synth writes 18) — 26
+guaranteed-miss hops in the gate denominator.
+
+**Verified:** notes accuracy 61.9→87.6 (gate 90 still red — the residual is a
+DIFFERENT mechanism, filed as BUG-045), notes presence 43.6→100 PASS, octave-jump
+gate PASS, all other selftest lines green. Real clips: tears bass (the oracle) 30→5
+octave jumps; jumps drop across ~all 25 clips (bad_guy bass 26→13, vocals ~halved);
+presence flat-to-up everywhere; apricots bass stays perfect (0 jumps, 0.83).
 
 ### BUG-043 (deep-bass-floor-anchor) — Tracker anchored at the spectrum bottom on deep sub-bass — FIXED 2026-07-06 (apex-masked salience comb)
 

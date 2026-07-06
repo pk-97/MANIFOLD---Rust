@@ -74,10 +74,9 @@ liveliness, transients`, then `tracked_f0_hz`, then per band `pitch, presence`.
 `P2 <scenario>:` tracker trajectory gates · `P2b:` presence gates ·
 `P2c notes:` note-based material gates · `P3:` transient fire-count gates.
 Each line prints its own bound and PASS/FAIL. **Known-failing by design as of
-2026-07-06 (post-BUG-043 fix):** ONE line — `P2c notes` pitch accuracy (56.4%, gate
-90) — the oracle for BUG-042. (The notes PRESENCE line went green with the BUG-043
-apex-mask work, 43.6%→95.2%; accuracy shifted 61.9%→56.4% and remains the open
-target.) Everything else green is the entry state; a change that reddens any other
+2026-07-06 (post-BUG-042/043 fixes):** ONE line — `P2c notes` pitch accuracy
+(87.6%, gate 90) — now owned by BUG-045 (gap-ring-down-chase), the residual
+mechanism after BUG-042's fix. Notes presence is green (100%). Everything else green is the entry state; a change that reddens any other
 line is a regression regardless of what it improves.
 
 ## 5. Current state + the open-bug oracles (2026-07-06)
@@ -90,7 +89,8 @@ on real note-based basslines is effectively dark.
 
 | Bug | One line | Oracle |
 |---|---|---|
-| BUG-042 onset-settle-grab | attacks re-acquire garbage for ~12 hops; two fix shapes already rejected with traces — read the entry before designing | `notes` scenario CSV + tears bass |
+| BUG-045 gap-ring-down-chase | tracker follows the kernel ring-down 2-4 bins down in note gaps; value-trend fix direction + its knife-edge risk recorded in the entry | `notes` accuracy line (87.6/90) |
+| ~~BUG-042~~ FIXED 2026-07-06 | position-anchored re-acquire window (accelerated takeover clock); see backlog Fixed entry | notes gates + tears bass are the regression guard |
 | ~~BUG-043~~ FIXED 2026-07-06 | apex-masked salience comb + dominance/consistency presence factors (see backlog Fixed entry) | `sub` scenario gates are the permanent regression guard |
 | BUG-044 mix-trigger-deafness | dense mixes self-raise the ODF median threshold; timing is grid-accurate when firing | feel + apricots mixes (dead) vs their drums stems (healthy) |
 

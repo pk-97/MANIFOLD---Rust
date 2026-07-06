@@ -363,6 +363,18 @@ hop's argmax; band-noise wanders 10–20 bins/hop, real objects <0.3). Dead ends
 measured and recorded in the backlog Fixed entry: dominance², kernel-normalized
 mound width. Full trail: BUG_BACKLOG.md Fixed → BUG-043.
 
+**BUG-042 record (2026-07-06, same day, after the BUG-043 record above):** the
+third fix shape SHIPPED and the bug is closed. Onset re-acquire is now a
+position-anchored window: an onset opens CHALLENGE_HOPS of observation; `pos`
+holds; the jump needs SETTLE_STREAK (3) hops of the memoryless apex parked within
+MAX_SLEW of the streak's anchor AND CHALLENGE_RATIO decisiveness against the held
+bin — an accelerated takeover clock, never a lowered bar. Sibling continuation
+amendments: moving super-slew candidates are refused (hold), static dead-zone
+peaks snap. notes accuracy 61.9→87.6, presence 43.6→100; tears bass 30→5 octave
+jumps. The residual 2.4 points are a different mechanism (pre-onset kernel
+ring-down chase) — BUG-045 in the backlog owns it with the untried fix direction
+and its risks. Do not re-attempt the two shapes this design superseded.
+
 **P2c/P2d record (2026-07-06, same day):** P2c shipped the unified stability
 distance law, the `notes` scenario (the note-based fixture class the six
 continuous-tone scenarios missed — found via real Skrillex bass stems), and `--bpm`

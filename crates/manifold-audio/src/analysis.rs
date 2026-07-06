@@ -835,6 +835,15 @@ const CHALLENGE_HOPS: u8 = 12;
 /// Hops of dropout (no acceptable peak, no completed takeover) tolerated
 /// before the tracker goes inactive (~200 ms at hop ≈ 5.3 ms, D5 step 5).
 const HOLD_HOPS: u8 = 38;
+/// Consecutive apex-consistent hops the post-onset re-acquire window waits
+/// for before jumping (BUG-042 third design, 2026-07-06): the transform's
+/// peak POSITION parks within ±0.3 bin ~3 hops after an attack even though
+/// its relative STRENGTH needs ~12 (the measured fact both rejected fix
+/// shapes ignored). The window itself stays open CHALLENGE_HOPS (~12) — 4×
+/// slack over this streak, the exact slack whose absence broke rejected
+/// shape 2 (window == streak froze pos permanently when settle noise ate a
+/// hop).
+const SETTLE_STREAK: u8 = 3;
 /// Presence one-pole attack time constant, seconds (D6 recalibration
 /// 2026-07-06): trust is earned over ~a tenth of a second of sustained
 /// evidence. Noise rejection is NOT this constant's job — the stability
@@ -899,6 +908,25 @@ struct RidgeTracker {
     /// it follows nothing and holds nothing: it is wherever the window's
     /// strongest peak actually was.
     last_apex: f32,
+    /// Hops the post-onset re-acquire window stays open (BUG-042); 0 =
+    /// closed. Opened to CHALLENGE_HOPS by a transient fire.
+    reacquire_hops: u8,
+    /// Consecutive in-window hops the apex has stayed within MAX_SLEW of
+    /// `settle_anchor`; the jump happens at SETTLE_STREAK (strength-agnostic
+    /// — position evidence only).
+    settle_streak: u8,
+    /// Last hop's continuation candidate bin (strongest in-radius peak,
+    /// accepted or not); `NEG_INFINITY` when last hop had none. The
+    /// super-slew static-snap below compares against it.
+    last_cont_bin: f32,
+    /// The bin the current settle streak STARTED at. Each streak hop must
+    /// stay within MAX_SLEW of this anchor, not of the previous hop — the
+    /// post-attack spectral splash DRIFTS slowly (~1-3 bins/hop, measured on
+    /// `notes`: 125→100 Hz over ~6 hops before the fundamental resolves),
+    /// so hop-to-hop consistency reads true on garbage; cumulative
+    /// displacement from the anchor is what breaks it. A genuinely parked
+    /// apex completes the streak; anything still moving re-anchors.
+    settle_anchor: f32,
 }
 
 impl RidgeTracker {
@@ -918,6 +946,10 @@ impl RidgeTracker {
             // reads inconsistent (one hop of zero presence target), never
             // accidentally consistent with bin 0.
             last_apex: f32::NEG_INFINITY,
+            last_cont_bin: f32::NEG_INFINITY,
+            reacquire_hops: 0,
+            settle_streak: 0,
+            settle_anchor: f32::NEG_INFINITY,
         }
     }
 
@@ -978,24 +1010,63 @@ impl RidgeTracker {
             return;
         }
 
-        // Step 4: onset re-acquire — bypasses hysteresis and slew entirely
-        // for this hop; the strongest window peak wins outright.
-        if transient_fired {
-            if let Some((bin, _)) = apex {
-                let delta = bin - self.pos;
-                self.pos = bin;
-                self.hold = 0;
-                self.challenger_hops = 0;
-                // Unified distance law (D6/P2c, 2026-07-06): a re-attack near
-                // the current position is the SAME object (a bassline
-                // re-striking the same note) and keeps trust; only a jump
-                // across the window (Δ > MAX_SLEW) re-earns it, same as
-                // continuation below.
-                self.stability = (1.0 - (delta.abs() / MAX_SLEW)).clamp(0.0, 1.0);
+        // Step 4 as amended (BUG-042 third design, 2026-07-06): an onset
+        // OPENS a re-acquire window instead of teleporting. The fire-hop
+        // apex is garbage — the transform needs ~1-3 hops for the new
+        // peak's POSITION to park (and ~12 for its strength, which is why
+        // strength-based challenge is too slow for 8th notes). While the
+        // window is open `pos` HOLDS (a bassline re-striking the same note
+        // — the overwhelmingly common case — therefore reads correctly
+        // through the attack), continuation and takeover below keep running
+        // (nothing freezes: rejected shape 2's fatal flaw), and the jump
+        // happens on position evidence alone: SETTLE_STREAK consecutive
+        // apex-consistent hops, however weak the apex still is relative to
+        // the old peak. Both rejected shapes are recorded in BUG_BACKLOG
+        // (now Fixed) / the design doc P2c record — do not resurrect them.
+        if transient_fired && apex.is_some() {
+            self.reacquire_hops = CHALLENGE_HOPS;
+            self.settle_streak = 0;
+            self.settle_anchor = f32::NEG_INFINITY;
+        }
+        if self.reacquire_hops > 0 {
+            self.reacquire_hops -= 1;
+            if let Some((bin, apex_val)) = apex {
+                if (bin - self.settle_anchor).abs() > MAX_SLEW {
+                    self.settle_anchor = bin;
+                    self.settle_streak = 1;
+                } else {
+                    self.settle_streak = self.settle_streak.saturating_add(1);
+                }
+                // The jump needs BOTH: a parked apex (position evidence, the
+                // streak) AND decisiveness against what `pos` still holds —
+                // the SAME CHALLENGE_RATIO bar the takeover path uses, so
+                // the window is an accelerated takeover clock (3 parked hops
+                // instead of 12) and never a lowered strength bar. On a real
+                // re-attack the held bin is dead residue (S[pos] ≈ 0) and
+                // any real note passes immediately; on a still-sounding
+                // object (the dive's fundamental during a warm-up-artifact
+                // fire) a briefly-parked harmonic is refused — measured:
+                // without this clause one hop-18 fire teleported the dive
+                // tracker 19 st onto a fade-in harmonic.
+                let held_bin = (self.pos.round().max(0.0) as usize).min(salience.len().saturating_sub(1));
+                let held_val = salience[held_bin];
+                if self.settle_streak >= SETTLE_STREAK && apex_val > held_val * CHALLENGE_RATIO {
+                    let delta = bin - self.pos;
+                    self.pos = bin;
+                    self.hold = 0;
+                    self.challenger_hops = 0;
+                    self.reacquire_hops = 0;
+                    // Unified distance law (D6/P2c): a re-attack near the
+                    // held position is the SAME object and keeps trust; a
+                    // genuine jump (the octave note) re-earns it.
+                    self.stability = (1.0 - (delta.abs() / MAX_SLEW)).clamp(0.0, 1.0);
+                    let target = self.stability * dominance(salience, self.pos, lo, hi) * consistency * presence_target(salience, col, self.pos, bpo);
+                    self.step_presence(target, dt);
+                    return;
+                }
             }
-            let target = self.stability * dominance(salience, self.pos, lo, hi) * consistency * presence_target(salience, col, self.pos, bpo);
-            self.step_presence(target, dt);
-            return;
+            // Window open, streak not complete: fall through — continuation,
+            // takeover, and dropout behave exactly as on any other hop.
         }
 
         // Step 2: continuation — the strongest peak within `SLEW_RADIUS`.
@@ -1003,6 +1074,7 @@ impl RidgeTracker {
             &peaks.iter().copied().filter(|&(bin, _)| (bin - self.pos).abs() <= SLEW_RADIUS).collect::<Vec<_>>(),
         );
 
+        let this_cont_bin = continuation.map(|(b, _)| b).unwrap_or(f32::NEG_INFINITY);
         if let Some((cbin, cont_val)) = continuation {
             // Step 3: takeover — a stronger peak OUTSIDE the radius must
             // out-salience THIS hop's real continuation value (never a
@@ -1039,13 +1111,42 @@ impl RidgeTracker {
                 self.challenger_hops = 0;
             }
             if !took_over {
-                let delta = (cbin - self.pos).clamp(-MAX_SLEW, MAX_SLEW);
-                self.pos += delta;
-                self.hold = 0;
-                // Continuity IS the confidence signal: a still or slowly
-                // gliding object reads ~1; noise-following jitter at the slew
-                // limit reads ~0. Uses the existing MAX_SLEW — no new constant.
-                self.stability = 1.0 - (delta.abs() / MAX_SLEW).clamp(0.0, 1.0);
+                let delta = cbin - self.pos;
+                if delta.abs() <= MAX_SLEW {
+                    self.pos += delta;
+                    self.hold = 0;
+                    // Continuity IS the confidence signal: a still or slowly
+                    // gliding object reads ~1; noise-following jitter at the slew
+                    // limit reads ~0. Uses the existing MAX_SLEW — no new constant.
+                    self.stability = 1.0 - (delta.abs() / MAX_SLEW).clamp(0.0, 1.0);
+                } else if (cbin - self.last_cont_bin).abs() <= MAX_SLEW {
+                    // Super-slew but STATIC: a real peak sitting in the dead
+                    // zone between MAX_SLEW and SLEW_RADIUS (e.g. the
+                    // fundamental returning ~4 bins away after a tremolo
+                    // trough) — adopt it directly. A moving super-slew
+                    // candidate never qualifies: it was somewhere else last
+                    // hop.
+                    let delta = cbin - self.pos;
+                    self.pos = cbin;
+                    self.hold = 0;
+                    self.stability = (1.0 - (delta.abs() / MAX_SLEW)).clamp(0.0, 1.0);
+                } else {
+                    // Super-slew AND moving: NOT the same object gliding —
+                    // MAX_SLEW is ~12 oct/s, no real glide approaches it —
+                    // so HOLD instead of chasing it at the clamp (BUG-042
+                    // follow-up, 2026-07-06). The measured failure this
+                    // deletes: after every note release the transform's
+                    // kernel ring-down presents an accelerating downward
+                    // artifact (0.1 → 1 → 3 → 4+ bins/hop); the old
+                    // clamp-and-follow dragged pos ~7 st below the note in
+                    // the gap, so every next attack started badly wrong.
+                    // Holding parks near the note instead, and the attack's
+                    // own continuation/window recovers immediately.
+                    self.hold = self.hold.saturating_add(1);
+                    if self.hold > HOLD_HOPS {
+                        self.active = false;
+                    }
+                }
             }
         } else {
             // Step 5: dropout — no peak within SLEW_RADIUS of `pos` this hop.
@@ -1064,6 +1165,8 @@ impl RidgeTracker {
                 self.active = false;
             }
         }
+
+        self.last_cont_bin = this_cont_bin;
 
         let target = if self.active {
             self.stability * dominance(salience, self.pos, lo, hi) * consistency * presence_target(salience, col, self.pos, bpo)
@@ -2858,7 +2961,7 @@ mod tests {
     }
 
     #[test]
-    fn tracker_onset_reacquires_immediately_bypassing_hysteresis() {
+    fn tracker_onset_reacquires_after_position_settles_strength_agnostic() {
         let n = 120;
         let mut t = RidgeTracker::new();
         for _ in 0..5 {
@@ -2866,12 +2969,50 @@ mod tests {
             t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
         }
         assert_eq!(t.pos, 40.0);
-        // A brand-new, far-away, stronger peak with the band's onset firing
-        // THIS hop must win immediately — no CHALLENGE_HOPS wait, no MAX_SLEW
-        // clamp (D5 step 4: a new note may legitimately teleport).
-        let sal = impulse(n, 95, 50.0);
+        // BUG-042 third design (as amended): a new note fires an onset and
+        // the OLD peak collapses to residue (1.0) — the real re-attack
+        // signature. The new peak is decisive against the held residue
+        // (CHALLENGE_RATIO clears trivially) but the fire hop must still
+        // NOT teleport (the fire-hop estimate is garbage on real material);
+        // the jump happens once the apex position has PARKED for
+        // SETTLE_STREAK hops — far sooner than the 12-hop strength-based
+        // takeover clock, which is the acceleration this window exists for.
+        let sal = two_impulses(n, 40, 1.0, 95, 12.0);
         t.update(&sal, &sal, 0, n, true, SAL_BPO, TRACKER_DT);
-        assert_eq!(t.pos, 95.0, "onset fire must re-acquire immediately");
+        assert_eq!(t.pos, 40.0, "the fire hop itself must hold, never teleport");
+        // The fire hop anchored the streak at 95 (streak 1); it completes
+        // after SETTLE_STREAK - 1 further parked hops.
+        for hop in 0..(SETTLE_STREAK - 2) {
+            t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
+            assert_eq!(t.pos, 40.0, "must hold until the streak completes (hop {hop})");
+        }
+        t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
+        assert_eq!(t.pos, 95.0, "must jump to the settled apex after SETTLE_STREAK parked hops, not after the takeover clock");
+    }
+
+    /// BUG-042 guard: an onset whose window never sees a position-consistent
+    /// apex (band-noise attack: the argmax jumps around) must expire with
+    /// pos unmoved — the re-acquire window is position-evidence-only.
+    #[test]
+    fn tracker_onset_window_expires_on_wandering_apex() {
+        let n = 120;
+        let mut t = RidgeTracker::new();
+        for _ in 0..5 {
+            let sal = impulse(n, 40, 10.0);
+            t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
+        }
+        assert_eq!(t.pos, 40.0);
+        let mut fired = true;
+        for hop in 0..(CHALLENGE_HOPS + 4) {
+            // Apex alternates 70/100 every hop (30 bins apart) with the old
+            // peak still present at 40 — no SETTLE_STREAK run can form.
+            let apex_bin = if hop % 2 == 0 { 70 } else { 100 };
+            let sal = two_impulses(n, 40, 10.0, apex_bin, 50.0);
+            t.update(&sal, &sal, 0, n, fired, SAL_BPO, TRACKER_DT);
+            fired = false;
+            assert_eq!(t.pos, 40.0, "a wandering apex must never win the re-acquire window (hop {hop})");
+        }
+        assert_eq!(t.reacquire_hops, 0, "window must have expired");
     }
 
     /// D6/P2c unification (2026-07-06, real-clip finding): the onset
@@ -2896,36 +3037,48 @@ mod tests {
             t.stability
         );
 
-        // (i) Re-acquire NEAR the current pos (Δ=0): a fresh, stronger onset
-        // at the SAME bin — the re-attack case. Stability must be preserved,
-        // and presence must keep rising across it, not dip.
+        // (i) Re-attack at the SAME bin (the common real-bassline case): the
+        // onset opens the window, the apex is already position-consistent at
+        // pos, the streak-complete jump is a no-op with Δ=0 — stability must
+        // be preserved and presence must keep rising across the attack.
         let presence_before_near = t.presence;
         let sal = impulse(n, 40, 50.0);
         t.update(&sal, &sal, 0, n, true, SAL_BPO, TRACKER_DT);
-        assert_eq!(t.pos, 40.0, "onset fire must re-acquire immediately");
-        assert_eq!(t.stability, 1.0, "re-acquire at Δpos=0 must read full stability (same object)");
         for hop in 0..10 {
             t.update(&sal, &sal, 0, n, false, SAL_BPO, TRACKER_DT);
+            assert_eq!(t.pos, 40.0, "same-pitch re-attack must never move pos (hop {hop})");
             assert!(
                 t.presence >= presence_before_near - 1e-6,
                 "presence must not dip below its pre-re-attack value while re-earning nothing (same object), hop {hop}"
             );
         }
+        assert_eq!(t.stability, 1.0, "re-attack at Δpos=0 must read full stability (same object)");
         assert!(
             t.presence > presence_before_near,
             "presence must have kept rising through the same-pitch re-attack: {presence_before_near} -> {}",
             t.presence
         );
 
-        // (ii) Re-acquire FAR from the current pos: a brand-new note far
-        // outside SLEW_RADIUS. Stability must reset to 0, and presence must
-        // fall (re-earning trust from scratch), never hold or rise on the
-        // re-acquire hop itself.
+        // (ii) A genuinely NEW note far outside SLEW_RADIUS: after the
+        // settle streak completes the jump, stability must read 0 (new
+        // object, trust re-earned) and presence must fall from its
+        // pre-attack level.
         let presence_before_far = t.presence;
         let sal_far = impulse(n, 95, 50.0);
         t.update(&sal_far, &sal_far, 0, n, true, SAL_BPO, TRACKER_DT);
-        assert_eq!(t.pos, 95.0, "onset fire must re-acquire immediately even far away");
-        assert_eq!(t.stability, 0.0, "re-acquire far from the previous pos must read 0 stability (new object)");
+        // Drive hops until the settle-streak jump lands, then check the
+        // jump hop's own stability (a later static continuation hop would
+        // legitimately read 1.0 again).
+        let mut jumped_at = None;
+        for hop in 0..CHALLENGE_HOPS {
+            if t.pos == 95.0 {
+                jumped_at = Some(hop);
+                break;
+            }
+            t.update(&sal_far, &sal_far, 0, n, false, SAL_BPO, TRACKER_DT);
+        }
+        assert!(jumped_at.is_some(), "the settled far apex must have won the window");
+        assert_eq!(t.stability, 0.0, "a far jump must read 0 stability (new object)");
         assert!(
             t.presence < presence_before_far,
             "presence must fall on a far re-acquire before it can re-earn trust: {presence_before_far} -> {}",

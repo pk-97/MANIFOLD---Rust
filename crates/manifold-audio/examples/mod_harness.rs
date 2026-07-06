@@ -826,11 +826,17 @@ fn print_p2c_gates(records: &[HopRecord], dt: f32, ground_truth: GroundTruthFn) 
 /// features for each of the four bands — see the module header comment for
 /// the exact column layout this must match.
 fn write_csv(dir: &str, label: &str, records: &[HopRecord], dt: f32, ground_truth: GroundTruthFn) {
-    std::fs::create_dir_all(dir).unwrap_or_else(|e| {
-        eprintln!("failed to create csv dir {dir}: {e}");
-        std::process::exit(1);
-    });
     let path = format!("{dir}/{label}.csv");
+    // `label` embeds the input path for file jobs, so the CSV's parent may be
+    // arbitrarily nested — create the FULL parent, not just `dir` (this was
+    // the guide's "pre-create nested dirs" papercut; it bit again 2026-07-06,
+    // silently dropping a whole batch scan's CSVs).
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        std::fs::create_dir_all(parent).unwrap_or_else(|e| {
+            eprintln!("failed to create csv dir {}: {e}", parent.display());
+            std::process::exit(1);
+        });
+    }
     let mut csv = String::from("hop_index,time_s,ground_truth_f0_hz,salience_f0_hz");
     for band in BAND_NAMES {
         let band_lc = band.to_ascii_lowercase();
@@ -954,14 +960,26 @@ fn notes_ramp_s() -> f32 {
 fn note_freq(i: usize) -> f32 {
     if i == NOTES_JUMP_NOTE_INDEX { 300.0 } else { 150.0 }
 }
+/// How many notes `synth_notes` actually writes: the last grid slot before
+/// the clip end. `gt_notes` MUST share this bound — an unbounded index
+/// claimed a 19th note was sounding in the final 140 ms while the synth had
+/// written silence, putting 26 guaranteed-miss hops (~4.3%) in the P2c
+/// accuracy gate's denominator (found 2026-07-06 during BUG-042).
+fn notes_count() -> usize {
+    (SELFTEST_SECS as f32 / notes_eighth_s()).floor() as usize
+}
 /// Ground truth for `notes`: the sounding note's f0 while a note is playing,
-/// `NaN` in the gap between notes (a real bassline isn't always sounding).
+/// `NaN` in the gap between notes (a real bassline isn't always sounding)
+/// and after the last synthesized note.
 fn gt_notes(t: f32) -> f32 {
     if t < 0.0 {
         return f32::NAN;
     }
     let grid = notes_eighth_s();
     let i = (t / grid) as usize;
+    if i >= notes_count() {
+        return f32::NAN;
+    }
     let note_start = i as f32 * grid;
     if t < note_start + notes_sound_s() { note_freq(i) } else { f32::NAN }
 }
@@ -1113,7 +1131,7 @@ fn synth_notes() -> Vec<f32> {
     let grid = notes_eighth_s();
     let dur = notes_sound_s();
     let ramp = notes_ramp_s();
-    let n_notes = (SELFTEST_SECS as f32 / grid).floor() as usize;
+    let n_notes = notes_count();
     for i in 0..n_notes {
         let f0 = note_freq(i);
         let start_sample = (i as f32 * grid * srf) as usize;
