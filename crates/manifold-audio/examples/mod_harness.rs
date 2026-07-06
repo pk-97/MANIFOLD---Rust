@@ -515,7 +515,7 @@ fn semitones_vs(f_hz: f32, ref_hz: f32) -> f32 {
 /// fired value (`> 0.999` — the same threshold `update_trackers` reads to
 /// treat a hop as "this band's onset fired this hop", not the decayed tail).
 /// Only Full and Low are counted — the two bands the P3 gates and the dive/
-/// riser/growl/kicks/busymix scenarios care about. Wobble prints its count
+/// riser/growl/kicks/busymix/densemix scenarios care about. Wobble prints its count
 /// with no gate attached (its LFO re-attacks are arguably genuine onsets;
 /// its real gate is the P2 `pitch_stddev_st` line). This is a raw count, not
 /// a PASS/FAIL judgment — the sweep script reads the numbers against the
@@ -537,7 +537,7 @@ fn print_p3_fires(label: &str, records: &[HopRecord]) {
     let full_fires = post.iter().filter(|r| r.raw[TRANSIENTS_IDX][FULL] > 0.999).count();
     let low_fires = post.iter().filter(|r| r.raw[TRANSIENTS_IDX][LOW] > 0.999).count();
     println!(
-        "P3 {label}: full_fires={full_fires} low_fires={low_fires} (gates: dive full 0, kicks low == 8, busymix low >= 7, riser full 0, growl full 0)"
+        "P3 {label}: full_fires={full_fires} low_fires={low_fires} (gates: dive full 0, kicks low == 8, busymix low >= 7, densemix low >= 6, riser full 0, growl full 0)"
     );
 }
 
@@ -900,6 +900,13 @@ type GroundTruthFn = fn(f32) -> f32;
 /// bottom-octave case the other seven never reach. The tracker must sit ON
 /// the 45 Hz fundamental, not ride the spectral floor / subharmonic comb
 /// below it the way real deep-sub stems (bad_guy, apricots bass) showed.
+/// `densemix` — BUG-044's oracle: a genuinely DENSE sustained bed (three
+/// static-pitch supersaw clusters low/mid/high, beating continuously, plus
+/// bright noise, mixed HOT) under the standard kick pattern. Unlike
+/// `busymix` (one plain saw + modest noise — too sparse to keep the ODF
+/// median elevated, which is exactly how BUG-044 escaped the P3 sweep), this
+/// is built so the adaptive threshold self-raises past real kick rises: Low-
+/// band fires must still catch most of the 8 kicks.
 fn synth_selftests() -> Vec<(&'static str, Vec<f32>, GroundTruthFn, Option<f32>)> {
     vec![
         ("dive", soft_clip(synth_dive()), gt_dive as GroundTruthFn, None),
@@ -910,6 +917,7 @@ fn synth_selftests() -> Vec<(&'static str, Vec<f32>, GroundTruthFn, Option<f32>)
         ("growl", soft_clip(synth_growl()), gt_const_150, None),
         ("notes", soft_clip(synth_notes()), gt_notes, Some(NOTES_BPM)),
         ("sub", soft_clip(synth_sub()), gt_const_45, None),
+        ("densemix", soft_clip(synth_kicks(synth_dense_bed())), gt_none, None),
     ]
 }
 
@@ -1172,6 +1180,78 @@ fn synth_sub() -> Vec<f32> {
         p = (p + 45.0 / srf).fract();
         let ph = std::f32::consts::TAU * p;
         *s_out += 0.5 * ph.sin() + 0.06 * (2.0 * ph).sin() + 0.03 * (3.0 * ph).sin();
+    }
+    out
+}
+
+/// Genuinely dense sustained bed (BUG-044's reproduction target,
+/// `docs/BUG_BACKLOG.md` BUG-044): three supersaw clusters (7 detuned voices
+/// each, the same detune spread `synth_dive` uses) at low/mid/high anchors,
+/// every voice under its own amplitude LFO, plus bright noise (a first-
+/// difference high-pass tilt on white noise — "bright" the way hats/cymbals/
+/// air are), mixed HOT (into `soft_clip` saturation). `synth_busy_pad` (one
+/// plain saw + modest noise) is why BUG-044 escaped the P3 sweep: a single
+/// un-detuned tone's spectral magnitude is CONSTANT hop to hop once settled,
+/// so it contributes ~0 SuperFlux ODF — busymix's onset floor was carried
+/// almost entirely by its noise floor. Real dense productions never settle:
+/// every instrument's envelope is always moving, which keeps broadband dB
+/// flux alive at EVERY hop, and that continuous floor is what lets the
+/// rolling MEDIAN climb high enough to swallow a real kick's rise — the
+/// exact failure mode this scenario exists to reproduce.
+fn synth_dense_bed() -> Vec<f32> {
+    let mut out = selftest_buf();
+    let srf = SELFTEST_SR as f32;
+    let detunes: [f32; 7] = [-0.12, -0.08, -0.04, 0.0, 0.04, 0.08, 0.12];
+    // Three supersaw clusters spread across the spectrum. The low cluster is
+    // weighted hottest and sits at 55 Hz — INSIDE the kick's 120→45 Hz sweep
+    // range, the way a real mix's sustained bass pre-occupies the kick's
+    // spectrum. That placement is load-bearing: against an empty bottom
+    // octave a kick rises from the floor and its dB jump is huge no matter
+    // how high the median sits (the first bed draft anchored at 90 Hz and
+    // the Low band caught 7/8 kicks — no reproduction). The 0.24 low gain is
+    // the reproduction point measured against the pre-fix constants: 0.12
+    // still caught 6/7 countable kicks, 0.16 caught 6, 0.20 sat at the gate
+    // boundary, 0.24 dropped to 4/7 with zero strays (and Full fully deaf) —
+    // kick-to-bed ratio, not any single knob, is what drives the deafness.
+    let clusters: [(f32, f32); 3] = [(55.0, 0.24), (500.0, 0.05), (2200.0, 0.035)];
+    // Per-voice amplitude LFOs, each at its own incommensurate rate and phase
+    // (hash-spread over 3..8 Hz). Slow unison beating alone is invisible to
+    // the low band's long VQT kernels; a moving per-voice envelope is what
+    // actually feeds per-bin dB flux continuously. Decorrelated phases keep
+    // the SUM level roughly steady — no coherent global pump that would
+    // itself read as an onset — while each voice's own ~8 dB swing keeps the
+    // ODF floor permanently elevated.
+    let mut lfo_rate = [[0.0f32; 7]; 3];
+    let mut lfo_phase = [[0.0f32; 7]; 3];
+    for ci in 0..3 {
+        for vi in 0..7 {
+            let h = (ci * 7 + vi) as f32;
+            lfo_rate[ci][vi] = 3.0 + 5.0 * (h * 0.37).fract();
+            lfo_phase[ci][vi] = (h * 0.61).fract();
+        }
+    }
+    let mut phases = [[0.0f32; 7]; 3];
+    let mut seed = 0x9E3779B9u32;
+    let mut prev_noise = 0.0f32;
+    for (i, s_out) in out.iter_mut().enumerate() {
+        let t = i as f32 / srf;
+        let mut s = 0.0f32;
+        for (ci, &(base, gain)) in clusters.iter().enumerate() {
+            for vi in 0..7 {
+                let f = base * 2.0f32.powf(detunes[vi] / 12.0);
+                let p = &mut phases[ci][vi];
+                *p = (*p + f / srf).fract();
+                let lfo =
+                    (std::f32::consts::TAU * (lfo_rate[ci][vi] * t + lfo_phase[ci][vi])).sin();
+                let amp = 1.0 - 0.6 * (0.5 + 0.5 * lfo);
+                s += gain * amp * (2.0 * *p - 1.0);
+            }
+        }
+        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+        let noise = (seed >> 8) as f32 / (1 << 24) as f32 * 2.0 - 1.0;
+        let bright_noise = noise - prev_noise; // first difference: high-pass tilt
+        prev_noise = noise;
+        *s_out += s + 0.3 * bright_noise;
     }
     out
 }

@@ -565,6 +565,36 @@ const SUPERFLUX_THRESH_FACTOR: f32 = 7.0;
 /// fires runs from ~30 to ~300 (real kicks start dropping out above ~400), so
 /// 48.0 sits with margin on both sides against denser real material.
 const SUPERFLUX_DELTA: f32 = 48.0;
+/// BUG-044 novelty criterion (see the second-criterion comment in
+/// [`reduce_send`]): how far the ODF candidate must exceed the recent-window
+/// MAX to fire on dense material where the median test has self-raised past
+/// real onsets. Swept 2026-07-06 on the ODF dumps of all 9 selftest scenarios
+/// plus the 10 mix/drums fixtures (full fire-logic replay, exact match with
+/// the live detector on all 10 entry counts): factor 1.5 leaks dive (3) and riser
+/// (1); 1.75 leaks dive (1) at delta ≤ 100; 2.0 holds every false-fire guard
+/// at 0 across delta 48–300; 2.25–3.0 also hold but bleed the recovered mixes
+/// back toward deafness (feel 12→8→3 at delta 100). 2.0 sits on the guard
+/// plateau's edge-with-margin while keeping recovery — the same "minimal value
+/// that silences the guards" logic that picked THRESH_FACTOR 7.
+const SUPERFLUX_NOVELTY_FACTOR: f32 = 2.0;
+/// Absolute floor of the novelty criterion, in ODF units. Where the median
+/// test's delta (48.0) guards near-silence, this guards SPARSE material: on a
+/// quiet stem the recent max is also ~0, and factor × ~0 would re-admit the
+/// small ghost bumps the P3 raise deliberately silenced. Swept 48–300 at
+/// factor 2.0: 48–100 inflates already-healthy stems past their retention
+/// bounds (busymix low 9, apricots drums +14); 150+ starts dropping densemix
+/// kicks (7→6) and recovered mix fires (feel 10→8, tears 60→53); 125 is the
+/// plateau point that keeps every guard and every recovery gate
+/// simultaneously (kicks == 8, densemix 7/7, all three dead mixes recovered).
+const SUPERFLUX_NOVELTY_DELTA: f32 = 125.0;
+/// Novelty reference window bounds within the ODF history ring (newest entry
+/// `ODF_MEDIAN_HOPS - 1` is the candidate itself): `hist[1..10]` = 7..15 hops
+/// before the candidate. Upper bound excludes the candidate's own VQT-smeared
+/// rise (~6 hops); lower bound excludes hist[0], where a previous REAL hit
+/// sits at fast-16ths spacing (~85 ms) and would suppress legitimate runs.
+/// Rationale detail in [`reduce_send`]'s second-criterion comment.
+const ODF_NOVELTY_LO: usize = 1;
+const ODF_NOVELTY_HI: usize = 10;
 /// Frequency max-filter radius (bins) for vibrato suppression. The SuperFlux
 /// paper uses ±1 bin at 24 bins/octave — wide enough to cover a semitone wobble.
 /// P3 sweep (2026-07-06) tried 1/2/3: radius 1 always matched or beat wider
@@ -1569,8 +1599,40 @@ fn reduce_send(
                 .fold(0.0f32, f32::max);
             let is_peak = candidate >= past_max && odf <= candidate;
 
+            // BUG-044 second criterion — NOVELTY vs the recent ODF max. The median
+            // test alone goes deaf on dense mixes: continuous broadband change (a
+            // full production's every envelope moving at once) parks the ODF median
+            // high, and median × 7 self-raises past real kick rises (feel mix fired
+            // 1× in 11 s while its drums stem fired 32×). The rescue cannot be a
+            // median walk-back (BUG-041), so a genuine attack is admitted by a
+            // second, OR'd test: the candidate must dwarf the LARGEST ODF seen in
+            // the recent window — dense-but-steady material cannot inflate that
+            // reference to kick size, while every continuous false-firer can.
+            // Measured on the 2026-07-06 ODF dumps: growl's tilt wobble spikes to
+            // 1259 every ~5 hops, so its recent max ≈ its peaks and novelty never
+            // fires it; same for dive's beating (peaks 687, neighbours 598) and
+            // riser's noise (481 vs 413). A real kick over the densemix bed reads
+            // 300–530 against a recent max of ~100, and feel/apricots/tears mix
+            // kicks read 500–1600 against floors of 250–400.
+            //
+            // Window geometry (indices into `hist`, newest at ODF_MEDIAN_HOPS-1 =
+            // the candidate): the reference max is taken over hist[1..10], i.e.
+            // 7..15 hops before the candidate. The 6 hops just before the candidate
+            // are EXCLUDED — the attack's own VQT-kernel-smeared rise lives there
+            // and must not become its own suppressor. hist[0] (16 hops ≈ 85 ms
+            // back) is also excluded: at 174 BPM a 16th-note grid is ~86 ms, so a
+            // previous real hit sits right at that edge and would suppress legit
+            // hits in fast drum runs (measured: including it cost tears mix 3
+            // fires with no guard improvement).
+            let novelty_ref = hist[ODF_NOVELTY_LO..ODF_NOVELTY_HI]
+                .iter()
+                .copied()
+                .fold(0.0f32, f32::max);
+            let novel =
+                candidate > novelty_ref * SUPERFLUX_NOVELTY_FACTOR + SUPERFLUX_NOVELTY_DELTA;
+
             let refractory = &mut send.transient_refractory[bi];
-            let fired = is_peak && *refractory == 0 && candidate > threshold;
+            let fired = is_peak && *refractory == 0 && (candidate > threshold || novel);
             if fired {
                 bf.transients = 1.0;
                 *refractory = ONSET_REFRACTORY_HOPS;

@@ -55,32 +55,6 @@ or human can read it, and it needs no external tool.
 
 ## Open
 
-### BUG-044 (mix-trigger-deafness) — Transient detection goes near-silent on dense full mixes — HIGH (kills the live-audio-in free-triggering use case on some tracks)
-
-**Symptom** (found 2026-07-06 real-clip review; CSVs from `tests/fixtures/audio/`):
-with the P3-raised threshold, full mixes of smoother/denser productions barely fire in
-ANY band: feel_the_vibration mix = 1 Full fire in 11 s (its drums stem: 32; a 174 BPM
-DnB track), apricots mix = 2 Full / 6 Low (drums stem: 51). Tears mix halved (102→35).
-Harder mixes retained (inhale 45, bad_guy 61). Isolated drums stems are healthy
-everywhere (2.4–7.7 fires/s).
-
-**Mechanism (high confidence, unverified at column level):** the adaptive threshold is
-median(ODF)×7; a dense mix keeps the ODF median permanently elevated (continuous
-broadband change), so the threshold self-raises past real kick rises. The P3 sweep's
-only mix-like scenario (synthetic busymix) is far sparser than real productions — the
-P3 caveat ("validate soft-onset material on real clips") predicted this escape.
-
-**Also measured, the good half:** WHEN it fires, timing is grid-accurate — inhale mix
-98% of fires on the 8th grid / 100% on 16ths (BPM-warped clips, ±35 ms tol), bad_guy
-drums 100% on 16ths. Lower on-grid % on tears/feel/apricots drums is plausibly real
-syncopation/swing, not jitter — needs labeled hits to distinguish.
-
-**Fix shape:** NOT a simple threshold walk-back (that resurrects BUG-041). Candidates:
-per-band median windows, a density-normalized delta floor, or a dual criterion
-(median-relative AND local-contrast). Needs a real-mix scenario in the sweep set —
-feel/apricots mixes are the oracle, dive/riser/growl remain the false-fire guards.
-No tuning done this round per Peter (review-only pass).
-
 ### BUG-045 (gap-ring-down-chase) — Tracker chases the transform's kernel ring-down during inter-note gaps — LOW (2.4 points on the notes gate; real-clip impact small)
 
 **Found 2026-07-06 while fixing BUG-042** (its remaining accuracy misses after the
@@ -1076,6 +1050,46 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-044 (mix-trigger-deafness) — Transient detection near-silent on dense full mixes — FIXED 2026-07-06 (novelty-vs-recent-max dual criterion; Sonnet agent build, orchestrator-verified)
+
+**Was:** the adaptive threshold `median(ODF)×7+48` self-raised on dense productions
+(continuous broadband change keeps the median elevated) — feel mix 1 Full fire in
+11 s (drums stem: 32), apricots 2 (drums: 51), tears halved.
+
+**Fix:** a genuine attack masked by a dense bed is admitted by a second, OR'd
+criterion: `candidate > 2.0 × max(ODF over hops t−15..t−7) + 125`. A dense-but-
+steady bed cannot inflate its recent MAX to kick size; every BUG-041 false-firer
+(dive/riser/growl) spikes continuously so its recent max ≈ its peaks and novelty
+never admits it (growl's ODF is a ~5-hop spike train to ~1259 — see observations).
+Window excludes the candidate's own VQT-smeared rise (t−6..t) and the previous
+16th-note hit (t−16). Median criterion untouched. Constants sit on a measured
+plateau (factor ≥ 2.0, δ 48–300 all hold the zero-false-fire guards; sweep table
+in the agent report, session 2026-07-06).
+
+**Reproduction first:** new `densemix` scenario (three LFO'd supersaw clusters +
+bright noise + 8 kicks; a static detuned bed contributes ~0 ODF — why busymix
+never caught this — and the low cluster must sit inside the kick's sweep range).
+Entry constants: 4 of 7 catchable kicks = gate FAIL; after: 7/7.
+
+**Verified (orchestrator re-ran):** all selftest lines green (BUG-045's notes
+87.6 unchanged, guards 0/0/0, kicks 8, busymix low 8, densemix low 7); feel mix
+1→10, apricots 2→31, tears 35→60, inhale 45→58, bad_guy 61→82 Full fires;
+on-grid ≥ 96%. Three brief retention caps (bad_guy mix ±30%, feel/apricots drums
+±20%) exceeded by 2–3 fires: accepted — the caps were blunt proxies, the added
+fires match real-hit magnitude (300–1600) and grid-align equal-or-better than
+entry fires, and a six-family feasibility scan showed the caps jointly
+unsatisfiable with tears ≥60 under ANY criterion shape. busymix Full went 0→7:
+the P3 threshold had been over-suppressing genuine Full-band fires on sparse
+mixes too.
+
+**Follow-ups recorded, not done:** (a) consider a busymix/densemix FULL-band gate
+once the right bound is understood (kicks full=9 vs low=8 needs explaining
+first); (b) vocals stems got notably more sensitive (inhale vocals 29→49) —
+plausibly real syllable onsets, no ground truth in the fixture set; check
+against Peter's labeled clips when they arrive; (c) growl's spike-train ODF
+means any future shortening of the median window below ~2 spike periods
+resurrects BUG-041 — greppable warning lives here.
 
 ### BUG-042 (onset-settle-grab) — Tracker re-acquired garbage pitch during the post-attack settle window — FIXED 2026-07-06 (third design: position-anchored re-acquire window)
 
