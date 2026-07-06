@@ -53,5 +53,39 @@ check("bypass tag", not denies('rg "struct Layer" crates/ #grep-ok'))
 check("no searcher", not denies("cargo test -p manifold-core --lib"))
 check("empty", not denies(""))
 
+# --- #grep-ok comment-swallowing footgun -------------------------------------
+check(
+    "marker at true end of line — allowed",
+    not denies('rg "struct Layer" crates/ #grep-ok'),
+)
+check(
+    "marker with only trailing whitespace — allowed",
+    not denies('rg "struct Layer" crates/ #grep-ok   '),
+)
+check(
+    "marker followed by ; cmd on same line — blocked (would be silently dropped)",
+    denies("rg 'struct Layer' crates/ #grep-ok; printf 'x' >> live_grades.session.jsonl"),
+)
+check(
+    "marker followed by && cmd on same line — blocked",
+    denies("rg 'struct Layer' crates/ #grep-ok && echo done"),
+)
+check(
+    "marker immediately followed by non-whitespace — blocked",
+    denies("rg 'struct Layer' crates/ #grep-ok-ish"),
+)
+check(
+    "marker inside a single-quoted string — not a real marker, symbol shape still fires",
+    denies("rg 'struct Layer #grep-ok' crates/"),
+)
+check(
+    "marker inside a double-quoted string — not a real marker, symbol shape still fires",
+    denies('rg "struct Layer #grep-ok" crates/'),
+)
+check(
+    "marker on an earlier line, real command on next line — allowed (new statement)",
+    not denies('rg "struct Layer" crates/ #grep-ok\necho done'),
+)
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 raise SystemExit(1 if FAIL else 0)

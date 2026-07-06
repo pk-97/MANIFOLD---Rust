@@ -22,6 +22,13 @@ Bypass: append `#grep-ok` to the command to force the text search through. The
 cost of a false positive is therefore one of: re-issue as an LSP call (the point),
 or re-run with `#grep-ok`.
 
+`#grep-ok` MUST be the last thing on its physical line. `#` starts a real shell
+comment, so anything chained after the marker on the same line (`#grep-ok; cmd`,
+`#grep-ok && cmd`) is silently swallowed by the shell and never runs — this bit
+a session on 2026-07-06 (a required daemon self-grade append was dropped this
+way; see `.claude/daemon/eval/observations.session.jsonl`). This hook now denies
+that shape outright instead of letting the model discover it by lost output.
+
 Runs as a second PreToolUse Bash hook alongside preToolUseBash.py. A `deny` here
 overrides that hook's `allow` (deny takes precedence across hooks).
 
@@ -36,6 +43,73 @@ import sys
 # Extensions that mark a token as an explicit single-file target. Anything the
 # def/impl patterns could plausibly be grepped for in this repo.
 _FILE_EXT = re.compile(r"\.(rs|toml|md|json|wgsl|metal|py|txt|yaml|yml)$")
+
+_GREP_OK = "#grep-ok"
+
+
+def _unquoted_mask(cmd: str):
+    """Per-character mask, True where cmd[i] sits inside a shell quote (or is
+    an escaped char), False where it's real unquoted shell text.
+
+    Just enough shell-quoting awareness to tell a genuine `#grep-ok` marker
+    apart from the same literal text appearing as quoted data (e.g. inside an
+    `rg '...'` search pattern or a `printf` payload).
+    """
+    quoted = [False] * len(cmd)
+    state = None  # None | "'" | '"'
+    escaped = False
+    for i, ch in enumerate(cmd):
+        if state == "'":
+            quoted[i] = True
+            if ch == "'":
+                state = None
+            continue
+        if escaped:
+            quoted[i] = True
+            escaped = False
+            continue
+        if ch == "\\" and state != "'":
+            quoted[i] = True
+            escaped = True
+            continue
+        if state == '"':
+            quoted[i] = True
+            if ch == '"':
+                state = None
+            continue
+        if ch == "'":
+            quoted[i] = True
+            state = "'"
+            continue
+        if ch == '"':
+            quoted[i] = True
+            state = '"'
+            continue
+        quoted[i] = False
+    return quoted
+
+
+def _grep_ok_status(cmd: str) -> str:
+    """Classify every unquoted `#grep-ok` occurrence in `cmd`.
+
+    Returns "absent" (no real marker anywhere), "valid" (every real marker
+    runs to the end of its physical line, i.e. is an actual shell comment with
+    nothing after it), or "trailing" (some real marker has more command text
+    after it on the same line — that text is inside the shell comment and
+    will NOT execute).
+    """
+    quoted = _unquoted_mask(cmd)
+    found_any = False
+    for m in re.finditer(re.escape(_GREP_OK), cmd):
+        start, end = m.start(), m.end()
+        if any(quoted[start:end]):
+            continue  # `#grep-ok` here is quoted data, not a real marker
+        found_any = True
+        newline = cmd.find("\n", end)
+        tail = cmd[end:] if newline == -1 else cmd[end:newline]
+        if tail.strip():
+            return "trailing"
+    return "valid" if found_any else "absent"
 
 
 def _targets_explicit_file(cmd: str) -> bool:
@@ -58,8 +132,18 @@ def decide(cmd: str):
     if not cmd:
         return None
 
+    grep_ok = _grep_ok_status(cmd)
+    if grep_ok == "trailing":
+        return (
+            "`#grep-ok` has more command text after it on the same line. `#` starts a "
+            "real shell comment, so everything after `#grep-ok` on that line is silently "
+            "DISCARDED and will not run — this has already dropped a required command once. "
+            "Put `#grep-ok` at the very end of the line, or split the trailing command into "
+            "a separate Bash call."
+        )
+
     # Explicit bypass — the model meant a text search.
-    if "#grep-ok" in cmd:
+    if grep_ok == "valid":
         return None
 
     # Only consider commands that actually run a text searcher.
