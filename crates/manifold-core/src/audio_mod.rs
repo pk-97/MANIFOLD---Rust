@@ -72,16 +72,25 @@ pub enum AudioFeatureKind {
     Flux,
     /// Onset trigger — transient hits in the band.
     Transients,
+    /// Tracked pitch of the band's dominant object, normalized to the band's
+    /// bin range (P4, docs/AUDIO_OBJECT_TRACKING_DESIGN.md). HOLDS on dropout
+    /// — gate with `Presence`, never read a held value as "low pitch".
+    Pitch,
+    /// Confidence the band's tracked pitch is a real object (0..1) — the D6
+    /// display/trust signal.
+    Presence,
 }
 
 impl AudioFeatureKind {
     /// All kinds in drawer-button order.
-    pub const ALL: [AudioFeatureKind; 5] = [
+    pub const ALL: [AudioFeatureKind; 7] = [
         AudioFeatureKind::Amplitude,
         AudioFeatureKind::Centroid,
         AudioFeatureKind::Noisiness,
         AudioFeatureKind::Flux,
         AudioFeatureKind::Transients,
+        AudioFeatureKind::Pitch,
+        AudioFeatureKind::Presence,
     ];
 
     /// Index in [`Self::ALL`] order.
@@ -97,6 +106,8 @@ impl AudioFeatureKind {
             AudioFeatureKind::Noisiness => "Noisiness",
             AudioFeatureKind::Flux => "Flux",
             AudioFeatureKind::Transients => "Transients",
+            AudioFeatureKind::Pitch => "Pitch",
+            AudioFeatureKind::Presence => "Presence",
         }
     }
 }
@@ -126,6 +137,8 @@ impl AudioFeature {
             AudioFeatureKind::Noisiness => b.noisiness,
             AudioFeatureKind::Flux => b.liveliness,
             AudioFeatureKind::Transients => b.transients,
+            AudioFeatureKind::Pitch => b.pitch,
+            AudioFeatureKind::Presence => b.presence,
         }
     }
 }
@@ -181,7 +194,10 @@ impl From<AudioFeatureRepr> for AudioFeature {
                 LegacyAudioFeature::Flatness => (Noisiness, Full),
                 LegacyAudioFeature::Flux => (Flux, Full),
                 LegacyAudioFeature::Onset => (Transients, Full),
-                LegacyAudioFeature::Pitch | LegacyAudioFeature::PitchDelta => (Amplitude, Full),
+                // D3 retarget (P4): the reserved legacy pitch names finally
+                // land on the real tracker. No `PitchDelta` kind exists by
+                // design — `rate_of_change` on `Pitch` composes it.
+                LegacyAudioFeature::Pitch | LegacyAudioFeature::PitchDelta => (Pitch, Full),
             },
         };
         AudioFeature { kind, band }
@@ -372,6 +388,26 @@ mod tests {
     }
 
     #[test]
+    fn extract_reads_pitch_and_presence() {
+        use crate::audio_features::BandFeatures;
+        use AudioBand::*;
+        use AudioFeatureKind::*;
+        let f = SendFeatures {
+            bands: [
+                BandFeatures { pitch: 0.61, presence: 0.9, ..Default::default() }, // Full
+                BandFeatures { pitch: 0.25, presence: 0.4, ..Default::default() }, // Low
+                BandFeatures::default(),
+                BandFeatures::default(),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(AudioFeature::new(Pitch, Full).extract(&f), 0.61);
+        assert_eq!(AudioFeature::new(Presence, Full).extract(&f), 0.9);
+        assert_eq!(AudioFeature::new(Pitch, Low).extract(&f), 0.25);
+        assert_eq!(AudioFeature::new(Presence, Low).extract(&f), 0.4);
+    }
+
+    #[test]
     fn amplitude_full_is_the_default_feature() {
         assert_eq!(
             AudioFeature::default(),
@@ -389,15 +425,27 @@ mod tests {
             ("\"flatness\"", AudioFeatureKind::Noisiness, AudioBand::Full),
             ("\"flux\"", AudioFeatureKind::Flux, AudioBand::Full),
             ("\"onset\"", AudioFeatureKind::Transients, AudioBand::Full),
+            // D3 retarget (P4): the reserved legacy pitch names land on the
+            // real tracker; PitchDelta composes as rate_of_change on Pitch.
+            ("\"pitch\"", AudioFeatureKind::Pitch, AudioBand::Full),
+            ("\"pitchDelta\"", AudioFeatureKind::Pitch, AudioBand::Full),
         ];
         for (json, kind, band) in cases {
             let f: AudioFeature = serde_json::from_str(json).unwrap();
             assert_eq!(f, AudioFeature::new(kind, band), "migrating {json}");
         }
-        // Current shape round-trips.
-        let cur = AudioFeature::new(AudioFeatureKind::Centroid, AudioBand::High);
-        let json = serde_json::to_string(&cur).unwrap();
-        assert_eq!(serde_json::from_str::<AudioFeature>(&json).unwrap(), cur);
+        // Current shape round-trips — including the P4 kinds, whose serde
+        // names ("pitch"/"presence") are load-bearing for saved projects.
+        for kind in AudioFeatureKind::ALL {
+            let cur = AudioFeature::new(kind, AudioBand::High);
+            let json = serde_json::to_string(&cur).unwrap();
+            assert_eq!(serde_json::from_str::<AudioFeature>(&json).unwrap(), cur, "round-trip {json}");
+        }
+        assert!(
+            serde_json::to_string(&AudioFeatureKind::Pitch).unwrap().contains("pitch")
+                && serde_json::to_string(&AudioFeatureKind::Presence).unwrap().contains("presence"),
+            "serde names are the file-format contract"
+        );
     }
 
     #[test]

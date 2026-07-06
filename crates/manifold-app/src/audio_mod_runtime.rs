@@ -127,6 +127,11 @@ pub struct AudioModRuntime {
     /// Per-send analyzers, keyed by send id. Each is the single source of features
     /// + scope columns for its send, fed the send's whole (mixed) input.
     analyzers: AHashMap<AudioSendId, SendAnalyzer>,
+    /// D7 activation set (AUDIO_OBJECT_TRACKING P4): sends with at least one
+    /// enabled Pitch/Presence mod. Recomputed only on a data-version change;
+    /// switches each analyzer's ridge tracker on/off per tick (byte-identical
+    /// analysis when off, so unbound projects pay nothing).
+    pitch_sends: ahash::AHashSet<AudioSendId>,
     /// Snapshot index (project send order) of the scope-tapped send, for the
     /// per-band meters. Resolved each tick.
     tapped_index: Option<usize>,
@@ -165,6 +170,7 @@ impl Default for AudioModRuntime {
             spec_send: None,
             spec_dirty: false,
             analyzers: AHashMap::new(),
+            pitch_sends: ahash::AHashSet::new(),
             tapped_index: None,
             capture_mono: Vec::new(),
             layer_mix: Vec::new(),
@@ -223,6 +229,8 @@ impl AudioModRuntime {
                 self.analyzers
                     .retain(|id, _| project.audio_setup.sends.iter().any(|s| &s.id == id));
             }
+            self.pitch_sends =
+                engine.project().map(|p| p.sends_with_pitch_mods()).unwrap_or_default();
             self.last_version = data_version;
             self.spec_dirty = false;
         }
@@ -305,6 +313,7 @@ impl AudioModRuntime {
                 };
                 entry.analyzer.set_crossovers(low_hz, mid_hz);
                 entry.analyzer.set_scope(is_tapped);
+                entry.analyzer.set_pitch_tracking(self.pitch_sends.contains(&send.id));
                 // Pre-analysis squelch: applied live, identical for scope + features.
                 entry.analyzer.set_floor_db(send.floor_db);
 

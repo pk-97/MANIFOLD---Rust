@@ -693,3 +693,79 @@ fn liveschool_reload_omits_empty_session_field() {
         loader::load_project_from_json(&json).expect("reload re-saved liveschool project");
     assert!(project2.session.is_empty());
 }
+
+/// P4 round-trip gate (docs/AUDIO_OBJECT_TRACKING_DESIGN.md): a saved
+/// `Pitch × Low` audio mod must reload intact and still drive — the serde
+/// names ("pitch"/"presence") are the file-format contract, and `extract`
+/// must read the tracker's per-band fields after the reload. Injects the mod
+/// into a real fixture so the whole project reader runs, not just the
+/// `AudioFeature` serde unit.
+#[test]
+fn pitch_presence_mods_survive_roundtrip_and_drive() {
+    use manifold_core::audio_features::{BandFeatures, SendFeatures};
+    use manifold_core::audio_mod::{
+        AudioBand, AudioFeature, AudioFeatureKind, AudioModSource, ParameterAudioMod,
+    };
+
+    let path = fixture_path("Burn V5.manifold");
+    if !path.exists() {
+        return; // gitignored personal fixture — same guard as the other tests
+    }
+    let mut project = loader::load_project(&path).unwrap();
+
+    let send_id = manifold_core::AudioSendId::from("send-a");
+    let fx = project
+        .timeline
+        .layers
+        .iter_mut()
+        .find_map(|l| l.effects.as_mut().and_then(|v| v.first_mut()))
+        .expect("fixture has at least one layer effect");
+    // The mapping key needn't resolve to a live param for the serde
+    // round-trip — the loader doesn't run registry resolution here.
+    let pid: String = "p4_roundtrip_probe".into();
+    fx.audio_mods = Some(vec![ParameterAudioMod {
+        param_id: pid.clone().into(),
+        enabled: true,
+        source: AudioModSource {
+            send_id: send_id.clone(),
+            feature: AudioFeature::new(AudioFeatureKind::Pitch, AudioBand::Low),
+        },
+        shape: Default::default(),
+        smoothed: 0.0,
+        prev_raw: 0.0,
+    }]);
+
+    let json = serde_json::to_string(&project).unwrap();
+    assert!(json.contains("\"pitch\""), "serde name is the file-format contract");
+    let project2 = loader::load_project_from_json(&json).unwrap();
+
+    let fx2 = project2
+        .timeline
+        .layers
+        .iter()
+        .find_map(|l| l.effects.as_deref().and_then(|v| v.first()))
+        .unwrap();
+    let mods = fx2.audio_mods.as_deref().unwrap();
+    assert_eq!(mods.len(), 1);
+    let m = &mods[0];
+    assert_eq!(m.param_id.as_ref(), pid);
+    assert_eq!(m.source.send_id, send_id);
+    assert_eq!(m.source.feature, AudioFeature::new(AudioFeatureKind::Pitch, AudioBand::Low));
+
+    // …and still drives: the reloaded feature must read the Low band's tracker
+    // pitch, and two different feeds must produce two different mod outputs.
+    let feed = |pitch: f32| SendFeatures {
+        bands: [
+            BandFeatures::default(),
+            BandFeatures { pitch, presence: 0.9, ..Default::default() },
+            BandFeatures::default(),
+            BandFeatures::default(),
+        ],
+        ..Default::default()
+    };
+    let (mut s, mut p) = (0.0f32, 0.0f32);
+    let lo = m.shape.apply(m.source.feature.extract(&feed(0.2)), 10.0, &mut s, &mut p);
+    let (mut s2, mut p2) = (0.0f32, 0.0f32);
+    let hi = m.shape.apply(m.source.feature.extract(&feed(0.8)), 10.0, &mut s2, &mut p2);
+    assert!(hi > lo, "a reloaded Pitch mod must still drive: {lo} vs {hi}");
+}

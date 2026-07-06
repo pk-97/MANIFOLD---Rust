@@ -276,15 +276,11 @@ pub(crate) fn audio_band_from_index(idx: usize) -> crate::types::AudioBand {
         .unwrap_or(crate::types::AudioBand::Full)
 }
 
-/// Feature-row button labels, in `AudioFeatureKind::ALL` order.
-pub(crate) fn audio_kind_labels() -> [&'static str; 5] {
-    [
-        crate::types::AudioFeatureKind::Amplitude.label(),
-        crate::types::AudioFeatureKind::Centroid.label(),
-        crate::types::AudioFeatureKind::Noisiness.label(),
-        crate::types::AudioFeatureKind::Flux.label(),
-        crate::types::AudioFeatureKind::Transients.label(),
-    ]
+/// Feature-row button labels, in `AudioFeatureKind::ALL` order — derived from
+/// `ALL` so a new kind (P4 added Pitch/Presence) can never leave the drawer
+/// stale.
+pub(crate) fn audio_kind_labels() -> [&'static str; AUDIO_KIND_COUNT] {
+    crate::types::AudioFeatureKind::ALL.map(|k| k.label())
 }
 
 /// Band-row button labels, in `AudioBand::ALL` order.
@@ -298,7 +294,7 @@ pub(crate) fn audio_band_labels() -> [&'static str; 4] {
 }
 
 /// Number of feature kinds / bands exposed in the drawer.
-pub(crate) const AUDIO_KIND_COUNT: usize = 5;
+pub(crate) const AUDIO_KIND_COUNT: usize = crate::types::AudioFeatureKind::ALL.len();
 pub(crate) const AUDIO_BAND_COUNT: usize = 4;
 
 /// Audio-modulation display state for one card, assembled in `state_sync` and
@@ -1681,8 +1677,9 @@ pub(crate) fn build_param_row(
         let invert_on = mod_state.audio_invert.get(i).copied().unwrap_or(false);
         let rate_on = mod_state.audio_rate.get(i).copied().unwrap_or(false);
         // The feature matrix: a Feature row (kind) and a Band row, each a single
-        // selection. Flat button indices run sends, then kinds (0..5), then bands
-        // (5..9), then the two modifier toggles (9, 10) — see match_param_row_click.
+        // selection. Flat button indices run sends, then kinds
+        // (0..AUDIO_KIND_COUNT), then bands, then the two modifier toggles —
+        // see match_param_row_click.
         let kind_buttons: Vec<DrawerButton> = audio_kind_labels()
             .iter()
             .enumerate()

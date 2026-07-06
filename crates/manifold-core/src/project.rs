@@ -1066,6 +1066,42 @@ impl Project {
     /// instance (NOT clip effects, which the pipeline neither resets nor
     /// modulates). Cheap — most instances carry no audio mods, short-circuiting
     /// on the `Option`.
+    /// Send ids with at least one ENABLED audio mod reading `Pitch` or
+    /// `Presence` — the D7 activation set (docs/AUDIO_OBJECT_TRACKING_DESIGN.md
+    /// P4). The audio-mod runtime recomputes this only on a data-version
+    /// change and switches each send analyzer's ridge tracker on/off with it,
+    /// so projects that never bind pitch pay nothing (the tracker path is
+    /// byte-identical when off — tested in manifold-audio).
+    pub fn sends_with_pitch_mods(&self) -> ahash::AHashSet<crate::AudioSendId> {
+        let mut out = ahash::AHashSet::new();
+        let mut collect = |fx: &crate::effects::PresetInstance| {
+            if let Some(mods) = fx.audio_mods.as_ref() {
+                for m in mods.iter().filter(|m| m.enabled) {
+                    if matches!(
+                        m.source.feature.kind,
+                        crate::audio_mod::AudioFeatureKind::Pitch | crate::audio_mod::AudioFeatureKind::Presence
+                    ) {
+                        out.insert(m.source.send_id.clone());
+                    }
+                }
+            }
+        };
+        for fx in &self.settings.master_effects {
+            collect(fx);
+        }
+        for layer in &self.timeline.layers {
+            if let Some(effects) = layer.effects.as_ref() {
+                for fx in effects {
+                    collect(fx);
+                }
+            }
+            if let Some(gp) = layer.gen_params() {
+                collect(gp);
+            }
+        }
+        out
+    }
+
     pub fn has_active_audio_mods(&self) -> bool {
         fn inst_has(fx: &crate::effects::PresetInstance) -> bool {
             fx.audio_mods
