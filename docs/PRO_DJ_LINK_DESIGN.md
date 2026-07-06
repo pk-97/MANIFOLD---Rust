@@ -48,6 +48,17 @@ trademark-careful wording, no claimed endorsement.
 CDJ-3000 differences, Opus Quad divergences) — all against the current
 dysentery/beat-link documentation at implementation time, not this doc.
 
+**Pre-CDJ-3000 absolute position (noted 2026-07-06, from the beat-link
+TimeFinder technique — verify at impl like everything above):** nexus-era status
+packets carry no absolute time but do carry the current *beat number within the
+track*; position = beat number looked up in the track's beat grid (fetched via
+the same metadata path as track ID/phrases), interpolated between beats by
+BPM/pitch. This is how ShowKontrol-class tools produced SMPTE before CDJ-3000.
+Consequence for P2: timeline section-lock is achievable on nexus gear via this
+derivation, not just beat-phase lock — with honest wobble during loops,
+scratching, and the first beat after a needle drop. CDJ-3000 position packets
+replace the derivation where present.
+
 ## 2. Decisions
 
 - **D1 — Deep door (Peter, 2026-07-03).** Full native stack: discovery, virtual
