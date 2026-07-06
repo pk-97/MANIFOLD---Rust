@@ -1606,30 +1606,58 @@ impl LayerHeaderPanel {
                     r.height,
                     sel_accent_style(layer.is_selected),
                 ),
-                C::Name => tree.add_button(
-                    clip_parent,
-                    r.x,
-                    r.y,
-                    r.width,
-                    r.height,
-                    UIStyle {
-                        bg_color: Color32::TRANSPARENT,
-                        hover_bg_color: color::LAYER_CHEVRON_HOVER,
-                        pressed_bg_color: color::LAYER_CHEVRON_PRESSED,
-                        // §K16: a selected layer's name brightens to pure white
-                        // (paired with the focus ring), so the selected layer
-                        // reads first; otherwise the identity-contrast colour.
-                        text_color: if layer.is_selected {
-                            color::TEXT_WHITE_C32
-                        } else {
-                            text_clr
+                C::Name => {
+                    // `add_button` never clips/ellipsizes its text to the node's
+                    // own width — it draws the full string and only the row-wide
+                    // ClipRegion cuts it off, at the row's right edge, not at
+                    // this control's own rect. On a collapsed child row (indent
+                    // narrows the card, and `compute_layer_row` further carves
+                    // GEN_LABEL_COLLAPSED_W off the Name rect's right edge for
+                    // GenType) a long name's unclipped text bled straight into
+                    // the GenType label drawn after it. Truncate against the
+                    // tree's measurer (glyph-accurate in the app, per
+                    // `UITree::set_text_measure`) so a name that genuinely fits
+                    // passes through byte-identical and only a true overflow
+                    // ellipsizes — GenType then starts in genuinely empty space
+                    // instead of hoping the name happened to be short. The
+                    // budget is the distance to the next control's x, not the
+                    // bare rect width: `compute_layer_row` ends the Name rect
+                    // TOP_GAP before GenType/DragHandle as a breathing gap, and
+                    // a name may run into that gap (as short names always have)
+                    // — the collision boundary is the neighbour's ink, never
+                    // the gap.
+                    let name = crate::text::truncate_with_ellipsis(
+                        tree.measurer(),
+                        &layer.name,
+                        NAME_FONT,
+                        color::FONT_WEIGHT_DEFAULT,
+                        r.width + TOP_GAP,
+                    );
+                    tree.add_button(
+                        clip_parent,
+                        r.x,
+                        r.y,
+                        r.width,
+                        r.height,
+                        UIStyle {
+                            bg_color: Color32::TRANSPARENT,
+                            hover_bg_color: color::LAYER_CHEVRON_HOVER,
+                            pressed_bg_color: color::LAYER_CHEVRON_PRESSED,
+                            // §K16: a selected layer's name brightens to pure white
+                            // (paired with the focus ring), so the selected layer
+                            // reads first; otherwise the identity-contrast colour.
+                            text_color: if layer.is_selected {
+                                color::TEXT_WHITE_C32
+                            } else {
+                                text_clr
+                            },
+                            font_size: NAME_FONT,
+                            text_align: TextAlign::Left,
+                            ..UIStyle::default()
                         },
-                        font_size: NAME_FONT,
-                        text_align: TextAlign::Left,
-                        ..UIStyle::default()
-                    },
-                    &layer.name,
-                ),
+                        &name,
+                    )
+                }
                 C::DragHandle => {
                     // Hamburger icon drawn as 3 horizontal bars. No pill: the grab
                     // handle isn't a live-show action, so it recedes — a bare glyph
