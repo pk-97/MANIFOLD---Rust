@@ -49,6 +49,7 @@ or human can read it, and it needs no external tool.
 | BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
 | BUG-033 | **ui-snapshot-broken** | FIXED — verified in-tree 2026-07-07 (harness builds + runs) |
 | BUG-048 | **arm-two-reds** | ARM idle/armed both red, shade-only difference (LOW, UX call) |
+| BUG-049 | **child-row-right-indent** | group-child right-anchored controls misaligned ~20px (LOW) |
 | BUG-012 | **tex-rename-corrupt** | fragment `tex_` port-rename corrupts `tex_*` scalars (LOW) |
 | BUG-018 | **catalog-stale** | node_catalog.json out of sync test red (LOW) |
 | BUG-031 | **audio-load-blip** | ~10ms of audio leaks when a voice is built (LOW) ⚠ id collides with the positional-layer-menu entry under Fixed — first free id is BUG-042 |
@@ -57,6 +58,18 @@ or human can read it, and it needs no external tool.
 | BUG-019 / 020 / 021 | deferred | group-fold gap · gen-card collapse · snap-back gap |
 
 ## Open
+
+### BUG-049 (child-row-right-indent) — Group-child header rows double-pay the indent on right-anchored controls — LOW (visual misalignment, ~20px)
+
+**Found 2026-07-07 by the label-collision fix worker (timeline-ux pass), verified in the
+Liveschool after-PNG.** `layer_header.rs:489`: `handle_x = w - pad - HANDLE_W - 8.0` uses
+`pad = PAD + CHILD_INDENT`, but the indent only moves the card's LEFT edge — so child
+cards get a ~28px interior right margin vs 8px on top-level rows. Drag handles and Blend
+chips sit ~20px left of their top-level siblings, and the collapsed name budget is 20px
+tighter than necessary (it contributed to how early BUG-fixed label truncation kicks in).
+**Fix shape:** right-anchored x's use `PAD`, not the indented pad. Moves rects pinned by
+`layout_matches_frozen_oracle`, so it needs the oracle updated in the same commit — its
+own small pass, not a drive-by. **Oracle:** the frozen-layout test + a child-row render.
 
 ### BUG-048 (arm-two-reds) — Automation ARM idle vs armed are both red, distinguished only by shade — LOW (stage-legibility; behavior-changing mode)
 
