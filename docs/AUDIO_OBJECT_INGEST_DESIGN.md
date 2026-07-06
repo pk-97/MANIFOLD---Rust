@@ -71,6 +71,14 @@ relation contract. **Rejected: rewriting the whole Python pipeline in Rust** —
 and ADTOF are ML models with Python ecosystems; the boundary stays where the models
 are.
 
+**D1a — SOTA survey note (web-surveyed 2026-07-06).** Basic Pitch remains the 2025
+literature's lightweight baseline; MT3-family transformers emit quantized note tokens
+(structurally wrong for glides — skip); **Timbre-Trap (Sony, ICASSP 2024) joins the
+P1/P3 comparison list** (frame-level salience output, Basic-Pitch-class cost). No
+published work benchmarks transcription on growl/glide material — P1's labeled-clip
+measurement is doing work the literature hasn't, which is one more reason it precedes
+any replacement.
+
 **D4 — Basic Pitch is replaced per-instrument, by measurement, not wholesale.** If
 P1 confirms bass/synth/pad as the weak rows, the object segmenter takes those stems
 and Basic Pitch is dropped from them; any row that measures fine keeps its current

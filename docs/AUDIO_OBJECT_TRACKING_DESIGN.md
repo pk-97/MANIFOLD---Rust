@@ -66,6 +66,18 @@ per hop — trivial against the existing VQT FFT.
 **Rejected: time-domain mono pitch (YIN/autocorrelation)** — assumes monophonic input;
 fails exactly on the full-mix case Peter names, and duplicates spectral machinery.
 
+**D1a — SOTA survey note (web-surveyed 2026-07-06, Peter's challenge recorded).**
+Peter asked whether a 2026 neural model should replace the hand-coded architecture.
+Survey verdict: **no causal, polyphonic/full-mix pitch or salience model exists at any
+budget** — every streaming-capable candidate is monophonic-only. Named findings:
+PESTO (real-time 2025 version: mono, <10 ms, ~130k params, LGPL-3.0) is cheap enough
+to prototype later as an optional monophonic-send assist behind the same tracker —
+Deferred, with the salience seam as its slot; COREPIT (ISMIR 2025 late-breaking,
+claims poly+realtime) has no paper or code — watch item, not adoptable. The salience
+function is deliberately ONE pure function so a learned replacement can slot in
+without touching tracker/features/UI; that seam is the standing answer to "should
+this be ML" — re-survey before reopening D1, don't re-litigate from memory.
+
 **D2 — No synchrosqueezing in v1; named revival trigger.** AUDIO_MODULATION §6 called
 for a synchrosqueeze port. The audit says its cost buys the wrong thing: synchro
 sharpens *frequency precision*, but the failure mode is *which peak is the object* —
@@ -286,7 +298,9 @@ features into the tracker (it consumes the column, not its own outputs).
 (max-filter radius, `SUPERFLUX_DELTA`, lookback) against dive/kicks/busymix CSVs;
 commit the winning constants with the sweep table in the phase report. If no point in
 the sweep passes, escalate with the table — do not invent new detector architecture in
-this phase.
+this phase. (2026-07-06 survey: nothing published beats SuperFlux on electronic
+material; madmom's `CNNOnsetProcessor` defaults are the sanctioned second opinion if
+escalation happens.)
 *Gate:* dive — 0 transient fires after warm-up; kicks — exactly 8; busymix — ≥ 7 of 8
 kicks fire in Low.
 *Demo:* dive + kicks PNGs — L2. *Forbidden:* per-scenario constants; gating the
@@ -350,6 +364,9 @@ built against this doc's invariants.
 - **Multi-object per window / object birth-death events as triggers** — revive with
   the ingest design's segmentation work, where birth/death is load-bearing.
 - **Synchrosqueeze precision port** — D2's trigger.
+- **PESTO as a monophonic-send assist** (D1a) — revive only if a clean mono send
+  (isolated bass channel) measurably out-demands the salience path; slots into the
+  salience seam, LGPL-3.0 linking implications assessed at that point.
 - **Per-send analysis toggles in the Audio Setup panel** (the deferred v1 polish item,
   AUDIO_MODULATION §11.5) — revive with P4 if trivial, else stays panel backlog.
 - **Real-clip eval fixtures** — when Peter exports them; they extend the CSV/PNG set,
