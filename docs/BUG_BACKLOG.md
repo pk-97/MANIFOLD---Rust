@@ -114,8 +114,17 @@ lines (extra Low fires feed D5 step 4 re-acquire). **Partial SHIPPED 2026-07-06 
 gate vs the prototype 100/100, selftest green minus BUG-045's line): recovery
 now apricots 12/13, feel 16/35, tears 12/25, inhale 17/22 — **bad_guy 8/45
 keeps this bug OPEN** for the ridge-motion successor. Behavior change shipped
-knowingly: Low transients also fire on bass-note attacks now. Oracle
-unchanged: the mix-Low vs drums-Low table; bad_guy sharpest. Full-band is still NOT a substitute (hats spam —
+knowingly: Low transients also fire on bass-note attacks now. **Oracle caveat
+(Peter, same night):** the drums-stem ground truth is ITSELF unverified
+detector output — the bad_guy stem shows ~31 kick sweeps by eye but fired 46
+times, so every recovery denominator is suspect until human labels exist. Do
+NOT re-litigate recovery percentages against stem fires; the next pass grades
+BOTH stem and mix detection against Peter's hand-labeled kick positions
+(corpus incoming, Ableton-labeled — doubles as ingest P1's blocker). Also
+settled in discussion: on-stage routing (drum bus as its own send) caps this
+bug's priority for Peter's own sets — mix-only detection matters most for
+finished/other-people's tracks; and the ridge-motion successor should track
+the second ridge under the bass (the D5 machinery), not the argmax. Full-band is still NOT a substitute (hats spam —
 Peter). Crossover-defaults sweep: independent report-only task; does not
 address this bug (kick and bass share bins — re-confirmed at the bin level).
 
