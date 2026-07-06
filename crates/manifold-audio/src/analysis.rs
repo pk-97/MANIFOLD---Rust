@@ -278,6 +278,24 @@ struct SendState {
     /// recent entry (one hop back); the current hop is tested before it's pushed.
     /// Order [Full, Low, Mid, High].
     odf_hist: [[f32; ODF_MEDIAN_HOPS]; 4],
+    /// BUG-046 masked-novelty state — ring of the last `SUSTAIN_MEDIAN_HOPS`
+    /// floored/tilted columns (`SUSTAIN_MEDIAN_HOPS × num_bins`, slot-major),
+    /// the per-bin trailing-median source. Order of slots is irrelevant (the
+    /// median is order-free); `col_hist_len` counts filled slots (≤ window),
+    /// `col_hist_pos` is the next write slot.
+    col_hist: Vec<f32>,
+    col_hist_len: usize,
+    col_hist_pos: usize,
+    /// Per-bin trailing median of the previous ≤`SUSTAIN_MEDIAN_HOPS` columns
+    /// (EXCLUDING the current hop), `num_bins` long — the sustained/harmonic
+    /// baseline the masked SuperFlux floors its rise reference at. Refilled
+    /// every hop in `push` before `reduce_send`; 0 while the ring is empty.
+    sustain_med: Vec<f32>,
+    /// Rolling history of the masked (harmonic-floored) SuperFlux ODF per band,
+    /// maintained exactly like `odf_hist` (pushed only under `has_prev`),
+    /// with its own candidate/peak/recent-max bookkeeping. Order [Full, Low,
+    /// Mid, High].
+    masked_odf_hist: [[f32; ODF_MEDIAN_HOPS]; 4],
     /// Whether `prev_col` holds a real column yet (skips the startup flux spike).
     has_prev: bool,
     /// Per-band spectral-centroid height-from-bottom (0..1) for the scope overlay,
@@ -595,6 +613,30 @@ const SUPERFLUX_NOVELTY_DELTA: f32 = 125.0;
 /// Rationale detail in [`reduce_send`]'s second-criterion comment.
 const ODF_NOVELTY_LO: usize = 1;
 const ODF_NOVELTY_HI: usize = 10;
+/// BUG-046 masked-novelty criterion (D9/P6,
+/// `docs/AUDIO_OBJECT_TRACKING_DESIGN.md`; sweep tables in
+/// `docs/evidence/audio_modulation/BUG046_P6A_SWEEPS.md` round 3):
+/// trailing per-bin median window (~85 ms at hop ≈ 5.3 ms) that estimates each
+/// bin's sustained (harmonic) baseline. A sustained bass tone is a horizontal
+/// ridge — its trailing median ≈ its level; a kick's low-band body is
+/// transient — its median stays low. The P6a sweep tried H = 16/32/64;
+/// 16 matched 32 on every guard and recovered slightly more (feel 16 vs 10).
+const SUSTAIN_MEDIAN_HOPS: usize = 16;
+/// dB headroom above the trailing-median baseline before masked flux counts
+/// (D9/P6). Swept 3.0/4.5/6.0 in P6a round 3 — all guard-green; 3.0 recovers
+/// the most (higher margins only shave real kick flux). Below the baseline+
+/// margin, sustained content and its wobble read ~0 on the masked curve.
+const MASKED_ONSET_MARGIN_DB: f32 = 3.0;
+/// Absolute floor of the masked novelty test, in ODF units (D9/P6). The P6a
+/// plateau scan pinned the guard cliff at delta = 60: at delta ≤ 60 the
+/// dive/busymix/densemix guards break; 80 sits one step above the cliff while
+/// keeping the recovery (apricots 5→12/13, feel 4→16/35, tears 8→12/25).
+const MASKED_ONSET_DELTA: f32 = 80.0;
+/// Factor on the masked curve's own recent-window max — the same shape as
+/// `SUPERFLUX_NOVELTY_FACTOR` (and deliberately equal to it), but an
+/// INDEPENDENT knob: the masked curve has its own dynamics and may be retuned
+/// without touching the BUG-044 criterion.
+const MASKED_NOVELTY_FACTOR: f32 = 2.0;
 /// Frequency max-filter radius (bins) for vibrato suppression. The SuperFlux
 /// paper uses ±1 bin at 24 bins/octave — wide enough to cover a semitone wobble.
 /// P3 sweep (2026-07-06) tried 1/2/3: radius 1 always matched or beat wider
@@ -1412,6 +1454,13 @@ struct BandReduce {
     /// after a frequency **maximum filter** — the vibrato/pitch-slide suppression
     /// that makes this fire on attacks, not amplitude wobble. Onset input.
     superflux: f32,
+    /// Masked SuperFlux ODF (BUG-046, D9/P6): same positive dB rise, but each
+    /// bin's rise reference is additionally floored at that bin's own trailing
+    /// -median dB + `MASKED_ONSET_MARGIN_DB` — the sustained (harmonic)
+    /// baseline. Sustained content and its wobble read ~0 on this curve, so a
+    /// kick is measured from the bass level UP. Strictly ≤ `superflux` per bin
+    /// (the reference is a max). Third fire criterion's input.
+    superflux_masked: f32,
     /// Sum of current magnitudes (liveliness denominator).
     energy: f32,
 }
@@ -1421,7 +1470,15 @@ struct BandReduce {
 /// features need. Amplitude maps the band's RMS through the colourmap's own dB
 /// window (`db_min`…`db_max`), so a band's level reads on the same 0..1 scale it
 /// is painted with.
-fn band_reduce(col: &[f32], prev: &[f32], lo: usize, hi: usize, db_min: f32, db_max: f32) -> BandReduce {
+fn band_reduce(
+    col: &[f32],
+    prev: &[f32],
+    sustain_med: &[f32],
+    lo: usize,
+    hi: usize,
+    db_min: f32,
+    db_max: f32,
+) -> BandReduce {
     let hi = hi.min(col.len());
     if lo >= hi {
         return BandReduce {
@@ -1430,6 +1487,7 @@ fn band_reduce(col: &[f32], prev: &[f32], lo: usize, hi: usize, db_min: f32, db_
             noisiness: 0.0,
             flux: 0.0,
             superflux: 0.0,
+            superflux_masked: 0.0,
             energy: 0.0,
         };
     }
@@ -1441,6 +1499,7 @@ fn band_reduce(col: &[f32], prev: &[f32], lo: usize, hi: usize, db_min: f32, db_
     let mut lin_sum = 0.0f32;
     let mut flux = 0.0f32;
     let mut superflux = 0.0f32;
+    let mut superflux_masked = 0.0f32;
     let mut energy = 0.0f32;
     for k in lo..hi {
         let m = col[k];
@@ -1482,6 +1541,18 @@ fn band_reduce(col: &[f32], prev: &[f32], lo: usize, hi: usize, db_min: f32, db_
         if ds > 0.0 {
             superflux += ds;
         }
+        // Masked SuperFlux (BUG-046, D9/P6): the same rise, but the reference
+        // is additionally floored at THIS bin's trailing-median dB +
+        // `MASKED_ONSET_MARGIN_DB` — the sustained (harmonic) baseline. On a
+        // bass-occupied band the sustained tone's level IS its median, so it
+        // and its wobble read ~0 here, while a kick's thump is measured from
+        // the bass level up instead of from silence.
+        let sustain_db =
+            (20.0 * sustain_med[k].max(1e-9).log10()).clamp(db_min, db_max) + MASKED_ONSET_MARGIN_DB;
+        let ds_masked = m_db - prev_db.max(sustain_db);
+        if ds_masked > 0.0 {
+            superflux_masked += ds_masked;
+        }
         energy += m;
     }
     let n = (hi - lo) as f32;
@@ -1512,7 +1583,49 @@ fn band_reduce(col: &[f32], prev: &[f32], lo: usize, hi: usize, db_min: f32, db_
         0.0
     };
 
-    BandReduce { amplitude, brightness, noisiness, flux, superflux, energy }
+    BandReduce { amplitude, brightness, noisiness, flux, superflux, superflux_masked, energy }
+}
+
+/// Fill `out` with the per-bin trailing UPPER median (`sorted[len/2]`, matching
+/// the ODF median's convention in [`reduce_send`]) of the `col_hist_len` columns
+/// stored in the `SUSTAIN_MEDIAN_HOPS × num_bins` ring `col_hist`. The ring holds
+/// only PREVIOUS hops — the caller fills the median BEFORE pushing the current
+/// column, so the current hop never suppresses itself and hop 0 (empty ring)
+/// reads 0.0 per bin: brand-new energy passes the masked reference untouched.
+/// Slot order is irrelevant (a median is order-free), so both the pre-fill
+/// prefix and the wrapped steady-state ring read correctly from slots
+/// `0..col_hist_len`. Allocation-free (stack scratch) — hot path.
+fn sustain_median_into(col_hist: &[f32], col_hist_len: usize, num_bins: usize, out: &mut [f32]) {
+    let len = col_hist_len.min(SUSTAIN_MEDIAN_HOPS);
+    if len == 0 {
+        out[..num_bins].fill(0.0);
+        return;
+    }
+    let mut scratch = [0.0f32; SUSTAIN_MEDIAN_HOPS];
+    let mid = len / 2;
+    for (k, o) in out[..num_bins].iter_mut().enumerate() {
+        for (j, s) in scratch[..len].iter_mut().enumerate() {
+            *s = col_hist[j * num_bins + k];
+        }
+        let (_, m, _) = scratch[..len].select_nth_unstable_by(mid, f32::total_cmp);
+        *o = *m;
+    }
+}
+
+/// Push one floored/tilted column into the trailing-median ring (newest
+/// overwrites the oldest slot once full). Call AFTER [`sustain_median_into`]
+/// each hop — the median must exclude the hop it serves.
+fn push_col_hist(
+    col: &[f32],
+    col_hist: &mut [f32],
+    col_hist_len: &mut usize,
+    col_hist_pos: &mut usize,
+    num_bins: usize,
+) {
+    let pos = *col_hist_pos;
+    col_hist[pos * num_bins..(pos + 1) * num_bins].copy_from_slice(&col[..num_bins]);
+    *col_hist_pos = (pos + 1) % SUSTAIN_MEDIAN_HOPS;
+    *col_hist_len = (*col_hist_len + 1).min(SUSTAIN_MEDIAN_HOPS);
 }
 
 /// Reduce one send's current tilted column into its five per-band features, using
@@ -1539,7 +1652,7 @@ fn reduce_send(
     ];
     let have_prev = send.has_prev;
     for (bi, &(lo, hi)) in bands.iter().enumerate() {
-        let r = band_reduce(&send.col, &send.prev_col, lo, hi, db_min, db_max);
+        let r = band_reduce(&send.col, &send.prev_col, &send.sustain_med, lo, hi, db_min, db_max);
         // The column is already floored (sub-floor bins zeroed upstream), so every
         // reduction reads only above-floor energy — the exact content the user sees.
         // No hidden gate: a band below the floor has zero energy, and the feature
@@ -1631,8 +1744,52 @@ fn reduce_send(
             let novel =
                 candidate > novelty_ref * SUPERFLUX_NOVELTY_FACTOR + SUPERFLUX_NOVELTY_DELTA;
 
+            // BUG-046 third criterion — MASKED NOVELTY on the harmonic-floored
+            // flux curve (D9/P6, `docs/AUDIO_OBJECT_TRACKING_DESIGN.md`; sweeps
+            // in `docs/evidence/audio_modulation/BUG046_P6A_SWEEPS.md` round 3
+            // + the plateau scan). On bass-heavy mixes the Low band's ODF
+            // median AND recent max are owned by the sustained bassline, so a
+            // kick can't clear either test above — and BUG-044's novelty can't
+            // help, because bass notes are themselves novel in that band. The
+            // masked curve (`superflux_masked`) floors each bin's rise
+            // reference at its own trailing-median dB + margin: sustained
+            // content and its wobble read ~0 there, so a kick is measured from
+            // the bass level UP. The fire test mirrors the BUG-044 novelty
+            // test on the masked curve's OWN terms — the candidate must be a
+            // local peak of the masked curve and dwarf ITS recent-window max
+            // (× `MASKED_NOVELTY_FACTOR` + `MASKED_ONSET_DELTA`). Continuous
+            // firers (growl's sweeps, riser, dense beds) keep their masked
+            // flux continuous, so their own recent max suppresses them. OR'd
+            // into the decision below with the two existing criteria UNTOUCHED
+            // — every currently-passing guard stays passing by construction
+            // (verified offline: guard-green across the whole round-3 grid;
+            // delta 80 sits one step above the guard cliff at 60).
+            let masked_odf = r.superflux_masked;
+            let mhist = &send.masked_odf_hist[bi];
+            let masked_candidate = mhist[ODF_MEDIAN_HOPS - 1];
+            let masked_past_max = mhist[lookback_lo..ODF_MEDIAN_HOPS - 1]
+                .iter()
+                .copied()
+                .fold(0.0f32, f32::max);
+            let masked_is_peak = masked_candidate >= masked_past_max && masked_odf <= masked_candidate;
+            let masked_ref = mhist[ODF_NOVELTY_LO..ODF_NOVELTY_HI]
+                .iter()
+                .copied()
+                .fold(0.0f32, f32::max);
+            let masked_novel =
+                masked_candidate > masked_ref * MASKED_NOVELTY_FACTOR + MASKED_ONSET_DELTA;
+
             let refractory = &mut send.transient_refractory[bi];
-            let fired = is_peak && *refractory == 0 && (candidate > threshold || novel);
+            // One shared refractory: any criterion firing arms it for all.
+            let fired = (is_peak && *refractory == 0 && (candidate > threshold || novel))
+                || (masked_is_peak && *refractory == 0 && masked_novel);
+
+            // Push the current masked ODF into its history ring (newest last)
+            // — after the fire decision, mirroring the plain hist's ordering.
+            let mh = &mut send.masked_odf_hist[bi];
+            mh.copy_within(1.., 0);
+            mh[ODF_MEDIAN_HOPS - 1] = masked_odf;
+
             if fired {
                 bf.transients = 1.0;
                 *refractory = ONSET_REFRACTORY_HOPS;
@@ -1676,6 +1833,11 @@ fn new_send_state(num_bins: usize) -> SendState {
         prev_col: vec![0.0; num_bins],
         transient_refractory: [0; 4],
         odf_hist: [[0.0; ODF_MEDIAN_HOPS]; 4],
+        col_hist: vec![0.0; SUSTAIN_MEDIAN_HOPS * num_bins],
+        col_hist_len: 0,
+        col_hist_pos: 0,
+        sustain_med: vec![0.0; num_bins],
+        masked_odf_hist: [[0.0; ODF_MEDIAN_HOPS]; 4],
         has_prev: false,
         centroid_yfb: [-1.0; 4],
         features: SendFeatures::default(),
@@ -1939,6 +2101,19 @@ impl StreamingSendAnalyzer {
                     *c = 0.0;
                 }
             }
+            // BUG-046 masked-novelty baseline (D9/P6): fill each bin's trailing
+            // median from the ring of PREVIOUS floored columns, THEN push the
+            // current column. Order matters — the median must exclude the hop
+            // it serves (its own energy must not become its own suppressor),
+            // and hop 0 gets a zero baseline so brand-new energy passes.
+            sustain_median_into(&state.col_hist, state.col_hist_len, nb, &mut state.sustain_med);
+            push_col_hist(
+                &state.col,
+                &mut state.col_hist,
+                &mut state.col_hist_len,
+                &mut state.col_hist_pos,
+                nb,
+            );
             reduce_send(state, nb, *low_bin, *mid_bin, db_min, db_max);
             // Same guard `reduce_send` used internally for flux/transients
             // (captured before the has_prev update just below) — the D5
@@ -2143,7 +2318,7 @@ mod tests {
         let ranges = [(0, nb), (0, low_bin), (low_bin, mid_bin), (mid_bin, nb)];
         let mut out = [0.0f32; 4];
         for (i, &(lo, hi)) in ranges.iter().enumerate() {
-            out[i] = band_reduce(col, &prev, lo, hi, c.db_min, c.db_max).amplitude;
+            out[i] = band_reduce(col, &prev, &prev, lo, hi, c.db_min, c.db_max).amplitude;
         }
         out
     }
@@ -2181,8 +2356,8 @@ mod tests {
         let nb = nbins();
         let prev = vec![0.0f32; nb];
         let n = nfft();
-        let dark = band_reduce(&vqt_col(&sine(100.0, n)), &prev, 0, nb, c.db_min, c.db_max).brightness;
-        let bright = band_reduce(&vqt_col(&sine(5000.0, n)), &prev, 0, nb, c.db_min, c.db_max).brightness;
+        let dark = band_reduce(&vqt_col(&sine(100.0, n)), &prev, &prev, 0, nb, c.db_min, c.db_max).brightness;
+        let bright = band_reduce(&vqt_col(&sine(5000.0, n)), &prev, &prev, 0, nb, c.db_min, c.db_max).brightness;
         assert!(bright > dark, "5 kHz brighter than 100 Hz: {dark} vs {bright}");
         assert!((0.0..=1.0).contains(&dark) && (0.0..=1.0).contains(&bright), "0..1");
     }
@@ -2193,8 +2368,8 @@ mod tests {
         let nb = nbins();
         let prev = vec![0.0f32; nb];
         let n = nfft();
-        let tone = band_reduce(&vqt_col(&sine(1000.0, n)), &prev, 0, nb, c.db_min, c.db_max).noisiness;
-        let noisy = band_reduce(&vqt_col(&noise(n)), &prev, 0, nb, c.db_min, c.db_max).noisiness;
+        let tone = band_reduce(&vqt_col(&sine(1000.0, n)), &prev, &prev, 0, nb, c.db_min, c.db_max).noisiness;
+        let noisy = band_reduce(&vqt_col(&noise(n)), &prev, &prev, 0, nb, c.db_min, c.db_max).noisiness;
         assert!(noisy > tone, "noise flatter than a tone: {tone} vs {noisy}");
     }
 
@@ -2208,8 +2383,8 @@ mod tests {
         // ~10x the quiet one and false-fire. Same +3.5 dB step (×1.5) at two levels:
         let c = cfg();
         let nb = nbins();
-        let loud = band_reduce(&vec![0.45f32; nb], &vec![0.30f32; nb], 0, nb, c.db_min, c.db_max).superflux;
-        let quiet = band_reduce(&vec![0.045f32; nb], &vec![0.030f32; nb], 0, nb, c.db_min, c.db_max).superflux;
+        let loud = band_reduce(&vec![0.45f32; nb], &vec![0.30f32; nb], &vec![0.0f32; nb], 0, nb, c.db_min, c.db_max).superflux;
+        let quiet = band_reduce(&vec![0.045f32; nb], &vec![0.030f32; nb], &vec![0.0f32; nb], 0, nb, c.db_min, c.db_max).superflux;
         assert!(loud > 0.0 && quiet > 0.0, "a +3.5 dB step is a positive ODF: loud {loud}, quiet {quiet}");
         assert!(
             (loud - quiet).abs() / loud < 0.02,
@@ -2277,11 +2452,11 @@ mod tests {
         let col = vqt_col(&sine(1000.0, nfft()));
         // Energy appearing against silence → near-max relative flux.
         let zeros = vec![0.0f32; nb];
-        let r = band_reduce(&col, &zeros, 0, nb, c.db_min, c.db_max);
+        let r = band_reduce(&col, &zeros, &zeros, 0, nb, c.db_min, c.db_max);
         let onset = relative_flux(r.flux, r.energy);
         assert!(onset > 0.5, "energy from silence → high relative flux: {onset}");
         // The same spectrum twice → ~0 change.
-        let r2 = band_reduce(&col, &col, 0, nb, c.db_min, c.db_max);
+        let r2 = band_reduce(&col, &col, &zeros, 0, nb, c.db_min, c.db_max);
         let steady = relative_flux(r2.flux, r2.energy);
         assert!(steady < 0.1, "steady tone → low relative flux: {steady}");
     }
@@ -2299,7 +2474,8 @@ mod tests {
         let mut col = vec![0.0f32; nb];
         col[b] = 1.0; // now one bin higher — a slide, not a new onset
 
-        let slide = band_reduce(&col, &prev_shifted, 0, nb, c.db_min, c.db_max);
+        let silence = vec![0.0f32; nb];
+        let slide = band_reduce(&col, &prev_shifted, &silence, 0, nb, c.db_min, c.db_max);
         assert!(slide.flux > 0.5, "plain flux trips on the bin shift: {}", slide.flux);
         assert!(
             slide.superflux < 1e-6,
@@ -2308,8 +2484,7 @@ mod tests {
         );
 
         // A real attack from silence still produces strong SuperFlux.
-        let silence = vec![0.0f32; nb];
-        let attack = band_reduce(&col, &silence, 0, nb, c.db_min, c.db_max);
+        let attack = band_reduce(&col, &silence, &silence, 0, nb, c.db_min, c.db_max);
         assert!(
             attack.superflux > 0.5,
             "new broadband energy still fires SuperFlux: {}",
@@ -2336,6 +2511,11 @@ mod tests {
             prev_col: vec![0.0f32; nb],
             transient_refractory: [0; 4],
             odf_hist: [[0.0; ODF_MEDIAN_HOPS]; 4],
+            col_hist: vec![0.0; SUSTAIN_MEDIAN_HOPS * nb],
+            col_hist_len: 0,
+            col_hist_pos: 0,
+            sustain_med: vec![0.0; nb],
+            masked_odf_hist: [[0.0; ODF_MEDIAN_HOPS]; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
@@ -2394,6 +2574,11 @@ mod tests {
             prev_col: bass.clone(),
             transient_refractory: [0; 4],
             odf_hist: [[0.0; ODF_MEDIAN_HOPS]; 4],
+            col_hist: vec![0.0; SUSTAIN_MEDIAN_HOPS * nb],
+            col_hist_len: 0,
+            col_hist_pos: 0,
+            sustain_med: vec![0.0; nb],
+            masked_odf_hist: [[0.0; ODF_MEDIAN_HOPS]; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
@@ -2447,6 +2632,11 @@ mod tests {
             prev_col: bass.clone(),
             transient_refractory: [0; 4],
             odf_hist: [[0.0; ODF_MEDIAN_HOPS]; 4],
+            col_hist: vec![0.0; SUSTAIN_MEDIAN_HOPS * nb],
+            col_hist_len: 0,
+            col_hist_pos: 0,
+            sustain_med: vec![0.0; nb],
+            masked_odf_hist: [[0.0; ODF_MEDIAN_HOPS]; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
@@ -2526,6 +2716,144 @@ mod tests {
     }
 
     #[test]
+    fn sustain_median_is_trailing_and_excludes_current_hop() {
+        // Empty ring reads 0 per bin — brand-new energy passes the masked
+        // reference untouched (hop 0 gets no baseline).
+        let nb = 3;
+        let mut hist = vec![0.0f32; SUSTAIN_MEDIAN_HOPS * nb];
+        let (mut len, mut pos) = (0usize, 0usize);
+        let mut med = vec![9.9f32; nb];
+        sustain_median_into(&hist, len, nb, &mut med);
+        assert_eq!(med, vec![0.0; nb], "empty ring must read 0");
+
+        // Push known constant columns (hop j pushes value j+1); at each hop the
+        // median — computed fill-BEFORE-push, exactly as `push` does — must
+        // cover ONLY the previously pushed columns (excludes-current-hop).
+        for j in 0..5usize {
+            sustain_median_into(&hist, len, nb, &mut med);
+            let expect = if j == 0 {
+                0.0
+            } else {
+                let mut prev: Vec<f32> = (0..j).map(|x| (x + 1) as f32).collect();
+                prev.sort_by(f32::total_cmp);
+                prev[prev.len() / 2] // upper median, reduce_send's convention
+            };
+            assert_eq!(med[0], expect, "hop {j}: median of previous hops only");
+            let col = vec![(j + 1) as f32; nb];
+            push_col_hist(&col, &mut hist, &mut len, &mut pos, nb);
+        }
+
+        // Steady state: after > SUSTAIN_MEDIAN_HOPS pushes of 7.0 the ring has
+        // wrapped and the median reads 7.0 in every bin.
+        for _ in 0..SUSTAIN_MEDIAN_HOPS + 4 {
+            push_col_hist(&vec![7.0f32; nb], &mut hist, &mut len, &mut pos, nb);
+        }
+        sustain_median_into(&hist, len, nb, &mut med);
+        assert_eq!(med, vec![7.0; nb], "wrapped ring reads the sustained level");
+    }
+
+    #[test]
+    fn masked_superflux_never_exceeds_plain() {
+        // Property: the masked rise reference is max(prev_db, sustain_db +
+        // margin) ≥ prev_db, so per-bin masked rise ≤ plain rise, and only
+        // positives are summed — masked ≤ plain for ANY inputs.
+        let c = cfg();
+        let nb = 32;
+        let mut state = 0x9E37_79B9u32;
+        let mut next_col = |n: usize| -> Vec<f32> {
+            (0..n)
+                .map(|_| {
+                    state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    (state >> 8) as f32 / (1u32 << 24) as f32
+                })
+                .collect()
+        };
+        for _ in 0..8 {
+            let col = next_col(nb);
+            let prev = next_col(nb);
+            let med = next_col(nb);
+            let r = band_reduce(&col, &prev, &med, 0, nb, c.db_min, c.db_max);
+            assert!(
+                r.superflux_masked <= r.superflux + 1e-4,
+                "masked flux must never exceed plain: {} vs {}",
+                r.superflux_masked,
+                r.superflux,
+            );
+        }
+    }
+
+    #[test]
+    fn masked_novelty_fires_kick_over_busy_bass_where_plain_criteria_dont() {
+        // BUG-046 mechanism test: a "busy" sustained bass — energy alternating
+        // every hop between two low-band bin groups spaced farther apart than
+        // the max-filter radius — keeps the plain ODF high EVERY hop, so its
+        // median and recent max are owned by the bass and a moderate kick step
+        // clears neither existing test. The trailing median sees both groups
+        // at their sustained level, so the MASKED curve reads ~0 through the
+        // bass and the kick is measured from the bass level up — the
+        // masked-novelty criterion fires it.
+        //
+        // The identical scenario runs twice: run A maintains the trailing-
+        // median ring exactly as `push` does; run B pins `sustain_med` at
+        // full-scale, which zeroes the masked curve — i.e. the detector
+        // reduced to the pre-BUG-046 two-criterion logic. The kick must fire
+        // in A and be missed in B.
+        let c = cfg();
+        let nb = nbins();
+        let (low_bin, mid_bin) = band_edges(&c, SR as f32, nb, 250.0, 2000.0);
+        let low = bands().1;
+
+        let mut bass_a = vec![0.0f32; nb]; // bins 0, 8, 16, … at −20 dB
+        let mut bass_b = vec![0.0f32; nb]; // bins 4, 12, 20, … at −20 dB
+        let mut kick = vec![0.0f32; nb]; // both groups at −8 dB (+12 dB step)
+        let lb = low_bin.min(nb);
+        for k in (0..lb).step_by(8) {
+            bass_a[k] = 0.1;
+        }
+        for k in (4..lb).step_by(8) {
+            bass_b[k] = 0.1;
+        }
+        for k in (0..lb).step_by(4) {
+            kick[k] = 0.4;
+        }
+
+        let run = |maintain_ring: bool| -> usize {
+            let mut s = new_send_state(nb);
+            s.has_prev = true;
+            if !maintain_ring {
+                s.sustain_med.fill(1.0); // 0 dB baseline ⇒ masked flux always 0
+            }
+            let kick_at = 80usize;
+            let mut fires_in_window = 0usize;
+            for hop in 0..96usize {
+                let col = if hop == kick_at {
+                    &kick
+                } else if hop % 2 == 0 {
+                    &bass_a
+                } else {
+                    &bass_b
+                };
+                s.col.copy_from_slice(col);
+                if maintain_ring {
+                    // Exactly `push`'s per-hop order: fill from PREVIOUS
+                    // columns, then push the current one.
+                    sustain_median_into(&s.col_hist, s.col_hist_len, nb, &mut s.sustain_med);
+                    push_col_hist(&s.col, &mut s.col_hist, &mut s.col_hist_len, &mut s.col_hist_pos, nb);
+                }
+                reduce_send(&mut s, nb, low_bin, mid_bin, c.db_min, c.db_max);
+                if (kick_at..kick_at + 5).contains(&hop) && s.features.bands[low].transients > 0.99 {
+                    fires_in_window += 1;
+                }
+                s.prev_col.copy_from_slice(&s.col);
+            }
+            fires_in_window
+        };
+
+        assert!(run(true) >= 1, "kick over busy bass must fire via masked novelty");
+        assert_eq!(run(false), 0, "without the masked criterion the same kick is missed (BUG-046)");
+    }
+
+    #[test]
     fn band_edges_move_with_crossovers() {
         let c = cfg();
         let nb = nbins();
@@ -2548,8 +2876,8 @@ mod tests {
         let (low_bin, mid_bin) = band_edges(&c, SR as f32, nb, 250.0, 2000.0);
         let prev = vec![0.0f32; nb]; // silence baseline
         let col = vqt_col(&sine(60.0, nfft())); // a 60 Hz thump appears
-        let low_flux = band_reduce(&col, &prev, 0, low_bin, c.db_min, c.db_max).flux;
-        let high_flux = band_reduce(&col, &prev, mid_bin, nb, c.db_min, c.db_max).flux;
+        let low_flux = band_reduce(&col, &prev, &prev, 0, low_bin, c.db_min, c.db_max).flux;
+        let high_flux = band_reduce(&col, &prev, &prev, mid_bin, nb, c.db_min, c.db_max).flux;
         assert!(
             low_flux > high_flux * 4.0,
             "60 Hz thump flux: low {low_flux} should ≫ high {high_flux}"
