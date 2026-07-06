@@ -101,11 +101,24 @@ path), `collapse:<layer-id>` (toggles `is_collapsed` directly on the `Project`
 data, not via a synthesized chevron click — the bug classes this harness
 exists to catch live in the render/sync path's reaction to that state, not in
 input dispatch), `delete:<layer-id>` (removes the layer + any children),
-`open:settings`. Plus a `--scroll <px>` flag (not an interact verb — it seeds
-`Viewport::scroll_y_px` and the header's `ScrollContainer` offset identically,
-mirroring the settings-restore path, so a scene can start "already scrolled"
-before an `--interact` is applied). `hover:`/`expand:` above are aspirational,
-not yet built.
+`open:settings` / `open:audio_setup`, the automation-lane verbs
+(`automation_add/move/bend/segment_drag/group_move/group_delete`), and the
+clip-selection verbs (`click_clip`/`shift_click_clip`/`cmd_click_clip`/`cmd_d`/
+`drag_clip_toward_zero`/`drag_readout`). Every verb returns a structural
+hit/miss outcome — a miss fails the run (exit 1) with a tree dump as evidence,
+never a fabricated "after" render (2026-07-07; was a string-match that never
+fired). Plus a `--scroll <px>` flag (not an interact verb — seeds
+`Viewport::set_scroll` then re-syncs, because the header column bakes its Y
+offsets at build time; applied before the BASE render as of 2026-07-07).
+`hover:`/`expand:` above are aspirational, not yet built.
+
+**Since 2026-07-07 the `--script` driver dispatches every resolved
+`PanelAction` through the real `ui_bridge::dispatch`** (driver-owned scratch
+state; `UserPrefs::in_memory()` keeps determinism) — transport, inspector, and
+popup wiring are all headless-drivable now, not just `LayerClicked`. Scenes:
+`project:<path>` loads a real `.manifold` through the app's exact load path
+(real-scale renders — the 52-layer Liveschool fixture is the canonical
+subject), and `empty` renders the zero-layer File→New state.
 
 ### 3. State matrix
 Render one component across all its states — normal / selected / muted / collapsed / expanded /
