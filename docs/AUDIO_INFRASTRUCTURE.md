@@ -131,7 +131,7 @@ Fix: persist the **UID**, keep the name as display + fallback match. On load, re
 
 ## 7. The audio-settings UX
 
-The Audio Setup panel ([crates/manifold-ui/src/panels/audio_setup_panel.rs](../crates/manifold-ui/src/panels/audio_setup_panel.rs)) is a **modal** — and stays modal. This is settings, configured deliberately, not a live-performance surface; dimming the show behind it is correct. The dropdown machinery is in [crates/manifold-app/src/ui_root.rs](../crates/manifold-app/src/ui_root.rs#L1236-L1268).
+The Audio Setup panel ([crates/manifold-ui/src/panels/audio_setup_panel.rs](../crates/manifold-ui/src/panels/audio_setup_panel.rs)) is a **non-dimming overlay anchored to the viewport's right edge** (~38% width, full height, `Modality::Modeless`, outside clicks pass through) — shipped 2026-07-06 by `AUDIO_SENDS_UX_DESIGN.md` D6/P3, superseding this section's original "stays modal" call. That call predated the trigger matrix and calibration drags growing in here: gain, floor, sensitivity, and crossovers are tuned against live output, which a show-dimming modal made impossible. The dropdown machinery is in [crates/manifold-app/src/ui_root.rs](../crates/manifold-app/src/ui_root.rs#L1236-L1268).
 
 The organizing idea: **a send is the vocabulary the rest of the instrument speaks in.** Anything that makes a send legible pays off everywhere it's referenced (notably the modulation drawer).
 
@@ -140,10 +140,10 @@ Planned UX (all post-Phase-2):
 - **Rename + color sends** — "Kick," not the auto-assigned "Audio N"; a per-send color carried into the modulation drawer so a driven slider is visibly tied to its source.
 - **Channel dropdown shows names, grouped by subdevice** — `BlackHole ▸ BH_IN_L / BH_IN_R`, `MacBook ▸ Mic`. A flat 64-item list on a big aggregate is unusable.
 - **Stereo / paired channels** — a mono/stereo toggle per send. `SendSpec.channels` already supports multiple channels (`downmix` averages them); this is just the UI affordance plus a 2-channel default.
-- **Per-send meter** — reads the existing `FeatureFrame.amplitude`, shipped via the normal `ContentState` snapshot (no new path, no GPU). Paired with gain trim it becomes the calibration surface: set a send so it actually swings 0–1 on your material.
+- **Per-send meter** — reads the send's analyzed amplitude feature off the content-thread analyzer snapshot (`FeatureFrame` and the worker-side analysis it belonged to are gone — see §3.2), shipped via the normal `ContentState` snapshot (no new path, no GPU). Paired with gain trim it becomes the calibration surface: set a send so it actually swings 0–1 on your material.
 - **Delete-in-use warning** — show "drives N params" on the row and confirm before deleting, so a bound send isn't silently severed.
 
-Explicitly **not** doing: dockable/non-dim modality (it's settings); per-send smoothing/attack-release (deferred — and if added, it likely belongs in the drawer, not here).
+Explicitly **not** doing: a dockable window (the panel is a right-anchored overlay, not a dock — see above; the original "no non-dim modality" item here was reversed by AUDIO_SENDS_UX D6); per-send smoothing/attack-release (deferred — and if added, it likely belongs in the drawer, not here).
 
 ## 8. Performance — the budget is sacred
 
@@ -191,7 +191,7 @@ Sequenced by dependency. **Critical path: 1 → 2 → (3 ∥ 4).** Phase 3's sav
 ### Phase 5 — UX
 - **5.1** Rename + color sends (carry into the modulation drawer).
 - **5.2** Stereo / paired channels (UI toggle over existing multi-channel `downmix`).
-- **5.3** Per-send meter (reuse `FeatureFrame.amplitude` via `ContentState`).
+- **5.3** Per-send meter (analyzed amplitude off the content-thread analyzer snapshot via `ContentState` — `FeatureFrame` is gone, see §3.2).
 - **5.4** Delete-in-use warning ("drives N params").
 
 ### Phase 6 — Perf hygiene

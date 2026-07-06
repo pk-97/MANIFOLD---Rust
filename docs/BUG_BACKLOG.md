@@ -30,6 +30,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-046 | **setup-panel-overflow** | Audio Setup sections clip past bottom when a source has many input/consumer rows (LOW) |
 | BUG-039 | **saw-rotation-wrap** | angle params clamp instead of wrapping; saw LFO can't spin a full rotation (MED, mechanism pinned) |
 | BUG-045 | **gap-ring-down-chase** | tracker follows kernel ring-down down ~2-4 bins in note gaps; notes gate 87.6 vs 90 (LOW) |
 | BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
@@ -54,6 +55,23 @@ or human can read it, and it needs no external tool.
 | BUG-019 / 020 / 021 | deferred | group-fold gap · gen-card collapse · snap-back gap |
 
 ## Open
+
+### BUG-046 (setup-panel-overflow) — Audio Setup panel content clips past the bottom edge when chrome exceeds viewport − SCOPE_H_MIN — LOW (needs ~18 combined input/consumer rows on one source at full height; ~5 extra rows at a 720px window)
+
+**Found 2026-07-06 during AUDIO_SENDS_UX P3 review** (orchestrated wave, found by the
+worker's own analysis after an orchestrator-caught clipping defect was root-caused —
+the clamp behavior below is the designed residue, not the bug that was fixed).
+The panel sizes its spectrogram as `viewport − chrome_height()` floored at
+`SCOPE_H_MIN` (200px). When a selected send's Inputs + Consumers rows (28px each)
+push `chrome_height()` past `viewport − SCOPE_H_MIN`, the scope clamps at the floor
+and the sections below it run past the panel's bottom edge — same visual as the
+fixed P3 bug, different cause. **Symptom:** bottom consumer rows invisible on a
+heavily-bound source. **Fix shape:** cap the consumers list at N rows + a "+N more"
+summary row, or wrap the sections in the existing ScrollContainer (see
+`guide_scroll_and_clipping` memory) — a deliberate UX call, not a mechanical fix;
+don't improvise it inside an unrelated wave. **Oracle:** `audio_setup_panel.rs`
+test `consumers_fit_within_panel_on_first_build_after_configure` guards the fixed
+ordering bug; no executable test for this clamp overflow yet.
 
 ### BUG-045 (gap-ring-down-chase) — Tracker chases the transform's kernel ring-down during inter-note gaps — LOW (2.4 points on the notes gate; real-clip impact small)
 
