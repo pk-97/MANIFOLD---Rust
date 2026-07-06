@@ -10,13 +10,20 @@ reason to exist.
    message.** From telemetry.jsonl injected records, compute the in-turn
    (valve PostToolUse/Stop) vs next-prompt (valve UserPromptSubmit) split for
    corrective fires (anchor/coaching/escalate — exclude advice + primers).
-   Baseline 07-05→07-07: 52 in-turn vs 16 late (~24%). The chat-tier move
-   (mechanical/ungrounded-chat-claim, shipped 07-07) should convert the
-   largest late class — verify it did, and report the new split. Also check
-   the stop-wait v2 per-turn latency tax (telemetry `stop_wait` field).
+   Baseline 07-05→07-07: 52 in-turn vs 17 late (~25%). The 07-07 forensics
+   (DESIGN.md §2h.6) classified all 17: 11 capped-wait classifier races (8 =
+   done-claim family), 5 snapshot-race defect (fixed), 1 anomaly. Three fixes
+   shipped same day: snapshot double-stat, cap 6s→10s, and two deterministic
+   Stop-tier moves. Verify the split actually moved; measurement oracle: the
+   transcript's `stop_hook_summary.hookInfos[].durationMs` field is the
+   measured Stop wall time — use it, don't infer. Also check the per-turn
+   latency tax (the double-stat adds ~0.2s to every turn end; the 10s cap
+   binds only when a classification is in flight).
 2. **Score the 07-07 additions** by their DESIGN.md §2h oracles:
    ungrounded-chat-claim (grounding read or unverified-restatement within ~10
-   events), landing-doc-reflex (Status-line edit / docs/landings/ write around
+   events), unverified-done-claim (verification-class event within ~10 events
+   or claim restated unverified — crude by design, PULL it if noisy),
+   landing-doc-reflex (Status-line edit / docs/landings/ write around
    the fire), workflow-agent observation (workflow agents discovered + fires
    carry their agent_id), worker self-grade uptake (agent_id-bearing grade
    lines rise from all-time zero), worker review threshold (20 events —
@@ -57,7 +64,16 @@ reason to exist.
     incident note); worker whispers still not persisted to worker transcript
     jsonls (mailbox/observer-log recovery only); hook-ordered context switches
     still invisible to TASK attribution (HARNESS_TEXT_PREFIXES exclusion —
-    named residue on scope-drift's mute).
+    named residue on scope-drift's mute); ack/backstop inconsistency —
+    build_block's supervised grade-ask is appended to EVERY delivered move
+    including mechanical ones, but the grade backstop only counts
+    anchor/coaching/escalate, so mechanical fires are asked for grades
+    nobody chases (found 07-07; decide: exempt mechanical from the ack, or
+    count them in the backstop); worker Stop events reuse
+    data["transcript_path"] as-is — whether the harness populates the
+    subagent's OWN transcript there is an inherited, unverified assumption
+    under announced-not-started and the 07-07 worker review flows (the
+    workflow/worker probe should settle it).
 11. **Numeric placeholders that are yours to tune** (marked Opus-tunable at
     handoff): §2d oscillation span/flips, §2g card-limit bounds, §2h.4 worker
     review threshold, OBSERVATION_PROMPT_MIN_EVENTS (40, main) if grading
