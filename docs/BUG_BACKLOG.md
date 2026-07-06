@@ -33,6 +33,7 @@ or human can read it, and it needs no external tool.
 | BUG-039 | **saw-rotation-wrap** | angle params clamp instead of wrapping; saw LFO can't spin a full rotation (MED, mechanism pinned) |
 | BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
 | BUG-037 | **glp-first-render-stall** | ~37ms warm-up on a glTF clip's first rendered frame (MED) |
+| BUG-040 | **v13-import-migration-drop** | V1.3→V1.4 migration drops positional params of imported generators; 1-day save window (LOW) |
 | BUG-038 | **ableton-log-spam** | bridge warns every 1.5s forever when Live absent (LOW) |
 | BUG-006 | **fused-param-noop** | param edits/undo on fused-away nodes silently no-op (HIGH) |
 | BUG-007 | **fusion-exclusion-blind** | particle-loop exclusion misses configured wgsl_compute shapes (HIGH) |
@@ -46,7 +47,7 @@ or human can read it, and it needs no external tool.
 | BUG-033 | **ui-snapshot-broken** | headless UI harness feature doesn't build (MED) |
 | BUG-012 | **tex-rename-corrupt** | fragment `tex_` port-rename corrupts `tex_*` scalars (LOW) |
 | BUG-018 | **catalog-stale** | node_catalog.json out of sync test red (LOW) |
-| BUG-031 | **audio-load-blip** | ~10ms of audio leaks when a voice is built (LOW) ⚠ id collides with the positional-layer-menu entry under Fixed — first free id is BUG-039 |
+| BUG-031 | **audio-load-blip** | ~10ms of audio leaks when a voice is built (LOW) ⚠ id collides with the positional-layer-menu entry under Fixed — first free id is BUG-041 |
 | BUG-034 | **atlas-uv-test-gap** | headless preview doesn't cover live atlas UV path (LOW) |
 | BUG-014 / 030 | parked | NaN content-key hash · color-ratchet red |
 | BUG-019 / 020 / 021 | deferred | group-fold gap · gen-card collapse · snap-back gap |
@@ -78,6 +79,30 @@ and generators.
 
 **Sequencing** — AFTER the param-system post-refactor audit (Fable queue item 1): same
 code region; land the audit's verified ground first.
+
+### BUG-040 (v13-import-migration-drop) — V1.3→V1.4 migration drops positional params of a project-local (imported) generator — LOW (narrow window)
+
+**Found** during the 2026-07-06 param-system post-refactor audit (BUG-036 sibling hunt),
+by reading `crates/manifold-io/src/migrations/param_storage_v14.rs` — not reproduced on a
+real file.
+
+**Mechanism** — the migration maps positional `paramValues` to ids via (a) the instance's
+own `graph.presetMetadata.params` order, else (b) the baked `LEGACY_PARAM_ORDER` table.
+A TRACKING instance of an imported/forked generator has `graph: None` and its type id is
+project-local, so it's absent from the baked table → arm (b) drops the values with the
+"not in the baked LEGACY_PARAM_ORDER" warning and the instance loads with template
+defaults. The file itself carries the missing order: `embeddedPresets[type].def
+.presetMetadata.params`.
+
+**Exposure** — only projects saved between the glTF import door landing (2026-07-04) and
+the V1.4 wire landing (2026-07-05) can hold positional params for a project-local type;
+anything saved since writes the id-keyed map. The drop is loud (warning), one-time, and
+values-only (defaults still load).
+
+**Fix shape** — in `param_storage_v14`, between the per-instance-graph arm and the baked
+table, consult the project tree's own `embeddedPresets` for the type's
+`def.presetMetadata.params` order (pure `Value → Value`, self-contained in the same
+file). Unit fixture: positional generator instance + matching embedded preset.
 
 ### BUG-037 (glp-first-render-stall) — First render of a glTF scene layer stalls the content thread ~37ms (warm-up on the frame, not at load) — MED
 

@@ -321,9 +321,15 @@ to `params`, which is also the migration trigger:
   entries overlay state + calibration; (3) file entries with `spec` append as
   user-added; (4) template params missing from the file append with defaults
   (today's backfill); (5) file entries matching neither template nor `spec` are
-  dropped with the existing observability warning (today's unknown-id drop,
-  effects.rs:795-805). Alias resolution (template `param_aliases`) runs between
-  (2) and (5).
+  dropped with the existing observability warning — **but only when a template
+  actually resolved** (informed deprecation). When NO template resolves at all
+  (registry miss + no inline generator graph), the entry is kept on a
+  placeholder spec instead of dropped: an unresolvable template is a load-order
+  or environment condition, not evidence the id was deprecated, and dropping
+  there was silent data loss (BUG-036 — project-local preset templates used to
+  register after layer deserialize; the loader's `_with` pre-pass now orders
+  them first, and this keep rule is the storage-layer backstop). Alias
+  resolution (template `param_aliases`) runs between (2) and (5).
 - Per-instance `graph.preset_metadata.params` is rewritten from the manifest on
   save and ignored on load (D12). `meta.bindings` round-trips unchanged.
 

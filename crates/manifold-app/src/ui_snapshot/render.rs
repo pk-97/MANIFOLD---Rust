@@ -8,7 +8,7 @@
 use std::ffi::c_void;
 use std::slice;
 
-use manifold_gpu::{GpuBinding, GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
+use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
 use manifold_renderer::automation_lane_draw::emit_automation_lanes;
 use manifold_renderer::clip_draw::{emit_clip_names, emit_clips, ClipBody};
 use manifold_renderer::clip_thumb_gpu::ClipThumbGpu;

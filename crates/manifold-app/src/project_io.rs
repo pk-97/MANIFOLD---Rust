@@ -352,7 +352,11 @@ impl ProjectIOService {
         // deserialize — the V1.4 param loader resolves each instance's params
         // against the registry at deserialize time, so installing after the
         // load (the pre-BUG-036 order) dropped every param keyed to a
-        // project-local preset type.
+        // project-local preset type. Because the hook mutates the global
+        // overlay before the load is known-good, a failed load must roll the
+        // overlay back or the LIVE project is stranded on the candidate
+        // file's presets.
+        let overlay_before = manifold_renderer::preset_loader::project_presets_snapshot();
         let load_result =
             manifold_io::loader::load_project_with(path, install_embedded_presets);
 
@@ -402,6 +406,8 @@ impl ProjectIOService {
                 }
             }
             Err(e) => {
+                // The current project stays live — put its overlay back.
+                manifold_renderer::preset_loader::restore_project_presets(&overlay_before);
                 // G4: load failures were log-only — surface them.
                 log::error!("[ProjectIO] Failed to open project: {e}");
                 crate::alerts::error(

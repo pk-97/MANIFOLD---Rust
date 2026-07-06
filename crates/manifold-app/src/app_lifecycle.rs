@@ -832,6 +832,9 @@ impl Application {
         let Some(path) = self.current_project_path.clone() else {
             return;
         };
+        // Same rollback discipline as `open_project_from_path`: the hook
+        // swaps the global overlay before the load is known-good.
+        let overlay_before = manifold_renderer::preset_loader::project_presets_snapshot();
         match manifold_io::loader::load_project_snapshot_with(
             &path,
             hash,
@@ -846,6 +849,7 @@ impl Application {
                 });
             }
             Err(e) => {
+                manifold_renderer::preset_loader::restore_project_presets(&overlay_before);
                 log::error!("[ProjectIO] Snapshot restore failed: {e}");
                 crate::alerts::error(
                     "Restore Failed",
@@ -862,6 +866,7 @@ impl Application {
         let Some(path) = self.current_project_path.clone() else {
             return;
         };
+        let overlay_before = manifold_renderer::preset_loader::project_presets_snapshot();
         match manifold_io::loader::load_project_snapshot_with(
             &path,
             hash,
@@ -882,6 +887,7 @@ impl Application {
                 });
             }
             Err(e) => {
+                manifold_renderer::preset_loader::restore_project_presets(&overlay_before);
                 log::error!("[ProjectIO] Snapshot copy failed: {e}");
                 crate::alerts::error(
                     "Open Copy Failed",
