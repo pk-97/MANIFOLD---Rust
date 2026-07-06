@@ -54,6 +54,32 @@ or human can read it, and it needs no external tool.
 
 ## Open
 
+### BUG-044 (mix-trigger-deafness) — Transient detection goes near-silent on dense full mixes — HIGH (kills the live-audio-in free-triggering use case on some tracks)
+
+**Symptom** (found 2026-07-06 real-clip review; CSVs from `tests/fixtures/audio/`):
+with the P3-raised threshold, full mixes of smoother/denser productions barely fire in
+ANY band: feel_the_vibration mix = 1 Full fire in 11 s (its drums stem: 32; a 174 BPM
+DnB track), apricots mix = 2 Full / 6 Low (drums stem: 51). Tears mix halved (102→35).
+Harder mixes retained (inhale 45, bad_guy 61). Isolated drums stems are healthy
+everywhere (2.4–7.7 fires/s).
+
+**Mechanism (high confidence, unverified at column level):** the adaptive threshold is
+median(ODF)×7; a dense mix keeps the ODF median permanently elevated (continuous
+broadband change), so the threshold self-raises past real kick rises. The P3 sweep's
+only mix-like scenario (synthetic busymix) is far sparser than real productions — the
+P3 caveat ("validate soft-onset material on real clips") predicted this escape.
+
+**Also measured, the good half:** WHEN it fires, timing is grid-accurate — inhale mix
+98% of fires on the 8th grid / 100% on 16ths (BPM-warped clips, ±35 ms tol), bad_guy
+drums 100% on 16ths. Lower on-grid % on tears/feel/apricots drums is plausibly real
+syncopation/swing, not jitter — needs labeled hits to distinguish.
+
+**Fix shape:** NOT a simple threshold walk-back (that resurrects BUG-041). Candidates:
+per-band median windows, a density-normalized delta floor, or a dual criterion
+(median-relative AND local-contrast). Needs a real-mix scenario in the sweep set —
+feel/apricots mixes are the oracle, dive/riser/growl remain the false-fire guards.
+No tuning done this round per Peter (review-only pass).
+
 ### BUG-043 (deep-bass-floor-anchor) — Tracker anchors at the bottom of the spectrum on deep sub-bass stems — HIGH for the bass use case
 
 **Symptom** (found 2026-07-06, real-clip review, CSVs + PNGs in
