@@ -31,6 +31,7 @@ or human can read it, and it needs no external tool.
 | ID | Nickname | One line |
 |---|---|---|
 | BUG-039 | **saw-rotation-wrap** | angle params clamp instead of wrapping; saw LFO can't spin a full rotation (MED, mechanism pinned) |
+| BUG-041 | **superflux-glide-fire** | transients fire continuously through a pure pitch glide (supersaw dive); fix owned by AUDIO_OBJECT_TRACKING P3 (MED) |
 | BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
 | BUG-037 | **glp-first-render-stall** | ~37ms warm-up on a glTF clip's first rendered frame (MED) |
 | BUG-040 | **v13-import-migration-drop** | V1.3→V1.4 migration drops positional params of imported generators; 1-day save window (LOW) |
@@ -47,12 +48,31 @@ or human can read it, and it needs no external tool.
 | BUG-033 | **ui-snapshot-broken** | headless UI harness feature doesn't build (MED) |
 | BUG-012 | **tex-rename-corrupt** | fragment `tex_` port-rename corrupts `tex_*` scalars (LOW) |
 | BUG-018 | **catalog-stale** | node_catalog.json out of sync test red (LOW) |
-| BUG-031 | **audio-load-blip** | ~10ms of audio leaks when a voice is built (LOW) ⚠ id collides with the positional-layer-menu entry under Fixed — first free id is BUG-041 |
+| BUG-031 | **audio-load-blip** | ~10ms of audio leaks when a voice is built (LOW) ⚠ id collides with the positional-layer-menu entry under Fixed — first free id is BUG-042 |
 | BUG-034 | **atlas-uv-test-gap** | headless preview doesn't cover live atlas UV path (LOW) |
 | BUG-014 / 030 | parked | NaN content-key hash · color-ratchet red |
 | BUG-019 / 020 / 021 | deferred | group-fold gap · gen-card collapse · snap-back gap |
 
 ## Open
+
+### BUG-041 (superflux-glide-fire) — Transients fire continuously through a pure pitch glide — MED (modulation quality, performer-facing)
+
+**Symptom** (found 2026-07-06, mod_harness selftest) — the `dive` scenario (7-voice
+supersaw gliding 1200→150 Hz, no attacks anywhere in the signal) lights the Transients
+lane continuously in all bands: `docs/evidence/audio_modulation/selftest_dive.png`.
+SuperFlux's frequency max-filter exists precisely to suppress pitch slides, and it
+works for a single slide — the suspected mechanism is the supersaw's 7-voice detune
+beating: per-harmonic amplitude modulation reads as genuine broadband dB flux that a
+±1-bin max-filter (at bpo 24) cannot cover. Unconfirmed; needs the parameter sweep.
+
+**Root cause:** unknown — suspects: `MAXFILTER_RADIUS` (1 bin) too narrow for detuned
+stacks; `SUPERFLUX_DELTA`/threshold floor too low for dense sustained material
+(`crates/manifold-audio/src/analysis.rs`, superflux consts ~line 540).
+
+**Fix shape:** parameter sweep against the harness CSV gates (dive = 0 fires, kicks =
+exactly 8, busymix ≥ 7 of 8) — owned by `docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P3,
+which carries the full brief. If no sweep point passes, that phase escalates with the
+table rather than redesigning the detector.
 
 ### BUG-039 (saw-rotation-wrap) — Angle params clamp at range ends, so a saw LFO / automation can't drive a smooth full rotation — MED (enhancement, performer-facing)
 
