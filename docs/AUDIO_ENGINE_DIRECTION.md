@@ -56,6 +56,13 @@ flattened.
   with the video path's hot-path discipline (no allocation, ~3–5 ms budget). Don't
   pre-commit; the stage-1 design session decides with kira's routing limits
   (bus/send topology, latency reporting, PDC) in hand.
+- **Peter's lean (2026-07-07): the endpoint is a custom low-level engine.** The
+  precedent is manifold-gpu — wgpu carried the renderer until the requirements
+  were fully known, then was deleted; kira plays the same scaffold role here.
+  Sequence kira-first to learn the requirements, replace when the seams hurt.
+  Note the embryo already exists: `render_export_mix` (audio_mixdown.rs) is a
+  hand-rolled mixer (sum, gain, varispeed resample); the custom engine is
+  roughly that, in a CoreAudio callback, with lock-free parameter delivery.
 - Export parity is a standing contract: every insert added live must be mirrored in
   `audio_mixdown.rs` or the what-you-hear-is-what-exports invariant breaks.
 
