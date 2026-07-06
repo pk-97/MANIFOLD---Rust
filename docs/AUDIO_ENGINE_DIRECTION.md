@@ -1,5 +1,7 @@
 # MANIFOLD as the Audio Engine — Direction Memo
 
+Staged path toward live shows needing no Ableton: stems + mixer + built-in DSP first, AU instrument hosting decided later with data, full production DAW never.
+
 **Status:** DIRECTION (2026-07-07, Fable) — not a design doc, deliberately does not
 satisfy DESIGN_DOC_STANDARD.md. This captures a strategic conversation with Peter so
 the framing survives the Fable handoff. A design session (Opus) turns Stage 1 into a
