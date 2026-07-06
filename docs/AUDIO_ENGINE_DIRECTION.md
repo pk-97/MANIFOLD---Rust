@@ -63,6 +63,14 @@ flattened.
   Note the embryo already exists: `render_export_mix` (audio_mixdown.rs) is a
   hand-rolled mixer (sum, gain, varispeed resample); the custom engine is
   roughly that, in a CoreAudio callback, with lock-free parameter delivery.
+- **Swap timing (asked and answered 2026-07-07): not before Stage 1.** Measured
+  footprint: kira is confined to manifold-playback, effectively one file
+  (`audio_layer_playback.rs`, ~600 lines) — the swap is a phase, not an epic.
+  But pre-Stage-1 it buys nothing user-visible while re-owning what kira gives
+  free (device hot-plug, sample-rate changes, buffer negotiation, underruns).
+  The trigger is the first insert: that's when hand-mirroring live vs export
+  starts compounding, and one shared mixer core makes parity true by
+  construction. So: engine swap = Stage 1, phase 1.
 - Export parity is a standing contract: every insert added live must be mirrored in
   `audio_mixdown.rs` or the what-you-hear-is-what-exports invariant breaks.
 
