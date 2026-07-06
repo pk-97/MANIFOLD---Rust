@@ -1364,13 +1364,20 @@ impl AudioSetupPanel {
             .map(|s| s.feeding_layers.clone())
             .unwrap_or_default();
 
+        // Per-send section header, matching "Spectrogram — X" / "Triggers — X".
+        let sel_label = self
+            .selected_send
+            .as_ref()
+            .and_then(|id| self.sends.iter().find(|s| &s.id == id))
+            .map(|s| s.label.as_str())
+            .unwrap_or("—");
         tree.add_label(
             Some(self.bg_id),
             inner_x,
             cy,
             inner_w,
             TRIG_TITLE_H,
-            "Inputs",
+            &format!("Inputs — {sel_label}"),
             UIStyle {
                 text_color: Color32::new(170, 170, 180, 255),
                 font_size: color::FONT_LABEL,
@@ -1429,13 +1436,20 @@ impl AudioSetupPanel {
             .map(|s| s.consumers.clone())
             .unwrap_or_default();
 
+        // Per-send section header, matching "Spectrogram — X" / "Triggers — X".
+        let sel_label = self
+            .selected_send
+            .as_ref()
+            .and_then(|id| self.sends.iter().find(|s| &s.id == id))
+            .map(|s| s.label.as_str())
+            .unwrap_or("—");
         tree.add_label(
             Some(self.bg_id),
             inner_x,
             cy,
             inner_w,
             TRIG_TITLE_H,
-            "Consumers",
+            &format!("Consumers — {sel_label}"),
             UIStyle {
                 text_color: Color32::new(170, 170, 180, 255),
                 font_size: color::FONT_LABEL,
@@ -1471,6 +1485,25 @@ impl AudioSetupPanel {
                     ROW_H,
                     label_button_style(),
                     &c.label,
+                );
+                // Jump affordance: a muted "›" at the row's right edge (same
+                // muted tone as the panel's dropdown chevrons), so the only
+                // navigational rows in the panel read as "click to jump".
+                // A plain label drawn over the button — non-interactive, so
+                // the button under it stays the hit target.
+                tree.add_label(
+                    Some(self.bg_id),
+                    inner_x + inner_w - STEP_W,
+                    cy,
+                    STEP_W,
+                    ROW_H,
+                    "\u{203A}", // ›
+                    UIStyle {
+                        text_color: Color32::new(150, 150, 160, 255),
+                        font_size: color::FONT_LABEL,
+                        text_align: TextAlign::Center,
+                        ..UIStyle::default()
+                    },
                 );
                 self.consumer_row_ids.push(id);
                 cy += ROW_H + ROW_GAP;
