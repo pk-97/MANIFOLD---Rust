@@ -70,6 +70,10 @@ PHASE_OSCILLATION_MIN_FLIPS = 3
 # pass 2 tunes it from real fires rather than a guess made now.
 LANDING_DOCS_WINDOW_EVENTS = 30
 
+# DESIGN.md §2h.5: hygiene sweep retention — sentinels older than this are
+# stale and safe to remove at observer startup (never mid-loop).
+HYGIENE_MAX_AGE_S = 7 * 86400
+
 
 def _move_family(move_id):
     if move_id == "anchor/verify-claim":
@@ -240,6 +244,65 @@ class Daemon:
             except OSError:
                 pass
 
+    @staticmethod
+    def _pid_alive(pid_path):
+        """Signal-0 liveness check for an ARBITRARY session's pidfile — same
+        check as `_already_running` above, parameterized, because the
+        hygiene sweep below tests a candidate orphan `.stop` file against
+        ITS OWN session, not the sweeping daemon's own."""
+        try:
+            with open(pid_path, encoding="utf-8") as f:
+                pid = int(f.read().strip())
+            os.kill(pid, 0)
+            return True
+        except (OSError, ValueError):
+            return False
+
+    @staticmethod
+    def _hygiene_sweep(logf):
+        """DESIGN.md §2h.5: startup-only, fail-open cleanup of stale
+        `verdicts/` sentinels — called once per observer start (from
+        `_run`, before the poll loop begins), never inside the loop.
+        Conservative by construction: only two narrowly-named patterns ever
+        qualify, both also gated on age, so every other file (.pid, .json
+        verdicts, .consumed, .firestate.json, .offset) and the mutes/
+        subdirectory are left alone — the patterns below never match them,
+        and `mutes/` is never descended into (only VERDICTS_DIR's own
+        top-level listing is scanned). Any failure anywhere just means this
+        run's sweep did less; it never raises."""
+        removed = []
+        try:
+            now = time.time()
+            for name in os.listdir(VERDICTS_DIR):
+                path = os.path.join(VERDICTS_DIR, name)
+                try:
+                    if not os.path.isfile(path):
+                        continue
+                    age = now - os.path.getmtime(path)
+                except OSError:
+                    continue
+                if age <= HYGIENE_MAX_AGE_S:
+                    continue
+                if ".stopblock." in name:
+                    pass  # age alone qualifies — same criterion as daemon-stop.py's own (shorter) sweep
+                elif name.endswith(".stop"):
+                    session_id = name[: -len(".stop")]
+                    if Daemon._pid_alive(os.path.join(VERDICTS_DIR, f"{session_id}.pid")):
+                        continue  # not an orphan — that session's daemon is still live
+                else:
+                    continue
+                try:
+                    os.remove(path)
+                    removed.append(name)
+                except OSError:
+                    pass
+        except OSError:
+            pass
+        if removed:
+            _log(logf, f"hygiene sweep: removed {len(removed)} stale sentinel(s): {sorted(removed)}")
+        else:
+            _log(logf, "hygiene sweep: nothing to remove")
+
     def run(self):
         os.makedirs(VERDICTS_DIR, exist_ok=True)
         # SessionEnd stops us with SIGTERM; Python's default handler skips
@@ -260,6 +323,7 @@ class Daemon:
             _log(logf, "another daemon already running for this session, exiting")
             return
         self._claim_pidfile()
+        self._hygiene_sweep(logf)  # DESIGN.md §2h.5: startup-only, once per observer start
         # Anything in the mailbox from before our spawn is a predecessor's:
         # a leftover .stop (SIGKILLed daemon, pre-fix SIGTERM) would end us on
         # the first poll, and the consumed marker persists across restarts —
