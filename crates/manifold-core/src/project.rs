@@ -1124,6 +1124,44 @@ impl Project {
         false
     }
 
+    /// Send ids the analysis runtime should actually spend cycles on: every
+    /// send with at least one ENABLED audio mod reading it, plus every send
+    /// with at least one enabled trigger route. Walks the same instance set
+    /// [`Self::has_active_audio_mods`] does (master effects, layer effects,
+    /// layer generator params — NOT clip effects, mirroring that function).
+    /// `AudioModRuntime` recomputes this only on a data-version change and
+    /// skips every send outside the set (unless it's the scope-tapped send) —
+    /// see `docs/AUDIO_SENDS_UX_DESIGN.md` D4/§3.2.
+    pub fn analysis_consumed_sends(&self) -> ahash::AHashSet<crate::AudioSendId> {
+        let mut out = ahash::AHashSet::new();
+        let mut collect = |fx: &crate::effects::PresetInstance| {
+            if let Some(mods) = fx.audio_mods.as_ref() {
+                for m in mods.iter().filter(|m| m.enabled) {
+                    out.insert(m.source.send_id.clone());
+                }
+            }
+        };
+        for fx in &self.settings.master_effects {
+            collect(fx);
+        }
+        for layer in &self.timeline.layers {
+            if let Some(effects) = layer.effects.as_ref() {
+                for fx in effects {
+                    collect(fx);
+                }
+            }
+            if let Some(gp) = layer.gen_params() {
+                collect(gp);
+            }
+        }
+        for send in &self.audio_setup.sends {
+            if send.has_active_triggers() {
+                out.insert(send.id.clone());
+            }
+        }
+        out
+    }
+
     /// Number of parameters whose modulation references `send_id` (enabled or
     /// not), across master effects, layer effects, and generator params. Used to
     /// warn before deleting a send that sliders still depend on.
@@ -1400,7 +1438,7 @@ fn default_version() -> String {
 mod tests {
     use super::*;
     use crate::PresetTypeId;
-    use crate::effects::{PresetInstance, ParameterDriver};
+    use crate::effects::{ParamId, ParameterDriver, PresetInstance};
     use crate::types::{BeatDivision, DriverWaveform};
 
     /// Build a bundled test [`crate::params::Param`] (mirrors
@@ -1972,4 +2010,80 @@ mod tests {
         );
     }
 
+    // ─── analysis_consumed_sends (AUDIO_SENDS_UX_DESIGN D4) ───
+
+    fn send_with_id(label: &str, id: &str) -> crate::audio_setup::AudioSend {
+        let mut s = crate::audio_setup::AudioSend::new(label);
+        s.id = crate::AudioSendId::new(id);
+        s
+    }
+
+    fn amplitude_mod(send_id: crate::AudioSendId) -> crate::audio_mod::ParameterAudioMod {
+        crate::audio_mod::ParameterAudioMod::new(
+            ParamId::from("amount"),
+            send_id,
+            crate::audio_mod::AudioFeature::new(
+                crate::audio_mod::AudioFeatureKind::Amplitude,
+                crate::audio_mod::AudioBand::Full,
+            ),
+        )
+    }
+
+    #[test]
+    fn analysis_consumed_sends_includes_only_the_send_with_an_enabled_mod() {
+        let mut p = Project::default();
+        let send_a = send_with_id("A", "send-a");
+        let send_b = send_with_id("B", "send-b");
+        p.audio_setup.sends.push(send_a.clone());
+        p.audio_setup.sends.push(send_b.clone());
+
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.audio_mods_mut().push(amplitude_mod(send_a.id.clone()));
+        p.settings.master_effects.push(fx);
+
+        let consumed = p.analysis_consumed_sends();
+        assert_eq!(consumed.len(), 1);
+        assert!(consumed.contains(&send_a.id));
+        assert!(!consumed.contains(&send_b.id));
+    }
+
+    #[test]
+    fn analysis_consumed_sends_is_empty_when_the_only_mod_is_disabled() {
+        let mut p = Project::default();
+        let send_a = send_with_id("A", "send-a");
+        p.audio_setup.sends.push(send_a.clone());
+
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        let m = fx.audio_mods_mut();
+        m.push(amplitude_mod(send_a.id.clone()));
+        m[0].enabled = false;
+        p.settings.master_effects.push(fx);
+
+        assert!(p.analysis_consumed_sends().is_empty());
+    }
+
+    #[test]
+    fn analysis_consumed_sends_includes_send_with_enabled_trigger_route_and_no_mod() {
+        let mut p = Project::default();
+        let mut send_a = send_with_id("A", "send-a");
+        let mut route = crate::audio_trigger::TriggerRoute::new(crate::audio_mod::AudioBand::Low);
+        route.enabled = true;
+        send_a.triggers.push(route);
+        p.audio_setup.sends.push(send_a.clone());
+
+        let consumed = p.analysis_consumed_sends();
+        assert_eq!(consumed.len(), 1);
+        assert!(consumed.contains(&send_a.id));
+    }
+
+    #[test]
+    fn analysis_consumed_sends_excludes_send_with_disabled_trigger_route() {
+        let mut p = Project::default();
+        let mut send_a = send_with_id("A", "send-a");
+        // TriggerRoute::new is disabled by default.
+        send_a.triggers.push(crate::audio_trigger::TriggerRoute::new(crate::audio_mod::AudioBand::Low));
+        p.audio_setup.sends.push(send_a);
+
+        assert!(p.analysis_consumed_sends().is_empty());
+    }
 }

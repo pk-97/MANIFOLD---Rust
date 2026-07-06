@@ -50,24 +50,23 @@ The realtime callback (cpal's, or the tap's IO proc) obeys the RT contract: **no
 
 What the cpal backend exposes for the device picker: `list_devices()` (name + default flag), `sample_rate()`, `channels()`. The limitation that drives Phase 1: **cpal's device model is counts and formats only — it has no concept of a channel name or a stable device identity.**
 
-### 3.2 Analysis worker — `manifold-audio::analysis`
+### 3.2 Analysis — split across the downmix worker and the content thread
 
-[crates/manifold-audio/src/analysis.rs](../crates/manifold-audio/src/analysis.rs). A dedicated OS thread (`manifold-audio-analysis`) owns the capture ring's consumer and turns samples into per-send **feature frames**:
+Analysis is **not** one worker-thread stage anymore. It splits at the mono handoff (`docs/AUDIO_SENDS_UX_DESIGN.md` D4, shipped 2026-07-06):
 
 ```text
-drain ring → deinterleave → downmix each send to mono → accumulate to FFT_SIZE → FFT → band energy + RMS
+capture ring (f32, interleaved) ─drain→ AudioFeatureWorker ─mono→ content thread
+  (cpal/tap RT thread fills it)          (downmix worker thread)   (StreamingSendAnalyzer × consumed sends)
 ```
 
-- **Window:** 1024 samples, non-overlapping (~21ms at 48kHz — finer than the 16ms content tick).
-- **Per send:** selected channels are averaged to mono (`downmix`), accumulated, and once a full window is ready, run through a Hann-windowed FFT into three perceptual bands (low/mid/high) plus an overall RMS amplitude.
-- **Output:** a `Copy`, fixed-size `FeatureFrame` (`[SendFeatures; MAX_SENDS=16]`) published latest-wins through a second SPSC ring. No `Arc<Mutex>`, no locks on the read path.
-- **Send identity** is by *index* (position in the `sends` slice), not `AudioSendId` — the id↔index mapping is the wiring layer's job, keeping this crate free of `manifold-core` types and unit-testable in isolation.
-
-The frame struct is built around a **feature seam**: adding onset/pitch (v2) is a new field on `SendFeatures` plus an extractor in the worker loop — and it must reuse the *same* FFT buffer, never run a second transform.
+- **`manifold-audio::analysis::AudioFeatureWorker`** — [crates/manifold-audio/src/analysis.rs](../crates/manifold-audio/src/analysis.rs). A dedicated OS thread owns the capture ring's consumer, deinterleaves it, and downmixes each configured send to **one post-gain mono sample per device frame** — nothing more. No FFT here. The result is published interleaved-by-send through a second SPSC ring (`MonoReader`), keyed by send **index** (position in the `sends` slice), not `AudioSendId` — the id↔index mapping is `AudioModRuntime`'s job, keeping this crate free of `manifold-core` types.
+- **`manifold-app::audio_mod_runtime::AudioModRuntime`** — [crates/manifold-app/src/audio_mod_runtime.rs](../crates/manifold-app/src/audio_mod_runtime.rs), on the **content thread**. Owns one `StreamingSendAnalyzer` (VQT, bands, onsets, scope columns) per send. Each tick it drains the worker's per-send mono, **sums it with that send's audio-layer taps** (resampled to a common rate when needed), and pushes the one mixed signal into that send's single analyzer — a send fed by both a capture channel and timeline audio layers gets one analysis of the sum, not two. This is deliberate, not a shortcut: "what you hear is what modulates" (`analysis.rs` module doc). Moving analysis back to the worker thread would make that summation impossible without a second transform.
+- **Per-send gating (D4):** a send is analyzed only if it has ≥1 enabled audio mod, ≥1 enabled trigger route, or is the send the Audio Setup scope is tapping — `Project::analysis_consumed_sends()` computes the set. `AudioModRuntime` caches it and recomputes it **only when the project's `DataVersion` changes**, never per tick; the per-send loop is one hash-set lookup per send to decide whether to do any work at all. A send that drops out of the set (mod disabled, trigger disabled, scope moved elsewhere) has its analyzer entry dropped on the same project-change pass, via the existing analyzer-cleanup retain.
+- **v1 features:** band energy (3 perceptual bands) + onset + a ridge-tracked pitch/presence path (P4, gated per-send the same way — off by default, byte-identical analysis when off). The feature seam (`SendFeatures`) is unchanged: a new extractor is a new field plus a case in the analyzer, no plumbing change.
 
 ### 3.3 The read end — content thread
 
-`FeatureReader::latest()` drains the output ring keeping the newest frame, and caches it so a tick with no new frame still reports the last value (modulation holds, doesn't drop to zero). This is all the 60fps tick does for audio: one ring drain + one ~256-byte struct copy.
+The content thread's per-tick audio work is bounded by the consumed set, not by `sends.len()`: a project with 16 sends and one bound param analyzes **one** send per tick, not sixteen. `AudioModRuntime::update()` feeds the engine's `SendFeatures` snapshot directly (no separate ring-read step now that analysis itself lives here) — a tick with no new capture data still reports the analyzer's last value (modulation holds, doesn't drop to zero).
 
 ## 4. The metadata path — `AudioDeviceDirectory` (planned)
 
@@ -148,19 +147,21 @@ Explicitly **not** doing: dockable/non-dim modality (it's settings); per-send sm
 
 ## 8. Performance — the budget is sacred
 
-The audio subsystem is low-impact **by construction**, and the metadata work doesn't change that (it's all device-open / panel-build, never per-frame). Verdict:
+Analysis moved onto the **content thread** (§3.2) specifically so a send's capture mono and its layer taps can be summed before one analysis. That trade only pays for itself if the content-thread cost is bounded — which is what the per-send gating (D4) is for. Verdict:
 
 - **GPU: zero.** Nothing in the audio path touches the GPU. It never competes with the 4.5–5.5ms frame budget.
-- **Content thread (60fps tick): microseconds.** One SPSC drain + one ~256-byte `FeatureFrame` copy. No FFT, no alloc, no lock on the read path.
-- **Analysis worker: ~1% of one core** at the 16-send cap (one 1024-pt FFT per send per ~21ms window ≈ 750 FFTs/sec total). The right thread to spend it on, isolated from content and render.
+- **Downmix worker (off-RT OS thread): microseconds.** Deinterleave + per-send mono average, no FFT, no alloc, no lock on the read path.
+- **Content thread (60fps tick), measured (release, M-series, probed 2026-07-04):** **16 sends, all analyzed ≈ 0.96ms mean / 1.27ms worst per tick** — roughly **60µs/send** (VQT + bands + onset + scope columns), against the 16.6ms tick budget. That number is the cost of analyzing every send unconditionally; it's what the gating below exists to avoid paying when most sends aren't wired to anything.
+- **Per-send gating (D4) makes the real-world cost proportional to what's bound, not to `MAX_SENDS`.** A send is analyzed only if it has an enabled audio mod, an enabled trigger route, or is the scope-tapped send (`Project::analysis_consumed_sends()`, recomputed only on a `DataVersion` change). A project with 16 sends routed but only 2 driving params pays ~2 × 60µs, not 16 × 60µs. The per-tick cost of the gate itself is one hash-set lookup per send — negligible next to the ~60µs it's deciding whether to spend.
+- A send that just became consumed (a mod was enabled, or the scope opened on it) has no analyzer history yet: it warms in one 4096-sample window (~85ms) — the same fade-in capture already has on cold start, not a new edge case.
 
 Discipline to keep it there:
 
-- The meter **must** reuse `FeatureFrame.amplitude` — never add a separate readback path.
-- Don't run the worker with zero sends / no device — it currently idle-wakes ~500×/sec regardless ([analysis.rs run loop](../crates/manifold-audio/src/analysis.rs)). Gate its existence on "device open AND ≥1 send."
-- Minor cleanup (worker thread, off the hot path): `drain_and_analyze` takes `carry` out leaving it zero-capacity, then `extend_from_slice` reallocates it every drain — a buffer swap removes the churn.
+- Never move analysis back to the worker thread to "save" content-thread time — that's the mix-before-analyze property gone, not a perf win (§3.2, D4 rationale).
+- Never widen the gate to "analyze if any mod exists anywhere" — it must be keyed per-send (`analysis_consumed_sends`), or one bound param anywhere in the project pays for all 16 sends again, which is the exact regression D4 fixes.
+- `MAX_SENDS = 16` (`analysis.rs`) stands; the gate is the scaling answer, not a bigger cap (`AUDIO_SENDS_UX_DESIGN.md` §5.2).
+- Don't run the downmix worker with zero sends / no device — it currently idle-wakes ~500×/sec regardless ([analysis.rs run loop](../crates/manifold-audio/src/analysis.rs)). Gate its existence on "device open AND ≥1 send" (capture-level gate, separate from and upstream of the per-send analysis gate).
 - Cap channel count sanely: the capture ring is `2s × SR × channels`; a 64-ch aggregate at 96kHz is ~49MB. One-time alloc, but an exotic device shouldn't surprise us.
-- v2 onset/pitch extracts from the existing FFT buffer — no second transform.
 
 ## 9. Build plan — phases, steps, tasks
 
