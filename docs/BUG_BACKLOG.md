@@ -30,6 +30,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-046 | **low-band-kick-deafness-on-mixes** | Low=kick binding near-deaf on bass-heavy full mixes; HPSS is the structural candidate (HIGH) |
 | BUG-039 | **saw-rotation-wrap** | angle params clamp instead of wrapping; saw LFO can't spin a full rotation (MED, mechanism pinned) |
 | BUG-045 | **gap-ring-down-chase** | tracker follows kernel ring-down down ~2-4 bins in note gaps; notes gate 87.6 vs 90 (LOW) |
 | BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
@@ -54,6 +55,34 @@ or human can read it, and it needs no external tool.
 | BUG-019 / 020 / 021 | deferred | group-fold gap · gen-card collapse · snap-back gap |
 
 ## Open
+
+### BUG-046 (low-band-kick-deafness-on-mixes) — The canonical Low=kick binding is near-deaf on full mixes with active basslines — HIGH for the streaming/live-trigger use case
+
+**Found 2026-07-06 (post-BUG-044 measurement, prompted by Peter):** on full mixes,
+the Low band catches almost no kicks while Full catches plenty — bad_guy mix Low 6
+vs drums-stem Low 46 (mix Full: 82); feel 7 vs 36; apricots 6 vs 13. inhale (29 vs
+23) and tears (32 vs 26) are healthy — arrangement-dependent. Peter's use model is
+per-band by design (Low = kicks/bass, Mid = vocals/synths, High = hats), so this is
+the primary binding for kick-triggering being broken on bass-heavy genres.
+
+**Mechanism (high confidence):** the Low band of a mix is where the sustained,
+note-active bassline lives; the kick's low-frequency energy competes with the bass
+IN the very band bound for it, keeping that band's ODF baseline (median AND recent
+max) elevated. Full recovers kicks via their broadband attack click in mid/high —
+which is why mixes fire well on Full but not Low. BUG-044's novelty criterion can't
+help: bass notes are themselves novel events in the Low band.
+
+**Fix direction:** threshold tuning is exhausted in this band (BUG-044's session).
+The structural candidate is harmonic/percussive separation (HPSS) ahead of the band
+split — the percussive component's Low band = kicks without the bassline; the
+harmonic component would feed the pitch tracker (cleaner for both consumers).
+Causal variants exist (median filtering over time vs frequency on the VQT columns
+we already stream, a few hops of lag). Sub-band thresholding does NOT address this
+one — kick and bass share the same bins. Needs a design doc + offline harness
+prototype first (replay the 25 clips, count recovered kicks against drums-stem Low
+as ground truth). Oracle: the mix-Low vs drums-Low table above; bad_guy is the
+sharpest case. Interim guidance (recorded for the perform surface): trigger from
+Full on mixes; Low only on stems or bass-light material.
 
 ### BUG-045 (gap-ring-down-chase) — Tracker chases the transform's kernel ring-down during inter-note gaps — LOW (2.4 points on the notes gate; real-clip impact small)
 
