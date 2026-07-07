@@ -5,6 +5,12 @@ Status: **SHIPPED — phases 0–7 done, fires + renders end-to-end (verified li
 stems (an L4 check). Header corrected 2026-07-05 (it still read "IN PROGRESS").
 Branch `live-audio-triggers` (off `audio-clip-detection`). Created 2026-06-18.
 
+**§8 addendum (2026-07-07): Param triggers — audio fires the Trigger controls.
+DESIGNED, not built.** Same evaluator machinery, new target: instead of firing
+one-shot clips, a transient pulses a playing generator's trigger response (and
+`is_trigger` cards on effects). Peter's ask, verbatim: *"if Trigger is enabled we
+can choose if we want rising clip edge (default) OR the transient trigger OR both."*
+
 > **This doc is the cross-compaction tracker.** A fresh session reads §0 first, works
 > the §Phase checklist, ticks boxes + commits as it goes, and updates §0 at the end.
 
@@ -273,3 +279,148 @@ Drop the decorative `→` between sensitivity and target.
       Whole row; dropped the `→`.
 - [x] **7.6 Ship.** Builds + clippy clean; core/io/ui/audio/editing tests green; floor
       serde round-trip + analyzer gate tests; committed + pushed; §0 + memory updated.
+
+## 8. Param triggers — audio fires the Trigger controls (designed 2026-07-07, NOT BUILT)
+
+§1–§7 fire **clips**. This section makes transients fire the **trigger response of an
+already-playing generator** (and `is_trigger` cards on effects) — the kick pulses the
+burst/reset/jump the generator already performs on clip retrigger, without touching clip
+scheduling. On stage: point the Kick send at a playing FluidSim and every kick injects;
+the same generator still responds to clip launches in "both" mode. Peter's founding
+directive, verbatim: *"if Trigger is enabled we can choose if we want rising clip edge
+(default) OR the transient trigger OR both."*
+
+### 8.1 Audit — what the trigger surface actually is (verified 2026-07-07)
+
+- **Triggers are counts, not pulses.** `ParamConvert::Trigger` passes a monotonic count
+  through; every consuming primitive edge-detects with the `last_count` cold-start
+  pattern (`node_graph/param_binding.rs:181-184`). Counts compose by addition — "both"
+  is summing two counters.
+- **The generator "Trigger" control is the `clip_trigger` toggle card.** All 11
+  trigger-responsive generator presets (BasicShapes, ConcentricTunnel, FluidSim2D/3D,
+  Lissajous, MriVolume, NestedCubes, ParticleText, Plasma, StrangeAttractor, Wireframe)
+  ship a `clip_trigger` **toggle** (`isToggle: true`) that gates the response
+  (e.g. FluidSim2D: `trig_gate_env.enable`); the event source is separate — always-present
+  wires from `generator_input.trigger_count` into consuming ports.
+- **The clip edge is `acquire_clip`.** `trigger_count` is per-layer runtime state in
+  `GeneratorRenderer`, incremented when a new clip becomes active on the layer
+  (`generator_renderer.rs:370-372`). That is the "rising clip edge".
+- **Effects never see the clip edge.** `trigger_count`/`anim_progress` are clip-side
+  concepts that stay 0 for effect chains (`preset_runtime.rs:1918-1924`). An effect's
+  only trigger surface is an `is_trigger` fire-button card (`param_card.rs:123-126`,
+  user bindings with `ParamConvert::Trigger`); zero shipped presets set `isTrigger: true`
+  (searched 2026-07-07), and `RegisteredParam::trigger()` has zero callers.
+- **The audio half already ships.** Sensitivity→threshold mapping
+  (`core/audio_trigger.rs:71-74`), armed-flag edge detection with `REARM_RATIO = 0.6`
+  hysteresis (`playback/live_trigger.rs:79-88`), transient extraction via
+  `AudioFeature{Transients, band}`, and per-instance audio-mod evaluation each tick
+  (`playback/modulation.rs:375-414`, runs for effect AND generator instances).
+- **Port-shadows-param kills graph-level summing.** A wired port shadows its param, so
+  clip-edge wire + card binding on the same port select, not add. The sum must happen
+  at the count **source** (engine/renderer side), not in the graph.
+
+Classification: the edge detection, threshold math, transient feature, per-instance
+config storage, and drawer UI all *exist*. Genuinely new: one config type, one
+evaluation arm, the count-combination seam, and ~15 lines of drawer spec.
+
+### 8.2 Decisions
+
+- **D1 — Two counters, gated at event time, summed at read.** Per layer the renderer
+  keeps `clip_count` (existing, incremented in `acquire_clip`) and `audio_count` (new,
+  incremented by transient fires). Mode `ClipEdge` (default) / `Transient` / `Both`
+  gates each increment **when the event happens**, not retroactively at read — so
+  switching mode live never jumps the effective count and never emits a phantom
+  trigger. Effective `trigger_count` = `clip_count + audio_count`.
+- **D2 — Config is per-instance, beside `audio_mods`.**
+  `PresetInstance.audio_trigger: Option<AudioTriggerMod>` where
+  `AudioTriggerMod { enabled, source: AudioModSource /* send + Transients×band */,
+  sensitivity: f32, mode: TriggerFireMode }`. Reuses `AudioModSource` (send-id
+  addressing survives relabel/re-patch); serde skip-none, old projects byte-identical.
+  It is the performance surface, saved with the show, and travels with the generator
+  instance like the `clip_trigger` toggle it sits beside.
+- **D3 — Fires are immediate.** No launch-quantize: a visual transient quantized to the
+  grid reads as latency on stage. Latency = detector latency + ≤1 content frame — same
+  as §1–§7 routes with quantize Off. (Clip-launch TriggerRoutes keep honoring the
+  project quantize mode; that behavior is correct for *launches* and unchanged.)
+- **D4 — Reuse the edge detector, refactored not copied.** Extract the sensitivity→
+  threshold mapping (already pure in `TriggerRoute::threshold`) into a shared helper in
+  `core::audio_trigger`, and the armed/re-arm hysteresis into a small pure
+  `TransientEdge` struct usable by both `LiveTriggerState` (keyed by send×band) and the
+  new param evaluator (keyed by instance). Runtime state, never serialized. Audit
+  finding: `LiveTriggerState::clear()` documents "call on transport stop" but has zero
+  call sites (BUG-051) — P1 wires BOTH edge-state holders into the transport-stop reset
+  rather than copying the omission.
+- **D5 — Effects ride `ParameterAudioMod`, trigger-aware.** When an audio mod's target
+  param `is_trigger`, evaluation switches from continuous overwrite
+  (`p.value = min + (max-min)*out_norm`) to edge detection: a runtime fire-counter on
+  the mod, `p.value = base + count`. Downstream `last_count` edge detection consumes it
+  unchanged. Mode is moot for effects (no clip edge exists — §8.1); the drawer hides
+  the mode row there.
+- **D6 — UI home: the audio drawer on the trigger card.** For generators, the "A"
+  drawer on the `clip_trigger` toggle card configures it: Dropdown(send) ·
+  Segmented(band: Whole/Low/Mid/High) · Slider(sensitivity) · Segmented(mode:
+  Clip/Audio/Both). The card is identified by an explicit `isTriggerGate` flag on the
+  outer-card ParamDef (one-line edit in each of the 11 presets), NOT by matching the id
+  string `"clip_trigger"` (`feedback_hidden_field_dependencies`). For effects,
+  `is_trigger` cards get the same drawer minus the mode row. All edits through
+  `EditingService` commands like every other audio-mod edit.
+
+Consequences, stated honestly:
+- Fires arrive at analysis-block rate on the content tick — a transient between blocks
+  lands on the next one. Identical to the shipped clip-trigger routes; nobody has felt
+  it, but Peter's L4 feel-pass on §1–§7 is still owed and covers both.
+- `Transient` mode silently ignores clip launches for that generator's trigger response.
+  That is the point, but it's a mode a user can forget — the drawer must show the mode
+  on the collapsed card row (the toggle card already shows its state).
+- A generator whose graph consumes `trigger_count` through custom override wiring gets
+  the summed count like any preset — but an override that *re-purposes* `trigger_count`
+  semantically (e.g. as a free counter) will see audio increments too. Accepted; the
+  count has always meant "times this layer was triggered".
+
+Rejected (do not re-propose):
+- **R1 — Fire a one-shot clip on the same layer** (works today via §1–§7 and does
+  increment `trigger_count`): churns clip state, interrupts the playing clip, and the
+  one-shot length is meaningless for a pulse. Clip routes stay for firing *clips*.
+- **R2 — Continuous audio mod on the `clip_trigger` toggle** (BoolThreshold flapping):
+  gates the response on/off instead of firing it; no refractory; wrong semantics.
+- **R3 — An audio-transient node inside the graph**: audio stays on the perform
+  surface, not graph nodes (`[[audio-stays-on-perform-surface]]`, §6).
+- **R4 — A routing table in the Audio Setup modal**: splits a param's audio config
+  across two surfaces; per-param drawers are where mod config lives (§10 of
+  AUDIO_MODULATION_DESIGN). The Audio Setup table stays clip-routing only.
+
+### 8.3 Architecture (by crate)
+
+```
+core      AudioTriggerMod + TriggerFireMode + shared threshold fn      NEW (serialized)
+core      TransientEdge (pure armed/re-arm hysteresis)                 NEW (runtime-only)
+core      ParamDef.is_trigger_gate flag (+ 11 preset JSON edits)       NEW
+playback  param-trigger arm in the audio-mod pass: generator fires →   NEW
+          per-layer pulse list; is_trigger mods → count-add semantics
+renderer  GeneratorRenderer: audio_count per layer; mode gate in       EXTEND
+          acquire_clip; effective count = clip_count + audio_count
+editing   SetAudioTriggerModCommand (mirrors audio-mod commands)       NEW
+ui        drawer rows on trigger cards (DrawerSpec — §10.2 of          NEW (small)
+          AUDIO_MODULATION_DESIGN did the hard part)
+app       PanelAction + dispatch + state_sync card view                WIRE
+```
+
+### 8.4 Phase checklist (tick + commit as you go)
+
+- [ ] **P1 — Core model + engine evaluation.** `AudioTriggerMod`/`TriggerFireMode`;
+      `audio_trigger` on `PresetInstance` (skip-none, serde round-trip test);
+      `TransientEdge` extracted and `LiveTriggerState` re-based on it (its 5 tests stay
+      green — the refactor proof); trigger-aware arm in `evaluate_instance_audio_mods`
+      for `is_trigger` targets; generator fires surfaced from the modulation pass as a
+      per-layer pulse list. Gate: focused core+playback tests, clippy.
+- [ ] **P2 — Renderer seam + vertical proof.** `audio_count` on layer generator state;
+      mode gate at both increment sites; pulse list plumbed content-pipeline → renderer.
+      Gate: a renderer test driving pulses into a trigger-consuming graph asserts the
+      effective count; then the real proof — app run, stem playing, transient visibly
+      fires a playing FluidSim burst (this design's whole point; do not skip the look).
+- [ ] **P3 — UI.** `is_trigger_gate` flag + 11 preset edits (`check-presets` after JSON
+      edits); drawer spec on trigger cards (send/band/sensitivity/mode); command +
+      dispatch + state_sync; collapsed-row mode indicator. Gate: ui tests + clippy +
+      manual drawer pass.
+- [ ] **P4 — Ship.** Workspace gate, docs §0/§8 status flip, memory updated, landed per
+      the git landing protocol. Peter's feel-pass (L4) explicitly owed and logged.

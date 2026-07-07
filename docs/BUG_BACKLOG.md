@@ -49,6 +49,7 @@ or human can read it, and it needs no external tool.
 | BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
 | BUG-033 | **ui-snapshot-broken** | FIXED — verified in-tree 2026-07-07 (harness builds + runs) |
 | BUG-050 | **ableton-anchor-yankback** | play-from-cursor snap-backs; anchor fix landed, rig confirmation owed via [ABL-SYNC] logs (HIGH) |
+| BUG-051 | **trigger-clear-unwired** | `LiveTriggerState::clear()` documents "call on transport stop / project reset" but has zero call sites (LOW) |
 | BUG-048 | **arm-two-reds** | ARM idle/armed both red, shade-only difference (LOW, UX call) |
 | BUG-049 | **child-row-right-indent** | group-child right-anchored controls misaligned ~20px (LOW) |
 | BUG-012 | **tex-rename-corrupt** | fragment `tex_` port-rename corrupts `tex_*` scalars (LOW) |
@@ -59,6 +60,19 @@ or human can read it, and it needs no external tool.
 | BUG-019 / 020 / 021 | deferred | group-fold gap · gen-card collapse · snap-back gap |
 
 ## Open
+
+### BUG-051 (trigger-clear-unwired) — `LiveTriggerState::clear()` never called; armed flags survive transport stop — LOW
+
+**Found 2026-07-07 during the §8 param-triggers design audit (LIVE_AUDIO_TRIGGERS_DESIGN.md).**
+The method's own doc says "call on transport stop / project reset so a stale 'fired, not
+yet re-armed' flag can't suppress the first onset next time" (`live_trigger.rs:94-98`), but
+the engine's only use of `live_trigger_state` is `.evaluate` in `tick_audio_triggers`
+(`engine.rs:1592`) — `clear()` has zero call sites. Narrow in practice: flags re-arm on the
+next evaluate once the impulse decays, so the stale flag only suppresses an onset if
+transport stops during an impulse plateau and restarts while the same band is still hot.
+**Fix shape:** call `clear()` from the transport-stop path (wherever live one-shots are
+already expired/stopped), and wire the future param-trigger edge state (§8 D4's
+`TransientEdge` holders) into the same reset point. Fold into §8 P1 if that ships first.
 
 ### BUG-050 (ableton-anchor-yankback) — Play-from-cursor: Ableton repeatedly snaps back to the gesture beat, then MANIFOLD clock-dragged after retries exhaust — HIGH (live transport; partial fix landed 2026-07-07, rig confirmation owed)
 
