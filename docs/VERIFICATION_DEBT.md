@@ -35,8 +35,19 @@ unchanged. The runtime pointer→command→redraw automation-editing core **work
 but not visibly working" Peter hit is downstream of this core — live-app rendering/visibility or
 a live-only wiring the headless overlay path bypasses. **L4 (Peter watching a lane edit take
 effect in the running app) remains the target** and is where the real symptom must be triaged.
+**07-07 update (timeline-ux audit):** the LANES transport toggle is also proven headless
+end-to-end through the REAL `ui_bridge::dispatch` (`scripts/ui-flows/toggle-lanes.json` —
+strips off/on, asserts + PNGs), and the in-app symptom is root-caused as an EXPOSURE gap, not
+a wiring break: no UI path creates a first lane (AUTOMATION_LANES §7 chooser unbuilt), so
+LANES on a lane-less project visibly does nothing. See `docs/TIMELINE_UX_AUDIT_2026-07-07.md`
+§1. Peter's L4 residue narrows to: confirm LANES lights live + ARM-record a first lane.
 
-### VD-002 — Preset library + picker P0–P6: interactive GUI matrix — L2 reached / L3 target — **BLOCKED on driver reach**
+### VD-002 — Preset library + picker P0–P6: interactive GUI matrix — L2 reached / L3 target — **driver-reach blocker REMOVED 2026-07-07**
+**07-07 update:** option (c) below shipped on `fix/timeline-ux-pass` — the `--script` driver
+now routes every `PanelAction` through the real `ui_bridge::dispatch` (`UserPrefs::in_memory()`
+preserves D7 determinism), so open-picker dispatch is headless-reachable. Remaining burn-down:
+author the four picker flows as `--script` JSONs; search-text steps stay excluded until
+`AutomationAction::Text` gets a headless seam.
 Landed 2026-07-04/05 (last `4c860cad`). Drag-drop, search-clear, the management
 matrix, and thumbnail display are physically unautomatable headless today.
 **Correction 2026-07-05 (Opus): NOT runnable at L3 via the current P2 `--script` driver.**

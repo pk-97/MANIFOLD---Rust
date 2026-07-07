@@ -24,7 +24,11 @@ pub struct SceneData {
 }
 
 /// Resolve a scene name to its fixture. Returns `None` for unknown names.
+/// `project:<path>` is not a fixed name but a syntax — see [`project_scene`].
 pub fn build(scene: &str) -> Option<SceneData> {
+    if let Some(path) = scene.strip_prefix("project:") {
+        return project_scene(path);
+    }
     match scene {
         "timeline" => Some(timeline_scene()),
         "states" => Some(states_scene()),
@@ -34,8 +38,42 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "automation" => Some(automation_scene()),
         "selectionclips" => Some(selection_clips_scene()),
         "audiosends" => Some(audio_sends_scene()),
+        "empty" => Some(empty_scene()),
         _ => None,
     }
+}
+
+/// Zero-layer scene: what a user sees on File → New before doing anything.
+/// Exists so the UX audit can look at the empty state itself (what, if any,
+/// affordance points at creating the first layer).
+fn empty_scene() -> SceneData {
+    let project = Project::default();
+    SceneData { project, content: ContentState::default(), active: None, selection: UIState::default() }
+}
+
+/// Real-project scene (`project:<abs-or-relative-path>`): loads an actual
+/// `.manifold` file through the SAME path the live app uses
+/// (`ProjectIOService::open_project_from_path`) — `load_project_with` plus the
+/// pre-deserialize embedded-preset hook, so project-local forked presets
+/// resolve their params exactly as the app would show them (BUG-036). Missing
+/// media does not fail the load: `run_post_load_validation` only logs
+/// (`manifold-io/src/loader.rs`'s step 6), so real projects with unreachable
+/// source files still render — no special-casing needed here. Default
+/// selection/active, same as a freshly opened project before the user clicks
+/// anything.
+fn project_scene(path: &str) -> Option<SceneData> {
+    let load_result = manifold_io::loader::load_project_with(
+        std::path::Path::new(path),
+        crate::project_io::install_embedded_presets,
+    );
+    let project = match load_result {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("ui-snap: failed to load project '{path}': {e}");
+            return None;
+        }
+    };
+    Some(SceneData { project, content: ContentState::default(), active: None, selection: UIState::default() })
 }
 
 /// A fully-initialized effect-kind `PresetInstance` of `type_id`, params seeded

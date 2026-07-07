@@ -31,6 +31,14 @@ fn out_dir(scene: &str) -> PathBuf {
     PathBuf::from("target/ui-snapshots").join(scene)
 }
 
+/// A scene name safe to use as a single path component. Only `project:<path>`
+/// scenes need this (the path half contains `/`); every built-in scene name is
+/// already a bare identifier, so this is a no-op for them and their output
+/// paths stay byte-identical.
+fn sanitize_scene_name(scene: &str) -> String {
+    scene.chars().map(|c| if c == '/' || c == ':' || c == ' ' { '_' } else { c }).collect()
+}
+
 /// Entry dispatched from `main()` when `argv[1] == "ui-snap"`. `args` is the
 /// argument slice starting at `"ui-snap"`.
 pub fn run(args: &[String]) {
@@ -124,13 +132,20 @@ fn render_ui_scene(
 ) {
     let Some(mut data) = fixtures::build(scene) else {
         eprintln!(
-            "ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, scrollshrink, hairlineclips, automation, selectionclips, audiosends, graph, editor, transform, all)"
+            "ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, scrollshrink, hairlineclips, automation, selectionclips, audiosends, empty, graph, editor, transform, all, project:<path>)"
         );
         std::process::exit(2);
     };
 
     let zoom_ppb: f32 = zoom_ppb_for_scene(scene);
 
+    // `scene` itself becomes the output dir name and every dumped file's stem
+    // below; a `project:<path>` scene carries `/`/`:`/` ` that would otherwise
+    // land as extra directories (or, if the path is absolute, silently replace
+    // `dir` entirely — `Path::join` drops the base on an absolute join). Every
+    // built-in scene name is untouched by sanitization, so their output paths
+    // stay byte-identical.
+    let scene = &sanitize_scene_name(scene);
     let dir = out_dir(scene);
     std::fs::create_dir_all(&dir).expect("create ui-snapshots dir");
 
@@ -149,6 +164,31 @@ fn render_ui_scene(
         ui.layout.timeline_split_ratio = 0.93;
     }
     sync_build(&mut ui, &data, zoom_ppb);
+
+    // P0.1: the viewport is the sole scroll owner (D2) — the header panel
+    // reads `viewport.scroll_y_px()` live at draw time, so seeding it here is
+    // the only seed needed (mirrors `ui_root.rs`'s settings-restore path).
+    // Before P0.1 this seeded two independent copies to reproduce RC1 ("user
+    // scrolled, then the content shrank"); post-fix, `rebuild_mapper_layout`
+    // (called from `sync_project_data` inside the `--interact` branch below)
+    // re-clamps this same value against the new content height every time
+    // (D3), so RC1 no longer reproduces — see
+    // `docs/evidence/timeline_p0/after/README.md`.
+    // Seeded BEFORE the base render (fixed 2026-07-07): it used to apply
+    // after, so a bare `--scroll` run wrote an unscrolled base PNG while
+    // printing the seed message — the seed only ever showed in an
+    // `--interact` after-render. The re-sync after seeding is load-bearing:
+    // the header column bakes its Y offsets at BUILD time (only the lane
+    // pass reads `scroll_y_px()` at draw), so rendering without a re-sync
+    // draws scrolled lanes under unscrolled headers — a desync the live app
+    // can't produce (it rebuilds every frame a scroll event dirties).
+    if let Some(y) = scroll_seed {
+        let x = ui.viewport.scroll_x_beats().as_f32();
+        ui.viewport.set_scroll(x, y);
+        println!("ui-snap: scroll-seed y={y} (viewport clamped to {})", ui.viewport.scroll_y_px());
+        sync_build(&mut ui, &data, zoom_ppb);
+    }
+
     render_and_dump(
         &ui,
         &data.selection,
@@ -160,21 +200,6 @@ fn render_ui_scene(
         want_thumbs,
     );
 
-    // P0.1: the viewport is the sole scroll owner (D2) — the header panel
-    // reads `viewport.scroll_y_px()` live at draw time, so seeding it here is
-    // the only seed needed (mirrors `ui_root.rs`'s settings-restore path).
-    // Before P0.1 this seeded two independent copies to reproduce RC1 ("user
-    // scrolled, then the content shrank"); post-fix, `rebuild_mapper_layout`
-    // (called from `sync_project_data` inside the `--interact` branch below)
-    // re-clamps this same value against the new content height every time
-    // (D3), so RC1 no longer reproduces — see
-    // `docs/evidence/timeline_p0/after/README.md`.
-    if let Some(y) = scroll_seed {
-        let x = ui.viewport.scroll_x_beats().as_f32();
-        ui.viewport.set_scroll(x, y);
-        println!("ui-snap: scroll-seed y={y} (viewport clamped to {})", ui.viewport.scroll_y_px());
-    }
-
     // Optional: render the HTML mockup and composite app | mockup side by side.
     if want_vs_mockup {
         compare::vs_mockup(&dir, scene, &dir.join(format!("{scene}.png")));
@@ -182,14 +207,16 @@ fn render_ui_scene(
 
     // Optional interaction: drive a real event, re-sync, render the "after".
     if let Some(spec) = interact {
-        let desc = interact::apply(&mut ui, &mut data, &spec);
+        let outcome = interact::apply(&mut ui, &mut data, &spec);
+        let desc = outcome.desc;
         println!("ui-snap: interact {desc}");
-        // D6 (§6 seam brief): a synthesized-click miss is no longer patched
-        // over — `select:`'s sugar (`interact::select_layer`) reports it as
-        // "MISS: ..." instead of falling back to an id match. Fail loudly
-        // with the dump attached as evidence rather than rendering an
-        // "after" that never actually happened.
-        if desc.contains("MISS: ") {
+        // D6 (§6 seam brief): a miss is not patched over — the outcome's
+        // STRUCTURAL flag (set by every verb's Err path) fails the run
+        // loudly with the dump attached, rather than rendering an "after"
+        // that never actually happened. (Was a `contains("MISS: ")` grep
+        // that no verb's text matched — every miss exited 0 until
+        // 2026-07-07.)
+        if outcome.missed {
             sync_build(&mut ui, &data, zoom_ppb);
             let fail_path = dir.join(format!("{scene}.interact-miss.tree.json"));
             script::write_fail_dump(&ui, &data, &fail_path);

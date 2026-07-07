@@ -23,13 +23,13 @@
 //! `SceneData.project`, which is what the re-dump reads. No live content
 //! thread is needed for the real drag path to run headlessly.
 //!
-//! Generic widget clicks apply only the one `PanelAction` arm this driver's
-//! two proving scripts exercise (`LayerClicked`, mirrored from
-//! `ui_bridge/layer.rs`'s exact logic) rather than the full `ui_bridge::
-//! dispatch` — that function needs `UserPrefs::load()` (real disk I/O),
-//! which would make a "headless, deterministic, same run -> same pixels"
-//! script driver (D7) depend on the host machine's prefs file. Other
-//! `PanelAction`s are logged, not silently swallowed.
+//! Generic widget clicks route through the full, REAL `ui_bridge::dispatch`
+//! against driver-owned scratch state (see `Runner`'s snapshot fields).
+//! Determinism (D7) holds because prefs are `UserPrefs::in_memory()` —
+//! empty, host-independent, never the user's file. (Pre-2026-07-07 this
+//! driver mirrored a single `LayerClicked` arm and logged everything else
+//! unapplied, which made every transport/inspector action invisible to
+//! headless verification — the seam the dead-LANES investigation exposed.)
 
 use std::path::PathBuf;
 
@@ -163,6 +163,20 @@ struct Runner {
     pre_drag_commands: Vec<Box<dyn Command>>,
     clock: f32,
     modifiers: manifold_ui::input::Modifiers,
+    // Scratch state `ui_bridge::dispatch` threads through the live
+    // `Application` — owned here so panel actions run the REAL bridge
+    // headlessly (drag snapshots stay None between atomic gestures; prefs
+    // are in-memory, never the user's file — D7 determinism holds).
+    user_prefs: crate::user_prefs::UserPrefs,
+    slider_snapshot: Option<f32>,
+    trim_snapshot: Option<(f32, f32)>,
+    target_snapshot: Option<f32>,
+    decay_snapshot: Option<f32>,
+    audio_shape_snapshot: Option<manifold_core::audio_mod::AudioModShape>,
+    audio_crossover_snapshot: Option<(f32, f32)>,
+    audio_send_gain_drag_snapshot: Option<f32>,
+    audio_send_sensitivity_drag_snapshot: Option<Vec<manifold_core::audio_trigger::TriggerRoute>>,
+    active_inspector_drag: Option<crate::app::ActiveInspectorDrag>,
 }
 
 impl Runner {
@@ -182,6 +196,16 @@ impl Runner {
             pre_drag_commands: Vec::new(),
             clock: 0.0,
             modifiers: manifold_ui::input::Modifiers::NONE,
+            user_prefs: crate::user_prefs::UserPrefs::in_memory(),
+            slider_snapshot: None,
+            trim_snapshot: None,
+            target_snapshot: None,
+            decay_snapshot: None,
+            audio_shape_snapshot: None,
+            audio_crossover_snapshot: None,
+            audio_send_gain_drag_snapshot: None,
+            audio_send_sensitivity_drag_snapshot: None,
+            active_inspector_drag: None,
         }
     }
 
@@ -232,7 +256,10 @@ impl Runner {
                 self.modifiers = *modifiers;
                 ui.input.set_modifiers(*modifiers);
                 ui.key_event(*key, *modifiers);
-                let _ = ui.process_events();
+                // Was `let _ = ui.process_events()` — key-triggered panel
+                // actions were resolved and then dropped on the floor (the
+                // same dormant seam as the pre-2026-07-07 apply_panel_actions).
+                self.drain_and_dispatch(ui, data);
                 self.rebuild(ui, data, zoom_ppb);
                 StepResult {
                     index,
@@ -443,38 +470,50 @@ impl Runner {
         let _ = host.pending_actions; // context-menu actions: no proving script needs these yet
     }
 
-    /// Apply the one `PanelAction` arm the two proving scripts exercise —
-    /// see the module doc for why this isn't the full `ui_bridge::dispatch`.
+    /// Route every `PanelAction` through the REAL `ui_bridge::dispatch` —
+    /// the same bridge the live app's action loop calls (`app_render.rs`'s
+    /// dispatch site), against driver-owned scratch state. The original
+    /// driver mirrored a single `LayerClicked` arm here and logged the rest
+    /// unapplied; that made the driver blind to every transport/inspector
+    /// action (found 2026-07-07 chasing the "dead LANES button" — the click
+    /// resolved, then evaporated in this exact function). The stated reason
+    /// (dispatch needs `UserPrefs::load()` disk I/O, breaking D7 determinism)
+    /// dissolves with `UserPrefs::in_memory()`: empty prefs, deterministic on
+    /// any host, `save()` diverted to the temp dir.
     fn apply_panel_actions(&mut self, ui: &mut UIRoot, data: &mut SceneData, actions: &[PanelAction]) {
         for action in actions {
-            match action {
-                PanelAction::LayerClicked(id, modifiers) => {
-                    let Some((idx, layer_id)) = data
-                        .project
-                        .timeline
-                        .find_layer_by_id(id)
-                        .map(|(i, l)| (i, l.layer_id.clone()))
-                    else {
-                        continue;
-                    };
-                    data.active = Some(idx);
-                    self.active_layer = Some(layer_id.clone());
-                    ui.inspector.clear_effect_selection(&mut ui.tree);
-                    if modifiers.shift {
-                        let ui_layers = crate::ui_translate::layers_to_ui(&data.project.timeline.layers);
-                        data.selection.select_layer_range(&layer_id, &ui_layers);
-                    } else if modifiers.ctrl || modifiers.command {
-                        data.selection.toggle_layer_selection(layer_id);
-                    } else {
-                        data.selection.select_layer(layer_id);
-                    }
-                }
-                _ => {
-                    // Not silently dropped: visible in stdout evidence, just
-                    // not applied to `data` — this driver's bridge coverage
-                    // is intentionally scoped to what its scripts exercise.
-                    println!("ui-snap --script: note — unhandled PanelAction {action:?}");
-                }
+            let result = crate::ui_bridge::dispatch(
+                action,
+                &mut data.project,
+                &self.content_tx,
+                &self.content_state,
+                ui,
+                &mut data.selection,
+                &mut self.active_layer,
+                &mut self.slider_snapshot,
+                &mut self.trim_snapshot,
+                &mut self.target_snapshot,
+                &mut self.decay_snapshot,
+                &mut self.audio_shape_snapshot,
+                &mut self.audio_crossover_snapshot,
+                &mut self.audio_send_gain_drag_snapshot,
+                &mut self.audio_send_sensitivity_drag_snapshot,
+                &mut self.user_prefs,
+                &mut self.active_inspector_drag,
+                None,
+            );
+            println!("ui-snap --script: dispatched {action:?} (structural={})", result.structural_change);
+            if result.structural_change {
+                self.needs_structural_sync = true;
+            }
+            // The fixture's active-layer INDEX feeds `sync_build`'s inspector
+            // sync; derive it from the id the real bridge maintains (the old
+            // mirrored arm set it directly).
+            if let PanelAction::LayerClicked(..) = action {
+                data.active = self
+                    .active_layer
+                    .as_ref()
+                    .and_then(|lid| data.project.timeline.find_layer_by_id(lid).map(|(i, _)| i));
             }
         }
     }

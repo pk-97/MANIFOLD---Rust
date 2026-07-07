@@ -15,58 +15,91 @@ use manifold_core::{Beats, ClipId, LayerId};
 use super::fixtures::SceneData;
 use crate::ui_root::UIRoot;
 
+/// Outcome of an `--interact` spec: the stdout evidence line plus a
+/// STRUCTURAL miss flag. The flag exists because the previous contract —
+/// caller greps the description for a "MISS: " prefix — was dead code: no
+/// verb emitted that exact string (the one that tried used "MISS —"), so
+/// every miss exited 0 and rendered an "after" PNG of an interaction that
+/// never happened (found 2026-07-07: `select:EXPANDED` miss exited 0).
+pub struct InteractOutcome {
+    pub desc: String,
+    pub missed: bool,
+}
+
 /// Apply one interaction spec. Specs may be chained with `;` — each part is
 /// applied in sequence against the same `data`/`ui` (e.g. a click then a
 /// shift-click to build a multi-clip selection in one `--interact` string;
 /// the CLI only threads one `--interact` value per process, so chaining
 /// within the string is how a multi-gesture "before" scene gets built).
 /// Mutates `data`'s selection/project so the caller can re-sync + re-render.
-/// Returns a description of what happened (for stdout evidence).
-pub fn apply(ui: &mut UIRoot, data: &mut SceneData, spec: &str) -> String {
-    if spec.contains(';') {
-        return spec
-            .split(';')
-            .map(|part| apply_one(ui, data, part.trim()))
-            .collect::<Vec<_>>()
-            .join(" | ");
+pub fn apply(ui: &mut UIRoot, data: &mut SceneData, spec: &str) -> InteractOutcome {
+    let mut descs = Vec::new();
+    let mut missed = false;
+    for part in spec.split(';') {
+        let outcome = apply_one(ui, data, part.trim());
+        missed |= outcome.missed;
+        descs.push(outcome.desc);
     }
-    apply_one(ui, data, spec)
+    InteractOutcome { desc: descs.join(" | "), missed }
 }
 
-fn apply_one(ui: &mut UIRoot, data: &mut SceneData, spec: &str) -> String {
+/// A verb's miss (target not found / input path didn't resolve). Every miss
+/// path funnels through here so the flag can never drift from the text.
+fn miss(desc: String) -> InteractOutcome {
+    InteractOutcome { desc, missed: true }
+}
+
+fn hit(desc: String) -> InteractOutcome {
+    InteractOutcome { desc, missed: false }
+}
+
+/// Map a verb's `Result` (Ok = applied, Err = target/args didn't resolve)
+/// into the outcome the CLI branches on.
+fn res(r: Result<String, String>) -> InteractOutcome {
+    match r {
+        Ok(desc) => hit(desc),
+        Err(desc) => miss(desc),
+    }
+}
+
+fn apply_one(ui: &mut UIRoot, data: &mut SceneData, spec: &str) -> InteractOutcome {
+    // A verb's returned description marks a miss when its target didn't
+    // resolve; the match below classifies structurally (miss()/hit()), so
+    // the caller never string-greps. Verbs whose desc starts with a
+    // "<verb>: no ..." / MISS text return via miss().
     match spec.split_once(':') {
-        Some(("select", target)) => select_layer(ui, data, target),
-        Some(("collapse", target)) => collapse_layer(data, target),
-        Some(("collapse_effect", target)) => collapse_effect(ui, data, target),
-        Some(("delete", target)) => delete_layer(data, target),
+        Some(("select", target)) => res(select_layer(ui, data, target)),
+        Some(("collapse", target)) => res(collapse_layer(data, target)),
+        Some(("collapse_effect", target)) => res(collapse_effect(ui, data, target)),
+        Some(("delete", target)) => res(delete_layer(data, target)),
         Some(("open", "settings")) => {
             ui.settings_popup.open();
-            "open -> settings popup".to_string()
+            hit("open -> settings popup".to_string())
         }
         Some(("open", "audio_setup")) => {
             ui.audio_setup_panel.open();
-            "open -> audio setup panel".to_string()
+            hit("open -> audio setup panel".to_string())
         }
-        Some(("automation_add", rest)) => automation_add_point(data, rest),
-        Some(("automation_move", rest)) => automation_move_point(data, rest),
-        Some(("automation_bend", rest)) => automation_bend_segment(data, rest),
-        Some(("automation_segment_drag", rest)) => automation_segment_drag(data, rest),
-        Some(("automation_group_move", rest)) => automation_group_move(data, rest),
-        Some(("automation_group_delete", rest)) => automation_group_delete(data, rest),
-        Some(("click_clip", rest)) => click_clip(data, rest),
-        Some(("shift_click_clip", rest)) => shift_click_clip(data, rest),
-        Some(("cmd_click_clip", rest)) => cmd_click_clip(data, rest),
-        Some(("cmd_d", _)) => duplicate_selected_clips(data),
-        Some(("drag_clip_toward_zero", rest)) => drag_clip_toward_zero(data, rest),
-        Some(("drag_readout", rest)) => drag_readout(ui, data, rest),
-        Some((verb, _)) => format!(
+        Some(("automation_add", rest)) => res(automation_add_point(data, rest)),
+        Some(("automation_move", rest)) => res(automation_move_point(data, rest)),
+        Some(("automation_bend", rest)) => res(automation_bend_segment(data, rest)),
+        Some(("automation_segment_drag", rest)) => res(automation_segment_drag(data, rest)),
+        Some(("automation_group_move", rest)) => res(automation_group_move(data, rest)),
+        Some(("automation_group_delete", rest)) => res(automation_group_delete(data, rest)),
+        Some(("click_clip", rest)) => res(click_clip(data, rest)),
+        Some(("shift_click_clip", rest)) => res(shift_click_clip(data, rest)),
+        Some(("cmd_click_clip", rest)) => res(cmd_click_clip(data, rest)),
+        Some(("cmd_d", _)) => res(duplicate_selected_clips(data)),
+        Some(("drag_clip_toward_zero", rest)) => res(drag_clip_toward_zero(data, rest)),
+        Some(("drag_readout", rest)) => res(drag_readout(ui, data, rest)),
+        Some((verb, _)) => miss(format!(
             "unknown interact verb '{verb}' (known: select, collapse, collapse_effect, delete, \
              open, automation_add, automation_move, automation_bend, automation_segment_drag, \
              automation_group_move, automation_group_delete, click_clip, shift_click_clip, \
              cmd_click_clip, cmd_d, drag_clip_toward_zero, drag_readout)"
-        ),
-        None if spec == "cmd_d" => duplicate_selected_clips(data),
-        None => format!("malformed interact '{spec}' (want verb:target)"),
+        )),
+        None if spec == "cmd_d" => res(duplicate_selected_clips(data)),
+        None => miss(format!("malformed interact '{spec}' (want verb:target)")),
     }
 }
 
@@ -76,13 +109,13 @@ fn apply_one(ui: &mut UIRoot, data: &mut SceneData, spec: &str) -> String {
 /// `PanelAction::ClipClicked` plain-click arm does (`editing.rs:60`). Selects
 /// one clip and clears any region — the anchor for a subsequent
 /// `shift_click_clip`/`cmd_click_clip` in a chained spec.
-fn click_clip(data: &mut SceneData, rest: &str) -> String {
+fn click_clip(data: &mut SceneData, rest: &str) -> Result<String, String> {
     let Some((clip_id, layer_id)) = rest.split_once(':') else {
-        return format!("click_clip: want clip_id:layer_id, got '{rest}'");
+        return Err(format!("click_clip: want clip_id:layer_id, got '{rest}'"));
     };
     data.selection
         .select_clip(ClipId::new(clip_id), LayerId::new(layer_id));
-    format!("click_clip -> '{clip_id}' on '{layer_id}' (selection cleared, this clip selected)")
+    Ok(format!("click_clip -> '{clip_id}' on '{layer_id}' (selection cleared, this clip selected)"))
 }
 
 /// `shift_click_clip:<clip_id>:<layer_id>` drives the clip-click shift path —
@@ -93,21 +126,21 @@ fn click_clip(data: &mut SceneData, rest: &str) -> String {
 /// (a REGION) — S1/S3's root; it now drives the clip-RANGE selection D2
 /// mandates, so the after-PNG shows the fixed chrome (per-clip highlight
 /// across the range, no region band).
-fn shift_click_clip(data: &mut SceneData, rest: &str) -> String {
+fn shift_click_clip(data: &mut SceneData, rest: &str) -> Result<String, String> {
     // `layer_id` isn't used — the clip-range gesture looks up the anchor's
     // and target's own layer/position internally; kept in the spec only for
     // symmetry with `click_clip`/`cmd_click_clip`.
     let Some((clip_id, _layer_id)) = rest.split_once(':') else {
-        return format!("shift_click_clip: want clip_id:layer_id, got '{rest}'");
+        return Err(format!("shift_click_clip: want clip_id:layer_id, got '{rest}'"));
     };
     let cid = ClipId::new(clip_id);
     crate::ui_bridge::select_clip_range_to_with_project(&cid, &mut data.selection, &data.project);
-    format!(
+    Ok(format!(
         "shift_click_clip -> range extended to '{clip_id}' \
          (selected_clip_ids={:?}, has_region={})",
         data.selection.get_selected_clip_ids(),
         data.selection.has_region(),
-    )
+    ))
 }
 
 /// Cmd/ctrl-click path — mirrors `ui_bridge/editing.rs`'s `PanelAction::
@@ -116,17 +149,17 @@ fn shift_click_clip(data: &mut SceneData, rest: &str) -> String {
 /// `update_region_from_clip_selection_inline` sync is deleted), so a multi-clip
 /// selection produces a `Clips` selection with no region band — the S1 collapse
 /// this verb now exercises.
-fn cmd_click_clip(data: &mut SceneData, rest: &str) -> String {
+fn cmd_click_clip(data: &mut SceneData, rest: &str) -> Result<String, String> {
     let Some((clip_id, layer_id)) = rest.split_once(':') else {
-        return format!("cmd_click_clip: want clip_id:layer_id, got '{rest}'");
+        return Err(format!("cmd_click_clip: want clip_id:layer_id, got '{rest}'"));
     };
     data.selection
         .toggle_clip_selection(ClipId::new(clip_id), LayerId::new(layer_id));
-    format!(
+    Ok(format!(
         "cmd_click_clip -> toggled '{clip_id}'; selected_clip_ids={:?} has_region={}",
         data.selection.get_selected_clip_ids(),
         data.selection.has_region(),
-    )
+    ))
 }
 
 /// P1.0 evidence-gathering verb: `cmd_d` (no argument) reproduces today's
@@ -140,7 +173,7 @@ fn cmd_click_clip(data: &mut SceneData, rest: &str) -> String {
 /// (D3): if a preceding `shift_click_clip` left `region.is_active` true, this
 /// takes the REGION-duration offset branch even though 4 *specific* clips
 /// were the intent — the "gap after the originals" symptom.
-fn duplicate_selected_clips(data: &mut SceneData) -> String {
+fn duplicate_selected_clips(data: &mut SceneData) -> Result<String, String> {
     let clip_ids = data.selection.get_selected_clip_ids();
     let region = data.selection.current_region().cloned().unwrap_or_default();
     let used_region_mode = region.is_active;
@@ -162,9 +195,9 @@ fn duplicate_selected_clips(data: &mut SceneData) -> String {
         spb,
     );
     if commands.is_empty() {
-        return format!(
+        return Err(format!(
             "cmd_d: no-op — 0 commands (selected_clip_ids={clip_ids:?}, region.is_active={used_region_mode})"
-        );
+        ));
     }
     for c in commands.iter_mut() {
         c.execute(&mut data.project);
@@ -180,12 +213,12 @@ fn duplicate_selected_clips(data: &mut SceneData) -> String {
 
     data.selection.select_clips(new_ids.clone());
 
-    format!(
+    Ok(format!(
         "cmd_d -> mode={} ({} commands) before_ids={} new_ids={new_ids:?}",
         if used_region_mode { "REGION" } else { "individual" },
         commands.len(),
         before_ids.len(),
-    )
+    ))
 }
 
 /// P1.4 evidence verb (D5/D7, `docs/TIMELINE_INTERACTION_P1_SPEC.md`, S2):
@@ -201,23 +234,23 @@ fn duplicate_selected_clips(data: &mut SceneData) -> String {
 /// committed RESULT (a clip legitimately sitting at beat 0) so the PNG
 /// proves D7's structural claim: the clip paints inside the tracks area,
 /// never over the header column, regardless of how it got to beat 0.
-fn drag_clip_toward_zero(data: &mut SceneData, rest: &str) -> String {
+fn drag_clip_toward_zero(data: &mut SceneData, rest: &str) -> Result<String, String> {
     let Some((clip_id, layer_id)) = rest.split_once(':') else {
-        return format!("drag_clip_toward_zero: want clip_id:layer_id, got '{rest}'");
+        return Err(format!("drag_clip_toward_zero: want clip_id:layer_id, got '{rest}'"));
     };
     let Some(layer) = data.project.timeline.layers.iter_mut().find(|l| l.layer_id == layer_id)
     else {
-        return format!("drag_clip_toward_zero: no layer '{layer_id}'");
+        return Err(format!("drag_clip_toward_zero: no layer '{layer_id}'"));
     };
     let Some(clip) = layer.clips.iter_mut().find(|c| c.id.as_str() == clip_id) else {
-        return format!("drag_clip_toward_zero: no clip '{clip_id}' on layer '{layer_id}'");
+        return Err(format!("drag_clip_toward_zero: no clip '{clip_id}' on layer '{layer_id}'"));
     };
     let requested = Beats(-40.0); // deeply negative — the drag-toward-zero repro
     clip.start_beat = requested.max(Beats::ZERO);
-    format!(
+    Ok(format!(
         "drag_clip_toward_zero -> '{clip_id}' requested_beat={:.1} clamped_start_beat={:.3}",
         requested.0, clip.start_beat.0
-    )
+    ))
 }
 
 /// P1.5 evidence verb (B13, `docs/TIMELINE_INTERACTION_P1_SPEC.md`, S5):
@@ -233,12 +266,12 @@ fn drag_clip_toward_zero(data: &mut SceneData, rest: &str) -> String {
 /// (not a clip id) because fixture clip ids are freshly minted UUIDs at
 /// build time (`TimelineClip::default()` calls `short_id()`), not stable
 /// literals a CLI arg could name.
-fn drag_readout(ui: &mut UIRoot, data: &mut SceneData, rest: &str) -> String {
+fn drag_readout(ui: &mut UIRoot, data: &mut SceneData, rest: &str) -> Result<String, String> {
     let parts: Vec<&str> = rest.splitn(4, ':').collect();
     let [layer_id, idx_str, position_str, duration_str] = parts.as_slice() else {
-        return format!(
+        return Err(format!(
             "drag_readout: want layer_id:clip_index:position_beat:duration_beat, got '{rest}'"
-        );
+        ));
     };
     let Some(layer_index) = data
         .project
@@ -247,29 +280,29 @@ fn drag_readout(ui: &mut UIRoot, data: &mut SceneData, rest: &str) -> String {
         .iter()
         .position(|l| l.layer_id == *layer_id)
     else {
-        return format!("drag_readout: no layer '{layer_id}'");
+        return Err(format!("drag_readout: no layer '{layer_id}'"));
     };
     let Ok(clip_index) = idx_str.parse::<usize>() else {
-        return format!("drag_readout: bad clip_index '{idx_str}'");
+        return Err(format!("drag_readout: bad clip_index '{idx_str}'"));
     };
     if data.project.timeline.layers[layer_index].clips.get(clip_index).is_none() {
-        return format!(
+        return Err(format!(
             "drag_readout: no clip at index {clip_index} on layer '{layer_id}' ({} clips)",
             data.project.timeline.layers[layer_index].clips.len()
-        );
+        ));
     }
     let Ok(position) = position_str.parse::<f64>() else {
-        return format!("drag_readout: bad position_beat '{position_str}'");
+        return Err(format!("drag_readout: bad position_beat '{position_str}'"));
     };
     let Ok(duration) = duration_str.parse::<f64>() else {
-        return format!("drag_readout: bad duration_beat '{duration_str}'");
+        return Err(format!("drag_readout: bad duration_beat '{duration_str}'"));
     };
     ui.viewport
         .set_drag_readout(Some((Beats(position), Beats(duration), layer_index)));
-    format!(
+    Ok(format!(
         "drag_readout -> layer '{layer_id}' (index {layer_index}) clip[{clip_index}] \
          position={position:.3} duration={duration:.3}"
-    )
+    ))
 }
 
 /// P4 Unit A evidence-gathering verb (`docs/AUTOMATION_LANES_DESIGN.md` §7):
@@ -283,20 +316,20 @@ fn drag_readout(ui: &mut UIRoot, data: &mut SceneData, rest: &str) -> String {
 /// `commands::automation::tests`, `manifold-ui`'s
 /// `automation_hit_tester::tests` + `view::automation_lane_tests`); this verb
 /// proves the RENDER reacts to a point that lands on an existing lane.
-fn automation_add_point(data: &mut SceneData, rest: &str) -> String {
+fn automation_add_point(data: &mut SceneData, rest: &str) -> Result<String, String> {
     let parts: Vec<&str> = rest.splitn(3, ':').collect();
     let [layer_id, param_id, beat_str] = parts.as_slice() else {
-        return format!("automation_add: want layer:param:beat, got '{rest}'");
+        return Err(format!("automation_add: want layer:param:beat, got '{rest}'"));
     };
     let Ok(beat) = beat_str.parse::<f64>() else {
-        return format!("automation_add: bad beat '{beat_str}'");
+        return Err(format!("automation_add: bad beat '{beat_str}'"));
     };
     let Some((min, max)) = lane_param_range(data, layer_id, param_id) else {
-        return format!("automation_add: no lane for '{layer_id}':'{param_id}'");
+        return Err(format!("automation_add: no lane for '{layer_id}':'{param_id}'"));
     };
     let value = (min + max) * 0.5;
     let Some(lane) = find_lane_mut(data, layer_id, param_id) else {
-        return format!("automation_add: no lane for '{layer_id}':'{param_id}' (2nd lookup)");
+        return Err(format!("automation_add: no lane for '{layer_id}':'{param_id}' (2nd lookup)"));
     };
     lane.points.push(manifold_core::effects::AutomationPoint {
         beat: manifold_core::Beats(beat),
@@ -304,33 +337,33 @@ fn automation_add_point(data: &mut SceneData, rest: &str) -> String {
         shape: manifold_core::effects::SegmentShape::Linear,
     });
     lane.points.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap());
-    format!("automation_add -> '{layer_id}':'{param_id}' beat={beat} value={value:.3} ({} points now)", lane.points.len())
+    Ok(format!("automation_add -> '{layer_id}':'{param_id}' beat={beat} value={value:.3} ({} points now)", lane.points.len()))
 }
 
 /// P4 Unit A evidence-gathering verb: `automation_move:<layer_id>:<param_id>:
 /// <point_index>:<new_beat>` moves an existing point's beat directly,
 /// mirroring `set_automation_point_preview`'s live-drag mutation.
-fn automation_move_point(data: &mut SceneData, rest: &str) -> String {
+fn automation_move_point(data: &mut SceneData, rest: &str) -> Result<String, String> {
     let parts: Vec<&str> = rest.splitn(4, ':').collect();
     let [layer_id, param_id, idx_str, new_beat_str] = parts.as_slice() else {
-        return format!("automation_move: want layer:param:index:new_beat, got '{rest}'");
+        return Err(format!("automation_move: want layer:param:index:new_beat, got '{rest}'"));
     };
     let Ok(idx) = idx_str.parse::<usize>() else {
-        return format!("automation_move: bad index '{idx_str}'");
+        return Err(format!("automation_move: bad index '{idx_str}'"));
     };
     let Ok(new_beat) = new_beat_str.parse::<f64>() else {
-        return format!("automation_move: bad beat '{new_beat_str}'");
+        return Err(format!("automation_move: bad beat '{new_beat_str}'"));
     };
     let Some(lane) = find_lane_mut(data, layer_id, param_id) else {
-        return format!("automation_move: no lane for '{layer_id}':'{param_id}'");
+        return Err(format!("automation_move: no lane for '{layer_id}':'{param_id}'"));
     };
     let Some(point) = lane.points.get_mut(idx) else {
-        return format!("automation_move: no point at index {idx} ({} points)", lane.points.len());
+        return Err(format!("automation_move: no point at index {idx} ({} points)", lane.points.len()));
     };
     let old_beat = point.beat.0;
     point.beat = manifold_core::Beats(new_beat);
     lane.points.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap());
-    format!("automation_move -> '{layer_id}':'{param_id}'[{idx}] beat {old_beat} -> {new_beat}")
+    Ok(format!("automation_move -> '{layer_id}':'{param_id}'[{idx}] beat {old_beat} -> {new_beat}"))
 }
 
 /// P4 Unit B evidence-gathering verb (`docs/AUTOMATION_LANES_DESIGN.md` §7):
@@ -342,25 +375,25 @@ fn automation_move_point(data: &mut SceneData, rest: &str) -> String {
 /// `shape` differs); the drag math itself (pixel delta -> bend, Alt-gating,
 /// whole_numbers gate) is unit-tested separately
 /// (`interaction_overlay.rs`/`automation_hit_tester.rs`).
-fn automation_bend_segment(data: &mut SceneData, rest: &str) -> String {
+fn automation_bend_segment(data: &mut SceneData, rest: &str) -> Result<String, String> {
     let parts: Vec<&str> = rest.splitn(4, ':').collect();
     let [layer_id, param_id, idx_str, bend_str] = parts.as_slice() else {
-        return format!("automation_bend: want layer:param:index:bend, got '{rest}'");
+        return Err(format!("automation_bend: want layer:param:index:bend, got '{rest}'"));
     };
     let Ok(idx) = idx_str.parse::<usize>() else {
-        return format!("automation_bend: bad index '{idx_str}'");
+        return Err(format!("automation_bend: bad index '{idx_str}'"));
     };
     let Ok(bend) = bend_str.parse::<f32>() else {
-        return format!("automation_bend: bad bend '{bend_str}'");
+        return Err(format!("automation_bend: bad bend '{bend_str}'"));
     };
     let Some(lane) = find_lane_mut(data, layer_id, param_id) else {
-        return format!("automation_bend: no lane for '{layer_id}':'{param_id}'");
+        return Err(format!("automation_bend: no lane for '{layer_id}':'{param_id}'"));
     };
     let Some(point) = lane.points.get_mut(idx) else {
-        return format!("automation_bend: no point at index {idx} ({} points)", lane.points.len());
+        return Err(format!("automation_bend: no point at index {idx} ({} points)", lane.points.len()));
     };
     point.shape = manifold_core::effects::SegmentShape::Curved(bend);
-    format!("automation_bend -> '{layer_id}':'{param_id}'[{idx}] shape=Curved({bend})")
+    Ok(format!("automation_bend -> '{layer_id}':'{param_id}'[{idx}] shape=Curved({bend})"))
 }
 
 /// P4 Unit B evidence-gathering verb: `automation_segment_drag:<layer_id>:
@@ -369,34 +402,34 @@ fn automation_bend_segment(data: &mut SceneData, rest: &str) -> String {
 /// safe numbers), directly on `data.project`. Mirrors `InteractionOverlay::
 /// commit_automation_segment_value_drag`'s end state (beats + shapes
 /// unchanged, only the two values shift by the same delta).
-fn automation_segment_drag(data: &mut SceneData, rest: &str) -> String {
+fn automation_segment_drag(data: &mut SceneData, rest: &str) -> Result<String, String> {
     let parts: Vec<&str> = rest.split(':').collect();
     let [layer_id, param_id, left_str, right_str, delta_str] = parts.as_slice() else {
-        return format!(
+        return Err(format!(
             "automation_segment_drag: want layer:param:left_index:right_index:delta, got '{rest}'"
-        );
+        ));
     };
     let Ok(left_idx) = left_str.parse::<usize>() else {
-        return format!("automation_segment_drag: bad left_index '{left_str}'");
+        return Err(format!("automation_segment_drag: bad left_index '{left_str}'"));
     };
     let Ok(right_idx) = right_str.parse::<usize>() else {
-        return format!("automation_segment_drag: bad right_index '{right_str}'");
+        return Err(format!("automation_segment_drag: bad right_index '{right_str}'"));
     };
     let Ok(delta) = delta_str.parse::<f32>() else {
-        return format!("automation_segment_drag: bad delta '{delta_str}'");
+        return Err(format!("automation_segment_drag: bad delta '{delta_str}'"));
     };
     let Some(lane) = find_lane_mut(data, layer_id, param_id) else {
-        return format!("automation_segment_drag: no lane for '{layer_id}':'{param_id}'");
+        return Err(format!("automation_segment_drag: no lane for '{layer_id}':'{param_id}'"));
     };
     let len = lane.points.len();
     if left_idx >= len || right_idx >= len {
-        return format!("automation_segment_drag: index out of range ({left_idx},{right_idx}) of {len} points");
+        return Err(format!("automation_segment_drag: index out of range ({left_idx},{right_idx}) of {len} points"));
     }
     lane.points[left_idx].value += delta;
     lane.points[right_idx].value += delta;
-    format!(
+    Ok(format!(
         "automation_segment_drag -> '{layer_id}':'{param_id}' [{left_idx},{right_idx}] both += {delta}"
-    )
+    ))
 }
 
 /// P4 Unit B evidence-gathering verb: `automation_group_move:<layer_id>:
@@ -406,34 +439,36 @@ fn automation_segment_drag(data: &mut SceneData, rest: &str) -> String {
 /// (a marquee-selected GROUP moved together, beats/shapes unchanged). The
 /// grab/marquee-rect math itself is unit-tested separately
 /// (`automation_hit_tester::dots_in_rect`).
-fn automation_group_move(data: &mut SceneData, rest: &str) -> String {
+fn automation_group_move(data: &mut SceneData, rest: &str) -> Result<String, String> {
     let parts: Vec<&str> = rest.splitn(4, ':').collect();
     let [layer_id, param_id, indices_str, delta_str] = parts.as_slice() else {
-        return format!("automation_group_move: want layer:param:indices:delta, got '{rest}'");
+        return Err(format!("automation_group_move: want layer:param:indices:delta, got '{rest}'"));
     };
     let Ok(delta) = delta_str.parse::<f32>() else {
-        return format!("automation_group_move: bad delta '{delta_str}'");
+        return Err(format!("automation_group_move: bad delta '{delta_str}'"));
     };
     let mut indices = Vec::new();
     for s in indices_str.split(',') {
         match s.parse::<usize>() {
             Ok(i) => indices.push(i),
-            Err(_) => return format!("automation_group_move: bad index '{s}' in '{indices_str}'"),
+            Err(_) => {
+                return Err(format!("automation_group_move: bad index '{s}' in '{indices_str}'"))
+            }
         }
     }
     let Some(lane) = find_lane_mut(data, layer_id, param_id) else {
-        return format!("automation_group_move: no lane for '{layer_id}':'{param_id}'");
+        return Err(format!("automation_group_move: no lane for '{layer_id}':'{param_id}'"));
     };
     let len = lane.points.len();
     for &idx in &indices {
         if idx >= len {
-            return format!("automation_group_move: index {idx} out of range ({len} points)");
+            return Err(format!("automation_group_move: index {idx} out of range ({len} points)"));
         }
     }
     for &idx in &indices {
         lane.points[idx].value += delta;
     }
-    format!("automation_group_move -> '{layer_id}':'{param_id}' {indices:?} all += {delta}")
+    Ok(format!("automation_group_move -> '{layer_id}':'{param_id}' {indices:?} all += {delta}"))
 }
 
 /// P4 Unit B evidence-gathering verb: `automation_group_delete:<layer_id>:
@@ -441,22 +476,24 @@ fn automation_group_move(data: &mut SceneData, rest: &str) -> String {
 /// highest-index-first — mirrors `AppInputHost::delete_selected_automation_points`'s
 /// per-lane ordering (proven generically by `manifold-editing`'s
 /// `composite_group_delete_highest_index_first_survives_execute_and_undo`).
-fn automation_group_delete(data: &mut SceneData, rest: &str) -> String {
+fn automation_group_delete(data: &mut SceneData, rest: &str) -> Result<String, String> {
     let parts: Vec<&str> = rest.splitn(3, ':').collect();
     let [layer_id, param_id, indices_str] = parts.as_slice() else {
-        return format!("automation_group_delete: want layer:param:indices, got '{rest}'");
+        return Err(format!("automation_group_delete: want layer:param:indices, got '{rest}'"));
     };
     let mut indices = Vec::new();
     for s in indices_str.split(',') {
         match s.parse::<usize>() {
             Ok(i) => indices.push(i),
-            Err(_) => return format!("automation_group_delete: bad index '{s}' in '{indices_str}'"),
+            Err(_) => {
+                return Err(format!("automation_group_delete: bad index '{s}' in '{indices_str}'"))
+            }
         }
     }
     indices.sort_unstable_by(|a, b| b.cmp(a)); // highest first
     indices.dedup();
     let Some(lane) = find_lane_mut(data, layer_id, param_id) else {
-        return format!("automation_group_delete: no lane for '{layer_id}':'{param_id}'");
+        return Err(format!("automation_group_delete: no lane for '{layer_id}':'{param_id}'"));
     };
     let before = lane.points.len();
     for idx in &indices {
@@ -464,10 +501,10 @@ fn automation_group_delete(data: &mut SceneData, rest: &str) -> String {
             lane.points.remove(*idx);
         }
     }
-    format!(
+    Ok(format!(
         "automation_group_delete -> '{layer_id}':'{param_id}' removed {indices:?}; {before} -> {} points",
         lane.points.len()
-    )
+    ))
 }
 
 /// Find the automation lane for `param_id` among `layer_id`'s effects (checked
@@ -511,13 +548,13 @@ fn lane_param_range(data: &SceneData, layer_id: &str, param_id: &str) -> Option<
 /// investigation (`docs/TIMELINE_LAYOUT_P0_SPEC.md` RC1-RC3) lives in the
 /// render/sync path's reaction to the resulting state, not in input dispatch,
 /// so driving the data field directly is the right level for this phase.
-fn collapse_layer(data: &mut SceneData, target: &str) -> String {
+fn collapse_layer(data: &mut SceneData, target: &str) -> Result<String, String> {
     let Some(layer) = data.project.timeline.layers.iter_mut().find(|l| l.layer_id == target)
     else {
-        return format!("collapse: no layer with id '{target}'");
+        return Err(format!("collapse: no layer with id '{target}'"));
     };
     layer.is_collapsed = !layer.is_collapsed;
-    format!("collapse -> layer '{target}' is_collapsed={}", layer.is_collapsed)
+    Ok(format!("collapse -> layer '{target}' is_collapsed={}", layer.is_collapsed))
 }
 
 /// P2 "caret rotate" evidence verb (`docs/UI_CRAFT_AND_MOTION_PLAN.md` P2):
@@ -536,29 +573,29 @@ fn collapse_layer(data: &mut SceneData, target: &str) -> String {
 /// expanded angle), not the fully-collapsed rotation this verb exists to
 /// prove. Snapping the panel here first means the follow-up `configure()`
 /// finds it already at the target and leaves it alone.
-fn collapse_effect(ui: &mut UIRoot, data: &mut SceneData, target: &str) -> String {
+fn collapse_effect(ui: &mut UIRoot, data: &mut SceneData, target: &str) -> Result<String, String> {
     let Some(layer) = data.project.timeline.layers.iter_mut().find(|l| l.layer_id == target)
     else {
-        return format!("collapse_effect: no layer with id '{target}'");
+        return Err(format!("collapse_effect: no layer with id '{target}'"));
     };
     let Some(effects) = layer.effects.as_mut() else {
-        return format!("collapse_effect: layer '{target}' has no effects");
+        return Err(format!("collapse_effect: layer '{target}' has no effects"));
     };
     let Some(fx) = effects.first_mut() else {
-        return format!("collapse_effect: layer '{target}' has an empty effect list");
+        return Err(format!("collapse_effect: layer '{target}' has an empty effect list"));
     };
     fx.collapsed = !fx.collapsed;
     let new_collapsed = fx.collapsed;
     if let Some(card) = ui.inspector.layer_effect_mut(0) {
         card.set_collapsed(new_collapsed);
     }
-    format!("collapse_effect -> layer '{target}' effect[0] collapsed={new_collapsed}")
+    Ok(format!("collapse_effect -> layer '{target}' effect[0] collapsed={new_collapsed}"))
 }
 
 /// P0.0 evidence-gathering verb: remove the target layer (and any children
 /// parented to it) from the `Project`, mirroring what `EditingService`'s
 /// delete command achieves at the data level. No synthesized click/menu.
-fn delete_layer(data: &mut SceneData, target: &str) -> String {
+fn delete_layer(data: &mut SceneData, target: &str) -> Result<String, String> {
     let before = data.project.timeline.layers.len();
     data.project
         .timeline
@@ -566,9 +603,9 @@ fn delete_layer(data: &mut SceneData, target: &str) -> String {
         .retain(|l| l.layer_id != target && !l.parent_layer_id.as_ref().is_some_and(|pid| *pid == target));
     let after = data.project.timeline.layers.len();
     if before == after {
-        return format!("delete: no layer with id '{target}' (or children) found");
+        return Err(format!("delete: no layer with id '{target}' (or children) found"));
     }
-    format!("delete -> removed '{target}' and any children; {before} -> {after} layers")
+    Ok(format!("delete -> removed '{target}' and any children; {before} -> {after} layers"))
 }
 
 /// `select:<layer_id>` sugar (§6): looks up the layer's display name (the
@@ -579,7 +616,7 @@ fn delete_layer(data: &mut SceneData, target: &str) -> String {
 /// synthesized-click miss is no longer silently patched over with an id
 /// lookup (D6, the seam this phase removes): it comes back as `Err` and the
 /// caller (`mod.rs`'s `--interact` branch) fails the run loudly with the dump.
-fn select_layer(ui: &mut UIRoot, data: &mut SceneData, target: &str) -> String {
+fn select_layer(ui: &mut UIRoot, data: &mut SceneData, target: &str) -> Result<String, String> {
     let Some(idx) = data
         .project
         .timeline
@@ -587,7 +624,7 @@ fn select_layer(ui: &mut UIRoot, data: &mut SceneData, target: &str) -> String {
         .iter()
         .position(|l| l.layer_id == target)
     else {
-        return format!("select: no layer with id '{target}'");
+        return Err(format!("select: no layer with id '{target}'"));
     };
     let name = data.project.timeline.layers[idx].name.clone();
 
@@ -596,12 +633,12 @@ fn select_layer(ui: &mut UIRoot, data: &mut SceneData, target: &str) -> String {
         // real `PanelAction::LayerClicked` the click produced — `idx` (the
         // pre-click lookup) is reported here only for the human-readable
         // description, not as a stand-in for it.
-        Ok(()) => {
-            format!("select -> layer {idx} '{name}' (real click dispatched through the automation core)")
-        }
-        Err(e) => format!(
+        Ok(()) => Ok(format!(
+            "select -> layer {idx} '{name}' (real click dispatched through the automation core)"
+        )),
+        Err(e) => Err(format!(
             "select: MISS — synthesized click on '{name}' did not resolve ({e}); the real input \
              path was NOT exercised and no fallback selection was applied"
-        ),
+        )),
     }
 }

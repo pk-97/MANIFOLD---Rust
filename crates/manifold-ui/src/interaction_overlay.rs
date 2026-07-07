@@ -1669,6 +1669,10 @@ impl InteractionOverlay {
         let ended_move = self.drag_mode == DragMode::Move;
         host.begin_command_batch();
 
+        // D15 landing-line flash geometry — leftmost landed beat + layer span
+        // of the clips that actually moved, accumulated in the record loop.
+        let mut landed: Option<(Beats, usize, usize)> = None;
+
         if self.drag_mode == DragMode::Move {
             // Unity lines 370-386: record commands. No finalize-snap step —
             // `handle_move_drag` already snapped+clamped this position on the
@@ -1679,6 +1683,14 @@ impl InteractionOverlay {
                         (clip.start_beat - snapshot.start_beat).abs() >= Beats(0.0001);
                     let layer_changed = clip.layer_index != snapshot.layer_index;
                     if start_changed || layer_changed {
+                        landed = Some(match landed {
+                            None => (clip.start_beat, clip.layer_index, clip.layer_index),
+                            Some((b, lo, hi)) => (
+                                if clip.start_beat < b { clip.start_beat } else { b },
+                                lo.min(clip.layer_index),
+                                hi.max(clip.layer_index),
+                            ),
+                        });
                         host.record_move(
                             &snapshot.clip_id,
                             snapshot.start_beat,
@@ -1748,6 +1760,19 @@ impl InteractionOverlay {
             "Trim clips"
         };
         host.commit_command_batch(desc);
+
+        // D15 landing-line flash — re-hooked at drag-end (2026-07-07). P1.4's
+        // continuous snap deleted the discrete `finalize_move_snap` trigger
+        // (see the dormancy note at the drawer, `app_render.rs`); the drag-END
+        // commit is the new discrete moment. Fires once, only when a move
+        // actually landed somewhere new (a click-without-move stays dark).
+        // Move only — a trim reshapes in place, there is no "landing".
+        // Feel sign-off owed to Peter (UI_CRAFT_AND_MOTION_PLAN.md D15 gate).
+        if let Some((beat, lo, hi)) = landed {
+            self.landing_flash_beat = beat;
+            self.landing_flash_layers = (lo, hi);
+            self.landing_flash.fire(color::MOTION_MED_MS);
+        }
 
         // Unity lines 423-427/444-445: clear drag state
         self.reset_drag_state(host);
@@ -3435,6 +3460,43 @@ mod p1_4_gesture_integrity_tests {
             snapped,
             Beats::from_f32(10.03),
             "a drag landing near a marker must snap to it"
+        );
+    }
+
+    /// D15 landing-line flash, re-hooked at drag-end (2026-07-07): a move
+    /// that actually lands somewhere new fires the flash with the landed
+    /// beat + layer span; a gesture that never moved stays dark (the flash
+    /// marks a landing, not a click).
+    #[test]
+    fn move_drag_fires_landing_flash_at_commit_only_when_landed() {
+        let mut panel = build_viewport();
+        let mut host = GestureTestHost::new(&["layer-0"]).with_clip("clip_a", 0, 0.0, 8.0);
+        let mut ui_state = UIState::new();
+        ui_state.select_clips(vec![ClipId::new("clip_a")]);
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+
+        overlay.on_begin_drag(body_pos_for(&panel, 2.0), &mut host, &mut ui_state, &panel);
+        overlay.on_drag(body_pos_for(&panel, 10.0), &mut host, &mut ui_state, &mut panel);
+        overlay.on_end_drag(&mut host);
+
+        let (_, beat, lo, hi) = overlay.landing_flash().expect("flash fires on a landed move");
+        let landed = host.find_clip_by_id("clip_a").unwrap().start_beat;
+        assert!(
+            (beat - landed).abs() < Beats(1e-6),
+            "flash beat {beat:?} must be the landed start beat {landed:?}"
+        );
+        assert_eq!((lo, hi), (0, 0), "single-layer drag spans exactly its layer");
+
+        // Same gesture, zero displacement: begin then release in place.
+        let mut host2 = GestureTestHost::new(&["layer-0"]).with_clip("clip_a", 0, 0.0, 8.0);
+        let mut ui_state2 = UIState::new();
+        ui_state2.select_clips(vec![ClipId::new("clip_a")]);
+        let mut overlay2 = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+        overlay2.on_begin_drag(body_pos_for(&panel, 2.0), &mut host2, &mut ui_state2, &panel);
+        overlay2.on_end_drag(&mut host2);
+        assert!(
+            overlay2.landing_flash().is_none(),
+            "no flash when the gesture landed nowhere new"
         );
     }
 }

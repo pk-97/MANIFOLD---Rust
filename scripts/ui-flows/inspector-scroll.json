@@ -1,0 +1,39 @@
+[
+  "Snapshot",
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Bloom"
+        }
+      },
+      "gesture": {
+        "Scroll": {
+          "delta": {
+            "x": 0.0,
+            "y": -300.0
+          }
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Bloom"
+        }
+      },
+      "gesture": {
+        "Scroll": {
+          "delta": {
+            "x": 0.0,
+            "y": 300.0
+          }
+        }
+      }
+    }
+  },
+  "Snapshot"
+]
