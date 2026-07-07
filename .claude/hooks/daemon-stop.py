@@ -52,6 +52,12 @@ REPO_ROOT = os.path.normpath(os.path.join(HOOKS_DIR, "..", ".."))
 
 STOPBLOCK_MAX_AGE = 24 * 60 * 60  # sentinels older than a day are stale, sweep them
 
+# Catch-up wait bounds (DESIGN.md §2 re-ruling, 2026-07-05).
+STOP_WAIT_CAP_S = 6.0
+# §2h.6(a): gap between the transcript stats at Stop entry — see
+# _stable_transcript_size below.
+STOP_STAT_GAP_S = 0.2
+
 # Grade-backstop (2026-07-05 review): self-grades can't be joined to fires
 # when sessions never write them at all. Deterministic, mirrors the
 # announced-not-started check below — main-session only, fires at most ONCE
@@ -303,6 +309,38 @@ def _ungrounded_chat_claim(transcript_path, repo_root=REPO_ROOT):
     grounded_blob = _collect_tool_input_strings(transcript_path)
     ungrounded = sorted(a for a in artifacts if a not in grounded_blob)
     return ungrounded[0] if ungrounded else None
+
+
+def _stable_transcript_size(transcript_path):
+    """DESIGN.md §2h.6(a) — the snapshot-race fix. The Stop event can race
+    the harness's write of the turn-final text: 5 of the 17 late fires in the
+    2026-07-07 forensics were VERDICT-AFTER-TURN (hook durationMs 27-44 with
+    the flagged text landing 27-77ms BEFORE Stop) — a single stat at Stop
+    entry read a stale size, the observer's heartbeat already covered it, and
+    the hook concluded caught-up and skipped the wait with the observer
+    provably alive. Stat twice ~200ms apart and take the max; if the file
+    grew between the two stats it may still be mid-flush, so re-stat once
+    more after another gap (bounded at three stats total — this is a race
+    window measured in tens of ms, not a tail we chase forever). Returns
+    None when the first stat fails (caller skips the wait, fail open); a
+    later stat failing falls back to the best size seen so far."""
+    try:
+        first = os.path.getsize(transcript_path)
+    except OSError:
+        return None
+    time.sleep(STOP_STAT_GAP_S)
+    try:
+        second = os.path.getsize(transcript_path)
+    except OSError:
+        return first
+    if second <= first:
+        return first  # stable across the gap: the common case, one gap paid
+    time.sleep(STOP_STAT_GAP_S)
+    try:
+        third = os.path.getsize(transcript_path)
+    except OSError:
+        return second
+    return max(second, third)
 
 
 def _last_assistant_content(transcript_path):
@@ -623,22 +661,24 @@ def main():
         # read the turn-final text yet — it polls every POLL_SECONDS, Stop
         # fires milliseconds after the text lands — so the old marker-only
         # wait missed the common case. Wait for the observer's `.offset`
-        # heartbeat to reach the transcript size recorded at Stop entry;
-        # classification is synchronous inside the observer's drain and the
-        # heartbeat is written after the drain returns, so caught-up means
-        # every verdict this turn can produce is already on disk. Skips
-        # (fails open) when the observer is dead, the heartbeat file doesn't
-        # exist, or the transcript is unreadable. Main session only —
-        # workers' transcripts aren't heartbeat-tracked.
-        STOP_WAIT_CAP_S = 6.0
+        # heartbeat to reach the transcript size recorded at Stop entry
+        # (double-statted per §2h.6(a) — a single stat raced the harness's
+        # write of the final text and read a stale size, see
+        # _stable_transcript_size); classification is synchronous inside the
+        # observer's drain and the heartbeat is written after the drain
+        # returns, so caught-up means every verdict this turn can produce is
+        # already on disk. Skips (fails open) when the observer is dead, the
+        # heartbeat file doesn't exist, or the transcript is unreadable —
+        # gate checked BEFORE the double-stat so skipped sessions never pay
+        # the stat gap. Main session only — workers' transcripts aren't
+        # heartbeat-tracked.
         transcript_path = data.get("transcript_path")
         if not agent_id and transcript_path:
-            try:
-                target = os.path.getsize(transcript_path)
-            except OSError:
-                target = None
             offset_path = os.path.join(valve.VERDICTS_DIR, f"{session_id}.offset")
-            if target is not None and os.path.exists(offset_path) and valve.observer_alive(session_id):
+            target = None
+            if os.path.exists(offset_path) and valve.observer_alive(session_id):
+                target = _stable_transcript_size(transcript_path)
+            if target is not None:
                 deadline = time.time() + STOP_WAIT_CAP_S
                 while True:
                     # Verdicts land inside the drain, before the heartbeat

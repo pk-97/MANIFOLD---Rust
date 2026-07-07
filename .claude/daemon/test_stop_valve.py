@@ -720,9 +720,94 @@ def test_stop_wait_bounded_when_observer_stalls():
         start = time.time()
         out = run_hook({"session_id": session, "prompt_id": "pw5", "transcript_path": transcript}, td)
         elapsed = time.time() - start
-        check("stalled observer: returns within cap + slack", elapsed < 7.5, elapsed)
+        # The stable-file double-stat (§2h.6(a)) adds one ~0.2s gap before
+        # the deadline is armed, hence the slack on both bounds.
+        check("stalled observer: returns within cap + slack", elapsed < 7.7, elapsed)
         check("stalled observer: waited to the cap, not less", elapsed > 5.0, elapsed)
         check("stalled observer: no block", not out, out)
+
+    with_temp_verdicts(run)
+
+
+# ---- snapshot-race fix (§2h.6(a)): stat the transcript twice ~200ms apart
+# at Stop, target = max, one extra re-stat if still growing. The defect this
+# kills: the final text's write raced the single Stop-entry stat, the stale
+# size was already covered by the heartbeat, and the hook skipped the wait
+# with the observer alive (5 of 17 late fires in the forensics run). ----
+
+
+def test_stop_wait_snapshot_race_growth_during_gap_triggers_wait():
+    def run(td):
+        session = "sess-snaprace"
+        transcript = os.path.join(td, "t.jsonl")
+        write_transcript(transcript, "Setup turn text, not the final one.")
+        stale_size = os.path.getsize(transcript)
+        # Observer alive and caught up to the STALE size — exactly the
+        # VERDICT-AFTER-TURN defect state: pre-fix, a single stat at Stop
+        # entry returns stale_size, drained >= target holds immediately, and
+        # the hook skips the wait without ever seeing the verdict below.
+        plant_observer(td, session, stale_size)
+        import threading
+
+        def late_final_text_then_verdict():
+            # The harness flushes the turn-final text ~100ms after Stop
+            # fires — inside the fix's ~200ms stat gap.
+            time.sleep(0.1)
+            with open(transcript, "a", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "type": "assistant",
+                    "timestamp": "2026-07-04T00:00:09Z",
+                    "message": {"role": "assistant", "model": "claude-sonnet-5", "content": [{"type": "text", "text": "The fix is in and the tests pass."}]},
+                }) + "\n")
+            # The observer drains the new text: verdict first, heartbeat after.
+            time.sleep(0.3)
+            write_verdict(td, session, "anchor/verify-claim", seq=1)
+            with open(os.path.join(td, f"{session}.offset"), "w", encoding="utf-8") as f:
+                f.write(str(os.path.getsize(transcript)))
+
+        t = threading.Thread(target=late_final_text_then_verdict)
+        t.start()
+        start = time.time()
+        out = run_hook({"session_id": session, "prompt_id": "psr1", "transcript_path": transcript}, td)
+        elapsed = time.time() - start
+        t.join()
+        d = json.loads(out) if out else None
+        check("growth during the stat gap engages the wait and delivers the verdict", d is not None and d.get("decision") == "block", out)
+        check("race-fix delivery is prompt, not a cap wait", elapsed < 3.0, elapsed)
+
+    with_temp_verdicts(run)
+
+
+def test_stop_wait_stable_file_pays_exactly_one_stat_gap():
+    def run(td):
+        session = "sess-stablestat"
+        transcript = os.path.join(td, "t.jsonl")
+        write_transcript(transcript, "Here is the summary of what I found.")
+        plant_observer(td, session, os.path.getsize(transcript))  # caught up
+        start = time.time()
+        out = run_hook({"session_id": session, "prompt_id": "pss1", "transcript_path": transcript}, td)
+        elapsed = time.time() - start
+        check("stable file: the one ~200ms stat gap was actually paid", elapsed >= 0.15, elapsed)
+        check("stable file: no latency beyond the single gap", elapsed < 0.6, elapsed)
+        check("stable file: no block", not out, out)
+
+    with_temp_verdicts(run)
+
+
+def test_stop_wait_skip_paths_pay_no_stat_gap():
+    def run(td):
+        # Dead observer: the §2h.6(a) double-stat sits BEHIND the liveness
+        # gate, so skipped sessions must not pay even the single 200ms gap.
+        session = "sess-deadobs-nogap"
+        transcript = os.path.join(td, "t.jsonl")
+        write_transcript(transcript, "Here is the summary of what I found.")
+        with open(os.path.join(td, f"{session}.offset"), "w", encoding="utf-8") as f:
+            f.write("0")
+        start = time.time()
+        out = run_hook({"session_id": session, "prompt_id": "png1", "transcript_path": transcript}, td)
+        elapsed = time.time() - start
+        check("dead observer: no stat gap paid", elapsed < 0.15, elapsed)
+        check("dead observer: no block", not out, out)
 
     with_temp_verdicts(run)
 
@@ -1107,6 +1192,9 @@ def main():
         test_stop_wait_fast_when_observer_already_caught_up,
         test_stop_wait_skips_when_observer_dead_or_no_heartbeat,
         test_stop_wait_bounded_when_observer_stalls,
+        test_stop_wait_snapshot_race_growth_during_gap_triggers_wait,
+        test_stop_wait_stable_file_pays_exactly_one_stat_gap,
+        test_stop_wait_skip_paths_pay_no_stat_gap,
         test_stop_wait_never_runs_for_workers,
         test_session_gradeable_fires_filters_prefix_agent_and_null_seq,
         test_session_grade_count_sums_across_live_grades_files,
