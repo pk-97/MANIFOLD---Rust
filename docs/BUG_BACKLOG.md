@@ -112,8 +112,26 @@ card params past their UI ranges (e.g. `curl 0`/`90`, `flow` sign flip), which t
    matches the scatter packing exactly. Also checked clean by read: gradient central-diff
    wrap, container SDFs, euler step, samplers (linear, clamp-to-edge).
 
+**New evidence (Peter, 2026-07-07, after the session):** the pre-decomposition fused
+`node.fluid_simulate_3d` (the original Rust generator, before the node-graph migration)
+did NOT visibly have this bug. Unverified memory — verify it first (checkout a
+pre-decomposition commit, run the harness's slope_only/feather40 scenarios against the old
+generator, or eyeball a long run). If it holds, the root is something the decomposition
+changed about the COMPOSITION, not the kernels — the per-kernel gpu_tests prove each atom
+matches its legacy shader, so the delta must be in: pass ordering / which texture each pass
+reads (stale-intermediate suspect, already ranked first below), double-buffering the legacy
+frame did that the graph doesn't, blur radius units or pass count, gradient boundary
+convention, or preset wiring/param scaling. Corroborating smell: the per-voxel curl wobble
+(2211b20f) was added AFTER decomposition to fix "swirl pools in one octant" — pooling the
+legacy sim reportedly never had, i.e. the wobble may have papered over one symptom of the
+same introduced asymmetry. **This makes the first step a history diff:** `git log -S
+fluid_simulate_3d` to recover the fused generator's frame recipe (kernel order, texture
+ping-pong, per-pass params), then line it up against the FluidSim3D preset graph's execution
+plan and diff the compositions.
+
 **Next steps (Opus):** the drift needs blur *range*, not blur sampling mode. Candidates, in
-order: (1) synthetic-volume antisymmetry probe at the kernel level — upload a symmetric
+order: (0) the legacy-composition diff above — cheapest and now the strongest lens;
+(1) synthetic-volume antisymmetry probe at the kernel level — upload a symmetric
 Gaussian density, run blur→grad→(slope)→blur, sample at mirrored probe positions with the
 codegen standalone kernels (pattern: `gpu_tests` in scatter_particles_3d.rs), assert
 F(p) = −F(mirror p) stage by stage; the first stage that breaks antisymmetry is the bug.
