@@ -2423,6 +2423,7 @@ mod tests {
             exposed: true,
             is_toggle: false,
             is_trigger: false,
+            is_trigger_gate: false,
             value_labels: None,
             osc_address: None,
             ableton_display: None,
@@ -2468,6 +2469,7 @@ mod tests {
             driver_triplet: vec![false; n],
             driver_free_period: vec![None; n],
             audio: Default::default(),
+            audio_trigger: Default::default(),
             automation_active: vec![false; n],
             automation_overridden: vec![false; n],
         }

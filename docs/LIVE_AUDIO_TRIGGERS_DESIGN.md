@@ -22,6 +22,22 @@ clip edge (default) OR the transient trigger OR both."*
 
 ## 0. CURRENT POSITION (read first, update last)
 
+- **§8 P3b BUILT 2026-07-07 (follow-up session, two PRs on `wave/param-triggers-p3b`) —
+  the whole §8 feature is now UI-reachable.** PR1: effect cards gained the toggle/trigger
+  row branch they never had (root cause was deeper than the missing branch —
+  `state_sync.rs::preset_to_config` hardcoded `is_toggle/is_trigger: false` for every
+  effect param, so Strobe's P3a card rendered as a raw slider; fixed at the registry-read
+  level, shared `build_toggle_trigger_row` now serves both card builders, and
+  `GenParamToggle/Fire` generalized to `ParamToggle/Fire(GraphParamTarget, ..)`), plus
+  D5b reachability: `is_trigger` cards now reach the standard audio-mod "A" drawer
+  (no mode row). PR2: the D6 `AudioTriggerMod` drawer (Dropdown send · Segmented band ·
+  Slider sensitivity · Segmented mode) on `isTriggerGate` cards, new
+  `SetAudioTriggerModCommand` (whole-field capture, undoable), PanelAction dispatch +
+  state_sync card view, and the collapsed-row mode badge (§8.2 consequences). Second
+  root fix en route: `is_trigger_gate` lived only on graph-metadata `ParamSpecDef`,
+  unreachable for stock (never-forked) instances — added to registry `ParamDef` and
+  threaded through both resolution paths. Verified headless to PNG on both a generator
+  (Plasma) and Strobe. Still owed: Peter's live L4 feel-pass (whole §8 + §1–§7 debt).
 - **§8 execution note (2026-07-07, P1+P2 session): one interpretive call made mid-flight,
   flagged for Peter's review.** D1 says "per layer the renderer keeps `clip_count`... and
   `audio_count`" (singular, per-layer) while D2 says the `audio_trigger` config is
@@ -519,8 +535,10 @@ app       PanelAction + dispatch + state_sync card view                WIRE
       `docs/node_catalog.json` regenerated (Strobe is now a usage example for 3
       primitives). Full gpu-proofs suite (1245) + default workspace sweep + clippy
       all green.
-- [ ] **P3b — UI drawer + dispatch (SCOPED, NOT BUILT — deferred to a follow-up
-      session; do not skip silently).** Investigation found this is substantially
+- [x] **P3b — UI drawer + dispatch (BUILT 2026-07-07, follow-up session, two PRs:
+      `b333d855` reachability + `b71c7dc8` drawer — see §0 for the two root-cause
+      fixes found en route; scoping notes below kept for the record).**
+      Investigation found this is substantially
       bigger than the original phase brief implied — a genuinely new UI feature, not
       a drawer-config tweak. Findings, so a follow-up session doesn't re-derive them:
       - **D5b (`is_trigger` cards reuse the existing per-param audio-mod "A"

@@ -573,6 +573,11 @@ fn param_spec_def_to_param_def(p: &ParamSpecDef) -> ParamDef {
         },
         curve: p.curve,
         invert: p.invert,
+        // §8 D6: the trigger-gate flag flows through the registry now too
+        // (not just the graph-metadata `ParamSpecDef`) — see `ParamDef::
+        // is_trigger_gate`'s doc comment for why a stock, never-forked
+        // instance needs it here.
+        is_trigger_gate: p.is_trigger_gate,
     }
 }
 

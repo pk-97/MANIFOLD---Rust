@@ -364,6 +364,18 @@ pub enum PanelAction {
     ParamSnapshot(GraphParamTarget, ParamId),
     ParamChanged(GraphParamTarget, ParamId, f32),
     ParamCommit(GraphParamTarget, ParamId),
+    /// Toggle a boolean (`isToggle`) param's ON/OFF button — a 0↔1 flip.
+    /// Was `GenParamToggle(ParamId)` (generator-only); joined the unified
+    /// group (§8.4 P3b) once effect cards gained the same toggle-row
+    /// rendering generators already had — see `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md`
+    /// §8. Same `ChangeGraphParamCommand` write path as `ParamChanged`, but
+    /// atomic (no snapshot/commit pair — a click isn't a drag).
+    ParamToggle(GraphParamTarget, ParamId),
+    /// Fire a monotonic `isTrigger` param's "▶" button — increments the
+    /// underlying counter by one instead of flipping it. Was
+    /// `GenParamFire(ParamId)`; unified alongside `ParamToggle` for the same
+    /// reason (D5b: `is_trigger` cards now exist on effect chains too).
+    ParamFire(GraphParamTarget, ParamId),
     /// Double-click on a numeric param's value cell → open a type-in box. Carries
     /// the target + id, the value-cell anchor rect, the base value to prefill, the
     /// clamp range, and whether the param rounds to an integer — everything the
@@ -423,6 +435,31 @@ pub enum PanelAction {
     ),
     /// Commit a shape-slider drag as one undo step (drag end).
     AudioModShapeCommit(GraphParamTarget, ParamId),
+
+    // ── Audio Trigger Mod (§8 D6 — the `isTriggerGate` card drawer). A
+    // single per-instance config (`PresetInstance.audio_trigger`), not a
+    // per-param list, so these carry no `ParamId` — the target alone
+    // addresses the one config. See `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` §8.
+    /// Arm/disarm the instance's audio trigger. Arming assigns the project's
+    /// first audio send with default band/sensitivity/mode; a no-op when no
+    /// sends exist (opens Audio Setup instead, mirroring `AudioModToggle`'s
+    /// no-sends fallback).
+    AudioTriggerModToggle(GraphParamTarget),
+    /// Set the trigger mod's source: which send + which band. Feature kind is
+    /// always `Transients` for this drawer (D2: "Transients×band") — never
+    /// user-selectable, so there is no kind axis to carry.
+    AudioTriggerModSetSource(GraphParamTarget, AudioSendId, AudioBand),
+    /// Set the trigger mod's fire mode — index into `[ClipEdge, Transient,
+    /// Both]` (D1), converted to `TriggerFireMode` at the dispatch boundary
+    /// (this crate mirrors core enums rather than depending on `manifold-core`
+    /// directly; see `ui_translate.rs`).
+    AudioTriggerModSetMode(GraphParamTarget, usize),
+    /// Snapshot the trigger mod before a sensitivity-slider drag (undo start).
+    AudioTriggerModSensitivitySnapshot(GraphParamTarget),
+    /// Live-edit sensitivity during a drawer-slider drag (no undo entry).
+    AudioTriggerModSensitivityChanged(GraphParamTarget, f32),
+    /// Commit a sensitivity-slider drag as one undo step (drag end).
+    AudioTriggerModSensitivityCommit(GraphParamTarget),
 
     // ── Audio Setup panel (project-level send routing) ──
     /// Open the input-device dropdown (anchored to the clicked trigger).
@@ -624,12 +661,6 @@ pub enum PanelAction {
     // target-carrying `ParamSnapshot` … `TargetCommit` variants above. Only
     // these have no effect counterpart and stay generator-only.
     GenTypeClicked(Option<LayerId>), // layer_id
-    GenParamToggle(ParamId),
-    /// Outer-card click on a `is_trigger` param's button — increment the
-    /// underlying monotonic counter by one. Same write path as a toggle
-    /// (`ChangeGraphParamCommand` on the generator), but `+1` instead of a
-    /// `0↔1` flip. Wired in [`crate::panels::param_card`].
-    GenParamFire(ParamId),
 
     // Generator string params (per-clip text, etc.)
     GenStringParamClicked(usize), // string_param_index — open text input

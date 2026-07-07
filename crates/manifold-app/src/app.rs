@@ -189,6 +189,12 @@ pub struct Application {
     pub(crate) decay_snapshot: Option<f32>,
     /// Audio-mod shaping-slider drag snapshot (whole shape) for undo.
     pub(crate) audio_shape_snapshot: Option<manifold_core::audio_mod::AudioModShape>,
+    /// Audio-TRIGGER-mod sensitivity-slider drag snapshot (§8 D6) — the
+    /// whole `AudioTriggerMod` (not just the scalar), so
+    /// `SetAudioTriggerModCommand`'s undo restores every field, not just
+    /// sensitivity. Captured on `AudioTriggerModSensitivitySnapshot`,
+    /// committed on `AudioTriggerModSensitivityCommit`.
+    pub(crate) audio_trigger_snapshot: Option<manifold_core::audio_trigger::AudioTriggerMod>,
     /// Band-divider drag snapshot `(low_hz, mid_hz)` for undo. Captured on
     /// `AudioCrossoverDragBegin`, committed as one `SetAudioCrossoversCommand`
     /// on `AudioCrossoverCommit`.
@@ -597,6 +603,7 @@ impl Application {
             target_snapshot: None,
             decay_snapshot: None,
             audio_shape_snapshot: None,
+            audio_trigger_snapshot: None,
             audio_crossover_snapshot: None,
             audio_send_gain_drag_snapshot: None,
             audio_send_sensitivity_drag_snapshot: None,
@@ -1000,6 +1007,7 @@ impl Application {
                                 &mut self.target_snapshot,
                                 &mut self.decay_snapshot,
                                 &mut self.audio_shape_snapshot,
+                                &mut self.audio_trigger_snapshot,
                                 &mut self.audio_crossover_snapshot,
                                 &mut self.audio_send_gain_drag_snapshot,
                                 &mut self.audio_send_sensitivity_drag_snapshot,
@@ -1045,6 +1053,7 @@ impl Application {
                             &mut self.target_snapshot,
                             &mut self.decay_snapshot,
                             &mut self.audio_shape_snapshot,
+                            &mut self.audio_trigger_snapshot,
                             &mut self.audio_crossover_snapshot,
                             &mut self.audio_send_gain_drag_snapshot,
                             &mut self.audio_send_sensitivity_drag_snapshot,

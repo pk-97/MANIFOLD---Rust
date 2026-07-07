@@ -162,6 +162,7 @@ pub fn dispatch(
     target_snapshot: &mut Option<f32>,
     decay_snapshot: &mut Option<f32>,
     audio_shape_snapshot: &mut Option<manifold_core::audio_mod::AudioModShape>,
+    audio_trigger_snapshot: &mut Option<manifold_core::audio_trigger::AudioTriggerMod>,
     audio_crossover_snapshot: &mut Option<(f32, f32)>,
     audio_send_gain_drag_snapshot: &mut Option<f32>,
     audio_send_sensitivity_drag_snapshot: &mut Option<Vec<manifold_core::audio_trigger::TriggerRoute>>,
@@ -318,6 +319,12 @@ pub fn dispatch(
         | PanelAction::AudioModShapeSnapshot(..)
         | PanelAction::AudioModShapeParamChanged(..)
         | PanelAction::AudioModShapeCommit(..)
+        | PanelAction::AudioTriggerModToggle(..)
+        | PanelAction::AudioTriggerModSetSource(..)
+        | PanelAction::AudioTriggerModSetMode(..)
+        | PanelAction::AudioTriggerModSensitivitySnapshot(..)
+        | PanelAction::AudioTriggerModSensitivityChanged(..)
+        | PanelAction::AudioTriggerModSensitivityCommit(..)
         | PanelAction::AudioSetDevice(..)
         | PanelAction::AudioAddSend
         | PanelAction::AudioRemoveSend(..)
@@ -360,8 +367,8 @@ pub fn dispatch(
         | PanelAction::EffectReorder(..)
         | PanelAction::EffectReorderGroup(..)
         | PanelAction::GenTypeClicked(_)
-        | PanelAction::GenParamToggle(_)
-        | PanelAction::GenParamFire(_)
+        | PanelAction::ParamToggle(..)
+        | PanelAction::ParamFire(..)
         | PanelAction::GenStringParamClicked(_)
         | PanelAction::GenStringParamDropdownClicked(_)
         | PanelAction::GenStringParamSelected(..)
@@ -418,6 +425,7 @@ pub fn dispatch(
             target_snapshot,
             decay_snapshot,
             audio_shape_snapshot,
+            audio_trigger_snapshot,
             audio_crossover_snapshot,
             audio_send_gain_drag_snapshot,
             audio_send_sensitivity_drag_snapshot,
