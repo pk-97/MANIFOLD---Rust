@@ -2174,6 +2174,7 @@ impl StreamingSendAnalyzer {
                 scope_scalars.push(ScopeColumn {
                     centroids: state.centroid_yfb,
                     onsets: ScopeOnsets {
+                        kick: fired(b[1].kick),
                         low: fired(b[1].transients),
                         mid: fired(b[2].transients),
                         high: fired(b[3].transients),
@@ -3010,6 +3011,40 @@ mod tests {
         let mut after = 0;
         a.drain_scope_columns(|_| after += 1);
         assert_eq!(after, 0, "disabling scope clears buffered columns");
+    }
+
+    #[test]
+    fn streaming_analyzer_scope_reports_kick_fires() {
+        // Two synthetic kicks — 90 ms exponentially-decaying sines gliding
+        // 120 → 45 Hz (the selftest kick recipe) — must light the scope's kick
+        // lane on (only) their fire hops, end to end through the streaming
+        // analyzer: VQT → KickRidges → fired() → `ScopeColumn::onsets.kick`.
+        let mut a = StreamingSendAnalyzer::new(SR, 250.0, 2000.0);
+        a.set_scope(true);
+        let srf = SR as f32;
+        let mut buf = vec![0.0f32; (srf * 1.2) as usize];
+        for &start_s in &[0.25f32, 0.75] {
+            let start = (start_s * srf) as usize;
+            let mut ph = 0.0f32;
+            for j in 0..(SR as usize * 9 / 100) {
+                let t = j as f32 / srf;
+                let f = 120.0 * (45.0f32 / 120.0).powf(t / 0.09);
+                ph += f / srf;
+                buf[start + j] += 0.8 * (-t / 0.03).exp() * (std::f32::consts::TAU * ph).sin();
+            }
+        }
+        for chunk in buf.chunks(257) {
+            a.push(chunk);
+        }
+        let (mut cols, mut kick_cols) = (0, 0);
+        a.drain_scope_scalars(|c| {
+            cols += 1;
+            if c.onsets.kick > 0.999 {
+                kick_cols += 1;
+            }
+        });
+        assert!(cols > 0, "scope buffered columns");
+        assert_eq!(kick_cols, 2, "each synthetic kick fires the kick lane exactly once");
     }
 
     // ── Salience (D1) — synthetic columns, no FFT ────────────────────────

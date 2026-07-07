@@ -17,6 +17,9 @@
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ScopeOnsets {
+    /// Kick fire (0/1 impulse) — the dedicated ridge-only sub-bass kick
+    /// detector, independent of the Low transient. Bottom lane.
+    pub kick: f32,
     /// Low-band transient fire (0/1 impulse; only the fired hop, not the tail).
     pub low: f32,
     /// Mid-band transient fire.
@@ -34,6 +37,7 @@ impl ScopeOnsets {
     /// families deliberately absent from the scope's jet colourmap where
     /// possible; Low/Mid/High match their centroid-trace colours.
     pub const LANE_COLORS: [[f32; 3]; Self::COUNT] = [
+        [1.0, 0.0, 0.8],   // kick — magenta (the one hue the jet colourmap never paints)
         [1.0, 0.35, 0.30], // low — red
         [0.35, 1.0, 0.45], // mid — green
         [0.40, 0.62, 1.0], // high — blue
@@ -43,7 +47,7 @@ impl ScopeOnsets {
     /// the `mod_harness` CPU renderer). The return length is [`Self::COUNT`],
     /// so forgetting to list a new field here is a compile error.
     pub fn lanes(&self) -> [f32; Self::COUNT] {
-        [self.low, self.mid, self.high]
+        [self.kick, self.low, self.mid, self.high]
     }
 }
 
@@ -76,8 +80,10 @@ impl ScopeColumn {
     pub const ONSET_BASE: usize = std::mem::offset_of!(ScopeColumn, onsets) / size_of::<f32>();
 
     /// The "nothing recorded" column: hidden centroid traces, no onset ticks.
-    pub const EMPTY: Self =
-        Self { centroids: [-1.0; SCOPE_CENTROID_COUNT], onsets: ScopeOnsets { low: 0.0, mid: 0.0, high: 0.0 } };
+    pub const EMPTY: Self = Self {
+        centroids: [-1.0; SCOPE_CENTROID_COUNT],
+        onsets: ScopeOnsets { kick: 0.0, low: 0.0, mid: 0.0, high: 0.0 },
+    };
 }
 
 // The GPU contract: all-f32, no padding, onsets contiguous after centroids,
@@ -101,7 +107,7 @@ mod tests {
     fn lanes_match_memory_order() {
         let col = ScopeColumn {
             centroids: [0.1, 0.2, 0.3, 0.4],
-            onsets: ScopeOnsets { low: 1.0, mid: 2.0, high: 3.0 },
+            onsets: ScopeOnsets { kick: 0.5, low: 1.0, mid: 2.0, high: 3.0 },
         };
         // SAFETY: repr(C), all-f32, no padding (const-asserted above).
         let raw: [f32; ScopeColumn::STRIDE] = unsafe { std::mem::transmute(col) };
