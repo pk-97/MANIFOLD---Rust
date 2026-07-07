@@ -572,6 +572,87 @@ def test_chat_claim_silent_for_worker_when_flag_disabled():
     with_temp_verdicts(run)
 
 
+# ---- T3 (2026-07-07): widened artifact vocabulary — bare filenames that
+# exist in the repo (moves.md near-miss ef0c8e89), and move-id-shaped tokens
+# resolvable against moves.md's own headings. ----
+
+
+def test_chat_claim_fires_on_existing_bare_filename():
+    def run(td):
+        session = "sess-chatclaim-barefile-fire"
+        transcript = os.path.join(td, "t.jsonl")
+        write_chat_claim_transcript(
+            transcript,
+            "moves.md now documents the self-disposal exemption.",
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        d = json.loads(out) if out else None
+        check(
+            "a bare filename that really exists in .claude/daemon/ fires when ungrounded",
+            d is not None and d.get("decision") == "block" and 'move="mechanical/ungrounded-chat-claim"' in d.get("reason", ""),
+            out,
+        )
+    with_temp_verdicts(run)
+
+
+def test_chat_claim_silent_for_bare_filename_grounded_by_earlier_read():
+    def run(td):
+        session = "sess-chatclaim-barefile-grounded"
+        transcript = os.path.join(td, "t.jsonl")
+        write_chat_claim_transcript(
+            transcript,
+            "moves.md now documents the self-disposal exemption.",
+            prior_tool_calls=[("Read", {"file_path": "moves.md"})],
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        check("an earlier Read of the bare filename's path grounds it — stays silent", out == "", out)
+    with_temp_verdicts(run)
+
+
+def test_chat_claim_silent_for_nonexistent_bare_filename():
+    def run(td):
+        session = "sess-chatclaim-barefile-fake"
+        transcript = os.path.join(td, "t.jsonl")
+        write_chat_claim_transcript(
+            transcript,
+            "notes.md handles this.",
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        check("a plausible but nonexistent bare filename never becomes a candidate", out == "", out)
+    with_temp_verdicts(run)
+
+
+def test_chat_claim_fires_on_real_move_id_token():
+    def run(td):
+        session = "sess-chatclaim-moveid-fire"
+        transcript = os.path.join(td, "t.jsonl")
+        write_chat_claim_transcript(
+            transcript,
+            "mechanical/confessed-stopgap already covers this case.",
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        d = json.loads(out) if out else None
+        check(
+            "a real move-id-shaped token resolving against moves.md fires when ungrounded",
+            d is not None and d.get("decision") == "block" and 'move="mechanical/ungrounded-chat-claim"' in d.get("reason", ""),
+            out,
+        )
+    with_temp_verdicts(run)
+
+
+def test_chat_claim_silent_for_fake_move_id_shaped_token():
+    def run(td):
+        session = "sess-chatclaim-moveid-fake"
+        transcript = os.path.join(td, "t.jsonl")
+        write_chat_claim_transcript(
+            transcript,
+            "foo/bar-baz already covers this.",
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        check("a move-id-shaped token that doesn't resolve against real moves.md headings never fires", out == "", out)
+    with_temp_verdicts(run)
+
+
 # ---- mechanical/unverified-done-claim (DESIGN.md §2h.6(c)) ----
 
 
@@ -841,21 +922,23 @@ def test_stale_stopblock_sentinel_is_swept():
 def test_real_hook_process_smoke():
     """One true end-to-end run through the actual subprocess (not the
     in-process exec used by the rest of this file), against a throwaway
-    session id in the REAL repo verdicts dir, to catch anything the
-    in-process harness's module reload could paper over (import errors,
-    syntax errors, path resolution)."""
+    session id, to catch anything the in-process harness's module reload
+    could paper over (import errors, syntax errors, path resolution).
+    T11: the subprocess gets its own fresh `import valve`, so it's pointed at
+    a temp verdicts/telemetry path via env vars rather than the real repo
+    state — a parent-process monkeypatch of `valve.VERDICTS_DIR` can't reach
+    a child interpreter's own import."""
     fake_session = "test-session-for-stop-hook-smoke"
-    real_verdicts = os.path.join(DAEMON_DIR, "verdicts")
-    os.makedirs(real_verdicts, exist_ok=True)
-    payload = json.dumps({"session_id": fake_session, "prompt_id": "p1", "transcript_path": "/dev/null"})
-    r = subprocess.run([sys.executable, str(HOOK_PATH)], input=payload, capture_output=True, text=True)
-    check("real subprocess exits 0", r.returncode == 0, r.returncode)
-    check("real subprocess prints nothing for a session with no verdict", r.stdout.strip() == "", r.stdout)
-    for suffix in (".json", ".consumed", f".stopblock.p1"):
-        try:
-            os.remove(os.path.join(real_verdicts, f"{fake_session}{suffix}"))
-        except OSError:
-            pass
+    with tempfile.TemporaryDirectory() as tmp_verdicts:
+        env = {
+            **os.environ,
+            "DAEMON_VERDICTS_DIR": tmp_verdicts,
+            "DAEMON_TELEMETRY_PATH": os.path.join(tmp_verdicts, "telemetry.jsonl"),
+        }
+        payload = json.dumps({"session_id": fake_session, "prompt_id": "p1", "transcript_path": "/dev/null"})
+        r = subprocess.run([sys.executable, str(HOOK_PATH)], input=payload, capture_output=True, text=True, env=env)
+        check("real subprocess exits 0", r.returncode == 0, r.returncode)
+        check("real subprocess prints nothing for a session with no verdict", r.stdout.strip() == "", r.stdout)
 
 
 # ---- catch-up Stop-wait (re-ruled 2026-07-05: wait for the observer's
@@ -1435,6 +1518,11 @@ def main():
         test_chat_claim_loses_priority_to_pending_whisper,
         test_chat_claim_applies_to_worker_when_flag_enabled,
         test_chat_claim_silent_for_worker_when_flag_disabled,
+        test_chat_claim_fires_on_existing_bare_filename,
+        test_chat_claim_silent_for_bare_filename_grounded_by_earlier_read,
+        test_chat_claim_silent_for_nonexistent_bare_filename,
+        test_chat_claim_fires_on_real_move_id_token,
+        test_chat_claim_silent_for_fake_move_id_shaped_token,
         test_done_claim_fires_on_mutation_without_verification,
         test_done_claim_silent_when_turn_ran_a_test,
         test_done_claim_silent_when_turn_read_a_render,
