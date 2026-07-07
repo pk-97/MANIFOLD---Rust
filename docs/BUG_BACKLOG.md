@@ -44,7 +44,7 @@ or human can read it, and it needs no external tool.
 | BUG-009 | **stateless-gate-miss** | harvest skip resets StateStore-held scalar state (HIGH) |
 | BUG-010 | **wgsl-first-entry** | multi-entry wgsl_compute silently dispatches the first (MED) |
 | BUG-011 | **fused-output-oversize** | fused output buffer sized to max of all inputs (MED) |
-| BUG-015 | **inspector-overlap** | sections at stale offsets after scroll (MED, repro needed — headless attempt 07-07 clean, fixture too short) |
+| BUG-015 | **inspector-overlap** | inspector shows stale content (section overlap after scroll; edge/margin ghost fragments) — concrete cache-staleness suspect + Fable handoff 07-07 (MED, repro needs a new cache-driving harness) |
 | BUG-025 | **timeline-scissor-bleed** | clip content bleeds across row bounds (MED, repro needed — scrolled headless render 07-07 clean) |
 | BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
 | BUG-033 | **ui-snapshot-broken** | FIXED — verified in-tree 2026-07-07 (harness builds + runs) |
@@ -994,6 +994,66 @@ out in both. Not reproduced. The missing ingredient per the symptom is timeline 
 DURING a scrolled state (rebuild-while-scrolled); the `--script` driver can now interleave
 scroll + clip-drag + snapshot in one flow (post real-dispatch fix, this branch), so a
 dedicated repro flow is now writable when this bug is next picked up.
+
+**Sighting + concrete progress 2026-07-07 (Opus session)** — Peter hit inspector
+artifacts again: on a Fluid Simulation generator (Master tab), stale fragments at the
+panel's left edge (one is a patch of viewport/video showing through) plus a clipped sliver
+above the Layer/Master tab strip. Screenshot in this session's transcript. May be this bug
+or a close sibling — same suspect surface (stale inspector content), same repro difficulty.
+
+_Ruled out this session:_
+- NOT the just-merged trigger-gate drawer (§9): the drawer is CLOSED in the repro
+  screenshot. Two proposed mechanisms for it — a "Mode row" escaping its clip parent, and an
+  unbalanced Overlay paint-layer push — are both refuted by the code (every node in
+  `build_toggle_trigger_row` parents to one `parent`; there is zero paint-layer manipulation
+  in the card/drawer path).
+- NOT a settled-state containment error: built the armed trigger-gate card into a real
+  `UITree` and measured — one root node, max node bottom == the card's reserved height
+  exactly, zero overflow. Height accounting (incl. the Mode row via `audio_config_height(true)`)
+  is exact.
+
+_New concrete suspect (stronger than the two above):_ the inspector's incremental atlas
+cache. `UICacheManager::render_dirty_panels`
+([ui_cache_manager.rs:175](../crates/manifold-renderer/src/ui_cache_manager.rs#L175))
+repaints only dirty CARD sub-regions and trusts `LoadOp::Load` for everything else. The
+sub-regions are the cards only
+([inspector.rs:506 `sub_region_ranges`](../crates/manifold-ui/src/panels/inspector.rs#L506)) —
+section backgrounds, tab strip, padding, inter-card gaps and margins sit in NO sub-region, so
+an incremental frame never repaints them and a stale pixel there survives until the next full
+render. The guard `extents_unchanged`
+([:282](../crates/manifold-renderer/src/ui_cache_manager.rs#L282)) approximates each card's
+painted extent by its FIRST node's bounds, so anything a card paints OUTSIDE its frame is
+untracked.
+
+_Measured seed candidate:_ `build_toggle_trigger_row`
+([param_slider_shared.rs:1532](../crates/manifold-ui/src/panels/param_slider_shared.rs#L1532))
+lacks the `drawer_reveal` reveal-clip that `build_param_row` has
+([:2005-2017](../crates/manifold-ui/src/panels/param_slider_shared.rs#L2005)), so its drawer
+paints ~120px below the card frame, unclipped, for the whole open/close tween (measured:
+0 clip regions, 119.5px overflow, vs the slider path's 1 clip region that contains its
+overflow).
+
+_The crack in the hypothesis (why this is a reasoning problem, not a quick fix):_
+`extents_unchanged` keys on the frame's bounds, and the trigger-drawer overflow exists only
+while the frame is ALSO resizing (mid-tween), which changes the frame bounds → guard trips →
+full self-clearing render → no ghost. So the guard MAY already prevent this exact ghost class.
+
+_The one open reasoning question:_ is there any realistic in-place edit that keeps a card's
+first-node (frame) bounds stable while changing what it paints outside that frame — OR that
+paints into the never-repainted margins outside all sub-regions? If yes, the ghost is real;
+fix = always repaint the inspector's opaque full-rect background before the dirty sub-regions
+AND clip every card render to its own frame. If no, the guard covers the card case and the
+culprit is the margins / a panel-boundary atlas-staleness issue (which fits the left-edge +
+video-bleed fragments better).
+
+_Repro difficulty:_ `render_ui_to_png` renders the tree directly and bypasses
+`UICacheManager` entirely
+([render.rs:44-51](../crates/manifold-app/src/ui_snapshot/render.rs#L44)), so NO existing
+headless snapshot can show this class — every snapshot is a clean full render. A repro needs
+a new harness driving `render_dirty_panels` across full→edit→incremental and reading back the
+atlas. Blast radius is contained: only the inspector passes `sub_regions`; every other panel
+full-renders when dirty and can't ghost this way. Handed to Fable as a reasoning task
+(2026-07-07). Same family as BUG-025 (timeline-scissor-bleed).
 
 ### BUG-016 — Imported .glb layers are black boxes: no card params, no Model File picker, edit paths silently no-op — FIXED 2026-07-04 (`2d5e4dc6`)
 

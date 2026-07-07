@@ -765,6 +765,14 @@ Catalog 34→41.
   so it always races the Stop wait. The classifier keeps the nuanced cases
   (bundled claims, wrong-medium evidence); this catches the literal form
   instantly. UNVALIDATED; pass 2 scores it and pulls it if noisy.
+  **MUTED 2026-07-07 (sleep pass 2 night-half, Fable): 0/3 TP on the first
+  live day** — verdicts/mutes/, 7 days. All three fires hit done-claims that
+  WERE verified: twice in preceding turns of the same session (84a58ca5 —
+  the per-turn verification check can't see backward across turns), once by
+  git commit/push output in-turn on a docs-only landing (a9e1202b — git
+  output isn't in the verification-class table). Unmute only with a fix for
+  at least the git-output case; the cross-turn case may need a claims-scope
+  rule ("this turn's work" vs report-of-earlier-work).
 - **cooldown:** standard
 - **payload:**
 > The turn is ending on a done-claim, and nothing in this turn ran where that
@@ -821,7 +829,14 @@ Catalog 34→41.
 
 ## escalate/checkpoint
 - **signature:** Selected by the daemon, not the rubric: the same drift anchor has
-  fired twice this session and the drift persists.
+  fired twice this session and the drift persists. Fire-count alone is not
+  repeated drift: when the session's prior fires are distinct move families that
+  were each acknowledged or resolved, or the work's failure signal is shrinking
+  (errors dropping, phases landing), never fire — require the SAME named drift
+  to have recurred after its correction. (Clause added sleep pass 2 night-half,
+  2026-07-07: graded 2 TP / 7 FP this window; all seven FPs were fire-count or
+  session-length matches on linear/converging sessions — 10977941 s7, 5d79cea3
+  s8, 84a58ca5 s6, f3a51c18 s5, a9e1202b s5, c9e4d45d s7, 45a4aade s8.)
 - **cooldown:** once
 - **payload:**
 > Stop forward work. The session has been correcting the same drift repeatedly and
