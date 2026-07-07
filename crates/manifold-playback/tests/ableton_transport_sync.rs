@@ -51,6 +51,10 @@ struct FakeAbleton {
     /// AbletonOSC/Live's command-processing latency (default 100ms, §1).
     scheduler_delay: f64,
     extra_latency: f64,
+    /// Seconds between `current_song_time` listener reports while playing.
+    /// Defaults to the nominal 10 Hz; real Live under load reports slower —
+    /// the 2026-07-07 L4 escape happened in exactly that regime.
+    listener_cadence: f64,
     /// Queued inbound commands: (message, apply-at instant).
     inbox: Vec<(OutMsg, f64)>,
     drop_next_inbound: u32,
@@ -74,6 +78,7 @@ impl FakeAbleton {
             last_advance_at: 0.0,
             scheduler_delay: 0.1,
             extra_latency: 0.0,
+            listener_cadence: 0.1,
             inbox: Vec::new(),
             drop_next_inbound: 0,
             drop_next_outbound: 0,
@@ -97,6 +102,11 @@ impl FakeAbleton {
 
     fn with_scheduler_delay(mut self, secs: f64) -> Self {
         self.scheduler_delay = secs;
+        self
+    }
+
+    fn with_listener_cadence(mut self, secs: f64) -> Self {
+        self.listener_cadence = secs;
         self
     }
 
@@ -185,7 +195,7 @@ impl FakeAbleton {
         if self.is_playing {
             let due = self
                 .last_song_time_emit_at
-                .is_none_or(|t| now - t >= 0.1);
+                .is_none_or(|t| now - t >= self.listener_cadence);
             if due {
                 events.push(ObsEvent::SongTime(self.song_time_beats));
                 self.last_song_time_emit_at = Some(now);
@@ -397,9 +407,18 @@ fn f2_seek_survives_packet_loss() {
     let settled = h.run_until_settled(true, 200);
     assert!(settled, "machine never recovered from the dropped seek packet");
     assert_eq!(h.machine.status(), TransportSyncStatus::Locked);
+    // The retransmit carries the engine's CURRENT beat (anchor-fix
+    // semantics), so the meaningful property is that the two playheads
+    // converged — not that Ableton sits at the original gesture beat.
     assert!(
-        (h.fake.song_time_beats - 128.0).abs() < 1.2,
-        "fake did not converge after packet-loss recovery: {}",
+        (h.fake.song_time_beats - h.engine_beat).abs() < 1.2,
+        "playheads did not converge after packet-loss recovery: fake {} vs engine {}",
+        h.fake.song_time_beats,
+        h.engine_beat
+    );
+    assert!(
+        h.fake.song_time_beats >= 128.0,
+        "Ableton must land forward of the gesture beat, never behind it: {}",
         h.fake.song_time_beats
     );
 }
@@ -649,5 +668,74 @@ fn f7_slow_scheduler_400ms_still_converges() {
         elapsed > 0.6,
         "retry interval did not grow past the 0.3s-seed baseline (2×RTT=0.6s): \
          first retransmit landed at {elapsed:.3}s after send"
+    );
+}
+
+// ── F8 — the 2026-07-07 L4 escape: high tempo + real listener latency ──
+
+/// Play-from-cursor at 174 BPM with a SLOW `current_song_time` listener
+/// (0.5s cadence — real Live under load; the nominal 10 Hz is not owed).
+/// With a frozen anchor, the first position report arrives after Ableton
+/// has already advanced past the ±1-beat ack window, so the retry fires
+/// first — and re-seeks Ableton BACKWARDS to the stale anchor. Observed on
+/// stage 2026-07-07 as: Ableton visibly yanked back once per retry, then
+/// MANIFOLD dragged back by MIDI clock after retries exhausted.
+///
+/// Two properties: the gesture converges to Locked (interval ack accepts
+/// any position consistent with having started from the anchor), and
+/// Ableton's playhead NEVER moves backwards once it has started playing
+/// (retransmits carry the current beat, not the stale anchor).
+///
+/// Honesty note: this scenario does NOT fail against the pre-fix machine —
+/// the fake acks too fast (its first listener report is immediate and its
+/// seek applies atomically with the play). The unit-level regression proof
+/// is `transport_sync::tests::t7b_retransmit_seeks_current_beat_not_stale_anchor`,
+/// which was red before the fix. The real-rig ack starvation this escape
+/// exposed is instrumented by the `[ABL-SYNC]` info logs, not simulated here.
+#[test]
+fn f8_high_tempo_slow_ack_no_yankback() {
+    let fake = FakeAbleton::new()
+        .with_song_time(17.0)
+        .with_tempo(174.0)
+        .with_listener_cadence(0.5);
+    let mut h = Harness::new(fake);
+
+    h.local_play(128.0);
+
+    let mut prev_fake_beat = h.fake.song_time_beats;
+    let mut started_playing = false;
+    let mut settled = false;
+    for _ in 0..600 {
+        h.frame(FRAME_DT, true);
+        if h.fake.is_playing {
+            if started_playing {
+                assert!(
+                    h.fake.song_time_beats >= prev_fake_beat - 1e-3,
+                    "Ableton's playhead moved BACKWARDS while playing \
+                     ({} -> {}): a retransmit re-sent a stale anchor",
+                    prev_fake_beat,
+                    h.fake.song_time_beats
+                );
+            }
+            started_playing = true;
+            prev_fake_beat = h.fake.song_time_beats;
+        }
+        if !h.machine.sync_pending() {
+            settled = true;
+            break;
+        }
+    }
+
+    assert!(settled, "gesture never acknowledged at 174 BPM / 0.5s latency");
+    assert_eq!(
+        h.machine.status(),
+        TransportSyncStatus::Locked,
+        "must lock, not degrade, under realistic latency"
+    );
+    assert!(
+        (h.fake.song_time_beats - h.engine_beat).abs() < 2.0,
+        "playheads did not converge: fake {} vs engine {}",
+        h.fake.song_time_beats,
+        h.engine_beat
     );
 }

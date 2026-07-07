@@ -86,7 +86,7 @@ fn project_local_generator_params_survive_reload() {
         let gp = project.timeline.layers[0]
             .gen_params_mut()
             .expect("generator instance");
-        assert!(gp.params.len() > 0, "template must seed card params");
+        assert!(!gp.params.is_empty(), "template must seed card params");
         let param_id = gp.params.iter().next().unwrap().id().to_string();
         let spec = gp.params.iter().next().unwrap().spec.clone();
         gp.set_base_param(&param_id, 0.37);
