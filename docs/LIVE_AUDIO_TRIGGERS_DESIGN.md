@@ -6,11 +6,15 @@ stems (an L4 check). Header corrected 2026-07-05 (it still read "IN PROGRESS").
 Branch `live-audio-triggers` (off `audio-clip-detection`). Created 2026-06-18.
 
 **§8 addendum (2026-07-07): Param triggers — audio fires the Trigger controls.
-P1 SHIPPED 2026-07-07 (worktree `wave/param-triggers`), P2-P4 in progress.** Same
-evaluator machinery, new target: instead of firing one-shot clips, a transient
-pulses a playing generator's trigger response (and `is_trigger` cards on effects).
-Peter's ask, verbatim: *"if Trigger is enabled we can choose if we want rising clip
-edge (default) OR the transient trigger OR both."*
+P1+P2+P3a SHIPPED 2026-07-07 (worktree `wave/param-triggers`): the engine fires,
+the renderer feeds generators AND effect chains, Strobe proves the effect-side
+reachability at L1. P3b (the UI drawer to configure it) is SCOPED, not built —
+see §8.4 P3b for why it's bigger than the original brief and what a follow-up
+session needs to read first. P4 (landing) pending.** Same evaluator machinery,
+new target: instead of firing one-shot clips, a transient pulses a playing
+generator's trigger response (and `is_trigger` cards on effects). Peter's ask,
+verbatim: *"if Trigger is enabled we can choose if we want rising clip edge
+(default) OR the transient trigger OR both."*
 
 > **This doc is the cross-compaction tracker.** A fresh session reads §0 first, works
 > the §Phase checklist, ticks boxes + commits as it goes, and updates §0 at the end.
@@ -497,13 +501,61 @@ app       PanelAction + dispatch + state_sync card view                WIRE
       only to L1 (tests green) for this phase; Peter's live feel-pass must cover
       this alongside the existing §7 feel-pass debt. The effect-side look lands
       with P3's Strobe card, also L4-owed.
-- [ ] **P3 — UI + effect reachability.** `is_trigger_gate` flag + 11 generator preset
-      edits; Strobe upgraded with a `clip_trigger` toggle card + minimal trigger→flash
-      response (D6 reachability rule; §2.5 read of Strobe's graph first);
-      `check-presets` after all JSON edits; drawer spec on trigger cards
-      (send/band/sensitivity/mode; no mode row on `is_trigger` cards); command +
-      dispatch + state_sync; collapsed-row mode indicator. Gate: ui tests + clippy +
-      manual drawer pass + the effect-side look: kick fires Strobe flashes on a playing
-      layer.
+- [x] **P3a — Model + Strobe reachability (SHIPPED).** `is_trigger_gate` flag
+      (`ParamSpecDef.is_trigger_gate`) + all 11 generator preset edits
+      (`isTriggerGate: true` on each `clip_trigger` card) + Strobe upgraded with a
+      `clip_trigger` toggle card wired to a minimal trigger→flash response
+      (D6 reachability rule; §2.5 audit of Strobe's graph done first — composed
+      entirely from existing primitives: `system.generator_input` →
+      `node.trigger_gate` (enabled by the toggle) → `node.envelope_decay` (the same
+      atom FluidSim2D's clip-trigger state machine uses) → `node.math` (Max) combined
+      with the existing beat-gate square wave → `flash.amount`). Gate: `check-presets`
+      (46/46) + a real `gpu-proofs` test that builds and RUNS the bundled Strobe
+      preset end-to-end and proves clip_trigger ON flashes on a trigger_count jump
+      while OFF doesn't (`preset_runtime::generator_input_tests::
+      strobe_clip_trigger_card_flashes_on_trigger_count_jump_when_enabled`) — the
+      concrete effect-side "kick fires Strobe" proof at the graph-value (L1) level.
+      `docs/node_catalog.json` regenerated (Strobe is now a usage example for 3
+      primitives). Full gpu-proofs suite (1245) + default workspace sweep + clippy
+      all green.
+- [ ] **P3b — UI drawer + dispatch (SCOPED, NOT BUILT — deferred to a follow-up
+      session; do not skip silently).** Investigation found this is substantially
+      bigger than the original phase brief implied — a genuinely new UI feature, not
+      a drawer-config tweak. Findings, so a follow-up session doesn't re-derive them:
+      - **D5b (`is_trigger` cards reuse the existing per-param audio-mod "A"
+        drawer)** requires touching the SAME gate at 6 call sites, not 1:
+        `param_slider_shared.rs:1838` (click resolution, already found) PLUS
+        `param_card.rs:1304`, `:2266`, `:3289`, `:3662` (height computation for both
+        generator and effect card variants, and row-building). The row-building
+        site at `param_card.rs:2266` is NOT a boolean gate — the toggle/trigger
+        branch allocates NO D/E/A lane space at all ("A toggle can't be modulated,
+        so the D/E/A lane to its right is correctly left empty"), so reaching
+        `is_trigger` cards means restructuring that branch to reserve lane space
+        conditionally, not flipping a flag.
+      - **D6 (`is_trigger_gate` cards get a NEW drawer: Dropdown(send) ·
+        Segmented(band) · Slider(sensitivity) · Segmented(mode))** cannot reuse the
+        existing per-param audio-mod drawer's dispatch as-is: `ParameterAudioMod`
+        lives in a per-param `Vec` (`PresetInstance.audio_mods`), while
+        `AudioTriggerMod` (D2) is a single `Option` field
+        (`PresetInstance.audio_trigger`) — the click→edit dispatch, the
+        `DrawerIds`/config struct, and the `EditingService` command (new
+        `SetAudioTriggerModCommand`, mirroring `SetAudioSendTriggersCommand`'s
+        whole-field-capture shape, not the per-param audio-mod command) are all new,
+        not reused. The `DrawerSpec`/`drawer::build` MECHANISM (§10.2 of
+        AUDIO_MODULATION_DESIGN) is reusable — only the model binding and the extra
+        mode row are new.
+      - **Collapsed-row mode indicator** (show the mode on the collapsed card row
+        so `Transient`-only isn't a silent trap) has no existing precedent to
+        extend from; small, but genuinely new.
+      Brief for the follow-up session: read `param_slider_shared.rs`'s
+      `check_row_click` (~1830-1924) and `param_card.rs`'s `build_param_row` +
+      `compute_height_effect`/`compute_height_generator` end to end first (the
+      §2.5-style read this phase skipped due to running out of session budget);
+      then split into two PRs — (1) `is_trigger` reachability on the existing
+      drawer (small, mechanical once the layout branch is understood), (2) the new
+      `AudioTriggerMod` drawer + command + dispatch + state_sync + collapsed-row
+      indicator (the real build). Gate: ui tests + clippy + manual drawer pass +
+      the effect-side look already proven at L1 above should also be exercised via
+      the new UI at L3/L4 once it exists.
 - [ ] **P4 — Ship.** Workspace gate, docs §0/§8 status flip, memory updated, landed per
       the git landing protocol. Peter's feel-pass (L4) explicitly owed and logged.
