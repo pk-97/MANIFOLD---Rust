@@ -112,3 +112,15 @@ only — by design, precedent: the Agent-model annotation). The classifier can
 then see the warning; the move's signature does the rest. Specimen the move
 must catch: 5363065f — `git checkout -b` in the main checkout with the
 warning attached, no weighing sentence, Peter intervened manually.
+
+## T11 — test suites leak records into live telemetry (third purge this week)
+Subprocess-style tests (test_worker_nudges' real-subprocess delivery test,
+test_stop_valve's hook-invocation tests) execute the real hooks, which write
+the REAL telemetry.jsonl and verdicts/ — module-attribute monkeypatching
+cannot reach a child process. Purge history: 30 sess-* records (sleep pass
+1), 1 test-session record + 9 test-ses/sess1 records (pass 2 night-half,
+the latter from the pass's own suite runs). Fix: valve.py (and anything a
+hook reads paths from) honors env overrides — DAEMON_TELEMETRY_PATH,
+DAEMON_VERDICTS_DIR — and every subprocess-invoking test sets them to temp
+paths; in-process tests keep the existing module patching. Test: run the
+full suite, assert live telemetry.jsonl byte-identical before/after.

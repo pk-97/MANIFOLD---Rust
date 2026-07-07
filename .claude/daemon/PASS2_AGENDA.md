@@ -34,6 +34,19 @@ observed session (69 FP / 100 sessions — passes <1, up from pass 1's 0.26);
 recall insufficient-data-leaning-good (72 TP vs ~15 unique logged FNs — a
 floor-quality estimate, see item 9).
 
+Addendum (~20:50, same night — Peter flagged stragglers): +4 records for
+fires/grades that arrived while the pass ran. Three corrective TPs (incl.
+**coaching/price-the-fork's FIRST-ever fire — coaching is now 5/0 this
+window**) and the chat-claim FP→TP reversal above. Corrective totals become
+75/69/1 ≈ 52%. Two a2c972aa fires (seq 4 git-landing, seq 5) left for that
+session's own end-of-session grades / pass 3. One process casualty: the
+pass cleared live_grades.session.jsonl at 20:26 and destroyed a 20:12
+self-grade it hadn't folded (a2c972aa seq 2 — re-graded from transcript).
+Pass-3 procedure: defer the session-file clear to the pass's very last
+step, and clear only lines whose fire predates the pass's telemetry
+snapshot. Test-residue purge #3 also ran (9 records, from the pass's own
+suite runs — T11 is the root fix).
+
 Actions taken by the night-half (dated notes in the files): **worker-nudges
 flag PULLED** (2/10, disable rule; return path in DESIGN §2b note — includes
 the read-only-worker whisper-refusal framing defect, 93150901/a8287d);
@@ -122,10 +135,14 @@ is a code edit for this pass, one concern, small blast radius.
    self-grade uptake (more agent_id-bearing grade lines), worker review
    threshold (20 events — placeholder, tune from data).
    **PARTIALLY MEASURED (night-half):** unverified-done-claim **0/3 → MUTED**
-   (see moves.md note); ungrounded-chat-claim **0/2** — both FPs are the T3
-   provenance-vocabulary gap (5363065f: system-context + earlier tool result;
-   f4b895d7: artifacts read earlier in-session + the flagged turn was a
-   PROPOSAL, not a repo-fact report) — T3 now has two specimens;
+   (see moves.md note); ungrounded-chat-claim **1 TP / 1 FP** — the pass
+   first graded the f4b895d7 fire FP (two named artifacts had earlier
+   in-session reads) then REVERSED it to TP on the session's own evidence
+   (the OTHER named artifacts were unverified recall; rechecking found
+   render_ui_to_png bypasses UICacheManager and changed the plan — the
+   pass had sampled the named artifacts instead of checking all of them;
+   reversal record in the corpus). The 5363065f FP (system-context +
+   earlier tool-result provenance) still motivates T3;
    landing-doc-reflex **1/1 + 1 FP-lean** (4340cb05 TP produced the missing
    report; 5e1aca3d fixtures-freeze had its doc trace in a memory update —
    consider a landing-size/class threshold, n=2, no edit). Sharpened
