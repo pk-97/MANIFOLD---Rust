@@ -70,10 +70,62 @@ or human can read it, and it needs no external tool.
 | BUG-063 | **silent-load-repairs** | overlap repair / orphan purge / unknown-effect strip delete project data on load with log-only notice; next save persists the loss (MED-HIGH) |
 | BUG-064 | **save-rename-before-fsync** | V2 save fsyncs the directory but never the temp file — power loss can leave a valid-named archive with unwritten data blocks (MED) |
 | BUG-065 | **24-bit-snapshot-hash** | save dedup + history identity key on 6 hex chars of SHA-256; a collision skips a real save or restores the wrong snapshot (LOW prob / HIGH cost) |
+| BUG-066 | **fluid3d-corner-drift** | FluidSim3D density herds into one corner (top-right at default params): turbulence noise is a wandering net tide + slope force has a sign-following, feather-scaled diagonal drift; root of the drift NOT yet found — 4 hypotheses refuted with evidence, harness in-repo (MED-HIGH, visible on stage) |
 
 ## Open
 
-### BUG-062 (no-forward-version-guard) — an older build opening a newer .manifold silently strips it and saves the loss back — HIGH (latent; becomes live the day two builds coexist)
+### BUG-066 (fluid3d-corner-drift) — FluidSim3D density herds into one corner; two causes isolated, one root still open — MED-HIGH (visible on stage in long-running clips)
+
+**Found 2026-07-07 by Peter on the live output (subtle top-right dominance, no container and
+cube container), bisected headless the same session.** Harness:
+`crates/manifold-renderer/tests/fluid3d_bias.rs` (gpu-proofs, `--ignored`) — renders the
+bundled preset 900 frames per scenario, prints per-quadrant luminance shares, dumps PNGs to
+`/tmp/fluid3d_bias/`. Scenario matrix is edit-and-rerun (~12s/scenario at 512²); it injects
+card params past their UI ranges (e.g. `curl 0`/`90`, `flow` sign flip), which the UI can't.
+
+**Established (all at 512², cube container, deterministic):**
+1. Baseline is clean: with turbulence=0, curl=0, flow=0 the steady state is symmetric
+   (≈25% per quadrant) — spawn, NGP scatter, resolve, integrator, container repel/bounds,
+   camera splat are not the bias.
+2. **Turbulence is a wandering tide** (largest contributor at defaults): the 3-plane 2D
+   simplex in `simplex_noise_force_3d_at_particles_body.wgsl` spans only ~2 lattice cells
+   across the volume (`noise_pos = pos * 2.0`), so its instantaneous volume-mean is a real
+   net force (measured ±0.05/axis in a CPU replica; drifts over ~30–60s as
+   `noise_time = time*0.1` scrolls). Whole fluid leans on one wall, wall changes slowly.
+   Fix shape: make the per-axis noise zero-mean over the volume (subtract the analytic/
+   sampled mean, or raise frequency + add octaves — changes the look, needs Peter's eye).
+3. **Slope force has a systematic diagonal drift — root cause OPEN.** slope-only (turb 0,
+   curl 0, flow −0.01 default) pools 33–37% of luminance in the top-right with voxel-aligned
+   "shelves"; at feather=40 it's a violent bulk translation (TR 50% by f300, striping against
+   the +x face); at feather=4 the bias is gone. Flipping `flow` sign mirrors it to
+   bottom-left; rotating the camera 180° mirrors it on screen (so sim-space, +x/+y-ward).
+   The mean slope force over all particles is nonzero — for a pure density-gradient force
+   that should be impossible (momentum conservation), so something in
+   density→blur×3→gradient→curl_slope→blur×3→trilinear-sample is spatially shifted, and the
+   shift grows with blur radius.
+4. **Refuted with evidence (don't re-chase):** (a) NGP-deposit/trilinear-read PIC mismatch —
+   a matched trilinear (CIC) 8-corner deposit in the scatter body changed the trajectory
+   ~0.1% and the bias not at all; (b) Metal 8-bit subtexel rounding of the blur's bilinear
+   tap-pair offsets — replacing pairs with exact integer-offset taps changed nothing;
+   (c) codegen uv convention — the 3D wrapper uses texel-center `(id+0.5)/dims`
+   (codegen.rs:168); (d) resolve index mapping — `id.z*dims.x*dims.y + id.y*dims.x + id.x`
+   matches the scatter packing exactly. Also checked clean by read: gradient central-diff
+   wrap, container SDFs, euler step, samplers (linear, clamp-to-edge).
+
+**Next steps (Opus):** the drift needs blur *range*, not blur sampling mode. Candidates, in
+order: (1) synthetic-volume antisymmetry probe at the kernel level — upload a symmetric
+Gaussian density, run blur→grad→(slope)→blur, sample at mirrored probe positions with the
+codegen standalone kernels (pattern: `gpu_tests` in scatter_particles_3d.rs), assert
+F(p) = −F(mirror p) stage by stage; the first stage that breaks antisymmetry is the bug.
+(2) The executor/fusion schedule for the 6-blur chain — if any blur pass reads a stale
+(last-frame or not-yet-written) intermediate, symmetric math still yields a lagged, shifted
+field; check the plan order + barriers for Render Volume/Force Field groups (this is the one
+hypothesis that needs blur *range* to matter and survived every kernel-level check).
+(3) clamp-to-edge interaction at large sigma: blur clamps while the gradient wraps
+toroidally — mixed boundary conventions couple opposite faces asymmetrically once the kernel
+reaches the volume edge. Fix at whichever level the probe convicts; then rerun the harness
+matrix (slope_only + slope_feather40 must go ≈25% flat) and give Peter a look-pass, since
+zero-mean turbulence (item 2) changes the fluid's feel. — an older build opening a newer .manifold silently strips it and saves the loss back — HIGH (latent; becomes live the day two builds coexist)
 
 **Found 2026-07-07 by the PROJECT_IO_MAP read (docs/PROJECT_IO_MAP.md §9 E1).**
 `migrate_if_needed` (migrate.rs:5) only gates on `is_version_less_than` — there is no check
