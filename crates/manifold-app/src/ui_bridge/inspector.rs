@@ -19,6 +19,7 @@ use manifold_editing::commands::audio_mod::{
     AddAudioModCommand, RemoveAudioModCommand, SetAudioModShapeCommand, SetAudioModSourceCommand,
     ToggleAudioModEnabledCommand,
 };
+use manifold_editing::commands::audio_trigger::SetAudioTriggerModCommand;
 use manifold_editing::commands::audio_setup::{
     AddAudioSendCommand, RemoveAudioSendCommand, RenameAudioSendCommand, SetAudioCrossoversCommand,
     SetAudioInputDeviceCommand, SetAudioSendChannelsCommand, SetAudioSendFloorCommand,
@@ -170,6 +171,42 @@ fn graph_audio_mod_dual_edit<F>(
                     .and_then(|ms| ms.iter_mut().find(|a| a.param_id == pid))
                 {
                     edit2(m);
+                }
+            });
+        })),
+    );
+}
+
+/// Live dual-edit of the instance's `audio_trigger` (§8 D6), mirroring
+/// [`graph_audio_mod_dual_edit`] for the audio-TRIGGER drawer's Sensitivity
+/// slider drag: applies `edit` to `Option<AudioTriggerMod>` on both the
+/// UI-thread project mirror and (via `MutateProjectLive`) the content
+/// thread, so the slider tracks under the cursor with no undo entry per
+/// frame — the undo command lands on `AudioTriggerModSensitivityCommit`. A
+/// no-op if `audio_trigger` is `None` (nothing to edit; the slider only
+/// exists in the drawer while it's armed).
+fn graph_audio_trigger_dual_edit<F>(
+    project: &mut Project,
+    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    target: &manifold_core::GraphTarget,
+    edit: F,
+) where
+    F: Fn(&mut manifold_core::audio_trigger::AudioTriggerMod) + Clone + Send + 'static,
+{
+    use crate::content_command::ContentCommand;
+    project.with_preset_graph_mut(target, |inst| {
+        if let Some(cfg) = inst.audio_trigger.as_mut() {
+            edit(cfg);
+        }
+    });
+    let edit2 = edit.clone();
+    let t = target.clone();
+    ContentCommand::send(
+        content_tx,
+        ContentCommand::MutateProjectLive(Box::new(move |p| {
+            p.with_preset_graph_mut(&t, |inst| {
+                if let Some(cfg) = inst.audio_trigger.as_mut() {
+                    edit2(cfg);
                 }
             });
         })),
@@ -378,6 +415,7 @@ pub(super) fn dispatch_inspector(
     target_snapshot: &mut Option<f32>,
     decay_snapshot: &mut Option<f32>,
     audio_shape_snapshot: &mut Option<manifold_core::audio_mod::AudioModShape>,
+    audio_trigger_snapshot: &mut Option<manifold_core::audio_trigger::AudioTriggerMod>,
     audio_crossover_snapshot: &mut Option<(f32, f32)>,
     audio_send_gain_drag_snapshot: &mut Option<f32>,
     audio_send_sensitivity_drag_snapshot: &mut Option<Vec<manifold_core::audio_trigger::TriggerRoute>>,
@@ -1621,6 +1659,175 @@ pub(super) fn dispatch_inspector(
                             param_id.clone(),
                             old_shape,
                             new_shape,
+                        ));
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
+            }
+            DispatchResult::handled()
+        }
+
+        // ── Audio TRIGGER mod (§8 D6, `isTriggerGate` cards) — a single
+        // per-instance `Option<AudioTriggerMod>` field, not a per-param list.
+        // Every edit routes through ONE `SetAudioTriggerModCommand`
+        // (whole-field-capture, mirrors `SetAudioSendTriggersCommand`), not
+        // the per-param audio-mod command family above.
+        PanelAction::AudioTriggerModToggle(gpt) => {
+            let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            else {
+                return DispatchResult::structural();
+            };
+            let old = project
+                .with_preset_graph_mut(&target, |inst| inst.audio_trigger.clone())
+                .flatten();
+            let new = match &old {
+                Some(cfg) => {
+                    let mut cfg = cfg.clone();
+                    cfg.enabled = !cfg.enabled;
+                    Some(cfg)
+                }
+                None => {
+                    // Arm: assign the project's first audio send (mirrors
+                    // `AudioModToggle`'s no-sends fallback). No sends → inert;
+                    // the card-side `audio_trigger_toggle_action` opens Audio
+                    // Setup instead of emitting this action in that case, but
+                    // re-check defensively.
+                    let Some(send_id) = project.audio_setup.sends.first().map(|s| s.id.clone())
+                    else {
+                        return DispatchResult::structural();
+                    };
+                    Some(manifold_core::audio_trigger::AudioTriggerMod {
+                        enabled: true,
+                        source: manifold_core::audio_mod::AudioModSource {
+                            send_id,
+                            feature: manifold_core::audio_mod::AudioFeature::new(
+                                manifold_core::audio_mod::AudioFeatureKind::Transients,
+                                manifold_core::audio_mod::AudioBand::Full,
+                            ),
+                        },
+                        sensitivity: 0.5,
+                        mode: manifold_core::audio_trigger::TriggerFireMode::default(),
+                        edge: Default::default(),
+                    })
+                }
+            };
+            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
+                SetAudioTriggerModCommand::new(DriverTarget::from(&target), old, new),
+            );
+            boxed.execute(project);
+            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            DispatchResult::structural()
+        }
+        PanelAction::AudioTriggerModSetSource(gpt, send_id, band) => {
+            let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            else {
+                return DispatchResult::structural();
+            };
+            let old = project
+                .with_preset_graph_mut(&target, |inst| inst.audio_trigger.clone())
+                .flatten();
+            let core_band = crate::ui_translate::audio_band_to_core(*band);
+            let new = match &old {
+                Some(cfg) => {
+                    let mut cfg = cfg.clone();
+                    cfg.source.send_id = send_id.clone();
+                    cfg.source.feature.band = core_band;
+                    Some(cfg)
+                }
+                // Defensive: the send/band buttons only render while the
+                // drawer is open, which implies `audio_trigger` already
+                // exists — but construct a sensible fresh config rather than
+                // silently dropping the click if that invariant ever breaks.
+                None => Some(manifold_core::audio_trigger::AudioTriggerMod {
+                    enabled: true,
+                    source: manifold_core::audio_mod::AudioModSource {
+                        send_id: send_id.clone(),
+                        feature: manifold_core::audio_mod::AudioFeature::new(
+                            manifold_core::audio_mod::AudioFeatureKind::Transients,
+                            core_band,
+                        ),
+                    },
+                    sensitivity: 0.5,
+                    mode: manifold_core::audio_trigger::TriggerFireMode::default(),
+                    edge: Default::default(),
+                }),
+            };
+            if new != old {
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
+                    SetAudioTriggerModCommand::new(DriverTarget::from(&target), old, new),
+                );
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::AudioTriggerModSetMode(gpt, mode_idx) => {
+            let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            else {
+                return DispatchResult::structural();
+            };
+            let old = project
+                .with_preset_graph_mut(&target, |inst| inst.audio_trigger.clone())
+                .flatten();
+            let mode = match mode_idx {
+                1 => manifold_core::audio_trigger::TriggerFireMode::Transient,
+                2 => manifold_core::audio_trigger::TriggerFireMode::Both,
+                _ => manifold_core::audio_trigger::TriggerFireMode::ClipEdge,
+            };
+            let Some(mut cfg) = old.clone() else {
+                return DispatchResult::structural();
+            };
+            cfg.mode = mode;
+            let new = Some(cfg);
+            if new != old {
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
+                    SetAudioTriggerModCommand::new(DriverTarget::from(&target), old, new),
+                );
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::AudioTriggerModSensitivitySnapshot(gpt) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                *audio_trigger_snapshot = project
+                    .with_preset_graph_mut(&target, |inst| inst.audio_trigger.clone())
+                    .flatten();
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::AudioTriggerModSensitivityChanged(gpt, value) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let v = *value;
+                graph_audio_trigger_dual_edit(project, content_tx, &target, move |cfg| {
+                    cfg.sensitivity = v;
+                });
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::AudioTriggerModSensitivityCommit(gpt) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                && let Some(old_cfg) = audio_trigger_snapshot.take()
+            {
+                let new_cfg = project
+                    .with_preset_graph_mut(&target, |inst| inst.audio_trigger.clone())
+                    .flatten();
+                if let Some(new_cfg) = new_cfg
+                    && new_cfg != old_cfg
+                {
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        Box::new(SetAudioTriggerModCommand::new(
+                            DriverTarget::from(&target),
+                            Some(old_cfg),
+                            Some(new_cfg),
                         ));
                     boxed.execute(project);
                     ContentCommand::send(content_tx, ContentCommand::Execute(boxed));

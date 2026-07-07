@@ -436,6 +436,31 @@ pub enum PanelAction {
     /// Commit a shape-slider drag as one undo step (drag end).
     AudioModShapeCommit(GraphParamTarget, ParamId),
 
+    // ── Audio Trigger Mod (§8 D6 — the `isTriggerGate` card drawer). A
+    // single per-instance config (`PresetInstance.audio_trigger`), not a
+    // per-param list, so these carry no `ParamId` — the target alone
+    // addresses the one config. See `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` §8.
+    /// Arm/disarm the instance's audio trigger. Arming assigns the project's
+    /// first audio send with default band/sensitivity/mode; a no-op when no
+    /// sends exist (opens Audio Setup instead, mirroring `AudioModToggle`'s
+    /// no-sends fallback).
+    AudioTriggerModToggle(GraphParamTarget),
+    /// Set the trigger mod's source: which send + which band. Feature kind is
+    /// always `Transients` for this drawer (D2: "Transients×band") — never
+    /// user-selectable, so there is no kind axis to carry.
+    AudioTriggerModSetSource(GraphParamTarget, AudioSendId, AudioBand),
+    /// Set the trigger mod's fire mode — index into `[ClipEdge, Transient,
+    /// Both]` (D1), converted to `TriggerFireMode` at the dispatch boundary
+    /// (this crate mirrors core enums rather than depending on `manifold-core`
+    /// directly; see `ui_translate.rs`).
+    AudioTriggerModSetMode(GraphParamTarget, usize),
+    /// Snapshot the trigger mod before a sensitivity-slider drag (undo start).
+    AudioTriggerModSensitivitySnapshot(GraphParamTarget),
+    /// Live-edit sensitivity during a drawer-slider drag (no undo entry).
+    AudioTriggerModSensitivityChanged(GraphParamTarget, f32),
+    /// Commit a sensitivity-slider drag as one undo step (drag end).
+    AudioTriggerModSensitivityCommit(GraphParamTarget),
+
     // ── Audio Setup panel (project-level send routing) ──
     /// Open the input-device dropdown (anchored to the clicked trigger).
     AudioSetupDeviceClicked,

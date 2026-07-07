@@ -184,6 +184,11 @@ impl ParamSpec {
             // response; preset-authored curve/invert live in the disk JSON.
             curve: crate::macro_bank::MacroCurve::Linear,
             invert: false,
+            // §8 D6: this compile-time inventory struct pre-dates the
+            // trigger-gate flag and carries no field for it — every
+            // trigger-gate card ships via the JSON preset path
+            // (`ParamSpecDef`/`preset_metadata_to_def`), not this one.
+            is_trigger_gate: false,
         }
     }
 }

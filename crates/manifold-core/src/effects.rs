@@ -68,6 +68,18 @@ pub struct ParamDef {
     /// and is skipped on serialize when false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub invert: bool,
+    /// §8 D6: identifies the outer-card gate for a generator's/effect's audio
+    /// trigger response (the `clip_trigger` toggle on the 11 trigger-
+    /// responsive generators; the Strobe `clip_trigger` card, P3). Mirrors
+    /// [`crate::effect_graph_def::ParamSpecDef::is_trigger_gate`] — carried
+    /// here too (not just the graph-metadata twin) because the registry
+    /// `param_defs` is what a STOCK, never-forked instance's card reads
+    /// (`PresetInstance.graph` is `None` until the user edits the graph), and
+    /// every trigger-gate card ships on a stock instance. `false` by default,
+    /// skipped on serialize when false so every existing preset stays
+    /// byte-identical.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_trigger_gate: bool,
 }
 
 /// serde `skip_serializing_if` for [`ParamDef::curve`] / [`ParamSpecDef::curve`].
@@ -96,6 +108,7 @@ impl Default for ParamDef {
             osc_suffix: None,
             curve: crate::macro_bank::MacroCurve::Linear,
             invert: false,
+            is_trigger_gate: false,
         }
     }
 }
@@ -127,10 +140,7 @@ impl ParamDef {
             // `format_string`). Angle display is a user-expose concern, seeded
             // onto the spec in `append_user_binding`.
             is_angle: false,
-            // ParamDef (the registry-catalog struct) carries no
-            // trigger-gate concept — bundled generator presets set this
-            // via their JSON presetMetadata.params directly (ParamSpecDef).
-            is_trigger_gate: false,
+            is_trigger_gate: self.is_trigger_gate,
         }
     }
 }
@@ -153,6 +163,7 @@ pub(crate) fn param_def_from_spec(s: &crate::effect_graph_def::ParamSpecDef) -> 
         osc_suffix: (!s.osc_suffix.is_empty()).then(|| s.osc_suffix.clone()),
         curve: s.curve,
         invert: s.invert,
+        is_trigger_gate: s.is_trigger_gate,
     }
 }
 

@@ -125,6 +125,13 @@ pub struct ParamInfo {
     /// Click increments the underlying monotonic counter by one; consumed via
     /// the same `ParamConvert::Trigger` plumbing as wired trigger inputs.
     pub is_trigger: bool,
+    /// §8 D6: this is the outer-card gate for a generator's/effect's audio
+    /// trigger response (the `clip_trigger` toggle on the 11 trigger-
+    /// responsive generators and Strobe). Always paired with `is_toggle:
+    /// true, is_trigger: false` — a toggle row that additionally reaches the
+    /// `AudioTriggerMod` "A" drawer instead of the plain zero-lane toggle.
+    /// See `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` §8.
+    pub is_trigger_gate: bool,
     /// Named value labels for discrete params (e.g. `["Horiz","Vert","Both"]`).
     /// When present the slider shows the label instead of a numeric value.
     pub value_labels: Option<Vec<String>>,
@@ -221,6 +228,11 @@ pub struct ParamCardConfig {
     /// Audio-modulation state (per-param active/send/feature + card-level send
     /// list). Bundled so the config grows by one field.
     pub audio: super::param_slider_shared::AudioCardState,
+    /// Audio-TRIGGER-mod state (§8 D6) — a separate mechanism from `audio`
+    /// above (`PresetInstance.audio_trigger`, a single field, not a per-param
+    /// `Vec`). Only ever populated at the row whose `ParamInfo.
+    /// is_trigger_gate` is true.
+    pub audio_trigger: super::param_slider_shared::AudioTriggerCardState,
     /// Per-param: an enabled automation lane (≥1 point) exists on this
     /// instance for this param — drives the red "automated" dot (P4 §7).
     pub automation_active: Vec<bool>,
@@ -486,6 +498,14 @@ pub struct ParamCardPanel {
     audio_btn_ids: Vec<Option<NodeId>>,
     /// Per-param audio drawer ids + send count (for click resolution).
     audio_configs: Vec<Option<(crate::panels::drawer::DrawerIds, usize)>>,
+    /// Per-param "A" audio-TRIGGER-mod button node id (D6, `is_trigger_gate`
+    /// rows only — distinct from `audio_btn_ids`'s D5b mechanism).
+    audio_trigger_btn_ids: Vec<Option<NodeId>>,
+    /// Per-param audio-trigger drawer ids + send count (for click resolution).
+    audio_trigger_configs: Vec<Option<(crate::panels::drawer::DrawerIds, usize)>>,
+    /// Per-param collapsed-row mode-indicator label (D6 consequence — shown
+    /// even when the drawer is closed, `is_trigger_gate` rows only).
+    audio_trigger_mode_badge_ids: Vec<Option<NodeId>>,
     /// Per-param orange envelope target handle on the slider track (when armed).
     target_ids: Vec<Option<EnvelopeTargetIds>>,
     /// Per-param envelope drawer — the single "Decay" slider (when armed).
@@ -657,6 +677,9 @@ impl ParamCardPanel {
             driver_config_ids: Vec::new(),
             audio_btn_ids: Vec::new(),
             audio_configs: Vec::new(),
+            audio_trigger_btn_ids: Vec::new(),
+            audio_trigger_configs: Vec::new(),
+            audio_trigger_mode_badge_ids: Vec::new(),
             target_ids: Vec::new(),
             envelope_config_ids: Vec::new(),
             trim_ids: Vec::new(),
@@ -730,6 +753,10 @@ impl ParamCardPanel {
             &config.automation_overridden,
         );
         self.state.mod_state.sync_audio(n, &config.audio);
+        // §8 D6: audio-TRIGGER state (`is_trigger_gate` rows). Reuses
+        // `audio_send_ids` populated by `sync_audio` just above, so this must
+        // run after it.
+        self.state.mod_state.sync_audio_trigger(n, &config.audio_trigger);
         // AUD badge aggregate: any param has an armed audio modulation (parallels
         // has_drv / has_env). Derived after sync_audio populates audio_active.
         self.state.has_audio = self.state.mod_state.audio_active.iter().any(|&a| a);
@@ -749,6 +776,10 @@ impl ParamCardPanel {
         self.audio_btn_ids = vec![None; n];
         self.audio_configs = Vec::new();
         self.audio_configs.resize_with(n, || None);
+        self.audio_trigger_btn_ids = vec![None; n];
+        self.audio_trigger_configs = Vec::new();
+        self.audio_trigger_configs.resize_with(n, || None);
+        self.audio_trigger_mode_badge_ids = vec![None; n];
         self.target_ids = Vec::new();
         self.target_ids.resize_with(n, || None);
         self.envelope_config_ids = Vec::new();
@@ -1290,8 +1321,9 @@ impl ParamCardPanel {
             // sliders both go through the general `active_mod_tabs`-driven
             // height (`animated_drawer_height` already handles "no active
             // config → 0" on its own; is_trigger only ever has Audio active,
-            // per D5b).
-            if !self.param_info[i].is_toggle {
+            // per D5b). `is_trigger_gate` is ALSO an `is_toggle` row (D6) but
+            // reaches its own `AudioTrigger` tab through the same path.
+            if !self.param_info[i].is_toggle || self.param_info[i].is_trigger_gate {
                 h += self.animated_drawer_height(i);
             }
         }
@@ -1308,9 +1340,10 @@ impl ParamCardPanel {
                 h += ROW_HEIGHT + ROW_SPACING;
                 // Same rule as `effect_body_natural_height`: only a plain
                 // toggle forces zero drawer height. `is_trigger` reaches the
-                // audio-mod drawer (D5b) via the same general height path
-                // every slider row uses.
-                if !info.is_toggle {
+                // audio-mod drawer (D5b), `is_trigger_gate` reaches the
+                // audio-TRIGGER-mod drawer (D6) — both via the same general
+                // height path every slider row uses.
+                if !info.is_toggle || info.is_trigger_gate {
                     h += self.animated_drawer_height(i);
                 }
             }
@@ -2157,6 +2190,9 @@ impl ParamCardPanel {
                 self.toggle_cache[i] = info.default > 0.5;
                 self.audio_btn_ids[i] = row.audio_btn;
                 self.audio_configs[i] = row.audio_config;
+                self.audio_trigger_btn_ids[i] = row.audio_trigger_btn;
+                self.audio_trigger_configs[i] = row.audio_trigger_config;
+                self.audio_trigger_mode_badge_ids[i] = row.mode_badge_id;
                 cy = row.new_cy;
                 continue;
             }
@@ -2335,6 +2371,9 @@ impl ParamCardPanel {
                     self.toggle_cache[i] = info.default > 0.5;
                     self.audio_btn_ids[i] = row.audio_btn;
                     self.audio_configs[i] = row.audio_config;
+                    self.audio_trigger_btn_ids[i] = row.audio_trigger_btn;
+                    self.audio_trigger_configs[i] = row.audio_trigger_config;
+                    self.audio_trigger_mode_badge_ids[i] = row.mode_badge_id;
                     cy = row.new_cy;
                 } else {
                     // Slider row — shared per-param core. Generators parent rows
@@ -2810,6 +2849,51 @@ impl ParamCardPanel {
         vec![PanelAction::AudioModSetSource(target, self.pid_at(pi), send_id, feature)]
     }
 
+    /// The "A" audio-TRIGGER-mod button action (§8 D6) — arm/disarm the
+    /// instance's `audio_trigger`. Mirrors `audio_toggle_action`'s no-sends
+    /// fallback (open Audio Setup instead of arming into nothing).
+    fn audio_trigger_toggle_action(&self, target: GraphParamTarget, pi: usize) -> Vec<PanelAction> {
+        let ms = &self.state.mod_state;
+        if ms.audio_trigger_active.get(pi).copied().unwrap_or(false) {
+            vec![PanelAction::AudioTriggerModToggle(target)]
+        } else if ms.audio_send_ids.is_empty() {
+            vec![PanelAction::OpenAudioSetup]
+        } else {
+            vec![PanelAction::AudioTriggerModToggle(target)]
+        }
+    }
+
+    /// Build an `AudioTriggerModSetSource` action from the row's current
+    /// send/band selection, with one axis optionally overridden (the clicked
+    /// send or band button). Mirrors `audio_set_source_action` without the
+    /// kind axis (always `Transients` for this drawer, D2).
+    fn audio_trigger_set_source_action(
+        &self,
+        target: GraphParamTarget,
+        pi: usize,
+        send_override: Option<usize>,
+        band_override: Option<usize>,
+    ) -> Vec<PanelAction> {
+        use super::param_slider_shared::audio_band_from_index;
+        let ms = &self.state.mod_state;
+        let send_k = send_override
+            .map(|k| k as i32)
+            .unwrap_or_else(|| ms.audio_trigger_send_idx.get(pi).copied().unwrap_or(-1));
+        let Some(send_id) = (send_k >= 0)
+            .then(|| ms.audio_send_ids.get(send_k as usize).cloned())
+            .flatten()
+        else {
+            return vec![];
+        };
+        let band_idx = band_override
+            .unwrap_or_else(|| ms.audio_trigger_band_idx.get(pi).copied().unwrap_or(0) as usize);
+        vec![PanelAction::AudioTriggerModSetSource(
+            target,
+            send_id,
+            audio_band_from_index(band_idx),
+        )]
+    }
+
     pub fn handle_click(&mut self, node_id: NodeId) -> Vec<PanelAction> {
         match self.kind {
             ParamCardKind::Effect => self.handle_click_effect(node_id),
@@ -2881,6 +2965,8 @@ impl ParamCardPanel {
             &self.ableton_config_ids,
             &self.audio_btn_ids,
             &self.audio_configs,
+            &self.audio_trigger_btn_ids,
+            &self.audio_trigger_configs,
             &self.slider_ids,
             &self.osc_addresses,
             &self.param_info,
@@ -2921,6 +3007,18 @@ impl ParamCardPanel {
                         GraphParamTarget::Effect(ei),
                         self.pid_at(pi),
                     )]
+                }
+                RowClick::AudioTriggerToggle(pi) => {
+                    self.audio_trigger_toggle_action(GraphParamTarget::Effect(ei), pi)
+                }
+                RowClick::AudioTriggerSelectSend(pi, k) => {
+                    self.audio_trigger_set_source_action(GraphParamTarget::Effect(ei), pi, Some(k), None)
+                }
+                RowClick::AudioTriggerSelectBand(pi, b) => {
+                    self.audio_trigger_set_source_action(GraphParamTarget::Effect(ei), pi, None, Some(b))
+                }
+                RowClick::AudioTriggerSelectMode(_pi, m) => {
+                    vec![PanelAction::AudioTriggerModSetMode(GraphParamTarget::Effect(ei), m)]
                 }
                 RowClick::LabelCopy(pi) => {
                     if let Some(ids) = &self.slider_ids[pi]
@@ -3039,6 +3137,8 @@ impl ParamCardPanel {
             &self.ableton_config_ids,
             &self.audio_btn_ids,
             &self.audio_configs,
+            &self.audio_trigger_btn_ids,
+            &self.audio_trigger_configs,
             &self.slider_ids,
             &self.osc_addresses,
             &self.param_info,
@@ -3079,6 +3179,18 @@ impl ParamCardPanel {
                         GraphParamTarget::Generator,
                         self.pid_at(pi),
                     )]
+                }
+                RowClick::AudioTriggerToggle(pi) => {
+                    self.audio_trigger_toggle_action(GraphParamTarget::Generator, pi)
+                }
+                RowClick::AudioTriggerSelectSend(pi, k) => {
+                    self.audio_trigger_set_source_action(GraphParamTarget::Generator, pi, Some(k), None)
+                }
+                RowClick::AudioTriggerSelectBand(pi, b) => {
+                    self.audio_trigger_set_source_action(GraphParamTarget::Generator, pi, None, Some(b))
+                }
+                RowClick::AudioTriggerSelectMode(_pi, m) => {
+                    vec![PanelAction::AudioTriggerModSetMode(GraphParamTarget::Generator, m)]
                 }
                 RowClick::LabelCopy(pi) => {
                     if let Some(ids) = &self.slider_ids[pi]
@@ -3245,6 +3357,23 @@ impl ParamCardPanel {
                         PanelAction::AudioModShapeParamChanged(target, pid, which, value),
                     ];
                 }
+            }
+        }
+
+        // 2c. Audio-TRIGGER drawer's Sensitivity slider (§8 D6) — a single
+        // 0..1 scalar, unlike the per-param drawer's three shaping sliders,
+        // so no "which" tag is needed.
+        for (pi, cfg) in self.audio_trigger_configs.iter().enumerate() {
+            let Some((dids, _)) = cfg else { continue };
+            if let Some(sl) = dids.sliders.first()
+                && node_id == sl.track
+            {
+                let norm = BitmapSlider::x_to_normalized(sl.track_rect, pos.x).clamp(0.0, 1.0);
+                self.drag.dragging_audio_trigger_sensitivity = pi as i32;
+                return vec![
+                    PanelAction::AudioTriggerModSensitivitySnapshot(target),
+                    PanelAction::AudioTriggerModSensitivityChanged(target, norm),
+                ];
             }
         }
 
@@ -3500,6 +3629,39 @@ impl ParamCardPanel {
             }
         }
 
+        // Audio-TRIGGER drawer's Sensitivity slider drag (§8 D6) — update
+        // fill + value, dispatch live edit.
+        if self.drag.dragging_audio_trigger_sensitivity >= 0 {
+            let pi = self.drag.dragging_audio_trigger_sensitivity as usize;
+            let rect = self
+                .audio_trigger_configs
+                .get(pi)
+                .and_then(|c| c.as_ref())
+                .and_then(|(d, _)| d.sliders.first())
+                .map(|sl| sl.track_rect);
+            if let Some(rect) = rect {
+                let norm = BitmapSlider::x_to_normalized(rect, pos.x).clamp(0.0, 1.0);
+                if let Some(v) = self.state.mod_state.audio_trigger_sensitivity.get_mut(pi) {
+                    *v = norm;
+                }
+                if let Some((d, _)) = self.audio_trigger_configs.get(pi).and_then(|c| c.as_ref())
+                    && let Some(sl) = d.sliders.first()
+                {
+                    BitmapSlider::update_value(tree, sl, norm, &format!("{norm:.2}"));
+                }
+                return match self.kind {
+                    ParamCardKind::Effect => vec![PanelAction::AudioTriggerModSensitivityChanged(
+                        GraphParamTarget::Effect(ei),
+                        norm,
+                    )],
+                    ParamCardKind::Generator => vec![PanelAction::AudioTriggerModSensitivityChanged(
+                        GraphParamTarget::Generator,
+                        norm,
+                    )],
+                };
+            }
+        }
+
         // Trim bar drag (driver / Ableton / audio) — one path. Read the kind's
         // current range, clamp the dragged edge, write it back, reposition the
         // bars, emit the change. The clamp and `reposition_trim_bars` are
@@ -3597,6 +3759,17 @@ impl ParamCardPanel {
             return match self.kind {
                 ParamCardKind::Effect => vec![PanelAction::AudioModShapeCommit(GraphParamTarget::Effect(ei), pid)],
                 ParamCardKind::Generator => vec![PanelAction::AudioModShapeCommit(GraphParamTarget::Generator, pid)],
+            };
+        }
+        if self.drag.dragging_audio_trigger_sensitivity >= 0 {
+            self.drag.dragging_audio_trigger_sensitivity = -1;
+            return match self.kind {
+                ParamCardKind::Effect => {
+                    vec![PanelAction::AudioTriggerModSensitivityCommit(GraphParamTarget::Effect(ei))]
+                }
+                ParamCardKind::Generator => {
+                    vec![PanelAction::AudioTriggerModSensitivityCommit(GraphParamTarget::Generator)]
+                }
             };
         }
         if let Some((kind, pi, _)) = self.drag.dragging_trim.take() {
@@ -3719,6 +3892,7 @@ mod tests {
                     exposed: true,
                     is_toggle: false,
                     is_trigger: false,
+                    is_trigger_gate: false,
                     value_labels: None,
                     osc_address: None,
                     ableton_display: None,
@@ -3736,6 +3910,7 @@ mod tests {
                     exposed: true,
                     is_toggle: false,
                     is_trigger: false,
+                    is_trigger_gate: false,
                     value_labels: None,
                     osc_address: None,
                     ableton_display: None,
@@ -3760,6 +3935,7 @@ mod tests {
             driver_triplet: vec![false; n],
             driver_free_period: vec![None; n],
             audio: Default::default(),
+            audio_trigger: Default::default(),
             automation_active: vec![false; n],
             automation_overridden: vec![false; n],
         }
@@ -3782,6 +3958,7 @@ mod tests {
             exposed: true,
             is_toggle: true,
             is_trigger: false,
+            is_trigger_gate: false,
             value_labels: None,
             osc_address: None,
             ableton_display: None,
@@ -3799,6 +3976,7 @@ mod tests {
             exposed: true,
             is_toggle: false,
             is_trigger: true,
+            is_trigger_gate: false,
             value_labels: None,
             osc_address: None,
             ableton_display: None,
@@ -3888,6 +4066,139 @@ mod tests {
         let actions = panel.handle_click(audio_btn);
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], PanelAction::OpenAudioSetup | PanelAction::AudioModToggle(..)));
+    }
+
+    /// Config with an `is_trigger_gate` toggle param (§8 D6, the outer-card
+    /// gate for a generator's/effect's audio trigger response — Strobe's/the
+    /// 11 generators' `clip_trigger`), armed with a real `AudioTriggerMod`
+    /// so the drawer builds. Exercises `build_toggle_trigger_row`'s
+    /// `is_trigger_gate` branch and the new `AudioTriggerMod` dispatch —
+    /// distinct from `effect_config_with_toggle_and_trigger`'s `is_trigger`
+    /// (D5b) coverage above.
+    fn effect_config_with_trigger_gate() -> ParamCardConfig {
+        let mut c = effect_config();
+        c.params.push(ParamInfo {
+            param_id: std::borrow::Cow::Borrowed("clip_trigger"),
+            name: "Clip Trigger".into(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+            whole_numbers: false,
+            is_angle: false,
+            exposed: true,
+            is_toggle: true,
+            is_trigger: false,
+            is_trigger_gate: true,
+            value_labels: None,
+            osc_address: None,
+            ableton_display: None,
+            ableton_range: None,
+            mappable: false,
+        });
+        let n = c.params.len();
+        c.driver_active.resize(n, false);
+        c.envelope_active.resize(n, false);
+        c.trim_min.resize(n, 0.0);
+        c.trim_max.resize(n, 1.0);
+        c.target_norm.resize(n, 1.0);
+        c.env_decay.resize(n, 1.0);
+        c.driver_beat_div_idx.resize(n, -1);
+        c.driver_waveform_idx.resize(n, -1);
+        c.driver_reversed.resize(n, false);
+        c.driver_dotted.resize(n, false);
+        c.driver_triplet.resize(n, false);
+        c.driver_free_period.resize(n, None);
+        c.automation_active.resize(n, false);
+        c.automation_overridden.resize(n, false);
+
+        c.audio.send_labels = vec!["Kick".into()];
+        c.audio.send_ids = vec![manifold_foundation::AudioSendId::new("send-kick")];
+
+        c.audio_trigger.active = vec![false; n];
+        c.audio_trigger.send_id = vec![None; n];
+        c.audio_trigger.band_idx = vec![0; n];
+        c.audio_trigger.sensitivity = vec![1.0; n];
+        c.audio_trigger.mode_idx = vec![0; n];
+        let gi = n - 1; // the clip_trigger row's index
+        c.audio_trigger.active[gi] = true;
+        c.audio_trigger.send_id[gi] = Some(manifold_foundation::AudioSendId::new("send-kick"));
+        c.audio_trigger.band_idx[gi] = 1; // Low
+        c.audio_trigger.sensitivity[gi] = 0.65;
+        c.audio_trigger.mode_idx[gi] = 2; // Both
+        c
+    }
+
+    #[test]
+    fn build_effect_trigger_gate_row_and_drawer() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config_with_trigger_gate());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+
+        let gi = panel.param_info.len() - 1;
+        // Renders as a toggle row (not a slider), same as a plain toggle —
+        // but ALSO reaches the audio-TRIGGER "A" button + drawer (D6), which
+        // a plain toggle never does.
+        assert!(panel.slider_ids[gi].is_none());
+        assert!(panel.toggle_ids[gi].is_some());
+        assert!(panel.audio_trigger_btn_ids[gi].is_some());
+        // Armed in the fixture (`active[gi] = true`) — the drawer must build.
+        assert!(panel.audio_trigger_configs[gi].is_some());
+        // The collapsed-row mode badge exists (mode = Both, index 2 > 0).
+        assert!(panel.audio_trigger_mode_badge_ids[gi].is_some());
+        // The plain-toggle mechanism (D5b's per-param "A") does NOT apply here.
+        assert!(panel.audio_btn_ids[gi].is_none());
+    }
+
+    #[test]
+    fn handle_click_effect_trigger_gate_drawer() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config_with_trigger_gate());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+        let gi = panel.param_info.len() - 1;
+
+        // The "A" button toggles the whole `audio_trigger` config (armed →
+        // disarm, since the fixture starts active).
+        let audio_btn = panel.audio_trigger_btn_ids[gi].unwrap();
+        let actions = panel.handle_click(audio_btn);
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            PanelAction::AudioTriggerModToggle(target) => {
+                assert_eq!(*target, GraphParamTarget::Effect(0));
+            }
+            other => panic!("expected AudioTriggerModToggle, got {:?}", other),
+        }
+
+        // The drawer's Source (send) button — flat index 0 (only one send).
+        // Clone the button ids out first: `handle_click` needs `&mut panel`,
+        // which would otherwise conflict with the borrow of `dids`.
+        let (dids, send_count) = panel.audio_trigger_configs[gi].as_ref().unwrap();
+        assert_eq!(*send_count, 1);
+        let button_ids: Vec<NodeId> = dids.button_ids().to_vec();
+        let send_btn = button_ids[0];
+        let actions = panel.handle_click(send_btn);
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            PanelAction::AudioTriggerModSetSource(target, send_id, _band) => {
+                assert_eq!(*target, GraphParamTarget::Effect(0));
+                assert_eq!(send_id.as_ref(), "send-kick");
+            }
+            other => panic!("expected AudioTriggerModSetSource, got {:?}", other),
+        }
+
+        // The Mode row's last button ("Both") — flat index = send_count(1) +
+        // band_count(4) + 2.
+        let mode_both_btn = button_ids[1 + 4 + 2];
+        let actions = panel.handle_click(mode_both_btn);
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            PanelAction::AudioTriggerModSetMode(target, mode_idx) => {
+                assert_eq!(*target, GraphParamTarget::Effect(0));
+                assert_eq!(*mode_idx, 2);
+            }
+            other => panic!("expected AudioTriggerModSetMode, got {:?}", other),
+        }
     }
 
     #[test]
@@ -4824,6 +5135,7 @@ mod tests {
                     exposed: true,
                     is_toggle: false,
                     is_trigger: false,
+                    is_trigger_gate: false,
                     value_labels: None,
                     osc_address: None,
                     ableton_display: None,
@@ -4841,6 +5153,7 @@ mod tests {
                     exposed: true,
                     is_toggle: true,
                     is_trigger: false,
+                    is_trigger_gate: false,
                     value_labels: None,
                     osc_address: None,
                     ableton_display: None,
@@ -4858,6 +5171,7 @@ mod tests {
                     exposed: true,
                     is_toggle: false,
                     is_trigger: false,
+                    is_trigger_gate: false,
                     value_labels: None,
                     osc_address: None,
                     ableton_display: None,
@@ -4879,6 +5193,7 @@ mod tests {
             driver_triplet: vec![false; 3],
             driver_free_period: vec![None; 3],
             audio: Default::default(),
+            audio_trigger: Default::default(),
             automation_active: vec![false; 3],
             automation_overridden: vec![false; 3],
         }
