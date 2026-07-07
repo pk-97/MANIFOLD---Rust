@@ -145,12 +145,35 @@ _ARTIFACT_EXTENSIONS = ("rs", "md", "py", "json", "wgsl", "toml")
 _SLASH_ARTIFACT_RE = re.compile(
     "(?:" + "|".join(re.escape(r) for r in _ARTIFACT_ROOTS) + r")[\w./-]*[\w]"
 )
-_EXT_ARTIFACT_RE = re.compile(r"[\w][\w./-]*\.(?:" + "|".join(_ARTIFACT_EXTENSIONS) + r")\b")
+# Requires a "/" in the match (T3, 2026-07-07 fix): this form exists to catch
+# extension-having sub-paths not anchored to a known top root (e.g. a nested
+# path mentioned mid-crate, "node_graph/primitives/foo.rs", without the
+# "crates/" prefix) — a BARE filename with no slash at all ("moves.md") was
+# never this pattern's intent, but the unconstrained regex swept those in too
+# with no existence check, so a plausible-but-nonexistent bare filename could
+# already fire. Bare filenames now go exclusively through the gated
+# _BARE_FILENAME_RE below (stat-checked), keeping this form's "no existence
+# check, grounding is the safety net" contract scoped to genuine paths.
+_EXT_ARTIFACT_RE = re.compile(r"[\w][\w./-]*/[\w.-]*\.(?:" + "|".join(_ARTIFACT_EXTENSIONS) + r")\b")
 
 # ALL-CAPS underscore-joined tokens: only a candidate, membership requires
 # os.path.exists(docs/<token>.md) against the repo root (below) — the regex
 # alone is not enough per moves.md's signature.
 _ALLCAPS_ARTIFACT_RE = re.compile(r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b")
+
+# TICKETS.md T3(a): bare relative filenames (no slash, no ALL-CAPS) with a
+# code/doc extension — e.g. "moves.md now documents..." — a near-miss
+# (ef0c8e89) asserted moves.md's contents and matched none of the existing
+# forms. Only a candidate: membership requires a stat-check against the repo
+# root or .claude/daemon/ (below), same discipline as the ALL-CAPS form, so a
+# generic word like "notes.md" that doesn't exist never fires.
+_BARE_FILENAME_RE = re.compile(r"\b[\w][\w.-]*\.(?:" + "|".join(_ARTIFACT_EXTENSIONS) + r")\b")
+
+# TICKETS.md T3(b): move-id-shaped tokens (`family/kebab-name`), e.g.
+# "mechanical/confessed-stopgap already covers this" — only a candidate,
+# membership requires resolving against moves.md's own `## family/kebab-name`
+# headings (below), so a plausible-looking but fake token never fires.
+_MOVE_ID_TOKEN_RE = re.compile(r"\b[a-z][a-z-]*/[a-z][a-z-]*\b")
 
 # Self-marked recall/proposal text: skip the whole detection, not just the
 # named artifact — moves.md: "the text does not mark itself as recall or
@@ -160,6 +183,20 @@ _RECALL_MARKER_RE = re.compile(
     r"\bnot checked\b|\bunverified\b",
     re.IGNORECASE,
 )
+
+
+def _moves_md_ids():
+    """Real move ids from moves.md's own `## family/kebab-name` headings,
+    for TICKETS.md T3(b)'s move-id-shaped-token recognizer. Reuses
+    common.parse_moves rather than re-deriving the heading format. Never
+    raises — returns an empty set on any failure."""
+    try:
+        import common
+
+        moves = common.parse_moves(common.read(os.path.join(DAEMON_DIR, "moves.md")))
+        return set(moves.keys())
+    except Exception:
+        return set()
 
 
 def _extract_chat_artifacts(text, repo_root):
@@ -173,6 +210,14 @@ def _extract_chat_artifacts(text, repo_root):
     for m in _ALLCAPS_ARTIFACT_RE.finditer(stripped):
         token = m.group(0)
         if os.path.exists(os.path.join(repo_root, "docs", f"{token}.md")):
+            found.add(token)
+    for m in _BARE_FILENAME_RE.finditer(stripped):
+        name = m.group(0)
+        if os.path.exists(os.path.join(repo_root, name)) or os.path.exists(os.path.join(DAEMON_DIR, name)):
+            found.add(name)
+    for m in _MOVE_ID_TOKEN_RE.finditer(stripped):
+        token = m.group(0)
+        if token in _moves_md_ids():
             found.add(token)
     return found
 

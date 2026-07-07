@@ -14,9 +14,15 @@ import os
 import time
 
 DAEMON_DIR = os.path.dirname(os.path.abspath(__file__))
-VERDICTS_DIR = os.path.join(DAEMON_DIR, "verdicts")
-MOVES_PATH = os.path.join(DAEMON_DIR, "moves.md")
-TELEMETRY_PATH = os.path.join(DAEMON_DIR, "telemetry.jsonl")
+# Env-var overrides (2026-07-07, T11): a subprocess-spawned hook does a fresh
+# `import valve` in a fresh interpreter, so a parent test process's module-
+# attribute monkeypatching can never reach it — three tests that spawn the
+# real hooks as subprocesses were writing straight into the REAL verdicts dir
+# and telemetry.jsonl (3 manual purges, 30+10+9 residue records). Set before
+# the subprocess starts (via `env=`) and picked up here at import time.
+VERDICTS_DIR = os.environ.get("DAEMON_VERDICTS_DIR") or os.path.join(DAEMON_DIR, "verdicts")
+MOVES_PATH = os.path.join(DAEMON_DIR, "moves.md")  # unchanged — read-only, no leakage risk
+TELEMETRY_PATH = os.environ.get("DAEMON_TELEMETRY_PATH") or os.path.join(DAEMON_DIR, "telemetry.jsonl")
 EVAL_DIR = os.path.join(DAEMON_DIR, "eval")
 WORKER_NUDGES_FLAG = os.path.join(VERDICTS_DIR, "worker-nudges.enabled")
 
