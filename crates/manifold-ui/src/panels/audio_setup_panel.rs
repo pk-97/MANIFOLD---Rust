@@ -401,6 +401,17 @@ pub struct AudioSetupPanel {
     /// present pass blits on top), updated in place each frame by
     /// [`AudioSetupPanel::update_scope_readout`]. `None` when not built.
     scope_readout_label: Option<NodeId>,
+    /// Onset tick-lane legend: (name, colour) per lane bottom-up + each lane's
+    /// height fraction of the scope, fed once by the app from the one lane
+    /// definition (`manifold_spectral::ScopeOnsets` — this crate deliberately
+    /// doesn't depend on spectral) via
+    /// [`AudioSetupPanel::set_scope_lane_legend`]. Labels are created by
+    /// `build` and positioned each frame by
+    /// [`AudioSetupPanel::update_scope_lane_labels`] in the axis gutter, one
+    /// per lane, in that lane's colour.
+    scope_lane_legend: Vec<(String, Color32)>,
+    scope_lane_frac: f32,
+    scope_lane_label_ids: Vec<NodeId>,
     /// Pre-analysis floor stepper [−]/[＋] in the scope title row (the spectrogram
     /// squelch). `None` when not built.
     floor_minus_id: Option<NodeId>,
@@ -459,6 +470,9 @@ impl Default for AudioSetupPanel {
             add_send_id: NodeId::PLACEHOLDER,
             send_ids: Vec::new(),
             scope_readout_label: None,
+            scope_lane_legend: Vec::new(),
+            scope_lane_frac: 0.0,
+            scope_lane_label_ids: Vec::new(),
             floor_minus_id: None,
             floor_plus_id: None,
             scope_low_hz: 0.0,
@@ -1139,6 +1153,29 @@ impl AudioSetupPanel {
             // follow the crossovers and the live levels. Fill + label share the
             // band colour (red/green/blue), so the colours double as the legend
             // across the meters and the spectrogram's transient ticks.
+            // Onset tick-lane legend: one label per lane in the axis gutter,
+            // right-aligned against the scope's left edge, in the lane's
+            // colour. Created at zero size; positioned every frame by
+            // `update_scope_lane_labels` (the lanes track the resizable scope).
+            self.scope_lane_label_ids.clear();
+            for (name, color) in &self.scope_lane_legend {
+                let id = tree.add_label(
+                    Some(self.bg_id),
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    name,
+                    UIStyle {
+                        text_color: *color,
+                        font_size: color::FONT_LABEL,
+                        text_align: TextAlign::Right,
+                        ..UIStyle::default()
+                    },
+                );
+                self.scope_lane_label_ids.push(id);
+            }
+
             for (band, slot) in self.band_meter_ids.iter_mut().enumerate() {
                 let label = tree.add_label(
                     Some(self.bg_id),
@@ -1178,6 +1215,11 @@ impl AudioSetupPanel {
                 );
                 *slot = (Some(track), Some(fill), Some(label));
             }
+
+            // Position the lane legend now so it is correct from the first
+            // frame (and in headless snapshots, which don't run the per-frame
+            // meter updates); `update_scope_lane_labels` re-tracks resizes.
+            self.update_scope_lane_labels(tree);
 
             // ── Live triggers (selected send) — laid out below the scope ──
             cy += self.scope_h + ROW_GAP;
@@ -1799,6 +1841,44 @@ impl AudioSetupPanel {
     /// bar sits at the geometric centre of its band slab — so it lines up with
     /// the frequency axis — and follows the crossovers as they're dragged.
     /// `None`, or a dark scope, hides the bars.
+    /// Feed the onset tick-lane legend (name + colour per lane, bottom-up, and
+    /// the per-lane height fraction) from the one lane definition in
+    /// `manifold_spectral::scope`. Called once by the app at startup, before
+    /// the panel first builds.
+    pub fn set_scope_lane_legend(&mut self, legend: Vec<(String, Color32)>, lane_frac: f32) {
+        self.scope_lane_legend = legend;
+        self.scope_lane_frac = lane_frac;
+    }
+
+    /// Position the tick-lane legend labels in the axis gutter, each centred
+    /// on its lane where possible. The lanes (`lane_frac` of the scope each)
+    /// are shorter than a line of text, so labels stack upward from the bottom
+    /// lane with a minimum spacing — colour, order, and proximity carry the
+    /// mapping. Called every frame beside [`Self::update_band_meters`].
+    pub fn update_scope_lane_labels(&self, tree: &mut UITree) {
+        let label_h = 12.0;
+        let Some(rect) = self.scope_rect().filter(|_| self.scope_lane_frac > 0.0) else {
+            for &id in &self.scope_lane_label_ids {
+                tree.set_visible(id, false);
+            }
+            return;
+        };
+        let gutter_x = rect.x - SCOPE_AXIS_W + 2.0;
+        let gutter_w = SCOPE_AXIS_W - 6.0;
+        let mut prev_top = f32::INFINITY;
+        for (i, &id) in self.scope_lane_label_ids.iter().enumerate() {
+            // Lane i's vertical centre, bottom-up; then keep at least one
+            // label-height below the label beneath (labels are taller than
+            // lanes, so upper ones get pushed up).
+            let lane_center =
+                rect.y + rect.height * (1.0 - self.scope_lane_frac * (i as f32 + 0.5));
+            let y = (lane_center - label_h * 0.5).min(prev_top - label_h);
+            prev_top = y;
+            tree.set_bounds(id, Rect::new(gutter_x, y, gutter_w, label_h));
+            tree.set_visible(id, true);
+        }
+    }
+
     pub fn update_band_meters(&self, tree: &mut UITree, amps: Option<[f32; 3]>) {
         let Some(rect) = self.scope_rect() else { return };
         // Letter label on the left of the margin, bar filling the rest.

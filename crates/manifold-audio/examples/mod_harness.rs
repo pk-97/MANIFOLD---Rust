@@ -1397,7 +1397,7 @@ fn render_png(
         // same layout, colors, and alpha as the shader's onset lanes, iterated
         // from the ONE lane definition in `scope.rs` (a new lane there shows
         // up here with no harness change).
-        let lane_px = (SPEC_H as f32 * 0.014) as usize;
+        let lane_px = (SPEC_H as f32 * manifold_spectral::LANE_HEIGHT_FRAC) as usize;
         for (oi, [r, g, b]) in ScopeOnsets::LANE_COLORS.into_iter().enumerate() {
             let tick_color =
                 [(r * 255.0).round() as u8, (g * 255.0).round() as u8, (b * 255.0).round() as u8];

@@ -403,7 +403,22 @@ impl UIRoot {
             audio_waveforms: crate::audio_waveform_cache::AudioWaveformCache::default(),
             dropdown: DropdownPanel::new(),
             browser_popup: manifold_ui::panels::browser_popup::BrowserPopupPanel::new(),
-            audio_setup_panel: manifold_ui::panels::audio_setup_panel::AudioSetupPanel::new(),
+            audio_setup_panel: {
+                let mut p = manifold_ui::panels::audio_setup_panel::AudioSetupPanel::new();
+                // The scope's tick-lane legend, from the one lane definition
+                // (names, colours, geometry all owned by spectral's scope.rs).
+                use manifold_spectral::{LANE_HEIGHT_FRAC, ScopeOnsets};
+                let legend = ScopeOnsets::LANE_LABELS
+                    .iter()
+                    .zip(ScopeOnsets::LANE_COLORS)
+                    .map(|(name, [r, g, b])| {
+                        let to8 = |c: f32| (c * 255.0).round() as u8;
+                        (name.to_string(), manifold_ui::Color32::new(to8(r), to8(g), to8(b), 255))
+                    })
+                    .collect();
+                p.set_scope_lane_legend(legend, LANE_HEIGHT_FRAC);
+                p
+            },
             settings_popup: manifold_ui::panels::settings_popup::SettingsPopup::new(),
             perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel::new(),
             toast: manifold_ui::panels::toast::ToastPanel::new(),
@@ -2537,6 +2552,7 @@ impl UIRoot {
             return;
         }
         self.audio_setup_panel.update_band_meters(&mut self.tree, amps);
+        self.audio_setup_panel.update_scope_lane_labels(&mut self.tree);
     }
 
     /// Drive the per-row trigger meters + firing flash from the selected send's

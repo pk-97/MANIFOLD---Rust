@@ -42,7 +42,9 @@ struct Params {
     scalar_stride: u32,
     onset_base: u32,
     onset_count: u32,
-    _pad1: u32,
+    // Each tick lane's height as a fraction of the scope (LANE_HEIGHT_FRAC
+    // in scope.rs — one owner; the UI gutter legend uses the same value).
+    lane_frac: f32,
     // Onset lane colours, bottom-up lane order (ScopeOnsets::LANE_COLORS).
     // Fixed capacity; only the first `onset_count` entries are live.
     onset_colors: array<vec4<f32>, 8>,
@@ -209,7 +211,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // ScopeOnsets in scope.rs names the lanes and owns the colours), so each
     // lane's onset rhythm reads separately. Gated near the impulse peak so
     // hits stay discrete, not a smeared ribbon.
-    let lane = 0.014;
+    let lane = p.lane_frac;
     for (var i = 0u; i < p.onset_count; i = i + 1u) {
         let fi = f32(i);
         if (col_scalars[sbase + p.onset_base + i] > 0.5
