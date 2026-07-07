@@ -158,6 +158,15 @@ F(p) = −F(mirror p) stage by stage; the first stage that breaks antisymmetry i
 (last-frame or not-yet-written) intermediate, symmetric math still yields a lagged, shifted
 field; check the plan order + barriers for Render Volume/Force Field groups (this is the one
 hypothesis that needs blur *range* to matter and survived every kernel-level check).
+(1b) measure the violation directly instead of the drift: the per-particle force array is a
+plain buffer — read it back in the harness and sum it. Nonzero mean force = the conservation
+break itself, visible in ONE frame (vs 900-frame integration), and nulling force terms
+attributes it to a stage instantly. Build this meter first; it makes every other probe 100×
+faster. (1c) elimination note: vol_res 128 is a power of two, so blur/gradient coordinates
+are EXACT in f32, and the integer-tap experiment made the blur reads exact too — drift
+unchanged. The only position-dependent inexact ops left in the loop are the deposit
+(refuted via CIC) and the per-particle trilinear read (2b below) — among precision theories,
+2b is nearly the last one standing;
 (2b) Peter's rounding hunch, sharpened (untested, fits ALL evidence): any precision theory
 must round DIRECTIONALLY — symmetric noise can't pick a corner. Prime candidate: the per-particle force read in
 `sample_volume_at_particles` — the one filtered read the integer-tap experiment did NOT
