@@ -1,6 +1,6 @@
 # Drag Capture — one owner per pointer gesture, from press to release
 
-**Status:** PROPOSED design, not built · 2026-07-07 · Fable
+**Status:** APPROVED design, not built · 2026-07-07 (approved same day by Peter) · Fable
 **Prerequisites:** none (BUG-058 instrumentation + BUG-059 stopgap landed 2026-07-07 @ `fb2bdc07`; P2 deletes the stopgap)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
