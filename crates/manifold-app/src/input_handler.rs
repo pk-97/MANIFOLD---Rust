@@ -50,6 +50,18 @@ impl InputHandler {
             return true;
         }
 
+        // ── A — toggle automation lane visibility (P5, `docs/AUTOMATION_LANES_DESIGN.md`
+        // §7's "Automation mode toggle", Live's `A`). Same effect as clicking
+        // the transport bar's LANES button. Not gated on current visibility —
+        // unlike `B`, this key must work from either state to turn lanes on
+        // in the first place. ──
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "a" || c.as_str() == "A")
+            && m.is_none()
+        {
+            host.toggle_automation_mode_visible();
+            return true;
+        }
+
         // ── B — toggle automation draw/pencil mode (P4 Unit B,
         // `docs/AUTOMATION_LANES_DESIGN.md` §7's "Draw mode", Live's `B`).
         // No pre-existing MANIFOLD binding on this key — bound directly,
@@ -493,6 +505,7 @@ mod b14_keyboard_layer_tests {
         internal_snapshot_val: Option<i64>,
         paste_pasteboard_files_calls: Vec<(Vec<std::path::PathBuf>, f32)>,
         paste_clips_calls: Vec<(f32, i32)>,
+        automation_mode_visible_toggles: u32,
     }
 
     impl TimelineInputHost for MockHost {
@@ -655,6 +668,9 @@ mod b14_keyboard_layer_tests {
         fn automation_mode_visible(&self) -> bool {
             false
         }
+        fn toggle_automation_mode_visible(&mut self) {
+            self.automation_mode_visible_toggles += 1;
+        }
     }
 
     fn selected_host() -> (InputHandler, MockHost) {
@@ -734,6 +750,36 @@ mod b14_keyboard_layer_tests {
         assert!(consumed);
         assert_eq!(host.split_calls.len(), 1);
         assert_eq!(host.split_calls[0], host.selected_ids);
+    }
+
+    #[test]
+    fn bare_a_toggles_automation_mode_visible_regardless_of_current_state() {
+        let (mut handler, mut host) = selected_host();
+        let consumed = handler.handle_keyboard_input(
+            &Key::Character(winit::keyboard::SmolStr::new("a")),
+            Modifiers::NONE,
+            &mut host,
+        );
+        assert!(consumed);
+        assert_eq!(
+            host.automation_mode_visible_toggles, 1,
+            "A must toggle visibility from either state — no automation_mode_visible() gate"
+        );
+
+        // Cmd+A (select-all) must NOT be intercepted by this binding.
+        let cmd = Modifiers {
+            command: true,
+            ..Modifiers::NONE
+        };
+        handler.handle_keyboard_input(
+            &Key::Character(winit::keyboard::SmolStr::new("a")),
+            cmd,
+            &mut host,
+        );
+        assert_eq!(
+            host.automation_mode_visible_toggles, 1,
+            "Cmd+A stays select-all, not the lanes toggle"
+        );
     }
 
     #[test]

@@ -36,6 +36,7 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "scrollshrink" => Some(scroll_shrink_scene()),
         "hairlineclips" => Some(hairline_clips_scene()),
         "automation" => Some(automation_scene()),
+        "automationplaceholder" => Some(automation_placeholder_scene()),
         "selectionclips" => Some(selection_clips_scene()),
         "audiosends" => Some(audio_sends_scene()),
         "empty" => Some(empty_scene()),
@@ -270,6 +271,45 @@ fn automation_scene() -> SceneData {
     flowers.effects = Some(vec![mirror, bloom]);
 
     data.content.automation_latched_params = vec![(bloom_id, bloom_param.into())];
+    data
+}
+
+/// P5 (`docs/AUTOMATION_LANES_DESIGN.md` §7 addendum) evidence scene: proves
+/// the "first-draw path" end to end — a param the user has chosen but never
+/// automated renders as a flat line with NO dot (not `automation_scene`'s
+/// already-real Mirror/Bloom lanes, which would make the two states
+/// impossible to tell apart in a screenshot), and a real click on that line
+/// creates the lane. Kept separate from `automation_scene` so this scene's
+/// evidence never disturbs `toggle-lanes.json`/`drag-automation-point.json`'s
+/// pixel-exact assertions against Mirror/Bloom's Y offsets.
+fn automation_placeholder_scene() -> SceneData {
+    let mut data = timeline_scene();
+    data.selection.automation_mode_visible = true;
+
+    let flowers = data
+        .project
+        .timeline
+        .layers
+        .iter_mut()
+        .find(|l| l.layer_id == lid("flowers"))
+        .expect("timeline_scene always has a 'flowers' layer");
+
+    let mirror = effect("Mirror");
+    let mirror_id = mirror.id.clone();
+    let mirror_param = manifold_core::preset_definition_registry::try_get(mirror.effect_type())
+        .and_then(|def| def.param_defs.first().map(|pd| pd.id.clone()))
+        .expect("Mirror has at least one automatable param");
+    // No `automation_lanes` set — this param has never been automated. The
+    // placeholder is what makes it choosable/drawable anyway.
+    flowers.effects = Some(vec![mirror]);
+
+    data.selection.chosen_automation_params.insert(
+        lid("flowers"),
+        (
+            manifold_ui::view::UiGraphTarget::Effect(mirror_id),
+            mirror_param.into(),
+        ),
+    );
     data
 }
 

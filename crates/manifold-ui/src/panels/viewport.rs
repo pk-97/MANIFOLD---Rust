@@ -944,25 +944,32 @@ impl TimelineViewportPanel {
                     x += STEP_PX;
                 }
 
-                let dots = lane
-                    .points
-                    .iter()
-                    .filter(|p| {
-                        let b = p.beat.as_f32();
-                        b >= min_beat && b <= max_beat
-                    })
-                    .map(|p| {
-                        let x = self.beat_to_pixel(p.beat);
-                        let y = strip_rect.y + strip_rect.height * (1.0 - p.value_norm);
-                        model::AutomationDotScreen {
-                            x,
-                            y,
-                            beat: p.beat,
-                            value_norm: p.value_norm,
-                            shape: p.shape,
-                        }
-                    })
-                    .collect();
+                // Placeholder lanes (P5, §7 addendum) carry one synthetic
+                // point at the param's current value so the flat-line
+                // polyline above samples correctly, but it isn't a real
+                // breakpoint yet — no dot, until the first click creates one.
+                let dots = if lane.placeholder {
+                    Vec::new()
+                } else {
+                    lane.points
+                        .iter()
+                        .filter(|p| {
+                            let b = p.beat.as_f32();
+                            b >= min_beat && b <= max_beat
+                        })
+                        .map(|p| {
+                            let x = self.beat_to_pixel(p.beat);
+                            let y = strip_rect.y + strip_rect.height * (1.0 - p.value_norm);
+                            model::AutomationDotScreen {
+                                x,
+                                y,
+                                beat: p.beat,
+                                value_norm: p.value_norm,
+                                shape: p.shape,
+                            }
+                        })
+                        .collect()
+                };
 
                 out.push(AutomationLaneScreen {
                     strip_rect,

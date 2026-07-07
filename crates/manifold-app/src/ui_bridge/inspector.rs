@@ -1290,6 +1290,20 @@ pub(super) fn dispatch_inspector(
                     })
                     .flatten();
                 if let Some(val) = val {
+                    // Touch-to-select (P5, `docs/AUTOMATION_LANES_DESIGN.md`
+                    // §7 addendum): the ONE funnel every param drag fires
+                    // through, once per touch. Layer-scoped only (Master/Clip
+                    // tabs have no layer for the chooser to live on, per §7's
+                    // "automation lives on the layer").
+                    if effective_tab.is_layer_scope()
+                        && let Some(layer_id) = active_layer.clone()
+                    {
+                        selection.set_chosen_automation_param(
+                            layer_id,
+                            crate::editing_host::to_ui_graph_target(&target),
+                            param_id.clone(),
+                        );
+                    }
                     *drag_snapshot = Some(val);
                     *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Param {
                         target,

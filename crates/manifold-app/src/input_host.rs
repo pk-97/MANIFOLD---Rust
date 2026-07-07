@@ -1580,6 +1580,16 @@ impl TimelineInputHost for AppInputHost<'_> {
         self.selection.automation_mode_visible
     }
 
+    fn toggle_automation_mode_visible(&mut self) {
+        // Mirrors `PanelAction::ToggleAutomationMode` (ui_bridge/transport.rs)
+        // exactly — same view-state flip, same `DispatchResult::structural()`
+        // semantics: it changes the Y-layout (lane strips appear/disappear),
+        // so both dirty flags are needed, not just `needs_rebuild`.
+        self.selection.automation_mode_visible = !self.selection.automation_mode_visible;
+        *self.needs_rebuild = true;
+        *self.needs_structural_sync = true;
+    }
+
     // ── D4/D5 Finder-paste arbitration (docs/TIMELINE_INGEST_DESIGN.md §2) ──
 
     fn pasteboard_file_urls(&self) -> Vec<std::path::PathBuf> {
