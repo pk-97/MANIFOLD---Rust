@@ -112,9 +112,8 @@ mostly wiring; the audit is why.
   Master-chain instances have no layer: clip contribution is 0, audio fires
   work (same rule as §8 D5). Rejected: a new source enum on the action —
   duplicates `TriggerFireMode` and forks the vocabulary the drawer just
-  unified. Beat-clock and driver-edge sources are DEFERRED, not designed here
-  (see Deferred — the ambiguity in Peter's "extend to the drivers" is flagged
-  there and needs his call before anyone builds it).
+  unified. Beat-clock and driver-edge sources are REJECTED (see §7 — drivers
+  already cover tempo-locked stepping; Peter's call, 2026-07-07).
 
 - **D4 — Step replaces the base value (Peter, verbatim above).** Runtime state
   on the mod: `step_value: Option<f32>` + `step_dir: f32` (Bounce direction),
@@ -367,16 +366,13 @@ entity. No committed affordance is unowned.
 
 ## 7. Deferred (with revival triggers)
 
-- **Beat-clock step source** (fire every N beats/bar without audio — the
-  `BeatDivision` vocabulary, same cycle math as `DriverWaveform::Random`).
-  Revive when Peter asks for tempo-locked stepping without an audio send; it
-  slots in as one more `TriggerFireMode`-adjacent source and MUST go through a
-  design addendum here, not ad-hoc. **Flag for Peter's read:** his phrase
-  "this would also extend to the drivers" (2026-07-07) may have meant exactly
-  this — his call decides whether it joins v1 (it would land as its own phase;
-  P1–P3 don't block on it).
-- **Driver-edge source** (a square driver's rising edge fires a step) — same
-  flag as above; cheaper to add after the beat-clock call is made.
+- ~~Beat-clock / driver-edge step sources~~ **REJECTED (Peter, 2026-07-07:
+  "you're right that drivers don't make much sense here, we have the rand
+  function for that").** Tempo-locked stepping is already the driver system's
+  job: `DriverWaveform::Random` is beat-division-clocked random, and a
+  Sawtooth/Square driver on a `whole_numbers` param already walks it on the
+  grid. Step actions exist for events the grid can't know — transients and
+  clip launches. Do not re-propose driver or beat-clock sources.
 - **Cycling-preset tranche** (BasicShapes variant, ConcentricTunnel, Wireframe,
   StrangeAttractor, MriVolume). Revive after P4's Plasma recipe survives
   Peter's L4; each is a one-session preset re-author following P4's brief shape.
