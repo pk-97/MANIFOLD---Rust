@@ -24,10 +24,13 @@ reason to exist.
    events), unverified-done-claim (verification-class event within ~10 events
    or claim restated unverified — crude by design, PULL it if noisy),
    landing-doc-reflex (Status-line edit / docs/landings/ write around
-   the fire), workflow-agent observation (workflow agents discovered + fires
-   carry their agent_id), worker self-grade uptake (agent_id-bearing grade
-   lines rise from all-time zero), worker review threshold (20 events —
-   placeholder, tune from data).
+   the fire), workflow-agent observation (workflow agents discovered in
+   observer logs + phase telemetry carries their agent_id — DELIVERY is off
+   the table: the 07-07 probe proved the harness runs no hooks for workflow
+   agents, see DESIGN.md §2h.3; first agent_id self-grade already exists:
+   af65698430e9470ac seq 2, written during the build itself), worker
+   self-grade uptake (more agent_id-bearing grade lines), worker review
+   threshold (20 events — placeholder, tune from data).
 3. **Score the pass-1 rework + mute expiry:** verify-claim post-rework fires
    only (pre-rework grades don't count); scope-drift mute expires ~07-12 —
    decide: attribution-aware rework using §2f session facts, fold into the

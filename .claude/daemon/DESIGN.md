@@ -501,7 +501,7 @@ re-enter PreToolUse (covered only insofar as the parent script text is
 parsed); name-only saved workflows can't be model-checked (announce-once
 still applies). Tests: `.claude/hooks/test_workflow_gate.py` (27 checks).
 
-## 2h. Final-window extensions (SPECCED + BUILT 2026-07-07, Fable authoring + two Sonnet builders, same day — all sections shipped; workflow-agent DELIVERY unproven pending the live probe, observation tested against real layouts)
+## 2h. Final-window extensions (SPECCED + BUILT 2026-07-07, Fable authoring + two Sonnet builders, same day — all sections shipped; workflow-agent delivery DISPROVEN by the 2h.3 probe same day: harness runs no hooks for workflow agents, observation-only stands)
 
 Context: Peter's two directives from the final-window session. (1) "The daemon
 must fire BEFORE my next message — otherwise it's pointless." Telemetry since
@@ -559,6 +559,21 @@ grade backstop and observation prompt are explicitly main-session-only.
   holds but (b) fails → ship observation+telemetry only, record the residue
   here. (a) fails → transcript observation still works, delivery impossible,
   record. The worker-nudges flag gates delivery exactly as for Agent workers.
+- **PROBE RUN 2026-07-07 — (a) FAILS: delivery to workflow agents is
+  impossible today.** Method (reusable): a background watcher polled
+  `subagents/workflows/*/` for the agent transcript and planted a fresh
+  advice-move verdict in the agent's mailbox the second it appeared; the
+  probe agent then made twelve separate Bash calls (all timestamped AFTER the
+  plant) and ended its turn — mailbox never consumed, zero injected telemetry
+  for the agent_id, and the agent's transcript contains no hook-execution
+  records at all (vs. Agent-tool workers, which received a live PostToolUse
+  delivery the same day). Verdict: the harness runs no project hooks for
+  Workflow-tool agents — not an agent_id routing gap, hooks are absent
+  entirely. Consequences: workflow agents get observation + classifier
+  telemetry only; no whispers, no worker Stop-tier review prompts (2h.4 is
+  Agent-tool workers only). Re-probe with the same method if a harness
+  update adds subagent hooks for workflows; the §2h.4 machinery then extends
+  for free (routing is agent_id-generic by construction).
 
 ### 2h.4 Worker self-grade + end-of-session review (Stop valve, workers)
 - Seam: `daemon-stop.py` already receives worker Stop events (agent_id set).
