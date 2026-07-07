@@ -1048,16 +1048,16 @@ impl ClipRenderer for GeneratorRenderer {
             .map(|l| l.generator_graph_structure_version())
             .unwrap_or(0);
         let param_version = layer.map(|l| l.generator_graph_version()).unwrap_or(0);
-        // §8 D1: the clip edge is mode-gated by the generator's OWN
-        // `audio_trigger` config (no config = always on — old-project
-        // behavior, unchanged). `Transient`-only mode silently drops the
-        // clip-launch contribution for this layer's trigger_count. A disarmed
-        // config is semantically absent — `clip_edge_enabled()` owns that
-        // rule; don't read `mode` off the config directly.
+        // §9 U3 (formerly §8 D1): the clip edge is mode-gated by the
+        // generator's OWN fire-mode audio mod, if any (no such mod = always
+        // on — old-project behavior, unchanged). `Transient`-only mode
+        // silently drops the clip-launch contribution for this layer's
+        // trigger_count. `PresetInstance::clip_edge_enabled()` owns the
+        // disabled-means-absent rule; don't read a mod's `trigger_mode`
+        // directly.
         let clip_edge_enabled = layer
             .and_then(|l| l.gen_params())
-            .and_then(|gp| gp.audio_trigger.as_ref())
-            .map(|cfg| cfg.clip_edge_enabled())
+            .map(|gp| gp.clip_edge_enabled())
             .unwrap_or(true);
         let acquired = self.acquire_clip(
             &clip.id,
