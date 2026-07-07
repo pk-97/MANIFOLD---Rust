@@ -168,10 +168,14 @@ is a code edit for this pass, one concern, small blast radius.
    agent_id); the §2b clock started at the first orchestration after the
    07-04 discovery fix. Disable rule: worker precision <60% at any pass pulls
    the worker-nudges flag.
-   **DONE (night-half): 2/10 → FLAG PULLED.** Numbers, both defect shapes,
-   and the return path are in DESIGN.md §2b's dated note. Your item: decide
-   whether to build the worker payload variant + verify-claim precondition
-   and re-enable, or leave workers dark until the §2d phase tier matures.
+   **DONE (night-half): 2/10 → flag pulled, then RESTORED same night in
+   OBSERVATION-ONLY mode at Peter's direction** (the pull had killed worker
+   observation entirely, not just whispers). Corrective fires on worker
+   mailboxes now log `worker_shadow_fire` telemetry instead of delivering
+   (observer.py `_resolve_fire`, tested); advice + mechanical still deliver.
+   Your item: grade the accumulated `worker_shadow_fire` records at pass 2/3,
+   build the worker payload variant + verify-claim precondition, and flip
+   corrective delivery back on per-move at the §2b bar.
 8. **Specific graded-window debts:** ~~session 10977941~~ **DONE (night-half),
    and the lean was WRONG:** the circling ×2 → checkpoint → circling chain
    graded all-FP from timestamp-anchored transcript windows — the session was

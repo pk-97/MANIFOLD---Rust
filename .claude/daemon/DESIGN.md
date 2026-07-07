@@ -199,6 +199,23 @@ the smaller models this layer exists to lift, and their documented failure modes
   path: a worker-specific payload variant (no self-grade file-write ask, no
   out-loud ritual) plus a verify-claim precondition that the flagged claim not
   be same-turn command output; re-enable behind the same flag and re-grade.
+- **FLAG RESTORED same night in OBSERVATION-ONLY mode (Peter's call after
+  reading the pull: "agents launched in orchestration sessions no longer get
+  whispers? This feels wrong").** The pull had switched off the whole worker
+  measurement apparatus, not just whispers (`_scan_agents` no-ops without the
+  flag; worker Stop events return early in daemon-stop.py) — no telemetry, no
+  primers, no self-grades, no data to ever re-earn delivery with. Now:
+  workers are tailed, classified, and logged as before, but `_resolve_fire`
+  suppresses CORRECTIVE (anchor/coaching/escalate) delivery to worker
+  mailboxes, logging a `worker_shadow_fire` telemetry record instead (all
+  cooldown/escalation/seq bookkeeping still runs, so shadow cadence mirrors
+  live; the worker grade backstop counts only "injected" events, so it stays
+  silent for shadows). Advice moves and the deterministic mechanical guards
+  still deliver — the refusal specimen was a corrective supervised-ack
+  payload, and mechanical worker fires are as yet ungraded (their ack burden
+  is pass-2 item 10's ack/backstop question). Pass 3 grades
+  `worker_shadow_fire` records like §2d's `phase_fire` and re-enables
+  delivery per-move at the §2b bar, on the fixed payload.
 
 ## 2c. Stopgap detection (approved 2026-07-04, Peter: "I NEVER want the quick fix" — build with Sonnet)
 

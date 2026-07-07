@@ -1117,6 +1117,36 @@ class Daemon:
             self.fire_records[seq] = effective_id
             self.fire_ordinals[seq] = ordinal
             self._save_fire_state()  # survive idle-exit revives (redelivery fix)
+
+        # DESIGN.md §2b observation-only mode (Peter, 2026-07-07 night):
+        # workers are tailed, classified, and logged, but CORRECTIVE fires
+        # (anchor/coaching/escalate — the class sleep pass 2 measured at
+        # 2/10 precision) are NOT delivered to worker mailboxes; one
+        # read-only worker also refused the supervised-mode payload as a
+        # suspected prompt injection (93150901/a8287d; both defect shapes in
+        # the §2b dated note). Advice-kind moves still deliver (no ack
+        # ritual, no file-write ask — the refusal class doesn't apply) and
+        # so do the deterministic mechanical guards (ungraded as worker
+        # fires; their ack burden is agenda item 10, not tonight's call).
+        # Every gate above (cooldown, fire_count, escalation, seq) already
+        # ran, so these shadow records mirror exactly what live delivery
+        # would have done — pass 3 grades them like §2d's phase_fire records
+        # (the grade backstop can't see them either: it counts only
+        # "injected" events) and re-enables delivery per-move once precision
+        # clears the §2b bar.
+        if mailbox is not None and effective_id.startswith(("anchor/", "coaching/", "escalate/")):
+            valve.append_telemetry({
+                "ts": time.time(),
+                "session_id": self.session_id,
+                "agent_id": mb.agent_id,
+                "event": "worker_shadow_fire",
+                "seq": seq,
+                "move_id": effective_id,
+                "evidence": verdict.get("evidence"),
+                "confidence": verdict.get("confidence"),
+            })
+            _log(logf, f"worker shadow fire (observation-only, not delivered): {effective_id} seq={seq} agent={mb.agent_id}")
+            return None
         return {
             "move_id": effective_id,
             "evidence": verdict.get("evidence"),

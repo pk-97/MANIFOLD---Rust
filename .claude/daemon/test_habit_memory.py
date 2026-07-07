@@ -124,12 +124,20 @@ def test_resolve_fire_seeds_from_rollup_and_increments():
 
 
 def test_resolve_fire_weekly_count_none_for_agent_mailbox():
+    """Original intent (worker fires get no weekly habit count) now splits
+    across §2b observation-only mode (2026-07-07): corrective worker fires
+    don't deliver at all — their shadow telemetry carries no weekly_count —
+    and advice fires, which still deliver, keep weekly_count=None."""
     def run(td):
         d = make_daemon()
         worker = observer.AgentWorker("agent1", "test-session", "/dev/null")
         logf = io.StringIO()
         r = d._resolve_fire(0, "anchor/verify-claim", FAKE_VERDICT, logf, mailbox=worker)
-        check("agent mailbox fires get weekly_count=None (out of scope, like §4b)", r["weekly_count"] is None, r)
+        check("corrective agent-mailbox fire is shadowed, not delivered (§2b observation-only)", r is None, r)
+        shadow = [json.loads(l) for l in open(valve.TELEMETRY_PATH)][-1]
+        check("shadow record has no weekly_count (out of scope, like §4b)", shadow.get("event") == "worker_shadow_fire" and "weekly_count" not in shadow, shadow)
+        r2 = d._resolve_fire(0, "mechanical/reasoning-primer", FAKE_VERDICT, logf, mailbox=worker)
+        check("advice agent-mailbox fire still delivers with weekly_count=None", r2 is not None and r2["weekly_count"] is None, r2)
     with_temp_dirs(run)
 
 
