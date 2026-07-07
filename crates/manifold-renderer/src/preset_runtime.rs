@@ -4431,6 +4431,120 @@ mod generator_input_tests {
         );
     }
 
+    /// §8 D6 — Strobe reachability proof: the bundled Strobe preset's
+    /// `clip_trigger` card (Trigger Gate → Envelope Decay → Max-combine with
+    /// the beat gate) actually flashes when the layer's effective
+    /// `trigger_count` jumps, and does NOT when the card is off. This is the
+    /// concrete "kick fires Strobe" acceptance demo at the L1 (graph-value)
+    /// level — the live app/stem look is still L4-owed (logged in the design
+    /// doc), but this proves the wiring is live, not just present in the JSON.
+    #[test]
+    fn strobe_clip_trigger_card_flashes_on_trigger_count_jump_when_enabled() {
+        use crate::preset_context::PresetContext;
+        use crate::gpu_encoder::GpuEncoder;
+
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+
+        let run_and_read_flash_amount = |clip_trigger_on: bool| -> f32 {
+            let mut fx = manifold_core::preset_definition_registry::create_default(
+                &PresetTypeId::new("Strobe"),
+            );
+            if let Some(p) = fx.params.get_mut("clip_trigger") {
+                p.value = if clip_trigger_on { 1.0 } else { 0.0 };
+                p.base = p.value;
+            } else {
+                panic!("Strobe must ship a clip_trigger card (§8 D6)");
+            }
+
+            let mut cg = PresetRuntime::try_build(
+                std::slice::from_ref(&fx),
+                &[],
+                &primitives,
+                &device,
+                None,
+                64,
+                64,
+                None,
+                None,
+            )
+            .expect("Strobe chain builds");
+
+            let input = crate::render_target::RenderTarget::new(
+                &device,
+                64,
+                64,
+                GpuTextureFormat::Rgba16Float,
+                "strobe-test-input",
+            );
+            let mut native_enc = device.create_encoder("strobe-trigger-test");
+            let mut gpu = GpuEncoder::new(&mut native_enc, &device);
+
+            let ctx_at = |trigger_count: u32| PresetContext {
+                time: 0.0,
+                // beat = 0.0 parks node.beat_gate's square wave at 0 (phase
+                // 0.0 < duty 0.5) so the Max-combine isolates the trigger
+                // path — a bare beat-gate contribution would confound the
+                // assertion below.
+                beat: 0.0,
+                dt: 1.0 / 60.0,
+                width: 64,
+                height: 64,
+                output_width: 64,
+                output_height: 64,
+                aspect: 1.0,
+                owner_key: 0,
+                is_clip_level: false,
+                frame_count: 0,
+                anim_progress: 0.0,
+                trigger_count,
+            };
+
+            // Watch combine_gate's scalar I/O — `preview_scalar_io` only
+            // captures for a NON-texture-outputting node (`node.math`'s `out`
+            // is a bare scalar, unlike `flash`'s image output, which the
+            // executor deliberately skips scalar capture for — see
+            // `execution.rs`'s preview-capture step: image nodes show their
+            // texture, not numbers). `.params` was tried first and rejected:
+            // it only reflects bound/set values, never what a port-shadowed
+            // wire evaluates to (confirmed by inspection — combine_gate's and
+            // flash's `.params` stayed at their authoring defaults across both
+            // frames below, even though the wires clearly carried real data).
+            cg.set_preview_target(&fx.id, Some(&manifold_core::NodeId::new("combine_gate")));
+
+            // Frame 1: baseline at trigger_count 0, settles initial state.
+            cg.run(&mut gpu, &input.texture, &[fx.clone()], &[], &ctx_at(0));
+            // Frame 2: the layer's effective count jumps (a kick fired).
+            cg.run(&mut gpu, &input.texture, &[fx], &[], &ctx_at(5));
+
+            let (_inputs, outputs) = cg.preview_scalar_io();
+            outputs
+                .iter()
+                .find(|(name, _)| name == "out")
+                .map(|(_, v)| *v)
+                .expect("combine_gate's watched scalar outputs must include `out`")
+        };
+
+        let on = run_and_read_flash_amount(true);
+        let off = run_and_read_flash_amount(false);
+
+        // node.envelope_decay snaps to 1.0 THEN decays once by this frame's dt
+        // in the same evaluate() call, so the observable post-frame value
+        // after a fire is exp(-decay_rate * dt) = exp(-12/60) ≈ 0.819, never
+        // a full 1.0 — 0.7 comfortably separates "just fired" from "at rest".
+        assert!(
+            on > 0.7,
+            "clip_trigger ON: a trigger_count jump must snap the envelope \
+             (and therefore flash.amount, via the Max-combine) toward 1.0 \
+             (observably ~0.82 one frame later), got {on}"
+        );
+        assert!(
+            off < 0.1,
+            "clip_trigger OFF: the Trigger Gate must absorb the count jump \
+             so flash.amount stays at the beat gate's (parked-at-0) value, got {off}"
+        );
+    }
+
     /// **The production main-path proof (design §12.3 step 5).** With the freeze
     /// toggle on (default), [`PresetRuntime::try_build`] renders a canonical
     /// ColorGrade card through the FUSED node, not the 7 atoms: the built chain
