@@ -219,6 +219,17 @@ UNDERNEATH the modal, committing real project edits.
 - **Scope-dark deadness:** `scope_fmin <= 0` (no capture yet) makes dividers ungrabbable by
   design (`audio_setup_panel.rs:422`) — reads as "sometimes it just doesn't work" if lines
   are visible before audio flows.
+- **First-click-dead — TRACE-CONFIRMED 2026-07-07 (Peter, `MANIFOLD_INPUT_TRACE=1`), the
+  dominant "always the second click works" mechanism:** the press arms the band drag and is
+  consumed by the panel, but by threshold-crossing the pressed node no longer resolves
+  (`DRAG-BEGIN … resolves=false` in the trace; dead and working clicks carried different
+  WidgetIds) — and `input.rs` `process_pointer` emits `DragBegin` and every `Drag` ONLY
+  while the pressed widget resolves, so the entire motion stream is silently swallowed and
+  the armed position-based drag never hears a move. Same disease `859bbceb` fixed for the
+  terminal events, unfixed for motion. Probable node-death path (inferred): the panel's own
+  consume sets `overlay_dirty` → overlay rebuild between Down and threshold. Root fix:
+  `DRAG_CAPTURE_DESIGN.md` D9 (added same day) — unconditional `DragBegin`/`Drag` emission
+  with `node_id: Option<NodeId>`, in P1.
 
 **Fix shape** — same root as BUG-058's capture model plus locals: (1) the modeless panel's
 `PointerDown`/drag family must swallow anything inside the panel rect (mirror the `Click`

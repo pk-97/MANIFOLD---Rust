@@ -32,7 +32,7 @@ gates use); `docs/OVERLAY_SYSTEM_DESIGN.md` (the overlay driver being extended).
 
 | Piece | Where | State |
 |---|---|---|
-| Widget-level capture (correct) | `crates/manifold-ui/src/input.rs:490` `process_pointer` | `pressed_widget` pinned at Down; `DragEnd`/`PointerUp` emitted unconditionally on Up (fix `859bbebb`). Sound — untouched by this design. |
+| Widget-level capture (correct for terminals, NOT for motion) | `crates/manifold-ui/src/input.rs:490` `process_pointer` | `pressed_widget` pinned at Down; `DragEnd`/`PointerUp` emitted unconditionally on Up (fix `859bbceb`) — but `DragBegin` and every `Drag` are emitted ONLY while the pressed widget resolves to a live node; a rebuild that drops the node silently swallows the whole motion stream (D9, live-trace confirmed 2026-07-07). P1 touches this. |
 | Consumable routing gauntlet | `crates/manifold-app/src/ui_root.rs:1372` `process_events` | Per event: overlay gauntlet → intent → panel handlers → positional stash. First consumer wins; a consumed `DragEnd` never reaches later stages. **The wedge mechanism.** |
 | Overlay gauntlet | `ui_root.rs:982` `route_overlay_event` | Z-order walk ([ui_root.rs:42](../crates/manifold-app/src/ui_root.rs) `Z_ORDER`); `Consumed` stops routing; a `Modal` captures even events it `Ignored`s. |
 | Dropdown eats all drags | `crates/manifold-ui/src/panels/dropdown.rs` (`on_event`, RightClick/Drag* arm) | An open dropdown consumes `DragBegin`/`Drag`/`DragEnd` unconditionally and dismisses. Confirmed `DragEnd`-eater (BUG-058). |
@@ -97,12 +97,36 @@ between surfaces changes.
   `rg -n "Drag" crates/manifold-ui/src/panels/viewport.rs`. If it does, it's a
   `DragOwner` variant; if scrubbing is Move-based, it isn't and the variant is
   dropped. Default: include the variant; drop it if the check says otherwise.
+- **D9 — the drag event stream is emitted unconditionally; node identity is
+  best-effort context (added 2026-07-07, same day, from Peter's live trace).**
+  `DragBegin` and `Drag` today are emitted only while `tree.node_for_widget
+  (pressed)` resolves; the terminal events already lost that gate in `859bbceb`.
+  Peter's `MANIFOLD_INPUT_TRACE=1` repro of the "first band-line click is always
+  dead" bug caught the consequence live (observed): the press armed the band drag
+  and was consumed by the panel, then `DRAG-BEGIN … resolves=false` — the pressed
+  node was gone from the build by threshold-crossing — and the ENTIRE motion
+  stream was silently swallowed; the armed, position-based band drag never
+  received a single move. The dead click and the working click carried different
+  WidgetIds. Probable path for the node death (inferred, not observed): the
+  panel's own consume sets `overlay_dirty` → overlay rebuild between Down and
+  threshold; the design does not depend on which rebuild killed the node — ANY
+  node death mid-gesture must not kill the stream. Under this design the gate is
+  removed: `DragBegin`/
+  `Drag` carry `node_id: Option<NodeId>` (the same best-effort contract `DragEnd`
+  has), position is the payload, and ownership routing (D1) — not node identity —
+  decides delivery. Without D9, D1 is inert in exactly this case: ownership is
+  resolved at `DragBegin`, and a swallowed `DragBegin` means no owner and a dead
+  gesture. Consequences, stated honestly: consumers that used `Drag.node_id` as a
+  guaranteed live node must handle `None`; the compiler finds them all when the
+  field type changes (seam brief in P1).
 - **D8 — BUG-058's live-repro confirmation is not a prerequisite.** The
   instrumentation stays shipped and useful, but this design removes the eater class
   wholesale, so the design does not block on naming which eater fired in Peter's
-  exact repro. If a `MANIFOLD_INPUT_TRACE=1` repro before P1 lands names a link this
-  design does NOT cover (e.g. winit-macOS losing the Release at the OS seam —
-  BUG-028 precedent), that is a new bug entry, not a change to this design.
+  exact stuck-trim repro. (D8's original claim that a trace finding would "never
+  change this design" was falsified within hours — Peter's first-click-dead trace
+  produced D9. Corrected rule: a trace finding inside the drag pipeline amends
+  this design; only a finding outside it — e.g. winit-macOS losing the Release at
+  the OS seam, BUG-028 precedent — becomes a separate bug entry.)
 
 ## 3. Design body
 
@@ -236,8 +260,9 @@ opt-in and not a style flag.
 A drag can no longer wedge (stuck move/trim cursor mid-set) because no surface can
 eat the release; a drag can no longer leak (clips silently moved under a calibration
 panel, timeline region-selects while adjusting a slider) because exactly one surface
-owns the gesture; and the band dividers become a real precision control (first pixel
-responds). The performer-visible contract: **whatever you grabbed is what you're
+owns the gesture; a grab can no longer die because the UI repainted under your
+finger (D9 — the "first band-line click is always dead" bug); and the band dividers
+become a real precision control (first pixel responds). The performer-visible contract: **whatever you grabbed is what you're
 dragging, until you let go — no matter where your hand travels.**
 
 ## 5. Phasing
@@ -248,24 +273,37 @@ dragging, until you let go — no matter where your hand travels.**
   `git log --oneline -5` shows it; `rg -n "overlay_drag_active" crates/manifold-app/src/ui_root.rs`
   returns the 5 current sites (re-derive; if the count differs, stop and list).
 - **Read-back:** this doc §2–§3 + `ui_root.rs` `process_events` end-to-end +
-  `dropdown.rs` `on_event` + BUG-058 backlog entry. Restate D1–D4, the forbidden
-  moves (§3.5), and the entry-check counts before any code.
+  `dropdown.rs` `on_event` + BUG-058 backlog entry. Restate D1–D4, D9, the
+  forbidden moves (§3.5), and the entry-check counts before any code.
 - **Deliverables:** `DragOwner` + `UIRoot::drag_owner` + `resolve_drag_owner` +
   `broadcast_gesture_end`; `claims_drag`/`gesture_ended` trait hooks (defaults);
   dropdown eat-arm deleted per D3; stash gate's Drag/DragEnd/latch arms deleted;
   second loop's inspector/layer_headers calls gated on ownership; the
-  `PointerDown` stale-owner self-heal (§3.3 failure story); unit tests in
+  `PointerDown` stale-owner self-heal (§3.3 failure story); **D9: `DragBegin`/
+  `Drag` emission made unconditional in `input.rs` `process_pointer` — their
+  `node_id` becomes `Option<NodeId>`, same contract as `DragEnd`**; unit tests in
   `ui_root` (or the panel crates where state lives) covering: owner resolution
   order, dropdown-open-at-release no longer wedges `DragMode`, modal claims all,
-  timeline drag released outside tracks rect still reaches `on_end_drag`.
-- **Seam brief:** old → new for the stash gate:
+  timeline drag released outside tracks rect still reaches `on_end_drag`, and
+  **the D9 repro: press, remove the pressed node from the tree, cross the
+  threshold and move — DragBegin + Drag events still arrive with `node_id:
+  None` and correct positions** (this is Peter's first-click-dead trace as a
+  unit test).
+- **Seam brief:** two seams. (a) Stash gate:
   `is_event_in_tracks_area(Drag*|DragEnd) → latch → stash` becomes
   `drag_owner == Some(TimelineTracks) → stash`. Call-site inventory (2026-07-07):
   `overlay_drag_active` ×5 (`ui_root.rs:336,461,~1461,~1464,~2493`), dropdown drag
   arm ×1, stash gate ×1. Re-derivation:
   `rg -n "overlay_drag_active|is_event_in_tracks_area" crates/manifold-app/src`.
   Compiler-driven: delete the `overlay_drag_active` field first; the errors are the
-  checklist. Misfit sites escalate, never adapt.
+  checklist. (b) D9 event shape: `UIEvent::DragBegin { node_id: NodeId, … }` and
+  `UIEvent::Drag { node_id: NodeId, … }` become `node_id: Option<NodeId>` —
+  change the field type FIRST; every consumer that assumed a live node is then a
+  compile error and gets an explicit `None` decision (most consumers are
+  position-based and ignore the node; a consumer that genuinely needs the node
+  treats `None` as "keep last known", per the DragEnd precedent). Re-derivation:
+  `rg -n "DragBegin \{|Drag \{" crates/ -g '*.rs'`. Misfit sites escalate, never
+  adapt.
 - **Gate (positive):** `cargo test -p manifold-ui --lib` and the new ui_root tests
   green; existing L3 flow `scripts/ui-flows/drag-clip.json` passes; NEW L3 flow
   `drag-clip-release-over-inspector.json` — drag a clip from tracks to inspector
@@ -329,7 +367,8 @@ dragging, until you let go — no matter where your hand travels.**
 
 Phasing-completeness check (§5 of the standard): every §3 commitment maps — 3.1/3.2/3.3 → P1;
 D5 + stopgap retirement → P2; 3.4/D6 → P3; D7's variant → P1 (with its
-VERIFY-AT-IMPL); handle widget-conversion → Deferred. No affordance is phase-less.
+VERIFY-AT-IMPL); D9 unconditional emission → P1; handle widget-conversion →
+Deferred. No affordance is phase-less.
 
 ## 6. Decided — do not reopen
 
@@ -345,6 +384,8 @@ VERIFY-AT-IMPL); handle widget-conversion → Deferred. No affordance is phase-l
    global or per-style change.
 7. The graph-editor canvas's internal capture is out of scope; scope fence.
 8. `swallow_drag` is a stopgap and dies in P2 — do not extend it.
+9. `DragBegin`/`Drag` emit unconditionally with `node_id: Option<NodeId>` (D9);
+   the motion stream never depends on the pressed node surviving a rebuild.
 
 ## 7. Deferred
 
