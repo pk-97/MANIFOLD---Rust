@@ -65,8 +65,48 @@ or human can read it, and it needs no external tool.
 | BUG-057 | **ui-snapshot-dead-blit-pipeline** | `cargo clippy -p manifold-app --features ui-snapshot` fails pre-existing on an unused `make_blit_pipeline` fn (LOW, blocks that one feature's clippy gate, not correctness) |
 | BUG-058 | **drag-end-consumable** | timeline sticks in move/trim mode when the drag's terminal DragEnd is consumed mid-route (open dropdown/modal eats it); root = terminal events routable instead of broadcast (HIGH) |
 | BUG-059 | **band-line-grab-falls-through** | Audio Setup crossover lines sticky (4px threshold, seam interceptors, dropdown swallow) AND a missed grab silently drags clips under the modal — position-based stash gate has no z-awareness (HIGH) |
+| BUG-061 | **slider-reset-per-panel-lottery** | right-click reset only works on sliders whose panel hand-wired it twice (bespoke PanelAction + app handler); clip slip/loop regressed silently, drawer/Audio Setup never had it — reset belongs to the slider itself (MED) |
 
 ## Open
+
+### BUG-061 (slider-reset-per-panel-lottery) — right-click reset works on some sliders and not others; reset is per-panel hand-wiring instead of a slider behavior — MED (live recovery gesture a performer can't trust; reported by Peter 2026-07-07)
+
+**Symptom:** right-click-to-reset-to-default works on effect/generator param sliders, macros,
+master opacity, LED brightness, and layer opacity — and silently does nothing on clip
+slip/loop sliders, the modulation drawer sliders, and the Audio Setup gain sliders. On stage
+this is the recovery gesture (crank a param too far, snap it home in one click); a gesture
+that only works on some faders is one you can't use without thinking.
+
+**Root cause (structural, investigated 2026-07-07):** reset is not a slider behavior — it's a
+per-panel contract wired twice: each panel registers a bespoke `PanelAction` on the track node
+in `register_intents` (e.g. `ParamRightClick` at `param_card.rs:3707`, `MacroRightClick` at
+`macros_panel.rs:466`, `MasterOpacityRightClick`/`LedBrightnessRightClick` at
+`master_chrome.rs:365-368`, `LayerOpacityRightClick` at `layer_chrome.rs:267`), and
+`ui_bridge/inspector.rs` handles each one separately, re-deriving the default. Any panel that
+skips or loses either half silently has no reset. Two proofs it's the wiring model:
+
+- **Clip slip/loop is a regression.** Reset shipped in `b78dc9ba` (March), then `52920ab6`
+  deleted clip_chrome's legacy event handler during the intent-registry migration and the
+  right-click was never re-registered. The app-side handlers still sit dead at
+  `ui_bridge/inspector.rs:1017` (`ClipSlipRightClick`) and `:1032` (`ClipLoopRightClick`) —
+  no UI code emits those actions anymore.
+- **The infra has a vestigial field.** `SliderNodeIds.default_normalized` (`slider.rs:47`),
+  commented "for right-click reset", is written once with the *initial* value (not the
+  default) and read by nothing — reset was meant to live in the widget and never did.
+
+Drawer sliders (`drawer.rs:331`) and Audio Setup gain sliders never had reset at all. The
+graph editor's inline param sliders use right-click for the mapping popover instead —
+intentional, but decide explicitly whether that surface keeps the divergent gesture.
+
+**Fix shape (root):** make reset the slider's own gesture. Every slider already has a
+value-change path (Snapshot → Changed → Commit, same one a drag uses); give
+`BitmapSlider`/`SliderSpec`/`SliderController` a real `default` value and have right-click on
+any track synthesize "set to default" through that existing path. Every slider gets reset by
+construction, the bespoke `*RightClick` actions and their duplicated app-side handlers
+collapse into the generic path, and the clip slip/loop regression fixes itself. New sliders
+can't opt out by forgetting. Watch the two non-uniform cases: param-card sliders whose
+right-click currently carries `(target, param_id, default)` context, and label/row right-click
+menus (`ParamLabelRightClick` etc.) which are context menus, not reset — they stay.
 
 ### BUG-052 (sample-rate-dependent-detection) — onset + kick detection mis-tunes at non-48k sample rates — FIXED 2026-07-07 @ 6e0e8988
 
