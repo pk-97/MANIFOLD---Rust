@@ -44,7 +44,7 @@ or human can read it, and it needs no external tool.
 | BUG-009 | **stateless-gate-miss** | harvest skip resets StateStore-held scalar state (HIGH) |
 | BUG-010 | **wgsl-first-entry** | multi-entry wgsl_compute silently dispatches the first (MED) |
 | BUG-011 | **fused-output-oversize** | fused output buffer sized to max of all inputs (MED) |
-| BUG-015 | **inspector-overlap** | inspector shows stale content (section overlap after scroll; edge/margin ghost fragments) — concrete cache-staleness suspect + Fable handoff 07-07 (MED, repro needs a new cache-driving harness) |
+| BUG-015 | **inspector-overlap** | inspector shows stale content (section overlap after scroll; edge/margin ghost fragments) — Fable verdict 07-07: card-ghost hypothesis REFUTED; real hole = out-of-sub-region dirt dropped (stale-chrome class); video fragment = post-atlas pass overdraw, BUG-025 family (MED) |
 | BUG-025 | **timeline-scissor-bleed** | clip content bleeds across row bounds (MED, repro needed — scrolled headless render 07-07 clean) |
 | BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
 | BUG-033 | **ui-snapshot-broken** | FIXED — verified in-tree 2026-07-07 (harness builds + runs) |
@@ -1054,6 +1054,67 @@ a new harness driving `render_dirty_panels` across full→edit→incremental and
 atlas. Blast radius is contained: only the inspector passes `sub_regions`; every other panel
 full-renders when dirty and can't ghost this way. Handed to Fable as a reasoning task
 (2026-07-07). Same family as BUG-025 (timeline-scissor-bleed).
+
+**Verdict (Fable reasoning pass, 2026-07-07) — hypothesis REFUTED for the card-ghost class;
+a different, real hole found; the video fragment exonerates the atlas entirely.**
+
+_1. The card-ghost class cannot occur — three independent seals, verified in code:_
+- **Every card-geometry tween runs under full invalidation, never the incremental path.**
+  `tick_drawers` ([param_card.rs:1401](../crates/manifold-ui/src/panels/param_card.rs#L1401))
+  bubbles collapse, spawn-pop, delete-fade, drawer-height AND tab-ink tweens into
+  `drawer_anim_active`, which the app polls every frame
+  ([app_render.rs:2940](../crates/manifold-app/src/app_render.rs#L2940)) → `needs_rebuild` →
+  `invalidate_all()` ([:2842](../crates/manifold-app/src/app_render.rs#L2842)) → whole-atlas
+  clear + full self-clearing renders. The trigger-drawer's unclipped ~120px overflow therefore
+  never meets `LoadOp::Load` at all — the guard doesn't even need to catch it.
+- **Bounds-stable-but-paints-outside edits don't exist in the card path.** Searched: the
+  chevron's `Affine2::rotate` pivots about its own small rect (contained); slider fill/thumb/
+  value-flash writes are contained under the card's opaque frame, which the incremental path
+  always redraws first (`dirty_only=false`,
+  [ui_cache_manager.rs:228](../crates/manifold-renderer/src/ui_cache_manager.rs#L228)).
+- **The scroll-clip hole is already patched.** `traverse_flat_range` pre-pushes ancestor
+  `CLIPS_CHILDREN` bounds for mid-tree ranges
+  ([tree.rs:737-756](../crates/manifold-ui/src/tree.rs#L737)) — an incremental card repaint
+  IS clipped by the scroll viewport. And the inspector's first node is a genuine full-rect
+  opaque background ([inspector.rs:1892](../crates/manifold-ui/src/panels/inspector.rs#L1892)),
+  so every full render self-clears the margins. The proposed fix direction ("repaint the
+  background before dirty sub-regions") is actively WRONG: the background would overpaint the
+  tab strip/chrome, which no sub-region would then redraw.
+
+_2. The real hole (different from the hypothesis): out-of-sub-region dirt is silently
+dropped._ The incremental path
+([ui_cache_manager.rs:212-238](../crates/manifold-renderer/src/ui_cache_manager.rs#L212))
+fires when ANY sub-region is dirty and repaints ONLY dirty sub-regions — it never checks for
+dirt in the panel range that belongs to NO sub-region (tab strip, cog/Collapse controls,
+scrollbar, all built directly in `build_in_rect`). `rendered_ranges` clears only the card
+ranges, and the end-of-frame blanket `tree.clear_dirty()`
+([app_render.rs:4807](../crates/manifold-app/src/app_render.rs#L4807)) then wipes the
+remaining flags — erasing the evidence, so the fallback-to-full-render ("dirty list empty
+next frame") never fires. The comment at
+[app_render.rs:3870](../crates/manifold-app/src/app_render.rs#L3870) ("Deferred panels keep
+their dirty flags") is falsified by :4807. **Trigger:** an in-place chrome mutation
+co-occurring with card dirt — guaranteed whenever any param is audio-modulated (per-frame
+card dirt), e.g. hover/unhover a tab or the Collapse button while a modulated generator
+plays → the un-hover repaint is dropped and the stale hover state persists until the next
+rebuild. This produces stale chrome STATES in place (ghost highlights, stale scrollbar) —
+real, but probably NOT the screenshot's fragments. **Fix shape (root):** the incremental
+path must detect dirt in the complement of the sub-regions and fall back to the full panel
+render, and dirty-flag clearing for panel ranges should be owned by the cache manager (the
+blanket `clear_dirty` may only touch the overlay region).
+
+_3. The video-bleed fragment cannot be atlas staleness at all._ The atlas never contains
+compositor pixels: composite order is clear-to-black → atlas blit (pass 2,
+[app_render.rs:3972](../crates/manifold-app/src/app_render.rs#L3972)) → compositor video
+into `layout.video_area()` (pass 3, [:4001](../crates/manifold-app/src/app_render.rs#L4001),
+opaque, aspect-fit INSIDE the rect) → timeline passes (4) → overlays (5, drawn straight into
+the offscreen, [:4587](../crates/manifold-app/src/app_render.rs#L4587)). An atlas failure
+shows black/transparent, never video. Video-colored pixels over the inspector's left edge
+must be painted by a post-atlas pass whose rect/scissor crosses the timeline↔inspector
+boundary — exactly the BUG-025 (timeline-scissor-bleed) class. **Where to look next:** the
+pass-4 sub-pass scissors vs `layout.timeline_body()`'s right edge and the pass-3
+`video_area` rect, especially across inspector-width changes; the 2026-07-04 "sections
+interleaved" sighting should be re-examined against hole #2 + rebuild-while-scrolled rather
+than the card cache.
 
 ### BUG-016 — Imported .glb layers are black boxes: no card params, no Model File picker, edit paths silently no-op — FIXED 2026-07-04 (`2d5e4dc6`)
 
