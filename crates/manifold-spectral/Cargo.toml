@@ -20,6 +20,10 @@ rustfft = "6"
 [features]
 default = []
 gpu = ["dep:manifold-gpu"]
+# GPU-readback tests (real Metal device, minutes not seconds) — OFF by default,
+# mirroring manifold-renderer's gpu-proofs convention. Run deliberately:
+# `cargo test -p manifold-spectral --features gpu-proofs`.
+gpu-proofs = ["gpu"]
 
 [dev-dependencies]
 # WGSL front-end only, to statically parse + validate the spectrogram shader in
