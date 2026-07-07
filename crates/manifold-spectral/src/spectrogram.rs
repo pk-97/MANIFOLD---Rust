@@ -14,6 +14,7 @@
 //! rotating GPU buffers per render, so the CPU never writes a buffer the GPU is
 //! still reading from a prior in-flight frame.
 
+use crate::scope::{MAX_ONSET_LANES, ScopeColumn, ScopeOnsets};
 use manifold_gpu::{
     GpuBinding, GpuBuffer, GpuDevice, GpuEncoder, GpuRenderPipeline, GpuTexture, GpuTextureFormat,
 };
@@ -24,10 +25,19 @@ const SHADER: &str = include_str!("shaders/spectrogram.wgsl");
 /// is never written while a prior frame's GPU read is outstanding.
 const BUFFER_ROTATION: usize = 3;
 
-/// Overlay scalars stored per spectrogram column: four per-band centroid heights
-/// `[centroid_full, centroid_low, centroid_mid, centroid_high]` then three onsets
-/// `[onset_low, onset_mid, onset_high]`. The shader reads the same stride.
-const SCALAR_STRIDE: usize = 7;
+/// [`ScopeOnsets::LANE_COLORS`] padded (alpha'd) to the shader uniform's fixed
+/// [`MAX_ONSET_LANES`] capacity; `onset_count` in the params says how many are
+/// live. Colours live in `scope.rs` next to the lane fields they belong to.
+const ONSET_LANE_COLORS_PADDED: [[f32; 4]; MAX_ONSET_LANES] = {
+    let mut out = [[0.0; 4]; MAX_ONSET_LANES];
+    let mut i = 0;
+    while i < ScopeOnsets::COUNT {
+        let [r, g, b] = ScopeOnsets::LANE_COLORS[i];
+        out[i] = [r, g, b, 1.0];
+        i += 1;
+    }
+    out
+};
 
 /// Uniform params for the shader. `#[repr(C)]`, 16-byte aligned (two `vec4`-
 /// sized rows) per the GPU uniform-alignment convention.
@@ -53,6 +63,17 @@ struct Params {
     /// Which band divider the cursor is over (drag affordance): `0` = low/mid,
     /// `1` = mid/high, `< 0` = none. The shader brightens that line's grip.
     hovered_divider: f32,
+    /// Overlay-scalar layout, from the one definition in `scope.rs` —
+    /// [`ScopeColumn::STRIDE`], [`ScopeColumn::ONSET_BASE`],
+    /// [`ScopeOnsets::COUNT`]. The shader indexes `col_scalars` with these, so
+    /// the WGSL carries no layout literals of its own.
+    scalar_stride: u32,
+    onset_base: u32,
+    onset_count: u32,
+    _pad1: u32,
+    /// Onset lane colours (bottom-up), [`ONSET_LANE_COLORS_PADDED`]. Fixed
+    /// capacity; only the first `onset_count` entries are live.
+    onset_colors: [[f32; 4]; MAX_ONSET_LANES],
 }
 
 /// Sweep-fill spectrogram renderer. One per visible scope; sized to the scope's
@@ -64,14 +85,10 @@ pub struct Spectrogram {
     /// `num_cols * num_bins` magnitudes; a ring of columns. `head` is the next
     /// column to overwrite (also the shader's `write_index` — the sweep line).
     ring: Vec<f32>,
-    /// Parallel per-column overlay scalars, [`SCALAR_STRIDE`] per column:
-    /// `[centroid_full, centroid_low, centroid_mid, centroid_high, onset_low,
-    /// onset_mid, onset_high]`. Each centroid is that band's spectral centroid as
-    /// normalised height-from-bottom (0..1, matching the bin axis); `< 0` hides
-    /// that band's trace for that column. The three onsets are 0..1 transient
-    /// impulses per band, drawn as colour-coded ticks on the time axis. Same ring
-    /// layout as `ring`, written at `head`.
-    col_scalars: Vec<f32>,
+    /// Parallel per-column overlay scalars (one [`ScopeColumn`] per column —
+    /// centroid traces + onset tick lanes; see `scope.rs` for the layout). Same
+    /// ring layout as `ring`, written at `head`; uploaded as raw bytes.
+    col_scalars: Vec<ScopeColumn>,
     head: usize,
     bufs: Vec<GpuBuffer>,
     /// Rotating GPU buffers for `col_scalars`, mirroring `bufs`.
@@ -113,9 +130,8 @@ impl Spectrogram {
                 b
             })
             .collect();
-        // Overlay scalar ring: SCALAR_STRIDE floats per column.
-        let scalar_elems = num_cols * SCALAR_STRIDE;
-        let scalar_bytes = (scalar_elems * std::mem::size_of::<f32>()) as u64;
+        // Overlay scalar ring: one ScopeColumn per column.
+        let scalar_bytes = (num_cols * std::mem::size_of::<ScopeColumn>()) as u64;
         let scalar_bufs = (0..BUFFER_ROTATION)
             .map(|_| {
                 let b = device.create_buffer_shared(scalar_bytes.max(4));
@@ -135,7 +151,7 @@ impl Spectrogram {
             num_bins,
             num_cols,
             ring: vec![0.0; elems],
-            col_scalars: vec![-1.0; scalar_elems],
+            col_scalars: vec![ScopeColumn::EMPTY; num_cols],
             head: 0,
             bufs,
             scalar_bufs,
@@ -195,12 +211,10 @@ impl Spectrogram {
     /// values past `num_bins` are ignored; a short column zero-pads the
     /// remainder. The head wraps at the right edge back to the left.
     ///
-    /// `centroids` is the per-band `[full, low, mid, high]` spectral centroids as
-    /// normalised height-from-bottom (0..1); pass `< 0` for a band to hide its
-    /// trace for this column. `onsets` is the per-band `[low, mid, high]` transient
-    /// impulses (0..1), drawn as colour-coded ticks on the time axis. Stored in
-    /// the parallel scalar ring at the same slot, so they scroll with the waterfall.
-    pub fn push_column(&mut self, magnitudes: &[f32], centroids: [f32; 4], onsets: [f32; 3]) {
+    /// `scalars` is the column's overlay record (centroid traces + onset tick
+    /// lanes — see `scope.rs`), stored in the parallel scalar ring at the same
+    /// slot, so it scrolls with the waterfall.
+    pub fn push_column(&mut self, magnitudes: &[f32], scalars: ScopeColumn) {
         let base = self.head * self.num_bins;
         let dst = &mut self.ring[base..base + self.num_bins];
         let n = magnitudes.len().min(self.num_bins);
@@ -208,14 +222,7 @@ impl Spectrogram {
         for v in &mut dst[n..] {
             *v = 0.0;
         }
-        let sbase = self.head * SCALAR_STRIDE;
-        self.col_scalars[sbase] = centroids[0];
-        self.col_scalars[sbase + 1] = centroids[1];
-        self.col_scalars[sbase + 2] = centroids[2];
-        self.col_scalars[sbase + 3] = centroids[3];
-        self.col_scalars[sbase + 4] = onsets[0];
-        self.col_scalars[sbase + 5] = onsets[1];
-        self.col_scalars[sbase + 6] = onsets[2];
+        self.col_scalars[self.head] = scalars;
         self.head = (self.head + 1) % self.num_cols;
     }
 
@@ -270,6 +277,11 @@ impl Spectrogram {
             freq_log_ratio,
             cursor_y,
             hovered_divider,
+            scalar_stride: ScopeColumn::STRIDE as u32,
+            onset_base: ScopeColumn::ONSET_BASE as u32,
+            onset_count: ScopeOnsets::COUNT as u32,
+            _pad1: 0,
+            onset_colors: ONSET_LANE_COLORS_PADDED,
         };
         // SAFETY: `Params` is `#[repr(C)]` plain-old-data.
         let param_bytes = unsafe {
@@ -296,11 +308,14 @@ impl Spectrogram {
 
 #[cfg(test)]
 mod tests {
-    use super::SHADER;
+    use super::{Params, SHADER};
 
     /// The spectrogram WGSL must parse and pass naga's validator — catches a
     /// malformed binding/index/type before it reaches the GPU at runtime (the
     /// shader is otherwise only compiled when the Audio Setup scope opens).
+    /// Also asserts the WGSL `Params` size equals the Rust [`Params`] size —
+    /// the two are maintained by hand, and a drift garbles every uniform after
+    /// the mismatch at runtime with no compile-time signal.
     #[test]
     fn shader_parses_and_validates() {
         let module =
@@ -311,5 +326,18 @@ mod tests {
         )
         .validate(&module)
         .expect("spectrogram WGSL should validate");
+
+        let mut layouter = naga::proc::Layouter::default();
+        layouter.update(module.to_ctx()).expect("layout should resolve");
+        let (handle, _) = module
+            .types
+            .iter()
+            .find(|(_, t)| t.name.as_deref() == Some("Params"))
+            .expect("shader should declare a Params struct");
+        assert_eq!(
+            layouter[handle].size as usize,
+            std::mem::size_of::<Params>(),
+            "Rust Params and WGSL Params must have identical sizes"
+        );
     }
 }

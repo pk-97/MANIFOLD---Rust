@@ -657,7 +657,7 @@ impl Application {
                 // drain none. The render path consumes (clears) this buffer.
                 self.pending_spectrogram_columns
                     .extend_from_slice(&state.spectrogram_columns);
-                // Overlay scalars ride in lockstep (2 per column).
+                // Overlay records ride in lockstep (one ScopeColumn per column).
                 self.pending_spectrogram_scalars
                     .extend_from_slice(&state.spectrogram_col_scalars);
                 // Bound it: never keep more than one screen-width of columns (a
@@ -673,10 +673,13 @@ impl Application {
                         self.pending_spectrogram_columns.len().saturating_sub(MAX_PENDING_COLS * nb);
                     if excess > 0 {
                         self.pending_spectrogram_columns.drain(0..excess);
-                        // Drop the matching scalar records (4 per column).
-                        let cols = excess / nb;
-                        let scalar_excess = (cols * 4).min(self.pending_spectrogram_scalars.len());
-                        self.pending_spectrogram_scalars.drain(0..scalar_excess);
+                        // Drop the matching overlay records (one per column).
+                        // (Pre-ScopeColumn this used a hand-tracked stride and
+                        // had drifted to a wrong literal, silently desyncing
+                        // the overlay under overflow — the record type makes
+                        // that unrepresentable.)
+                        let cols = (excess / nb).min(self.pending_spectrogram_scalars.len());
+                        self.pending_spectrogram_scalars.drain(0..cols);
                     }
                 }
                 self.content_state = ContentState {
@@ -4707,16 +4710,14 @@ impl Application {
             {
                 // Feed new columns (post-gain magnitudes from the worker), each
                 // exactly once, then clear — see `pending_spectrogram_columns`.
-                // The overlay scalars ride in lockstep (7 per column: four per-band
-                // centroids + three onsets); a column with no matching record
-                // (shouldn't happen) gets the hide sentinel.
-                let mut scalars = self.pending_spectrogram_scalars.chunks_exact(7);
+                // The overlay records ride in lockstep (one ScopeColumn per
+                // column); a column with no matching record (shouldn't happen)
+                // gets the hide sentinel.
+                let mut scalars = self.pending_spectrogram_scalars.iter();
                 for col in self.pending_spectrogram_columns.chunks_exact(num_bins) {
-                    let (centroids, onsets) = match scalars.next() {
-                        Some(s) => ([s[0], s[1], s[2], s[3]], [s[4], s[5], s[6]]),
-                        None => ([-1.0; 4], [0.0; 3]),
-                    };
-                    spectrogram.push_column(col, centroids, onsets);
+                    let record =
+                        scalars.next().copied().unwrap_or(manifold_spectral::ScopeColumn::EMPTY);
+                    spectrogram.push_column(col, record);
                 }
                 self.pending_spectrogram_columns.clear();
                 self.pending_spectrogram_scalars.clear();

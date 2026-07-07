@@ -47,7 +47,7 @@ use ringbuf::HeapRb;
 use ringbuf::traits::{Consumer as ConsumerTrait, Observer as ObserverTrait, Producer as ProducerTrait, Split};
 
 pub use manifold_core::audio_features::SendFeatures;
-use manifold_spectral::{CqtTransform, SpectrogramConfig};
+use manifold_spectral::{CqtTransform, ScopeColumn, ScopeOnsets, SpectrogramConfig};
 
 use crate::capture::AudioConsumer;
 
@@ -106,13 +106,6 @@ impl GainBank {
         self.linear.is_empty()
     }
 }
-
-/// Overlay scalars per spectrogram column: four per-band centroid heights
-/// `[centroid_full, centroid_low, centroid_mid, centroid_high]` followed by the
-/// three per-band onset impulses `[onset_low, onset_mid, onset_high]`. The shader
-/// reads the same stride; a [`StreamingSendAnalyzer`] buffers this many floats
-/// per scope column.
-const SCOPE_SCALAR_STRIDE: usize = 7;
 
 /// Read end of the capture worker's per-send **mono** stream.
 ///
@@ -1920,7 +1913,7 @@ pub struct StreamingSendAnalyzer {
     /// pushes to its scope rings — so a layer-fed send draws identically.
     scope: bool,
     scope_cols: Vec<f32>,
-    scope_scalars: Vec<f32>,
+    scope_scalars: Vec<ScopeColumn>,
     /// D7 (simplified for P2): gates the D5 tracker on/off. Default OFF so an
     /// untouched project's analysis is byte-identical to the pre-tracker path
     /// (checked by `pitch_tracking_disabled_matches_untouched_path` below);
@@ -2028,14 +2021,12 @@ impl StreamingSendAnalyzer {
         self.scope_cols.clear();
     }
 
-    /// Drain buffered overlay scalars in lockstep with the columns: four per-band
-    /// centroid heights `[full, low, mid, high]` + three per-band onset impulses
-    /// `[low, mid, high]`. Same stride the scope shader reads.
-    pub fn drain_scope_scalars(&mut self, mut f: impl FnMut([f32; 4], [f32; 3])) {
-        for s in self.scope_scalars.chunks_exact(SCOPE_SCALAR_STRIDE) {
-            f([s[0], s[1], s[2], s[3]], [s[4], s[5], s[6]]);
+    /// Drain buffered overlay records in lockstep with the columns — one
+    /// [`ScopeColumn`] (centroid traces + onset tick lanes) per scope column.
+    pub fn drain_scope_scalars(&mut self, mut f: impl FnMut(ScopeColumn)) {
+        for s in self.scope_scalars.drain(..) {
+            f(s);
         }
-        self.scope_scalars.clear();
     }
 
     /// Retune the analysis band edges to new Low/Mid crossovers (cheap; no
@@ -2180,15 +2171,14 @@ impl StreamingSendAnalyzer {
                 // ~5 columns into a solid carpet that read as far busier than the
                 // real fire rate. One column per fire = the true rate, visible.
                 let fired = |t: f32| if t > 0.999 { 1.0 } else { 0.0 };
-                scope_scalars.extend_from_slice(&[
-                    state.centroid_yfb[0],
-                    state.centroid_yfb[1],
-                    state.centroid_yfb[2],
-                    state.centroid_yfb[3],
-                    fired(b[1].transients),
-                    fired(b[2].transients),
-                    fired(b[3].transients),
-                ]);
+                scope_scalars.push(ScopeColumn {
+                    centroids: state.centroid_yfb,
+                    onsets: ScopeOnsets {
+                        low: fired(b[1].transients),
+                        mid: fired(b[2].transients),
+                        high: fired(b[3].transients),
+                    },
+                });
             }
         }
         state.since_hop -= owed * hop;
@@ -3005,7 +2995,7 @@ mod tests {
             a.push(chunk);
         }
         let mut scal = 0;
-        a.drain_scope_scalars(|_, _| scal += 1);
+        a.drain_scope_scalars(|_| scal += 1);
         let mut cols = 0;
         a.drain_scope_columns(|c| {
             cols += 1;

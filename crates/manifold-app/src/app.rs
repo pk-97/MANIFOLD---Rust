@@ -306,9 +306,10 @@ pub struct Application {
     /// and drops columns on frames that drain several — visible as juddery,
     /// "jelly" scrolling and smeared startup columns.
     pub(crate) pending_spectrogram_columns: Vec<f32>,
-    /// Per-column overlay scalars staged in lockstep with
-    /// `pending_spectrogram_columns`: 2 per column, `[centroid_yfb, onset]`.
-    pub(crate) pending_spectrogram_scalars: Vec<f32>,
+    /// Per-column overlay records staged in lockstep with
+    /// `pending_spectrogram_columns` — one [`manifold_spectral::ScopeColumn`]
+    /// (centroid traces + onset tick lanes) per column.
+    pub(crate) pending_spectrogram_scalars: Vec<manifold_spectral::ScopeColumn>,
     /// Physical-pixel size of the scope render target, tracked so it is rebuilt
     /// when the (resizable) Audio Setup modal changes the on-screen scope size —
     /// keeps the waterfall crisp instead of upscaling a fixed small texture.
