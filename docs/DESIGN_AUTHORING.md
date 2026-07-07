@@ -268,6 +268,29 @@ Opus inherits — bug hunts and complex tasks run the same skeleton, cheaper:
   discipline (state the observable end condition before starting), same kill-pass
   before declaring victory (verify one level closer to the stage than where you
   changed things).
+- **Emergent bugs** (the BUG-066 class — a feedback loop misbehaves while every
+  component reads clean; also: drift, hysteresis, "it slowly goes wrong"): reading
+  code CANNOT find these — the bug lives in the composition, not in any kernel, so
+  every component-level audit returns "symmetric, correct" and every theory feels
+  plausible. The method that worked, in order: (1) build a *quantified* observable
+  first — a deterministic headless harness with a number (quadrant shares, drift
+  rate), not a look; rerun must be seconds-to-minutes (BUG-066's is
+  `tests/fluid3d_bias.rs`, ~12s/scenario). (2) Bisect by nulling contributors via
+  params — inject past UI ranges from the harness; find the minimal configuration
+  that still shows the bug. (3) Characterize the bug's *invariances* before
+  theorizing: flip a sign (does it mirror?), scale a parameter (does it grow?),
+  rotate the camera (sim-space or view-space?). Each probe is one run and kills a
+  whole hypothesis family. (4) Refute by experiment, not argument — build the
+  candidate fix as a probe and run it; in one session four theories that survived
+  code-reading died on contact (each refutation is progress: record it WITH its
+  evidence in the backlog entry so nobody re-chases). (5) Prefer fault-LOCALIZING
+  probes over theory-testing probes — a stage-by-stage symmetry walk convicts the
+  broken stage no matter whose theory is right. (6) Any "unchanged/identical"
+  claim gets a machine diff, never an eyeball — one misread 0.1% difference cost a
+  phantom compiler-bug detour. Budget expectation: this class takes a full session
+  to *characterize* and may still hand off with the root open; a precise
+  characterization plus refuted-hypothesis fence is a successful session, a
+  plausible unproven diagnosis is a failed one.
 - **Everywhere**: CLAUDE.md's oracle discipline governs every step of every altitude
   — cheapest *reliable* oracle for the question's class; observe over deduce; "I
   don't know" plus the oracle that would resolve it is a complete answer.
