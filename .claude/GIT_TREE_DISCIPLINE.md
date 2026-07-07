@@ -172,6 +172,38 @@ or agents run; read the branch off the commit OUTPUT, not session start; diff
 resurrected files against their new-path versions before deleting (a merge,
 not an agent, may have restored them).
 
+## §3b. Shared-checkout commit mechanics (added 2026-07-07 — four sessions hit these in one day)
+
+- **Untracked-file exception to the pathspec-commit rule.** `git commit -m …
+  -- <path>` fails with "pathspec did not match" for a NEW file — git cannot
+  pathspec-commit what it isn't tracking. The correct move: `git add --
+  <exactly the new paths>` then the pathspec commit as usual. The targeted
+  add plus the commit's own pathspec still fences out other sessions' staged
+  work, preserving the rule's intent. Never `add -A`, never `add .`, never a
+  bare commit. (Sessions 2b15501e, 0f503e2e, 85d2348e, 0f5b70ea — all
+  improvised this independently; now it's written down.)
+- **Inverse-sweep hazard.** The known hazard is YOUR add-then-commit sweeping
+  THEIR staged work. The inverse also happens: another session's landing loop
+  can commit files sitting unstaged/untracked in YOUR working tree (observed
+  2026-07-06: a concurrent session landed this session's three working-tree
+  docs minutes before its own commit — the commit then failed with "nothing
+  added"). If your pathspec commit reports nothing to commit, diff your files
+  against HEAD before assuming an error: byte-identity means another session
+  landed them, and the landing is yours to verify, not redo.
+- **Landing merges are standalone commands.** Never run the landing `git
+  merge --no-ff` inside a compound chain — HEAD can change between a chain's
+  steps in a shared checkout (observed 2026-07-07: a fetch→merge→push chain
+  landed a merge on another session's branch). Re-verify
+  `git branch --show-current` immediately before the merge step, as its own
+  command.
+- **Worktree handoff files.** A session stopping mid-work in a worktree
+  (compaction, budget, interruption) writes its handoff to
+  `<worktree>/WORKTREE_HANDOFF.md` — branch state, uncommitted diagnostics,
+  the finding in flight — not only to its final chat message. A successor
+  session can find a file; it cannot find a transcript message (observed
+  2026-07-07: a successor only avoided duplicating a stopped session's work
+  because `git worktree add` happened to collide on the branch name).
+
 ## Acceptance
 
 §1 test cases (unchanged) pass. §1b: `branch -f main` and force-push-to-main

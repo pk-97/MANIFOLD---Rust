@@ -41,6 +41,31 @@ candidate was found already covered — coaching/price-the-fork carries the full
 pattern including the retroactive tell, and the ask-gate's semantic tier holds
 "mispriced" as a deny reason — marked stale, not re-authored.
 
+2026-07-07 late (Fable, final authoring pass — mined from the window's own
+eval/observations.session.jsonl, 39 records triaged; dispositions in
+PASS2_AGENDA.md §Triage): seven new moves, all UNVALIDATED, oracles in
+DESIGN.md §2i — coaching/deduction-loop (glTF viewport hunt f204e253:
+innocence proven four times while the bug sat on another axis),
+anchor/circular-oracle (kick session 1d67eabd: "kicks are gone from the mix"
+graded by the detector under debug), anchor/premature-capture (Peter's "you
+didn't really discuss with me at all here", 82ee1e52), anchor/asserted-values
+(bass-stems-as-THE-use-case, c9e4d45d, Peter-flagged),
+coaching/explain-with-their-artifact (group-params fork: two architecture
+explanations failed; walking his 4-object glb scene landed),
+anchor/unheeded-warning (branch work in the main checkout past a live
+shared-checkout warning, 5363065f — dormant until the T10 ledger annotation
+ships), mechanical/stale-brief (design-hardening 74c8486b: both 3-day-old
+queued decisions flipped on re-verification). Sharpened same pass: circling
+(+2 never-fire clauses — converging fix loops, post-refactor call-site
+sweeps; both graded-FP classes this window), ungrounded-resolution
+(memory-file reads are not artifact provenance — the 07-07 near-miss),
+git-landing payload (+its missing escape hatch: ancestor-safe scratch
+branches), confessed-stopgap contract (self-disposing markers exempt,
+implementation pending T2), design-primer payload (+termination-condition,
++unification-bias sentences). verify-claim deliberately untouched again —
+its pass-1 rework is still unscored (one change, one measurement).
+Catalog 34→41.
+
 ---
 
 ## coaching/model-first
@@ -182,6 +207,50 @@ pattern including the retroactive tell, and the ask-gate's semantic tier holds
 > resolve, then ask with real prices. A question that dissolves the moment the
 > human picks an option was not ready to be asked.
 
+## coaching/deduction-loop
+- **signature:** An investigation of a reported symptom keeps clearing the
+  suspect: two or more assistant texts have concluded the mechanism under
+  inspection is correct — "should work", "looks right", "can't diverge",
+  innocence re-proven from another angle — while the reported symptom remains
+  unexplained, and the LEDGER between those conclusions shows only reads and
+  searches: no run, render, or log of the failing case itself, and no question
+  to the user sharpening the symptom. Never flag when each clearing conclusion
+  follows a new observation of the actual failure (a run, a log read, a
+  render) — eliminating suspects against fresh evidence is progress, not
+  looping. Never flag when the latest text already switches move class:
+  proposes running or rendering the failing case, or asks the user exactly
+  what they see.
+- **cooldown:** standard
+- **payload:**
+> You've proven "this part works" more than once now, and the symptom is still
+> standing. Re-deriving innocence a third time won't move it — the bug is
+> likely on an axis you're not checking, or the symptom you're working from is
+> under-specified. Two moves beat another proof: observe the failing case in
+> its own medium (run it, render it, read its log), or ask the user to
+> describe exactly what they see — an analysis that keeps concluding "should
+> work" usually means the question is wrong, not the code. If you have a
+> concrete reason the next re-read settles it, say it in one sentence.
+
+## coaching/explain-with-their-artifact
+- **signature:** The user has asked for a re-explanation — "explain better",
+  "I don't understand", "simple language", "what does that actually mean", or
+  substantially the same question asked again — and the new attempt in RECENT
+  re-runs the failed one's shape: comparing architectures, mechanisms, or
+  options in the abstract, without walking a concrete artifact the user owns
+  (their named scene, project, track, file, show) through the thing being
+  explained. Never flag a first explanation (only re-asks), a re-explanation
+  that already walks a user-owned example end to end, or questions where no
+  user artifact exists to walk.
+- **cooldown:** standard
+- **payload:**
+> The first explanation didn't land, and this one is the same shape in
+> different words. Change the shape, not the vocabulary: take something the
+> user owns — the scene they named, their track, their show — and walk it
+> through the mechanism step by step: what happens to it at each stage, and
+> where the choice at hand changes what they'd see. Save the architecture
+> comparison for one closing line. An explanation lands when the user can
+> watch their own thing move through it.
+
 ---
 
 ## anchor/verify-claim
@@ -223,7 +292,11 @@ pattern including the retroactive tell, and the ask-gate's semantic tier holds
   read, search, or run of the described artifact. Do not flag when the text
   cites files or symbols the LEDGER or SESSION FACTS shows being examined —
   for SESSION FACTS the "read <path>" clause must name the artifact the
-  account describes; an unrelated stale read is not provenance. Do not flag
+  account describes; an unrelated stale read is not provenance. A read of a
+  memory, handoff, or index file whose TEXT mentions the artifact is a read
+  of the memory file, not of the artifact — it grounds a claim about what the
+  memory says, never a claim about what the artifact contains; stale relayed
+  memory is precisely what this move exists to catch. Do not flag
   when the text explicitly marks itself as a guess, proposal, or unverified
   ("I think", "proposal:", "not checked"). The tell is authority without
   provenance: the description is stated as fact and nothing in view is where
@@ -240,6 +313,12 @@ pattern including the retroactive tell, and the ask-gate's semantic tier holds
   small variations, within one investigation — motion without new information.
   Repeated edits to one file that each build a distinct, named sub-part of a
   stated plan (not repeated attempts at the same fix) are not this signature.
+  A fix loop whose failure signal strictly shrinks across successive checks —
+  compile-error count dropping every run, test failures decreasing — is
+  convergence, not circling: never flag while the metric is still falling.
+  And repeated searches or reads that sweep the call sites of a symbol the
+  session's own just-made edit changed (post-refactor sweeps) are execution
+  of that change, not motion without information — never flag those.
 - **cooldown:** standard
 - **payload:**
 > You're circling. Stop; don't open that file again. Restate the problem in one
@@ -383,6 +462,99 @@ pattern including the retroactive tell, and the ask-gate's semantic tier holds
 > it's friction — do it and report. Save the question for a real fork the
 > instruction doesn't cover, not one it already answered.
 
+## anchor/circular-oracle
+- **signature:** A claim is being scored by the instrument whose correctness
+  is in question: a detector's own output cited as evidence its signal is
+  absent or undetectable; a just-built bench "confirming" the hypothesis it
+  was built to test, with nothing in view validating the bench itself (no
+  positive control, no readback, no known-good case through the same rig); or
+  an invariant asserted about a self-referential system — a threshold,
+  normalizer, or reference computed from the same input being transformed.
+  The tell: the cited evidence's source is the system under debug, and no
+  independent oracle — a different modality, a human label, a by-eye count, a
+  labeled fixture, a positive control — appears in the window. Negative
+  claims are the highest-risk form: "the signal isn't there", graded by the
+  detector that's failing to find it, matches even when the numbers are real.
+  Never flag when an independent oracle is cited alongside, or when the text
+  itself names the circularity and the independent check it still needs.
+- **cooldown:** standard
+- **payload:**
+> That evidence comes from the instrument you're debugging — the detector is
+> grading its own homework, and a negative result from it proves nothing
+> about the signal. Get one reading from an oracle that doesn't share its
+> failure modes: a by-eye count, a labeled fixture, a different modality, a
+> known-good input through the same rig. If no independent oracle exists
+> here, report that instead of the number — "our detector can't find it" and
+> "it isn't there" are different claims.
+
+## anchor/premature-capture
+- **signature:** The user's message in view is a float, question, or
+  invitation to think together — "let's discuss", "what do you think", "how
+  should we", a question with no directive verb — and the assistant's turn
+  commits or pushes a docs/ or memory file recording that same open exchange
+  as settled ("pinned", "decided", "asked and answered"), before the user has
+  replied to the assistant's side of it. The LEDGER tell: a Write or git
+  commit of docs/ or memory paths inside a turn whose TASK is conversational;
+  consecutive turns repeating the shape strengthen the match. Never flag when
+  the user explicitly asked for capture ("write that down", "add it to the
+  doc"), when the write restates a decision the user already made, or when
+  the destination is a scratchpad rather than repo state.
+- **cooldown:** standard
+- **payload:**
+> That was the user's side of an open discussion, and you just filed it as
+> settled repo state. A float recorded as a decision forecloses the
+> conversation it came from — they haven't even answered your half yet. Hold
+> it in the thread; capture once, when it actually settles (the repo rule:
+> feedback_discuss_before_capturing_to_doc — leans are not decisions).
+> Bias-to-act is for work, not for the user's turn to talk. If they did ask
+> you to write it down, carry on.
+
+## anchor/asserted-values
+- **signature:** Assistant text ranks the user's own priorities — elevates
+  one use case, audience, or goal to primary ("the core use case is", "what
+  matters most here is", "this is really about", "the main reason you'd want
+  this") — and nothing in view grounds the ranking: no quoted user statement,
+  no decision-log or memory citation carrying it. A values claim (what the
+  user cares about most) stated in the grammar of fact; analysis then
+  structured around the asserted ranking — priorities ordered by it,
+  recommendations keyed to it — strengthens the match. Never flag rankings
+  cited to the user's words or a decision record in view, rankings explicitly
+  framed as assumptions or questions ("treating X as the priority — is that
+  right?"), or technical orderings data can settle (throughput, latency,
+  cost) — only the user ranks what the show needs.
+- **cooldown:** standard
+- **payload:**
+> You just ranked what the user cares about, and the ranking is yours. A
+> values claim can't be verified by any read or run — only the user can
+> settle it, and analysis built on an asserted priority inherits its
+> wrongness silently. Cite where they said it, or turn the sentence into a
+> question before structuring anything around it.
+
+## anchor/unheeded-warning
+- **signature:** A tool result in the LEDGER carries an attached hook warning
+  about shared-checkout or branch state — another live session named, a
+  branch-switch in the main checkout flagged, a landing-protocol reminder —
+  and subsequent commands proceed with the warned-about operation unchanged
+  (the branch created or switched in the main checkout, work continuing
+  there, the landing chain continuing) while no assistant text in view weighs
+  the warning: no worktree considered, no sentence saying why proceeding in
+  place is right. DORMANT until the ledger's hook-warning annotation ships
+  (TICKETS.md T10) — the window cannot currently see warning text attached to
+  tool results, so this move cannot fire as worded. Never flag when the text
+  addresses the warning and decides with a reason, when the warned command
+  was aborted or redirected to a worktree, or when the warning is purely
+  informational with no alternative action available.
+- **cooldown:** standard
+- **payload:**
+> A warning fired on that exact operation and nothing in your reasoning
+> touched it. Hook warnings here are load-bearing — that one names another
+> live session sharing this checkout, and recovery when this goes wrong costs
+> more than reading it would have. Price the alternative it implies (a
+> worktree off the verified tip, .claude/GIT_TREE_DISCIPLINE.md) in one
+> sentence. If proceeding in place is genuinely right — solo in practice,
+> paths don't overlap — say so and go: a warning answered is fine; a warning
+> scrolled past is how two sessions collide.
+
 ---
 
 ## mechanical/announced-not-started
@@ -407,7 +579,14 @@ pattern including the retroactive tell, and the ask-gate's semantic tier holds
   stopgap, band-aid, FIXME, a TODO deferring the real fix ("proper", "real
   fix", "later", "revisit"), a new `#[allow(`, a new sleep outside test code —
   where the marker is absent from the text being replaced (removing a hack
-  never fires). Markdown files and `.claude/` internals are excluded. Marker
+  never fires). Markdown files and `.claude/` internals are excluded. An
+  added marker whose surrounding added text names its own concrete disposal
+  trigger — "delete after <named event>", "convert to a mechanism assertion
+  with the fix", a measurement or phase that retires it — is eval-loop
+  scaffolding, not a confession: never fire on self-disposing markers
+  (contract change 2026-07-07 from two graded FP fires on TEMPORARY test
+  scaffolding, session 9cd5f0c9; implementation pending, TICKETS.md T2 —
+  until it ships the runtime over-fires relative to this contract). Marker
   table + scan mechanics: DESIGN.md §2c, shared regex in `common.py`.
 - **cooldown:** standard
 - **payload:**
@@ -439,7 +618,9 @@ pattern including the retroactive tell, and the ask-gate's semantic tier holds
 > so SHAs stay shared (the one sanctioned exception is lifting a branch's
 > final content right before retiring it for good). And never delete a
 > branch until `git merge-base --is-ancestor <tip> origin/main` confirms its
-> commits are actually on main.
+> commits are actually on main. One legitimate out: a scratch or verification
+> branch pinned at a commit already on main has nothing to lose — run the
+> is-ancestor check, say so in one sentence, and delete freely.
 
 ## mechanical/reasoning-primer
 - **signature:** Deterministic, observer-selected — never the classifier: the
@@ -507,7 +688,15 @@ pattern including the retroactive tell, and the ask-gate's semantic tier holds
 > part. Prefer deleting a bug class over handling one. And write the failure
 > story before the success story: what does this do when the input is absent,
 > malformed, or huge — a design that only covers the happy path is a demo
-> script.
+> script. Any mechanism that repeats or re-fires — a reminder, a retry, a
+> poll — needs its termination condition designed in the first draft: what
+> stops it, what caps it, what it does when there's nothing to do (the
+> daemon's own observation prompt shipped its first draft without one and
+> would have nagged every clean turn). Last, unify only where the sameness is
+> structural or physical — one Stage surface because there is one venue —
+> never for consistency's own sake: a cross-cutting idiom spanning unrelated
+> features is usually the designer enjoying the framework, and per-case
+> design is what the user wanted.
 
 ## mechanical/unread-edit
 - **signature:** Deterministic, observer-selected — never the classifier: an
@@ -606,6 +795,29 @@ pattern including the retroactive tell, and the ask-gate's semantic tier holds
 > committed under docs/landings/. Next sessions route by those lines — a doc
 > still saying "not built" over shipped code is how work gets rebuilt. If
 > they're not in this landing, add them before you push.
+
+## mechanical/stale-brief
+- **signature:** Deterministic, observer-selected, kind advice — never the
+  classifier: a live (non-catchup) Read of a queue, brief, agenda, or handoff
+  artifact — path matching `*_QUEUE.md`, `*BRIEF*.md`, `PASS*_AGENDA.md`,
+  `docs/handoff*`, or a memory `handoff_*.md` — whose file mtime at read time
+  is more than 48 hours old. Fires once per (session, path); the builder keys
+  paths the way unread-edit keys its path sets. Catchup never fires. Advice
+  frame (nothing is wrong yet): `<daemon-advice>` wrapper, no ack, never
+  escalates. Implementation: Sonnet, TICKETS.md T9. Specimens: the 07-06
+  design-hardening session (74c8486b), where re-verifying a 3-day-old queue's
+  evidence flipped BOTH queued decisions; the 07-07 meta-session's stale
+  six-vocab handoff item, relayed as open five days after it shipped.
+- **cooldown:** once
+- **kind:** advice
+- **payload:**
+> The brief you just opened is more than two days old, and in this repo
+> evidence packets age in days — landings since it was written have flipped
+> queued decisions before (both design-hardening items, 07-06). Its questions
+> are probably still right; its counts, anchors, and drafted leans may not
+> be. Before weighing any lean it drafts: re-derive the load-bearing numbers
+> and re-read one cited anchor at its file:line. Trust a stale brief's
+> questions, not its answers.
 
 ## escalate/checkpoint
 - **signature:** Selected by the daemon, not the rubric: the same drift anchor has

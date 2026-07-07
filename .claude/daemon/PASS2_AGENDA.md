@@ -19,7 +19,12 @@ reason to exist.
    measured Stop wall time — use it, don't infer. Also check the per-turn
    latency tax (the double-stat adds ~0.2s to every turn end; the 10s cap
    binds only when a classification is in flight).
-2. **Score the 07-07 additions** by their DESIGN.md §2h oracles:
+2. **Score the 07-07 additions** — BOTH batches. The final authoring pass
+   (same day, later) added 7 more moves + 5 sharpenings mined from
+   eval/observations.session.jsonl; per-move oracles in DESIGN.md §2i, triage
+   dispositions in §Triage below. Note anchor/unheeded-warning is DORMANT
+   until TICKETS.md T10 ships — its non-fires are not misses. The morning
+   batch, by their DESIGN.md §2h oracles:
    ungrounded-chat-claim (grounding read or unverified-restatement within ~10
    events), unverified-done-claim (verification-class event within ~10 events
    or claim restated unverified — crude by design, PULL it if noisy),
@@ -81,6 +86,55 @@ reason to exist.
     handoff): §2d oscillation span/flips, §2g card-limit bounds, §2h.4 worker
     review threshold, OBSERVATION_PROMPT_MIN_EVENTS (40, main) if grading
     shows it mis-set.
+
+12. **Check for the 07-07-night Fable grading session's output first.** A
+    dedicated grading session was planned for the window's final night
+    (reconciling the ~180 self-grade lines and scoring ungraded telemetry
+    fires). If eval/live_grades* carries a 07-07/07-08 pass stamp, build on
+    it — verify, don't redo. If it never ran, its scope folds into items 1–3
+    and 8 here.
+
+## Triage of eval/observations.session.jsonl (Fable, 2026-07-07 late — final authoring pass)
+
+All 39 records were read and dispatched; do NOT re-triage. By entry number
+(line order in the jsonl):
+
+- **Authored as new moves (7)** — oracles in DESIGN.md §2i: #2
+  coaching/deduction-loop; #6+#18+#20 anchor/circular-oracle; #10
+  anchor/asserted-values; #13 coaching/explain-with-their-artifact; #26
+  anchor/premature-capture; #39 anchor/unheeded-warning (dormant on T10);
+  #8+#14 mechanical/stale-brief (advice-kind).
+- **Sharpened existing moves** — #4+#12 circling (two never-fire clauses);
+  #23 ungrounded-resolution (memory-file reads are not artifact provenance —
+  the rest of #23's candidate was NOT re-authored as a move: the chat form is
+  ungrounded-chat-claim's territory once T3 widens its vocabulary); #3
+  git-landing payload (escape hatch); #11 confessed-stopgap contract
+  (self-disposal exemption; runtime = T2); #1+#19 design-primer payload
+  (termination-condition + unification-bias).
+- **Ticketed for Sonnet** (TICKETS.md): #3→T1, #5+#11→T2, #23→T3,
+  #24+#31→T4, #35→T5, #38→T6, #27→T7, #9→T8, #8/#14→T9, #39→T10.
+- **Rule-doc fixes shipped same pass:** #16+#28+#29+#33 untracked-file
+  exception (CLAUDE.md rule + GIT_TREE_DISCIPLINE §3b); #16 inverse-sweep
+  hazard (§3b); #38 standalone landing merges (§3b); #36 worktree handoff
+  files (§3b); #17 affordance-legibility gate line (DESIGN_DOC_STANDARD §5);
+  #22's meta-lesson = the hook-tier placement rule (MOVE_AUTHORING §2).
+- **Pass-2 watch/grade, deliberately no artifact tonight:** #5 verify-claim
+  honest-hedge FPs (blocked behind scoring the pass-1 rework first — one
+  change, one measurement); #7 trim primers before detectors if tier budget
+  ever needs trimming; #15+#25 ask-gate calibration (generalized past its
+  intended class twice, net-positive both times — consider a value-framing
+  rule for (Recommended) tags, and "decidable from doctrine → decide, don't
+  ask" as its own deny reason); #21 recall-before-recommend (one specimen,
+  waits for a second per MOVE_AUTHORING §1); #22 consider narrowing
+  agent-model-discipline now agent-model-guard.py denies at launch; #30
+  PNG-alone-verification whisper (one specimen, waits); #32 verify-claim
+  cadence-fire audit (does the trigger require a nearby claim, or fire
+  periodically in tool-heavy stretches?); #34+#37 orchestration hazards
+  (gate commands verified runnable before dispatch; background long workers,
+  user answers in the turn's final message — also appended to the
+  agent-execution-playbook memory).
+
+Raw jsonl entries left in place for RUNBOOK step 8's normal clear.
 
 Done = grades written per RUNBOOK, gate numbers reported per family (never
 aggregate-only — the pass-1 bimodal lesson), actions (mutes/rewords/flag

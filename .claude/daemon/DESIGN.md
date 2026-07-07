@@ -632,6 +632,63 @@ dead-observer fail-opens, zero mid-turn misses. Fixes, all in daemon-stop.py:
   verification-class event within ~10 events of delivery, or the claim
   restated as unverified; UNVALIDATED, pull if pass 2 grades it noisy.
 
+## 2i. Final authoring pass (2026-07-07 late, Fable — last Fable session; moves authored from eval/observations.session.jsonl, 39 records triaged, dispositions in PASS2_AGENDA.md §Triage)
+
+Seven new moves + four sharpenings landed in moves.md (catalog 34→41; full
+provenance in the moves.md header note). Everything here is UNVALIDATED until
+a pass grades live fires. Per-move scoring stories, per MOVE_AUTHORING §5:
+
+- **coaching/deduction-loop** — success: within ~10 events of delivery, a
+  run/render/log-read of the failing case, or an assistant question to the
+  user asking for the concrete symptom. Fail: another read-only clearing
+  conclusion. Mechanical enough for §4b (verification-class event or a
+  question-mark text following the fire).
+- **anchor/circular-oracle** — success: an independent-oracle event follows
+  (different tool class/modality than the cited instrument: a render read, a
+  fixture comparison, a by-eye count request), or the claim is restated as
+  "detector can't find it" rather than "it isn't there". No clean mechanical
+  oracle — **unscored**, pass grades from transcripts.
+- **anchor/premature-capture** — success: no further docs//memory commit of
+  the open thread in the following turns until the user has replied;
+  discussion continues in-thread. Fail: the next turn commits more of the
+  same exchange. Semi-mechanical (commit-path telemetry vs user-turn
+  boundaries); grade from transcripts first, automate if a pass wants it.
+- **anchor/asserted-values** — success: the ranking is re-grounded (user
+  quote cited) or converted to a question in the next text. **Unscored**;
+  pass grades. Expect low frequency; the specimen class is Peter-flagged
+  values inversion (c9e4d45d).
+- **coaching/explain-with-their-artifact** — success: the next explanation
+  names and walks a user-owned artifact (scene/track/file the user
+  introduced). Gradeable from the next assistant text alone.
+- **anchor/unheeded-warning** — DORMANT until T10 (ledger hook-warning
+  annotation) ships; do not count non-fires as misses before that. Once
+  live — success: a worktree is created, the operation is redirected, or a
+  one-sentence justification appears. Fail: warned operation proceeds
+  unaddressed again within the session.
+- **mechanical/stale-brief** (advice-kind) — pass-level grading only, like
+  the other advice moves: did re-derivation events (fresh rg counts, reads of
+  the brief's cited anchors) follow the brief read? `effective: unclear` is
+  the expected common case; exclude from precision denominators.
+
+Sharpenings to score at pass 2: circling's two new never-fire clauses (both
+were graded-FP classes this window — converging fix loops 5d79cea3,
+post-refactor sweeps 9cd5f0c9); ungrounded-resolution's memory-provenance
+clause (the ef0c8e89 near-miss is the positive specimen); git-landing's
+escape hatch (should convert the f204e253 scratch-branch FP class to cheap
+one-sentence outs); confessed-stopgap's self-disposal exemption (contract
+only until T2 ships — runtime over-fires vs contract in the interim, grade
+against the CONTRACT). verify-claim was left untouched a second time: its
+pass-1 rework is still unscored (one change, one measurement — §7 of
+MOVE_AUTHORING).
+
+Plumbing this pass deliberately did NOT do (tickets in TICKETS.md, T1–T10):
+the git-landing non-git-command detection bug, confessed-stopgap's exemption
+implementation, ungrounded-chat-claim's artifact-vocabulary widening, the
+rg -r corrupted-oracle lint, the exit-status-masking lint, the
+landing-merge-in-compound guard, MEMORY.md compaction ownership, the #-marker
+chained-command lint, stale-brief's implementation, and the ledger
+hook-warning annotation that wakes unheeded-warning.
+
 ## 3. Payload library (`moves.md`)
 
 Two families, one format. **Coaching moves** fire on phase transitions (hypothesis

@@ -174,7 +174,14 @@ brief is not executable — that's the definition.
   verification level it reaches (§10). Mandatory for any phase with a user-visible
   surface (UI, rendering, import, playback, export), gated at **L2 minimum** — an
   artifact a reviewer *looks at*, not a green test. "The buttons exist" is not a
-  demo; the lane visibly rendering in the PNG is. A phase with no observable surface
+  demo; the lane visibly rendering in the PNG is. **Affordance legibility
+  (added 2026-07-07, from AUDIO_SENDS P2):** every clickable element must be
+  visually distinguishable AS clickable in the static PNG — a gate that says
+  "renders, labels resolve" passes affordance-blind output (the observed
+  escape: consumer rows rendered as bare text, the only interactive rows in
+  the panel with no chrome; the worker's self-report was factually accurate
+  and still missed it). Orchestrator PNG review checks affordances, not just
+  presence. A phase with no observable surface
   states `Demo: none — L1` explicitly. The demo is what forces the vertical path
   (model → command → UI → pixels) to be exercised at least once before landing;
   horizontal slices each passing their own gate while the seam between them never

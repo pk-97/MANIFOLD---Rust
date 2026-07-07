@@ -65,6 +65,17 @@ Two placement rules with measured teeth:
   define-done, given a surface proxy instead, produced 47 noise fires in one
   replay round). Absences go to the phase-transition tier (§2d) or a
   deterministic rule with a concrete proxy, or they wait.
+- **A mistake that completes in a single tool call belongs in a PreToolUse
+  hook, not a move.** Any whisper — even a deterministic Stop-tier one —
+  arrives after the call resolves; if the damage is final at call time
+  (an agent launched at the wrong model tier, a destructive command), the
+  reactive tier is structurally too late. Specimen: agent-model-discipline
+  fired only AFTER the first inherit-Fable launch, and the second worker was
+  already committed by then (2026-07-07, Peter: a serious fuckup); the fix
+  that actually closed it was `agent-model-guard.py` denying at PreToolUse.
+  When authoring, ask: is the mistake still recoverable one event later? If
+  not, it's a hook (deterministic deny/warn), and the move — if kept at
+  all — is only the semantic backstop for phrasings the hook can't see.
 
 ## 3. Writing a classifier signature — you are writing for Haiku
 
