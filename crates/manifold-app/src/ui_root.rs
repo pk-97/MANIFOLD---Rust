@@ -997,12 +997,25 @@ impl UIRoot {
                 OverlayResponse::Consumed(acts) => {
                     actions.extend(acts);
                     consumed = true;
+                    if manifold_ui::input::input_trace_enabled() && trace_worthy(event) {
+                        eprintln!(
+                            "[input-trace] ui_root: {} CONSUMED by overlay {id:?}",
+                            trace_kind(event)
+                        );
+                    }
                     break;
                 }
                 OverlayResponse::Ignored => {
                     if is_modal {
                         // A modal captures everything — no fall-through below it.
                         consumed = true;
+                        if manifold_ui::input::input_trace_enabled() && trace_worthy(event) {
+                            eprintln!(
+                                "[input-trace] ui_root: {} CAPTURED by modal {id:?} (ignored \
+                                 but not passed through)",
+                                trace_kind(event)
+                            );
+                        }
                         break;
                     }
                 }
@@ -1450,7 +1463,25 @@ impl UIRoot {
                 if matches!(event, UIEvent::DragEnd { .. }) {
                     self.overlay_drag_active = false;
                 }
+                if manifold_ui::input::input_trace_enabled()
+                    && matches!(event, UIEvent::DragBegin { .. } | UIEvent::DragEnd { .. })
+                {
+                    eprintln!(
+                        "[input-trace] ui_root: {} STASHED for timeline overlay (latch={})",
+                        trace_kind(event),
+                        self.overlay_drag_active
+                    );
+                }
                 self.viewport_events.push(event.clone());
+            } else if manifold_ui::input::input_trace_enabled()
+                && matches!(event, UIEvent::DragBegin { .. } | UIEvent::DragEnd { .. })
+            {
+                eprintln!(
+                    "[input-trace] ui_root: {} NOT in tracks area (latch={}) — timeline \
+                     overlay will not see it",
+                    trace_kind(event),
+                    self.overlay_drag_active
+                );
             }
         }
 
@@ -2630,4 +2661,28 @@ fn build_channel_dropdown(
         }
     }
     items
+}
+
+/// BUG-058 trace (`MANIFOLD_INPUT_TRACE=1`): the discrete pointer transitions
+/// worth a routing line. Never the per-frame Move/Drag stream — a trace run
+/// stays readable at gesture granularity.
+fn trace_worthy(event: &UIEvent) -> bool {
+    matches!(
+        event,
+        UIEvent::PointerDown { .. }
+            | UIEvent::PointerUp { .. }
+            | UIEvent::DragBegin { .. }
+            | UIEvent::DragEnd { .. }
+    )
+}
+
+/// Short label for [`trace_worthy`] events in trace lines.
+fn trace_kind(event: &UIEvent) -> &'static str {
+    match event {
+        UIEvent::PointerDown { .. } => "PointerDown",
+        UIEvent::PointerUp { .. } => "PointerUp",
+        UIEvent::DragBegin { .. } => "DragBegin",
+        UIEvent::DragEnd { .. } => "DragEnd",
+        _ => "other",
+    }
 }

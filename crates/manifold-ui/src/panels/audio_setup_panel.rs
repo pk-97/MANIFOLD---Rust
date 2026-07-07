@@ -427,6 +427,20 @@ pub struct AudioSetupPanel {
     scope_fmax: f32,
     /// Which divider line is currently being dragged, if any.
     dragging_band: Option<BandDivider>,
+    /// BUG-059 stopgap (superseded by `docs/DRAG_CAPTURE_DESIGN.md` when that
+    /// lands): true while a drag that STARTED inside the panel rect is in
+    /// flight but armed nothing (missed a divider/label grab). The panel then
+    /// consumes the whole DragBegin/Drag/DragEnd family so the gesture can't
+    /// fall through `is_event_in_tracks_area`'s position-only gate and
+    /// silently move clips / region-select on the timeline underneath — the
+    /// drag analogue of the `Click` arm's `owns_node || point_in_scope`
+    /// swallow. Keyed on the drag's ORIGIN, never its current position, so a
+    /// timeline drag wandering over the panel still passes through.
+    swallow_drag: bool,
+    /// Screen rect of the whole panel, set by `build_nodes` — the ownership
+    /// test for `swallow_drag` (and nothing else; node-level hit-testing
+    /// stays the authority for everything with a node).
+    panel_rect: Rect,
     /// The D7 calibration drag currently armed (gain or trigger sensitivity
     /// value label), if any — mirrors `dragging_band` but per-send since gain
     /// and sensitivity are per-row, not panel-global like the crossovers.
@@ -480,6 +494,8 @@ impl Default for AudioSetupPanel {
             scope_fmin: 0.0,
             scope_fmax: 0.0,
             dragging_band: None,
+            swallow_drag: false,
+            panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
             calibration_drag: None,
             band_meter_ids: [(None, None, None); 3],
             trigger_row_ids: Vec::new(),
@@ -731,6 +747,8 @@ impl AudioSetupPanel {
             .host
             .node_id_for_key(KEY_CLOSE)
             .unwrap_or(NodeId::PLACEHOLDER);
+        // Ownership rect for the BUG-059 drag swallow — see `swallow_drag`.
+        self.panel_rect = Rect::new(x, y, self.panel_w, body_h);
 
         let inner_x = x + PAD;
         let inner_w = self.panel_w - PAD * 2.0;
@@ -1729,6 +1747,16 @@ impl AudioSetupPanel {
         best.map(|(b, _)| b)
     }
 
+    /// Whether a screen point lies inside the built panel — the ownership test
+    /// for the BUG-059 drag swallow (`swallow_drag`). False before first build
+    /// (zero rect contains nothing).
+    fn point_in_panel(&self, pos: Vec2) -> bool {
+        pos.x >= self.panel_rect.x
+            && pos.x <= self.panel_rect.x + self.panel_rect.width
+            && pos.y >= self.panel_rect.y
+            && pos.y <= self.panel_rect.y + self.panel_rect.height
+    }
+
     /// Which divider line (if any) is within grab distance of a screen point,
     /// preferring the nearer when both are close. Requires the point to be within
     /// the waterfall's horizontal span (plus a small slop so the left-edge grip
@@ -2289,7 +2317,35 @@ impl Overlay for AudioSetupPanel {
                     OverlayResponse::Consumed(vec![PanelAction::AudioSendSensitivityDragBegin(
                         send, band,
                     )])
+                } else if self.owns_node(*node_id) || self.point_in_scope(*pos) {
+                    // BUG-059: a press inside the panel that arms nothing must
+                    // not fall through to whatever sits beneath the modal —
+                    // same ownership rule as the `Click` arm above.
+                    OverlayResponse::Consumed(Vec::new())
                 } else {
+                    OverlayResponse::Ignored
+                }
+            }
+            // BUG-059 stopgap (superseded by `docs/DRAG_CAPTURE_DESIGN.md`): a
+            // drag that STARTS inside the panel belongs to the panel, whether
+            // or not it grabbed anything. Without this, a missed divider grab
+            // fell through to `is_event_in_tracks_area`'s position-only gate
+            // and silently moved clips / region-selected on the timeline
+            // underneath. Origin-keyed: a timeline drag whose path merely
+            // crosses the panel still passes through untouched.
+            UIEvent::DragBegin { origin, .. } => {
+                if self.dragging_band.is_some()
+                    || self.calibration_drag.is_some()
+                    || self.point_in_panel(*origin)
+                {
+                    self.swallow_drag = true;
+                    OverlayResponse::Consumed(Vec::new())
+                } else {
+                    // A new drag from outside the panel: drop any stale swallow
+                    // (its terminal event may itself have been eaten upstream —
+                    // the BUG-058 class) so a timeline drag crossing the panel
+                    // is never mis-claimed.
+                    self.swallow_drag = false;
                     OverlayResponse::Ignored
                 }
             }
@@ -2318,14 +2374,20 @@ impl Overlay for AudioSetupPanel {
                             ])
                         }
                     }
+                } else if self.swallow_drag {
+                    // BUG-059: panel-owned drag that armed nothing — keep
+                    // swallowing so it can't leak to the timeline beneath.
+                    OverlayResponse::Consumed(Vec::new())
                 } else {
                     OverlayResponse::Ignored
                 }
             }
             UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
                 if self.dragging_band.take().is_some() {
+                    self.swallow_drag = false;
                     OverlayResponse::Consumed(vec![PanelAction::AudioCrossoverCommit])
                 } else if let Some(drag) = self.calibration_drag.take() {
+                    self.swallow_drag = false;
                     OverlayResponse::Consumed(vec![match drag {
                         CalibrationDrag::Gain { send, .. } => {
                             PanelAction::AudioSendGainDragCommit(send)
@@ -2334,6 +2396,9 @@ impl Overlay for AudioSetupPanel {
                             PanelAction::AudioSendSensitivityDragCommit(send, band)
                         }
                     }])
+                } else if std::mem::take(&mut self.swallow_drag) {
+                    // BUG-059: terminal event of a panel-owned missed-grab drag.
+                    OverlayResponse::Consumed(Vec::new())
                 } else {
                     OverlayResponse::Ignored
                 }
@@ -2532,6 +2597,87 @@ mod tests {
         // Closed → no scope rect.
         p.close();
         assert!(p.scope_rect().is_none());
+    }
+
+    /// BUG-059: a drag starting inside the panel that grabs nothing (missed a
+    /// divider by >12px) must be consumed end-to-end — before this, it fell
+    /// through the modeless panel and silently moved clips / region-selected
+    /// on the timeline underneath.
+    #[test]
+    fn missed_grab_drag_inside_panel_is_swallowed() {
+        let mut p = panel_with_two_sends();
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+
+        // Top-left chrome corner: inside the panel, far from any divider/label.
+        let inside = Vec2::new(p.panel_rect.x + 6.0, p.panel_rect.y + 6.0);
+        let modifiers = Modifiers::default();
+
+        assert!(matches!(
+            p.on_event(
+                &UIEvent::PointerDown { node_id: p.bg_id, pos: inside, modifiers },
+                &mut tree
+            ),
+            OverlayResponse::Consumed(_)
+        ));
+        assert!(matches!(
+            p.on_event(
+                &UIEvent::DragBegin { node_id: p.bg_id, pos: inside, origin: inside, modifiers },
+                &mut tree
+            ),
+            OverlayResponse::Consumed(_)
+        ));
+        assert!(p.swallow_drag, "panel claims the drag it hosts");
+        let moved = Vec2::new(inside.x + 40.0, inside.y + 40.0);
+        assert!(matches!(
+            p.on_event(
+                &UIEvent::Drag { node_id: p.bg_id, pos: moved, delta: Vec2::new(40.0, 40.0) },
+                &mut tree
+            ),
+            OverlayResponse::Consumed(_)
+        ));
+        assert!(matches!(
+            p.on_event(&UIEvent::DragEnd { node_id: Some(p.bg_id), pos: moved }, &mut tree),
+            OverlayResponse::Consumed(_)
+        ));
+        assert!(!p.swallow_drag, "terminal event clears the swallow");
+    }
+
+    /// BUG-059 guard-rail: a timeline drag whose PATH crosses the panel (origin
+    /// outside) must pass through untouched — ownership is keyed on the drag's
+    /// origin, never its current position. Also proves a stale swallow (its
+    /// terminal event eaten upstream, the BUG-058 class) is dropped on the next
+    /// outside drag instead of mis-claiming it.
+    #[test]
+    fn timeline_drag_crossing_panel_passes_through() {
+        let mut p = panel_with_two_sends();
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+
+        let outside = Vec2::new(p.panel_rect.x - 40.0, p.panel_rect.y - 40.0);
+        let inside = Vec2::new(p.panel_rect.x + 20.0, p.panel_rect.y + 20.0);
+        let modifiers = Modifiers::default();
+
+        p.swallow_drag = true; // stale from a hypothetical eaten terminal event
+        assert!(matches!(
+            p.on_event(
+                &UIEvent::DragBegin { node_id: p.bg_id, pos: outside, origin: outside, modifiers },
+                &mut tree
+            ),
+            OverlayResponse::Ignored
+        ));
+        assert!(!p.swallow_drag, "outside drag drops the stale swallow");
+        assert!(matches!(
+            p.on_event(
+                &UIEvent::Drag { node_id: p.bg_id, pos: inside, delta: Vec2::new(60.0, 60.0) },
+                &mut tree
+            ),
+            OverlayResponse::Ignored
+        ));
+        assert!(matches!(
+            p.on_event(&UIEvent::DragEnd { node_id: Some(p.bg_id), pos: inside }, &mut tree),
+            OverlayResponse::Ignored
+        ));
     }
 
     #[test]
