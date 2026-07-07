@@ -823,6 +823,7 @@ mod tests {
                 curve: Default::default(),
                 invert: false,
                 is_angle: false,
+                is_trigger_gate: false,
             }],
             bindings: vec![BindingDef {
                 id: "amount".to_string(),
@@ -914,6 +915,7 @@ mod tests {
                 curve: Default::default(),
                 invert: false,
                 is_angle: false,
+                is_trigger_gate: false,
             }],
             bindings: Vec::new(),
             skip_mode: SkipModeDef::default(),

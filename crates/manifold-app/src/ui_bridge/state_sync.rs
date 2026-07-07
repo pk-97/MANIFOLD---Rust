@@ -2373,6 +2373,7 @@ mod param_label_tests {
             curve: manifold_core::macro_bank::MacroCurve::default(),
             invert: false,
             is_angle: false,
+            is_trigger_gate: false,
         }
     }
 

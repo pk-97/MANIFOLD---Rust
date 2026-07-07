@@ -286,6 +286,7 @@ pub fn evaluate_modulation(
     dt: Seconds,
     audio: &AudioFeatureSnapshot,
     timing_scratch: &mut Vec<(Beats, Beats)>,
+    trigger_pulses: &mut Vec<TriggerPulse>,
 ) -> bool {
     // Phase 1: Reset all effective values to base
     reset_all_effectives(project);
@@ -297,6 +298,14 @@ pub fn evaluate_modulation(
     // like (sets the value), so it runs alongside drivers and before the
     // additive envelope phase. Inert when no audio features are present.
     let any_audio = evaluate_all_audio_mods(project, audio, dt);
+
+    // Phase 2.6 (§8): each instance's own `audio_trigger` config (D2) fires
+    // independently of the continuous audio-mod pass above — surfaced as a
+    // per-layer/master pulse list for the renderer (P2) to fold into
+    // `audio_count`. Never marks the compositor dirty on its own (the
+    // renderer's own dirty tracking covers the visible effect); collected
+    // here so the evaluation stays a single walk per tick.
+    *trigger_pulses = evaluate_all_param_triggers(project, audio);
 
     // Pre-compute per-layer active clip timing for envelope phases.
     // Avoids O(total_clips) scan in each envelope function.
@@ -407,11 +416,136 @@ fn evaluate_instance_audio_mods(
         let shape = m.shape;
         let out_norm = shape.apply(raw, dt_s, &mut m.smoothed, &mut m.prev_raw);
         if let Some(p) = params.get_mut(m.param_id.as_ref()) {
-            p.value = min + (max - min) * out_norm;
+            if p.spec.is_trigger {
+                // §8 D5b: a fire-button target wants a monotonic count, not a
+                // level — edge-detect the shaped signal (rising through
+                // mid-range) instead of overwriting continuously. Downstream
+                // `last_count`-style consumers edge-detect the written value
+                // unchanged.
+                if m.trigger_edge.advance(out_norm, 0.5) {
+                    m.fire_count = m.fire_count.wrapping_add(1);
+                }
+                p.value = p.base + m.fire_count as f32;
+            } else {
+                p.value = min + (max - min) * out_norm;
+            }
             wrote = true;
         }
     }
     wrote
+}
+
+/// §8 D2/D4: one instance's own `audio_trigger` config fired this tick — the
+/// caller sums fires into the owning layer's/master's `audio_count` (P2,
+/// renderer-owned). Pure edge detection over the config's own send/band, same
+/// shared `TransientEdge` the clip-trigger evaluator uses. Skipped when the
+/// mode doesn't want the audio path — see `TriggerFireMode::wants_transient`.
+fn evaluate_instance_trigger(
+    fx: &mut PresetInstance,
+    by_send: &HashMap<AudioSendId, SendFeatures>,
+) -> bool {
+    let Some(cfg) = fx.audio_trigger.as_mut() else {
+        return false;
+    };
+    if !cfg.enabled || !cfg.mode.wants_transient() {
+        return false;
+    }
+    let Some(features) = by_send.get(&cfg.source.send_id) else {
+        return false;
+    };
+    let level = cfg.source.feature.extract(features);
+    let threshold = cfg.threshold();
+    cfg.edge.advance(level, threshold)
+}
+
+/// One instance's audio-trigger fire this tick (§8 D1), for the renderer (P2)
+/// to fold into its `audio_count`. `layer_id` is `None` for a master-chain
+/// instance (D5: "master/global chains have no layer... audio fires still
+/// work") — the renderer keys a master-scoped counter off that sentinel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TriggerPulse {
+    pub layer_id: Option<manifold_core::id::LayerId>,
+}
+
+/// Walk master effects, layer effects, and generator instances — the same
+/// instance set `evaluate_all_audio_mods` walks — evaluating each instance's
+/// own `audio_trigger` config (§8 D2) and collecting a pulse per fire. Pure:
+/// only mutates each config's runtime `TransientEdge`. Self-contained (builds
+/// its own send→features map, mirroring `evaluate_all_audio_mods`) so it can
+/// run as its own step in `evaluate_modulation`.
+pub fn evaluate_all_param_triggers(
+    project: &mut Project,
+    snapshot: &AudioFeatureSnapshot,
+) -> Vec<TriggerPulse> {
+    let mut pulses = Vec::new();
+    if snapshot.is_empty() || project.audio_setup.sends.is_empty() {
+        return pulses;
+    }
+    let mut by_send: HashMap<AudioSendId, SendFeatures> = HashMap::new();
+    for (i, send) in project.audio_setup.sends.iter().enumerate() {
+        if let Some(f) = snapshot.get(i) {
+            by_send.insert(send.id.clone(), *f);
+        }
+    }
+    if by_send.is_empty() {
+        return pulses;
+    }
+
+    for fx in project.settings.master_effects.iter_mut() {
+        if evaluate_instance_trigger(fx, &by_send) {
+            pulses.push(TriggerPulse { layer_id: None });
+        }
+    }
+    for layer in project.timeline.layers.iter_mut() {
+        let layer_id = layer.layer_id.clone();
+        if let Some(effects) = &mut layer.effects {
+            for fx in effects.iter_mut() {
+                if evaluate_instance_trigger(fx, &by_send) {
+                    pulses.push(TriggerPulse { layer_id: Some(layer_id.clone()) });
+                }
+            }
+        }
+        if let Some(gp) = layer.gen_params_mut()
+            && evaluate_instance_trigger(gp, &by_send)
+        {
+            pulses.push(TriggerPulse { layer_id: Some(layer_id) });
+        }
+    }
+    pulses
+}
+
+/// BUG-051 fix (§8 D4): drop every audio-trigger edge-detector's armed state
+/// back to armed. Call on transport stop / project reset so a stale "fired,
+/// not yet re-armed" flag can't suppress the first onset next time. Walks the
+/// same instance set as [`evaluate_all_param_triggers`], clearing both the
+/// per-instance `audio_trigger.edge` (D2) and every `is_trigger`-target
+/// `ParameterAudioMod.trigger_edge` (D5b) — the two new edge-state holders
+/// this wave introduced.
+pub fn clear_all_trigger_edges(project: &mut Project) {
+    fn clear_instance(fx: &mut PresetInstance) {
+        if let Some(cfg) = fx.audio_trigger.as_mut() {
+            cfg.edge.clear();
+        }
+        if let Some(mods) = fx.audio_mods.as_mut() {
+            for m in mods.iter_mut() {
+                m.trigger_edge.clear();
+            }
+        }
+    }
+
+    for fx in project.settings.master_effects.iter_mut() {
+        clear_instance(fx);
+    }
+    for layer in project.timeline.layers.iter_mut() {
+        if let Some(effects) = &mut layer.effects {
+            for fx in effects.iter_mut() {
+                clear_instance(fx);
+            }
+        }
+        if let Some(gp) = layer.gen_params_mut() {
+            clear_instance(gp);
+        }
+    }
 }
 
 /// Per-layer active clip timing: (elapsed, duration).
@@ -875,5 +1009,168 @@ mod tests {
             "full signal caps at the recalibrated max 0.5, got {}",
             fx.params.get("amount").unwrap().value,
         );
+    }
+
+    // ── §8 param triggers ────────────────────────────────────────────────
+
+    use manifold_core::audio_mod::AudioModSource;
+    use manifold_core::audio_trigger::{AudioTriggerMod, TriggerFireMode};
+
+    const TEST_TRIGGER_FX: PresetTypeId = PresetTypeId::new("TestTriggerFx");
+
+    inventory::submit! {
+        EffectMetadata {
+            id: PresetTypeId::new("TestTriggerFx"),
+            display_name: "Test Trigger Fx",
+            category: "Test",
+            available: true,
+            osc_prefix: "testTriggerFx",
+            legacy_discriminant: None,
+            params: &[ParamSpec::trigger("fire", "Fire", "")],
+        }
+    }
+
+    fn audio_trigger_cfg(
+        send_id: &AudioSendId,
+        sensitivity: f32,
+        mode: TriggerFireMode,
+    ) -> AudioTriggerMod {
+        AudioTriggerMod {
+            enabled: true,
+            source: AudioModSource {
+                send_id: send_id.clone(),
+                feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+            },
+            sensitivity,
+            mode,
+            edge: Default::default(),
+        }
+    }
+
+    /// A snapshot with one send whose Full-band transient reads `level`.
+    fn snapshot_full_transient(level: f32) -> AudioFeatureSnapshot {
+        let mut s = AudioFeatureSnapshot { sends: vec![SendFeatures::default()] };
+        s.sends[0].bands[AudioBand::Full.index()].transients = level;
+        s
+    }
+
+    #[test]
+    fn param_trigger_fires_on_generator_and_produces_layer_pulse() {
+        let mut project = project_with(generator_layer());
+        let send = AudioSend::new("Kick");
+        let send_id = send.id.clone();
+        project.audio_setup.sends.push(send);
+        let layer_id = project.timeline.layers[0].layer_id.clone();
+        project.timeline.layers[0].gen_params_mut().unwrap().audio_trigger =
+            Some(audio_trigger_cfg(&send_id, 0.5, TriggerFireMode::Both));
+
+        let hot = snapshot_full_transient(0.99);
+        let pulses = evaluate_all_param_triggers(&mut project, &hot);
+        assert_eq!(pulses, vec![TriggerPulse { layer_id: Some(layer_id) }]);
+    }
+
+    #[test]
+    fn param_trigger_mode_clip_edge_ignores_transients() {
+        let mut project = project_with(generator_layer());
+        let send = AudioSend::new("Kick");
+        let send_id = send.id.clone();
+        project.audio_setup.sends.push(send);
+        project.timeline.layers[0].gen_params_mut().unwrap().audio_trigger =
+            Some(audio_trigger_cfg(&send_id, 0.5, TriggerFireMode::ClipEdge));
+
+        let hot = snapshot_full_transient(0.99);
+        assert!(
+            evaluate_all_param_triggers(&mut project, &hot).is_empty(),
+            "ClipEdge mode (default) must not react to audio"
+        );
+    }
+
+    #[test]
+    fn param_trigger_master_effect_pulse_has_no_layer() {
+        let mut project = Project::default();
+        let send = AudioSend::new("Kick");
+        let send_id = send.id.clone();
+        project.audio_setup.sends.push(send);
+        let mut fx = create_default(&TEST_FX);
+        fx.audio_trigger = Some(audio_trigger_cfg(&send_id, 0.5, TriggerFireMode::Transient));
+        project.settings.master_effects.push(fx);
+
+        let hot = snapshot_full_transient(0.99);
+        let pulses = evaluate_all_param_triggers(&mut project, &hot);
+        assert_eq!(pulses, vec![TriggerPulse { layer_id: None }]);
+    }
+
+    #[test]
+    fn param_trigger_edge_rearms_between_fires() {
+        let mut project = project_with(generator_layer());
+        let send = AudioSend::new("Kick");
+        let send_id = send.id.clone();
+        project.audio_setup.sends.push(send);
+        project.timeline.layers[0].gen_params_mut().unwrap().audio_trigger =
+            Some(audio_trigger_cfg(&send_id, 0.5, TriggerFireMode::Transient));
+
+        let hot = snapshot_full_transient(0.99);
+        assert_eq!(evaluate_all_param_triggers(&mut project, &hot).len(), 1);
+        assert_eq!(
+            evaluate_all_param_triggers(&mut project, &hot).len(),
+            0,
+            "still hot, no re-fire"
+        );
+    }
+
+    #[test]
+    fn clear_all_trigger_edges_rearms_generator_edge() {
+        let mut project = project_with(generator_layer());
+        let send = AudioSend::new("Kick");
+        let send_id = send.id.clone();
+        project.audio_setup.sends.push(send);
+        project.timeline.layers[0].gen_params_mut().unwrap().audio_trigger =
+            Some(audio_trigger_cfg(&send_id, 0.5, TriggerFireMode::Transient));
+
+        let hot = snapshot_full_transient(0.99);
+        assert_eq!(evaluate_all_param_triggers(&mut project, &hot).len(), 1);
+        assert_eq!(evaluate_all_param_triggers(&mut project, &hot).len(), 0); // disarmed
+
+        clear_all_trigger_edges(&mut project);
+        assert_eq!(
+            evaluate_all_param_triggers(&mut project, &hot).len(),
+            1,
+            "clear() re-arms so the held-hot signal fires again (BUG-051)"
+        );
+    }
+
+    #[test]
+    fn is_trigger_audio_mod_writes_monotonic_count_not_continuous_value() {
+        let (mut project, send_id) = project_with_audio_send();
+        project.timeline.layers[0].effects = Some(vec![create_default(&TEST_TRIGGER_FX)]);
+        let mut m = ParameterAudioMod::new(
+            "fire".into(),
+            send_id,
+            AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Low),
+        );
+        m.shape = AudioModShape { attack_ms: 0.0, release_ms: 0.0, ..Default::default() };
+        project.timeline.layers[0].effects.as_mut().unwrap()[0]
+            .audio_mods_mut()
+            .push(m);
+
+        let hot = snapshot_low(1.0);
+        let cold = snapshot_low(0.0);
+
+        assert!(evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016)));
+        let value = |p: &Project| p.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .params
+            .get("fire")
+            .unwrap()
+            .value;
+        assert_eq!(value(&project), 1.0, "first rising edge bumps the count to 1");
+
+        // Still hot: no re-fire, count holds at 1.
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016));
+        assert_eq!(value(&project), 1.0);
+
+        // Decay below the rearm floor, then fire again: count bumps to 2.
+        evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016));
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016));
+        assert_eq!(value(&project), 2.0);
     }
 }

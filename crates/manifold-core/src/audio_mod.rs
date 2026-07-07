@@ -356,6 +356,19 @@ pub struct ParameterAudioMod {
     /// Runtime state, not serialized.
     #[serde(skip)]
     pub prev_raw: f32,
+    /// §8 D5b: when this mod's target param is `is_trigger`, evaluation
+    /// switches from continuous overwrite to edge detection over the shaped
+    /// `out_norm` (rising through 0.5). Runtime state, not serialized —
+    /// resets to armed on load, matching `smoothed`/`prev_raw`.
+    #[serde(skip)]
+    pub trigger_edge: crate::audio_trigger::TransientEdge,
+    /// §8 D5b: monotonic fire counter for an `is_trigger` target — each
+    /// `trigger_edge` fire bumps this by one; the written value is
+    /// `base + fire_count`, the same monotonic-counter shape every
+    /// `last_count`-style consumer already edge-detects. Runtime state, not
+    /// serialized.
+    #[serde(skip)]
+    pub fire_count: u32,
 }
 
 fn default_true() -> bool {
@@ -372,6 +385,8 @@ impl ParameterAudioMod {
             shape: AudioModShape::default(),
             smoothed: 0.0,
             prev_raw: 0.0,
+            trigger_edge: crate::audio_trigger::TransientEdge::default(),
+            fire_count: 0,
         }
     }
 }

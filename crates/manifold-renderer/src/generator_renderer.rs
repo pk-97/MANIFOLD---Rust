@@ -40,7 +40,16 @@ impl ActiveClip {
 struct LayerGeneratorState {
     generator: Box<PresetRuntime>,
     generator_type: PresetTypeId,
-    trigger_count: u32,
+    /// The layer's clip-launch edge counter (existing behavior, unconditional
+    /// pre-§8) — bumped in `acquire_clip`, gated by the generator's own
+    /// `audio_trigger.mode` wanting `ClipEdge` (§8 D1; no config = always on,
+    /// preserving old-project behavior byte-for-byte).
+    clip_count: u32,
+    /// §8 D1: bumped once per audio-trigger fire this layer's generator (or
+    /// any effect in its chain — D5) is configured to react to, mode-gated at
+    /// increment time by the firing instance's own `audio_trigger.mode`
+    /// wanting `Transient`. See [`Self::effective_trigger_count`].
+    audio_count: u32,
     /// `Layer::generator_graph_structure_version` at the time this generator
     /// was constructed. Only a topology change (node/wire add or remove, type
     /// swap, revert) bumps it, so `acquire_clip` / the per-frame sweep rebuild
@@ -71,6 +80,17 @@ struct LayerGeneratorState {
     /// the rebuild sweeps so opening/closing the editor flips the generator
     /// fused ⇄ unfused — the registry's fuse gate only re-runs on rebuild.
     built_watched: bool,
+}
+
+impl LayerGeneratorState {
+    /// §8 D1: the value fed into `PresetContext.trigger_count` / consuming
+    /// graphs' `generator_input.trigger_count` — the layer's clip edge plus
+    /// its audio-trigger fires. Wrapping add: a `u32` overflow only after
+    /// billions of triggers on one layer in one session, and wrapping (not
+    /// saturating) matches the existing clip-count overflow policy.
+    fn effective_trigger_count(&self) -> u32 {
+        self.clip_count.wrapping_add(self.audio_count)
+    }
 }
 
 /// GPU-side clip renderer for generators.
@@ -229,6 +249,29 @@ impl GeneratorRenderer {
         }
     }
 
+    /// §8 D1: bump `layer_id`'s audio-trigger counter by one fire. Called by
+    /// the content pipeline for every [`manifold_playback::modulation::TriggerPulse`]
+    /// with `layer_id: Some(_)` this tick (mode-gating already happened in the
+    /// playback-side evaluator — a pulse only exists here because its
+    /// instance's `audio_trigger.mode` wanted `Transient`). A no-op if the
+    /// layer has no live generator (e.g. it was deleted the same tick the
+    /// pulse fired).
+    pub fn bump_audio_count(&mut self, layer_id: &LayerId) {
+        if let Some(ls) = self.layer_generators.get_mut(layer_id) {
+            ls.audio_count = ls.audio_count.wrapping_add(1);
+        }
+    }
+
+    /// §8 D1: `layer_id`'s effective `trigger_count` (clip edge + audio
+    /// fires) for the content pipeline to feed into that layer's effect
+    /// chain's `PresetContext` (D5 — replaces the old pinned 0.0). `0` if the
+    /// layer has no live generator.
+    pub fn effective_trigger_count_for_layer(&self, layer_id: &LayerId) -> u32 {
+        self.layer_generators
+            .get(layer_id)
+            .map_or(0, |ls| ls.effective_trigger_count())
+    }
+
     /// Every captured Texture2D output of the generator at `layer_id` as
     /// `(node_id, port, type_id, texture)`, after a [`Self::render_all`] with the
     /// dump enabled. The generator counterpart of `Compositor::dump_textures`.
@@ -303,6 +346,7 @@ impl GeneratorRenderer {
     /// added, version bump — the existing generator is dropped and
     /// rebuilt against the new state. `override_def = None` falls
     /// back to the bundled JSON preset.
+    #[allow(clippy::too_many_arguments)]
     fn acquire_clip(
         &mut self,
         clip_id: &str,
@@ -313,6 +357,7 @@ impl GeneratorRenderer {
         override_def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
         override_version: u32,
         param_version: u32,
+        clip_edge_enabled: bool,
     ) -> bool {
         if self.active_clips.contains_key(clip_id) {
             return true;
@@ -339,36 +384,42 @@ impl GeneratorRenderer {
             });
 
         if needs_create {
-            // Preserve `trigger_count` across rebuild. Without this,
-            // editing the override graph mid-clip OR changing the
-            // generator type resets the counter to 0, which makes the
+            // Preserve `clip_count`/`audio_count` across rebuild. Without
+            // this, editing the override graph mid-clip OR changing the
+            // generator type resets the counters to 0, which makes the
             // next clip-trigger's `count % N` calculation potentially
             // collide with the value the previous instance just
             // emitted — the user sees the same pattern back-to-back
             // even though the math should never produce duplicates.
             // The counter is conceptually "how many times has this
-            // layer been triggered" and is generator-agnostic, so
-            // carrying it forward is semantically correct.
-            let preserved_trigger_count = self
+            // layer been triggered" (clip launches + audio fires, §8 D1)
+            // and is generator-agnostic, so carrying both forward is
+            // semantically correct.
+            let (preserved_clip_count, preserved_audio_count) = self
                 .layer_generators
                 .get(&layer_id)
-                .map(|ls| ls.trigger_count)
-                .unwrap_or(0);
+                .map(|ls| (ls.clip_count, ls.audio_count))
+                .unwrap_or((0, 0));
             if !self.install_layer_generator(
                 layer_id.clone(),
                 gen_type.clone(),
                 override_def,
                 current_override_version,
                 current_param_version,
-                preserved_trigger_count,
+                preserved_clip_count,
+                preserved_audio_count,
                 std::collections::BTreeMap::new(),
             ) {
                 return false;
             }
         }
 
-        if let Some(ls) = self.layer_generators.get_mut(&layer_id) {
-            ls.trigger_count += 1;
+        // §8 D1: the clip-launch edge is mode-gated at increment time by the
+        // generator's own `audio_trigger.mode` (no config = always on,
+        // preserving pre-§8 behavior byte-for-byte for every project that
+        // hasn't touched this feature).
+        if clip_edge_enabled && let Some(ls) = self.layer_generators.get_mut(&layer_id) {
+            ls.clip_count = ls.clip_count.wrapping_add(1);
         }
 
         // Create render target at full output resolution. Pool-recycle when
@@ -500,11 +551,11 @@ impl GeneratorRenderer {
                 }
                 continue;
             }
-            let preserved_trigger_count = self
+            let (preserved_clip_count, preserved_audio_count) = self
                 .layer_generators
                 .get(layer_id)
-                .map(|ls| ls.trigger_count)
-                .unwrap_or(0);
+                .map(|ls| (ls.clip_count, ls.audio_count))
+                .unwrap_or((0, 0));
             let gen_type = layer.generator_type().clone();
             let override_def = layer.generator_graph();
             self.install_layer_generator(
@@ -513,7 +564,8 @@ impl GeneratorRenderer {
                 override_def,
                 current_override_version,
                 current_param_version,
-                preserved_trigger_count,
+                preserved_clip_count,
+                preserved_audio_count,
                 std::collections::BTreeMap::new(),
             );
         }
@@ -531,7 +583,7 @@ impl GeneratorRenderer {
                 let trigger_count = self
                     .layer_generators
                     .get(&active.layer_id)
-                    .map_or(0, |ls| ls.trigger_count);
+                    .map_or(0, |ls| ls.effective_trigger_count());
                 self.render_info_scratch.push((
                     active.layer_index,
                     active.clip_index,
@@ -732,10 +784,10 @@ impl GeneratorRenderer {
             .is_some_and(|ls| ls.generator_type != new_type);
 
         if needs_swap {
-            let old_trigger_count = self
+            let (old_clip_count, old_audio_count) = self
                 .layer_generators
                 .get(layer_id)
-                .map_or(0, |ls| ls.trigger_count);
+                .map_or((0, 0), |ls| (ls.clip_count, ls.audio_count));
             // Preserve layer_string_defaults across type changes.
             let old_defaults = self
                 .layer_generators
@@ -754,7 +806,8 @@ impl GeneratorRenderer {
                 None,
                 None,
                 None,
-                old_trigger_count,
+                old_clip_count,
+                old_audio_count,
                 old_defaults,
             );
         }
@@ -789,6 +842,7 @@ impl GeneratorRenderer {
     /// the registry rejected the construction (unknown type / preset
     /// failed to load); in that case the existing entry (if any) is
     /// left untouched so the previous generator keeps rendering.
+    #[allow(clippy::too_many_arguments)]
     fn install_layer_generator(
         &mut self,
         layer_id: LayerId,
@@ -796,7 +850,8 @@ impl GeneratorRenderer {
         override_def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
         override_version: Option<u32>,
         param_version: Option<u32>,
-        trigger_count: u32,
+        clip_count: u32,
+        audio_count: u32,
         layer_string_defaults: std::collections::BTreeMap<String, String>,
     ) -> bool {
         // A layer open in the graph editor renders unfused (per-node preview +
@@ -818,7 +873,8 @@ impl GeneratorRenderer {
             LayerGeneratorState {
                 generator,
                 generator_type: gen_type,
-                trigger_count,
+                clip_count,
+                audio_count,
                 override_version,
                 applied_param_version: param_version,
                 layer_string_defaults,
@@ -992,6 +1048,15 @@ impl ClipRenderer for GeneratorRenderer {
             .map(|l| l.generator_graph_structure_version())
             .unwrap_or(0);
         let param_version = layer.map(|l| l.generator_graph_version()).unwrap_or(0);
+        // §8 D1: the clip edge is mode-gated by the generator's OWN
+        // `audio_trigger` config (no config = always on — old-project
+        // behavior, unchanged). `Transient`-only mode silently drops the
+        // clip-launch contribution for this layer's trigger_count.
+        let clip_edge_enabled = layer
+            .and_then(|l| l.gen_params())
+            .and_then(|gp| gp.audio_trigger.as_ref())
+            .map(|cfg| cfg.mode.wants_clip_edge())
+            .unwrap_or(true);
         let acquired = self.acquire_clip(
             &clip.id,
             gen_type,
@@ -1001,6 +1066,7 @@ impl ClipRenderer for GeneratorRenderer {
             override_def,
             override_version,
             param_version,
+            clip_edge_enabled,
         );
 
         // Populate layer string defaults by scanning ALL clips on this layer.
@@ -1185,6 +1251,7 @@ mod tests {
                 None,
                 None,
                 0,
+                0,
                 std::collections::BTreeMap::new(),
             ),
             "seed install of TrivialPassthrough must succeed",
@@ -1291,6 +1358,104 @@ mod tests {
         assert!(
             !clip_other.needs_clear,
             "swap on layer-under-test must not touch clips on other layers",
+        );
+    }
+
+    /// §8 D1 — the generator half of the P2 gate (the effect-chain half is
+    /// `preset_runtime::generator_input_tests::run_feeds_nonzero_trigger_count_into_generator_input_effect_slot`).
+    /// `effective_trigger_count` sums `clip_count` (clip-launch edge) +
+    /// `audio_count` (audio-trigger fires), and the clip edge is mode-gated
+    /// at `acquire_clip` time by `clip_edge_enabled` — `Transient`-only mode
+    /// (simulated here by passing `false`) must NOT bump `clip_count`.
+    #[test]
+    fn effective_trigger_count_sums_clip_and_audio_and_respects_clip_edge_mode() {
+        let device = crate::test_device();
+        let mut renderer = GeneratorRenderer::new(&device, 256, 256, GpuTextureFormat::Rgba16Float, 0);
+        let layer_id = LayerId::new("trigger-count-layer");
+        let gen_type = PresetTypeId::new("TrivialPassthrough");
+
+        assert!(
+            renderer.install_layer_generator(
+                layer_id.clone(),
+                gen_type.clone(),
+                None,
+                None,
+                None,
+                0,
+                0,
+                std::collections::BTreeMap::new(),
+            ),
+            "seed install must succeed",
+        );
+
+        // Two clip launches (clip_edge_enabled = true, the default/no-config
+        // behavior): clip_count 0 -> 2.
+        assert!(renderer.acquire_clip(
+            "clip-1",
+            gen_type.clone(),
+            layer_id.clone(),
+            0,
+            0,
+            None,
+            0,
+            0,
+            true,
+        ));
+        assert!(renderer.acquire_clip(
+            "clip-2",
+            gen_type.clone(),
+            layer_id.clone(),
+            0,
+            1,
+            None,
+            0,
+            0,
+            true,
+        ));
+        assert_eq!(
+            renderer.layer_generators.get(&layer_id).unwrap().clip_count,
+            2,
+            "two distinct clip launches with clip edge enabled must bump clip_count twice",
+        );
+
+        // Three audio-trigger fires: audio_count 0 -> 3.
+        renderer.bump_audio_count(&layer_id);
+        renderer.bump_audio_count(&layer_id);
+        renderer.bump_audio_count(&layer_id);
+        assert_eq!(
+            renderer.effective_trigger_count_for_layer(&layer_id),
+            5,
+            "effective count must be clip_count(2) + audio_count(3) = 5",
+        );
+
+        // A third clip launch with clip_edge_enabled = false (Transient-only
+        // mode) must NOT bump clip_count — the whole point of D1's mode gate.
+        assert!(renderer.acquire_clip(
+            "clip-3",
+            gen_type,
+            layer_id.clone(),
+            0,
+            2,
+            None,
+            0,
+            0,
+            false,
+        ));
+        assert_eq!(
+            renderer.layer_generators.get(&layer_id).unwrap().clip_count,
+            2,
+            "Transient-only mode must silently ignore the clip-launch edge",
+        );
+        assert_eq!(
+            renderer.effective_trigger_count_for_layer(&layer_id),
+            5,
+            "effective count unchanged by the mode-gated-off clip launch",
+        );
+
+        // A layer with no generator reads 0, not a panic.
+        assert_eq!(
+            renderer.effective_trigger_count_for_layer(&LayerId::new("no-such-layer")),
+            0,
         );
     }
 }

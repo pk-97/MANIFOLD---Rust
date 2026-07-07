@@ -381,7 +381,7 @@ _Generated from the node registry. Do not hand-edit. 216 nodes registered, group
 | `SoftFocus` | Soft Focus | effect | Stylize | 2 |
 | `StarField` | Star Field | generator | Pattern | 8 |
 | `StrangeAttractor` | Strange Attractor | generator | Sim | 11 |
-| `Strobe` | Strobe | effect | Stylize | 3 |
+| `Strobe` | Strobe | effect | Stylize | 4 |
 | `StylizedFeedback` | Stylized Feedback | effect | Stylize | 3 |
 | `Tesseract` | Tesseract | generator | Geometry | 12 |
 | `Text` | Text | generator | Text & Media | 9 |

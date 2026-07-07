@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Strobe",
-  "description": "Strobe is a beat-synced brightness modulator, decomposed from the legacy fused kernel into two reusable pieces: a beat-gated square wave and a brightness flash effect.\n\nThe source image flows into the flash node, which modulates it by a brightness envelope driven by the beat gate. The beat gate reads FrameTime.beats and produces a square wave at a synced rate (1/1 to 1/64), scaled by the amount slider. The gate is held internally at 50 percent duty cycle and zero phase, giving a clean on/off pulse matching the legacy strobe behavior.\n\nThe flash node applies the gate signal to the image in one of three modes: Opacity fades toward black, White fades toward white, and Gain applies a 3x brighten. The result is driven directly to the output.\n\nNo grouping is needed: the graph is already transparent, and moving between nodes requires no layering.",
+  "description": "Strobe is a beat-synced brightness modulator, decomposed from the legacy fused kernel into two reusable pieces: a beat-gated square wave and a brightness flash effect.\n\nThe source image flows into the flash node, which modulates it by a brightness envelope driven by the beat gate. The beat gate reads FrameTime.beats and produces a square wave at a synced rate (1/1 to 1/64), scaled by the amount slider. The gate is held internally at 50 percent duty cycle and zero phase, giving a clean on/off pulse matching the legacy strobe behavior.\n\n§8 param triggers: a second path reads generator_input.trigger_count (the layer's clip-edge + audio-trigger effective count, D5) through a Trigger Gate node whose enable is bound to the Clip Trigger toggle card (isTriggerGate) - when on, each new count snaps an Envelope Decay node to full brightness which decays exponentially back to zero. A Math (Max) node combines this trigger flash with the beat gate's square wave before driving the flash node's amount, so a kick and a beat-tick both read as a flash, whichever is brighter this frame. Reachability proof for §8 D6/D5: this is the only shipped effect with a clip_trigger card.\n\nThe flash node applies the combined gate signal to the image in one of three modes: Opacity fades toward black, White fades toward white, and Gain applies a 3x brighten. The result is driven directly to the output.\n\nNo grouping is needed: the graph is already transparent, and moving between nodes requires no layering.",
   "presetMetadata": {
     "id": "Strobe",
     "displayName": "Strobe",
@@ -60,6 +60,19 @@
           "Gain"
         ],
         "oscSuffix": "Mode"
+      },
+      {
+        "id": "clip_trigger",
+        "name": "Clip Trigger",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "isTriggerGate": true,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "clipTrigger"
       }
     ],
     "bindings": [
@@ -100,6 +113,19 @@
         },
         "convert": {
           "type": "EnumRound"
+        }
+      },
+      {
+        "id": "clip_trigger",
+        "label": "Clip Trigger",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "trigger_gate",
+          "param": "enable"
+        },
+        "convert": {
+          "type": "BoolThreshold"
         }
       }
     ],
@@ -164,6 +190,59 @@
       "typeId": "system.final_output",
       "handle": "final_output",
       "title": "Output"
+    },
+    {
+      "id": 4,
+      "nodeId": "generator_input",
+      "typeId": "system.generator_input",
+      "handle": "generator_input"
+    },
+    {
+      "id": 5,
+      "nodeId": "trigger_gate",
+      "typeId": "node.trigger_gate",
+      "handle": "trigger_gate",
+      "params": {
+        "enable": {
+          "type": "Bool",
+          "value": false
+        }
+      },
+      "title": "Trigger Gate"
+    },
+    {
+      "id": 6,
+      "nodeId": "trigger_flash",
+      "typeId": "node.envelope_decay",
+      "handle": "trigger_flash",
+      "params": {
+        "decay_rate": {
+          "type": "Float",
+          "value": 12.0
+        }
+      },
+      "title": "Trigger Flash"
+    },
+    {
+      "id": 7,
+      "nodeId": "combine_gate",
+      "typeId": "node.math",
+      "handle": "combine_gate",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "op": {
+          "type": "Enum",
+          "value": 5
+        }
+      },
+      "title": "Combine (Max)"
     }
   ],
   "wires": [
@@ -175,6 +254,30 @@
     },
     {
       "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "trigger_count",
+      "toNode": 5,
+      "toPort": "trigger_count"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "trigger"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 7,
       "fromPort": "out",
       "toNode": 2,
       "toPort": "amount"

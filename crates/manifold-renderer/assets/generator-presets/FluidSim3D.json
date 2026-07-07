@@ -107,6 +107,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": true,
         "isToggle": true,
+        "isTriggerGate": true,
         "isTrigger": false,
         "formatString": "F0"
       },

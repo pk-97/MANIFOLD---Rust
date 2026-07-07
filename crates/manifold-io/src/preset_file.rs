@@ -103,6 +103,7 @@ mod tests {
                     curve: Default::default(),
                     invert: false,
                     is_angle: false,
+                    is_trigger_gate: false,
                 }],
                 bindings: vec![BindingDef {
                     id: "speed".to_string(),

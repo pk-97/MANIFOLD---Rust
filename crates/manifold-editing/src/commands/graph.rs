@@ -2229,6 +2229,7 @@ mod tests {
             curve: Default::default(),
             invert: false,
             is_angle: false,
+            is_trigger_gate: false,
         });
         p.value = value;
         p.base = value;
@@ -2761,6 +2762,7 @@ mod tests {
                 curve: Default::default(),
                 invert: false,
                 is_angle: false,
+                is_trigger_gate: false,
             }],
             bindings: vec![BindingDef {
                 id: "amount".into(),
@@ -3409,6 +3411,7 @@ mod tests {
                         curve: Default::default(),
                         invert: false,
                         is_angle: false,
+                        is_trigger_gate: false,
                     },
                     ParamSpecDef {
                         id: "scale".into(),
@@ -3425,6 +3428,7 @@ mod tests {
                         curve: Default::default(),
                         is_angle: false,
                         invert: false,
+                        is_trigger_gate: false,
                     },
                 ],
                 bindings: vec![
@@ -3667,6 +3671,7 @@ mod tests {
                         curve: Default::default(),
                         invert: false,
                         is_angle: false,
+                        is_trigger_gate: false,
                     },
                     ParamSpecDef {
                         id: "user.render.animate.1".into(),
@@ -3683,6 +3688,7 @@ mod tests {
                         curve: Default::default(),
                         invert: false,
                         is_angle: false,
+                        is_trigger_gate: false,
                     },
                 ],
                 bindings: vec![
@@ -4110,6 +4116,7 @@ mod tests {
                     curve: Default::default(),
                     invert: false,
                     is_angle: false,
+                    is_trigger_gate: false,
                 }],
                 bindings: vec![BindingDef {
                     id: "pattern".into(),
