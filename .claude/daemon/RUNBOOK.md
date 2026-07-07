@@ -100,6 +100,10 @@ grades and changes nothing is a valid pass; bias toward silence.
    (gates, catalog count, open decisions).
 
 ## Rules
+- Authoring a NEW move, or editing any signature/payload: read
+  MOVE_AUTHORING.md first, whole. It is the method behind the catalog
+  (specimen rule, tier choice, signature evidence contract, payload voice,
+  scoring story, tuning discipline) — grading is only half the pass.
 - Fail toward silence: when a grade is genuinely unclear, `unclear`, not TP.
 - Never tune from invalid data (classifier error rate > 5% in the graded
   window = don't trust it; see replay run-validity precedent).

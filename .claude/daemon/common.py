@@ -11,9 +11,11 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 from datetime import datetime
+from pathlib import Path
 
 CADENCE_EVENTS = 8
 CADENCE_SECONDS = 90
@@ -201,6 +203,18 @@ STOPGAP_TEST_PATH_RE = re.compile(
     r"(^|/)tests?/|(^|/)test_[^/]+\.\w+$|_test\.\w+$", re.IGNORECASE
 )
 
+# DESIGN.md §2h.2: mechanical/landing-doc-reflex's docs-only suppression.
+# Distinct from STOPGAP_EXCLUDED_PATH_RE above (which excludes ALL markdown +
+# .claude/ from stopgap scanning) — this one names exactly the three path
+# families moves.md's signature calls the paper trail: docs/, memory (the
+# gitignored auto-memory files under ~/.claude/projects/.../memory/), and
+# .claude/ internals.
+LANDING_DOCS_ONLY_RE = re.compile(r"(^|/)(?:docs|memory|\.claude)/", re.IGNORECASE)
+
+
+def is_docs_memory_or_claude_path(path):
+    return bool(path) and bool(LANDING_DOCS_ONLY_RE.search(path))
+
 
 def _stopgap_hits(text):
     return {cat for cat, pat in STOPGAP_MARKERS.items() if pat.search(text or "")}
@@ -305,6 +319,149 @@ def detect_git_landing_signal(name, input_):
         return []
     cmd = input_.get("command") or ""
     return sorted(cat for cat, pat in GIT_LANDING_MARKERS.items() if pat.search(cmd))
+
+
+# DESIGN.md §2h.2: mechanical/landing-doc-reflex. The token-parsing below
+# (quote-aware segment splitting, control-flow/env-assignment stripping, the
+# `-C <dir>` chain resolver, the explicit-refspec string match) is PORTED
+# from preToolUseBash.py's landing-protocol guard (_shlex_segments,
+# _strip_leading_keywords, _git_checkout_dir, _push_targets_main) rather
+# than re-derived — read that file, never edit it. One deliberate
+# divergence: that guard resolves an implicit (no-refspec) push/merge's
+# current branch via a live `git rev-parse` subprocess (_current_branch);
+# this observer runs no git subprocesses at all (DESIGN.md §2h.2), so the
+# no-refspec case is instead resolved from the transcript's own per-entry
+# `gitBranch`/`cwd` fields — confirmed against real transcripts to update
+# live across branch switches within a session, so it's exactly as fresh as
+# a subprocess call would be at that point in the replay, for free.
+_LANDING_SHELL_OPERATORS = {"&&", "||", ";", "|", "&"}
+_LANDING_DATA_KEYWORDS = {"for", "select", "case", "in", "function"}
+_LANDING_STRIP_KEYWORDS = {
+    "if", "then", "elif", "else", "fi", "while", "until", "do", "done",
+    "esac", "time", "!", "{", "}", "(", ")",
+}
+_MAIN_REF_TOKENS = ("main", "refs/heads/main")
+
+
+def _landing_shlex_segments(cmd):
+    """Ported verbatim from preToolUseBash.py's _shlex_segments: quote-aware
+    tokenize + split into command-position segments on shell operators."""
+    try:
+        tokens = shlex.split(cmd, posix=True)
+    except ValueError:
+        return []
+    segments = []
+    current = []
+    for t in tokens:
+        if t in _LANDING_SHELL_OPERATORS:
+            if current:
+                segments.append(current)
+            current = []
+        else:
+            current.append(t)
+    if current:
+        segments.append(current)
+    return segments
+
+
+def _landing_strip_leading_keywords(toks):
+    """Ported verbatim from preToolUseBash.py's _strip_leading_keywords."""
+    while toks:
+        t = toks[0]
+        if t in _LANDING_DATA_KEYWORDS:
+            return []  # data list, not a command
+        if t in _LANDING_STRIP_KEYWORDS:
+            toks = toks[1:]
+            continue
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t):
+            toks = toks[1:]
+            continue
+        break
+    return toks
+
+
+def _landing_git_checkout_dir(toks, cwd):
+    """Ported verbatim from preToolUseBash.py's _git_checkout_dir: resolves a
+    chain of `-C <dir>` flags against a baseline cwd (git semantics: each is
+    relative to the last). Returns (target_dir, sub, rest_toks), or
+    (None, None, None) if unparsable."""
+    i = 1
+    target = Path(cwd)
+    while i < len(toks) and toks[i].startswith("-"):
+        if toks[i] == "-C":
+            if i + 1 >= len(toks):
+                return None, None, None
+            p = Path(toks[i + 1])
+            target = p if p.is_absolute() else (target / p)
+            i += 2
+        elif toks[i] == "-c":
+            i += 2
+        else:
+            i += 1
+    sub = toks[i] if i < len(toks) else ""
+    return target, sub, toks[i + 1 :]
+
+
+def _landing_push_targets_main_explicit(rest_toks):
+    """Explicit-refspec branch of preToolUseBash.py's _push_targets_main,
+    ported verbatim (pure string match: 2+ positional args means an explicit
+    refspec was given). Returns True/False for an explicit refspec, or None
+    when there's 0/1 positional args (bare push / push-with-remote-only) —
+    the caller resolves that ambiguous case from the transcript's own
+    gitBranch instead of a subprocess."""
+    positional = [t for t in rest_toks if not t.startswith("-")]
+    if len(positional) >= 2:
+        refspec = positional[-1]
+        remote_part = refspec.split(":", 1)[-1] if ":" in refspec else refspec
+        return remote_part in _MAIN_REF_TOKENS
+    return None
+
+
+def _landing_same_directory(target_dir, cwd):
+    """True if a parsed `-C` target resolves back to the session's own cwd
+    (or no `-C` was present at all, in which case target_dir IS Path(cwd)).
+    Any resolve failure (e.g. a worktree directory no longer on disk) fails
+    open to False — abstain, don't guess."""
+    try:
+        return target_dir.resolve() == Path(cwd).resolve()
+    except (OSError, ValueError):
+        return target_dir == Path(cwd)
+
+
+def detect_landing_on_main(name, input_, cwd, git_branch):
+    """DESIGN.md §2h.2 / moves.md mechanical/landing-doc-reflex: a live Bash
+    command that lands work on main — `git merge` run while on main, or
+    `git push` whose refspec (or, absent one, current branch) is main.
+    `cwd`/`git_branch` are the transcript entry's own fields for the tool
+    event being checked (this observer runs no git subprocesses). Only the
+    no-`-C` case (the git command running directly in the session's own
+    working directory) is resolved against `git_branch` — a `-C <other-dir>`
+    command abstains unless that dir resolves back to `cwd`, since there is
+    no subprocess here to check some OTHER directory's branch (a documented
+    residue: an orchestrator landing on main via `git -C <path>` from a
+    session whose own cwd is elsewhere is invisible to this check). Returns
+    a sorted list of category names ("merge", "push"; possibly both,
+    possibly empty); never raises."""
+    if name != "Bash" or not isinstance(input_, dict) or not cwd:
+        return []
+    cmd = input_.get("command") or ""
+    hits = set()
+    for toks in _landing_shlex_segments(cmd):
+        toks = _landing_strip_leading_keywords(toks)
+        if not toks or toks[0] != "git":
+            continue
+        target_dir, sub, rest = _landing_git_checkout_dir(toks, cwd)
+        if target_dir is None:
+            continue
+        on_main = git_branch == "main" and _landing_same_directory(target_dir, cwd)
+        if sub == "merge":
+            if on_main:
+                hits.add("merge")
+        elif sub == "push":
+            explicit = _landing_push_targets_main_explicit(rest)
+            if explicit is True or (explicit is None and on_main):
+                hits.add("push")
+    return sorted(hits)
 
 
 # DESIGN.md §2c-ask: a distinct vocabulary from STOPGAP_MARKERS above — that

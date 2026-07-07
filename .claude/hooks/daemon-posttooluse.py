@@ -51,7 +51,10 @@ def main():
         if agent_id and not valve.worker_nudges_enabled():
             return
         key = f"{session_id}.{agent_id}" if agent_id else session_id
-        block, seq, move_id = valve.pending_injection(key)
+        # DESIGN.md §2h.4: build_block's ack sentence needs agent_id too, so
+        # a worker's self-grade line can carry it (RUNBOOK.md step 2 — plain
+        # (session_id, seq) collides across workers).
+        block, seq, move_id = valve.pending_injection(key, agent_id=agent_id)
         if not block:
             return
         valve.write_consumed(key, seq)

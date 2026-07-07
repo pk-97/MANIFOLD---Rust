@@ -170,6 +170,36 @@ def test_build_block_supervised_ack_seq_varies_with_the_flag():
     check("seq 12 fire names seq 12, not another", "this fire: seq 12" in block12 and "this fire: seq 5" not in block12, block12)
 
 
+# ---- DESIGN.md §2h.4: build_block's supervised ack must reach worker
+# deliveries too, with the worker's agent_id folded into the grade-line
+# instruction (RUNBOOK.md step 2 — plain (session_id, seq) collides across
+# workers). ----
+
+
+def test_build_block_worker_ack_includes_agent_id():
+    flag = {"move_id": "anchor/verify-claim", "confidence": 0.9, "seq": 9}
+    block = valve.build_block(flag, agent_id="worker-abc")
+    check("worker ack still names this fire's own seq", "this fire: seq 9" in block, block)
+    check('worker ack grade-line schema includes "agent_id"', '"agent_id": "worker-abc"' in block, block)
+
+
+def test_build_block_main_ack_omits_agent_id_field():
+    flag = {"move_id": "anchor/verify-claim", "confidence": 0.9, "seq": 9}
+    block_default = valve.build_block(flag)
+    block_explicit_none = valve.build_block(flag, agent_id=None)
+    check("no agent_id in the main-session ack (default call)", '"agent_id"' not in block_default, block_default)
+    check("no agent_id in the main-session ack (explicit agent_id=None)", '"agent_id"' not in block_explicit_none, block_explicit_none)
+
+
+def test_build_block_advice_kind_never_carries_agent_id():
+    # Advice-kind moves (§2e) never get the supervised ack at all — passing
+    # agent_id must not change that; the advice frame has no ack to attach it to.
+    flag = {"move_id": "mechanical/reasoning-primer", "confidence": 0.9, "seq": 9}
+    block = valve.build_block(flag, agent_id="worker-abc")
+    check("advice frame present", "<daemon-advice" in block, block)
+    check("no supervised-ack or agent_id leaks into the advice frame", "agent_id" not in block, block)
+
+
 def main():
     tests = [
         test_rollup_counts_scored_within_window,
@@ -182,6 +212,9 @@ def main():
         test_build_block_omits_habit_line_when_weekly_count_none,
         test_build_block_supervised_ack_names_the_fires_own_seq,
         test_build_block_supervised_ack_seq_varies_with_the_flag,
+        test_build_block_worker_ack_includes_agent_id,
+        test_build_block_main_ack_omits_agent_id_field,
+        test_build_block_advice_kind_never_carries_agent_id,
     ]
     for t in tests:
         t()
