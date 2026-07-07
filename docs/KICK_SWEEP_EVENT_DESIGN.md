@@ -1,6 +1,6 @@
 # Kick Sweep-Event Detector — motion-based kick detection for the bass-heavy Low band
 
-**Status:** IN PROGRESS · P1 (prototype) + P2 (runtime integration) SHIPPED 2026-07-07 · P3 (feel-pass) owed to Peter · 2026-07-07 · Opus 4.8
+**Status:** IN PROGRESS · P1 (prototype) + P2 (runtime) + P4 (Kick split from Transients, ridge-only) SHIPPED 2026-07-07 · P3 (feel-pass, now binds the Kick feature) owed to Peter · 2026-07-07 · Opus 4.8
 P1 @ `648f07e3` · P2 landing report: `docs/landings/2026-07-07-kick-sweep-p2.md`. The live `reduce_send` reproduces the prototype's `ridge-final` fire counts exactly on all 10 mix/drums fixtures; masked-novelty deleted.
 **Prerequisites:** none (the prototype and the 73-label corpus both exist).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
@@ -226,6 +226,32 @@ catch the kicks; does it strobe on the bass; is the ~50–65 ms latency (D7) acc
 Performer gesture: the first thing a VJ does — a hard on-the-kick strobe. `win` is the knob if
 latency reads late. Not headless-verifiable; never let a worker decide it.
 
+### P4 — Split Kick out of Transients (no-fallback detector). **SHIPPED 2026-07-07 (Opus).**
+P2 folded the ridge into `Transients@Low` (flux **OR** ridge). Peter's call: fallbacks are why
+these detectors feel twitchy, so make the kick its own thing. `Transients@Low` reverts to a
+plain SuperFlux onset (identical to every other band); `Kick` is a new `AudioFeatureKind`,
+ridge-**only**, Low band, with its own refractory so the two never debounce each other.
+`extract()` forces the Low band for Kick so a `Kick`-on-any-band selection can't read silence.
+The physical justification (Peter): a sub-bass kick always has a pitched descending body — a
+click-only kick can't exist down there (a click is broadband, that's the transient detector's
+job) — so ridge-only loses no real sub-bass kicks by dropping the flux half.
+
+**Measured (ridge-only, 73 labels, `hpss_proto --ridge-only`):** at the shipped `drop_bins=14
+win=10`, recall holds — 59/73 @±70 ms vs the old hybrid's 61 — while bass false-fires drop
+57→37 and spurious 98→58. The flux half was contributing the bass-note false fires, not the
+kick catches. `drop_bins=14` is the recall knee (d=16→52/25, d=18→41/20); it stays the kick /
+bass-portamento threshold the mechanism math put it at. Tight ±35 ms recall is lower (the ridge
+confirms ~50 ms late, the D7 latency); `win=8` pulls that to ~43 ms at 53/73.
+
+**Exact-match gate (real fixtures — the only input both harnesses share, since the synth beds
+have drifted apart between the two example files):** runtime `mod_harness` kick counts equal the
+`hpss_proto --ridge-only` reference to the fire on all 5 — apricots 16, bad_guy 42, feel 23,
+inhale 13, tears 25 — and the reverted `Transients` flux matches the prototype baseline
+5/5/6/29/32. Scaffold: `hpss_proto --ridge-only` + `--family ridge-sweep`; `mod_harness` now
+prints `kick_fires` for every job.
+
+**Still owed:** the P3 feel-pass now binds the **Kick** feature (not Transients@Low).
+
 ## 6. Decided — do not reopen
 
 1. Detection is Low-band only (Peter). Not full-spectrum.
@@ -234,7 +260,11 @@ latency reads late. Not headless-verifiable; never let a worker decide it.
 4. Masked-novelty is replaced, not kept alongside (D4).
 5. The kick tracker is a new struct, not the pitch `RidgeTracker` (D6).
 6. Config constants are D5's; the P2 gate is exact-match against `--family ridge-final`.
-7. No serialized state, no per-send toggle — always-on parity with masked-novelty.
+7. ~~No serialized state, no per-send toggle — always-on parity with masked-novelty.~~
+   **Superseded by P4:** Kick is now a first-class selectable `AudioFeatureKind` (ridge-only),
+   separate from `Transients` (plain flux). No fallback inside either detector (Peter: fallbacks
+   are why they feel twitchy). The `KickRidges` tracker still runs always-on for the Low band;
+   what's selectable is which feature a modulation binds.
 
 ## 7. Deferred (with the trigger that revives each)
 

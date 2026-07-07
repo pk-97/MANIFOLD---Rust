@@ -122,6 +122,26 @@ invalidate it. Blast radius: renderer call signatures; no behavior change. Until
 brief that constructs `ContentThread` outside `Application::resumed()` must name the repoint
 step.
 
+### BUG-053 (hdr-live-recording-structural) — HDR live recording cannot work: pool format mismatches the native pixel buffer, and nothing PQ-encodes — LOW today (UI can't reach it), blocks any HDR-capture ambition
+
+**Found 2026-07-07 by Fable during the LIVE_RECORDING_PROOFS design audit (statically
+derived, not yet observed — no runtime repro attempted).** The recording texture pool is
+unconditionally `Bgra8Unorm` (`crates/manifold-recording/src/session.rs:60`, comment
+says "format conversion done in content thread"), but the native HDR path wraps its
+CVPixelBuffer as `RGBA16Float` and blits pool → buffer
+(`crates/manifold-recording/native/LiveRecordingPlugin.m:378`); Metal forbids blits
+between 4-byte and 8-byte texel formats, so the first HDR frame should fail with
+`LR_ERR_BLIT_FAILED`. Independently, the HDR writer config declares PQ/BT.2020 but no
+stage in the pipeline applies a PQ transfer (the only converter is linear→sRGB,
+`format_converter.rs`) — so even with matching formats the file would carry linear
+values labeled PQ. Effectively the HDR path was never finished. **Stage impact today:
+none** — the UI always records SDR (`app_render.rs:1257` uses `default_to_desktop()`,
+hdr=false, and never sets the flag). **Fix shape:** pool format and converter must
+follow `config.hdr` (Rgba16Float pool, PQ-encode compute stage or handoff of linear
+values with correct color tagging — decide at design time), then replace the
+`hdr_blocked_by_bug_053` guard test with the HDR twin of `nominal_video_only`, which is
+this bug's acceptance test. See `docs/LIVE_RECORDING_PROOFS_DESIGN.md` §2 D7.
+
 ### BUG-050 (ableton-anchor-yankback) — Play-from-cursor: Ableton repeatedly snaps back to the gesture beat, then MANIFOLD clock-dragged after retries exhaust — HIGH (live transport; partial fix landed 2026-07-07, rig confirmation owed)
 
 **Found 2026-07-07 by Peter, first L4 run of the ABLETON_TRANSPORT_SYNC wave (checklist
