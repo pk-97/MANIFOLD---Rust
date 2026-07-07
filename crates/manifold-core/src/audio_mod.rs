@@ -72,6 +72,12 @@ pub enum AudioFeatureKind {
     Flux,
     /// Onset trigger — transient hits in the band.
     Transients,
+    /// Kick trigger — descending-FM-ridge detector, sub-bass only. A dedicated
+    /// no-fallback kick detector: fires on the coherent pitch descent a kick
+    /// drum makes, which general `Transients` (flux) is blind to on a
+    /// bass-occupied Low band, and which a bass note's fixed-pitch attack cannot
+    /// fake. Always reads the Low band regardless of the selected `band`.
+    Kick,
     /// Tracked pitch of the band's dominant object, normalized to the band's
     /// bin range (P4, docs/AUDIO_OBJECT_TRACKING_DESIGN.md). HOLDS on dropout
     /// — gate with `Presence`, never read a held value as "low pitch".
@@ -83,12 +89,13 @@ pub enum AudioFeatureKind {
 
 impl AudioFeatureKind {
     /// All kinds in drawer-button order.
-    pub const ALL: [AudioFeatureKind; 7] = [
+    pub const ALL: [AudioFeatureKind; 8] = [
         AudioFeatureKind::Amplitude,
         AudioFeatureKind::Centroid,
         AudioFeatureKind::Noisiness,
         AudioFeatureKind::Flux,
         AudioFeatureKind::Transients,
+        AudioFeatureKind::Kick,
         AudioFeatureKind::Pitch,
         AudioFeatureKind::Presence,
     ];
@@ -106,6 +113,7 @@ impl AudioFeatureKind {
             AudioFeatureKind::Noisiness => "Noisiness",
             AudioFeatureKind::Flux => "Flux",
             AudioFeatureKind::Transients => "Transients",
+            AudioFeatureKind::Kick => "Kick",
             AudioFeatureKind::Pitch => "Pitch",
             AudioFeatureKind::Presence => "Presence",
         }
@@ -130,6 +138,11 @@ impl AudioFeature {
 
     /// Pull this feature's scalar out of a send's per-band features.
     pub fn extract(self, f: &SendFeatures) -> f32 {
+        // Kick is a sub-bass-only detector; it always reads the Low band so a
+        // `Kick` selected on any other band can't silently read zero.
+        if let AudioFeatureKind::Kick = self.kind {
+            return f.bands[AudioBand::Low.index()].kick;
+        }
         let b = &f.bands[self.band.index()];
         match self.kind {
             AudioFeatureKind::Amplitude => b.amplitude,
@@ -137,6 +150,7 @@ impl AudioFeature {
             AudioFeatureKind::Noisiness => b.noisiness,
             AudioFeatureKind::Flux => b.liveliness,
             AudioFeatureKind::Transients => b.transients,
+            AudioFeatureKind::Kick => b.kick, // unreachable (handled above), keeps match total
             AudioFeatureKind::Pitch => b.pitch,
             AudioFeatureKind::Presence => b.presence,
         }

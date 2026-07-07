@@ -122,6 +122,9 @@ struct HopRecord {
     /// acquired at least once this clip (`pitch_confidence` still exactly 0 —
     /// see the module doc's CSV column note).
     tracked_f0_hz: f32,
+    /// Low-band Kick detector impulse (ridge-only). Its fire count over the
+    /// fixtures is the exact-match gate against `hpss_proto --ridge-only`.
+    kick: f32,
 }
 
 struct Args {
@@ -382,6 +385,7 @@ fn analyze_and_render(
                 smoothed,
                 salience_f0_hz,
                 tracked_f0_hz,
+                kick: f.bands[1].kick, // 1 = Low (AudioBand order [Full, Low, Mid, High])
             });
         }
     }
@@ -465,10 +469,14 @@ fn analyze_and_render(
         );
     }
 
+    // Fire counts (full/low/kick) — printed for every job so the kick count on a
+    // real fixture can be diffed against `hpss_proto --ridge-only` (exact-match
+    // gate); the guard thresholds in the line only apply to the synth scenarios.
+    print_p3_fires(label, &records);
+
     // ── P2 gates (docs/AUDIO_OBJECT_TRACKING_DESIGN.md P2): the D5 tracker's
     // numeric acceptance bar, one line per metric, selftest only.
     if args.selftest {
-        print_p3_fires(label, &records);
         print_p2_gates(label, &records, dt, ground_truth);
         print_p2b_gates(label, &records, dt, ground_truth);
         if label == "notes" {
@@ -536,8 +544,9 @@ fn print_p3_fires(label: &str, records: &[HopRecord]) {
     let post = &records[WARMUP_HOPS.min(records.len())..];
     let full_fires = post.iter().filter(|r| r.raw[TRANSIENTS_IDX][FULL] > 0.999).count();
     let low_fires = post.iter().filter(|r| r.raw[TRANSIENTS_IDX][LOW] > 0.999).count();
+    let kick_fires = post.iter().filter(|r| r.kick > 0.999).count();
     println!(
-        "P3 {label}: full_fires={full_fires} low_fires={low_fires} (gates: dive full 0, kicks low == 8, busymix low >= 7, densemix low >= 6, riser full 0, growl full 0)"
+        "P3 {label}: full_fires={full_fires} low_fires={low_fires} kick_fires={kick_fires} (gates: dive full 0, kicks low == 8, busymix low >= 7, densemix low >= 6, riser full 0, growl full 0)"
     );
 }
 
