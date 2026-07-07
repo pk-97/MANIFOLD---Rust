@@ -252,6 +252,25 @@ is a code edit for this pass, one concern, small blast radius.
     unverified headless) turned out to be already tracked as BUG-034, whose
     BUG-033 gate is now open — nothing lost by the session-file clear.
 
+**TICKETS.md T1–T11 are DONE as of 2026-07-07 night (Sonnet, 3-lane worktree
+session)** — T1–T6, T8–T11 shipped and landed on main; T7 SKIPPED with
+discovery findings recorded in the ticket (no hook/skill governs MEMORY.md
+compaction in this repo). Grade the now-live detectors against their
+tickets in the July-12 pass: git-landing's command-position anchoring (T1),
+confessed-stopgap's self-disposal exemption (T2) plus its resolved a5d63eee
+audit (the grading note misattributed the artifact — see the ticket close
+and the code comment above `DISPOSAL_TRIGGER_RE` in common.py — the
+mesh_pipeline.rs `#[allow(unreachable_code)]` edit itself was never
+actually graded and remains an open TP/FP question), ungrounded-chat-claim's
+widened vocabulary (T3, plus a root-caused pre-existing bug: `_EXT_ARTIFACT_RE`
+matched bare filenames with no existence check before this pass), three new
+preToolUseBash lints (T4/T5/T8, warn-only) and one narrow compound-landing
+DENY (T6), mechanical/stale-brief's first live fires (T9),
+anchor/unheeded-warning's now-populated hook-warning ledger annotation (T10
+— it can finally fire; still needs its first real grade), and T11's
+telemetry-leak fix (verify no new test-residue records land in
+telemetry.jsonl across the next few sessions' suite runs).
+
 ## Triage of eval/observations.session.jsonl (Fable, 2026-07-07 late — final authoring pass)
 
 All 39 records were read and dispatched; do NOT re-triage. By entry number
