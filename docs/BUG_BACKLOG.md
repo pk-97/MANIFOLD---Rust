@@ -61,6 +61,7 @@ or human can read it, and it needs no external tool.
 | BUG-014 / 030 | parked | NaN content-key hash · color-ratchet red |
 | BUG-019 / 020 / 021 | deferred | group-fold gap · gen-card collapse · snap-back gap |
 | BUG-056 | **audio-mixdown-clippy-debt** | `manifold-playback` clippy gate (`-D warnings`) fails pre-existing on `audio_mixdown.rs` — `cloned_ref_to_slice_refs` + `needless_range_loop` (LOW, blocks the crate's clippy gate, not correctness) |
+| BUG-057 | **ui-snapshot-dead-blit-pipeline** | `cargo clippy -p manifold-app --features ui-snapshot` fails pre-existing on an unused `make_blit_pipeline` fn (LOW, blocks that one feature's clippy gate, not correctness) |
 
 ## Open
 
@@ -120,7 +121,25 @@ change. `cargo test -p manifold-playback --lib` is unaffected (tests still build
 only `--tests -- -D warnings` fails). Not fixed here — out of scope for the audio-trigger
 unification and touching `audio_mixdown.rs` wasn't part of this phase's brief.
 
-Next free id: BUG-057.
+### BUG-057 (ui-snapshot-dead-blit-pipeline) — `manifold-app --features ui-snapshot` fails `cargo clippy -D warnings` pre-existing on an unused fn — LOW (blocks that feature's clippy gate, not correctness)
+
+**Found 2026-07-07** while gating U-P2 of `LIVE_AUDIO_TRIGGERS_DESIGN.md` §9 (the trigger-gate
+UI unification). Not this wave's fault — `crates/manifold-app/src/ui_snapshot/render.rs`
+wasn't touched this session; `git log -S "fn make_blit_pipeline"` shows it landed in an
+earlier, unrelated commit (`fea20ade`, "real per-node output thumbnails in the graph scene").
+`fn make_blit_pipeline(device: &GpuDevice) -> manifold_gpu::GpuRenderPipeline` at
+`ui_snapshot/render.rs:760` has zero call sites under any feature combination — plain
+`dead_code`, not a lint-version regression like BUG-056.
+
+**Fix shape:** either delete the function or wire it to its intended call site (unclear which
+without reading the surrounding thumbnail-render code, out of scope for this phase). `cargo
+build -p manifold-app --features ui-snapshot` and `cargo test -p manifold-app --lib` are both
+unaffected (only `clippy --features ui-snapshot -- -D warnings` fails); plain `cargo clippy
+--workspace -- -D warnings` (which doesn't enable the feature) stays clean. Not fixed here —
+out of scope for the audio-trigger unification and touching `render.rs` wasn't part of this
+phase's brief.
+
+Next free id: BUG-058.
 
 ### BUG-055 (eval-harness-stale-time-grid) — both audio eval harnesses used the unscaled default hop on non-48k files — FIXED 2026-07-07 (kick P5 retune branch)
 

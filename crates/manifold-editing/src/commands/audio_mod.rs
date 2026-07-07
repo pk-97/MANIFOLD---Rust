@@ -9,6 +9,7 @@
 use crate::command::Command;
 use crate::commands::effect_target::DriverTarget;
 use manifold_core::audio_mod::{AudioModShape, AudioModSource, ParameterAudioMod};
+use manifold_core::audio_trigger::TriggerFireMode;
 use manifold_core::effects::ParamId;
 use manifold_core::project::Project;
 
@@ -217,6 +218,55 @@ impl Command for SetAudioModShapeCommand {
     }
 }
 
+/// Change a trigger-gate mod's fire mode (§9 U3 — `ClipEdge`/`Transient`/
+/// `Both`, the drawer's Mode row). Mirrors [`SetAudioModSourceCommand`]'s
+/// shape: whole-field old/new capture, addressed by `param_id` like every
+/// other audio-mod command. Meaningless on a non-gate target (`trigger_mode`
+/// stays `None` there and nothing reads it), but the command doesn't need to
+/// know which — the drawer only ever emits this for an `is_trigger_gate` row.
+#[derive(Debug)]
+pub struct SetAudioModTriggerModeCommand {
+    target: DriverTarget,
+    param_id: ParamId,
+    old: Option<TriggerFireMode>,
+    new: Option<TriggerFireMode>,
+}
+
+impl SetAudioModTriggerModeCommand {
+    pub fn new(
+        target: DriverTarget,
+        param_id: ParamId,
+        old: Option<TriggerFireMode>,
+        new: Option<TriggerFireMode>,
+    ) -> Self {
+        Self { target, param_id, old, new }
+    }
+}
+
+impl Command for SetAudioModTriggerModeCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let v = self.new;
+        with_audio_mods_mut(project, &self.target, |mods| {
+            if let Some(m) = mods.iter_mut().find(|a| a.param_id == self.param_id) {
+                m.trigger_mode = v;
+            }
+        });
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let v = self.old;
+        with_audio_mods_mut(project, &self.target, |mods| {
+            if let Some(m) = mods.iter_mut().find(|a| a.param_id == self.param_id) {
+                m.trigger_mode = v;
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Set Audio Trigger Mode"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,5 +318,31 @@ mod tests {
         assert!(!project.settings.master_effects[0].find_audio_mod("intensity").unwrap().enabled);
         cmd.undo(&mut project);
         assert!(project.settings.master_effects[0].find_audio_mod("intensity").unwrap().enabled);
+    }
+
+    #[test]
+    fn set_trigger_mode_round_trips() {
+        let mut project = project_with_effect();
+        AddAudioModCommand::new(effect_target(), make_mod("clip_trigger")).execute(&mut project);
+        assert_eq!(
+            project.settings.master_effects[0].find_audio_mod("clip_trigger").unwrap().trigger_mode,
+            None
+        );
+        let mut cmd = SetAudioModTriggerModeCommand::new(
+            effect_target(),
+            "clip_trigger".into(),
+            None,
+            Some(TriggerFireMode::Transient),
+        );
+        cmd.execute(&mut project);
+        assert_eq!(
+            project.settings.master_effects[0].find_audio_mod("clip_trigger").unwrap().trigger_mode,
+            Some(TriggerFireMode::Transient)
+        );
+        cmd.undo(&mut project);
+        assert_eq!(
+            project.settings.master_effects[0].find_audio_mod("clip_trigger").unwrap().trigger_mode,
+            None
+        );
     }
 }

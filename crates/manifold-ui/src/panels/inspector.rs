@@ -2469,7 +2469,6 @@ mod tests {
             driver_triplet: vec![false; n],
             driver_free_period: vec![None; n],
             audio: Default::default(),
-            audio_trigger: Default::default(),
             automation_active: vec![false; n],
             automation_overridden: vec![false; n],
         }
