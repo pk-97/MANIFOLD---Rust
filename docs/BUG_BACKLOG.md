@@ -129,8 +129,27 @@ fluid_simulate_3d` to recover the fused generator's frame recipe (kernel order, 
 ping-pong, per-pass params), then line it up against the FluidSim3D preset graph's execution
 plan and diff the compositions.
 
+**Legacy-composition diff (Fable, same night — step 0 partially done):** recovered the
+pre-node-graph Rust generator (`git show 044e7c8a~1:.../fluid_simulation_3d.rs`) and the
+fused-primitive era (`git show 50909419~1`). Force math is IDENTICAL through both eras
+(same central-diff gradient, same cross(gradient, ref_axis) + slope, no wobble; fused
+per-particle kernel = today's chain step for step), so the decomposition did NOT change the
+physics. The composition deltas, complete list: (a) blur radius — legacy
+`feather × vol_res/640` = 4 at defaults vs preset `feather × 0.2 + 1` = 5
+(`blur_radius_scaled`); the harness cliff sits exactly there (radius ~1 clean, 5 visibly
+biased, 9 violent); (b) legacy amortized the whole volume pipeline to alternate frames —
+half-rate field updates ≈ half-speed drift; (c) legacy blur ping-ponged vol→temp→vol
+explicitly (graph allocates per-pass outputs — check the executor actually does the same);
+(d) the curl wobble exists only post-decomposition. Net: legacy likely drifted too, ~2–3×
+slower (radius 4 vs 5 at the steep part of the response + half-rate updates) — consistent
+with \"never noticed\" rather than \"absent\". So Peter's report probably does NOT convict the
+decomposition; the drift mechanism itself (why any radius ≥ ~4 drifts diagonally) is still
+the open question and the antisymmetry probe remains the way in. Verify (b)/(c) against the
+execution plan before trusting this paragraph's \"identical\" claims for the blur pass wiring.
+
 **Next steps (Opus):** the drift needs blur *range*, not blur sampling mode. Candidates, in
-order: (0) the legacy-composition diff above — cheapest and now the strongest lens;
+order: (0) finish the legacy diff — confirm the graph's blur ping-pong/order matches (c),
+and if cheap, run the harness at radius 4 + half-rate to see legacy-equivalent drift speed;
 (1) synthetic-volume antisymmetry probe at the kernel level — upload a symmetric
 Gaussian density, run blur→grad→(slope)→blur, sample at mirrored probe positions with the
 codegen standalone kernels (pattern: `gpu_tests` in scatter_particles_3d.rs), assert
