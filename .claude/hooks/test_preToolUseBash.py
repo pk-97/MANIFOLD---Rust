@@ -300,6 +300,127 @@ def test_landing_ask_survives_auto_mode():
     check("auto mode: force-push to main still asks", '"ask"' in out, out)
 
 
+def test_rg_replace_bundled_rn_fires():
+    reason = hook.rg_replace_lint("rg -rn pattern file")
+    check("rg -rn (bundled) -> warns", reason is not None, reason)
+
+
+def test_rg_replace_bundled_rl_fires():
+    reason = hook.rg_replace_lint("rg -rl pattern")
+    check("rg -rl (bundled) -> warns", reason is not None, reason)
+
+
+def test_rg_replace_standalone_fires():
+    reason = hook.rg_replace_lint("rg -r 'x' file")
+    check("rg -r 'x' (standalone) -> warns", reason is not None, reason)
+
+
+def test_rg_plain_n_does_not_fire():
+    reason = hook.rg_replace_lint("rg -n pattern file")
+    check("rg -n (no r) -> no warning", reason is None, reason)
+
+
+def test_rg_plain_no_flags_does_not_fire():
+    reason = hook.rg_replace_lint("rg pattern file")
+    check("rg pattern file (no flags) -> no warning", reason is None, reason)
+
+
+def test_rg_replace_non_rg_command_does_not_fire():
+    reason = hook.rg_replace_lint("grep -rn pattern file")
+    check("non-rg command with -rn -> no warning", reason is None, reason)
+
+
+def test_masked_exit_status_pipe_then_echo_dollar_status_fires():
+    reason = hook.masked_exit_status_lint("cargo test | rg FAIL; echo exit: $?")
+    check("cargo test | rg ...; echo $? -> warns", reason is not None, reason)
+
+
+def test_masked_exit_status_and_chain_does_not_fire():
+    reason = hook.masked_exit_status_lint("cargo test -p foo --lib && cargo clippy")
+    check("cargo test && cargo clippy (no pipe-into-filter) -> no warning", reason is None, reason)
+
+
+def test_masked_exit_status_pytest_head_echo_fires():
+    reason = hook.masked_exit_status_lint("pytest | head -20; echo GATE_DONE")
+    check("pytest | head ...; echo GATE_DONE -> warns", reason is not None, reason)
+
+
+def test_masked_exit_status_no_trailing_echo_does_not_fire():
+    reason = hook.masked_exit_status_lint("cargo test | rg FAIL")
+    check("cargo test | rg FAIL alone (no trailing echo/$?) -> no warning", reason is None, reason)
+
+
+def test_masked_exit_status_non_runner_head_does_not_fire():
+    reason = hook.masked_exit_status_lint("rg foo | head")
+    check("rg foo | head (no test runner) -> no warning", reason is None, reason)
+
+
+def test_trailing_comment_swallow_fires():
+    reason = hook.trailing_comment_swallow_lint("rg foo #grep-ok && echo done-grading")
+    check("comment followed by && -> warns", reason is not None, reason)
+    check("warning names the swallowed text", reason and "done-grading" in reason, reason)
+
+
+def test_trailing_comment_no_operator_does_not_fire():
+    reason = hook.trailing_comment_swallow_lint("rg foo # just a note")
+    check("comment with no trailing operator -> no warning", reason is None, reason)
+
+
+def test_trailing_comment_no_hash_does_not_fire():
+    reason = hook.trailing_comment_swallow_lint("rg foo")
+    check("no `#` at all -> no warning", reason is None, reason)
+
+
+def test_trailing_comment_hash_inside_quotes_does_not_fire():
+    reason = hook.trailing_comment_swallow_lint('echo "price: #1" && echo done')
+    check("`#` inside quoted string -> no warning", reason is None, reason)
+
+
+def test_compound_landing_merge_unverified_denies():
+    orig = hook._current_branch
+    hook._current_branch = lambda cwd: "main"
+    try:
+        cmd = "git fetch && git merge origin/main && git merge --no-ff feat/x && git push"
+        reason = hook.detect_unverified_compound_landing_merge(cmd, MAIN_CWD)
+        check("unverified compound landing merge -> denies", reason is not None, reason)
+    finally:
+        hook._current_branch = orig
+
+
+def test_compound_landing_merge_verified_in_between_unaffected():
+    orig = hook._current_branch
+    hook._current_branch = lambda cwd: "main"
+    try:
+        cmd = ("git fetch && git merge origin/main && git branch --show-current "
+               "&& git merge --no-ff feat/x && git push")
+        reason = hook.detect_unverified_compound_landing_merge(cmd, MAIN_CWD)
+        check("verify segment in between -> unaffected", reason is None, reason)
+    finally:
+        hook._current_branch = orig
+
+
+def test_single_landing_merge_not_compound_unaffected():
+    orig = hook._current_branch
+    hook._current_branch = lambda cwd: "main"
+    try:
+        reason = hook.detect_unverified_compound_landing_merge("git merge --no-ff feat/x", MAIN_CWD)
+        check("single (non-compound) landing merge -> unaffected", reason is None, reason)
+    finally:
+        hook._current_branch = orig
+
+
+def test_compound_landing_merge_worktree_unaffected():
+    orig = hook._current_branch
+    hook._current_branch = lambda cwd: "main"
+    try:
+        cmd = (f'git -C "{WORKTREE_CWD}" fetch && git -C "{WORKTREE_CWD}" merge origin/main '
+               f'&& git -C "{WORKTREE_CWD}" merge --no-ff feat/x && git -C "{WORKTREE_CWD}" push')
+        reason = hook.detect_unverified_compound_landing_merge(cmd, MAIN_CWD)
+        check("compound targeting a worktree dir -> unaffected", reason is None, reason)
+    finally:
+        hook._current_branch = orig
+
+
 def main():
     test_bare_checkout_foreign_live()
     test_bare_checkout_only_own_session()
@@ -328,6 +449,29 @@ def main():
     test_pipe_deny_skipped_in_auto_mode()
     test_pipe_deny_active_when_mode_missing()
     test_landing_ask_survives_auto_mode()
+
+    test_rg_replace_bundled_rn_fires()
+    test_rg_replace_bundled_rl_fires()
+    test_rg_replace_standalone_fires()
+    test_rg_plain_n_does_not_fire()
+    test_rg_plain_no_flags_does_not_fire()
+    test_rg_replace_non_rg_command_does_not_fire()
+
+    test_masked_exit_status_pipe_then_echo_dollar_status_fires()
+    test_masked_exit_status_and_chain_does_not_fire()
+    test_masked_exit_status_pytest_head_echo_fires()
+    test_masked_exit_status_no_trailing_echo_does_not_fire()
+    test_masked_exit_status_non_runner_head_does_not_fire()
+
+    test_trailing_comment_swallow_fires()
+    test_trailing_comment_no_operator_does_not_fire()
+    test_trailing_comment_no_hash_does_not_fire()
+    test_trailing_comment_hash_inside_quotes_does_not_fire()
+
+    test_compound_landing_merge_unverified_denies()
+    test_compound_landing_merge_verified_in_between_unaffected()
+    test_single_landing_merge_not_compound_unaffected()
+    test_compound_landing_merge_worktree_unaffected()
 
     for name in PASS:
         print(f"PASS: {name}")
