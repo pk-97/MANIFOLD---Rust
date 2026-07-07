@@ -1968,9 +1968,15 @@ fn preset_to_config(
                     default: pd.default_value,
                     whole_numbers: pd.whole_numbers,
                     is_angle: false,
-                    // Effect params render as sliders, never toggle/trigger rows.
-                    is_toggle: false,
-                    is_trigger: false,
+                    // §8.4 P3b: effect params CAN be toggle/trigger rows now
+                    // (Strobe's `clip_trigger` card, D6) — read the real flag
+                    // instead of hardcoding false. This was the actual root
+                    // cause of the Task A render bug: the JSON preset and the
+                    // param-card build path both already supported it, but
+                    // this translation boundary stripped it before either
+                    // saw it.
+                    is_toggle: pd.is_toggle,
+                    is_trigger: pd.is_trigger,
                     value_labels: pd.value_labels.clone(),
                     exposed: inst.is_param_exposed(pd.id.as_ref()),
                 })
@@ -1988,8 +1994,11 @@ fn preset_to_config(
                             | manifold_core::effects::ParamConvert::EnumRound
                     ),
                     is_angle: ub.is_angle,
-                    is_toggle: false,
-                    is_trigger: false,
+                    // Mirrors `spec_from_binding`'s convert->flag mapping
+                    // (`manifold_core::effects`) — a user-tail binding can
+                    // carry `BoolThreshold`/`Trigger` convert too.
+                    is_toggle: matches!(ub.convert, manifold_core::effects::ParamConvert::BoolThreshold),
+                    is_trigger: matches!(ub.convert, manifold_core::effects::ParamConvert::Trigger),
                     value_labels: None,
                     exposed: inst.is_param_exposed(ub.id.as_ref()),
                 });

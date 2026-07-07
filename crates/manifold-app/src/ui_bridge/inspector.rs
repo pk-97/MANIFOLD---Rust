@@ -2819,50 +2819,54 @@ pub(super) fn dispatch_inspector(
 
         // ── Generator params ───────────────────────────────────────
         PanelAction::GenTypeClicked(_) => DispatchResult::handled(),
-        PanelAction::GenParamToggle(param_id) => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
+        // `ParamToggle`/`ParamFire` (§8.4 P3b): unified effect+generator via
+        // the same `resolve_graph_target` + `with_preset_graph_mut` path
+        // `ParamChanged`/`ParamCommit` already use, rather than the old
+        // `GenParamToggle`/`GenParamFire`'s generator-only `gen_params_mut()`
+        // lookup — a click is atomic (no drag), so one command captures the
+        // old value and writes the new one in the same arm.
+        PanelAction::ParamToggle(gpt, param_id) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
             {
-                let layer_id = layer.layer_id.clone();
-                if let Some(gp) = layer.gen_params_mut()
-                    && gp.params.contains(param_id.as_ref())
-                {
-                    let old_val = gp.get_base_param(param_id.as_ref());
+                let old_val = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.params
+                            .contains(param_id.as_ref())
+                            .then(|| inst.get_base_param(param_id.as_ref()))
+                    })
+                    .flatten();
+                if let Some(old_val) = old_val {
                     let new_val = if old_val > 0.5 { 0.0 } else { 1.0 };
-                    gp.set_base_param(param_id.as_ref(), new_val);
-                    let cmd = ChangeGraphParamCommand::new(
-                        manifold_core::GraphTarget::Generator(layer_id),
-                        param_id.clone(),
-                        old_val,
-                        new_val,
-                    );
+                    project.with_preset_graph_mut(&target, |inst| {
+                        inst.set_base_param(param_id.as_ref(), new_val);
+                    });
+                    let cmd = ChangeGraphParamCommand::new(target, param_id.clone(), old_val, new_val);
                     ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
             DispatchResult::handled()
         }
-        PanelAction::GenParamFire(param_id) => {
-            // Trigger button click: increment the monotonic counter
-            // by one. Mirrors GenParamToggle's plumbing exactly except
-            // the value transform is `+1` instead of `0↔1`.
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
+        PanelAction::ParamFire(gpt, param_id) => {
+            // Trigger button click: increment the monotonic counter by one.
+            // Mirrors ParamToggle's plumbing exactly except the value
+            // transform is `+1` instead of `0↔1`.
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
             {
-                let layer_id = layer.layer_id.clone();
-                if let Some(gp) = layer.gen_params_mut()
-                    && gp.params.contains(param_id.as_ref())
-                {
-                    let old_val = gp.get_base_param(param_id.as_ref());
+                let old_val = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.params
+                            .contains(param_id.as_ref())
+                            .then(|| inst.get_base_param(param_id.as_ref()))
+                    })
+                    .flatten();
+                if let Some(old_val) = old_val {
                     let new_val = old_val + 1.0;
-                    gp.set_base_param(param_id.as_ref(), new_val);
-                    let cmd = ChangeGraphParamCommand::new(
-                        manifold_core::GraphTarget::Generator(layer_id),
-                        param_id.clone(),
-                        old_val,
-                        new_val,
-                    );
+                    project.with_preset_graph_mut(&target, |inst| {
+                        inst.set_base_param(param_id.as_ref(), new_val);
+                    });
+                    let cmd = ChangeGraphParamCommand::new(target, param_id.clone(), old_val, new_val);
                     ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }

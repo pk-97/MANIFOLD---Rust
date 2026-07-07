@@ -364,6 +364,18 @@ pub enum PanelAction {
     ParamSnapshot(GraphParamTarget, ParamId),
     ParamChanged(GraphParamTarget, ParamId, f32),
     ParamCommit(GraphParamTarget, ParamId),
+    /// Toggle a boolean (`isToggle`) param's ON/OFF button — a 0↔1 flip.
+    /// Was `GenParamToggle(ParamId)` (generator-only); joined the unified
+    /// group (§8.4 P3b) once effect cards gained the same toggle-row
+    /// rendering generators already had — see `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md`
+    /// §8. Same `ChangeGraphParamCommand` write path as `ParamChanged`, but
+    /// atomic (no snapshot/commit pair — a click isn't a drag).
+    ParamToggle(GraphParamTarget, ParamId),
+    /// Fire a monotonic `isTrigger` param's "▶" button — increments the
+    /// underlying counter by one instead of flipping it. Was
+    /// `GenParamFire(ParamId)`; unified alongside `ParamToggle` for the same
+    /// reason (D5b: `is_trigger` cards now exist on effect chains too).
+    ParamFire(GraphParamTarget, ParamId),
     /// Double-click on a numeric param's value cell → open a type-in box. Carries
     /// the target + id, the value-cell anchor rect, the base value to prefill, the
     /// clamp range, and whether the param rounds to an integer — everything the
@@ -624,12 +636,6 @@ pub enum PanelAction {
     // target-carrying `ParamSnapshot` … `TargetCommit` variants above. Only
     // these have no effect counterpart and stay generator-only.
     GenTypeClicked(Option<LayerId>), // layer_id
-    GenParamToggle(ParamId),
-    /// Outer-card click on a `is_trigger` param's button — increment the
-    /// underlying monotonic counter by one. Same write path as a toggle
-    /// (`ChangeGraphParamCommand` on the generator), but `+1` instead of a
-    /// `0↔1` flip. Wired in [`crate::panels::param_card`].
-    GenParamFire(ParamId),
 
     // Generator string params (per-clip text, etc.)
     GenStringParamClicked(usize), // string_param_index — open text input

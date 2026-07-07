@@ -11,9 +11,11 @@
 //!
 //! The small real differences between the two kinds live on these structs as
 //! kind-tagged or optional fields (effect-only: `enabled`, badges,
-//! `has_graph_mod`; generator-only: `string_params`, `is_toggle`,
-//! `is_trigger`). Readers branch on [`ParamCardKind`] or ignore the field
-//! that doesn't apply to them.
+//! `has_graph_mod`; generator-only: `string_params`). `is_toggle`/
+//! `is_trigger` apply to both kinds (§8.4 P3b gave effect cards the same
+//! toggle/trigger row rendering generators already had — see
+//! `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` §8). Readers branch on
+//! [`ParamCardKind`] or ignore the field that doesn't apply to them.
 
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::*;
@@ -265,21 +267,15 @@ const BADGE_H: f32 = 14.0;
 const BADGE_RADIUS: f32 = 7.0;
 const CONFIG_BTN_FONT_SIZE: u16 = color::FONT_CAPTION;
 
-// Generator shell furniture. A toggle/trigger row stands in for a value, so its
-// button is the same width as the slider value box and right-aligns to the same
-// column — the right edge of every row lines up.
-const TOGGLE_BTN_W: f32 = crate::slider::VALUE_BOX_W;
-const TOGGLE_BTN_H: f32 = 16.0;
+// Generator shell furniture.
 const CHANGE_BTN_W: f32 = 60.0;
 const CHANGE_BTN_H: f32 = 16.0;
 
 // ── Internal node ID structs ─────────────────────────────────────
-
-/// Generator toggle/trigger row node IDs (button + its label).
-struct ToggleParamIds {
-    label_id: Option<NodeId>,
-    button_id: NodeId,
-}
+//
+// `TOGGLE_BTN_W`/`TOGGLE_BTN_H`/`ToggleParamIds` moved to
+// `param_slider_shared` (`build_toggle_trigger_row`) — shared by both card
+// kinds now that effects build toggle/trigger rows too.
 
 /// Packed right-aligned positions for the 0–4 header modulation badges.
 /// In display order [MOD, ABL, ENV, DRV]; `None` for a hidden badge.
@@ -1289,7 +1285,15 @@ impl ParamCardPanel {
                 continue;
             }
             h += ROW_HEIGHT + ROW_SPACING;
-            h += self.animated_drawer_height(i);
+            // A plain toggle never gets a drawer (nothing to modulate) — zero
+            // lane, zero height, unconditionally. `is_trigger` and ordinary
+            // sliders both go through the general `active_mod_tabs`-driven
+            // height (`animated_drawer_height` already handles "no active
+            // config → 0" on its own; is_trigger only ever has Audio active,
+            // per D5b).
+            if !self.param_info[i].is_toggle {
+                h += self.animated_drawer_height(i);
+            }
         }
         h
     }
@@ -1301,10 +1305,12 @@ impl ParamCardPanel {
                 h += HEADER_BODY_GAP;
             }
             for (i, info) in self.param_info.iter().enumerate() {
-                if info.is_toggle || info.is_trigger {
-                    h += ROW_HEIGHT + ROW_SPACING;
-                } else {
-                    h += ROW_HEIGHT + ROW_SPACING;
+                h += ROW_HEIGHT + ROW_SPACING;
+                // Same rule as `effect_body_natural_height`: only a plain
+                // toggle forces zero drawer height. `is_trigger` reaches the
+                // audio-mod drawer (D5b) via the same general height path
+                // every slider row uses.
+                if !info.is_toggle {
                     h += self.animated_drawer_height(i);
                 }
             }
@@ -2119,6 +2125,42 @@ impl ParamCardPanel {
                 continue;
             }
             let info = self.param_info[i].clone();
+
+            if info.is_toggle || info.is_trigger {
+                // Toggle / Trigger row — shared builder (Task A of §8.4 P3b:
+                // effect cards previously had no branch for this at all and
+                // fell through to `build_param_row`, rendering a boolean/
+                // fire-once param as a raw draggable slider). Same shared
+                // core the generator card uses; effects gate the driver-
+                // column reservation on `supports_envelopes` like their
+                // slider rows do, so an `is_trigger` row's lone "A" button
+                // still lands in the same column.
+                let has_osc = self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some();
+                let row = build_toggle_trigger_row(
+                    tree,
+                    Some(parent),
+                    x + PADDING,
+                    cy,
+                    slider_w,
+                    &info,
+                    &self.state.mod_state,
+                    i,
+                    CONFIG_BTN_FONT_SIZE,
+                    self.supports_envelopes,
+                    has_osc,
+                    author.then_some((i as u64) << 8),
+                );
+                self.toggle_ids[i] = Some(ToggleParamIds {
+                    label_id: row.label_id,
+                    button_id: row.button_id,
+                });
+                self.toggle_cache[i] = info.default > 0.5;
+                self.audio_btn_ids[i] = row.audio_btn;
+                self.audio_configs[i] = row.audio_config;
+                cy = row.new_cy;
+                continue;
+            }
+
             let row_y = cy;
             // Per-param slider + driver/envelope/Ableton drawers — the shared
             // core. Effects nest rows under `parent` (the inner-bg panel), use
@@ -2264,75 +2306,36 @@ impl ParamCardPanel {
                 let info = self.param_info[i].clone();
 
                 if info.is_toggle || info.is_trigger {
-                    // Toggle / Trigger row — both share the button-row layout.
+                    // Toggle / Trigger row — shared builder (Task A of §8.4
+                    // P3b unified this with the effect card's toggle/trigger
+                    // rendering; see `build_toggle_trigger_row`'s doc comment).
                     // ON/OFF for sticky toggles, ▶ for momentary fire-once
-                    // triggers. Click handler dispatches differently (toggle vs
-                    // fire) based on the is_trigger flag.
-                    //
-                    // §6.4: line the toggle up with the slider grid — its button
-                    // right-aligns to the same control column as slider VALUES
-                    // (x = cx + slider_w), so it doesn't float at the far edge and
-                    // read as bolted-on. A toggle can't be modulated, so the
-                    // D/E/A lane to its right is correctly left empty. The label
-                    // fills the column to the button's left (left-aligned, same
-                    // start x as every slider label).
-                    let toggle_btn_x = cx + slider_w - TOGGLE_BTN_W;
-                    let label_id = tree.add_label(
+                    // triggers; `is_trigger` additionally reaches the audio-mod
+                    // "A" button + drawer (D5b). Click handler dispatches
+                    // differently (toggle vs fire) based on the is_trigger flag.
+                    let has_osc = self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some();
+                    let row = build_toggle_trigger_row(
+                        tree,
                         None,
                         cx,
                         cy,
-                        (slider_w - TOGGLE_BTN_W - GAP).max(0.0),
-                        ROW_HEIGHT,
-                        &info.name,
-                        UIStyle {
-                            text_color: color::SLIDER_TEXT_C32,
-                            font_size: FONT_SIZE,
-                            text_align: TextAlign::Left,
-                            ..UIStyle::default()
-                        },
+                        slider_w,
+                        &info,
+                        &self.state.mod_state,
+                        i,
+                        FONT_SIZE,
+                        true, // generators always reserve the driver-column gap
+                        has_osc,
+                        author.then_some((i as u64) << 8),
                     );
-
-                    let on = info.default > 0.5;
-                    let (button_text, button_style) = if info.is_trigger {
-                        // Trigger renders as a momentary button — always neutral.
-                        ("▶", toggle_btn_style(false))
-                    } else {
-                        (if on { "ON" } else { "OFF" }, toggle_btn_style(on))
-                    };
-                    let toggle_y = cy + (ROW_HEIGHT - TOGGLE_BTN_H) * 0.5;
-                    let button_id = match author.then_some(((i as u64) << 8) | ROW_ROLE_TOGGLE) {
-                        Some(key) => tree.add_button_keyed(
-                            None,
-                            toggle_btn_x,
-                            toggle_y,
-                            TOGGLE_BTN_W,
-                            TOGGLE_BTN_H,
-                            button_style,
-                            button_text,
-                            key,
-                        ),
-                        None => tree.add_button(
-                            None,
-                            toggle_btn_x,
-                            toggle_y,
-                            TOGGLE_BTN_W,
-                            TOGGLE_BTN_H,
-                            button_style,
-                            button_text,
-                        ),
-                    };
-
-                    // Make toggle label interactive for click-to-copy OSC address
-                    if self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some() {
-                        tree.set_flag(label_id, UIFlags::INTERACTIVE);
-                    }
-
                     self.toggle_ids[i] = Some(ToggleParamIds {
-                        label_id: Some(label_id),
-                        button_id,
+                        label_id: row.label_id,
+                        button_id: row.button_id,
                     });
-                    self.toggle_cache[i] = on;
-                    cy += ROW_HEIGHT + ROW_SPACING;
+                    self.toggle_cache[i] = info.default > 0.5;
+                    self.audio_btn_ids[i] = row.audio_btn;
+                    self.audio_configs[i] = row.audio_config;
+                    cy = row.new_cy;
                 } else {
                     // Slider row — shared per-param core. Generators parent rows
                     // flat to the root (`None`), use the gen-param slider palette,
@@ -2498,20 +2501,12 @@ impl ParamCardPanel {
         tree: &mut UITree,
         values: &[crate::view::UiParamSlot],
     ) {
+        // Shared lookup (checks both slider AND toggle/trigger row labels —
+        // effect cards can copy-flash either kind now, same as generator's).
         let copied_label = self
             .copied_flash
             .label_id()
-            .map(|label_id| {
-                self.slider_ids
-                    .iter()
-                    .enumerate()
-                    .find_map(|(pi, s)| {
-                        s.as_ref()
-                            .filter(|ids| ids.label == Some(label_id))
-                            .and_then(|_| self.param_info.get(pi).map(|p| p.name.clone()))
-                    })
-                    .unwrap_or_default()
-            })
+            .map(|label_id| self.find_label_name(label_id))
             .unwrap_or_default();
         self.copied_flash.sync(tree, FONT_SIZE, &copied_label);
 
@@ -2563,16 +2558,29 @@ impl ParamCardPanel {
             return;
         }
 
-        // Per-param slider values + label (dirty-check via param_cache / label_cache)
+        // Per-param slider/toggle/trigger values + label — shared with
+        // `sync_values_generator` (`sync_param_value`).
         for (i, slot) in values.iter().enumerate().take(self.param_info.len()) {
-            let val = slot.value;
             if let Some(b) = self.base_values.get_mut(i) {
                 *b = slot.base;
             }
-            let info = &self.param_info[i];
-            let new_label = Some(info.name.clone());
+            self.sync_param_value(tree, i, slot.value);
+        }
+    }
 
-            // Label dirty-check
+    /// Per-parameter value/label sync shared by both card kinds. Slider rows
+    /// redraw their fill + value text on change; a toggle row flips its
+    /// ON/OFF button; a trigger row does nothing (the fire counter isn't
+    /// user-visible). Kept as one function so the two kinds can't drift back
+    /// apart the way `build_effect_sliders` and `build_generator`'s toggle
+    /// rendering did (§8.4 P3b Task A).
+    fn sync_param_value(&mut self, tree: &mut UITree, i: usize, val: f32) {
+        let info = &self.param_info[i];
+
+        // Label dirty-check (slider rows only — toggle/trigger rows have
+        // their label baked into the row at build time).
+        if !info.is_toggle && !info.is_trigger {
+            let new_label = Some(info.name.clone());
             if self.label_cache[i] != new_label {
                 self.label_cache[i] = new_label;
                 if let Some(ref ids) = self.slider_ids[i]
@@ -2581,44 +2589,55 @@ impl ParamCardPanel {
                     tree.set_text(label, &info.name);
                 }
             }
+        }
 
-            // Value dirty-check
-            if val != self.param_cache[i] || self.param_cache[i].is_nan() {
-                // P2 value-change flash: only for a genuine change (not the
-                // post-configure NaN resync) and only while this card's slider
-                // isn't being dragged (the drag is its own feedback).
-                if !self.param_cache[i].is_nan()
-                    && !self.drag.is_dragging()
-                    && let Some(flash) = self.value_flash.get_mut(i)
-                {
-                    flash.fire(color::MOTION_SLOW_MS);
+        if info.is_toggle {
+            let on = val > 0.5;
+            if on != self.toggle_cache[i] {
+                self.toggle_cache[i] = on;
+                if let Some(ref ids) = self.toggle_ids[i] {
+                    tree.set_style(ids.button_id, toggle_btn_style(on));
+                    tree.set_text(ids.button_id, if on { "ON" } else { "OFF" });
                 }
-                self.param_cache[i] = val;
-                if let Some(ref ids) = self.slider_ids[i] {
-                    let norm = BitmapSlider::value_to_normalized(val, info.min, info.max);
-                    let text = format_param_value(
-                        val,
-                        info.min,
-                        info.whole_numbers,
-                        info.is_angle,
-                        info.value_labels.as_deref(),
-                    );
-                    // P2 value snap-back (D15): a reset just retargeted this
-                    // row's `value_snapback` (`begin_value_snapback`, same
-                    // frame, before this poll) — draw the fill at its
-                    // just-`snap()`ped starting point instead of jumping
-                    // straight to `norm`; `tick_value_flash` eases it forward
-                    // every frame after. Any other value change (drag commit,
-                    // automation, undo) has no animating snapback here and
-                    // draws `norm` exactly as before.
-                    let display_norm = self
-                        .value_snapback
-                        .get(i)
-                        .filter(|a| a.is_animating())
-                        .map(|a| a.value())
-                        .unwrap_or(norm);
-                    BitmapSlider::update_value(tree, ids, display_norm, &text);
-                }
+            }
+        } else if info.is_trigger {
+            // Trigger button stays neutral — the counter value isn't
+            // user-visible; nothing to re-render per frame.
+        } else if val != self.param_cache[i] || self.param_cache[i].is_nan() {
+            // P2 value-change flash: only for a genuine change (not the
+            // post-configure NaN resync) and only while this card's slider
+            // isn't being dragged (the drag is its own feedback).
+            if !self.param_cache[i].is_nan()
+                && !self.drag.is_dragging()
+                && let Some(flash) = self.value_flash.get_mut(i)
+            {
+                flash.fire(color::MOTION_SLOW_MS);
+            }
+            self.param_cache[i] = val;
+            if let Some(ref ids) = self.slider_ids[i] {
+                let norm = BitmapSlider::value_to_normalized(val, info.min, info.max);
+                let text = format_param_value(
+                    val,
+                    info.min,
+                    info.whole_numbers,
+                    info.is_angle,
+                    info.value_labels.as_deref(),
+                );
+                // P2 value snap-back (D15): a reset just retargeted this
+                // row's `value_snapback` (`begin_value_snapback`, same
+                // frame, before this poll) — draw the fill at its
+                // just-`snap()`ped starting point instead of jumping
+                // straight to `norm`; `tick_value_flash` eases it forward
+                // every frame after. Any other value change (drag commit,
+                // automation, undo) has no animating snapback here and
+                // draws `norm` exactly as before.
+                let display_norm = self
+                    .value_snapback
+                    .get(i)
+                    .filter(|a| a.is_animating())
+                    .map(|a| a.value())
+                    .unwrap_or(norm);
+                BitmapSlider::update_value(tree, ids, display_norm, &text);
             }
         }
     }
@@ -2636,72 +2655,10 @@ impl ParamCardPanel {
         self.copied_flash.sync(tree, FONT_SIZE, &copied_label);
 
         for (i, slot) in values.iter().enumerate().take(self.param_info.len()) {
-            let val = slot.value;
             if let Some(b) = self.base_values.get_mut(i) {
                 *b = slot.base;
             }
-            let info = &self.param_info[i];
-
-            // Label dirty-check (slider rows only — toggle/trigger rows have
-            // their label baked into the row at build time).
-            if !info.is_toggle && !info.is_trigger {
-                let new_label = Some(info.name.clone());
-                if self.label_cache[i] != new_label {
-                    self.label_cache[i] = new_label;
-                    if let Some(ref ids) = self.slider_ids[i]
-                        && let Some(label) = ids.label
-                    {
-                        tree.set_text(label, &info.name);
-                    }
-                }
-            }
-
-            if info.is_toggle {
-                let on = val > 0.5;
-                if on != self.toggle_cache[i] {
-                    self.toggle_cache[i] = on;
-                    if let Some(ref ids) = self.toggle_ids[i] {
-                        tree.set_style(ids.button_id, toggle_btn_style(on));
-                        tree.set_text(ids.button_id, if on { "ON" } else { "OFF" });
-                    }
-                }
-            } else if info.is_trigger {
-                // Trigger button stays neutral — the counter value isn't
-                // user-visible; nothing to re-render per frame.
-            } else if val != self.param_cache[i] || self.param_cache[i].is_nan() {
-                if !self.param_cache[i].is_nan()
-                    && !self.drag.is_dragging()
-                    && let Some(flash) = self.value_flash.get_mut(i)
-                {
-                    flash.fire(color::MOTION_SLOW_MS);
-                }
-                self.param_cache[i] = val;
-                if let Some(ref ids) = self.slider_ids[i] {
-                    let norm = BitmapSlider::value_to_normalized(val, info.min, info.max);
-                    let text = format_param_value(
-                        val,
-                        info.min,
-                        info.whole_numbers,
-                        info.is_angle,
-                        info.value_labels.as_deref(),
-                    );
-                    // P2 value snap-back (D15): a reset just retargeted this
-                    // row's `value_snapback` (`begin_value_snapback`, same
-                    // frame, before this poll) — draw the fill at its
-                    // just-`snap()`ped starting point instead of jumping
-                    // straight to `norm`; `tick_value_flash` eases it forward
-                    // every frame after. Any other value change (drag commit,
-                    // automation, undo) has no animating snapback here and
-                    // draws `norm` exactly as before.
-                    let display_norm = self
-                        .value_snapback
-                        .get(i)
-                        .filter(|a| a.is_animating())
-                        .map(|a| a.value())
-                        .unwrap_or(norm);
-                    BitmapSlider::update_value(tree, ids, display_norm, &text);
-                }
-            }
+            self.sync_param_value(tree, i, slot.value);
         }
     }
 
@@ -2894,6 +2851,26 @@ impl ParamCardPanel {
             return vec![PanelAction::ModConfigTabChanged];
         }
 
+        // Toggle / Trigger buttons — same button slot, different semantics.
+        // is_trigger fires ParamFire (counter +1); is_toggle fires
+        // ParamToggle (0↔1 flip). Mirrors `handle_click_generator`'s toggle
+        // loop (§8.4 P3b Task A gave effect cards the same toggle/trigger
+        // rows generators already had).
+        for (pi, toggle) in self.toggle_ids.iter().enumerate() {
+            if let Some(t) = toggle
+                && t.button_id == id
+            {
+                let is_trigger = self.param_info.get(pi).map(|i| i.is_trigger).unwrap_or(false);
+                let target = GraphParamTarget::Effect(ei);
+                let action = if is_trigger {
+                    PanelAction::ParamFire(target, self.pid_at(pi))
+                } else {
+                    PanelAction::ParamToggle(target, self.pid_at(pi))
+                };
+                return vec![action];
+            }
+        }
+
         // Per-param row elements (D/E buttons, config drawers, label copy) —
         // shared dispatch; map the abstract RowClick to effect-side actions.
         if let Some(rc) = match_param_row_click(
@@ -2957,6 +2934,19 @@ impl ParamCardPanel {
             };
         }
 
+        // Toggle labels → copy OSC address (slider labels handled by the
+        // shared matcher above — `match_param_row_click`'s `LabelCopy` only
+        // checks `slider_ids`). Mirrors `handle_click_generator`.
+        for (pi, toggle) in self.toggle_ids.iter().enumerate() {
+            if let Some(t) = toggle
+                && t.label_id == Some(id)
+                && let Some(addr) = self.osc_addresses.get(pi).and_then(|a| a.clone())
+            {
+                self.copied_flash.trigger(id);
+                return vec![PanelAction::CopyOscAddress(addr)];
+            }
+        }
+
         // Card selection — any click on card background, border, or header
         if self.border_id == Some(id)
             || self.header_bg_id == Some(id)
@@ -3009,8 +2999,10 @@ impl ParamCardPanel {
         }
 
         // Toggle / Trigger buttons — same button slot, different semantics.
-        // is_trigger fires GenParamFire (counter +1); is_toggle fires
-        // GenParamToggle (0↔1 flip).
+        // is_trigger fires ParamFire (counter +1); is_toggle fires
+        // ParamToggle (0↔1 flip). Was `GenParamFire`/`GenParamToggle`
+        // (`ParamId`-only, generator-implied); unified onto `GraphParamTarget`
+        // (§8.4 P3b) once effect cards gained the same toggle/trigger rows.
         for (pi, toggle) in self.toggle_ids.iter().enumerate() {
             if let Some(t) = toggle
                 && t.button_id == id
@@ -3020,10 +3012,11 @@ impl ParamCardPanel {
                     .get(pi)
                     .map(|i| i.is_trigger)
                     .unwrap_or(false);
+                let target = GraphParamTarget::Generator;
                 let action = if is_trigger {
-                    PanelAction::GenParamFire(self.pid_at(pi))
+                    PanelAction::ParamFire(target, self.pid_at(pi))
                 } else {
-                    PanelAction::GenParamToggle(self.pid_at(pi))
+                    PanelAction::ParamToggle(target, self.pid_at(pi))
                 };
                 return vec![action];
             }
@@ -3770,6 +3763,131 @@ mod tests {
             automation_active: vec![false; n],
             automation_overridden: vec![false; n],
         }
+    }
+
+    /// Config with a third (`is_toggle`) and fourth (`is_trigger`) param —
+    /// exercises the effect card's toggle/trigger row rendering + click
+    /// dispatch (§8.4 P3b: effect cards previously had no branch for either
+    /// and rendered them as raw sliders — the Task A bug).
+    fn effect_config_with_toggle_and_trigger() -> ParamCardConfig {
+        let mut c = effect_config();
+        c.params.push(ParamInfo {
+            param_id: std::borrow::Cow::Borrowed("invert"),
+            name: "Invert".into(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+            whole_numbers: false,
+            is_angle: false,
+            exposed: true,
+            is_toggle: true,
+            is_trigger: false,
+            value_labels: None,
+            osc_address: None,
+            ableton_display: None,
+            ableton_range: None,
+            mappable: false,
+        });
+        c.params.push(ParamInfo {
+            param_id: std::borrow::Cow::Borrowed("reset"),
+            name: "Reset".into(),
+            min: 0.0,
+            max: 0.0,
+            default: 0.0,
+            whole_numbers: true,
+            is_angle: false,
+            exposed: true,
+            is_toggle: false,
+            is_trigger: true,
+            value_labels: None,
+            osc_address: None,
+            ableton_display: None,
+            ableton_range: None,
+            mappable: false,
+        });
+        let n = c.params.len();
+        c.driver_active.resize(n, false);
+        c.envelope_active.resize(n, false);
+        c.trim_min.resize(n, 0.0);
+        c.trim_max.resize(n, 1.0);
+        c.target_norm.resize(n, 1.0);
+        c.env_decay.resize(n, 1.0);
+        c.driver_beat_div_idx.resize(n, -1);
+        c.driver_waveform_idx.resize(n, -1);
+        c.driver_reversed.resize(n, false);
+        c.driver_dotted.resize(n, false);
+        c.driver_triplet.resize(n, false);
+        c.driver_free_period.resize(n, None);
+        c.automation_active.resize(n, false);
+        c.automation_overridden.resize(n, false);
+        c
+    }
+
+    #[test]
+    fn build_effect_toggle_and_trigger_rows() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config_with_toggle_and_trigger());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+
+        // Task A: a toggle/trigger param must build a toggle row (button),
+        // NOT a slider — the bug was `build_effect_sliders` calling
+        // `build_param_row` unconditionally for every param.
+        assert!(panel.slider_ids[0].is_some()); // Radius = slider
+        assert!(panel.slider_ids[1].is_some()); // Strength = slider
+        assert!(panel.slider_ids[2].is_none()); // Invert = toggle, no slider
+        assert!(panel.slider_ids[3].is_none()); // Reset = trigger, no slider
+        assert!(panel.toggle_ids[2].is_some());
+        assert!(panel.toggle_ids[3].is_some());
+
+        // Task B (D5b): the trigger row reaches the audio-mod "A" button;
+        // the toggle row does not (zero D/E/A lane, unchanged rule).
+        assert!(panel.audio_btn_ids[2].is_none());
+        assert!(panel.audio_btn_ids[3].is_some());
+    }
+
+    #[test]
+    fn handle_click_effect_toggle_param() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config_with_toggle_and_trigger());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+
+        let button_id = panel.toggle_ids[2].as_ref().unwrap().button_id;
+        let actions = panel.handle_click(button_id);
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            PanelAction::ParamToggle(target, param_id) => {
+                assert_eq!(*target, GraphParamTarget::Effect(0));
+                assert_eq!(param_id.as_ref(), "invert");
+            }
+            other => panic!("expected ParamToggle, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn handle_click_effect_trigger_param() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config_with_toggle_and_trigger());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+
+        let button_id = panel.toggle_ids[3].as_ref().unwrap().button_id;
+        let actions = panel.handle_click(button_id);
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            PanelAction::ParamFire(target, param_id) => {
+                assert_eq!(*target, GraphParamTarget::Effect(0));
+                assert_eq!(param_id.as_ref(), "reset");
+            }
+            other => panic!("expected ParamFire, got {:?}", other),
+        }
+
+        // The trigger row's "A" button reaches the shared audio-mod dispatch.
+        let audio_btn = panel.audio_btn_ids[3].unwrap();
+        let actions = panel.handle_click(audio_btn);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], PanelAction::OpenAudioSetup | PanelAction::AudioModToggle(..)));
     }
 
     #[test]
@@ -4811,10 +4929,11 @@ mod tests {
         let actions = panel.handle_click(button_id);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            PanelAction::GenParamToggle(param_id) => {
+            PanelAction::ParamToggle(target, param_id) => {
+                assert_eq!(*target, GraphParamTarget::Generator);
                 assert_eq!(param_id.as_ref(), "invert");
             }
-            other => panic!("expected GenParamToggle, got {:?}", other),
+            other => panic!("expected ParamToggle, got {:?}", other),
         }
     }
 

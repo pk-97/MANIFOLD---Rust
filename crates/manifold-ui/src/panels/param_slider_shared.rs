@@ -1304,6 +1304,266 @@ fn add_row_button(
     }
 }
 
+// A toggle/trigger row stands in for a value, so its button is the same
+// width as the slider value box and right-aligns to the same column — the
+// right edge of every row lines up. Shared by both card kinds
+// (`build_toggle_trigger_row`).
+pub(crate) const TOGGLE_BTN_W: f32 = crate::slider::VALUE_BOX_W;
+pub(crate) const TOGGLE_BTN_H: f32 = 16.0;
+
+/// Toggle/trigger row node IDs (button + its label). Shared by both card
+/// kinds.
+pub(crate) struct ToggleParamIds {
+    pub(crate) label_id: Option<NodeId>,
+    pub(crate) button_id: NodeId,
+}
+
+/// Build the per-param audio-modulation config drawer (Source/Feature/Band/
+/// Inv-Delta toggles + Amount/Attack/Release shaping sliders). Shared by
+/// `build_param_row`'s Audio mod-tab branch (continuous params, behind the
+/// multi-tab drawer) and `build_toggle_trigger_row`'s `is_trigger` case
+/// (D5b, `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` §8 — a fire-button reaches the
+/// SAME drawer, audio-only, no tab strip since Driver/Envelope/Ableton never
+/// apply to it). Returns the built `DrawerIds` plus the send count (the
+/// caller needs it to split the drawer's flat button index into send vs.
+/// feature/band regions — see `match_param_row_click`).
+#[allow(clippy::too_many_arguments)]
+fn build_audio_mod_drawer(
+    tree: &mut UITree,
+    parent: Option<NodeId>,
+    x: f32,
+    cy: f32,
+    w: f32,
+    mod_state: &ParamModState,
+    i: usize,
+    config_font: u16,
+) -> (crate::panels::drawer::DrawerIds, usize) {
+    use crate::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
+    let send_sel = mod_state.audio_send_idx.get(i).copied().unwrap_or(-1);
+    let send_count = mod_state.audio_send_labels.len();
+    let send_buttons: Vec<DrawerButton> = mod_state
+        .audio_send_labels
+        .iter()
+        .enumerate()
+        .map(|(k, label)| {
+            let btn = DrawerButton::new(label.clone(), k as i32 == send_sel);
+            // Tint the label with the send's identity color so a driven
+            // slider reads the same color as its source in the Audio Setup
+            // panel — text-only, so the selected send shows the standard
+            // highlight instead of a drawer-wide block of saturated color.
+            match mod_state.audio_send_ids.get(k) {
+                Some(id) => btn.with_accent_text_only(crate::panels::audio_send_color(id)),
+                None => btn,
+            }
+        })
+        .collect();
+    let kind_sel = mod_state.audio_kind_idx.get(i).copied().unwrap_or(0);
+    let band_sel = mod_state.audio_band_idx.get(i).copied().unwrap_or(0);
+    let invert_on = mod_state.audio_invert.get(i).copied().unwrap_or(false);
+    let rate_on = mod_state.audio_rate.get(i).copied().unwrap_or(false);
+    // The feature matrix: a Feature row (kind) and a Band row, each a single
+    // selection. Flat button indices run sends, then kinds
+    // (0..AUDIO_KIND_COUNT), then bands, then the two modifier toggles —
+    // see match_param_row_click.
+    let kind_buttons: Vec<DrawerButton> = audio_kind_labels()
+        .iter()
+        .enumerate()
+        .map(|(k, l)| DrawerButton::new(*l, k as i32 == kind_sel))
+        .collect();
+    let band_buttons: Vec<DrawerButton> = audio_band_labels()
+        .iter()
+        .enumerate()
+        .map(|(b, l)| DrawerButton::new(*l, b as i32 == band_sel))
+        .collect();
+    // Shaping sliders: Amount (sensitivity), Attack, Release. These become
+    // `DrawerIds.sliders[0..3]` in row order — what the drag path hit-tests.
+    let sens = mod_state.audio_sensitivity.get(i).copied().unwrap_or(1.0);
+    let attack = mod_state.audio_attack_ms.get(i).copied().unwrap_or(5.0);
+    let release = mod_state.audio_release_ms.get(i).copied().unwrap_or(120.0);
+    let shape_slider = |label: &str, norm: f32, value_text: String| DrawerRow::Slider {
+        label: label.to_string(),
+        norm: norm.clamp(0.0, 1.0),
+        value_text,
+        label_w: AUDIO_SHAPE_LABEL_W,
+    };
+    // Modifier toggles below the band row: "Inv" (loud → low) then "Delta"
+    // (drive on motion). Flat indices sit one and two past the bands.
+    let toggle_buttons =
+        vec![DrawerButton::new("Inv", invert_on), DrawerButton::new("Delta", rate_on)];
+    let spec = DrawerSpec {
+        rows: vec![
+            DrawerRow::Buttons {
+                buttons: send_buttons,
+                width: ButtonWidth::Proportional,
+                label: Some("Source".into()),
+            },
+            DrawerRow::Buttons {
+                buttons: kind_buttons,
+                width: ButtonWidth::Uniform,
+                label: Some("Feature".into()),
+            },
+            DrawerRow::Buttons {
+                buttons: band_buttons,
+                width: ButtonWidth::Uniform,
+                label: Some("Band".into()),
+            },
+            DrawerRow::Buttons {
+                buttons: toggle_buttons,
+                width: ButtonWidth::Proportional,
+                label: None,
+            },
+            shape_slider("Amount", sens / AUDIO_SENS_MAX, format!("{sens:.2}")),
+            shape_slider("Attack", attack / AUDIO_ATTACK_MAX_MS, format!("{attack:.0} ms")),
+            shape_slider("Release", release / AUDIO_RELEASE_MAX_MS, format!("{release:.0} ms")),
+        ],
+        btn_font_size: config_font,
+        slider_font_size: FONT_SIZE,
+        theme: Theme::INSPECTOR.with_accent(AUDIO_MOD_ACTIVE_C32).tinted(),
+    };
+    let dids = drawer::build(tree, parent, x, cy, w, &spec);
+    (dids, send_count)
+}
+
+/// Node IDs produced by [`build_toggle_trigger_row`].
+pub(crate) struct ToggleTriggerRowIds {
+    pub(crate) label_id: Option<NodeId>,
+    pub(crate) button_id: NodeId,
+    /// The "A" audio-mod button — `Some` only for `is_trigger` rows (D5b).
+    /// Plain toggles never build one (`None`, zero lane reserved).
+    pub(crate) audio_btn: Option<NodeId>,
+    /// The audio-mod drawer, when armed. Same shape as a slider row's
+    /// `audio_config` so `match_param_row_click` resolves both identically.
+    pub(crate) audio_config: Option<(crate::panels::drawer::DrawerIds, usize)>,
+    pub(crate) new_cy: f32,
+}
+
+/// Build a toggle or trigger row — a label plus a single button (ON/OFF for
+/// a sticky toggle, "▶" for a momentary fire-once trigger) instead of a
+/// slider. Shared verbatim by the effect and generator cards (Task A of
+/// §8.4 P3b: effect cards previously had no toggle-row branch at all and
+/// rendered `isToggle`/`isTrigger` params as raw sliders — the bug this
+/// function fixes at the root by giving both kinds one code path).
+///
+/// The button right-aligns to the same column a slider row's VALUE cell
+/// uses (`x + slider_w - TOGGLE_BTN_W`) — a toggle can't be modulated, so
+/// the D/E/A lane further right stays empty for it. An `is_trigger` row is
+/// the one exception (D5b): it reaches the standard per-param audio-mod "A"
+/// button + drawer at the SAME column a slider row's audio button would
+/// occupy, so the "A" column stays visually aligned down the whole card
+/// regardless of row kind. Driver/Envelope never apply to a trigger (no
+/// continuous value to drive), so only the Audio slot is ever built —
+/// no tab strip, no `active_mod_tabs` multi-config machinery.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_toggle_trigger_row(
+    tree: &mut UITree,
+    parent: Option<NodeId>,
+    x: f32,
+    cy: f32,
+    slider_w: f32,
+    info: &ParamInfo,
+    mod_state: &ParamModState,
+    i: usize,
+    config_font: u16,
+    // Whether this card reserves an envelope-button-width gap before the
+    // driver column on its slider rows (effects gate on `supports_envelopes`;
+    // generators always true) — needed so the trigger row's lone "A" button
+    // lands in the same column slider rows in this card use.
+    build_env_button: bool,
+    has_osc: bool,
+    row_key_base: Option<u64>,
+) -> ToggleTriggerRowIds {
+    let toggle_btn_x = x + slider_w - TOGGLE_BTN_W;
+    let label_id = tree.add_label(
+        parent,
+        x,
+        cy,
+        (slider_w - TOGGLE_BTN_W - GAP).max(0.0),
+        ROW_HEIGHT,
+        &info.name,
+        UIStyle {
+            text_color: color::SLIDER_TEXT_C32,
+            font_size: FONT_SIZE,
+            text_align: TextAlign::Left,
+            ..UIStyle::default()
+        },
+    );
+    if has_osc {
+        tree.set_flag(label_id, UIFlags::INTERACTIVE);
+    }
+
+    let on = info.default > 0.5;
+    let (button_text, button_style) = if info.is_trigger {
+        // Trigger renders as a momentary button — always neutral.
+        ("▶", toggle_btn_style(false))
+    } else {
+        (if on { "ON" } else { "OFF" }, toggle_btn_style(on))
+    };
+    let toggle_y = cy + (ROW_HEIGHT - TOGGLE_BTN_H) * 0.5;
+    let button_id = add_row_button(
+        tree,
+        parent,
+        toggle_btn_x,
+        toggle_y,
+        TOGGLE_BTN_W,
+        TOGGLE_BTN_H,
+        button_style,
+        button_text,
+        row_key_base,
+        ROW_ROLE_TOGGLE,
+    );
+
+    let mut cy = cy + ROW_HEIGHT + ROW_SPACING;
+    let mut audio_btn = None;
+    let mut audio_config = None;
+
+    // is_trigger reaches the standard per-param audio-mod "A" drawer (D5b) —
+    // audio fires the button by count-add, the same edge-detected semantics
+    // a clip-launch trigger already uses. Plain toggles keep zero lane space
+    // (the branch above is unchanged for them — no button, no drawer).
+    if info.is_trigger {
+        let env_arm_w = if build_env_button { DE_BUTTON_SIZE + DE_BUTTON_GAP } else { 0.0 };
+        let btn_x = x + slider_w + MOD_LANE_GAP;
+        let drv_btn_x = btn_x + env_arm_w;
+        let audio_btn_x = drv_btn_x + DE_BUTTON_SIZE + DE_BUTTON_GAP;
+        let btn_y = toggle_y;
+        let audio_active = mod_state.audio_active.get(i).copied().unwrap_or(false);
+        let btn_id = add_row_button(
+            tree,
+            parent,
+            audio_btn_x,
+            btn_y,
+            DE_BUTTON_SIZE,
+            DE_BUTTON_SIZE,
+            de_btn_style(audio_active, AUDIO_MOD_ACTIVE_C32),
+            "A",
+            row_key_base,
+            ROW_ROLE_AUDIO,
+        );
+        audio_btn = Some(btn_id);
+
+        if audio_active {
+            let drawer_x = x + DRAWER_INDENT;
+            let row_right = audio_btn_x + DE_BUTTON_SIZE;
+            let drawer_w = (row_right - drawer_x).max(1.0);
+            let (dids, send_count) =
+                build_audio_mod_drawer(tree, parent, drawer_x, cy, drawer_w, mod_state, i, config_font);
+            cy += dids.height;
+            audio_config = Some((dids, send_count));
+            // Mirrors `row_drawer_height`'s `+ DRAWER_BOTTOM_GAP` for the
+            // ≥1-active-config case, so build and height computation agree.
+            cy += DRAWER_BOTTOM_GAP;
+        }
+    }
+
+    ToggleTriggerRowIds {
+        label_id: Some(label_id),
+        button_id,
+        audio_btn,
+        audio_config,
+        new_cy: cy,
+    }
+}
+
 pub(crate) fn build_param_row(
     tree: &mut UITree,
     parent: Option<NodeId>,
@@ -1669,94 +1929,12 @@ pub(crate) fn build_param_row(
         cy += ABL_CONFIG_HEIGHT;
     }
 
-    // Audio-modulation drawer — shown when the Audio config tab is active. Two
-    // rows: send selector (the project's sends — new sends are created in the
-    // Audio Setup panel, not here) and feature selector. Built on the shared
-    // drawer API.
+    // Audio-modulation drawer — shown when the Audio config tab is active.
+    // Extracted to `build_audio_mod_drawer` (shared with
+    // `build_toggle_trigger_row`'s `is_trigger` case, D5b).
     if shown_tab == Some(ModTab::Audio) {
-        use crate::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
-        let send_sel = mod_state.audio_send_idx.get(i).copied().unwrap_or(-1);
-        let send_count = mod_state.audio_send_labels.len();
-        let send_buttons: Vec<DrawerButton> = mod_state
-            .audio_send_labels
-            .iter()
-            .enumerate()
-            .map(|(k, label)| {
-                let btn = DrawerButton::new(label.clone(), k as i32 == send_sel);
-                // Tint the label with the send's identity color so a driven
-                // slider reads the same color as its source in the Audio Setup
-                // panel — text-only, so the selected send shows the standard
-                // highlight instead of a drawer-wide block of saturated color.
-                match mod_state.audio_send_ids.get(k) {
-                    Some(id) => btn.with_accent_text_only(crate::panels::audio_send_color(id)),
-                    None => btn,
-                }
-            })
-            .collect();
-        let kind_sel = mod_state.audio_kind_idx.get(i).copied().unwrap_or(0);
-        let band_sel = mod_state.audio_band_idx.get(i).copied().unwrap_or(0);
-        let invert_on = mod_state.audio_invert.get(i).copied().unwrap_or(false);
-        let rate_on = mod_state.audio_rate.get(i).copied().unwrap_or(false);
-        // The feature matrix: a Feature row (kind) and a Band row, each a single
-        // selection. Flat button indices run sends, then kinds
-        // (0..AUDIO_KIND_COUNT), then bands, then the two modifier toggles —
-        // see match_param_row_click.
-        let kind_buttons: Vec<DrawerButton> = audio_kind_labels()
-            .iter()
-            .enumerate()
-            .map(|(k, l)| DrawerButton::new(*l, k as i32 == kind_sel))
-            .collect();
-        let band_buttons: Vec<DrawerButton> = audio_band_labels()
-            .iter()
-            .enumerate()
-            .map(|(b, l)| DrawerButton::new(*l, b as i32 == band_sel))
-            .collect();
-        // Shaping sliders: Amount (sensitivity), Attack, Release. These become
-        // `DrawerIds.sliders[0..3]` in row order — what the drag path hit-tests.
-        let sens = mod_state.audio_sensitivity.get(i).copied().unwrap_or(1.0);
-        let attack = mod_state.audio_attack_ms.get(i).copied().unwrap_or(5.0);
-        let release = mod_state.audio_release_ms.get(i).copied().unwrap_or(120.0);
-        let shape_slider = |label: &str, norm: f32, value_text: String| DrawerRow::Slider {
-            label: label.to_string(),
-            norm: norm.clamp(0.0, 1.0),
-            value_text,
-            label_w: AUDIO_SHAPE_LABEL_W,
-        };
-        // Modifier toggles below the band row: "Inv" (loud → low) then "Delta"
-        // (drive on motion). Flat indices sit one and two past the bands.
-        let toggle_buttons =
-            vec![DrawerButton::new("Inv", invert_on), DrawerButton::new("Delta", rate_on)];
-        let spec = DrawerSpec {
-            rows: vec![
-                DrawerRow::Buttons {
-                    buttons: send_buttons,
-                    width: ButtonWidth::Proportional,
-                    label: Some("Source".into()),
-                },
-                DrawerRow::Buttons {
-                    buttons: kind_buttons,
-                    width: ButtonWidth::Uniform,
-                    label: Some("Feature".into()),
-                },
-                DrawerRow::Buttons {
-                    buttons: band_buttons,
-                    width: ButtonWidth::Uniform,
-                    label: Some("Band".into()),
-                },
-                DrawerRow::Buttons {
-                    buttons: toggle_buttons,
-                    width: ButtonWidth::Proportional,
-                    label: None,
-                },
-                shape_slider("Amount", sens / AUDIO_SENS_MAX, format!("{sens:.2}")),
-                shape_slider("Attack", attack / AUDIO_ATTACK_MAX_MS, format!("{attack:.0} ms")),
-                shape_slider("Release", release / AUDIO_RELEASE_MAX_MS, format!("{release:.0} ms")),
-            ],
-            btn_font_size: config_font,
-            slider_font_size: FONT_SIZE,
-            theme: Theme::INSPECTOR.with_accent(AUDIO_MOD_ACTIVE_C32).tinted(),
-        };
-        let dids = drawer::build(tree, drawer_parent, drawer_x, cy, drawer_w, &spec);
+        let (dids, send_count) =
+            build_audio_mod_drawer(tree, drawer_parent, drawer_x, cy, drawer_w, mod_state, i, config_font);
         cy += dids.height;
         ids.audio_config = Some((dids, send_count));
     }
@@ -1817,8 +1995,8 @@ pub(crate) enum RowClick {
 /// rows, card selection).
 ///
 /// Driver/envelope toggle buttons on toggle/trigger params are skipped (they
-/// carry no slider to modulate). Effects have no toggle/trigger params, so the
-/// skip is a no-op there — behavior is identical to the prior per-panel code.
+/// carry no slider to modulate); the audio button skips only toggle params —
+/// `is_trigger` reaches it (D5b, `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` §8).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn match_param_row_click(
     id: NodeId,
@@ -1832,16 +2010,25 @@ pub(crate) fn match_param_row_click(
     osc_addresses: &[Option<String>],
     param_info: &[ParamInfo],
 ) -> Option<RowClick> {
-    let is_unmodulatable = |pi: usize| {
+    // D/E buttons never apply to toggle OR trigger params — neither a sticky
+    // on/off nor a fire-once count has a continuous value an LFO/envelope
+    // could drive.
+    let skip_driver_envelope = |pi: usize| {
         param_info
             .get(pi)
             .map(|p| p.is_toggle || p.is_trigger)
             .unwrap_or(false)
     };
+    // The "A" audio button DOES apply to `is_trigger` (D5b: a fire-button
+    // rides `ParameterAudioMod` — audio increments its count exactly like a
+    // clip edge does). Only `is_toggle` stays unreachable — a sticky on/off
+    // has no audio-mod semantics; `isTriggerGate` toggles get their own
+    // `AudioTriggerMod` drawer, a different mechanism (D6, PR2).
+    let skip_audio = |pi: usize| param_info.get(pi).map(|p| p.is_toggle).unwrap_or(false);
 
     // D/E buttons (skip toggle/trigger params).
     for (pi, &btn_id) in driver_btn_ids.iter().enumerate() {
-        if is_unmodulatable(pi) {
+        if skip_driver_envelope(pi) {
             continue;
         }
         if btn_id == Some(id) {
@@ -1849,7 +2036,7 @@ pub(crate) fn match_param_row_click(
         }
     }
     for (pi, &btn_id) in envelope_btn_ids.iter().enumerate() {
-        if is_unmodulatable(pi) {
+        if skip_driver_envelope(pi) {
             continue;
         }
         if btn_id == Some(id) {
@@ -1878,9 +2065,9 @@ pub(crate) fn match_param_row_click(
         return Some(RowClick::AbletonInvert(pi));
     }
 
-    // Audio "A" buttons (skip toggle/trigger params).
+    // Audio "A" buttons (skip toggle params only — see `skip_audio`).
     for (pi, &btn_id) in audio_btn_ids.iter().enumerate() {
-        if is_unmodulatable(pi) {
+        if skip_audio(pi) {
             continue;
         }
         if btn_id == Some(id) {
