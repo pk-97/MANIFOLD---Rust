@@ -2201,6 +2201,17 @@ impl PresetInstance {
     pub fn has_audio_mods(&self) -> bool {
         self.audio_mods.as_ref().is_some_and(|v| !v.is_empty())
     }
+
+    /// This instance's audio-trigger config iff it is ARMED — the single
+    /// owner of "an audio trigger consumes analysis". Every walker that
+    /// decides whether audio capture/analysis is needed (or which sends it
+    /// must cover) goes through here alongside its `audio_mods` arm; reading
+    /// `audio_trigger` directly skips the enabled check and re-opens the bug
+    /// where an armed trigger config never turned the capture worker on
+    /// (found live 2026-07-07: armed drawer, silent send, no fires).
+    pub fn active_audio_trigger(&self) -> Option<&crate::audio_trigger::AudioTriggerMod> {
+        self.audio_trigger.as_ref().filter(|t| t.enabled)
+    }
 }
 
 /// Drop every element of an optional automation list whose key is in `ids`,
