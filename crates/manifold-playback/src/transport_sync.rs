@@ -82,6 +82,14 @@ struct Expectation {
     playing: bool,
     /// Some(beat): the gesture carries a position (play-from-cursor, seek).
     beat: Option<f32>,
+    /// When `beat` was captured. A PLAYING expectation is a moving target —
+    /// "playing, having started from `beat` at `anchored_at`" — because both
+    /// engines advance while the ack is in flight. Comparing a frozen beat
+    /// against Ableton's advancing position gives a ~ε-wide ack window that
+    /// real listener latency blows straight past (the 2026-07-07 L4 escape:
+    /// retries then re-seeked Ableton BACK to the stale beat, visibly
+    /// yanking its playhead once per retry).
+    anchored_at: f64,
 }
 
 #[derive(Debug)]
@@ -99,7 +107,10 @@ enum SyncState {
         retries: u8,
         /// Deferred `SetSongTime` not yet emitted (D11): play is sent
         /// immediately, the position follows after PLAY_SEEK_DELAY_SECS.
-        deferred_seek: Option<f32>,
+        /// The position is read from `local_beat` AT FIRE TIME (not frozen
+        /// at gesture time) so a late tick — frame hitch — can't send a
+        /// stale beat and yank Ableton backwards.
+        deferred_seek_owed: bool,
     },
 }
 
@@ -114,6 +125,28 @@ struct ObservedAbleton {
 }
 
 impl ObservedAbleton {
+    /// One-line snapshot for the `[ABL-SYNC]` diagnostics — the evidence a
+    /// live run produces when acks starve (the 2026-07-07 escape's open
+    /// question: which observation was missing or stale on the real rig).
+    fn describe(&self, now: f64) -> String {
+        let playing = match self.is_playing {
+            Some(true) => "playing",
+            Some(false) => "stopped",
+            None => "playing=UNOBSERVED",
+        };
+        let pos = match self.song_time {
+            Some((beats, at)) => {
+                format!("song_time={beats:.2} ({:.0}ms old)", (now - at) * 1000.0)
+            }
+            None => "song_time=UNOBSERVED".to_string(),
+        };
+        let tempo = match self.tempo_bpm {
+            Some(bpm) => format!("tempo={bpm:.1}"),
+            None => "tempo=UNOBSERVED".to_string(),
+        };
+        format!("{playing}, {pos}, {tempo}")
+    }
+
     /// Ableton's song position projected to `now` (design §4 dead-reckoning
     /// rule): advance the last report by elapsed time only while playing.
     fn song_time_at(&self, now: f64) -> Option<f32> {
@@ -208,7 +241,7 @@ impl AbletonTransportSync {
         }
         // T1 / T13: latest user intent wins.
         self.begin_pending(
-            Expectation { playing: true, beat: Some(beat) },
+            Expectation { playing: true, beat: Some(beat), anchored_at: now },
             now,
         );
         self.out.push(OutMsg::StartPlaying);
@@ -224,7 +257,10 @@ impl AbletonTransportSync {
             return;
         }
         // T2 / T13.
-        self.begin_pending(Expectation { playing: false, beat: None }, now);
+        self.begin_pending(
+            Expectation { playing: false, beat: None, anchored_at: now },
+            now,
+        );
         self.out.push(OutMsg::StopPlaying);
     }
 
@@ -233,7 +269,10 @@ impl AbletonTransportSync {
     pub fn on_local_seek(&mut self, beat: f32, playing: bool, now: f64) {
         self.local_beat = beat;
         // T3 / T4 / T13.
-        self.begin_pending(Expectation { playing, beat: Some(beat) }, now);
+        self.begin_pending(
+            Expectation { playing, beat: Some(beat), anchored_at: now },
+            now,
+        );
         self.out.push(OutMsg::SetSongTime(beat));
     }
 
@@ -305,18 +344,19 @@ impl AbletonTransportSync {
             sent_at,
             last_send,
             retries,
-            deferred_seek,
+            deferred_seek_owed,
         } = &mut self.state
         else {
             return;
         };
 
-        // D11: the deferred position follows the play command.
-        if let Some(beat) = *deferred_seek
-            && now - *sent_at >= PLAY_SEEK_DELAY_SECS
-        {
-            self.out.push(OutMsg::SetSongTime(beat));
-            *deferred_seek = None;
+        // D11: the deferred position follows the play command — at the
+        // engine's CURRENT beat, so a late fire can't send a stale one.
+        if *deferred_seek_owed && now - *sent_at >= PLAY_SEEK_DELAY_SECS {
+            self.out.push(OutMsg::SetSongTime(self.local_beat));
+            expect.beat = Some(self.local_beat);
+            expect.anchored_at = now;
+            *deferred_seek_owed = false;
         }
 
         // T7: retransmit at 2×RTT until acked.
@@ -324,7 +364,26 @@ impl AbletonTransportSync {
             if *retries < MAX_RETRIES {
                 *retries += 1;
                 *last_send = now;
+                // A PLAYING position retransmit re-anchors to the engine's
+                // CURRENT beat — MANIFOLD's playhead kept advancing, and the
+                // gesture means "sync to my playhead", not "return to where
+                // it was when I pressed play". Re-sending the stale anchor
+                // is the L4-observed bug: every retry visibly yanked
+                // Ableton's playhead backwards. A STOPPED seek stays frozen
+                // (nothing advances).
+                if expect.playing && expect.beat.is_some() {
+                    expect.beat = Some(self.local_beat);
+                    expect.anchored_at = now;
+                }
                 let expect = *expect;
+                log::info!(
+                    "[ABL-SYNC] retry {}/{} — no ack for {{playing={}, beat={:?}}}; observed: {}",
+                    retries,
+                    MAX_RETRIES,
+                    expect.playing,
+                    expect.beat,
+                    self.observed.describe(now)
+                );
                 // Re-send the full gesture + the matching queries so a lost
                 // LISTENER packet can't strand a delivered command (D7).
                 if expect.playing {
@@ -339,6 +398,13 @@ impl AbletonTransportSync {
                 self.out.push(OutMsg::QueryIsPlaying);
             } else {
                 // T8: degrade loudly, adopt observed reality (D9).
+                log::warn!(
+                    "[ABL-SYNC] DEGRADED — {} retries exhausted for {{playing={}, beat={:?}}}; observed: {} — adopting Ableton's state",
+                    MAX_RETRIES,
+                    expect.playing,
+                    expect.beat,
+                    self.observed.describe(now)
+                );
                 self.warning_latched = true;
                 if let Some(observed_playing) = self.observed.is_playing
                     && observed_playing != self.local_playing
@@ -403,24 +469,28 @@ impl AbletonTransportSync {
 
     fn begin_pending(&mut self, expect: Expectation, now: f64) {
         // A play-with-position defers its seek (D11); a bare seek or stop
-        // has nothing to defer. When replacing an in-flight expectation
-        // (T13) the old deferred seek is abandoned with it.
-        let deferred_seek = if expect.playing { expect.beat } else { None };
-        // A bare seek-while-stopped sends its position immediately in the
-        // caller; a play defers it — so only the play path leaves the beat
-        // out of the immediate sends.
+        // has nothing to defer (seeks send their position immediately in
+        // the caller). When replacing an in-flight expectation (T13) the
+        // old deferred seek is abandoned with it.
+        let deferred_seek_owed = expect.playing && expect.beat.is_some();
         self.state = SyncState::Pending {
             expect,
             sent_at: now,
             last_send: now,
             retries: 0,
-            deferred_seek,
+            deferred_seek_owed,
         };
     }
 
     /// T5/T6: check the full expectation against the current observed
     /// snapshot. Match → settle + RTT sample. Contradiction → hold (the
     /// pre-command state echoing back is not an external command).
+    ///
+    /// A PLAYING position expectation is an interval, not a point: Ableton
+    /// starts advancing the moment the command applies, so "acknowledged"
+    /// means its observed position is consistent with having started from
+    /// the anchor — within [beat − ε, beat + elapsed·tempo + ε]. A STOPPED
+    /// expectation stays a point match.
     fn try_ack(&mut self, now: f64) {
         let SyncState::Pending { expect, sent_at, .. } = &self.state else {
             return;
@@ -428,12 +498,24 @@ impl AbletonTransportSync {
         let playing_matches = self.observed.is_playing == Some(expect.playing);
         let beat_matches = match expect.beat {
             None => true,
-            Some(target) => self
-                .observed
-                .song_time_at(now)
-                .is_some_and(|b| (b - target).abs() <= ACK_EPSILON_BEATS),
+            Some(target) => self.observed.song_time_at(now).is_some_and(|b| {
+                if expect.playing {
+                    let bpm = self.observed.tempo_bpm.unwrap_or(FALLBACK_BPM);
+                    let max_advance =
+                        ((now - expect.anchored_at).max(0.0) as f32) * bpm / 60.0;
+                    b >= target - ACK_EPSILON_BEATS
+                        && b <= target + max_advance + ACK_EPSILON_BEATS
+                } else {
+                    (b - target).abs() <= ACK_EPSILON_BEATS
+                }
+            }),
         };
         if playing_matches && beat_matches {
+            log::info!(
+                "[ABL-SYNC] locked — ack in {:.0}ms; observed: {}",
+                (now - *sent_at) * 1000.0,
+                self.observed.describe(now)
+            );
             self.rtt.sample(now - *sent_at);
             self.warning_latched = false;
             self.state = SyncState::Settled;
@@ -529,6 +611,46 @@ mod tests {
         assert_eq!(m.status(), TransportSyncStatus::Locked);
         // No relay actions from the ack path.
         assert_eq!(drain_actions(&mut m), vec![]);
+    }
+
+    /// Regression for the 2026-07-07 L4 escape: the ack arrives AFTER
+    /// Ableton has already played several beats past the anchor (real
+    /// listener latency at real tempo). A playing expectation is an
+    /// interval, not a point — this must still acknowledge.
+    #[test]
+    fn t5b_late_ack_after_ableton_advanced_still_acks() {
+        let mut m = settled_stopped_at_9();
+        m.on_local_play(128.0, 1.0);
+        drain_out(&mut m);
+        // A full second later (2 beats at 120 BPM): Ableton reports playing
+        // at 130 — consistent with having started from 128.
+        m.on_osc_is_playing(true, 2.0);
+        m.on_osc_song_time(130.0, 2.0);
+        assert!(!m.sync_pending(), "advancing position within the anchor \
+             interval must acknowledge (L4 escape regression)");
+        assert_eq!(m.status(), TransportSyncStatus::Locked);
+    }
+
+    /// The other half of the same escape: an unacked retransmit must seek
+    /// Ableton to the engine's CURRENT beat, never back to the stale anchor
+    /// (the visible playhead yank-back, once per retry).
+    #[test]
+    fn t7b_retransmit_seeks_current_beat_not_stale_anchor() {
+        let mut m = settled_stopped_at_9();
+        m.on_local_play(128.0, 1.0);
+        drain_out(&mut m);
+        // Engine keeps playing while the ack is missing.
+        m.on_local_transport(true, 131.0, 1.7);
+        m.tick(1.7, true); // past 2×RTT seed (0.6s)
+        let out = drain_out(&mut m);
+        assert!(
+            out.contains(&OutMsg::SetSongTime(131.0)),
+            "retransmit must carry the current playhead, got {out:?}"
+        );
+        assert!(
+            !out.contains(&OutMsg::SetSongTime(128.0)),
+            "retransmit must never re-send the stale anchor (yank-back), got {out:?}"
+        );
     }
 
     #[test]

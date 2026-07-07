@@ -48,6 +48,7 @@ or human can read it, and it needs no external tool.
 | BUG-025 | **timeline-scissor-bleed** | clip content bleeds across row bounds (MED, repro needed — scrolled headless render 07-07 clean) |
 | BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
 | BUG-033 | **ui-snapshot-broken** | FIXED — verified in-tree 2026-07-07 (harness builds + runs) |
+| BUG-050 | **ableton-anchor-yankback** | play-from-cursor snap-backs; anchor fix landed, rig confirmation owed via [ABL-SYNC] logs (HIGH) |
 | BUG-048 | **arm-two-reds** | ARM idle/armed both red, shade-only difference (LOW, UX call) |
 | BUG-049 | **child-row-right-indent** | group-child right-anchored controls misaligned ~20px (LOW) |
 | BUG-012 | **tex-rename-corrupt** | fragment `tex_` port-rename corrupts `tex_*` scalars (LOW) |
@@ -58,6 +59,29 @@ or human can read it, and it needs no external tool.
 | BUG-019 / 020 / 021 | deferred | group-fold gap · gen-card collapse · snap-back gap |
 
 ## Open
+
+### BUG-050 (ableton-anchor-yankback) — Play-from-cursor: Ableton repeatedly snaps back to the gesture beat, then MANIFOLD clock-dragged after retries exhaust — HIGH (live transport; partial fix landed 2026-07-07, rig confirmation owed)
+
+**Found 2026-07-07 by Peter, first L4 run of the ABLETON_TRANSPORT_SYNC wave (checklist
+step 1).** Symptom: press play in MANIFOLD; Ableton keeps snapping back to the gesture
+position (~once per retry interval); MANIFOLD's playhead holds for a few seconds (the
+pending suppression working as designed), then snaps back when retries exhaust and MIDI
+clock reasserts. Root defect (proven, fixed): the pending expectation froze its target
+beat — the ack was a point match against a position both engines run away from, and
+every retransmit re-seeked Ableton back to the stale anchor
+(`transport_sync.rs`, fixed by the moving-anchor amendment — design doc deviation 5;
+regression: `t5b`/`t7b` red pre-fix, `f8` pins the property). **Still open:** WHY acks
+starved across several retries on the real rig — retry queries (`get/is_playing` +
+`get/current_song_time`) should have acked by retry 1 even pre-fix, and the harness
+cannot reproduce the starvation (its fake acks too fast in every plausible
+configuration; see f8's honesty note). Suspects, unranked: real listener/query reply
+latency under load; a reply-routing gap only manifesting live; beat-space offset
+between MANIFOLD's timeline and Live's song time in Peter's set. **Oracle:** the
+`[ABL-SYNC]` info logs added with the fix — gesture/retry/ack/degrade each dump the
+observed snapshot (playing/song_time+age/tempo, or UNOBSERVED). One play-from-cursor
+on the rig answers it. **Escaped:** ABLETON_TRANSPORT_SYNC wave, P2 stage — the
+harness's FakeAbleton was fixture-overfit (instant first listener report, atomic
+play+seek apply, prompt query replies); no scenario modeled a starved ack channel.
 
 ### BUG-049 (child-row-right-indent) — Group-child header rows double-pay the indent on right-anchored controls — LOW (visual misalignment, ~20px)
 

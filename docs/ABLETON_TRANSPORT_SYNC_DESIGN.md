@@ -22,6 +22,23 @@
    driving the windowed app; the same sequence is asserted by
    `f7_slow_scheduler_400ms_still_converges` + T7/T8 at L1. Entry in
    `docs/VERIFICATION_DEBT.md`; Peter's checklist (§6 P4) closes it at L4.
+5. **Moving-anchor amendment (2026-07-07, from the first L4 run — BUG-050).**
+   Peter's checklist step 1 failed on the real rig: Ableton repeatedly
+   snapped back to the gesture position, then MANIFOLD got clock-dragged
+   after retries exhausted. Root defect in the §4 semantics as first built:
+   a PLAYING expectation held a **frozen** target beat, so (a) the ack was a
+   point match against a position both engines immediately run away from —
+   a ~ε-wide window real listener cadence can miss — and (b) every T7
+   retransmit re-seeked Ableton BACK to the stale anchor, which is the
+   visible snap-back. Amended semantics: `Expectation` carries
+   `anchored_at`; a playing ack accepts any observed position in
+   [beat−ε, beat+elapsed·tempo+ε]; T7 retransmits and the D11 deferred seek
+   carry the engine's **current** beat and re-anchor. Regression proof:
+   `t5b`/`t7b` (unit, red pre-fix) + `f8` (harness, slow-listener regime;
+   does not bite pre-fix code — see its honesty note). **Open question the
+   fix does NOT close:** why acks starved across multiple retries on the
+   real rig — the `[ABL-SYNC]` info logs (gesture/retry/ack/degrade, each
+   with the observed-snapshot) exist to answer it on Peter's next run.
 
 The governing insight, in Peter's framing: the current transport sync is
 **open-loop control** — every command to Ableton is fire-and-forget, and every
