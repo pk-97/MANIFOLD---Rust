@@ -148,6 +148,18 @@ impl AudioTriggerMod {
     pub fn threshold(&self) -> f32 {
         sensitivity_to_threshold(self.sensitivity)
     }
+
+    /// True if the owning layer's clip-launch edge should count for this
+    /// instance's trigger response. A DISABLED config is semantically absent
+    /// — it keeps the user's drawer settings for re-arm (like
+    /// `TriggerRoute.enabled`) but must not gate anything, so only an ENABLED
+    /// config's mode may suppress the clip edge. Every reader of the clip
+    /// gate goes through here; reading `mode.wants_clip_edge()` directly on a
+    /// config skips the enabled check (the bug that shipped a disarmed
+    /// Transient config silently killing clip triggers on reload).
+    pub fn clip_edge_enabled(&self) -> bool {
+        !self.enabled || self.mode.wants_clip_edge()
+    }
 }
 
 /// One audio → visual trigger: a send's transient on `source` fires a one-shot
@@ -275,6 +287,32 @@ mod tests {
         assert!(TriggerFireMode::Both.wants_clip_edge());
         assert!(TriggerFireMode::Both.wants_transient());
         assert_eq!(TriggerFireMode::default(), TriggerFireMode::ClipEdge);
+    }
+
+    #[test]
+    fn disabled_config_never_suppresses_clip_edge() {
+        // Regression (2026-07-07): a config left disarmed from the drawer —
+        // enabled=false, mode=Transient — persisted with the project and,
+        // because the renderer gate read `mode.wants_clip_edge()` without
+        // checking `enabled`, silently killed clip-launch triggering for
+        // that layer after reload. Disabled must mean absent.
+        let mut cfg = AudioTriggerMod {
+            enabled: false,
+            source: AudioModSource {
+                send_id: crate::id::AudioSendId::new("send-1"),
+                feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+            },
+            sensitivity: 1.0,
+            mode: TriggerFireMode::Transient,
+            edge: TransientEdge::default(),
+        };
+        assert!(cfg.clip_edge_enabled(), "disabled config must be inert");
+        cfg.enabled = true;
+        assert!(!cfg.clip_edge_enabled(), "armed Transient mode gates the clip edge");
+        cfg.mode = TriggerFireMode::ClipEdge;
+        assert!(cfg.clip_edge_enabled());
+        cfg.mode = TriggerFireMode::Both;
+        assert!(cfg.clip_edge_enabled());
     }
 
     #[test]
