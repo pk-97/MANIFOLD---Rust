@@ -565,11 +565,18 @@ grade backstop and observation prompt are explicitly main-session-only.
   advice-move verdict in the agent's mailbox the second it appeared; the
   probe agent then made twelve separate Bash calls (all timestamped AFTER the
   plant) and ended its turn — mailbox never consumed, zero injected telemetry
-  for the agent_id, and the agent's transcript contains no hook-execution
-  records at all (vs. Agent-tool workers, which received a live PostToolUse
-  delivery the same day). Verdict: the harness runs no project hooks for
-  Workflow-tool agents — not an agent_id routing gap, hooks are absent
-  entirely. Consequences: workflow agents get observation + classifier
+  for the agent_id, no sentinel writes or observer spawn for any new session
+  in the probe window. Calibration note (post-probe sweep): subagent
+  transcripts NEVER persist hook records — Agent-tool workers provably
+  receive hooks (live delivery same day) and their transcripts are equally
+  silent — so transcript silence discriminates nothing; the evidence is the
+  untouched mailbox + absent telemetry/sentinels. Verdict: no whisper can
+  reach a Workflow-tool agent. Most likely the harness runs no project hooks
+  for them; the variant "hooks fire but without agent_id" (routing to the
+  main mailbox, empty during the probe) cannot be excluded from local
+  artifacts — it leaves identical silence and is equally unfixable
+  daemon-side, since the valve would have no way to target the agent's
+  context. Consequences: workflow agents get observation + classifier
   telemetry only; no whispers, no worker Stop-tier review prompts (2h.4 is
   Agent-tool workers only). Re-probe with the same method if a harness
   update adds subagent hooks for workflows; the §2h.4 machinery then extends
