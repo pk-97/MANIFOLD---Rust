@@ -1916,12 +1916,19 @@ impl PresetRuntime {
             slot.bound.apply(&mut self.graph, &fx.params);
             // If the preset includes a `system.generator_input` node,
             // push every frame-context scalar (time / beat / aspect /
-            // output dims) into its params. The standard port-shadows-
-            // param machinery propagates these to inner primitives via
-            // scalar wires — same surface generators have, no per-effect
-            // Rust code. `trigger_count` / `anim_progress` are clip-side
-            // concepts that don't reach the effect chain — they stay at
-            // the generator_input primitive's default (0.0).
+            // output dims / trigger_count / anim_progress) into its
+            // params. The standard port-shadows-param machinery
+            // propagates these to inner primitives via scalar wires —
+            // same surface generators have, no per-effect Rust code.
+            // §8 D5 (2026-07-07): `trigger_count` used to stay pinned at
+            // the primitive's 0.0 default here ("clip-side concepts that
+            // don't reach the effect chain") — the caller now feeds the
+            // owning layer's EFFECTIVE count (clip edge + audio fires,
+            // §8 D1) same as a generator graph gets; master/global chains
+            // have no layer, so their clip contribution is 0 and only
+            // audio fires move the count. `anim_progress` stays clip-side
+            // (effects have no anim_progress concept) and is always 0.0
+            // for effect chains — only `trigger_count` changed.
             if let Some(node) = slot.generator_input_node {
                 let aspect = if ctx.height > 0 {
                     ctx.width as f32 / ctx.height as f32
@@ -1935,6 +1942,11 @@ impl PresetRuntime {
                     .graph
                     .set_param(node, "beat", ParamValue::Float(ctx.beat as f32));
                 let _ = self.graph.set_param(node, "aspect", ParamValue::Float(aspect));
+                let _ = self.graph.set_param(
+                    node,
+                    "trigger_count",
+                    ParamValue::Float(ctx.trigger_count as f32),
+                );
                 let _ = self.graph.set_param(
                     node,
                     "output_width",
@@ -4342,6 +4354,81 @@ mod generator_input_tests {
         assert!((read("aspect").unwrap() - (1920.0 / 1080.0)).abs() < 1e-5);
         assert_eq!(read("output_width"), Some(3840.0));
         assert_eq!(read("output_height"), Some(2160.0));
+    }
+
+    /// §8 D5 (2026-07-07): `trigger_count` used to stay pinned at 0.0 for
+    /// effect-chain generator_input nodes ("clip-side concepts that don't
+    /// reach the effect chain"). This is the effect-chain half of the P2
+    /// gate — the generator half lives in
+    /// `generator_renderer::tests` (`effective_trigger_count_sums_clip_and_audio_and_respects_clip_edge_mode`).
+    /// Together they prove the SAME effective count (clip edge + audio
+    /// fires) reaches both a generator's own graph and an effect chain on
+    /// the same layer.
+    #[test]
+    fn run_feeds_nonzero_trigger_count_into_generator_input_effect_slot() {
+        use crate::preset_context::PresetContext;
+        use crate::gpu_encoder::GpuEncoder;
+
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        let fx = invert_with_generator_input();
+
+        let mut cg =
+            PresetRuntime::try_build(std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256, None, None)
+                .expect("chain builds");
+
+        let gi_id = cg
+            .effect_nodes
+            .first()
+            .and_then(|s| s.generator_input_node)
+            .expect("splice populated generator_input_node");
+
+        let input = crate::render_target::RenderTarget::new(
+            &device,
+            256,
+            256,
+            GpuTextureFormat::Rgba16Float,
+            "test-source-input",
+        );
+        let mut native_enc = device.create_encoder("generator-input-trigger-count-test");
+        let mut gpu = GpuEncoder::new(&mut native_enc, &device);
+
+        // A layer whose generator has been triggered 7 times (clip launches
+        // + audio fires, already summed by the caller per §8 D1) — the
+        // effect chain on that same layer must see the SAME 7, not the old
+        // pinned 0.0.
+        let ctx = PresetContext {
+            time: 0.0,
+            beat: 0.0,
+            dt: 1.0 / 60.0,
+            width: 256,
+            height: 256,
+            output_width: 256,
+            output_height: 256,
+            aspect: 1.0,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: 0,
+            anim_progress: 0.0,
+            trigger_count: 7,
+        };
+
+        cg.run(&mut gpu, &input.texture, &[fx], &[], &ctx);
+
+        let node = cg
+            .graph
+            .get_node(gi_id)
+            .expect("generator_input node id still valid");
+        let trigger_count = node.params.get("trigger_count").and_then(|v| match v {
+            ParamValue::Float(f) => Some(*f),
+            _ => None,
+        });
+        assert_eq!(
+            trigger_count,
+            Some(7.0),
+            "effect chain's generator_input.trigger_count must reflect the \
+             owning layer's effective count (D5), not stay pinned at 0.0"
+        );
     }
 
     /// **The production main-path proof (design §12.3 step 5).** With the freeze

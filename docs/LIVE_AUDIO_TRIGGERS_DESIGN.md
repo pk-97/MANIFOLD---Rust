@@ -17,6 +17,23 @@ edge (default) OR the transient trigger OR both."*
 
 ## 0. CURRENT POSITION (read first, update last)
 
+- **§8 execution note (2026-07-07, P1+P2 session): one interpretive call made mid-flight,
+  flagged for Peter's review.** D1 says "per layer the renderer keeps `clip_count`... and
+  `audio_count`" (singular, per-layer) while D2 says the `audio_trigger` config is
+  per-INSTANCE (any generator or effect on that layer). The doc doesn't spell out what
+  happens when multiple instances on one layer each carry their own config. Read
+  literally ("gates each increment when the event happens... so switching mode live
+  never jumps the effective count"), I implemented: `clip_count` increments
+  unconditionally at `acquire_clip`, gated only by the layer's OWN GENERATOR's
+  `audio_trigger.mode` (default true = old behavior, unaffected by config absence);
+  `audio_count` is a single per-layer accumulator that ANY instance on that layer
+  (generator or effect) can independently bump via its own `audio_trigger` fire,
+  gated by THAT instance's own mode wanting `Transient`. This reconciles "one shared
+  count per layer" with "config lives per-instance" and matches the P3 acceptance demo
+  (Strobe, an EFFECT, needs its own audio_trigger to make "kick fires Strobe" true even
+  when the layer's generator has no config of its own). Not re-litigated exhaustively
+  against every possible multi-instance interaction — flag if the live feel-pass finds
+  this wrong.
 - **Status: FIRES + RENDERS end-to-end (verified live 2026-06-19).** Phases 0–6 done. The
   render bug is fixed (see the §3.4 note + `[[live-audio-triggers]]` memory): a one-shot now
   snaps on the **beat clock** (`beat_stamp = current_beat`, `event_absolute_tick = -1`), not
@@ -445,14 +462,41 @@ app       PanelAction + dispatch + state_sync card view                WIRE
       playback 158+6 incl. the 5 `live_trigger` refactor-proof tests, editing 97+67,
       io `load_project` 15 incl. the Liveschool canonical fixture); clippy clean on
       core/playback/editing/io.
-- [ ] **P2 — Renderer seam + vertical proof.** `audio_count` on layer generator state;
-      mode gate at both increment sites; pulse list plumbed content-pipeline → renderer;
-      effect chains fed the layer's effective count in `set_frame_context` (D5 — replaces
-      the pinned 0.0; master chains get clip part 0). Gate: a renderer test driving
-      pulses into a trigger-consuming graph asserts the effective count for BOTH a
-      generator and an effect-chain slot; then the real proof — app run, stem playing,
-      transient visibly fires a playing FluidSim burst (this design's whole point; do
-      not skip the look). Effect-side look lands with P3's Strobe card.
+- [x] **P2 — Renderer seam + vertical proof.** `LayerGeneratorState.trigger_count`
+      split into `clip_count` + `audio_count` (`generator_renderer.rs`); mode gate at
+      `acquire_clip`'s increment site (`clip_edge_enabled`, computed from the
+      generator's own `audio_trigger.mode`, default true = unchanged old-project
+      behavior); `effective_trigger_count()` = `clip_count + audio_count`, read at the
+      render_info_scratch site. `bump_audio_count`/`effective_trigger_count_for_layer`
+      public accessors. Pulse list plumbed content-pipeline (`ContentPipeline::
+      apply_trigger_pulses`, called each tick right after `take_trigger_pulses`) →
+      renderer: `CompositeLayerDescriptor.trigger_count` (per-layer) +
+      `CompositorFrame.master_trigger_count` (new, session-scoped counter on
+      `ContentPipeline`, D5: master has no layer so clip part is always 0) →
+      `layer_compositor.rs`'s 2 layer-effect-chain `PresetContext` sites +2 master
+      sites now read the real count instead of a hardcoded 0 (the 2 group-chain sites
+      are UNCHANGED/deferred — D5 doesn't define a group-scoped count). D5 fix in
+      `preset_runtime.rs::run`: the `generator_input` frame-context block now also
+      pushes `ctx.trigger_count` (previously always 0.0 for effect chains).
+      Gate: 2 new `gpu-proofs` tests —
+      `generator_renderer::tests::effective_trigger_count_sums_clip_and_audio_and_respects_clip_edge_mode`
+      (generator half: clip_count+audio_count sum, mode gate) and
+      `preset_runtime::generator_input_tests::run_feeds_nonzero_trigger_count_into_generator_input_effect_slot`
+      (effect-chain half: a nonzero `ctx.trigger_count` reaches the
+      `generator_input` node) — both pass, proving the SAME effective count reaches
+      a generator graph AND an effect-chain slot on the same layer. Full
+      `gpu-proofs` suite (1244 tests) + default workspace sweep + full workspace
+      clippy all green (one PRE-EXISTING unrelated failure excluded:
+      `manifold-core`'s `docs_index_sync` — `docs/README.md` was already stale
+      against `ABLETON_TRANSPORT_SYNC_DESIGN.md`/`BOX3D_PHYSICS_DESIGN.md` at this
+      branch's base tip `a52860e7`, before this wave touched anything — out of
+      scope for this wave, not fixed here).
+      **Honest gap — L4 owed:** the real proof (app run, stem playing, transient
+      visibly fires a playing FluidSim burst) could not be run in this headless
+      session — no audio device, no interactive GPU output to observe. Verified
+      only to L1 (tests green) for this phase; Peter's live feel-pass must cover
+      this alongside the existing §7 feel-pass debt. The effect-side look lands
+      with P3's Strobe card, also L4-owed.
 - [ ] **P3 — UI + effect reachability.** `is_trigger_gate` flag + 11 generator preset
       edits; Strobe upgraded with a `clip_trigger` toggle card + minimal trigger→flash
       response (D6 reachability rule; §2.5 read of Strobe's graph first);

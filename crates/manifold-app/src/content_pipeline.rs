@@ -814,6 +814,13 @@ pub struct ContentPipeline {
     /// depends on visibility. Recomputed every frame (opacity/blend are live
     /// performance surfaces); pre-allocated scratch, no per-frame allocation.
     occluded_layers_scratch: Vec<i32>,
+    /// §8 D5: master/global effect chains have no owning layer, so their
+    /// audio-trigger fires accumulate here instead of on a `GeneratorRenderer`
+    /// layer state. Clip contribution is always 0 for master (no clip
+    /// lifecycle); this counter alone is the master chain's effective
+    /// `trigger_count`. Bumped by [`Self::apply_trigger_pulses`], read into
+    /// `CompositorFrame.master_trigger_count` each frame.
+    master_trigger_count: u32,
     /// Whether the node-output preview applies its smart (semantic) encoding.
     /// On by default; toggled from the editor's preview pane. Only affects the
     /// node preview pane, never the live render or workspace preview.
@@ -881,6 +888,7 @@ impl ContentPipeline {
             last_node_preview_info: None,
             last_live_node_params: Vec::new(),
             occluded_layers_scratch: Vec::new(),
+            master_trigger_count: 0,
             pending_graph_dump: None,
             #[cfg(target_os = "macos")]
             node_preview_textures: [None, None, None],
@@ -1454,6 +1462,40 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         Arc::clone(&self.shared_output)
     }
 
+    /// §8 P2: fold this tick's audio-trigger fires into the renderer's
+    /// per-layer (or master) `audio_count`. `pulses` is
+    /// `PlaybackEngine::take_trigger_pulses`'s output for this tick — pure
+    /// bookkeeping, no GPU work. A `Some(layer_id)` pulse bumps that layer's
+    /// `GeneratorRenderer` counter (a no-op if the layer's generator was
+    /// deleted the same tick); `None` (D5: master/global chains have no
+    /// layer) bumps `master_trigger_count`. Takes the counter by `&mut u32`
+    /// (not `&mut self`) so the call site can hold it disjoint from other
+    /// live borrows of `self` (e.g. `self.texture_pool.as_ref()`).
+    fn apply_trigger_pulses(
+        master_trigger_count: &mut u32,
+        pulses: &[manifold_playback::modulation::TriggerPulse],
+        renderers: &mut [Box<dyn manifold_playback::renderer::ClipRenderer>],
+    ) {
+        if pulses.is_empty() {
+            return;
+        }
+        let mut gen_renderer = renderers
+            .iter_mut()
+            .find_map(|r| r.as_any_mut().downcast_mut::<GeneratorRenderer>());
+        for pulse in pulses {
+            match &pulse.layer_id {
+                Some(layer_id) => {
+                    if let Some(gr) = gen_renderer.as_deref_mut() {
+                        gr.bump_audio_count(layer_id);
+                    }
+                }
+                None => {
+                    *master_trigger_count = master_trigger_count.wrapping_add(1);
+                }
+            }
+        }
+    }
+
     /// Render all generators and composite, then submit asynchronously.
     ///
     /// Uses native Metal encoding on macOS via manifold-gpu.
@@ -1594,9 +1636,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let mut atlas_filled_this_frame = false;
         let texture_pool = self.texture_pool.as_ref();
 
+        // §8 P2: drain this tick's audio-trigger fires (P1's evaluator
+        // output) before the split borrow below — `take_trigger_pulses`
+        // needs `&mut engine` in full, same as `split_renderer_project`.
+        let trigger_pulses = engine.take_trigger_pulses();
+
         // Split borrow: get renderers + project from engine simultaneously.
         let (renderers, project) = engine.split_renderer_project();
         let layers = project.map(|p| p.timeline.layers.as_slice()).unwrap_or(&[]);
+
+        // Fold this tick's fires into the renderer's per-layer/master
+        // audio_count BEFORE generators render, so the same frame's
+        // trigger_count already reflects the fire (no one-frame lag).
+        Self::apply_trigger_pulses(
+            &mut self.master_trigger_count,
+            &trigger_pulses,
+            renderers.as_mut_slice(),
+        );
 
         // ── Generators (separate CB, committed first) ─────────────────
         // Generators must commit before the compositor because the parallel
@@ -1842,6 +1898,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // as base layer. This ordering is required by generate_layers' consecutive-run grouping.
         clip_descs.sort_unstable_by(|a, b| b.layer_index.cmp(&a.layer_index));
 
+        // §8 D1/D5: each layer's effect chain gets its generator's effective
+        // trigger_count (clip edge + audio fires) fed via `PresetContext` —
+        // the same value the layer's own generator graph sees. `None` (no
+        // GeneratorRenderer registered) reads as 0 for every layer, same as
+        // a layer with no live generator.
+        let gen_renderer_for_frame = renderers
+            .iter()
+            .find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>());
+
         let layer_descs: Vec<CompositeLayerDescriptor> = layers
             .iter()
             // Audio layers produce no visual output and must not enter the
@@ -1859,6 +1924,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 effect_groups: layer.effect_groups.as_deref().unwrap_or(empty_groups),
                 parent_layer_id: layer.parent_layer_id.as_ref(),
                 is_group: layer.is_group(),
+                trigger_count: gen_renderer_for_frame
+                    .map_or(0, |gr| gr.effective_trigger_count_for_layer(&layer.layer_id)),
             })
             .collect();
 
@@ -1878,6 +1945,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             layers: &layer_descs,
             master_effects,
             master_effect_groups,
+            // §8 D5: master has no layer, so its effective count is
+            // audio-fires-only, accumulated across the session in
+            // `self.master_trigger_count` (bumped in `apply_trigger_pulses`,
+            // called earlier this frame before generators render).
+            master_trigger_count: self.master_trigger_count,
             led_exit_index,
             led_composite_size: self.led_grid_size,
             tonemap: TonemapSettings {
