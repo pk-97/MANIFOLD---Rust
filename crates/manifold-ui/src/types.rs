@@ -181,6 +181,8 @@ pub enum AudioFeatureKind {
     Noisiness,
     Flux,
     Transients,
+    /// Descending-FM-ridge kick detector, sub-bass only (always reads Low).
+    Kick,
     /// Tracked pitch of the band's dominant object (P4). Holds on dropout;
     /// gate with Presence.
     Pitch,
@@ -190,12 +192,13 @@ pub enum AudioFeatureKind {
 
 impl AudioFeatureKind {
     /// All kinds in drawer-button order.
-    pub const ALL: [AudioFeatureKind; 7] = [
+    pub const ALL: [AudioFeatureKind; 8] = [
         AudioFeatureKind::Amplitude,
         AudioFeatureKind::Centroid,
         AudioFeatureKind::Noisiness,
         AudioFeatureKind::Flux,
         AudioFeatureKind::Transients,
+        AudioFeatureKind::Kick,
         AudioFeatureKind::Pitch,
         AudioFeatureKind::Presence,
     ];
@@ -213,6 +216,7 @@ impl AudioFeatureKind {
             AudioFeatureKind::Noisiness => "Noisiness",
             AudioFeatureKind::Flux => "Flux",
             AudioFeatureKind::Transients => "Transients",
+            AudioFeatureKind::Kick => "Kick",
             AudioFeatureKind::Pitch => "Pitch",
             AudioFeatureKind::Presence => "Presence",
         }

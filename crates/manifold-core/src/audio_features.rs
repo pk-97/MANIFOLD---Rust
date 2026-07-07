@@ -25,8 +25,15 @@ pub struct BandFeatures {
     /// self-scales with density instead of pinning on loud/busy material.
     pub liveliness: f32,
     /// Transient trigger — a 0..1 impulse that decays, from an adaptive
-    /// threshold on the band's flux. `Transients` on `Low` is a kick detector.
+    /// threshold on the band's flux. A general onset in the band.
     pub transients: f32,
+    /// Kick trigger — a 0..1 impulse that decays, from the descending-FM-ridge
+    /// detector (`KickRidges`). Low band only (zero on Full/Mid/High): a sub-bass
+    /// kick is the one onset with a coherent pitch descent, which SuperFlux nulls
+    /// by design, so it gets a dedicated ridge-only detector with its own
+    /// refractory — independent of `transients` so binding one never blocks the
+    /// other. See `docs/KICK_SWEEP_EVENT_DESIGN.md`.
+    pub kick: f32,
     /// Tracked dominant-object log-frequency position within this band's bin
     /// window, 0..1 (same mapping as `brightness`). HOLDS its last value on
     /// dropout — gate with `presence`, never read 0 as "low pitch". Filled by
