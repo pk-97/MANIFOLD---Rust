@@ -833,6 +833,7 @@ mod tests {
             curve: Default::default(),
             invert: false,
             is_angle: false,
+            is_trigger_gate: false,
         });
         p.value = value;
         p.base = value;

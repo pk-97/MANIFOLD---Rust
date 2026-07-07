@@ -442,6 +442,7 @@ mod tests {
             curve: Default::default(),
             invert: false,
             is_angle: false,
+            is_trigger_gate: false,
         });
         p.value = value;
         p.base = value;
@@ -477,6 +478,7 @@ mod tests {
                     curve: MacroCurve::Linear,
                     invert: false,
                     is_angle: false,
+                    is_trigger_gate: false,
                 }],
                 bindings: Vec::new(),
                 skip_mode: Default::default(),

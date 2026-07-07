@@ -127,6 +127,10 @@ impl ParamDef {
             // `format_string`). Angle display is a user-expose concern, seeded
             // onto the spec in `append_user_binding`.
             is_angle: false,
+            // ParamDef (the registry-catalog struct) carries no
+            // trigger-gate concept — bundled generator presets set this
+            // via their JSON presetMetadata.params directly (ParamSpecDef).
+            is_trigger_gate: false,
         }
     }
 }
@@ -699,6 +703,7 @@ fn spec_from_binding(
         // Pre-spec fallback: a `BindingDef` records no angle-ness, so the flag
         // starts false. A later expose/edit reseeds it with the real value.
         is_angle: false,
+        is_trigger_gate: false,
     }
 }
 
@@ -725,6 +730,7 @@ fn placeholder_spec(
         curve: Default::default(),
         invert: false,
         is_angle: false,
+        is_trigger_gate: false,
     }
 }
 
@@ -1676,6 +1682,9 @@ impl PresetInstance {
             // (rides `UserParamBinding.is_angle`). The spec is now the single
             // home for the flag, so the card reads it straight off the manifest.
             is_angle: binding.is_angle,
+            // A user-exposed inner-graph param is never the trigger-gate card
+            // (that's the preset-authored `clip_trigger` outer card only).
+            is_trigger_gate: false,
         };
 
         // The per-instance graph is the single binding-storage list.
@@ -1856,6 +1865,7 @@ impl PresetInstance {
             // Position-aware reinstate (undo of an unexpose): preserve the
             // angle flag off the captured binding, same as `append_user_binding`.
             is_angle: binding.is_angle,
+            is_trigger_gate: false,
         });
 
         // Re-insert the manifest entry at its original display position among
@@ -3814,6 +3824,7 @@ mod tests {
             curve: Default::default(),
             invert: false,
             is_angle: false,
+            is_trigger_gate: false,
         };
         let mut p = crate::params::Param::bundled(spec);
         p.value = value;

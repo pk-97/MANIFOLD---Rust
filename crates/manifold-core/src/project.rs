@@ -1505,6 +1505,7 @@ mod tests {
             curve: Default::default(),
             invert: false,
             is_angle: false,
+            is_trigger_gate: false,
         };
         let mut p = crate::params::Param::bundled(spec);
         p.value = value;
