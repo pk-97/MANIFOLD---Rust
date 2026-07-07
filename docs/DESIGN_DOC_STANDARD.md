@@ -206,6 +206,18 @@ brief is not executable — that's the definition.
   shipped range-clamped — correct to every test, unusable with the first thing a VJ
   does (saw LFO for a full spin, BUG-039). The gesture line is the phase-scale
   version of DESIGN_AUTHORING §3's instrument test.
+- **Phasing-completeness check (added 2026-07-07, from the dead-LANES escape).**
+  Before a Phasing section is done, walk every affordance/behavior the design body
+  COMMITS to (each §-section's "the user can X" claims) and confirm each appears in
+  exactly one place: a phase's deliverable list, or the Deferred section with its
+  revival trigger. An affordance in neither is invisible to execution: the observed
+  escape — AUTOMATION_LANES §7 specified the param-chooser + "+" (the only way a
+  first lane can be born by drawing), §10's P4 list never named it, the orchestrator
+  built the list faithfully, one worker noticed and wrote "a later phase" into a
+  draw-fn comment no one re-reads, and the doc's status honestly said "SHIPPED
+  P1–P4" while the feature was unreachable in every un-recorded project. The status
+  line tracks the phase list, so the phase list must cover the design — a worker's
+  code comment is not a deferral record; the Deferred section is.
 - **Forbidden moves** — the specific shortcuts THIS phase invites, named. Drawn from
   the observed failure catalog: fuse-for-parity · silent fallback / parallel old path
   kept alive · TODO-as-deferral · "temporary" flags · adapters/shims around a misfit

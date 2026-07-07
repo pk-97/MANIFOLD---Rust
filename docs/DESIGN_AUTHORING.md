@@ -206,6 +206,14 @@ Phasing is part of the design, not packaging. The rules that matter:
 - **Choose the acceptance demo when you write the phase**, with its target L-level
   (standard §10). Since UI_AUTOMATION landed, anything the flow driver can reach
   targets L3 — a scripted flow, not a PNG someone promises to look at.
+- **The phase list must cover the design** (standard §5, phasing-completeness
+  check). Executors build the phase list, not the design body — an affordance the
+  body commits to but no phase names simply never gets built, and the status line
+  ("SHIPPED P1–P4") stays honest while the design ships incomplete. Walk every
+  "the user can X" claim; each lands in a phase's deliverables or in Deferred
+  with a trigger. The dead-LANES escape (AUTOMATION_LANES §7 chooser, 2026-07-07)
+  is the proof case: the UX section's centerpiece affordance was absent from §10,
+  so four faithful phases shipped an unreachable feature.
 
 ## 8. Done deciding vs. done surveying
 
