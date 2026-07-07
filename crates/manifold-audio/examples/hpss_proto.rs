@@ -24,6 +24,7 @@
 //! dies with P6a, the harness stays authoritative).
 
 use manifold_spectral::SpectrogramConfig;
+use std::collections::VecDeque;
 
 // ── Constants copied from analysis.rs (the replica contract: these MUST match
 //    the live detector; validation catches drift) ────────────────────────────
@@ -200,6 +201,20 @@ enum Mask {
     /// (riser), and one-hop teleports (bass note changes) all fail the
     /// coherence test.
     Sweep { drop_bins: f32, step_max: f32 },
+    /// Round 5 — the v0 successor. v0's four measured failures (P6a round 4):
+    /// global argmax sticks to the louder bass ridge, bass portamento
+    /// false-fires, the kick double-fires (attack + body), and the pure-kick
+    /// synth guard fired 15 for 8. All four are "shape A done naively." This
+    /// tracks MULTIPLE ridges (local maxima), not one global apex, so a kick's
+    /// descending ridge is followed even while a louder bass ridge sits static;
+    /// discriminates by RATE + EXTENT over a window (portamento is too slow to
+    /// accumulate `drop_bins` within `win` hops); and OR's into the base flux
+    /// path under one SHARED refractory (the attack and body collapse to one
+    /// fire). Runs on the LOW band only (Peter's constraint) — Full-band would
+    /// fire on `dive`'s spectrum-wide descent. Replaces the masked-novelty
+    /// criterion, it does not stack with it: the base path here is plain
+    /// SuperFlux (clean tracks) OR the ridge event (bass-heavy tracks).
+    RidgeTrack { drop_bins: f32, win: usize, step_max: f32, min_peak: f32 },
 }
 
 impl Mask {
@@ -212,11 +227,14 @@ impl Mask {
             Mask::NovFloor { margin_db, h } => format!("N m={margin_db:.1} H={h}"),
             Mask::OrFloor { margin_db, delta, h } => format!("O m={margin_db:.1} d={delta:.0} H={h}"),
             Mask::Sweep { drop_bins, step_max } => format!("K d={drop_bins:.0} s={step_max:.0}"),
+            Mask::RidgeTrack { drop_bins, win, step_max, min_peak } => {
+                format!("R d={drop_bins:.0} w={win} s={step_max:.0} p={min_peak:.2}")
+            }
         }
     }
     fn h_window(self) -> Option<usize> {
         match self {
-            Mask::Baseline | Mask::Sweep { .. } => None,
+            Mask::Baseline | Mask::Sweep { .. } | Mask::RidgeTrack { .. } => None,
             Mask::Sub { h, .. }
             | Mask::Gate { h, .. }
             | Mask::Wiener { h, .. }
@@ -256,7 +274,18 @@ impl Mask {
             }
             // NovFloor/OrFloor/Sweep don't transform the column — they modify
             // the ODF reference / fire criteria inside the replay.
-            Mask::NovFloor { .. } | Mask::OrFloor { .. } | Mask::Sweep { .. } => col,
+            Mask::NovFloor { .. }
+            | Mask::OrFloor { .. }
+            | Mask::Sweep { .. }
+            | Mask::RidgeTrack { .. } => col,
+        }
+    }
+    fn ridge_params(self) -> Option<(f32, usize, f32, f32)> {
+        match self {
+            Mask::RidgeTrack { drop_bins, win, step_max, min_peak } => {
+                Some((drop_bins, win, step_max, min_peak))
+            }
+            _ => None,
         }
     }
 }
@@ -354,6 +383,16 @@ fn superflux_floor(
     sf
 }
 
+/// One followed ridge for the RidgeTrack criterion: the last `win` apex bins
+/// (newest at back), a gap counter (hops since last extension), and a
+/// once-fired latch so a single descent can't re-fire while it keeps descending.
+struct Track {
+    bins: VecDeque<f32>,
+    gap: u8,
+    fired: bool,
+    birth: usize,
+}
+
 /// Replay the per-band fire logic over a clip with `mask` applied to the ODF's
 /// input columns (and nothing else). Returns fire hop indices per band
 /// [Full, Low, Mid, High]. `have_prev` arms at hop 16, matching the live
@@ -393,7 +432,19 @@ fn replay_fires_dump(
     const SWEEP_WIN: usize = 12;
     let mut apex_hist = [[-1.0f32; SWEEP_WIN]; 4];
     let mut sweep_latch = [false; 4];
+    // RidgeTrack family: a small set of followed ridges per band (only the Low
+    // band, index 1, is ever populated — kicks are a Low-band event and a
+    // Full-band tracker would fire on `dive`'s spectrum-wide descent).
+    const MAX_TRACKS: usize = 12;
+    const MAX_GAP: u8 = 1;
+    let mut tracks: [Vec<Track>; 4] = Default::default();
     let mut refractory = [0u8; 4];
+    // Last hop any criterion fired in each band — the RidgeTrack criterion
+    // dedups against it: a ridge (kick BODY) that confirms within `win` hops of
+    // a prior fire is the body of an already-reported attack, so it's silenced.
+    // Where flux went deaf (bass-heavy Low band) there is no prior fire, so the
+    // ridge speaks — it is precisely the fallback for the missed attack.
+    let mut last_fire = [-1000i64; 4];
     let mut fires: [Vec<usize>; 4] = Default::default();
     let mut prev_perc = vec![0.0f32; nb];
     let mut cur_perc = vec![0.0f32; nb];
@@ -486,6 +537,103 @@ fn replay_fires_dump(
                         sweep_latch[bi] = true; // once per descent
                     }
                 }
+                // RidgeTrack criterion: multi-ridge descent, Low band only.
+                if let Some((drop_bins, win, step_max, min_peak)) =
+                    mask.ridge_params().filter(|_| bi == 1)
+                {
+                    {
+                        let col = clip.col(i);
+                        // Peak-pick: local maxima above a fraction of the band max.
+                        let band_max = col[lo..hi].iter().copied().fold(0.0f32, f32::max);
+                        let floor = band_max * min_peak;
+                        let mut peaks: Vec<usize> = Vec::new();
+                        let plo = lo.max(1);
+                        for k in plo..hi.saturating_sub(1) {
+                            let v = col[k];
+                            if v >= floor && v > col[k - 1] && v >= col[k + 1] {
+                                peaks.push(k);
+                            }
+                        }
+                        let mut consumed = vec![false; peaks.len()];
+                        let tks = &mut tracks[bi];
+                        // Extend each track with the nearest unconsumed peak in
+                        // the descent gate [last - step_max, last + 1].
+                        for tk in tks.iter_mut() {
+                            let last = *tk.bins.back().unwrap();
+                            let mut best_j: Option<usize> = None;
+                            let mut best_d = f32::INFINITY;
+                            for (j, &pk) in peaks.iter().enumerate() {
+                                if consumed[j] {
+                                    continue;
+                                }
+                                let d = pk as f32 - last;
+                                if (-step_max..=1.0).contains(&d) && d.abs() < best_d {
+                                    best_d = d.abs();
+                                    best_j = Some(j);
+                                }
+                            }
+                            if let Some(j) = best_j {
+                                consumed[j] = true;
+                                tk.bins.push_back(peaks[j] as f32);
+                                if tk.bins.len() > win {
+                                    tk.bins.pop_front();
+                                }
+                                tk.gap = 0;
+                            } else {
+                                tk.gap += 1;
+                            }
+                        }
+                        // Fire: a full window that descended >= drop_bins
+                        // coherently, once per descent, shared refractory.
+                        // Age cap: the descent must be the ridge's whole short
+                        // life (born at the attack, descends, dies). A bass
+                        // portamento is a long-lived ridge that bends late — its
+                        // age at the bend far exceeds `win`, so it's rejected
+                        // here without any rate/extent overlap with a kick.
+                        let age_cap = win + 6;
+                        let mut ridge_fire = false;
+                        for tk in tks.iter_mut() {
+                            if tk.fired || tk.gap != 0 || tk.bins.len() < win || i - tk.birth > age_cap
+                            {
+                                continue;
+                            }
+                            let front = *tk.bins.front().unwrap();
+                            let back = *tk.bins.back().unwrap();
+                            if front - back < drop_bins {
+                                continue;
+                            }
+                            let coherent = (1..tk.bins.len())
+                                .all(|w| (-step_max..=1.0).contains(&(tk.bins[w] - tk.bins[w - 1])));
+                            if coherent {
+                                tk.fired = true;
+                                ridge_fire = true;
+                            }
+                        }
+                        // Cull broken tracks; birth new ones from stray peaks.
+                        tks.retain(|tk| tk.gap <= MAX_GAP);
+                        for (j, &pk) in peaks.iter().enumerate() {
+                            if !consumed[j] {
+                                let mut b = VecDeque::with_capacity(win);
+                                b.push_back(pk as f32);
+                                tks.push(Track { bins: b, gap: 0, fired: false, birth: i });
+                            }
+                        }
+                        if tks.len() > MAX_TRACKS {
+                            let drop_n = tks.len() - MAX_TRACKS;
+                            tks.drain(0..drop_n);
+                        }
+                        // OR into the base fire, but dedup against the attack:
+                        // suppress if the same band already fired this hop (flux
+                        // saw the attack now) or within the confirmation window
+                        // (flux saw the attack ~win hops ago). `+3` covers the
+                        // VQT-kernel smear between the true attack and the ridge
+                        // reaching drop_bins.
+                        let recent_fire = fired || (i as i64 - last_fire[bi]) < win as i64 + 3;
+                        if ridge_fire && refractory[bi] == 0 && !recent_fire {
+                            fired = true;
+                        }
+                    }
+                }
                 if let Some(r) = row.as_mut() {
                     r.push_str(&format!(
                         ",{candidate:.1},{threshold:.1},{novelty_ref:.1},{},{},{}",
@@ -497,6 +645,7 @@ fn replay_fires_dump(
                 if fired {
                     fires[bi].push(i);
                     refractory[bi] = ONSET_REFRACTORY_HOPS;
+                    last_fire[bi] = i as i64;
                 } else {
                     refractory[bi] = refractory[bi].saturating_sub(1);
                 }
@@ -521,6 +670,37 @@ fn count_post_warmup(fires: &[usize]) -> usize {
 
 fn matched_within(t: f32, refs: &[f32], tol_s: f32) -> bool {
     refs.iter().any(|&r| (t - r).abs() <= tol_s)
+}
+
+/// Load one track's kick labels: (mix_time_s, drums_time_s) columns from
+/// tests/fixtures/audio_labels/<track>.csv. The 73 hand-verified events are the
+/// grading target (README provenance) — mix fires grade against mix_time_s,
+/// drums fires against drums_time_s. Missing file ⇒ empty (that track ungraded).
+fn load_labels(track: &str) -> (Vec<f32>, Vec<f32>) {
+    let path = format!("tests/fixtures/audio_labels/{track}.csv");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        eprintln!("no labels: {path}");
+        return (Vec::new(), Vec::new());
+    };
+    let (mut mix, mut drums) = (Vec::new(), Vec::new());
+    for line in text.lines().skip(1) {
+        let mut it = line.split(',');
+        let (Some(m), Some(d)) = (it.next(), it.next()) else { continue };
+        if let (Ok(m), Ok(d)) = (m.trim().parse::<f32>(), d.trim().parse::<f32>()) {
+            mix.push(m);
+            drums.push(d);
+        }
+    }
+    (mix, drums)
+}
+
+/// Grade fire times against label times: (recovered@±35ms, recovered@±70ms,
+/// spurious = fires >±70ms from any label). Precision/recall derive from these.
+fn grade(fires: &[f32], labels: &[f32]) -> (usize, usize, usize) {
+    let rec35 = labels.iter().filter(|&&l| matched_within(l, fires, 0.035)).count();
+    let rec70 = labels.iter().filter(|&&l| matched_within(l, fires, 0.070)).count();
+    let spurious = fires.iter().filter(|&&f| !matched_within(f, labels, 0.070)).count();
+    (rec35, rec70, spurious)
 }
 
 // ── Synth scenarios, copied verbatim from mod_harness.rs (guard replay) ─────
@@ -806,6 +986,29 @@ fn main() {
                 }
             }
         }
+        // Round 5 — the v0 successor. Rate/extent bounds are mechanism-derived:
+        // a 120→45 Hz kick sweep spans ~34 bins (bpo=24) over ~17 hops ≈ 2
+        // bins/hop, so a real descent clears ~24 bins in a 12-hop window; bass
+        // portamento (<1 bin/hop) cannot. Grid brackets that: drop 14/18/22
+        // over win 10/14, step_max 4 (2 bins/hop + slop), peak floor 6%/12% of
+        // the band max (catch the sweep tail under a louder bass without
+        // admitting shelf ripple).
+        if all || family == "ridge" {
+            for &drop_bins in &[14.0f32, 18.0, 22.0] {
+                for &win in &[10usize, 14] {
+                    for &min_peak in &[0.06f32, 0.12] {
+                        masks.push(Mask::RidgeTrack { drop_bins, win, step_max: 4.0, min_peak });
+                    }
+                }
+            }
+        }
+        // The chosen successor config (spike 2026-07-07): replaces the
+        // masked-novelty OrFloor criterion. Nearly 2x its kick recall at equal
+        // bass-false-fire cost; all guards green. Prints the exact per-band fire
+        // counts the runtime integration must reproduce (exact-match gate).
+        if family == "ridge-final" {
+            masks.push(Mask::RidgeTrack { drop_bins: 14.0, win: 10, step_max: 4.0, min_peak: 0.12 });
+        }
     }
 
     // ── Build clips one at a time; replay every mask over its cached columns.
@@ -957,6 +1160,66 @@ fn main() {
             cells.join("  "),
             min_drums_retention
         );
+    }
+
+    // ── LABELS: grade mix-Low and drums-Low fires against the 73 hand-verified
+    //    kick labels (README provenance), in seconds, mix and stems separately.
+    //    This replaces the circular "baseline drums fires as GT" grading above.
+    //    Per mask: total recall@±35ms / @±70ms / labels, and spurious fires. ──
+    let labels: std::collections::HashMap<&str, (Vec<f32>, Vec<f32>)> =
+        TRACKS.iter().map(|&t| (t, load_labels(t))).collect();
+    println!("\n== LABELS (mix-Low vs mix_time_s | drums-Low vs drums_time_s; r35/r70/N sp) ==");
+    for (mi, mask) in masks.iter().enumerate() {
+        let g = |name: &str, band: usize| -> usize {
+            count_post_warmup(&results[&format!("guard/{name}")][mi][band])
+        };
+        let guards_ok = g("dive", 0) == 0
+            && g("dive", 1) <= 2
+            && g("riser", 0) == 0
+            && g("growl", 0) == 0
+            && g("kicks", 1) == 8
+            && (7..=8).contains(&g("busymix", 1))
+            && (6..=8).contains(&g("densemix", 1));
+        let kicks_l = g("kicks", 1);
+        let (mut mr35, mut mr70, mut msp, mut mn) = (0, 0, 0, 0);
+        let (mut dr35, mut dr70, mut dsp, mut dn) = (0, 0, 0, 0);
+        let mut mbass = 0; // mix fires near NO kick label AND NO drums-stem onset
+        let mut cells: Vec<String> = Vec::new();
+        for t in TRACKS {
+            let (ml, dl) = &labels[t];
+            let mix_low = times(&format!("{t}/mix"), mi, 1);
+            let drums_low = times(&format!("{t}/drums"), mi, 1);
+            // Alibi for "a drum was here": the isolated drums stem's BASELINE
+            // (mask-off) Low fires — approximate, but the only per-track drum-
+            // activity oracle we have beyond the kick-only labels.
+            let drum_alibi = times(&format!("{t}/drums"), 0, 1);
+            let (a35, a70, asp) = grade(&mix_low, ml);
+            let (b35, b70, bsp) = grade(&drums_low, dl);
+            let bass = mix_low
+                .iter()
+                .filter(|&&f| !matched_within(f, ml, 0.070) && !matched_within(f, &drum_alibi, 0.070))
+                .count();
+            mr35 += a35;
+            mr70 += a70;
+            msp += asp;
+            mn += ml.len();
+            dr35 += b35;
+            dr70 += b70;
+            dsp += bsp;
+            dn += dl.len();
+            mbass += bass;
+            cells.push(format!(
+                "{}:m{a35}({a70})/{} sp{asp} bass{bass}",
+                &t[..4.min(t.len())],
+                ml.len()
+            ));
+        }
+        println!(
+            "{:22} | guards {} k{kicks_l} | MIX {mr35}({mr70})/{mn} sp{msp} bass{mbass} | DRUMS {dr35}({dr70})/{dn} sp{dsp}",
+            mask.name(),
+            if guards_ok { "PASS" } else { "FAIL" },
+        );
+        println!("    {}", cells.join("  "));
     }
 
     // ── Retention detail: per-clip Low fire counts, baseline vs each config —
