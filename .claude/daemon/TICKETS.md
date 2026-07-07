@@ -83,6 +83,21 @@ preToolUseBash's shared-checkout guard uses), and when compacting anyway,
 mandate re-read + targeted Edits, never a full-file Write from an earlier
 read.
 
+**SKIPPED 2026-07-07 (Sonnet, T1-T11 plumbing session) — discovery found no
+build site.** `rg -il compact .claude` (excluding verdicts/) turns up only
+`GIT_TREE_DISCIPLINE.md`'s unrelated worktree-handoff mention; `rg -l
+"MEMORY.md" .claude` returns nothing. There is no hook or skill anywhere
+under `.claude/` that runs, schedules, or configures MEMORY.md compaction —
+it's the harness's built-in auto-memory behavior, driven by system-prompt
+instructions (the "auto memory" section + this repo's CLAUDE.md guidance),
+not a code path in this repo. Per the ticket's own instruction ("if it isn't
+where the ticket assumes, write findings ... and stop that lane"), there is
+nothing to add a pidfile-liveness check to and no compaction call site to
+gate — the incident's actual backstop (the Write tool's own
+modified-since-read guard) already did its job per the ticket's own
+description. Not built; would need a harness-level change outside this
+repo's control, or a CLAUDE.md-prose mitigation instead of a code fix.
+
 ## T8 — PreToolUse Bash lint: trailing # marker swallows chained commands
 Session c9e4d45d: a self-grade append chained after a `#grep-ok` marker
 silently never ran (# comments to end of line). Lint: a `#word` token
