@@ -398,6 +398,13 @@ struct Track {
 /// [Full, Low, Mid, High]. `have_prev` arms at hop 16, matching the live
 /// window-fill guard; the ODF history ring only accumulates from there —
 /// both exactly as `reduce_send` behaves under mod_harness's feed cadence.
+/// Prototype-only measurement switch (set once from `--ridge-only` in `main`):
+/// when true, the Low band fires SOLELY on the ridge criterion — the base flux
+/// path and its recent-fire dedup are suppressed for bi==1. Models the planned
+/// no-fallback `Kick` feature (ridge-only) vs the shipped hybrid Transients@Low
+/// (flux OR ridge). Not shared engine state — a throwaway example toggle.
+static RIDGE_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn replay_fires(clip: &Clip, mask: Mask, est: &Estimates) -> [Vec<usize>; 4] {
     replay_fires_dump(clip, mask, est, None)
 }
@@ -628,9 +635,18 @@ fn replay_fires_dump(
                         // (flux saw the attack ~win hops ago). `+3` covers the
                         // VQT-kernel smear between the true attack and the ridge
                         // reaching drop_bins.
-                        let recent_fire = fired || (i as i64 - last_fire[bi]) < win as i64 + 3;
-                        if ridge_fire && refractory[bi] == 0 && !recent_fire {
-                            fired = true;
+                        if RIDGE_ONLY.load(std::sync::atomic::Ordering::Relaxed) {
+                            // No-fallback Kick model: the ridge IS the detector.
+                            // Drop the base-flux fire and the flux-dedup window;
+                            // the per-track `fired` latch + shared refractory
+                            // already give one fire per descent.
+                            fired = ridge_fire && refractory[bi] == 0;
+                        } else {
+                            let recent_fire =
+                                fired || (i as i64 - last_fire[bi]) < win as i64 + 3;
+                            if ridge_fire && refractory[bi] == 0 && !recent_fire {
+                                fired = true;
+                            }
                         }
                     }
                 }
@@ -889,6 +905,11 @@ fn decode_mono(path: &str) -> Option<(Vec<f32>, u32)> {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let validate_only = args.iter().any(|a| a == "--validate-only");
+    // Ridge-only measurement (no-fallback Kick model): Low band fires solely on
+    // the ridge criterion. Pair with `--family ridge` or `--family ridge-sweep`.
+    if args.iter().any(|a| a == "--ridge-only") {
+        RIDGE_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     let fixtures_root = args
         .iter()
         .position(|a| a == "--fixtures")
@@ -1008,6 +1029,18 @@ fn main() {
         // counts the runtime integration must reproduce (exact-match gate).
         if family == "ridge-final" {
             masks.push(Mask::RidgeTrack { drop_bins: 14.0, win: 10, step_max: 4.0, min_peak: 0.12 });
+        }
+        // Ridge-only threshold placement (pair with `--ridge-only`): finer
+        // drop_bins grid, bracketing the kick/bass-portamento line from below.
+        // A 120→45 Hz kick clears ~2 bins/hop, so a win-10 window sees ~20 bins;
+        // bass portamento (<1 bin/hop) clears <10. drop_bins between those is the
+        // knife — this brackets 10→20 to read recall vs bass-fires per step.
+        if family == "ridge-sweep" {
+            for &drop_bins in &[10.0f32, 12.0, 14.0, 16.0, 18.0, 20.0] {
+                for &win in &[8usize, 10, 12] {
+                    masks.push(Mask::RidgeTrack { drop_bins, win, step_max: 4.0, min_peak: 0.12 });
+                }
+            }
         }
     }
 

@@ -36,16 +36,27 @@ struct Params {
     // Which band divider the cursor is over: 0 = low/mid, 1 = mid/high, < 0 none.
     // The hovered divider's grip handle brightens to signal it's draggable.
     hovered_divider: f32,
+    // Overlay-scalar layout, from the ONE definition in scope.rs (ScopeColumn):
+    // floats per column, the first onset lane's float index, and the live lane
+    // count. This shader carries no layout literals of its own.
+    scalar_stride: u32,
+    onset_base: u32,
+    onset_count: u32,
+    _pad1: u32,
+    // Onset lane colours, bottom-up lane order (ScopeOnsets::LANE_COLORS).
+    // Fixed capacity; only the first `onset_count` entries are live.
+    onset_colors: array<vec4<f32>, 8>,
 };
 
 @group(0) @binding(0) var<storage, read> history: array<f32>;
 @group(0) @binding(1) var<uniform> p: Params;
-// Per-column overlay scalars, 7 per column: four per-band centroid heights
-// [centroid_full, centroid_low, centroid_mid, centroid_high] then three onsets
-// [onset_low, onset_mid, onset_high]. Same column layout as `history`. Each
-// centroid is that band's spectral centroid as height-from-bottom (0..1); < 0
-// hides that band's trace. The three onsets are 0..1 per-band transient impulses,
-// drawn as colour-coded ticks.
+// Per-column overlay scalars — the raw bytes of one ScopeColumn (scope.rs) per
+// column, `p.scalar_stride` floats each: four per-band centroid heights
+// [full, low, mid, high] then `p.onset_count` onset lanes starting at
+// `p.onset_base`. Same column layout as `history`. Each centroid is that
+// band's spectral centroid as height-from-bottom (0..1); < 0 hides that
+// band's trace. Onsets are 0..1 per-lane transient impulses, drawn as
+// colour-coded ticks.
 @group(0) @binding(2) var<storage, read> col_scalars: array<f32>;
 
 struct VertexOutput {
@@ -178,13 +189,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Per-column overlays: the per-band spectral-centroid traces and per-band
     // transient ticks. Both scroll with the waterfall because they're keyed by
     // `col`, the same 1:1 column slot the magnitudes use.
-    let cen_full = col_scalars[col * 7u];
-    let cen_low = col_scalars[col * 7u + 1u];
-    let cen_mid = col_scalars[col * 7u + 2u];
-    let cen_high = col_scalars[col * 7u + 3u];
-    let on_low = col_scalars[col * 7u + 4u];
-    let on_mid = col_scalars[col * 7u + 5u];
-    let on_high = col_scalars[col * 7u + 6u];
+    let sbase = col * p.scalar_stride;
+    let cen_full = col_scalars[sbase];
+    let cen_low = col_scalars[sbase + 1u];
+    let cen_mid = col_scalars[sbase + 2u];
+    let cen_high = col_scalars[sbase + 3u];
     // Centroid traces: one line per band tracking "where the energy sits" within
     // that band over time. Full = magenta (whole spectrum); per-band lines are
     // colour-matched to the transient ticks below — Low = red, Mid = green, High
@@ -195,19 +204,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     rgb = centroid_line(rgb, y_from_bottom, cen_low, vec3<f32>(1.0, 0.45, 0.30));
     rgb = centroid_line(rgb, y_from_bottom, cen_mid, vec3<f32>(0.40, 1.0, 0.50));
     rgb = centroid_line(rgb, y_from_bottom, cen_high, vec3<f32>(0.45, 0.72, 1.0));
-    // Transient ticks: three stacked lanes at the bottom edge, one colour per
-    // band — Low = red (lowest lane), Mid = green, High = blue — so each band's
-    // onset rhythm reads separately. Gated near the impulse peak so hits stay
-    // discrete, not a smeared ribbon.
+    // Transient ticks: stacked lanes at the bottom edge, lane i drawn i lanes
+    // up from the bottom, coloured from `p.onset_colors[i]` (bottom-up order —
+    // ScopeOnsets in scope.rs names the lanes and owns the colours), so each
+    // lane's onset rhythm reads separately. Gated near the impulse peak so
+    // hits stay discrete, not a smeared ribbon.
     let lane = 0.014;
-    if (on_high > 0.5 && in.uv.y > 1.0 - lane * 3.0 && in.uv.y <= 1.0 - lane * 2.0) {
-        rgb = mix(rgb, vec3<f32>(0.40, 0.62, 1.0), 0.85);
-    }
-    if (on_mid > 0.5 && in.uv.y > 1.0 - lane * 2.0 && in.uv.y <= 1.0 - lane) {
-        rgb = mix(rgb, vec3<f32>(0.35, 1.0, 0.45), 0.85);
-    }
-    if (on_low > 0.5 && in.uv.y > 1.0 - lane) {
-        rgb = mix(rgb, vec3<f32>(1.0, 0.35, 0.30), 0.85);
+    for (var i = 0u; i < p.onset_count; i = i + 1u) {
+        let fi = f32(i);
+        if (col_scalars[sbase + p.onset_base + i] > 0.5
+            && in.uv.y > 1.0 - lane * (fi + 1.0) && in.uv.y <= 1.0 - lane * fi) {
+            rgb = mix(rgb, p.onset_colors[i].rgb, 0.85);
+        }
     }
 
     // Cursor frequency locator: a faint horizontal line at the hovered freq,

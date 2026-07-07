@@ -47,7 +47,7 @@ use ringbuf::HeapRb;
 use ringbuf::traits::{Consumer as ConsumerTrait, Observer as ObserverTrait, Producer as ProducerTrait, Split};
 
 pub use manifold_core::audio_features::SendFeatures;
-use manifold_spectral::{CqtTransform, SpectrogramConfig};
+use manifold_spectral::{CqtTransform, ScopeColumn, ScopeOnsets, SpectrogramConfig};
 
 use crate::capture::AudioConsumer;
 
@@ -106,13 +106,6 @@ impl GainBank {
         self.linear.is_empty()
     }
 }
-
-/// Overlay scalars per spectrogram column: four per-band centroid heights
-/// `[centroid_full, centroid_low, centroid_mid, centroid_high]` followed by the
-/// three per-band onset impulses `[onset_low, onset_mid, onset_high]`. The shader
-/// reads the same stride; a [`StreamingSendAnalyzer`] buffers this many floats
-/// per scope column.
-const SCOPE_SCALAR_STRIDE: usize = 7;
 
 /// Read end of the capture worker's per-send **mono** stream.
 ///
@@ -270,6 +263,10 @@ struct SendState {
     /// Hops remaining in each band's onset refractory window — after a transient
     /// fires, suppress re-fire until this elapses. Order [Full, Low, Mid, High].
     transient_refractory: [u8; 4],
+    /// Hops remaining in the Kick detector's own onset refractory (Low band
+    /// only). Independent of `transient_refractory` so a general onset and a
+    /// kick never debounce each other.
+    kick_refractory: u8,
     /// Rolling history of the last `ODF_MEDIAN_HOPS` SuperFlux ODF values per band,
     /// newest last. Serves the peak-pick twice over: its MEDIAN is the adaptive
     /// threshold baseline (robust to the onset spikes it's compared against, where a
@@ -651,7 +648,6 @@ struct KickRidges {
     peaks: Vec<usize>,
     consumed: Vec<bool>,
     hop: usize,
-    last_fire: i64,
 }
 
 impl KickRidges {
@@ -661,17 +657,17 @@ impl KickRidges {
             peaks: Vec::with_capacity(num_bins),
             consumed: Vec::with_capacity(num_bins),
             hop: 0,
-            last_fire: -1000,
         }
     }
 
     /// Advance one Low-band hop. `col` is the full tilted column, `[lo,hi)` the
-    /// Low band, `refractory` the band's shared onset refractory, `base_fired`
-    /// whether a flux/novelty criterion already fired this hop. Returns whether
-    /// a kick ridge fires — the caller OR's it into the band decision under the
-    /// shared refractory. Called once per hop (Low band only), so `self.hop` is
-    /// a faithful per-hop clock; birth/age are relative, so its origin is free.
-    fn update(&mut self, col: &[f32], lo: usize, hi: usize, refractory: u8, base_fired: bool) -> bool {
+    /// Low band. Returns whether a kick ridge coherently descended this hop (the
+    /// raw event); the caller gates it with the Kick refractory. This is the
+    /// no-fallback Kick detector — no flux dedup, since Kick is now its own
+    /// feature independent of `Transients` (the hybrid flux-OR-ridge path was
+    /// retired). Called once per hop (Low band only), so `self.hop` is a faithful
+    /// per-hop clock; birth/age are relative, so its origin is free.
+    fn update(&mut self, col: &[f32], lo: usize, hi: usize) -> bool {
         let hop = self.hop;
         self.hop += 1;
         let hi = hi.min(col.len());
@@ -753,16 +749,10 @@ impl KickRidges {
             self.tracks.drain(0..n);
         }
 
-        // Dedup against the attack: a ridge confirming within the confirmation
-        // window of any prior Low-band fire is the BODY of an already-reported
-        // attack. Where flux went deaf there is no prior fire, so the ridge
-        // speaks. `last_fire` tracks EVERY Low-band fire (flux or ridge).
-        let recent = base_fired || (hop as i64 - self.last_fire) < KICK_WIN as i64 + 3;
-        let fire = ridge_fire && refractory == 0 && !recent;
-        if base_fired || fire {
-            self.last_fire = hop as i64;
-        }
-        fire
+        // The raw coherent-descent event. The per-track `fired` latch already
+        // gives one fire per descent; the caller's Kick refractory debounces the
+        // multi-hop confirmation. No flux dedup: Kick is a standalone detector.
+        ridge_fire
     }
 }
 /// Frequency max-filter radius (bins) for vibrato suppression. The SuperFlux
@@ -1808,34 +1798,39 @@ fn reduce_send(
             let novel =
                 candidate > novelty_ref * SUPERFLUX_NOVELTY_FACTOR + SUPERFLUX_NOVELTY_DELTA;
 
-            // BUG-046 successor — the KICK SWEEP EVENT replaces masked novelty
-            // (docs/KICK_SWEEP_EVENT_DESIGN.md). On a bass-heavy Low band the ODF
-            // median AND recent max are owned by the bassline, so a kick clears
-            // neither test above, and BUG-044's novelty can't help (bass notes
-            // are themselves novel there). The kick's one distinguishing trace is
-            // its descending FM ridge, which SuperFlux nulls by design — so the
-            // Low band OR's in a coherent-descent event under the SAME shared
-            // refractory, and only there (a Full-band tracker would fire on a
-            // spectrum-wide dive). `KickRidges::update` dedups against the attack
-            // internally: a kick whose attack already fired via flux within the
-            // confirmation window is not double-counted, and where flux went deaf
-            // there is no prior fire, so the ridge is the sole report.
+            // Transients: a plain SuperFlux onset on every band, Low included.
+            // The kick sweep is NOT folded in here anymore — it is its own
+            // `Kick` feature (below), so a general onset and a kick can be bound
+            // to different targets and never block each other's refractory.
             let refr = send.transient_refractory[bi];
-            // One shared refractory: any criterion firing arms it for all.
-            let base_fired = is_peak && refr == 0 && (candidate > threshold || novel);
-            let ridge_fired = if bi == 1 {
-                send.kick_ridges.update(&send.col, lo, hi, refr, base_fired)
-            } else {
-                false
-            };
-            let fired = base_fired || ridge_fired;
-
+            let fired = is_peak && refr == 0 && (candidate > threshold || novel);
             if fired {
                 bf.transients = 1.0;
                 send.transient_refractory[bi] = ONSET_REFRACTORY_HOPS;
             } else {
                 bf.transients *= ONSET_DECAY;
                 send.transient_refractory[bi] = refr.saturating_sub(1);
+            }
+
+            // Kick — the descending-FM-ridge detector, Low band only
+            // (docs/KICK_SWEEP_EVENT_DESIGN.md). On a bass-heavy Low band the ODF
+            // median and recent max are owned by the bassline, so a kick clears
+            // neither flux test above; its one distinguishing trace is the
+            // coherent pitch descent, which SuperFlux nulls by design. Ridge-only,
+            // no fallback (a bass note's fixed-pitch attack can't fake a descent),
+            // with its own refractory so it's independent of `Transients`. The
+            // tracker advances every Low hop; the fire is gated by the Kick
+            // refractory — this reproduces the prototype `--ridge-only` reference.
+            if bi == 1 {
+                let ridge_fire = send.kick_ridges.update(&send.col, lo, hi);
+                let kick_refr = send.kick_refractory;
+                if ridge_fire && kick_refr == 0 {
+                    bf.kick = 1.0;
+                    send.kick_refractory = ONSET_REFRACTORY_HOPS;
+                } else {
+                    bf.kick *= ONSET_DECAY;
+                    send.kick_refractory = kick_refr.saturating_sub(1);
+                }
             }
 
             // Push the current ODF into the history ring (newest last).
@@ -1872,6 +1867,7 @@ fn new_send_state(num_bins: usize) -> SendState {
         col: vec![0.0; num_bins],
         prev_col: vec![0.0; num_bins],
         transient_refractory: [0; 4],
+        kick_refractory: 0,
         odf_hist: [[0.0; ODF_MEDIAN_HOPS]; 4],
         has_prev: false,
         centroid_yfb: [-1.0; 4],
@@ -1917,7 +1913,7 @@ pub struct StreamingSendAnalyzer {
     /// pushes to its scope rings — so a layer-fed send draws identically.
     scope: bool,
     scope_cols: Vec<f32>,
-    scope_scalars: Vec<f32>,
+    scope_scalars: Vec<ScopeColumn>,
     /// D7 (simplified for P2): gates the D5 tracker on/off. Default OFF so an
     /// untouched project's analysis is byte-identical to the pre-tracker path
     /// (checked by `pitch_tracking_disabled_matches_untouched_path` below);
@@ -2025,14 +2021,12 @@ impl StreamingSendAnalyzer {
         self.scope_cols.clear();
     }
 
-    /// Drain buffered overlay scalars in lockstep with the columns: four per-band
-    /// centroid heights `[full, low, mid, high]` + three per-band onset impulses
-    /// `[low, mid, high]`. Same stride the scope shader reads.
-    pub fn drain_scope_scalars(&mut self, mut f: impl FnMut([f32; 4], [f32; 3])) {
-        for s in self.scope_scalars.chunks_exact(SCOPE_SCALAR_STRIDE) {
-            f([s[0], s[1], s[2], s[3]], [s[4], s[5], s[6]]);
+    /// Drain buffered overlay records in lockstep with the columns — one
+    /// [`ScopeColumn`] (centroid traces + onset tick lanes) per scope column.
+    pub fn drain_scope_scalars(&mut self, mut f: impl FnMut(ScopeColumn)) {
+        for s in self.scope_scalars.drain(..) {
+            f(s);
         }
-        self.scope_scalars.clear();
     }
 
     /// Retune the analysis band edges to new Low/Mid crossovers (cheap; no
@@ -2177,15 +2171,15 @@ impl StreamingSendAnalyzer {
                 // ~5 columns into a solid carpet that read as far busier than the
                 // real fire rate. One column per fire = the true rate, visible.
                 let fired = |t: f32| if t > 0.999 { 1.0 } else { 0.0 };
-                scope_scalars.extend_from_slice(&[
-                    state.centroid_yfb[0],
-                    state.centroid_yfb[1],
-                    state.centroid_yfb[2],
-                    state.centroid_yfb[3],
-                    fired(b[1].transients),
-                    fired(b[2].transients),
-                    fired(b[3].transients),
-                ]);
+                scope_scalars.push(ScopeColumn {
+                    centroids: state.centroid_yfb,
+                    onsets: ScopeOnsets {
+                        kick: fired(b[1].kick),
+                        low: fired(b[1].transients),
+                        mid: fired(b[2].transients),
+                        high: fired(b[3].transients),
+                    },
+                });
             }
         }
         state.since_hop -= owed * hop;
@@ -2537,6 +2531,7 @@ mod tests {
             col: tone.clone(),
             prev_col: vec![0.0f32; nb],
             transient_refractory: [0; 4],
+            kick_refractory: 0,
             odf_hist: [[0.0; ODF_MEDIAN_HOPS]; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
@@ -2596,6 +2591,7 @@ mod tests {
             col: bass.clone(),
             prev_col: bass.clone(),
             transient_refractory: [0; 4],
+            kick_refractory: 0,
             odf_hist: [[0.0; ODF_MEDIAN_HOPS]; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
@@ -2650,6 +2646,7 @@ mod tests {
             col: bass.clone(),
             prev_col: bass.clone(),
             transient_refractory: [0; 4],
+            kick_refractory: 0,
             odf_hist: [[0.0; ODF_MEDIAN_HOPS]; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
@@ -2742,14 +2739,13 @@ mod tests {
     #[test]
     fn kick_ridges_fires_on_coherent_descent() {
         // A ridge falling ~2 bins/hop (the kick sweep rate) clears KICK_DROP_BINS
-        // within KICK_WIN and fires once. base_fired=false isolates the ridge
-        // criterion from the flux path (the bass-deaf condition it exists for).
+        // within KICK_WIN and fires exactly once (the per-track latch).
         let nb = 120;
         let mut kr = KickRidges::new(nb);
         let mut fires = 0;
         for h in 0..20i32 {
             let bin = (90 - 2 * h).max(1) as usize;
-            if kr.update(&ridge_col(nb, bin), 0, nb, 0, false) {
+            if kr.update(&ridge_col(nb, bin), 0, nb) {
                 fires += 1;
             }
         }
@@ -2763,7 +2759,7 @@ mod tests {
         let mut kr = KickRidges::new(nb);
         let mut any = false;
         for _ in 0..24 {
-            any |= kr.update(&ridge_col(nb, 80), 0, nb, 0, false);
+            any |= kr.update(&ridge_col(nb, 80), 0, nb);
         }
         assert!(!any, "a static ridge must not fire");
 
@@ -2773,7 +2769,7 @@ mod tests {
         let mut any = false;
         for h in 0..24i32 {
             let bin = (90 - h / 2).max(1) as usize;
-            any |= kr.update(&ridge_col(nb, bin), 0, nb, 0, false);
+            any |= kr.update(&ridge_col(nb, bin), 0, nb);
         }
         assert!(!any, "a slow portamento descent must not fire");
 
@@ -2783,36 +2779,39 @@ mod tests {
         let mut kr = KickRidges::new(nb);
         let mut any = false;
         for _ in 0..15 {
-            any |= kr.update(&ridge_col(nb, 90), 0, nb, 0, false);
+            any |= kr.update(&ridge_col(nb, 90), 0, nb);
         }
         for h in 0..15i32 {
             let bin = (90 - 2 * h).max(1) as usize;
-            any |= kr.update(&ridge_col(nb, bin), 0, nb, 0, false);
+            any |= kr.update(&ridge_col(nb, bin), 0, nb);
         }
         assert!(!any, "a late-bending (long-lived) ridge must not fire — age cap");
     }
 
     #[test]
-    fn kick_ridge_dedups_against_a_recent_attack() {
-        // The body-vs-attack dedup: if a flux attack already fired this band
-        // within the confirmation window (base_fired at the descent's start),
-        // the ridge that confirms the same kick's body is suppressed — no
-        // double-count. Where no attack fired, the same descent DOES fire.
+    fn kick_ridge_rearms_for_a_second_descent() {
+        // Two separate kicks: a coherent descent, a gap of static/silence long
+        // enough to retire the first ridge, then a second descent. Each fires its
+        // own raw event — the detector re-arms per descent (new track born at the
+        // second attack), it doesn't latch shut after the first.
         let nb = 120;
-        let feed = |attack_at_start: bool| -> u32 {
-            let mut kr = KickRidges::new(nb);
-            let mut fires = 0;
-            for h in 0..20i32 {
+        let mut kr = KickRidges::new(nb);
+        let mut fires = 0;
+        let descent = |kr: &mut KickRidges, fires: &mut u32| {
+            for h in 0..12i32 {
                 let bin = (90 - 2 * h).max(1) as usize;
-                let base = attack_at_start && h == 0; // flux caught the attack
-                if kr.update(&ridge_col(nb, bin), 0, nb, 0, base) {
-                    fires += 1;
+                if kr.update(&ridge_col(nb, bin), 0, nb) {
+                    *fires += 1;
                 }
             }
-            fires
         };
-        assert_eq!(feed(true), 0, "ridge is suppressed when the attack already fired");
-        assert_eq!(feed(false), 1, "ridge fires when flux went deaf on the attack");
+        descent(&mut kr, &mut fires);
+        // Silence gap: the first ridge's tracks die (gap > KICK_MAX_GAP).
+        for _ in 0..8 {
+            kr.update(&vec![0.0f32; nb], 0, nb);
+        }
+        descent(&mut kr, &mut fires);
+        assert_eq!(fires, 2, "two distinct descents each fire once: {fires}");
     }
 
     #[test]
@@ -2997,7 +2996,7 @@ mod tests {
             a.push(chunk);
         }
         let mut scal = 0;
-        a.drain_scope_scalars(|_, _| scal += 1);
+        a.drain_scope_scalars(|_| scal += 1);
         let mut cols = 0;
         a.drain_scope_columns(|c| {
             cols += 1;
@@ -3012,6 +3011,40 @@ mod tests {
         let mut after = 0;
         a.drain_scope_columns(|_| after += 1);
         assert_eq!(after, 0, "disabling scope clears buffered columns");
+    }
+
+    #[test]
+    fn streaming_analyzer_scope_reports_kick_fires() {
+        // Two synthetic kicks — 90 ms exponentially-decaying sines gliding
+        // 120 → 45 Hz (the selftest kick recipe) — must light the scope's kick
+        // lane on (only) their fire hops, end to end through the streaming
+        // analyzer: VQT → KickRidges → fired() → `ScopeColumn::onsets.kick`.
+        let mut a = StreamingSendAnalyzer::new(SR, 250.0, 2000.0);
+        a.set_scope(true);
+        let srf = SR as f32;
+        let mut buf = vec![0.0f32; (srf * 1.2) as usize];
+        for &start_s in &[0.25f32, 0.75] {
+            let start = (start_s * srf) as usize;
+            let mut ph = 0.0f32;
+            for j in 0..(SR as usize * 9 / 100) {
+                let t = j as f32 / srf;
+                let f = 120.0 * (45.0f32 / 120.0).powf(t / 0.09);
+                ph += f / srf;
+                buf[start + j] += 0.8 * (-t / 0.03).exp() * (std::f32::consts::TAU * ph).sin();
+            }
+        }
+        for chunk in buf.chunks(257) {
+            a.push(chunk);
+        }
+        let (mut cols, mut kick_cols) = (0, 0);
+        a.drain_scope_scalars(|c| {
+            cols += 1;
+            if c.onsets.kick > 0.999 {
+                kick_cols += 1;
+            }
+        });
+        assert!(cols > 0, "scope buffered columns");
+        assert_eq!(kick_cols, 2, "each synthetic kick fires the kick lane exactly once");
     }
 
     // ── Salience (D1) — synthetic columns, no FFT ────────────────────────

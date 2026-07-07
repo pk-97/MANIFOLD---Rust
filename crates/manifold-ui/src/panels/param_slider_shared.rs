@@ -320,12 +320,14 @@ mod audio_row_tests {
     /// drawer stayed at five buttons while serde/runtime shipped. This pins
     /// the row that actually feeds pixels.
     #[test]
-    fn feature_row_carries_pitch_and_presence() {
+    fn feature_row_carries_kick_pitch_and_presence() {
         let labels = audio_kind_labels();
-        assert_eq!(labels.len(), 7);
-        assert_eq!(labels[5], "Pitch");
-        assert_eq!(labels[6], "Presence");
-        assert_eq!(AUDIO_KIND_COUNT, 7);
+        assert_eq!(labels.len(), 8);
+        // Kick was inserted after Transients (index 4), shifting Pitch/Presence.
+        assert_eq!(labels[5], "Kick");
+        assert_eq!(labels[6], "Pitch");
+        assert_eq!(labels[7], "Presence");
+        assert_eq!(AUDIO_KIND_COUNT, 8);
         // Order-parity with core lives in manifold-app's ui_translate tests —
         // this crate deliberately cannot see manifold-core.
     }

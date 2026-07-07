@@ -470,11 +470,11 @@ impl AudioModRuntime {
         }
     }
 
-    /// Drain the tapped send's per-column overlay scalars (`[centroid_full,
-    /// centroid_low, centroid_mid, centroid_high]`, `[onset_low, onset_mid,
-    /// onset_high]`), oldest → newest, in lockstep with
+    /// Drain the tapped send's per-column overlay records (one
+    /// [`manifold_spectral::ScopeColumn`] each — centroid traces + onset tick
+    /// lanes), oldest → newest, in lockstep with
     /// [`Self::drain_spectrogram_columns`]. No-op when nothing is tapped.
-    pub fn drain_spectrogram_scalars(&mut self, f: impl FnMut([f32; 4], [f32; 3])) {
+    pub fn drain_spectrogram_scalars(&mut self, f: impl FnMut(manifold_spectral::ScopeColumn)) {
         if let Some(id) = self.spec_send.clone()
             && let Some(entry) = self.analyzers.get_mut(&id)
         {

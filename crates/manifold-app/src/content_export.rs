@@ -106,27 +106,73 @@ impl ContentThread {
         // wire it as the export's audio track. Mirrors live playback exactly
         // (warp / gain / solo); see manifold_playback::audio_mixdown. Aligned to
         // the export start, so audio_start_beat = start_beat → mux offset 0.
+        //
+        // P2 (docs/OFFLINE_AUDIO_REACTIVE_EXPORT_DESIGN.md): the same render
+        // also produces the mono buffers the offline audio-mod driver
+        // analyzes — "one render, two consumers, no drift between what is
+        // heard and what is analyzed" (design seam brief). `tapped_layers` is
+        // every layer any consumed send reads (union over
+        // `AudioSend::layers()`), so the mixdown renders exactly the taps the
+        // driver will need and no more.
+        let consumed_sends = project.analysis_consumed_sends();
+        let mut tapped_layers_set: ahash::AHashSet<manifold_core::id::LayerId> =
+            ahash::AHashSet::new();
+        for send in &project.audio_setup.sends {
+            if consumed_sends.contains(&send.id) {
+                tapped_layers_set.extend(send.layers().iter().cloned());
+            }
+        }
+        let tapped_layers: Vec<manifold_core::id::LayerId> =
+            tapped_layers_set.into_iter().collect();
+
         let mix_wav_path = format!("{}.mixdown.wav", export_config.output_path);
-        match manifold_playback::audio_mixdown::render_export_mix(
+        // Declared before `offline_audio_mod` so it outlives the driver that
+        // borrows its buffers (Rust drops locals in reverse declaration order).
+        let export_audio = match manifold_playback::audio_mixdown::render_export_audio(
             project,
             Beats::from_f32(start_beat),
             Beats::from_f32(end_beat),
             bpm,
             &mut tempo_map,
-            &mix_wav_path,
+            &tapped_layers,
         ) {
-            Ok(true) => {
-                export_config.audio_path = Some(mix_wav_path.clone());
-                export_config.audio_start_beat = start_beat;
-                export_config.audio_encoder_delay = 0.0;
-            }
-            Ok(false) => {
-                log::info!("[Export] No audio-layer clips in range — video-only export");
+            Ok(audio) => {
+                // Byte-identical WAV semantics to the old `render_export_mix`
+                // wrapper (P1-guaranteed): same Ok(true)/Ok(false)/Err handling.
+                match manifold_playback::audio_mixdown::write_export_wav(&audio, &mix_wav_path) {
+                    Ok(true) => {
+                        export_config.audio_path = Some(mix_wav_path.clone());
+                        export_config.audio_start_beat = start_beat;
+                        export_config.audio_encoder_delay = 0.0;
+                    }
+                    Ok(false) => {
+                        log::info!("[Export] No audio-layer clips in range — video-only export");
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[Export] Audio mixdown WAV write failed ({e}) — exporting video-only"
+                        );
+                    }
+                }
+                Some(audio)
             }
             Err(e) => {
                 log::warn!("[Export] Audio mixdown failed ({e}) — exporting video-only");
+                None
             }
-        }
+        };
+        // The offline audio-mod driver analyzes the rendered buffer directly —
+        // independent of whether the WAV muxing above succeeded, since that's
+        // a disk-write concern and this is the in-memory render (P2).
+        let mut offline_audio_mod = export_audio
+            .as_ref()
+            .and_then(|audio| {
+                crate::offline_audio_mod::OfflineAudioModDriver::new(
+                    project,
+                    audio,
+                    export_config.fps as f64,
+                )
+            });
 
         // Detect generator-only projects: no video clips means no decode
         // backpressure needed, enabling faster-than-realtime export.
@@ -275,6 +321,7 @@ impl ContentThread {
                     frame_dt,
                     state_tx,
                     generator_only,
+                    offline_audio_mod.as_mut(),
                 )
             });
             #[cfg(not(target_os = "macos"))]
@@ -286,6 +333,7 @@ impl ContentThread {
                 frame_dt,
                 state_tx,
                 generator_only,
+                offline_audio_mod.as_mut(),
             );
 
             if let Some(err) = frame_err {
@@ -379,6 +427,7 @@ impl ContentThread {
         frame_dt: f64,
         state_tx: &crossbeam_channel::Sender<ContentState>,
         generator_only: bool,
+        offline_audio_mod: Option<&mut crate::offline_audio_mod::OfflineAudioModDriver>,
     ) -> Option<String> {
         let ctx = TickContext {
             dt_seconds: Seconds(frame_dt),
@@ -387,6 +436,18 @@ impl ContentThread {
             frame_count: frame_idx as u64,
             export_fixed_dt: Seconds(frame_dt),
         };
+        // P2 (docs/OFFLINE_AUDIO_REACTIVE_EXPORT_DESIGN.md): feed this frame's
+        // export-rendered audio through the analyzer chain and write the
+        // resulting features into the engine's audio snapshot BEFORE the
+        // tick that consumes them for param modulation, param triggers, and
+        // live clip triggers — deterministic audio reactivity in the export.
+        // No restore after export: `AudioModRuntime::update` overwrites
+        // `snap.sends` unconditionally on every live tick (including its
+        // `active == false` branch, which still clears+resizes), so
+        // export-written features cannot leak into subsequent live playback.
+        if let Some(driver) = offline_audio_mod {
+            driver.feed_frame(frame_idx, &mut self.engine);
+        }
         let tick_result = self.engine.tick(ctx);
 
         // Wait for any in-flight video decodes to complete before rendering.
