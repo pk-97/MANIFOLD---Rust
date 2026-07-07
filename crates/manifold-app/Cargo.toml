@@ -70,6 +70,11 @@ objc2-app-kit = { version = "0.3", features = [
 [features]
 profiling = ["dep:manifold-profiler"]
 ui-snapshot = ["dep:image"]
+# P3 release-journey harness (docs/OFFLINE_AUDIO_REACTIVE_EXPORT_DESIGN.md):
+# headless end-to-end export proofs (audio-reactive + LFO + round-trip).
+# Deliberate-run only, like gpu-proofs — GPU + video encode, minutes-long.
+# `dep:image` for PNG luma decode, same optional dep `ui-snapshot` uses.
+journey-proofs = ["dep:image"]
 
 [lints]
 workspace = true

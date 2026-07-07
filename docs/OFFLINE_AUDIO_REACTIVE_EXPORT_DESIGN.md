@@ -1,9 +1,15 @@
-<!-- index: Offline audio-reactive export — feed export-rendered audio through the live SendAnalyzer chain per frame so audio-bound params move in rendered video; deterministic, live path untouched. Approved for build 2026-07-04. -->
+<!-- index: Offline audio-reactive export — feed export-rendered audio through the live SendAnalyzer chain per frame so audio-bound params move in rendered video; deterministic, live path untouched. SHIPPED P1–P3 2026-07-07 (journey-proofs feature = the standing proof). -->
 
 # Offline Audio-Reactive Export — Design & Implementation Contract
 
-**Status: DESIGNED (Fable, 2026-07-04). Sonnet-executable. Blocks nothing;
-unblocked by nothing — runs in its own lane.**
+**Status: SHIPPED P1–P3 (2026-07-07, Fable→Sonnet wave, branch
+`wave/offline-audio-export`) — L2 verified: exported video demonstrably moves
+with the audio (click-track luma ratio ~6.9×), survives save→reload, and two
+runs are bit-identical in extracted frames. P3 shipped as the standing
+`journey-proofs` cargo feature on manifold-app (run deliberately, like
+gpu-proofs; needs ffmpeg/ffprobe on PATH). L4 (Peter exports a real track and
+sees the pump) = VD-016. Landing report:
+`docs/landings/2026-07-07-offline-audio-reactive-export.md`.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 + §8 first.
 Anchors are a 2026-07-04 snapshot — re-verify before each phase.**
 
@@ -79,12 +85,17 @@ The live path is untouched by this design.
 pub fn render_export_mix(project, start_beat, end_beat, bpm, tempo_map, out_wav_path)
     -> Result<bool, String>
 
-// NEW (extracted core, same crate):
+// NEW (extracted core, same crate) — shipped shape (P1 amended the sketch:
+// the wrapper needs the stereo frames for the WAV, and Ok(false) semantics
+// need a flag computed against the original range, not the pre-roll):
 pub struct ExportAudio {
     pub sample_rate: u32,            // OUT_SAMPLE_RATE
-    pub master_mono: Vec<f32>,       // full mix, mono, whole range incl. 1s pre-roll
+    pub left: Vec<f32>,              // stereo master, whole render incl. pre-roll
+    pub right: Vec<f32>,
+    pub master_mono: Vec<f32>,       // downmix of the same frames (analysis consumer)
     pub per_layer_mono: AHashMap<LayerId, Vec<f32>>, // only layers referenced by any send
     pub pre_roll_samples: usize,
+    pub audible_in_range: bool,      // any clip contributed inside [start,end) — not the pre-roll
 }
 pub fn render_export_audio(project, start_beat, end_beat, bpm, tempo_map,
                            tapped_layers: &[LayerId]) -> Result<ExportAudio, String>
@@ -98,6 +109,15 @@ same rendered frames — one render, two consumers, no drift between what is hea
 and what is analyzed.
 
 ## Phases
+
+All three DONE 2026-07-07 (P1 `d207f94a`, P2 `bdbf50d5`, P3 `f2d4cc38` on
+`wave/offline-audio-export`). Execution drift folded in at orchestration time:
+the live path had gained per-send analysis gating (`analysis_consumed_sends()`),
+per-send pitch tracking (`sends_with_pitch_mods()`), and snapshot-fed param/clip
+triggers since the 07-04 snapshot — the offline driver mirrors all three, so
+exported video also fires transient triggers deterministically. P3 shipped
+bigger than briefed: the `journey-proofs` feature also proves LFO-in-export and
+save→reload→export fidelity (the release-journey seams from the priority queue).
 
 - **P1 — Mixdown seam.** Extract `render_export_audio`; wrapper preserves
   `render_export_mix` behavior. Gates: `-p manifold-playback --lib`; fixture

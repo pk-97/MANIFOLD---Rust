@@ -38,6 +38,12 @@ mod input_host;
 #[cfg(target_os = "macos")]
 mod macos_pasteboard;
 mod menu;
+mod offline_audio_mod;
+// P3 release-journey harness (docs/OFFLINE_AUDIO_REACTIVE_EXPORT_DESIGN.md):
+// headless end-to-end export proofs. Feature-gated, macOS-only (same
+// constraint as `run_export` itself — native Metal, no wgpu).
+#[cfg(all(feature = "journey-proofs", target_os = "macos"))]
+mod journey_proof;
 mod perform_mode;
 mod project_io;
 #[cfg(target_os = "macos")]
