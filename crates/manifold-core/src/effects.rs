@@ -520,11 +520,6 @@ pub struct PresetInstance {
     /// drives a param from a named audio send. `None` when unused. See
     /// `docs/AUDIO_MODULATION_DESIGN.md`.
     pub audio_mods: Option<Vec<crate::audio_mod::ParameterAudioMod>>,
-    /// Audio fires this instance's Trigger response (§8 D2): the kick pulses
-    /// the burst/reset/jump the generator (or effect, D5) already performs on
-    /// clip retrigger. `None` when unused. See
-    /// `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` §8.
-    pub audio_trigger: Option<crate::audio_trigger::AudioTriggerMod>,
     /// Per-instance timeline automation, keyed by `param_id` — a lane is a
     /// beat-indexed base writer sampled each tick (a tier-1 "hand"), riding
     /// on top of the same modulation pipeline audio_mods/drivers/envelopes
@@ -927,9 +922,6 @@ impl Serialize for PresetInstance {
         if self.audio_mods.is_some() {
             field_count += 1;
         }
-        if self.audio_trigger.is_some() {
-            field_count += 1;
-        }
         if self.automation_lanes.is_some() {
             field_count += 1;
         }
@@ -979,9 +971,6 @@ impl Serialize for PresetInstance {
         }
         if let Some(a) = &self.audio_mods {
             s.serialize_field("audioMods", a)?;
-        }
-        if let Some(a) = &self.audio_trigger {
-            s.serialize_field("audioTrigger", a)?;
         }
         if let Some(a) = &self.automation_lanes {
             s.serialize_field("automationLanes", a)?;
@@ -1034,9 +1023,6 @@ impl PresetInstance {
         if self.audio_mods.is_some() {
             field_count += 1;
         }
-        if self.audio_trigger.is_some() {
-            field_count += 1;
-        }
         if self.automation_lanes.is_some() {
             field_count += 1;
         }
@@ -1068,9 +1054,6 @@ impl PresetInstance {
         if let Some(a) = &self.audio_mods {
             s.serialize_field("audioMods", a)?;
         }
-        if let Some(a) = &self.audio_trigger {
-            s.serialize_field("audioTrigger", a)?;
-        }
         if let Some(a) = &self.automation_lanes {
             s.serialize_field("automationLanes", a)?;
         }
@@ -1082,6 +1065,48 @@ impl PresetInstance {
         }
         s.end()
     }
+}
+
+/// §9 U5 load migration: a legacy `audioTrigger` field (§8 D2's now-deleted
+/// `AudioTriggerMod`) converts to a `ParameterAudioMod` on the instance's
+/// trigger-gate param — the same param the `clip_trigger` toggle card lives
+/// on (`spec.is_trigger_gate`). Runs from BOTH `PresetInstance` Deserialize
+/// paths (effect `Raw` and generator `GeneratorInstanceRaw`), which is also
+/// the only choke point either V1 JSON or V2 ZIP load ever passes through
+/// (`manifold-io`'s loader deserializes the whole `Project` via one
+/// `serde_json::from_str`, so there is nothing V2-specific to wire).
+///
+/// `enabled` and `mode` carry over exactly; `sensitivity` (an input-gain-
+/// style fire-threshold knob) approximates onto `AudioModShape.sensitivity`
+/// (the closest surviving "how hard is this to trigger" knob) — U5 is
+/// explicit that exact-feel fidelity is NOT owed here, since the field
+/// existed in roughly one project for one day. No trigger-gate param on this
+/// instance (a hand-edited file, or one that predates the flag) drops the
+/// config with a warning rather than guessing a target.
+fn migrate_legacy_audio_trigger(
+    legacy: crate::audio_trigger::LegacyAudioTriggerMod,
+    params: &crate::params::ParamManifest,
+    audio_mods: &mut Option<Vec<crate::audio_mod::ParameterAudioMod>>,
+) {
+    let Some(gate_id) = params
+        .iter()
+        .find(|p| p.spec.is_trigger_gate)
+        .map(|p| p.spec.id.clone())
+    else {
+        log::warn!(
+            "[Migration] legacy audioTrigger config found no trigger-gate param on this \
+             instance; dropping it (the instance predates the trigger-gate flag or was \
+             hand-edited)"
+        );
+        return;
+    };
+
+    let crate::audio_mod::AudioModSource { send_id, feature } = legacy.source;
+    let mut m = crate::audio_mod::ParameterAudioMod::new(gate_id.into(), send_id, feature);
+    m.enabled = legacy.enabled;
+    m.trigger_mode = Some(legacy.mode);
+    m.shape.sensitivity = legacy.sensitivity;
+    audio_mods.get_or_insert_with(Vec::new).push(m);
 }
 
 impl<'de> Deserialize<'de> for PresetInstance {
@@ -1110,8 +1135,11 @@ impl<'de> Deserialize<'de> for PresetInstance {
             ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
             #[serde(default)]
             audio_mods: Option<Vec<crate::audio_mod::ParameterAudioMod>>,
-            #[serde(default)]
-            audio_trigger: Option<crate::audio_trigger::AudioTriggerMod>,
+            /// §9 U5: the deleted `AudioTriggerMod`'s wire shape, kept only so
+            /// an old project's `audioTrigger` field migrates onto
+            /// `audio_mods` below — see [`migrate_legacy_audio_trigger`].
+            #[serde(default, rename = "audioTrigger")]
+            legacy_audio_trigger: Option<crate::audio_trigger::LegacyAudioTriggerMod>,
             #[serde(default)]
             automation_lanes: Option<Vec<AutomationLane>>,
             #[serde(default)]
@@ -1136,6 +1164,11 @@ impl<'de> Deserialize<'de> for PresetInstance {
         let (params, base_tracked) =
             build_param_manifest(false, &raw.effect_type, &raw.graph, raw.params);
 
+        let mut audio_mods = raw.audio_mods;
+        if let Some(legacy) = raw.legacy_audio_trigger {
+            migrate_legacy_audio_trigger(legacy, &params, &mut audio_mods);
+        }
+
         Ok(PresetInstance {
             kind: crate::preset_def::PresetKind::Effect,
             id: raw.id,
@@ -1147,8 +1180,7 @@ impl<'de> Deserialize<'de> for PresetInstance {
             drivers: raw.drivers,
             envelopes: raw.envelopes,
             ableton_mappings: raw.ableton_mappings,
-            audio_mods: raw.audio_mods,
-            audio_trigger: raw.audio_trigger,
+            audio_mods,
             automation_lanes: raw.automation_lanes,
             group_id: raw.group_id,
             graph: raw.graph,
@@ -1184,8 +1216,10 @@ struct GeneratorInstanceRaw {
     ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
     #[serde(default)]
     audio_mods: Option<Vec<crate::audio_mod::ParameterAudioMod>>,
-    #[serde(default)]
-    audio_trigger: Option<crate::audio_trigger::AudioTriggerMod>,
+    /// §9 U5: see `Raw::legacy_audio_trigger` on the effect-kind Deserialize
+    /// impl above — same migration, generator wire shape.
+    #[serde(default, rename = "audioTrigger")]
+    legacy_audio_trigger: Option<crate::audio_trigger::LegacyAudioTriggerMod>,
     #[serde(default)]
     automation_lanes: Option<Vec<AutomationLane>>,
     /// The generator's per-instance graph override. Lives on the generator
@@ -1205,6 +1239,10 @@ impl GeneratorInstanceRaw {
         // `params` map by id.
         let (params, base_tracked) =
             build_param_manifest(true, &self.generator_type, &self.graph, self.params);
+        let mut audio_mods = self.audio_mods;
+        if let Some(legacy) = self.legacy_audio_trigger {
+            migrate_legacy_audio_trigger(legacy, &params, &mut audio_mods);
+        }
         PresetInstance {
             kind: crate::preset_def::PresetKind::Generator,
             id: generate_effect_id(),
@@ -1216,8 +1254,7 @@ impl GeneratorInstanceRaw {
             drivers: self.drivers,
             envelopes: self.envelopes,
             ableton_mappings: self.ableton_mappings,
-            audio_mods: self.audio_mods,
-            audio_trigger: self.audio_trigger,
+            audio_mods,
             automation_lanes: self.automation_lanes,
             group_id: None,
             graph: self.graph,
@@ -1312,7 +1349,6 @@ impl PresetInstance {
             envelopes: None,
             ableton_mappings: None,
             audio_mods: None,
-            audio_trigger: None,
             automation_lanes: None,
             group_id: None,
             graph: None,
@@ -1342,7 +1378,6 @@ impl PresetInstance {
             envelopes: None,
             ableton_mappings: None,
             audio_mods: None,
-            audio_trigger: None,
             automation_lanes: None,
             group_id: None,
             graph: None,
@@ -2202,15 +2237,34 @@ impl PresetInstance {
         self.audio_mods.as_ref().is_some_and(|v| !v.is_empty())
     }
 
-    /// This instance's audio-trigger config iff it is ARMED — the single
-    /// owner of "an audio trigger consumes analysis". Every walker that
-    /// decides whether audio capture/analysis is needed (or which sends it
-    /// must cover) goes through here alongside its `audio_mods` arm; reading
-    /// `audio_trigger` directly skips the enabled check and re-opens the bug
-    /// where an armed trigger config never turned the capture worker on
-    /// (found live 2026-07-07: armed drawer, silent send, no fires).
-    pub fn active_audio_trigger(&self) -> Option<&crate::audio_trigger::AudioTriggerMod> {
-        self.audio_trigger.as_ref().filter(|t| t.enabled)
+    /// Whether this instance's clip-launch edge should count toward its own
+    /// Trigger response (§9 U3, supersedes the deleted `AudioTriggerMod::
+    /// clip_edge_enabled`). Finds an ENABLED `audio_mods` entry targeting a
+    /// trigger-gate param (`spec.is_trigger_gate`); none found means no audio
+    /// config exists for this gate, so the clip edge is unconditionally on
+    /// (the pre-§8 behavior, unchanged). A DISABLED mod is semantically
+    /// absent — the same "disabled means absent" rule the old per-instance
+    /// config used to own (the bug that shipped a disarmed Transient config
+    /// silently killing clip triggers on reload), now expressed with zero
+    /// trigger-specific storage: a fire-mode mod is just a normal audio mod.
+    pub fn clip_edge_enabled(&self) -> bool {
+        let Some(mods) = self.audio_mods.as_ref() else {
+            return true;
+        };
+        let gate_mod = mods.iter().find(|m| {
+            m.enabled
+                && self
+                    .params
+                    .get(m.param_id.as_ref())
+                    .is_some_and(|p| p.spec.is_trigger_gate)
+        });
+        match gate_mod {
+            None => true,
+            Some(m) => m
+                .trigger_mode
+                .unwrap_or(crate::audio_trigger::TriggerFireMode::Both)
+                .wants_clip_edge(),
+        }
     }
 }
 
@@ -3663,7 +3717,6 @@ mod tests {
             envelopes: None,
             ableton_mappings: None,
             audio_mods: None,
-            audio_trigger: None,
             automation_lanes: None,
             group_id: None,
             graph: None,
@@ -3699,7 +3752,6 @@ mod tests {
             envelopes: None,
             ableton_mappings: None,
             audio_mods: None,
-            audio_trigger: None,
             automation_lanes: None,
             group_id: None,
             graph: None,
@@ -4675,4 +4727,147 @@ mod tests {
     // gone; every param is now addressed by stable id everywhere (card
     // display, pruning, and runtime modulation resolution alike), so
     // there is no positional index to disagree in the first place.
+
+    // ── §9 U1: unified trigger-gate mods ─────────────────────────────────
+
+    /// A bundled `is_trigger_gate` param — mirrors [`slot`] but flips the
+    /// gate flag, the same way a `clip_trigger` toggle card ships on the 11
+    /// trigger-responsive generator presets.
+    fn gate_slot(id: &str) -> crate::params::Param {
+        let mut p = slot(id, 0.0, true);
+        p.spec.is_toggle = true;
+        p.spec.is_trigger_gate = true;
+        p
+    }
+
+    #[test]
+    fn clip_edge_enabled_matrix() {
+        use crate::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, ParameterAudioMod};
+        use crate::audio_trigger::TriggerFireMode;
+        use crate::id::AudioSendId;
+
+        let mut inst = PresetInstance::new(PresetTypeId::new("TestGate"));
+        inst.params.push(gate_slot("clip_trigger"));
+
+        // No mod at all → clip edge unconditionally on (pre-§8 behavior).
+        assert!(inst.clip_edge_enabled());
+
+        let mut m = ParameterAudioMod::new(
+            "clip_trigger".into(),
+            AudioSendId::new("send-1"),
+            AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+        );
+        m.trigger_mode = Some(TriggerFireMode::Transient);
+        m.enabled = false;
+        inst.audio_mods_mut().push(m);
+
+        // Disabled mod → disabled-means-absent, clip edge stays on.
+        assert!(inst.clip_edge_enabled(), "disabled mod must be inert");
+
+        inst.audio_mods.as_mut().unwrap()[0].enabled = true;
+        assert!(!inst.clip_edge_enabled(), "armed Transient mode gates the clip edge");
+
+        inst.audio_mods.as_mut().unwrap()[0].trigger_mode = Some(TriggerFireMode::ClipEdge);
+        assert!(inst.clip_edge_enabled());
+
+        inst.audio_mods.as_mut().unwrap()[0].trigger_mode = Some(TriggerFireMode::Both);
+        assert!(inst.clip_edge_enabled());
+    }
+
+    #[test]
+    fn legacy_audio_trigger_migrates_onto_a_parameter_audio_mod_on_the_gate_param() {
+        // The exact `audioTrigger` shape a project saved during the one day
+        // §8's `AudioTriggerMod` shipped (see
+        // `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` §9 U5). A generator-kind
+        // instance's `graph.presetMetadata.params` is the only route to an
+        // `is_trigger_gate` param outside the JSON preset path (the
+        // compile-time `ParamSpec` inventory format has no field for it —
+        // see `generator_registration::ParamSpec::to_param_def`), so the
+        // fixture carries its own minimal per-instance graph.
+        let json = r#"{
+            "generatorType": "TestGenTrig",
+            "graph": {
+                "version": 2,
+                "presetMetadata": {
+                    "id": "TestGenTrig",
+                    "displayName": "Test Gen Trig",
+                    "category": "Test",
+                    "oscPrefix": "testGenTrig",
+                    "params": [
+                        {
+                            "id": "clip_trigger",
+                            "name": "Clip Trigger",
+                            "min": 0.0,
+                            "max": 1.0,
+                            "defaultValue": 0.0,
+                            "isToggle": true,
+                            "isTriggerGate": true
+                        }
+                    ],
+                    "bindings": []
+                },
+                "nodes": [],
+                "wires": []
+            },
+            "audioTrigger": {
+                "enabled": false,
+                "source": {
+                    "sendId": "e14b42f8",
+                    "feature": { "kind": "transients", "band": "full" }
+                },
+                "sensitivity": 1.0,
+                "mode": "transient"
+            }
+        }"#;
+
+        let mut de = serde_json::Deserializer::from_str(json);
+        let inst = deserialize_generator_instance(&mut de).unwrap();
+
+        assert_eq!(inst.kind, crate::preset_def::PresetKind::Generator);
+        let mods = inst
+            .audio_mods
+            .as_ref()
+            .expect("legacy audioTrigger must migrate onto audio_mods");
+        assert_eq!(mods.len(), 1);
+        let m = &mods[0];
+        assert_eq!(m.param_id.as_ref(), "clip_trigger", "targets the gate param");
+        assert!(!m.enabled, "legacy enabled=false carries over");
+        assert_eq!(m.source.send_id, crate::id::AudioSendId::new("e14b42f8"));
+        assert_eq!(
+            m.source.feature,
+            crate::audio_mod::AudioFeature::new(
+                crate::audio_mod::AudioFeatureKind::Transients,
+                crate::audio_mod::AudioBand::Full
+            )
+        );
+        assert_eq!(
+            m.trigger_mode,
+            Some(crate::audio_trigger::TriggerFireMode::Transient)
+        );
+        assert_eq!(m.shape.sensitivity, 1.0, "sensitivity approximates onto Amount (U5)");
+    }
+
+    #[test]
+    fn legacy_audio_trigger_with_no_gate_param_is_dropped_not_guessed() {
+        // No `isTriggerGate` param anywhere on the instance → the migration
+        // has no target to attach to and must drop the config rather than
+        // guess one (a hand-edited file, or an instance saved before the
+        // flag existed).
+        let json = r#"{
+            "generatorType": "TestGenTrigNoGate",
+            "audioTrigger": {
+                "enabled": true,
+                "source": {
+                    "sendId": "send-1",
+                    "feature": { "kind": "transients", "band": "full" }
+                },
+                "sensitivity": 0.5,
+                "mode": "both"
+            }
+        }"#;
+
+        let mut de = serde_json::Deserializer::from_str(json);
+        let inst = deserialize_generator_instance(&mut de).unwrap();
+        assert!(inst.audio_mods.is_none(), "no gate param means nothing to migrate onto");
+    }
 }

@@ -369,6 +369,15 @@ pub struct ParameterAudioMod {
     /// serialized.
     #[serde(skip)]
     pub fire_count: u32,
+    /// §9 U1/U3: when this mod's target param is a trigger-gate card
+    /// (`spec.is_trigger_gate`), which events fire the gate's trigger
+    /// response — `ClipEdge`/`Transient`/`Both`. `None` on every non-gate
+    /// target (the vast majority of mods); serde skip-none so ordinary audio
+    /// mods stay byte-identical. Supersedes the deleted `AudioTriggerMod`
+    /// (§8 D2) — a fire-mode mod is now a normal `ParameterAudioMod`, not a
+    /// parallel per-instance config type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_mode: Option<crate::audio_trigger::TriggerFireMode>,
 }
 
 fn default_true() -> bool {
@@ -387,6 +396,7 @@ impl ParameterAudioMod {
             prev_raw: 0.0,
             trigger_edge: crate::audio_trigger::TransientEdge::default(),
             fire_count: 0,
+            trigger_mode: None,
         }
     }
 }
@@ -548,5 +558,22 @@ mod tests {
         assert_eq!(m, back);
         // Runtime state is not serialized.
         assert!(!json.contains("smoothed"));
+        // §9 U3: `trigger_mode` is `None` on an ordinary (non-gate) mod and
+        // must not appear on the wire — old projects stay byte-identical.
+        assert!(!json.contains("triggerMode"));
+    }
+
+    #[test]
+    fn trigger_mode_round_trips_when_set() {
+        let mut m = ParameterAudioMod::new(
+            "clip_trigger".into(),
+            AudioSendId::new("send-1"),
+            AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+        );
+        m.trigger_mode = Some(crate::audio_trigger::TriggerFireMode::Both);
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(json.contains("triggerMode"));
+        let back: ParameterAudioMod = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.trigger_mode, Some(crate::audio_trigger::TriggerFireMode::Both));
     }
 }

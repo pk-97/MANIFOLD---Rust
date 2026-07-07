@@ -54,7 +54,7 @@ pub use audio_mod::{
 pub use audio_setup::{
     AudioDeviceRef, AudioSend, AudioSendSource, AudioSetup, AudioSourceKind, SendAnalysisConfig,
 };
-pub use audio_trigger::{AudioTriggerMod, TransientEdge, TriggerFireMode, TriggerRoute};
+pub use audio_trigger::{TransientEdge, TriggerFireMode, TriggerRoute};
 pub use id::{AudioSendId, ClipId, EffectGroupId, EffectId, LayerId, MarkerId, NodeId, SceneId};
 pub use layer::OverlapAction;
 pub use macro_bank::{

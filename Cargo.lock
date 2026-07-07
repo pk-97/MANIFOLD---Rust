@@ -2295,6 +2295,7 @@ dependencies = [
  "ahash",
  "arc-swap",
  "inventory",
+ "log",
  "manifold-foundation",
  "serde",
  "serde_json",
