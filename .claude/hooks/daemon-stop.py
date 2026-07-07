@@ -52,8 +52,15 @@ REPO_ROOT = os.path.normpath(os.path.join(HOOKS_DIR, "..", ".."))
 
 STOPBLOCK_MAX_AGE = 24 * 60 * 60  # sentinels older than a day are stale, sweep them
 
-# Catch-up wait bounds (DESIGN.md §2 re-ruling, 2026-07-05).
-STOP_WAIT_CAP_S = 6.0
+# Catch-up wait bounds (DESIGN.md §2 re-ruling + §2h.6 forensics, 2026-07-07).
+# STOP_WAIT_CAP_S was 6.0 until the forensics run: all 11 TEXT-ONLY-RACE late
+# fires ran to EXACTLY the 6.0s cap (durations clustered 6130-6250ms), meaning
+# the classifier was close behind and the cap — not observer death — was the
+# binding constraint. §2h.6(b) re-prices that trade per Peter's 2026-07-07
+# metric ruling ("the daemon must fire BEFORE my next message — otherwise
+# it's pointless"). Throttling degradation unchanged: dead/stale observer
+# still means no wait at all.
+STOP_WAIT_CAP_S = 10.0
 # §2h.6(a): gap between the transcript stats at Stop entry — see
 # _stable_transcript_size below.
 STOP_STAT_GAP_S = 0.2

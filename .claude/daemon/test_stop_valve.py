@@ -720,10 +720,11 @@ def test_stop_wait_bounded_when_observer_stalls():
         start = time.time()
         out = run_hook({"session_id": session, "prompt_id": "pw5", "transcript_path": transcript}, td)
         elapsed = time.time() - start
-        # The stable-file double-stat (§2h.6(a)) adds one ~0.2s gap before
-        # the deadline is armed, hence the slack on both bounds.
-        check("stalled observer: returns within cap + slack", elapsed < 7.7, elapsed)
-        check("stalled observer: waited to the cap, not less", elapsed > 5.0, elapsed)
+        # Cap raised 6.0 -> 10.0 (§2h.6(b)); the stable-file double-stat
+        # (§2h.6(a)) adds one ~0.2s gap before the deadline is armed, hence
+        # the slack on both bounds.
+        check("stalled observer: returns within cap + slack", elapsed < 12.0, elapsed)
+        check("stalled observer: waited to the cap, not less", elapsed > 9.5, elapsed)
         check("stalled observer: no block", not out, out)
 
     with_temp_verdicts(run)
