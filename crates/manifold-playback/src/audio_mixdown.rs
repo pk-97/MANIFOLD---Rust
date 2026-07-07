@@ -192,3 +192,173 @@ fn write_wav_i16(path: &str, sample_rate: u32, left: &[f32], right: &[f32]) -> R
     w.flush().map_err(|e| format!("flush WAV '{path}': {e}"))?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifold_core::clip::TimelineClip;
+    use manifold_core::layer::Layer;
+    use manifold_core::Seconds;
+    use std::f32::consts::PI;
+
+    /// FNV-1a 64-bit hash — inline, no dependency, good enough to catch any
+    /// byte-level drift in the written WAV.
+    fn fnv1a_hash(bytes: &[u8]) -> u64 {
+        const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+        const PRIME: u64 = 0x100000001b3;
+        let mut hash = OFFSET_BASIS;
+        for &b in bytes {
+            hash ^= b as u64;
+            hash = hash.wrapping_mul(PRIME);
+        }
+        hash
+    }
+
+    /// Writes a small stereo WAV fixture (440Hz tone + 3Hz slow component, so
+    /// the resample path has real signal to interpolate) at `sample_rate` —
+    /// deliberately != 48kHz so the mixdown's resample path actually runs.
+    fn write_test_fixture_wav(path: &std::path::Path, sample_rate: u32, duration_secs: f32) {
+        let n = (sample_rate as f32 * duration_secs) as usize;
+        let mut left = vec![0.0f32; n];
+        let mut right = vec![0.0f32; n];
+        for i in 0..n {
+            let t = i as f32 / sample_rate as f32;
+            let s = 0.5 * (2.0 * PI * 440.0 * t).sin() + 0.2 * (2.0 * PI * 3.0 * t).sin();
+            left[i] = s;
+            right[i] = s * 0.9; // slightly different right channel so L/R aren't identical
+        }
+        write_wav_i16(path.to_str().unwrap(), sample_rate, &left, &right)
+            .expect("write test fixture wav");
+    }
+
+    /// Builds the fixture project used by the pre/post-refactor byte-identity
+    /// gate: three audio layers (normal gain, non-unity gain with a
+    /// non-integer-beat clip start, and one muted layer that must not
+    /// contribute), each with one clip backed by a 44.1kHz fixture file.
+    /// Returns `(project, fixture_dir)` — the fixture dir must outlive the
+    /// call to `render_export_mix`/`render_export_audio`.
+    fn build_fixture_project() -> (Project, tempfile_dir::TestDir) {
+        let dir = tempfile_dir::TestDir::new("manifold_audio_mixdown_test");
+        let wav_path = dir.path().join("tone.wav");
+        write_test_fixture_wav(&wav_path, 44_100, 2.0);
+        let wav_path_str = wav_path.to_str().unwrap().to_string();
+
+        let mut project = Project::default();
+        project.settings.bpm = Bpm(120.0);
+
+        let mut layer_normal = Layer::new_audio("Normal".to_string(), 0);
+        layer_normal.clips.push(TimelineClip::new_audio(
+            wav_path_str.clone(),
+            Beats(0.0),
+            Beats(20.0),
+            Seconds(0.0),
+            Seconds(2.0),
+        ));
+
+        let mut layer_gain = Layer::new_audio("Gain".to_string(), 1);
+        layer_gain.audio_gain_db = 6.0; // non-unity gain
+        layer_gain.clips.push(TimelineClip::new_audio(
+            wav_path_str.clone(),
+            Beats(0.5), // non-integer beat start
+            Beats(19.5),
+            Seconds(0.0),
+            Seconds(2.0),
+        ));
+
+        let mut layer_muted = Layer::new_audio("Muted".to_string(), 2);
+        layer_muted.is_muted = true;
+        layer_muted.clips.push(TimelineClip::new_audio(
+            wav_path_str,
+            Beats(0.0),
+            Beats(20.0),
+            Seconds(0.0),
+            Seconds(2.0),
+        ));
+
+        project.timeline.layers.push(layer_normal);
+        project.timeline.layers.push(layer_gain);
+        project.timeline.layers.push(layer_muted);
+
+        (project, dir)
+    }
+
+    /// Minimal self-cleaning temp-dir helper — no `tempfile` dependency.
+    mod tempfile_dir {
+        use std::path::{Path, PathBuf};
+
+        pub struct TestDir(PathBuf);
+
+        impl TestDir {
+            pub fn new(prefix: &str) -> Self {
+                let dir = std::env::temp_dir().join(format!(
+                    "{prefix}_{}_{}",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos())
+                        .unwrap_or(0)
+                ));
+                std::fs::create_dir_all(&dir).expect("create test fixture dir");
+                Self(dir)
+            }
+
+            pub fn path(&self) -> &Path {
+                &self.0
+            }
+        }
+
+        impl Drop for TestDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+    }
+
+    #[test]
+    fn render_export_mix_byte_identity_fixture() {
+        let (project, _dir) = build_fixture_project();
+        let mut tempo_map = TempoMap::default();
+        let out_dir = tempfile_dir::TestDir::new("manifold_audio_mixdown_out");
+        let out_path = out_dir.path().join("mix.wav");
+
+        let wrote = render_export_mix(
+            &project,
+            Beats(2.0),
+            Beats(6.0),
+            Bpm(120.0),
+            &mut tempo_map,
+            out_path.to_str().unwrap(),
+        )
+        .expect("render_export_mix should succeed");
+        assert!(wrote, "expected audio in range to produce a WAV");
+
+        let bytes = std::fs::read(&out_path).expect("read written wav");
+        let hash = fnv1a_hash(&bytes);
+        // Recorded from the unmodified pre-refactor code (P1 gate literal —
+        // do NOT update this to make a refactor pass; a changed hash means
+        // the refactor changed behavior).
+        assert_eq!(
+            hash, 0xaa873b48d8b143e1,
+            "mixdown byte-identity gate: WAV bytes changed (hash was {hash:#x})"
+        );
+    }
+
+    #[test]
+    fn render_export_mix_empty_range_returns_ok_false() {
+        let (project, _dir) = build_fixture_project();
+        let mut tempo_map = TempoMap::default();
+        let out_dir = tempfile_dir::TestDir::new("manifold_audio_mixdown_empty_out");
+        let out_path = out_dir.path().join("empty.wav");
+
+        let wrote = render_export_mix(
+            &project,
+            Beats(1000.0),
+            Beats(1004.0),
+            Bpm(120.0),
+            &mut tempo_map,
+            out_path.to_str().unwrap(),
+        )
+        .expect("render_export_mix should succeed on empty range");
+        assert!(!wrote, "expected no audio in an out-of-range window");
+    }
+}
