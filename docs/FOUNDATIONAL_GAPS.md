@@ -45,28 +45,26 @@ saves. Kill it if a survey of the actual snapshot fields shows they're too
 irregular to tabulate — the tell would be a "declarative" layer that's mostly
 escape hatches.
 
-### A2. Bitmap-UI layout/clipping/z: every panel hand-computes geometry (stage risk: MED-HIGH)
+### A2. Bitmap-UI bounds enforcement: clipping is opt-in, z is build order (stage risk: MED-HIGH) — **DESIGNED 2026-07-07**
 
-**Evidence.** Six backlog entries are one bug recurring per panel: BUG-015
-(overlapping sections), BUG-025 (clip bleed across rows), BUG-027 (preview on
-wrong z), BUG-047 (panel overflow), BUG-049 (double-paid indent), BUG-060
-(content over footer). Three invariant memories exist solely to warn about it:
-`single-source-y-layout`, `subregion-scissor-invariant`,
-`track-header-invariant`. `82ce2f35` ("one Y source + one scroll owner") fixed
-the class for the timeline only.
+**Corrected 2026-07-07 (same day, after running the kill-test).** The first
+draft said "every panel hand-computes geometry" — under-credited:
+`UI_ARCHITECTURE_OVERHAUL.md` shipped completely (phases 0–8, 2026-06-23) with
+`ScreenLayout`, the declarative chrome API, and one input owner. What the
+overhaul did NOT cover is precisely two properties: **pixel clipping is opt-in
+per panel** (`CLIPS_CHILDREN`, node.rs:381 — the inspector never set it,
+BUG-060) and **stacking is insertion order** (`draw_order = self.count`,
+tree.rs:247 — overlays have a z registry, base panels don't).
 
-**The missing system.** A layout/clip contract for `manifold-ui`: panels
-declare rows/regions and receive computed rects, scissors, and z from one
-owner, instead of each panel adding offsets by hand. The timeline's "one Y
-source, one scroll owner" fix is the proven shape — generalize it to
-panels/popups/footers. `UI_TRANSFORM_STACK_DESIGN.md` is adjacent (transforms)
-but does not cover layout ownership.
+**Evidence.** The post-overhaul bug family: BUG-060 (inspector over footer),
+BUG-047 (panel overflow), BUG-027 (editor-window preview z), BUG-025 (row
+bleed). The kill-test split the original six: BUG-049 is row *arithmetic* and
+BUG-015 is *state-sync* (A1) — different mechanisms, removed from this entry.
 
-**Kill-test.** The bitmap UI is deliberately immediate and simple; a
-constraint solver is the wrong species here (`dont-cascade-redesign`). Kill it
-if the six bugs turn out to live in three unrelated mechanisms — the entry
-stands only if they share the "hand-computed geometry" root. Scope check
-before design: count how many panels would actually adopt the owner.
+**The system — designed, not built:** `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md`
+(PROPOSED 2026-07-07): region roots are the only way to root a top-level
+subtree, clip by construction, four declared z tiers, structural enforcement
+test, both windows + perform surface. P1–P3, Sonnet-ready.
 
 ### A3. Input ownership beyond the pointer (stage risk: MED — pointer half already designed)
 
