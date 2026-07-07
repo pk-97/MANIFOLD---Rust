@@ -79,8 +79,13 @@ fn band_edges(cfg: &SpectrogramConfig, num_bins: usize, low_hz: f32, mid_hz: f32
 /// n_fft-sample tail ending at sample (i+1)·hop, zero-padded before the stream
 /// fills one window. Floor off ⇒ lin floor at `db_min` (the push-loop default).
 fn build_clip(mono: &[f32], sr: u32, low_hz: f32, mid_hz: f32) -> Clip {
-    let cfg = SpectrogramConfig::default();
     let srf = sr as f32;
+    // BUG-052 parity: the live analyzer derives hop/n_fft from the device rate
+    // so a hop is always ~5.33 ms; without this the prototype hops 256 samples
+    // at NATIVE rate (5.8 ms at 44.1k fixtures) — an 8.8% cadence drift that
+    // flips borderline ridge fires and breaks the exact-match gate (surfaced
+    // by the 2026-07-07 w10→w6 kick retune; masked at w10).
+    let cfg = SpectrogramConfig::default().with_time_grid_for(srf);
     let num_bins = cfg.num_bins(srf).max(1);
     let n_fft = cfg.n_fft;
     let hop = cfg.hop.max(1);
@@ -215,6 +220,18 @@ enum Mask {
     /// criterion, it does not stack with it: the base path here is plain
     /// SuperFlux (clean tracks) OR the ridge event (bass-heavy tracks).
     RidgeTrack { drop_bins: f32, win: usize, step_max: f32, min_peak: f32 },
+    /// Round 6 — RidgeTrack + a birth-attack gate, hunting the short-window
+    /// false-fire cost. Short confirmation windows (w6-7) halve the fire
+    /// latency and lift ±35 ms recall ~37→53, but admit fast wobble-bass
+    /// slides (drop 8 in 6 hops is within an LFO filter-sweep's reach). The
+    /// discriminator is the ATTACK: a kick ADDS broadband sub energy at ridge
+    /// birth; a wobble slide only REDISTRIBUTES it — and the max-filtered
+    /// SuperFlux ODF (already computed per hop) measures exactly "new energy,
+    /// motion excluded." A ridge may only fire if the Low-band ODF spiked
+    /// ≥ `gate` within its first ~3 hops (±2 hops of birth for VQT smear).
+    /// `gate` is in ODF units (band positive-dB sum: attacks are tens to
+    /// hundreds, wobble under the max-filter is near zero).
+    RidgeGate { drop_bins: f32, win: usize, step_max: f32, min_peak: f32, gate: f32 },
 }
 
 impl Mask {
@@ -230,11 +247,14 @@ impl Mask {
             Mask::RidgeTrack { drop_bins, win, step_max, min_peak } => {
                 format!("R d={drop_bins:.0} w={win} s={step_max:.0} p={min_peak:.2}")
             }
+            Mask::RidgeGate { drop_bins, win, gate, .. } => {
+                format!("RG d={drop_bins:.0} w={win} g={gate:.0}")
+            }
         }
     }
     fn h_window(self) -> Option<usize> {
         match self {
-            Mask::Baseline | Mask::Sweep { .. } | Mask::RidgeTrack { .. } => None,
+            Mask::Baseline | Mask::Sweep { .. } | Mask::RidgeTrack { .. } | Mask::RidgeGate { .. } => None,
             Mask::Sub { h, .. }
             | Mask::Gate { h, .. }
             | Mask::Wiener { h, .. }
@@ -277,13 +297,18 @@ impl Mask {
             Mask::NovFloor { .. }
             | Mask::OrFloor { .. }
             | Mask::Sweep { .. }
-            | Mask::RidgeTrack { .. } => col,
+            | Mask::RidgeTrack { .. }
+            | Mask::RidgeGate { .. } => col,
         }
     }
-    fn ridge_params(self) -> Option<(f32, usize, f32, f32)> {
+    /// (drop_bins, win, step_max, min_peak, attack_gate); gate 0.0 = ungated.
+    fn ridge_params(self) -> Option<(f32, usize, f32, f32, f32)> {
         match self {
             Mask::RidgeTrack { drop_bins, win, step_max, min_peak } => {
-                Some((drop_bins, win, step_max, min_peak))
+                Some((drop_bins, win, step_max, min_peak, 0.0))
+            }
+            Mask::RidgeGate { drop_bins, win, step_max, min_peak, gate } => {
+                Some((drop_bins, win, step_max, min_peak, gate))
             }
             _ => None,
         }
@@ -391,6 +416,22 @@ struct Track {
     gap: u8,
     fired: bool,
     birth: usize,
+    /// Max Low-band ODF seen in the ridge's birth window (±2 hops before birth
+    /// via the ODF history, first 3 extensions after). RidgeGate's fire
+    /// criterion; 0-cost for RidgeTrack.
+    attack: f32,
+    /// Full apex-bin history since birth (miss-audit only; the fire logic never
+    /// reads it). Gap hops don't push, so index ≈ hops-since-birth ± gap slop.
+    hist: Vec<f32>,
+}
+
+/// One dead (or end-of-clip) Low-band track's lifecycle, for `--miss-audit`:
+/// classify each missed label by what its nearest ridge actually did.
+struct RidgeDiag {
+    birth: usize,
+    hist: Vec<f32>,
+    fired: bool,
+    attack: f32,
 }
 
 /// Replay the per-band fire logic over a clip with `mask` applied to the ODF's
@@ -405,8 +446,26 @@ struct Track {
 /// (flux OR ridge). Not shared engine state — a throwaway example toggle.
 static RIDGE_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Upper bound of the per-hop step gate (bins, f32 bits; default +1.0). The
+/// descent gate is [-step_max, STEP_UP]. +1 tolerates VQT jitter on a real
+/// sweep; in a dense noise-peak field (riser mid-sweep, snare tails) the
+/// asymmetric gate lets a track random-walk DOWNWARD — at short confirmation
+/// windows that walk reaches drop_bins and false-fires (riser Low 2→13 at
+/// d10/w6). 0/-1 demand a never-rising / strictly-falling ridge. `--stepup`.
+static RIDGE_STEP_UP: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0x3F80_0000); // 1.0f32
+
+/// Absolute peak floor (tilted-column units; default 0 = off, `--absfloor`).
+/// The relative floor (`min_peak` × band max) scales DOWN in quiet passages —
+/// after a riser's noise band ascends out of Low, the residual filter-skirt
+/// ripple is near-silent yet its local maxima still clear a relative floor,
+/// and a short-window track can random-walk down through them (riser Low
+/// 2→13 at d10/w6). A kick apex is loud in ABSOLUTE terms; skirt ripple is
+/// not. Peaks must clear BOTH floors.
+static RIDGE_ABS_FLOOR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 fn replay_fires(clip: &Clip, mask: Mask, est: &Estimates) -> [Vec<usize>; 4] {
-    replay_fires_dump(clip, mask, est, None)
+    replay_fires_dump(clip, mask, est, None, None)
 }
 
 /// Same replay with an optional per-hop trace: one CSV line per hop with each
@@ -417,6 +476,7 @@ fn replay_fires_dump(
     mask: Mask,
     est: &Estimates,
     mut dump: Option<&mut Vec<String>>,
+    mut ridge_diag: Option<&mut Vec<RidgeDiag>>,
 ) -> [Vec<usize>; 4] {
     let cfg = SpectrogramConfig::default();
     let (db_min, db_max) = (cfg.db_min, cfg.db_max);
@@ -545,14 +605,19 @@ fn replay_fires_dump(
                     }
                 }
                 // RidgeTrack criterion: multi-ridge descent, Low band only.
-                if let Some((drop_bins, win, step_max, min_peak)) =
+                if let Some((drop_bins, win, step_max, min_peak, attack_gate)) =
                     mask.ridge_params().filter(|_| bi == 1)
                 {
                     {
+                        let step_up =
+                            f32::from_bits(RIDGE_STEP_UP.load(std::sync::atomic::Ordering::Relaxed));
                         let col = clip.col(i);
                         // Peak-pick: local maxima above a fraction of the band max.
                         let band_max = col[lo..hi].iter().copied().fold(0.0f32, f32::max);
-                        let floor = band_max * min_peak;
+                        let abs_floor = f32::from_bits(
+                            RIDGE_ABS_FLOOR.load(std::sync::atomic::Ordering::Relaxed),
+                        );
+                        let floor = (band_max * min_peak).max(abs_floor);
                         let mut peaks: Vec<usize> = Vec::new();
                         let plo = lo.max(1);
                         for k in plo..hi.saturating_sub(1) {
@@ -574,7 +639,7 @@ fn replay_fires_dump(
                                     continue;
                                 }
                                 let d = pk as f32 - last;
-                                if (-step_max..=1.0).contains(&d) && d.abs() < best_d {
+                                if (-step_max..=step_up).contains(&d) && d.abs() < best_d {
                                     best_d = d.abs();
                                     best_j = Some(j);
                                 }
@@ -586,6 +651,12 @@ fn replay_fires_dump(
                                     tk.bins.pop_front();
                                 }
                                 tk.gap = 0;
+                                tk.hist.push(peaks[j] as f32);
+                                // Birth-attack window: the ODF spike may lag the
+                                // ridge birth by a hop or two (VQT smear).
+                                if tk.hist.len() <= 3 {
+                                    tk.attack = tk.attack.max(odf);
+                                }
                             } else {
                                 tk.gap += 1;
                             }
@@ -604,29 +675,69 @@ fn replay_fires_dump(
                             {
                                 continue;
                             }
+                            // Birth-attack gate (RidgeGate only): no new sub
+                            // energy near birth ⇒ a slide, not a kick.
+                            if attack_gate > 0.0 && tk.attack < attack_gate {
+                                continue;
+                            }
                             let front = *tk.bins.front().unwrap();
                             let back = *tk.bins.back().unwrap();
                             if front - back < drop_bins {
                                 continue;
                             }
                             let coherent = (1..tk.bins.len())
-                                .all(|w| (-step_max..=1.0).contains(&(tk.bins[w] - tk.bins[w - 1])));
+                                .all(|w| {
+                                    (-step_max..=step_up)
+                                        .contains(&(tk.bins[w] - tk.bins[w - 1]))
+                                });
                             if coherent {
                                 tk.fired = true;
                                 ridge_fire = true;
                             }
                         }
                         // Cull broken tracks; birth new ones from stray peaks.
+                        if let Some(diag) = ridge_diag.as_deref_mut() {
+                            for tk in tks.iter().filter(|tk| tk.gap > MAX_GAP) {
+                                diag.push(RidgeDiag {
+                                    birth: tk.birth,
+                                    hist: tk.hist.clone(),
+                                    fired: tk.fired,
+                                    attack: tk.attack,
+                                });
+                            }
+                        }
                         tks.retain(|tk| tk.gap <= MAX_GAP);
+                        // Birth attack: current hop's ODF plus the two before it
+                        // (hist push happens after this block, so 15/14 are the
+                        // previous two hops).
+                        let birth_attack =
+                            odf.max(hist[bi][ODF_MEDIAN_HOPS - 1]).max(hist[bi][ODF_MEDIAN_HOPS - 2]);
                         for (j, &pk) in peaks.iter().enumerate() {
                             if !consumed[j] {
                                 let mut b = VecDeque::with_capacity(win);
                                 b.push_back(pk as f32);
-                                tks.push(Track { bins: b, gap: 0, fired: false, birth: i });
+                                tks.push(Track {
+                                    bins: b,
+                                    gap: 0,
+                                    fired: false,
+                                    birth: i,
+                                    attack: birth_attack,
+                                    hist: vec![pk as f32],
+                                });
                             }
                         }
                         if tks.len() > MAX_TRACKS {
                             let drop_n = tks.len() - MAX_TRACKS;
+                            if let Some(diag) = ridge_diag.as_deref_mut() {
+                                for tk in &tks[..drop_n] {
+                                    diag.push(RidgeDiag {
+                                        birth: tk.birth,
+                                        hist: tk.hist.clone(),
+                                        fired: tk.fired,
+                                        attack: tk.attack,
+                                    });
+                                }
+                            }
                             tks.drain(0..drop_n);
                         }
                         // OR into the base fire, but dedup against the attack:
@@ -675,6 +786,17 @@ fn replay_fires_dump(
         }
         std::mem::swap(&mut prev_perc, &mut cur_perc);
     }
+    // Flush tracks still alive at end-of-clip so the miss-audit sees them.
+    if let Some(diag) = ridge_diag {
+        for tk in tracks[1].iter() {
+            diag.push(RidgeDiag {
+                birth: tk.birth,
+                hist: tk.hist.clone(),
+                fired: tk.fired,
+                attack: tk.attack,
+            });
+        }
+    }
     fires
 }
 
@@ -717,6 +839,86 @@ fn grade(fires: &[f32], labels: &[f32]) -> (usize, usize, usize) {
     let rec70 = labels.iter().filter(|&&l| matched_within(l, fires, 0.070)).count();
     let spurious = fires.iter().filter(|&&f| !matched_within(f, labels, 0.070)).count();
     (rec35, rec70, spurious)
+}
+
+/// Signed fire latency per recovered label: for each label with a fire within
+/// ±70 ms, the nearest fire's offset in ms (positive = fire AFTER the label's
+/// attack). The labels mark the attack (25% sub-envelope walk-back), so this is
+/// the detector's true latency — the metric the recall counts hide: a fire at
+/// +60 ms "recovers" the label at ±70 but reads as sloppy on stage.
+fn latencies_ms(fires: &[f32], labels: &[f32]) -> Vec<f32> {
+    labels
+        .iter()
+        .filter_map(|&l| {
+            fires
+                .iter()
+                .map(|&f| f - l)
+                .filter(|d| d.abs() <= 0.070)
+                .min_by(|a, b| a.abs().total_cmp(&b.abs()))
+        })
+        .map(|d| d * 1000.0)
+        .collect()
+}
+
+/// Classify one missed label from the Low-band ridge lifecycles (`--miss-audit`).
+/// The extension gate already enforces per-step coherence, so a miss is one of:
+/// no ridge born at the attack (peak-pick/floor), born too late (apex initially
+/// merged with a louder bass peak), killed by a >1-hop gap, too shallow a
+/// descent, fired-but-late, or reached the drop yet was swallowed
+/// (latch/refractory/age-cap). `hop_l` is the label time in hops.
+fn classify_miss(hop_l: f32, diags: &[RidgeDiag], drop_bins: f32, win: usize, gate: f32) -> String {
+    // Best coherent descent within any ≤win-length slice of a track's history.
+    let best_drop = |hist: &[f32]| -> f32 {
+        let mut best = 0.0f32;
+        for i in 0..hist.len() {
+            for j in (i + 1)..hist.len().min(i + win) {
+                best = best.max(hist[i] - hist[j]);
+            }
+        }
+        best
+    };
+    let born_in = |lo: f32, hi: f32| {
+        diags.iter().filter(move |d| {
+            let b = d.birth as f32;
+            b >= hop_l + lo && b <= hop_l + hi
+        })
+    };
+    let candidates: Vec<&RidgeDiag> = born_in(-4.0, 10.0).collect();
+    if candidates.is_empty() {
+        return if born_in(10.0, 17.0).next().is_some() {
+            "born-late (apex merged with bass at attack)".into()
+        } else {
+            "no-birth (no Low-band local max above floor)".into()
+        };
+    }
+    if candidates.iter().any(|d| d.fired) {
+        return "fired-late (>70ms after label)".into();
+    }
+    let best = candidates
+        .iter()
+        .max_by(|a, b| best_drop(&a.hist).total_cmp(&best_drop(&b.hist)))
+        .unwrap();
+    let (bd, len) = (best_drop(&best.hist), best.hist.len());
+    if len < win {
+        format!("gap-death (len {len} < win {win}, drop {bd:.0})")
+    } else if bd < drop_bins {
+        format!("shallow (drop {bd:.0} < {drop_bins:.0}, len {len})")
+    } else if gate > 0.0 && best.attack < gate {
+        format!("gated (attack {:.0} < {gate:.0}, drop {bd:.0})", best.attack)
+    } else {
+        format!("swallowed (drop {bd:.0} reached; latch/refractory/age-cap)")
+    }
+}
+
+/// (median, p90) of a latency sample, or None if empty.
+fn latency_stats(mut ms: Vec<f32>) -> Option<(f32, f32)> {
+    if ms.is_empty() {
+        return None;
+    }
+    ms.sort_unstable_by(f32::total_cmp);
+    let med = ms[ms.len() / 2];
+    let p90 = ms[(ms.len() * 9 / 10).min(ms.len() - 1)];
+    Some((med, p90))
 }
 
 // ── Synth scenarios, copied verbatim from mod_harness.rs (guard replay) ─────
@@ -910,6 +1112,22 @@ fn main() {
     if args.iter().any(|a| a == "--ridge-only") {
         RIDGE_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
     }
+    if let Some(v) = args
+        .iter()
+        .position(|a| a == "--stepup")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.parse::<f32>().ok())
+    {
+        RIDGE_STEP_UP.store(v.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    }
+    if let Some(v) = args
+        .iter()
+        .position(|a| a == "--absfloor")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.parse::<f32>().ok())
+    {
+        RIDGE_ABS_FLOOR.store(v.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    }
     let fixtures_root = args
         .iter()
         .position(|a| a == "--fixtures")
@@ -1030,6 +1248,38 @@ fn main() {
         if family == "ridge-final" {
             masks.push(Mask::RidgeTrack { drop_bins: 14.0, win: 10, step_max: 4.0, min_peak: 0.12 });
         }
+        // Any single ridge config from the command line (pairs with --miss-audit):
+        // `--family ridge-one --drop 8 --win 7`.
+        if family == "ridge-one" {
+            let get = |flag: &str, dflt: f32| -> f32 {
+                args.iter()
+                    .position(|a| a == flag)
+                    .and_then(|i| args.get(i + 1))
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(dflt)
+            };
+            let (drop_bins, win, step_max, min_peak) = (
+                get("--drop", 14.0),
+                get("--win", 10.0) as usize,
+                get("--step", 4.0),
+                get("--peak", 0.12),
+            );
+            let gate = get("--gate", 0.0);
+            masks.push(if gate > 0.0 {
+                Mask::RidgeGate { drop_bins, win, step_max, min_peak, gate }
+            } else {
+                Mask::RidgeTrack { drop_bins, win, step_max, min_peak }
+            });
+        }
+        // Round 6: the birth-attack gate over the short-window frontier.
+        // Reads recall vs bass-false-fires vs latency per gate step.
+        if family == "ridge-gate" {
+            for &(win, drop_bins) in &[(6usize, 8.0f32), (7, 8.0), (6, 10.0), (7, 10.0)] {
+                for &gate in &[10.0f32, 20.0, 40.0, 80.0] {
+                    masks.push(Mask::RidgeGate { drop_bins, win, step_max: 4.0, min_peak: 0.12, gate });
+                }
+            }
+        }
         // Ridge-only threshold placement (pair with `--ridge-only`): finer
         // drop_bins grid, bracketing the kick/bass-portamento line from below.
         // A 120→45 Hz kick clears ~2 bins/hop, so a win-10 window sees ~20 bins;
@@ -1038,6 +1288,26 @@ fn main() {
         if family == "ridge-sweep" {
             for &drop_bins in &[10.0f32, 12.0, 14.0, 16.0, 18.0, 20.0] {
                 for &win in &[8usize, 10, 12] {
+                    masks.push(Mask::RidgeTrack { drop_bins, win, step_max: 4.0, min_peak: 0.12 });
+                }
+            }
+        }
+        // Latency sweep: the fire lands when the confirmation window FILLS, so
+        // `win` is the structural latency (~5.3 ms/hop). Shorter windows fire
+        // earlier but see less of the descent, so drop_bins scales with win to
+        // stay between the kick's rate (~2 bins/hop over the window) and bass
+        // portamento (<1 bin/hop): drop ≈ [1.2×win .. 2×win]. Grades with the
+        // signed-offset stats (LATENCY section) to pick the earliest config on
+        // the recall/guard plateau.
+        if family == "ridge-latency" {
+            for &(win, drops) in &[
+                (5usize, &[6.0f32, 7.0, 8.0][..]),
+                (6, &[7.0, 8.0, 10.0][..]),
+                (7, &[8.0, 10.0, 12.0][..]),
+                (8, &[9.0, 10.0, 12.0, 14.0][..]),
+                (10, &[12.0, 14.0][..]),
+            ] {
+                for &drop_bins in drops {
                     masks.push(Mask::RidgeTrack { drop_bins, win, step_max: 4.0, min_peak: 0.12 });
                 }
             }
@@ -1075,6 +1345,13 @@ fn main() {
         .position(|a| a == "--dump")
         .and_then(|i| args.get(i + 1).cloned());
 
+    // `--miss-audit`: single-config families only (e.g. ridge-final). Replays
+    // the config with per-track lifecycle capture on every labeled clip, then
+    // classifies each missed label after the grading section.
+    let miss_audit = args.iter().any(|a| a == "--miss-audit");
+    let mut ridge_diags: std::collections::HashMap<String, Vec<RidgeDiag>> =
+        std::collections::HashMap::new();
+
     for (label, mono, sr) in &jobs {
         let clip = build_clip(mono, *sr, low_hz, mid_hz);
         let est = Estimates::build(&clip, &masks);
@@ -1087,11 +1364,20 @@ fn main() {
                     "hop,f_cand,f_thr,f_nov,f_pk,f_refr,f_fired,l_cand,l_thr,l_nov,l_pk,l_refr,l_fired,m_cand,m_thr,m_nov,m_pk,m_refr,m_fired,h_cand,h_thr,h_nov,h_pk,h_refr,h_fired"
                         .to_string(),
                 ];
-                replay_fires_dump(&clip, m, &est, Some(&mut lines));
+                replay_fires_dump(&clip, m, &est, Some(&mut lines), None);
                 let fname = format!("/tmp/hpss_dump/{}.csv", m.name().replace([' ', '='], "_"));
                 std::fs::write(&fname, lines.join("\n")).unwrap();
                 eprintln!("dumped {fname}");
             }
+        }
+        if miss_audit
+            && masks.len() == 2
+            && masks[1].ridge_params().is_some()
+            && (label.ends_with("/mix") || label.ends_with("/drums"))
+        {
+            let mut diag = Vec::new();
+            replay_fires_dump(&clip, masks[1], &est, None, Some(&mut diag));
+            ridge_diags.insert(label.clone(), diag);
         }
         clip_meta.push((label.clone(), *sr, clip.hop));
         results.insert(label.clone(), per_mask);
@@ -1217,11 +1503,14 @@ fn main() {
         let (mut mr35, mut mr70, mut msp, mut mn) = (0, 0, 0, 0);
         let (mut dr35, mut dr70, mut dsp, mut dn) = (0, 0, 0, 0);
         let mut mbass = 0; // mix fires near NO kick label AND NO drums-stem onset
+        let (mut mlat, mut dlat): (Vec<f32>, Vec<f32>) = (Vec::new(), Vec::new());
         let mut cells: Vec<String> = Vec::new();
         for t in TRACKS {
             let (ml, dl) = &labels[t];
             let mix_low = times(&format!("{t}/mix"), mi, 1);
             let drums_low = times(&format!("{t}/drums"), mi, 1);
+            mlat.extend(latencies_ms(&mix_low, ml));
+            dlat.extend(latencies_ms(&drums_low, dl));
             // Alibi for "a drum was here": the isolated drums stem's BASELINE
             // (mask-off) Low fires — approximate, but the only per-track drum-
             // activity oracle we have beyond the kick-only labels.
@@ -1247,10 +1536,41 @@ fn main() {
                 ml.len()
             ));
         }
+        // Spurious anatomy: is a mix false fire an ECHO of a real kick (a second
+        // track confirming 70-160 ms after the label — refractory-fixable), or
+        // an event on another stem (bass-note / non-kick-drum onset), or truly
+        // unexplained? Decides WHICH lever claws precision back.
+        let (mut echo, mut nbass, mut ndrum, mut nother, mut unexpl) = (0, 0, 0, 0, 0);
+        for t in TRACKS {
+            let (ml, _) = &labels[t];
+            let mix_low = times(&format!("{t}/mix"), mi, 1);
+            let bass_on = times(&format!("{t}/bass"), 0, 1);
+            let drum_on = times(&format!("{t}/drums"), 0, 1);
+            let other_on = times(&format!("{t}/others"), 0, 1);
+            for &f in mix_low.iter().filter(|&&f| !matched_within(f, ml, 0.070)) {
+                if ml.iter().any(|&l| (0.070..0.160).contains(&(f - l))) {
+                    echo += 1;
+                } else if matched_within(f, &bass_on, 0.070) {
+                    nbass += 1;
+                } else if matched_within(f, &drum_on, 0.070) {
+                    ndrum += 1;
+                } else if matched_within(f, &other_on, 0.070) {
+                    nother += 1;
+                } else {
+                    unexpl += 1;
+                }
+            }
+        }
+        let lat = |v: Vec<f32>| {
+            latency_stats(v)
+                .map_or("lat -/-".into(), |(m, p)| format!("lat {m:+.0}/{p:+.0}ms"))
+        };
         println!(
-            "{:22} | guards {} k{kicks_l} | MIX {mr35}({mr70})/{mn} sp{msp} bass{mbass} | DRUMS {dr35}({dr70})/{dn} sp{dsp}",
+            "{:22} | guards {} k{kicks_l} | MIX {mr35}({mr70})/{mn} sp{msp} bass{mbass} {} | DRUMS {dr35}({dr70})/{dn} sp{dsp} {} | sp: echo{echo} bass{nbass} drum{ndrum} oth{nother} ?{unexpl}",
             mask.name(),
             if guards_ok { "PASS" } else { "FAIL" },
+            lat(mlat),
+            lat(dlat),
         );
         println!("    {}", cells.join("  "));
     }
@@ -1267,4 +1587,38 @@ fn main() {
         println!("{label}: {}", row.join(" "));
     }
     println!("\ncolumns: {}", masks.iter().map(|m| m.name()).collect::<Vec<_>>().join(" | "));
+
+    // ── MISS AUDIT: classify every label the single ridge config missed ──────
+    if miss_audit && !ridge_diags.is_empty() {
+        let (drop_bins, win, _, _, gate) = masks[1].ridge_params().unwrap();
+        println!("\n== MISS AUDIT ({}, missed labels @±70ms) ==", masks[1].name());
+        let mut buckets: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for t in TRACKS {
+            let (ml, dl) = &labels[t];
+            for (stem, lab) in [("mix", ml), ("drums", dl)] {
+                let clip_label = format!("{t}/{stem}");
+                let Some(diags) = ridge_diags.get(&clip_label) else { continue };
+                let fires = times(&clip_label, 1, 1);
+                let (_, sr, hop) =
+                    clip_meta.iter().find(|(l, _, _)| l == &clip_label).unwrap();
+                for &l in lab {
+                    if matched_within(l, &fires, 0.070) {
+                        continue;
+                    }
+                    let hop_l = l * *sr as f32 / *hop as f32;
+                    let class = classify_miss(hop_l, diags, drop_bins, win, gate);
+                    *buckets.entry(class.split(' ').next().unwrap().into()).or_default() += 1;
+                    println!("{clip_label} @{l:.3}s: {class}");
+                }
+            }
+        }
+        let mut counts: Vec<_> = buckets.into_iter().collect();
+        counts.sort_by(|a, b| b.1.cmp(&a.1));
+        let total: usize = counts.iter().map(|(_, n)| n).sum();
+        println!(
+            "buckets ({total} misses): {}",
+            counts.iter().map(|(k, n)| format!("{k} {n}")).collect::<Vec<_>>().join(" · ")
+        );
+    }
 }

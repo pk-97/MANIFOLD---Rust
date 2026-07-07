@@ -603,13 +603,39 @@ const ODF_NOVELTY_HI: usize = 10;
 // band, follows every local maximum as a ridge, and fires on a coherent descent.
 // It REPLACES the masked-novelty criterion — proven to ~2x its kick recall on the
 // 73-label corpus at equal bass-false-fire cost (P1 spike, hpss_proto.rs). Low
-// band only (a Full-band tracker would fire on a spectrum-wide dive). These
-// constants are the spike's `--family ridge-final` config; the runtime must
-// reproduce its per-band fire counts exactly.
-const KICK_WIN: usize = 10; // descent-confirmation window (hops)
-const KICK_DROP_BINS: f32 = 14.0; // net descent required across the window (bins)
+// band only (a Full-band tracker would fire on a spectrum-wide dive).
+//
+// The fire lands when the confirmation window FILLS, so `KICK_WIN` is the
+// detector's structural latency (~5.3 ms/hop). The 2026-07-07 latency retune
+// (`--family ridge-latency` + signed-offset grading vs the 73 attack labels)
+// moved d14/w10 → d10/w6: median fire offset +31 → +9 ms (p90 +60 → +39),
+// mix recall@±35ms 37→49/73, drums 38→53, all synth guards green (d14/w10
+// failed kicks 7/8). The cost — mix false fires 58→115, concentrated on the
+// label-README's "ambiguous 808/bass" tracks — is the evidence/latency trade:
+// a shorter window sees less of the descent, and no cheaper discriminator
+// exists (a birth-attack ODF gate was swept and falsified: bass masking hides
+// kick attacks exactly where the ridge is needed). drop 10 in 6 hops =
+// 1.67 bins/hop, still cleanly between the kick's ~2 and portamento's <1.
+// These constants are the spike's `--family ridge-one --drop 10 --win 6
+// --absfloor 0.005 --ridge-only` config; the runtime must reproduce its
+// per-band fire counts exactly on the 48 kHz fixtures (the 44.1 kHz stems
+// near-match: same BUG-052 grid, but the offline replay's window placement
+// differs sub-hop from the streaming fade-in, flipping a few borderline
+// events — see KICK_SWEEP_EVENT_DESIGN §retune).
+const KICK_WIN: usize = 6; // descent-confirmation window (hops) = fire latency
+const KICK_DROP_BINS: f32 = 10.0; // net descent required across the window (bins)
 const KICK_STEP_MAX: f32 = 4.0; // max down-step per hop (2 bins/hop + slop)
 const KICK_MIN_PEAK: f32 = 0.12; // ridge floor as a fraction of the band max
+/// Absolute ridge-peak floor (tilted-column units), paired with the relative
+/// `KICK_MIN_PEAK`. The relative floor scales down in quiet passages, so
+/// near-silent filter-skirt ripple (a riser after its band ascends out of Low,
+/// snare tails) still yields local maxima — and a 6-hop track can random-walk
+/// down through that noise field to a false fire (riser guard 2→13 when the
+/// window shortened). A kick apex is loud in absolute terms; skirt ripple is
+/// not. Swept 2026-07-07 at d10/w6: 0.001 no effect, 0.005 riser 13→0 at ZERO
+/// recall/latency cost, 0.02 kills a real synth kick (guard 8→7), 0.08
+/// collapses recall — 0.005 is the plateau point with 4x margin to the cliff.
+const KICK_ABS_FLOOR: f32 = 0.005;
 const KICK_AGE_CAP: usize = KICK_WIN + 6; // reject long-lived (portamento) ridges
 const KICK_MAX_GAP: u8 = 1; // a ridge may skip one hop before it dies
 const KICK_MAX_TRACKS: usize = 12; // per-send bound on followed ridges
@@ -679,7 +705,7 @@ impl KickRidges {
                 band_max = v;
             }
         }
-        let floor = band_max * KICK_MIN_PEAK;
+        let floor = (band_max * KICK_MIN_PEAK).max(KICK_ABS_FLOOR);
         self.peaks.clear();
         for k in lo.max(1)..hi.saturating_sub(1) {
             let v = col[k];
@@ -1996,6 +2022,14 @@ impl StreamingSendAnalyzer {
     /// Analysed frequency range `(fmin, fmax)` Hz, for the scope's frequency axis.
     pub fn freq_range(&self) -> (f32, f32) {
         (self.spec_config.fmin, self.spec_config.effective_fmax(self.sample_rate))
+    }
+
+    /// Hop size in SAMPLES at this analyzer's rate — the BUG-052 rate-scaled
+    /// value, NOT `SpectrogramConfig::default().hop`. Consumers deriving a
+    /// per-hop time base (CSV time axis, bar grids) must use this: at 44.1 kHz
+    /// the default's 256 is 8.8% wrong (the real hop is 235 ≈ 5.33 ms).
+    pub fn hop(&self) -> usize {
+        self.hop
     }
 
     /// Turn scope-column capture on/off. On only for the send the Audio Setup
