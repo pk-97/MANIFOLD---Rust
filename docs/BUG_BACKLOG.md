@@ -51,6 +51,7 @@ or human can read it, and it needs no external tool.
 | BUG-050 | **ableton-anchor-yankback** | play-from-cursor snap-backs; anchor fix landed, rig confirmation owed via [ABL-SYNC] logs (HIGH) |
 | BUG-051 | **trigger-clear-unwired** | FIXED 2026-07-07 @ 3089e0a3 — `engine.stop()` now calls `live_trigger_state.clear()` + the new `modulation::clear_all_trigger_edges` |
 | BUG-052 | **sample-rate-dependent-detection** | FIXED 2026-07-07 @ 6e0e8988 — `SpectrogramConfig::with_time_grid_for(sr)` derives hop/n_fft from the device rate so hop≈5.33ms + window≈85ms hold at any rate; unit-test proven across 44.1/48/88.2/96/192k; end-to-end cross-rate harness fire-time match still owed (VD) |
+| BUG-054 | **renderer-device-ptr-dangles** | renderers cache `*const GpuDevice` only `ContentThread::run()` repoints — any other consumer segfaults (MED, latent) |
 | BUG-048 | **arm-two-reds** | ARM idle/armed both red, shade-only difference (LOW, UX call) |
 | BUG-049 | **child-row-right-indent** | group-child right-anchored controls misaligned ~20px (LOW) |
 | BUG-012 | **tex-rename-corrupt** | fragment `tex_` port-rename corrupts `tex_*` scalars (LOW) |
@@ -99,7 +100,27 @@ hop-COUNTS with SR — more blast radius (dynamic ring sizes) for no gain. Gate:
 fixture to 96k, run the harness, confirm fire TIMES in seconds match the 48k run (the eval
 already grades in seconds). Fold into the kick time-constant rework.
 
-Next free id: BUG-053.
+Next free id: BUG-055.
+
+### BUG-054 (renderer-device-ptr-dangles) — renderers cache a raw `*const GpuDevice` that only `ContentThread::run()` repoints — MED (latent; every new headless/embedded consumer of ContentThread hits it)
+
+**Found 2026-07-07 by the OFFLINE_AUDIO_REACTIVE_EXPORT P3 harness (first code path ever to
+drive `run_export` outside the app's thread spawn).** `GeneratorRenderer` / `VideoRenderer` /
+`ImageRenderer` cache a raw device pointer set at construction
+(`generator_renderer.rs:126,180`); it dangles as soon as the owning `ContentPipeline` moves.
+The running app is safe only because `ContentThread::run()` repoints every renderer once,
+after all moves are complete (`content_thread.rs:300-328`) — a load-bearing, undocumented
+ordering invariant. Any new consumer (headless export/journey harness, future preview
+contexts, tests) that constructs a `ContentThread` and calls methods without replicating that
+exact repoint gets an ObjC nil-receiver panic or a straight segfault, as the P3 build did
+twice before finding the correct point. **Workaround shipped:** `journey_proof.rs`
+`rebind_gpu_device_pointers` runs after the struct reaches its final binding — correct but a
+second copy of the invariant. **Fix shape (root):** remove the self-referential raw pointer —
+either pass `&GpuDevice` per render call (renderers already receive per-call context), or
+hold the device behind a stable heap indirection owned above the pipeline so moves can't
+invalidate it. Blast radius: renderer call signatures; no behavior change. Until then, any
+brief that constructs `ContentThread` outside `Application::resumed()` must name the repoint
+step.
 
 ### BUG-050 (ableton-anchor-yankback) — Play-from-cursor: Ableton repeatedly snaps back to the gesture beat, then MANIFOLD clock-dragged after retries exhaust — HIGH (live transport; partial fix landed 2026-07-07, rig confirmation owed)
 

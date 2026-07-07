@@ -82,10 +82,17 @@ no albedo — see the separate `gltf_textured_azalea…` proof for the textured 
 exercised. **Fixtures are large** (lowe 43 MB, apricot 85 MB) and remain untracked — committing
 127 MB of binaries is Peter's call (recommend git-lfs or keep them as local held-out assets).
 
-### VD-004 — Audio layer export mixdown — L1 reached / L2 target
-`audio_mixdown.rs` offline mix is unverified on a real export (recorded in memory as
-"unverified on real export" since it shipped). Burn-down: one real export of a
-stem-bearing project; listen to / inspect the output file.
+### VD-016 — OFFLINE_AUDIO_REACTIVE_EXPORT: real-track export feel — L2 reached / L4 target
+Landed 2026-07-07 (`docs/landings/2026-07-07-offline-audio-reactive-export.md`). Audio-bound
+params now move in exported video, proven L2 by the `journey-proofs` harness (click-track
+luma ratio ~6.9× click-vs-gap, save→reload survives, two runs bit-identical in extracted
+frames) — but only on a synthetic click track and one generator param. Unobserved: a real
+master through the full band/floor/crossover settings Peter actually performs with, and
+whether the offline capture-substitution (capture-fed sends hear the timeline mix) reads
+correctly on a real project. Burn-down: Peter exports one real track with his usual bindings
+and watches it — the design doc's stated milestone ("Peter exports a real track and sees the
+pump"). One deliberate `cargo test -p manifold-app --features journey-proofs` per audio-path
+wave keeps the harness honest (needs ffmpeg/ffprobe on PATH).
 
 ### VD-006 — BUG-026 batch-2 popup entrance-tween fix: running-app confirmation — L2 reached / L4 target
 Fix landed 2026-07-05 (commit `01c15213`) for the "no popup background until mouseover" bug —
@@ -183,6 +190,13 @@ landing. VD-005 closed at P2 landing. The full backfill pass over recent landing
 will extend this list.)*
 
 ## Closed
+
+### VD-004 — Audio layer export mixdown — CLOSED 2026-07-07 (L2 reached)
+`audio_mixdown.rs` offline mix was unverified on a real export since it shipped. **Closed by
+the OFFLINE_AUDIO_REACTIVE_EXPORT landing**: the P1 byte-identity fixture pins the WAV bytes
+across the seam refactor, and the `journey-proofs` `audio_reactive_export_moves` proof runs a
+REAL export end-to-end and asserts via ffprobe that the muxed audio stream is present in the
+output file. (Listening to a real stem-bearing export is subsumed by VD-016's L4 pass.)
 
 ### VD-005 — UI_AUTOMATION P1 selector surface: no scripted drive — CLOSED 2026-07-05 (L3 reached)
 Opened at P1 landing (`3294eb9d`, L2). **Closed by P2 landing** — the `drag-clip.json`
