@@ -1051,11 +1051,13 @@ impl ClipRenderer for GeneratorRenderer {
         // §8 D1: the clip edge is mode-gated by the generator's OWN
         // `audio_trigger` config (no config = always on — old-project
         // behavior, unchanged). `Transient`-only mode silently drops the
-        // clip-launch contribution for this layer's trigger_count.
+        // clip-launch contribution for this layer's trigger_count. A disarmed
+        // config is semantically absent — `clip_edge_enabled()` owns that
+        // rule; don't read `mode` off the config directly.
         let clip_edge_enabled = layer
             .and_then(|l| l.gen_params())
             .and_then(|gp| gp.audio_trigger.as_ref())
-            .map(|cfg| cfg.mode.wants_clip_edge())
+            .map(|cfg| cfg.clip_edge_enabled())
             .unwrap_or(true);
         let acquired = self.acquire_clip(
             &clip.id,
