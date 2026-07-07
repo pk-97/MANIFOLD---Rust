@@ -1107,6 +1107,11 @@ impl Project {
             fx.audio_mods
                 .as_ref()
                 .is_some_and(|v| v.iter().any(|a| a.enabled))
+                // §8: an armed audio-trigger config consumes analysis exactly
+                // like an enabled audio mod — without this arm the capture
+                // worker never starts for a project whose only audio consumer
+                // is a trigger drawer.
+                || fx.active_audio_trigger().is_some()
         }
         if self.settings.master_effects.iter().any(inst_has) {
             return true;
@@ -1140,6 +1145,12 @@ impl Project {
                     out.insert(m.source.send_id.clone());
                 }
             }
+            // §8: an armed audio-trigger config reads its send's transients —
+            // without this the D4 gate skips the send and the armed trigger
+            // sees only silence (no fires) even with capture running.
+            if let Some(t) = fx.active_audio_trigger() {
+                out.insert(t.source.send_id.clone());
+            }
         };
         for fx in &self.settings.master_effects {
             collect(fx);
@@ -1171,6 +1182,14 @@ impl Project {
                 .as_ref()
                 .map(|v| v.iter().filter(|a| &a.source.send_id == send_id).count())
                 .unwrap_or(0)
+                // A trigger config referencing the send is a dependent too
+                // (enabled or not, matching the audio-mod arm above): deleting
+                // the send would orphan it.
+                + usize::from(
+                    fx.audio_trigger
+                        .as_ref()
+                        .is_some_and(|t| &t.source.send_id == send_id),
+                )
         }
         let mut count = self
             .settings
@@ -1203,17 +1222,30 @@ impl Project {
             send_id: &crate::id::AudioSendId,
             out: &mut Vec<(Option<crate::id::LayerId>, String)>,
         ) {
-            let Some(mods) = fx.audio_mods.as_ref() else { return };
-            for m in mods.iter().filter(|m| m.enabled && &m.source.send_id == send_id) {
+            if let Some(mods) = fx.audio_mods.as_ref() {
+                for m in mods.iter().filter(|m| m.enabled && &m.source.send_id == send_id) {
+                    let effect_name = crate::preset_type_registry::display_name(fx.effect_type());
+                    let param_name = fx
+                        .params
+                        .get(&m.param_id)
+                        .map(|p| p.spec.name.clone())
+                        .unwrap_or_else(|| m.param_id.to_string());
+                    out.push((
+                        layer_id.clone(),
+                        format!("{layer_name} \u{2022} {effect_name} \u{2022} {param_name}"),
+                    ));
+                }
+            }
+            // §8: an armed trigger config is a consumer of the send too —
+            // keep the Consumers section honest about who reads it.
+            if fx
+                .active_audio_trigger()
+                .is_some_and(|t| &t.source.send_id == send_id)
+            {
                 let effect_name = crate::preset_type_registry::display_name(fx.effect_type());
-                let param_name = fx
-                    .params
-                    .get(&m.param_id)
-                    .map(|p| p.spec.name.clone())
-                    .unwrap_or_else(|| m.param_id.to_string());
                 out.push((
                     layer_id.clone(),
-                    format!("{layer_name} \u{2022} {effect_name} \u{2022} {param_name}"),
+                    format!("{layer_name} \u{2022} {effect_name} \u{2022} Trigger"),
                 ));
             }
         }
@@ -2131,6 +2163,68 @@ mod tests {
         p.audio_setup.sends.push(send_a);
 
         assert!(p.analysis_consumed_sends().is_empty());
+    }
+
+    fn armed_trigger(send_id: crate::AudioSendId) -> crate::audio_trigger::AudioTriggerMod {
+        crate::audio_trigger::AudioTriggerMod {
+            enabled: true,
+            source: crate::audio_mod::AudioModSource {
+                send_id,
+                feature: crate::audio_mod::AudioFeature::new(
+                    crate::audio_mod::AudioFeatureKind::Transients,
+                    crate::audio_mod::AudioBand::Full,
+                ),
+            },
+            sensitivity: 0.5,
+            mode: crate::audio_trigger::TriggerFireMode::Transient,
+            edge: Default::default(),
+        }
+    }
+
+    #[test]
+    fn armed_audio_trigger_turns_the_analysis_gate_on_and_claims_its_send() {
+        // Regression (2026-07-07): a project whose ONLY audio consumer is an
+        // armed per-instance trigger config never started capture
+        // (has_active_audio_mods false) and, even with capture running, its
+        // send was skipped by the D4 gate (analysis_consumed_sends empty) —
+        // so armed audio triggers silently never fired.
+        let mut p = Project::default();
+        let send_a = send_with_id("A", "send-a");
+        p.audio_setup.sends.push(send_a.clone());
+
+        let mut layer = crate::layer::Layer::new("PLASMA".into(), crate::types::LayerType::Generator, 0);
+        layer.layer_id = crate::LayerId::new("plasma-layer");
+        layer.gen_params_or_init().audio_trigger = Some(armed_trigger(send_a.id.clone()));
+        p.timeline.layers.push(layer);
+
+        assert!(p.has_active_audio_mods(), "armed trigger must start capture");
+        let consumed = p.analysis_consumed_sends();
+        assert!(consumed.contains(&send_a.id), "armed trigger's send must be analyzed");
+        assert_eq!(p.audio_send_usage_count(&send_a.id), 1);
+        let consumers = p.audio_mod_consumers(&send_a.id);
+        assert_eq!(consumers.len(), 1);
+        assert!(consumers[0].1.contains("Trigger"), "consumers list names the trigger");
+    }
+
+    #[test]
+    fn disarmed_audio_trigger_does_not_gate_analysis_but_still_counts_as_send_usage() {
+        let mut p = Project::default();
+        let send_a = send_with_id("A", "send-a");
+        p.audio_setup.sends.push(send_a.clone());
+
+        let mut layer = crate::layer::Layer::new("PLASMA".into(), crate::types::LayerType::Generator, 0);
+        layer.layer_id = crate::LayerId::new("plasma-layer");
+        let mut cfg = armed_trigger(send_a.id.clone());
+        cfg.enabled = false;
+        layer.gen_params_or_init().audio_trigger = Some(cfg);
+        p.timeline.layers.push(layer);
+
+        assert!(!p.has_active_audio_mods(), "disarmed trigger must not run capture");
+        assert!(p.analysis_consumed_sends().is_empty());
+        // Usage matches the audio-mod arm's enabled-or-not semantics: the
+        // config still references the send, so deleting it should warn.
+        assert_eq!(p.audio_send_usage_count(&send_a.id), 1);
+        assert!(p.audio_mod_consumers(&send_a.id).is_empty(), "consumers lists armed only");
     }
 
     // ─── audio_mod_consumers (AUDIO_SENDS_UX_DESIGN Phase 2, Consumers section) ───

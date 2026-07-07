@@ -22,6 +22,24 @@ clip edge (default) OR the transient trigger OR both."*
 
 ## 0. CURRENT POSITION (read first, update last)
 
+- **§8 feel-pass round 1 (2026-07-07, same evening): Peter's first live pass found two
+  real engine bugs, both root-fixed the same night.** (1) A config left DISARMED from
+  the drawer kept its mode, and the `acquire_clip` clip-edge gate read
+  `mode.wants_clip_edge()` without checking `enabled` — a disarmed Transient config
+  silently killed clip-launch triggering for its layer, surviving save/reload with no
+  badge (the badge correctly hides when disarmed; the engine didn't apply the same
+  rule). Fixed @ `62a75cee`: disabled-means-absent now has one owner,
+  `AudioTriggerMod::clip_edge_enabled()`. (2) The audio-analysis gate was blind to §8
+  configs: `has_active_audio_mods` (capture on/off) and `analysis_consumed_sends` (D4
+  per-send gate) counted per-param audio mods and §1–§7 send routes but not
+  `PresetInstance.audio_trigger` — so a project whose only audio consumer is an armed
+  trigger drawer never captured, and even with capture running the trigger's send was
+  skipped: armed audio triggers never fired. Fixed this landing: single owner
+  `PresetInstance::active_audio_trigger()`, wired into both gates plus
+  `audio_send_usage_count` (delete-send warning) and `audio_mod_consumers` (Consumers
+  section, listed as "… • Trigger"). Lesson for future §-additions: a new audio
+  consumer type must register with the ANALYSIS GATE walkers in `project.rs`, not just
+  the evaluator — the evaluator can be perfect and never see a single sample.
 - **§8 P3b BUILT 2026-07-07 (follow-up session, two PRs on `wave/param-triggers-p3b`) —
   the whole §8 feature is now UI-reachable.** PR1: effect cards gained the toggle/trigger
   row branch they never had (root cause was deeper than the missing branch —
