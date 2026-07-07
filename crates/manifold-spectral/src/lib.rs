@@ -101,10 +101,37 @@ impl Default for SpectrogramConfig {
     }
 }
 
+/// Sample rate the default `hop`/`n_fft` durations are defined at (Hz). At this
+/// rate `hop = 256` is a ~5.33 ms column and `n_fft = 4096` a ~85 ms window;
+/// [`SpectrogramConfig::with_time_grid_for`] rescales both to hold those
+/// DURATIONS fixed at any other device rate (BUG-052).
+pub const REFERENCE_RATE_HZ: f32 = 48_000.0;
+
 impl SpectrogramConfig {
     /// `fmax` capped to just under the device Nyquist (and kept above `fmin`).
     pub fn effective_fmax(&self, sample_rate: f32) -> f32 {
         self.fmax.min(sample_rate * 0.5 * 0.98).max(self.fmin * 2.0)
+    }
+
+    /// Rescale the TIME grid (`hop`, `n_fft`) from [`REFERENCE_RATE_HZ`] so a hop
+    /// is always ~5.33 ms and the window ~85 ms regardless of `sample_rate`. The
+    /// frequency axis needs no adjustment — bins are geometric (`bpo·log2(f/fmin)`)
+    /// with `fmin`/`fmax` fixed in Hz, so they're already SR-invariant; only the
+    /// sample-counted time grid drifts with the rate. Holding hop/window durations
+    /// fixed keeps every hop-count tuning constant (kick descent window, ODF
+    /// median, refractories, tracker slew) valid at 44.1/48/88.2/96/192 kHz
+    /// without resampling the audio. `n_fft` rounds to a power of two (FFT
+    /// requirement); the column rate `sample_rate / hop` stays ~constant too, so
+    /// the scope scrolls at the same speed at every rate. At 48 kHz this is a
+    /// no-op (returns the reference 256/4096). See BUG-052.
+    #[must_use]
+    pub fn with_time_grid_for(mut self, sample_rate: f32) -> Self {
+        let ratio = (sample_rate / REFERENCE_RATE_HZ).max(1e-3);
+        self.hop = ((self.hop as f32 * ratio).round() as usize).max(1);
+        self.n_fft = ((self.n_fft as f32 * ratio).round() as usize)
+            .max(1)
+            .next_power_of_two();
+        self
     }
 
     /// Bin count for this config at `sample_rate` — the column length the
@@ -127,5 +154,49 @@ impl SpectrogramConfig {
             self.min_kernel_len,
             self.threshold_rel,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// BUG-052: the hop and window DURATIONS must stay fixed across device rates,
+    /// so every hop-count tuning constant in the analyzer keeps its wall-clock
+    /// meaning. Frequency (bins) is already SR-invariant, so it's not retested here.
+    #[test]
+    fn time_grid_holds_hop_and_window_duration_across_rates() {
+        let base = SpectrogramConfig::default();
+        let hop_secs = base.hop as f32 / REFERENCE_RATE_HZ; // ~5.33 ms
+        let win_secs = base.n_fft as f32 / REFERENCE_RATE_HZ; // ~85 ms
+
+        // 48 kHz is the reference — must be an exact no-op.
+        let at48 = base.with_time_grid_for(48_000.0);
+        assert_eq!(at48.hop, base.hop);
+        assert_eq!(at48.n_fft, base.n_fft);
+
+        for &sr in &[44_100.0_f32, 88_200.0, 96_000.0, 192_000.0] {
+            let c = base.with_time_grid_for(sr);
+            // Hop duration within one sample of the reference.
+            let hop_err = (c.hop as f32 / sr - hop_secs).abs();
+            assert!(
+                hop_err <= 1.0 / sr,
+                "hop duration drifted at {sr} Hz: {} ms vs {} ms",
+                c.hop as f32 / sr * 1e3,
+                hop_secs * 1e3
+            );
+            // n_fft is power-of-two-rounded, so allow ±1 octave of window slack.
+            assert!(c.n_fft.is_power_of_two(), "n_fft not pow2 at {sr} Hz");
+            let win_ratio = (c.n_fft as f32 / sr) / win_secs;
+            assert!(
+                (0.5..=2.0).contains(&win_ratio),
+                "window duration off by >1 octave at {sr} Hz: ratio {win_ratio}"
+            );
+        }
+
+        // Doubling the rate doubles the sample-counted grid exactly.
+        let at96 = base.with_time_grid_for(96_000.0);
+        assert_eq!(at96.hop, base.hop * 2);
+        assert_eq!(at96.n_fft, base.n_fft * 2);
     }
 }
