@@ -513,6 +513,12 @@ impl MidiClockSyncController {
     ///
     /// Unity's Update() takes no parameters — it holds refs to syncTarget and syncArbiter
     /// as fields. Rust passes them as arguments to avoid unsafe shared mutable state.
+    ///
+    /// `suppress_clock_plane`: caller-computed gate (ABLETON_TRANSPORT_SYNC_DESIGN
+    /// D5): seek-cooldown (M4L path) OR an unacknowledged AbletonOSC transport
+    /// command in flight. While true, MIDI Clock must not drive the engine —
+    /// position OR transport — because everything Ableton emits is known-stale
+    /// until the command plane confirms.
     pub fn update(
         &mut self,
         now: Seconds,
@@ -520,6 +526,7 @@ impl MidiClockSyncController {
         arb_target: &mut dyn SyncArbiterTarget,
         sync_target: &dyn SyncTarget,
         authority: ClockAuthority,
+        suppress_clock_plane: bool,
     ) {
         if !self.is_midi_clock_enabled || self.receiver.is_none() {
             return;
@@ -578,17 +585,21 @@ impl MidiClockSyncController {
 
         // Suppress local deltaTime when CLK is active authority and playing.
         // Not gated on manifold_owns — MIDI Clock always drives timing when active.
-        // Gated on seek cooldown — during scrubs, engine advances internally until
-        // Ableton catches up to the new position.
+        // Gated on the clock-plane suppress — during scrubs and in-flight
+        // AbletonOSC commands, the engine advances internally until Ableton
+        // confirms the new state.
         arbiter.set_external_time_sync(
             ClockAuthority::MidiClock,
             authority,
             arb_target,
-            has_recent_clock_activity && is_playing && !arbiter.is_seek_cooldown_active(now),
+            has_recent_clock_activity && is_playing && !suppress_clock_plane,
         );
 
         // Transport sync — gated by arbiter authority check (port of C# lines 256-279).
-        if !manifold_owns {
+        // Also held while the clock plane is suppressed: during an in-flight
+        // play-from-cursor, Ableton's clock still says "stopped" — relaying
+        // that as a pause is the "doesn't respond" flap (F1's cousin).
+        if !manifold_owns && !suppress_clock_plane {
             let playing = has_recent_clock_activity && is_playing;
             if playing {
                 if !sync_target.is_playing() {
@@ -617,9 +628,10 @@ impl MidiClockSyncController {
 
         // Position sync — MIDI Clock always drives position when active.
         // manifold_owns only gates transport (play/stop), not position.
-        // Suppressed during seek cooldown (user scrubbing the playhead — Ableton
-        // hasn't received the new position yet, so MIDI Clock is stale).
-        if has_recent_clock_activity && !arbiter.is_seek_cooldown_active(now) {
+        // Suppressed while the clock plane is gated (user scrub not yet
+        // processed by Ableton, or an AbletonOSC command awaiting its ack —
+        // either way the clock is reporting a stale position).
+        if has_recent_clock_activity && !suppress_clock_plane {
             self.current_position_sixteenths = pos_sixteenths;
             self.update_position_display(pos_sixteenths);
             self.sync_position_to_playback(

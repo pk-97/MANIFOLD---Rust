@@ -170,12 +170,26 @@ impl ContentThread {
             ContentCommand::SeekTo(t) => {
                 self.sync_arbiter.set_user_seek_time(self.time_since_start);
                 self.engine.seek_to(t);
+                // Seeks to Ableton are commanded explicitly, never inferred
+                // from beat divergence (ABLETON_TRANSPORT_SYNC_DESIGN D6).
+                let beat = self.engine.time_to_timeline_beat(t).as_f32();
+                self.ableton_bridge.notify_local_seek(
+                    beat,
+                    self.engine.is_playing(),
+                    self.time_since_start.0,
+                );
                 self.cache_link_beat_offset();
             }
             ContentCommand::SeekToBeat(beat) => {
                 self.sync_arbiter.set_user_seek_time(self.time_since_start);
                 let time = self.engine.beat_to_timeline_time(beat);
                 self.engine.seek_to(time);
+                // Explicit seek command to the transport machine (D6).
+                self.ableton_bridge.notify_local_seek(
+                    beat.as_f32(),
+                    self.engine.is_playing(),
+                    self.time_since_start.0,
+                );
                 self.cache_link_beat_offset();
             }
             ContentCommand::SetRecording(rec) => {

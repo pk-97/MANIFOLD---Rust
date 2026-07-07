@@ -364,6 +364,17 @@ impl AbletonTransportSync {
         self.actions.drain(..)
     }
 
+    /// FIFO pop variants for call sites that interleave popping with other
+    /// `&self` borrows (the bridge's send loop). O(n) shift is fine: the
+    /// queue holds a handful of messages at most.
+    pub fn pop_out(&mut self) -> Option<OutMsg> {
+        if self.out.is_empty() { None } else { Some(self.out.remove(0)) }
+    }
+
+    pub fn pop_action(&mut self) -> Option<EngineAction> {
+        if self.actions.is_empty() { None } else { Some(self.actions.remove(0)) }
+    }
+
     // ── Gates ──────────────────────────────────────────────────────
 
     /// True while a command is unconfirmed: the clock plane must not drive

@@ -176,6 +176,9 @@ pub struct ContentState {
     /// Whether the Ableton bridge is currently connected.
     pub ableton_connected: bool,
     pub ableton_transport_enabled: bool,
+    /// Closed-loop transport sync health (Locked / Confirming / degraded /
+    /// warning) — drives the SYNC chip (ABLETON_TRANSPORT_SYNC_DESIGN D9/D10).
+    pub ableton_sync_status: manifold_playback::transport_sync::TransportSyncStatus,
     pub osc_sync_mode: OscSyncMode,
 
     // ── Project snapshot ──────────────────────────────────────────
@@ -487,6 +490,8 @@ impl Default for ContentState {
             ableton_session: None,
             ableton_connected: false,
             ableton_transport_enabled: false,
+            ableton_sync_status:
+                manifold_playback::transport_sync::TransportSyncStatus::Locked,
             osc_sync_mode: OscSyncMode::M4L,
             project_snapshot: None,
             modulation_snapshot: None,
