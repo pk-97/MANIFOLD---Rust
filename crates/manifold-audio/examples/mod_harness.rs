@@ -311,10 +311,16 @@ fn analyze_and_render(
 ) {
     // ── Analysis: the exact live path, fed causally one hop at a time so
     //    `latest()` is sampled at hop rate — what the modulation evaluator sees.
-    let cfg = SpectrogramConfig::default();
-    let hop = cfg.hop.max(1);
-    let dt = hop as f32 / sr as f32;
+    // BUG-052 rate-scaled config, matching the analyzer's internal grid: the
+    // unscaled default's hop (256) is 8.8% wrong at 44.1 kHz, which stretched
+    // this harness's whole time base — CSV time_s, the PNG bar grid, and the
+    // printed hop line (surfaced 2026-07-07 chasing a phantom grid mismatch in
+    // the kick exact-match gate).
+    let cfg = SpectrogramConfig::default().with_time_grid_for(sr as f32);
     let mut an = StreamingSendAnalyzer::new(sr, args.low_hz, args.mid_hz);
+    let hop = an.hop().max(1);
+    debug_assert_eq!(hop, cfg.hop.max(1), "harness grid must match the analyzer's");
+    let dt = hop as f32 / sr as f32;
     an.set_floor_db(args.floor_db);
     an.set_scope(true);
     // P2: the harness always runs with the D5 tracker on (D7's runtime
@@ -548,6 +554,17 @@ fn print_p3_fires(label: &str, records: &[HopRecord]) {
     println!(
         "P3 {label}: full_fires={full_fires} low_fires={low_fires} kick_fires={kick_fires} (gates: dive full 0, kicks low == 8, busymix low >= 7, densemix low >= 6, riser full 0, growl full 0)"
     );
+    // Kick fire HOP INDICES (all hops, absolute) — the exact-match gate's
+    // divergence instrument: diff this list against the prototype's per-hop
+    // dump (`hpss_proto --dump <clip>`, column l_fired) to see WHERE the two
+    // engines disagree, not just by how many.
+    let kick_hops: Vec<usize> = records
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.kick > 0.999)
+        .map(|(i, _)| i)
+        .collect();
+    println!("P3 {label}: kick_hops={kick_hops:?}");
 }
 
 /// P2 numeric gates (`docs/AUDIO_OBJECT_TRACKING_DESIGN.md` P2's phase-report

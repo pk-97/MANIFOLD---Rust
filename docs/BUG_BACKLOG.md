@@ -100,7 +100,22 @@ hop-COUNTS with SR — more blast radius (dynamic ring sizes) for no gain. Gate:
 fixture to 96k, run the harness, confirm fire TIMES in seconds match the 48k run (the eval
 already grades in seconds). Fold into the kick time-constant rework.
 
-Next free id: BUG-055.
+Next free id: BUG-056.
+
+### BUG-055 (eval-harness-stale-time-grid) — both audio eval harnesses used the unscaled default hop on non-48k files — FIXED 2026-07-07 (kick P5 retune branch)
+
+**Symptom:** kick exact-match gate drifted ±1–5 fires per 44.1 kHz drums fixture; mod_harness
+CSV `time_s`, PNG bar grid, and printed hop line stretched 8.8% on 44.1k files. **Root cause:**
+BUG-052 made the LIVE analyzer's time grid rate-invariant (`with_time_grid_for`), but neither
+example harness followed: `hpss_proto::build_clip` hopped 256 native samples, and `mod_harness`
+built its own unscaled `SpectrogramConfig` for its feed cadence and time base — so it pushed
+256-sample chunks against a 235-sample analyzer hop and sampled `latest()` at the wrong rate,
+silently missing/duplicating fires in every per-hop record on 44.1k input. The P2/P4 kick
+"exact match" was measured through this sampler. **Fix:** both harnesses now scale their config
+(`with_time_grid_for`); `StreamingSendAnalyzer::hop()` accessor added so consumers can't
+re-derive it stale; `mod_harness` `debug_assert`s its grid equals the analyzer's. Residual
+documented in KICK_SWEEP_EVENT_DESIGN §P5: offline replay vs live stream legitimately diverge
+for ridges born during the fade-in (window-fill) region only.
 
 ### BUG-054 (renderer-device-ptr-dangles) — renderers cache a raw `*const GpuDevice` that only `ContentThread::run()` repoints — MED (latent; every new headless/embedded consumer of ContentThread hits it)
 

@@ -1,7 +1,7 @@
 # Kick Sweep-Event Detector — motion-based kick detection for the bass-heavy Low band
 
-**Status:** IN PROGRESS · P1 (prototype) + P2 (runtime) + P4 (Kick split from Transients, ridge-only) SHIPPED 2026-07-07 · scope kick lane (magenta bottom tick lane on the Audio Setup scope, P3's tuning monitor) SHIPPED 2026-07-07 · P3 (feel-pass, now binds the Kick feature) owed to Peter · 2026-07-07 · Opus 4.8
-P1 @ `648f07e3` · P2 landing report: `docs/landings/2026-07-07-kick-sweep-p2.md`. The live `reduce_send` reproduces the prototype's `ridge-final` fire counts exactly on all 10 mix/drums fixtures; masked-novelty deleted.
+**Status:** IN PROGRESS · P1 (prototype) + P2 (runtime) + P4 (Kick split from Transients, ridge-only) + P5 (latency retune: d10/w6 + abs floor, median fire offset +31→+9 ms, §P5) SHIPPED 2026-07-07 · scope kick lane (magenta bottom tick lane on the Audio Setup scope, P3's tuning monitor) SHIPPED 2026-07-07 · P3 (feel-pass, now binds the Kick feature) owed to Peter · 2026-07-07 · Opus 4.8 + Fable
+P1 @ `648f07e3` · P2 landing report: `docs/landings/2026-07-07-kick-sweep-p2.md`. The live `reduce_send` reproduces the prototype's reference fire counts on all 10 mix/drums fixtures (post-P5: bit-exact outside the stream fade-in region); masked-novelty deleted. P5 reference: `--family ridge-one --drop 10 --win 6 --absfloor 0.005 --ridge-only`.
 Scope lane @ `b6aed008` (rode the ScopeColumn typed-overlay refactor) · landing report: `docs/landings/2026-07-07-kick-scope-lane.md`.
 **Prerequisites:** none (the prototype and the 73-label corpus both exist).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
@@ -253,6 +253,53 @@ prints `kick_fires` for every job.
 
 **Still owed:** the P3 feel-pass now binds the **Kick** feature (not Transients@Low).
 
+### P5 — Latency retune (D7's reviving trigger fired). **SHIPPED 2026-07-07.**
+Peter's live verdict pre-empted P3: ~70% catches, noticeably late. Root cause is structural —
+the fire lands when the confirmation window FILLS, so `win` IS the latency (~5.3 ms/hop), and
+recall@±35 vs ±70 confirmed it (37 vs 59: twenty-two kicks were caught 35–70 ms late).
+
+**New instruments (all in `hpss_proto`, kept for every future retune):**
+- **Signed fire-offset grading** (median/p90 ms vs the 73 attack labels) in the LABELS table —
+  the metric the recall counts hid.
+- **`--miss-audit`**: classifies every missed label from full ridge lifecycles
+  (no-birth / born-late / gap-death / shallow / gated / swallowed / fired-late).
+- **Spurious anatomy**: false fires bucketed by alibi (echo of a real kick / bass-stem onset /
+  non-kick drum / other stem / unexplained).
+- **`--family ridge-latency|ridge-gate|ridge-one`** (+ `--drop --win --stepup --absfloor`).
+
+**Falsified on the way (do not re-try):** a birth-attack ODF gate (bass masking hides kick
+attacks exactly where the ridge is needed — gate 80 barely moved false fires, then ate recall);
+step-up tightening `+1→0/-1` (noise-walks don't need up-steps — riser stayed 13/10).
+
+**Shipped config: `drop_bins 14→10, win 10→6, + KICK_ABS_FLOOR 0.005`** (relative `min_peak`
+unchanged). Corrected-grid numbers, 73 labels:
+- mix: recall@±35 37→**49**, @±70 59→**65**, median fire offset **+31→+9 ms**, p90 +60→+39.
+- drums: @±35 47→**55**, @±70 63→**66**, median **+26→+2 ms**.
+- Cost: mix spurious 58→115, concentrated on the label-README's ambiguous-808 tracks (echo ~8%,
+  bass ~24%, non-kick drums ~30%, other/unexplained rest — no single cheap-fixable class; the
+  latency/precision trade is evidence-over-time, fundamental to a confirmation detector).
+- The **absolute peak floor** is new: the relative floor admits near-silent filter-skirt ripple,
+  and a 6-hop track random-walks down through that noise (riser guard 2→**13** when the window
+  shortened; the sweep's guard line never gated riser-Low — it does now by hand). 0.005 kills
+  the whole class (riser 13→**0**, drums spurious 43→30) at zero recall/latency cost; 0.02
+  starts eating real kicks (guard 8→7). Alternates for the feel-pass if Peter wants more recall:
+  d8/w7 (54/69 @ +11/+44, sp158) or d8/w6 (52/67 @ +5/+31, sp165).
+
+**Two harness bugs found by the gate, both fixed:**
+1. `hpss_proto` lacked the BUG-052 rate-invariant grid (`with_time_grid_for`) — the reference
+   instrument hopped 256 native samples (5.8 ms at the 44.1k stems) vs the runtime's 5.33 ms.
+2. `mod_harness` built its OWN unscaled `SpectrogramConfig` for the feed/time base — records
+   were sampled at the wrong cadence on 44.1k files (fires missed/duplicated in counts, CSV
+   `time_s` + PNG grid stretched 8.8%). Now reads `an.hop()` (new accessor) + scales its cfg.
+   The P2/P4 "exact match" was measured through this sampler; it held only because w10 events
+   were robust.
+
+**Exact-match gate (re-proven, stronger form):** all 5 mixes AND 4/5 drums bit-exact
+(19/66/42/18/42 · 22/40/18/15/9); the single divergence is one feel-drums fire at hop 21 whose
+ridge was born DURING the stream fade-in (window fills at 16, confirmation at 22) — the offline
+replay and the live stream legitimately differ in the partial-window region only. Guards: dive 0,
+kicks 8, busymix 7, densemix 8(≥6), riser **0**, growl 0.
+
 ## 6. Decided — do not reopen
 
 1. Detection is Low-band only (Peter). Not full-spectrum.
@@ -275,9 +322,10 @@ prints `kick_fires` for every job.
 - **The bad_guy time-base caveat** — reviving trigger: Peter re-exports bad_guy's stems
   *warped* (currently 15.0 s unwarped vs the 13.241 s warped mix). Removes the ×0.8828 scaling
   and lets bad_guy grade at ±35, not just ±70.
-- **Lower-latency confirmation** (D7) — reviving trigger: the P3 feel-pass finds ~50 ms too
-  late. `win` down-tuning, or an early-fire on partial descent, both bounded by guard-safety;
-  a build-phase experiment, not a v1 decision.
+- ~~**Lower-latency confirmation** (D7)~~ — **fired and shipped as P5** (2026-07-07): Peter
+  called the latency before the formal feel-pass; `win` 10→6 + `drop` 14→10 + absolute peak
+  floor 0.005. Median fire offset +31→+9 ms. Next latency rung would be beat-grid prediction
+  (Ableton transport sync), parked by Peter as too hard to get right for now.
 - **Salience-based peak-pick** — the tracker peak-picks the raw tilted column (proven).
   Reviving trigger: P3 precision needs it — `salience_into` (harmonic-sum) may separate the
   kick's fundamental from the bass stack more cleanly, at the cost of possible conflation.
