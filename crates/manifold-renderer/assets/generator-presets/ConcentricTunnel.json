@@ -81,6 +81,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": false,
         "isToggle": true,
+        "isTriggerGate": true,
         "isTrigger": false,
         "formatString": "F0",
         "oscSuffix": "clipTrigger"

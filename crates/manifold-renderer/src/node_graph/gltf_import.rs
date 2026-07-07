@@ -147,6 +147,7 @@ fn card_param(id: &str, name: &str, min: f32, max: f32, default: f32, is_angle: 
         curve: manifold_core::macro_bank::MacroCurve::default(),
         invert: false,
         is_angle,
+        is_trigger_gate: false,
     }
 }
 

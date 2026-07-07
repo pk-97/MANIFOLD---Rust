@@ -1120,7 +1120,7 @@ impl LayerCompositor {
                         is_clip_level: false,
                         frame_count: frame.frame_count as i64,
                         anim_progress: 0.0,
-                        trigger_count: 0,
+                        trigger_count: ld.trigger_count,
                     };
                     Self::apply_effects(
                         effect_chain,
@@ -1891,7 +1891,7 @@ impl LayerCompositor {
                             is_clip_level: false,
                             frame_count: frame.frame_count as i64,
                             anim_progress: 0.0,
-                            trigger_count: 0,
+                            trigger_count: ld.trigger_count,
                         };
                         Self::apply_effects(
                             effect_chain,
@@ -2228,7 +2228,7 @@ impl Compositor for LayerCompositor {
                 is_clip_level: false,
                 frame_count: frame.frame_count as i64,
                 anim_progress: 0.0,
-                trigger_count: 0,
+                trigger_count: frame.master_trigger_count,
             };
 
             // Master effects use a dedicated `EffectChain` instance,
@@ -2298,7 +2298,7 @@ impl Compositor for LayerCompositor {
                 is_clip_level: false,
                 frame_count: frame.frame_count as i64,
                 anim_progress: 0.0,
-                trigger_count: 0,
+                trigger_count: frame.master_trigger_count,
             };
 
             // Run master FX directly on raw HDR `led_main`, copy result back
@@ -2523,6 +2523,7 @@ mod chain_pool_tests {
             effect_groups: &[],
             parent_layer_id: None,
             is_group: false,
+            trigger_count: 0,
         }
     }
 

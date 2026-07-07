@@ -15,7 +15,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::audio_features::SendFeatures;
-use crate::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind};
+use crate::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, AudioModSource};
 use crate::id::LayerId;
 use crate::units::Beats;
 
@@ -26,6 +26,129 @@ const MAX_TRIGGER_THRESHOLD: f32 = 0.9;
 const MIN_TRIGGER_THRESHOLD: f32 = 0.05;
 /// Default one-shot length (beats) — a one-beat flash; the user tunes per route.
 const DEFAULT_ONE_SHOT_BEATS: f64 = 1.0;
+
+fn default_true() -> bool {
+    true
+}
+
+/// Map a 0..1 sensitivity slider to a transient fire threshold. Shared by
+/// [`TriggerRoute`] (clip-launch routes) and [`AudioTriggerMod`] (§8 param
+/// triggers) so both surfaces feel identical to tune. Inverted: sensitivity
+/// 1.0 → [`MIN_TRIGGER_THRESHOLD`] (fire easily); 0.0 → [`MAX_TRIGGER_THRESHOLD`]
+/// (only the strongest onsets).
+pub fn sensitivity_to_threshold(sensitivity: f32) -> f32 {
+    let s = sensitivity.clamp(0.0, 1.0);
+    MIN_TRIGGER_THRESHOLD + (1.0 - s) * (MAX_TRIGGER_THRESHOLD - MIN_TRIGGER_THRESHOLD)
+}
+
+/// Re-arm hysteresis for [`TransientEdge`]: a fired edge re-arms once its
+/// level drops below `threshold * REARM_RATIO`. Below 1.0 so a noisy plateau
+/// just above threshold doesn't chatter; well above 0 so the edge re-arms
+/// promptly between onsets. Shared by the live clip-trigger evaluator
+/// (`manifold-playback::live_trigger::LiveTriggerState`) and the §8 param-
+/// trigger evaluator.
+pub const REARM_RATIO: f32 = 0.6;
+
+/// Pure armed/re-arm edge detector for a transient impulse crossing a
+/// threshold: fires once on the rising edge, then only re-arms once the level
+/// falls back below `threshold * REARM_RATIO`. Tempo-independent, runtime-only
+/// (never serialized) — extracted from `LiveTriggerState`'s per-route armed
+/// flag (D4) so both the clip-trigger evaluator (keyed by send×band) and the
+/// §8 param-trigger evaluator (keyed by instance) share one implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransientEdge {
+    armed: bool,
+}
+
+impl Default for TransientEdge {
+    fn default() -> Self {
+        Self { armed: true }
+    }
+}
+
+impl TransientEdge {
+    /// Advance one tick: true iff `level` crosses `threshold` on this armed
+    /// edge (a fire). Re-arms internally once `level` decays below
+    /// `threshold * REARM_RATIO`.
+    pub fn advance(&mut self, level: f32, threshold: f32) -> bool {
+        if self.armed && level > threshold {
+            self.armed = false;
+            true
+        } else {
+            if !self.armed && level < threshold * REARM_RATIO {
+                self.armed = true;
+            }
+            false
+        }
+    }
+
+    /// Drop to armed — call on transport stop / project reset so a stale
+    /// "fired, not yet re-armed" flag can't suppress the first onset next time
+    /// (BUG-051).
+    pub fn clear(&mut self) {
+        self.armed = true;
+    }
+}
+
+/// Which events increment a generator's/effect's Trigger response while audio
+/// triggers are enabled on it (§8 D1/D2). Peter, 2026-07-07: *"if Trigger is
+/// enabled we can choose if we want rising clip edge (default) OR the
+/// transient trigger OR both."*
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum TriggerFireMode {
+    /// Only the layer's clip-launch edge counts (today's behavior, unchanged).
+    #[default]
+    ClipEdge,
+    /// Only audio transients count — clip launches are silently ignored for
+    /// this instance's trigger response (a mode a user can forget; the drawer
+    /// surfaces it on the collapsed card row).
+    Transient,
+    /// Both the clip edge and audio transients count.
+    Both,
+}
+
+impl TriggerFireMode {
+    /// True if this mode counts the layer's clip-launch edge.
+    pub fn wants_clip_edge(self) -> bool {
+        matches!(self, TriggerFireMode::ClipEdge | TriggerFireMode::Both)
+    }
+
+    /// True if this mode counts audio transients.
+    pub fn wants_transient(self) -> bool {
+        matches!(self, TriggerFireMode::Transient | TriggerFireMode::Both)
+    }
+}
+
+/// Per-instance config: audio fires this generator's/effect's Trigger
+/// response (§8 D2). Lives beside `PresetInstance.audio_mods`, addressed the
+/// same way (a named send + feature), but drives the instance's
+/// `trigger_count` contribution instead of a continuous param value. Reuses
+/// `AudioModSource` so send addressing survives relabel/re-patch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioTriggerMod {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    pub source: AudioModSource,
+    /// 0..1. High sensitivity = low transient threshold (more onsets fire).
+    pub sensitivity: f32,
+    #[serde(default)]
+    pub mode: TriggerFireMode,
+    /// Edge-detection runtime state. Never serialized — resets to armed on
+    /// load, matching every other audio-mod runtime field (e.g.
+    /// `ParameterAudioMod.smoothed`).
+    #[serde(skip)]
+    pub edge: TransientEdge,
+}
+
+impl AudioTriggerMod {
+    /// Map `sensitivity` to the transient fire threshold (shared mapping —
+    /// see [`sensitivity_to_threshold`]).
+    pub fn threshold(&self) -> f32 {
+        sensitivity_to_threshold(self.sensitivity)
+    }
+}
 
 /// One audio → visual trigger: a send's transient on `source` fires a one-shot
 /// clip on `target_layer`. All fields act at evaluation time, so editing any of
@@ -65,12 +188,10 @@ impl TriggerRoute {
         }
     }
 
-    /// Map the 0..1 sensitivity slider to the transient fire threshold.
-    /// Inverted: sensitivity 1.0 → [`MIN_TRIGGER_THRESHOLD`] (fire easily);
-    /// 0.0 → [`MAX_TRIGGER_THRESHOLD`] (only the strongest onsets).
+    /// Map the 0..1 sensitivity slider to the transient fire threshold
+    /// (shared mapping — see [`sensitivity_to_threshold`]).
     pub fn threshold(&self) -> f32 {
-        let s = self.sensitivity.clamp(0.0, 1.0);
-        MIN_TRIGGER_THRESHOLD + (1.0 - s) * (MAX_TRIGGER_THRESHOLD - MIN_TRIGGER_THRESHOLD)
+        sensitivity_to_threshold(self.sensitivity)
     }
 
     /// The transient impulse (0..1) for this route's band, read from a send's
@@ -124,5 +245,71 @@ mod tests {
         let high = TriggerRoute::new(AudioBand::High);
         assert!((low.transient(&features) - 0.7).abs() < 1e-6);
         assert!((high.transient(&features) - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn transient_edge_fires_once_then_rearms_below_ratio() {
+        let mut edge = TransientEdge::default();
+        assert!(edge.advance(0.6, 0.5)); // rising edge
+        assert!(!edge.advance(0.6, 0.5)); // still hot, no re-fire
+        assert!(!edge.advance(0.31, 0.5)); // above rearm floor (0.3), stays disarmed
+        assert!(!edge.advance(0.29, 0.5)); // below rearm floor, rearms (no fire on the dip)
+        assert!(edge.advance(0.6, 0.5)); // fires again
+    }
+
+    #[test]
+    fn transient_edge_clear_forces_rearm() {
+        let mut edge = TransientEdge::default();
+        assert!(edge.advance(0.9, 0.5));
+        assert!(!edge.advance(0.9, 0.5)); // disarmed
+        edge.clear();
+        assert!(edge.advance(0.9, 0.5)); // re-armed by clear()
+    }
+
+    #[test]
+    fn trigger_fire_mode_wants() {
+        assert!(TriggerFireMode::ClipEdge.wants_clip_edge());
+        assert!(!TriggerFireMode::ClipEdge.wants_transient());
+        assert!(!TriggerFireMode::Transient.wants_clip_edge());
+        assert!(TriggerFireMode::Transient.wants_transient());
+        assert!(TriggerFireMode::Both.wants_clip_edge());
+        assert!(TriggerFireMode::Both.wants_transient());
+        assert_eq!(TriggerFireMode::default(), TriggerFireMode::ClipEdge);
+    }
+
+    #[test]
+    fn audio_trigger_mod_threshold_matches_shared_mapping() {
+        let cfg = AudioTriggerMod {
+            enabled: true,
+            source: AudioModSource {
+                send_id: crate::id::AudioSendId::new("send-1"),
+                feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+            },
+            sensitivity: 0.5,
+            mode: TriggerFireMode::default(),
+            edge: TransientEdge::default(),
+        };
+        assert!((cfg.threshold() - sensitivity_to_threshold(0.5)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn audio_trigger_mod_round_trips_serde_skip_none_edge() {
+        let cfg = AudioTriggerMod {
+            enabled: true,
+            source: AudioModSource {
+                send_id: crate::id::AudioSendId::new("send-1"),
+                feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Low),
+            },
+            sensitivity: 0.7,
+            mode: TriggerFireMode::Both,
+            edge: TransientEdge::default(),
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(!json.contains("edge"), "runtime edge state must not serialize");
+        let back: AudioTriggerMod = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.enabled, cfg.enabled);
+        assert_eq!(back.source, cfg.source);
+        assert_eq!(back.sensitivity, cfg.sensitivity);
+        assert_eq!(back.mode, cfg.mode);
     }
 }

@@ -5302,7 +5302,8 @@
       "examples": [
         "FluidSim2D",
         "FluidSim3D",
-        "ParticleText"
+        "ParticleText",
+        "Strobe"
       ],
       "inputs": [
         {
@@ -9078,6 +9079,7 @@
         "ParticleText",
         "StarField",
         "StrangeAttractor",
+        "Strobe",
         "Tesseract",
         "VoronoiPrism",
         "Wireframe",
@@ -16365,7 +16367,8 @@
         "FluidSim2D",
         "FluidSim3D",
         "NestedCubes",
-        "ParticleText"
+        "ParticleText",
+        "Strobe"
       ],
       "inputs": [
         {
@@ -17772,6 +17775,7 @@
         "Plasma",
         "StarField",
         "StrangeAttractor",
+        "Strobe",
         "Tesseract",
         "Text",
         "TrivialPassthrough",
@@ -19965,6 +19969,13 @@
           "max": "2",
           "min": "0",
           "name": "Mode"
+        },
+        {
+          "default": "0",
+          "id": "clip_trigger",
+          "max": "1",
+          "min": "0",
+          "name": "Clip Trigger"
         }
       ]
     },

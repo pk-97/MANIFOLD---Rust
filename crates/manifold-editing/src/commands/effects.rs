@@ -1085,6 +1085,7 @@ mod tests {
                     curve: MacroCurve::Linear,
                     invert: false,
                     is_angle: false,
+                    is_trigger_gate: false,
                 }],
                 bindings: vec![BindingDef {
                     id: param_id.to_string(),

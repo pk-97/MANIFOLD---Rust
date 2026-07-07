@@ -488,6 +488,15 @@ pub struct ParamSpecDef {
     /// on serialize when false so non-angle presets stay byte-identical on disk.
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_angle: bool,
+    /// §8 D6: identifies the outer-card gate for a generator's/effect's audio
+    /// trigger response (the `clip_trigger` toggle on the 11 trigger-
+    /// responsive generators; the Strobe `clip_trigger` card added in P3) —
+    /// an EXPLICIT flag, not a match on the id string `"clip_trigger"`
+    /// (`feedback_hidden_field_dependencies`). Drives the "A" drawer's mode
+    /// row (Clip/Audio/Both) on this card. `false` by default, skipped on
+    /// serialize when false so every existing preset stays byte-identical.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_trigger_gate: bool,
 }
 
 /// JSON-wire shape mirroring `manifold_renderer::node_graph::ParamBinding`.
@@ -691,6 +700,7 @@ mod tests {
             curve: crate::macro_bank::MacroCurve::Linear,
             invert: false,
             is_angle: false,
+            is_trigger_gate: false,
         }
     }
 
@@ -1006,6 +1016,7 @@ mod tests {
                 curve: Default::default(),
                 invert: false,
                 is_angle: false,
+                is_trigger_gate: false,
             }],
             bindings: vec![BindingDef {
                 id: "amount".to_string(),

@@ -188,6 +188,12 @@ pub struct PlaybackEngine {
     sync_start_scratch: Vec<ActiveClipRef>,
     /// Pre-allocated scratch for modulation active clip timing.
     modulation_timing_scratch: Vec<(Beats, Beats)>,
+    /// §8 param triggers: which instances' own `audio_trigger` config fired
+    /// this tick, from the most recent `evaluate_modulation` call. Drained by
+    /// [`Self::take_trigger_pulses`] each tick (P2 plumbs this into the
+    /// renderer's per-layer `audio_count`); reused as scratch between ticks to
+    /// avoid a per-tick allocation.
+    pending_trigger_pulses: Vec<crate::modulation::TriggerPulse>,
     /// Latest per-send audio features, refreshed each tick by the content
     /// thread (which owns the capture/analysis worker) via
     /// [`Self::set_audio_snapshot`]. Empty when audio modulation is inactive, in
@@ -291,6 +297,7 @@ impl PlaybackEngine {
             session_wrap_restart_scratch: Vec::with_capacity(4),
             sync_start_scratch: Vec::with_capacity(4),
             modulation_timing_scratch: Vec::with_capacity(64),
+            pending_trigger_pulses: Vec::new(),
             audio_snapshot: manifold_core::audio_features::AudioFeatureSnapshot::default(),
             automation_latches: crate::automation::AutomationLatches::default(),
             automation_armed: false,
@@ -523,6 +530,16 @@ impl PlaybackEngine {
         if let Some(mgr) = &mut self.live_clip_manager {
             mgr.clear_all();
         }
+        // BUG-051: drop every audio-trigger edge-detector's armed state so a
+        // stale "fired, not yet re-armed" flag can't suppress the first onset
+        // next time transport starts. Both the live clip-trigger routes
+        // (§1-7) and the §8 param-trigger holders (audio_trigger.edge +
+        // ParameterAudioMod.trigger_edge) are runtime-only and never
+        // serialized, so this is the only reset point that reaches them.
+        self.live_trigger_state.clear();
+        if let Some(project) = &mut self.project {
+            crate::modulation::clear_all_trigger_edges(project);
+        }
         // Transport stop stops all session playback and clears pending
         // launches (Ableton behavior). session_override is NOT cleared —
         // layers stay detached until an explicit Back to Arrangement (§4).
@@ -713,6 +730,14 @@ impl PlaybackEngine {
         result
     }
 
+    /// §8 param triggers: drain this tick's fired `audio_trigger` pulses
+    /// (P1's evaluator output) for the caller to fold into the renderer's
+    /// per-layer `audio_count` (P2). Leaves the scratch Vec's capacity intact
+    /// for reuse next tick.
+    pub fn take_trigger_pulses(&mut self) -> Vec<crate::modulation::TriggerPulse> {
+        std::mem::take(&mut self.pending_trigger_pulses)
+    }
+
     /// Reclaim the ready_clips buffer from a consumed TickResult.
     /// Call after the frame is done with the TickResult to preserve
     /// the pre-allocated buffer for the next tick (zero allocation).
@@ -810,6 +835,7 @@ impl PlaybackEngine {
         // 7. Evaluate modulation pipeline (LFO drivers + ADSR envelopes).
         //    Port of C# DriverController.Update() [ExecutionOrder 50, after PlaybackController].
         let mut timing = std::mem::take(&mut self.modulation_timing_scratch);
+        let mut pulses = std::mem::take(&mut self.pending_trigger_pulses);
         let audio = &self.audio_snapshot;
         let modulation_dirty = if let Some(project) = &mut self.project {
             crate::modulation::evaluate_modulation(
@@ -818,11 +844,13 @@ impl PlaybackEngine {
                 ctx.dt_seconds,
                 audio,
                 &mut timing,
+                &mut pulses,
             )
         } else {
             false
         };
         self.modulation_timing_scratch = timing;
+        self.pending_trigger_pulses = pulses;
         // Automation folds into the same compositor-dirty path modulation
         // uses — a lane write is just as much a reason to re-send the UI
         // snapshot as a driver/envelope write.
@@ -883,6 +911,7 @@ impl PlaybackEngine {
         // 3. Evaluate modulation pipeline even when stopped (for scrub preview / inspector).
         //    Port of C# DriverController — runs in all states.
         let mut timing = std::mem::take(&mut self.modulation_timing_scratch);
+        let mut pulses = std::mem::take(&mut self.pending_trigger_pulses);
         let dirty = {
             let audio = &self.audio_snapshot;
             if let Some(project) = &mut self.project {
@@ -892,6 +921,7 @@ impl PlaybackEngine {
                     ctx.dt_seconds,
                     audio,
                     &mut timing,
+                    &mut pulses,
                 )
             } else {
                 false
@@ -902,6 +932,7 @@ impl PlaybackEngine {
         }
         let modulation_dirty = dirty;
         self.modulation_timing_scratch = timing;
+        self.pending_trigger_pulses = pulses;
 
         // 4. Filter ready clips for compositor.
         //    Port of C# UpdateCompositor (lines 1126-1132).

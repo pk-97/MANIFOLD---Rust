@@ -127,6 +127,10 @@ impl ParamDef {
             // `format_string`). Angle display is a user-expose concern, seeded
             // onto the spec in `append_user_binding`.
             is_angle: false,
+            // ParamDef (the registry-catalog struct) carries no
+            // trigger-gate concept — bundled generator presets set this
+            // via their JSON presetMetadata.params directly (ParamSpecDef).
+            is_trigger_gate: false,
         }
     }
 }
@@ -505,6 +509,11 @@ pub struct PresetInstance {
     /// drives a param from a named audio send. `None` when unused. See
     /// `docs/AUDIO_MODULATION_DESIGN.md`.
     pub audio_mods: Option<Vec<crate::audio_mod::ParameterAudioMod>>,
+    /// Audio fires this instance's Trigger response (§8 D2): the kick pulses
+    /// the burst/reset/jump the generator (or effect, D5) already performs on
+    /// clip retrigger. `None` when unused. See
+    /// `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` §8.
+    pub audio_trigger: Option<crate::audio_trigger::AudioTriggerMod>,
     /// Per-instance timeline automation, keyed by `param_id` — a lane is a
     /// beat-indexed base writer sampled each tick (a tier-1 "hand"), riding
     /// on top of the same modulation pipeline audio_mods/drivers/envelopes
@@ -694,6 +703,7 @@ fn spec_from_binding(
         // Pre-spec fallback: a `BindingDef` records no angle-ness, so the flag
         // starts false. A later expose/edit reseeds it with the real value.
         is_angle: false,
+        is_trigger_gate: false,
     }
 }
 
@@ -720,6 +730,7 @@ fn placeholder_spec(
         curve: Default::default(),
         invert: false,
         is_angle: false,
+        is_trigger_gate: false,
     }
 }
 
@@ -905,6 +916,9 @@ impl Serialize for PresetInstance {
         if self.audio_mods.is_some() {
             field_count += 1;
         }
+        if self.audio_trigger.is_some() {
+            field_count += 1;
+        }
         if self.automation_lanes.is_some() {
             field_count += 1;
         }
@@ -954,6 +968,9 @@ impl Serialize for PresetInstance {
         }
         if let Some(a) = &self.audio_mods {
             s.serialize_field("audioMods", a)?;
+        }
+        if let Some(a) = &self.audio_trigger {
+            s.serialize_field("audioTrigger", a)?;
         }
         if let Some(a) = &self.automation_lanes {
             s.serialize_field("automationLanes", a)?;
@@ -1006,6 +1023,9 @@ impl PresetInstance {
         if self.audio_mods.is_some() {
             field_count += 1;
         }
+        if self.audio_trigger.is_some() {
+            field_count += 1;
+        }
         if self.automation_lanes.is_some() {
             field_count += 1;
         }
@@ -1036,6 +1056,9 @@ impl PresetInstance {
         }
         if let Some(a) = &self.audio_mods {
             s.serialize_field("audioMods", a)?;
+        }
+        if let Some(a) = &self.audio_trigger {
+            s.serialize_field("audioTrigger", a)?;
         }
         if let Some(a) = &self.automation_lanes {
             s.serialize_field("automationLanes", a)?;
@@ -1077,6 +1100,8 @@ impl<'de> Deserialize<'de> for PresetInstance {
             #[serde(default)]
             audio_mods: Option<Vec<crate::audio_mod::ParameterAudioMod>>,
             #[serde(default)]
+            audio_trigger: Option<crate::audio_trigger::AudioTriggerMod>,
+            #[serde(default)]
             automation_lanes: Option<Vec<AutomationLane>>,
             #[serde(default)]
             group_id: Option<EffectGroupId>,
@@ -1112,6 +1137,7 @@ impl<'de> Deserialize<'de> for PresetInstance {
             envelopes: raw.envelopes,
             ableton_mappings: raw.ableton_mappings,
             audio_mods: raw.audio_mods,
+            audio_trigger: raw.audio_trigger,
             automation_lanes: raw.automation_lanes,
             group_id: raw.group_id,
             graph: raw.graph,
@@ -1148,6 +1174,8 @@ struct GeneratorInstanceRaw {
     #[serde(default)]
     audio_mods: Option<Vec<crate::audio_mod::ParameterAudioMod>>,
     #[serde(default)]
+    audio_trigger: Option<crate::audio_trigger::AudioTriggerMod>,
+    #[serde(default)]
     automation_lanes: Option<Vec<AutomationLane>>,
     /// The generator's per-instance graph override. Lives on the generator
     /// `PresetInstance` now (graph-home unification) exactly like an effect's
@@ -1178,6 +1206,7 @@ impl GeneratorInstanceRaw {
             envelopes: self.envelopes,
             ableton_mappings: self.ableton_mappings,
             audio_mods: self.audio_mods,
+            audio_trigger: self.audio_trigger,
             automation_lanes: self.automation_lanes,
             group_id: None,
             graph: self.graph,
@@ -1272,6 +1301,7 @@ impl PresetInstance {
             envelopes: None,
             ableton_mappings: None,
             audio_mods: None,
+            audio_trigger: None,
             automation_lanes: None,
             group_id: None,
             graph: None,
@@ -1301,6 +1331,7 @@ impl PresetInstance {
             envelopes: None,
             ableton_mappings: None,
             audio_mods: None,
+            audio_trigger: None,
             automation_lanes: None,
             group_id: None,
             graph: None,
@@ -1651,6 +1682,9 @@ impl PresetInstance {
             // (rides `UserParamBinding.is_angle`). The spec is now the single
             // home for the flag, so the card reads it straight off the manifest.
             is_angle: binding.is_angle,
+            // A user-exposed inner-graph param is never the trigger-gate card
+            // (that's the preset-authored `clip_trigger` outer card only).
+            is_trigger_gate: false,
         };
 
         // The per-instance graph is the single binding-storage list.
@@ -1831,6 +1865,7 @@ impl PresetInstance {
             // Position-aware reinstate (undo of an unexpose): preserve the
             // angle flag off the captured binding, same as `append_user_binding`.
             is_angle: binding.is_angle,
+            is_trigger_gate: false,
         });
 
         // Re-insert the manifest entry at its original display position among
@@ -3606,6 +3641,7 @@ mod tests {
             envelopes: None,
             ableton_mappings: None,
             audio_mods: None,
+            audio_trigger: None,
             automation_lanes: None,
             group_id: None,
             graph: None,
@@ -3641,6 +3677,7 @@ mod tests {
             envelopes: None,
             ableton_mappings: None,
             audio_mods: None,
+            audio_trigger: None,
             automation_lanes: None,
             group_id: None,
             graph: None,
@@ -3787,6 +3824,7 @@ mod tests {
             curve: Default::default(),
             invert: false,
             is_angle: false,
+            is_trigger_gate: false,
         };
         let mut p = crate::params::Param::bundled(spec);
         p.value = value;

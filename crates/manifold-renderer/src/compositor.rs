@@ -21,6 +21,13 @@ pub struct CompositeLayerDescriptor<'a> {
     pub parent_layer_id: Option<&'a LayerId>,
     /// Whether this layer is a group container.
     pub is_group: bool,
+    /// §8 D1/D5: this layer's effective `trigger_count` (clip edge + audio
+    /// fires), read from `GeneratorRenderer::effective_trigger_count_for_layer`
+    /// and fed into this layer's effect chain's `PresetContext` — the same
+    /// value the layer's own generator graph sees. `0` for a layer with no
+    /// generator (nothing to be effective about) or group layers (D5 doesn't
+    /// define a group-scoped count; deferred).
+    pub trigger_count: u32,
 }
 
 /// Frame context passed to the compositor each tick.
@@ -34,6 +41,12 @@ pub struct CompositorFrame<'a> {
     pub layers: &'a [CompositeLayerDescriptor<'a>],
     pub master_effects: &'a [PresetInstance],
     pub master_effect_groups: &'a [EffectGroup],
+    /// §8 D5: master/global chains have no owning layer, so their effective
+    /// `trigger_count` is audio-fires-only (clip contribution is always 0
+    /// here) — accumulated by the content pipeline across every
+    /// `TriggerPulse { layer_id: None }` and fed into the master chain's
+    /// `PresetContext` the same way a layer's count feeds its chain.
+    pub master_trigger_count: u32,
     /// Tonemap settings for this frame.
     pub tonemap: TonemapSettings,
     /// LED exit path index: 0 = capture pre-tonemap composite for LED output,
