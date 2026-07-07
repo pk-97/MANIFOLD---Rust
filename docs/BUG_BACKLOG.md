@@ -66,8 +66,61 @@ or human can read it, and it needs no external tool.
 | BUG-058 | **drag-end-consumable** | timeline sticks in move/trim mode when the drag's terminal DragEnd is consumed mid-route (open dropdown/modal eats it); root = terminal events routable instead of broadcast (HIGH) |
 | BUG-059 | **band-line-grab-falls-through** | Audio Setup crossover lines sticky (4px threshold, seam interceptors, dropdown swallow) AND a missed grab silently drags clips under the modal — position-based stash gate has no z-awareness (HIGH) |
 | BUG-061 | **slider-reset-per-panel-lottery** | right-click reset only works on sliders whose panel hand-wired it twice (bespoke PanelAction + app handler); clip slip/loop regressed silently, drawer/Audio Setup never had it — reset belongs to the slider itself (MED) |
+| BUG-062 | **no-forward-version-guard** | an older build opening a newer .manifold silently strips unknown fields/effects and saves the loss back (HIGH, latent) |
+| BUG-063 | **silent-load-repairs** | overlap repair / orphan purge / unknown-effect strip delete project data on load with log-only notice; next save persists the loss (MED-HIGH) |
+| BUG-064 | **save-rename-before-fsync** | V2 save fsyncs the directory but never the temp file — power loss can leave a valid-named archive with unwritten data blocks (MED) |
+| BUG-065 | **24-bit-snapshot-hash** | save dedup + history identity key on 6 hex chars of SHA-256; a collision skips a real save or restores the wrong snapshot (LOW prob / HIGH cost) |
 
 ## Open
+
+### BUG-062 (no-forward-version-guard) — an older build opening a newer .manifold silently strips it and saves the loss back — HIGH (latent; becomes live the day two builds coexist)
+
+**Found 2026-07-07 by the PROJECT_IO_MAP read (docs/PROJECT_IO_MAP.md §9 E1).**
+`migrate_if_needed` (migrate.rs:5) only gates on `is_version_less_than` — there is no check
+that the file's `projectVersion` is ≤ the build's ceiling (`Project::default` stamps
+`"1.11.0"`, project.rs:1467). A newer file runs zero migrations, serde's
+ignore-unknown-fields default drops every field the older binary doesn't know,
+`strip_unknown_effects` (loader.rs:188) deletes newer effect types, and the next manual save
+or 60s autosave writes the stripped project back — still carrying the newer version string,
+so nothing ever notices. Scenario: laptop on last release opens the studio machine's current
+show file once. **Fix shape:** before the typed deserialize, compare the file's
+`projectVersion` against a build-version ceiling constant; refuse with a dialog (or open
+read-only with autosave disabled). One constant + one comparison + one alert.
+
+### BUG-063 (silent-load-repairs) — load-time repairs delete project data with log-only notice — MED-HIGH (silent data alteration; compounds BUG-062)
+
+**Found 2026-07-07 by the PROJECT_IO_MAP read (§9 E2).** Three load steps mutate the project
+destructively and report only to the log: `repair_overlapping_clips` (loader.rs:282) removes
+the shorter clip of every overlapping pair, `purge_orphaned_references` removes clips and
+MIDI mappings, `strip_unknown_effects` drops whole effects. The user believes they opened
+the file they saved; the next save persists the altered state and the pre-repair original
+ages out of the 50-autosave history cap. **Fix shape:** aggregate a `LoadRepairReport`
+across the pipeline; any nonzero count raises a dialog naming what changed, and the
+pre-repair `project.json` gets journaled into `history/` as a labeled snapshot ("before load
+repair") so the original is one restore away.
+
+### BUG-064 (save-rename-before-fsync) — V2 save renames before fsyncing the temp file — MED (power-loss window replaces a good save with a torn one)
+
+**Found 2026-07-07 by the PROJECT_IO_MAP read (§9 E3).** `save_v2_archive` (archive.rs:196)
+writes the zip to a temp file, atomically renames it over the archive, then fsyncs the
+parent directory — but never calls `sync_all()` on the temp file itself; `zip.finish()` only
+flushes userspace buffers. On power loss the rename metadata can be durable while the file's
+data blocks aren't: a correctly-named `.manifold` full of garbage that has already replaced
+the previous good save (history blobs included — they live in the same zip). Venue power is
+exactly the environment GIG_RESILIENCE_DESIGN plans for. **Fix shape:** one line —
+`file.sync_all()` between `zip.finish()` and the rename (keep the File handle or reopen the
+temp path).
+
+### BUG-065 (24-bit-snapshot-hash) — save dedup and history identity key on 6 hex chars of SHA-256 — LOW probability / HIGH cost
+
+**Found 2026-07-07 by the PROJECT_IO_MAP read (§9 E4).** `compute_hash` (archive.rs:289)
+truncates SHA-256 to 24 bits for both the "no changes detected → skip save" dedup
+(archive.rs:89) and `history/<hash>.json.gz` snapshot identity. A dedup collision silently
+skips a real save; a history collision makes restore return the wrong snapshot. ~7×10⁻⁵ per
+50-entry project lifetime — small, but the failure is silent data loss on the one
+unrecoverable asset. **Fix shape:** widen to 16 hex chars (64 bits); entry names stay short,
+old 6-char history entries stay readable (identity is string equality against the manifest,
+so mixed-width archives keep working as saves roll over).
 
 ### BUG-061 (slider-reset-per-panel-lottery) — right-click reset works on some sliders and not others; reset is per-panel hand-wiring instead of a slider behavior — MED (live recovery gesture a performer can't trust; reported by Peter 2026-07-07)
 
