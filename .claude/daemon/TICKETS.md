@@ -72,6 +72,17 @@ tokens (`family/kebab-name`) resolvable against moves.md headings. Keep the
 existing never-fire rules (fenced blocks, user-introduced artifacts,
 recall-marked text) unchanged.
 
+**DONE 2026-07-07 (Sonnet, lane/daemon-tickets-c @ `a569a902`).** Added
+`_BARE_FILENAME_RE` (stat-checked against repo root + `.claude/daemon/`)
+and `_MOVE_ID_TOKEN_RE`/`_moves_md_ids()` (resolved against real moves.md
+headings via `common.parse_moves`). **Found and root-caused a pre-existing
+bug while verifying**: the old `_EXT_ARTIFACT_RE` matched bare filenames
+like `notes.md` unconditionally, no existence check — contradicting its own
+contract and the brief's own acceptance test. Scoped it to require a `/`
+(its actual intent: extension-having sub-paths, not bare filenames) so bare
+filenames now go exclusively through the new gated recognizer. 5 new
+tests, all in the dispatch list.
+
 ## T4 — PreToolUse Bash lint: rg -r is a replace, not a line-number flag
 Two sessions (84a58ca5, a9e1202b) ran `rg -rn`/`rg -rl` meaning `-n`/`-l`,
 and read the silently rewritten match text as real code. In
@@ -213,3 +224,19 @@ hook reads paths from) honors env overrides — DAEMON_TELEMETRY_PATH,
 DAEMON_VERDICTS_DIR — and every subprocess-invoking test sets them to temp
 paths; in-process tests keep the existing module patching. Test: run the
 full suite, assert live telemetry.jsonl byte-identical before/after.
+
+**DONE 2026-07-07 (Sonnet, lane/daemon-tickets-c @ `a569a902`).**
+`valve.py`'s `VERDICTS_DIR`/`TELEMETRY_PATH` honor `DAEMON_VERDICTS_DIR`/
+`DAEMON_TELEMETRY_PATH` env overrides (falling back to the real paths);
+`MOVES_PATH` left untouched (read-only, no leak risk). The three tests that
+spawn real hook subprocesses (`test_real_hook_process_smoke` and both
+worker-mailbox tests in `test_worker_nudges.py`) now redirect via `env=`
+into a `tempfile.TemporaryDirectory()`, manual real-verdicts cleanup blocks
+deleted. `daemon-posttooluse.py` confirmed to use `valve.*` exclusively, no
+hardcoded paths of its own. `observer.py` confirmed OUT OF SCOPE — it has
+its own separate `VERDICTS_DIR` constant, but no test spawns it as a real
+subprocess (both worker tests deliberately plant a fake alive pidfile so
+`ensure_observer()` never spawns one). Acceptance test run and confirmed:
+telemetry.jsonl was absent before and after the full suite run in the
+lane's own worktree (gitignored, so each worktree has independent untracked
+state) — no leakage.
