@@ -6,10 +6,11 @@ stems (an L4 check). Header corrected 2026-07-05 (it still read "IN PROGRESS").
 Branch `live-audio-triggers` (off `audio-clip-detection`). Created 2026-06-18.
 
 **§8 addendum (2026-07-07): Param triggers — audio fires the Trigger controls.
-DESIGNED, not built.** Same evaluator machinery, new target: instead of firing
-one-shot clips, a transient pulses a playing generator's trigger response (and
-`is_trigger` cards on effects). Peter's ask, verbatim: *"if Trigger is enabled we
-can choose if we want rising clip edge (default) OR the transient trigger OR both."*
+P1 SHIPPED 2026-07-07 (worktree `wave/param-triggers`), P2-P4 in progress.** Same
+evaluator machinery, new target: instead of firing one-shot clips, a transient
+pulses a playing generator's trigger response (and `is_trigger` cards on effects).
+Peter's ask, verbatim: *"if Trigger is enabled we can choose if we want rising clip
+edge (default) OR the transient trigger OR both."*
 
 > **This doc is the cross-compaction tracker.** A fresh session reads §0 first, works
 > the §Phase checklist, ticks boxes + commits as it goes, and updates §0 at the end.
@@ -427,12 +428,23 @@ app       PanelAction + dispatch + state_sync card view                WIRE
 
 ### 8.4 Phase checklist (tick + commit as you go)
 
-- [ ] **P1 — Core model + engine evaluation.** `AudioTriggerMod`/`TriggerFireMode`;
-      `audio_trigger` on `PresetInstance` (skip-none, serde round-trip test);
-      `TransientEdge` extracted and `LiveTriggerState` re-based on it (its 5 tests stay
-      green — the refactor proof); trigger-aware arm in `evaluate_instance_audio_mods`
-      for `is_trigger` targets; generator fires surfaced from the modulation pass as a
-      per-layer pulse list. Gate: focused core+playback tests, clippy.
+- [x] **P1 — Core model + engine evaluation.** `AudioTriggerMod`/`TriggerFireMode`
+      (`core/audio_trigger.rs`); `audio_trigger` on `PresetInstance` (skip-none, serde
+      round-trip test, both effect + generator wire paths); `TransientEdge` extracted
+      and `LiveTriggerState` re-based on it (its 5 tests stay green — the refactor
+      proof); trigger-aware arm in `evaluate_instance_audio_mods` for `is_trigger`
+      targets (`ParameterAudioMod.trigger_edge`/`fire_count`, D5b); generator/effect
+      fires surfaced from the modulation pass as a per-layer (or master, D5) pulse list
+      (`evaluate_all_param_triggers` → `Vec<TriggerPulse>`, drained via
+      `PlaybackEngine::take_trigger_pulses`, P2 plumbs it into the renderer); BUG-051
+      fixed — `engine.stop()` now calls `live_trigger_state.clear()` +
+      `modulation::clear_all_trigger_edges` (covers both the §1-7 route edges and the
+      new §8 holders). Gate: 6 new core tests (`audio_trigger::tests`) + 6 new playback
+      tests (`modulation::tests::param_trigger_*`, `clear_all_trigger_edges_*`,
+      `is_trigger_audio_mod_*`) all green; full existing suites green (core 309+9,
+      playback 158+6 incl. the 5 `live_trigger` refactor-proof tests, editing 97+67,
+      io `load_project` 15 incl. the Liveschool canonical fixture); clippy clean on
+      core/playback/editing/io.
 - [ ] **P2 — Renderer seam + vertical proof.** `audio_count` on layer generator state;
       mode gate at both increment sites; pulse list plumbed content-pipeline → renderer;
       effect chains fed the layer's effective count in `set_frame_context` (D5 — replaces

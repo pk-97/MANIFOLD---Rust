@@ -11,21 +11,20 @@
 //! emits one decaying impulse per onset and holds its own ~106 ms refractory
 //! (the audio-modulation onset detector). So this layer needs no time- or
 //! beat-based refractory of its own — it only has to avoid re-firing on the
-//! *same* impulse's decay. It does that with a per-route armed flag: fire on the
-//! rising edge above the route threshold, then re-arm only once the impulse
-//! falls back below `threshold * REARM_RATIO`. Tempo-independent and pure.
+//! *same* impulse's decay. It does that with a per-route [`TransientEdge`]:
+//! fire on the rising edge above the route threshold, then re-arm only once
+//! the impulse falls back below `threshold * REARM_RATIO`. Tempo-independent
+//! and pure. (§8, 2026-07-07: the edge itself moved to
+//! `manifold_core::audio_trigger::TransientEdge` so the new param-trigger
+//! evaluator can share it — this module now just keys instances of it.)
 
 use ahash::AHashMap;
 
 use manifold_core::audio_features::AudioFeatureSnapshot;
 use manifold_core::audio_setup::AudioSetup;
+use manifold_core::audio_trigger::TransientEdge;
 use manifold_core::id::{AudioSendId, LayerId};
 use manifold_core::units::Beats;
-
-/// Re-arm hysteresis: a fired route re-arms once its transient drops below
-/// `threshold * REARM_RATIO`. Below 1.0 so a noisy plateau just above threshold
-/// doesn't chatter; well above 0 so the route re-arms promptly between onsets.
-const REARM_RATIO: f32 = 0.6;
 
 /// One decided fire: a route crossed its threshold this tick. The engine
 /// resolves `target_layer` (or auto-routes by `send_label` when `None`) to a
@@ -43,15 +42,15 @@ pub struct FireRequest {
 
 /// Runtime edge-detection state for every live trigger route. Owned by the
 /// content thread (the engine), never serialized. Keyed by `(send id, band
-/// index)`; an absent key means armed.
+/// index)`; an absent key means armed (matches `TransientEdge::default()`).
 #[derive(Default)]
 pub struct LiveTriggerState {
-    armed: AHashMap<(AudioSendId, usize), bool>,
+    armed: AHashMap<(AudioSendId, usize), TransientEdge>,
 }
 
 impl LiveTriggerState {
     /// Decide which routes fire this tick. Pure: reads the snapshot + setup,
-    /// updates only the internal armed flags, and returns the fires for the
+    /// updates only the internal edge state, and returns the fires for the
     /// engine to act on. Skips sends with no enabled routes and sends with no
     /// features this block.
     pub fn evaluate(
@@ -72,19 +71,16 @@ impl LiveTriggerState {
                     continue;
                 }
                 let key = (send.id.clone(), route.source.index());
-                let armed = self.armed.get(&key).copied().unwrap_or(true);
                 let level = route.transient(features);
                 let threshold = route.threshold();
+                let edge = self.armed.entry(key).or_default();
 
-                if armed && level > threshold {
+                if edge.advance(level, threshold) {
                     fires.push(FireRequest {
                         send_label: send.label.clone(),
                         target_layer: route.target_layer.clone(),
                         one_shot_beats: route.one_shot_beats,
                     });
-                    self.armed.insert(key, false);
-                } else if !armed && level < threshold * REARM_RATIO {
-                    self.armed.insert(key, true);
                 }
             }
         }
@@ -92,9 +88,12 @@ impl LiveTriggerState {
     }
 
     /// Drop all armed state — call on transport stop / project reset so a stale
-    /// "fired, not yet re-armed" flag can't suppress the first onset next time.
+    /// "fired, not yet re-armed" flag can't suppress the first onset next time
+    /// (BUG-051).
     pub fn clear(&mut self) {
-        self.armed.clear();
+        for edge in self.armed.values_mut() {
+            edge.clear();
+        }
     }
 }
 

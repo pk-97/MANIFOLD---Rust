@@ -505,6 +505,11 @@ pub struct PresetInstance {
     /// drives a param from a named audio send. `None` when unused. See
     /// `docs/AUDIO_MODULATION_DESIGN.md`.
     pub audio_mods: Option<Vec<crate::audio_mod::ParameterAudioMod>>,
+    /// Audio fires this instance's Trigger response (§8 D2): the kick pulses
+    /// the burst/reset/jump the generator (or effect, D5) already performs on
+    /// clip retrigger. `None` when unused. See
+    /// `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` §8.
+    pub audio_trigger: Option<crate::audio_trigger::AudioTriggerMod>,
     /// Per-instance timeline automation, keyed by `param_id` — a lane is a
     /// beat-indexed base writer sampled each tick (a tier-1 "hand"), riding
     /// on top of the same modulation pipeline audio_mods/drivers/envelopes
@@ -905,6 +910,9 @@ impl Serialize for PresetInstance {
         if self.audio_mods.is_some() {
             field_count += 1;
         }
+        if self.audio_trigger.is_some() {
+            field_count += 1;
+        }
         if self.automation_lanes.is_some() {
             field_count += 1;
         }
@@ -954,6 +962,9 @@ impl Serialize for PresetInstance {
         }
         if let Some(a) = &self.audio_mods {
             s.serialize_field("audioMods", a)?;
+        }
+        if let Some(a) = &self.audio_trigger {
+            s.serialize_field("audioTrigger", a)?;
         }
         if let Some(a) = &self.automation_lanes {
             s.serialize_field("automationLanes", a)?;
@@ -1006,6 +1017,9 @@ impl PresetInstance {
         if self.audio_mods.is_some() {
             field_count += 1;
         }
+        if self.audio_trigger.is_some() {
+            field_count += 1;
+        }
         if self.automation_lanes.is_some() {
             field_count += 1;
         }
@@ -1036,6 +1050,9 @@ impl PresetInstance {
         }
         if let Some(a) = &self.audio_mods {
             s.serialize_field("audioMods", a)?;
+        }
+        if let Some(a) = &self.audio_trigger {
+            s.serialize_field("audioTrigger", a)?;
         }
         if let Some(a) = &self.automation_lanes {
             s.serialize_field("automationLanes", a)?;
@@ -1077,6 +1094,8 @@ impl<'de> Deserialize<'de> for PresetInstance {
             #[serde(default)]
             audio_mods: Option<Vec<crate::audio_mod::ParameterAudioMod>>,
             #[serde(default)]
+            audio_trigger: Option<crate::audio_trigger::AudioTriggerMod>,
+            #[serde(default)]
             automation_lanes: Option<Vec<AutomationLane>>,
             #[serde(default)]
             group_id: Option<EffectGroupId>,
@@ -1112,6 +1131,7 @@ impl<'de> Deserialize<'de> for PresetInstance {
             envelopes: raw.envelopes,
             ableton_mappings: raw.ableton_mappings,
             audio_mods: raw.audio_mods,
+            audio_trigger: raw.audio_trigger,
             automation_lanes: raw.automation_lanes,
             group_id: raw.group_id,
             graph: raw.graph,
@@ -1148,6 +1168,8 @@ struct GeneratorInstanceRaw {
     #[serde(default)]
     audio_mods: Option<Vec<crate::audio_mod::ParameterAudioMod>>,
     #[serde(default)]
+    audio_trigger: Option<crate::audio_trigger::AudioTriggerMod>,
+    #[serde(default)]
     automation_lanes: Option<Vec<AutomationLane>>,
     /// The generator's per-instance graph override. Lives on the generator
     /// `PresetInstance` now (graph-home unification) exactly like an effect's
@@ -1178,6 +1200,7 @@ impl GeneratorInstanceRaw {
             envelopes: self.envelopes,
             ableton_mappings: self.ableton_mappings,
             audio_mods: self.audio_mods,
+            audio_trigger: self.audio_trigger,
             automation_lanes: self.automation_lanes,
             group_id: None,
             graph: self.graph,
@@ -1272,6 +1295,7 @@ impl PresetInstance {
             envelopes: None,
             ableton_mappings: None,
             audio_mods: None,
+            audio_trigger: None,
             automation_lanes: None,
             group_id: None,
             graph: None,
@@ -1301,6 +1325,7 @@ impl PresetInstance {
             envelopes: None,
             ableton_mappings: None,
             audio_mods: None,
+            audio_trigger: None,
             automation_lanes: None,
             group_id: None,
             graph: None,
@@ -3606,6 +3631,7 @@ mod tests {
             envelopes: None,
             ableton_mappings: None,
             audio_mods: None,
+            audio_trigger: None,
             automation_lanes: None,
             group_id: None,
             graph: None,
@@ -3641,6 +3667,7 @@ mod tests {
             envelopes: None,
             ableton_mappings: None,
             audio_mods: None,
+            audio_trigger: None,
             automation_lanes: None,
             group_id: None,
             graph: None,
