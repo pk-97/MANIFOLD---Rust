@@ -1,4 +1,4 @@
-# Daemon final-window upgrades — landed 2026-07-07 @ <filled at merge>
+# Daemon final-window upgrades — landed 2026-07-07 @ 1ea3162f
 
 **Branch:** feat/daemon-final-upgrades · **Level reached:** L2 (full automated
 suite; no GUI surface exists for this change class) / target L2
