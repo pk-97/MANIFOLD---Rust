@@ -152,5 +152,8 @@ escape hatch, HDR half-res rule applies).
 - **Tearing / plastic deformation**: constraint-breaking thresholds — after cloth
   ships and gets performed with.
 - **Two-way coupling** (fluid pushes cloth): research-tier; revisit on demand.
-- **GPU rigid bodies**: only if a look demands stacking/contact; XPBD shape-matching
-  is the cheap version if so.
+- **GPU rigid bodies**: ~~only if a look demands stacking/contact; XPBD shape-matching
+  is the cheap version if so.~~ **SUPERSEDED 2026-07-07** — rigid bodies are now
+  `docs/BOX3D_PHYSICS_DESIGN.md` (box3d FFI, Peter's call). Two-way coupling with
+  this doc's XPBD lane remains deferred here; collider-atom vocabulary reconciles at
+  this lane's §2.5 audit.
