@@ -1101,7 +1101,9 @@ rebuild. This produces stale chrome STATES in place (ghost highlights, stale scr
 real, but probably NOT the screenshot's fragments. **Fix shape (root):** the incremental
 path must detect dirt in the complement of the sub-regions and fall back to the full panel
 render, and dirty-flag clearing for panel ranges should be owned by the cache manager (the
-blanket `clear_dirty` may only touch the overlay region).
+blanket `clear_dirty` may only touch the overlay region). **Sequencing: land BUG-060's clip
+container first** — it bounds what this cache can be wrong about; order rationale in the
+BUG-060 entry. This half is Opus-grade (fast-path regression risk), not Sonnet-mechanical.
 
 _3. The video-bleed fragment cannot be atlas staleness at all._ The atlas never contains
 compositor pixels: composite order is clear-to-black → atlas blit (pass 2,
@@ -1143,8 +1145,21 @@ the bottom paints card content over the footer bar.
 at the inspector rect — kills the whole class (footer overpaint, drawer-tween overflow, any
 future straddling node) in one move; incremental cache renders already honor ancestor clips
 (`traverse_flat_range` pre-push, [tree.rs:737](../crates/manifold-ui/src/tree.rs#L737)).
+The clip must wrap the SCROLLED card column, not the pinned macros strip / tab strip chrome.
 Also add the missing `drawer_reveal` clip to `build_toggle_trigger_row` for parity with the
 param-row path (correct tween containment regardless of the container fix).
+
+**Order (Fable, 2026-07-07): fix BUG-060 FIRST, then BUG-015's stale-chrome hole.** The
+clip container bounds what the atlas cache can ever be wrong about (no inspector pixel can
+land outside its region afterwards), which shrinks the reasoning surface for the BUG-015
+fix. BUG-060 is Sonnet-ready and verifiable with the existing headless snapshot tool (the
+spill shows in plain full renders — before/after PNG of a bottom-straddling open trigger
+drawer). BUG-015's hole is Opus-grade: it sits at the seam between the cache's incremental
+path and the frame loop's blanket `clear_dirty`
+([app_render.rs:4807](../crates/manifold-app/src/app_render.rs#L4807)), which exists
+precisely because leftover dirty flags once defeated the idle fast path — a careless fix
+reintroduces that regression; verify by reasoning + a unit test at the
+`render_dirty_panels` helper layer (no snapshot can show it).
 
 ### BUG-016 — Imported .glb layers are black boxes: no card params, no Model File picker, edit paths silently no-op — FIXED 2026-07-04 (`2d5e4dc6`)
 
