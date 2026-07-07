@@ -11,9 +11,7 @@ use manifold_ui::panels::layer_header::LayerInfo;
 use manifold_ui::panels::param_card::{
     ParamCardConfig, ParamCardKind, ParamCardStringInfo, ParamInfo,
 };
-use manifold_ui::panels::param_slider_shared::{
-    AbletonMappingDisplay, AudioCardState, AudioTriggerCardState,
-};
+use manifold_ui::panels::param_slider_shared::{AbletonMappingDisplay, AudioCardState};
 use manifold_ui::panels::viewport::TrackInfo;
 
 use crate::app::SelectionState;
@@ -1768,6 +1766,13 @@ fn build_card_modulation(
 /// instance's `audio_mods`. The card-level send list (`send_labels`/`send_ids`)
 /// is filled separately by [`attach_audio_sends`] (it needs the project's
 /// `AudioSetup`, which this per-instance builder doesn't carry).
+///
+/// §9: a trigger-gate row's config is a normal `ParameterAudioMod` like any
+/// other, so this single walk covers it too — `trigger_mode_idx` is read off
+/// `am.trigger_mode` (defaulting to `Both`, mirroring the evaluator's
+/// `unwrap_or(TriggerFireMode::Both)` fallback) alongside the other fields.
+/// No `is_trigger_gate` awareness needed here; only the UI's collapsed-row
+/// badge and Mode row care which row it is.
 fn build_audio_card_state(
     inst: &PresetInstance,
     n: usize,
@@ -1785,6 +1790,7 @@ fn build_audio_card_state(
         sensitivity: vec![1.0; n],
         attack_ms: vec![5.0; n],
         release_ms: vec![120.0; n],
+        trigger_mode_idx: vec![0; n],
         send_labels: Vec::new(),
         send_ids: Vec::new(),
     };
@@ -1806,39 +1812,15 @@ fn build_audio_card_state(
         a.release_ms[pi] = am.shape.release_ms;
         a.kind_idx[pi] = am.source.feature.kind.index() as i32;
         a.band_idx[pi] = am.source.feature.band.index() as i32;
+        a.trigger_mode_idx[pi] = match am
+            .trigger_mode
+            .unwrap_or(manifold_core::audio_trigger::TriggerFireMode::Both)
+        {
+            manifold_core::audio_trigger::TriggerFireMode::ClipEdge => 0,
+            manifold_core::audio_trigger::TriggerFireMode::Transient => 1,
+            manifold_core::audio_trigger::TriggerFireMode::Both => 2,
+        };
     }
-    a
-}
-
-/// Audio-TRIGGER card state (§8 D6) — the twin of [`build_audio_card_state`]
-/// for `PresetInstance.audio_trigger`. Unlike the per-param `audio_mods`
-/// list, there is at most ONE trigger-gate row per card, so this just finds
-/// that row's index (`ParamInfo.is_trigger_gate`) and stamps the single
-/// config onto it; every other row's entry stays at its default (inactive).
-fn build_audio_trigger_card_state(inst: &PresetInstance, params: &[ParamInfo]) -> AudioTriggerCardState {
-    let n = params.len();
-    let mut a = AudioTriggerCardState {
-        active: vec![false; n],
-        send_id: vec![None; n],
-        band_idx: vec![0; n],
-        sensitivity: vec![1.0; n],
-        mode_idx: vec![0; n],
-    };
-    let Some(pi) = params.iter().position(|p| p.is_trigger_gate) else {
-        return a;
-    };
-    let Some(cfg) = inst.audio_trigger.as_ref().filter(|c| c.enabled) else {
-        return a;
-    };
-    a.active[pi] = true;
-    a.send_id[pi] = Some(cfg.source.send_id.clone());
-    a.band_idx[pi] = cfg.source.feature.band.index() as i32;
-    a.sensitivity[pi] = cfg.sensitivity;
-    a.mode_idx[pi] = match cfg.mode {
-        manifold_core::audio_trigger::TriggerFireMode::ClipEdge => 0,
-        manifold_core::audio_trigger::TriggerFireMode::Transient => 1,
-        manifold_core::audio_trigger::TriggerFireMode::Both => 2,
-    };
     a
 }
 
@@ -1961,7 +1943,6 @@ fn empty_generator_config(inst: &PresetInstance) -> ParamCardConfig {
         driver_triplet: vec![],
         driver_free_period: vec![],
         audio: Default::default(),
-        audio_trigger: Default::default(),
         automation_active: vec![],
         automation_overridden: vec![],
     }
@@ -2199,7 +2180,6 @@ fn preset_to_config(
         automation_latched,
     );
     let audio = build_audio_card_state(inst, n, |id| id_to_index.get(id).copied());
-    let audio_trigger = build_audio_trigger_card_state(inst, &params);
 
     // String params are a generator-only surface (text inputs, font dropdowns),
     // sourced from the registry def.
@@ -2290,7 +2270,6 @@ fn preset_to_config(
         driver_triplet: m.driver_triplet,
         driver_free_period: m.driver_free_period,
         audio,
-        audio_trigger,
         automation_active: m.automation_active,
         automation_overridden: m.automation_overridden,
     })
@@ -2461,112 +2440,85 @@ mod param_label_tests {
 }
 
 #[cfg(test)]
-mod audio_trigger_card_state_tests {
+mod build_audio_card_state_trigger_mode_tests {
     use super::*;
-    use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, AudioModSource};
-    use manifold_core::audio_trigger::{AudioTriggerMod, TriggerFireMode};
+    use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, ParameterAudioMod};
+    use manifold_core::audio_trigger::TriggerFireMode;
     use manifold_core::effects::PresetInstance;
     use manifold_core::id::AudioSendId;
 
-    fn param_info(id: &str, is_trigger_gate: bool) -> ParamInfo {
-        ParamInfo {
-            param_id: std::borrow::Cow::Owned(id.to_string()),
-            name: id.to_string(),
-            min: 0.0,
-            max: 1.0,
-            default: 0.0,
-            whole_numbers: false,
-            is_angle: false,
-            exposed: true,
-            is_toggle: is_trigger_gate,
-            is_trigger: false,
-            is_trigger_gate,
-            value_labels: None,
-            osc_address: None,
-            ableton_display: None,
-            ableton_range: None,
-            mappable: true,
-        }
+    fn resolve<'a>(params: &'a [&'a str]) -> impl Fn(&str) -> Option<usize> + 'a {
+        move |id| params.iter().position(|&p| p == id)
     }
 
-    /// §8 D6: `build_audio_trigger_card_state` finds the row whose
-    /// `ParamInfo.is_trigger_gate` is true and stamps `inst.audio_trigger`
-    /// onto it — every other row's entry stays at its default (inactive).
+    /// §9: a trigger-gate row's fire mode lives on the mod itself
+    /// (`ParameterAudioMod.trigger_mode`), not a separate per-instance
+    /// config — `build_audio_card_state` reads it into `trigger_mode_idx`
+    /// in the SAME walk that populates `active`/`send_id`/`band_idx`/etc.
     /// This is the function `preset_to_config` calls to populate
-    /// `ParamCardConfig.audio_trigger`, so a green test here is the proof the
-    /// config the card sees actually carries the project's live
-    /// `AudioTriggerMod`, not just that the model round-trips in isolation.
+    /// `ParamCardConfig.audio`, so a green test here is the proof the
+    /// config the card sees actually carries the project's live mode, not
+    /// just that the model round-trips in isolation.
     #[test]
-    fn finds_the_trigger_gate_row_and_stamps_its_config() {
+    fn trigger_mode_reads_off_the_mod_alongside_every_other_field() {
         let mut inst = PresetInstance::new(manifold_core::PresetTypeId::new("Strobe"));
-        inst.audio_trigger = Some(AudioTriggerMod {
-            enabled: true,
-            source: AudioModSource {
-                send_id: AudioSendId::new("send-kick"),
-                feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Low),
-            },
-            sensitivity: 0.65,
-            mode: TriggerFireMode::Both,
-            edge: Default::default(),
-        });
-        let params = vec![
-            param_info("amount", false),
-            param_info("clip_trigger", true),
-        ];
+        let mut m = ParameterAudioMod::new(
+            "clip_trigger".into(),
+            AudioSendId::new("send-kick"),
+            AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Low),
+        );
+        m.trigger_mode = Some(TriggerFireMode::Both);
+        inst.audio_mods = Some(vec![m]);
 
-        let cfg = build_audio_trigger_card_state(&inst, &params);
+        let params = ["amount", "clip_trigger"];
+        let cfg = build_audio_card_state(&inst, params.len(), resolve(&params));
 
         assert_eq!(cfg.active, vec![false, true]);
         assert_eq!(cfg.send_id[0], None);
         assert_eq!(cfg.send_id[1], Some(AudioSendId::new("send-kick")));
         assert_eq!(cfg.band_idx[1], AudioBand::Low.index() as i32);
-        assert!((cfg.sensitivity[1] - 0.65).abs() < 1e-6);
-        assert_eq!(cfg.mode_idx[1], 2); // Both
+        assert_eq!(cfg.trigger_mode_idx[1], 2); // Both
     }
 
-    /// A disabled config (armed once, then disarmed via the "A" button,
-    /// which flips `enabled` without clearing the rest) reads as fully
-    /// inactive — matches the per-param `build_audio_card_state`'s identical
-    /// "skip if !enabled" rule, so the card hides a disarmed drawer exactly
-    /// like the existing per-param one does.
+    /// A disabled mod (armed once, then disarmed via the "A" button, which
+    /// flips `enabled` without clearing the rest) reads as fully inactive —
+    /// the standard per-param "skip if !enabled" rule covers a trigger-gate
+    /// row automatically now; no trigger-specific gate to keep in sync.
     #[test]
-    fn disabled_config_reads_as_inactive() {
+    fn disabled_mod_reads_as_inactive() {
         let mut inst = PresetInstance::new(manifold_core::PresetTypeId::new("Strobe"));
-        inst.audio_trigger = Some(AudioTriggerMod {
-            enabled: false,
-            source: AudioModSource {
-                send_id: AudioSendId::new("send-kick"),
-                feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
-            },
-            sensitivity: 0.5,
-            mode: TriggerFireMode::ClipEdge,
-            edge: Default::default(),
-        });
-        let params = vec![param_info("clip_trigger", true)];
+        let mut m = ParameterAudioMod::new(
+            "clip_trigger".into(),
+            AudioSendId::new("send-kick"),
+            AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+        );
+        m.enabled = false;
+        m.trigger_mode = Some(TriggerFireMode::ClipEdge);
+        inst.audio_mods = Some(vec![m]);
 
-        let cfg = build_audio_trigger_card_state(&inst, &params);
+        let params = ["clip_trigger"];
+        let cfg = build_audio_card_state(&inst, params.len(), resolve(&params));
         assert_eq!(cfg.active, vec![false]);
     }
 
-    /// No `is_trigger_gate` row at all (a normal effect/generator) → every
-    /// entry stays at its default, regardless of `audio_trigger`'s value.
+    /// No `trigger_mode` set on the mod (defensive — §9 U3 always arms with
+    /// `Some(Both)`, but a hand-built or pre-§9-migrated mod could carry
+    /// `None`) reads the SAME `Both` fallback the evaluator uses
+    /// (`unwrap_or(TriggerFireMode::Both)`), so the badge/drawer never
+    /// disagrees with what actually fires.
     #[test]
-    fn no_trigger_gate_row_yields_all_defaults() {
-        let mut inst = PresetInstance::new(manifold_core::PresetTypeId::new("Bloom"));
-        inst.audio_trigger = Some(AudioTriggerMod {
-            enabled: true,
-            source: AudioModSource {
-                send_id: AudioSendId::new("send-kick"),
-                feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
-            },
-            sensitivity: 0.5,
-            mode: TriggerFireMode::ClipEdge,
-            edge: Default::default(),
-        });
-        let params = vec![param_info("amount", false)];
+    fn missing_trigger_mode_defaults_to_both() {
+        let mut inst = PresetInstance::new(manifold_core::PresetTypeId::new("Strobe"));
+        let m = ParameterAudioMod::new(
+            "clip_trigger".into(),
+            AudioSendId::new("send-kick"),
+            AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+        );
+        assert_eq!(m.trigger_mode, None);
+        inst.audio_mods = Some(vec![m]);
 
-        let cfg = build_audio_trigger_card_state(&inst, &params);
-        assert_eq!(cfg.active, vec![false]);
-        assert_eq!(cfg.send_id, vec![None]);
+        let params = ["clip_trigger"];
+        let cfg = build_audio_card_state(&inst, params.len(), resolve(&params));
+        assert_eq!(cfg.trigger_mode_idx[0], 2); // Both
     }
 }

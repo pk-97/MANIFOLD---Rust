@@ -22,6 +22,15 @@ clip edge (default) OR the transient trigger OR both."*
 
 ## 0. CURRENT POSITION (read first, update last)
 
+- **§9 unification U-P1 + U-P2 SHIPPED 2026-07-07** (worktree
+  `.claude/worktrees/unified-trigger-mods`): the trigger IS an audio mod now, top
+  to bottom. `AudioTriggerMod`/`PresetInstance.audio_trigger` are gone; a
+  trigger-gate card's config is a `ParameterAudioMod` with `trigger_mode:
+  Option<TriggerFireMode>`, reachable through the exact same "A" drawer every
+  other audio mod uses, plus one trailing Mode row. See §9.2 for the full
+  file-by-file account. **Owed:** Peter's live L4 feel-pass (carries over from
+  §8, unchanged by this refactor since the DSP path is identical) — headless
+  PNG proof only goes to L1.
 - **§8 feel-pass round 1 (2026-07-07, same evening): Peter's first live pass found two
   real engine bugs, both root-fixed the same night.** (1) A config left DISARMED from
   the drawer kept its mode, and the `acquire_clip` clip-edge gate read
@@ -607,3 +616,94 @@ app       PanelAction + dispatch + state_sync card view                WIRE
       the whole feature — no audio device, no interactive GPU output in this
       session; P3b's UI drawer (see P3b above) — a follow-up session's job, with
       the brief already written.
+
+## 9. Unification — the trigger IS an audio mod (Peter, 2026-07-07: "reuse the existing detectors so we don't have this stupid and dangerous split")
+
+Decided in-session after feel-pass round 1. The §8 D2 shape (`AudioTriggerMod`, a
+second per-instance config beside `audio_mods`) was a design mistake: the DSP was
+always shared, but the parallel CONFIG type forced every gate, walker, drawer, and
+command to know about two things, and the same night it shipped, two real bugs came
+from plumbing that knew about only one (§0). The §8.2 D2/D6 decisions are SUPERSEDED
+by this section; D1 (two counters, event-time gating), D3 (immediate fires), D5
+(effect chains get the count) stand unchanged.
+
+### 9.1 Decisions
+
+- **U1 — One config type.** `AudioTriggerMod` and `PresetInstance.audio_trigger` are
+  DELETED. A trigger-gate card's audio config is a normal `ParameterAudioMod` in
+  `audio_mods`, `param_id` = the gate card's param. The D5b fire chassis is the
+  evaluator: `shape.apply()` → `trigger_edge.advance(out_norm, 0.5)` — but for an
+  `is_trigger_gate` target the fire emits a `TriggerPulse` (bumping the layer's
+  `audio_count` exactly as before) and NEVER writes the toggle's value (R2's
+  flapping stays dead — the toggle remains a user control).
+- **U2 — Any feature, standard drawer.** UX: the trigger drawer IS the audio-mod
+  drawer — Source/Feature/Band/Inv/Delta/Amount/Attack/Release — plus one
+  trigger-only Mode row (Clip/Audio/Both). Kick can fire a trigger now.
+  What you audition on a slider is byte-identical to what fires the trigger.
+  The bespoke Sensitivity slider dies; Amount is the tune knob (scales the shaped
+  signal against the fixed 0.5 edge threshold, same knob-feel, one vocabulary).
+- **U3 — Mode lives on the mod.** `ParameterAudioMod.trigger_mode:
+  Option<TriggerFireMode>` (serde skip-none; `None` on non-gate targets). Arm-time
+  default **Both** (adding audio to a trigger must not silently kill clip launches —
+  the §8 ClipEdge default made arming a no-op, bad instrument feel). The clip-edge
+  gate helper becomes `PresetInstance::clip_edge_enabled()`: no enabled gate mod →
+  true; else its mode's `wants_clip_edge()`. Disabled-means-absent (today's
+  regression semantics) carries over verbatim.
+- **U4 — Walkers shrink back.** `PresetInstance::active_audio_trigger()` and the
+  four §0 walker arms are DELETED — a fire-mode mod is just an audio mod, so
+  `has_active_audio_mods`/`analysis_consumed_sends`/usage/consumers cover it with
+  zero trigger-specific code. This deletes the "walker forgets the second config
+  type" bug class by deleting the second config type.
+- **U5 — Migration.** Load-time: a serialized `audioTrigger` field converts to a
+  `ParameterAudioMod` on the instance's `is_trigger_gate` param (feature/band/send
+  preserved; `trigger_mode` preserved; enabled preserved; sensitivity approximated
+  into Amount — field is one day old, exists in ~one project, exact-feel fidelity
+  explicitly NOT owed). Deserialize-only legacy struct, no version bump needed
+  (field was skip-none; absent stays absent).
+- **U6 — Pulse plumbing unchanged.** `evaluate_all_param_triggers` and its second
+  walk DIE; the audio-mod walk collects pulses. `PlaybackEngine::take_trigger_pulses`,
+  `ContentPipeline::apply_trigger_pulses`, renderer `audio_count`, D5 effect-chain
+  feed: all untouched.
+
+### 9.2 Phases
+
+- [x] **U-P1 (core+playback+renderer+io):** model change + migration + evaluator
+      merge + `clip_edge_enabled()` move + walker-arm removal + BUG-051 clear path
+      covers `trigger_mode` mods' edges (already does — same `trigger_edge` field).
+      Tests: port today's two §0 regression tests to the unified shape (disarmed
+      gate mod → clip edge on + gates off; armed fire mod → gates on, send claimed,
+      pulse emitted on threshold crossing; mode row gates clip/audio at event time);
+      migration round-trip from a legacy `audioTrigger` JSON blob.
+- [x] **U-P2 (ui+app+editing, 2026-07-07):** trigger-gate cards open the standard
+      audio-mod drawer + a trailing Mode row (`build_audio_mod_drawer`'s new
+      `trigger_mode_idx: Option<i32>` param), reusing the SAME `audio_btn`/
+      `audio_config` slot `is_trigger` (D5b) already proved reaches both effect
+      and generator targets — `build_toggle_trigger_row`'s `is_trigger` and
+      `is_trigger_gate` branches are now one branch (`param_slider_shared.rs`).
+      Deleted: `AudioTriggerCardState`, `build_audio_trigger_mod_drawer`,
+      `ModTab::AudioTrigger`, the 6 `AudioTriggerMod*` PanelActions +
+      `audio_trigger_snapshot` (`app.rs`/`ui_bridge/mod.rs`/`inspector.rs`/
+      `ui_snapshot/script.rs`), `build_audio_trigger_card_state`,
+      `SetAudioTriggerModCommand`, `audio_trigger_band_labels`,
+      `dragging_audio_trigger_sensitivity`. Added: one new command
+      (`SetAudioModTriggerModeCommand`, mirrors `SetAudioModSourceCommand`'s
+      whole-old/new-capture shape) + one new PanelAction
+      (`AudioModSetTriggerMode(GraphParamTarget, ParamId, usize)`) — the
+      smallest existing audio-mod command family member, not a new mechanism.
+      `AudioCardState`/`ParamModState` grew one field each
+      (`trigger_mode_idx`/`audio_mode_idx`), populated by the SAME
+      `build_audio_card_state` walk every other per-param field already used
+      (no `is_trigger_gate` awareness needed there — only the UI's Mode row
+      and collapsed badge care which row it is). Collapsed-row mode badge
+      reads the gate mod's `trigger_mode` (unchanged mechanism, new field
+      source). Headless PNG proof on a generator (Plasma, mode Both) and
+      Strobe (mode Transient/"Audio"), both drawers open + badges, plus a
+      plain slider's (Bloom's) own armed audio-mod drawer alongside for the
+      regression look — see `[[live-audio-triggers]]` memory for the
+      screenshots. Gate: `cargo test --workspace` (2 new manifold-editing
+      tests + 3 rewritten manifold-app state_sync tests + 2 rewritten
+      manifold-ui param_card tests, full suite green) + `cargo clippy
+      --workspace -- -D warnings` clean + `cargo clippy -p manifold-app
+      --features ui-snapshot` clean except the pre-existing unrelated
+      BUG-057 (`make_blit_pipeline` dead code, landed in an earlier commit,
+      logged not fixed — out of scope).

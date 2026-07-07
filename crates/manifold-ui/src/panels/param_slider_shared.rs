@@ -67,13 +67,6 @@ pub(crate) enum ModTab {
     Driver,
     Audio,
     Ableton,
-    /// §8 D6 — the audio-TRIGGER-mod drawer on an `is_trigger_gate` row.
-    /// Never coexists with the other three on the same row (a trigger-gate
-    /// row has no continuous value, so no D/E/Ableton config ever applies),
-    /// so this tab is only ever used for height computation — the row is
-    /// built directly by `build_toggle_trigger_row`, bypassing the tab-strip
-    /// machinery exactly as `is_trigger`'s `Audio` tab does.
-    AudioTrigger,
 }
 /// Height of the modulation-config tab strip (only drawn when ≥2 configs active).
 pub(crate) const MOD_TAB_STRIP_H: f32 = 18.0;
@@ -102,9 +95,10 @@ pub(crate) const ABL_CONFIG_HEIGHT: f32 = 24.0;
 /// Level feature row, the Tone feature row, the three shaping sliders
 /// (Amount/Attack/Release), and the modifier toggles (Inv/d-dt). Derived from
 /// the shared drawer metrics so the card's reserved height can't drift from
-/// what's actually drawn.
-pub(crate) fn audio_config_height() -> f32 {
-    crate::panels::drawer::uniform_rows_height(7)
+/// what's actually drawn. `show_trigger_mode` adds the extra Mode row (§9 U2)
+/// that only an `is_trigger_gate` target's drawer carries.
+pub(crate) fn audio_config_height(show_trigger_mode: bool) -> f32 {
+    crate::panels::drawer::uniform_rows_height(if show_trigger_mode { 8 } else { 7 })
 }
 
 /// Full-scale for the audio "Amount" (sensitivity) slider: 0..this.
@@ -257,25 +251,13 @@ pub struct ParamModState {
     /// drawer index into the id an `AudioModSetSource` command needs.
     pub audio_send_ids: Vec<manifold_foundation::AudioSendId>,
 
-    // ── Audio TRIGGER mod (§8 D6, `isTriggerGate` cards) — a separate
-    // mechanism from the per-param audio mod above: `PresetInstance.
-    // audio_trigger` is a single `Option` field, not a per-param `Vec`, so it
-    // gets its own arrays rather than reusing `audio_active`/`audio_send_idx`
-    // (which are semantically `audio_mods`-keyed). Only ever populated at the
-    // one row index whose `ParamInfo.is_trigger_gate` is true; the card-level
-    // `audio_send_labels`/`audio_send_ids` above are reused as-is (same
-    // project send list, no reason to duplicate it).
-    /// Per-param: the instance's `audio_trigger` exists and is enabled.
-    pub audio_trigger_active: Vec<bool>,
-    /// Per-param: index of the selected send in `audio_send_labels`, or -1.
-    pub audio_trigger_send_idx: Vec<i32>,
-    /// Per-param: selected band index (into `AudioBand::ALL` — Whole/Low/
-    /// Mid/High). Feature kind is always `Transients` (D2), never a UI axis.
-    pub audio_trigger_band_idx: Vec<i32>,
-    /// Per-param: sensitivity, 0..1 (high = low transient threshold).
-    pub audio_trigger_sensitivity: Vec<f32>,
-    /// Per-param: fire-mode index into `[ClipEdge, Transient, Both]` (D1).
-    pub audio_trigger_mode_idx: Vec<i32>,
+    /// Per-param: fire-mode index into `[ClipEdge, Transient, Both]` (§9 U3),
+    /// read off `ParameterAudioMod.trigger_mode`. Only meaningful on an
+    /// `is_trigger_gate` row's mod; harmless elsewhere (never read). Unlike
+    /// the pre-§9 `audio_trigger_*` arrays this rides the SAME per-param
+    /// `audio_*` state above — a trigger-gate card's config is a normal
+    /// `ParameterAudioMod`, not a separate per-instance field.
+    pub audio_mode_idx: Vec<i32>,
 
     // ── Automation lane indicator (P4 §7 last bullet) ──
     /// Per-param: an enabled automation lane with ≥1 point exists on this
@@ -371,6 +353,10 @@ pub struct AudioCardState {
     pub sensitivity: Vec<f32>,
     pub attack_ms: Vec<f32>,
     pub release_ms: Vec<f32>,
+    /// Per-param: fire-mode index (`ParameterAudioMod.trigger_mode`, §9 U3),
+    /// into `[ClipEdge, Transient, Both]`. Only meaningful on an
+    /// `is_trigger_gate` target; a harmless default elsewhere.
+    pub trigger_mode_idx: Vec<i32>,
     /// Card-level: available send labels.
     pub send_labels: Vec<String>,
     /// Card-level: send ids parallel to `send_labels` — what the click handler
@@ -378,55 +364,17 @@ pub struct AudioCardState {
     pub send_ids: Vec<manifold_foundation::AudioSendId>,
 }
 
-/// Band-row button labels for the audio-TRIGGER drawer (D6), in
-/// `AudioBand::ALL` order. Deliberately "Whole" (not "Full", as
-/// [`audio_band_labels`] uses) — matches the sibling clip-launch TriggerRoute
-/// UI (`audio_setup_panel.rs`'s `(AudioBand::Full, "Whole")`), the concept
-/// this drawer's Band row is the instance-scoped twin of.
-pub(crate) fn audio_trigger_band_labels() -> [&'static str; AUDIO_BAND_COUNT] {
-    ["Whole", "Low", "Mid", "High"]
-}
-
-/// Number of fire-mode choices in the audio-trigger drawer's Mode row
-/// (D1: ClipEdge / Transient / Both).
+/// Number of fire-mode choices in a trigger-gate mod's Mode row
+/// (§9 U3: ClipEdge / Transient / Both).
 pub(crate) const AUDIO_TRIGGER_MODE_COUNT: usize = 3;
 
 /// Mode-row button labels, index-parallel to core's `TriggerFireMode`
 /// (`ClipEdge`/`Transient`/`Both`) — the UI carries only the index (mirrors
 /// `BEAT_DIV_LABELS`'s relationship to `BeatDivision`), converted at the
-/// `manifold-app` dispatch boundary.
+/// `manifold-app` dispatch boundary. §9 unified the trigger-gate drawer onto
+/// the standard audio-mod drawer; this is the one extra row it appends.
 pub(crate) fn audio_trigger_mode_labels() -> [&'static str; AUDIO_TRIGGER_MODE_COUNT] {
     ["Clip", "Audio", "Both"]
-}
-
-/// Height of the audio-TRIGGER drawer (D6): Source / Band / Sensitivity /
-/// Mode — four rows, no tab strip (a trigger-gate row never has a competing
-/// Driver/Envelope/Ableton config, same reasoning as the `is_trigger` D5b
-/// drawer). Derived from the shared drawer metrics so the card's reserved
-/// height can't drift from what's actually drawn.
-pub(crate) fn audio_trigger_config_height() -> f32 {
-    crate::panels::drawer::uniform_rows_height(4)
-}
-
-/// Audio-TRIGGER display state for one card (§8 D6), assembled in
-/// `state_sync` from `PresetInstance.audio_trigger` and applied to
-/// [`ParamModState`] via [`ParamModState::sync_audio_trigger`]. Only ever
-/// populated at the row index whose `ParamInfo.is_trigger_gate` is true.
-/// Send labels/ids are NOT duplicated here — the drawer reads
-/// `ParamModState::audio_send_labels`/`audio_send_ids` (already populated by
-/// [`ParamModState::sync_audio`] from the same project send list).
-#[derive(Debug, Default, Clone)]
-pub struct AudioTriggerCardState {
-    /// Per-param: `audio_trigger` exists and is enabled.
-    pub active: Vec<bool>,
-    /// Per-param: the config's send id, if any.
-    pub send_id: Vec<Option<manifold_foundation::AudioSendId>>,
-    /// Per-param: selected band index (`AudioBand::ALL`).
-    pub band_idx: Vec<i32>,
-    /// Per-param: sensitivity, 0..1.
-    pub sensitivity: Vec<f32>,
-    /// Per-param: fire-mode index (`[ClipEdge, Transient, Both]`).
-    pub mode_idx: Vec<i32>,
 }
 
 impl ParamModState {
@@ -457,11 +405,7 @@ impl ParamModState {
             audio_release_ms: vec![120.0; param_count],
             audio_send_labels: Vec::new(),
             audio_send_ids: Vec::new(),
-            audio_trigger_active: vec![false; param_count],
-            audio_trigger_send_idx: vec![-1; param_count],
-            audio_trigger_band_idx: vec![0; param_count],
-            audio_trigger_sensitivity: vec![1.0; param_count],
-            audio_trigger_mode_idx: vec![0; param_count],
+            audio_mode_idx: vec![0; param_count],
             automation_active: vec![false; param_count],
             automation_overridden: vec![false; param_count],
         }
@@ -480,6 +424,7 @@ impl ParamModState {
             self.audio_sensitivity[i] = audio.sensitivity.get(i).copied().unwrap_or(1.0);
             self.audio_attack_ms[i] = audio.attack_ms.get(i).copied().unwrap_or(5.0);
             self.audio_release_ms[i] = audio.release_ms.get(i).copied().unwrap_or(120.0);
+            self.audio_mode_idx[i] = audio.trigger_mode_idx.get(i).copied().unwrap_or(0);
             self.audio_send_idx[i] = audio
                 .send_id
                 .get(i)
@@ -490,26 +435,6 @@ impl ParamModState {
         }
         self.audio_send_labels = audio.send_labels.clone();
         self.audio_send_ids = audio.send_ids.clone();
-    }
-
-    /// Sync audio-TRIGGER display state from the card config (§8 D6). Reuses
-    /// `audio_send_ids` (already populated by [`Self::sync_audio`], called
-    /// first in `configure()`) to resolve the config's send id to an index —
-    /// same project send list, no separate card-level list to sync.
-    pub fn sync_audio_trigger(&mut self, n: usize, cfg: &AudioTriggerCardState) {
-        for i in 0..n {
-            self.audio_trigger_active[i] = cfg.active.get(i).copied().unwrap_or(false);
-            self.audio_trigger_band_idx[i] = cfg.band_idx.get(i).copied().unwrap_or(0);
-            self.audio_trigger_sensitivity[i] = cfg.sensitivity.get(i).copied().unwrap_or(1.0);
-            self.audio_trigger_mode_idx[i] = cfg.mode_idx.get(i).copied().unwrap_or(0);
-            self.audio_trigger_send_idx[i] = cfg
-                .send_id
-                .get(i)
-                .and_then(|o| o.as_ref())
-                .and_then(|sid| self.audio_send_ids.iter().position(|s| s == sid))
-                .map(|p| p as i32)
-                .unwrap_or(-1);
-        }
     }
 
     /// Sync driver/envelope/trim/target/decay state from config vectors.
@@ -584,11 +509,9 @@ pub(crate) struct ParamDragState {
     /// The envelope decay slider (`decay_beats`) in the drawer.
     pub(crate) dragging_decay_param: i32,
     /// An audio shaping slider drag in the drawer: `(param_index, which scalar)`.
+    /// A trigger-gate row's Amount/Attack/Release sliders ride this SAME path
+    /// (§9 unified the drawer) — no separate trigger-mod drag state.
     pub(crate) dragging_audio_shape: Option<(usize, crate::panels::AudioShapeParam)>,
-    /// The audio-TRIGGER-mod drawer's Sensitivity slider drag (§8 D6),
-    /// param index or -1 — only one scalar, unlike `dragging_audio_shape`'s
-    /// three, so no accompanying "which" tag is needed.
-    pub(crate) dragging_audio_trigger_sensitivity: i32,
 }
 
 impl ParamDragState {
@@ -599,7 +522,6 @@ impl ParamDragState {
             dragging_target_param: -1,
             dragging_decay_param: -1,
             dragging_audio_shape: None,
-            dragging_audio_trigger_sensitivity: -1,
         }
     }
 
@@ -609,7 +531,6 @@ impl ParamDragState {
             || self.dragging_target_param >= 0
             || self.dragging_decay_param >= 0
             || self.dragging_audio_shape.is_some()
-            || self.dragging_audio_trigger_sensitivity >= 0
     }
 }
 
@@ -1286,14 +1207,11 @@ pub(crate) fn active_mod_tabs(mod_state: &ParamModState, info: &ParamInfo, i: us
     if info.ableton_display.is_some() {
         v.push(ModTab::Ableton);
     }
-    // §8 D6 — the audio-TRIGGER-mod drawer height, on the SAME general path
-    // every other config uses (this tab is never actually rendered via the
-    // tab strip — `build_toggle_trigger_row` builds it directly, exactly
-    // like `is_trigger`'s `Audio` tab above — but height computation needs
-    // one code path everyone agrees with).
-    if info.is_trigger_gate && mod_state.audio_trigger_active.get(i).copied().unwrap_or(false) {
-        v.push(ModTab::AudioTrigger);
-    }
+    // §9: a trigger-gate row's config is a normal `ParameterAudioMod`, so
+    // `audio_active` above already covers it — no separate tab. The row is
+    // still built directly by `build_toggle_trigger_row` (bypassing the tab
+    // strip, same as `is_trigger`'s `Audio` tab), but height computation now
+    // shares the identical `ModTab::Audio` path every other Audio config uses.
     v
 }
 
@@ -1308,13 +1226,14 @@ pub(crate) fn resolve_active_tab(active: &[ModTab], stored: ModTab) -> Option<Mo
 }
 
 /// Height a single config tab's drawer contributes (excludes the tab strip).
-pub(crate) fn mod_config_height(tab: ModTab) -> f32 {
+/// `is_trigger_gate` adds the drawer's extra Mode row (§9 U2) when `tab` is
+/// `Audio` — the only tab a trigger-gate row ever shows.
+pub(crate) fn mod_config_height(tab: ModTab, is_trigger_gate: bool) -> f32 {
     match tab {
         ModTab::Envelope => ENV_CONFIG_HEIGHT,
         ModTab::Driver => driver_config_height(),
-        ModTab::Audio => audio_config_height(),
+        ModTab::Audio => audio_config_height(is_trigger_gate),
         ModTab::Ableton => ABL_CONFIG_HEIGHT,
-        ModTab::AudioTrigger => audio_trigger_config_height(),
     }
 }
 
@@ -1324,7 +1243,6 @@ fn mod_tab_label(tab: ModTab) -> &'static str {
         ModTab::Driver => "LFO",
         ModTab::Audio => "Audio",
         ModTab::Ableton => "Ableton",
-        ModTab::AudioTrigger => "Audio",
     }
 }
 
@@ -1338,7 +1256,6 @@ pub(crate) fn mod_tab_accent(tab: ModTab) -> Color32 {
         ModTab::Driver => color::DRIVER_ACTIVE_C32,
         ModTab::Audio => AUDIO_MOD_ACTIVE_C32,
         ModTab::Ableton => color::ABL_BADGE_C32,
-        ModTab::AudioTrigger => AUDIO_MOD_ACTIVE_C32,
     }
 }
 
@@ -1403,10 +1320,6 @@ pub(crate) const ROW_ROLE_DRV: u64 = 2;
 pub(crate) const ROW_ROLE_AUDIO: u64 = 3;
 pub(crate) const ROW_ROLE_CHEVRON: u64 = 4;
 pub(crate) const ROW_ROLE_TOGGLE: u64 = 5;
-/// The "A" audio-TRIGGER-mod button on an `is_trigger_gate` row (D6) — distinct
-/// from `ROW_ROLE_AUDIO` (D5b's per-param mechanism); the two never coexist on
-/// the same row, but a distinct role keeps the reorder-stable key unambiguous.
-pub(crate) const ROW_ROLE_AUDIO_TRIGGER: u64 = 6;
 
 /// Add a row arm button: explicitly keyed (`base | role`) when a row key base is
 /// supplied (editor card), else auto-salted by sibling index (perform inspector,
@@ -1450,14 +1363,21 @@ pub(crate) struct ToggleParamIds {
 }
 
 /// Build the per-param audio-modulation config drawer (Source/Feature/Band/
-/// Inv-Delta toggles + Amount/Attack/Release shaping sliders). Shared by
-/// `build_param_row`'s Audio mod-tab branch (continuous params, behind the
-/// multi-tab drawer) and `build_toggle_trigger_row`'s `is_trigger` case
-/// (D5b, `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` §8 — a fire-button reaches the
-/// SAME drawer, audio-only, no tab strip since Driver/Envelope/Ableton never
-/// apply to it). Returns the built `DrawerIds` plus the send count (the
-/// caller needs it to split the drawer's flat button index into send vs.
-/// feature/band regions — see `match_param_row_click`).
+/// Inv-Delta toggles + Amount/Attack/Release shaping sliders, plus an optional
+/// trailing Mode row). Shared by `build_param_row`'s Audio mod-tab branch
+/// (continuous params, behind the multi-tab drawer) and
+/// `build_toggle_trigger_row`'s `is_trigger`/`is_trigger_gate` cases (D5b/§9 —
+/// a fire-button OR a trigger-gate toggle reaches the SAME drawer, audio-only,
+/// no tab strip since Driver/Envelope/Ableton never apply to either). Returns
+/// the built `DrawerIds` plus the send count (the caller needs it to split the
+/// drawer's flat button index into send vs. feature/band/mode regions — see
+/// `match_param_row_click`).
+///
+/// `trigger_mode_idx` is `Some(idx)` only for an `is_trigger_gate` target
+/// (§9 U2): it appends the Mode row (Clip/Audio/Both) after the shaping
+/// sliders, so the drawer is byte-identical to a plain audio mod's plus one
+/// row. `None` for every other target (regular sliders, `is_trigger` fire
+/// buttons) — no Mode row, no height difference from before §9.
 #[allow(clippy::too_many_arguments)]
 fn build_audio_mod_drawer(
     tree: &mut UITree,
@@ -1468,6 +1388,7 @@ fn build_audio_mod_drawer(
     mod_state: &ParamModState,
     i: usize,
     config_font: u16,
+    trigger_mode_idx: Option<i32>,
 ) -> (crate::panels::drawer::DrawerIds, usize) {
     use crate::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
     let send_sel = mod_state.audio_send_idx.get(i).copied().unwrap_or(-1);
@@ -1521,32 +1442,44 @@ fn build_audio_mod_drawer(
     // (drive on motion). Flat indices sit one and two past the bands.
     let toggle_buttons =
         vec![DrawerButton::new("Inv", invert_on), DrawerButton::new("Delta", rate_on)];
+    let mut rows = vec![
+        DrawerRow::Buttons {
+            buttons: send_buttons,
+            width: ButtonWidth::Proportional,
+            label: Some("Source".into()),
+        },
+        DrawerRow::Buttons {
+            buttons: kind_buttons,
+            width: ButtonWidth::Uniform,
+            label: Some("Feature".into()),
+        },
+        DrawerRow::Buttons {
+            buttons: band_buttons,
+            width: ButtonWidth::Uniform,
+            label: Some("Band".into()),
+        },
+        DrawerRow::Buttons { buttons: toggle_buttons, width: ButtonWidth::Proportional, label: None },
+        shape_slider("Amount", sens / AUDIO_SENS_MAX, format!("{sens:.2}")),
+        shape_slider("Attack", attack / AUDIO_ATTACK_MAX_MS, format!("{attack:.0} ms")),
+        shape_slider("Release", release / AUDIO_RELEASE_MAX_MS, format!("{release:.0} ms")),
+    ];
+    // §9 U2: the trigger-only Mode row, appended last so its flat button
+    // index continues right after the Inv/Delta toggles (the three Slider
+    // rows above contribute no buttons) — see `match_param_row_click`.
+    if let Some(mode_sel) = trigger_mode_idx {
+        let mode_buttons: Vec<DrawerButton> = audio_trigger_mode_labels()
+            .iter()
+            .enumerate()
+            .map(|(m, l)| DrawerButton::new(*l, m as i32 == mode_sel))
+            .collect();
+        rows.push(DrawerRow::Buttons {
+            buttons: mode_buttons,
+            width: ButtonWidth::Uniform,
+            label: Some("Mode".into()),
+        });
+    }
     let spec = DrawerSpec {
-        rows: vec![
-            DrawerRow::Buttons {
-                buttons: send_buttons,
-                width: ButtonWidth::Proportional,
-                label: Some("Source".into()),
-            },
-            DrawerRow::Buttons {
-                buttons: kind_buttons,
-                width: ButtonWidth::Uniform,
-                label: Some("Feature".into()),
-            },
-            DrawerRow::Buttons {
-                buttons: band_buttons,
-                width: ButtonWidth::Uniform,
-                label: Some("Band".into()),
-            },
-            DrawerRow::Buttons {
-                buttons: toggle_buttons,
-                width: ButtonWidth::Proportional,
-                label: None,
-            },
-            shape_slider("Amount", sens / AUDIO_SENS_MAX, format!("{sens:.2}")),
-            shape_slider("Attack", attack / AUDIO_ATTACK_MAX_MS, format!("{attack:.0} ms")),
-            shape_slider("Release", release / AUDIO_RELEASE_MAX_MS, format!("{release:.0} ms")),
-        ],
+        rows,
         btn_font_size: config_font,
         slider_font_size: FONT_SIZE,
         theme: Theme::INSPECTOR.with_accent(AUDIO_MOD_ACTIVE_C32).tinted(),
@@ -1555,108 +1488,24 @@ fn build_audio_mod_drawer(
     (dids, send_count)
 }
 
-/// Build the audio-TRIGGER config drawer (§8 D6): Source / Band / Sensitivity
-/// / Mode. Built by `build_toggle_trigger_row`'s `is_trigger_gate` case — the
-/// new mechanism a `clip_trigger` toggle card's "A" button reaches, distinct
-/// from [`build_audio_mod_drawer`] (that one edits `PresetInstance.
-/// audio_mods`, a per-param `Vec`; this one edits the single `PresetInstance.
-/// audio_trigger` field). No Feature row: the feature kind is always
-/// `Transients` for a trigger mod (D2: "Transients×band"), never a UI axis.
-/// Returns the built `DrawerIds` plus the send count, mirroring
-/// `build_audio_mod_drawer`'s return shape so `match_param_row_click`
-/// resolves both the same way.
-fn build_audio_trigger_mod_drawer(
-    tree: &mut UITree,
-    parent: Option<NodeId>,
-    x: f32,
-    cy: f32,
-    w: f32,
-    mod_state: &ParamModState,
-    i: usize,
-    config_font: u16,
-) -> (crate::panels::drawer::DrawerIds, usize) {
-    use crate::panels::drawer::{ButtonWidth, DrawerButton, DrawerRow, DrawerSpec, self as drawer_mod};
-    let send_sel = mod_state.audio_trigger_send_idx.get(i).copied().unwrap_or(-1);
-    let send_count = mod_state.audio_send_labels.len();
-    let send_buttons: Vec<DrawerButton> = mod_state
-        .audio_send_labels
-        .iter()
-        .enumerate()
-        .map(|(k, label)| {
-            let btn = DrawerButton::new(label.clone(), k as i32 == send_sel);
-            match mod_state.audio_send_ids.get(k) {
-                Some(id) => btn.with_accent_text_only(crate::panels::audio_send_color(id)),
-                None => btn,
-            }
-        })
-        .collect();
-    let band_sel = mod_state.audio_trigger_band_idx.get(i).copied().unwrap_or(0);
-    // Flat button indices run sends, then bands, then modes — see
-    // `match_param_row_click`.
-    let band_buttons: Vec<DrawerButton> = audio_trigger_band_labels()
-        .iter()
-        .enumerate()
-        .map(|(b, l)| DrawerButton::new(*l, b as i32 == band_sel))
-        .collect();
-    let mode_sel = mod_state.audio_trigger_mode_idx.get(i).copied().unwrap_or(0);
-    let mode_buttons: Vec<DrawerButton> = audio_trigger_mode_labels()
-        .iter()
-        .enumerate()
-        .map(|(m, l)| DrawerButton::new(*l, m as i32 == mode_sel))
-        .collect();
-    let sens = mod_state.audio_trigger_sensitivity.get(i).copied().unwrap_or(1.0);
-    let spec = DrawerSpec {
-        rows: vec![
-            DrawerRow::Buttons {
-                buttons: send_buttons,
-                width: ButtonWidth::Proportional,
-                label: Some("Source".into()),
-            },
-            DrawerRow::Buttons {
-                buttons: band_buttons,
-                width: ButtonWidth::Uniform,
-                label: Some("Band".into()),
-            },
-            DrawerRow::Slider {
-                label: "Sens".to_string(),
-                norm: sens.clamp(0.0, 1.0),
-                value_text: format!("{sens:.2}"),
-                label_w: AUDIO_SHAPE_LABEL_W,
-            },
-            DrawerRow::Buttons {
-                buttons: mode_buttons,
-                width: ButtonWidth::Uniform,
-                label: Some("Mode".into()),
-            },
-        ],
-        btn_font_size: config_font,
-        slider_font_size: FONT_SIZE,
-        theme: Theme::INSPECTOR.with_accent(AUDIO_MOD_ACTIVE_C32).tinted(),
-    };
-    let dids = drawer_mod::build(tree, parent, x, cy, w, &spec);
-    (dids, send_count)
-}
-
 /// Node IDs produced by [`build_toggle_trigger_row`].
 pub(crate) struct ToggleTriggerRowIds {
     pub(crate) label_id: Option<NodeId>,
     pub(crate) button_id: NodeId,
-    /// The "A" audio-mod button — `Some` only for `is_trigger` rows (D5b).
-    /// Plain toggles never build one (`None`, zero lane reserved).
+    /// The "A" audio-mod button — `Some` for `is_trigger` (D5b) AND
+    /// `is_trigger_gate` (§9) rows alike; both reach the SAME per-param
+    /// drawer mechanism now. Plain toggles never build one (`None`, zero
+    /// lane reserved).
     pub(crate) audio_btn: Option<NodeId>,
     /// The audio-mod drawer, when armed. Same shape as a slider row's
     /// `audio_config` so `match_param_row_click` resolves both identically.
     pub(crate) audio_config: Option<(crate::panels::drawer::DrawerIds, usize)>,
-    /// The "A" audio-TRIGGER-mod button — `Some` only for `is_trigger_gate`
-    /// rows (D6). Distinct from `audio_btn` (D5b's per-param mechanism).
-    pub(crate) audio_trigger_btn: Option<NodeId>,
-    /// The audio-trigger-mod drawer, when armed.
-    pub(crate) audio_trigger_config: Option<(crate::panels::drawer::DrawerIds, usize)>,
-    /// Collapsed-row mode indicator (D6 consequence: "Transient mode
-    /// silently ignores clip launches... the drawer must show the mode on
-    /// the collapsed card row"). `Some` only for `is_trigger_gate` rows;
-    /// text is set (or left blank for the default `ClipEdge` mode) by the
-    /// caller from the live `mod_state` — see `build_toggle_trigger_row`.
+    /// Collapsed-row mode indicator (§9 consequence, carried over from §8 D6:
+    /// "Transient mode silently ignores clip launches... the drawer must
+    /// show the mode on the collapsed card row"). `Some` only for
+    /// `is_trigger_gate` rows; text is set (or left blank for the default
+    /// `ClipEdge` mode) by the caller from the live `mod_state` — see
+    /// `build_toggle_trigger_row`.
     pub(crate) mode_badge_id: Option<NodeId>,
     pub(crate) new_cy: f32,
 }
@@ -1670,13 +1519,15 @@ pub(crate) struct ToggleTriggerRowIds {
 ///
 /// The button right-aligns to the same column a slider row's VALUE cell
 /// uses (`x + slider_w - TOGGLE_BTN_W`) — a toggle can't be modulated, so
-/// the D/E/A lane further right stays empty for it. An `is_trigger` row is
-/// the one exception (D5b): it reaches the standard per-param audio-mod "A"
-/// button + drawer at the SAME column a slider row's audio button would
-/// occupy, so the "A" column stays visually aligned down the whole card
-/// regardless of row kind. Driver/Envelope never apply to a trigger (no
-/// continuous value to drive), so only the Audio slot is ever built —
-/// no tab strip, no `active_mod_tabs` multi-config machinery.
+/// the D/E/A lane further right stays empty for it. `is_trigger` (D5b) and
+/// `is_trigger_gate` (§9) rows are the exception: both reach the standard
+/// per-param audio-mod "A" button + drawer at the SAME column a slider row's
+/// audio button would occupy, so the "A" column stays visually aligned down
+/// the whole card regardless of row kind. `is_trigger_gate` additionally
+/// shows the collapsed-row mode badge and gets the drawer's extra Mode row.
+/// Driver/Envelope never apply to either (no continuous value to drive), so
+/// only the Audio slot is ever built — no tab strip, no `active_mod_tabs`
+/// multi-config machinery.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_toggle_trigger_row(
     tree: &mut UITree,
@@ -1750,15 +1601,15 @@ pub(crate) fn build_toggle_trigger_row(
     let mut cy = cy + ROW_HEIGHT + ROW_SPACING;
     let mut audio_btn = None;
     let mut audio_config = None;
-    let mut audio_trigger_btn = None;
-    let mut audio_trigger_config = None;
     let mut mode_badge_id = None;
 
-    // is_trigger reaches the standard per-param audio-mod "A" drawer (D5b) —
-    // audio fires the button by count-add, the same edge-detected semantics
-    // a clip-launch trigger already uses. Plain toggles keep zero lane space
-    // (the branch above is unchanged for them — no button, no drawer).
-    if info.is_trigger {
+    // is_trigger (D5b) and is_trigger_gate (§9) both reach the standard
+    // per-param audio-mod "A" drawer — a fire-button counts by count-add, a
+    // trigger-gate card fires a pulse (never writing the toggle's value, R2)
+    // and additionally gets the drawer's trailing Mode row + the collapsed-
+    // row mode badge. Plain toggles keep zero lane space (no button, no
+    // drawer) — the row-label branch above is unchanged for them.
+    if info.is_trigger || info.is_trigger_gate {
         let env_arm_w = if build_env_button { DE_BUTTON_SIZE + DE_BUTTON_GAP } else { 0.0 };
         let btn_x = x + slider_w + MOD_LANE_GAP;
         let drv_btn_x = btn_x + env_arm_w;
@@ -1783,88 +1634,60 @@ pub(crate) fn build_toggle_trigger_row(
             let drawer_x = x + DRAWER_INDENT;
             let row_right = audio_btn_x + DE_BUTTON_SIZE;
             let drawer_w = (row_right - drawer_x).max(1.0);
-            let (dids, send_count) =
-                build_audio_mod_drawer(tree, parent, drawer_x, cy, drawer_w, mod_state, i, config_font);
+            let trigger_mode_idx =
+                info.is_trigger_gate.then(|| mod_state.audio_mode_idx.get(i).copied().unwrap_or(0));
+            let (dids, send_count) = build_audio_mod_drawer(
+                tree,
+                parent,
+                drawer_x,
+                cy,
+                drawer_w,
+                mod_state,
+                i,
+                config_font,
+                trigger_mode_idx,
+            );
             cy += dids.height;
             audio_config = Some((dids, send_count));
             // Mirrors `row_drawer_height`'s `+ DRAWER_BOTTOM_GAP` for the
             // ≥1-active-config case, so build and height computation agree.
             cy += DRAWER_BOTTOM_GAP;
         }
-    } else if info.is_trigger_gate {
-        // §8 D6: the outer-card trigger-gate toggle (Strobe's/the 11
-        // generators' `clip_trigger`) reaches its OWN "A" drawer — a
-        // different mechanism from D5b (single `audio_trigger` field, not a
-        // per-param `Vec`). Same button column as the is_trigger case above,
-        // so the "A" lane stays aligned regardless of which row kind a card
-        // mixes (a card never has both on the same row — mutually exclusive
-        // per the JSON: `isTriggerGate` cards ship `isTrigger: false`).
-        let env_arm_w = if build_env_button { DE_BUTTON_SIZE + DE_BUTTON_GAP } else { 0.0 };
-        let btn_x = x + slider_w + MOD_LANE_GAP;
-        let drv_btn_x = btn_x + env_arm_w;
-        let audio_btn_x = drv_btn_x + DE_BUTTON_SIZE + DE_BUTTON_GAP;
-        let btn_y = toggle_y;
-        let active = mod_state.audio_trigger_active.get(i).copied().unwrap_or(false);
-        let btn_id = add_row_button(
-            tree,
-            parent,
-            audio_btn_x,
-            btn_y,
-            DE_BUTTON_SIZE,
-            DE_BUTTON_SIZE,
-            de_btn_style(active, AUDIO_MOD_ACTIVE_C32),
-            "A",
-            row_key_base,
-            ROW_ROLE_AUDIO_TRIGGER,
-        );
-        audio_trigger_btn = Some(btn_id);
 
-        if active {
-            let drawer_x = x + DRAWER_INDENT;
-            let row_right = audio_btn_x + DE_BUTTON_SIZE;
-            let drawer_w = (row_right - drawer_x).max(1.0);
-            let (dids, send_count) = build_audio_trigger_mod_drawer(
-                tree, parent, drawer_x, cy, drawer_w, mod_state, i, config_font,
-            );
-            cy += dids.height;
-            audio_trigger_config = Some((dids, send_count));
-            cy += DRAWER_BOTTOM_GAP;
+        if info.is_trigger_gate {
+            // Collapsed-row mode indicator (§9, carried over from §8 D6):
+            // "Transient mode silently ignores clip launches... the drawer
+            // must show the mode on the collapsed card row" — shown whether
+            // or not the drawer itself is open, so a user who never re-opens
+            // the drawer still sees it. Blank for the default `ClipEdge`
+            // (index 0) — the common, unsurprising case gets no badge at
+            // all. A fixed-width slot just left of the toggle button,
+            // reserved on every `is_trigger_gate` row regardless of current
+            // mode, so the badge appearing/disappearing on a mode change
+            // never shifts the toggle button's column.
+            let mode_idx = mod_state.audio_mode_idx.get(i).copied().unwrap_or(0);
+            let mode_text = if audio_active && mode_idx > 0 {
+                audio_trigger_mode_labels().get(mode_idx as usize).copied().unwrap_or("")
+            } else {
+                ""
+            };
+            let badge_w = TRIGGER_GATE_BADGE_W;
+            let badge_x = toggle_btn_x - badge_w - GAP;
+            mode_badge_id = Some(tree.add_label(
+                parent,
+                badge_x,
+                row_top_y,
+                badge_w,
+                ROW_HEIGHT,
+                mode_text,
+                UIStyle {
+                    text_color: AUDIO_MOD_ACTIVE_C32,
+                    font_size: color::FONT_CAPTION,
+                    text_align: TextAlign::Right,
+                    ..UIStyle::default()
+                },
+            ));
         }
-
-        // Collapsed-row mode indicator (D6 consequence): "Transient mode
-        // silently ignores clip launches... the drawer must show the mode on
-        // the collapsed card row" — shown whether or not the drawer itself is
-        // open, so a user who never re-opens the drawer still sees it. Blank
-        // for the default `ClipEdge` (index 0) — the common, unsurprising
-        // case gets no badge at all. A fixed-width slot just left of the
-        // toggle button, reserved on every `is_trigger_gate` row regardless
-        // of current mode, so the badge appearing/disappearing on a mode
-        // change never shifts the toggle button's column.
-        let mode_idx = mod_state.audio_trigger_mode_idx.get(i).copied().unwrap_or(0);
-        let mode_text = if active && mode_idx > 0 {
-            audio_trigger_mode_labels()
-                .get(mode_idx as usize)
-                .copied()
-                .unwrap_or("")
-        } else {
-            ""
-        };
-        let badge_w = TRIGGER_GATE_BADGE_W;
-        let badge_x = toggle_btn_x - badge_w - GAP;
-        mode_badge_id = Some(tree.add_label(
-            parent,
-            badge_x,
-            row_top_y,
-            badge_w,
-            ROW_HEIGHT,
-            mode_text,
-            UIStyle {
-                text_color: AUDIO_MOD_ACTIVE_C32,
-                font_size: color::FONT_CAPTION,
-                text_align: TextAlign::Right,
-                ..UIStyle::default()
-            },
-        ));
     }
 
     ToggleTriggerRowIds {
@@ -1872,8 +1695,6 @@ pub(crate) fn build_toggle_trigger_row(
         button_id,
         audio_btn,
         audio_config,
-        audio_trigger_btn,
-        audio_trigger_config,
         mode_badge_id,
         new_cy: cy,
     }
@@ -1987,7 +1808,11 @@ pub(crate) fn build_param_row(
         // edge (and the top covers the slider's trim / target handles). Bottom needs
         // no pad — the drawer's internal TOP_PAD already insets the last row. The top
         // pad folds into card_h so the bottom edge is unchanged.
-        let card_h = MOD_CARD_PAD + ROW_HEIGHT + ROW_SPACING + tab_strip_h + mod_config_height(tab);
+        // A slider row is never `is_trigger_gate` (that's always a toggle
+        // row, built by `build_toggle_trigger_row` instead) — the Mode row
+        // never applies here.
+        let card_h =
+            MOD_CARD_PAD + ROW_HEIGHT + ROW_SPACING + tab_strip_h + mod_config_height(tab, false);
         let card_w = (row_right - x + MOD_CARD_PAD * 2.0).max(1.0);
         tree.add_panel(
             parent,
@@ -2246,10 +2071,12 @@ pub(crate) fn build_param_row(
 
     // Audio-modulation drawer — shown when the Audio config tab is active.
     // Extracted to `build_audio_mod_drawer` (shared with
-    // `build_toggle_trigger_row`'s `is_trigger` case, D5b).
+    // `build_toggle_trigger_row`'s `is_trigger`/`is_trigger_gate` cases,
+    // D5b/§9). A slider row is never `is_trigger_gate`, so no Mode row here.
     if shown_tab == Some(ModTab::Audio) {
-        let (dids, send_count) =
-            build_audio_mod_drawer(tree, drawer_parent, drawer_x, cy, drawer_w, mod_state, i, config_font);
+        let (dids, send_count) = build_audio_mod_drawer(
+            tree, drawer_parent, drawer_x, cy, drawer_w, mod_state, i, config_font, None,
+        );
         cy += dids.height;
         ids.audio_config = Some((dids, send_count));
     }
@@ -2296,23 +2123,14 @@ pub(crate) enum RowClick {
     AudioToggleInvert(usize),
     /// The "d/dt" rate-of-change toggle in the audio drawer (param index).
     AudioToggleRate(usize),
+    /// A mode button in an `is_trigger_gate` row's drawer (param index, mode
+    /// index — `[ClipEdge, Transient, Both]`, §9 U3). The drawer's trailing
+    /// row, only ever built for a trigger-gate target.
+    AudioSelectTriggerMode(usize, usize),
     /// The slider's param label, when it carries an OSC address to copy
     /// (param index). The caller performs the copied-flash side effect and
     /// reads `osc_addresses[pi]`.
     LabelCopy(usize),
-
-    // ── Audio TRIGGER mod (§8 D6, `is_trigger_gate` cards) — a separate
-    // mechanism from the per-param `Audio*` variants above (those edit
-    // `audio_mods`; these edit the single `audio_trigger` field).
-    /// The "A" audio-trigger-mod button (param index) — arm/disarm.
-    AudioTriggerToggle(usize),
-    /// A send button in the trigger drawer (param index, send index).
-    AudioTriggerSelectSend(usize, usize),
-    /// A band button in the trigger drawer (param index, band index).
-    AudioTriggerSelectBand(usize, usize),
-    /// A mode button in the trigger drawer (param index, mode index —
-    /// `[ClipEdge, Transient, Both]`).
-    AudioTriggerSelectMode(usize, usize),
 }
 
 /// Match a clicked node id against a parameter row's interactive elements,
@@ -2323,12 +2141,9 @@ pub(crate) enum RowClick {
 /// rows, card selection).
 ///
 /// Driver/envelope toggle buttons on toggle/trigger params are skipped (they
-/// carry no slider to modulate); the audio button skips only toggle params —
-/// `is_trigger` reaches it (D5b, `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` §8).
-/// `is_trigger_gate` rows get their own audio-TRIGGER-mod button + drawer
-/// (D6) via the separate `audio_trigger_btn_ids`/`audio_trigger_configs`
-/// arrays — a different mechanism (`AudioTriggerMod`, a single per-instance
-/// field) from the per-param `Audio*` variants above.
+/// carry no slider to modulate); the audio button skips only PLAIN toggle
+/// params — `is_trigger` (D5b) and `is_trigger_gate` (§9) both reach it, the
+/// same drawer mechanism as any other audio mod.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn match_param_row_click(
     id: NodeId,
@@ -2338,8 +2153,6 @@ pub(crate) fn match_param_row_click(
     ableton_config_ids: &[Option<AbletonConfigIds>],
     audio_btn_ids: &[Option<NodeId>],
     audio_configs: &[Option<(crate::panels::drawer::DrawerIds, usize)>],
-    audio_trigger_btn_ids: &[Option<NodeId>],
-    audio_trigger_configs: &[Option<(crate::panels::drawer::DrawerIds, usize)>],
     slider_ids: &[Option<SliderNodeIds>],
     osc_addresses: &[Option<String>],
     param_info: &[ParamInfo],
@@ -2353,17 +2166,13 @@ pub(crate) fn match_param_row_click(
             .map(|p| p.is_toggle || p.is_trigger)
             .unwrap_or(false)
     };
-    // The "A" audio button DOES apply to `is_trigger` (D5b: a fire-button
-    // rides `ParameterAudioMod` — audio increments its count exactly like a
-    // clip edge does). Only a PLAIN toggle stays unreachable — a sticky
-    // on/off has no audio-mod semantics; `is_trigger_gate` toggles get their
-    // own `AudioTriggerMod` drawer via the `audio_trigger_btn_ids` loop below
-    // instead (D6).
+    // The "A" audio button applies to `is_trigger` (D5b: a fire-button rides
+    // `ParameterAudioMod` — audio increments its count exactly like a clip
+    // edge does) AND `is_trigger_gate` (§9: same mechanism, plus the drawer's
+    // Mode row and the collapsed-row badge). Only a PLAIN toggle stays
+    // unreachable — a sticky on/off has no audio-mod semantics.
     let skip_audio =
         |pi: usize| param_info.get(pi).map(|p| p.is_toggle && !p.is_trigger_gate).unwrap_or(false);
-    // The audio-TRIGGER "A" button applies ONLY to `is_trigger_gate` rows.
-    let skip_audio_trigger =
-        |pi: usize| param_info.get(pi).map(|p| !p.is_trigger_gate).unwrap_or(true);
 
     // D/E buttons (skip toggle/trigger params).
     for (pi, &btn_id) in driver_btn_ids.iter().enumerate() {
@@ -2414,8 +2223,13 @@ pub(crate) fn match_param_row_click(
         }
     }
 
-    // Audio drawer buttons: one flat index across rows in build order — sends,
-    // then the Feature (kind) row, the Band row, then the two modifier toggles.
+    // Audio drawer buttons: one flat index across rows in build order —
+    // sends, the Feature (kind) row, the Band row, the two modifier toggles,
+    // then — ONLY on an `is_trigger_gate` target — the trailing Mode row
+    // (§9 U2). The three shaping sliders (Amount/Attack/Release) are
+    // `DrawerRow::Slider`s, not buttons, so they contribute nothing to this
+    // flat index; a non-gate drawer simply has no buttons past Delta, so
+    // `resolve_button` can never produce an `f` that reaches the Mode arm.
     for (pi, cfg) in audio_configs.iter().enumerate() {
         if let Some((dids, send_count)) = cfg
             && let Some(flat) = dids.resolve_button(id)
@@ -2424,44 +2238,21 @@ pub(crate) fn match_param_row_click(
                 return Some(RowClick::AudioSelectSend(pi, flat));
             }
             let f = flat - send_count;
-            return Some(if f < AUDIO_KIND_COUNT {
-                RowClick::AudioSelectKind(pi, f)
-            } else if f < AUDIO_KIND_COUNT + AUDIO_BAND_COUNT {
-                RowClick::AudioSelectBand(pi, f - AUDIO_KIND_COUNT)
-            } else if f == AUDIO_KIND_COUNT + AUDIO_BAND_COUNT {
-                RowClick::AudioToggleInvert(pi)
-            } else {
-                RowClick::AudioToggleRate(pi)
-            });
-        }
-    }
-
-    // Audio-TRIGGER "A" buttons (D6 — `is_trigger_gate` rows only).
-    for (pi, &btn_id) in audio_trigger_btn_ids.iter().enumerate() {
-        if skip_audio_trigger(pi) {
-            continue;
-        }
-        if btn_id == Some(id) {
-            return Some(RowClick::AudioTriggerToggle(pi));
-        }
-    }
-
-    // Audio-trigger drawer buttons: one flat index across rows in build
-    // order — sends, then the Band row, then the Mode row (no Feature row —
-    // the trigger drawer's feature is always Transients, D2).
-    for (pi, cfg) in audio_trigger_configs.iter().enumerate() {
-        if let Some((dids, send_count)) = cfg
-            && let Some(flat) = dids.resolve_button(id)
-        {
-            if flat < *send_count {
-                return Some(RowClick::AudioTriggerSelectSend(pi, flat));
+            if f < AUDIO_KIND_COUNT {
+                return Some(RowClick::AudioSelectKind(pi, f));
             }
-            let f = flat - send_count;
-            return Some(if f < AUDIO_BAND_COUNT {
-                RowClick::AudioTriggerSelectBand(pi, f)
-            } else {
-                RowClick::AudioTriggerSelectMode(pi, f - AUDIO_BAND_COUNT)
-            });
+            let f = f - AUDIO_KIND_COUNT;
+            if f < AUDIO_BAND_COUNT {
+                return Some(RowClick::AudioSelectBand(pi, f));
+            }
+            let f = f - AUDIO_BAND_COUNT;
+            if f == 0 {
+                return Some(RowClick::AudioToggleInvert(pi));
+            }
+            if f == 1 {
+                return Some(RowClick::AudioToggleRate(pi));
+            }
+            return Some(RowClick::AudioSelectTriggerMode(pi, f - 2));
         }
     }
 

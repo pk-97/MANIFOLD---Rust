@@ -32,8 +32,9 @@ fn default_true() -> bool {
 }
 
 /// Map a 0..1 sensitivity slider to a transient fire threshold. Shared by
-/// [`TriggerRoute`] (clip-launch routes) and [`AudioTriggerMod`] (§8 param
-/// triggers) so both surfaces feel identical to tune. Inverted: sensitivity
+/// [`TriggerRoute`] (clip-launch routes) and the legacy `AudioTriggerMod`
+/// wire shape ([`LegacyAudioTriggerMod`], migrated onto `ParameterAudioMod`
+/// since §9) so both surfaces felt identical to tune. Inverted: sensitivity
 /// 1.0 → [`MIN_TRIGGER_THRESHOLD`] (fire easily); 0.0 → [`MAX_TRIGGER_THRESHOLD`]
 /// (only the strongest onsets).
 pub fn sensitivity_to_threshold(sensitivity: f32) -> f32 {
@@ -54,7 +55,8 @@ pub const REARM_RATIO: f32 = 0.6;
 /// falls back below `threshold * REARM_RATIO`. Tempo-independent, runtime-only
 /// (never serialized) — extracted from `LiveTriggerState`'s per-route armed
 /// flag (D4) so both the clip-trigger evaluator (keyed by send×band) and the
-/// §8 param-trigger evaluator (keyed by instance) share one implementation.
+/// `ParameterAudioMod` trigger-gate evaluator (keyed by mod, §9 U1) share one
+/// implementation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransientEdge {
     armed: bool,
@@ -120,46 +122,26 @@ impl TriggerFireMode {
     }
 }
 
-/// Per-instance config: audio fires this generator's/effect's Trigger
-/// response (§8 D2). Lives beside `PresetInstance.audio_mods`, addressed the
-/// same way (a named send + feature), but drives the instance's
-/// `trigger_count` contribution instead of a continuous param value. Reuses
-/// `AudioModSource` so send addressing survives relabel/re-patch.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Deserialize-only wire shape for the pre-§9 `audioTrigger` field (§8 D2:
+/// `AudioTriggerMod`, a per-instance config parallel to `audio_mods` — deleted
+/// 2026-07-07 per §9 U1, the day after it shipped, because the parallel
+/// config type forced every gate/walker/drawer/command to know about two
+/// things instead of one). Kept only so an old project's `audioTrigger` field
+/// load-migrates onto a `ParameterAudioMod` on the instance's trigger-gate
+/// param — see `effects::migrate_legacy_audio_trigger`. Never constructed
+/// fresh, never serialized.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AudioTriggerMod {
+pub struct LegacyAudioTriggerMod {
     #[serde(default = "default_true")]
     pub enabled: bool,
     pub source: AudioModSource,
     /// 0..1. High sensitivity = low transient threshold (more onsets fire).
+    /// Migrates onto `AudioModShape.sensitivity` (U5 — a rough approximation,
+    /// not exact-feel; the field existed in ~one project for one day).
     pub sensitivity: f32,
     #[serde(default)]
     pub mode: TriggerFireMode,
-    /// Edge-detection runtime state. Never serialized — resets to armed on
-    /// load, matching every other audio-mod runtime field (e.g.
-    /// `ParameterAudioMod.smoothed`).
-    #[serde(skip)]
-    pub edge: TransientEdge,
-}
-
-impl AudioTriggerMod {
-    /// Map `sensitivity` to the transient fire threshold (shared mapping —
-    /// see [`sensitivity_to_threshold`]).
-    pub fn threshold(&self) -> f32 {
-        sensitivity_to_threshold(self.sensitivity)
-    }
-
-    /// True if the owning layer's clip-launch edge should count for this
-    /// instance's trigger response. A DISABLED config is semantically absent
-    /// — it keeps the user's drawer settings for re-arm (like
-    /// `TriggerRoute.enabled`) but must not gate anything, so only an ENABLED
-    /// config's mode may suppress the clip edge. Every reader of the clip
-    /// gate goes through here; reading `mode.wants_clip_edge()` directly on a
-    /// config skips the enabled check (the bug that shipped a disarmed
-    /// Transient config silently killing clip triggers on reload).
-    pub fn clip_edge_enabled(&self) -> bool {
-        !self.enabled || self.mode.wants_clip_edge()
-    }
 }
 
 /// One audio → visual trigger: a send's transient on `source` fires a one-shot
@@ -289,65 +271,38 @@ mod tests {
         assert_eq!(TriggerFireMode::default(), TriggerFireMode::ClipEdge);
     }
 
-    #[test]
-    fn disabled_config_never_suppresses_clip_edge() {
-        // Regression (2026-07-07): a config left disarmed from the drawer —
-        // enabled=false, mode=Transient — persisted with the project and,
-        // because the renderer gate read `mode.wants_clip_edge()` without
-        // checking `enabled`, silently killed clip-launch triggering for
-        // that layer after reload. Disabled must mean absent.
-        let mut cfg = AudioTriggerMod {
-            enabled: false,
-            source: AudioModSource {
-                send_id: crate::id::AudioSendId::new("send-1"),
-                feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
-            },
-            sensitivity: 1.0,
-            mode: TriggerFireMode::Transient,
-            edge: TransientEdge::default(),
-        };
-        assert!(cfg.clip_edge_enabled(), "disabled config must be inert");
-        cfg.enabled = true;
-        assert!(!cfg.clip_edge_enabled(), "armed Transient mode gates the clip edge");
-        cfg.mode = TriggerFireMode::ClipEdge;
-        assert!(cfg.clip_edge_enabled());
-        cfg.mode = TriggerFireMode::Both;
-        assert!(cfg.clip_edge_enabled());
-    }
+    // The `disabled_config_never_suppresses_clip_edge` regression and the
+    // `AudioTriggerMod` threshold/serde tests moved with the type: §9 U1
+    // deletes `AudioTriggerMod` (a fire-mode config is now a normal
+    // `ParameterAudioMod`), so the "disabled means absent" proof now lives on
+    // `PresetInstance::clip_edge_enabled()` in `effects.rs`
+    // (`clip_edge_enabled_matrix`), and the threshold mapping is still
+    // exercised by `TriggerRoute`'s own tests above (same shared
+    // `sensitivity_to_threshold`).
 
     #[test]
-    fn audio_trigger_mod_threshold_matches_shared_mapping() {
-        let cfg = AudioTriggerMod {
-            enabled: true,
-            source: AudioModSource {
-                send_id: crate::id::AudioSendId::new("send-1"),
-                feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+    fn legacy_audio_trigger_mod_deserializes_the_pre_unification_wire_shape() {
+        // U5 migration source: the exact `audioTrigger` blob a project saved
+        // during the one day §8's `AudioTriggerMod` shipped. Proves
+        // `LegacyAudioTriggerMod` still parses it so
+        // `effects::migrate_legacy_audio_trigger` has something to convert.
+        let json = r#"{
+            "enabled": false,
+            "source": {
+                "sendId": "e14b42f8",
+                "feature": { "kind": "transients", "band": "full" }
             },
-            sensitivity: 0.5,
-            mode: TriggerFireMode::default(),
-            edge: TransientEdge::default(),
-        };
-        assert!((cfg.threshold() - sensitivity_to_threshold(0.5)).abs() < 1e-6);
-    }
-
-    #[test]
-    fn audio_trigger_mod_round_trips_serde_skip_none_edge() {
-        let cfg = AudioTriggerMod {
-            enabled: true,
-            source: AudioModSource {
-                send_id: crate::id::AudioSendId::new("send-1"),
-                feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Low),
-            },
-            sensitivity: 0.7,
-            mode: TriggerFireMode::Both,
-            edge: TransientEdge::default(),
-        };
-        let json = serde_json::to_string(&cfg).unwrap();
-        assert!(!json.contains("edge"), "runtime edge state must not serialize");
-        let back: AudioTriggerMod = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.enabled, cfg.enabled);
-        assert_eq!(back.source, cfg.source);
-        assert_eq!(back.sensitivity, cfg.sensitivity);
-        assert_eq!(back.mode, cfg.mode);
+            "sensitivity": 1.0,
+            "mode": "transient"
+        }"#;
+        let legacy: LegacyAudioTriggerMod = serde_json::from_str(json).unwrap();
+        assert!(!legacy.enabled);
+        assert_eq!(legacy.source.send_id, crate::id::AudioSendId::new("e14b42f8"));
+        assert_eq!(
+            legacy.source.feature,
+            AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full)
+        );
+        assert_eq!(legacy.sensitivity, 1.0);
+        assert_eq!(legacy.mode, TriggerFireMode::Transient);
     }
 }

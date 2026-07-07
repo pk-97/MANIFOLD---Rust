@@ -12,6 +12,7 @@ uuid = { workspace = true }
 ahash = { workspace = true }
 arc-swap = { workspace = true }
 inventory = "0.3"
+log = { workspace = true }
 
 [lints]
 workspace = true

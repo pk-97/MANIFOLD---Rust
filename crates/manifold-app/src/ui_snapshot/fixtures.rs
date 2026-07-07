@@ -461,8 +461,24 @@ fn selection_clips_scene() -> SceneData {
 /// dot. Bloom carries one too, but its `(EffectId, ParamId)` is latched in
 /// `automation_latched_params` — its card shows the gray (overridden) dot.
 /// Mirrors `automation_scene`'s Mirror-live / Bloom-overridden pairing.
+///
+/// §9 evidence (`LIVE_AUDIO_TRIGGERS_DESIGN.md` U-P2): Strobe carries an
+/// armed trigger-gate audio mod (`clip_trigger`, mode Transient) and Plasma
+/// carries one too (mode Both) — both reach the STANDARD audio-mod drawer
+/// (Source/Feature/Band/Inv/Delta/Amount/Attack/Release) plus its trailing
+/// Mode row, and both show the collapsed-row mode badge next to the toggle.
+/// Bloom's plain "Radius"-style slider (no mod armed) sits in the same
+/// screenshot as the regression look: a drawer-less row is unaffected by the
+/// unification.
 fn inspector_scene() -> SceneData {
+    use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, ParameterAudioMod};
+    use manifold_core::audio_setup::AudioSend;
+    use manifold_core::audio_trigger::TriggerFireMode;
     use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
+
+    let kick_send = AudioSend::new("Kick");
+    let kick_send_id = kick_send.id.clone();
+
     let mut text = Layer::new("TEXT BOT L".into(), LayerType::Video, 0);
     text.layer_id = lid("text-bot-l");
     text.clips
@@ -470,8 +486,8 @@ fn inspector_scene() -> SceneData {
     text.clips
         .push(TimelineClip::new_video("RETURN".into(), Beats(24.0), Beats(24.0), Seconds::ZERO));
 
-    // The subject: a video layer with a two-effect chain. Selected, so the
-    // inspector shows its layer card + the Mirror and Bloom effect cards.
+    // The subject: a video layer with a three-effect chain. Selected, so the
+    // inspector shows its layer card + the Mirror, Bloom, and Strobe cards.
     let mut glow = Layer::new("GLOW".into(), LayerType::Video, 1);
     glow.layer_id = lid("glow");
     glow.clips
@@ -512,14 +528,47 @@ fn inspector_scene() -> SceneData {
         ],
     }]);
     let bloom_id = bloom.id.clone();
+    // Regression look (§9 U2): a PLAIN slider's own armed audio mod reaches
+    // the exact same drawer builder as Strobe's/Plasma's trigger-gate rows,
+    // minus the Mode row — the direct side-by-side proof the unification
+    // didn't disturb the non-gate path.
+    let bloom_mod = ParameterAudioMod::new(
+        bloom_param.clone().into(),
+        kick_send_id.clone(),
+        AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Full),
+    );
+    bloom.audio_mods = Some(vec![bloom_mod]);
 
-    glow.effects = Some(vec![mirror, bloom]);
+    // Strobe: the effect-side trigger-gate reachability proof (§8 P3a) — its
+    // `clip_trigger` card gets an armed audio mod with `trigger_mode:
+    // Some(Transient)`, so the card shows the standard drawer OPEN with the
+    // Mode row highlighting "Audio", plus the collapsed-row badge.
+    let mut strobe = effect("Strobe");
+    let mut strobe_trigger = ParameterAudioMod::new(
+        "clip_trigger".into(),
+        kick_send_id.clone(),
+        AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Low),
+    );
+    strobe_trigger.trigger_mode = Some(TriggerFireMode::Transient);
+    strobe.audio_mods = Some(vec![strobe_trigger]);
 
-    let mut plasma = Layer::new("PLASMA".into(), LayerType::Generator, 2);
+    glow.effects = Some(vec![mirror, bloom, strobe]);
+
+    // Plasma: the generator-side proof, mode Both (the arm-time default,
+    // §9 U3) — drawer open, badge reads "Both".
+    let mut plasma = Layer::new_generator("PLASMA".into(), manifold_core::PresetTypeId::PLASMA, 2);
     plasma.layer_id = lid("plasma");
     plasma.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(48.0)));
+    let mut plasma_trigger = ParameterAudioMod::new(
+        "clip_trigger".into(),
+        kick_send_id,
+        AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+    );
+    plasma_trigger.trigger_mode = Some(TriggerFireMode::Both);
+    plasma.gen_params_or_init().audio_mods = Some(vec![plasma_trigger]);
 
     let mut project = Project::default();
+    project.audio_setup.sends.push(kick_send);
     project.timeline.layers = vec![text, glow, plasma];
 
     let mut content = ContentState { current_beat: Beats(8.0), is_playing: false, ..Default::default() };
