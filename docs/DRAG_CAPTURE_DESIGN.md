@@ -392,10 +392,24 @@ Deferred. No affordance is phase-less.
 - **Widget-intent routing for split/inspector handles** — revive if a third
   window-seam gesture appears (e.g. a draggable footer) or D5's z-check proves
   insufficient in practice (a press-through bug survives P2's gate).
-- **Editor-window ownership** — the editor shares `route_inspector_events` but has
-  no timeline stash and no seam handles; its drags are all inspector/canvas-local.
-  Revive if an editor overlay ever hosts a drag surface (trigger: a `claims_drag`
-  override on an overlay the editor window opens).
+- **Editor-window ownership** — verified 2026-07-07: what the editor needs, it
+  already gets. D9 (unconditional motion stream) and D3 (dropdown eat-arm
+  deletion) are shared-code fixes — the editor's `UIInputSystem` instance and
+  `Dropdown` type are the same types, so both windows are covered by P1
+  automatically. The editor inspector already has its own unconditional
+  `DragEnd|PointerUp` loop (`route_inspector_events`, second loop), and the graph
+  canvas never touches the event pipeline at all — `window_input.rs` feeds it
+  presses/moves directly and it does its own internal capture
+  (`editor_mouse_input`, `window_input.rs:706` onward), so the eater and
+  fall-through classes structurally cannot reach it. What is NOT built for the
+  editor: the `DragOwner` registry itself. The editor has its own trio of
+  position-based pre-canvas interceptors — the node-picker modal bypass, the
+  dock column-divider drag (`ed.dock.begin/end`), and the mini-timeline scrub —
+  the same architectural pattern as the primary window's seam handles,
+  currently exclusive-by-press and sound. Revive editor ownership if any of
+  those three ever mis-claims a canvas gesture in practice, or if an editor
+  overlay hosts a drag surface (trigger: a `claims_drag` override on an overlay
+  the editor window opens).
 - **Naming which eater fired in Peter's original repro** — the trace is shipped;
   if he reproduces before P1 lands, the log names it (D8). Not blocking.
 - **BUG-059 feel item "hover-glow only when grabbable"** (scope-dark deadness) —
