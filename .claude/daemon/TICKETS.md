@@ -18,6 +18,14 @@ command-position discipline preToolUseBash.py already implements — reuse its
 tokenizer if importable. Test: `rg 'git branch -D'` (a search ABOUT the
 command) must not fire; `git branch -D foo` must.
 
+**DONE 2026-07-07 (Sonnet, lane/daemon-tickets-b @ `683c55d8`).**
+`detect_git_landing_signal` rewritten to anchor to command position,
+reusing `_landing_shlex_segments`/`_landing_strip_leading_keywords`/
+`_landing_git_checkout_dir` (already shared with `detect_landing_on_main`)
+rather than re-deriving a tokenizer. `GIT_LANDING_MARKERS` deleted. Both
+acceptance cases pass: `rg 'git branch -D'` no longer fires; `git branch -D
+foo` still does.
+
 ## T2 — confessed-stopgap: self-disposing-marker exemption (contract landed, runtime pending)
 moves.md contract now exempts an added marker whose surrounding added text
 names its own concrete disposal trigger ("delete after <named event>",
@@ -33,6 +41,25 @@ observation says a marker matched commit-message-like text naming a
 PRE-EXISTING gap ("no headless harness exists for it yet"); "yet" is not in
 the marker table, so either the observation misattributes the move or the
 scan reaches text it shouldn't. Find which and record in the ticket close.
+
+**DONE 2026-07-07 (Sonnet, lane/daemon-tickets-b @ `683c55d8`).** Added
+`DISPOSAL_TRIGGER_RE` and changed `detect_stopgap_markers`'s aggregation
+loop to skip a pair's hits when its own added text names a disposal
+trigger (per-pair, not global). 4 new tests, including the exemption cases
+and a regression check that a bare "for now" with no disposal trigger
+still fires. **Audit resolved** (orchestrator, direct forensic read of the
+session's surviving observer log, `verdicts/a5d63eee-...-b7d1.log`, still
+on disk): the observation MISATTRIBUTES the artifact, not the scan. The
+real fire's evidence line is `mechanical/confessed-stopgap fired: Edit
+.../mesh_pipeline.rs hits=['lint-suppression']` — a genuine, unexempted
+`#[allow(unreachable_code)]` behind a new early `return;`. The word "yet"
+(and "harness"/"headless") appears in ZERO Edit/Write/MultiEdit diffs
+anywhere in that session's transcript (confirmed via `jq` over the full
+jsonl) — the grading note quotes a different specimen than what actually
+fired. Whether the mesh_pipeline.rs edit is itself a true/false positive
+was never graded; that's a separate, still-open gap this exemption does
+not touch (no disposal trigger names it either way). Recorded as a code
+comment in common.py above `DISPOSAL_TRIGGER_RE` too.
 
 ## T3 — ungrounded-chat-claim: widen artifact vocabulary
 Current detection (daemon-stop.py, per moves.md contract) recognizes slash
@@ -144,6 +171,13 @@ is observer code, allowed). Firestate: not needed (catchup rebuilds path
 sets; advice fires are cheap to re-arm on revive, matching unread-edit's
 convention).
 
+**DONE 2026-07-07 (Sonnet, lane/daemon-tickets-b @ `683c55d8`).** Added
+`common.is_stale_brief_path` + `STALE_BRIEF_MAX_AGE_S`; `observer.py` gets
+`stale_brief_fired_paths` on both `Daemon` and `AgentWorker`, plus
+`_check_stale_brief`, wired into both live-tail call sites (main session
+and worker) before `_check_unread_edit`/`_check_primer`. New
+`test_stale_brief.py`, 21 tests, all in the dispatch list.
+
 ## T10 — ledger annotation: hook warnings attached to tool results
 Wakes the dormant anchor/unheeded-warning (moves.md 2026-07-07). In
 common.py's ledger rendering: when a tool result carries a PreToolUse hook
@@ -155,6 +189,18 @@ only — by design, precedent: the Agent-model annotation). The classifier can
 then see the warning; the move's signature does the rest. Specimen the move
 must catch: 5363065f — `git checkout -b` in the main checkout with the
 warning attached, no weighing sentence, Peter intervened manually.
+
+**DONE 2026-07-07 (Sonnet, lane/daemon-tickets-b @ `683c55d8`).** Added
+`HOOK_WARNING_MARKERS`/`extract_hook_warning` (keyed on the two literal
+opening fragments preToolUseBash.py's `shared_checkout_guard` and
+`LANDING_PROTOCOL_REMINDER` emit — a hook's additionalContext lands inside
+the SAME tool_result's own content), wired into `_annotate_ledger` and
+`feed_user_content`. `WINDOW_VERSION` 6→7; confirmed no test pins an exact
+value (all use `>=`), so nothing else needed updating. 4 new tests in
+`test_stopgap_detection.py`, all in the dispatch list. `anchor/unheeded-
+warning` is no longer structurally dormant — its specimen (5363065f) is
+now the kind of shape the ledger can surface; still unvalidated until a
+real fire is graded.
 
 ## T11 — test suites leak records into live telemetry (third purge this week)
 Subprocess-style tests (test_worker_nudges' real-subprocess delivery test,
