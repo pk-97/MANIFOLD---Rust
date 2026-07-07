@@ -62,6 +62,8 @@ or human can read it, and it needs no external tool.
 | BUG-019 / 020 / 021 | deferred | group-fold gap · gen-card collapse · snap-back gap |
 | BUG-056 | **audio-mixdown-clippy-debt** | `manifold-playback` clippy gate (`-D warnings`) fails pre-existing on `audio_mixdown.rs` — `cloned_ref_to_slice_refs` + `needless_range_loop` (LOW, blocks the crate's clippy gate, not correctness) |
 | BUG-057 | **ui-snapshot-dead-blit-pipeline** | `cargo clippy -p manifold-app --features ui-snapshot` fails pre-existing on an unused `make_blit_pipeline` fn (LOW, blocks that one feature's clippy gate, not correctness) |
+| BUG-058 | **drag-end-consumable** | timeline sticks in move/trim mode when the drag's terminal DragEnd is consumed mid-route (open dropdown/modal eats it); root = terminal events routable instead of broadcast (HIGH) |
+| BUG-059 | **band-line-grab-falls-through** | Audio Setup crossover lines sticky (4px threshold, seam interceptors, dropdown swallow) AND a missed grab silently drags clips under the modal — position-based stash gate has no z-awareness (HIGH) |
 
 ## Open
 
@@ -139,7 +141,86 @@ unaffected (only `clippy --features ui-snapshot -- -D warnings` fails); plain `c
 out of scope for the audio-trigger unification and touching `render.rs` wasn't part of this
 phase's brief.
 
-Next free id: BUG-058.
+### BUG-058 (drag-end-consumable) — timeline stuck in move/trim mode: DragEnd is a routable/consumable event, but N independent drag-state owners depend on receiving it — HIGH (live editing gesture wedges; reported by Peter 2026-07-07)
+
+**Symptom** — sometimes a clip move/trim doesn't release: after the mouse leaves the
+timeline (typically onto the inspector) and the button is released, the timeline stays in
+move/trim mode (cursor stuck as Move/ResizeHorizontal, next interaction behaves as if the
+drag were still live). Self-heals on the next clip press (`on_begin_drag` overwrites
+`drag_mode`), which is why it reads as intermittent.
+
+**Root cause (architecture)** — a drag's terminal event must reach every drag-state owner,
+but the routing treats it as consumable, first-match-wins. `InteractionOverlay.drag_mode`
+(EXCLUSIVE owner of clip move/trim/region state, `interaction_overlay.rs`) is only cleared
+by `on_end_drag`, which only runs if the `DragEnd` survives `process_events`' routing
+gauntlet (`ui_root.rs:1411` overlay-first) and reaches the tracks-area stash
+(`ui_root.rs:1445`). Confirmed eaters:
+- `dropdown.rs:695-702` — an open dropdown consumes ALL `DragBegin`/`Drag`/`DragEnd`
+  unconditionally (e.g. an accidental two-finger right-click mid-drag opens the clip context
+  menu; the release's DragEnd is then eaten by the menu).
+- any `Modality::Modal` overlay open at release captures everything, even events it ignores
+  (`ui_root.rs:1003-1006`).
+The input layer already learned this lesson twice: `859bbceb` made `DragEnd`/`PointerUp`
+unconditional at the `UIInputSystem` level, and `process_events` routes
+`DragEnd|PointerUp` to the inspector + layer_headers in a dedicated UNCONDITIONAL second
+loop (`ui_root.rs:1499-1515`) — but the timeline overlay's DragEnd still travels the
+consumable path plus a positional gate (`is_event_in_tracks_area`) patched by a boolean
+latch (`overlay_drag_active`). Also unverified at the OS seam: winit-macOS delivery of
+`MouseInput(Released)` when the release lands outside the window (inspector is at the right
+edge; BUG-028 precedent says winit macOS seams are real). Cheap decisive oracle if the
+eater-list explanation doesn't hold: eprintln at four seams (Up received in
+`primary_mouse_input` / DragEnd emitted in `input.rs` / stashed in `process_events` /
+`on_end_drag` entered), reproduce once, read which link broke.
+
+**Fix shape (root)** — make drag-terminal events non-consumable broadcasts: every
+drag-state owner (InteractionOverlay, inspector, layer_headers, every overlay panel with an
+armed drag) receives `DragEnd`/`PointerUp` regardless of routing outcome; overlays may
+still *act* on it but never block it. Cleaner still: single drag-capture ownership — at
+`DragBegin` one owner is recorded, all subsequent `Drag`/`DragEnd` route to that owner by
+identity (not position), killing the latch, the positional gate, and the eater class in one
+move.
+
+### BUG-059 (band-line-grab-falls-through) — Audio Setup band-divider grabs are sticky, and a MISSED grab silently drags clips/region under the modal — HIGH (silent project edits during calibration; reported by Peter 2026-07-07)
+
+**Symptom** — the horizontal crossover lines in the Audio Setup spectrogram are hard to
+grab: fine adjustments stick, grabs sometimes do nothing, and (unreported but confirmed in
+code) a missed grab over the timeline area starts an invisible clip move / region select
+UNDERNEATH the modal, committing real project edits.
+
+**Root cause (several, stacked)** —
+- **Missed-grab fall-through (the HIGH):** the panel's `PointerDown` arm returns `Ignored`
+  when the press misses a divider/label (`audio_setup_panel.rs:2269-2294`), and the panel is
+  `Modality::Modeless`, so the whole DragBegin/Drag/DragEnd family falls through to the
+  layers beneath. The tracks-area stash gate classifies by RAW POSITION with zero z-order
+  awareness (`ui_root.rs:2455` `is_event_in_tracks_area`), so a drag starting on the modal
+  background over the timeline is stashed and `InteractionOverlay` hit-tests clips by
+  position (clips aren't tree nodes) — editing the project through the modal. The `Click`
+  arm was already patched to swallow exactly this (`owns_node(id) || point_in_scope(*pos)`,
+  the prior fix attempt Peter remembers); the drag family wasn't.
+- **4px dead zone:** the global `DRAG_THRESHOLD_PX = 4.0` (`color.rs:837`) applies to a
+  precision control — no `Drag` event fires for the first 4px, so sub-4px nudges are
+  impossible and every grab starts sticky.
+- **Window-seam interceptors punch through the modal:** `primary_mouse_input` checks
+  `is_near_split_handle` (6px full-width band at the timeline's top edge) and
+  `is_near_inspector_edge` (±4px at `insp.x`, full window height) BEFORE overlay routing and
+  BEFORE hit-testing (`window_input.rs:274-310`) — when the centered modal overlaps those
+  zones, a press on a band line there is stolen for a panel-resize drag.
+- **Dropdown-dismiss swallow:** with any dropdown open (the panel has device/layer
+  dropdowns), the next press outside it is consumed by the dismiss branch
+  (`window_input.rs:269-273`) — first grab after touching a dropdown always dies.
+- **Scope-dark deadness:** `scope_fmin <= 0` (no capture yet) makes dividers ungrabbable by
+  design (`audio_setup_panel.rs:422`) — reads as "sometimes it just doesn't work" if lines
+  are visible before audio flows.
+
+**Fix shape** — same root as BUG-058's capture model plus locals: (1) the modeless panel's
+`PointerDown`/drag family must swallow anything inside the panel rect (mirror the `Click`
+arm) — that alone kills the silent-edit hole; (2) per-widget drag threshold (0 for the
+divider lines — arm on press, track raw moves); (3) window-seam interceptors must respect
+z-order (both handles already have tree nodes — route them through hit-testing instead of
+raw-position pre-checks); (4) hover-glow the grab zone only when actually grabbable
+(scope live).
+
+Next free id: BUG-060.
 
 ### BUG-055 (eval-harness-stale-time-grid) — both audio eval harnesses used the unscaled default hop on non-48k files — FIXED 2026-07-07 (kick P5 retune branch)
 
