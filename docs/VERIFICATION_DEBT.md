@@ -159,6 +159,16 @@ sides, scrub during playback, rapid play/stop drumming, tempo ramp, IAC-kill deg
 machine. The checklist IS the acceptance gate; the design's safety property (unconfirmed
 expectation never moves the playhead) bounds the worst case at no-worse-than-before.
 
+### VD-014 — KICK_SWEEP_EVENT P2: content-thread cost + live kick feel — L1 reached / L4 target
+Landed 2026-07-07 (`docs/landings/2026-07-07-kick-sweep-p2.md`). The ridge detector is proven at
+L1 (exact-match fire counts on all 10 fixtures + green guards), but two things are unmeasured.
+(1) The `MANIFOLD_RENDER_TRACE` content-thread gate was reasoned, not run: the per-hop work is a
+bounded, allocation-free peak-pick + ≤12 short track updates, dwarfed by the CQT, but no live
+trace confirms no frame >20ms with an audio-layer send bound. (2) The kick feel is Peter's P3:
+does it catch kicks on a bass-heavy finished track, does it strobe on bass, is the ~50–65ms
+confirmation latency (D7) acceptable. Burn-down: the landing report's ≤2-min click-script;
+`KICK_WIN` is the latency knob if it reads late.
+
 *(VD-001–004 seeded 2026-07-05 from the memory corpus plus Peter's in-app findings; VD-006 added
 2026-07-05, VD-007 at P2 landing, VD-008 at P3 landing, VD-009 at P4 landing, VD-010 at P5-inspector
 landing. VD-005 closed at P2 landing. The full backfill pass over recent landings is still owed and
