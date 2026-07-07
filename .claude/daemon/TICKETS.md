@@ -54,6 +54,11 @@ a WARNING (never block): "-r is --replace; output text will be rewritten —
 did you mean -n?". Fire on bundled short flags (`-rn`, `-rl`, `-nr`) and on
 `-r <pattern>` where the command otherwise looks like a search.
 
+**DONE 2026-07-07 (Sonnet, lane/daemon-tickets-a @ `b2a973d9`).** Added
+`rg_replace_lint`, fires on bundled short flags containing `r` (`-rn`,
+`-rl`, `-nr`, ...) and on standalone `-r`/`--replace`. 6 new tests, all in
+the dispatch list.
+
 ## T5 — PreToolUse Bash lint: masked exit status on gate commands
 Session 4340cb05: `cargo check | rg ...; echo exit: $?` reported rg's exit;
 a background gate ended `| rg ...; echo GATE_DONE` — sentinel echoed
@@ -61,6 +66,13 @@ unconditionally, completion looked like success. Lint: a
 `cargo`/`pytest`/test-runner command whose output is piped into a filter
 (`rg`/`grep`/`head`/`tail`) AND followed by `; echo`/`$?` in the same chain
 gets a WARNING suggesting `${PIPESTATUS[0]}` or `&&` sequencing. Never block.
+
+**DONE 2026-07-07 (Sonnet, lane/daemon-tickets-a @ `b2a973d9`).** Added
+`masked_exit_status_lint` + `_segments_with_ops` (an operator-preserving
+segmenter — plain `_shlex_segments` discards which operator joined two
+segments, which this shape needs). Fires when a test/build-runner segment
+pipes into a filter head and a later `;`-joined segment echoes a status or
+`$?`. 5 new tests, all in the dispatch list.
 
 ## T6 — preToolUseBash: landing merges inside compounds
 Session 4340cb05: a fetch→merge→merge --no-ff→push compound landed a merge on
@@ -72,6 +84,16 @@ re-verify `git branch --show-current` immediately before it — or better,
 deny compounds where a landing merge follows a branch-mutating step with no
 `branch --show-current` between them. Deny only that narrow shape; plain
 landing chains that start from a verified-main state stay allow+reminder.
+
+**DONE 2026-07-07 (Sonnet, lane/daemon-tickets-a @ `b2a973d9`).** Picked the
+"or better" option — `detect_unverified_compound_landing_merge` DENIES (not
+just warns) a compound where a landing merge follows an earlier
+branch-mutating segment (checkout/switch/merge, reusing
+`_is_branch_switch_sub`) with no `git branch --show-current` /
+`rev-parse --abbrev-ref HEAD` re-verification segment in between; wired
+into `main()` right before the pre-approved-allow branch. Single landing
+merges and verified compounds are unaffected. 4 new tests, all in the
+dispatch list.
 
 ## T7 — MEMORY.md compaction: single-owner protocol
 Session 2b15501e hit 4 consecutive file-modified-since-read Edit failures
@@ -103,6 +125,12 @@ Session c9e4d45d: a self-grade append chained after a `#grep-ok` marker
 silently never ran (# comments to end of line). Lint: a `#word` token
 followed by more command text (`&&`, `;`, `|`, or another command) on the
 same line gets a WARNING naming the swallowed text. Never block.
+
+**DONE 2026-07-07 (Sonnet, lane/daemon-tickets-a @ `b2a973d9`).** Added
+`trailing_comment_swallow_lint`, reuses `sanitize()` so a `#` inside a
+quoted string never counts; fires only when the swallowed text after `#`
+contains a shell operator (`&&`/`;`/`|`/`||`), not on a bare trailing
+comment. 4 new tests, all in the dispatch list.
 
 ## T9 — implement mechanical/stale-brief (advice tier)
 Contract in moves.md (2026-07-07). Observer-side: on a live (non-catchup)

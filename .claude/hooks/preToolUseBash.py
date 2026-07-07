@@ -668,6 +668,197 @@ def landing_protocol_guard(cmd, cwd):
 
 
 # ---------------------------------------------------------------------------
+# Unverified compound landing-merge guard (.claude/GIT_TREE_DISCIPLINE.md §3b)
+#
+# Session 4340cb05: a `fetch && merge origin/main && merge --no-ff && push`
+# compound landed a merge on another session's branch because HEAD changed
+# between steps and was never re-verified. GIT_TREE_DISCIPLINE.md §3b: "Never
+# run the landing `git merge --no-ff` inside a compound chain... Re-verify
+# `git branch --show-current` immediately before the merge step, as its own
+# command." Unlike the warn-only guards above, this one DENIES: a compound
+# (2+ segments) in the main checkout where a landing merge (merge while on
+# main) follows an earlier branch-mutating segment (checkout/switch/merge)
+# with no branch-state re-verification segment in between. A single
+# (non-compound) landing merge, or a compound where a verify segment
+# intervenes, is unaffected (stays the existing allow+reminder path in
+# `landing_protocol_guard`).
+# ---------------------------------------------------------------------------
+
+def _is_branch_verify_sub(sub, rest_toks):
+    """True for `git branch --show-current` or `git rev-parse --abbrev-ref
+    HEAD` — the two forms that actually re-read current branch state."""
+    if sub == "branch":
+        return "--show-current" in rest_toks
+    if sub == "rev-parse":
+        return "--abbrev-ref" in rest_toks and "HEAD" in rest_toks
+    return False
+
+
+def detect_unverified_compound_landing_merge(cmd, cwd):
+    """TICKETS.md T6: deny (not just warn) a compound where a landing merge
+    (merge while on main) follows an earlier branch-mutating segment
+    (checkout/switch/merge) with no branch-state re-verification in between
+    — HEAD can change between a shared checkout's compound steps
+    (GIT_TREE_DISCIPLINE.md §3b, session 4340cb05). Never raises."""
+    try:
+        segments = _shlex_segments(cmd)
+        if len(segments) < 2:
+            return None  # not a compound; single landing merges are unaffected
+        unverified_mutation = False
+        for toks in segments:
+            toks = _strip_leading_keywords(toks)
+            if not toks or toks[0] != "git":
+                continue
+            target_dir, sub, rest = _git_checkout_dir(toks, cwd)
+            if target_dir is None or not _in_main_checkout(target_dir):
+                continue
+            is_landing_merge_here = sub == "merge" and _current_branch(target_dir) == "main"
+            if is_landing_merge_here and unverified_mutation:
+                return ("This compound runs a landing merge after an earlier "
+                        "branch-mutating step (checkout/switch/merge) with no "
+                        "`git branch --show-current` in between — HEAD can change "
+                        "between a shared checkout's compound steps "
+                        "(GIT_TREE_DISCIPLINE.md §3b). Run the landing "
+                        "`git merge --no-ff` as its OWN command, re-verifying "
+                        "`git branch --show-current` immediately before it.")
+            if _is_branch_verify_sub(sub, rest):
+                unverified_mutation = False
+            elif _is_branch_switch_sub(sub, rest):
+                unverified_mutation = True
+        return None
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Warning-only lints (never deny, never ask) — additionalContext on allow
+#
+# TICKETS.md T4/T5/T8: three independent shell-shape mistakes that have each
+# burned a real session by making the model read back something other than
+# what it thought it was reading. All three are computed unconditionally in
+# `main()` and folded into the same additionalContext string the
+# pre-approved-allow branch already builds; none of them ever change the
+# allow/ask/deny decision.
+# ---------------------------------------------------------------------------
+
+def rg_replace_lint(cmd):
+    """Warn (never deny) when an `rg`-headed segment carries -r/--replace —
+    easily confused with -n (line numbers) / -l (filenames only). TICKETS.md
+    T4: two sessions ran `rg -rn`/`rg -rl` meaning -n/-l and read back
+    rewritten text as if it were real. Never raises."""
+    try:
+        for toks in _shlex_segments(cmd):
+            toks = _strip_leading_keywords(toks)
+            if not toks or toks[0] != "rg":
+                continue
+            for t in toks[1:]:
+                if t in ("-r", "--replace") or t.startswith("--replace="):
+                    return ("`-r`/`--replace` on `rg` REWRITES the matched text in "
+                            "the output — it is not `-n` (line numbers) or `-l` "
+                            "(filenames only). If you meant those, use `-n`/`-l`; "
+                            "otherwise what you're about to read back has been "
+                            "rewritten, not the real file contents.")
+                if re.match(r"^-[A-Za-z]{2,}$", t) and "r" in t[1:]:
+                    return ("Bundled short flag `%s` on `rg` includes `-r` "
+                            "(--replace), which REWRITES matched text in the "
+                            "output rather than showing line numbers/filenames. "
+                            "If you meant `-n`/`-l`, use them un-bundled." % t)
+        return None
+    except Exception:
+        return None
+
+
+_TEST_RUNNER_RE = re.compile(r"^(?:cargo\s+(?:test|bench)\b|pytest\b|npm\s+(?:test|run)\b|go\s+test\b|swift\s+test\b)")
+_FILTER_HEADS = {"rg", "grep", "egrep", "fgrep", "head", "tail"}
+
+
+def _segments_with_ops(cmd):
+    """Like `_shlex_segments` but also returns the operator immediately
+    preceding each segment (None for the first segment). Needed because a
+    masked-exit-status shape depends on WHICH operator joins two segments
+    (`|` vs `;`), which `_shlex_segments` alone discards.
+
+    Uses `shlex.shlex(..., punctuation_chars=True)` rather than plain
+    `shlex.split` — a bare `shlex.split` does NOT separate an operator that's
+    glued to an adjacent word with no space (`rg FAIL; echo` tokenizes as
+    `'FAIL;'`, one token, not `'FAIL'` + `';'`), which is exactly the common
+    shape here (`echo exit: $?` right after a `;` with no space). The
+    punctuation-aware lexer still respects quoting correctly."""
+    try:
+        lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        tokens = list(lex)
+    except ValueError:
+        return []
+    segments, current, preceding_op = [], [], None
+    for t in tokens:
+        if t in _SHELL_OPERATORS:
+            if current:
+                segments.append((current, preceding_op))
+            current, preceding_op = [], t
+        else:
+            current.append(t)
+    if current:
+        segments.append((current, preceding_op))
+    return segments
+
+
+def masked_exit_status_lint(cmd):
+    """Warn (never deny) when a test/build-runner segment is piped into a
+    filter (rg/grep/head/tail) and the chain later echoes a status/`$?` —
+    that status reflects the FILTER's exit code, not the test runner's.
+    TICKETS.md T5: `cargo test | rg ...; echo exit: $?` reports rg's exit
+    code; a background gate ending `| rg ...; echo GATE_DONE` looks like
+    success unconditionally. Never raises."""
+    try:
+        segs = _segments_with_ops(cmd)
+        for i, (toks, _op) in enumerate(segs):
+            if not _TEST_RUNNER_RE.match(" ".join(toks)):
+                continue
+            if i + 1 >= len(segs):
+                continue
+            next_toks, next_op = segs[i + 1]
+            if next_op != "|" or not next_toks or next_toks[0] not in _FILTER_HEADS:
+                continue
+            for later_toks, later_op in segs[i + 2:]:
+                if later_op != ";":
+                    continue
+                if later_toks and (later_toks[0] == "echo" or any("$?" in t for t in later_toks)):
+                    return ("This pipes a test/build command's output into a filter, "
+                            "then echoes a status afterward — the echoed status/`$?` "
+                            "reflects the FILTER's exit code, not the test runner's. "
+                            "Use `${PIPESTATUS[0]}` or restructure with `&&`.")
+        return None
+    except Exception:
+        return None
+
+
+def trailing_comment_swallow_lint(cmd):
+    """Warn (never deny) when a `#...` comment is followed, on the same
+    line, by more text containing a shell operator — meaning a chained
+    command got swallowed into the comment (bash `#` runs to end of line).
+    TICKETS.md T8, session c9e4d45d: a self-grade append chained after a
+    `#grep-ok` marker silently never ran. Reuses `sanitize()` so a `#`
+    inside a quoted string doesn't count. Never raises."""
+    try:
+        structural, _inners = sanitize(cmd)
+        for line in structural.split("\n"):
+            idx = line.find("#")
+            if idx == -1:
+                continue
+            after = line[idx + 1:]
+            if not re.search(r"&&|\|\||;|(?<!\|)\|(?!\|)", after):
+                continue
+            return ("A `#...` comment swallows everything to end-of-line, including "
+                    "the `&&`/`;`/`|` after it — the chained command "
+                    "(%r) never runs. Put the comment last, or run the "
+                    "swallowed command as its own call." % after.strip()[:60])
+        return None
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Deny messages (unchanged policy for non-pre-approved compounds)
 # ---------------------------------------------------------------------------
 
@@ -752,9 +943,28 @@ def main() -> int:
         json.dump(build_ask(landing_ask), sys.stdout)
         return 0
 
+    # 0c. Unverified compound landing-merge guard (T6): denies a compound
+    # landing merge with no branch-state re-verification in between. Must
+    # run before the pre-approved-allow branch below, or this compound would
+    # sail through as a normal pre-approved git workflow.
+    compound_deny_reason = detect_unverified_compound_landing_merge(cmd, cwd)
+    if compound_deny_reason:
+        json.dump(build_deny([compound_deny_reason]), sys.stdout)
+        return 0
+
+    # T4/T5/T8: warning-only lints, computed unconditionally so they land as
+    # additionalContext on a pre-approved allow alongside the shared-checkout
+    # / landing-protocol context. Never affect the allow/ask/deny decision.
+    rg_warning = rg_replace_lint(cmd)
+    masked_exit_warning = masked_exit_status_lint(cmd)
+    comment_swallow_warning = trailing_comment_swallow_lint(cmd)
+
     # 1. Pre-approved? Allow outright, pipes and loops included.
     if is_preapproved_command(cmd):
-        combined = "\n\n".join(c for c in (shared_checkout_context, landing_context) if c) or None
+        combined = "\n\n".join(c for c in (
+            shared_checkout_context, landing_context,
+            rg_warning, masked_exit_warning, comment_swallow_warning,
+        ) if c) or None
         json.dump(build_allow(combined), sys.stdout)
         return 0
 
