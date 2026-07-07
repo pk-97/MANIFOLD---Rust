@@ -140,6 +140,59 @@ def test_race_sleep_fires_outside_test_paths():
     check("race-sleep fires in non-test path", "race-sleep" in hits, hits)
 
 
+# ---- TICKETS.md T2: self-disposing-marker exemption ----
+
+
+def test_delete_after_disposal_trigger_exempts():
+    hits = common.detect_stopgap_markers(
+        "Edit",
+        {
+            "file_path": "foo.rs",
+            "old_string": "x",
+            "new_string": "// TEMPORARY: delete after the fixtures-freeze lands\nlet x = 1;",
+        },
+    )
+    check("delete-after disposal trigger exempts the pair", hits == [], hits)
+
+
+def test_until_disposal_trigger_exempts():
+    hits = common.detect_stopgap_markers(
+        "Edit",
+        {
+            "file_path": "foo.rs",
+            "old_string": "x",
+            "new_string": "// workaround until the real API ships\nlet x = 1;",
+        },
+    )
+    check("until disposal trigger exempts the pair", hits == [], hits)
+
+
+def test_convert_to_disposal_trigger_exempts():
+    hits = common.detect_stopgap_markers(
+        "Edit",
+        {
+            "file_path": "foo.rs",
+            "old_string": "x",
+            "new_string": "// stopgap: convert to a mechanism assertion once the fix lands\nlet x = 1;",
+        },
+    )
+    check("convert-to disposal trigger exempts the pair", hits == [], hits)
+
+
+def test_for_now_without_disposal_trigger_still_fires():
+    # Regression: a bare "for now" with no disposal condition attached must
+    # NOT be accidentally swept into the exemption.
+    hits = common.detect_stopgap_markers(
+        "Edit",
+        {
+            "file_path": "foo.rs",
+            "old_string": "x",
+            "new_string": "// for now, just return zero\nlet x = 0;",
+        },
+    )
+    check("bare for-now (no disposal trigger) still fires", "for-now" in hits, hits)
+
+
 def test_non_edit_tool_never_fires():
     hits = common.detect_stopgap_markers("Bash", {"command": "echo HACK for now workaround FIXME"})
     check("non-Edit/Write/MultiEdit tool never scanned", hits == [], hits)
@@ -182,6 +235,54 @@ def test_window_version_current():
     # >= keeps this from breaking on every later bump — the exact-value guard
     # belongs to whichever test ships the bump.
     check("WINDOW_VERSION at least 3", common.WINDOW_VERSION >= 3, common.WINDOW_VERSION)
+
+
+# ---- TICKETS.md T10: hook-warning ledger annotation ----
+
+
+def test_ledger_annotates_shared_checkout_hook_warning():
+    state = common.WindowState()
+    state.feed_assistant_content([{"type": "tool_use", "id": "a", "name": "Bash", "input": {"command": "git checkout main"}}])
+    warning_text = (
+        "some tool output...\n"
+        "Heads-up: branch-switch in the shared main checkout (`git checkout main`) "
+        "while session other-session's daemon is live. This moves the tree...\n"
+        "...more output"
+    )
+    content = [{"type": "tool_result", "tool_use_id": "a", "is_error": False, "content": warning_text}]
+    state.feed_user_content(content, ts=1000.0)
+    check(
+        "ledger line carries hook-warning annotation",
+        "(hook-warning: Heads-up: branch-switch in the shared main checkout" in state.ledger_buffer[0],
+        state.ledger_buffer[0],
+    )
+
+
+def test_ledger_annotates_landing_protocol_hook_warning():
+    state = common.WindowState()
+    state.feed_assistant_content([{"type": "tool_use", "id": "a", "name": "Bash", "input": {"command": "git push"}}])
+    warning_text = "some tool output...\nLanding on main. Protocol (.claude/GIT_TREE_DISCIPLINE.md §2): fetch, merge, gate, push.\n...more"
+    content = [{"type": "tool_result", "tool_use_id": "a", "is_error": False, "content": warning_text}]
+    state.feed_user_content(content, ts=1000.0)
+    check(
+        "ledger line carries landing-protocol hook-warning annotation",
+        "(hook-warning: Landing on main. Protocol" in state.ledger_buffer[0],
+        state.ledger_buffer[0],
+    )
+
+
+def test_ledger_no_hook_warning_annotation_when_clean():
+    state = common.WindowState()
+    state.feed_assistant_content([{"type": "tool_use", "id": "a", "name": "Bash", "input": {"command": "git push origin my-branch"}}])
+    content = [{"type": "tool_result", "tool_use_id": "a", "is_error": False, "content": "pushed successfully"}]
+    state.feed_user_content(content, ts=1000.0)
+    check("no hook-warning annotation on a clean tool result", "(hook-warning:" not in state.ledger_buffer[0], state.ledger_buffer[0])
+
+
+def test_extract_hook_warning_none_when_absent():
+    check("extract_hook_warning returns None on clean text", common.extract_hook_warning("all good") is None)
+    check("extract_hook_warning returns None on empty text", common.extract_hook_warning("") is None)
+    check("extract_hook_warning returns None on None text", common.extract_hook_warning(None) is None)
 
 
 # ---- observer.py tier 1: deterministic mechanical fire ----
@@ -324,11 +425,19 @@ def main():
         test_claude_internals_excluded,
         test_race_sleep_excluded_in_test_paths,
         test_race_sleep_fires_outside_test_paths,
+        test_delete_after_disposal_trigger_exempts,
+        test_until_disposal_trigger_exempts,
+        test_convert_to_disposal_trigger_exempts,
+        test_for_now_without_disposal_trigger_still_fires,
         test_non_edit_tool_never_fires,
         test_malformed_input_never_raises,
         test_ledger_annotates_stopgap_hit,
         test_ledger_no_annotation_when_clean,
         test_window_version_current,
+        test_ledger_annotates_shared_checkout_hook_warning,
+        test_ledger_annotates_landing_protocol_hook_warning,
+        test_ledger_no_hook_warning_annotation_when_clean,
+        test_extract_hook_warning_none_when_absent,
         test_check_stopgap_fires_flag_for_main_session,
         test_check_stopgap_no_hit_writes_nothing,
         test_check_stopgap_respects_cooldown,

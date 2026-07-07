@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Standalone test for .claude/GIT_TREE_DISCIPLINE.md §2's mechanical/git-landing
-move: common.py's GIT_LANDING_MARKERS / detect_git_landing_signal, and
+move: common.py's detect_git_landing_signal (command-position anchored via the
+shared segment splitter — TICKETS.md T1), and
 observer.py's deterministic fire path (_check_git_landing). Never spawns a
 real classifier call — the mechanical fire path bypasses Haiku entirely, by
 design, mirroring test_stopgap_detection.py's pattern for the sibling
@@ -105,6 +106,19 @@ def test_both_categories_can_fire_together():
     check("branch-delete present", "branch-delete" in hits, hits)
 
 
+def test_search_for_command_text_does_not_fire():
+    # TICKETS.md T1: a search FOR the literal text "git branch -D", not a git
+    # invocation at all — the prior raw-string regex falsely fired on this.
+    hits = common.detect_git_landing_signal("Bash", {"command": "rg 'git branch -D'"})
+    check("search for the command text does not fire (T1 acceptance)", hits == [], hits)
+
+
+def test_real_branch_delete_still_fires():
+    # TICKETS.md T1: the anchored detector must still catch the real command.
+    hits = common.detect_git_landing_signal("Bash", {"command": "git branch -D foo"})
+    check("real branch -D still fires (T1 acceptance)", hits == ["branch-delete"], hits)
+
+
 # ---- observer.py: deterministic mechanical fire ----
 
 
@@ -185,6 +199,8 @@ def main():
     test_non_bash_tool_never_fires()
     test_malformed_input_never_raises()
     test_both_categories_can_fire_together()
+    test_search_for_command_text_does_not_fire()
+    test_real_branch_delete_still_fires()
     test_check_git_landing_fires_flag_for_cherry_pick()
     test_check_git_landing_fires_flag_for_branch_delete()
     test_check_git_landing_no_hit_writes_nothing()
