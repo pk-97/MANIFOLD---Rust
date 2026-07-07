@@ -696,6 +696,25 @@ def _try_observation_prompt(verdicts_dir, session_id, agent_id, transcript_path,
     return _observation_prompt_reason(agent_id), {"move_id": OBSERVATION_PROMPT_MOVE_ID}
 
 
+def _move_muted(move_id, verdicts_dir):
+    """Mirror of observer.py's _is_muted for the hook-fired mechanical moves.
+    A sleep pass's mute must silence a move at EVERY tier — found 2026-07-07
+    (sleep pass 2 night-half) when muting mechanical/unverified-done-claim
+    did nothing because this hook never read verdicts/mutes/. Read-only:
+    the observer owns expiry cleanup; fail open (missing/unreadable/expired
+    = not muted)."""
+    path = os.path.join(verdicts_dir, "mutes", move_id.replace("/", "__") + ".json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            mute = json.load(f)
+    except (OSError, ValueError):
+        return False
+    try:
+        return float(mute.get("unmute_at", 0)) > time.time()
+    except (TypeError, ValueError):
+        return False
+
+
 def main():
     try:
         import valve
@@ -837,7 +856,7 @@ def main():
         # started > ungrounded-chat-claim > this (the two mechanical checks
         # above are mutually exclusive with this one in practice — zero vs.
         # nonzero tool calls — but the order is the contract regardless).
-        if _unverified_done_claim(transcript_path):
+        if not _move_muted("mechanical/unverified-done-claim", valve.VERDICTS_DIR) and _unverified_done_claim(transcript_path):
             reason = valve.build_block({"move_id": "mechanical/unverified-done-claim"}, agent_id=agent_id)
             if reason:
                 _block(reason, {"move_id": "mechanical/unverified-done-claim"})

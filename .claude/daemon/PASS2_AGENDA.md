@@ -58,6 +58,23 @@ order-matching drifts mid-session — anchor by block timestamp instead
 (cut_windows.py recipe in the pass-2 grading session's scratchpad, trivially
 re-derivable: dedupe (text,ts) pairs, match nearest fire ts).
 
+Two enforcement gaps found while ACTING, both part-fixed, remainder yours:
+(e) **mutes were classifier-tier only** — daemon-stop.py never read
+verdicts/mutes/, so muting a hook-fired mechanical move did nothing. Fixed
+minimally same night: `_move_muted()` added to daemon-stop.py and gated on
+mechanical/unverified-done-claim (the move actually muted; 120/120 stop-valve
+tests green, gate verified against the live mute file). Gating
+announced-not-started + ungrounded-chat-claim the same way was DENIED by the
+auto-mode classifier as beyond the grading mandate — finish the generic
+version (every hook-fired move checks `_move_muted`) in pass 2 so "muted"
+means the same thing at every tier. (f) **escalate/checkpoint's new
+never-fire clause is CONTRACT only**: escalate/* is excluded from the
+classifier catalog and checkpoint actually fires from observer.py's
+fire_count-based escalation — the code counts fires, not same-drift
+recurrence, which IS the graded 7-FP defect. The clause states the contract;
+the observer escalation change (require same-move recurrence post-correction)
+is a code edit for this pass, one concern, small blast radius.
+
 1. **Headline metric (Peter, 2026-07-07): corrections land before his next
    message.** From telemetry.jsonl injected records, compute the in-turn
    (valve PostToolUse/Stop) vs next-prompt (valve UserPromptSubmit) split for
