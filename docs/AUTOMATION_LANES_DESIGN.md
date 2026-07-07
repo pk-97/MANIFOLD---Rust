@@ -248,6 +248,24 @@ makes "wiggle the knob, then draw" the zero-friction path to a new lane.
 Headless-PNG self-verification for the visual pass, per the standing UI
 workflow.
 
+**Addendum 2026-07-07 (Peter, discussion) — the exposure half, settled:**
+
+- **Strips-under, not overlay-on-track.** Live draws the selected envelope
+  over the track's clips; MANIFOLD keeps the shipped strips-below-the-layer
+  model (Peter: "strips under is better for Manifold"). The chooser + "+"
+  spec above is unchanged; don't build the overlay.
+- **`A` binds to the automation-mode toggle** (same as the transport LANES
+  button). Plain `a` is currently unbound (`input_handler.rs`); Cmd+A
+  stays select-all. `B` draw-mode already ships.
+- **First-draw path (no arm, no playback):** a param chosen in the chooser
+  with no lane yet renders as a flat line at its current base value —
+  Live's "every param has an implicit envelope" feel. The first click
+  births the real lane via `AddAutomationPointCommand`'s existing
+  `created_lane` semantics. Recording stops being the only birth path.
+- **Chooser home:** the expanded layer tier per this section — which means
+  the two-height header contract reconciliation
+  (TIMELINE_UX_AUDIT_2026-07-07 item #2) rides along with this work.
+
 ## 8. Interactions & edge cases
 
 - **Ableton macro on an automated param:** macro move = touch = override (or
@@ -297,6 +315,12 @@ workflow.
 
 P1 ships value on its own only via P2/P4 editing — but P1+P2 land as one
 reviewable arc; P3/P4 independent after.
+
+- **P5 — exposure (added 2026-07-07; = TIMELINE_UX_AUDIT item #1):** the §7
+  addendum. `A` keybinding; param chooser + "+" on the expanded layer;
+  touch-to-select; flat-line render + first-click lane birth. Depends on
+  the two-tier header reconciliation (audit item #2) for the chooser's
+  home. P1–P4 SHIPPED 2026-07-04; P5 is the remaining half.
 
 ## 11. Decided (don't reopen)
 
