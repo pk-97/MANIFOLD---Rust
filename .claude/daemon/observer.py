@@ -136,6 +136,7 @@ class AgentWorker:
         self.next_seq = 1
         self.phase = "orienting"
         self.paths_seen = set()  # file paths Read/Written this worker's life (unread-edit)
+        self.stale_brief_fired_paths = set()  # TICKETS.md T9: paths already checked for staleness
         # DESIGN.md §2d: phase-transition shadow tier. In-memory only — workers
         # never get firestate persistence for anything (same scope decision
         # as §4b/§4c above); a worker exiting simply loses its phase history.
@@ -189,6 +190,11 @@ class Daemon:
         # Populated during catchup too, so a resumed session doesn't treat
         # every previously-read file as unread.
         self.paths_seen = set()
+        # TICKETS.md T9 / mechanical/stale-brief: paths already checked for
+        # staleness this session — in-memory only, mirroring paths_seen's
+        # convention (no firestate persistence; advice fires are cheap to
+        # re-arm on revive).
+        self.stale_brief_fired_paths = set()
 
         # DESIGN.md §4b: outcome scoring + auto-mute.
         self.fire_records = {}  # seq -> move_id, for every flag *this instance* raised
@@ -507,6 +513,7 @@ class Daemon:
                             name, input_, event_count, logf, d.get("cwd"), d.get("gitBranch"), mailbox=worker
                         )
                         self._check_design_primer(name, input_, event_count, logf, mailbox=worker)
+                        self._check_stale_brief(name, input_, event_count, logf, mailbox=worker)
                     self._check_unread_edit(name, input_, event_count, logf, mailbox=worker, live=classify)
                     if classify:
                         self._check_primer(event_count, logf, mailbox=worker)
@@ -606,6 +613,7 @@ class Daemon:
                             name, input_, event_count, logf, d.get("cwd"), d.get("gitBranch")
                         )
                         self._check_design_primer(name, input_, event_count, logf)
+                        self._check_stale_brief(name, input_, event_count, logf)
                     # live=classify: catchup populates paths_seen, never fires
                     self._check_unread_edit(name, input_, event_count, logf, live=classify)
                     if classify:
@@ -760,6 +768,36 @@ class Daemon:
         }
         _atomic_write_json(mb.verdict_path, record)
         _log(logf, f"mechanical/design-primer fired: {name} {path}")
+
+    def _check_stale_brief(self, name, input_, event_count, logf, mailbox=None):
+        """mechanical/stale-brief (TICKETS.md T9, advice tier): a live Read of a
+        queue/brief/agenda/handoff artifact whose mtime is >48h old. Fires once
+        per (session, path); catchup never fires (mirrors unread-edit's
+        path-set convention — no firestate persistence needed, advice fires are
+        cheap to re-arm on revive per moves.md's own note)."""
+        if name != "Read" or not isinstance(input_, dict):
+            return
+        path = input_.get("file_path") or ""
+        if not path or not common.is_stale_brief_path(path):
+            return
+        mb = mailbox if mailbox is not None else self
+        if path in mb.stale_brief_fired_paths:
+            return
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            return
+        age = time.time() - mtime
+        if age <= common.STALE_BRIEF_MAX_AGE_S:
+            return
+        mb.stale_brief_fired_paths.add(path)
+        verdict = {"evidence": f"Read {path} — mtime {age/3600:.1f}h old", "confidence": 1.0}
+        flag_out = self._resolve_fire(event_count, "mechanical/stale-brief", verdict, logf, mailbox=mailbox)
+        if not flag_out:
+            return
+        record = {"ts": time.time(), "phase": mb.phase, "window_version": common.WINDOW_VERSION, "flag": flag_out}
+        _atomic_write_json(mb.verdict_path, record)
+        _log(logf, f"mechanical/stale-brief fired: {path} age={age/3600:.1f}h")
 
     def _check_unread_edit(self, name, input_, event_count, logf, mailbox=None, live=True):
         """mechanical/unread-edit: an Edit/MultiEdit to a path this target has

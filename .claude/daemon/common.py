@@ -32,7 +32,10 @@ MODEL = "claude-haiku-4-5-20251001"
 # added to SESSION FACTS — grounding reads scroll out of the ~8-event ledger
 # and ungrounded-resolution was FP-firing on claims that were in fact
 # grounded by a Read (live FP 2026-07-05, session a5b78b70 seq 2).
-WINDOW_VERSION = 6
+# v7 (TICKETS.md T10): ledger lines carry a (hook-warning: ...) annotation
+# when a tool result carries a shared-checkout-guard or landing-protocol
+# hook warning — wakes anchor/unheeded-warning.
+WINDOW_VERSION = 7
 
 # Window-size discipline (2026-07-04 orchestrator incident, session cadd7aad):
 # a <task-notification> embedding a worker's full report became current_task
@@ -193,6 +196,22 @@ STOPGAP_MARKERS = {
     "race-sleep": re.compile(r"\bthread::sleep\s*\(|\bsleep\s*\("),
 }
 
+# TICKETS.md T2(b), resolved by the orchestrator via direct forensic
+# investigation (not re-graded here): the a5d63eee seq-6 fire's grading note
+# ("the flagged 'yet' referenced a pre-existing coverage gap... no confessed
+# shortcut in the diff") misattributes the artifact. The session's surviving
+# observer log (verdicts/a5d63eee-1b49-424e-aa9b-775a3e64b7d1.log, still on
+# disk) shows the real evidence line: "mechanical/confessed-stopgap fired:
+# Edit .../crates/manifold-renderer/src/generators/mesh_pipeline.rs
+# hits=['lint-suppression']" — a genuine, unexempted #[allow(unreachable_code)]
+# behind a new early `return;`. "yet"/"harness"/"headless" appear in ZERO
+# Edit/Write/MultiEdit diffs anywhere in that session's transcript (confirmed
+# via jq), so the grading note describes a different specimen than what this
+# detector actually matched. Whether the mesh_pipeline.rs edit itself is a
+# true or false positive was never actually graded — that's a separate,
+# still-open grading gap, not something this ticket's self-disposal
+# exemption changes (no disposal trigger appears near that edit either way).
+
 # Markdown and the daemon's own internals are excluded from the scan entirely
 # (DESIGN.md §2c) — the daemon narrating its own build in prose isn't a hack.
 STOPGAP_EXCLUDED_PATH_RE = re.compile(r"(^|/)\.claude/|\.md$", re.IGNORECASE)
@@ -201,6 +220,17 @@ STOPGAP_EXCLUDED_PATH_RE = re.compile(r"(^|/)\.claude/|\.md$", re.IGNORECASE)
 # call in a test file is normal test scaffolding, not a race workaround.
 STOPGAP_TEST_PATH_RE = re.compile(
     r"(^|/)tests?/|(^|/)test_[^/]+\.\w+$|_test\.\w+$", re.IGNORECASE
+)
+
+# TICKETS.md T2: an added marker whose surrounding added text ALSO names its
+# own concrete disposal trigger is eval-loop scaffolding, not a confession —
+# e.g. "TEMPORARY: delete after the fixtures-freeze lands" names exactly when
+# it goes away, unlike a bare "for now" with no disposal condition attached.
+# Per-pair, not global: only the pair whose OWN added text carries a disposal
+# trigger is exempted.
+DISPOSAL_TRIGGER_RE = re.compile(
+    r"\bdelete\s+(?:after|once|when)\b|\bconvert\s+to\b|\buntil\s+\S|\bretire[sd]?\s+(?:with|after)\b",
+    re.IGNORECASE,
 )
 
 # DESIGN.md §2h.2: mechanical/landing-doc-reflex's docs-only suppression.
@@ -214,6 +244,31 @@ LANDING_DOCS_ONLY_RE = re.compile(r"(^|/)(?:docs|memory|\.claude)/", re.IGNORECA
 
 def is_docs_memory_or_claude_path(path):
     return bool(path) and bool(LANDING_DOCS_ONLY_RE.search(path))
+
+
+# TICKETS.md T9 / mechanical/stale-brief: how old a queue/brief/agenda/handoff
+# artifact's mtime must be, at read time, before the move fires.
+STALE_BRIEF_MAX_AGE_S = 48 * 60 * 60
+
+
+def is_stale_brief_path(path):
+    """TICKETS.md T9 / mechanical/stale-brief: a queue, brief, agenda, or
+    handoff artifact whose staleness this move warns about. Basename-scoped
+    except for the docs/handoff* and moves.md-adjacent memory-file cases."""
+    if not path:
+        return False
+    base = os.path.basename(path)
+    if base.endswith("_QUEUE.md"):
+        return True
+    if "BRIEF" in base.upper() and base.endswith(".md"):
+        return True
+    if re.match(r"^PASS.*_AGENDA\.md$", base, re.IGNORECASE):
+        return True
+    if "docs/handoff" in path.lower():
+        return True
+    if re.match(r"^handoff_.*\.md$", base, re.IGNORECASE):
+        return True
+    return False
 
 
 def _stopgap_hits(text):
@@ -248,7 +303,10 @@ def detect_stopgap_markers(name, input_):
 
     hits = set()
     for added, removed in pairs:
-        hits |= _stopgap_hits(added) - _stopgap_hits(removed)
+        pair_hits = _stopgap_hits(added) - _stopgap_hits(removed)
+        if pair_hits and DISPOSAL_TRIGGER_RE.search(added):
+            continue  # self-disposing marker — exempt (TICKETS.md T2, 2026-07-07 contract)
+        hits |= pair_hits
 
     if "race-sleep" in hits and STOPGAP_TEST_PATH_RE.search(path):
         hits.discard("race-sleep")
@@ -302,23 +360,32 @@ def detect_verification_class(name, input_):
 # operations that guard doesn't (cherry-pick isn't main-checkout-scoped by
 # nature, and branch deletion has no "target" to detect at all) — added at
 # Peter's suggestion the same session the incident was diagnosed.
-GIT_LANDING_MARKERS = {
-    "cherry-pick": re.compile(r"\bgit\s+cherry-pick\b"),
-    "branch-delete": re.compile(
-        r"\bgit\s+branch\s+(?:-d|-D|--delete)\b|\bgit\s+push\b[^\n]*--delete\b"
-    ),
-}
-
-
 def detect_git_landing_signal(name, input_):
     """Bash commands running the two twin-commit-prone git operations
-    (mechanical/git-landing signature in moves.md). Deterministic regex over
-    the raw command text; never raises. Returns a sorted list of category
-    names (possibly empty)."""
+    (mechanical/git-landing signature in moves.md), anchored to command
+    position via the shared segment splitter (TICKETS.md T1 — the prior
+    regex scanned the raw string anywhere, so `rg 'git branch -D'` — a
+    SEARCH for that text, no git invocation at all — falsely fired).
+    Never raises. Returns a sorted list of category names (possibly empty)."""
     if name != "Bash" or not isinstance(input_, dict):
         return []
     cmd = input_.get("command") or ""
-    return sorted(cat for cat, pat in GIT_LANDING_MARKERS.items() if pat.search(cmd))
+    hits = set()
+    try:
+        for toks in _landing_shlex_segments(cmd):
+            toks = _landing_strip_leading_keywords(toks)
+            if not toks or toks[0] != "git":
+                continue
+            _target_dir, sub, rest = _landing_git_checkout_dir(toks, ".")
+            if sub == "cherry-pick":
+                hits.add("cherry-pick")
+            elif sub == "branch" and any(t in ("-d", "-D", "--delete") for t in rest):
+                hits.add("branch-delete")
+            elif sub == "push" and any(t == "--delete" or t.startswith("--delete=") for t in rest):
+                hits.add("branch-delete")
+    except Exception:
+        return []
+    return sorted(hits)
 
 
 # DESIGN.md §2h.2: mechanical/landing-doc-reflex. The token-parsing below
@@ -578,6 +645,30 @@ def tool_result_status(block):
     return "ok"
 
 
+# TICKETS.md T10 / anchor/unheeded-warning: a PreToolUse hook's
+# additionalContext (shared-checkout guard warning, landing-protocol
+# reminder — preToolUseBash.py) is appended as extra text inside the SAME
+# tool_result's own content the hook fired on. These are the two literal
+# opening fragments preToolUseBash.py's shared_checkout_guard and
+# LANDING_PROTOCOL_REMINDER emit — kept here, not re-derived, so a wording
+# change in the hook is a one-place update.
+HOOK_WARNING_MARKERS = (
+    "Heads-up: branch-switch in the shared main checkout",
+    "Landing on main. Protocol",
+)
+
+
+def extract_hook_warning(tool_result_content_text):
+    """Returns the first ~80 chars of the matched hook-warning marker text if
+    present in a tool_result's own content, else None. Never raises."""
+    text = tool_result_content_text or ""
+    for marker in HOOK_WARNING_MARKERS:
+        idx = text.find(marker)
+        if idx != -1:
+            return _truncate(text[idx:], 80)
+    return None
+
+
 TASK_ADDRESSED_MIN_CHARS = 40  # a trivial ack ("OK.", "Got it.") doesn't count as addressing TASK
 
 
@@ -671,12 +762,13 @@ class WindowState:
         self.last_edit_event = {}  # path -> event_count
         self.edits_with_prior_read_this_window = []  # [(path, read_event_count)], reset per window
 
-    def _annotate_ledger(self, name, target, status, stopgap_hits=None):
+    def _annotate_ledger(self, name, target, status, stopgap_hits=None, hook_warning=None):
         """Returns a "(...)" suffix or "" — the repeat-touch and failure-streak
         tells from §4c-1, plus (§2c tier 3) confession-marker categories an
-        Edit/Write/MultiEdit just added. Only fires on a repeat (n>=2) / a
-        streak (n>=2): a first touch or a lone failure isn't a pattern worth
-        flagging; a marker hit always annotates (it's already a discrete
+        Edit/Write/MultiEdit just added, plus (T10) a hook warning attached to
+        this tool result. Only fires on a repeat (n>=2) / a streak (n>=2): a
+        first touch or a lone failure isn't a pattern worth flagging; a marker
+        hit or hook warning always annotates (each is already a discrete
         event, not a running count)."""
         notes = []
         if name in REPEAT_TARGET_TOOLS and target:
@@ -693,6 +785,8 @@ class WindowState:
             self.consecutive_failures = 0
         if stopgap_hits:
             notes.append(f"(adds: {', '.join(stopgap_hits)})")
+        if hook_warning:
+            notes.append(f"(hook-warning: {hook_warning})")
         return " ".join(notes)
 
     def _close_window(self, ts):
@@ -782,7 +876,9 @@ class WindowState:
                 target = tool_target(input_)
                 status = tool_result_status(c)
                 stopgap_hits = detect_stopgap_markers(name, input_)
-                note = self._annotate_ledger(name, target, status, stopgap_hits)
+                result_text = _flatten_content_text(c.get("content"))
+                hook_warning = extract_hook_warning(result_text)
+                note = self._annotate_ledger(name, target, status, stopgap_hits, hook_warning)
                 line = f"{label} {target} {status}".strip()
                 if note:
                     line += f" {note}"
