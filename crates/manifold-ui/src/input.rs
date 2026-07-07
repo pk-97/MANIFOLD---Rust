@@ -345,6 +345,18 @@ impl UIEvent {
     }
 }
 
+/// BUG-058 diagnostic tap — set `MANIFOLD_INPUT_TRACE=1` to print one line per
+/// discrete pointer transition (press / release / drag begin / drag end) at each
+/// seam of the drag pipeline: release received at the window, terminal events
+/// emitted here, routed-or-eaten in `UIRoot::process_events`, drag ended in
+/// `InteractionOverlay`. One live repro of a stuck drag then names the link
+/// that broke. Discrete events only — never the per-frame Move/Drag stream.
+/// Cached on first read; costs one branch on an initialized `OnceLock` after.
+pub fn input_trace_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("MANIFOLD_INPUT_TRACE").is_some_and(|v| v != "0"))
+}
+
 /// Processes pointer and keyboard input, dispatches UI events.
 ///
 /// Maintains hover/press/focus state and manages:
@@ -490,6 +502,12 @@ impl UIInputSystem {
 
         match action {
             PointerAction::Down => {
+                if input_trace_enabled() {
+                    eprintln!(
+                        "[input-trace] input.rs DOWN ({:.0},{:.0}) hit={hit_widget:?}",
+                        screen_pos.x, screen_pos.y
+                    );
+                }
                 self.pressed_widget = hit_widget;
                 self.press_origin = screen_pos;
                 self.last_drag_pos = screen_pos;
@@ -516,6 +534,15 @@ impl UIInputSystem {
                         let dist = screen_pos.distance(self.press_origin);
                         if dist >= DRAG_THRESHOLD {
                             self.is_dragging = true;
+                            if input_trace_enabled() {
+                                eprintln!(
+                                    "[input-trace] input.rs DRAG-BEGIN origin=({:.0},{:.0}) \
+                                     pressed={pw:?} resolves={}",
+                                    self.press_origin.x,
+                                    self.press_origin.y,
+                                    tree.node_for_widget(pw).is_some()
+                                );
+                            }
                             // Resolve the pressed widget to its live node now. If it
                             // left the build, there is no target — drop the event but
                             // keep the drag state so Up still tidies up.
@@ -543,6 +570,13 @@ impl UIInputSystem {
             }
 
             PointerAction::Up => {
+                if input_trace_enabled() {
+                    eprintln!(
+                        "[input-trace] input.rs UP ({:.0},{:.0}) pressed={:?} is_dragging={} \
+                         (dragging ⇒ DragEnd+PointerUp emitted)",
+                        screen_pos.x, screen_pos.y, self.pressed_widget, self.is_dragging
+                    );
+                }
                 if let Some(pw) = self.pressed_widget {
                     // Clear PRESSED on whatever live node carries the pressed widget.
                     if let Some(n) = tree.node_for_widget(pw) {

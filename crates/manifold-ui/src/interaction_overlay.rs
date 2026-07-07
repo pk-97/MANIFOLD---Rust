@@ -1464,6 +1464,12 @@ impl InteractionOverlay {
         ui_state: &mut UIState,
         viewport: &TimelineViewportPanel,
     ) {
+        if crate::input::input_trace_enabled() {
+            eprintln!(
+                "[input-trace] overlay: begin_drag ({:.0},{:.0}) prior mode={:?}",
+                press_pos.x, press_pos.y, self.drag_mode
+            );
+        }
         self.drag_layer_blocked = false;
         self.was_layer_blocked = false;
 
@@ -1599,6 +1605,9 @@ impl InteractionOverlay {
     /// Takes no `UIState`: end-of-drag commits the engine batch and clears the
     /// overlay's own transient state — selection is untouched here.
     pub fn on_end_drag(&mut self, host: &mut dyn TimelineEditingHost) {
+        if crate::input::input_trace_enabled() {
+            eprintln!("[input-trace] overlay: end_drag entered (mode={:?})", self.drag_mode);
+        }
         // Unity lines 358-363: region select → finalize
         if self.drag_mode == DragMode::RegionSelect {
             host.invalidate_all_layer_bitmaps();

@@ -241,6 +241,9 @@ impl Application {
         state: ElementState,
     ) {
         if is_primary && self.perform_handle_mouse_input(button, state) {
+            if manifold_ui::input::input_trace_enabled() {
+                eprintln!("[input-trace] window: {button:?} {state:?} consumed by perform mode");
+            }
             return;
         }
         if is_primary {
@@ -271,6 +274,13 @@ impl Application {
                             {
                                 self.ws.ui_root.dropdown.close(&mut self.ws.ui_root.tree);
                                 // Click is consumed by dismiss — do not forward.
+                                if manifold_ui::input::input_trace_enabled() {
+                                    eprintln!(
+                                        "[input-trace] window: PRESS ({:.0},{:.0}) consumed by \
+                                         dropdown-dismiss",
+                                        self.cursor_pos.x, self.cursor_pos.y
+                                    );
+                                }
                             } else if self
                                 .ws
                                 .ui_root
@@ -297,6 +307,13 @@ impl Application {
                                     // From Unity PanelResizeHandle.OnPointerDown.
                                     self.split_dragging = true;
                                     self.ws.ui_root.set_split_handle_drag();
+                                    if manifold_ui::input::input_trace_enabled() {
+                                        eprintln!(
+                                            "[input-trace] window: PRESS ({:.0},{:.0}) intercepted \
+                                             → split-handle drag",
+                                            self.cursor_pos.x, self.cursor_pos.y
+                                        );
+                                    }
                                 }
                             } else if self.ws.ui_root.is_near_inspector_edge(self.cursor_pos) {
                                 if self.is_double_click(self.inspector_handle_last_click) {
@@ -307,6 +324,13 @@ impl Application {
                                     self.inspector_handle_last_click = Some(std::time::Instant::now());
                                     self.ws.ui_root.begin_inspector_resize(self.cursor_pos.x);
                                     self.ws.ui_root.set_inspector_handle_drag();
+                                    if manifold_ui::input::input_trace_enabled() {
+                                        eprintln!(
+                                            "[input-trace] window: PRESS ({:.0},{:.0}) intercepted \
+                                             → inspector-resize drag",
+                                            self.cursor_pos.x, self.cursor_pos.y
+                                        );
+                                    }
                                 }
                             } else {
                                 self.ws.ui_root.pointer_event(
@@ -318,6 +342,19 @@ impl Application {
                         }
                         ElementState::Released => {
                             self.mouse_pressed = false;
+                            if manifold_ui::input::input_trace_enabled() {
+                                let route = if self.split_dragging {
+                                    "ends split drag"
+                                } else if self.ws.ui_root.inspector_resize_dragging {
+                                    "ends inspector resize"
+                                } else {
+                                    "forwarded to UI"
+                                };
+                                eprintln!(
+                                    "[input-trace] window: RELEASE ({:.0},{:.0}) {route}",
+                                    self.cursor_pos.x, self.cursor_pos.y
+                                );
+                            }
                             if self.split_dragging {
                                 // End video/timeline split drag.
                                 // From Unity PanelResizeHandle.OnPointerUp.

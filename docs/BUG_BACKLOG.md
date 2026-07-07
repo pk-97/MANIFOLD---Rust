@@ -172,6 +172,13 @@ eater-list explanation doesn't hold: eprintln at four seams (Up received in
 `primary_mouse_input` / DragEnd emitted in `input.rs` / stashed in `process_events` /
 `on_end_drag` entered), reproduce once, read which link broke.
 
+**Instrumentation SHIPPED 2026-07-07** (`feat/drag-capture-instrumentation`): launch with
+`MANIFOLD_INPUT_TRACE=1` and every discrete pointer transition prints a `[input-trace]`
+line at each seam — window interceptors, input-system press/release/drag-begin, overlay
+routing (which overlay consumed/captured), tracks-area stash gate (with latch state), and
+timeline-overlay begin/end (with drag mode). One repro of the stuck state names the broken
+link. Root fix is `docs/DRAG_CAPTURE_DESIGN.md`.
+
 **Fix shape (root)** — make drag-terminal events non-consumable broadcasts: every
 drag-state owner (InteractionOverlay, inspector, layer_headers, every overlay panel with an
 armed drag) receives `DragEnd`/`PointerUp` regardless of routing outcome; overlays may
@@ -219,6 +226,14 @@ divider lines — arm on press, track raw moves); (3) window-seam interceptors m
 z-order (both handles already have tree nodes — route them through hit-testing instead of
 raw-position pre-checks); (4) hover-glow the grab zone only when actually grabbable
 (scope live).
+
+**(1) SHIPPED 2026-07-07 as an explicit stopgap** (`feat/drag-capture-instrumentation`,
+superseded by `docs/DRAG_CAPTURE_DESIGN.md`): the panel now claims the whole
+DragBegin/Drag/DragEnd family for any drag whose ORIGIN is inside `panel_rect`
+(`swallow_drag`), keyed on origin so a timeline drag crossing the panel still passes
+through; unit tests `missed_grab_drag_inside_panel_is_swallowed` +
+`timeline_drag_crossing_panel_passes_through`. The silent-edit hole is closed; the feel
+items (2)–(4) remain for the design.
 
 Next free id: BUG-060.
 
