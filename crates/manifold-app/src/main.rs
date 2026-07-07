@@ -38,6 +38,7 @@ mod input_host;
 #[cfg(target_os = "macos")]
 mod macos_pasteboard;
 mod menu;
+mod offline_audio_mod;
 mod perform_mode;
 mod project_io;
 #[cfg(target_os = "macos")]
