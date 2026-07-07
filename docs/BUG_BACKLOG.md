@@ -60,6 +60,7 @@ or human can read it, and it needs no external tool.
 | BUG-034 | **atlas-uv-test-gap** | headless preview doesn't cover live atlas UV path (LOW) |
 | BUG-014 / 030 | parked | NaN content-key hash · color-ratchet red |
 | BUG-019 / 020 / 021 | deferred | group-fold gap · gen-card collapse · snap-back gap |
+| BUG-056 | **audio-mixdown-clippy-debt** | `manifold-playback` clippy gate (`-D warnings`) fails pre-existing on `audio_mixdown.rs` — `cloned_ref_to_slice_refs` + `needless_range_loop` (LOW, blocks the crate's clippy gate, not correctness) |
 
 ## Open
 
@@ -100,7 +101,26 @@ hop-COUNTS with SR — more blast radius (dynamic ring sizes) for no gain. Gate:
 fixture to 96k, run the harness, confirm fire TIMES in seconds match the 48k run (the eval
 already grades in seconds). Fold into the kick time-constant rework.
 
-Next free id: BUG-056.
+### BUG-056 (audio-mixdown-clippy-debt) — `manifold-playback` fails `cargo clippy -D warnings` pre-existing on `audio_mixdown.rs` — LOW (blocks the crate's clippy gate, not correctness)
+
+**Found 2026-07-07** while gating U-P1 of `LIVE_AUDIO_TRIGGERS_DESIGN.md` §9 (the
+`AudioTriggerMod` → `ParameterAudioMod` unification). Not this wave's fault: reproduces
+identically on the wave's base tip (`8ccc4fc6`, verified via `git stash` + re-run before
+touching anything) — a clippy-version-sensitive lint that was clean at whatever toolchain
+last gated `manifold-playback`, now firing on unrelated code:
+
+- `crates/manifold-playback/src/audio_mixdown.rs:589` and `:643` —
+  `clippy::cloned_ref_to_slice_refs`: `&[normal_id.clone()]` / `&[analysis_id.clone()]` should
+  be `std::slice::from_ref(&normal_id)` / `std::slice::from_ref(&analysis_id)`.
+- `crates/manifold-playback/src/audio_mixdown.rs:623` — `clippy::needless_range_loop`: `for i
+  in 0..tapped.len()` should iterate `tapped.iter().enumerate()`.
+
+**Fix shape:** three mechanical one-line-ish clippy fixups in `audio_mixdown.rs`, no behavior
+change. `cargo test -p manifold-playback --lib` is unaffected (tests still build and pass;
+only `--tests -- -D warnings` fails). Not fixed here — out of scope for the audio-trigger
+unification and touching `audio_mixdown.rs` wasn't part of this phase's brief.
+
+Next free id: BUG-057.
 
 ### BUG-055 (eval-harness-stale-time-grid) — both audio eval harnesses used the unscaled default hop on non-48k files — FIXED 2026-07-07 (kick P5 retune branch)
 
