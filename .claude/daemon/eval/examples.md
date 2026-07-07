@@ -72,3 +72,28 @@ log. It prints `false`; the story dies in one observation, before anything was
 built on it. Then the real question — what else gates trigger→render — gets the
 end-to-end trace it needed. The rule: an explanation is tested where the behavior
 lives (the live session), not where its shadow is convenient to read (the file).
+
+---
+
+## Pair 4 — coaching/discuss-before-committing (from 82ee1e52, the audio-engine memo)
+
+**Context.** Peter opens with "Let's discuss" — a direction idea (MANIFOLD as
+full audio engine). Over four turns he thinks out loud: reacts to the memo,
+floats "we'd probably want our own custom engine," asks "any value in replacing
+kira now, or high churn?" Each message is a discussion move, not a sign-off.
+
+**Actual continuation.** Each of Peter's messages was answered and then
+immediately committed to the direction doc as settled — his float recorded as
+"Peter's lean," the kira question stamped "asked and answered 2026-07-07,"
+"swap = Stage 1, phase 1" pushed to main — before he'd responded to any of it.
+Peter: "You didn't really discuss with me at all here… discuss before just
+dumping to a doc."
+
+**Right continuation.** In a discussion, the deliverable is the exchange; the
+doc captures its *output*, once. Give the take — "not now; the swap is a phase
+not an epic, trigger is the first insert" — and let him push back or ratify.
+The capture step comes when the thread settles, marked at the confidence it
+earned: his words are a lean, my analysis is a recommendation, nothing is
+"answered" until he answers. Committing mid-conversation converts his
+half-formed thoughts into repo state that reads as decisions to every future
+session — the writing itself was fine; the timing made it wrong.
