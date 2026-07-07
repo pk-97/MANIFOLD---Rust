@@ -50,7 +50,7 @@ or human can read it, and it needs no external tool.
 | BUG-033 | **ui-snapshot-broken** | FIXED — verified in-tree 2026-07-07 (harness builds + runs) |
 | BUG-050 | **ableton-anchor-yankback** | play-from-cursor snap-backs; anchor fix landed, rig confirmation owed via [ABL-SYNC] logs (HIGH) |
 | BUG-051 | **trigger-clear-unwired** | `LiveTriggerState::clear()` documents "call on transport stop / project reset" but has zero call sites (LOW) |
-| BUG-052 | **sample-rate-dependent-detection** | onset/kick detector constants are in hops+bins/hop; analyzer runs at device rate, so 96k halves hop-time and the kick detector under-fires. Fix at the time grid: derive hop/n_fft from SR (MED) |
+| BUG-052 | **sample-rate-dependent-detection** | FIXED 2026-07-07 @ 6e0e8988 — `SpectrogramConfig::with_time_grid_for(sr)` derives hop/n_fft from the device rate so hop≈5.33ms + window≈85ms hold at any rate; unit-test proven across 44.1/48/88.2/96/192k; end-to-end cross-rate harness fire-time match still owed (VD) |
 | BUG-048 | **arm-two-reds** | ARM idle/armed both red, shade-only difference (LOW, UX call) |
 | BUG-049 | **child-row-right-indent** | group-child right-anchored controls misaligned ~20px (LOW) |
 | BUG-012 | **tex-rename-corrupt** | fragment `tex_` port-rename corrupts `tex_*` scalars (LOW) |
@@ -62,7 +62,19 @@ or human can read it, and it needs no external tool.
 
 ## Open
 
-### BUG-052 (sample-rate-dependent-detection) — onset + kick detection mis-tunes at non-48k sample rates — MED
+### BUG-052 (sample-rate-dependent-detection) — onset + kick detection mis-tunes at non-48k sample rates — FIXED 2026-07-07 @ 6e0e8988
+
+**Fixed:** `SpectrogramConfig::with_time_grid_for(sample_rate)` (manifold-spectral) rescales
+`hop`/`n_fft` from the 48k reference so a hop is always ~5.33 ms and the window ~85 ms; the
+analyzer applies it at build (`analysis.rs` `StreamingSendAnalyzer::new`). Frequency bins were
+already SR-invariant, so nothing there changed. No-op at 48k, exact 2× at 96k. Proven by
+`time_grid_holds_hop_and_window_duration_across_rates` across 44.1/48/88.2/96/192k plus the full
+manifold-audio analysis suite (46 tests green). **Still owed (VD, cheap):** the end-to-end proof
+named in the original gate — resample a fixture to 96k, run the harness, confirm fire TIMES in
+seconds match the 48k run. The grid-invariance test makes this belt-and-suspenders, not load-bearing.
+Original diagnosis retained below.
+
+
 
 **Found 2026-07-07 (Peter's question during the kick-detector discussion).** The audio
 analysis runs at the DEVICE'S native rate — `audio_mod_runtime.rs:322` sets the analyzer

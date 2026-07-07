@@ -169,6 +169,14 @@ does it catch kicks on a bass-heavy finished track, does it strobe on bass, is t
 confirmation latency (D7) acceptable. Burn-down: the landing report's ≤2-min click-script;
 `KICK_WIN` is the latency knob if it reads late.
 
+### VD-015 — BUG-052 sample-rate invariance: end-to-end cross-rate fire-time match — L2 reached / L3 target
+Fixed 2026-07-07 (`6e0e8988`). Grid invariance is L2-proven by unit test (hop/window duration hold
+across 44.1/48/88.2/96/192k) + the green analysis suite, so all hop-count constants keep their
+wall-clock meaning by construction. What's unproven is the original gate: take one fixture, resample
+it 48k→96k, run `mod_harness` at both rates, confirm the kick/onset fire TIMES in seconds agree (the
+eval grades in seconds). Cheap and deterministic — a follow-up harness run, no rig. Closes at L3 on
+that match.
+
 *(VD-001–004 seeded 2026-07-05 from the memory corpus plus Peter's in-app findings; VD-006 added
 2026-07-05, VD-007 at P2 landing, VD-008 at P3 landing, VD-009 at P4 landing, VD-010 at P5-inspector
 landing. VD-005 closed at P2 landing. The full backfill pass over recent landings is still owed and
