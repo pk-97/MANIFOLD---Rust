@@ -75,7 +75,7 @@
 use manifold_audio::analysis::{StreamingSendAnalyzer, salience_into, salience_peak, tilt_weights};
 use manifold_core::audio_mod::AudioModShape;
 use manifold_core::audio_setup::{DEFAULT_LOW_HZ, DEFAULT_MID_HZ, FLOOR_DB_OFF};
-use manifold_spectral::SpectrogramConfig;
+use manifold_spectral::{ScopeColumn, ScopeOnsets, SpectrogramConfig};
 
 const BAND_NAMES: [&str; 4] = ["FULL", "LOW", "MID", "HIGH"];
 /// Band identity colors, matched to the scope shader's centroid traces
@@ -108,8 +108,8 @@ struct HopRecord {
     col: Vec<f32>,
     /// Per-band centroid height-from-bottom 0..1, -1 = hidden. [Full, Low, Mid, High].
     centroid_yfb: [f32; 4],
-    /// Per-band onset fire flags (1.0 on the fired hop). [Low, Mid, High].
-    onset_fired: [f32; 3],
+    /// Onset fire flags (1.0 on the fired hop), named lanes per `scope.rs`.
+    onsets: ScopeOnsets,
     /// features[feature][band], feature order per FEATURE_NAMES, band order per BAND_NAMES.
     raw: [[f32; 4]; 7],
     /// Same, after the default AudioModShape follower (what a param would receive).
@@ -342,11 +342,11 @@ fn analyze_and_render(
         an.push(chunk);
         let mut cols: Vec<Vec<f32>> = Vec::new();
         an.drain_scope_columns(|c| cols.push(c.to_vec()));
-        let mut scalars: Vec<([f32; 4], [f32; 3])> = Vec::new();
-        an.drain_scope_scalars(|c, o| scalars.push((c, o)));
+        let mut scalars: Vec<ScopeColumn> = Vec::new();
+        an.drain_scope_scalars(|c| scalars.push(c));
         let f = an.latest();
         // One hop in → one column out (a short final chunk emits none).
-        for (col, (centroid, onsets)) in cols.into_iter().zip(scalars) {
+        for (col, scalar) in cols.into_iter().zip(scalars) {
             let mut raw = [[0.0f32; 4]; 7];
             let mut smoothed = [[0.0f32; 4]; 7];
             for b in 0..4 {
@@ -379,8 +379,8 @@ fn analyze_and_render(
             let tracked_f0_hz = if f.pitch_confidence > 0.0 { f.pitch_hz } else { f32::NAN };
             records.push(HopRecord {
                 col,
-                centroid_yfb: centroid,
-                onset_fired: onsets,
+                centroid_yfb: scalar.centroids,
+                onsets: scalar.onsets,
                 raw,
                 smoothed,
                 salience_f0_hz,
@@ -1393,16 +1393,15 @@ fn render_png(
                 }
             }
         }
-        // Transient ticks: three stacked lanes at the BOTTOM edge, Low lowest —
-        // same layout, colors, and alpha as the shader's onset lanes.
-        const TICK_COLORS: [[u8; 3]; 3] = [
-            [255, 89, 77],   // Low (1.0, 0.35, 0.30)
-            [89, 255, 115],  // Mid (0.35, 1.0, 0.45)
-            [102, 158, 255], // High (0.40, 0.62, 1.0)
-        ];
+        // Transient ticks: stacked lanes at the BOTTOM edge, lane 0 lowest —
+        // same layout, colors, and alpha as the shader's onset lanes, iterated
+        // from the ONE lane definition in `scope.rs` (a new lane there shows
+        // up here with no harness change).
         let lane_px = (SPEC_H as f32 * 0.014) as usize;
-        for (oi, &tick_color) in TICK_COLORS.iter().enumerate() {
-            if records[lo..hi].iter().any(|rec| rec.onset_fired[oi] > 0.5) {
+        for (oi, [r, g, b]) in ScopeOnsets::LANE_COLORS.into_iter().enumerate() {
+            let tick_color =
+                [(r * 255.0).round() as u8, (g * 255.0).round() as u8, (b * 255.0).round() as u8];
+            if records[lo..hi].iter().any(|rec| rec.onsets.lanes()[oi] > 0.5) {
                 let lane_bottom = SPEC_H - oi * lane_px;
                 for py in (lane_bottom - lane_px)..lane_bottom {
                     blend_pixel(&mut img, x0 + x, y + py, tick_color, 0.85);

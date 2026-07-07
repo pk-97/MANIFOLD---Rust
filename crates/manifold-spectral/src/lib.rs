@@ -15,11 +15,13 @@
 //! they need.
 
 mod cqt;
+mod scope;
 mod window;
 #[cfg(feature = "gpu")]
 mod spectrogram;
 
 pub use cqt::{CqtTransform, num_bins};
+pub use scope::{MAX_ONSET_LANES, SCOPE_CENTROID_COUNT, ScopeColumn, ScopeOnsets};
 #[cfg(feature = "gpu")]
 pub use spectrogram::Spectrogram;
 
