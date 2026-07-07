@@ -49,7 +49,7 @@ or human can read it, and it needs no external tool.
 | BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
 | BUG-033 | **ui-snapshot-broken** | FIXED — verified in-tree 2026-07-07 (harness builds + runs) |
 | BUG-050 | **ableton-anchor-yankback** | play-from-cursor snap-backs; anchor fix landed, rig confirmation owed via [ABL-SYNC] logs (HIGH) |
-| BUG-051 | **trigger-clear-unwired** | `LiveTriggerState::clear()` documents "call on transport stop / project reset" but has zero call sites (LOW) |
+| BUG-051 | **trigger-clear-unwired** | FIXED 2026-07-07 @ 3089e0a3 — `engine.stop()` now calls `live_trigger_state.clear()` + the new `modulation::clear_all_trigger_edges` |
 | BUG-052 | **sample-rate-dependent-detection** | FIXED 2026-07-07 @ 6e0e8988 — `SpectrogramConfig::with_time_grid_for(sr)` derives hop/n_fft from the device rate so hop≈5.33ms + window≈85ms hold at any rate; unit-test proven across 44.1/48/88.2/96/192k; end-to-end cross-rate harness fire-time match still owed (VD) |
 | BUG-048 | **arm-two-reds** | ARM idle/armed both red, shade-only difference (LOW, UX call) |
 | BUG-049 | **child-row-right-indent** | group-child right-anchored controls misaligned ~20px (LOW) |
@@ -100,19 +100,6 @@ fixture to 96k, run the harness, confirm fire TIMES in seconds match the 48k run
 already grades in seconds). Fold into the kick time-constant rework.
 
 Next free id: BUG-053.
-
-### BUG-051 (trigger-clear-unwired) — `LiveTriggerState::clear()` never called; armed flags survive transport stop — LOW
-
-**Found 2026-07-07 during the §8 param-triggers design audit (LIVE_AUDIO_TRIGGERS_DESIGN.md).**
-The method's own doc says "call on transport stop / project reset so a stale 'fired, not
-yet re-armed' flag can't suppress the first onset next time" (`live_trigger.rs:94-98`), but
-the engine's only use of `live_trigger_state` is `.evaluate` in `tick_audio_triggers`
-(`engine.rs:1592`) — `clear()` has zero call sites. Narrow in practice: flags re-arm on the
-next evaluate once the impulse decays, so the stale flag only suppresses an onset if
-transport stops during an impulse plateau and restarts while the same band is still hot.
-**Fix shape:** call `clear()` from the transport-stop path (wherever live one-shots are
-already expired/stopped), and wire the future param-trigger edge state (§8 D4's
-`TransientEdge` holders) into the same reset point. Fold into §8 P1 if that ships first.
 
 ### BUG-050 (ableton-anchor-yankback) — Play-from-cursor: Ableton repeatedly snaps back to the gesture beat, then MANIFOLD clock-dragged after retries exhaust — HIGH (live transport; partial fix landed 2026-07-07, rig confirmation owed)
 
@@ -1249,6 +1236,26 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-051 (trigger-clear-unwired) — `LiveTriggerState::clear()` never called; armed flags survive transport stop — FIXED 2026-07-07 @ 3089e0a3
+
+**Was:** `LiveTriggerState::clear()`'s own doc said "call on transport stop /
+project reset so a stale 'fired, not yet re-armed' flag can't suppress the
+first onset next time" (`live_trigger.rs:94-98`), but the engine's only use of
+`live_trigger_state` was `.evaluate` in `tick_audio_triggers` — `clear()` had
+zero call sites. Narrow in practice (flags re-arm on the next evaluate once
+the impulse decays), but a real gap: transport stopping during an impulse
+plateau and restarting while the same band was still hot would suppress the
+first onset.
+
+**Fix:** `PlaybackEngine::stop()` now calls `self.live_trigger_state.clear()`
+directly, and the new `modulation::clear_all_trigger_edges(project)` (§8 P1,
+`LIVE_AUDIO_TRIGGERS_DESIGN.md`) walks master effects, layer effects, and
+generator instances clearing both the per-instance `audio_trigger.edge` (D2)
+and every `is_trigger`-target `ParameterAudioMod.trigger_edge` (D5b) — the two
+new §8 edge-state holders, folded into the same reset point per the fix shape
+this entry originally specified. Regression proof:
+`modulation::tests::clear_all_trigger_edges_rearms_generator_edge`.
 
 ### BUG-044 (mix-trigger-deafness) — Transient detection near-silent on dense full mixes — FIXED 2026-07-06 (novelty-vs-recent-max dual criterion; Sonnet agent build, orchestrator-verified)
 

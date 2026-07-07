@@ -6,15 +6,16 @@ stems (an L4 check). Header corrected 2026-07-05 (it still read "IN PROGRESS").
 Branch `live-audio-triggers` (off `audio-clip-detection`). Created 2026-06-18.
 
 **§8 addendum (2026-07-07): Param triggers — audio fires the Trigger controls.
-P1+P2+P3a SHIPPED 2026-07-07 (worktree `wave/param-triggers`): the engine fires,
-the renderer feeds generators AND effect chains, Strobe proves the effect-side
-reachability at L1. P3b (the UI drawer to configure it) is SCOPED, not built —
-see §8.4 P3b for why it's bigger than the original brief and what a follow-up
-session needs to read first. P4 (landing) pending.** Same evaluator machinery,
-new target: instead of firing one-shot clips, a transient pulses a playing
-generator's trigger response (and `is_trigger` cards on effects). Peter's ask,
-verbatim: *"if Trigger is enabled we can choose if we want rising clip edge
-(default) OR the transient trigger OR both."*
+P1+P2+P3a LANDED on main 2026-07-07 @ `3089e0a3`** (merged from
+`wave/param-triggers`, full workspace + gpu-proofs + clippy gate green pre- and
+post-merge): the engine fires, the renderer feeds generators AND effect chains,
+Strobe proves the effect-side reachability at L1. **P3b (the UI drawer to
+configure it) is SCOPED, not built** — see §8.4 P3b for why it's bigger than the
+original brief and what a follow-up session needs to read first. Same evaluator
+machinery, new target: instead of firing one-shot clips, a transient pulses a
+playing generator's trigger response (and `is_trigger` cards on effects).
+Peter's ask, verbatim: *"if Trigger is enabled we can choose if we want rising
+clip edge (default) OR the transient trigger OR both."*
 
 > **This doc is the cross-compaction tracker.** A fresh session reads §0 first, works
 > the §Phase checklist, ticks boxes + commits as it goes, and updates §0 at the end.
@@ -557,5 +558,16 @@ app       PanelAction + dispatch + state_sync card view                WIRE
       indicator (the real build). Gate: ui tests + clippy + manual drawer pass +
       the effect-side look already proven at L1 above should also be exercised via
       the new UI at L3/L4 once it exists.
-- [ ] **P4 — Ship.** Workspace gate, docs §0/§8 status flip, memory updated, landed per
-      the git landing protocol. Peter's feel-pass (L4) explicitly owed and logged.
+- [x] **P4 — Ship (P1/P2/P3a only — P3b not in this landing).** Full workspace
+      gate rerun twice — once pre-merge in the `wave/param-triggers` worktree,
+      once more in the main checkout after merging a concurrent BUG-052 landing
+      (`216549e2`/`6e0e8988`) that arrived while this was landing — both green
+      (workspace suite, `manifold-core` 318, `gpu-proofs` 1245, workspace clippy).
+      Merged `--no-ff` into `main` @ `3089e0a3`, pushed, rejected once (someone
+      else landed first — the sample-rate-invariance fix), re-fetched/merged/
+      re-gated/pushed successfully @ `a8993dbc`. `wave/param-triggers` confirmed
+      an ancestor of `origin/main` before deleting the branch + worktree.
+      **Explicitly owed, logged, not done here:** Peter's live feel-pass (L4) on
+      the whole feature — no audio device, no interactive GPU output in this
+      session; P3b's UI drawer (see P3b above) — a follow-up session's job, with
+      the brief already written.
