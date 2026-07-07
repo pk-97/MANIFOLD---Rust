@@ -4674,7 +4674,12 @@ impl Application {
             if cur_cols != Some(tex_w as usize) || self.spectrogram_num_bins != num_bins {
                 // Drop buffered columns — chunking them at the new `num_bins`
                 // would misalign, and a width change resets the sweep anyway.
+                // The overlay records must drop WITH them: they pair 1:1 by
+                // position, so clearing one side leaves stale records pairing
+                // with fresh columns and the overlay slides out of time
+                // against the waterfall until the backlog flushes.
                 self.pending_spectrogram_columns.clear();
+                self.pending_spectrogram_scalars.clear();
                 self.spectrogram = Some(Spectrogram::new(
                     &gpu.device,
                     num_bins,
