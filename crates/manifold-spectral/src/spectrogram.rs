@@ -70,7 +70,10 @@ struct Params {
     scalar_stride: u32,
     onset_base: u32,
     onset_count: u32,
-    _pad1: u32,
+    /// [`crate::scope::LANE_HEIGHT_FRAC`] — each tick lane's height as a
+    /// fraction of the scope, carried in the uniform like the rest of the
+    /// lane definition so the WGSL holds no lane-geometry literal.
+    lane_frac: f32,
     /// Onset lane colours (bottom-up), [`ONSET_LANE_COLORS_PADDED`]. Fixed
     /// capacity; only the first `onset_count` entries are live.
     onset_colors: [[f32; 4]; MAX_ONSET_LANES],
@@ -280,7 +283,7 @@ impl Spectrogram {
             scalar_stride: ScopeColumn::STRIDE as u32,
             onset_base: ScopeColumn::ONSET_BASE as u32,
             onset_count: ScopeOnsets::COUNT as u32,
-            _pad1: 0,
+            lane_frac: crate::scope::LANE_HEIGHT_FRAC,
             onset_colors: ONSET_LANE_COLORS_PADDED,
         };
         // SAFETY: `Params` is `#[repr(C)]` plain-old-data.
@@ -312,7 +315,7 @@ impl Spectrogram {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::Spectrogram;
-    use crate::scope::{ScopeColumn, ScopeOnsets};
+    use crate::scope::{LANE_HEIGHT_FRAC, ScopeColumn, ScopeOnsets};
     use manifold_gpu::{
         GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
     };
@@ -377,10 +380,11 @@ mod gpu_tests {
             [px[i], px[i + 1], px[i + 2]]
         };
 
-        // Lane i spans uv.y in (1 - 0.014·(i+1), 1 - 0.014·i]: sample its
+        // Lane i spans uv.y in (1 - frac·(i+1), 1 - frac·i]: sample its
         // vertical centre. Expected colour = LANE_COLORS[i] mixed 0.85 over
         // the silent background (colormap(0) = black), so ≈ 0.85·colour·255.
-        let lane_center_y = |i: u32| H - 1 - ((0.014 * (i as f32 + 0.5)) * H as f32) as u32;
+        let lane_center_y =
+            |i: u32| H - 1 - ((LANE_HEIGHT_FRAC * (i as f32 + 0.5)) * H as f32) as u32;
         for (i, (col, [r, g, b])) in fired_cols.iter().zip(ScopeOnsets::LANE_COLORS).enumerate() {
             let y = lane_center_y(i as u32);
             let got = at(*col as u32, y);

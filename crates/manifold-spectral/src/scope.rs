@@ -43,6 +43,11 @@ impl ScopeOnsets {
         [0.40, 0.62, 1.0], // high — blue
     ];
 
+    /// Human-readable lane names, same bottom-up order as the fields — the
+    /// Audio Setup scope's gutter legend and any other UI naming a lane.
+    /// Length-checked against the field count at compile time.
+    pub const LANE_LABELS: [&'static str; Self::COUNT] = ["Kick", "Low", "Mid", "High"];
+
     /// The lanes as an array, bottom-up (for consumers that iterate lanes, e.g.
     /// the `mod_harness` CPU renderer). The return length is [`Self::COUNT`],
     /// so forgetting to list a new field here is a compile error.
@@ -50,6 +55,12 @@ impl ScopeOnsets {
         [self.kick, self.low, self.mid, self.high]
     }
 }
+
+/// Each onset tick lane's height as a fraction of the scope's height —
+/// owned here with the rest of the lane definition; the shader receives it
+/// through its uniforms, the UI's gutter legend and the `mod_harness` CPU
+/// port position labels/lanes with the same value.
+pub const LANE_HEIGHT_FRAC: f32 = 0.014;
 
 /// Per-band spectral-centroid count: `[full, low, mid, high]`, each a
 /// normalised height-from-bottom (0..1); `< 0` hides that band's trace.
