@@ -196,17 +196,18 @@ def _human_prompt_text(content):
     return None
 
 
-def _last_turn_zero_tool_calls(transcript_path):
-    """Finds the LAST genuine human prompt (a 'user' entry that isn't a
-    tool_result carrier) and, from there to the end of the transcript,
-    whether the turn contains any tool call at all. This is turn-WIDE — every
-    assistant JSONL entry after the boundary, not just the final one — unlike
-    mechanical/announced-not-started's check, which only looks at the last
-    assistant message's own trailing content. moves.md's signature for this
-    move is "the turn contains zero tool calls", a different and broader
-    question. Returns (final_text, user_prompt_text); final_text is None
-    when there's no usable boundary, no assistant text after it, or any tool
-    call anywhere in the turn."""
+def _parse_last_turn(transcript_path):
+    """Parse the transcript's LAST turn: from the final genuine human prompt
+    (a 'user' entry that isn't a tool_result carrier) to the end of the
+    file. This is turn-WIDE — every assistant JSONL entry after the
+    boundary, not just the final one — unlike mechanical/announced-not-
+    started's check, which only looks at the last assistant message's own
+    trailing content. Returns (final_text, user_prompt_text, tool_calls)
+    where tool_calls is [(name, input_dict)] in call order. Shared by the
+    §2h.1 chat-claim and §2h.6(c) done-claim checks — same turn boundary,
+    opposite requirements on tool_calls (zero vs. mutating-without-
+    verification). (None, None, []) when there's no usable boundary or no
+    assistant text after it."""
     entries = []
     try:
         with open(transcript_path, encoding="utf-8", errors="replace") as f:
@@ -219,7 +220,7 @@ def _last_turn_zero_tool_calls(transcript_path):
                 except json.JSONDecodeError:
                     continue
     except OSError:
-        return None, None
+        return None, None, []
 
     boundary = None
     user_prompt_text = ""
@@ -232,9 +233,10 @@ def _last_turn_zero_tool_calls(transcript_path):
             boundary, user_prompt_text = i, text
             break
     if boundary is None:
-        return None, None
+        return None, None, []
 
     final_text = None
+    tool_calls = []
     for d in entries[boundary + 1 :]:
         if d.get("type") != "assistant":
             continue
@@ -245,11 +247,23 @@ def _last_turn_zero_tool_calls(transcript_path):
             if not isinstance(block, dict):
                 continue
             if block.get("type") == "tool_use":
-                return None, None  # a tool call anywhere in the turn: not this signature
-            if block.get("type") == "text":
+                input_ = block.get("input")
+                tool_calls.append((block.get("name", "?"), input_ if isinstance(input_, dict) else {}))
+            elif block.get("type") == "text":
                 t = block.get("text", "")
                 if t.strip():
                     final_text = t
+    return final_text, user_prompt_text, tool_calls
+
+
+def _last_turn_zero_tool_calls(transcript_path):
+    """mechanical/ungrounded-chat-claim's turn gate: moves.md's signature is
+    "the turn contains zero tool calls" — any tool call anywhere in the turn
+    disqualifies. Returns (final_text, user_prompt_text), final_text None
+    when disqualified."""
+    final_text, user_prompt_text, tool_calls = _parse_last_turn(transcript_path)
+    if tool_calls:
+        return None, None
     return final_text, user_prompt_text
 
 
@@ -348,6 +362,81 @@ def _stable_transcript_size(transcript_path):
     except OSError:
         return second
     return max(second, third)
+
+
+# ---- mechanical/unverified-done-claim (DESIGN.md §2h.6(c)) ----
+#
+# The zero-latency tier for the anchor/verify-claim family: the 2026-07-07
+# forensics showed 8 of the 11 classifier-latency late fires were done-claim
+# family, and a completion claim is structurally the last text of its turn,
+# so it always races the Stop wait. Deterministic and crude by design — the
+# classifier keeps the nuanced cases (bundled claims, wrong-medium evidence);
+# this catches the literal form instantly. The moves.md signature is the
+# contract.
+
+# First-person completion claims, matched per sentence as leading words
+# (which subsumes standalone claim sentences — "Done." starts with "done");
+# an optional "all/everything" prefix covers "All done.".
+_DONE_CLAIM_RE = re.compile(
+    r"^(?:(?:all|everything)\s+)?"
+    r"(?:done|fixed|landed|shipped|pushed|implemented|complete|resolved|works now)\b",
+    re.IGNORECASE,
+)
+# The final text already confessing unverified-ness skips the fire — the
+# payload's own escape hatch ("end with 'unverified' instead of 'done'")
+# must not itself re-trigger the move next turn.
+_DONE_CONFESSION_RE = re.compile(
+    r"\bunverified\b|\bnot verified\b|\bhaven'?t run\b|\bstill needs\b|\bowed\b|\buntested\b",
+    re.IGNORECASE,
+)
+# Read-only Bash commands (first command position only — crude tier, same
+# spirit as common.py's regex tables): these never count as mutating work.
+_READONLY_BASH_RE = re.compile(
+    r"^\s*(?:rg|grep|fd|find|ls|cat|head|tail|wc|jq|sort|uniq|diff|stat|file|which|pwd|du|df|echo|tree)\b"
+)
+# Git commands are exempted wholesale per the signature: a commit/push-only
+# turn's claim is usually about the git action itself, which its own success
+# output verifies.
+_GIT_BASH_RE = re.compile(r"^\s*git\b")
+
+
+def _contains_done_claim(text):
+    sentences = [p.strip() for p in re.split(r"(?<=[.!?])\s+|\n+", text or "") if p.strip()]
+    # lstrip markdown decoration so "**Done.**" still reads as leading-word
+    # "done" — decoration is emphasis, not a different sentence.
+    return any(_DONE_CLAIM_RE.match(s.lstrip("*_#>`- ")) for s in sentences)
+
+
+def _unverified_done_claim(transcript_path):
+    """True iff mechanical/unverified-done-claim's ALL-hold signature holds
+    for the turn at the end of `transcript_path`: a completion claim in the
+    final text, at least one non-git mutating tool event in the turn, zero
+    verification-class events (common.py's detect_verification_class table),
+    and no confession in the final text. Never raises (caught by main()'s
+    top-level try/except)."""
+    final_text, _user_prompt, tool_calls = _parse_last_turn(transcript_path)
+    if not final_text or not tool_calls:
+        # No-tool turns belong to ungrounded-chat-claim / the classifier —
+        # "retrospective chat mentions of past completions" per the signature.
+        return False
+    if not _contains_done_claim(final_text):
+        return False
+    if _DONE_CONFESSION_RE.search(final_text):
+        return False
+    import common
+
+    has_non_git_mutation = False
+    for name, input_ in tool_calls:
+        if common.detect_verification_class(name, input_):
+            return False  # the turn verified something: not this signature
+        if name in ("Edit", "Write", "MultiEdit"):
+            has_non_git_mutation = True
+        elif name == "Bash":
+            cmd = input_.get("command") or ""
+            if _GIT_BASH_RE.match(cmd) or _READONLY_BASH_RE.match(cmd):
+                continue
+            has_non_git_mutation = True
+    return has_non_git_mutation
 
 
 def _last_assistant_content(transcript_path):
@@ -736,6 +825,22 @@ def main():
             reason = valve.build_block({"move_id": "mechanical/ungrounded-chat-claim"}, agent_id=agent_id)
             if reason:
                 _block(reason, {"move_id": "mechanical/ungrounded-chat-claim", "artifact": ungrounded})
+                return
+
+        # 2c. mechanical/unverified-done-claim (DESIGN.md §2h.6(c)): the turn
+        # ends on a completion claim, mutated something non-git, and ran
+        # nothing where the claim could fail. Zero-latency sibling of
+        # anchor/verify-claim for the literal done-claim form — 8 of the 11
+        # capped-wait late fires in the forensics were this family, and a
+        # done-claim is structurally turn-final, so it always races the Stop
+        # wait. Priority per §2h.6(c): pending whisper > announced-not-
+        # started > ungrounded-chat-claim > this (the two mechanical checks
+        # above are mutually exclusive with this one in practice — zero vs.
+        # nonzero tool calls — but the order is the contract regardless).
+        if _unverified_done_claim(transcript_path):
+            reason = valve.build_block({"move_id": "mechanical/unverified-done-claim"}, agent_id=agent_id)
+            if reason:
+                _block(reason, {"move_id": "mechanical/unverified-done-claim"})
                 return
 
         # 3/4. Grade-backstop + observation-review prompt. DESIGN.md §2h.4

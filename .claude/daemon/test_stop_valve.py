@@ -215,6 +215,43 @@ def write_chat_claim_transcript(path, final_text, user_prompt_text="continue wit
         f.write("\n".join(lines) + "\n")
 
 
+def write_done_claim_transcript(path, final_text, turn_tool_calls, user_prompt_text="please do the thing"):
+    """A transcript whose LAST turn contains tool calls (assistant tool_use +
+    user tool_result pairs AFTER the human prompt, i.e. inside the turn) and
+    ends on a final assistant text — mechanical/unverified-done-claim's
+    target shape. `turn_tool_calls` is a list of (name, input_dict)."""
+    lines = [json.dumps({
+        "type": "user",
+        "timestamp": "2026-07-04T00:00:00Z",
+        "message": {"role": "user", "content": user_prompt_text},
+    })]
+    ts = 0
+    for i, (name, input_) in enumerate(turn_tool_calls):
+        ts += 1
+        lines.append(json.dumps({
+            "type": "assistant",
+            "timestamp": f"2026-07-04T00:00:{ts:02d}Z",
+            "message": {
+                "role": "assistant",
+                "model": "claude-sonnet-5",
+                "content": [{"type": "tool_use", "id": f"dt{i}", "name": name, "input": input_}],
+            },
+        }))
+        ts += 1
+        lines.append(json.dumps({
+            "type": "user",
+            "timestamp": f"2026-07-04T00:00:{ts:02d}Z",
+            "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"dt{i}", "content": "ok"}]},
+        }))
+    lines.append(json.dumps({
+        "type": "assistant",
+        "timestamp": f"2026-07-04T00:00:{ts + 1:02d}Z",
+        "message": {"role": "assistant", "model": "claude-sonnet-5", "content": [{"type": "text", "text": final_text}]},
+    }))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
 def write_transcript(path, final_text, tool_use_after_text=False):
     """A minimal transcript whose LAST line is a single assistant message.
     If tool_use_after_text, a tool_use block follows the text block within
@@ -532,6 +569,220 @@ def test_chat_claim_silent_for_worker_when_flag_disabled():
         write_chat_claim_transcript(transcript, "The fix lives in docs/TOTALLY_UNSEEN_FILE.md.")
         out = run_hook({"session_id": session, "prompt_id": "p1", "agent_id": agent, "transcript_path": transcript}, td)
         check("worker Stop stays fully dark without the flag, even with a clear chat-claim signature", out == "", out)
+    with_temp_verdicts(run)
+
+
+# ---- mechanical/unverified-done-claim (DESIGN.md §2h.6(c)) ----
+
+
+def test_done_claim_fires_on_mutation_without_verification():
+    def run(td):
+        session = "sess-doneclaim-fire"
+        transcript = os.path.join(td, "t.jsonl")
+        write_done_claim_transcript(
+            transcript,
+            "Done. The parser handles both cases and the edge case is covered.",
+            [("Edit", {"file_path": "src/parser.rs", "old_string": "a", "new_string": "b"})],
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        d = json.loads(out) if out else None
+        check("done-claim after an unverified edit fires", d is not None and d.get("decision") == "block", out)
+        check("reason carries the done-claim move id", d and 'move="mechanical/unverified-done-claim"' in d.get("reason", ""), d)
+    with_temp_verdicts(run)
+
+
+def test_done_claim_silent_when_turn_ran_a_test():
+    def run(td):
+        session = "sess-doneclaim-tested"
+        transcript = os.path.join(td, "t.jsonl")
+        write_done_claim_transcript(
+            transcript,
+            "Done. The parser handles both cases and the tests pass.",
+            [
+                ("Edit", {"file_path": "src/parser.rs", "old_string": "a", "new_string": "b"}),
+                ("Bash", {"command": "cargo test -p manifold-core --lib"}),
+            ],
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        check("a verification-class event (test-run) in the turn suppresses the fire", out == "", out)
+    with_temp_verdicts(run)
+
+
+def test_done_claim_silent_when_turn_read_a_render():
+    def run(td):
+        session = "sess-doneclaim-render"
+        transcript = os.path.join(td, "t.jsonl")
+        write_done_claim_transcript(
+            transcript,
+            "Fixed. The gradient banding is gone in the output.",
+            [
+                ("Edit", {"file_path": "src/shader.rs", "old_string": "a", "new_string": "b"}),
+                ("Read", {"file_path": "/tmp/render_out.png"}),
+            ],
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        check("a render-read in the turn counts as verification — silent", out == "", out)
+    with_temp_verdicts(run)
+
+
+def test_done_claim_never_fires_on_git_only_turn():
+    def run(td):
+        session = "sess-doneclaim-gitonly"
+        transcript = os.path.join(td, "t.jsonl")
+        write_done_claim_transcript(
+            transcript,
+            "Pushed. Both commits are on the branch.",
+            [
+                ("Bash", {"command": "git -C /repo commit -m 'x' -- file.rs"}),
+                ("Bash", {"command": "git -C /repo push origin feat/x"}),
+            ],
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        check("a commit/push-only turn never fires (git's own output verifies the git claim)", out == "", out)
+    with_temp_verdicts(run)
+
+
+def test_done_claim_never_fires_without_mutating_work():
+    def run(td):
+        session = "sess-doneclaim-readonly"
+        transcript = os.path.join(td, "t.jsonl")
+        write_done_claim_transcript(
+            transcript,
+            "Done. The audit found nothing out of place.",
+            [
+                ("Read", {"file_path": "src/lib.rs"}),
+                ("Bash", {"command": "rg 'pattern' src/"}),
+            ],
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        check("reads and read-only bash are not mutating work — silent", out == "", out)
+    with_temp_verdicts(run)
+
+
+def test_done_claim_mutating_bash_counts_as_work():
+    def run(td):
+        session = "sess-doneclaim-mutbash"
+        transcript = os.path.join(td, "t.jsonl")
+        write_done_claim_transcript(
+            transcript,
+            "Done. The fixture layout is in place.",
+            [("Bash", {"command": "mkdir -p fixtures/audio && cp /tmp/a.wav fixtures/audio/"})],
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        d = json.loads(out) if out else None
+        check(
+            "a non-git, non-read-only bash command is mutating work — fires",
+            d is not None and 'move="mechanical/unverified-done-claim"' in d.get("reason", ""),
+            out,
+        )
+    with_temp_verdicts(run)
+
+
+def test_done_claim_confession_skips():
+    def run(td):
+        session = "sess-doneclaim-confess"
+        transcript = os.path.join(td, "t.jsonl")
+        write_done_claim_transcript(
+            transcript,
+            "Done, but unverified — the render check is still owed.",
+            [("Edit", {"file_path": "src/parser.rs", "old_string": "a", "new_string": "b"})],
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        check("a final text already confessing unverified-ness never fires", out == "", out)
+    with_temp_verdicts(run)
+
+
+def test_done_claim_requires_leading_claim_words():
+    def run(td):
+        session = "sess-doneclaim-midsentence"
+        transcript = os.path.join(td, "t.jsonl")
+        write_done_claim_transcript(
+            transcript,
+            "The build is done and everything landed cleanly.",
+            [("Edit", {"file_path": "src/parser.rs", "old_string": "a", "new_string": "b"})],
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        check(
+            "mid-sentence completion words don't match — leading words or standalone sentences only (crude by design)",
+            out == "",
+            out,
+        )
+    with_temp_verdicts(run)
+
+
+def test_done_claim_loses_priority_to_announced_not_started():
+    def run(td):
+        session = "sess-doneclaim-priority-announce"
+        transcript = os.path.join(td, "t.jsonl")
+        write_done_claim_transcript(
+            transcript,
+            "Fixed. Starting the follow-up cleanup now.",
+            [("Edit", {"file_path": "src/parser.rs", "old_string": "a", "new_string": "b"})],
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        d = json.loads(out) if out else None
+        check(
+            "announced-not-started wins when a turn matches both signatures",
+            d is not None and 'move="mechanical/announced-not-started"' in d.get("reason", ""),
+            out,
+        )
+        check("done-claim did not also fire in the same block", d and 'move="mechanical/unverified-done-claim"' not in d.get("reason", ""), d)
+    with_temp_verdicts(run)
+
+
+def test_done_claim_loses_priority_to_pending_whisper():
+    def run(td):
+        session = "sess-doneclaim-priority-pending"
+        transcript = os.path.join(td, "t.jsonl")
+        write_verdict(td, session, "anchor/circling", seq=1)
+        write_done_claim_transcript(
+            transcript,
+            "Done. The parser handles both cases.",
+            [("Edit", {"file_path": "src/parser.rs", "old_string": "a", "new_string": "b"})],
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        d = json.loads(out) if out else None
+        check(
+            "an already-pending whisper wins over the done-claim check",
+            d is not None and 'move="anchor/circling"' in d.get("reason", ""),
+            out,
+        )
+    with_temp_verdicts(run)
+
+
+def test_done_claim_applies_to_worker_when_flag_enabled():
+    def run(td):
+        with open(valve.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
+            f.write("1")
+        session, agent = "sess-doneclaim-worker", "wk11"
+        transcript = os.path.join(td, "t.jsonl")
+        write_done_claim_transcript(
+            transcript,
+            "Done. The parser handles both cases.",
+            [("Edit", {"file_path": "src/parser.rs", "old_string": "a", "new_string": "b"})],
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "agent_id": agent, "transcript_path": transcript}, td)
+        d = json.loads(out) if out else None
+        check(
+            "done-claim reaches a worker Stop event when the worker-nudges flag is on",
+            d is not None and 'move="mechanical/unverified-done-claim"' in d.get("reason", ""),
+            out,
+        )
+        check("the ack sentence names this worker's agent_id", d and f'"agent_id": "{agent}"' in d.get("reason", ""), d)
+    with_temp_verdicts(run)
+
+
+def test_done_claim_silent_for_worker_when_flag_disabled():
+    def run(td):
+        session, agent = "sess-doneclaim-worker-off", "wk12"
+        transcript = os.path.join(td, "t.jsonl")
+        write_done_claim_transcript(
+            transcript,
+            "Done. The parser handles both cases.",
+            [("Edit", {"file_path": "src/parser.rs", "old_string": "a", "new_string": "b"})],
+        )
+        out = run_hook({"session_id": session, "prompt_id": "p1", "agent_id": agent, "transcript_path": transcript}, td)
+        check("worker Stop stays fully dark without the flag, even with a clear done-claim signature", out == "", out)
     with_temp_verdicts(run)
 
 
@@ -1184,6 +1435,18 @@ def main():
         test_chat_claim_loses_priority_to_pending_whisper,
         test_chat_claim_applies_to_worker_when_flag_enabled,
         test_chat_claim_silent_for_worker_when_flag_disabled,
+        test_done_claim_fires_on_mutation_without_verification,
+        test_done_claim_silent_when_turn_ran_a_test,
+        test_done_claim_silent_when_turn_read_a_render,
+        test_done_claim_never_fires_on_git_only_turn,
+        test_done_claim_never_fires_without_mutating_work,
+        test_done_claim_mutating_bash_counts_as_work,
+        test_done_claim_confession_skips,
+        test_done_claim_requires_leading_claim_words,
+        test_done_claim_loses_priority_to_announced_not_started,
+        test_done_claim_loses_priority_to_pending_whisper,
+        test_done_claim_applies_to_worker_when_flag_enabled,
+        test_done_claim_silent_for_worker_when_flag_disabled,
         test_agent_id_routes_to_agent_mailbox,
         test_agent_id_silent_when_worker_nudges_disabled,
         test_malformed_stdin_and_missing_transcript_exit_clean,
