@@ -64,6 +64,16 @@ TASK_DIAGNOSIS_RE = re.compile(r"\b(?:fix|bug|broken|why|crash|wrong)\b", re.IGN
 PHASE_OSCILLATION_SPAN_EVENTS = 40
 PHASE_OSCILLATION_MIN_FLIPS = 3
 
+# DESIGN.md §2h.2: "the trailing window" for the landing-doc-reflex
+# docs-only suppression is not numerically specced either — same
+# placeholder-judgment-call status as PHASE_OSCILLATION_SPAN_EVENTS above;
+# pass 2 tunes it from real fires rather than a guess made now.
+LANDING_DOCS_WINDOW_EVENTS = 30
+
+# DESIGN.md §2h.5: hygiene sweep retention — sentinels older than this are
+# stale and safe to remove at observer startup (never mid-loop).
+HYGIENE_MAX_AGE_S = 7 * 86400
+
 
 def _move_family(move_id):
     if move_id == "anchor/verify-claim":
@@ -234,6 +244,65 @@ class Daemon:
             except OSError:
                 pass
 
+    @staticmethod
+    def _pid_alive(pid_path):
+        """Signal-0 liveness check for an ARBITRARY session's pidfile — same
+        check as `_already_running` above, parameterized, because the
+        hygiene sweep below tests a candidate orphan `.stop` file against
+        ITS OWN session, not the sweeping daemon's own."""
+        try:
+            with open(pid_path, encoding="utf-8") as f:
+                pid = int(f.read().strip())
+            os.kill(pid, 0)
+            return True
+        except (OSError, ValueError):
+            return False
+
+    @staticmethod
+    def _hygiene_sweep(logf):
+        """DESIGN.md §2h.5: startup-only, fail-open cleanup of stale
+        `verdicts/` sentinels — called once per observer start (from
+        `_run`, before the poll loop begins), never inside the loop.
+        Conservative by construction: only two narrowly-named patterns ever
+        qualify, both also gated on age, so every other file (.pid, .json
+        verdicts, .consumed, .firestate.json, .offset) and the mutes/
+        subdirectory are left alone — the patterns below never match them,
+        and `mutes/` is never descended into (only VERDICTS_DIR's own
+        top-level listing is scanned). Any failure anywhere just means this
+        run's sweep did less; it never raises."""
+        removed = []
+        try:
+            now = time.time()
+            for name in os.listdir(VERDICTS_DIR):
+                path = os.path.join(VERDICTS_DIR, name)
+                try:
+                    if not os.path.isfile(path):
+                        continue
+                    age = now - os.path.getmtime(path)
+                except OSError:
+                    continue
+                if age <= HYGIENE_MAX_AGE_S:
+                    continue
+                if ".stopblock." in name:
+                    pass  # age alone qualifies — same criterion as daemon-stop.py's own (shorter) sweep
+                elif name.endswith(".stop"):
+                    session_id = name[: -len(".stop")]
+                    if Daemon._pid_alive(os.path.join(VERDICTS_DIR, f"{session_id}.pid")):
+                        continue  # not an orphan — that session's daemon is still live
+                else:
+                    continue
+                try:
+                    os.remove(path)
+                    removed.append(name)
+                except OSError:
+                    pass
+        except OSError:
+            pass
+        if removed:
+            _log(logf, f"hygiene sweep: removed {len(removed)} stale sentinel(s): {sorted(removed)}")
+        else:
+            _log(logf, "hygiene sweep: nothing to remove")
+
     def run(self):
         os.makedirs(VERDICTS_DIR, exist_ok=True)
         # SessionEnd stops us with SIGTERM; Python's default handler skips
@@ -254,6 +323,7 @@ class Daemon:
             _log(logf, "another daemon already running for this session, exiting")
             return
         self._claim_pidfile()
+        self._hygiene_sweep(logf)  # DESIGN.md §2h.5: startup-only, once per observer start
         # Anything in the mailbox from before our spawn is a predecessor's:
         # a leftover .stop (SIGKILLed daemon, pre-fix SIGTERM) would end us on
         # the first poll, and the consumed marker persists across restarts —
@@ -313,20 +383,43 @@ class Daemon:
         try:
             names = os.listdir(subdir)
         except OSError:
-            return
-        for name in sorted(names):
-            if not (name.startswith("agent-") and name.endswith(".jsonl")):
-                continue
-            agent_id = name[len("agent-") : -len(".jsonl")]
-            if agent_id in self.agents:
-                continue
-            worker = AgentWorker(agent_id, self.session_id, os.path.join(subdir, name))
-            self.agents[agent_id] = worker
+            names = None
+        if names is not None:
+            self._discover_agents_in(subdir, names, logf)
+        # DESIGN.md §2h.3: workflow runs live one directory level deeper —
+        # <subagents_dir>/workflows/<run_id>/agent-*.jsonl — and a run
+        # directory can appear mid-session (a Workflow tool call launches it
+        # well after the observer started), so `workflows/` itself is
+        # re-listed every poll, same as the top-level scan above. If
+        # `subdir` doesn't exist yet, `workflows/` can't either (it's a
+        # child of it) — nothing to do.
+        #
+        # OBSERVATION ONLY (§2h.3): this discovers + tails workflow-agent
+        # transcripts exactly like top-level Agent-tool workers, feeding the
+        # same self.agents dict, so whisper delivery rides the existing
+        # agent_id-keyed valve routing automatically IF the harness actually
+        # threads a workflow agent's own additionalContext back into that
+        # agent's context (unconfirmed here). §2h.3's mandatory step-0 probe
+        # — plant a verdict for a real workflow agent, confirm PostToolUse
+        # fires with agent_id set AND the injected context lands in the
+        # workflow agent's own transcript, not the parent's — is left for
+        # whoever wires delivery to run before flipping anything on; it is
+        # NOT run by this change.
+        if names is not None:
+            workflows_dir = os.path.join(subdir, "workflows")
             try:
-                worker.offset = self._agent_drain(worker, logf, classify=False)
-                _log(logf, f"worker-nudges: discovered agent {agent_id}, catchup offset={worker.offset}")
-            except Exception:
-                _log(logf, f"worker-nudges: catchup failed for {agent_id}:\n" + traceback.format_exc())
+                run_names = os.listdir(workflows_dir)
+            except OSError:
+                run_names = []
+            for run_name in sorted(run_names):
+                run_path = os.path.join(workflows_dir, run_name)
+                if not os.path.isdir(run_path):
+                    continue
+                try:
+                    run_entries = os.listdir(run_path)
+                except OSError:
+                    continue
+                self._discover_agents_in(run_path, run_entries, logf)
         for agent_id, worker in list(self.agents.items()):
             try:
                 size = os.path.getsize(worker.transcript_path)
@@ -337,6 +430,27 @@ class Daemon:
                     worker.offset = self._agent_drain(worker, logf, classify=True)
                 except Exception:
                     _log(logf, f"worker-nudges: drain failed for {agent_id}:\n" + traceback.format_exc())
+
+    def _discover_agents_in(self, directory, names, logf):
+        """Register + catch up any not-yet-tracked `agent-*.jsonl` file in
+        `directory` (its listing already taken by the caller). Shared by the
+        top-level subagents dir and each `workflows/<run_id>/` dir (DESIGN.md
+        §2h.3) — agent_id is taken from the filename exactly as before in
+        both cases; ids are unique hex, collision-free across runs, so one
+        flat `self.agents` dict serves both sources."""
+        for name in sorted(names):
+            if not (name.startswith("agent-") and name.endswith(".jsonl")):
+                continue
+            agent_id = name[len("agent-") : -len(".jsonl")]
+            if agent_id in self.agents:
+                continue
+            worker = AgentWorker(agent_id, self.session_id, os.path.join(directory, name))
+            self.agents[agent_id] = worker
+            try:
+                worker.offset = self._agent_drain(worker, logf, classify=False)
+                _log(logf, f"worker-nudges: discovered agent {agent_id} in {directory}, catchup offset={worker.offset}")
+            except Exception:
+                _log(logf, f"worker-nudges: catchup failed for {agent_id}:\n" + traceback.format_exc())
 
     def _agent_drain(self, worker, logf, classify):
         """Mirrors `_drain`, reading `worker.transcript_path` into
@@ -389,6 +503,9 @@ class Daemon:
                     # generic, primer last (it retries until delivered).
                     if classify:
                         self._check_stopgap(name, input_, event_count, logf, mailbox=worker)
+                        self._check_landing_doc_reflex(
+                            name, input_, event_count, logf, d.get("cwd"), d.get("gitBranch"), mailbox=worker
+                        )
                         self._check_design_primer(name, input_, event_count, logf, mailbox=worker)
                     self._check_unread_edit(name, input_, event_count, logf, mailbox=worker, live=classify)
                     if classify:
@@ -485,6 +602,9 @@ class Daemon:
                     if classify:
                         self._check_stopgap(name, input_, event_count, logf)
                         self._check_git_landing(name, input_, event_count, logf)
+                        self._check_landing_doc_reflex(
+                            name, input_, event_count, logf, d.get("cwd"), d.get("gitBranch")
+                        )
                         self._check_design_primer(name, input_, event_count, logf)
                     # live=classify: catchup populates paths_seen, never fires
                     self._check_unread_edit(name, input_, event_count, logf, live=classify)
@@ -533,6 +653,55 @@ class Daemon:
         }
         _atomic_write_json(mb.verdict_path, record)
         _log(logf, f"mechanical/confessed-stopgap fired: {name} {common.tool_target(input_)} hits={hits}")
+
+    # ---- landing-doc-reflex (DESIGN.md §2h.2) ----
+
+    def _landing_docs_only_suppresses(self, mb, event_count):
+        """DESIGN.md §2h.2: honest approximation of "the landed range is
+        docs-only" — the observer runs no git subprocesses, so it cannot
+        diff the commits actually about to land. Uses §2f's per-path edit
+        facts instead (`state.last_edit_event`, session-durable: one
+        event_count per path, the path's MOST RECENT edit): if every path
+        this target has edited within the trailing LANDING_DOCS_WINDOW_EVENTS
+        tool events is itself under docs/, memory, or .claude/, this landing
+        is very likely the paper-trail update itself, so suppress. Zero
+        qualifying edits in the window is NOT treated as docs-only —
+        nothing is established either way, so the reflex still fires
+        (over-reminding beats silently missing a real code landing)."""
+        window_start = event_count - LANDING_DOCS_WINDOW_EVENTS
+        touched = [p for p, ec in mb.state.last_edit_event.items() if window_start < ec <= event_count]
+        if not touched:
+            return False
+        return all(common.is_docs_memory_or_claude_path(p) for p in touched)
+
+    def _check_landing_doc_reflex(self, name, input_, event_count, logf, cwd, git_branch, mailbox=None):
+        """mechanical/landing-doc-reflex (DESIGN.md §2h.2): deterministic,
+        never the classifier — a live-tailed (never catchup) Bash command
+        lands work on main (merge run on main, or push whose refspec/current
+        branch is main; common.detect_landing_on_main ports
+        preToolUseBash.py's landing-protocol command recognition rather than
+        re-deriving it). Docs-only suppression per §2f facts above. Fires
+        through the normal mailbox/cooldown path exactly like every other
+        mechanical move."""
+        hits = common.detect_landing_on_main(name, input_, cwd, git_branch)
+        if not hits:
+            return
+        mb = mailbox if mailbox is not None else self
+        if self._landing_docs_only_suppresses(mb, event_count):
+            _log(logf, f"mechanical/landing-doc-reflex suppressed (docs-only trailing window): {hits}")
+            return
+        verdict = {"evidence": f"{name}: {', '.join(hits)}", "confidence": 1.0}
+        flag_out = self._resolve_fire(event_count, "mechanical/landing-doc-reflex", verdict, logf, mailbox=mailbox)
+        if not flag_out:
+            return
+        record = {
+            "ts": time.time(),
+            "phase": mb.phase,
+            "window_version": common.WINDOW_VERSION,
+            "flag": flag_out,
+        }
+        _atomic_write_json(mb.verdict_path, record)
+        _log(logf, f"mechanical/landing-doc-reflex fired: {hits}")
 
     # ---- priming tier (sleep pass 1: pre-authored advice at predictable
     # moments — no detection, no classifier, no false-positive budget) ----
