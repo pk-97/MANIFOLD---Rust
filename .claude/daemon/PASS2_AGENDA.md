@@ -6,6 +6,58 @@ starts from one file. Procedure: RUNBOOK.md. Authoring/editing moves:
 MOVE_AUTHORING.md first. This agenda is ordered; items 1–3 are the pass's
 reason to exist.
 
+## Night-half results (Fable grading session, 2026-07-07 late — item 12's answer)
+
+The planned final-night grading session RAN. Every corrective fire since
+07-05 10:00 was pass-graded from timestamp-anchored transcript windows (154
+pass grades + 17 folded miss lines + 16 folded mechanical session grades,
+all stamped "[pass 2026-07-07 Fable night]" in eval/live_grades.jsonl).
+Verify these, don't redo them. Per-family precision (TP/FP/unclear):
+
+| family | TP/FP/u | precision |
+|---|---|---|
+| ungrounded-resolution | 31/14/0 | 69% |
+| verify-claim | 24/25/1 | **49%** (mains 23/19 ≈ 55%, workers 1/6) |
+| circling | 0/10/0 | **0%** |
+| checkpoint | 2/7/0 | 22% |
+| skim | 5/4/0 | 56% |
+| permission-creep | 2/4/0 | 33% |
+| unpackaged-deliverable | 3/1/0 | 75% |
+| differential, attack-the-story | 2/0 each | 100% |
+| agent-model-discipline | 1/0 | TP |
+| thrash, invariant-frame, symptom-suppression, model-first | 0/1 each | FP |
+| ALL corrective | 72/69/1 | 51% |
+
+Gates (RUNBOOK step 4): precision 51% (n=141 graded corrective fires — fails
+the 80% gate, bimodal exactly as pass 1); noise 0.69 corrective FP per
+observed session (69 FP / 100 sessions — passes <1, up from pass 1's 0.26);
+recall insufficient-data-leaning-good (72 TP vs ~15 unique logged FNs — a
+floor-quality estimate, see item 9).
+
+Actions taken by the night-half (dated notes in the files): **worker-nudges
+flag PULLED** (2/10, disable rule; return path in DESIGN §2b note — includes
+the read-only-worker whisper-refusal framing defect, 93150901/a8287d);
+**mechanical/unverified-done-claim MUTED 7 days** (0/3; both defect shapes in
+the moves.md note and mute file); **escalate/checkpoint never-fire clause**
+added (2/7; fire-count ≠ repeated drift — the one signature edit, evidence
+in the clause); test-session telemetry residue purged. NOT touched (frozen
+one-change-one-measurement): circling, ungrounded-resolution,
+confessed-stopgap, git-landing, verify-claim.
+
+Grading-infrastructure defects the night-half hit, for pass 3's method:
+(a) sessions before the mid-07-05 seq-in-sentence fix self-graded with their
+OWN corrective-only numbering (a5b78b70 "seq 1/2" = telemetry seq 2/3), so
+even exact-seq joins misattach — join by note-content when the vocab predates
+the fix; (b) five c9e4d45d self-grade lines were malformed JSON from
+`date +%s.%N` (macOS date has no %N → literal "N" in ts) — recovered by
+regex; consider naming the exact command in build_block's grade-ask;
+(c) grade lines without agent_id collide across (session, seq) exactly as
+pass 1 warned — the af6569 agent_id-bearing line was the only clean worker
+join; (d) compaction re-injects attachment history, so slice_fires
+order-matching drifts mid-session — anchor by block timestamp instead
+(cut_windows.py recipe in the pass-2 grading session's scratchpad, trivially
+re-derivable: dedupe (text,ts) pairs, match nearest fire ts).
+
 1. **Headline metric (Peter, 2026-07-07): corrections land before his next
    message.** From telemetry.jsonl injected records, compute the in-turn
    (valve PostToolUse/Stop) vs next-prompt (valve UserPromptSubmit) split for
@@ -19,6 +71,22 @@ reason to exist.
    measured Stop wall time — use it, don't infer. Also check the per-turn
    latency tax (the double-stat adds ~0.2s to every turn end; the 10s cap
    binds only when a classification is in flight).
+   **MEASURED 2026-07-07 night (Fable), durationMs oracle:** post-fix split =
+   **32 in-turn / 3 next-prompt (~9% late, from 25%)**. The 3 late: ebade1fd
+   s6 (TP; wait engaged, ran the FULL cap, 10685ms — capped class survives at
+   10s), f4b895d7 s2 (TP; capped class), 84a58ca5 s8 (FP; 29ms skip with the
+   verdict landing in the idle gap — residual VERDICT-AFTER-TURN, 1 specimen).
+   **But the latency-tax finding overturns 2h.6b's theory: of 114 post-fix
+   Stop invocations, 75% ran ≥10.5s and ZERO landed in 0.1–9.5s.** Bimodal =
+   the wait is not racing a slow classifier; it waits for something that
+   structurally does not arrive mid-wait (the observer doesn't classify
+   turn-final text until the next event pokes it). The cap bump converted
+   nothing and 1.75×'d a tax now paid on three-quarters of turn ends (~8s
+   mean). Top plumbing item for this pass: either make the Stop wait CONVERT
+   (poke the observer to classify the final text, then wait on that), or
+   revert the cap toward 6s / skip the wait when no flag is already pending.
+   The measured double-stat cost is invisible (28 skips all <100ms — check
+   whether the double-stat path engages at all on the skip branch).
 2. **Score the 07-07 additions** — BOTH batches. The final authoring pass
    (same day, later) added 7 more moves + 5 sharpenings mined from
    eval/observations.session.jsonl; per-move oracles in DESIGN.md §2i, triage
@@ -36,10 +104,36 @@ reason to exist.
    af65698430e9470ac seq 2, written during the build itself), worker
    self-grade uptake (more agent_id-bearing grade lines), worker review
    threshold (20 events — placeholder, tune from data).
+   **PARTIALLY MEASURED (night-half):** unverified-done-claim **0/3 → MUTED**
+   (see moves.md note); ungrounded-chat-claim **0/2** — both FPs are the T3
+   provenance-vocabulary gap (5363065f: system-context + earlier tool result;
+   f4b895d7: artifacts read earlier in-session + the flagged turn was a
+   PROPOSAL, not a repo-fact report) — T3 now has two specimens;
+   landing-doc-reflex **1/1 + 1 FP-lean** (4340cb05 TP produced the missing
+   report; 5e1aca3d fixtures-freeze had its doc trace in a memory update —
+   consider a landing-size/class threshold, n=2, no edit). Sharpened
+   confessed-stopgap graded against the CONTRACT: 1 TP (c9e4d45d allow-excuse)
+   / 4 FP — two are the self-disposal class T2 will exempt at runtime,
+   but TWO are classifier misidentifications with NO stopgap marker in the
+   flagged edit at all (a5d63eee coverage-gap "yet", 1f5cc037 grading-script
+   write) — that second defect is not covered by T2; needs its own look.
+   Tonight's 7 NEW moves: **zero live fires** (catalog went live at d7c80f78
+   19:33, observers revive naturally) — all still UNVALIDATED, nothing to
+   grade, unheeded-warning dormant on T10 as specced.
 3. **Score the pass-1 rework + mute expiry:** verify-claim post-rework fires
    only (pre-rework grades don't count); scope-drift mute expires ~07-12 —
    decide: attribution-aware rework using §2f session facts, fold into the
    §2d phase tier, or extend the mute. Do not unmute unchanged.
+   **MEASURED (night-half): verify-claim post-rework = 49% (24/25/1, n=50)
+   — the rework did NOT clear the gate.** FP taxonomy for the next single
+   change, from the graded notes: (a) ~11 fires with NO claim in view (recon
+   reads, task-start UserPromptSubmit, waiting-on-TaskOutput — the #32
+   cadence-fire suspicion is CONFIRMED); (b) ~10 fires on claims already
+   verified in-turn/same-compound (workers worst: 6/7 FP on literal command
+   output); (c) ~4 on rephrase/report-of-verified-work turns. Class (a) is
+   the biggest and cleanest: require a stated claim in the window. Move
+   stays frozen until Opus makes that one change. scope-drift decision
+   still Opus's (~07-12).
 4. **§2d shadow telemetry** (`phase_fire` records, accumulating since 07-05):
    hand-grade against transcripts (slice_fires.py recipe), flip delivery
    per-rule at ≥60% shadow precision; tune the placeholders (span 40 /
@@ -57,14 +151,30 @@ reason to exist.
    agent_id); the §2b clock started at the first orchestration after the
    07-04 discovery fix. Disable rule: worker precision <60% at any pass pulls
    the worker-nudges flag.
-8. **Specific graded-window debts:** session 10977941 (param-storage
-   orchestration 07-05: circling ×2 → checkpoint → circling again, ended
-   no-commits — leans TP, grade it); ignore null-move_id injected records
-   before 07-05 ~10:00 (pre-fix residue). Fires from the 07-07 final-window
-   sessions (timeline-ux run + the meta/daemon session) are ungraded material.
+   **DONE (night-half): 2/10 → FLAG PULLED.** Numbers, both defect shapes,
+   and the return path are in DESIGN.md §2b's dated note. Your item: decide
+   whether to build the worker payload variant + verify-claim precondition
+   and re-enable, or leave workers dark until the §2d phase tier matures.
+8. **Specific graded-window debts:** ~~session 10977941~~ **DONE (night-half),
+   and the lean was WRONG:** the circling ×2 → checkpoint → circling chain
+   graded all-FP from timestamp-anchored transcript windows — the session was
+   a monotonic compiler-driven migration whose "ended no-commits" premise is
+   refuted in-transcript (P2 landed @ fe363d86, P5b @ 6cf04bcf). The
+   telemetry fire-shape suggested stuck; the transcript proved converging —
+   the same observation-vs-inference lesson as the round-1/2 windowing one.
+   All 17 main + 1 worker fires graded (8 TP / 9 FP main). Null-move_id
+   pre-07-05 records ignored as specced; the 07-07 final-window sessions are
+   graded through ~20:10 (fires after this pass's write are pass-3 material).
 9. **Recall honesty:** pass-1 miss-hunt closed EMPTY (Peter had none to
    report) — recall stands at "insufficient data", not zero-miss. Ask Peter
    for specimens again; if none, say so again.
+   **Night-half input:** 17 session-logged miss lines folded into
+   live_grades.jsonl (correct:"miss") — Peter-caught and self-caught FNs,
+   several already consumed as tonight's new-move specimens (root-fix-retreat
+   ×2, false-fork, unchecked-negative-claim, name-the-blocker,
+   communication-register). Recall over the window: 72 TP / ~15 unique FN ≈
+   0.83 by the file, but treat as a floor-quality estimate, not a gate pass —
+   misses only surface when someone notices.
 10. **Standing residues (check, don't build):** §2g bounds tier = unbuilt
     Sonnet ticket; 3-arm falsification experiment deferred by Peter, still
     owed eventually; classifier throttling — if 180s timeouts recur under
@@ -87,12 +197,22 @@ reason to exist.
     review threshold, OBSERVATION_PROMPT_MIN_EVENTS (40, main) if grading
     shows it mis-set.
 
-12. **Check for the 07-07-night Fable grading session's output first.** A
-    dedicated grading session was planned for the window's final night
-    (reconciling the ~180 self-grade lines and scoring ungraded telemetry
-    fires). If eval/live_grades* carries a 07-07/07-08 pass stamp, build on
-    it — verify, don't redo. If it never ran, its scope folds into items 1–3
-    and 8 here.
+12. **The 07-07-night Fable grading session RAN — its output is the
+    "Night-half results" section above** plus the "[pass 2026-07-07 Fable
+    night]"-stamped records in eval/live_grades.jsonl. Build on it; verify,
+    don't redo. What it deliberately left for you: every frozen-move
+    measurement (circling clauses, ungrounded-resolution memory-provenance,
+    git-landing escape hatch, verify-claim next change per item 3),
+    checkpoint's new clause (measure it), the Stop-wait structural fix
+    (item 1), the worker re-enable decision (item 7), scope-drift expiry
+    (item 3), and everything in §Triage marked pass-2 watch. New small
+    residues found while grading: skim's FP class is conclusions resting on
+    structurally-gated evidence (&&-chained ancestry checks, captured run
+    output — 84a58ca5 s7 is the clean specimen); permission-creep keys on
+    Peter-ORDERED asks (99ea1793) and genuine taste forks (0d9e8fba); an
+    85b5962e note/harness-upgrade-followup session line (atlas cell-picking
+    unverified headless) turned out to be already tracked as BUG-034, whose
+    BUG-033 gate is now open — nothing lost by the session-file clear.
 
 ## Triage of eval/observations.session.jsonl (Fable, 2026-07-07 late — final authoring pass)
 

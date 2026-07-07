@@ -187,6 +187,18 @@ the smaller models this layer exists to lift, and their documented failure modes
   gone. Worker nudges have therefore observed ZERO real workers so far —
   the manual-grading clock (the ≥60% disable rule above) starts at the
   first orchestration after this fix, not at enablement.
+- **FLAG PULLED 2026-07-07 (sleep pass 2 night-half, Fable): worker precision
+  2/10 over the first graded window — the disable rule bound.** The 8 FPs
+  share one shape: workers are verification-dense by construction (briefs
+  mandate gates), so verify-claim fires on literal just-run output (6 of 7
+  worker verify-claim fires FP; the lone TP was a pre-merge-green-vs-moved-main
+  catch, 76177cfc). Second defect, payload framing: a read-only search worker
+  (93150901/a8287d) REFUSED the whisper as a suspected injection because the
+  supervised-mode sentence orders a repo-file write that contradicts its
+  read-only mandate — it said so in-transcript and ignored the nudge. Return
+  path: a worker-specific payload variant (no self-grade file-write ask, no
+  out-loud ritual) plus a verify-claim precondition that the flagged claim not
+  be same-turn command output; re-enable behind the same flag and re-grade.
 
 ## 2c. Stopgap detection (approved 2026-07-04, Peter: "I NEVER want the quick fix" — build with Sonnet)
 
