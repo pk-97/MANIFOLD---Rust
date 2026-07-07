@@ -39,6 +39,17 @@ pub(crate) fn to_graph_target(target: &UiGraphTarget) -> GraphTarget {
     }
 }
 
+/// Reverse of [`to_graph_target`] — `GraphTarget` (manifold-core) →
+/// `UiGraphTarget` (manifold-ui). Same plain-clone equivalence; used by
+/// touch-to-select (P5, `ui_bridge/inspector.rs`'s `ParamSnapshot` handler)
+/// to record the chooser's active param in UI-local terms.
+pub(crate) fn to_ui_graph_target(target: &GraphTarget) -> UiGraphTarget {
+    match target {
+        GraphTarget::Effect(id) => UiGraphTarget::Effect(id.clone()),
+        GraphTarget::Generator(id) => UiGraphTarget::Generator(id.clone()),
+    }
+}
+
 /// `UiSegmentShape` (manifold-ui mirror) → `SegmentShape` (manifold-core) —
 /// the reverse of `ui_translate::segment_shape_to_ui`.
 fn to_segment_shape(shape: UiSegmentShape) -> SegmentShape {
