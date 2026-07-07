@@ -158,6 +158,17 @@ F(p) = −F(mirror p) stage by stage; the first stage that breaks antisymmetry i
 (last-frame or not-yet-written) intermediate, symmetric math still yields a lagged, shifted
 field; check the plan order + barriers for Render Volume/Force Field groups (this is the one
 hypothesis that needs blur *range* to matter and survived every kernel-level check).
+(2b) Peter's rounding hunch, sharpened (untested, fits ALL evidence): any precision theory
+must round DIRECTIONALLY — symmetric noise can't pick a corner. Prime candidate: the per-particle force read in
+`sample_volume_at_particles` — the one filtered read the integer-tap experiment did NOT
+touch. Metal's trilinear filter fraction is ~8-bit; IF its rounding truncates (UNVERIFIED —
+Apple documents the precision, not the direction; if it's round-to-nearest this candidate
+dies), every read carries a fixed ~1/512-voxel shift toward −xyz and the feedback loop
+amplifies it, and feather sets the force field's spatial COHERENCE
+(radius 1 → decorrelated gradients, biases cancel; radius 5+ → aligned pushes compound) —
+which explains the radius cliff without the per-read error changing size. Cheap test:
+replace that one trilinear sample with a manual 8-tap textureLoad trilerp in f32 and rerun
+slope_only — if the drift dies, root found (and the fix is exactly that manual trilerp);
 (3) clamp-to-edge interaction at large sigma: blur clamps while the gradient wraps
 toroidally — mixed boundary conventions couple opposite faces asymmetrically once the kernel
 reaches the volume edge. Fix at whichever level the probe convicts; then rerun the harness
