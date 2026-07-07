@@ -1937,8 +1937,12 @@ impl StreamingSendAnalyzer {
     /// output rate, not the source file's) and the project's Low/Mid/High
     /// crossovers (Hz). Same crossovers a live send reads, so the analyses match.
     pub fn new(sample_rate: u32, low_hz: f32, mid_hz: f32) -> Self {
-        let spec_config = SpectrogramConfig::default();
         let sr = sample_rate as f32;
+        // BUG-052: derive hop/n_fft from the device rate so a hop is always
+        // ~5.33 ms and the window ~85 ms — every hop-count tuning constant below
+        // (kick descent, ODF median, refractories, tracker slew) is then valid at
+        // any sample rate without resampling. No-op at 48 kHz.
+        let spec_config = SpectrogramConfig::default().with_time_grid_for(sr);
         let num_bins = spec_config.num_bins(sr).max(1);
         let n_fft = spec_config.n_fft;
         let hop = spec_config.hop.max(1);
