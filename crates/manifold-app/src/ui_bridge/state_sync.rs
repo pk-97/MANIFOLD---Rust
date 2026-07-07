@@ -379,15 +379,32 @@ pub fn push_state(
                     "Off",
                     color::TEXT_DIMMED_C32,
                 );
-            } else {
-                let status = match content_state.osc_sync_mode {
-                    OscSyncMode::AbletonOsc => "ABL",
-                    OscSyncMode::M4L => "M4L",
+            } else if content_state.osc_sync_mode == OscSyncMode::AbletonOsc {
+                // Closed-loop sync health (ABLETON_TRANSPORT_SYNC_DESIGN
+                // D9/D10): amber while a command awaits its ack or while
+                // running position on OSC alone (MIDI clock absent), red
+                // after a command exhausted its retries.
+                use manifold_playback::transport_sync::TransportSyncStatus;
+                let (dot, text, text_color) = match content_state.ableton_sync_status {
+                    TransportSyncStatus::Locked => {
+                        (color::STATUS_DOT_GREEN, "ABL", color::TEXT_WHITE_C32)
+                    }
+                    TransportSyncStatus::Confirming => {
+                        (color::STATUS_DOT_YELLOW, "ABL…", color::TEXT_WHITE_C32)
+                    }
+                    TransportSyncStatus::DegradedOscOnly => {
+                        (color::STATUS_DOT_YELLOW, "ABL no CLK", color::TEXT_WHITE_C32)
+                    }
+                    TransportSyncStatus::Warning => {
+                        (color::STATUS_BAD, "ABL desync", color::TEXT_WHITE_C32)
+                    }
                 };
+                ui.transport.set_sync_state(true, dot, text, text_color);
+            } else {
                 ui.transport.set_sync_state(
                     true,
                     color::STATUS_DOT_GREEN,
-                    status,
+                    "M4L",
                     color::TEXT_WHITE_C32,
                 );
             }

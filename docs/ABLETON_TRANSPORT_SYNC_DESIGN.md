@@ -1,8 +1,27 @@
 # Ableton Transport Sync — closed-loop transport between MANIFOLD and Ableton Live
 
-**Status:** APPROVED design, building this session · 2026-07-07 · Fable
+**Status:** P1–P3 SHIPPED 2026-07-07 (same-session build, Fable) · P4 landing complete except the L4 live checklist (§6 P4 demo — Peter-owned, the real acceptance gate)
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+
+**Build deviations (2026-07-07, recorded at landing):**
+1. **D5 widened:** the clock-plane gate also holds CLK *transport* relay (not
+   just position + external_time_sync) while a command is pending — during an
+   in-flight play-from-cursor, Ableton's clock still says "stopped", and
+   relaying that as a pause is the "doesn't respond" flap. One extra `&&` in
+   `midi_clock_sync.rs` (transport block).
+2. **D10 refinement:** the relay drain gates on drain-time CLK liveness, not
+   the frame-start `authority` (which derives from last frame's
+   `is_transport_receiving` and is stale precisely on the first message after
+   an idle period — the from-idle play in Ableton would have been discarded).
+   Arbiter calls pass (Osc, Osc); the CLK-liveness check is the real gate.
+3. **P3 negative gate scoped:** the §6 rg pattern also matches `osc_sender.rs`
+   (M4L legacy, untouched by scope ruling); the gate applies to the AbletonOSC
+   path files, where it passes with zero hits.
+4. **P3 L2 demo deferred to VD:** the "no-peer degrade" log trace requires
+   driving the windowed app; the same sequence is asserted by
+   `f7_slow_scheduler_400ms_still_converges` + T7/T8 at L1. Entry in
+   `docs/VERIFICATION_DEBT.md`; Peter's checklist (§6 P4) closes it at L4.
 
 The governing insight, in Peter's framing: the current transport sync is
 **open-loop control** — every command to Ableton is fire-and-forget, and every

@@ -251,12 +251,24 @@ not authority.
   silence = pause; playing: nudge every message (<0.5s) else seek; stopped:
   seek beyond 0.05s. **Currently starved — no subscription wires the receiver
   to `on_timecode_received` (§13.1).**
-- **Outbound** (MANIFOLD → Ableton): `OscPositionSender` (M4L) or
-  `AbletonBridge` transport (AbletonOSC mode) — play carries the beat, stop is
-  `/transport 0`, seeks fire on >0.5-beat divergence from dead-reckoned
-  position; 3× redundant sends + 0.3s confirm window; echo suppressed via
-  `suppress_next_transport`. AbletonOSC *inbound* transport is disabled
-  pending echo-loop investigation (code TODO).
+- **AbletonOSC transport (rewritten 2026-07-07 — ABLETON_TRANSPORT_SYNC_DESIGN.md
+  is the authority):** closed-loop pending-expectation state machine
+  (`transport_sync.rs`, pure/testable). Commands (play/stop/seek) create
+  expectations; inbound `is_playing` + `current_song_time` listener values
+  ack them by value-matching; unacked commands retransmit at 2×measured-RTT
+  (EWMA), 4 retries then loud degrade (SYNC chip "ABL desync") + adopt
+  Ableton's observed state. While pending, the whole CLK plane (position,
+  external-time-sync, transport relay) is gated. Seeks to Ableton come only
+  from explicit user gestures — the dead-reckoned drift detector is deleted.
+  Inbound relay is RE-ENABLED: CLK-priority; when CLK is absent, OSC claims
+  the fallback authority tier and drives transport + position at listener
+  cadence (SYNC chip "ABL no CLK"). No echo windows, no wall-clock
+  confirmation windows, no `suppress_next_transport` in this path.
+- **Outbound M4L** (`OscPositionSender`, legacy — Peter no longer uses it):
+  play carries the beat, stop is `/transport 0`, seeks fire on >0.5-beat
+  divergence from dead-reckoned position; 3× redundant sends + 0.3s confirm
+  window; echo suppressed via `suppress_next_transport`. Deletion is a
+  deferred cleanup (ABLETON_TRANSPORT_SYNC_DESIGN §8).
 - **Ableton bridge** additionally: session discovery (tracks/racks/macros),
   macro listeners → replace-mode param writes each frame (flagged so the UI
   snapshot follows), cue points + PLAY-group arrangement for the perform HUD.
@@ -429,22 +441,26 @@ Every magic number on the timing paths, in one place:
     `LIVE_PREWARM_MAX_UNIQUE_CLIPS` / `RECENT_PRIORITY_COUNT` /
     `COMBINED_PREWARM_MAX` are unused. First MIDI fire of a cold video clip
     rides only the 0.02s recently-started gate — black-frame risk on stage.
-11. **AbletonOSC inbound transport relay is disabled** (echo loops → play/pause
-    oscillation; code TODO in `tick_sync_controllers`). In AbletonOSC mode,
-    inbound transport currently depends on MIDI Clock being connected too.
-12. **`suppress_next_transport` staleness.** The arbiter sets it on *any*
-    gated play/pause; only senders consume it, and the Play/Pause command
-    handlers clear it only when a sender is enabled. Sync-driven transport
-    with senders disabled leaves the flag set; enabling SYNC later swallows
-    the first real transport edge.
+11. ~~AbletonOSC inbound transport relay is disabled~~ **FIXED 2026-07-07**
+    (ABLETON_TRANSPORT_SYNC_DESIGN): relay re-enabled through the closed-loop
+    state machine — own commands are value-matched acks, not relayable
+    echoes; CLK keeps priority, OSC is the fallback authority tier.
+12. ~~`suppress_next_transport` staleness~~ **FIXED for the AbletonOSC path
+    2026-07-07**: the bridge no longer consumes the flag (value-matching
+    replaces it) and AbletonOSC mode clears it each frame when the M4L
+    sender is disabled. The M4L sender still uses the flag with the original
+    staleness hazard — retired path, deferred cleanup.
 13. **`OscReceiver::subscribe_keyed`'s key scheme is broken by design** —
     `swap_remove` invalidates other keys for the same address. Harmless today
     (only `unsubscribe_all` is used, single-subscriber addresses) but a trap
     for the next subscriber.
-14. **Round-trip constants are wall-clock guesses.** 0.3s seek cooldown and
-    0.5s ownership grace encode a healthy localhost Ableton round trip; a
-    loaded machine or networked DAW that exceeds them reintroduces the exact
-    playhead drag-back they exist to stop. No measurement, no adaptivity.
+14. ~~Round-trip constants are wall-clock guesses~~ **FIXED for position/
+    transport correctness 2026-07-07**: the CLK plane now releases on
+    value-matched acknowledgment, not on the 0.3s cooldown, and retry
+    cadence adapts to measured RTT (EWMA). The 0.3s cooldown and 0.5s
+    ownership grace still exist as M4L-path/secondary heuristics, but
+    exceeding them no longer causes drag-back in AbletonOSC mode — the ack
+    gate holds regardless of round-trip time.
 15. **Session P2 seams (fresh code):** `session_launch_slot` from stopped
     transport calls `play()` (full sync — arrangement clips on that layer
     start) before the launch registers, then stops them one call later —

@@ -149,6 +149,16 @@ observed: meter following a gain drag against live audio, absence of capture-res
 exactly one undo step per drag gesture — all inherently running-app. Burn-down: click-script step 4.
 Peter owns the L4 feel-pass; it is the acceptance gate for the panel per the wave brief.
 
+### VD-013 — ABLETON_TRANSPORT_SYNC: closed-loop transport against real Ableton — L1 reached / L4 target
+Landed 2026-07-07 (`docs/landings/2026-07-07-ableton-transport-sync.md`). The state machine is
+proven at L1 (16 transition tests + 8 failure-catalog scenarios incl. play-from-cursor drag-back,
+packet loss, 400ms scheduler), but every scenario runs against FakeAbleton — real Live's listener
+cadence, `set current_song_time` during playback, and SPP-on-relocate behavior are modeled, not
+observed. Burn-down: Peter's 7-step live checklist (design doc §6 P4 demo) — play-from-cursor both
+sides, scrub during playback, rapid play/stop drumming, tempo ramp, IAC-kill degrade test, loaded
+machine. The checklist IS the acceptance gate; the design's safety property (unconfirmed
+expectation never moves the playhead) bounds the worst case at no-worse-than-before.
+
 *(VD-001–004 seeded 2026-07-05 from the memory corpus plus Peter's in-app findings; VD-006 added
 2026-07-05, VD-007 at P2 landing, VD-008 at P3 landing, VD-009 at P4 landing, VD-010 at P5-inspector
 landing. VD-005 closed at P2 landing. The full backfill pass over recent landings is still owed and

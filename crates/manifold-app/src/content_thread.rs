@@ -625,18 +625,26 @@ impl ContentThread {
             .project()
             .map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode);
         if osc_sync_mode == OscSyncMode::AbletonOsc && self.ableton_bridge.is_transport_enabled() {
-            let bpm = self
-                .engine
-                .project()
-                .map_or(120.0_f32, |p| p.settings.bpm.0);
-            let seconds_per_beat = if bpm > 0.0 { 60.0 / bpm } else { 0.5 };
+            let clk_receiving = self
+                .transport_controller
+                .midi_clock_sync
+                .as_ref()
+                .is_some_and(|s| s.is_midi_clock_enabled() && s.is_receiving_clock());
             self.ableton_bridge.late_update_transport(
                 self.engine.is_playing(),
                 self.engine.current_beat().as_f32(),
-                seconds_per_beat,
                 realtime,
-                &mut self.sync_arbiter,
+                clk_receiving,
             );
+            // The arbiter's suppress flag only serves the M4L sender; a
+            // CLK-relayed play sets it unconditionally, and with the M4L
+            // sender disabled nothing would ever consume it — enabling SYNC
+            // later would then swallow the first real transport edge
+            // (CORE_ENGINE_MAP §13.12). Clear it each frame in AbletonOSC
+            // mode; the closed-loop machine needs no suppression flag.
+            if !self.transport_controller.osc_sender_enabled {
+                self.sync_arbiter.suppress_next_transport = false;
+            }
         } else if self.transport_controller.osc_sender_enabled {
             let bpm = self
                 .engine
@@ -1291,6 +1299,7 @@ impl ContentThread {
             },
             ableton_connected: self.ableton_bridge.is_connected(),
             ableton_transport_enabled: self.ableton_bridge.is_transport_enabled(),
+            ableton_sync_status: self.ableton_bridge.transport_sync_status(),
             osc_sync_mode: self
                 .engine
                 .project()
@@ -1466,12 +1475,18 @@ impl ContentThread {
             .project()
             .map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode);
         let authority = {
-            // AbletonOSC transport is a command channel, not a clock source —
-            // it must NOT claim authority. Only M4L timecode claims OSC authority
-            // (because it was an actual timing source). MIDI Clock handles timing.
+            // MIDI Clock is the timing plane and outranks everything. In
+            // AbletonOSC mode the bridge's transport channel claims OSC
+            // authority as the FALLBACK tier (ABLETON_TRANSPORT_SYNC_DESIGN
+            // D10): the ladder below puts CLK first, so this only takes
+            // effect when the clock plane is absent or dies mid-set —
+            // degraded-but-moving beats frozen. In M4L mode, timecode
+            // claims OSC authority as before.
             let osc_receiving = match osc_sync_mode {
                 OscSyncMode::M4L => self.osc_sync.is_receiving_timecode,
-                OscSyncMode::AbletonOsc => false,
+                OscSyncMode::AbletonOsc => {
+                    self.ableton_bridge.is_transport_receiving(now.0)
+                }
             };
             let auto = if self
                 .transport_controller
@@ -1518,6 +1533,12 @@ impl ContentThread {
 
         // MIDI Clock sync — poll clock/SPP from midir.
         // Snapshot SyncTarget state before passing &mut engine as SyncArbiterTarget.
+        // The clock plane is suppressed while a user seek's round trip is in
+        // flight (cooldown, M4L path) OR while an AbletonOSC transport
+        // command awaits its ack (ABLETON_TRANSPORT_SYNC_DESIGN D5) — in
+        // both cases what Ableton emits is known-stale.
+        let suppress_clock_plane = self.sync_arbiter.is_seek_cooldown_active(now)
+            || self.ableton_bridge.transport_sync_pending();
         if let Some(ref mut clk) = self.transport_controller.midi_clock_sync {
             let snap = SyncTargetSnapshot::from_engine(&self.engine);
             clk.update(
@@ -1526,6 +1547,7 @@ impl ContentThread {
                 &mut self.engine,
                 &snap,
                 authority,
+                suppress_clock_plane,
             );
             // Feed live MIDI Clock BPM to engine — but Link takes priority
             // when available (more accurate, network-synced tempo).
@@ -1579,14 +1601,73 @@ impl ContentThread {
             );
         }
 
-        // AbletonOSC inbound transport relay — DISABLED pending investigation.
-        // The is_playing listener echoes were causing play/pause loops and
-        // audio stutters. For now, M4L OscPositionSender handles outbound
-        // and MIDI CLK handles inbound transport state.
-        // TODO: Re-enable once echo suppression is reliable.
-        // if osc_sync_mode == OscSyncMode::AbletonOsc
-        //     && self.ableton_bridge.is_transport_receiving(now.0)
-        // { ... }
+        // AbletonOSC inbound transport relay — closed-loop via the transport
+        // state machine (ABLETON_TRANSPORT_SYNC_DESIGN D10). The machine
+        // only emits actions for genuine external changes (its own commands
+        // are consumed as value-matched acks, which is what killed the
+        // 2026-era play/pause oscillation that had this path amputated).
+        // CLK keeps priority: while it's receiving, CLK Start/Stop already
+        // relays Ableton's buttons, so machine actions apply only when the
+        // clock plane is absent — checked HERE, at drain time, not via the
+        // frame-start `authority` (which is derived from last frame's
+        // is_transport_receiving and is stale precisely on the first
+        // message after an idle period — the from-idle play in Ableton
+        // would be discarded and D10's primary scenario would fail).
+        if osc_sync_mode == OscSyncMode::AbletonOsc {
+            let clk_receiving = self
+                .transport_controller
+                .midi_clock_sync
+                .as_ref()
+                .is_some_and(|s| s.is_midi_clock_enabled() && s.is_receiving_clock());
+            while let Some(action) = self.ableton_bridge.pop_transport_action() {
+                if clk_receiving {
+                    continue; // CLK owns transport + position; drop stale intents
+                }
+                use manifold_playback::transport_sync::EngineAction;
+                // Source and authority are both Osc: the arbiter gate is
+                // satisfied by construction; the real gate is the CLK-liveness
+                // check above (the D10 fallback-tier rule).
+                match action {
+                    EngineAction::Play => {
+                        self.sync_arbiter.play(
+                            ClockAuthority::Osc,
+                            ClockAuthority::Osc,
+                            &mut self.engine,
+                        );
+                    }
+                    EngineAction::Pause => {
+                        self.sync_arbiter.pause(
+                            ClockAuthority::Osc,
+                            ClockAuthority::Osc,
+                            &mut self.engine,
+                            false,
+                        );
+                    }
+                    EngineAction::SeekBeats(beat) => {
+                        let time = self
+                            .engine
+                            .beat_to_timeline_time(Beats::from_f32(beat));
+                        self.sync_arbiter.seek(
+                            ClockAuthority::Osc,
+                            ClockAuthority::Osc,
+                            &mut self.engine,
+                            time,
+                        );
+                    }
+                    EngineAction::NudgeBeats(beat) => {
+                        let time = self
+                            .engine
+                            .beat_to_timeline_time(Beats::from_f32(beat));
+                        self.sync_arbiter.nudge_time(
+                            ClockAuthority::Osc,
+                            ClockAuthority::Osc,
+                            &mut self.engine,
+                            time,
+                        );
+                    }
+                }
+            }
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -1618,11 +1699,17 @@ impl ContentThread {
                 }
             }
             ClockAuthority::MidiClock => {
-                // MIDI Clock always drives position when active — suppressed only
-                // during seek cooldown (user scrubbing, Ableton hasn't caught up).
+                // MIDI Clock always drives position when active — suppressed
+                // during the seek cooldown (user scrub, M4L path) AND while
+                // an AbletonOSC transport command awaits its ack
+                // (ABLETON_TRANSPORT_SYNC_DESIGN D5). The missing ack gate
+                // here was the play-from-cursor drag-back: the cooldown
+                // expired on a wall clock while Ableton's clock still
+                // reported the old position, and it pulled the playhead back.
                 if !self
                     .sync_arbiter
                     .is_seek_cooldown_active(self.time_since_start)
+                    && !self.ableton_bridge.transport_sync_pending()
                     && let Some(ref clk) = self.transport_controller.midi_clock_sync
                     && clk.is_midi_clock_enabled()
                     && clk.is_receiving_clock()
