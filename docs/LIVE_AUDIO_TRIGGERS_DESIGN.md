@@ -283,7 +283,7 @@ Drop the decorative `→` between sensitivity and target.
 ## 8. Param triggers — audio fires the Trigger controls (designed 2026-07-07, NOT BUILT)
 
 §1–§7 fire **clips**. This section makes transients fire the **trigger response of an
-already-playing generator** (and `is_trigger` cards on effects) — the kick pulses the
+already-playing generator or effect chain** (plus `is_trigger` cards) — the kick pulses the
 burst/reset/jump the generator already performs on clip retrigger, without touching clip
 scheduling. On stage: point the Kick send at a playing FluidSim and every kick injects;
 the same generator still responds to clip launches in "both" mode. Peter's founding
@@ -350,20 +350,37 @@ evaluation arm, the count-combination seam, and ~15 lines of drawer spec.
   finding: `LiveTriggerState::clear()` documents "call on transport stop" but has zero
   call sites (BUG-051) — P1 wires BOTH edge-state holders into the transport-stop reset
   rather than copying the omission.
-- **D5 — Effects ride `ParameterAudioMod`, trigger-aware.** When an audio mod's target
-  param `is_trigger`, evaluation switches from continuous overwrite
-  (`p.value = min + (max-min)*out_norm`) to edge detection: a runtime fire-counter on
-  the mod, `p.value = base + count`. Downstream `last_count` edge detection consumes it
-  unchanged. Mode is moot for effects (no clip edge exists — §8.1); the drawer hides
-  the mode row there.
+- **D5 — Effect chains receive the clip edge too (Peter, 2026-07-07: "I would like
+  triggers to be possible with effects too").** `set_frame_context` currently pins
+  `trigger_count` to 0 for effect slots (`preset_runtime.rs:1918-1924`); P2 feeds the
+  owning layer's effective count instead, so an effect graph consumes
+  `generator_input.trigger_count` exactly like a generator graph and the instance-level
+  `audio_trigger` config (D2) applies to effects with the full mode choice — a Strobe
+  on the Kick layer can flash on clip launches, on kicks, or both. Master/global chains
+  have no layer: clip contribution is 0 there, audio fires still work. Honest gap: no
+  shipped effect preset consumes `trigger_count` yet, so day one this is reachable via
+  graph-editor override wiring (the P2 demo); effect presets adopt trigger-gate cards
+  as individual preset upgrades later, not in this wave.
+- **D5b — `is_trigger` fire-button cards ride `ParameterAudioMod`, audio-only.** When
+  an audio mod's target param `is_trigger`, evaluation switches from continuous
+  overwrite (`p.value = min + (max-min)*out_norm`) to edge detection: a runtime
+  fire-counter on the mod, `p.value = base + count`. Downstream `last_count` edge
+  detection consumes it unchanged. No mode row on these — a button has no clip edge,
+  and the chain-level stream (D5) is where clip/audio mixing lives; per-param mode
+  would be config sprawl.
 - **D6 — UI home: the audio drawer on the trigger card.** For generators, the "A"
   drawer on the `clip_trigger` toggle card configures it: Dropdown(send) ·
   Segmented(band: Whole/Low/Mid/High) · Slider(sensitivity) · Segmented(mode:
   Clip/Audio/Both). The card is identified by an explicit `isTriggerGate` flag on the
   outer-card ParamDef (one-line edit in each of the 11 presets), NOT by matching the id
-  string `"clip_trigger"` (`feedback_hidden_field_dependencies`). For effects,
-  `is_trigger` cards get the same drawer minus the mode row. All edits through
-  `EditingService` commands like every other audio-mod edit.
+  string `"clip_trigger"` (`feedback_hidden_field_dependencies`). `is_trigger` cards
+  get the same drawer minus the mode row (D5b). **Reachability rule (dead-LANES
+  lesson):** an effect's instance-level config needs a gate card to host the drawer, so
+  P3 upgrades ONE effect preset — Strobe — with a `clip_trigger` toggle card and a
+  minimal trigger→flash response (executor does the §2.5-style read of Strobe's graph
+  first; wiring is theirs, the card + behavior is committed here). Without this the
+  effect half ships UI-unreachable. All edits through `EditingService` commands like
+  every other audio-mod edit.
 
 Consequences, stated honestly:
 - Fires arrive at analysis-block rate on the content tick — a transient between blocks
@@ -395,10 +412,13 @@ Rejected (do not re-propose):
 core      AudioTriggerMod + TriggerFireMode + shared threshold fn      NEW (serialized)
 core      TransientEdge (pure armed/re-arm hysteresis)                 NEW (runtime-only)
 core      ParamDef.is_trigger_gate flag (+ 11 preset JSON edits)       NEW
-playback  param-trigger arm in the audio-mod pass: generator fires →   NEW
+playback  param-trigger arm in the audio-mod pass: instance fires →    NEW
           per-layer pulse list; is_trigger mods → count-add semantics
 renderer  GeneratorRenderer: audio_count per layer; mode gate in       EXTEND
           acquire_clip; effective count = clip_count + audio_count
+renderer  effect chains: set_frame_context feeds the layer's           EXTEND (D5)
+          effective count into generator_input.trigger_count
+          (currently pinned 0.0); master chains: clip part = 0
 editing   SetAudioTriggerModCommand (mirrors audio-mod commands)       NEW
 ui        drawer rows on trigger cards (DrawerSpec — §10.2 of          NEW (small)
           AUDIO_MODULATION_DESIGN did the hard part)
@@ -414,13 +434,20 @@ app       PanelAction + dispatch + state_sync card view                WIRE
       for `is_trigger` targets; generator fires surfaced from the modulation pass as a
       per-layer pulse list. Gate: focused core+playback tests, clippy.
 - [ ] **P2 — Renderer seam + vertical proof.** `audio_count` on layer generator state;
-      mode gate at both increment sites; pulse list plumbed content-pipeline → renderer.
-      Gate: a renderer test driving pulses into a trigger-consuming graph asserts the
-      effective count; then the real proof — app run, stem playing, transient visibly
-      fires a playing FluidSim burst (this design's whole point; do not skip the look).
-- [ ] **P3 — UI.** `is_trigger_gate` flag + 11 preset edits (`check-presets` after JSON
-      edits); drawer spec on trigger cards (send/band/sensitivity/mode); command +
+      mode gate at both increment sites; pulse list plumbed content-pipeline → renderer;
+      effect chains fed the layer's effective count in `set_frame_context` (D5 — replaces
+      the pinned 0.0; master chains get clip part 0). Gate: a renderer test driving
+      pulses into a trigger-consuming graph asserts the effective count for BOTH a
+      generator and an effect-chain slot; then the real proof — app run, stem playing,
+      transient visibly fires a playing FluidSim burst (this design's whole point; do
+      not skip the look). Effect-side look lands with P3's Strobe card.
+- [ ] **P3 — UI + effect reachability.** `is_trigger_gate` flag + 11 generator preset
+      edits; Strobe upgraded with a `clip_trigger` toggle card + minimal trigger→flash
+      response (D6 reachability rule; §2.5 read of Strobe's graph first);
+      `check-presets` after all JSON edits; drawer spec on trigger cards
+      (send/band/sensitivity/mode; no mode row on `is_trigger` cards); command +
       dispatch + state_sync; collapsed-row mode indicator. Gate: ui tests + clippy +
-      manual drawer pass.
+      manual drawer pass + the effect-side look: kick fires Strobe flashes on a playing
+      layer.
 - [ ] **P4 — Ship.** Workspace gate, docs §0/§8 status flip, memory updated, landed per
       the git landing protocol. Peter's feel-pass (L4) explicitly owed and logged.
