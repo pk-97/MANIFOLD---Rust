@@ -306,6 +306,107 @@ impl Spectrogram {
     }
 }
 
+/// GPU-readback proof of the onset-lane path — the real Metal render, not the
+/// mod_harness CPU port. Behind `gpu-proofs` (real device; off by default,
+/// mirroring manifold-renderer's convention).
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_tests {
+    use super::Spectrogram;
+    use crate::scope::{ScopeColumn, ScopeOnsets};
+    use manifold_gpu::{
+        GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+    };
+
+    /// Render 64 silent columns where exactly one column fires each onset
+    /// lane, read the pixels back, and assert every lane draws at its own
+    /// bottom-up slot in its own colour — the uniform-carried stride, onset
+    /// base/count, and colour array doing their job on the actual GPU.
+    #[test]
+    fn onset_lanes_draw_at_their_slots_in_their_colors() {
+        const COLS: u32 = 64;
+        const H: u32 = 512;
+        let device = GpuDevice::new();
+        let mut spec = Spectrogram::new(
+            &device,
+            64,
+            COLS as usize,
+            GpuTextureFormat::Rgba8Unorm,
+            -59.0,
+            0.0,
+            0.0,
+        );
+
+        // One firing column per lane, in lane (field) order bottom-up.
+        let fired_cols: [usize; ScopeOnsets::COUNT] = [10, 20, 30, 40];
+        let silence = vec![0.0f32; 64];
+        for c in 0..COLS as usize {
+            let mut onsets = ScopeOnsets::default();
+            let lanes = [&mut onsets.kick, &mut onsets.low, &mut onsets.mid, &mut onsets.high];
+            for (lane, col) in lanes.into_iter().zip(fired_cols) {
+                if c == col {
+                    *lane = 1.0;
+                }
+            }
+            spec.push_column(&silence, ScopeColumn { centroids: [-1.0; 4], onsets });
+        }
+
+        let target = device.create_texture(&GpuTextureDesc {
+            width: COLS,
+            height: H,
+            depth: 1,
+            format: GpuTextureFormat::Rgba8Unorm,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET | GpuTextureUsage::COPY_SRC,
+            label: "scope-gpu-proof",
+            mip_levels: 1,
+        });
+        let mut enc = device.create_encoder("scope-gpu-proof");
+        // Dividers, tilt, cursor, hover all off — only background + lanes.
+        spec.render(&mut enc, &target, [-1.0, -1.0], 0.0, -1.0, -1.0);
+        enc.commit_and_wait_completed();
+
+        let bytes_per_row = COLS * 4;
+        let readback = device.create_buffer_shared(u64::from(H * bytes_per_row));
+        let mut rb = device.create_encoder("scope-gpu-proof-readback");
+        rb.copy_texture_to_buffer(&target, &readback, COLS, H, bytes_per_row);
+        rb.commit_and_wait_completed();
+        let ptr = readback.mapped_ptr().expect("shared buffer maps");
+        let px = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), (COLS * H * 4) as usize) };
+        let at = |x: u32, y: u32| -> [u8; 3] {
+            let i = ((y * COLS + x) * 4) as usize;
+            [px[i], px[i + 1], px[i + 2]]
+        };
+
+        // Lane i spans uv.y in (1 - 0.014·(i+1), 1 - 0.014·i]: sample its
+        // vertical centre. Expected colour = LANE_COLORS[i] mixed 0.85 over
+        // the silent background (colormap(0) = black), so ≈ 0.85·colour·255.
+        let lane_center_y = |i: u32| H - 1 - ((0.014 * (i as f32 + 0.5)) * H as f32) as u32;
+        for (i, (col, [r, g, b])) in fired_cols.iter().zip(ScopeOnsets::LANE_COLORS).enumerate() {
+            let y = lane_center_y(i as u32);
+            let got = at(*col as u32, y);
+            let want = [r, g, b].map(|c| (c * 0.85 * 255.0) as i32);
+            for (ch, (g8, w)) in got.iter().zip(want).enumerate() {
+                let diff = (i32::from(*g8) - w).abs();
+                assert!(
+                    diff <= 12,
+                    "lane {i} col {col} channel {ch}: got {got:?}, want ~{want:?}"
+                );
+            }
+            // The same column one lane up must NOT be lit (no bleed).
+            let above = at(*col as u32, lane_center_y(i as u32 + 1));
+            assert!(
+                above.iter().all(|&c| c < 25),
+                "lane {i} col {col} bled into the lane above: {above:?}"
+            );
+        }
+        // A column that never fired stays background-dark across every lane.
+        for i in 0..ScopeOnsets::COUNT as u32 {
+            let got = at(50, lane_center_y(i));
+            assert!(got.iter().all(|&c| c < 25), "unfired col 50 lane {i} lit: {got:?}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Params, SHADER};
