@@ -1,6 +1,6 @@
 # Automation Lanes — Design
 
-**Status: SHIPPED — P1–P4 on main @ `8b306de0` (2026-07-04), EXCEPT the §7 exposure half: the param-chooser lane + "+" + touch-to-select never shipped, so lanes can only be born via ARM recording.** That gap is the root cause of Peter's 2026-07-05 "lane-visibility issues" / dead-LANES report — the 2026-07-07 timeline-ux audit proved the LANES toggle functional end-to-end headless (real dispatch, strips off/on, PNGs; `scripts/ui-flows/toggle-lanes.json`) and root-caused the symptom as unreachability, not wiring: see `docs/TIMELINE_UX_AUDIT_2026-07-07.md` §1 — the §7 chooser is that audit's #1 ranked build item. Status previously corrected in the 2026-07-05 baseline review (the canonical stale-status escape, `DESIGN_DOC_STANDARD.md` §10). Open verification debt: VD-001 — Peter's L4 residue narrowed to confirming LANES lights live + ARM-recording a first lane.
+**Status: SHIPPED — P1–P4 on main @ `8b306de0` (2026-07-04); P5 (§7 addendum) partially shipped 2026-07-07 on `lane/automation-exposure` — see the P5 status block after §10 for exactly what landed vs. what remains.** The original gap (param-chooser + "+" + touch-to-select never shipped, so lanes could only be born via ARM recording) was the root cause of Peter's 2026-07-05 "lane-visibility issues" / dead-LANES report — the 2026-07-07 timeline-ux audit proved the LANES toggle functional end-to-end headless (real dispatch, strips off/on, PNGs; `scripts/ui-flows/toggle-lanes.json`) and root-caused the symptom as unreachability, not wiring: see `docs/TIMELINE_UX_AUDIT_2026-07-07.md` §1. Status previously corrected in the 2026-07-05 baseline review (the canonical stale-status escape, `DESIGN_DOC_STANDARD.md` §10). Open verification debt: VD-001 — Peter's L4 residue narrowed to confirming LANES lights live + ARM-recording a first lane.
 **Prerequisites: none. Sequencing: `docs/DESIGN_BUILD_ORDER.md` wave 3. Note: SESSION_MODE_DESIGN §2 reserves a serde-optional field slot on `ClipSequence` for this feature — fill that slot, don't invent a second home.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any
 phase. Conformance-hardened: audit claims are a 2026-07-02 snapshot — run the §8.3
@@ -318,9 +318,68 @@ reviewable arc; P3/P4 independent after.
 
 - **P5 — exposure (added 2026-07-07; = TIMELINE_UX_AUDIT item #1):** the §7
   addendum. `A` keybinding; param chooser + "+" on the expanded layer;
-  touch-to-select; flat-line render + first-click lane birth. Depends on
-  the two-tier header reconciliation (audit item #2) for the chooser's
-  home. P1–P4 SHIPPED 2026-07-04; P5 is the remaining half.
+  touch-to-select; flat-line render + first-click lane birth. P1–P4 SHIPPED
+  2026-07-04; P5 status below (partial ship, 2026-07-07).
+
+### P5 status (2026-07-07, Sonnet, `lane/automation-exposure`)
+
+**Shipped and headless-PNG-verified** — Peter's actual complaint (ARM
+recording was the ONLY way to birth a lane) is fixed:
+
+- `A` keybinding, real unit test (`input_handler.rs`'s
+  `bare_a_toggles_automation_mode_visible_regardless_of_current_state`) —
+  toggles from either state, doesn't shadow Cmd+A select-all.
+- Touch-to-select: any param drag (`PanelAction::ParamSnapshot`'s handler,
+  `ui_bridge/inspector.rs`) records the layer's active chosen param
+  (`UIState::chosen_automation_params`, layer-scoped, one entry per layer).
+- First-draw path: a chosen param with no backing `AutomationLane` renders
+  as a flat line at its current base value, no dot
+  (`ui_translate::push_chosen_placeholder_lane`, `UiAutomationLane::placeholder`,
+  `viewport.rs` skips dot emission for placeholders). The first click on
+  that line creates the REAL lane via the pre-existing
+  `AddAutomationPointCommand`/`add_automation_point` path — unmodified, it
+  already creates a lane on demand. Proven end-to-end through the real
+  hit-test + dispatch path (not a mock): `scripts/ui-flows/
+  automation-placeholder-first-click.json` against the new
+  `automationplaceholder` ui-snap scene — strip exists with 0 points before,
+  a synthesized click, 1 point after; PNGs show the dot appearing where none
+  existed. The two pre-existing automation scripts (`toggle-lanes.json`,
+  `drag-automation-point.json`) still pass unchanged — no regression on the
+  shared lane pipeline.
+
+**Descoped, not silently dropped** — flagged back rather than faked:
+
+- **The "+" button / full param-picker popover** (device dropdown + param
+  dropdown search list) is NOT built. Building a real one (vs. another
+  "read-only stand-in," the exact anti-pattern that caused the original dead-
+  LANES report) means a new popover consumer of `PickerCore`
+  (`panels/picker_core.rs` — the existing reusable pick-from-a-list model
+  the preset browser already uses; it does the filter/keyboard-nav, drawing
+  stays per-surface) with its own render + dismiss-on-outside-click wiring —
+  a scoped follow-up, not a two-line addition. Touch-to-select already covers
+  the zero-friction path the design doc calls out ("wiggle the knob, then
+  draw") without it.
+- **The two-tier header height reconciliation** (TIMELINE_UX_AUDIT item #2,
+  the unused `TrackHeight::Tall` stop) turned out NOT to be a hard
+  dependency for the chooser's home, on inspection: the chooser/placeholder
+  strip stacks below the layer using the SAME additive-height pattern real
+  lane strips already use (`layer.automation_lane_count` →
+  `CoordinateMapper::layer_height`), which lives entirely within the
+  existing non-collapsed ("expanded" in §7's original 2026-07-02 language)
+  tier — no new tier needed. Item #2's actual complaint (the routing form
+  showing unconditionally whenever a layer isn't collapsed, wasting vertical
+  space) is a separate, real UX question — whether "expanded" should become
+  a deliberate third state distinct from "just not collapsed" — that changes
+  existing on-stage layer-header behavior and deserves its own sign-off, not
+  a silent redefinition as a side effect of this build. Still open;
+  unblocked from P5 either way.
+- **Live-drag E2E proof of touch-to-select itself** (a real slider drag
+  through the ui-snap harness) is unverified — the harness has no `HitTargets`
+  surface for param sliders (only automation lanes, clips, graph canvas), so
+  proving it needs a `Query`-selector approach to an uncertain node-type tag,
+  not the `Surface` selector the automation-lane assertions above use. The
+  wiring itself (`ui_bridge/inspector.rs`'s `ParamSnapshot` arm) is verified
+  by code review, not an end-to-end drag render — flagged, not claimed.
 
 ## 11. Decided (don't reopen)
 

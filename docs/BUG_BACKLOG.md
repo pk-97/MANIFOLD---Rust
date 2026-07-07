@@ -50,6 +50,7 @@ or human can read it, and it needs no external tool.
 | BUG-033 | **ui-snapshot-broken** | FIXED — verified in-tree 2026-07-07 (harness builds + runs) |
 | BUG-050 | **ableton-anchor-yankback** | play-from-cursor snap-backs; anchor fix landed, rig confirmation owed via [ABL-SYNC] logs (HIGH) |
 | BUG-051 | **trigger-clear-unwired** | `LiveTriggerState::clear()` documents "call on transport stop / project reset" but has zero call sites (LOW) |
+| BUG-052 | **sample-rate-dependent-detection** | onset/kick detector constants are in hops+bins/hop; analyzer runs at device rate, so 96k halves hop-time and the kick detector under-fires. Fix at the time grid: derive hop/n_fft from SR (MED) |
 | BUG-048 | **arm-two-reds** | ARM idle/armed both red, shade-only difference (LOW, UX call) |
 | BUG-049 | **child-row-right-indent** | group-child right-anchored controls misaligned ~20px (LOW) |
 | BUG-012 | **tex-rename-corrupt** | fragment `tex_` port-rename corrupts `tex_*` scalars (LOW) |
@@ -60,6 +61,33 @@ or human can read it, and it needs no external tool.
 | BUG-019 / 020 / 021 | deferred | group-fold gap · gen-card collapse · snap-back gap |
 
 ## Open
+
+### BUG-052 (sample-rate-dependent-detection) — onset + kick detection mis-tunes at non-48k sample rates — MED
+
+**Found 2026-07-07 (Peter's question during the kick-detector discussion).** The audio
+analysis runs at the DEVICE'S native rate — `audio_mod_runtime.rs:322` sets the analyzer
+rate to `device_rate`, and the resampler only aligns layer audio to that rate, never to a
+canonical one. Every timing constant is in HOPS (`ODF_MEDIAN_HOPS`, `ONSET_REFRACTORY_HOPS`,
+`KICK_WIN`/`KICK_AGE_CAP`) and every rate constant is bins-per-hop (`KICK_STEP_MAX`, the D5
+tracker slew), while a hop is `256/sample_rate` seconds. At 96k a hop is 2.7 ms (half of
+48k's 5.3 ms), so the kick detector's "14 bins within a 10-hop window" spans only 27 ms and
+the kick's ~90 ms chirp has descended only ~10 bins by then — under the 14-bin threshold, so
+**the kick detector goes near-deaf at 96k** (the whole onset analysis mis-tunes, though the
+adaptive-threshold/refractory parts degrade more gently). Bins are already SR-invariant
+(log-freq CQT anchored at 10 Hz), so `drop_bins` needs no change. Confirmed by arithmetic +
+the device-rate code path; NOT observed on a 96k run (Peter: no need to prove in code).
+
+**Fix shape (root, Peter-directed):** normalize the analysis TIME GRID, not the sample rate
+(no resampling) — derive `hop` and `n_fft` in samples from the device SR so a hop is always
+~5.3 ms and the window ~85 ms (`SR/n_fft` stays 11.7 Hz, so frequency resolution is
+unchanged). Then every hop-count and bins-per-hop constant is literally unchanged and
+automatically invariant; no fixed ODF ring becomes a Vec. Cost: larger FFT at higher rates
+(proportional to the extra data). Rejected alternative: keep hop=256 samples and scale all
+hop-COUNTS with SR — more blast radius (dynamic ring sizes) for no gain. Gate: resample a
+fixture to 96k, run the harness, confirm fire TIMES in seconds match the 48k run (the eval
+already grades in seconds). Fold into the kick time-constant rework.
+
+Next free id: BUG-053.
 
 ### BUG-051 (trigger-clear-unwired) — `LiveTriggerState::clear()` never called; armed flags survive transport stop — LOW
 

@@ -868,6 +868,7 @@ pub fn sync_project_data(
         ui.viewport.rebuild_mapper_layout(&crate::ui_translate::layers_to_ui_for_layout(
             &project.timeline.layers,
             selection.automation_mode_visible,
+            &selection.chosen_automation_params,
         ));
 
         // Layer data → LayerHeaderPanel. Y offset/height are NOT copied here —
@@ -1038,7 +1039,8 @@ pub fn sync_project_data(
                 if layer.is_collapsed || layer.is_group() {
                     continue;
                 }
-                for lane in crate::ui_translate::layer_automation_lanes_to_ui(layer) {
+                let chosen = selection.chosen_automation_params.get(&layer.layer_id);
+                for lane in crate::ui_translate::layer_automation_lanes_to_ui(layer, chosen) {
                     viewport_lanes.push(ViewportAutomationLane { layer_index: i, lane });
                 }
             }
@@ -1157,7 +1159,15 @@ fn clip_base_color(
 /// waiting for the next structural sync — `docs/AUTOMATION_LANES_DESIGN.md`
 /// §7). Cheap: gated the same way the clip refresh already is (mouse-pressed
 /// or structural change), and lane counts are tens, not hundreds.
-pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project, automation_visible: bool) {
+pub fn sync_clip_positions(
+    ui: &mut UIRoot,
+    project: &Project,
+    automation_visible: bool,
+    chosen_automation_params: &std::collections::HashMap<
+        manifold_core::LayerId,
+        (manifold_ui::view::UiGraphTarget, manifold_core::effects::ParamId),
+    >,
+) {
     use manifold_ui::panels::viewport::ViewportClip;
     let mut viewport_clips = Vec::new();
     for (i, layer) in project.timeline.layers.iter().enumerate() {
@@ -1195,7 +1205,8 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project, automation_visibl
             if layer.is_collapsed || layer.is_group() {
                 continue;
             }
-            for lane in crate::ui_translate::layer_automation_lanes_to_ui(layer) {
+            let chosen = chosen_automation_params.get(&layer.layer_id);
+            for lane in crate::ui_translate::layer_automation_lanes_to_ui(layer, chosen) {
                 viewport_lanes.push(ViewportAutomationLane { layer_index: i, lane });
             }
         }

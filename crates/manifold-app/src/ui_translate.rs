@@ -243,13 +243,24 @@ pub fn layers_to_ui(layers: &[Layer]) -> Vec<UiLayer> {
 /// and (more importantly) would NOT be the value `rebuild_mapper_layout` used,
 /// so a second call site recomputing it independently is exactly the
 /// "single-source-of-truth" trap this field exists to avoid.
-pub fn layers_to_ui_for_layout(layers: &[Layer], automation_visible: bool) -> Vec<UiLayer> {
+pub fn layers_to_ui_for_layout(
+    layers: &[Layer],
+    automation_visible: bool,
+    chosen_automation_params: &std::collections::HashMap<
+        manifold_core::LayerId,
+        (UiGraphTarget, manifold_core::effects::ParamId),
+    >,
+) -> Vec<UiLayer> {
     layers
         .iter()
         .map(|l| {
             let mut ui = layer_to_ui(l);
             if automation_visible && !l.is_collapsed && !l.is_group() {
-                ui.automation_lane_count = layer_automation_lanes_to_ui(l).len();
+                ui.automation_lane_count = layer_automation_lanes_to_ui(
+                    l,
+                    chosen_automation_params.get(&l.layer_id),
+                )
+                .len();
             }
             ui
         })
@@ -261,7 +272,16 @@ pub fn layers_to_ui_for_layout(layers: &[Layer], automation_visible: bool) -> Ve
 /// shape of `manifold_playback::automation::evaluate_all_automation`). Only
 /// `enabled` lanes produce a strip (Ableton: a deactivated lane draws
 /// nothing). See `docs/AUTOMATION_LANES_DESIGN.md` §7.
-pub fn layer_automation_lanes_to_ui(layer: &Layer) -> Vec<UiAutomationLane> {
+///
+/// `chosen` (P5, §7 addendum): the param the user last touched/chose on this
+/// layer, if any — appended as a placeholder flat-line strip (no dot, no
+/// core-side lane yet) UNLESS a real enabled lane for the same param already
+/// rendered above, so touching an already-automated param never double-draws
+/// it. See `push_chosen_placeholder_lane`.
+pub fn layer_automation_lanes_to_ui(
+    layer: &Layer,
+    chosen: Option<&(UiGraphTarget, manifold_core::effects::ParamId)>,
+) -> Vec<UiAutomationLane> {
     let mut out = Vec::new();
     if let Some(effects) = &layer.effects {
         for fx in effects {
@@ -283,7 +303,65 @@ pub fn layer_automation_lanes_to_ui(layer: &Layer) -> Vec<UiAutomationLane> {
         let target = UiGraphTarget::Generator(layer.layer_id.clone());
         push_instance_automation_lanes(gp, target, &mut out);
     }
+    if let Some((target, param_id)) = chosen {
+        push_chosen_placeholder_lane(layer, target, param_id, &mut out);
+    }
     out
+}
+
+/// Append a placeholder strip for a chosen-but-not-yet-automated param: a
+/// single point at the param's CURRENT base value, so it renders as a flat
+/// line (Live's "every param has an implicit envelope" feel) with no dot —
+/// `viewport.rs`'s `automation_lane_screens` skips dot emission for
+/// `placeholder` lanes. The first click on that line creates the real lane
+/// via the existing `AddAutomationPointCommand` path (`editing_host.rs`'s
+/// `add_automation_point`), completely unmodified — it already creates a
+/// lane on demand for a param that has none.
+fn push_chosen_placeholder_lane(
+    layer: &Layer,
+    target: &UiGraphTarget,
+    param_id: &manifold_core::effects::ParamId,
+    out: &mut Vec<UiAutomationLane>,
+) {
+    if out
+        .iter()
+        .any(|l| &l.target == target && l.param_id == *param_id)
+    {
+        return; // already a real, enabled lane for this param — don't double-draw
+    }
+    let instance = match target {
+        UiGraphTarget::Effect(eid) => layer
+            .effects
+            .as_ref()
+            .and_then(|fx| fx.iter().find(|f| f.id == *eid)),
+        UiGraphTarget::Generator(_) => layer.gen_params(),
+    };
+    let Some(instance) = instance else {
+        return;
+    };
+    let Some(p) = instance.params.get(param_id.as_ref()) else {
+        return;
+    };
+    let (pmin, pmax, whole) = (p.spec.min, p.spec.max, p.whole_numbers());
+    let range = (pmax - pmin).abs().max(f32::EPSILON);
+    let base = instance.get_base_param(param_id.as_ref());
+    let norm = ((base - pmin) / range).clamp(0.0, 1.0);
+    let effect_label = manifold_core::preset_type_registry::display_name(instance.effect_type());
+    out.push(UiAutomationLane {
+        effect_id: instance.id.clone(),
+        param_id: param_id.clone(),
+        target: target.clone(),
+        label: format!("{effect_label}: {param_id}"),
+        points: vec![UiAutomationPoint {
+            beat: manifold_core::Beats::ZERO,
+            value_norm: norm,
+            shape: UiSegmentShape::Linear,
+        }],
+        param_min: pmin,
+        param_max: pmax,
+        whole_numbers: whole,
+        placeholder: true,
+    });
 }
 
 fn push_instance_automation_lanes(
@@ -327,6 +405,7 @@ fn push_instance_automation_lanes(
             param_min: pmin,
             param_max: pmax,
             whole_numbers: whole,
+            placeholder: false,
         });
     }
 }

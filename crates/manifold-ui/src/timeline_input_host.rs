@@ -303,4 +303,10 @@ pub trait TimelineInputHost {
     /// Whether automation mode is currently showing lane strips — gates the
     /// `B` keybinding so it's a no-op with lanes hidden.
     fn automation_mode_visible(&self) -> bool;
+
+    /// Toggle automation-lane visibility across the timeline (Live's `A`) —
+    /// same effect as clicking the transport bar's LANES button
+    /// (`PanelAction::ToggleAutomationMode`). Unlike `toggle_automation_draw_mode`,
+    /// not gated on current visibility — `A` must work from either state.
+    fn toggle_automation_mode_visible(&mut self);
 }

@@ -1,6 +1,7 @@
 # Kick Sweep-Event Detector — motion-based kick detection for the bass-heavy Low band
 
-**Status:** IN PROGRESS · P1 (label-graded prototype) SHIPPED 2026-07-07 @ `648f07e3` · P2/P3 not built · 2026-07-07 · Opus 4.8
+**Status:** IN PROGRESS · P1 (prototype) + P2 (runtime integration) SHIPPED 2026-07-07 · P3 (feel-pass) owed to Peter · 2026-07-07 · Opus 4.8
+P1 @ `648f07e3` · P2 landing report: `docs/landings/2026-07-07-kick-sweep-p2.md`. The live `reduce_send` reproduces the prototype's `ridge-final` fire counts exactly on all 10 mix/drums fixtures; masked-novelty deleted.
 **Prerequisites:** none (the prototype and the 73-label corpus both exist).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -178,7 +179,18 @@ harness re-graded against the 73 labels in seconds (mix vs `mix_time_s`, drums v
 all six fire-gated guards green (`k8`); recall 41/61 proven (§2). Demo artifact: the §2 table
 (`cargo run --release -p manifold-audio --example hpss_proto -- --family ridge-final`). L1.
 
-### P2 — Runtime integration (Sonnet, one session).
+### P2 — Runtime integration. **SHIPPED 2026-07-07 (Opus).**
+Landed: `KickRidges`/`KickTrack` on `SendState`, driving the Low band in `reduce_send`
+via one OR'd criterion under the shared refractory; masked-novelty and all its state
+deleted (22 sites, zero remain). Gate met: `mod_harness` reproduces `--family
+ridge-final`'s per-band fire counts EXACTLY on all 10 mix/drums fixtures (mix
+19/45/27/38/43, drums 26/71/46/35/31); the six fire-gated selftest guards stay green
+(kicks low 8 — double-fire fix holds); 46 analysis unit tests pass incl. three new
+`KickRidges` tests; clippy clean. The one selftest FAIL is the pre-existing BUG-045
+notes-accuracy line (non-gating). Full report: `docs/landings/2026-07-07-kick-sweep-p2.md`.
+The `MANIFOLD_RENDER_TRACE` content-thread check is reasoned-not-measured (the added
+per-hop work is bounded, allocation-free, dwarfed by the CQT) — on Peter's running-app
+smoke list. Original brief:
 **Entry state:** `git log --oneline -1` on the branch shows `648f07e3` or a descendant; re-run
 `--family ridge-final` and confirm the reference Low-band mix counts (apricots 19, bad_guy 45,
 feel 27, inhale 38, tears 43) before touching `analysis.rs`.

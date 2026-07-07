@@ -250,6 +250,14 @@ pub struct UiAutomationLane {
     /// points on such a param default to `Hold` instead of `Linear` — see
     /// [`Self::new_point_shape`].
     pub whole_numbers: bool,
+    /// True for a chosen-but-not-yet-automated param (P5, §7 addendum's
+    /// "first-draw path") — a single synthetic point at the param's current
+    /// base value, no backing `AutomationLane` on the core side yet.
+    /// `viewport.rs`'s `automation_lane_screens` skips dot emission for
+    /// these so the flat line shows with no breakpoint until the user's
+    /// first click actually creates one. Real (core-backed) lanes are always
+    /// `false`.
+    pub placeholder: bool,
 }
 
 impl UiAutomationLane {
@@ -363,6 +371,7 @@ mod automation_lane_tests {
             param_min: 0.0,
             param_max: 1.0,
             whole_numbers: false,
+            placeholder: false,
         }
     }
 

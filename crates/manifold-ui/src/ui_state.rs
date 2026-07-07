@@ -5,9 +5,9 @@
 // Replaces the former app::SelectionState + app::ClipDragState.
 
 use crate::panels::InspectorTab;
-use crate::view::{SelectionRegion, UiAutomationPointRef};
-use manifold_foundation::{Beats, ClipId, LayerId, MarkerId};
-use std::collections::HashSet;
+use crate::view::{SelectionRegion, UiAutomationPointRef, UiGraphTarget};
+use manifold_foundation::{Beats, ClipId, LayerId, MarkerId, ParamId};
+use std::collections::{HashMap, HashSet};
 
 /// D1 (`docs/TIMELINE_INTERACTION_P1_SPEC.md`): the single timeline-selection
 /// authority. Exactly one kind is active at any moment — the enum makes the
@@ -121,6 +121,22 @@ pub struct UIState {
     /// grabbing a dot/segment (P4 Unit B, §7's "Draw mode"). Only meaningful
     /// while `automation_mode_visible`; never serialized.
     pub automation_draw_mode: bool,
+
+    /// The param most recently touched (slider grab, inspector knob drag) on
+    /// each layer — independent of whether it has a real `AutomationLane`
+    /// yet (P5, `docs/AUTOMATION_LANES_DESIGN.md` §7 addendum's
+    /// "touch-to-select" + "first-draw path"). While automation mode is
+    /// visible, a chosen param with no backing lane renders as a flat line
+    /// at its current base value — Live's "every param has an implicit
+    /// envelope" feel — and the first click on that line creates the real
+    /// lane via the existing `AddAutomationPointCommand` path (no new
+    /// command). One entry per layer; touching a different param replaces
+    /// it. Harmless once the lane is real: `ui_translate` skips the
+    /// placeholder once a real enabled lane exists for the same
+    /// `(target, param_id)`, so a stale entry here never double-draws.
+    /// Never serialized — pure view state, same tier as
+    /// `automation_mode_visible`.
+    pub chosen_automation_params: HashMap<LayerId, (UiGraphTarget, ParamId)>,
 }
 
 impl Default for UIState {
@@ -150,7 +166,23 @@ impl UIState {
             selected_automation_point: None,
             selected_automation_points: Vec::new(),
             automation_draw_mode: false,
+            chosen_automation_params: HashMap::new(),
         }
+    }
+
+    /// Touch-to-select (§7 addendum): record `target`/`param_id` as the
+    /// layer's active automation-chooser selection. Called from the same
+    /// funnel every param drag already goes through
+    /// (`PanelAction::ParamSnapshot`'s handler, `ui_bridge/inspector.rs`) —
+    /// fires once per touch, not per drag-frame.
+    pub fn set_chosen_automation_param(
+        &mut self,
+        layer_id: LayerId,
+        target: UiGraphTarget,
+        param_id: ParamId,
+    ) {
+        self.chosen_automation_params
+            .insert(layer_id, (target, param_id));
     }
 
     // ── Inspector scope ─────────────────────────────────────────────

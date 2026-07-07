@@ -743,6 +743,7 @@ impl Application {
                 &mut self.ws.ui_root,
                 &self.local_project,
                 self.selection.automation_mode_visible,
+                &self.selection.chosen_automation_params,
             );
         }
 
@@ -2876,6 +2877,7 @@ impl Application {
                 &mut self.ws.ui_root,
                 &self.local_project,
                 self.selection.automation_mode_visible,
+                &self.selection.chosen_automation_params,
             );
         }
 

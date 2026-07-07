@@ -1,0 +1,28 @@
+[
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Surface": { "surface": "automation_lanes", "kind": "automation_strip", "label": "Mirror: amount" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Surface": { "surface": "automation_lanes", "kind": "automation_point", "label": "Mirror: amount pt0" } },
+      "check": { "Count": 0 }
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Surface": { "surface": "automation_lanes", "kind": "automation_strip", "label": "Mirror: amount" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Surface": { "surface": "automation_lanes", "kind": "automation_point", "label": "Mirror: amount pt0" } },
+      "check": { "Count": 1 }
+    }
+  }
+]
