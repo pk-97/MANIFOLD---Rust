@@ -501,7 +501,7 @@ re-enter PreToolUse (covered only insofar as the parent script text is
 parsed); name-only saved workflows can't be model-checked (announce-once
 still applies). Tests: `.claude/hooks/test_workflow_gate.py` (27 checks).
 
-## 2h. Final-window extensions (SPECCED 2026-07-07, Fable, final Fable session — Sonnet builds all of it)
+## 2h. Final-window extensions (SPECCED + BUILT 2026-07-07, Fable authoring + two Sonnet builders, same day — all sections shipped; workflow-agent DELIVERY unproven pending the live probe, observation tested against real layouts)
 
 Context: Peter's two directives from the final-window session. (1) "The daemon
 must fire BEFORE my next message — otherwise it's pointless." Telemetry since
