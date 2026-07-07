@@ -1,4 +1,4 @@
-# wave/ableton-transport-sync (P1–P3 + P4 docs) — landed 2026-07-07 @ <merge SHA filled at push>
+# wave/ableton-transport-sync (P1–P3 + P4 docs) — landed 2026-07-07 @ bea00685
 
 **Branch:** wave/ableton-transport-sync · **Level reached:** L1 / target L2 (P3) + L4 (P4, Peter-owned)
 **Doc status line (quoted verbatim):** "**Status:** P1–P3 SHIPPED 2026-07-07 (same-session build, Fable) · P4 landing complete except the L4 live checklist (§6 P4 demo — Peter-owned, the real acceptance gate)"
