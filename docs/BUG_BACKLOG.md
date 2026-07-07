@@ -44,7 +44,8 @@ or human can read it, and it needs no external tool.
 | BUG-009 | **stateless-gate-miss** | harvest skip resets StateStore-held scalar state (HIGH) |
 | BUG-010 | **wgsl-first-entry** | multi-entry wgsl_compute silently dispatches the first (MED) |
 | BUG-011 | **fused-output-oversize** | fused output buffer sized to max of all inputs (MED) |
-| BUG-015 | **inspector-overlap** | inspector shows stale content (section overlap after scroll; edge/margin ghost fragments) — Fable verdict 07-07: card-ghost hypothesis REFUTED; real hole = out-of-sub-region dirt dropped (stale-chrome class); video fragment = post-atlas pass overdraw, BUG-025 family (MED) |
+| BUG-015 | **inspector-overlap** | inspector shows stale content (section overlap after scroll; edge/margin ghost fragments) — Fable verdict 07-07: card-ghost hypothesis REFUTED; real hole = out-of-sub-region dirt dropped (stale-chrome class); "video fragment" was the preview window, not a bug (Peter) (MED) |
+| BUG-060 | **inspector-footer-overpaint** | inspector content paints over the footer bar (repro: is_trigger_gate audio-mod drawer open, scroll to bottom) — root: inspector builds NO pixel clip at its rect (only CLIPS_CHILDREN in inspector.rs is a test) + trigger-row drawer lacks the param-row reveal clip; inspector renders after footer in the atlas loop so the spill wins (MED) |
 | BUG-025 | **timeline-scissor-bleed** | clip content bleeds across row bounds (MED, repro needed — scrolled headless render 07-07 clean) |
 | BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
 | BUG-033 | **ui-snapshot-broken** | FIXED — verified in-tree 2026-07-07 (harness builds + runs) |
@@ -235,7 +236,7 @@ through; unit tests `missed_grab_drag_inside_panel_is_swallowed` +
 `timeline_drag_crossing_panel_passes_through`. The silent-edit hole is closed; the feel
 items (2)–(4) remain for the design.
 
-Next free id: BUG-060.
+Next free id: BUG-061.
 
 ### BUG-055 (eval-harness-stale-time-grid) — both audio eval harnesses used the unscaled default hop on non-48k files — FIXED 2026-07-07 (kick P5 retune branch)
 
@@ -1108,13 +1109,42 @@ compositor pixels: composite order is clear-to-black → atlas blit (pass 2,
 into `layout.video_area()` (pass 3, [:4001](../crates/manifold-app/src/app_render.rs#L4001),
 opaque, aspect-fit INSIDE the rect) → timeline passes (4) → overlays (5, drawn straight into
 the offscreen, [:4587](../crates/manifold-app/src/app_render.rs#L4587)). An atlas failure
-shows black/transparent, never video. Video-colored pixels over the inspector's left edge
-must be painted by a post-atlas pass whose rect/scissor crosses the timeline↔inspector
-boundary — exactly the BUG-025 (timeline-scissor-bleed) class. **Where to look next:** the
-pass-4 sub-pass scissors vs `layout.timeline_body()`'s right edge and the pass-3
-`video_area` rect, especially across inspector-width changes; the 2026-07-04 "sections
-interleaved" sighting should be re-examined against hole #2 + rebuild-while-scrolled rather
-than the card cache.
+shows black/transparent, never video. **Resolved by Peter 2026-07-07: the "video patch" in
+the screenshot is just the preview window — legitimately there, not a bug.** (The composite
+reasoning above stands for any future genuine video-over-UI sighting: it would implicate a
+post-atlas pass, the BUG-025 class, never this cache.) The 2026-07-04 "sections interleaved"
+sighting should be re-examined against hole #2 + rebuild-while-scrolled rather than the card
+cache. The footer-overlap symptom this investigation started from is now its own entry with
+a grounded root cause: **BUG-060** (no inspector-level pixel clip + the trigger-row drawer's
+missing reveal clip).
+
+### BUG-060 — Inspector content paints over the footer bar — MED (root cause grounded 2026-07-07)
+
+**Symptom** (Peter, 2026-07-07; also the prior `f4b895d7` session's subject): with the
+audio-mod drawer open on a Clip Trigger row (`is_trigger_gate`), scrolling the inspector to
+the bottom paints card content over the footer bar.
+
+**Root cause (two layers, both verified in code):**
+1. **The inspector has no pixel clip of its own.** `build_in_rect` creates no
+   `CLIPS_CHILDREN` container — the only `CLIPS_CHILDREN` reference in
+   [inspector.rs](../crates/manifold-ui/src/panels/inspector.rs) is inside a test helper
+   (:2711). Card visibility is managed by layout math, so any node that extends past the
+   inspector's bottom edge paints straight into the footer's atlas region. The inspector
+   renders AFTER the footer in the atlas panel loop
+   ([ui_root.rs:480 `panel_cache_info`](../crates/manifold-app/src/ui_root.rs#L480) order),
+   so its spill wins; the footer only repaints when IT dirties, so the spill persists.
+2. **The concrete escape:** `build_toggle_trigger_row`'s drawer
+   ([param_slider_shared.rs:1532](../crates/manifold-ui/src/panels/param_slider_shared.rs#L1532))
+   lacks the `drawer_reveal` clip `build_param_row` has (:2005-2017) — measured ~119.5px of
+   unclipped paint below the card frame. A bottom-straddling card with that drawer open is
+   exactly the repro.
+
+**Fix shape (root):** give the inspector's content column a real `CLIPS_CHILDREN` container
+at the inspector rect — kills the whole class (footer overpaint, drawer-tween overflow, any
+future straddling node) in one move; incremental cache renders already honor ancestor clips
+(`traverse_flat_range` pre-push, [tree.rs:737](../crates/manifold-ui/src/tree.rs#L737)).
+Also add the missing `drawer_reveal` clip to `build_toggle_trigger_row` for parity with the
+param-row path (correct tween containment regardless of the container fix).
 
 ### BUG-016 — Imported .glb layers are black boxes: no card params, no Model File picker, edit paths silently no-op — FIXED 2026-07-04 (`2d5e4dc6`)
 
