@@ -690,6 +690,30 @@ impl UITree {
         false
     }
 
+    /// True if any DIRTY node in [start, end) lies OUTSIDE every range in
+    /// `covered`. The panel cache uses this to spot dirt in a panel's chrome —
+    /// nodes (tab strip, cog/Collapse, scrollbar) that sit in no sub-region and
+    /// so are invisible to the incremental sub-region repaint path. `covered`
+    /// is small (one range per card/chrome sub-panel) and the scan short-circuits
+    /// on the first uncovered dirty node, so this is the same order as the
+    /// per-frame `has_dirty_in_range` scans it sits beside.
+    pub fn has_dirty_outside_ranges(
+        &self,
+        start: usize,
+        end: usize,
+        covered: &[(usize, usize)],
+    ) -> bool {
+        let end = end.min(self.count);
+        for i in start..end {
+            if self.nodes[i].flags.contains(UIFlags::DIRTY)
+                && !covered.iter().any(|&(s, e)| i >= s && i < e)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Clear DIRTY flag on nodes in [start, end) and recompute global has_dirty.
     pub fn clear_dirty_range(&mut self, start: usize, end: usize) {
         let end = end.min(self.count);
