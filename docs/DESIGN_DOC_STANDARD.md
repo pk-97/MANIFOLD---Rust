@@ -63,9 +63,17 @@ your first: `GIG_RESILIENCE_DESIGN.md` (failure-audit shape),
 
 Section-by-section requirements:
 
-- **Status line** — state (APPROVED / IN PROGRESS / SHIPPED / SUPERSEDED), date,
-  author-model, prerequisites. When a doc ships, update the status and move detail to
-  a record; never leave a shipped doc claiming "not built".
+- **Status line** — a `**Status:**` line in the header that LEADS with a canonical
+  state tag (`SHIPPED` / `IN PROGRESS` / `APPROVED` / `PROPOSED` / `SUPERSEDED`), then
+  date, author-model, prerequisites. The leading tag is load-bearing: it is the single
+  source of design status, and `.claude/hooks/design_status.py` generates the session
+  status board by reading it, so **every design doc MUST carry one** and the tag must
+  reflect the OVERALL state — a doc with P1 shipped but P2–P4 open leads with
+  `IN PROGRESS`, not `SHIPPED`. When a doc ships, update the tag and move detail to a
+  record; never leave a shipped doc claiming "not built". Status lives ONLY here —
+  memory files and other docs point at the board, they never restate it. (A merge
+  housekeeper, `.claude/hooks/design_status_check.py`, is available to flag a doc
+  whose status went stale; install it as a `post-merge` git hook to run it on merge.)
 - **Audit** — a table of what exists: piece / where (file:line) / state, and the
   instruction *extend, don't redesign*. Every claim about existing code is anchored
   (§3). The audit is a dated snapshot and says so.

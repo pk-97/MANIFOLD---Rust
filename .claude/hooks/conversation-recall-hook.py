@@ -59,6 +59,21 @@ def index_new_conversations():
         pass  # Don't block on indexing failures
 
 
+def get_status_board():
+    """Live design-status board, generated from docs/*_DESIGN.md (never memory).
+
+    The docs' status lines are the single source of truth; this injects a fresh
+    board each session so status can't be read from a stale memory copy. Fail
+    open — a board error must never block the (more important) recall context.
+    """
+    try:
+        sys.path.insert(0, str(HOOKS_DIR))
+        import design_status
+        return design_status.build_board()
+    except Exception:
+        return ""
+
+
 def get_recent_sessions(prompt=""):
     """Get recent conversation digests, with optional prompt for continuation detection."""
     try:
@@ -104,6 +119,12 @@ def main():
 
     # Always return recent sessions, pass prompt for continuation detection
     context = get_recent_sessions(prompt)
+
+    # Prepend the live design-status board so status is read from the docs, not
+    # from stale memory. Board first (it's the ground truth), recall after.
+    board = get_status_board()
+    if board:
+        context = f"{board}\n\n{context}" if context else board
 
     if context:
         output = {
