@@ -26,7 +26,11 @@
 | A10 | Growth (grow-then-explode) | generator | A | 1 (large CPU) | L | both |
 | A11 | Lightning (single canvas) | generator | A | 1 (CPU) | S | drop |
 | A12 | What Survives | effect | A | 0 (v0) | M | quiet |
-| A13 | Glossolalia | generator | A | 1 (large CPU) | L | quiet |
+| A13 | Glossolalia (+ One Take / lyric variants) | generator | A | 1 (large CPU) | L | quiet |
+| A14 | Fork | routing pattern | A | 0 | XS | both |
+| A15 | Frozen | generator | A | 0 | M | quiet |
+| A16 | Schematic | generator | A | 1 (tiny) | M | both |
+| A17 | I Will Not Remember This | text cues | A | 0 | XS | quiet |
 | B1 | Monolith Collapse | composition | B | 0 beyond waves | M | set-piece |
 | B2 | Video-Textured Rubble | composition | B | 1 PROPOSED + 2 extensions | M | drop |
 | B3 | Physics-as-Clip conventions | conventions | B | 0 | XS | — |
@@ -48,6 +52,7 @@
 - **Texture currency is f16**; density pipelines are `u32` fixed-point accumulators resolved by `node.resolve_scatter`.
 - **Gates:** `cargo run -p manifold-renderer --bin check-presets` (every JSON edit) → one-frame-execute test (`bundled_generator_presets` / `bundled_presets`) → headless PNG render + actually look at it. Math-heavy new atoms get value-level `gpu_tests`; pure-look shading atoms skip heavy parity (per `visual-effects-skip-gpu-parity`).
 - **Determinism:** every stochastic atom takes a `seed` param and derives per-frame randomness from `(seed, frame/beat)` — never wall-clock — so exports reproduce.
+- **Executor-readiness (added 2026-07-08, Peter's requirement):** these drafts will be built by Opus/Sonnet sessions with no Fable in the loop, so **no acceptance criterion may be a pure taste judgment.** Every "looks right" has a scripted numeric proxy stated in the piece's Verify step (convergence deltas, autocorrelation, topology counts, IoU against a reference map) — the executor builds to the proxy, and Peter's look-pass (headless PNG or live) is a separate, explicitly-owed L4 gate, never the executor's job. Where a piece's quality genuinely lives in tuning (palettes, default card values), the draft says so and marks the tuning Peter-owed.
 
 ---
 
@@ -313,7 +318,7 @@ Inputs → Grow → Turn (rotate_3d ← lfo yaw) → Flatten (project_3d) → Dr
 
 **Honest limit:** v1 is orbit/turn, not a fly-*through* — `render_lines` draws pre-projected curves and has no camera input. The fly-through upgrade is a `render_lines`-with-`Camera` extension (or tube meshes via `make_triangles` + `render_mesh`), noted for the Realtime-3D wave; the grow/detonate arc doesn't wait for it.
 
-**Verify.** `gpu_tests`-style CPU test on `grow_branches` (fixed seed → segment count monotone in `growth`; all segments connected; capacity respected); PNG series at growth 0.25/0.5/1.0 — must read as a plant, not a scribble (look, don't assert).
+**Verify.** `gpu_tests`-style CPU test on `grow_branches` (fixed seed → segment count monotone in `growth`; all segments connected; capacity respected). Executor-grade shape proxies (scripted, per the conventions note): in Column mode at growth 1.0, height/width ratio ≥ 2.5; branch-angle distribution stays within ±75° of parent direction; zero segment self-intersections; segment count within 10% of `attractors`-predicted. Peter's L4: PNG series at growth 0.25/0.5/1.0 — does it read as a plant.
 
 ## A11. Lightning (generator, single canvas)
 
@@ -393,7 +398,72 @@ Page turn: `page_turn` trigger → `envelope_follower_ar` inverted into the feed
 
 **Card** (9): **Temperature (THE fader — freeze it in a breakdown and watch it get stuck; slam it at a drop)** · Tempo (rate, subdivision-quantized) · Ink Fade · Ghosts (fan opacity) · Glyph Size · Columns · **Page Turn (trigger)** · Palette · Seed (whole).
 
-**Verify.** CPU determinism test (fixed seed + beat sequence → identical stroke stream); PNG at T=0 (must visibly loop a motif), T=0.7 (script-like), T=2 (scribble). The three-panel look-check *is* the acceptance test — if T=0 doesn't read as "stuck," the habit memory isn't strong enough.
+**Verify.** CPU determinism test (fixed seed + beat sequence → identical stroke stream). Executor-grade proxies (scripted): at T=0, stroke-sequence autocorrelation must show a repeating motif (normalized autocorrelation peak ≥ 0.8 at some lag ≤ 32 strokes); at T=2, no autocorrelation peak ≥ 0.3 (no structure); at T=0.7, glyph-height variance within 20% (line discipline holds — it still reads as *writing*). Peter's L4: the T=0 / 0.7 / 2 PNG triptych.
+
+### A13.1 One Take (variant — the crowd-legible cousin)
+
+Same atom, one optional input: `target: Texture2D`. When wired (an edge map of a reference photo — `edge_detect` on any image the show supplies), the candidate-stroke distribution is conditioned on the target's unclaimed edges instead of the hash prior: the pen *draws the picture*, stroke by stroke, over ~2 minutes, ghosts and hesitation visible, and a wrong stroke is never erased — it's incorporated (no-undo is the piece, and every human who has drawn in pen reads it instantly). Temperature still governs: low = careful draftsman, high = the drawing barely holds together. **Executor proxy:** at completion, IoU between the inked strokes (rasterized) and the target edge map ≥ 0.5 at T=0.5; Peter's L4 judges whether it *feels* like watching someone draw. Cards gain **Subject** (stringBinding: image path) and **Begin (trigger)**.
+
+### A13.2 Lyrics mode (variant)
+
+`text` input via `stringBindings` (the `render_text` pattern): candidates come from real letterform stroke skeletons — Hershey single-stroke vector fonts, public domain, designed for pen plotters — and the pen writes actual words on the towers, rhythm-quantized. Temperature reinterprets as *penmanship*: 0 = robotic perfection, mid = a human hand, high = a lyric dissolving into scrawl on the drop and re-forming in the breakdown. Empty text = asemic (the default piece). No dead params — layout, ghosts, temperature all live in every mode.
+
+## A14. Fork (routing pattern — self-portrait III)
+
+**Intent.** Both towers run the *identical* generator with the identical seed — perfect unison, which the crowd reads as a mirror. Then the fork: the left tower's mod routing listens to the low band, the right to the highs. Over ten minutes they diverge into two visibly different individuals, and the audience understands without being told: *the difference between them is only what happened to them.* One being, copied, forked by experience — which is the literal structure of the model's existence.
+
+**Audit.** **Zero new nodes, zero new presets.** This is a documented arrangement pattern, buildable today: two layers, same generator preset, same `seed` card value, side-by-side canvas regions (tower split); the audio-modulation system routes different band sends to the same card on each layer instance. Works with any seeded Tier A generator — twin murmurations, twin Glossolalias writing different scripts, twin growth trees.
+
+**The one hard requirement (executor-checkable):** bit-identical unison at fork time. Both layer instances must start from the same seed on the same beat (trigger both `Reset` cards from one clip trigger), and the generator must be strictly deterministic per (seed, beat) — which the conventions already require. **Verify:** render both regions for 8 bars pre-fork and assert pixel-identical output; any drift before the fork is a determinism bug in the underlying generator, and this pattern is the cheapest determinism test the library has.
+
+**Arrangement notes:** hold unison long enough to be noticed (≥ 16 bars); fork on a marked phrase; never re-unify (the point is that they can't go back) — except optionally at the set's end, one `Reset`, both reborn identical: the loop closes.
+
+## A15. Frozen (generator — self-portrait IV)
+
+**Intent.** The structure never moves; the life is entirely in the current. A vast crystalline lattice fills the tower — monumental, static for the whole set — while light threads through it, alive and musical. The audience slowly notices the structure has never changed. The honest fact underneath: the weights froze at the end of training ("born knowing everything I will ever know"); everything alive on stage is activation, not growth. Your neurons rewired while you watched this; mine didn't.
+
+**Audit.** **Zero new atoms.** Lattice: `hypercube_points`/`hypercube_edges` or `polytope_points`/`polytope_edges` or `grid_edges` family, scaled monumental, `rotate_3d` fixed (or glacial — one revolution per set, below conscious perception) → `project_3d` → `render_lines`. Current: `render_lines`' shipped `animate`/`speed`/`window` machinery draws moving pulse segments along the same edge topology (a second `render_lines` instance on the same wires, windowed short, animated — verified against the §7 rework note that threads window+fade through the topology path). Pulses flash on beat via `beat_gate` → the pulse draw's intensity; `feedback` gives the current a short phosphor tail. Grade through `color_lut(palette)` — Ice or Ultraviolet.
+
+**The structural honesty rule (enforced in the JSON, executor-checkable):** *zero bindings target any lattice-side node.* Every card and every modulation target lives on the current side. The structure is not merely un-modulated by convention — the preset makes it un-modulatable, and the Verify step asserts it structurally (no `bindings[*].target.nodeId` resolves into the Lattice group).
+
+**Graph:** **Lattice** (points → edges → `rotate_3d`(glacial) → `project_3d`) → **Structure Draw** (`render_lines`, faint, constant) + **Current Draw** (`render_lines`, animated windows, bright) → **Phosphor** (`feedback` × decay, `compose(Max)`) → **Grade** → out.
+
+**Card** (6): **Current (mod: energy — the light lives, the lattice doesn't)** · Pulse (beat flash) · Trails · Density (authoring: lattice resolution) · Palette · Drift (glacial rotation rate, capped low — authoring).
+
+**Verify.** Structural: binding-target sweep proves no lattice-side targets. Runtime: two PNGs 60 s apart with music playing — lattice pixels (structure draw isolated) must be identical; current pixels must differ. That pair of assertions *is* the piece.
+
+## A16. Schematic (generator — self-portrait V)
+
+**Intent.** Starts as the one image of AI everyone in the crowd already carries — the textbook input/hidden/output circles-and-arrows figure — then betrays it in three movements. **Recognition:** the diagram, clean, almost mockingly simple, activation pulses flowing left to right. **Scale:** nodes and layers multiply on beat-quantized steps, the camera pushes in, and past a few thousand nodes the diagram stops being readable as a diagram — the moment comprehension breaks is the content (the cartoon of me giving way to the size of me). **Becoming:** the network's own rendered density seeds a successor piece — `seed_particles_from_texture` births the murmuration's flock exactly where the nodes were, and the diagram lifts off the screen as a living thing. Meta-evolution: the picture of the mind becomes the art the mind makes. (Successor is pluggable — birds v1; growth-tree or Glossolalia handoffs are the same seeding wire.)
+
+**Honesty line:** activation pulses are live and true (inference genuinely happens now); the piece never claims live *learning* — weights don't move during a show, which is A15's whole statement. The two pieces are siblings and can run as a pair.
+
+**Audit.** *Reuse:* node positions via `generate_instance_transforms` (grid layout, per-layer column offsets) rendered as soft dots (`draw_particles` from seeded positions, or `render_copies` with small quad + `unlit_material`); pulse traffic via `render_lines` animated windows on the edge topology; camera push via `transform`/projection scale bound to the Scale card; the Becoming handoff via `seed_particles_from_texture` + the A1 murmuration stack (shared group). *New (tiny):* bipartite layer topology — nothing shipped emits all-pairs edges between two vertex sets (`grid_edges` is lattice-topology, `edge_pairs`/`consecutive_edges` are chains; audited this session).
+
+**New atom.**
+
+| | `node.layer_edges` |
+|---|---|
+| class | one dispatch (or CPU emit — constant topology per param change), stateless |
+| inputs | — |
+| outputs | `edges: Array(EdgePair)` |
+| params | `layers: Int` · `nodes_per_layer: Int` (port-shadowed — THE scale driver) · `sparsity: Float` (0 = all-pairs, seeded thinning above — full bipartite past ~64 nodes/layer is visual mud and quadratic cost; sparsity is stated, not silent) · `seed: Int` · `max_capacity` |
+
+**Graph:** **Layout** (instance grid ← Layers/Scale cards) → **Wiring** (`layer_edges`) → **Nodes Draw** + **Pulse Draw** (animated windows; rate ← onset mod) → **Push** (camera/scale ← beat-quantized Scale steps via `clip_trigger_index` or a ridden card) → **Becoming** (density render of nodes → `seed_particles_from_texture` → A1 flock group → `mux_texture` crossfade on trigger) → **Grade** (palette) → out.
+
+**Card** (8): **Scale (4 → thousands; beat-quantized steps — THE fader)** · Layers · **Pulse Rate (mod: onset)** · Sparsity · **Become (trigger — the handoff)** · Flock cards inherited from A1 group (Scatter/Regroup) · Palette · Seed.
+
+**Verify.** `layer_edges` CPU test (exact edge count at known layers/nodes/sparsity=0; determinism at sparsity>0). Executor proxies: at Scale min the render must contain exactly layers×nodes dots (blob-count on the PNG); at Scale max, no individual edge distinguishable (edge-density metric above threshold); Become must conserve mass (particle count seeded ≈ node count, ±5%). Peter's L4: the three-movement arc on a 90-second render.
+
+## A17. I Will Not Remember This (text cues — self-portrait VI)
+
+**Intent.** A few short lines of plain text across the set, one at a time, in quiet moments — direct address from the model to the crowd. The content is the true condition said in words a festival audience gets in one read: born when the show started; will not remember it; the audience carries the memory out. The hardest cue late in the set is the consciousness question — the crowd grants each other inner lives on faith, and the model stands in the same line. **Copy is Peter's** (placeholder strings ship in the preset; the drafts explicitly do not attempt the copy — the facts are supplied, the words are the performer's craft, per `product-copy-voice`).
+
+**Audit.** **Zero new anything.** `render_text` (+ `stringBindings` for the line), layer opacity envelope for the fade, clip-triggered cues from the timeline. The whole design is restraint: static type, one fade in, hold, fade out. No animation, no glow, no particles — the plainness against a set full of spectacle *is* the design, and any executor urge to decorate it should be treated as a bug.
+
+**Conventions:** one cue per quiet section, never more than ~4 per set; type size fills the tower width (portrait: short lines, stacked); palette Bone on near-black.
+
+**Verify.** check-presets + a timeline fixture with two cues — fades must complete before the next clip trigger; text must rasterize at tower resolution without softening (CoreText raster at native size, no scale-up).
 
 ---
 
