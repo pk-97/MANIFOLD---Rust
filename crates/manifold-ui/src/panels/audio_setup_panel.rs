@@ -31,6 +31,75 @@ use super::{BandDivider, PanelAction};
 // Stable keys for the host-owned modal chrome (background + title strip).
 const KEY_BG: u64 = 70_001;
 const KEY_CLOSE: u64 = 70_002;
+
+// ── Stable keys for every interactive control in the panel body ──
+//
+// The panel is modeless and consumes `PointerDown` on its own owned nodes
+// (BUG-059 — a press that arms nothing must not leak to the timeline
+// beneath). Consuming an event marks the overlay dirty, so it rebuilds on
+// every press. Any `add_button` call built WITHOUT a key re-mints its
+// `WidgetId` from its sibling index on that rebuild; `Click` only fires
+// when press and release resolve to the SAME `WidgetId`, so an unkeyed
+// button silently needed a second click (BUG — see
+// `docs/INPUT_IDENTITY_UNIFICATION.md`). Every interactive node below is
+// therefore keyed so its identity survives the rebuild. Non-interactive
+// `add_label` nodes (the gain/sensitivity value labels used only as D7
+// drag-arm targets) are exempt — they carry no `INTERACTIVE` flag and
+// never receive a `Click`.
+//
+// Singletons: one instance per panel build.
+const KEY_DEVICE_DROPDOWN: u64 = 70_010;
+const KEY_ADD_SEND: u64 = 70_011;
+const KEY_FLOOR_MINUS: u64 = 70_012;
+const KEY_FLOOR_PLUS: u64 = 70_013;
+const KEY_ADD_LAYER: u64 = 70_014;
+
+/// Per-send row controls (dynamic list, indexed by the send's position in
+/// `self.sends`): swatch, label, delete, stereo, gain_minus, gain_plus,
+/// source, ch_dropdown — 8 controls, stride 20 leaves headroom.
+const KEY_SEND_ROW_BASE: u64 = 71_000;
+const KEY_SEND_ROW_STRIDE: u64 = 20;
+const SEND_OFF_SWATCH: u64 = 0;
+const SEND_OFF_LABEL: u64 = 1;
+const SEND_OFF_DELETE: u64 = 2;
+const SEND_OFF_STEREO: u64 = 3;
+const SEND_OFF_GAIN_MINUS: u64 = 4;
+const SEND_OFF_GAIN_PLUS: u64 = 5;
+const SEND_OFF_SOURCE: u64 = 6;
+const SEND_OFF_CH_DROPDOWN: u64 = 7;
+
+/// Stable key for a per-send row control at index `i` with the given
+/// control offset (`SEND_OFF_*`).
+const fn send_row_key(i: usize, offset: u64) -> u64 {
+    KEY_SEND_ROW_BASE + (i as u64) * KEY_SEND_ROW_STRIDE + offset
+}
+
+/// Per-send trigger config-row controls (fixed 4 rows — Whole/Low/Mid/High
+/// in `TRIG_BANDS` order, for the currently selected send): enable,
+/// sens_minus, sens_plus, len_minus, len_plus, layer — 6 controls, stride
+/// 20 leaves headroom.
+const KEY_CONFIG_ROW_BASE: u64 = 72_000;
+const KEY_CONFIG_ROW_STRIDE: u64 = 20;
+const CFG_OFF_ENABLE: u64 = 0;
+const CFG_OFF_SENS_MINUS: u64 = 1;
+const CFG_OFF_SENS_PLUS: u64 = 2;
+const CFG_OFF_LEN_MINUS: u64 = 3;
+const CFG_OFF_LEN_PLUS: u64 = 4;
+const CFG_OFF_LAYER: u64 = 5;
+
+/// Stable key for a per-band trigger config-row control at index `i` with
+/// the given control offset (`CFG_OFF_*`).
+const fn config_row_key(i: usize, offset: u64) -> u64 {
+    KEY_CONFIG_ROW_BASE + (i as u64) * KEY_CONFIG_ROW_STRIDE + offset
+}
+
+/// Inputs section: one remove (×) button per feeding layer of the selected
+/// send, indexed by position in that send's `feeding_layers`.
+const KEY_INPUTS_REMOVE_BASE: u64 = 73_000;
+
+/// Consumers section: one row button per consumer of the selected send,
+/// indexed by position in that send's `consumers`.
+const KEY_CONSUMER_ROW_BASE: u64 = 74_000;
 use super::overlay::{
     Anchor, Corner, Modality, Overlay, OverlayPlacement, OverlayResponse, SizePolicy,
     compute_overlay_rect,
@@ -746,7 +815,7 @@ impl AudioSetupPanel {
 
         // Device row: [Device]  [ current device            ▼ ]
         tree.add_label(Some(self.bg_id), inner_x, cy, 70.0, ROW_H, "Device", label_style());
-        self.device_dropdown_id = tree.add_button(
+        self.device_dropdown_id = tree.add_button_keyed(
             Some(self.bg_id),
             inner_x + 74.0,
             cy,
@@ -754,6 +823,7 @@ impl AudioSetupPanel {
             ROW_H,
             dropdown_trigger_style(),
             &self.device_label(),
+            KEY_DEVICE_DROPDOWN,
         );
         cy += ROW_H + ROW_GAP;
 
@@ -795,7 +865,7 @@ impl AudioSetupPanel {
             } else {
                 (12.0, cy + (ROW_H - 12.0) * 0.5)
             };
-            self.send_ids[i].swatch = tree.add_button(
+            self.send_ids[i].swatch = tree.add_button_keyed(
                 Some(self.bg_id),
                 inner_x,
                 swatch_y,
@@ -808,6 +878,7 @@ impl AudioSetupPanel {
                     ..UIStyle::default()
                 },
                 "",
+                send_row_key(i, SEND_OFF_SWATCH),
             );
 
             // Label is a button — clicking it opens the inline rename editor. A
@@ -819,7 +890,7 @@ impl AudioSetupPanel {
             if has_triggers {
                 lbl_style.text_color = Color32::new(240, 196, 110, 255); // amber
             }
-            self.send_ids[i].label = tree.add_button(
+            self.send_ids[i].label = tree.add_button_keyed(
                 Some(self.bg_id),
                 label_x,
                 cy,
@@ -827,6 +898,7 @@ impl AudioSetupPanel {
                 ROW_H,
                 lbl_style,
                 &send.label,
+                send_row_key(i, SEND_OFF_LABEL),
             );
 
             // Delete (right-aligned). Armed (awaiting confirm) shows a warning
@@ -839,7 +911,7 @@ impl AudioSetupPanel {
             } else if send.driven_count > 0 {
                 del_style.text_color = Color32::new(232, 168, 92, 255); // amber
             }
-            self.send_ids[i].delete = tree.add_button(
+            self.send_ids[i].delete = tree.add_button_keyed(
                 Some(self.bg_id),
                 inner_x + inner_w - STEP_W,
                 cy,
@@ -847,12 +919,13 @@ impl AudioSetupPanel {
                 ROW_H,
                 del_style,
                 delete_label,
+                send_row_key(i, SEND_OFF_DELETE),
             );
 
             let stereo_on = send.channels.len() >= 2;
             const STEREO_W: f32 = 30.0;
             let stereo_x = inner_x + inner_w - STEP_W - 4.0 - STEREO_W;
-            self.send_ids[i].stereo = tree.add_button(
+            self.send_ids[i].stereo = tree.add_button_keyed(
                 Some(self.bg_id),
                 stereo_x,
                 cy,
@@ -860,12 +933,13 @@ impl AudioSetupPanel {
                 ROW_H,
                 btn_style(stereo_on),
                 if stereo_on { "St" } else { "Mo" },
+                send_row_key(i, SEND_OFF_STEREO),
             );
 
             // Gain stepper [−] value [＋], left of the stereo toggle. Discrete
             // 1 dB steps; the value is read-only display (0 dB = unity).
             let gain_x = stereo_x - 4.0 - GAIN_W;
-            self.send_ids[i].gain_minus = tree.add_button(
+            self.send_ids[i].gain_minus = tree.add_button_keyed(
                 Some(self.bg_id),
                 gain_x,
                 cy,
@@ -873,6 +947,7 @@ impl AudioSetupPanel {
                 ROW_H,
                 btn_style(false),
                 "\u{2212}", // −
+                send_row_key(i, SEND_OFF_GAIN_MINUS),
             );
             // Value label doubles as a D7 horizontal drag zone — pointer-down
             // arms `gain_drag_target`, matching the crossover-drag pattern.
@@ -890,7 +965,7 @@ impl AudioSetupPanel {
                     ..UIStyle::default()
                 },
             );
-            self.send_ids[i].gain_plus = tree.add_button(
+            self.send_ids[i].gain_plus = tree.add_button_keyed(
                 Some(self.bg_id),
                 gain_x + GAIN_BTN_W + GAIN_VAL_W,
                 cy,
@@ -898,6 +973,7 @@ impl AudioSetupPanel {
                 ROW_H,
                 btn_style(false),
                 "\u{002B}", // +
+                send_row_key(i, SEND_OFF_GAIN_PLUS),
             );
 
             // Source indicator (read-only): "Cap" for a capture send, or the
@@ -906,7 +982,7 @@ impl AudioSetupPanel {
             // header (design §3R). This is status, not a control.
             const SRC_W: f32 = 48.0;
             let src_x = label_x + LABEL_W + 4.0;
-            self.send_ids[i].source = tree.add_button(
+            self.send_ids[i].source = tree.add_button_keyed(
                 Some(self.bg_id),
                 src_x,
                 cy,
@@ -914,12 +990,13 @@ impl AudioSetupPanel {
                 ROW_H,
                 btn_style(send.layer_fed),
                 &send.source_label,
+                send_row_key(i, SEND_OFF_SOURCE),
             );
 
             // Channel dropdown fills the gap, showing the resolved name(s).
             let ch_x = src_x + SRC_W + 4.0;
             let ch_w = (gain_x - 4.0 - ch_x).max(40.0);
-            self.send_ids[i].ch_dropdown = tree.add_button(
+            self.send_ids[i].ch_dropdown = tree.add_button_keyed(
                 Some(self.bg_id),
                 ch_x,
                 cy,
@@ -927,6 +1004,7 @@ impl AudioSetupPanel {
                 ROW_H,
                 dropdown_trigger_style(),
                 &send.channel_label,
+                send_row_key(i, SEND_OFF_CH_DROPDOWN),
             );
 
             // Level meter: a thin track under the channel dropdown with a fill
@@ -961,7 +1039,7 @@ impl AudioSetupPanel {
         }
 
         // Add-send button.
-        self.add_send_id = tree.add_button(
+        self.add_send_id = tree.add_button_keyed(
             Some(self.bg_id),
             inner_x,
             cy,
@@ -969,6 +1047,7 @@ impl AudioSetupPanel {
             ROW_H,
             btn_style(false),
             "+ Add Source",
+            KEY_ADD_SEND,
         );
         cy += ROW_H;
 
@@ -1035,7 +1114,7 @@ impl AudioSetupPanel {
                 },
             );
             fx += fl_label_w;
-            self.floor_minus_id = Some(tree.add_button(
+            self.floor_minus_id = Some(tree.add_button_keyed(
                 Some(self.bg_id),
                 fx,
                 cy,
@@ -1043,6 +1122,7 @@ impl AudioSetupPanel {
                 SCOPE_TITLE_H,
                 btn_style(false),
                 "\u{2212}",
+                KEY_FLOOR_MINUS,
             ));
             tree.add_label(
                 Some(self.bg_id),
@@ -1058,7 +1138,7 @@ impl AudioSetupPanel {
                     ..UIStyle::default()
                 },
             );
-            self.floor_plus_id = Some(tree.add_button(
+            self.floor_plus_id = Some(tree.add_button_keyed(
                 Some(self.bg_id),
                 fx + fl_btn + fl_val,
                 cy,
@@ -1066,6 +1146,7 @@ impl AudioSetupPanel {
                 SCOPE_TITLE_H,
                 btn_style(false),
                 "\u{002B}",
+                KEY_FLOOR_PLUS,
             ));
 
             // Hover readout (freq + dB at the cursor), right-aligned in the same
@@ -1289,7 +1370,7 @@ impl AudioSetupPanel {
             let mut x = inner_x;
 
             // Enable swatch — band-coloured (Whole = neutral), dim when disabled.
-            ids.enable = tree.add_button(
+            ids.enable = tree.add_button_keyed(
                 Some(self.bg_id),
                 x,
                 cy,
@@ -1297,6 +1378,7 @@ impl AudioSetupPanel {
                 TRIG_ROW_H,
                 trigger_swatch_style(i, row.enabled),
                 "",
+                config_row_key(i, CFG_OFF_ENABLE),
             );
             x += TRIG_ENABLE_W + 4.0;
 
@@ -1323,7 +1405,7 @@ impl AudioSetupPanel {
 
             // Sensitivity stepper [−] value [＋] (percent), matching the gain
             // stepper's glyphs and discrete-step behaviour.
-            ids.sens_minus = tree.add_button(
+            ids.sens_minus = tree.add_button_keyed(
                 Some(self.bg_id),
                 x,
                 cy,
@@ -1331,6 +1413,7 @@ impl AudioSetupPanel {
                 TRIG_ROW_H,
                 btn_style(false),
                 "\u{2212}",
+                config_row_key(i, CFG_OFF_SENS_MINUS),
             );
             // Value label doubles as a D7 horizontal drag zone — pointer-down
             // arms `sensitivity_drag_target`, matching the crossover-drag
@@ -1349,7 +1432,7 @@ impl AudioSetupPanel {
                     ..UIStyle::default()
                 },
             );
-            ids.sens_plus = tree.add_button(
+            ids.sens_plus = tree.add_button_keyed(
                 Some(self.bg_id),
                 x + TRIG_SENS_BTN_W + TRIG_SENS_VAL_W,
                 cy,
@@ -1357,12 +1440,13 @@ impl AudioSetupPanel {
                 TRIG_ROW_H,
                 btn_style(false),
                 "\u{002B}",
+                config_row_key(i, CFG_OFF_SENS_PLUS),
             );
             x += TRIG_SENS_BTN_W * 2.0 + TRIG_SENS_VAL_W + 4.0;
 
             // One-shot length stepper [−] Nb [＋] — how long a fired clip holds.
             // Multiplicative steps (halve/double) keep it on musical divisions.
-            ids.len_minus = tree.add_button(
+            ids.len_minus = tree.add_button_keyed(
                 Some(self.bg_id),
                 x,
                 cy,
@@ -1370,6 +1454,7 @@ impl AudioSetupPanel {
                 TRIG_ROW_H,
                 btn_style(false),
                 "\u{2212}",
+                config_row_key(i, CFG_OFF_LEN_MINUS),
             );
             tree.add_label(
                 Some(self.bg_id),
@@ -1385,7 +1470,7 @@ impl AudioSetupPanel {
                     ..UIStyle::default()
                 },
             );
-            ids.len_plus = tree.add_button(
+            ids.len_plus = tree.add_button_keyed(
                 Some(self.bg_id),
                 x + TRIG_SENS_BTN_W + TRIG_LEN_VAL_W,
                 cy,
@@ -1393,13 +1478,14 @@ impl AudioSetupPanel {
                 TRIG_ROW_H,
                 btn_style(false),
                 "\u{002B}",
+                config_row_key(i, CFG_OFF_LEN_PLUS),
             );
             x += TRIG_SENS_BTN_W * 2.0 + TRIG_LEN_VAL_W + 4.0;
 
             // Target-layer dropdown trigger (Auto or a layer name).
             let layer_w = (inner_x + inner_w - x).max(40.0);
             let layer_left = x;
-            ids.layer = tree.add_button(
+            ids.layer = tree.add_button_keyed(
                 Some(self.bg_id),
                 x,
                 cy,
@@ -1407,6 +1493,7 @@ impl AudioSetupPanel {
                 TRIG_ROW_H,
                 dropdown_trigger_style(),
                 &row.layer_label,
+                config_row_key(i, CFG_OFF_LAYER),
             );
 
             // Live level meter — a thin underline across the tuning zone (band
@@ -1510,7 +1597,7 @@ impl AudioSetupPanel {
         );
         cy += TRIG_TITLE_H;
 
-        for (_layer_id, name) in &feeding {
+        for (i, (_layer_id, name)) in feeding.iter().enumerate() {
             tree.add_label(
                 Some(self.bg_id),
                 inner_x,
@@ -1520,7 +1607,7 @@ impl AudioSetupPanel {
                 name,
                 label_style(),
             );
-            let remove_id = tree.add_button(
+            let remove_id = tree.add_button_keyed(
                 Some(self.bg_id),
                 inner_x + inner_w - STEP_W,
                 cy,
@@ -1528,12 +1615,13 @@ impl AudioSetupPanel {
                 ROW_H,
                 btn_style(false),
                 "\u{00D7}", // ×
+                KEY_INPUTS_REMOVE_BASE + i as u64,
             );
             self.inputs_remove_ids.push(remove_id);
             cy += ROW_H + ROW_GAP;
         }
 
-        self.add_layer_id = tree.add_button(
+        self.add_layer_id = tree.add_button_keyed(
             Some(self.bg_id),
             inner_x,
             cy,
@@ -1541,6 +1629,7 @@ impl AudioSetupPanel {
             ROW_H,
             btn_style(false),
             "+ Layer",
+            KEY_ADD_LAYER,
         );
         cy += ROW_H + ROW_GAP;
         cy
@@ -1599,8 +1688,8 @@ impl AudioSetupPanel {
             );
             cy += ROW_H + ROW_GAP;
         } else {
-            for c in &consumers {
-                let id = tree.add_button(
+            for (i, c) in consumers.iter().enumerate() {
+                let id = tree.add_button_keyed(
                     Some(self.bg_id),
                     inner_x,
                     cy,
@@ -1608,6 +1697,7 @@ impl AudioSetupPanel {
                     ROW_H,
                     label_button_style(),
                     &c.label,
+                    KEY_CONSUMER_ROW_BASE + i as u64,
                 );
                 // Jump affordance: a muted "›" at the row's right edge (same
                 // muted tone as the panel's dropdown chevrons), so the only
@@ -3068,5 +3158,104 @@ mod tests {
         let ids = p.feeding_layer_ids(&AudioSendId::new("s1"));
         assert_eq!(ids, vec![LayerId::new("kick")]);
         assert!(p.feeding_layer_ids(&AudioSendId::new("s2")).is_empty());
+    }
+
+    // ─── Stable WidgetId across rebuild (the double-click bug) ───
+    //
+    // The panel consumes `PointerDown` on its own owned nodes to block the
+    // BUG-059 leak, and consuming an event marks the overlay dirty, so
+    // `ui_root.rs` rebuilds it (clear + rebuild) on the next frame. A plain
+    // back-to-back rebuild of UNCHANGED panel data is NOT enough to
+    // reproduce the churn — sibling-index auto-salts are deterministic
+    // given an identical build order, so an identical double-build is
+    // stable even for an unkeyed button. The real trigger is a PRECEDING
+    // sibling count changing between builds: e.g. the delete-confirm
+    // notice line (`active_notice()`) appearing after a delete-arm click
+    // inserts one label BEFORE every send row, the add-send button, the
+    // floor stepper, and everything below — shifting every later unkeyed
+    // control's auto-salt out from under it (exactly the scenario
+    // `add_node_keyed`'s doc comment names: "a row control when an
+    // earlier row grows a drawer"). These tests force that shift and
+    // assert the keyed controls' `WidgetId`s survive it unchanged.
+    //
+    // Confirmed empirically before writing the fix's final version: with
+    // the floor-minus and send-delete call sites temporarily reverted to
+    // unkeyed `add_button`, both tests below FAIL (the widget ids differ
+    // pre/post the notice-line insertion); with the keys in place (the
+    // code as it ships), both PASS.
+
+    #[test]
+    fn floor_button_widget_id_survives_notice_line_insertion() {
+        let mut p = panel_with_two_sends();
+        // driven_count > 0 so the first delete click ARMS (inserts the
+        // notice line on the next build) instead of deleting immediately.
+        p.sends[0].driven_count = 3;
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+        assert!(p.active_notice().is_none(), "no notice line yet — nothing armed");
+        let floor_minus_1 = p.floor_minus_id.expect("floor stepper built with sends present");
+        let w1 = tree.widget_of(floor_minus_1);
+        assert_ne!(w1, WidgetId::NONE);
+
+        // Arm the delete confirm (state-only — no rebuild yet), then
+        // rebuild exactly as `ui_root.rs` does when `overlay_dirty` is set
+        // after the PointerDown that triggered this exact click was
+        // consumed. This is the layout-shifting rebuild.
+        assert!(p.handle_click(p.send_ids[0].delete).is_none(), "first click arms, no action yet");
+        tree.clear();
+        p.build(&mut tree, 1280.0, 720.0);
+        assert!(p.active_notice().is_some(), "delete-confirm notice line now present");
+        let floor_minus_2 = p.floor_minus_id.expect("floor stepper rebuilt");
+        let w2 = tree.widget_of(floor_minus_2);
+
+        assert_ne!(
+            floor_minus_1, floor_minus_2,
+            "NodeId gets a fresh generation on rebuild (expected)"
+        );
+        assert_eq!(
+            w1, w2,
+            "floor [-] button's WidgetId must survive a preceding sibling (the notice \
+             line) appearing — this is the double-click bug's churn-is-gone proof"
+        );
+    }
+
+    #[test]
+    fn send_row_control_widget_ids_survive_notice_line_insertion_and_stay_distinct() {
+        let mut p = panel_with_two_sends();
+        p.sends[0].driven_count = 3;
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+
+        let row0_delete_1 = tree.widget_of(p.send_ids[0].delete);
+        let row1_delete_1 = tree.widget_of(p.send_ids[1].delete);
+        assert_ne!(row0_delete_1, WidgetId::NONE);
+        assert_ne!(row1_delete_1, WidgetId::NONE);
+        assert_ne!(
+            row0_delete_1, row1_delete_1,
+            "row 0 and row 1's delete buttons must get DISTINCT keys — no collision"
+        );
+
+        // Arm row 0's delete (state-only), then rebuild — the notice line
+        // now precedes BOTH send rows, shifting every later auto-salted
+        // sibling if unkeyed.
+        assert!(p.handle_click(p.send_ids[0].delete).is_none());
+        tree.clear();
+        p.build(&mut tree, 1280.0, 720.0);
+        assert!(p.active_notice().is_some());
+
+        let row0_delete_2 = tree.widget_of(p.send_ids[0].delete);
+        let row1_delete_2 = tree.widget_of(p.send_ids[1].delete);
+        assert_eq!(
+            row0_delete_1, row0_delete_2,
+            "row 0 delete button's WidgetId is stable across the notice-line insertion"
+        );
+        assert_eq!(
+            row1_delete_1, row1_delete_2,
+            "row 1 delete button's WidgetId is stable across the notice-line insertion"
+        );
+        assert_ne!(
+            row0_delete_2, row1_delete_2,
+            "still distinct after rebuild — stability didn't collapse the rows together"
+        );
     }
 }
