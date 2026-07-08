@@ -256,9 +256,9 @@ one design-level call; accepted for P1 because BUG-060 dies by containment indep
 Landed 2026-07-08. The acceptance flow (`scripts/ui-flows/bug060-inspector-footer-containment.json`)
 drives the real click path and proves the footer stays hit-testable and dispatches with the inspector
 busy and scrolled — but `try_inspector_scroll`'s effective max is ~15-20px on content ~1200px too
-tall (BUG-075), so it never reaches the *very bottom* that is BUG-060's exact repro condition.
+tall (BUG-076), so it never reaches the *very bottom* that is BUG-060's exact repro condition.
 Containment makes bottom-scroll safe by construction (the region clip is unconditional), so this is a
-demonstration gap, not a correctness one. Burn-down: fix BUG-075 (scroll estimator under-counts
+demonstration gap, not a correctness one. Burn-down: fix BUG-076 (scroll estimator under-counts
 drawer-open card height), then re-run the flow to a true bottom and re-capture.
 
 *(VD-001–004 seeded 2026-07-05 from the memory corpus plus Peter's in-app findings; VD-006 added

@@ -1244,22 +1244,35 @@ impl UIRoot {
         None
     }
 
-    /// D2/§3.3 — the terminal broadcast every gesture that began gets,
-    /// exactly once, no matter who owned it or what ate the routed event.
-    /// Runs on `DragEnd`/`PointerUp` (after the owner's own idempotent
-    /// end-call, which stays unconditional — the precedent this generalizes)
-    /// and as the self-heal on the next `PointerDown` if a stale owner
-    /// survived (a lost OS release — `docs/DRAG_CAPTURE_DESIGN.md` §3.3
-    /// failure story). Every OPEN overlay's `gesture_ended` hook fires
-    /// (default no-op in P1; the audio panel's override lands P2), then
-    /// `drag_owner` clears.
-    fn broadcast_gesture_end(&mut self) {
+    /// Fire the end-of-gesture hook on every OPEN overlay (idempotent
+    /// `gesture_ended` clears; default no-op, the audio panel overrides).
+    /// Does NOT touch `drag_owner` — split out of `broadcast_gesture_end`
+    /// so the terminal-event path can fire the hooks while `drag_owner` is
+    /// still live for the stash classification, then clear the owner as the
+    /// last step of the terminal iteration (see `process_events`). Clearing
+    /// the owner one line too early was BUG-075: it nulled the owner before
+    /// `should_stash_for_tracks` read it, so a timeline gesture's terminal
+    /// `DragEnd` was never stashed and `on_end_drag` never ran (trim /
+    /// marquee never finalized).
+    fn fire_gesture_end_hooks(&mut self) {
         for id in OverlayId::Z_ORDER {
             let ov = self.overlay_mut(id);
             if ov.is_open() {
                 ov.gesture_ended();
             }
         }
+    }
+
+    /// D2/§3.3 — the terminal broadcast every gesture that began gets,
+    /// exactly once, no matter who owned it or what ate the routed event.
+    /// The fused form (hooks + `drag_owner` clear) is the self-heal on the
+    /// next `PointerDown` when a stale owner survived (a lost OS release —
+    /// `docs/DRAG_CAPTURE_DESIGN.md` §3.3 failure story). The normal terminal
+    /// path does NOT use this — it calls `fire_gesture_end_hooks` and defers
+    /// the clear past the stash read (see `process_events`); the two must not
+    /// be re-fused (BUG-075).
+    fn broadcast_gesture_end(&mut self) {
+        self.fire_gesture_end_hooks();
         self.drag_owner = None;
     }
 
@@ -1746,8 +1759,10 @@ impl UIRoot {
         // continuation is gated on the now-fixed owner instead of re-checking
         // the private flags directly. `DragEnd`/`PointerUp` keep the existing
         // unconditional, idempotent end-calls (the broadcast precedent this
-        // design generalizes), then `broadcast_gesture_end` fires once more for
-        // every other overlay's `gesture_ended` hook and clears `drag_owner`.
+        // design generalizes), then `fire_gesture_end_hooks` runs every other
+        // overlay's `gesture_ended` hook. The `drag_owner` clear is deferred
+        // to the END of the terminal iteration — past the stash read — so the
+        // timeline's terminal `DragEnd` is still routed to it (BUG-075).
         for event in &events {
             match event {
                 UIEvent::DragBegin { node_id, origin, .. } => {
@@ -1802,7 +1817,12 @@ impl UIRoot {
                         let mut g_actions = self.layer_headers.handle_gain_drag_end();
                         actions.append(&mut g_actions);
                     }
-                    self.broadcast_gesture_end();
+                    // Fire the overlay end hooks now, but leave `drag_owner`
+                    // set — the stash classification below (`should_stash_for
+                    // _tracks`) needs it to route this terminal `DragEnd` to
+                    // the timeline. The owner is cleared as the last step of
+                    // this iteration, past the stash read (BUG-075).
+                    self.fire_gesture_end_hooks();
                 }
                 _ => {}
             }
@@ -1821,6 +1841,16 @@ impl UIRoot {
             }
             if stash {
                 self.viewport_events.push(event.clone());
+            }
+
+            // Owner lifetime (BUG-075 / D2/§3.3): the stash read just above
+            // still needs `drag_owner`, so the terminal clear happens HERE —
+            // after both the fire-hooks (in the match arm) and the stash
+            // classification — never earlier. This is the fix's whole point:
+            // fire hooks, stash by owner, then clear. Re-folding the clear
+            // into `fire_gesture_end_hooks` would reintroduce BUG-075.
+            if matches!(event, UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. }) {
+                self.drag_owner = None;
             }
         }
 
@@ -3096,6 +3126,64 @@ mod drag_capture_tests {
         ui.drag_owner = Some(DragOwner::TimelineTracks);
         ui.broadcast_gesture_end();
         assert_eq!(ui.drag_owner, None);
+    }
+
+    /// BUG-075 regression: a timeline drag driven through the REAL
+    /// `process_events` path must stash its terminal `DragEnd` for
+    /// `InteractionOverlay::on_end_drag` — which is the only thing that
+    /// finalizes trim / marquee / move (commits undo, resets `drag_mode`).
+    ///
+    /// This drives the same seam the shipped bug lived in: the terminal
+    /// broadcast used to null `drag_owner` BEFORE `should_stash_for_tracks`
+    /// read it, so the `DragEnd` never reached `viewport_events` and the
+    /// gesture never finalized. The pre-existing ownership tests set
+    /// `drag_owner` by hand and called `should_stash_for_tracks` directly, so
+    /// they never exercised the broadcast-before-stash ordering — which is
+    /// exactly why the bug shipped. This test refuses to do that: it goes
+    /// Down → Move-past-threshold → Up through `pointer_event`/`process_events`
+    /// and asserts the drained events, so the ordering is under test.
+    #[test]
+    fn timeline_drag_end_reaches_viewport_events_through_process_events() {
+        let mut ui = new_root();
+        let origin = center(ui.viewport.tracks_rect());
+
+        // Press inside the tracks area.
+        ui.pointer_event(origin, PointerAction::Down, 0.0);
+        let _ = ui.process_events();
+        let _ = ui.drain_viewport_events(); // clear the PointerDown stash
+
+        // Move well past DRAG_THRESHOLD_PX (4px) → DragBegin + Drag. The
+        // DragBegin is where `resolve_drag_owner` fixes the owner.
+        let moved = Vec2::new(origin.x + 40.0, origin.y + 6.0);
+        ui.pointer_event(moved, PointerAction::Move, 0.02);
+        let _ = ui.process_events();
+        assert_eq!(
+            ui.drag_owner,
+            Some(DragOwner::TimelineTracks),
+            "the tracks-area DragBegin must resolve ownership to TimelineTracks \
+             (if this fails the input never emitted DragBegin, not the bug)"
+        );
+        let mid = ui.drain_viewport_events();
+        assert!(
+            mid.iter().any(|e| matches!(e, UIEvent::DragBegin { .. })),
+            "the DragBegin must stash while the gesture is owned: {mid:?}"
+        );
+
+        // Release. The terminal DragEnd must stash for on_end_drag, and the
+        // owner must be cleared afterward (self-heal invariant preserved).
+        ui.pointer_event(moved, PointerAction::Up, 0.04);
+        let _ = ui.process_events();
+        let end = ui.drain_viewport_events();
+        assert!(
+            end.iter().any(|e| matches!(e, UIEvent::DragEnd { .. })),
+            "BUG-075: the terminal DragEnd must reach viewport_events so \
+             on_end_drag finalizes the gesture — pre-fix this vec has no \
+             DragEnd because the broadcast nulled the owner first: {end:?}"
+        );
+        assert_eq!(
+            ui.drag_owner, None,
+            "the owner must be cleared once the terminal event is fully routed"
+        );
     }
 
     /// D5 (P2): the docked Audio Setup panel (top-right, 38% width, full
