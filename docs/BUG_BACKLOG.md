@@ -90,17 +90,13 @@ release-gating for the commercial cut, not optional.
    Fix in flight: AUDIO_ANALYSIS_ACCURACY P2 (Beat This, MIT code+weights) + P6 (full
    madmom removal), both with `rg 'madmom'` zero-hit deletion gates.
 2. **ADTOF — CC BY-NC-SA 4.0** (code + model; we ship the `adtof-pytorch` port, which
-   inherits it). Drum stage of the pipeline. Cheapest out: email Zehren for a
-   commercial grant; else replace the model (E-GMD + Slakh drums are clean truth; the
-   accuracy harness scores any candidate). AUDIO_ANALYSIS_ACCURACY Deferred #1,
-   trigger = commercialization v1.0 gate. **Peter's direction (2026-07-08):** try our
-   own detectors first — port the live 4-band SuperFlux + spectral-template classify
-   onto the demucs drum stem (stem-separated EDM drums are a much easier problem than
-   ADTOF's from-the-mix task); harness-score against ADTOF baseline on held-out.
-   Long-term sanctioned: train our own drum model on permissive data only (E-GMD +
-   Slakh + self-rendered EDM MIDI — satisfies the design's D8 no-NC-training line);
-   weights become ours. Fresh off-the-shelf search when work starts (Magenta E-GMD
-   model / Omnizart were the permissive options as of 2026-07, both mid).
+   inherits it). Drum stage of the pipeline. **Peter's direction (2026-07-08): do NOT
+   email Zehren yet** — replace instead. Full two-stage approach (DSP stem detectors
+   now, own trained drum-stem model to compete — trained on demucs-separated permissive
+   data, weights ours) is captured in AUDIO_ANALYSIS_ACCURACY_DESIGN Deferred #1;
+   trigger = commercialization v1.0 gate or drum work resuming. Fresh off-the-shelf
+   search when work starts (Magenta E-GMD model / Omnizart were the permissive options
+   as of 2026-07, both mid).
 3. **rusty_link 0.4 — GPL-2.0-or-later** (`crates/manifold-playback/Cargo.toml:17`,
    used by `link_sync.rs`). GPL is viral for a closed-source binary — this is the only
    non-permissive crate in the whole Rust tree. Ableton Link itself is dual-licensed

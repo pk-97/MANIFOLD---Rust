@@ -371,7 +371,26 @@ replacement, DALI, learned sections, realtime tuning → Deferred #1–#4.
 
 1. **ADTOF replacement** (NC license, BUG-069) — trigger: commercialization v1.0 gate,
    or drum accuracy work resuming. E-GMD + Slakh drums are the clean truth; the
-   harness makes any candidate measurable. Until then ADTOF ships only in dev builds.
+   harness makes any candidate measurable. Approach settled with Peter 2026-07-08
+   (*"I really like this idea of a trained model for drum stems only"*; do NOT email
+   Zehren yet — his call). Two stages, one contract:
+   - **Stage 1, DSP object detectors on the demucs drum stem** (no training): the live
+     kick detector's logic offline with non-causal luxuries — larger/centered windows,
+     whole-track normalization, backward sample-accurate attack refinement (feeds D14);
+     clap/snare/hat/tom via per-onset features (centroid, flatness, band ratios, decay
+     shape). Key mechanism: **cluster the track's onsets first (3–8 drum objects),
+     label clusters by centroid signature** — per-track calibration, never
+     one-onset-at-a-time global templates.
+   - **Stage 2, own trained model**: small CRNN (1–5M params) on log-mel of the drum
+     stem, 5–8 classes (clap split from snare, open/closed hat). Training data by
+     construction, permissive-only (D8): E-GMD + Slakh + self-rendered drum MIDI
+     through synthesized kits + EDM production-chain augmentation. **Domain-matching
+     trick: train on demucs-SEPARATED renders, not clean stems** — the model learns
+     the separation artifacts it will see at inference; this is where it beats
+     mix-trained ADTOF in our domain. Ships as CoreML/ONNX weights we own.
+   - **Contract**: both stages emit candidates-with-confidences into the same Event
+     JSON, scored per-class on held-out; ship whichever wins per class (kick may stay
+     DSP while hats go learned). All agent-runnable; Peter's ear is the top gate.
 2. **DALI / note-level vocal truth** — trigger: phrase-region metrics prove
    insufficient for a vocal feature Peter actually wants.
 3. **Learned section segmentation** — trigger: harness shows rule-based labels < what
