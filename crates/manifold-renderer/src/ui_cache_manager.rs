@@ -192,11 +192,32 @@ impl UICacheManager {
         }
 
         // Clear atlas if needed (resize, full rebuild).
+        let did_clear = self.needs_clear;
         if self.needs_clear {
             let mut enc = device.create_encoder("Atlas Clear");
             enc.clear_texture(self.atlas_texture.as_ref().unwrap(), 0.0, 0.0, 0.0, 0.0);
             enc.commit();
             self.needs_clear = false;
+        }
+
+        // BUG-060 footer-leak trace: log the footer + inspector render fate each
+        // frame — is the footer skipped, its rect narrow, or the inspector's
+        // range overlapping it? Settles why the footer's right half goes dark.
+        if ui_renderer.debug_footer_leak_enabled() {
+            for p in panels.iter().filter(|p| {
+                p.slot == PanelSlot::Footer || p.slot == PanelSlot::Inspector
+            }) {
+                let i = p.slot as usize;
+                let valid = self.panel_valid[i];
+                let dirty = tree.has_dirty_in_range(p.node_start, p.node_end);
+                let decision = if valid && !dirty { "SKIP" } else { "render" };
+                eprintln!(
+                    "[FOOTER-DBG] {:?} {decision} valid={valid} dirty={dirty} did_clear={did_clear} \
+                     rect=({:.0},{:.0},{:.0},{:.0}) range=[{},{})",
+                    p.slot, p.rect.x, p.rect.y, p.rect.width, p.rect.height,
+                    p.node_start, p.node_end,
+                );
+            }
         }
 
         let mut rendered = 0;
@@ -292,13 +313,14 @@ impl UICacheManager {
             rendered_ranges.push((info.node_start, info.node_end));
         }
 
-        // BUG-060 footer-leak trace: dump the composited atlas to PNG every ~30
-        // frames so the footer region can be inspected directly — settles whether
-        // a panel wrote blue INTO the atlas or the blue is added after the atlas.
+        // BUG-060 footer-leak trace: dump the composited atlas to a numbered PNG
+        // every ~12 frames (kept, not overwritten) so the exact broken frame is
+        // captured even if it's brief — settles whether a panel wrote blue INTO
+        // the atlas or the blue is added after the atlas.
         if ui_renderer.debug_footer_leak_enabled() {
             self.debug_frame_counter += 1;
-            if self.debug_frame_counter.is_multiple_of(30) {
-                self.debug_dump_atlas(device);
+            if self.debug_frame_counter.is_multiple_of(12) {
+                self.debug_dump_atlas(device, self.debug_frame_counter / 12);
             }
         }
 
@@ -308,7 +330,7 @@ impl UICacheManager {
     /// BUG-060 footer-leak trace: read the atlas back and write it to
     /// `/tmp/atlas_latest.png` (overwritten each dump). Bgra8Unorm → RGBA. Stalls
     /// the GPU (readback), so only ever called under the env flag. Remove with the trace.
-    fn debug_dump_atlas(&self, device: &GpuDevice) {
+    fn debug_dump_atlas(&self, device: &GpuDevice, seq: u64) {
         let Some(tex) = self.atlas_texture.as_ref() else {
             return;
         };
@@ -330,16 +352,12 @@ impl UICacheManager {
             rgba[i * 4 + 2] = bgra[i * 4]; // B <- R
             rgba[i * 4 + 3] = 255; // opaque, so a viewer doesn't show transparent as white
         }
-        if let Err(e) = image::save_buffer(
-            "/tmp/atlas_latest.png",
-            &rgba,
-            w,
-            h,
-            image::ColorType::Rgba8,
-        ) {
+        let _ = std::fs::create_dir_all("/tmp/atlas_dumps");
+        let path = format!("/tmp/atlas_dumps/atlas_{seq:04}.png");
+        if let Err(e) = image::save_buffer(&path, &rgba, w, h, image::ColorType::Rgba8) {
             eprintln!("[FOOTER-LEAK] atlas dump failed: {e}");
         } else {
-            eprintln!("[FOOTER-LEAK] dumped atlas {w}x{h} -> /tmp/atlas_latest.png");
+            eprintln!("[FOOTER-LEAK] dumped atlas {w}x{h} -> {path}");
         }
     }
 
