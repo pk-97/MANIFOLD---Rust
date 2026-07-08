@@ -8,6 +8,7 @@
 use super::DriverConfigAction;
 use super::TrimKind;
 use super::param_card::ParamInfo;
+use super::{AudioShapeParam, GraphParamTarget, PanelAction};
 use crate::chrome::{Theme, View};
 use crate::color;
 use crate::node::*;
@@ -171,6 +172,10 @@ pub(crate) struct EnvelopeTargetIds {
 pub(crate) struct EnvelopeConfigIds {
     pub(crate) _container_id: NodeId,
     pub(crate) decay_slider: SliderNodeIds,
+    /// Right-click reset for the Decay slider (the `EnvDecay*` trio) —
+    /// BUG-070 follow-through; this drawer previously had no reset gesture
+    /// at all (`DrawerRow::Slider`'s `reset` field is now required).
+    pub(crate) decay_reset: PanelAction,
 }
 
 #[derive(Clone, Copy)]
@@ -845,6 +850,8 @@ pub(crate) fn build_envelope_config(
     w: f32,
     mod_state: &ParamModState,
     param_idx: usize,
+    target: GraphParamTarget,
+    pid: manifold_foundation::ParamId,
 ) -> EnvelopeConfigIds {
     use crate::panels::drawer::{self, DrawerRow, DrawerSpec};
 
@@ -853,16 +860,23 @@ pub(crate) fn build_envelope_config(
         .get(param_idx)
         .copied()
         .unwrap_or(DEFAULT_ENV_DECAY);
+    // BUG-070 follow-through: the envelope drawer never had a reset gesture
+    // before (`DrawerRow::Slider::reset` is now required) — wired here using
+    // the same EnvDecay Snapshot/Changed/Commit trio the drag path already
+    // emits, reset to `DEFAULT_ENV_DECAY`.
+    let reset = PanelAction::slider_reset(
+        PanelAction::EnvDecaySnapshot(target, pid.clone()),
+        PanelAction::EnvDecayChanged(target, pid.clone(), DEFAULT_ENV_DECAY),
+        PanelAction::EnvDecayCommit(target, pid),
+    );
     let spec = DrawerSpec {
         rows: vec![DrawerRow::Slider {
             label: "Decay".into(),
             norm: (decay / ENV_DECAY_MAX).clamp(0.0, 1.0),
-            // Not yet reset-wired (no right-click registration exists for the
-            // envelope drawer today — outside BUG-061's surface inventory);
-            // set to the real default so the field is honest if that changes.
             default_norm: (DEFAULT_ENV_DECAY / ENV_DECAY_MAX).clamp(0.0, 1.0),
             value_text: format!("{decay:.2}"),
             label_w: ENV_DECAY_LABEL_W,
+            reset: reset.clone(),
         }],
         btn_font_size: FONT_SIZE,
         slider_font_size: FONT_SIZE,
@@ -878,6 +892,7 @@ pub(crate) fn build_envelope_config(
     EnvelopeConfigIds {
         _container_id: dids.container,
         decay_slider,
+        decay_reset: reset,
     }
 }
 
@@ -1173,6 +1188,11 @@ pub(crate) struct ParamRowIds {
     /// See `docs/NODE_INTENT_DISPATCH.md`.
     pub(crate) row_catcher: NodeId,
     pub(crate) slider: Option<SliderNodeIds>,
+    /// The main slider's right-click reset action — always constructed
+    /// alongside `slider` (both are `Some`/real together; `slider_reset` is
+    /// never `Option` because `build_param_row` always builds a main slider).
+    /// The caller stores it beside `slider` for a later replay pass.
+    pub(crate) slider_reset: PanelAction,
     pub(crate) trim: Option<TrimHandleIds>,
     /// Orange envelope target handle on the slider track (when armed).
     pub(crate) target: Option<EnvelopeTargetIds>,
@@ -1401,6 +1421,8 @@ fn build_audio_mod_drawer(
     i: usize,
     config_font: u16,
     trigger_mode_idx: Option<i32>,
+    target: GraphParamTarget,
+    pid: manifold_foundation::ParamId,
 ) -> (crate::panels::drawer::DrawerIds, usize) {
     use crate::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
     let send_sel = mod_state.audio_send_idx.get(i).copied().unwrap_or(-1);
@@ -1444,12 +1466,24 @@ fn build_audio_mod_drawer(
     let sens = mod_state.audio_sensitivity.get(i).copied().unwrap_or(1.0);
     let attack = mod_state.audio_attack_ms.get(i).copied().unwrap_or(5.0);
     let release = mod_state.audio_release_ms.get(i).copied().unwrap_or(120.0);
-    let shape_slider = |label: &str, norm: f32, default_norm: f32, value_text: String| DrawerRow::Slider {
-        label: label.to_string(),
-        norm: norm.clamp(0.0, 1.0),
-        default_norm: default_norm.clamp(0.0, 1.0),
-        value_text,
-        label_w: AUDIO_SHAPE_LABEL_W,
+    let shape_slider =
+        |label: &str, norm: f32, default_norm: f32, value_text: String, reset: PanelAction| DrawerRow::Slider {
+            label: label.to_string(),
+            norm: norm.clamp(0.0, 1.0),
+            default_norm: default_norm.clamp(0.0, 1.0),
+            value_text,
+            label_w: AUDIO_SHAPE_LABEL_W,
+            reset,
+        };
+    // Each shaping slider's right-click reset — AudioModShape's own default.
+    // BUG-070: these never had a reset gesture before this (the drawer only
+    // opens when armed, gated the same way the drag hit-test already is).
+    let shape_reset = |which: AudioShapeParam, default: f32| {
+        PanelAction::slider_reset(
+            PanelAction::AudioModShapeSnapshot(target, pid.clone()),
+            PanelAction::AudioModShapeParamChanged(target, pid.clone(), which, default),
+            PanelAction::AudioModShapeCommit(target, pid.clone()),
+        )
     };
     // Modifier toggles below the band row: "Inv" (loud → low) then "Delta"
     // (drive on motion). Flat indices sit one and two past the bands.
@@ -1477,18 +1511,21 @@ fn build_audio_mod_drawer(
             sens / AUDIO_SENS_MAX,
             AUDIO_SENS_DEFAULT / AUDIO_SENS_MAX,
             format!("{sens:.2}"),
+            shape_reset(AudioShapeParam::Sensitivity, AUDIO_SENS_DEFAULT),
         ),
         shape_slider(
             "Attack",
             attack / AUDIO_ATTACK_MAX_MS,
             AUDIO_ATTACK_DEFAULT_MS / AUDIO_ATTACK_MAX_MS,
             format!("{attack:.0} ms"),
+            shape_reset(AudioShapeParam::Attack, AUDIO_ATTACK_DEFAULT_MS),
         ),
         shape_slider(
             "Release",
             release / AUDIO_RELEASE_MAX_MS,
             AUDIO_RELEASE_DEFAULT_MS / AUDIO_RELEASE_MAX_MS,
             format!("{release:.0} ms"),
+            shape_reset(AudioShapeParam::Release, AUDIO_RELEASE_DEFAULT_MS),
         ),
     ];
     // §9 U2: the trigger-only Mode row, appended last so its flat button
@@ -1566,6 +1603,7 @@ pub(crate) fn build_toggle_trigger_row(
     info: &ParamInfo,
     mod_state: &ParamModState,
     i: usize,
+    target: GraphParamTarget,
     config_font: u16,
     // Whether this card reserves an envelope-button-width gap before the
     // driver column on its slider rows (effects gate on `supports_envelopes`;
@@ -1674,6 +1712,8 @@ pub(crate) fn build_toggle_trigger_row(
                 i,
                 config_font,
                 trigger_mode_idx,
+                target,
+                info.param_id.clone(),
             );
             cy += dids.height;
             audio_config = Some((dids, send_count));
@@ -1737,6 +1777,7 @@ pub(crate) fn build_param_row(
     info: &ParamInfo,
     mod_state: &ParamModState,
     i: usize,
+    target: GraphParamTarget,
     slider_colors: &SliderColors,
     config_font: u16,
     build_env_button: bool,
@@ -1767,10 +1808,19 @@ pub(crate) fn build_param_row(
     // tests, which build settled, are unaffected).
     drawer_reveal: Option<f32>,
 ) -> ParamRowIds {
+    // The main slider's right-click reset — constructed up front so it can
+    // seed both `ids.slider_reset` (below) and the `BitmapSlider::build` call
+    // that materialises the track it fires on.
+    let reset = PanelAction::slider_reset(
+        PanelAction::ParamSnapshot(target, info.param_id.clone()),
+        PanelAction::ParamChanged(target, info.param_id.clone(), info.default),
+        PanelAction::ParamCommit(target, info.param_id.clone()),
+    );
     let mut ids = ParamRowIds {
         // Overwritten with the real row-catcher node below before any read.
         row_catcher: NodeId::PLACEHOLDER,
         slider: None,
+        slider_reset: reset.clone(),
         trim: None,
         audio_trim: None,
         target: None,
@@ -1878,7 +1928,9 @@ pub(crate) fn build_param_row(
         // row always builds showing the default (sync_values pushes the live
         // value right after), so it doubles as the reset target.
         norm,
-    );
+        reset,
+    )
+    .ids;
 
     // Make label interactive for click-to-copy OSC address + Ableton mapping.
     if let Some(label_id) = slider.label {
@@ -2072,7 +2124,7 @@ pub(crate) fn build_param_row(
     // handle on the track above; this is how fast the value falls back.
     if shown_tab == Some(ModTab::Envelope) {
         ids.envelope_config = Some(build_envelope_config(
-            tree, drawer_parent, drawer_x, cy, drawer_w, mod_state, i,
+            tree, drawer_parent, drawer_x, cy, drawer_w, mod_state, i, target, info.param_id.clone(),
         ));
         cy += ENV_CONFIG_HEIGHT;
     }
@@ -2107,7 +2159,8 @@ pub(crate) fn build_param_row(
     // D5b/§9). A slider row is never `is_trigger_gate`, so no Mode row here.
     if shown_tab == Some(ModTab::Audio) {
         let (dids, send_count) = build_audio_mod_drawer(
-            tree, drawer_parent, drawer_x, cy, drawer_w, mod_state, i, config_font, None,
+            tree, drawer_parent, drawer_x, cy, drawer_w, mod_state, i, config_font, None, target,
+            info.param_id.clone(),
         );
         cy += dids.height;
         ids.audio_config = Some((dids, send_count));

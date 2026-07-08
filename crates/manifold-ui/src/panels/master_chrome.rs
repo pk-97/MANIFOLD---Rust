@@ -142,20 +142,28 @@ impl MasterChromePanel {
     }
 
     /// A 0–1 slider spec at the drag state's current cached value (defaulting a
-    /// never-synced NaN to 1.0, as the old build did).
-    fn slider_spec(slider: &SliderDragState, label: Option<&str>, label_width: f32) -> SliderSpec {
+    /// never-synced NaN to 1.0, as the old build did). `reset` is the caller's
+    /// own trio (opacity vs LED brightness carry different `PanelAction`s even
+    /// though both default to 1.0) — this shared helper just bundles it in.
+    fn slider_spec(
+        slider: &SliderDragState,
+        label: Option<&str>,
+        label_width: f32,
+        reset: PanelAction,
+    ) -> SliderSpec {
         let v = slider.cached_value();
         let v = if v.is_nan() { 1.0 } else { v };
         SliderSpec {
             label: label.map(str::to_string),
             value: v,
             // Both the opacity and LED-brightness sliders this helper builds
-            // default to full-scale (1.0) — see the register_intents resets below.
+            // default to full-scale (1.0) — matches `reset`'s carried value.
             default: 1.0,
             value_text: fmt_opacity(v),
             colors: SliderColors::default_slider(),
             font_size: FONT_SIZE,
             label_width,
+            reset,
         }
     }
 
@@ -184,10 +192,19 @@ impl MasterChromePanel {
             .child(chevron);
         if !self.is_collapsed {
             row = row.child(
-                View::slider_row(Self::slider_spec(&self.opacity, Some("Opacity"), OPACITY_LABEL_W))
-                    .fill_w()
-                    .h(Sizing::Fixed(HEADER_ROW_H))
-                    .key(KEY_OPACITY_SLOT),
+                View::slider_row(Self::slider_spec(
+                    &self.opacity,
+                    Some("Opacity"),
+                    OPACITY_LABEL_W,
+                    PanelAction::slider_reset(
+                        PanelAction::MasterOpacitySnapshot,
+                        PanelAction::MasterOpacityChanged(1.0),
+                        PanelAction::MasterOpacityCommit,
+                    ),
+                ))
+                .fill_w()
+                .h(Sizing::Fixed(HEADER_ROW_H))
+                .key(KEY_OPACITY_SLOT),
             );
         }
         row
@@ -212,9 +229,18 @@ impl MasterChromePanel {
             .key(KEY_LED_TOGGLE);
 
         // Brightness slider (no label) — the host materialises it into this slot.
-        let brightness_slot = View::slider_row(Self::slider_spec(&self.led_brightness, None, 0.0))
-            .fixed(LED_SLIDER_W, SLIDER_ROW_H)
-            .key(KEY_BRIGHTNESS_SLOT);
+        let brightness_slot = View::slider_row(Self::slider_spec(
+            &self.led_brightness,
+            None,
+            0.0,
+            PanelAction::slider_reset(
+                PanelAction::LedBrightnessSnapshot,
+                PanelAction::LedBrightnessChanged(1.0),
+                PanelAction::LedBrightnessCommit,
+            ),
+        ))
+        .fixed(LED_SLIDER_W, SLIDER_ROW_H)
+        .key(KEY_BRIGHTNESS_SLOT);
 
         View::row(GAP)
             .fill_w()
@@ -361,31 +387,10 @@ impl MasterChromePanel {
         Vec::new()
     }
 
-    /// Node-intent dispatch for the master chrome sliders' right-click resets.
+    /// Node-intent dispatch for the master chrome sliders' right-click resets,
+    /// via the host's shared replay (BUG-061 follow-through).
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
-        use crate::intent::Gesture::RightClick;
-        if let Some(ids) = self.opacity.ids() {
-            intents.on(
-                ids.track,
-                RightClick,
-                PanelAction::slider_reset(
-                    PanelAction::MasterOpacitySnapshot,
-                    PanelAction::MasterOpacityChanged(1.0),
-                    PanelAction::MasterOpacityCommit,
-                ),
-            );
-        }
-        if let Some(ids) = self.led_brightness.ids() {
-            intents.on(
-                ids.track,
-                RightClick,
-                PanelAction::slider_reset(
-                    PanelAction::LedBrightnessSnapshot,
-                    PanelAction::LedBrightnessChanged(1.0),
-                    PanelAction::LedBrightnessCommit,
-                ),
-            );
-        }
+        self.host.register_slider_resets(intents);
     }
 
     pub fn exit_path_button_rect(&self, tree: &UITree) -> Rect {

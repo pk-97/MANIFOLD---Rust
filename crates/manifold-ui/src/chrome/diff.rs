@@ -22,6 +22,7 @@ use crate::chrome::layout::{self, LaidNode};
 use crate::chrome::view::{validate, View};
 use crate::intent::{Gesture, IntentRegistry};
 use crate::node::{NodeId, Rect, UIFlags};
+use crate::panels::PanelAction;
 use crate::slider::{BitmapSlider, SliderNodeIds};
 use crate::tree::UITree;
 
@@ -100,10 +101,13 @@ pub struct ChromeHost {
     first_node: usize,
     signature: u64,
     built: bool,
-    /// Sliders materialised at build, by their slot's [`View::key`]. The panel
-    /// resolves these to drive the slider's value + drag through its
-    /// `SliderDragState`; the host owns the slider's structure, not its value.
-    slider_ids: Vec<(u64, SliderNodeIds)>,
+    /// Sliders materialised at build, by their slot's [`View::key`], plus each
+    /// slider's right-click reset action. The panel resolves the ids to drive
+    /// the slider's value + drag through its `SliderDragState`; the host owns
+    /// the slider's structure, not its value. The reset travels alongside so
+    /// [`Self::register_slider_resets`] can replay every one without a panel
+    /// having to re-derive it.
+    slider_ids: Vec<(u64, SliderNodeIds, PanelAction)>,
 }
 
 impl ChromeHost {
@@ -164,7 +168,7 @@ impl ChromeHost {
             };
             let rect = self.scratch[i].rect;
             let key = self.scratch[i].key;
-            let ids = BitmapSlider::build(
+            let built = BitmapSlider::build(
                 tree,
                 None,
                 rect,
@@ -175,9 +179,10 @@ impl ChromeHost {
                 spec.font_size,
                 spec.label_width,
                 spec.default,
+                spec.reset.clone(),
             );
             if let Some(k) = key {
-                self.slider_ids.push((k, ids));
+                self.slider_ids.push((k, built.ids, built.reset));
             }
         }
 
@@ -276,8 +281,18 @@ impl ChromeHost {
     pub fn slider_ids(&self, key: u64) -> Option<SliderNodeIds> {
         self.slider_ids
             .iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, ids)| *ids)
+            .find(|(k, _, _)| *k == key)
+            .map(|(_, ids, _)| *ids)
+    }
+
+    /// Register every materialised slider's right-click reset. Panels delegate
+    /// here instead of hand-registering slider tracks (BUG-061 follow-through,
+    /// BUG-070) — the host owns the full set of slots it materialised, so this
+    /// replay can't skip one the way a panel's own hand-written loop could.
+    pub fn register_slider_resets(&self, reg: &mut IntentRegistry) {
+        for (_key, ids, reset) in &self.slider_ids {
+            reg.on(ids.track, Gesture::RightClick, reset.clone());
+        }
     }
 }
 

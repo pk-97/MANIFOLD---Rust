@@ -2,6 +2,7 @@ use crate::color;
 use crate::drag::DragController;
 use crate::draw::{Painter, elide_to_width, text_width};
 use crate::node::*;
+use crate::panels::PanelAction;
 use crate::tree::UITree;
 
 // ── Layout constants ────────────────────────────────────────────────
@@ -46,6 +47,20 @@ pub struct SliderNodeIds {
     pub track_rect: Rect,        // usable track (excludes value gutter); for x_to_normalized()
     /// The slider's normalized default, for right-click reset.
     pub default_normalized: f32,
+}
+
+/// A built slider: its node ids plus the reset action to fire on a right-click
+/// of its track. `build` returns this so ids and reset travel together into
+/// panel storage — you cannot build a slider without stating its reset.
+/// `reset` and `default_normalized` (on [`SliderNodeIds`]) both encode the
+/// slider's default — `default_normalized` is the widget's own visual
+/// default (0..1, used to snap the fill on reset), `reset` is the value-units
+/// command the panel emits to actually write it back to the model. The mild
+/// redundancy is intentional: one is geometry, the other is a `PanelAction`.
+#[derive(Clone)]
+pub struct Slider {
+    pub ids: SliderNodeIds,
+    pub reset: PanelAction,
 }
 
 /// Stateless helper for building and updating bitmap slider widgets.
@@ -106,7 +121,8 @@ impl BitmapSlider {
         font_size: u16,
         label_width: f32,
         default_normalized: f32,
-    ) -> SliderNodeIds {
+        reset: PanelAction,
+    ) -> Slider {
         // track/fill/thumb/value_text are placeholders overwritten below before
         // any read; label stays None unless a label is actually built.
         let mut ids = SliderNodeIds {
@@ -227,7 +243,7 @@ impl BitmapSlider {
             },
         );
 
-        ids
+        Slider { ids, reset }
     }
 
     /// Update fill width, thumb position, and value text.
@@ -624,6 +640,14 @@ fn compute_thumb_rect(
 mod tests {
     use super::*;
 
+    fn placeholder_reset() -> PanelAction {
+        PanelAction::slider_reset(
+            PanelAction::MasterOpacitySnapshot,
+            PanelAction::MasterOpacityChanged(1.0),
+            PanelAction::MasterOpacityCommit,
+        )
+    }
+
     #[test]
     fn build_slider() {
         let mut tree = UITree::new();
@@ -640,7 +664,9 @@ mod tests {
             11,
             DEFAULT_LABEL_WIDTH,
             0.75,
-        );
+            placeholder_reset(),
+        )
+        .ids;
 
         assert!(ids.label.is_some());
         assert!(ids.track != NodeId::PLACEHOLDER);
@@ -665,7 +691,9 @@ mod tests {
             11,
             DEFAULT_LABEL_WIDTH,
             0.5,
-        );
+            placeholder_reset(),
+        )
+        .ids;
 
         assert_eq!(ids.label, None);
     }
@@ -690,7 +718,9 @@ mod tests {
             11,
             DEFAULT_LABEL_WIDTH,
             0.5,
-        );
+            placeholder_reset(),
+        )
+        .ids;
 
         assert!((ids.default_normalized - 0.5).abs() < f32::EPSILON);
     }
@@ -731,7 +761,9 @@ mod tests {
             11,
             DEFAULT_LABEL_WIDTH,
             0.5,
-        );
+            placeholder_reset(),
+        )
+        .ids;
 
         tree.clear_dirty();
         BitmapSlider::update_value(&mut tree, &ids, 0.25, "0.25");

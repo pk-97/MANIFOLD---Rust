@@ -16,6 +16,7 @@
 //!
 //! See `docs/AUDIO_MODULATION_DESIGN.md` §10.2.
 
+use super::PanelAction;
 use crate::chrome::Theme;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderNodeIds};
@@ -143,6 +144,12 @@ pub enum DrawerRow {
         value_text: String,
         /// Width reserved for the leading label.
         label_w: f32,
+        /// The right-click reset action to fire on this slider's track
+        /// (BUG-070 follow-through) — required so a drawer slider can never
+        /// be built without declaring how it resets. The caller (param_card /
+        /// param_slider_shared) supplies it; [`DrawerIds::slider_resets`]
+        /// carries it back out in the same order as [`DrawerIds::sliders`].
+        reset: PanelAction,
     },
     /// A status strip (see [`StatusStrip`]).
     Status(StatusStrip),
@@ -209,6 +216,11 @@ pub struct DrawerIds {
     button_ids: Vec<NodeId>,
     /// Slider node ids, in row order (one per `Slider` row).
     pub sliders: Vec<SliderNodeIds>,
+    /// Right-click reset action for each entry in [`Self::sliders`], same
+    /// order/index — a parallel array (rather than folding into `sliders`)
+    /// so existing `sliders[i].track`/`.track_rect` access sites are
+    /// untouched (BUG-070 follow-through).
+    pub slider_resets: Vec<PanelAction>,
     /// Total height the drawer occupied.
     pub height: f32,
 }
@@ -269,6 +281,7 @@ pub fn build(
 
     let mut button_ids: Vec<NodeId> = Vec::new();
     let mut sliders: Vec<SliderNodeIds> = Vec::new();
+    let mut slider_resets: Vec<PanelAction> = Vec::new();
     let avail_w = w - PAD_H * 2.0;
     let mut row_y = y + TOP_PAD;
 
@@ -327,6 +340,7 @@ pub fn build(
                 default_norm,
                 value_text,
                 label_w,
+                reset,
             } => {
                 let sx = x + PAD_H;
                 let slider_w = w - PAD_H * 2.0;
@@ -334,7 +348,7 @@ pub fn build(
                 // so a drawer slider belongs to its source (orange Decay, green
                 // audio shaping) without a per-row colour arg.
                 let sc = spec.theme.slider_colors();
-                let ids = BitmapSlider::build(
+                let built = BitmapSlider::build(
                     tree,
                     Some(container),
                     Rect::new(sx, row_y, slider_w, ROW_H),
@@ -345,8 +359,10 @@ pub fn build(
                     spec.slider_font_size,
                     *label_w,
                     default_norm.clamp(0.0, 1.0),
+                    reset.clone(),
                 );
-                sliders.push(ids);
+                sliders.push(built.ids);
+                slider_resets.push(built.reset);
             }
             DrawerRow::Status(s) => {
                 // Leading dot (centered in the row).
@@ -414,6 +430,7 @@ pub fn build(
         container,
         button_ids,
         sliders,
+        slider_resets,
         height,
     }
 }
@@ -475,6 +492,14 @@ mod tests {
         assert_eq!(ids.resolve_button(NodeId::PLACEHOLDER), None);
     }
 
+    fn placeholder_reset() -> PanelAction {
+        PanelAction::slider_reset(
+            PanelAction::MasterOpacitySnapshot,
+            PanelAction::MasterOpacityChanged(1.0),
+            PanelAction::MasterOpacityCommit,
+        )
+    }
+
     #[test]
     fn slider_row_yields_a_slider_not_a_button() {
         let spec = DrawerSpec {
@@ -484,6 +509,7 @@ mod tests {
                 default_norm: 0.25,
                 value_text: "2.00".into(),
                 label_w: 50.0,
+                reset: placeholder_reset(),
             }],
             btn_font_size: 10,
             slider_font_size: 11,

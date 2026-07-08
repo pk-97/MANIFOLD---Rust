@@ -34,6 +34,11 @@ pub struct SliderSpec {
     pub font_size: u16,
     /// Leading-label column width (0 when there is no label).
     pub label_width: f32,
+    /// Right-click reset action fired on the slider's track (BUG-070 follow-
+    /// through) — required so a chrome-host slider can never be materialised
+    /// without stating its reset. The host stores it alongside the slider's
+    /// ids and replays it via [`ChromeHost::register_slider_resets`].
+    pub reset: PanelAction,
 }
 
 /// How a [`View`] sizes along one axis. Resolved independently per axis.

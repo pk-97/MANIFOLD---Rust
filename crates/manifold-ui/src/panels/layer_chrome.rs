@@ -160,6 +160,11 @@ impl LayerChromePanel {
                 colors: SliderColors::default_slider(),
                 font_size: FONT_SIZE,
                 label_width: OPACITY_LABEL_W,
+                reset: PanelAction::slider_reset(
+                    PanelAction::LayerOpacitySnapshot,
+                    PanelAction::LayerOpacityChanged(1.0),
+                    PanelAction::LayerOpacityCommit,
+                ),
             };
             header = header.child(
                 View::slider_row(spec)
@@ -259,19 +264,10 @@ impl LayerChromePanel {
         Vec::new()
     }
 
-    /// Node-intent dispatch for the layer opacity slider's right-click reset.
+    /// Node-intent dispatch for the layer opacity slider's right-click reset,
+    /// via the host's shared replay (BUG-061 follow-through).
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
-        if let Some(ids) = self.opacity.ids() {
-            intents.on(
-                ids.track,
-                crate::intent::Gesture::RightClick,
-                PanelAction::slider_reset(
-                    PanelAction::LayerOpacitySnapshot,
-                    PanelAction::LayerOpacityChanged(1.0),
-                    PanelAction::LayerOpacityCommit,
-                ),
-            );
-        }
+        self.host.register_slider_resets(intents);
     }
 }
 
