@@ -1,0 +1,38 @@
+[
+  "Snapshot",
+  "Dump",
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "GLOW", "type": "Button" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Cont", "type": "Button" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "A", "type": "Button", "under_text": "Amount" } },
+      "check": { "Count": 1 }
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "Step", "type": "Button" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "S", "type": "Button", "under_text": "Amount" } },
+      "check": { "Count": 1 }
+    }
+  }
+]

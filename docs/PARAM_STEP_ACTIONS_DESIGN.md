@@ -1,6 +1,6 @@
 # Param Step Actions — triggers step, randomize, and sequence any param
 
-**Status:** APPROVED, IN PROGRESS (P1–P4 building) · designed 2026-07-07 Fable, read + amended by Peter 2026-07-08 (D6 divisor retired — see note in §2), building 2026-07-08 Sonnet orchestrating
+**Status:** P1–P3 SHIPPED 2026-07-08 (`43a7f508`/`d9b46422`/`fd3f767e`); P4 (Plasma re-author) DEFERRED — Peter's call this session, not started, no code written. The full feature (Continuous/Step/Random on any param, audio- and clip-fired, drawer UI) is live and usable on every preset without P4; P4 is cleanup on one preset's leftover graph wiring. See `docs/landings/2026-07-08-param-step-actions.md` for gate output and the click-script.
 **Prerequisites:** LIVE_AUDIO_TRIGGERS §9 unification (SHIPPED 2026-07-07 @ `14e0a90a`) — this design extends the unified `ParameterAudioMod`, which must exist as landed.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -236,7 +236,7 @@ channel, no new thread, no shared state.
 
 ## 4. Phasing
 
-### P1 — Core action model + audio-fired steps (one session)
+### P1 — Core action model + audio-fired steps (one session) — SHIPPED 2026-07-08 @ `43a7f508` (hotfix `2682f9f4`)
 - **Entry:** `14e0a90a` or later on main; re-verify the §1 anchors for
   `audio_mod.rs:344-381` and `modulation.rs:390-462`.
 - **Read-back:** this doc §1–§3; LIVE_AUDIO_TRIGGERS §9.1 (U1–U6); restate D1,
@@ -265,7 +265,7 @@ channel, no new thread, no shared state.
 - **Demo:** none — L1 (no UI surface yet; the vertical slice lands in P3).
 - **Forbidden moves:** F1–F4 (§6).
 
-### P2 — Engine clip edge + mode gating (one session)
+### P2 — Engine clip edge + mode gating (one session) — SHIPPED 2026-07-08 @ `d9b46422`. Content-thread `MANIFOLD_RENDER_TRACE` gate reasoned not measured, same wall as VD-014 — see VD-016.
 - **Entry:** P1 merged; re-verify `engine.rs` tick structure and
   `generator_renderer.rs:350-360` (the semantics being mirrored).
 - **Read-back:** D3, D5 (including the divergence consequence — do NOT sync to
@@ -286,7 +286,7 @@ channel, no new thread, no shared state.
 - **Demo:** none — L1 (surface still P3).
 - **Forbidden moves:** F5, F1.
 
-### P3 — Drawer UI + vertical slice (one session)
+### P3 — Drawer UI + vertical slice (one session) — SHIPPED 2026-07-08 @ `fd3f767e`. Performer gesture (Kick → BasicShapes variant, Step/Wrap, 4-bar loop) is Peter's L4 feel-pass, owed — see VD-017.
 - **Entry:** P1+P2 merged. Re-verify `build_toggle_trigger_row` /
   `build_audio_mod_drawer` shapes (§9.2 U-P2 moved them recently).
 - **Read-back:** D8; AUDIO_MODULATION_DESIGN §10.2; the §9.2 U-P2 account of
@@ -307,7 +307,21 @@ channel, no new thread, no shared state.
   exercised live by Peter at L4 (owed, logged in VERIFICATION_DEBT at landing).
 - **Forbidden moves:** F2, F6.
 
-### P4 — Exemplar preset re-author: Plasma (one session)
+### P4 — Exemplar preset re-author: Plasma (one session) — DEFERRED 2026-07-08, Peter's call, not started
+
+**Pre-flight finding (orchestrator's in-context §2.5 audit, 2026-07-08, before the phase was
+deferred — worth keeping so the next session doesn't redo it):** `Plasma.json` (v2) already
+exposes `pattern` as a `presetMetadata.params` card with exactly the shape this phase asks for
+(`min: 0, max: 7, wholeNumbers: true, formatString: "F0"`), bound to `pattern_mux.in_0`. Nothing
+wires `pattern_mux.selector` (a static `Float` stuck at `0.0`), so the mux always resolves to
+`in_0` — the `pattern_cycle → mux.in_1` auto-cycle path is dead code today, unreachable by any
+user-facing control. This means "expose `pattern` as a whole-numbers card" is **already done**;
+the actual remaining work is smaller than originally scoped: delete `pattern_cycle` (node id 3)
+and `pattern_mux` (node id 4, vestigial once its only live input is gone), retarget the `pattern`
+binding straight at `plasma.pattern`, and **investigate whether any existing saved project's
+stored card state depends on the old binding path** (unconfirmed — the load-migration question
+in F7 is still open, next session must check `param_storage_v14.rs`'s resolution model before
+concluding either way, not assume no-op).
 - **Entry:** P1–P3 merged. §2.5 audit of Plasma's graph (open the JSON, follow
   every wire from `pattern_cycle`).
 - **Deliverables:** Plasma's `pattern_cycle` node (`clip_trigger_cycle`,

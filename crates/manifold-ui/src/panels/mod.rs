@@ -440,6 +440,25 @@ pub enum PanelAction {
     /// drawer's one trigger-only row, on top of the standard Source/Feature/
     /// Band/Inv/Delta/Amount/Attack/Release rows every audio mod has.
     AudioModSetTriggerMode(GraphParamTarget, ParamId, usize),
+    /// Set an audio mod's fire ACTION kind (PARAM_STEP_ACTIONS D8) — the
+    /// drawer's Action segmented row. Index: 0=Continuous, 1=Step, 2=Random.
+    /// Entering Step from a non-Step action seeds `amount`/`wrap` to their
+    /// D2 defaults at the dispatch boundary; leaving Step drops them (the
+    /// enum has nowhere to keep them outside the `Step` variant — re-entering
+    /// reseeds, matching D2's "seeding only" contract).
+    AudioModSetActionKind(GraphParamTarget, ParamId, usize),
+    /// Snapshot an audio mod's action before a Step-Amount slider drag (undo
+    /// start). `amount` lives on `TriggerAction::Step`, not `AudioModShape`,
+    /// so it rides its own snapshot/changed/commit trio rather than
+    /// `AudioShapeParam`'s.
+    AudioModStepAmountSnapshot(GraphParamTarget, ParamId),
+    /// Live-edit the Step amount during a drawer-slider drag (no undo entry).
+    AudioModStepAmountChanged(GraphParamTarget, ParamId, f32),
+    /// Commit a Step-Amount drag as one undo step (drag end).
+    AudioModStepAmountCommit(GraphParamTarget, ParamId),
+    /// Set a Step action's wrap mode — index into `[Wrap, Bounce, Clamp]`
+    /// (D2) — the drawer's Wrap segmented row, shown only while Action=Step.
+    AudioModSetWrap(GraphParamTarget, ParamId, usize),
 
     // ── Audio Setup panel (project-level send routing) ──
     /// Open the input-device dropdown (anchored to the clicked trigger).

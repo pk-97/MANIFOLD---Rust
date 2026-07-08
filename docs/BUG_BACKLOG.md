@@ -30,7 +30,9 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
-| BUG-073 | **inspector-scroll-underestimates-content-height** | `layer_scroll`/`master_scroll`'s `max_scroll()` clamps to ~13-20px on a 9-card stack that's visibly ~1200px too tall for its viewport — the built content overflows but the scroll estimator doesn't agree (LOW, suspected root cause: `compute_height()` reads a mid-tween drawer-animation value instead of the settled/armed-at-build height) |
+| BUG-075 | **inspector-scroll-underestimates-content-height** | `layer_scroll`/`master_scroll`'s `max_scroll()` clamps to ~13-20px on a 9-card stack that's visibly ~1200px too tall for its viewport — the built content overflows but the scroll estimator doesn't agree (LOW, suspected root cause: `compute_height()` reads a mid-tween drawer-animation value instead of the settled/armed-at-build height) |
+| BUG-074 | **audio-mixdown-flaky-under-parallel-tests** | `render_export_audio_tapped_layer_matches_rendering_alone` fails ~1-in-3 under default parallel `cargo test`, always green with `--test-threads=1`; unrelated to PARAM_STEP_ACTIONS (LOW) |
+| BUG-073 | **ui-snap-script-drawer-tween-never-ticks** | `--script` harness has no per-frame tick, so a mod armed mid-script renders its drawer at a permanently zero-height clip region (unclickable rows) until the fixture pre-arms the state instead (LOW) |
 | BUG-072 | **audio-mixdown-all-targets-clippy-debt** | Pre-existing `--all-targets` clippy failures in audio_mixdown.rs, unrelated to PARAM_STEP_ACTIONS, two one-line fixes (LOW) |
 | BUG-046 | **low-band-kick-deafness-on-mixes** | Low=kick binding near-deaf on bass-heavy full mixes; HPSS measured DEAD 2026-07-06, successor = ridge-motion sweep event; partial (OR'd floored-novelty) on the shelf (HIGH) |
 | BUG-047 | **setup-panel-overflow** | Audio Setup sections clip past bottom when a source has many input/consumer rows (LOW) |
@@ -356,7 +358,7 @@ can't opt out by forgetting. Watch the two non-uniform cases: param-card sliders
 right-click currently carries `(target, param_id, default)` context, and label/row right-click
 menus (`ParamLabelRightClick` etc.) which are context menus, not reset — they stay.
 
-### BUG-073 (inspector-scroll-underestimates-content-height) — `try_inspector_scroll` clamps to a tiny max_scroll on genuinely tall content — LOW (found 2026-07-08 during UI_CLIP_AND_Z_OWNERSHIP_DESIGN P1)
+### BUG-075 (inspector-scroll-underestimates-content-height) — `try_inspector_scroll` clamps to a tiny max_scroll on genuinely tall content — LOW (found 2026-07-08 during UI_CLIP_AND_Z_OWNERSHIP_DESIGN P1)
 
 **Symptom:** built a headless gate scene (`ui_snapshot/fixtures.rs`'s `bug060_scene`, added this
 session) with 9 stacked effect cards, several with audio-mod drawers open — visibly, per the
@@ -396,6 +398,68 @@ dropdown/timeline but a no-op for the inspector's direct-call scroll path) — `
 branches on `ui.layout.inspector().contains(center)` and calls `try_inspector_scroll` directly,
 matching `window_input.rs`'s real dispatch. That fix is real and committed; this bug is what's
 left after it.
+
+### BUG-074 (audio-mixdown-flaky-under-parallel-tests) — a manifold-playback test fails intermittently only under the default parallel runner — LOW (found 2026-07-08 during PARAM_STEP_ACTIONS P3)
+
+**Symptom:** `cargo test -p manifold-playback` (default, parallel) fails
+`audio_mixdown::tests::render_export_audio_tapped_layer_matches_rendering_alone`
+roughly 1 run in 3; `cargo test -p manifold-playback -- --test-threads=1` is
+green every time (5/5 tried). Not caused by this phase's changes — the new
+`param_step_clip_edge.rs` round-trip test (a different file, its own temp
+path keyed by pid+nanosecond timestamp) isn't in the failure's module path.
+
+**Root cause:** unknown — suspects: GPU-adjacent contention (audio_mixdown
+renders via the export path, which may share a device/resource pool with
+another test running concurrently) or a shared-mutable fixture. Not
+investigated further — out of scope for PARAM_STEP_ACTIONS (audio_mixdown.rs
+isn't part of that design, mirrors BUG-072's scope fence).
+
+**Fix shape:** bisect by running audio_mixdown's tests alone in parallel vs.
+serially interleaved with unrelated modules to isolate whether it's
+intra-module or cross-module contention, then apply the standard fix
+(dedicated resource per test, or `#[serial]`-style gating).
+
+### BUG-073 (ui-snap-script-drawer-tween-never-ticks) — the headless `--script` driver has no per-frame animation tick, so a mod armed mid-script renders an unclickable, zero-height drawer — LOW (found 2026-07-08 during PARAM_STEP_ACTIONS P3)
+
+**Symptom:** in a `cargo xtask ui-snap <scene> --script <flow>.json` run, a
+click that newly arms a param's audio mod (or otherwise grows an EXISTING
+card's drawer row count) dispatches correctly (confirmed via
+`ui_bridge::dispatch` debug instrumentation — the right `PanelAction` fires
+and mutates the project), but the drawer's own P1 reveal tween
+(`ParamCardPanel::drawer_height_anim`, ticked by
+`InspectorCompositePanel::update`'s `tick_drawers`) never advances: the
+driver's `AutomationAction::Step` only increments a local `self.clock` field
+used for input-event timestamps, nothing calls `tick_drawers`/`Panel::update`
+with real elapsed time. The clip region sizing the reveal stays pinned at its
+t=0 height (0, if the card is easing from unarmed) forever, so subsequent
+rows in that clip region are invisible in the PNG AND unreachable by
+`ui.pointer_event`'s hit-test (confirmed: `dump_tree_ex` still reports the
+clipped nodes' raw, pre-clip rects with `VISIBLE | INTERACTIVE` flags, so the
+dump looks fine while both the render and the click silently no-op — a
+"dump says it's there, nothing else agrees" trap worth remembering before
+trusting a dump alone against a freshly-armed drawer).
+
+**Consequence for evidence-gathering:** any headless script that arms a
+config-drawer-bearing param FOR THE FIRST TIME on an EXISTING card (one that
+already went through one build with a smaller drawer) mid-script will show a
+believable-looking `PNG`/dump pair with a truncated drawer. The workaround
+used in `scripts/ui-flows/param-step-action.json`: pre-arm the mod directly
+in the fixture (`ui_snapshot::fixtures::param_steps_scene`) so the card's
+*very first* `configure()` call snaps `drawer_height_anim` straight to its
+settled target (`param_card.rs`'s own comment: "a *new* param... snaps so it
+never stalls half-open") — no tween in flight, no clipping. A REAL in-script
+click that only changes content WITHIN an already-open, unarmed-row-count-
+stable drawer (e.g. selecting a different Action/Mode segment on a param
+that's already armed) is unaffected — confirmed working in the same flow.
+
+**Fix shape:** either (a) give the `--script` driver a `self.rebuild`-adjacent
+call that also ticks `ui.inspector`'s drawer/value-flash animations by a
+large synthetic `dt` (e.g. `color::MOTION_MED_MS * 2.0`) after every
+dispatch that sets `structural_change`, fully settling in one call instead of
+requiring many small real-time-gated ticks; or (b) expose a
+`skip_to_settled()`/`finish_all()` on `ParamCardPanel` the driver calls
+unconditionally before every `Snapshot`/`Dump`/`Pointer`. Either closes the
+gap for every future script that arms something mid-flow, not just this one.
 
 ### BUG-072 (audio-mixdown-all-targets-clippy-debt) — pre-existing lint failures in audio_mixdown.rs only visible under `--all-targets` — LOW (found 2026-07-08 during PARAM_STEP_ACTIONS P2)
 

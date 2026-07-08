@@ -75,7 +75,7 @@ pub fn run(scene: &str, script_path: &str) {
     let Some(mut data) = super::fixtures::build(scene) else {
         eprintln!(
             "ui-snap --script: unknown scene '{scene}' (known: timeline, states, inspector, \
-             scrollshrink, hairlineclips, automation, selectionclips)"
+             paramsteps, scrollshrink, hairlineclips, automation, selectionclips)"
         );
         std::process::exit(2);
     };
@@ -104,7 +104,7 @@ pub fn run(scene: &str, script_path: &str) {
     let zoom_ppb = super::zoom_ppb_for_scene(scene);
     let mut ui = UIRoot::new();
     ui.resize(super::LOGICAL_W, super::LOGICAL_H);
-    if scene == "inspector" || scene == "bug060" {
+    if scene == "inspector" || scene == "bug060" || scene == "paramsteps" {
         ui.layout.inspector_width = 600.0;
         ui.layout.timeline_split_ratio = 0.6;
     } else {
@@ -173,6 +173,7 @@ struct Runner {
     target_snapshot: Option<f32>,
     decay_snapshot: Option<f32>,
     audio_shape_snapshot: Option<manifold_core::audio_mod::AudioModShape>,
+    audio_action_snapshot: Option<manifold_core::audio_mod::TriggerAction>,
     audio_crossover_snapshot: Option<(f32, f32)>,
     audio_send_gain_drag_snapshot: Option<f32>,
     audio_send_sensitivity_drag_snapshot: Option<Vec<manifold_core::audio_trigger::TriggerRoute>>,
@@ -202,6 +203,7 @@ impl Runner {
             target_snapshot: None,
             decay_snapshot: None,
             audio_shape_snapshot: None,
+            audio_action_snapshot: None,
             audio_crossover_snapshot: None,
             audio_send_gain_drag_snapshot: None,
             audio_send_sensitivity_drag_snapshot: None,
@@ -513,6 +515,7 @@ impl Runner {
                 &mut self.target_snapshot,
                 &mut self.decay_snapshot,
                 &mut self.audio_shape_snapshot,
+                &mut self.audio_action_snapshot,
                 &mut self.audio_crossover_snapshot,
                 &mut self.audio_send_gain_drag_snapshot,
                 &mut self.audio_send_sensitivity_drag_snapshot,

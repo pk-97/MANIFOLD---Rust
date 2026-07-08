@@ -173,6 +173,10 @@ pub struct Application {
     /// trigger-gate row's Amount/Attack/Release sliders ride this SAME
     /// snapshot (§9 unified the drawer) — no separate trigger-mod drag state.
     pub(crate) audio_shape_snapshot: Option<manifold_core::audio_mod::AudioModShape>,
+    /// Step-Amount drag snapshot (PARAM_STEP_ACTIONS D8) for undo. `amount`
+    /// lives on `TriggerAction::Step`, not `AudioModShape`, so it rides its
+    /// own slot rather than `audio_shape_snapshot`'s.
+    pub(crate) audio_action_snapshot: Option<manifold_core::audio_mod::TriggerAction>,
     /// Band-divider drag snapshot `(low_hz, mid_hz)` for undo. Captured on
     /// `AudioCrossoverDragBegin`, committed as one `SetAudioCrossoversCommand`
     /// on `AudioCrossoverCommit`.
@@ -581,6 +585,7 @@ impl Application {
             target_snapshot: None,
             decay_snapshot: None,
             audio_shape_snapshot: None,
+            audio_action_snapshot: None,
             audio_crossover_snapshot: None,
             audio_send_gain_drag_snapshot: None,
             audio_send_sensitivity_drag_snapshot: None,
@@ -984,6 +989,7 @@ impl Application {
                                 &mut self.target_snapshot,
                                 &mut self.decay_snapshot,
                                 &mut self.audio_shape_snapshot,
+                                &mut self.audio_action_snapshot,
                                 &mut self.audio_crossover_snapshot,
                                 &mut self.audio_send_gain_drag_snapshot,
                                 &mut self.audio_send_sensitivity_drag_snapshot,
@@ -1029,6 +1035,7 @@ impl Application {
                             &mut self.target_snapshot,
                             &mut self.decay_snapshot,
                             &mut self.audio_shape_snapshot,
+                            &mut self.audio_action_snapshot,
                             &mut self.audio_crossover_snapshot,
                             &mut self.audio_send_gain_drag_snapshot,
                             &mut self.audio_send_sensitivity_drag_snapshot,
