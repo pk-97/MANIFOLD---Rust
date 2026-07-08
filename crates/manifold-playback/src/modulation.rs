@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 
 use manifold_core::audio_features::{AudioFeatureSnapshot, SendFeatures};
+use manifold_core::audio_mod::{TriggerAction, WrapMode, random_step_value};
 use manifold_core::audio_trigger::TriggerFireMode;
 use manifold_core::id::AudioSendId;
 use manifold_core::{Beats, Seconds};
@@ -292,6 +293,16 @@ pub fn evaluate_modulation(
     // Phase 1: Reset all effective values to base
     reset_all_effectives(project);
 
+    // Phase 1.5: Apply any armed step/random audio-mod shadow values (PARAM_
+    // STEP_ACTIONS D4). Runs BEFORE drivers/continuous-mods/envelopes so a
+    // step *replaces* the base exactly like a hand-moved slider — everything
+    // downstream stacks on top unchanged. The shadow itself is only ever
+    // advanced by this tick's `evaluate_all_audio_mods` call below, so a fire
+    // surfaces here on the NEXT tick (one-frame latency, imperceptible at
+    // 60fps, and it keeps the step arm from having to special-case "did I
+    // just fire this same tick").
+    let any_stepped = apply_step_values(project);
+
     // Phase 2: Evaluate LFO drivers
     let any_driven = evaluate_all_drivers(project, current_beat);
 
@@ -315,7 +326,63 @@ pub fn evaluate_modulation(
     // instance — see evaluate_all_envelopes.
     let any_enveloped = evaluate_all_envelopes(project, timing_scratch);
 
-    any_driven || any_audio || any_enveloped
+    any_stepped || any_driven || any_audio || any_enveloped
+}
+
+// =====================================================================
+// Phase 1.5: Apply armed step/random audio-mod shadow values
+// =====================================================================
+
+/// For every enabled audio mod carrying an armed step/random shadow
+/// (`step_value = Some(v)`), write `p.value = v` — the step *replaces* the
+/// base for this tick (D4). Walks the same instance set
+/// [`evaluate_all_audio_mods`]/[`evaluate_all_drivers`] do (master effects +
+/// layer effects + generator params); a disabled instance or a mod with no
+/// shadow yet (`None` — never fired, or fell back after a disarm/reload)
+/// leaves the param at the base `reset_all_effectives` just wrote. Returns
+/// true if any value was written (compositor should be marked dirty).
+pub fn apply_step_values(project: &mut Project) -> bool {
+    fn apply_instance(fx: &mut PresetInstance) -> bool {
+        if !fx.enabled {
+            return false;
+        }
+        let Some(mods) = fx.audio_mods.as_ref() else {
+            return false;
+        };
+        let params = &mut fx.params;
+        let mut any = false;
+        for m in mods.iter().filter(|m| m.enabled) {
+            if let Some(v) = m.step_value
+                && let Some(p) = params.get_mut(m.param_id.as_ref())
+            {
+                p.value = v;
+                any = true;
+            }
+        }
+        any
+    }
+
+    let mut any = false;
+    for fx in project.settings.master_effects.iter_mut() {
+        if apply_instance(fx) {
+            any = true;
+        }
+    }
+    for layer in project.timeline.layers.iter_mut() {
+        if let Some(effects) = &mut layer.effects {
+            for fx in effects.iter_mut() {
+                if apply_instance(fx) {
+                    any = true;
+                }
+            }
+        }
+        if let Some(gp) = layer.gen_params_mut()
+            && apply_instance(gp)
+        {
+            any = true;
+        }
+    }
+    any
 }
 
 // =====================================================================
@@ -416,8 +483,8 @@ fn evaluate_instance_audio_mods(
         let Some(features) = by_send.get(&m.source.send_id) else {
             continue;
         };
-        let (min, max, is_trigger, is_trigger_gate) = match params.get(m.param_id.as_ref()) {
-            Some(p) => (p.spec.min, p.spec.max, p.spec.is_trigger, p.spec.is_trigger_gate),
+        let (min, max, is_trigger, is_trigger_gate, whole_numbers) = match params.get(m.param_id.as_ref()) {
+            Some(p) => (p.spec.min, p.spec.max, p.spec.is_trigger, p.spec.is_trigger_gate, p.whole_numbers()),
             None => continue,
         };
         let raw = m.source.feature.extract(features);
@@ -441,21 +508,77 @@ fn evaluate_instance_audio_mods(
             continue;
         }
 
-        if let Some(p) = params.get_mut(m.param_id.as_ref()) {
-            if is_trigger {
-                // §8 D5b: a fire-button target wants a monotonic count, not a
-                // level — edge-detect the shaped signal (rising through
-                // mid-range) instead of overwriting continuously. Downstream
-                // `last_count`-style consumers edge-detect the written value
-                // unchanged.
+        if is_trigger {
+            // §8 D5b: a fire-button target wants a monotonic count, not a
+            // level — edge-detect the shaped signal (rising through
+            // mid-range) instead of overwriting continuously. Downstream
+            // `last_count`-style consumers edge-detect the written value
+            // unchanged. `action` is irrelevant here — the drawer never
+            // offers an Action row on an `is_trigger`/`is_trigger_gate` card
+            // (D8), so this arm's behavior is untouched by PARAM_STEP_ACTIONS.
+            if let Some(p) = params.get_mut(m.param_id.as_ref()) {
                 if m.trigger_edge.advance(out_norm, 0.5) {
                     m.fire_count = m.fire_count.wrapping_add(1);
                 }
                 p.value = p.base + m.fire_count as f32;
-            } else {
-                p.value = min + (max - min) * out_norm;
+                wrote = true;
             }
-            wrote = true;
+            continue;
+        }
+
+        match m.action {
+            TriggerAction::Continuous => {
+                if let Some(p) = params.get_mut(m.param_id.as_ref()) {
+                    p.value = min + (max - min) * out_norm;
+                    wrote = true;
+                }
+            }
+            TriggerAction::Step { amount, wrap } => {
+                // PARAM_STEP_ACTIONS D4/D2: a fire advances the runtime shadow
+                // only — it does NOT write `p.value` this tick (that's Phase
+                // 1.5's job, next tick). First fire seeds from the committed
+                // `base` (D4's lifecycle), never from `p.value` (which may
+                // already be mid-frame-modulated by an earlier phase).
+                if m.trigger_edge.advance(out_norm, 0.5) {
+                    let base = params.get(m.param_id.as_ref()).map(|p| p.base).unwrap_or(min);
+                    let current = m.step_value.unwrap_or(base);
+                    // A discrete param's reachable set is the INCLUSIVE
+                    // integer grid {min, min+1, ..., max} — max-min+1
+                    // positions, one more than a continuous cycle's
+                    // max-min. `Wrap` must land one-past-max exactly on
+                    // min, so its cycle length needs that +1; `Bounce`/
+                    // `Clamp` reflect/saturate at the true max regardless
+                    // (max IS a reachable, real rail either way).
+                    let wrap_max = if whole_numbers && matches!(wrap, WrapMode::Wrap) {
+                        max + 1.0
+                    } else {
+                        max
+                    };
+                    let (mut next, dir) = wrap.advance(current, amount, m.step_dir, min, wrap_max);
+                    if whole_numbers {
+                        next = next.round();
+                    }
+                    m.step_dir = dir;
+                    m.step_value = Some(next.clamp(min, max));
+                }
+            }
+            TriggerAction::Random => {
+                // D7: fire_count doubles as the deterministic hash ordinal
+                // here — this arm and the `is_trigger` monotonic-count arm
+                // above are mutually exclusive per mod (is_trigger `continue`s
+                // before this match), so there's no shared-meaning collision.
+                if m.trigger_edge.advance(out_norm, 0.5) {
+                    m.fire_count = m.fire_count.wrapping_add(1);
+                    let base = params.get(m.param_id.as_ref()).map(|p| p.base).unwrap_or(min);
+                    let current = m.step_value.unwrap_or(base);
+                    let discrete_count =
+                        whole_numbers.then(|| ((max - min).round().max(0.0) as u32) + 1);
+                    let current_index =
+                        discrete_count.map(|_| (current - min).round().max(0.0) as u32).unwrap_or(0);
+                    let next = random_step_value(m.fire_count, min, max, discrete_count, current_index);
+                    m.step_value = Some(next.clamp(min, max));
+                }
+            }
         }
     }
     wrote
@@ -480,11 +603,19 @@ pub struct TriggerPulse {
 /// now backs both `is_trigger` fire buttons (D5b) and `is_trigger_gate`
 /// cards (§9 U1); the former separate `audio_trigger.edge` holder was
 /// deleted along with the config type it lived on.
+///
+/// PARAM_STEP_ACTIONS D4: also drops each mod's step shadow
+/// (`step_value`/`step_dir`) back to its initial `None`/`+1` state, at the
+/// same call site — a transport stop is exactly the "kill the trigger"
+/// moment D4 documents: the param falls back to its committed base rather
+/// than resuming mid-sequence next time the transport starts.
 pub fn clear_all_trigger_edges(project: &mut Project) {
     fn clear_instance(fx: &mut PresetInstance) {
         if let Some(mods) = fx.audio_mods.as_mut() {
             for m in mods.iter_mut() {
                 m.trigger_edge.clear();
+                m.step_value = None;
+                m.step_dir = 1.0;
             }
         }
     }
@@ -1175,5 +1306,275 @@ mod tests {
         evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new());
         evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new());
         assert_eq!(value(&project), 2.0);
+    }
+
+    // ── PARAM_STEP_ACTIONS P1: step/random actions on `ParameterAudioMod` ──
+
+    /// Attach a step/random mod on `param_id` (must exist on `TestEnvFx`),
+    /// reading the send's Full-band transient with an instant (unsmoothed)
+    /// shape so a snapshot level crossing the 0.5 edge threshold fires
+    /// deterministically on the very next evaluator call — the same D5b
+    /// chassis `is_trigger`/`is_trigger_gate` already use.
+    fn attach_action_mod(
+        project: &mut Project,
+        send_id: &AudioSendId,
+        param_id: &'static str,
+        action: TriggerAction,
+    ) {
+        let mut m = ParameterAudioMod::new(
+            param_id.into(),
+            send_id.clone(),
+            AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+        );
+        m.shape = AudioModShape { attack_ms: 0.0, release_ms: 0.0, ..Default::default() };
+        m.action = action;
+        project.timeline.layers[0].effects.as_mut().unwrap()[0]
+            .audio_mods_mut()
+            .push(m);
+    }
+
+    /// The layer-0 effect's first (and only, in these tests) audio mod's
+    /// current step shadow.
+    fn step_value_of(project: &Project) -> Option<f32> {
+        project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .audio_mods
+            .as_ref()
+            .unwrap()[0]
+            .step_value
+    }
+
+    fn step_dir_of(project: &Project) -> f32 {
+        project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .audio_mods
+            .as_ref()
+            .unwrap()[0]
+            .step_dir
+    }
+
+    /// Drive `n` fires on the layer-0 effect's first audio mod, alternating
+    /// hot/cold snapshots so `TransientEdge` re-arms between each (it only
+    /// re-arms once the level drops below `threshold * REARM_RATIO`). Returns
+    /// the mod's `step_value` after each hot call, in fire order.
+    fn fire_n_times(project: &mut Project, n: usize) -> Vec<f32> {
+        let hot = snapshot_full_transient(0.9);
+        let cold = snapshot_full_transient(0.0);
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            evaluate_all_audio_mods(project, &hot, Seconds(0.016), &mut Vec::new());
+            out.push(step_value_of(project).expect("armed after a fire"));
+            evaluate_all_audio_mods(project, &cold, Seconds(0.016), &mut Vec::new());
+        }
+        out
+    }
+
+    #[test]
+    fn step_shadow_advances_only_on_fire_not_every_tick() {
+        let (mut project, send_id) = project_with_audio_send();
+        attach_action_mod(
+            &mut project,
+            &send_id,
+            "segs", // whole_numbers 0..8
+            TriggerAction::Step { amount: 1.0, wrap: WrapMode::Clamp },
+        );
+
+        let hot = snapshot_full_transient(0.9);
+        // First rising edge: shadow seeds from base (0) and steps by 1.
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new());
+        assert_eq!(step_value_of(&project), Some(1.0));
+
+        // Signal stays hot: the edge is disarmed, so the SAME call again must
+        // not advance the shadow a second time.
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new());
+        assert_eq!(
+            step_value_of(&project),
+            Some(1.0),
+            "a sustained signal must not re-step every tick"
+        );
+    }
+
+    #[test]
+    fn step_wrap_mode_cycles_past_max_to_min_for_discrete_param() {
+        let (mut project, send_id) = project_with_audio_send();
+        // segs: 0..8 whole-numbers → 9 reachable positions. Wrap must treat
+        // one step past 8 as landing exactly on 0 (the *discrete* cycle
+        // length is max-min+1, not max-min — see the Step arm's `wrap_max`
+        // adjustment).
+        attach_action_mod(
+            &mut project,
+            &send_id,
+            "segs",
+            TriggerAction::Step { amount: 1.0, wrap: WrapMode::Wrap },
+        );
+
+        let expect = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 0.0];
+        let got = fire_n_times(&mut project, expect.len());
+        assert_eq!(got, expect, "9 fires of +1 wrap exactly once around the 9-position cycle");
+    }
+
+    #[test]
+    fn step_bounce_mode_reverses_direction_at_rails() {
+        let (mut project, send_id) = project_with_audio_send();
+        // "amount": continuous 0..1. amount=0.7 overshoots both rails within
+        // 3 fires, so the direction flip is observable directly.
+        attach_action_mod(
+            &mut project,
+            &send_id,
+            "amount",
+            TriggerAction::Step { amount: 0.7, wrap: WrapMode::Bounce },
+        );
+
+        let got = fire_n_times(&mut project, 3);
+        // fire1: 0 + 0.7*1 = 0.7 (no rail hit yet, dir stays +1)
+        assert!((got[0] - 0.7).abs() < 1e-5, "fire1 = {}", got[0]);
+        // fire2: 0.7 + 0.7 = 1.4 overshoots max(1) by 0.4 -> reflects to 0.6, dir flips to -1
+        assert!((got[1] - 0.6).abs() < 1e-5, "fire2 = {}", got[1]);
+        // fire3: 0.6 + 0.7*(-1) = -0.1 undershoots min(0) by 0.1 -> reflects to 0.1, dir flips to +1
+        assert!((got[2] - 0.1).abs() < 1e-5, "fire3 = {}", got[2]);
+        assert!((step_dir_of(&project) - 1.0).abs() < 1e-5, "dir flipped back to +1 after the 2nd rail");
+    }
+
+    #[test]
+    fn step_clamp_mode_saturates_at_rails() {
+        let (mut project, send_id) = project_with_audio_send();
+        attach_action_mod(
+            &mut project,
+            &send_id,
+            "amount", // continuous 0..1
+            TriggerAction::Step { amount: 0.9, wrap: WrapMode::Clamp },
+        );
+
+        let got = fire_n_times(&mut project, 3);
+        assert!((got[0] - 0.9).abs() < 1e-5, "fire1 within range, got {}", got[0]);
+        assert_eq!(got[1], 1.0, "fire2 saturates at max instead of wrapping/bouncing");
+        assert_eq!(got[2], 1.0, "fire3 stays saturated, no bounce-back");
+    }
+
+    #[test]
+    fn step_amount_scales_the_per_fire_jump_proportionally() {
+        // The control surface for "how big a jump" is `amount` alone — there
+        // is no separate "how often" knob (D6 retired the `every` divisor).
+        // A small vs. large amount from the same base must produce a
+        // proportionally different single-fire jump.
+        let (mut small_project, send_id_a) = project_with_audio_send();
+        attach_action_mod(
+            &mut small_project,
+            &send_id_a,
+            "amount",
+            TriggerAction::Step { amount: 0.1, wrap: WrapMode::Clamp },
+        );
+        let (mut large_project, send_id_b) = project_with_audio_send();
+        attach_action_mod(
+            &mut large_project,
+            &send_id_b,
+            "amount",
+            TriggerAction::Step { amount: 0.4, wrap: WrapMode::Clamp },
+        );
+
+        let small = fire_n_times(&mut small_project, 1)[0];
+        let large = fire_n_times(&mut large_project, 1)[0];
+        assert!((small - 0.1).abs() < 1e-5, "small amount jump, got {small}");
+        assert!((large - 0.4).abs() < 1e-5, "large amount jump, got {large}");
+        assert!(large > small * 3.0, "a 4x amount must produce a markedly larger jump");
+    }
+
+    #[test]
+    fn apply_step_values_writes_armed_shadow_then_disarm_falls_back_to_base() {
+        let (mut project, send_id) = project_with_audio_send();
+        attach_action_mod(
+            &mut project,
+            &send_id,
+            "segs",
+            TriggerAction::Step { amount: 1.0, wrap: WrapMode::Clamp },
+        );
+
+        let hot = snapshot_full_transient(0.9);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new());
+        assert_eq!(step_value_of(&project), Some(1.0));
+
+        // Phase 1 then Phase 1.5, exactly as `evaluate_modulation` orders them.
+        reset_all_effectives(&mut project);
+        assert!(apply_step_values(&mut project), "an armed shadow reports a write");
+        let value = |p: &Project| {
+            p.timeline.layers[0].effects.as_ref().unwrap()[0].params.get("segs").unwrap().value
+        };
+        assert_eq!(value(&project), 1.0, "the step replaced the base value");
+
+        // Transport stop (BUG-051's call site) clears the step shadow too (D4).
+        clear_all_trigger_edges(&mut project);
+        assert_eq!(step_value_of(&project), None, "disarm drops the shadow");
+        reset_all_effectives(&mut project);
+        assert!(!apply_step_values(&mut project), "no armed shadow left to apply");
+        assert_eq!(value(&project), 0.0, "falls back to the committed base");
+    }
+
+    #[test]
+    fn random_never_repeats_the_current_discrete_value_across_200_fires() {
+        let (mut project, send_id) = project_with_audio_send();
+        attach_action_mod(&mut project, &send_id, "segs", TriggerAction::Random);
+
+        let got = fire_n_times(&mut project, 200);
+        for pair in got.windows(2) {
+            assert_ne!(pair[0], pair[1], "adjacent random fires must never repeat the current value");
+        }
+        // And every value actually lands on a reachable discrete position.
+        for v in &got {
+            assert!((0.0..=8.0).contains(v) && v.fract() == 0.0, "off-grid random value {v}");
+        }
+    }
+
+    #[test]
+    fn random_is_deterministic_replaying_the_same_fire_sequence_twice() {
+        // Two independently-built, identical projects, driven by the
+        // identical fire sequence: the sequence of values must match exactly
+        // both times — no RNG state, no wall clock, purely a function of the
+        // mod's own fire ordinal (D7). This is the property offline export
+        // leans on for reproducible audio-reactive renders.
+        let (mut project_a, send_a) = project_with_audio_send();
+        attach_action_mod(&mut project_a, &send_a, "segs", TriggerAction::Random);
+        let (mut project_b, send_b) = project_with_audio_send();
+        attach_action_mod(&mut project_b, &send_b, "segs", TriggerAction::Random);
+
+        let seq_a = fire_n_times(&mut project_a, 50);
+        let seq_b = fire_n_times(&mut project_b, 50);
+        assert_eq!(seq_a, seq_b, "identical fire sequence must reproduce identical values");
+    }
+
+    #[test]
+    fn action_field_serde_round_trip_old_and_new_projects_byte_identical() {
+        // An old-project mod (no `action` key at all) must deserialize to
+        // `TriggerAction::Continuous` and re-serialize WITHOUT ever emitting
+        // an `action` key — old projects stay byte-identical on disk.
+        let old_project_json = r#"{
+            "paramId": "amount",
+            "enabled": true,
+            "source": { "sendId": "e14b42f8", "feature": { "kind": "amplitude", "band": "full" } },
+            "shape": {
+                "sensitivity": 1.0,
+                "attackMs": 5.0,
+                "releaseMs": 120.0,
+                "rangeMin": 0.0,
+                "rangeMax": 1.0,
+                "curve": "linear",
+                "invert": false,
+                "rateOfChange": false
+            }
+        }"#;
+        let m: ParameterAudioMod = serde_json::from_str(old_project_json).unwrap();
+        assert_eq!(m.action, TriggerAction::Continuous);
+        let reserialized = serde_json::to_string(&m).unwrap();
+        assert!(!reserialized.contains("\"action\""), "Continuous must not round-trip onto the wire");
+        assert!(!reserialized.contains("step_value") && !reserialized.contains("stepValue"));
+        assert!(!reserialized.contains("step_dir") && !reserialized.contains("stepDir"));
+
+        // A mod with `action` explicitly set DOES round-trip through it.
+        let mut stepped = m.clone();
+        stepped.action = TriggerAction::Step { amount: 2.0, wrap: WrapMode::Bounce };
+        let json = serde_json::to_string(&stepped).unwrap();
+        assert!(json.contains("\"action\""));
+        let back: ParameterAudioMod = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.action, TriggerAction::Step { amount: 2.0, wrap: WrapMode::Bounce });
+        // Runtime shadow state never round-trips even when `action` is set.
+        assert_eq!(back.step_value, None);
+        assert_eq!(back.step_dir, 1.0);
     }
 }

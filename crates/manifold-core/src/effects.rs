@@ -2791,15 +2791,66 @@ impl ParameterDriver {
                 // Deterministic per-period hash matching Unity's HashToFloat.
                 // Unity ParameterDriver.cs lines 224-236.
                 let cycle = (beat / period).floor() as i32;
-                let mut h = cycle as u32;
-                h ^= h >> 16;
-                h = h.wrapping_mul(0x45d9f3b);
-                h ^= h >> 16;
-                h = h.wrapping_mul(0x45d9f3b);
-                h ^= h >> 16;
-                (h & 0x7FFFFF) as f32 / 0x7FFFFF as f32
+                hash_to_float(cycle as u32)
             }
         }
+    }
+}
+
+/// Deterministic integer hash → the masked pre-normalize bits (0..=0x7FFFFF).
+/// Unity's `HashToFloat` port (`ParameterDriver.cs` lines 224-236) — the
+/// house random for anything that needs frame/seed-driven determinism
+/// without RNG state: the same `seed` always yields the same output, so a
+/// replay (e.g. offline export re-running the same fire sequence) reproduces
+/// identically. Exposed separately from [`hash_to_float`] for callers that
+/// want an exact integer modulo (PARAM_STEP_ACTIONS D7's discrete non-repeat
+/// selection) rather than a float, avoiding float-rounding at the boundary.
+pub fn hash_u32(seed: u32) -> u32 {
+    let mut h = seed;
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x45d9f3b);
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x45d9f3b);
+    h ^= h >> 16;
+    h & 0x7FFFFF
+}
+
+/// [`hash_u32`] normalized to `[0, 1)`.
+pub fn hash_to_float(seed: u32) -> f32 {
+    hash_u32(seed) as f32 / 0x7FFFFF as f32
+}
+
+#[cfg(test)]
+mod hash_tests {
+    use super::*;
+
+    #[test]
+    fn hash_to_float_is_a_pure_function_of_seed() {
+        // Same seed → same output, always (determinism is the whole point:
+        // PARAM_STEP_ACTIONS D7 leans on this for offline-export reproducibility).
+        for seed in [0u32, 1, 7, 12345, u32::MAX] {
+            assert_eq!(hash_to_float(seed), hash_to_float(seed));
+            assert_eq!(hash_u32(seed), hash_u32(seed));
+        }
+    }
+
+    #[test]
+    fn hash_to_float_stays_in_unit_range() {
+        for seed in 0..2000u32 {
+            let f = hash_to_float(seed);
+            assert!((0.0..1.0).contains(&f), "seed {seed} produced out-of-range {f}");
+        }
+    }
+
+    #[test]
+    fn driver_random_waveform_still_uses_the_shared_hash() {
+        // Pins the extraction didn't change DriverWaveform::Random's output —
+        // same cycle index, same value as calling hash_to_float directly.
+        let period = 4.0;
+        let cycle = 3i32;
+        let beat = Beats((cycle as f32 * period) as f64);
+        let v = ParameterDriver::evaluate_with_period(beat, period, DriverWaveform::Random, 0.0);
+        assert_eq!(v, hash_to_float(cycle as u32));
     }
 }
 
