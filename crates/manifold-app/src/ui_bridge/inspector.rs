@@ -4,12 +4,10 @@
 use manifold_core::effects::{PresetInstance, ParamEnvelope, ParameterDriver};
 use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, DriverWaveform};
-use manifold_core::{Beats, LayerId, Seconds};
+use manifold_core::LayerId;
 use manifold_editing::commands::ableton::ChangeAbletonTrimCommand;
 use manifold_core::audio_clip_detection::DetectionConfig;
-use manifold_editing::commands::clip::{
-    ChangeClipLoopCommand, ChangeClipRecordedBpmCommand, SlipClipCommand,
-};
+use manifold_editing::commands::clip::{ChangeClipLoopCommand, ChangeClipRecordedBpmCommand};
 use manifold_editing::commands::clip_detection::SetClipDetectionConfigCommand;
 use manifold_editing::commands::drivers::{
     AddDriverCommand, ChangeDriverBeatDivCommand, ChangeDriverWaveformCommand, ChangeTrimCommand,
@@ -448,19 +446,6 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::MacroRightClick(idx) => {
-            let idx = *idx;
-            if idx < manifold_core::macro_bank::MACRO_COUNT {
-                let old = project.settings.macro_bank.slots[idx].value;
-                if old.abs() > f32::EPSILON {
-                    manifold_core::macro_bank::MacroBank::apply_macro(project, idx, 0.0);
-                    let cmd = ChangeMacroCommand::new(idx, old, 0.0);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            DispatchResult::handled()
-        }
-
         PanelAction::MacroReset(idx) => {
             let idx = *idx;
             if idx < manifold_core::macro_bank::MACRO_COUNT {
@@ -568,17 +553,6 @@ pub(super) fn dispatch_inspector(
             );
             DispatchResult::handled()
         }
-        PanelAction::MasterOpacityRightClick => {
-            let old = project.settings.master_opacity;
-            if (old - 1.0).abs() > f32::EPSILON {
-                project.settings.master_opacity = 1.0;
-                let cmd = ChangeMasterOpacityCommand::new(old, 1.0);
-                ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-            }
-            *active_inspector_drag = None;
-            DispatchResult::handled()
-        }
-
         // ── LED enabled toggle ───────────────────────────────────
         PanelAction::LedEnabledToggle => {
             let new_enabled = !content_state.led_enabled;
@@ -639,17 +613,6 @@ pub(super) fn dispatch_inspector(
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::LedBrightnessRightClick => {
-            let old = project.settings.led_brightness;
-            if (old - 1.0).abs() > f32::EPSILON {
-                project.settings.led_brightness = 1.0;
-                let cmd = ChangeLedBrightnessCommand::new(old, 1.0);
-                ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-            }
-            *active_inspector_drag = None;
-            DispatchResult::handled()
-        }
-
         // ── Layer chrome ───────────────────────────────────────────
         PanelAction::LayerOpacitySnapshot => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
@@ -708,23 +671,6 @@ pub(super) fn dispatch_inspector(
             ui.inspector.layer_chrome_mut().toggle_collapsed();
             DispatchResult::structural()
         }
-        PanelAction::LayerOpacityRightClick => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, project);
-            if let Some(idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get_mut(idx)
-            {
-                let layer_id = layer.layer_id.clone();
-                let old = layer.opacity;
-                if (old - 1.0).abs() > f32::EPSILON {
-                    layer.opacity = 1.0;
-                    let cmd = ChangeLayerOpacityCommand::new(layer_id, old, 1.0);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            *active_inspector_drag = None;
-            DispatchResult::handled()
-        }
-
         // ── Clip chrome ────────────────────────────────────────────
         PanelAction::ClipChromeCollapseToggle => {
             ui.inspector.clip_chrome_mut().toggle_collapsed();
@@ -903,151 +849,13 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
-        PanelAction::ClipSlipSnapshot => {
-            if let Some(clip_id) = &selection.primary_selected_clip_id
-                && let Some(clip) = project.timeline.find_clip_by_id(clip_id)
-            {
-                *drag_snapshot = Some(clip.in_point.as_f32());
-                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::ClipSlip {
-                    clip_id: clip_id.clone(),
-                    value: clip.in_point.as_f32(),
-                });
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::ClipSlipChanged(val) => {
-            if let Some(clip_id) = &selection.primary_selected_clip_id {
-                if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
-                    clip.in_point = Seconds::from_f32(val.max(0.0));
-                }
-                if let Some(crate::app::ActiveInspectorDrag::ClipSlip { value, .. }) =
-                    active_inspector_drag
-                {
-                    *value = val.max(0.0);
-                }
-                let v = Seconds::from_f32(val.max(0.0));
-                let cid = clip_id.clone();
-                ContentCommand::send(
-                    content_tx,
-                    ContentCommand::MutateProject(Box::new(move |p| {
-                        if let Some(clip) = p.timeline.find_clip_by_id_mut(&cid) {
-                            clip.in_point = v;
-                        }
-                    })),
-                );
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::ClipSlipCommit => {
-            if let Some(old_val) = drag_snapshot.take()
-                && let Some(clip_id) = &selection.primary_selected_clip_id
-            {
-                let clip_id = clip_id.clone();
-                if let Some(clip) = project.timeline.find_clip_by_id(&clip_id) {
-                    let new_val = clip.in_point;
-                    if (old_val - new_val.as_f32()).abs() > f32::EPSILON {
-                        let cmd =
-                            SlipClipCommand::new(clip_id, Seconds::from_f32(old_val), new_val);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                    }
-                }
-            }
-            *active_inspector_drag = None;
-            DispatchResult::handled()
-        }
-        PanelAction::ClipLoopSnapshot => {
-            if let Some(clip_id) = &selection.primary_selected_clip_id
-                && let Some(clip) = project.timeline.find_clip_by_id(clip_id)
-            {
-                *drag_snapshot = Some(clip.loop_duration_beats.as_f32());
-                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::ClipLoop {
-                    clip_id: clip_id.clone(),
-                    value: clip.loop_duration_beats.as_f32(),
-                });
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::ClipLoopChanged(val) => {
-            if let Some(clip_id) = &selection.primary_selected_clip_id {
-                if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
-                    clip.loop_duration_beats = Beats::from_f32(val.max(0.0));
-                }
-                if let Some(crate::app::ActiveInspectorDrag::ClipLoop { value, .. }) =
-                    active_inspector_drag
-                {
-                    *value = val.max(0.0);
-                }
-                let v = Beats::from_f32(val.max(0.0));
-                let cid = clip_id.clone();
-                ContentCommand::send(
-                    content_tx,
-                    ContentCommand::MutateProject(Box::new(move |p| {
-                        if let Some(clip) = p.timeline.find_clip_by_id_mut(&cid) {
-                            clip.loop_duration_beats = v;
-                        }
-                    })),
-                );
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::ClipLoopCommit => {
-            if let Some(old_val) = drag_snapshot.take()
-                && let Some(clip_id) = &selection.primary_selected_clip_id
-            {
-                let clip_id = clip_id.clone();
-                if let Some(clip) = project.timeline.find_clip_by_id(&clip_id) {
-                    let new_val = clip.loop_duration_beats;
-                    let is_looping = clip.is_looping;
-                    if (old_val - new_val.as_f32()).abs() > f32::EPSILON {
-                        let cmd = ChangeClipLoopCommand::new(
-                            clip_id,
-                            is_looping,
-                            is_looping,
-                            Beats::from_f32(old_val),
-                            new_val,
-                        );
-                        ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                    }
-                }
-            }
-            *active_inspector_drag = None;
-            DispatchResult::handled()
-        }
-
-        PanelAction::ClipSlipRightClick => {
-            if let Some(clip_id) = &selection.primary_selected_clip_id {
-                let clip_id = clip_id.clone();
-                if let Some(clip) = project.timeline.find_clip_by_id_mut(&clip_id) {
-                    let old = clip.in_point;
-                    if old.as_f32().abs() > f32::EPSILON {
-                        clip.in_point = Seconds(0.0);
-                        let cmd = SlipClipCommand::new(clip_id, old, Seconds(0.0));
-                        ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                    }
-                }
-            }
-            *active_inspector_drag = None;
-            DispatchResult::handled()
-        }
-        PanelAction::ClipLoopRightClick => {
-            if let Some(clip_id) = &selection.primary_selected_clip_id {
-                let clip_id = clip_id.clone();
-                if let Some(clip) = project.timeline.find_clip_by_id_mut(&clip_id) {
-                    let old_dur = clip.loop_duration_beats;
-                    let full_dur = clip.duration_beats;
-                    let is_looping = clip.is_looping;
-                    if (old_dur - full_dur).abs().as_f32() > f32::EPSILON {
-                        clip.loop_duration_beats = full_dur;
-                        let cmd = ChangeClipLoopCommand::new(
-                            clip_id, is_looping, is_looping, old_dur, full_dur,
-                        );
-                        ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                    }
-                }
-            }
-            *active_inspector_drag = None;
-            DispatchResult::handled()
-        }
+        // BUG-061: the clip in-point ("slip") slider and its right-click reset
+        // were removed (`ClipSlipSnapshot`/`Changed`/`Commit`/`RightClick`) —
+        // dead code with no emitter (the slip UI itself was already gone;
+        // `clip_chrome.rs`'s `set_slip_range`/`sync_slip` were empty stubs).
+        // The clip LOOP-DURATION trio (`ClipLoopSnapshot`/`Changed`/`Commit`)
+        // was dead for the same reason and removed alongside it.
+        // `ClipLoopToggle` is a real, live toggle (is_looping) — kept above.
 
         // ── Effect operations ──────────────────────────────────────
         PanelAction::EffectToggle(fx_idx) => {
@@ -1217,67 +1025,16 @@ pub(super) fn dispatch_inspector(
             inspector.apply_selection_visuals(tree);
             DispatchResult::handled()
         }
-        PanelAction::ParamRightClick(gpt, param_id, default_val) => {
-            // Reset-to-default for both kinds. Routing through
-            // with_preset_graph_mut is what fixed the generator snap-back
-            // (#5): the committed command now resolves and writes the slot
-            // for a generator exactly as for an effect.
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
-                let changed = project
-                    .with_preset_graph_mut(&target, |inst| {
-                        let id = param_id.as_ref();
-                        if !inst.params.contains(id) {
-                            return None;
-                        }
-                        let old = inst.get_base_param(id);
-                        if (old - *default_val).abs() > f32::EPSILON {
-                            inst.set_base_param(id, *default_val);
-                            Some(old)
-                        } else {
-                            None
-                        }
-                    })
-                    .flatten();
-                if let Some(old) = changed {
-                    // P2 "value snap-back" (D15): the data above already
-                    // snapped instantly (`set_base_param`) — this only starts
-                    // the card's own `AnimF32` so the slider FILL eases
-                    // `old` -> `default_val` instead of jumping. Perform-
-                    // context inspector cards only: when the graph editor
-                    // drives this (`editor_target.is_some()`), the row that
-                    // fired the gesture lives in `graph_editor.rs`'s own
-                    // separate `ParamCardPanel` instance, not `ui.inspector`,
-                    // and `effective_tab`/`idx` here address the *inspector's*
-                    // current tab — reaching into the wrong card would
-                    // animate an unrelated row, so skip rather than guess.
-                    if editor_target.is_none() {
-                        match gpt {
-                            GraphParamTarget::Effect(idx) => {
-                                if let Some(card) = ui.inspector.effect_card_mut(effective_tab, *idx) {
-                                    card.begin_value_snapback(param_id, old, *default_val);
-                                }
-                            }
-                            GraphParamTarget::Generator => {
-                                if let Some(card) = ui.inspector.gen_params_mut() {
-                                    card.begin_value_snapback(param_id, old, *default_val);
-                                }
-                            }
-                        }
-                    }
-                    let cmd = ChangeGraphParamCommand::new(
-                        target,
-                        param_id.clone(),
-                        old,
-                        *default_val,
-                    );
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            *active_inspector_drag = None;
-            DispatchResult::handled()
-        }
+        // BUG-061: the old bespoke per-param right-click reset action was
+        // deleted — reset now rides the generic `SliderReset` trio
+        // (`ParamSnapshot`/`ParamChanged`/`ParamCommit` below), reusing
+        // these same handlers instead of a bespoke code path. Known
+        // trade-off: this drops the eased "value snap-back" fill animation
+        // the old handler drove via `begin_value_snapback` (D15) — the value
+        // now jumps to default like any other committed change instead of
+        // easing to it. `begin_value_snapback` itself is left in place in
+        // manifold-ui (still exercised by its own unit tests) but has no
+        // remaining production caller.
         PanelAction::ParamSnapshot(gpt, param_id) => {
             if let Some(target) =
                 resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)

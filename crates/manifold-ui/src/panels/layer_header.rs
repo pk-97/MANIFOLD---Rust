@@ -1999,6 +1999,7 @@ impl LayerHeaderPanel {
                         &crate::slider::SliderColors::default_slider(),
                         SMALL_FONT,
                         0.0,
+                        gain_db_to_norm(0.0),
                     );
                     let track = slider.track;
                     let mut gs = crate::slider::SliderDragState::with_range(
@@ -2127,6 +2128,21 @@ impl LayerHeaderPanel {
                     PanelAction::LayerHeaderRightClicked(lid.clone()),
                 );
             });
+            // Gain slider track: right-click resets to unity (0 dB) instead of
+            // opening the row's context menu — registered AFTER the whole-row
+            // loop above so this more specific intent wins (BUG-061; the gain
+            // slider never had a reset gesture before this).
+            if let Some(ids) = self.gain_sliders[i].ids() {
+                intents.on(
+                    ids.track,
+                    crate::intent::Gesture::RightClick,
+                    PanelAction::slider_reset(
+                        PanelAction::AudioGainSnapshot(lid.clone()),
+                        PanelAction::AudioGainChanged(lid.clone(), 0.0),
+                        PanelAction::AudioGainCommit(lid),
+                    ),
+                );
+            }
         }
     }
 
@@ -3057,6 +3073,37 @@ mod tests {
         assert!(
             matches!(a.as_slice(), [PanelAction::AudioSendClicked(id)] if *id == LayerId::new("Drums In"))
         );
+    }
+
+    #[test]
+    fn gain_track_right_click_resolves_to_slider_reset_at_unity_not_the_row_menu() {
+        // BUG-061: the gain track never had a reset gesture before this — a
+        // right-click on it fell through to the whole-row LayerHeaderRightClicked
+        // context menu (register_intents registers that on every row node,
+        // gain track included). The gain-specific registration must be added
+        // AFTER that loop so it wins for this one node.
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = LayerHeaderPanel::new();
+        let layers = vec![make_audio_layer("Drums In")];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
+
+        let mut reg = crate::intent::IntentRegistry::new();
+        panel.register_intents(&mut reg);
+
+        let gain_track = panel.gain_sliders[0].track_id().unwrap();
+        match reg.resolve(&tree, Some(gain_track), crate::intent::Gesture::RightClick) {
+            Some(PanelAction::SliderReset { changed, .. }) => {
+                assert!(matches!(
+                    *changed,
+                    PanelAction::AudioGainChanged(ref id, v)
+                        if *id == LayerId::new("Drums In") && v.abs() < f32::EPSILON
+                ));
+            }
+            other => panic!("expected SliderReset, got {other:?}"),
+        }
     }
 
     // ── P0.5 gate: generator label, both states ───────────────────────

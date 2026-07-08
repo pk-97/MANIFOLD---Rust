@@ -4,7 +4,7 @@ use manifold_core::PresetTypeId;
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, LayerType};
-use manifold_core::{Beats, Seconds};
+use manifold_core::Beats;
 use manifold_ui::color;
 use manifold_ui::node::Color32;
 use manifold_ui::panels::layer_header::LayerInfo;
@@ -750,7 +750,6 @@ pub fn push_state(
                 let name = clip.video_clip_id.clone();
                 chrome.sync_name(tree, &name);
                 chrome.sync_source_name(tree, &clip.video_clip_id);
-                chrome.sync_slip(tree, clip.in_point);
                 chrome.sync_loop_enabled(tree, clip.is_looping);
                 chrome.sync_loop_duration(tree, clip.loop_duration_beats);
                 if clip.recorded_bpm > 0.0 {
@@ -758,10 +757,6 @@ pub fn push_state(
                 } else {
                     chrome.sync_bpm(tree, "Auto");
                 }
-                // Slip range = source duration - clip duration in seconds
-                let spb = 60.0 / Some(project).map_or(120.0, |p| p.settings.bpm.0);
-                let clip_dur_s = Seconds::from_f32(clip.duration_beats.as_f32() * spb);
-                chrome.set_slip_range(clip_dur_s.max(Seconds(1.0)));
                 chrome.set_loop_range(clip.duration_beats.max(Beats(1.0)));
             } else if clip.is_audio() {
                 let file_name = std::path::Path::new(&clip.audio_file_path)

@@ -26,6 +26,8 @@ pub struct SliderSpec {
     pub label: Option<String>,
     /// Normalised position 0–1 the slider is first drawn at.
     pub value: f32,
+    /// Normalised position 0–1 the slider resets to on right-click (BUG-061).
+    pub default: f32,
     /// Value-cell text (already formatted).
     pub value_text: String,
     pub colors: SliderColors,

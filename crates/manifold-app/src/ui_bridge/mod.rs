@@ -175,6 +175,77 @@ pub fn dispatch(
     editor_target: Option<&manifold_core::GraphTarget>,
 ) -> DispatchResult {
     match action {
+        // Right-click reset of a slider to its default, expressed as the
+        // slider's own value-change trio (BUG-061). NOT delegated to a
+        // sub-dispatcher — it recurses into this same `dispatch` for each of
+        // the three inner actions, in order, reusing every existing
+        // value-change handler verbatim. That makes reset literally "a drag
+        // that lands on the default": undo behaves exactly like a drag to
+        // that value, and there is no separate reset code path to keep in
+        // sync with each slider's Snapshot/Changed/Commit handler.
+        PanelAction::SliderReset { snapshot, changed, commit } => {
+            dispatch(
+                snapshot,
+                project,
+                content_tx,
+                content_state,
+                ui,
+                selection,
+                active_layer,
+                drag_snapshot,
+                trim_snapshot,
+                target_snapshot,
+                decay_snapshot,
+                audio_shape_snapshot,
+                audio_crossover_snapshot,
+                audio_send_gain_drag_snapshot,
+                audio_send_sensitivity_drag_snapshot,
+                user_prefs,
+                active_inspector_drag,
+                editor_target,
+            );
+            dispatch(
+                changed,
+                project,
+                content_tx,
+                content_state,
+                ui,
+                selection,
+                active_layer,
+                drag_snapshot,
+                trim_snapshot,
+                target_snapshot,
+                decay_snapshot,
+                audio_shape_snapshot,
+                audio_crossover_snapshot,
+                audio_send_gain_drag_snapshot,
+                audio_send_sensitivity_drag_snapshot,
+                user_prefs,
+                active_inspector_drag,
+                editor_target,
+            );
+            dispatch(
+                commit,
+                project,
+                content_tx,
+                content_state,
+                ui,
+                selection,
+                active_layer,
+                drag_snapshot,
+                trim_snapshot,
+                target_snapshot,
+                decay_snapshot,
+                audio_shape_snapshot,
+                audio_crossover_snapshot,
+                audio_send_gain_drag_snapshot,
+                audio_send_sensitivity_drag_snapshot,
+                user_prefs,
+                active_inspector_drag,
+                editor_target,
+            )
+        }
+
         // ── Transport ──────────────────────────────────────────────
         PanelAction::PlayPause
         | PanelAction::Stop
@@ -264,17 +335,14 @@ pub fn dispatch(
         | PanelAction::MasterCollapseToggle
         | PanelAction::MasterExitPathClicked
         | PanelAction::SetLedExitIndex(_)
-        | PanelAction::MasterOpacityRightClick
         | PanelAction::LedEnabledToggle
         | PanelAction::LedBrightnessSnapshot
         | PanelAction::LedBrightnessChanged(_)
         | PanelAction::LedBrightnessCommit
-        | PanelAction::LedBrightnessRightClick
         | PanelAction::LayerOpacitySnapshot
         | PanelAction::LayerOpacityChanged(_)
         | PanelAction::LayerOpacityCommit
         | PanelAction::LayerChromeCollapseToggle
-        | PanelAction::LayerOpacityRightClick
         | PanelAction::ClipChromeCollapseToggle
         | PanelAction::ClipBpmClicked
         | PanelAction::ClipWarpToggled
@@ -289,21 +357,12 @@ pub fn dispatch(
         | PanelAction::ClipDetectSetQuantize(_)
         | PanelAction::ClipDetectSetLayer(..)
         | PanelAction::ClipLoopToggle
-        | PanelAction::ClipSlipSnapshot
-        | PanelAction::ClipSlipChanged(_)
-        | PanelAction::ClipSlipCommit
-        | PanelAction::ClipLoopSnapshot
-        | PanelAction::ClipLoopChanged(_)
-        | PanelAction::ClipLoopCommit
-        | PanelAction::ClipSlipRightClick
-        | PanelAction::ClipLoopRightClick
         | PanelAction::EffectToggle(_)
         | PanelAction::EffectCollapseToggle(_)
         | PanelAction::SetAllCardsCollapsed { .. }
         | PanelAction::ModConfigTabChanged
         | PanelAction::ModsCompactToggled
         | PanelAction::EffectCardClicked(_)
-        | PanelAction::ParamRightClick(..)
         | PanelAction::ParamSnapshot(..)
         | PanelAction::ParamChanged(..)
         | PanelAction::ParamCommit(..)
@@ -387,7 +446,6 @@ pub fn dispatch(
         | PanelAction::MacroSnapshot(_)
         | PanelAction::MacroChanged(..)
         | PanelAction::MacroCommit(_)
-        | PanelAction::MacroRightClick(_)
         | PanelAction::MacroReset(_)
         | PanelAction::MacroLabelRightClick(_)
         | PanelAction::MacroLabelRename(_)

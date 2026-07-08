@@ -572,10 +572,13 @@ pub struct ParamCardPanel {
 
     /// P2 "value snap-back" (D15) — per-param `AnimF32` (`Curve::Snap`) that
     /// eases the slider FILL from its pre-reset position to the default after
-    /// the RIGHT-CLICK reset gesture (`begin_value_snapback`, called by the
-    /// app-side `PanelAction::ParamRightClick` handler once the model has
-    /// already snapped instantly — D15: data first, visual follows). Settled
-    /// (not animating) for every row until a reset targets it. Ticked in
+    /// the RIGHT-CLICK reset gesture (`begin_value_snapback`, meant to be
+    /// called by the app-side dispatch once the model has already snapped
+    /// instantly — D15: data first, visual follows). BUG-061 folded the
+    /// param right-click reset into the generic `SliderReset` trio, which
+    /// reuses the plain `ParamChanged` handler and does not call this — no
+    /// production path drives it today; only its own unit tests below do.
+    /// Settled (not animating) for every row until a reset targets it. Ticked in
     /// `tick_value_flash` alongside the flash, which also repaints the fill
     /// every frame it's mid-flight (the value-dirty-check in `sync_values`
     /// only fires once, the frame the model value actually changes).
@@ -1036,13 +1039,16 @@ impl ParamCardPanel {
             && !self.collapse_anim.is_animating()
     }
 
-    /// P2 "value snap-back" (D15): called by the app-side dispatch the instant
-    /// the RIGHT-CLICK reset-to-default gesture (`PanelAction::ParamRightClick`)
-    /// commits — the model has ALREADY snapped to `to` (raw param value) by
-    /// the time this runs; this only retargets the row's `value_snapback`
-    /// `AnimF32` (Curve::Snap) so the slider FILL eases from `from` to `to`
-    /// instead of jumping — the data is never delayed behind this. A no-op
-    /// if `param_id` isn't one of this card's rows (stale/mismatched target).
+    /// P2 "value snap-back" (D15): meant to be called by the app-side dispatch
+    /// the instant the RIGHT-CLICK reset-to-default gesture commits — the
+    /// model has ALREADY snapped to `to` (raw param value) by the time this
+    /// runs; this only retargets the row's `value_snapback` `AnimF32`
+    /// (Curve::Snap) so the slider FILL eases from `from` to `to` instead of
+    /// jumping — the data is never delayed behind this. BUG-061 folded the
+    /// param right-click reset into the generic `SliderReset` trio (plain
+    /// `ParamChanged`, no easing) — no production call site remains; kept
+    /// for its own unit tests below. A no-op if `param_id` isn't one of this
+    /// card's rows (stale/mismatched target).
     pub fn begin_value_snapback(&mut self, param_id: &manifold_foundation::ParamId, from: f32, to: f32) {
         let Some(pi) = self.param_info.iter().position(|p| &p.param_id == param_id) else {
             return;
@@ -3704,7 +3710,46 @@ impl ParamCardPanel {
 
             // Slider track → reset to default.
             let default = self.param_info.get(pi).map(|i| i.default).unwrap_or(0.0);
-            intents.on(ids.track, RightClick, PanelAction::ParamRightClick(target, self.pid_at(pi), default));
+            intents.on(
+                ids.track,
+                RightClick,
+                PanelAction::slider_reset(
+                    PanelAction::ParamSnapshot(target, self.pid_at(pi)),
+                    PanelAction::ParamChanged(target, self.pid_at(pi), default),
+                    PanelAction::ParamCommit(target, self.pid_at(pi)),
+                ),
+            );
+
+            // Audio-shaping drawer sliders (Amount/Attack/Release) → each
+            // resets to AudioModShape's own default. Never had a reset gesture
+            // before this (BUG-061) — the drawer only opens when armed, so this
+            // is gated the same way the drag hit-test above gates on
+            // `self.audio_configs[pi]`.
+            if let Some((dids, _)) = self.audio_configs.get(pi).and_then(|c| c.as_ref()) {
+                for (si, which, shape_default) in [
+                    (0usize, AudioShapeParam::Sensitivity, AUDIO_SENS_DEFAULT),
+                    (1, AudioShapeParam::Attack, AUDIO_ATTACK_DEFAULT_MS),
+                    (2, AudioShapeParam::Release, AUDIO_RELEASE_DEFAULT_MS),
+                ] {
+                    if let Some(sl) = dids.sliders.get(si) {
+                        let pid = self.pid_at(pi);
+                        intents.on(
+                            sl.track,
+                            RightClick,
+                            PanelAction::slider_reset(
+                                PanelAction::AudioModShapeSnapshot(target, pid.clone()),
+                                PanelAction::AudioModShapeParamChanged(
+                                    target,
+                                    pid.clone(),
+                                    which,
+                                    shape_default,
+                                ),
+                                PanelAction::AudioModShapeCommit(target, pid),
+                            ),
+                        );
+                    }
+                }
+            }
 
             // Rest of the row → perform-mapping menu (Perform context only;
             // Author uses the right-edge mapping drawer instead). Registered on
@@ -5197,5 +5242,64 @@ mod tests {
         let audio_h = crate::panels::param_slider_shared::audio_config_height(false);
         // Drawer height includes the post-drawer break (DRAWER_BOTTOM_GAP).
         assert!((expanded_h - base_h - audio_h - DRAWER_BOTTOM_GAP).abs() < 0.1);
+    }
+
+    #[test]
+    fn right_click_on_param_track_resolves_to_slider_reset_with_declared_default() {
+        // BUG-061: the param reset now rides the generic SliderReset trio (the
+        // old per-panel right-click reset action was deleted), carrying the
+        // param's own declared default (10.0 for "radius" here).
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+
+        let mut reg = crate::intent::IntentRegistry::new();
+        panel.register_intents(&mut reg);
+
+        let track = panel.slider_ids[0].as_ref().unwrap().track;
+        match reg.resolve(&tree, Some(track), crate::intent::Gesture::RightClick) {
+            Some(PanelAction::SliderReset { changed, .. }) => {
+                assert!(matches!(*changed, PanelAction::ParamChanged(_, _, v) if (v - 10.0).abs() < f32::EPSILON));
+            }
+            other => panic!("expected SliderReset, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn right_click_on_audio_shape_slider_resolves_to_slider_reset_with_shape_default() {
+        // BUG-061: the drawer's Amount/Attack/Release shaping sliders never had
+        // a reset gesture before this — each must resolve to AudioModShape's
+        // own default (1.0 / 5ms / 120ms), not the current live value.
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.state.mod_state.audio_active[0] = true;
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+
+        let mut reg = crate::intent::IntentRegistry::new();
+        panel.register_intents(&mut reg);
+
+        let dids = &panel.audio_configs[0].as_ref().expect("audio drawer built").0;
+        assert_eq!(dids.sliders.len(), 3, "Amount/Attack/Release");
+
+        let expected = [
+            (AudioShapeParam::Sensitivity, AUDIO_SENS_DEFAULT),
+            (AudioShapeParam::Attack, AUDIO_ATTACK_DEFAULT_MS),
+            (AudioShapeParam::Release, AUDIO_RELEASE_DEFAULT_MS),
+        ];
+        for (si, (which, default)) in expected.into_iter().enumerate() {
+            let track = dids.sliders[si].track;
+            match reg.resolve(&tree, Some(track), crate::intent::Gesture::RightClick) {
+                Some(PanelAction::SliderReset { changed, .. }) => match *changed {
+                    PanelAction::AudioModShapeParamChanged(_, _, got_which, v) => {
+                        assert_eq!(got_which, which);
+                        assert!((v - default).abs() < f32::EPSILON, "slider {si}: {v} != {default}");
+                    }
+                    other => panic!("slider {si}: expected AudioModShapeParamChanged, got {other:?}"),
+                },
+                other => panic!("slider {si}: expected SliderReset, got {other:?}"),
+            }
+        }
     }
 }

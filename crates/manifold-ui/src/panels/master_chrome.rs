@@ -149,6 +149,9 @@ impl MasterChromePanel {
         SliderSpec {
             label: label.map(str::to_string),
             value: v,
+            // Both the opacity and LED-brightness sliders this helper builds
+            // default to full-scale (1.0) — see the register_intents resets below.
+            default: 1.0,
             value_text: fmt_opacity(v),
             colors: SliderColors::default_slider(),
             font_size: FONT_SIZE,
@@ -362,10 +365,26 @@ impl MasterChromePanel {
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         use crate::intent::Gesture::RightClick;
         if let Some(ids) = self.opacity.ids() {
-            intents.on(ids.track, RightClick, PanelAction::MasterOpacityRightClick);
+            intents.on(
+                ids.track,
+                RightClick,
+                PanelAction::slider_reset(
+                    PanelAction::MasterOpacitySnapshot,
+                    PanelAction::MasterOpacityChanged(1.0),
+                    PanelAction::MasterOpacityCommit,
+                ),
+            );
         }
         if let Some(ids) = self.led_brightness.ids() {
-            intents.on(ids.track, RightClick, PanelAction::LedBrightnessRightClick);
+            intents.on(
+                ids.track,
+                RightClick,
+                PanelAction::slider_reset(
+                    PanelAction::LedBrightnessSnapshot,
+                    PanelAction::LedBrightnessChanged(1.0),
+                    PanelAction::LedBrightnessCommit,
+                ),
+            );
         }
     }
 
@@ -513,5 +532,34 @@ mod tests {
         let actions = panel.handle_drag_end(&mut tree);
         assert!(matches!(actions[0], PanelAction::MasterOpacityCommit));
         assert!(!panel.is_dragging());
+    }
+
+    #[test]
+    fn right_click_on_either_slider_track_resolves_to_slider_reset_with_declared_default() {
+        // BUG-061: both master-chrome sliders' reset now rides the generic
+        // SliderReset trio (not a bespoke *RightClick), and each carries its
+        // own declared default (1.0 for both opacity and LED brightness).
+        let mut tree = UITree::new();
+        let mut panel = MasterChromePanel::new();
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+
+        let mut reg = crate::intent::IntentRegistry::new();
+        panel.register_intents(&mut reg);
+
+        let opacity_track = panel.opacity.track_id().unwrap();
+        match reg.resolve(&tree, Some(opacity_track), crate::intent::Gesture::RightClick) {
+            Some(PanelAction::SliderReset { changed, .. }) => {
+                assert!(matches!(*changed, PanelAction::MasterOpacityChanged(v) if (v - 1.0).abs() < f32::EPSILON));
+            }
+            other => panic!("expected SliderReset, got {other:?}"),
+        }
+
+        let brightness_track = panel.led_brightness.track_id().unwrap();
+        match reg.resolve(&tree, Some(brightness_track), crate::intent::Gesture::RightClick) {
+            Some(PanelAction::SliderReset { changed, .. }) => {
+                assert!(matches!(*changed, PanelAction::LedBrightnessChanged(v) if (v - 1.0).abs() < f32::EPSILON));
+            }
+            other => panic!("expected SliderReset, got {other:?}"),
+        }
     }
 }
