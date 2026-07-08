@@ -49,7 +49,7 @@ or human can read it, and it needs no external tool.
 | BUG-010 | **wgsl-first-entry** | multi-entry wgsl_compute silently dispatches the first (MED) |
 | BUG-011 | **fused-output-oversize** | fused output buffer sized to max of all inputs (MED) |
 | BUG-015 | **inspector-overlap** | stale-chrome class FIXED 2026-07-08 — incremental cache path now falls back to full render on out-of-sub-region dirt (`has_dirty_outside_ranges` + `incremental_path_safe`); blanket `clear_dirty` narrowed to the overlay region so the fallback isn't erased. (2026-07-04 "sections interleaved" sighting = separate open thread if it recurs) |
-| BUG-060 | **inspector-footer-overpaint** | FIXED 2026-07-08 — `build_in_rect` now clips its scrolled column to the inspector rect + `build_toggle_trigger_row` gained the mid-tween reveal clip `build_param_row` already had |
+| BUG-060 | **inspector-footer-overpaint** | REOPENED 2026-07-08 — still repros on main after UI_CLIP_AND_Z P1; inspector content bleeds below the panel into/over the footer. NEW: **tab-swap (Layer↔Master) clears it**; generator vs video inspectors differ. P1's region clip was verified only via the headless `traverse()` path; the live app renders via `panel_cache_info`/UICacheManager, which was never checked. Cause OPEN. |
 | BUG-025 | **timeline-scissor-bleed** | clip content bleeds across row bounds (MED, repro needed — scrolled headless render 07-07 clean) |
 | BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
 | BUG-033 | **ui-snapshot-broken** | FIXED — verified in-tree 2026-07-07 (harness builds + runs) |
@@ -1654,14 +1654,26 @@ _Verification:_ new device-free unit tests at the cache-manager helper layer —
 stale scrollbar). The 2026-07-04 "sections interleaved" sighting (hole #2 + rebuild-while-scrolled)
 is a separate open thread if it recurs.
 
-### BUG-060 — Inspector content paints over the footer bar — FIXED 2026-07-08 (structural, UI_CLIP_AND_Z P1 2026-07-08)
+### BUG-060 — Inspector content paints over the footer bar — REOPENED 2026-07-08 (UI_CLIP_AND_Z P1 verified the wrong render path)
 
-**Update (UI_CLIP_AND_Z P1, 2026-07-08):** the per-panel `build_in_rect` hand-clip that first
-fixed this was the forbidden stopgap the region design retires. P1 removed it and made the fix
-structural — the inspector now builds under a `begin_region(Base)` whose `CLIPS_CHILDREN` clip is
-minted by construction, so no inspector pixel can reach the footer regardless of paint order or
-future panel changes. Containment (D1) carries it on the live cache path; D2 tier-order on that path
-is carried as VD-018. Landing: `docs/landings/2026-07-08-ui-clip-z-p1.md`.
+**REOPENED 2026-07-08 (Peter, on latest main after P1 landed).** Still repros. New observations,
+none yet explained:
+- Inspector content bleeds below the panel's bottom edge into/over the footer (a stray param-slider
+  fragment renders below the footer divider; see the report screenshots).
+- **Swapping the inspector tab between Layer and Master clears it.** A full repaint makes it go away.
+- It behaves *slightly* differently on generator inspectors (e.g. Plasma + stacked Color Compass)
+  than on video-layer inspectors.
+
+**Why the P1 "fix" didn't catch it:** P1's acceptance PNG (`bug060.after.png`) was rendered through
+the headless snapshot harness, which draws via `UITree::traverse()` — the tier-sorted, region-clipped
+path P1 actually changed. The **live app renders the main window via `panel_cache_info()` +
+`UICacheManager`** (`crates/manifold-app/src/ui_root.rs`, `crates/manifold-renderer/src/ui_cache_manager.rs`),
+which P1 did NOT change (it was flagged as VD-018). So the region clip was verified in a render path
+the performer never sees, and the live path was never checked. The earlier "structural fix, dead by
+construction" claim (below) was premature and applies only to `traverse()`.
+
+**Cause: OPEN.** No confirmed root cause — do not assume one from the notes above; investigate the
+live path directly. Next `BUG-NNN` for anything discovered en route.
 
 **Symptom** (Peter, 2026-07-07; also the prior `f4b895d7` session's subject): with the
 audio-mod drawer open on a Clip Trigger row (`is_trigger_gate`), scrolling the inspector to
