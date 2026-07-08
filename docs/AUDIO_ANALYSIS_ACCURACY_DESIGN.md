@@ -155,6 +155,23 @@ skeleton are sound; the work is new emitters, a swap, and a harness beside them.
   stems of MUSDB18 to produce near-truth activity regions; score our detector (running
   on demucs output of the mix) against them. Note-level vocal datasets (DALI) are
   Deferred #2 — the product deliverable is phrase clips, so region truth suffices.
+- **D14 — Absolute alignment by measurement, not fudge (added 2026-07-08, same
+  session — Peter: grid/downbeat/BPM "often wrong" against the waveform, "some fudge
+  factors and ms offsets applied at the moment").** Today one hand-tuned constant —
+  `onset_compensation_seconds`, default 10 ms (`percussion_settings.rs:42`), added to
+  every event at plan time (`percussion_planner.rs:85`) — absorbs at least three
+  distinct physical offsets: decoder skew (pipeline decodes via ffmpeg, the app's
+  waveform via its own media path; mp3/AAC priming delay differs per decoder — a
+  per-format constant), model hop quantization (10–23 ms frames, center-vs-start
+  conventions), and attack-vs-beat bias per model. The fix: **click-track truth
+  fixtures** — clicks rendered at exactly known sample positions, exported as
+  wav + mp3 + AAC, run through the full pipeline; the measured per-stage, per-format
+  offsets are applied once at the seam where audio enters analysis, stamped into the
+  AnalysisBundle (D7's version fields), and re-measured automatically when any model
+  or ffmpeg version changes. End state: `onset_compensation` defaults to **zero** and
+  remains only as an artistic offset (deliberately early triggers for visuals),
+  never error correction. Rejected: keeping a hand-tuned global default — it cannot
+  be right for wav and mp3 simultaneously.
 
 ## 3. The harness
 
@@ -260,9 +277,12 @@ per phase, orchestrator lands.
   *Deliverables:* `eval/` package (layout §3), `bundles.py` (D7 cache, stamped),
   `metrics.py` (D10, frozen), `metamorphic.py`, fetch scripts for `babyslakh_16k` +
   Harmonix annotations + MUSDB18-compressed, `fixtures.toml` with dev/heldout split,
-  noise-floor measurement (D11, N=3, committed to `scoreboard/`). *Gate (positive):*
+  noise-floor measurement (D11, N=3, committed to `scoreboard/`), and the **D14
+  click-track alignment fixtures** (clicks at known sample positions, rendered to
+  wav + mp3 + AAC) with the per-stage/per-format absolute-offset report. *Gate (positive):*
   `python -m eval.run --set dev` produces a scoreboard JSON; metamorphic suite passes
-  on babyslakh; pytest green. *Gate (negative):* `rg -l '\.wav|\.flac|\.mp3' --glob
+  on babyslakh; the alignment report exists and the measured correction is applied at
+  the analysis-input seam (D14); pytest green. *Gate (negative):* `rg -l '\.wav|\.flac|\.mp3' --glob
   '*.gitignore' tools/audio_analysis/eval` shows audio dirs ignored; `git ls-files |
   rg '\.(wav|flac|mp3|npz)$'` → zero hits; `rg 'heldout' eval/sweep.py` → zero hits.
   *Demo:* the scoreboard JSON + one worst-track detail dump — L1 (no UI surface).
@@ -273,7 +293,8 @@ per phase, orchestrator lands.
   tempo arms deleted, before/after scoreboard committed, listen-list (10 tracks, beat
   click renders) for Peter. *Gate (positive):* beat F₁ + downbeat F₁ ≥ madmom baseline
   − noise floor on dev AND heldout (record both numbers in the landing report;
-  downbeat F₁ is the one expected to *rise*). *Gate (negative):*
+  downbeat F₁ is the one expected to *rise*); grid absolute alignment ≤ 5 ms on the
+  D14 click fixtures, per format (wav, mp3, AAC). *Gate (negative):*
   `rg 'madmom.features.(beats|downbeats|tempo)' tools/audio_analysis` → zero hits.
   *Demo:* scoreboard delta + listen-list — L2 (Peter listens, deferred OK as VD entry).
   *Forbidden:* keeping the madmom arm behind a flag; touching onset_detection.py (P6's).
@@ -294,7 +315,13 @@ per phase, orchestrator lands.
 - **P5 — Sustained objects + sections + Rust seams.** *Entry:* P2 landed (sections
   need the grid). *Read-back:* §4.3–4.5, D4/D5, round-trip gate in DESIGN_DOC_STANDARD
   §5. *Deliverables:* chord/vocal-phrase/section emitters; `label` field; enum variants
-  + parser mapping + inspector rows; per-type length floors. *Gate (positive):* section
+  + parser mapping + inspector rows; per-type length floors; **D14 Rust half** —
+  `onset_compensation_seconds` default 10 ms → zero (`percussion_settings.rs:42`), the
+  knob re-documented as artistic offset only; Section row ships default-OFF until its
+  accuracy gate has passed on real tracks (Peter, 2026-07-08: sections are "a bit
+  dangerous if we get them wrong"); plus the two logged detection-UX clunks while in
+  these files (sensitivity commit-on-release = two undo entries per gesture; triggers
+  don't follow the clip after move/warp). *Gate (positive):* section
   boundary F₁ ≥ 0.7 @ ±0.5 bar on the Harmonix electronic slice (record the number;
   escalate if the slice is <30 matched tracks); duration IoU ≥ 0.6 on Slakh sustained
   notes; **round trip**: save → reload → re-detect-from-cache reproduces identical
@@ -320,9 +347,11 @@ per phase, orchestrator lands.
   (his call, 2026-07-08: release-relevance sequencing is his).
 
 Phasing-completeness check (run 2026-07-08): every §2–§4 commitment maps to a phase —
-harness/cache/metrics/noise floor → P1; Beat This + fusion deletion → P2; datasets +
-baselines → P3; precision/hats/perc → P4; chords/phrases/sections/labels/Rust seams/
-inspector rows/length floors → P5; SuperFlux + madmom-zero → P6; loop → P7; ADTOF
+harness/cache/metrics/noise floor + D14 alignment fixtures → P1; Beat This + fusion
+deletion + alignment gate → P2; datasets + baselines → P3; precision/hats/perc → P4;
+chords/phrases/sections/labels/Rust seams/inspector rows/length floors +
+compensation-to-zero + Section default-off + the two detection-UX clunks → P5;
+SuperFlux + madmom-zero → P6; loop → P7; ADTOF
 replacement, DALI, learned sections, realtime tuning → Deferred #1–#4.
 
 ## 6. Decided — do not reopen
