@@ -81,6 +81,23 @@ and `widget_of`), `child_counts` / `root_count` (the auto salt source), and a
 hover / focus targets). `clear` and `truncate_from` maintain all of it. Two
 accessors complete the contract:
 
+> **Gap found and closed, 2026-07-08.** "`truncate_from` maintains all of it"
+> was one line short. It recomputed `root_count` by counting the survivors whose
+> parent is currently `None` — but `reparent_root_nodes` (the inspector wraps its
+> sub-panels under a ClipRegion) moves a node that was *minted* as a root, and so
+> already consumed a root salt, out of that count. A partial rebuild then
+> re-issued an already-used root salt: the rebuilt overlay-chrome root got a
+> *different* `WidgetId` than at press, and every control salted off it churned
+> too. Only the Audio Setup panel consumes `PointerDown` (the BUG-059 stopgap),
+> so it alone rebuilt the tree *between* a button's press and release — release
+> resolved to a different widget than press, no `Click` fired, and the button
+> needed a second click. Fix: a `root_minted` flag records mint-time parentage,
+> and `truncate_from` salts `root_count` from it, so a partial rebuild reproduces
+> the full build's root salts exactly. Guarded by
+> `tree.rs::truncate_from_reproduces_root_salt_after_reparent` and the
+> full-frame-loop `ui_root.rs::floor_stepper_fires_on_a_single_click_across_overlay_rebuild`.
+> Shipped in the merge of `fix/audio-widgetid-churn`.
+
 - `widget_of(NodeId) -> WidgetId` — durable id of a node; `NONE` if stale.
 - `node_for_widget(WidgetId) -> Option<NodeId>` — resolve a held identity back to
   a **live** node in the current build.
@@ -88,6 +105,24 @@ accessors complete the contract:
 A duplicate interactive `WidgetId` trips a `debug_assert` at insert — a duplicate
 explicit key among siblings (or a sibling-salt collision) fails loudly in debug
 instead of silently shadowing input.
+
+> **Known gap, 2026-07-08 (open).** "Fails loudly" only covers keys that reach
+> `mint`. The `ChromeHost` builder (`chrome/diff.rs`) records `View::key` for its
+> own `node_id_for_key` lookup but mints every node with plain `add_node` — it
+> **drops the key** before it reaches the tree, so keyed chrome falls back to the
+> auto sibling salt and its identity rides on `root_count` (this is why the Audio
+> Setup chrome root was position-dependent above). Two consequences: (a) any
+> `ChromeHost` panel's chrome root is only as stable as its root salt, not truly
+> keyed; (b) duplicate `View::key`s among siblings are **silently ignored today**
+> rather than caught by the assert. Prototyping "make `ChromeHost` honor
+> `View::key`" surfaced **5 such duplicate-key sites** in `inspector` /
+> `param_card`. Closing this gap is a two-step follow-up, not yet done: (1) audit
+> those panels and give each sibling a unique key; (2) switch `ChromeHost` build /
+> materialize to `add_node_keyed` when `View::key` is set. Step 2 without step 1
+> would turn those silent duplicates into live collisions. Not required for the
+> 2026-07-08 fix above — the duplicate keys are inert while `ChromeHost` ignores
+> them — but it would make overlay identity robust against structural reordering,
+> not just against the partial-rebuild churn already closed.
 
 ### Input system (`input.rs`)
 
