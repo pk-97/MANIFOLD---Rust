@@ -8,7 +8,7 @@
 
 use crate::command::Command;
 use crate::commands::effect_target::DriverTarget;
-use manifold_core::audio_mod::{AudioModShape, AudioModSource, ParameterAudioMod};
+use manifold_core::audio_mod::{AudioModShape, AudioModSource, ParameterAudioMod, TriggerAction};
 use manifold_core::audio_trigger::TriggerFireMode;
 use manifold_core::effects::ParamId;
 use manifold_core::project::Project;
@@ -267,6 +267,52 @@ impl Command for SetAudioModTriggerModeCommand {
     }
 }
 
+/// Change an audio modulation's fire ACTION (Continuous/Step/Random, D2) —
+/// the drawer's Action/Amount/Wrap rows (PARAM_STEP_ACTIONS P3, D8). Mirrors
+/// [`SetAudioModTriggerModeCommand`]'s shape: whole-field old/new capture, one
+/// undo step regardless of which UI control produced the new value.
+/// `TriggerAction::Step` already bundles `amount` + `wrap` in one Rust field,
+/// so one command covers all three drawer controls (Action segment, Amount
+/// drag, Wrap segment) instead of three parallel commands — the cleaner
+/// multi-field pattern D8 allows the executor to choose.
+#[derive(Debug)]
+pub struct SetAudioModActionCommand {
+    target: DriverTarget,
+    param_id: ParamId,
+    old: TriggerAction,
+    new: TriggerAction,
+}
+
+impl SetAudioModActionCommand {
+    pub fn new(target: DriverTarget, param_id: ParamId, old: TriggerAction, new: TriggerAction) -> Self {
+        Self { target, param_id, old, new }
+    }
+}
+
+impl Command for SetAudioModActionCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let v = self.new;
+        with_audio_mods_mut(project, &self.target, |mods| {
+            if let Some(m) = mods.iter_mut().find(|a| a.param_id == self.param_id) {
+                m.action = v;
+            }
+        });
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let v = self.old;
+        with_audio_mods_mut(project, &self.target, |mods| {
+            if let Some(m) = mods.iter_mut().find(|a| a.param_id == self.param_id) {
+                m.action = v;
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Set Audio Modulation Action"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +389,33 @@ mod tests {
         assert_eq!(
             project.settings.master_effects[0].find_audio_mod("clip_trigger").unwrap().trigger_mode,
             None
+        );
+    }
+
+    #[test]
+    fn set_action_round_trips_continuous_to_step_and_back() {
+        let mut project = project_with_effect();
+        AddAudioModCommand::new(effect_target(), make_mod("amount")).execute(&mut project);
+        assert_eq!(
+            project.settings.master_effects[0].find_audio_mod("amount").unwrap().action,
+            TriggerAction::Continuous
+        );
+        let step = TriggerAction::Step { amount: 2.0, wrap: manifold_core::audio_mod::WrapMode::Bounce };
+        let mut cmd = SetAudioModActionCommand::new(
+            effect_target(),
+            "amount".into(),
+            TriggerAction::Continuous,
+            step,
+        );
+        cmd.execute(&mut project);
+        assert_eq!(
+            project.settings.master_effects[0].find_audio_mod("amount").unwrap().action,
+            step
+        );
+        cmd.undo(&mut project);
+        assert_eq!(
+            project.settings.master_effects[0].find_audio_mod("amount").unwrap().action,
+            TriggerAction::Continuous
         );
     }
 }

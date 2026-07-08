@@ -339,3 +339,58 @@ fn unrelated_layer_edge_after_reorder_does_not_confuse_the_gate() {
         "no second fire without a second clip start on layer 0 itself"
     );
 }
+
+// ── PARAM_STEP_ACTIONS P3 round-trip gate (DESIGN_DOC_STANDARD §5, BUG-036
+// rule) ──────────────────────────────────────────────────────────────────
+//
+// The P1 unit test (`modulation.rs`'s `serde round-trip` test) only proves
+// `serde_json::to_string`/`from_str` round-trips the isolated
+// `ParameterAudioMod` struct in memory. That is HALF the gate for stateful
+// features (§5): it never drives the real `manifold-io` save/load pipeline
+// (path resolution, migrations, post-load validation) that a saved show
+// file actually goes through, and it never re-fires the mod afterward. This
+// test exercises the full stack: build a project with an armed Step mod,
+// save it to a real file via `save_project_v1`, reload it via
+// `load_project`, then tick the reloaded project's OWN engine forward and
+// confirm the clip-edge step still fires and resumes from the COMMITTED
+// base — not from a corrupted or stale value the round trip might have
+// introduced (D4/D5's "modulate AFTER reload" contract).
+#[test]
+fn step_mod_resumes_from_committed_base_after_real_save_and_reload() {
+    let project = two_layer_project(TriggerFireMode::ClipEdge);
+
+    let mut save_path = std::env::temp_dir();
+    save_path.push(format!(
+        "manifold_param_step_roundtrip_{}_{}.manifold",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    manifold_io::saver::save_project_v1(&project, &save_path)
+        .expect("save_project_v1 should succeed to a scratch path");
+    let reloaded = manifold_io::loader::load_project(&save_path).expect("reload should succeed");
+    std::fs::remove_file(&save_path).ok();
+
+    // The step mod's runtime shadow never round-trips (serde-skip) — confirm
+    // the reloaded project starts cold, exactly like a fresh load in the show.
+    assert_eq!(
+        reloaded.timeline.layers[0].gen_params().unwrap().audio_mods.as_ref().unwrap()[0].step_value,
+        None,
+        "step_value must not survive the round trip (D4: reload drops the shadow)"
+    );
+
+    let mut engine = create_engine();
+    engine.initialize(reloaded);
+    arm_cold_audio_snapshot(&mut engine);
+    engine.set_state(PlaybackState::Playing);
+
+    tick_n(&mut engine, 5, DT);
+    assert_eq!(
+        step_value_of(&engine, 0),
+        Some(1.0),
+        "after a real save+reload, the layer's own clip start still fires the \
+         Clip-mode step and resumes from the committed base (0 + amount 1 = 1)"
+    );
+}

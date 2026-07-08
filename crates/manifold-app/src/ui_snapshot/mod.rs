@@ -152,9 +152,11 @@ fn render_ui_scene(
     // Build the UI through the REAL core→UI translation path, render the base.
     let mut ui = UIRoot::new();
     ui.resize(LOGICAL_W, LOGICAL_H);
-    if scene == "inspector" {
+    if scene == "inspector" || scene == "paramsteps" {
         // The inspector IS the subject: keep it at a generous width and give the
         // timeline a normal split so the selected layer's cards have room.
+        // `paramsteps` (PARAM_STEP_ACTIONS P3) is the same kind of scene as
+        // `inspector` — its subject is a param card's drawer.
         ui.layout.inspector_width = 600.0;
         ui.layout.timeline_split_ratio = 0.6;
     } else {

@@ -162,6 +162,10 @@ pub fn dispatch(
     target_snapshot: &mut Option<f32>,
     decay_snapshot: &mut Option<f32>,
     audio_shape_snapshot: &mut Option<manifold_core::audio_mod::AudioModShape>,
+    // PARAM_STEP_ACTIONS D8: the Step-Amount drag's undo snapshot. `amount`
+    // lives on `TriggerAction::Step`, not `AudioModShape`, so it rides its
+    // own slot rather than `audio_shape_snapshot`'s.
+    audio_action_snapshot: &mut Option<manifold_core::audio_mod::TriggerAction>,
     audio_crossover_snapshot: &mut Option<(f32, f32)>,
     audio_send_gain_drag_snapshot: &mut Option<f32>,
     audio_send_sensitivity_drag_snapshot: &mut Option<Vec<manifold_core::audio_trigger::TriggerRoute>>,
@@ -197,6 +201,7 @@ pub fn dispatch(
                 target_snapshot,
                 decay_snapshot,
                 audio_shape_snapshot,
+                audio_action_snapshot,
                 audio_crossover_snapshot,
                 audio_send_gain_drag_snapshot,
                 audio_send_sensitivity_drag_snapshot,
@@ -217,6 +222,7 @@ pub fn dispatch(
                 target_snapshot,
                 decay_snapshot,
                 audio_shape_snapshot,
+                audio_action_snapshot,
                 audio_crossover_snapshot,
                 audio_send_gain_drag_snapshot,
                 audio_send_sensitivity_drag_snapshot,
@@ -237,6 +243,7 @@ pub fn dispatch(
                 target_snapshot,
                 decay_snapshot,
                 audio_shape_snapshot,
+                audio_action_snapshot,
                 audio_crossover_snapshot,
                 audio_send_gain_drag_snapshot,
                 audio_send_sensitivity_drag_snapshot,
@@ -378,6 +385,11 @@ pub fn dispatch(
         | PanelAction::AudioModShapeParamChanged(..)
         | PanelAction::AudioModShapeCommit(..)
         | PanelAction::AudioModSetTriggerMode(..)
+        | PanelAction::AudioModSetActionKind(..)
+        | PanelAction::AudioModStepAmountSnapshot(..)
+        | PanelAction::AudioModStepAmountChanged(..)
+        | PanelAction::AudioModStepAmountCommit(..)
+        | PanelAction::AudioModSetWrap(..)
         | PanelAction::AudioSetDevice(..)
         | PanelAction::AudioAddSend
         | PanelAction::AudioRemoveSend(..)
@@ -477,6 +489,7 @@ pub fn dispatch(
             target_snapshot,
             decay_snapshot,
             audio_shape_snapshot,
+            audio_action_snapshot,
             audio_crossover_snapshot,
             audio_send_gain_drag_snapshot,
             audio_send_sensitivity_drag_snapshot,
