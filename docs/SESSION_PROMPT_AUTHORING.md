@@ -23,7 +23,15 @@ the work without inventing anything this guide or the design doc already decided
 Every prompt instructs its session to open with a **workload brief** and then STOP
 for Peter's go-ahead. This is not ceremony: Peter re-prioritizes between sessions,
 and a session that starts executing a stale plan wastes its whole budget. The brief
-is also where he catches a misread of scope while it's still free to fix.
+is also where he catches a misread of scope while it's still free to fix — and, via
+the property and forks lines below, a misread of *intent*: a plan faithful to the
+steps while the abstract goal quietly drifts. That failure passes every gate
+(compiles, tests, lands) because it's conformance to intent, not correctness — so
+only Peter reading the brief catches it. BUG-061 is the specimen: the executor
+understood "make reset the slider's own gesture", built one shared reset action, but
+registered it per-panel "for lower risk" — leaving the exact skippable seam the goal
+existed to close, which surfaced as a whole panel of sliders with no reset. Steps can
+be right while the thing that had to be true isn't.
 
 Format — short, plain language, no jargon the prompt didn't define:
 
@@ -33,9 +41,22 @@ Format — short, plain language, no jargon the prompt didn't define:
 **What this session does:** <2–3 sentences, instrument terms — what Peter can DO
 after this lands that he can't do now.>
 
+**The property this must hold:** <the abstract invariant the change has to satisfy,
+one sentence — the end state, NOT the steps. "Reset is intrinsic to the slider: one
+mechanism, no skippable seam", not "add a reset action to each panel". The steps below
+are one route to it; this is the thing that must be true when they're done, and every
+fork gets decided against THIS, not against blast radius.>
+
 **The work, in order:**
 1. <phase — one line each, plain words>
 2. …
+
+**Forks I'm about to decide:** <every choice the design leaves open that I'll resolve
+while building — named, with the branch I lean to and why it serves the property above.
+At an undecided fork, "safer" / "smaller blast radius" is usually "weaker against the
+property" — surface the fork here rather than picking it quietly. "None" is a claim,
+not a default: if I found none, I either read the design too shallowly to see them or
+I'm about to bake them in silent.>
 
 **What lands today:** <the concrete deliverables>
 **What stays owed:** <anything deferred: Peter's feel-pass, a follow-up wave, a
@@ -60,7 +81,10 @@ Order matters less than presence. A prompt missing one of these is not done.
    Opus (high) orchestrating Sonnet workers; Peter is reachable at forks" changes
    every downstream decision about escalation and verification.
 
-2. **The opening brief instruction** (§1). Verbatim requirement, first action.
+2. **The opening brief instruction** (§1). Verbatim requirement, first action —
+   including the property line (the invariant the change must hold) and the forks
+   line (undecided choices surfaced, not picked quietly). A brief that lists only
+   the steps is the BUG-061 hole.
 
 3. **Read-first list.** The design doc WHOLE (never sections — the traps live in the
    parts that look skippable), its contract header, `DESIGN_DOC_STANDARD.md` §5–§6,
@@ -165,7 +189,8 @@ in the blanks rather than re-deriving the rules.
 ## 7. Self-test — the prompt is done when
 
 - [ ] A fresh session could run it with no conversation history and no follow-ups.
-- [ ] It opens with the §1 brief-and-pause instruction.
+- [ ] It opens with the §1 brief-and-pause instruction — property line and forks
+      line included, not just "the work, in order".
 - [ ] All eight §2 blocks present; traps are specific, not generic.
 - [ ] Every doc and memory it cites exists under that exact name (run the check —
       a mis-cited memory silently loads nothing).
