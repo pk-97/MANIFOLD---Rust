@@ -231,6 +231,14 @@ per-layer-count-sized `Vec` during modulation, the same allocation-free scratch-
 already-shipped `pending_trigger_pulses`. Burn-down: `MANIFOLD_RENDER_TRACE=1` live against the
 53-layer Liveschool fixture with a Clip-mode step mod armed, confirming no frame >20ms.
 
+### VD-017 — PARAM_STEP_ACTIONS P3: performer gesture untried live — L3 reached / L4 target
+Landed 2026-07-08. The drawer's Action/Amount/Wrap rows are proven at L3 (a `scripts/ui-flows/`
+script drives the real click path, sets Action=Step, asserts the badge; a separate integration
+test proves save→reload→fire resumes from the committed base) — but nobody has felt the actual
+performer gesture live: point the Kick send at BasicShapes' `variant` param, arm Step/Wrap, play a
+4-bar loop, watch the shape advance per kick and wrap cleanly at the rail. That's Peter's L4,
+owed. Burn-down: the click-script below in `docs/landings/2026-07-08-param-step-actions.md`.
+
 *(VD-001–004 seeded 2026-07-05 from the memory corpus plus Peter's in-app findings; VD-006 added
 2026-07-05, VD-007 at P2 landing, VD-008 at P3 landing, VD-009 at P4 landing, VD-010 at P5-inspector
 landing. VD-005 closed at P2 landing. The full backfill pass over recent landings is still owed and
