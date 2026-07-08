@@ -73,24 +73,48 @@ or human can read it, and it needs no external tool.
 | BUG-066 | **fluid3d-corner-drift** | FluidSim3D density herds into one corner (top-right at default params): turbulence noise is a wandering net tide + slope force has a sign-following, feather-scaled diagonal drift; root of the drift NOT yet found — 4 hypotheses refuted with evidence, harness in-repo (MED-HIGH, visible on stage) |
 | BUG-067 | **ui-snapshot-dead-blit-pipeline** | `make_blit_pipeline` (`crates/manifold-app/src/ui_snapshot/render.rs:760`) is never used; `cargo clippy --features manifold-app/ui-snapshot -- -D warnings` fails on it, so any clippy run that chains the ui-snapshot feature (needed for `cargo xtask ui-snap` L3 flows) trips. Pre-existing at `b9304330`, found during DRAG_CAPTURE P1 (LOW) |
 | BUG-068 | **inspector-scene-cliphit-overlap** | the `inspector` ui-snap scene fixture has a clip-vs-panel hit-test overlap at its narrower zoom — a clip can't be both uniquely-labeled and safely positioned over the inspector column, which forced DRAG_CAPTURE P1's L3 flow onto the `timeline` scene. Fixture-only, no runtime impact. Pre-existing at `b9304330` (LOW) |
-| BUG-069 | **nc-licensed-models-shipped** | the audio-import pipeline ships two CC BY-NC-SA model stacks — madmom model files (beats/downbeats/tempo/onsets) and ADTOF (drums) — in a product headed for commercial release (HIGH for commercialization, zero runtime impact) |
+| BUG-069 | **shipping-license-audit** | four license problems in shipped components: madmom models + ADTOF (both CC BY-NC-SA), rusty_link crate (GPL-2.0, viral, in manifold-playback), staged ffmpeg copied from the dev machine (likely GPL build); full sweep 2026-07-08, everything else clean (HIGH for commercialization, zero runtime impact) |
 
 ## Open
 
-### BUG-069 (nc-licensed-models-shipped) — madmom + ADTOF models are CC BY-NC-SA in a commercial product — HIGH at commercialization, latent until then
+### BUG-069 (shipping-license-audit) — four license problems in shipped components — HIGH at commercialization, latent until then
 
-**Found 2026-07-08 (Fable, audio-analysis design session; licenses verified via web same
-day).** madmom's *source* is BSD but its **model files are CC BY-NC-SA 4.0** ("commercial
-use requires contacting Gerhard Widmer") — we ship them via `tools/audio_analysis`
-(`bpm.py`, `onset_detection.py`). **ADTOF (code + model) is also CC BY-NC-SA 4.0**
-(`external_tools.py` drum stage). basic_pitch (Apache-2.0) and demucs (MIT) are clean.
-Zero effect on Peter's own use; blocks selling MANIFOLD with the pipeline bundled.
+**Found 2026-07-08 (Fable, audio-analysis design session; full sweep same day — Python
+runtime deps read from `requirements.runtime.mac.txt`, all Rust crate licenses swept via
+`cargo metadata`, staging script read).** Peter's ruling, verbatim: *"Using for dev only
+isn't good enough, what we build is what the users should have"* — every item below is
+release-gating for the commercial cut, not optional.
 
-**Fix shape:** `docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md` — P2 replaces madmom
-beats/downbeats/tempo with Beat This (MIT code + weights), P6 removes madmom entirely
-(SuperFlux vocal onsets), both with `rg 'madmom'` zero-hit deletion gates. ADTOF
-replacement is that doc's Deferred #1, trigger = commercialization v1.0 gate;
-COMMERCIALIZATION_DESIGN's license review should reference this entry.
+1. **madmom model files — CC BY-NC-SA 4.0** (source is BSD; models say "commercial use
+   requires contacting Gerhard Widmer"). Shipped via `bpm.py` / `onset_detection.py`.
+   Fix in flight: AUDIO_ANALYSIS_ACCURACY P2 (Beat This, MIT code+weights) + P6 (full
+   madmom removal), both with `rg 'madmom'` zero-hit deletion gates.
+2. **ADTOF — CC BY-NC-SA 4.0** (code + model; we ship the `adtof-pytorch` port, which
+   inherits it). Drum stage of the pipeline. Cheapest out: email Zehren for a
+   commercial grant; else replace the model (E-GMD + Slakh drums are clean truth; the
+   accuracy harness scores any candidate). AUDIO_ANALYSIS_ACCURACY Deferred #1,
+   trigger = commercialization v1.0 gate.
+3. **rusty_link 0.4 — GPL-2.0-or-later** (`crates/manifold-playback/Cargo.toml:17`,
+   used by `link_sync.rs`). GPL is viral for a closed-source binary — this is the only
+   non-permissive crate in the whole Rust tree. Ableton Link itself is dual-licensed
+   and Peter's proprietary Link license is already pending (competitive-steal-pass),
+   but that grant covers Link, NOT the community GPL Rust wrapper. Fix: commercial/
+   relicense ask to the rusty_link author, or a thin in-house binding over Link under
+   the Ableton agreement.
+4. **Staged ffmpeg is whatever the dev machine has** (`stage_runtime_mac.sh:253–273`
+   resolves `command -v ffmpeg` — a Homebrew build, i.e. `--enable-gpl`). Fix: stage a
+   deliberate LGPL-configured decode-only ffmpeg build (the sidecar only decodes) and
+   pin its source/offer per LGPL. The future app-side FFmpeg door (MEDIA_BACKEND)
+   must pin the same constraint.
+
+**Clean (verified 2026-07-08):** torch/torchaudio (BSD-3), numpy (BSD), demucs (MIT),
+basic_pitch (Apache-2.0), librosa (ISC), soundfile (BSD), pretty_midi (MIT); every
+other Rust crate is permissive (r-efi is MIT-or-Apache-or-LGPL — choose MIT). Minor
+watch: the `lameenc.py` shim / LAME (LGPL — fine as subprocess/dylib, patents expired);
+demucs htdemucs weight file license (⚠ verify at commercialization review). Datasets
+are NOT affected — eval-only, never bundled.
+
+COMMERCIALIZATION_DESIGN's license review must consume this entry wholesale.
 
 ### BUG-067 (ui-snapshot-dead-blit-pipeline) — dead `make_blit_pipeline` fails clippy under the ui-snapshot feature — LOW
 
