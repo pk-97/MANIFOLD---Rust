@@ -94,6 +94,30 @@ and watches it — the design doc's stated milestone ("Peter exports a real trac
 pump"). One deliberate `cargo test -p manifold-app --features journey-proofs` per audio-path
 wave keeps the harness honest (needs ffmpeg/ffprobe on PATH).
 
+### VD-017 — DRAG_CAPTURE P2: audio-panel-over-timeline seam demo — L1 reached / L2 target
+Landed 2026-07-08 (`docs/landings/2026-07-08-drag-capture-p2.md`). The z-aware seam guard
+(`overlay_contains_point` blocking the split-handle/inspector-edge press when the Audio Setup
+panel floats over the timeline) is proven only by unit tests, including one that asserts the
+panel and split-handle actually overlap at today's constants before checking the guard. No
+headless PNG exists because no `scripts/ui-flows/` scene or snapshot fixture opens the Audio
+Setup panel positioned over the timeline, and the brief forbade inventing one. Burn-down:
+this collapses into the P3 L4 feel pass — Peter grabs a crossover line sitting over the
+timeline-split zone and confirms the line moves while the panels don't resize (the P2
+performer gesture). If a repeatable artifact is wanted, add an audio-panel-over-timeline
+snapshot scene in a later UI-fixtures pass.
+
+### VD-018 — DRAG_CAPTURE P2: SelfManaged overlay rect fidelity in `overlay_contains_point` — L1 / structural note
+Landed 2026-07-08 (`docs/landings/2026-07-08-drag-capture-p2.md`). `overlay_contains_point`
+tests the rect each overlay was *placed* at (`overlay_rects`, recorded in `build_overlays`),
+which is exact for anchored/sized overlays like the Audio Setup panel (the BUG-059 case) but a
+placeholder for the three `SelfManaged` overlays that draw their own footprint — dropdown,
+browser popup, Ableton device picker. The dropdown is hit-tested accurately *upstream* in
+`window_input`'s dropdown-dismiss branch (runs before the seam checks), so it is unaffected;
+the residual exposure is only a browser popup or Ableton picker positioned directly over the
+6px split band or 4px inspector edge, an unlikely layout. Burn-down: if a press-through bug
+surfaces there in practice, give `SelfManaged` overlays a real footprint query (the D5-Deferred
+§7 handle→widget-routing conversion also closes it). Not observed; carried.
+
 ### VD-006 — BUG-026 batch-2 popup entrance-tween fix: running-app confirmation — L2 reached / L4 target
 Fix landed 2026-07-05 (commit `01c15213`) for the "no popup background until mouseover" bug —
 root-caused as a missing animation-poll (see BUG-026). Gate green (clippy; `manifold-ui --lib`

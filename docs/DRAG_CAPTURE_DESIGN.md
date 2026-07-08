@@ -1,6 +1,6 @@
 # Drag Capture — one owner per pointer gesture, from press to release
 
-**Status:** IN PROGRESS — **P1 LANDED 2026-07-08 @ `9bb8ca86`** (single drag-capture ownership D1–D4 + D9, L3); P2–P3 pending · design 2026-07-07 (approved same day by Peter) · Fable
+**Status:** IN PROGRESS — **P1 LANDED 2026-07-08 @ `9bb8ca86`** (ownership D1–D4 + D9, L3); **P2 LANDED 2026-07-08 @ `12683746`** (z-aware seams D5 + `swallow_drag` retired, L1; VD-017/018); P3 pending · design 2026-07-07 (approved same day by Peter) · Fable
 **Prerequisites:** none (BUG-058 instrumentation + BUG-059 stopgap landed 2026-07-07 @ `fb2bdc07`; P2 deletes the stopgap)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -320,7 +320,7 @@ dragging, until you let go — no matter where your hand travels.**
 - **Test scope:** focused (`-p manifold-ui --lib`, ui_root tests); workspace sweep
   deferred to P3 (final phase of the pass).
 
-### P2 — Z-aware window seams + stopgap retirement
+### P2 — Z-aware window seams + stopgap retirement — ✅ LANDED 2026-07-08 @ `12683746` (L1; VD-017/018; report `docs/landings/2026-07-08-drag-capture-p2.md`)
 
 - **Entry state:** P1 landed (`rg "drag_owner" crates/manifold-app/src/ui_root.rs`
   non-empty, `overlay_drag_active` zero).
