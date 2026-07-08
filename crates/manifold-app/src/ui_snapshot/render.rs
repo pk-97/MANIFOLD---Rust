@@ -365,6 +365,21 @@ pub fn render_graph_editor_to_png(
             text_align: TextAlign::Left,
             ..UIStyle::default()
         };
+        // `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D4: `tree` is a standalone
+        // scratch tree local to this snapshot function (not part of any
+        // `UIRoot`), but it's still a real `UITree` and `mint`'s D4 debug
+        // assertion doesn't know that — a bare `None`-rooted node here
+        // panics identically to one in the live app (confirmed: `cargo
+        // xtask ui-snap editor` panicked before this wrap). One region for
+        // the whole sidebar; this function never had per-panel tiers to
+        // begin with.
+        let sidebar_region = tree.begin_region(
+            manifold_ui::Rect::new(0.0, 0.0, SIDEBAR_WIDTH, canvas_height),
+            manifold_ui::ZTier::Base,
+            "editor_snapshot_sidebar",
+            manifold_ui::UIFlags::empty(),
+        );
+        let sidebar_start = tree.count();
         tree.add_panel(
             None,
             0.0,
@@ -389,6 +404,7 @@ pub fn render_graph_editor_to_png(
             },
         );
         tree.add_label(None, preview_x, master_title_y, preview_w, preview_title_h, "Master Out", title_style);
+        tree.end_region(sidebar_region, sidebar_start);
     }
 
     // Center canvas, offset into its lane between the two side columns — the
@@ -510,6 +526,16 @@ pub fn render_transform_proof_to_png(path: &str) {
     let target = RenderTarget::new(&device, TEX_W, TEX_H, FORMAT, "ui-snap-transform");
 
     let mut tree = UITree::new();
+    // `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D4: a standalone scratch tree
+    // local to this function, same reasoning as the sidebar wrap above —
+    // still a real `UITree`, still subject to `mint`'s debug assertion.
+    let proof_region = tree.begin_region(
+        manifold_ui::Rect::new(0.0, 0.0, TEX_W as f32, TEX_H as f32),
+        manifold_ui::ZTier::Base,
+        "transform_proof",
+        UIFlags::empty(),
+    );
+    let proof_start = tree.count();
 
     // Dark backdrop for contrast.
     tree.add_panel(
@@ -598,6 +624,7 @@ pub fn render_transform_proof_to_png(path: &str) {
         None,
         UIFlags::empty(),
     );
+    tree.end_region(proof_region, proof_start);
 
     renderer.begin_frame();
     renderer.render_tree(&tree, None);

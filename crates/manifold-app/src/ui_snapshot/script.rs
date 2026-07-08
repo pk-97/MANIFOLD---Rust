@@ -104,7 +104,7 @@ pub fn run(scene: &str, script_path: &str) {
     let zoom_ppb = super::zoom_ppb_for_scene(scene);
     let mut ui = UIRoot::new();
     ui.resize(super::LOGICAL_W, super::LOGICAL_H);
-    if scene == "inspector" {
+    if scene == "inspector" || scene == "bug060" {
         ui.layout.inspector_width = 600.0;
         ui.layout.timeline_split_ratio = 0.6;
     } else {
@@ -361,8 +361,26 @@ impl Runner {
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::Scroll { delta } => {
-                ui.input.process_scroll(center, *delta);
-                self.drain_and_dispatch(ui, data);
+                // Mirror `window_input.rs`'s real mouse-wheel dispatch: the
+                // inspector's scroll is a direct, synchronous call
+                // (`try_inspector_scroll` -> `try_scroll_in_place`, offsetting
+                // built content nodes in place), NOT routed through the
+                // generic `UIEvent::Scroll` -> `pending_events` ->
+                // `drain_and_dispatch` pipeline below (that pipeline is real
+                // for the dropdown/timeline, but a no-op for the inspector —
+                // found building `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md`'s
+                // BUG-060 gate scene: repeated `Gesture::Scroll`s at the
+                // inspector moved content a few px, clamped, and never
+                // reached it). Falls back to `handle_scroll_at` exactly as
+                // the real handler does when nothing is built yet.
+                if ui.layout.inspector().contains(center) {
+                    if !ui.try_inspector_scroll(delta.y, center.x) {
+                        ui.inspector.handle_scroll_at(delta.y, center.x);
+                    }
+                } else {
+                    ui.input.process_scroll(center, *delta);
+                    self.drain_and_dispatch(ui, data);
+                }
             }
             Gesture::Drag { to, steps } => {
                 let to_rect = match self.resolve(ui, data, to) {
