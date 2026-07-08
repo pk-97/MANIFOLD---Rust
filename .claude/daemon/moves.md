@@ -66,6 +66,21 @@ implementation pending T2), design-primer payload (+termination-condition,
 its pass-1 rework is still unscored (one change, one measurement).
 Catalog 34→41.
 
+2026-07-08 (Opus, off-cycle single-move authoring with Peter — not a sleep
+pass): coaching/state-the-property. Specimen: cf8c327c / BUG-061
+(observations.session.jsonl #13) — brief said "make reset the slider's own
+gesture", executor built one shared reset action but registered it per-panel
+"for lower risk", leaving the skippable seam the goal existed to close. The
+preventive half was homed in SESSION_PROMPT_AUTHORING.md §1 (the brief must
+now state the property + the undecided forks, not just the steps; landed @
+022c3bb2); this move is the REACTIVE backstop for the informal/solo case where
+no §1 prompt was cut (BUG-061 itself was an informal brief). Keys on the
+CONFESSED tell only (risk-minimization language at a fork) — a silently-weaker
+fork pick stays invisible, the same confessed-only limit as
+mechanical/confessed-stopgap. Sibling of coaching/enumerate-levels (fires on
+approach-chosen, injects a reasoning move). UNVALIDATED; scoring story in
+DESIGN.md §2j. Catalog 41→42.
+
 ---
 
 ## coaching/model-first
@@ -250,6 +265,39 @@ Catalog 34→41.
 > where the choice at hand changes what they'd see. Save the architecture
 > comparison for one closing line. An explanation lands when the user can
 > watch their own thing move through it.
+
+## coaching/state-the-property
+- **signature:** The agent is executing from a brief, design doc, or ticket —
+  TASK names one (a BUG-NNN, a `*_DESIGN.md`, "the brief", "the design", a
+  handoff spec), or the LEDGER / SESSION FACTS shows a read of one — and a text
+  in RECENT resolves a fork between implementation approaches by appealing to
+  risk or scope minimization ("for lower risk", "safer", "smaller blast
+  radius", "less invasive", "minimal change", "to be safe", "to keep it
+  contained") for a choice the brief did not itself dictate, while no text in
+  the window has stated the abstract PROPERTY the change must hold — the
+  invariant or end state it must satisfy, as distinct from the task's steps.
+  The phase is implementing or hypothesizing. Never flag when the window
+  already states that property plainly and the fork is being weighed against
+  it; when the brief explicitly specified this choice (quotable); when "safer"
+  means genuinely less buggy / more correct (a lower-defect path) rather than a
+  narrower reading of the goal; or when the minimized-scope decision is
+  reversible and the human pre-approved staying small. Not a fix-depth
+  signature — this fires even when the fix is correct and complete; the concern
+  is conformance to the goal's intent, not symptom-vs-root
+  (anchor/symptom-suppression, coaching/enumerate-levels) and not
+  when-you're-done (coaching/define-done: the BUG-061 fix WAS "done" by that
+  measure yet failed its property).
+- **cooldown:** standard
+- **payload:**
+> You just took the lower-risk branch at a fork the brief left open — and at an
+> undecided fork, "safer" is usually "weaker against the goal." Before you bake
+> it in: state back, in one sentence, the abstract property this change must
+> hold — the invariant or end state, not the steps (BUG-061's was "reset is
+> intrinsic to the slider: one mechanism, no skippable seam", and per-panel
+> registration quietly failed it). Then decide this fork against THAT property,
+> not against blast radius. If the property genuinely allows the smaller move,
+> say so in one sentence. If the fork might be the user's to call, surface the
+> property and the fork instead of choosing quietly.
 
 ---
 

@@ -718,6 +718,28 @@ landing-merge-in-compound guard, MEMORY.md compaction ownership, the #-marker
 chained-command lint, stale-brief's implementation, and the ledger
 hook-warning annotation that wakes unheeded-warning.
 
+## 2j. Off-cycle move (2026-07-08, Opus, with Peter — single move, not a sleep pass)
+
+**coaching/state-the-property** (catalog 41→42). Specimen: cf8c327c / BUG-061
+(observations.session.jsonl #13). Preventive half homed in
+SESSION_PROMPT_AUTHORING.md §1 (brief states the property + the undecided
+forks, not just steps; landed @ 022c3bb2); this classifier move is the reactive
+backstop for the informal/solo case where no §1 prompt was cut. Confessed-tell
+only (risk-minimization language at a fork) — silent weaker-fork picks stay
+invisible, per the confessed-only limit shared with mechanical/confessed-stopgap.
+
+- **Scoring story** (MOVE_AUTHORING §5): within ~10 events of delivery, success
+  = an assistant text states the property/invariant the change must hold (a
+  sentence naming what must be true / the end state), OR surfaces the fork to
+  the human; fail = the edits implementing the lower-risk fork continue with no
+  property stated. Property-statement is prose, not a tool event, so there is no
+  clean mechanical oracle — **unscored**, pass grades from transcripts.
+  UNVALIDATED until a pass grades live fires. Expect low frequency (fires only
+  on a confessed risk-minimization pick while executing a brief). Distinct from
+  coaching/define-done (what-must-be-true vs when-you're-done) and from
+  anchor/symptom-suppression / coaching/enumerate-levels (intent-conformance vs
+  fix-depth — the specimen was correct and complete yet weaker than intended).
+
 ## 3. Payload library (`moves.md`)
 
 Two families, one format. **Coaching moves** fire on phase transitions (hypothesis
