@@ -169,6 +169,14 @@ Grouped in waves; within a wave, items are independent and order is free.
     MULTI_DISPLAY/PROJECTION/LED/COMMERCIALIZATION config surfaces land into, so
     shipping it before those waves start saves them idiom-inventing; and P1's
     command table is what MCP_INTERFACE's command surface reads.
+13g. AUDIO_ANALYSIS_ACCURACY_DESIGN P1–P7 (added 2026-07-08, Peter-driven: offline
+    detection accuracy + eval harness over public datasets + Beat This swap +
+    sustained-object/section clips). Zero hard edges — all tools/audio_analysis
+    Python except P5's small Rust seams; re-rankable arbitrarily early like
+    13b–13e. Two forcing functions: P2+P6 remove the NC-licensed madmom models
+    (BUG-069, a commercialization blocker — must land before item 19), and the
+    detection-accuracy phases (P4–P5) serve the release-content push (import
+    front door). P7 (unattended tuning loop) is post-release; Peter re-ranks.
 14. COMPONENT_LIBRARY → 15. MCP_INTERFACE (in that order — MCP consumes components).
 16. AUTOMATION_LANES.
 17. ML_NODES Vision/CoreML tier.

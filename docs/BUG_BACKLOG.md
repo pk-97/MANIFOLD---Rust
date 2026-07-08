@@ -73,8 +73,24 @@ or human can read it, and it needs no external tool.
 | BUG-066 | **fluid3d-corner-drift** | FluidSim3D density herds into one corner (top-right at default params): turbulence noise is a wandering net tide + slope force has a sign-following, feather-scaled diagonal drift; root of the drift NOT yet found — 4 hypotheses refuted with evidence, harness in-repo (MED-HIGH, visible on stage) |
 | BUG-067 | **ui-snapshot-dead-blit-pipeline** | `make_blit_pipeline` (`crates/manifold-app/src/ui_snapshot/render.rs:760`) is never used; `cargo clippy --features manifold-app/ui-snapshot -- -D warnings` fails on it, so any clippy run that chains the ui-snapshot feature (needed for `cargo xtask ui-snap` L3 flows) trips. Pre-existing at `b9304330`, found during DRAG_CAPTURE P1 (LOW) |
 | BUG-068 | **inspector-scene-cliphit-overlap** | the `inspector` ui-snap scene fixture has a clip-vs-panel hit-test overlap at its narrower zoom — a clip can't be both uniquely-labeled and safely positioned over the inspector column, which forced DRAG_CAPTURE P1's L3 flow onto the `timeline` scene. Fixture-only, no runtime impact. Pre-existing at `b9304330` (LOW) |
+| BUG-069 | **nc-licensed-models-shipped** | the audio-import pipeline ships two CC BY-NC-SA model stacks — madmom model files (beats/downbeats/tempo/onsets) and ADTOF (drums) — in a product headed for commercial release (HIGH for commercialization, zero runtime impact) |
 
 ## Open
+
+### BUG-069 (nc-licensed-models-shipped) — madmom + ADTOF models are CC BY-NC-SA in a commercial product — HIGH at commercialization, latent until then
+
+**Found 2026-07-08 (Fable, audio-analysis design session; licenses verified via web same
+day).** madmom's *source* is BSD but its **model files are CC BY-NC-SA 4.0** ("commercial
+use requires contacting Gerhard Widmer") — we ship them via `tools/audio_analysis`
+(`bpm.py`, `onset_detection.py`). **ADTOF (code + model) is also CC BY-NC-SA 4.0**
+(`external_tools.py` drum stage). basic_pitch (Apache-2.0) and demucs (MIT) are clean.
+Zero effect on Peter's own use; blocks selling MANIFOLD with the pipeline bundled.
+
+**Fix shape:** `docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md` — P2 replaces madmom
+beats/downbeats/tempo with Beat This (MIT code + weights), P6 removes madmom entirely
+(SuperFlux vocal onsets), both with `rg 'madmom'` zero-hit deletion gates. ADTOF
+replacement is that doc's Deferred #1, trigger = commercialization v1.0 gate;
+COMMERCIALIZATION_DESIGN's license review should reference this entry.
 
 ### BUG-067 (ui-snapshot-dead-blit-pipeline) — dead `make_blit_pipeline` fails clippy under the ui-snapshot feature — LOW
 
