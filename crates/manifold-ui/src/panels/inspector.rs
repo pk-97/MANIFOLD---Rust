@@ -2713,10 +2713,23 @@ mod tests {
             &[InspectorTab::Layer, InspectorTab::Master],
             InspectorTab::Layer,
         );
+        // Post-D1/D4: `ui_root.rs` now wraps the inspector's build in a
+        // region (`begin_region` .. `end_region`) instead of letting it root
+        // itself at the tree — mirror that here so `traverse_range` (which
+        // walks registered regions, not a raw root scan) actually reaches
+        // this panel's content.
+        let region = tree.begin_region(
+            layout.inspector(),
+            crate::tree::ZTier::Base,
+            "inspector",
+            UIFlags::empty(),
+        );
+        let content_start = tree.count();
         panel.build(&mut tree, &layout);
+        tree.end_region(region, content_start);
 
-        let start = panel.first_node();
-        let end = start + panel.node_count();
+        let start = region.root.index();
+        let end = tree.count();
 
         // Collect node indices the full-render traversal actually visits.
         let mut visited = std::collections::HashSet::new();
