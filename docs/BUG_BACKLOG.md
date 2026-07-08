@@ -93,14 +93,24 @@ release-gating for the commercial cut, not optional.
    inherits it). Drum stage of the pipeline. Cheapest out: email Zehren for a
    commercial grant; else replace the model (E-GMD + Slakh drums are clean truth; the
    accuracy harness scores any candidate). AUDIO_ANALYSIS_ACCURACY Deferred #1,
-   trigger = commercialization v1.0 gate.
+   trigger = commercialization v1.0 gate. **Peter's direction (2026-07-08):** try our
+   own detectors first — port the live 4-band SuperFlux + spectral-template classify
+   onto the demucs drum stem (stem-separated EDM drums are a much easier problem than
+   ADTOF's from-the-mix task); harness-score against ADTOF baseline on held-out.
+   Long-term sanctioned: train our own drum model on permissive data only (E-GMD +
+   Slakh + self-rendered EDM MIDI — satisfies the design's D8 no-NC-training line);
+   weights become ours. Fresh off-the-shelf search when work starts (Magenta E-GMD
+   model / Omnizart were the permissive options as of 2026-07, both mid).
 3. **rusty_link 0.4 — GPL-2.0-or-later** (`crates/manifold-playback/Cargo.toml:17`,
    used by `link_sync.rs`). GPL is viral for a closed-source binary — this is the only
    non-permissive crate in the whole Rust tree. Ableton Link itself is dual-licensed
    and Peter's proprietary Link license is already pending (competitive-steal-pass),
-   but that grant covers Link, NOT the community GPL Rust wrapper. Fix: commercial/
-   relicense ask to the rusty_link author, or a thin in-house binding over Link under
-   the Ableton agreement.
+   but that grant covers Link, NOT the community GPL Rust wrapper. Fix (Peter's
+   direction 2026-07-08): once the Ableton proprietary Link license lands, write a
+   thin clean-room FFI binding over Ableton's official `abl_link` C wrapper (~a day;
+   `link_sync.rs` is the only consumer). **Never copy rusty_link source — copying GPL
+   code inherits GPL.** Do not reimplement the Link network protocol; the licensed
+   library carries it.
 4. **Staged ffmpeg is whatever the dev machine has** (`stage_runtime_mac.sh:253–273`
    resolves `command -v ffmpeg` — a Homebrew build, i.e. `--enable-gpl`). Fix: stage a
    deliberate LGPL-configured decode-only ffmpeg build (the sidecar only decodes) and
