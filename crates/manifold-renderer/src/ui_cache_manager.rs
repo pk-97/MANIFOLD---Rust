@@ -72,6 +72,11 @@ pub struct UICacheManager {
 
     format: GpuTextureFormat,
     scale_factor: f64,
+
+    // BUG-060 footer-leak trace: counts render_dirty_panels calls so the atlas
+    // is dumped to PNG every N frames when MANIFOLD_TRACE_FOOTER_LEAK is set.
+    // Remove with the trace.
+    debug_frame_counter: u64,
 }
 
 impl UICacheManager {
@@ -87,6 +92,7 @@ impl UICacheManager {
             last_sub_regions: std::array::from_fn(|_| Vec::new()),
             format,
             scale_factor,
+            debug_frame_counter: 0,
         }
     }
 
@@ -286,7 +292,55 @@ impl UICacheManager {
             rendered_ranges.push((info.node_start, info.node_end));
         }
 
+        // BUG-060 footer-leak trace: dump the composited atlas to PNG every ~30
+        // frames so the footer region can be inspected directly — settles whether
+        // a panel wrote blue INTO the atlas or the blue is added after the atlas.
+        if ui_renderer.debug_footer_leak_enabled() {
+            self.debug_frame_counter += 1;
+            if self.debug_frame_counter.is_multiple_of(30) {
+                self.debug_dump_atlas(device);
+            }
+        }
+
         (rendered, rendered_ranges)
+    }
+
+    /// BUG-060 footer-leak trace: read the atlas back and write it to
+    /// `/tmp/atlas_latest.png` (overwritten each dump). Bgra8Unorm → RGBA. Stalls
+    /// the GPU (readback), so only ever called under the env flag. Remove with the trace.
+    fn debug_dump_atlas(&self, device: &GpuDevice) {
+        let Some(tex) = self.atlas_texture.as_ref() else {
+            return;
+        };
+        let (w, h) = (self.atlas_physical_w, self.atlas_physical_h);
+        if w == 0 || h == 0 {
+            return;
+        }
+        let bytes_per_row = w * 4;
+        let buf = device.create_buffer_shared(u64::from(h * bytes_per_row));
+        let mut enc = device.create_encoder("atlas-dump");
+        enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
+        enc.commit_and_wait_completed();
+        let Some(ptr) = buf.mapped_ptr() else { return };
+        let bgra = unsafe { std::slice::from_raw_parts(ptr, (w * h * 4) as usize) };
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for i in 0..(w * h) as usize {
+            rgba[i * 4] = bgra[i * 4 + 2]; // R <- B
+            rgba[i * 4 + 1] = bgra[i * 4 + 1]; // G
+            rgba[i * 4 + 2] = bgra[i * 4]; // B <- R
+            rgba[i * 4 + 3] = 255; // opaque, so a viewer doesn't show transparent as white
+        }
+        if let Err(e) = image::save_buffer(
+            "/tmp/atlas_latest.png",
+            &rgba,
+            w,
+            h,
+            image::ColorType::Rgba8,
+        ) {
+            eprintln!("[FOOTER-LEAK] atlas dump failed: {e}");
+        } else {
+            eprintln!("[FOOTER-LEAK] dumped atlas {w}x{h} -> /tmp/atlas_latest.png");
+        }
     }
 
     /// Signature of a panel's sub-regions: each `(start, end, bounds-of-first-node)`.

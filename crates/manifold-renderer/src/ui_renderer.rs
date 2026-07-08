@@ -681,6 +681,12 @@ impl UIRenderer {
         }
     }
 
+    /// BUG-060 footer-leak trace: whether the trace is armed (env flag set).
+    /// Lets the cache manager gate its periodic atlas dump.
+    pub fn debug_footer_leak_enabled(&self) -> bool {
+        self.debug_footer_leak
+    }
+
     /// One-shot: log that the footer-leak trace armed, so a zero-fire run is
     /// unambiguous (flag on + no leak) rather than "did the env var take?".
     /// Called once after construction. Remove with the trace.
