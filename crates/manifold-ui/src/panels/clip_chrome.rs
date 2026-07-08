@@ -414,14 +414,24 @@ impl ClipChromePanel {
                             ONSET_MIN_MS,
                             ONSET_MAX_MS,
                         ),
-                        // Not reset-wired — a detection-config slider excluded
-                        // from BUG-061 (no Snapshot/Commit undo trio). 0ms is
-                        // the natural "no compensation" default.
+                        // 0ms is the natural "no compensation" default.
                         default: BitmapSlider::value_to_normalized(0.0, ONSET_MIN_MS, ONSET_MAX_MS),
                         value_text: format!("{:+.0}ms", self.cached_onset_ms),
                         colors: SliderColors::default_slider(),
                         font_size: SMALL_FONT_SIZE,
                         label_width: 34.0,
+                        // A detection-config slider excluded from BUG-061 (no
+                        // Snapshot/Commit undo trio — `ClipDetectOnsetChanged`
+                        // writes the model directly on every change, no open/
+                        // close phase). The reset is still a real, working
+                        // trio: reusing the one existing action for all three
+                        // slots IS "a drag that lands on the default" — there
+                        // is no separate snapshot/commit to invent.
+                        reset: PanelAction::slider_reset(
+                            PanelAction::ClipDetectOnsetChanged(0.0),
+                            PanelAction::ClipDetectOnsetChanged(0.0),
+                            PanelAction::ClipDetectOnsetChanged(0.0),
+                        ),
                     })
                     .fill_w()
                     .h(Sizing::Fixed(ROW_BTN_H))
@@ -493,14 +503,20 @@ impl ClipChromePanel {
                 View::slider_row(SliderSpec {
                     label: None,
                     value: inst.sensitivity.clamp(0.0, 1.0),
-                    // Not reset-wired — a detection-config slider excluded
-                    // from BUG-061 (no Snapshot/Commit undo trio). No semantic
-                    // default exists per-instrument; neutral midpoint.
+                    // No semantic default exists per-instrument; neutral
+                    // midpoint.
                     default: 0.5,
                     value_text: String::new(),
                     colors: SliderColors::default_slider(),
                     font_size: SMALL_FONT_SIZE,
                     label_width: 0.0,
+                    // Same "excluded from BUG-061, real reset via the one
+                    // existing action" reasoning as the Onset slider above.
+                    reset: PanelAction::slider_reset(
+                        PanelAction::ClipDetectSensitivityChanged(i, 0.5),
+                        PanelAction::ClipDetectSensitivityChanged(i, 0.5),
+                        PanelAction::ClipDetectSensitivityChanged(i, 0.5),
+                    ),
                 })
                 .fill_w()
                 .fill_h()

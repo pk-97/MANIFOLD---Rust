@@ -249,6 +249,11 @@ impl MacrosPanel {
                     colors: SliderColors::default_slider(),
                     font_size: FONT_SIZE,
                     label_width: LABEL_WIDTH,
+                    reset: PanelAction::slider_reset(
+                        PanelAction::MacroSnapshot(i),
+                        PanelAction::MacroChanged(i, 0.0),
+                        PanelAction::MacroCommit(i),
+                    ),
                 };
                 inner = inner.child(
                     View::slider_row(spec)
@@ -458,22 +463,12 @@ impl MacrosPanel {
         Vec::new()
     }
 
-    /// Node-intent dispatch for the macro sliders: track → reset, label → open
-    /// mappings dropdown.
+    /// Node-intent dispatch for the macro sliders: track → reset (via the
+    /// host's shared replay), label → open mappings dropdown.
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         use crate::intent::Gesture::RightClick;
+        self.host.register_slider_resets(intents);
         for (i, s) in self.sliders.iter().enumerate() {
-            if let Some(track) = s.track_id() {
-                intents.on(
-                    track,
-                    RightClick,
-                    PanelAction::slider_reset(
-                        PanelAction::MacroSnapshot(i),
-                        PanelAction::MacroChanged(i, 0.0),
-                        PanelAction::MacroCommit(i),
-                    ),
-                );
-            }
             if let Some(ids) = s.ids()
                 && let Some(label) = ids.label
             {

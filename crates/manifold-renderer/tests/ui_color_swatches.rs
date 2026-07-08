@@ -1240,8 +1240,19 @@ fn modulation_drawer_sheet() {
     use manifold_ui::chrome::Theme;
     use manifold_ui::node::Rect;
     use manifold_ui::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
+    use manifold_ui::panels::PanelAction;
     use manifold_ui::slider::{BitmapSlider, SliderColors};
     use manifold_ui::UITree;
+
+    // Headless swatch render: sliders never receive a right-click, so any valid
+    // reset action serves as a placeholder for the now-required field/param.
+    let placeholder_reset = || {
+        PanelAction::slider_reset(
+            PanelAction::MasterOpacitySnapshot,
+            PanelAction::MasterOpacityChanged(1.0),
+            PanelAction::MasterOpacityCommit,
+        )
+    };
 
     let device = GpuDevice::new();
     let mut ui = UIRenderer::new(&device, FORMAT);
@@ -1262,6 +1273,8 @@ fn modulation_drawer_sheet() {
         norm,
         value_text: value.to_string(),
         label_w: 52.0,
+        default_norm: norm,
+        reset: placeholder_reset(),
     };
 
     // Trigger (orange) — a single Decay slider.
@@ -1378,6 +1391,8 @@ fn modulation_drawer_sheet() {
             &SliderColors::default_slider(),
             sf,
             52.0,
+            0.62,
+            placeholder_reset(),
         );
         drawer::build(
             &mut tree,

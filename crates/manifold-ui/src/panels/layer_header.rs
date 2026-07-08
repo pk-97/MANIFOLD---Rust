@@ -835,6 +835,9 @@ pub struct LayerHeaderPanel {
     // Per-row gain slider drag state (audio layers). Reuses the shared
     // SliderDragState machine — same as the inspector/master sliders.
     gain_sliders: Vec<crate::slider::SliderDragState>,
+    /// Per-row gain slider right-click reset, built alongside `gain_sliders`
+    /// (BUG-061 follow-through) and replayed in `register_intents`.
+    gain_slider_resets: Vec<Option<PanelAction>>,
     // Index of the layer whose gain slider is mid-drag, or -1.
     active_gain_drag: i32,
 
@@ -874,6 +877,7 @@ impl LayerHeaderPanel {
             panel_width: 0.0,
             scroll: ScrollContainer::new(),
             gain_sliders: Vec::new(),
+            gain_slider_resets: Vec::new(),
             active_gain_drag: -1,
             cache_first_node: usize::MAX,
             cache_node_count: 0,
@@ -1989,7 +1993,13 @@ impl LayerHeaderPanel {
                     // a SliderDragState so drag updates reuse the shared machine.
                     let norm = gain_db_to_norm(layer.audio_gain_db);
                     let value_text = gain_db_text(layer.audio_gain_db);
-                    let slider = crate::slider::BitmapSlider::build(
+                    let lid = LayerId::new(&layer.layer_id);
+                    let reset = PanelAction::slider_reset(
+                        PanelAction::AudioGainSnapshot(lid.clone()),
+                        PanelAction::AudioGainChanged(lid.clone(), 0.0),
+                        PanelAction::AudioGainCommit(lid),
+                    );
+                    let built = crate::slider::BitmapSlider::build(
                         tree,
                         clip_parent,
                         r,
@@ -2000,15 +2010,17 @@ impl LayerHeaderPanel {
                         SMALL_FONT,
                         0.0,
                         gain_db_to_norm(0.0),
+                        reset,
                     );
-                    let track = slider.track;
+                    let track = built.ids.track;
                     let mut gs = crate::slider::SliderDragState::with_range(
                         GAIN_DB_MIN,
                         GAIN_DB_MAX,
                         false,
                     );
-                    gs.set_ids(slider);
+                    gs.set_ids(built.ids);
                     self.gain_sliders[index] = gs;
+                    self.gain_slider_resets[index] = Some(built.reset);
                     track
                 }
                 C::Send => {
@@ -2131,17 +2143,13 @@ impl LayerHeaderPanel {
             // Gain slider track: right-click resets to unity (0 dB) instead of
             // opening the row's context menu — registered AFTER the whole-row
             // loop above so this more specific intent wins (BUG-061; the gain
-            // slider never had a reset gesture before this).
-            if let Some(ids) = self.gain_sliders[i].ids() {
-                intents.on(
-                    ids.track,
-                    crate::intent::Gesture::RightClick,
-                    PanelAction::slider_reset(
-                        PanelAction::AudioGainSnapshot(lid.clone()),
-                        PanelAction::AudioGainChanged(lid.clone(), 0.0),
-                        PanelAction::AudioGainCommit(lid),
-                    ),
-                );
+            // slider never had a reset gesture before this). The reset was
+            // built alongside the slider (`build_layer_row`'s `C::Gain` arm);
+            // replayed here rather than re-derived.
+            if let (Some(ids), Some(reset)) =
+                (self.gain_sliders[i].ids(), self.gain_slider_resets.get(i).and_then(|r| r.as_ref()))
+            {
+                intents.on(ids.track, crate::intent::Gesture::RightClick, reset.clone());
             }
         }
     }
@@ -2267,6 +2275,8 @@ impl LayerHeaderPanel {
         self.gain_sliders.clear();
         self.gain_sliders
             .resize_with(layer_count, crate::slider::SliderDragState::default);
+        self.gain_slider_resets.clear();
+        self.gain_slider_resets.resize_with(layer_count, || None);
         // Only resize cached state vectors if layer count changed —
         // preserve existing values to keep dirty-check logic correct.
         self.cached_mute.resize(layer_count, false);

@@ -481,6 +481,11 @@ pub struct ParamCardPanel {
 
     // ── Node IDs — per-param (shared) ──
     slider_ids: Vec<Option<SliderNodeIds>>,
+    /// Per-param right-click reset for `slider_ids[pi]`'s track — a parallel
+    /// array (rather than folding into `slider_ids`) so the many existing
+    /// `slider_ids[pi].track`/`.value_text`/etc. access sites are untouched.
+    /// `Some` exactly when `slider_ids[pi]` is `Some` (BUG-070 follow-through).
+    slider_resets: Vec<Option<PanelAction>>,
     /// Per-param base (pre-modulation) value, cached each sync so a value-cell
     /// double-click prefills the type-in box with the user-set value, not the
     /// live modulated display. Sized to the param count in `configure`.
@@ -669,6 +674,7 @@ impl ParamCardPanel {
             cached_has_audio: false,
             cached_has_graph_mod: false,
             slider_ids: Vec::new(),
+            slider_resets: Vec::new(),
             base_values: Vec::new(),
             row_catcher_ids: Vec::new(),
             driver_btn_ids: Vec::new(),
@@ -760,6 +766,7 @@ impl ParamCardPanel {
             .collect();
         self.copied_flash.clear();
         self.slider_ids = vec![None; n];
+        self.slider_resets = vec![None; n];
         self.base_values = vec![0.0; n];
         self.row_catcher_ids = vec![None; n];
         self.driver_btn_ids = vec![None; n];
@@ -2171,6 +2178,7 @@ impl ParamCardPanel {
                     &info,
                     &self.state.mod_state,
                     i,
+                    self.param_target(),
                     CONFIG_BTN_FONT_SIZE,
                     self.supports_envelopes,
                     has_osc,
@@ -2202,6 +2210,7 @@ impl ParamCardPanel {
                 &info,
                 &self.state.mod_state,
                 i,
+                self.param_target(),
                 &SliderColors::default_slider(),
                 CONFIG_BTN_FONT_SIZE,
                 self.supports_envelopes,
@@ -2217,6 +2226,7 @@ impl ParamCardPanel {
                     .map(|a| a.value()),
             );
             self.slider_ids[i] = row.slider;
+            self.slider_resets[i] = Some(row.slider_reset);
             self.row_catcher_ids[i] = Some(row.row_catcher);
             self.trim_ids[i] = row.trim;
             self.target_ids[i] = row.target;
@@ -2350,6 +2360,7 @@ impl ParamCardPanel {
                         &info,
                         &self.state.mod_state,
                         i,
+                        self.param_target(),
                         FONT_SIZE,
                         true, // generators always reserve the driver-column gap
                         has_osc,
@@ -2379,6 +2390,7 @@ impl ParamCardPanel {
                         &info,
                         &self.state.mod_state,
                         i,
+                        self.param_target(),
                         &SliderColors::default_slider(),
                         FONT_SIZE,
                         true,
@@ -2393,6 +2405,7 @@ impl ParamCardPanel {
                             .map(|a| a.value()),
                     );
                     self.slider_ids[i] = row.slider;
+                    self.slider_resets[i] = Some(row.slider_reset);
                     self.row_catcher_ids[i] = Some(row.row_catcher);
                     self.trim_ids[i] = row.trim;
                     self.target_ids[i] = row.target;
@@ -3693,10 +3706,36 @@ impl ParamCardPanel {
             intents.on(border_id, RightClick, PanelAction::CardRightClicked(target));
         }
 
-        // Per-param specific intents.
+        // Every materialised slider's right-click reset — main rows AND every
+        // drawer slider (audio-shape Amount/Attack/Release, envelope Decay) —
+        // replayed independent of row kind (slider / toggle / trigger /
+        // trigger-gate). This is what fixes BUG-070: a trigger-gate row has no
+        // main slider, but its armed drawer's sliders are stored in
+        // `audio_configs[pi]` regardless, so this pass reaches them directly
+        // instead of piggybacking on the main-slider loop below (which is
+        // exactly the loop that used to bail before ever checking
+        // `audio_configs`).
         for (pi, slider) in self.slider_ids.iter().enumerate() {
-            // Generator toggle/trigger rows have no reset/map gesture — they
-            // fall through to the card claim like any other dead zone.
+            if let (Some(ids), Some(reset)) =
+                (slider, self.slider_resets.get(pi).and_then(|r| r.as_ref()))
+            {
+                intents.on(ids.track, RightClick, reset.clone());
+            }
+        }
+        for cfg in self.envelope_config_ids.iter().flatten() {
+            intents.on(cfg.decay_slider.track, RightClick, cfg.decay_reset.clone());
+        }
+        for cfg in self.audio_configs.iter().flatten() {
+            let (dids, _) = cfg;
+            for (sl, reset) in dids.sliders.iter().zip(dids.slider_resets.iter()) {
+                intents.on(sl.track, RightClick, reset.clone());
+            }
+        }
+
+        // Per-param perform-mapping menu.
+        for (pi, slider) in self.slider_ids.iter().enumerate() {
+            // Generator toggle/trigger rows have no map gesture — they fall
+            // through to the card claim like any other dead zone.
             if matches!(self.kind, ParamCardKind::Generator)
                 && self
                     .param_info
@@ -3707,49 +3746,6 @@ impl ParamCardPanel {
                 continue;
             }
             let Some(ids) = slider else { continue };
-
-            // Slider track → reset to default.
-            let default = self.param_info.get(pi).map(|i| i.default).unwrap_or(0.0);
-            intents.on(
-                ids.track,
-                RightClick,
-                PanelAction::slider_reset(
-                    PanelAction::ParamSnapshot(target, self.pid_at(pi)),
-                    PanelAction::ParamChanged(target, self.pid_at(pi), default),
-                    PanelAction::ParamCommit(target, self.pid_at(pi)),
-                ),
-            );
-
-            // Audio-shaping drawer sliders (Amount/Attack/Release) → each
-            // resets to AudioModShape's own default. Never had a reset gesture
-            // before this (BUG-061) — the drawer only opens when armed, so this
-            // is gated the same way the drag hit-test above gates on
-            // `self.audio_configs[pi]`.
-            if let Some((dids, _)) = self.audio_configs.get(pi).and_then(|c| c.as_ref()) {
-                for (si, which, shape_default) in [
-                    (0usize, AudioShapeParam::Sensitivity, AUDIO_SENS_DEFAULT),
-                    (1, AudioShapeParam::Attack, AUDIO_ATTACK_DEFAULT_MS),
-                    (2, AudioShapeParam::Release, AUDIO_RELEASE_DEFAULT_MS),
-                ] {
-                    if let Some(sl) = dids.sliders.get(si) {
-                        let pid = self.pid_at(pi);
-                        intents.on(
-                            sl.track,
-                            RightClick,
-                            PanelAction::slider_reset(
-                                PanelAction::AudioModShapeSnapshot(target, pid.clone()),
-                                PanelAction::AudioModShapeParamChanged(
-                                    target,
-                                    pid.clone(),
-                                    which,
-                                    shape_default,
-                                ),
-                                PanelAction::AudioModShapeCommit(target, pid),
-                            ),
-                        );
-                    }
-                }
-            }
 
             // Rest of the row → perform-mapping menu (Perform context only;
             // Author uses the right-edge mapping drawer instead). Registered on
@@ -5301,5 +5297,64 @@ mod tests {
                 other => panic!("slider {si}: expected SliderReset, got {other:?}"),
             }
         }
+    }
+
+    /// Shared assertion: `track` resolves to a `SliderReset` via the registry
+    /// on right-click. Reused across the main-slider and drawer-slider cases
+    /// below (spec §8).
+    fn assert_track_resets(reg: &crate::intent::IntentRegistry, tree: &UITree, track: NodeId) {
+        match reg.resolve(tree, Some(track), crate::intent::Gesture::RightClick) {
+            Some(PanelAction::SliderReset { .. }) => {}
+            other => panic!("expected SliderReset on track {track:?}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn trigger_gate_drawer_sliders_all_resolve_to_slider_reset() {
+        // BUG-070: the Clip Trigger drawer's Amount/Attack/Release sliders got
+        // NO reset gesture, because register_intents' old per-row loop bailed
+        // at `let Some(ids) = slider else { continue }` before it ever reached
+        // the drawer — a trigger-gate row has no main slider (confirmed by the
+        // `slider_ids[gi].is_none()` assertion in
+        // `build_effect_trigger_gate_row_and_drawer` above), so the drawer's
+        // Amount/Attack/Release sliders were structurally unreachable from that
+        // loop. This test fails on that old code path (register_intents never
+        // reaches `audio_configs[gi]` for this row) and passes once resets are
+        // replayed independent of whether the row has a main slider — the fix
+        // in this file's `register_intents`.
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config_with_trigger_gate());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+
+        let gi = panel.param_info.len() - 1;
+        assert!(panel.slider_ids[gi].is_none(), "trigger-gate row has no main slider");
+
+        let mut reg = crate::intent::IntentRegistry::new();
+        panel.register_intents(&mut reg);
+
+        let dids = &panel.audio_configs[gi].as_ref().expect("audio drawer armed in fixture").0;
+        assert_eq!(dids.sliders.len(), 3, "Amount/Attack/Release");
+        for sl in &dids.sliders {
+            assert_track_resets(&reg, &tree, sl.track);
+        }
+    }
+
+    #[test]
+    fn normal_param_row_main_slider_track_resolves_to_slider_reset() {
+        // Companion to the trigger-gate coverage test above, using the same
+        // shared helper: a plain slider row's main track still resolves too
+        // (unchanged behaviour — now via the replay pass instead of the
+        // deleted in-loop registration).
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+
+        let mut reg = crate::intent::IntentRegistry::new();
+        panel.register_intents(&mut reg);
+
+        let track = panel.slider_ids[0].as_ref().unwrap().track;
+        assert_track_resets(&reg, &tree, track);
     }
 }
