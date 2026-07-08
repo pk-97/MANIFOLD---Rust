@@ -357,6 +357,36 @@ can't opt out by forgetting. Watch the two non-uniform cases: param-card sliders
 right-click currently carries `(target, param_id, default)` context, and label/row right-click
 menus (`ParamLabelRightClick` etc.) which are context menus, not reset — they stay.
 
+### BUG-075 (timeline-drag-end-never-finalizes) — the terminal DragEnd for trim/marquee/move was dropped, so on_end_drag never ran — HIGH — FIXED 2026-07-08 (found + fixed same session)
+
+**Symptom:** after the DRAG_CAPTURE landing (P1 `6e4bddcb`), timeline
+trim-drag and click-drag marquee/region-select never finalized on release —
+the trim didn't commit, the selection box stayed live, `drag_mode` stuck.
+Clip *move* looked fine but silently lost its undo snapshot and left the
+same stuck `drag_mode` (its live per-frame preview masked the miss).
+
+**Root cause:** ordering bug in `ui_root::process_events`. The terminal
+`DragEnd`/`PointerUp` arm called `broadcast_gesture_end()`, which set
+`drag_owner = None`, BEFORE the post-match `should_stash_for_tracks(event)`
+read `drag_owner` to decide whether to stash the event for
+`InteractionOverlay`. With the owner already nulled, the terminal `DragEnd`
+was never pushed to `viewport_events`, and `on_end_drag` (the sole finalizer,
+`app_render.rs`) never ran. Confirmed empirically by an adversarial repro
+driving the real `process_events` path: stashed kinds = PointerDown,
+DragBegin, Drag — no DragEnd. The existing ownership unit tests set
+`drag_owner` by hand and called `should_stash_for_tracks` directly, bypassing
+the broadcast-before-stash seam, which is why it shipped.
+
+**Fix:** split `broadcast_gesture_end` into `fire_gesture_end_hooks()`
+(overlay hooks only) + the fused clear. The terminal arm fires the hooks but
+defers the `drag_owner = None` clear to the end of the iteration, after the
+stash read; the PointerDown self-heal keeps the fused `broadcast_gesture_end`
+so a lost-OS-release still clears a stale owner. Guarded by a new
+`process_events`-driven regression test
+(`timeline_drag_end_reaches_viewport_events_through_process_events`) that
+drives Down→Move→Up and asserts the terminal DragEnd reaches
+`drain_viewport_events()`.
+
 ### BUG-074 (audio-mixdown-flaky-under-parallel-tests) — a manifold-playback test fails intermittently only under the default parallel runner — LOW (found 2026-07-08 during PARAM_STEP_ACTIONS P3)
 
 **Symptom:** `cargo test -p manifold-playback` (default, parallel) fails
