@@ -200,6 +200,21 @@ impl UICacheManager {
             self.needs_clear = false;
         }
 
+        // BUG-060 footer-leak trace: probe the footer band after the clear and
+        // after every panel pass below. The first probe where footer-right goes
+        // dark names the killer pass. None (and zero cost) unless the flag is set.
+        let dbg_footer_top = if ui_renderer.debug_footer_leak_enabled() {
+            panels
+                .iter()
+                .find(|p| p.slot == PanelSlot::Footer)
+                .map(|p| p.rect.y)
+        } else {
+            None
+        };
+        if did_clear && let Some(top) = dbg_footer_top {
+            self.debug_probe_footer_band(device, top, "atlas-clear");
+        }
+
         // BUG-060 footer-leak trace: log the footer + inspector render fate each
         // frame — is the footer skipped, its rect narrow, or the inspector's
         // range overlapping it? Settles why the footer's right half goes dark.
@@ -306,6 +321,13 @@ impl UICacheManager {
                     if self.prepare_and_draw(device, ui_renderer) {
                         rendered += 1;
                     }
+                    if let Some(top) = dbg_footer_top {
+                        self.debug_probe_footer_band(
+                            device,
+                            top,
+                            &format!("{:?} (incremental)", info.slot),
+                        );
+                    }
                     // The incremental path only fires when there is no dirt outside
                     // the sub-regions (guaranteed by `incremental_path_safe`), so the
                     // whole panel range is clean after this repaint. Return the full
@@ -327,6 +349,9 @@ impl UICacheManager {
                 rendered += 1;
             } else {
                 self.panel_valid[idx] = true;
+            }
+            if let Some(top) = dbg_footer_top {
+                self.debug_probe_footer_band(device, top, &format!("{:?}", info.slot));
             }
             // Record the sub-region extents this full render established, so the
             // next incremental frame can confirm nothing moved before trusting Load.
@@ -380,6 +405,43 @@ impl UICacheManager {
         } else {
             eprintln!("[FOOTER-LEAK] dumped atlas {w}x{h} -> {path}");
         }
+    }
+
+    /// BUG-060 footer-leak trace: read back the atlas and log the max RGB in the
+    /// footer band's left and right halves. Called after the clear and after each
+    /// panel pass on traced frames, so the log names the pass that darkens
+    /// footer-right. GPU stall per call — debug flag only. Remove with the trace.
+    fn debug_probe_footer_band(&self, device: &GpuDevice, footer_top_logical: f32, label: &str) {
+        let Some(tex) = self.atlas_texture.as_ref() else {
+            return;
+        };
+        let (w, h) = (self.atlas_physical_w, self.atlas_physical_h);
+        if w == 0 || h == 0 {
+            return;
+        }
+        let y0 = ((f64::from(footer_top_logical) * f64::from(self.scale_factor)) as u32).min(h);
+        let bytes_per_row = w * 4;
+        let buf = device.create_buffer_shared(u64::from(h * bytes_per_row));
+        let mut enc = device.create_encoder("footer-band-probe");
+        enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
+        enc.commit_and_wait_completed();
+        let Some(ptr) = buf.mapped_ptr() else { return };
+        let data = unsafe { std::slice::from_raw_parts(ptr, (w * h * 4) as usize) };
+        let mid = w / 2;
+        let (mut lmax, mut rmax) = (0u8, 0u8);
+        for y in y0..h {
+            let row = (y * bytes_per_row) as usize;
+            for x in 0..w {
+                let p = row + (x * 4) as usize;
+                let v = data[p].max(data[p + 1]).max(data[p + 2]);
+                if x < mid {
+                    lmax = lmax.max(v);
+                } else {
+                    rmax = rmax.max(v);
+                }
+            }
+        }
+        eprintln!("[FOOTER-BAND] after {label}: left_max={lmax} right_max={rmax}");
     }
 
     /// Signature of a panel's sub-regions: each `(start, end, bounds-of-first-node)`.
