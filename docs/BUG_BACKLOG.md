@@ -49,7 +49,7 @@ or human can read it, and it needs no external tool.
 | BUG-010 | **wgsl-first-entry** | multi-entry wgsl_compute silently dispatches the first (MED) |
 | BUG-011 | **fused-output-oversize** | fused output buffer sized to max of all inputs (MED) |
 | BUG-015 | **inspector-overlap** | stale-chrome class FIXED 2026-07-08 — incremental cache path now falls back to full render on out-of-sub-region dirt (`has_dirty_outside_ranges` + `incremental_path_safe`); blanket `clear_dirty` narrowed to the overlay region so the fallback isn't erased. (2026-07-04 "sections interleaved" sighting = separate open thread if it recurs) |
-| BUG-060 | **inspector-footer-overpaint** | REOPENED 2026-07-08. Opus 2nd pass: tree-geometry cause **ELIMINATED on the live cache path** (new `footer_leak_probe` test proves the inspector clips at footer_top through `traverse_flat_range`; footer's own render is correct) — the "inspector escapes into the footer" framing is wrong. Cause localized BELOW the tree, to the cache/dirty or offscreen layer (tab-swap clears it = full recomposite). Two unverified suspects (footer atlas region left un-repainted; incremental dirty-clear range mismatch, BUG-015 class). Needs live atlas+offscreen pixel dump. Cause still OPEN. |
+| BUG-060 | **inspector-footer-overpaint** | REOPENED 2026-07-08. Opus 2nd pass: tree-geometry cause **ELIMINATED on the live cache path** (new `footer_leak_probe` test proves the inspector clips at footer_top through `traverse_flat_range`; footer's own render is correct) — the "inspector escapes into the footer" framing is wrong. Cause localized BELOW the tree, to the cache/dirty layer (tab-swap clears it = full recomposite). Artifact is **stale UI content** (UI colours / button fragments left behind), NOT clear/dark — the prior "footer goes dark, RGB 9-16" atlas dump was a HARNESS failure, not the symptom. Stale-pixel / dirty-clear bug, BUG-015 class. Needs live atlas+offscreen pixel dump. Cause still OPEN. |
 | BUG-025 | **timeline-scissor-bleed** | clip content bleeds across row bounds (MED, repro needed — scrolled headless render 07-07 clean) |
 | BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
 | BUG-033 | **ui-snapshot-broken** | FIXED — verified in-tree 2026-07-07 (harness builds + runs) |
@@ -1721,20 +1721,34 @@ Cache decision path traced (both layers), which explains the triggers:
 **Honest open gap:** by static reading, *no* write path puts wrong pixels into the footer band —
 every UI draw clips at footer_top, and the footer repaints correctly on every clear. Yet the repro
 persists and only a full clear fixes it, which is a *caching* signature (Peter's read, well-founded).
-So the cause is a state the static read doesn't reveal. Two leading, unverified suspects, both
-dirty/cache-level: (1) the footer's atlas region left un-repainted on a frame where the footer
-panel is skipped/empty — would show **clear-colour dark**, matching the prior session's atlas dumps
-of footer-right at RGB ~9-16; (2) a node-index/range mismatch in the incremental dirty-clear
-(BUG-015 class). Do not treat either as settled.
+
+**CORRECTION (Peter, 2026-07-08) — the artifact is STALE UI CONTENT, not darkness.** The footer band
+retains real UI pixels: UI colours, button / UI-chrome fragments left over from a prior render. It
+is **not** a black or clear-colour gap. The prior footer-leak session's atlas dumps that read
+"footer-right goes dark, RGB ~9-16" were a **harness failure** (bad atlas readback), not the live
+symptom — do NOT cite them as evidence and do NOT chase a clear-colour / un-repainted-transparent
+theory. Whatever lands in the footer band is old UI content that a full clear (tab-swap) wipes.
+
+So the cause is a **stale-pixel / dirty-clear** failure the static read doesn't expose: UI content
+that was validly drawn once is not cleared/repainted when it should be, so old chrome persists in
+the footer band until the next whole-atlas clear. This is squarely the **BUG-015** class (the
+incremental cache path leaving stale chrome), in the same file. Leading unverified suspects: (1) the
+incremental sub-region path ([ui_cache_manager.rs:206-248](../crates/manifold-renderer/src/ui_cache_manager.rs#L206))
+clears dirty for the whole inspector range while a node-index/extent shift leaves some band of
+pixels un-repainted; (2) the footer's own prior-state pixels (old button positions/labels) surviving
+a footer render that doesn't fully overpaint its rect; (3) another panel whose atlas rect or node
+range overlaps the footer band leaving content there. Do not treat any as settled.
 
 **Next step (needs LIVE pixels, not the geometry harness):** dump BOTH the atlas and the composited
-offscreen footer band, plus per-frame `panel_valid` / `needs_clear` / `has_dirty_in_range(footer)`,
-across the exact scroll + drawer + tab-swap repro. That is the only oracle that separates "atlas
-footer region wrong" from "offscreen footer region wrong" and shows the flag values at the instant
-it breaks. Prior instrumentation exists on branch `fix/bug-060-footer-leak-trace` (worktree
-`.claude/worktrees/footer-leak`, env `MANIFOLD_TRACE_FOOTER_LEAK=1`) but predates P1 — re-point it
-at current main. The `footer_leak_probe` cache-path containment test landed with this pass is the
-durable regression guard for the geometry half.
+offscreen footer band across the exact scroll + drawer + tab-swap repro, and identify *which* UI
+content lands in the footer band and on *which* frame it is written-then-not-cleared — plus per-frame
+`panel_valid` / `needs_clear` / `has_dirty_in_range(footer)`. That is the only oracle that shows the
+stale content's source and the flag values at the instant it breaks. Prior instrumentation exists on
+branch `fix/bug-060-footer-leak-trace` (worktree `.claude/worktrees/footer-leak`, env
+`MANIFOLD_TRACE_FOOTER_LEAK=1`) but predates P1 AND its atlas readback is suspect (it produced the
+bogus "dark" reading) — re-point it at current main and re-validate the readback first. The
+`footer_leak_probe` cache-path containment test landed with this pass is the durable regression guard
+for the geometry half (it proves the inspector does not geometrically leak, which stands).
 
 **Symptom** (Peter, 2026-07-07; also the prior `f4b895d7` session's subject): with the
 audio-mod drawer open on a Clip Trigger row (`is_trigger_gate`), scrolling the inspector to
