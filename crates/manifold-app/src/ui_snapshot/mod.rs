@@ -415,3 +415,136 @@ fn render_and_dump(
 fn arg_value(args: &[String], flag: &str) -> Option<String> {
     args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned()
 }
+
+#[cfg(test)]
+mod footer_leak_probe {
+    //! BUG-060 investigation: observe the LIVE cache-path traversal (the one the
+    //! main window renders through — `render_dirty_panels` →
+    //! `UIRenderer::render_sub_region` → `UITree::traverse_flat_range`), NOT the
+    //! headless `traverse()` path the P1 gate PNG used. Builds the real `bug060`
+    //! scene through the real `UIRoot::build()` region wrap, scrolls the inspector
+    //! to the bottom exactly like the live app, then walks the inspector panel's
+    //! node range the way the cache manager does and reports every node whose
+    //! visible (clipped) paint reaches BELOW the footer's top edge.
+    use super::*;
+    use manifold_renderer::ui_cache_manager::PanelSlot;
+    use manifold_ui::node::Rect;
+    use manifold_ui::tree::TraversalEvent;
+    use manifold_ui::UIFlags;
+
+    fn intersect(a: Rect, b: Rect) -> Rect {
+        let x0 = a.x.max(b.x);
+        let y0 = a.y.max(b.y);
+        let x1 = (a.x + a.width).min(b.x + b.width);
+        let y1 = (a.y + a.height).min(b.y + b.height);
+        Rect::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
+    }
+
+    #[test]
+    fn cache_path_inspector_does_not_paint_below_footer_top() {
+        let data = fixtures::build("bug060").expect("bug060 scene");
+        let mut ui = UIRoot::new();
+        ui.resize(LOGICAL_W, LOGICAL_H);
+        ui.layout.inspector_width = 600.0;
+        ui.layout.timeline_split_ratio = 0.6;
+        sync_build(&mut ui, &data, 24.0);
+
+        // Scroll the inspector hard to the bottom — the live gesture path.
+        let insp = ui.layout.inspector();
+        let cursor_x = insp.x + insp.width * 0.5;
+        let scrolled = ui.try_inspector_scroll(1_000_000.0, cursor_x);
+        assert!(scrolled, "sanity: inspector must report a live scroll container");
+
+        let footer_top = ui.layout.footer().y;
+        assert!(footer_top > 0.0);
+
+        // The inspector panel's node range, EXACTLY as `panel_cache_info` reports
+        // it to the cache manager.
+        let infos = ui.panel_cache_info();
+        let insp_info = infos
+            .iter()
+            .find(|i| i.slot == PanelSlot::Inspector)
+            .expect("inspector panel in cache info");
+        let (start, end) = (insp_info.node_start, insp_info.node_end);
+        let eps = 0.5_f32;
+
+        // Sanity: the scroll must have pushed content so that some node's RAW
+        // bounds straddle the footer edge — otherwise the leak check below is
+        // vacuous (nothing to clip). Mirrors the P1 tab-strip test's `any_above`.
+        let straddling = (start..end)
+            .filter(|&i| {
+                let n = ui.tree.get_node(ui.tree.id_at(i)).unwrap();
+                n.flags.contains(UIFlags::VISIBLE)
+                    && n.bounds.width > 0.0
+                    && n.bounds.height > 0.0
+                    && n.bounds.y < footer_top
+                    && n.bounds.y_max() > footer_top + eps
+            })
+            .count();
+        assert!(
+            straddling > 0,
+            "sanity: scrolling must leave some node straddling footer_top ({footer_top}) \
+             or this test proves nothing"
+        );
+
+        // Walk the range the way `render_sub_region` does: `traverse_flat_range`
+        // pre-pushes ancestor clips (the region container + scroll-column clips),
+        // then emits nodes. Reconstruct the effective clip per node and flag any
+        // whose clipped paint crosses below the footer's top edge.
+        let mut clip_stack: Vec<Rect> = Vec::new();
+        let mut leaks: Vec<(usize, Rect, Option<Rect>, String)> = Vec::new();
+        ui.tree.traverse_flat_range(start, end, false, |ev| match ev {
+            TraversalEvent::PushClip(r) => {
+                let clipped = clip_stack.last().map(|c| intersect(*c, r)).unwrap_or(r);
+                clip_stack.push(clipped);
+            }
+            TraversalEvent::PopClip => {
+                clip_stack.pop();
+            }
+            TraversalEvent::Node(n) => {
+                let b = n.bounds;
+                if !n.flags.contains(UIFlags::VISIBLE) || b.width <= 0.0 || b.height <= 0.0 {
+                    return;
+                }
+                // The GPU cull (`draw_node`) discards a node fully outside the
+                // clip; replicate it so we don't count nodes that never paint.
+                if let Some(c) = clip_stack.last()
+                    && (b.x >= c.x_max()
+                        || b.x_max() <= c.x
+                        || b.y >= c.y_max()
+                        || b.y_max() <= c.y)
+                {
+                    return;
+                }
+                // Effective painted bottom = clipped bottom (or raw if unclipped).
+                let painted_bottom = match clip_stack.last() {
+                    Some(c) => b.y_max().min(c.y_max()),
+                    None => b.y_max(),
+                };
+                if painted_bottom > footer_top + eps {
+                    let text = n.text.clone().unwrap_or_default();
+                    leaks.push((n.id.index(), b, clip_stack.last().copied(), text));
+                }
+            }
+        });
+
+        if !leaks.is_empty() {
+            eprintln!(
+                "\n=== BUG-060 cache-path leak: {} inspector node(s) paint below footer_top={footer_top} ===",
+                leaks.len()
+            );
+            for (idx, b, clip, text) in &leaks {
+                eprintln!(
+                    "  node[{idx}] bounds=({:.1},{:.1} {:.1}x{:.1}) y_max={:.1}  clip={:?}  text={:?}",
+                    b.x, b.y, b.width, b.height, b.y_max(), clip, text
+                );
+            }
+            eprintln!("=== end leak report ===\n");
+        }
+        assert!(
+            leaks.is_empty(),
+            "{} inspector node(s) paint below the footer top edge on the LIVE cache path",
+            leaks.len()
+        );
+    }
+}
