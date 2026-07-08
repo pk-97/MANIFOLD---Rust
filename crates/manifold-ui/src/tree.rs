@@ -652,6 +652,21 @@ impl UITree {
         self.open_regions = self.open_regions.saturating_sub(1);
     }
 
+    /// D4's second enforcement leg: true iff every root-parented node
+    /// (`parent_index[i].is_none()`) is a registered region — i.e. no
+    /// top-level subtree escaped `begin_region`. `mint`'s debug assertion
+    /// (the first leg) catches this at the moment a stray root is minted,
+    /// but only in non-test builds of a `manifold-ui` dependency
+    /// (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D4); this walks a tree AFTER
+    /// the fact, unconditionally, so both `manifold-ui`'s own suite and
+    /// `manifold-app`'s can assert it directly against a real, fully-built
+    /// tree.
+    pub fn all_roots_are_regions(&self) -> bool {
+        (0..self.count).all(|i| {
+            self.parent_index[i].is_some() || self.regions.iter().any(|&(_, root)| root.index() == i)
+        })
+    }
+
     /// Reparent all root-level nodes (parent_id == -1) in the index range
     /// [from_index..from_index+count) under the given parent.
     /// Used by the inspector to wrap built sub-panel nodes under a ClipRegion.
@@ -1358,6 +1373,61 @@ mod tests {
 
         let indices: Vec<usize> = order.iter().map(|n| n.index()).collect();
         assert_eq!(indices, vec![0, 1, 2]); // DFS pre-order: region root, A, B
+    }
+
+    /// D4's second enforcement leg (`all_roots_are_regions`), positive case:
+    /// a tree built entirely through `begin_region`/`end_region` — several
+    /// regions, several tiers, some with multi-node content swept under them
+    /// — has every root accounted for.
+    #[test]
+    fn all_roots_are_regions_holds_for_a_properly_regioned_tree() {
+        let mut tree = UITree::new();
+
+        let chrome = tree.begin_region(Rect::new(0.0, 0.0, 800.0, 40.0), ZTier::Chrome, "chrome", UIFlags::empty());
+        let start = tree.count();
+        tree.add_panel(None, 0.0, 0.0, 100.0, 20.0, default_style());
+        tree.add_panel(None, 0.0, 20.0, 100.0, 20.0, default_style());
+        tree.end_region(chrome, start);
+
+        let base = tree.begin_region(Rect::new(0.0, 40.0, 800.0, 500.0), ZTier::Base, "base", UIFlags::empty());
+        let start = tree.count();
+        tree.add_panel(None, 0.0, 40.0, 200.0, 200.0, default_style());
+        tree.end_region(base, start);
+
+        let ghost = tree.begin_region(
+            Rect::new(0.0, 0.0, 800.0, 600.0),
+            ZTier::Ghost,
+            "ghost",
+            UIFlags::ALLOW_OVERFLOW,
+        );
+        let start = tree.count();
+        tree.add_label(None, 400.0, 300.0, 80.0, 20.0, "ghost", default_style());
+        tree.end_region(ghost, start);
+
+        assert!(tree.all_roots_are_regions());
+    }
+
+    /// D4's second enforcement leg, negative case: a stray root-parented
+    /// node created with no `begin_region` bracket open at all (the exact
+    /// per-panel hand-clip shape D1 forbids) is caught by
+    /// `all_roots_are_regions` even though `mint`'s debug assertion is
+    /// `cfg(not(test))`-gated and stays silent inside this crate's own
+    /// suite (`tree.rs`'s `mint` doc comment).
+    #[test]
+    fn all_roots_are_regions_catches_a_stray_root() {
+        let mut tree = UITree::new();
+        let region = tree.begin_region(Rect::new(0.0, 0.0, 100.0, 100.0), ZTier::Base, "base", UIFlags::empty());
+        let start = tree.count();
+        tree.add_panel(None, 0.0, 0.0, 50.0, 50.0, default_style());
+        tree.end_region(region, start);
+        assert!(tree.all_roots_are_regions(), "sanity: the well-formed part passes");
+
+        // A panel that forgot to wrap itself — no begin_region, no end_region.
+        tree.add_panel(None, 0.0, 0.0, 10.0, 10.0, default_style());
+        assert!(
+            !tree.all_roots_are_regions(),
+            "a root-parented node outside any region must fail the D4 check"
+        );
     }
 
     #[test]

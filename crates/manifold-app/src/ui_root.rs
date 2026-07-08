@@ -3337,3 +3337,73 @@ mod drag_capture_tests {
         assert_eq!(steps(&click2), 1, "the second click must also fire one step: click2={click2:?}");
     }
 }
+
+#[cfg(test)]
+mod region_structural_tests {
+    //! `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D4, second enforcement leg,
+    //! asserted against the REAL `UIRoot::build()` — the strongest available
+    //! proof P1's migration is complete: not a synthetic fixture, the actual
+    //! tree the app renders every frame. `mint`'s debug assertion (the first
+    //! leg) is `cfg(not(test))`-gated inside `manifold-ui` itself, but
+    //! `manifold-ui` is an ordinary (non-test-cfg) dependency from here, so
+    //! it's live for every test in this module too — a regression would
+    //! panic before either assertion below even runs.
+    use super::*;
+
+    const W: f32 = 1536.0;
+    const H: f32 = 1216.0;
+
+    /// The static build: transport/header/footer/inspector/split-handles/
+    /// layer-headers/viewport, no overlay open. Every root must be a region.
+    #[test]
+    fn main_window_build_has_no_stray_roots() {
+        let mut ui = UIRoot::new();
+        ui.resize(W, H);
+        assert!(ui.built, "resize() must have run build()");
+        assert!(
+            ui.tree.all_roots_are_regions(),
+            "every top-level node in a freshly built main window must be a \
+             region root (D1/D4) — found one that isn't"
+        );
+    }
+
+    /// Same check with an overlay open (settings modal, with its dim scrim)
+    /// and a scroll-triggered partial rebuild in between — covers
+    /// `build_overlays`'s per-overlay regions and the `truncate_from` /
+    /// region-list pruning path `build_viewport_panels` exercises.
+    #[test]
+    fn main_window_build_with_overlay_and_scroll_rebuild_has_no_stray_roots() {
+        let mut ui = UIRoot::new();
+        ui.resize(W, H);
+        ui.settings_popup.open();
+        ui.build();
+        assert!(
+            ui.tree.all_roots_are_regions(),
+            "a stray root survived with an overlay open"
+        );
+
+        // zoom: true forces `needs_layer_headers()` — the full
+        // `tree.truncate_from(scroll_panels_start)` + `build_scroll_panels()`
+        // path, not the scroll-only in-place fast path that skips
+        // truncation (and so wouldn't exercise the region-list pruning at
+        // all).
+        ui.rebuild_scroll_panels(ScrollDirty { scroll_x: false, scroll_y: true, zoom: true, visual: false });
+        assert!(
+            ui.tree.all_roots_are_regions(),
+            "a stray root survived a scroll-triggered partial rebuild"
+        );
+    }
+
+    /// The editor window's `build_inspector_in_rect` entry point (D5: the
+    /// mechanism is window-agnostic) is likewise fully regioned.
+    #[test]
+    fn inspector_in_rect_has_no_stray_roots() {
+        let mut ui = UIRoot::new();
+        ui.resize(W, H);
+        ui.build_inspector_in_rect(Rect::new(0.0, 0.0, 400.0, H));
+        assert!(
+            ui.tree.all_roots_are_regions(),
+            "build_inspector_in_rect left a stray root"
+        );
+    }
+}
