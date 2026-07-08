@@ -289,6 +289,7 @@ pub fn evaluate_modulation(
     audio: &AudioFeatureSnapshot,
     timing_scratch: &mut Vec<(Beats, Beats)>,
     trigger_pulses: &mut Vec<TriggerPulse>,
+    clip_edge_layers: &[i32],
 ) -> bool {
     // Phase 1: Reset all effective values to base
     reset_all_effectives(project);
@@ -314,8 +315,11 @@ pub fn evaluate_modulation(
     // config's separate `evaluate_all_param_triggers` pass is gone — a
     // fire-mode mod is a normal audio mod now). A trigger-gate fire never
     // marks the compositor dirty on its own (the renderer's own dirty
-    // tracking covers the visible effect).
-    let any_audio = evaluate_all_audio_mods(project, audio, dt, trigger_pulses);
+    // tracking covers the visible effect). `clip_edge_layers` (PARAM_STEP_
+    // ACTIONS D5) is the engine-computed set of `timeline.layers` indices
+    // with a clip-start edge since this function's last call — the Step/
+    // Random arm's second fire source, gated by `trigger_mode` (D3).
+    let any_audio = evaluate_all_audio_mods(project, audio, dt, trigger_pulses, clip_edge_layers);
 
     // Pre-compute per-layer active clip timing for envelope phases.
     // Avoids O(total_clips) scan in each envelope function.
@@ -400,11 +404,24 @@ pub fn apply_step_values(project: &mut Project) -> bool {
 /// or evaluate. A modulation whose send no longer resolves (deleted send, or no
 /// features yet) is skipped, leaving its param at the base value from
 /// `reset_all_effectives` — the orphan policy, matching drivers/envelopes.
+///
+/// `clip_edge_layers` (PARAM_STEP_ACTIONS D5) is the engine's list of
+/// `timeline.layers` indices with a clip-start edge since this was last
+/// called — a Clip/Both-mode Step or Random mod on that layer fires this
+/// tick (D3). Master-chain instances have no layer index, so they never
+/// see a clip contribution (D3/D5's "clip contribution is 0" rule) —
+/// **note:** this early-return (inherited from P1, unchanged here) still
+/// gates a pure Clip-mode step on `by_send` resolving the mod's configured
+/// source, because every `ParameterAudioMod` is fundamentally send-sourced
+/// (P1 scope); a step mod whose bound send has no feature data yet won't
+/// fire on a clip edge either. Not a P2 regression — flagging so it isn't
+/// mistaken for one.
 pub fn evaluate_all_audio_mods(
     project: &mut Project,
     snapshot: &AudioFeatureSnapshot,
     dt: Seconds,
     pulses: &mut Vec<TriggerPulse>,
+    clip_edge_layers: &[i32],
 ) -> bool {
     pulses.clear();
     if snapshot.is_empty() || project.audio_setup.sends.is_empty() {
@@ -427,21 +444,29 @@ pub fn evaluate_all_audio_mods(
     let mut any = false;
 
     for fx in project.settings.master_effects.iter_mut() {
-        if evaluate_instance_audio_mods(fx, &by_send, dt, None, pulses) {
+        if evaluate_instance_audio_mods(fx, &by_send, dt, None, false, pulses) {
             any = true;
         }
     }
-    for layer in project.timeline.layers.iter_mut() {
+    for (layer_index, layer) in project.timeline.layers.iter_mut().enumerate() {
         let layer_id = layer.layer_id.clone();
+        let clip_edge = clip_edge_layers.contains(&(layer_index as i32));
         if let Some(effects) = &mut layer.effects {
             for fx in effects.iter_mut() {
-                if evaluate_instance_audio_mods(fx, &by_send, dt, Some(layer_id.clone()), pulses) {
+                if evaluate_instance_audio_mods(
+                    fx,
+                    &by_send,
+                    dt,
+                    Some(layer_id.clone()),
+                    clip_edge,
+                    pulses,
+                ) {
                     any = true;
                 }
             }
         }
         if let Some(gp) = layer.gen_params_mut()
-            && evaluate_instance_audio_mods(gp, &by_send, dt, Some(layer_id), pulses)
+            && evaluate_instance_audio_mods(gp, &by_send, dt, Some(layer_id), clip_edge, pulses)
         {
             any = true;
         }
@@ -453,12 +478,16 @@ pub fn evaluate_all_audio_mods(
 /// Evaluate every audio modulation on a single instance. Returns true if any
 /// wrote a param value (a trigger-gate fire pushed onto `pulses` does NOT
 /// count — see §9 U1). `layer_id` is `None` for a master-chain instance,
-/// cloned onto every pulse this instance emits.
+/// cloned onto every pulse this instance emits. `clip_edge` (PARAM_STEP_
+/// ACTIONS D5) is whether this instance's owning layer had a clip-start edge
+/// since this was last called — always `false` for a master-chain instance
+/// (`layer_id: None`), matching D3's "master chains have no layer" rule.
 fn evaluate_instance_audio_mods(
     fx: &mut PresetInstance,
     by_send: &HashMap<AudioSendId, SendFeatures>,
     dt: Seconds,
     layer_id: Option<manifold_core::id::LayerId>,
+    clip_edge: bool,
     pulses: &mut Vec<TriggerPulse>,
 ) -> bool {
     if !fx.enabled {
@@ -539,7 +568,19 @@ fn evaluate_instance_audio_mods(
                 // 1.5's job, next tick). First fire seeds from the committed
                 // `base` (D4's lifecycle), never from `p.value` (which may
                 // already be mid-frame-modulated by an earlier phase).
-                if m.trigger_edge.advance(out_norm, 0.5) {
+                //
+                // D3: `trigger_edge.advance` always runs (keeps the armed/
+                // re-arm state tracking the live signal regardless of mode,
+                // exactly like the is_trigger_gate arm above) — `trigger_mode`
+                // only gates which of the two admitted edges actually fires
+                // the step. `None` defaults to Transient here, NOT `Both`
+                // like gate cards (D3: a step mod with no audio intent is
+                // meaningless — arming it required opening an audio drawer).
+                let audio_edge = m.trigger_edge.advance(out_norm, 0.5);
+                let mode = m.trigger_mode.unwrap_or(TriggerFireMode::Transient);
+                let fires =
+                    (mode.wants_transient() && audio_edge) || (mode.wants_clip_edge() && clip_edge);
+                if fires {
                     let base = params.get(m.param_id.as_ref()).map(|p| p.base).unwrap_or(min);
                     let current = m.step_value.unwrap_or(base);
                     // A discrete param's reachable set is the INCLUSIVE
@@ -567,7 +608,12 @@ fn evaluate_instance_audio_mods(
                 // here — this arm and the `is_trigger` monotonic-count arm
                 // above are mutually exclusive per mod (is_trigger `continue`s
                 // before this match), so there's no shared-meaning collision.
-                if m.trigger_edge.advance(out_norm, 0.5) {
+                // D3 event-source gating: same shape as the Step arm above.
+                let audio_edge = m.trigger_edge.advance(out_norm, 0.5);
+                let mode = m.trigger_mode.unwrap_or(TriggerFireMode::Transient);
+                let fires =
+                    (mode.wants_transient() && audio_edge) || (mode.wants_clip_edge() && clip_edge);
+                if fires {
                     m.fire_count = m.fire_count.wrapping_add(1);
                     let base = params.get(m.param_id.as_ref()).map(|p| p.base).unwrap_or(min);
                     let current = m.step_value.unwrap_or(base);
@@ -1005,7 +1051,7 @@ mod tests {
         attach_full_range_low_mod(&mut project, &send_id);
 
         let snap = snapshot_low(1.0);
-        let active = evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016), &mut Vec::new());
+        let active = evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016), &mut Vec::new(), &[]);
         assert!(active, "an audio mod with signal reports modulation");
 
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
@@ -1024,7 +1070,7 @@ mod tests {
 
         // Empty snapshot → no features → no write.
         let empty = AudioFeatureSnapshot::default();
-        assert!(!evaluate_all_audio_mods(&mut project, &empty, Seconds(0.016), &mut Vec::new()));
+        assert!(!evaluate_all_audio_mods(&mut project, &empty, Seconds(0.016), &mut Vec::new(), &[]));
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         assert_eq!(fx.params.get("amount").unwrap().value, 0.0, "param untouched");
     }
@@ -1040,7 +1086,7 @@ mod tests {
             .enabled = false;
 
         let snap = snapshot_low(1.0);
-        assert!(!evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016), &mut Vec::new()));
+        assert!(!evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016), &mut Vec::new(), &[]));
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         assert_eq!(fx.params.get("amount").unwrap().value, 0.0);
     }
@@ -1054,7 +1100,7 @@ mod tests {
         project.audio_setup.sends.push(AudioSend::new("Other"));
 
         let snap = snapshot_low(1.0);
-        assert!(!evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016), &mut Vec::new()));
+        assert!(!evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016), &mut Vec::new(), &[]));
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         assert_eq!(fx.params.get("amount").unwrap().value, 0.0);
     }
@@ -1089,7 +1135,7 @@ mod tests {
         );
 
         let snap = snapshot_low(1.0);
-        assert!(evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016), &mut Vec::new()));
+        assert!(evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016), &mut Vec::new(), &[]));
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         assert!(
             (fx.params.get("amount").unwrap().value - 0.5).abs() < 1e-6,
@@ -1179,7 +1225,7 @@ mod tests {
 
         let hot = snapshot_full_transient(0.99);
         let mut pulses = Vec::new();
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[]);
         assert_eq!(pulses, vec![TriggerPulse { layer_id: Some(layer_id) }]);
     }
 
@@ -1199,10 +1245,10 @@ mod tests {
 
         let hot = snapshot_full_transient(0.99);
         let mut pulses = Vec::new();
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[]);
         assert_eq!(pulses.len(), 1, "rising edge fires");
 
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[]);
         assert!(pulses.is_empty(), "still hot (held high), no re-fire");
     }
 
@@ -1222,7 +1268,7 @@ mod tests {
 
         let hot = snapshot_full_transient(0.99);
         let mut pulses = Vec::new();
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[]);
         assert!(pulses.is_empty(), "ClipEdge mode (default) must not react to audio");
     }
 
@@ -1239,7 +1285,7 @@ mod tests {
 
         let hot = snapshot_full_transient(0.99);
         let mut pulses = Vec::new();
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[]);
         assert_eq!(pulses, vec![TriggerPulse { layer_id: None }]);
     }
 
@@ -1259,13 +1305,13 @@ mod tests {
 
         let hot = snapshot_full_transient(0.99);
         let mut pulses = Vec::new();
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[]);
         assert_eq!(pulses.len(), 1);
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[]);
         assert!(pulses.is_empty(), "disarmed");
 
         clear_all_trigger_edges(&mut project);
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[]);
         assert_eq!(
             pulses.len(),
             1,
@@ -1290,7 +1336,7 @@ mod tests {
         let hot = snapshot_low(1.0);
         let cold = snapshot_low(0.0);
 
-        assert!(evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new()));
+        assert!(evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[]));
         let value = |p: &Project| p.timeline.layers[0].effects.as_ref().unwrap()[0]
             .params
             .get("fire")
@@ -1299,12 +1345,12 @@ mod tests {
         assert_eq!(value(&project), 1.0, "first rising edge bumps the count to 1");
 
         // Still hot: no re-fire, count holds at 1.
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new());
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[]);
         assert_eq!(value(&project), 1.0);
 
         // Decay below the rearm floor, then fire again: count bumps to 2.
-        evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new());
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new());
+        evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[]);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[]);
         assert_eq!(value(&project), 2.0);
     }
 
@@ -1360,9 +1406,9 @@ mod tests {
         let cold = snapshot_full_transient(0.0);
         let mut out = Vec::with_capacity(n);
         for _ in 0..n {
-            evaluate_all_audio_mods(project, &hot, Seconds(0.016), &mut Vec::new());
+            evaluate_all_audio_mods(project, &hot, Seconds(0.016), &mut Vec::new(), &[]);
             out.push(step_value_of(project).expect("armed after a fire"));
-            evaluate_all_audio_mods(project, &cold, Seconds(0.016), &mut Vec::new());
+            evaluate_all_audio_mods(project, &cold, Seconds(0.016), &mut Vec::new(), &[]);
         }
         out
     }
@@ -1379,12 +1425,12 @@ mod tests {
 
         let hot = snapshot_full_transient(0.9);
         // First rising edge: shadow seeds from base (0) and steps by 1.
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new());
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[]);
         assert_eq!(step_value_of(&project), Some(1.0));
 
         // Signal stays hot: the edge is disarmed, so the SAME call again must
         // not advance the shadow a second time.
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new());
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[]);
         assert_eq!(
             step_value_of(&project),
             Some(1.0),
@@ -1488,7 +1534,7 @@ mod tests {
         );
 
         let hot = snapshot_full_transient(0.9);
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new());
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[]);
         assert_eq!(step_value_of(&project), Some(1.0));
 
         // Phase 1 then Phase 1.5, exactly as `evaluate_modulation` orders them.
@@ -1576,5 +1622,178 @@ mod tests {
         // Runtime shadow state never round-trips even when `action` is set.
         assert_eq!(back.step_value, None);
         assert_eq!(back.step_dir, 1.0);
+    }
+
+    // ── PARAM_STEP_ACTIONS P2: clip-edge source + mode gating ────────────
+    //
+    // Pure gating-logic tests: `clip_edge_layers` is passed by hand (not
+    // produced by a real `PlaybackEngine`), isolating the D3 mode-gate
+    // arithmetic in `evaluate_instance_audio_mods`'s Step/Random arm from
+    // the engine's own edge-production mechanism (that end-to-end path is
+    // covered separately in
+    // `crates/manifold-playback/tests/param_step_clip_edge.rs`, which
+    // exercises the real `sync_clips_to_time` → `last_active_clip_id` →
+    // `clip_edge_layers` pipeline through `PlaybackEngine::tick`).
+    // `snapshot_full_transient(0.0)` never crosses the 0.5 edge threshold,
+    // so every fire observed here is attributable purely to the clip-edge
+    // source, not the mod's own audio edge.
+
+    #[test]
+    fn clip_edge_mode_fires_from_clip_edge_alone_no_audio_signal() {
+        let (mut project, send_id) = project_with_audio_send();
+        attach_action_mod(
+            &mut project,
+            &send_id,
+            "segs",
+            TriggerAction::Step { amount: 1.0, wrap: WrapMode::Clamp },
+        );
+        project.timeline.layers[0].effects.as_mut().unwrap()[0]
+            .audio_mods
+            .as_mut()
+            .unwrap()[0]
+            .trigger_mode = Some(TriggerFireMode::ClipEdge);
+
+        let cold = snapshot_full_transient(0.0);
+        // Step/Random never set the `wrote` return bool (D4: the fire only
+        // advances the runtime shadow; `p.value` is written by Phase 1.5 on
+        // the NEXT tick) — assert on `step_value`, not the return value,
+        // matching every P1 step test's convention.
+        evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[0]);
+        assert_eq!(
+            step_value_of(&project),
+            Some(1.0),
+            "ClipEdge mode fires purely from the layer's clip edge"
+        );
+    }
+
+    #[test]
+    fn transient_mode_step_ignores_clip_edge() {
+        let (mut project, send_id) = project_with_audio_send();
+        attach_action_mod(
+            &mut project,
+            &send_id,
+            "segs",
+            TriggerAction::Step { amount: 1.0, wrap: WrapMode::Clamp },
+        );
+        project.timeline.layers[0].effects.as_mut().unwrap()[0]
+            .audio_mods
+            .as_mut()
+            .unwrap()[0]
+            .trigger_mode = Some(TriggerFireMode::Transient);
+
+        let cold = snapshot_full_transient(0.0);
+        assert!(!evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[0]));
+        assert_eq!(step_value_of(&project), None, "Transient mode never reacts to a clip edge");
+    }
+
+    #[test]
+    fn none_trigger_mode_on_step_defaults_to_transient_not_both() {
+        // D3: unlike gate cards (default Both), a step mod's unset
+        // `trigger_mode` defaults to Transient — a clip edge alone must NOT
+        // fire it (arming a step required opening an audio drawer, so a
+        // config with no audio intent at all is meaningless).
+        let (mut project, send_id) = project_with_audio_send();
+        attach_action_mod(
+            &mut project,
+            &send_id,
+            "segs",
+            TriggerAction::Step { amount: 1.0, wrap: WrapMode::Clamp },
+        );
+        // trigger_mode left at attach_action_mod's default: None.
+
+        let cold = snapshot_full_transient(0.0);
+        assert!(!evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[0]));
+        assert_eq!(
+            step_value_of(&project),
+            None,
+            "unset trigger_mode on a step defaults to Transient, not Both"
+        );
+    }
+
+    #[test]
+    fn both_mode_sums_audio_and_clip_edge_sources() {
+        let (mut project, send_id) = project_with_audio_send();
+        attach_action_mod(
+            &mut project,
+            &send_id,
+            "segs",
+            TriggerAction::Step { amount: 1.0, wrap: WrapMode::Clamp },
+        );
+        project.timeline.layers[0].effects.as_mut().unwrap()[0]
+            .audio_mods
+            .as_mut()
+            .unwrap()[0]
+            .trigger_mode = Some(TriggerFireMode::Both);
+
+        // Clip edge alone (no audio signal) fires once.
+        let cold = snapshot_full_transient(0.0);
+        evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[0]);
+        assert_eq!(step_value_of(&project), Some(1.0));
+
+        // A hot audio signal with NO clip edge this time also fires — Both
+        // sums the two sources rather than requiring either exclusively.
+        let hot = snapshot_full_transient(0.9);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[]);
+        assert_eq!(
+            step_value_of(&project),
+            Some(2.0),
+            "the audio edge alone also fires under Both, summing with the earlier clip-edge fire"
+        );
+    }
+
+    #[test]
+    fn clip_edge_on_a_different_layer_index_does_not_fire() {
+        let (mut project, send_id) = project_with_audio_send();
+        attach_action_mod(
+            &mut project,
+            &send_id,
+            "segs",
+            TriggerAction::Step { amount: 1.0, wrap: WrapMode::Clamp },
+        );
+        project.timeline.layers[0].effects.as_mut().unwrap()[0]
+            .audio_mods
+            .as_mut()
+            .unwrap()[0]
+            .trigger_mode = Some(TriggerFireMode::ClipEdge);
+
+        let cold = snapshot_full_transient(0.0);
+        // The edge is reported for layer 7 — this mod lives on layer 0.
+        assert!(!evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[7]));
+        assert_eq!(
+            step_value_of(&project),
+            None,
+            "a clip edge on an unrelated layer index must not fire this layer's step"
+        );
+    }
+
+    #[test]
+    fn master_chain_mod_never_sees_a_clip_edge_even_when_layer_0_has_one() {
+        // D3/D5: master-chain instances have no layer, so their clip
+        // contribution is always 0 — even when `clip_edge_layers` happens to
+        // contain layer index 0 (a real per-layer instance's index), a
+        // master-effect's own mod must not alias onto it.
+        let mut project = Project::default();
+        let send = AudioSend::new("Kick");
+        let send_id = send.id.clone();
+        project.audio_setup.sends.push(send);
+        let mut fx = create_default(&TEST_FX);
+        let mut m = ParameterAudioMod::new(
+            "segs".into(),
+            send_id.clone(),
+            AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+        );
+        m.shape = AudioModShape { attack_ms: 0.0, release_ms: 0.0, ..Default::default() };
+        m.action = TriggerAction::Step { amount: 1.0, wrap: WrapMode::Clamp };
+        m.trigger_mode = Some(TriggerFireMode::ClipEdge);
+        fx.audio_mods_mut().push(m);
+        project.settings.master_effects.push(fx);
+
+        let cold = snapshot_full_transient(0.0);
+        assert!(!evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[0]));
+        let step = project.settings.master_effects[0].audio_mods.as_ref().unwrap()[0].step_value;
+        assert_eq!(
+            step, None,
+            "master-chain instances never see a clip edge, regardless of clip_edge_layers contents"
+        );
     }
 }

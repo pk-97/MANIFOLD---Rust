@@ -218,6 +218,19 @@ it 48k→96k, run `mod_harness` at both rates, confirm the kick/onset fire TIMES
 eval grades in seconds). Cheap and deterministic — a follow-up harness run, no rig. Closes at L3 on
 that match.
 
+### VD-016 — PARAM_STEP_ACTIONS P2: content-thread cost of per-layer clip-edge tracking — L1 reached / L4 target
+Landed 2026-07-08. The clip-edge tests are proven at L1 (timeline start / session-slot launch /
+Transient-vs-Clip-vs-Both mode gating, all green), but the `MANIFOLD_RENDER_TRACE` content-thread
+gate was reasoned, not run — same wall VD-014 hit: the trace instrumentation lives inside
+`content_pipeline.rs`'s live render path, gated on a real `GpuDevice` and only reachable through the
+running app's event loop; the `ui_snapshot` harness (`cargo xtask ui-snap`) renders UI/graph PNGs off
+a bare `GpuDevice` but never drives `ContentThread`/`content_pipeline.rs`, so there is no headless
+path today. Reasoned bound: the addition is one `AHashMap` insert + one small `Vec` push per actual
+clip START (not per-frame — rare relative to tick rate) plus a bounded scan over that same
+per-layer-count-sized `Vec` during modulation, the same allocation-free scratch-reuse shape as the
+already-shipped `pending_trigger_pulses`. Burn-down: `MANIFOLD_RENDER_TRACE=1` live against the
+53-layer Liveschool fixture with a Clip-mode step mod armed, confirming no frame >20ms.
+
 *(VD-001–004 seeded 2026-07-05 from the memory corpus plus Peter's in-app findings; VD-006 added
 2026-07-05, VD-007 at P2 landing, VD-008 at P3 landing, VD-009 at P4 landing, VD-010 at P5-inspector
 landing. VD-005 closed at P2 landing. The full backfill pass over recent landings is still owed and

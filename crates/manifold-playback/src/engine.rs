@@ -194,6 +194,27 @@ pub struct PlaybackEngine {
     /// renderer's per-layer `audio_count`); reused as scratch between ticks to
     /// avoid a per-tick allocation.
     pending_trigger_pulses: Vec<crate::modulation::TriggerPulse>,
+    /// PARAM_STEP_ACTIONS D5: last clip identity started on each layer
+    /// (`timeline.layers` index → `ClipId`), the engine-side mirror of what
+    /// `GeneratorRenderer::acquire_clip` tracks downstream per `LayerId`
+    /// (`generator_renderer.rs:350-360`) — computed at the sole-authority
+    /// level (`sync_clips_to_time`) instead of derived from renderer
+    /// readiness. Never removed on stop (a "last" record, not "currently");
+    /// only ever overwritten by a fresh `to_start`, so a stop-then-restart of
+    /// the very same clip id is still detected as a change because
+    /// `compute_sync`'s own diff (against `active_clip_ids`) already
+    /// guarantees `to_start` only reports genuinely-new-to-the-layer starts.
+    last_active_clip_id: AHashMap<i32, ClipId>,
+    /// Layer indices with a clip-start edge accumulated since the last
+    /// `evaluate_modulation` call — may span more than one `sync_clips_to_time`
+    /// call (e.g. `play()`'s direct sync followed by the next tick's own sync)
+    /// because it is only drained (never cleared) at tick's end, mirroring
+    /// `pending_trigger_pulses`'/`take_trigger_pulses`'s drain-queue shape so
+    /// an edge produced by an out-of-tick sync is never silently lost before
+    /// modulation gets to see it. Zero per-frame allocation: capacity
+    /// survives the clear-and-reassign at the end of `tick_playing`/
+    /// `tick_non_playing`.
+    clip_edge_layers: Vec<i32>,
     /// Latest per-send audio features, refreshed each tick by the content
     /// thread (which owns the capture/analysis worker) via
     /// [`Self::set_audio_snapshot`]. Empty when audio modulation is inactive, in
@@ -298,6 +319,8 @@ impl PlaybackEngine {
             sync_start_scratch: Vec::with_capacity(4),
             modulation_timing_scratch: Vec::with_capacity(64),
             pending_trigger_pulses: Vec::new(),
+            last_active_clip_id: AHashMap::with_capacity(32),
+            clip_edge_layers: Vec::with_capacity(8),
             audio_snapshot: manifold_core::audio_features::AudioFeatureSnapshot::default(),
             automation_latches: crate::automation::AutomationLatches::default(),
             automation_armed: false,
@@ -836,6 +859,12 @@ impl PlaybackEngine {
         //    Port of C# DriverController.Update() [ExecutionOrder 50, after PlaybackController].
         let mut timing = std::mem::take(&mut self.modulation_timing_scratch);
         let mut pulses = std::mem::take(&mut self.pending_trigger_pulses);
+        // PARAM_STEP_ACTIONS D5: drain (not clear-at-top) the clip-edge queue
+        // accumulated by every `sync_clips_to_time` call since the last time
+        // modulation consumed it — this tick's own step 4 sync, plus any
+        // out-of-tick sync (`play()`/`seek_to()`) that ran since. Cleared only
+        // after this call so an edge from an out-of-tick sync is never lost.
+        let mut clip_edges = std::mem::take(&mut self.clip_edge_layers);
         let audio = &self.audio_snapshot;
         let modulation_dirty = if let Some(project) = &mut self.project {
             crate::modulation::evaluate_modulation(
@@ -845,12 +874,15 @@ impl PlaybackEngine {
                 audio,
                 &mut timing,
                 &mut pulses,
+                &clip_edges,
             )
         } else {
             false
         };
         self.modulation_timing_scratch = timing;
         self.pending_trigger_pulses = pulses;
+        clip_edges.clear();
+        self.clip_edge_layers = clip_edges;
         // Automation folds into the same compositor-dirty path modulation
         // uses — a lane write is just as much a reason to re-send the UI
         // snapshot as a driver/envelope write.
@@ -912,6 +944,10 @@ impl PlaybackEngine {
         //    Port of C# DriverController — runs in all states.
         let mut timing = std::mem::take(&mut self.modulation_timing_scratch);
         let mut pulses = std::mem::take(&mut self.pending_trigger_pulses);
+        // PARAM_STEP_ACTIONS D5: see the matching comment in `tick_playing` —
+        // same drain-queue shape, so a scrub-while-stopped's own sync (step 1
+        // above, when dirty) still reaches modulation this tick.
+        let mut clip_edges = std::mem::take(&mut self.clip_edge_layers);
         let dirty = {
             let audio = &self.audio_snapshot;
             if let Some(project) = &mut self.project {
@@ -922,6 +958,7 @@ impl PlaybackEngine {
                     audio,
                     &mut timing,
                     &mut pulses,
+                    &clip_edges,
                 )
             } else {
                 false
@@ -933,6 +970,8 @@ impl PlaybackEngine {
         let modulation_dirty = dirty;
         self.modulation_timing_scratch = timing;
         self.pending_trigger_pulses = pulses;
+        clip_edges.clear();
+        self.clip_edge_layers = clip_edges;
 
         // 4. Filter ready clips for compositor.
         //    Port of C# UpdateCompositor (lines 1126-1132).
@@ -1281,6 +1320,21 @@ impl PlaybackEngine {
         starts.clear();
         starts.extend(sync_result.to_start.iter().cloned());
         for entry in &starts {
+            // PARAM_STEP_ACTIONS D5: record the clip-edge at scheduler-decision
+            // time — the engine's own notion of "this layer just started a
+            // clip" — never gated on whether a renderer later accepts it
+            // (that's the acquire_clip-level readiness divergence D5 accepts
+            // by design). `to_start` already guarantees this clip_id was not
+            // in `active_clip_ids` a moment ago, so the identity comparison
+            // below is almost always true; it's kept explicit (rather than
+            // pushing unconditionally) so `last_active_clip_id` is a genuine
+            // before/after diff, not just a to_start mirror.
+            if self.last_active_clip_id.get(&entry.layer_index) != Some(&entry.clip_id) {
+                self.clip_edge_layers.push(entry.layer_index);
+            }
+            self.last_active_clip_id
+                .insert(entry.layer_index, entry.clip_id.clone());
+
             let clip = if entry.is_live_slot() {
                 self.live_clip_manager
                     .as_ref()
