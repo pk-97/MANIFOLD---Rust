@@ -336,6 +336,119 @@ impl AudioModShape {
     }
 }
 
+/// PARAM_STEP_ACTIONS D2: what a fire does to the target param, evaluated by
+/// the same edge chassis (`trigger_edge.advance`) `is_trigger` targets
+/// already use. `Continuous` (default) is today's behavior — the shaped
+/// signal overwrites the value every tick. `Step`/`Random` instead advance a
+/// runtime shadow (`ParameterAudioMod::step_value`) that *replaces* the
+/// param's base at evaluation time (D4) — a fire acts like the user's hand
+/// moved the slider, and everything that stacks on a hand-set base (drivers,
+/// continuous audio mods, envelopes) stacks on the stepped value identically.
+/// No `every`/divisor field exists here (D6, retired 2026-07-08) — step size
+/// is `amount` alone; every armed mod fires on every event its `trigger_mode`
+/// admits.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum TriggerAction {
+    /// Today's behavior: the shaped signal overwrites the value continuously.
+    #[default]
+    Continuous,
+    /// Each fire moves the stepped value by `amount` (signed, param units).
+    Step { amount: f32, wrap: WrapMode },
+    /// Each fire jumps to a deterministic pseudo-random value in range,
+    /// never repeating the current one for a discrete param (D7).
+    Random,
+}
+
+/// How [`TriggerAction::Step`] behaves at the param's `min`/`max` rails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum WrapMode {
+    /// min..=max is a cycle: stepping past max lands at min (and vice versa).
+    #[default]
+    Wrap,
+    /// Ping-pong: direction reverses at min/max.
+    Bounce,
+    /// Saturate at the ends.
+    Clamp,
+}
+
+impl WrapMode {
+    /// Advance `current` by `delta` (signed, already sign-combined with the
+    /// running `dir` for `Bounce`) at the `[min, max]` rails this mode
+    /// implements. `dir` is `Bounce`'s ping-pong sign (±1) — unused, but
+    /// always returned, by `Wrap`/`Clamp` so the caller can persist one
+    /// uniform piece of state regardless of which wrap mode is armed (a live
+    /// wrap-mode switch never needs special-casing). Returns
+    /// `(new_value, new_dir)`.
+    pub fn advance(self, current: f32, delta: f32, dir: f32, min: f32, max: f32) -> (f32, f32) {
+        let range = (max - min).max(f32::EPSILON);
+        match self {
+            WrapMode::Wrap => {
+                // rem_euclid keeps the result in [min, max) regardless of how
+                // large `delta` is or which direction it overshoots from.
+                let next = min + (current + delta - min).rem_euclid(range);
+                (next, dir)
+            }
+            WrapMode::Bounce => {
+                let mut d = dir;
+                let mut next = current + delta * d;
+                if next > max {
+                    next = max - (next - max);
+                    d = -d;
+                } else if next < min {
+                    next = min + (min - next);
+                    d = -d;
+                }
+                (next.clamp(min, max), d)
+            }
+            WrapMode::Clamp => ((current + delta).clamp(min, max), dir),
+        }
+    }
+}
+
+/// D2's UI-seeding default for a fresh `Step` action's `amount`: 1.0 for a
+/// discrete param (whole_numbers/value_labels — one card-step per fire), or
+/// an eighth of the param's range for a continuous one (a fine-but-audible
+/// jump per hit, the same "size any other knob" feel). Seeding only — once
+/// the user sets `amount` this is never consulted again; the stored value is
+/// whatever they left it at.
+pub fn default_step_amount(min: f32, max: f32, whole_numbers: bool) -> f32 {
+    if whole_numbers { 1.0 } else { (max - min) / 8.0 }
+}
+
+/// D7: a deterministic pseudo-random step value keyed by `ordinal` (the
+/// mod's own monotonic fire count — reused from `fire_count`, never a wall
+/// clock or RNG state, so replaying the same fire sequence — e.g. offline
+/// export — reproduces the identical value sequence every time).
+/// `discrete_count = Some(n)` for a whole-numbers/value-labels param with `n`
+/// reachable integer positions on `[min, max]`; `current_index` is excluded
+/// so adjacent fires never repeat (the `ClipTriggerCycle` non-repeat
+/// invariant, relocated here). `None` = continuous full-range random with no
+/// exclusion (repeat probability is negligible, so none is enforced).
+pub fn random_step_value(
+    ordinal: u32,
+    min: f32,
+    max: f32,
+    discrete_count: Option<u32>,
+    current_index: u32,
+) -> f32 {
+    match discrete_count {
+        Some(n) if n > 1 => {
+            // Pick from the n-1 buckets that exclude `current_index`, then
+            // shift the bucket index past it so every other value is
+            // reachable and the current one never repeats back-to-back.
+            let bucket = crate::effects::hash_u32(ordinal) % (n - 1);
+            let idx = if bucket >= current_index { bucket + 1 } else { bucket };
+            min + idx as f32
+        }
+        // n <= 1: nothing to randomize between (a single-value discrete
+        // param, degenerate but not a panic case).
+        Some(_) => min,
+        None => min + (max - min) * crate::effects::hash_to_float(ordinal),
+    }
+}
+
 /// An audio modulation bound to one parameter. Mirrors `ParameterDriver`:
 /// addressed by `param_id`, with runtime-only state (`smoothed`) that is not
 /// serialized.
@@ -378,10 +491,34 @@ pub struct ParameterAudioMod {
     /// parallel per-instance config type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger_mode: Option<crate::audio_trigger::TriggerFireMode>,
+    /// PARAM_STEP_ACTIONS D1/D2: what a fire does to the target param.
+    /// `Continuous` (default) is skip-when-default so old projects and every
+    /// ordinary (non-stepping) mod stay byte-identical on disk.
+    #[serde(default, skip_serializing_if = "is_continuous_action")]
+    pub action: TriggerAction,
+    /// D4: the stepped/randomized value, which *replaces* `base` at
+    /// evaluation time (`apply_step_values`, `modulation.rs` Phase 1.5).
+    /// `None` until this mod's first fire (which seeds from the param's
+    /// `base`, per D4's lifecycle); a disarm (disabled/deleted mod) or a
+    /// project reload drops it back to `None`, so the param falls back to
+    /// the committed base — deliberate live behavior, not a bug. Runtime
+    /// state, not serialized.
+    #[serde(skip)]
+    pub step_value: Option<f32>,
+    /// `WrapMode::Bounce`'s running ping-pong sign (±1, D2). Unused by
+    /// `Wrap`/`Clamp` but always carried so switching wrap mode mid-
+    /// performance never needs special-casing. Starts at +1 (the first step
+    /// follows `amount`'s authored sign). Runtime state, not serialized.
+    #[serde(skip, default = "one")]
+    pub step_dir: f32,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn is_continuous_action(action: &TriggerAction) -> bool {
+    matches!(action, TriggerAction::Continuous)
 }
 
 impl ParameterAudioMod {
@@ -397,6 +534,9 @@ impl ParameterAudioMod {
             trigger_edge: crate::audio_trigger::TransientEdge::default(),
             fire_count: 0,
             trigger_mode: None,
+            action: TriggerAction::default(),
+            step_value: None,
+            step_dir: 1.0,
         }
     }
 }
@@ -575,5 +715,72 @@ mod tests {
         assert!(json.contains("triggerMode"));
         let back: ParameterAudioMod = serde_json::from_str(&json).unwrap();
         assert_eq!(back.trigger_mode, Some(crate::audio_trigger::TriggerFireMode::Both));
+    }
+
+    // ── PARAM_STEP_ACTIONS D2/D7 pure helpers ───────────────────────────────
+
+    #[test]
+    fn default_step_amount_is_one_for_discrete_and_an_eighth_range_for_continuous() {
+        assert_eq!(default_step_amount(0.0, 8.0, true), 1.0);
+        assert_eq!(default_step_amount(0.0, 1.0, false), 0.125);
+        assert_eq!(default_step_amount(-10.0, 10.0, false), 2.5);
+    }
+
+    #[test]
+    fn wrap_mode_wrap_cycles_at_the_rails() {
+        let (v, _) = WrapMode::Wrap.advance(9.0, 1.0, 1.0, 0.0, 10.0);
+        assert_eq!(v, 0.0, "one step past the top of a 0..10 cycle lands on 0");
+        // A continuous cycle is half-open [min, max) — max and min are the
+        // SAME point (like 360° == 0° on a phase wheel), so stepping below
+        // min wraps to just under max, not exactly to max. (The Step arm in
+        // `manifold-playback` widens the modulus to max-min+1 for a
+        // *discrete* param specifically so its true, distinct max stays
+        // reachable — see `step_wrap_mode_cycles_past_max_to_min_for_
+        // discrete_param` in `modulation.rs`.)
+        let (v, _) = WrapMode::Wrap.advance(0.0, -1.0, 1.0, 0.0, 10.0);
+        assert_eq!(v, 9.0, "one step before the bottom wraps to just under the top");
+    }
+
+    #[test]
+    fn wrap_mode_clamp_never_exceeds_the_rails() {
+        let (v, dir) = WrapMode::Clamp.advance(9.0, 5.0, 1.0, 0.0, 10.0);
+        assert_eq!(v, 10.0);
+        assert_eq!(dir, 1.0, "Clamp never flips direction");
+    }
+
+    #[test]
+    fn wrap_mode_bounce_flips_direction_at_a_rail() {
+        let (v, dir) = WrapMode::Bounce.advance(9.0, 5.0, 1.0, 0.0, 10.0);
+        assert_eq!(v, 6.0, "overshoot by 4 reflects back from the max rail");
+        assert_eq!(dir, -1.0, "direction flips after hitting the rail");
+    }
+
+    #[test]
+    fn random_step_value_continuous_spans_the_full_range() {
+        // No discrete_count => full-range hash, no exclusion.
+        let v = random_step_value(42, 0.0, 10.0, None, 0);
+        assert!((0.0..10.0).contains(&v), "got {v}");
+    }
+
+    #[test]
+    fn random_step_value_discrete_excludes_the_current_index() {
+        // Sweep a wide range of ordinals against every possible current
+        // index on a small (N=4) discrete range — the result must never
+        // equal the excluded index.
+        for current_index in 0..4u32 {
+            for ordinal in 0..500u32 {
+                let v = random_step_value(ordinal, 0.0, 3.0, Some(4), current_index);
+                let idx = v.round() as u32;
+                assert_ne!(idx, current_index, "ordinal {ordinal} picked the excluded current index");
+                assert!(idx < 4, "index {idx} out of range");
+            }
+        }
+    }
+
+    #[test]
+    fn random_step_value_single_discrete_position_has_nothing_to_exclude() {
+        // N=1: no other value exists to pick — degenerate but must not panic.
+        let v = random_step_value(7, 5.0, 5.0, Some(1), 0);
+        assert_eq!(v, 5.0);
     }
 }
