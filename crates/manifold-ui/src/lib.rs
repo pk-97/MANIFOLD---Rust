@@ -82,7 +82,7 @@ pub use panels::{
 };
 pub use slider::{BitmapSlider, SliderColors, SliderNodeIds};
 pub use transform2d::Affine2;
-pub use tree::UITree;
+pub use tree::{RegionToken, UITree, ZTier};
 pub use types::{
     AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus, AudioBand, AudioDeviceRef,
     AudioFeature, AudioFeatureKind, AudioSourceKind, DriverWaveform, FLOOR_DB_OFF, LayerType,

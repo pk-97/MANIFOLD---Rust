@@ -30,6 +30,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-076 | **inspector-scroll-underestimates-content-height** | `layer_scroll`/`master_scroll`'s `max_scroll()` clamps to ~13-20px on a 9-card stack that's visibly ~1200px too tall for its viewport — the built content overflows but the scroll estimator doesn't agree (LOW, suspected root cause: `compute_height()` reads a mid-tween drawer-animation value instead of the settled/armed-at-build height) |
 | BUG-074 | **audio-mixdown-flaky-under-parallel-tests** | `render_export_audio_tapped_layer_matches_rendering_alone` fails ~1-in-3 under default parallel `cargo test`, always green with `--test-threads=1`; unrelated to PARAM_STEP_ACTIONS (LOW) |
 | BUG-073 | **ui-snap-script-drawer-tween-never-ticks** | `--script` harness has no per-frame tick, so a mod armed mid-script renders its drawer at a permanently zero-height clip region (unclickable rows) until the fixture pre-arms the state instead (LOW) |
 | BUG-072 | **audio-mixdown-all-targets-clippy-debt** | Pre-existing `--all-targets` clippy failures in audio_mixdown.rs, unrelated to PARAM_STEP_ACTIONS, two one-line fixes (LOW) |
@@ -356,6 +357,47 @@ collapse into the generic path, and the clip slip/loop regression fixes itself. 
 can't opt out by forgetting. Watch the two non-uniform cases: param-card sliders whose
 right-click currently carries `(target, param_id, default)` context, and label/row right-click
 menus (`ParamLabelRightClick` etc.) which are context menus, not reset — they stay.
+
+### BUG-076 (inspector-scroll-underestimates-content-height) — `try_inspector_scroll` clamps to a tiny max_scroll on genuinely tall content — LOW (found 2026-07-08 during UI_CLIP_AND_Z_OWNERSHIP_DESIGN P1)
+
+**Symptom:** built a headless gate scene (`ui_snapshot/fixtures.rs`'s `bug060_scene`, added this
+session) with 9 stacked effect cards, several with audio-mod drawers open — visibly, per the
+unscrolled render (`target/ui-snapshots/bug060/bug060.png`), several cards extend well past the
+1216px-tall canvas. Calling `UIRoot::try_inspector_scroll` (the same method
+`window_input.rs`'s real mouse-wheel handler calls) with a delta of 300, 1000, or 1_000_000 all
+converge to the SAME ~13-20px of movement and then stop — as if `max_scroll()` were computed as
+roughly 20px, not the ~1200px the visible overflow implies.
+
+**Root cause:** unknown — suspected but not confirmed. `ScrollContainer::apply_scroll_delta`
+clamps against `self.content_height`, set via `InspectorCompositePanel::update_scroll_bounds`'s
+`right_column_height()` -> `layer_column_height()`, which sums `card.compute_height()` per
+effect card. Suspect: `compute_height()` reads a drawer-open-tween-animated height
+(`drawer_height_anim`, see `param_card.rs`'s `drawer_open_tween_reserves_interpolated_height_
+clips_then_settles` test) that starts at/near 0 and needs `tick_drawers(dt)` calls to reach its
+settled value — a card configured with its audio mod ALREADY armed (as `bug060_scene` does, no
+"click to open" step) renders its FULL drawer immediately (the build path uses the target
+height directly) but `compute_height()` may still be reading the un-ticked animation state,
+undercounting every card's height by its drawer's contribution. Not verified: whether
+`configure()` seeds the animation at its target when armed from a cold build, or always starts
+from 0.
+
+**Fix shape:** instrument `right_column_height()`/`card.compute_height()` directly (a
+`manifold-ui` unit test asserting `layer_column_height() ≈ sum of settled per-card heights` for
+a 9-card, all-drawers-open fixture) to confirm or rule out the animation-state theory; if
+confirmed, seed `drawer_height_anim` at its target value on first configure when the mod is
+already armed (mirroring how the card already renders it), not just on a later toggle.
+
+**Impact on this session:** blocked producing a scrolled-to-bottom PNG for
+`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` P1's BUG-060 acceptance demo — worked around by deciding the
+stopgap-removal question via a direct unit test (`InspectorCompositePanel::try_scroll_in_place`
+called with a 1,000,000 delta, `manifold-ui`'s own suite, no PNG round-trip needed) instead of
+the headless CLI harness. Also found and partially fixed en route, independent of this bug: the
+L3 script runner's `Gesture::Scroll` never reached the inspector at all before this session
+(routed only through the generic `UIEvent::Scroll` pipeline, which is real for the
+dropdown/timeline but a no-op for the inspector's direct-call scroll path) — `script.rs` now
+branches on `ui.layout.inspector().contains(center)` and calls `try_inspector_scroll` directly,
+matching `window_input.rs`'s real dispatch. That fix is real and committed; this bug is what's
+left after it.
 
 ### BUG-075 (timeline-drag-end-never-finalizes) — the terminal DragEnd for trim/marquee/move was dropped, so on_end_drag never ran — HIGH — FIXED 2026-07-08 (found + fixed same session)
 
@@ -1612,7 +1654,14 @@ _Verification:_ new device-free unit tests at the cache-manager helper layer —
 stale scrollbar). The 2026-07-04 "sections interleaved" sighting (hole #2 + rebuild-while-scrolled)
 is a separate open thread if it recurs.
 
-### BUG-060 — Inspector content paints over the footer bar — FIXED 2026-07-08
+### BUG-060 — Inspector content paints over the footer bar — FIXED 2026-07-08 (structural, UI_CLIP_AND_Z P1 2026-07-08)
+
+**Update (UI_CLIP_AND_Z P1, 2026-07-08):** the per-panel `build_in_rect` hand-clip that first
+fixed this was the forbidden stopgap the region design retires. P1 removed it and made the fix
+structural — the inspector now builds under a `begin_region(Base)` whose `CLIPS_CHILDREN` clip is
+minted by construction, so no inspector pixel can reach the footer regardless of paint order or
+future panel changes. Containment (D1) carries it on the live cache path; D2 tier-order on that path
+is carried as VD-018. Landing: `docs/landings/2026-07-08-ui-clip-z-p1.md`.
 
 **Symptom** (Peter, 2026-07-07; also the prior `f4b895d7` session's subject): with the
 audio-mod drawer open on a Clip Trigger row (`is_trigger_gate`), scrolling the inspector to

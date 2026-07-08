@@ -1,6 +1,40 @@
 use crate::node::*;
 use crate::text::{HeuristicTextMeasure, TextMeasure};
 
+/// Stacking tier for a top-level [`UITree::begin_region`] root —
+/// `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D2. Render order is `(tier,
+/// insertion)`: regions of a lower tier paint first (further back); within a
+/// tier, insertion order breaks ties, matching today's build-order behavior.
+/// So a `Chrome` region (the transport/header/footer frame) always wins over
+/// a `Base` region (timeline/viewport/inspector) regardless of which one
+/// built first this frame — "the footer can never lose to the inspector
+/// again regardless of who builds first" (D2).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum ZTier {
+    /// Timeline, viewport, inspector — the main content surfaces.
+    Base = 0,
+    /// Transport, header, footer — the always-visible frame.
+    Chrome = 1,
+    /// Popups/modals (the existing `OverlayId::Z_ORDER` registry becomes
+    /// ordering *within* this tier).
+    Overlay = 2,
+    /// Drag ghosts, tooltips, toasts — topmost, and the only tier where
+    /// `ALLOW_OVERFLOW` is expected to be legitimate (D3).
+    Ghost = 3,
+}
+
+/// A region minted by [`UITree::begin_region`] — the token its content builds
+/// under. `root` is the container node's id; pass `Some(token.root)` as the
+/// parent for content built directly under it, or capture `tree.count()`
+/// before calling the panel's existing (unchanged) `None`-rooted build and
+/// sweep the result under `token.root` via
+/// [`end_region`](UITree::end_region)/[`reparent_root_nodes`](UITree::reparent_root_nodes) —
+/// the same idiom the inspector's own `ClipRegion` already uses.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct RegionToken {
+    pub root: NodeId,
+}
+
 /// Flat indexed node storage for the bitmap UI system.
 ///
 /// INVARIANTS:
@@ -88,6 +122,24 @@ pub struct UITree {
     ///
     /// [`set_text_measure`]: UITree::set_text_measure
     text_measure: Box<dyn TextMeasure>,
+    /// Every region minted by [`begin_region`](UITree::begin_region), in the
+    /// order it was minted — `(tier, root)`. The render walk
+    /// ([`traverse`](UITree::traverse), [`traverse_range`](UITree::traverse_range))
+    /// visits these instead of scanning for root-parented nodes directly, in
+    /// `(tier, insertion)` order — `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D2.
+    /// Pruned in [`truncate_from`](UITree::truncate_from) and
+    /// [`clear`](UITree::clear) alongside the other per-node Vecs.
+    regions: Vec<(ZTier, NodeId)>,
+    /// Depth counter: >0 while a [`begin_region`](UITree::begin_region) call's
+    /// subtree is still being built (before its matching
+    /// [`end_region`](UITree::end_region) reparents it). While open, `mint`
+    /// permits a `parent_id: None` node — the sanctioned "build flat, then
+    /// sweep under the region" idiom already used by the inspector's own
+    /// `ClipRegion` (`reparent_root_nodes`'s doc comment) — generalized here
+    /// instead of hand-rolled per panel. A counter, not a bool, because two
+    /// regions can be open sequentially without interleaving inside one build
+    /// pass; nesting (a region opened while another is still open) is safe too.
+    open_regions: u32,
 }
 
 const INITIAL_CAPACITY: usize = 512;
@@ -112,6 +164,8 @@ impl UITree {
             has_dirty: false,
             structure_version: 0,
             text_measure: Box::new(HeuristicTextMeasure),
+            regions: Vec::with_capacity(16),
+            open_regions: 0,
         }
     }
 
@@ -213,6 +267,32 @@ impl UITree {
         extra_flags: UIFlags,
         key: Option<u64>,
     ) -> NodeId {
+        // D4 — the only sanctioned way to root a top-level (parent: None)
+        // subtree is inside an open `begin_region`/`end_region` bracket
+        // (`open_regions > 0`): either `begin_region`'s own mint of the
+        // region container, or a panel building its (still `None`-rooted)
+        // content in between, later swept under the region by `end_region`.
+        // A `None`-parented node minted with no region open is exactly the
+        // per-panel hand-clip bug class `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md`
+        // D1 exists to kill — see that doc before adding one back.
+        //
+        // `cfg(not(test))`: gated out of `manifold-ui`'s OWN unit tests, which
+        // legitimately build a panel on a bare `UITree::new()` in isolation
+        // (never touching `begin_region` — that wrapping is `ui_root.rs`'s
+        // job, one layer up). `cfg(test)` is per-compilation-unit, so this
+        // still fires for `manifold-app` — the real app (debug build) and
+        // its own test/gate-scene binaries, where every panel DOES build
+        // through the now-fully-migrated `UIRoot::build()`. The D4
+        // structural unit test (`manifold-ui`, walking a *built* tree after
+        // the fact) is the enforcement that still applies inside
+        // `manifold-ui`'s own suite.
+        #[cfg(not(test))]
+        debug_assert!(
+            parent_id.is_some() || self.open_regions > 0,
+            "root-parented node minted outside an open UITree::begin_region — \
+             UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md D1/D4. Wrap this subtree's build \
+             in begin_region(...)/end_region(...) instead of rooting it at the tree."
+        );
         // Mint a fresh generation for this slot. `gen_counter` never yields 0
         // (reserved for PLACEHOLDER); skip it on the wrap.
         let generation = self.gen_counter;
@@ -509,6 +589,84 @@ impl UITree {
         }
     }
 
+    // ── Regions (UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md D1–D4) ────────────
+
+    /// The ONLY sanctioned way to root a top-level subtree. Mints a container
+    /// node at `rect` carrying `CLIPS_CHILDREN` by construction — unless
+    /// `extra_flags` carries `ALLOW_OVERFLOW` (D3), the `Ghost`-tier
+    /// drag-ghost/toast escape hatch — and registers `(tier, root)` in the
+    /// tree's region list, which the render walk
+    /// ([`traverse`](Self::traverse), [`traverse_range`](Self::traverse_range))
+    /// visits instead of scanning for root-parented nodes directly.
+    ///
+    /// `label` names the region for debugging/automation (`set_name`) — not
+    /// currently read by any consumer, kept `&'static str` (not `String`) so
+    /// a future one costs nothing on the per-frame rebuild path.
+    ///
+    /// `extra_flags` is normally `UIFlags::empty()`; pass `ALLOW_OVERFLOW`
+    /// for the `Ghost`-tier escape hatch (D3) — the design doc's committed
+    /// signature (§3) omits this parameter but its own doc comment on
+    /// `begin_region` requires it ("unless ALLOW_OVERFLOW is passed in
+    /// extra_flags"), and D3's opt-out cannot exist without it. Resolved
+    /// here in the 4-param direction the doc's own prose specifies; see the
+    /// P1 report.
+    ///
+    /// Opens the `open_regions` bracket so the panel content built between
+    /// this call and the matching [`end_region`](Self::end_region) may itself
+    /// mint `None`-parented nodes without tripping `mint`'s D4 debug
+    /// assertion — capture `tree.count()` right after this call, build the
+    /// panel exactly as before (still `None`-rooted internally), then call
+    /// `end_region(token, that_start)` to sweep it under `token.root`. This
+    /// generalizes the inspector's own pre-existing `ClipRegion` +
+    /// `reparent_root_nodes` idiom into the one mechanism every top-level
+    /// panel uses.
+    pub fn begin_region(
+        &mut self,
+        rect: Rect,
+        tier: ZTier,
+        label: &'static str,
+        extra_flags: UIFlags,
+    ) -> RegionToken {
+        self.open_regions += 1;
+        let clips = if extra_flags.contains(UIFlags::ALLOW_OVERFLOW) {
+            extra_flags
+        } else {
+            extra_flags | UIFlags::CLIPS_CHILDREN
+        };
+        let root = self.mint(None, rect, UINodeType::ClipRegion, UIStyle::default(), None, clips, None);
+        self.set_name(root, label);
+        self.regions.push((tier, root));
+        RegionToken { root }
+    }
+
+    /// Close the bracket [`begin_region`](Self::begin_region) opened: sweeps
+    /// every still-`None`-parented node in `[content_start, tree.count())`
+    /// under `token.root` (via [`reparent_root_nodes`](Self::reparent_root_nodes) —
+    /// a no-op for any node a nested region already claimed) and closes the
+    /// `open_regions` bracket. `content_start` is `tree.count()` captured
+    /// right after the matching `begin_region` call, so the region's own
+    /// container node (minted before that capture) is never re-swept.
+    pub fn end_region(&mut self, token: RegionToken, content_start: usize) {
+        let count = self.count.saturating_sub(content_start);
+        self.reparent_root_nodes(content_start, count, token.root);
+        self.open_regions = self.open_regions.saturating_sub(1);
+    }
+
+    /// D4's second enforcement leg: true iff every root-parented node
+    /// (`parent_index[i].is_none()`) is a registered region — i.e. no
+    /// top-level subtree escaped `begin_region`. `mint`'s debug assertion
+    /// (the first leg) catches this at the moment a stray root is minted,
+    /// but only in non-test builds of a `manifold-ui` dependency
+    /// (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D4); this walks a tree AFTER
+    /// the fact, unconditionally, so both `manifold-ui`'s own suite and
+    /// `manifold-app`'s can assert it directly against a real, fully-built
+    /// tree.
+    pub fn all_roots_are_regions(&self) -> bool {
+        (0..self.count).all(|i| {
+            self.parent_index[i].is_some() || self.regions.iter().any(|&(_, root)| root.index() == i)
+        })
+    }
+
     /// Reparent all root-level nodes (parent_id == -1) in the index range
     /// [from_index..from_index+count) under the given parent.
     /// Used by the inspector to wrap built sub-panel nodes under a ClipRegion.
@@ -727,28 +885,54 @@ impl UITree {
 
     /// Walk the tree in DFS order and call the visitor for each visible node.
     /// The visitor receives: (node, push_clip, pop_clip) signals.
+    ///
+    /// Root-level order is `(tier, insertion)` over the registered region
+    /// list (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D2), not raw array
+    /// index — a `Chrome` region always paints after (on top of) a `Base`
+    /// region regardless of which one built first this frame. Post-D4
+    /// migration every root IS a region, so this and the old "scan for
+    /// `parent_index[i].is_none()`" behavior agree on WHICH nodes are
+    /// visited; they differ only in order, and only across tiers.
     pub fn traverse<F>(&self, mut visitor: F)
     where
         F: FnMut(TraversalEvent),
     {
-        for i in 0..self.count {
-            if self.parent_index[i].is_none() {
-                self.traverse_subtree(i, &mut visitor);
-            }
-        }
+        self.traverse_regions(0, usize::MAX, &mut visitor);
     }
 
-    /// Walk only root nodes in `[start, end)` and their subtrees.
-    /// Used for overlay rendering — avoids traversing the entire tree
-    /// when only a small range of nodes needs to be drawn.
+    /// Walk only region roots in `[start, end)` and their subtrees, in
+    /// `(tier, insertion)` order. Used for overlay rendering and per-panel
+    /// cache re-render — avoids traversing the entire tree when only a small
+    /// range of nodes needs to be drawn. See [`traverse`](Self::traverse)'s
+    /// doc for the ordering rationale.
     pub fn traverse_range<F>(&self, start: usize, end: usize, mut visitor: F)
     where
         F: FnMut(TraversalEvent),
     {
+        self.traverse_regions(start, end, &mut visitor);
+    }
+
+    /// Shared implementation of [`traverse`](Self::traverse) and
+    /// [`traverse_range`](Self::traverse_range): visit every registered
+    /// region whose root index falls in `[start, end)`, tier-ascending
+    /// (`Base` first / furthest back, `Ghost` last / topmost), insertion
+    /// order breaking ties within a tier. Four linear passes over the
+    /// (small, ~10-entry) region list — no sort, no allocation, per the
+    /// hot-path discipline the design commits to (§3).
+    fn traverse_regions<F>(&self, start: usize, end: usize, visitor: &mut F)
+    where
+        F: FnMut(TraversalEvent),
+    {
         let end = end.min(self.count);
-        for i in start..end {
-            if self.parent_index[i].is_none() {
-                self.traverse_subtree(i, &mut visitor);
+        for tier in [ZTier::Base, ZTier::Chrome, ZTier::Overlay, ZTier::Ghost] {
+            for &(t, root) in &self.regions {
+                if t != tier {
+                    continue;
+                }
+                let idx = root.index();
+                if idx >= start && idx < end && self.is_live(root) {
+                    self.traverse_subtree(idx, visitor);
+                }
             }
         }
     }
@@ -949,6 +1133,12 @@ impl UITree {
         self.root_count = 0;
         // Retain the map's capacity — the editor clears+refills it every frame.
         self.widget_to_node.clear();
+        self.regions.clear();
+        // `open_regions` is NOT reset here: a `clear()` mid-build (none exist
+        // today) would otherwise silently drop the bracket a caller is still
+        // holding a token for. Normal usage always pairs begin/end within one
+        // build pass, so this is zero-cost in practice and fails loud (the D4
+        // assertion) instead of silent if that assumption is ever broken.
         self.count = 0;
         self.has_dirty = false;
         self.structure_version = self.structure_version.wrapping_add(1);
@@ -1002,6 +1192,12 @@ impl UITree {
             .filter(|&&r| r)
             .count() as u32;
         self.root_minted.truncate(from_index);
+        // Drop region entries whose root node was truncated away — a partial
+        // rebuild that re-enters the same range mints a fresh region via a
+        // fresh `begin_region` call, so a stale entry here would leave a dead
+        // NodeId in the tier-sorted render walk (harmless — `is_live` filters
+        // it — but keeps the region list bounded and honest).
+        self.regions.retain(|&(_, root)| root.index() < from_index);
         self.count = from_index;
         self.has_dirty = true;
         self.structure_version = self.structure_version.wrapping_add(1);
@@ -1152,10 +1348,21 @@ mod tests {
 
     #[test]
     fn traversal_order() {
+        // Post-D1/D4: `traverse()` visits registered regions, not a raw
+        // root scan — build this fixture the way `ui_root.rs` now does
+        // (`begin_region`, build content, `end_region`) instead of a bare
+        // `add_panel(None, ...)`.
         let mut tree = UITree::new();
-        let root = tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, default_style());
-        let _a = tree.add_label(Some(root), 0.0, 0.0, 100.0, 20.0, "A", default_style());
-        let _b = tree.add_label(Some(root), 0.0, 20.0, 100.0, 20.0, "B", default_style());
+        let region = tree.begin_region(
+            Rect::new(0.0, 0.0, 800.0, 600.0),
+            ZTier::Base,
+            "test",
+            UIFlags::empty(),
+        );
+        let start = tree.count();
+        let _a = tree.add_label(None, 0.0, 0.0, 100.0, 20.0, "A", default_style());
+        let _b = tree.add_label(None, 0.0, 20.0, 100.0, 20.0, "B", default_style());
+        tree.end_region(region, start);
 
         let mut order = Vec::new();
         tree.traverse(|event| {
@@ -1165,7 +1372,62 @@ mod tests {
         });
 
         let indices: Vec<usize> = order.iter().map(|n| n.index()).collect();
-        assert_eq!(indices, vec![0, 1, 2]); // DFS pre-order
+        assert_eq!(indices, vec![0, 1, 2]); // DFS pre-order: region root, A, B
+    }
+
+    /// D4's second enforcement leg (`all_roots_are_regions`), positive case:
+    /// a tree built entirely through `begin_region`/`end_region` — several
+    /// regions, several tiers, some with multi-node content swept under them
+    /// — has every root accounted for.
+    #[test]
+    fn all_roots_are_regions_holds_for_a_properly_regioned_tree() {
+        let mut tree = UITree::new();
+
+        let chrome = tree.begin_region(Rect::new(0.0, 0.0, 800.0, 40.0), ZTier::Chrome, "chrome", UIFlags::empty());
+        let start = tree.count();
+        tree.add_panel(None, 0.0, 0.0, 100.0, 20.0, default_style());
+        tree.add_panel(None, 0.0, 20.0, 100.0, 20.0, default_style());
+        tree.end_region(chrome, start);
+
+        let base = tree.begin_region(Rect::new(0.0, 40.0, 800.0, 500.0), ZTier::Base, "base", UIFlags::empty());
+        let start = tree.count();
+        tree.add_panel(None, 0.0, 40.0, 200.0, 200.0, default_style());
+        tree.end_region(base, start);
+
+        let ghost = tree.begin_region(
+            Rect::new(0.0, 0.0, 800.0, 600.0),
+            ZTier::Ghost,
+            "ghost",
+            UIFlags::ALLOW_OVERFLOW,
+        );
+        let start = tree.count();
+        tree.add_label(None, 400.0, 300.0, 80.0, 20.0, "ghost", default_style());
+        tree.end_region(ghost, start);
+
+        assert!(tree.all_roots_are_regions());
+    }
+
+    /// D4's second enforcement leg, negative case: a stray root-parented
+    /// node created with no `begin_region` bracket open at all (the exact
+    /// per-panel hand-clip shape D1 forbids) is caught by
+    /// `all_roots_are_regions` even though `mint`'s debug assertion is
+    /// `cfg(not(test))`-gated and stays silent inside this crate's own
+    /// suite (`tree.rs`'s `mint` doc comment).
+    #[test]
+    fn all_roots_are_regions_catches_a_stray_root() {
+        let mut tree = UITree::new();
+        let region = tree.begin_region(Rect::new(0.0, 0.0, 100.0, 100.0), ZTier::Base, "base", UIFlags::empty());
+        let start = tree.count();
+        tree.add_panel(None, 0.0, 0.0, 50.0, 50.0, default_style());
+        tree.end_region(region, start);
+        assert!(tree.all_roots_are_regions(), "sanity: the well-formed part passes");
+
+        // A panel that forgot to wrap itself — no begin_region, no end_region.
+        tree.add_panel(None, 0.0, 0.0, 10.0, 10.0, default_style());
+        assert!(
+            !tree.all_roots_are_regions(),
+            "a root-parented node outside any region must fail the D4 check"
+        );
     }
 
     #[test]

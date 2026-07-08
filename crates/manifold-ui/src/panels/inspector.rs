@@ -10,7 +10,7 @@ use crate::input::{Modifiers, UIEvent};
 use crate::layout::ScreenLayout;
 use crate::node::*;
 use crate::scroll_container::{SCROLLBAR_W, ScrollContainer, ScrollbarStyle};
-use crate::tree::UITree;
+use crate::tree::{UITree, ZTier};
 use manifold_foundation::EffectId;
 use manifold_foundation::LayerId;
 use std::collections::HashSet;
@@ -222,6 +222,15 @@ pub struct InspectorCompositePanel {
     card_drag_ghost_id: Option<NodeId>,
     card_drag_indicator_id: Option<NodeId>,
     card_drag_label: String,
+    /// The `Ghost`-tier region (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1–D3)
+    /// wrapping the ghost + indicator, minted fresh in
+    /// [`try_begin_card_drag`](Self::try_begin_card_drag) each time a drag
+    /// starts. Its root sits BEFORE `card_drag_ghost_id` in the tree, so
+    /// [`card_drag_first_node`](Self::card_drag_first_node) reports this
+    /// index (not the ghost label's own) — the render pass's
+    /// `render_tree_range(start, usize::MAX)` walks registered regions, not
+    /// a raw root scan, and would miss the region entirely otherwise.
+    card_drag_region_root: Option<NodeId>,
 
     // Cache tracking
     cache_first_node: usize,
@@ -289,6 +298,7 @@ impl InspectorCompositePanel {
             card_drag_ghost_id: None,
             card_drag_indicator_id: None,
             card_drag_label: String::new(),
+            card_drag_region_root: None,
             cache_first_node: usize::MAX,
             cache_node_count: 0,
             drawer_anim_active: false,
@@ -1255,10 +1265,15 @@ impl InspectorCompositePanel {
     }
 
     /// First node ID of the drag ghost/indicator overlay (for render pass).
-    /// Returns None if no drag is active.
+    /// Returns None if no drag is active. Reports the wrapping `Ghost`-tier
+    /// region's root (not `card_drag_ghost_id`, the label node itself) —
+    /// the render pass's `render_tree_range(start, usize::MAX)` walks
+    /// registered regions, and the region root sits one index before the
+    /// label, so reporting the label's own index would make that walk miss
+    /// the region entirely.
     pub fn card_drag_first_node(&self) -> Option<usize> {
         if self.card_drag_active {
-            self.card_drag_ghost_id.map(|id| id.index())
+            self.card_drag_region_root.map(|id| id.index())
         } else {
             None
         }
@@ -1406,9 +1421,26 @@ impl InspectorCompositePanel {
 
             // Create ghost + indicator nodes — scoped to the correct column
             // Single full-width active column — both tabs drag within it.
+            //
+            // Ghost tier + ALLOW_OVERFLOW (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md`
+            // D1–D3): the ghost tracks the cursor for the drag's whole
+            // lifetime (`update_card_drag` below), so it must be able to
+            // paint outside whatever rect it starts at and outside the
+            // inspector's own region clip — the region mechanism's one
+            // sanctioned overflow case. `try_begin_card_drag` runs from an
+            // input event, not the panel's own `build()`, so this region is
+            // minted fresh per drag (there is no already-open region to
+            // nest under at this point) and torn down in `end_card_drag`.
             let col_x = self.viewport_rect.x + COLUMN_PAD;
             let col_w = (self.viewport_rect.width - COLUMN_PAD * 2.0).max(0.0);
             let ghost_w = (col_w - 24.0).min(160.0);
+            let region = tree.begin_region(
+                self.viewport_rect,
+                ZTier::Ghost,
+                "card_drag_ghost",
+                UIFlags::ALLOW_OVERFLOW,
+            );
+            let region_start = tree.count();
             self.card_drag_ghost_id = Some(tree.add_label(
                 None,
                 0.0,
@@ -1437,6 +1469,8 @@ impl InspectorCompositePanel {
                     ..UIStyle::default()
                 },
             ));
+            tree.end_region(region, region_start);
+            self.card_drag_region_root = Some(region.root);
 
             return true;
         }
@@ -1566,6 +1600,7 @@ impl InspectorCompositePanel {
         self.card_drag_active = false;
         self.card_drag_ghost_id = None;
         self.card_drag_indicator_id = None;
+        self.card_drag_region_root = None;
 
         if is_multi {
             // Multi-select: move all selected effects as a group
@@ -1954,24 +1989,28 @@ impl InspectorCompositePanel {
         self.columns_y = columns_y;
         self.columns_height = columns_h;
 
-        // BUG-060 root fix: the inspector's own pixel clip. Everything the
-        // scroll columns build below (cards, drawers, scrollbars) gets swept
-        // under this — see the reparent call after both columns finish —
-        // so no card content can ever paint past the inspector's own bottom
-        // edge into whatever panel renders below it (was relying entirely on
-        // layout math never overflowing). Deliberately covers only the
-        // scrolled column region: the pinned macros strip and tab strip
-        // chrome above stay outside it (already built, so excluded from the
-        // upcoming sweep range regardless).
-        let content_clip_start = tree.count();
-        let content_clip_id = tree.add_node(
-            None,
-            Rect::new(rect.x, columns_y, rect.width, columns_h),
-            UINodeType::ClipRegion,
-            UIStyle::default(),
-            None,
-            UIFlags::VISIBLE | UIFlags::CLIPS_CHILDREN,
-        );
+        // `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` P1 stopgap removal: this used to
+        // be a bespoke, root-parented `ClipRegion` (`content_clip_id`) — the
+        // BUG-060 hand-clip the design forbids by name — covering
+        // `(rect.x, columns_y, rect.width, columns_h)` so no card content
+        // could paint past the inspector's own bottom edge. It's gone: the
+        // outer `begin_region` the inspector now builds under (`ui_root.rs`)
+        // clips the WHOLE inspector rect unconditionally, so that job is
+        // structural now, not this panel's to do by hand.
+        //
+        // It was NOT, however, doing nothing — decided empirically, not by
+        // reading (`inspector.rs`'s
+        // `content_clip_prevents_scrolled_columns_painting_over_the_tab_strip`
+        // test forced a scroll far enough to push several cards' raw bounds
+        // above `columns_y`, into the pinned tab-strip's territory, with
+        // this clip's `CLIPS_CHILDREN` flag removed as a controlled
+        // experiment — and the GPU-cull replica still reported zero pixels
+        // reaching the tab strip). The reason: `master_scroll`/`layer_scroll`
+        // (`ScrollContainer::begin`, just below) each mint their OWN
+        // `CLIPS_CHILDREN` clip at the SAME `columns_y` top edge — this
+        // node's Y-range was always a strict subset of whichever column is
+        // active. Deleted, not kept-and-reparented: proven redundant, not
+        // merely unproven-necessary.
 
         // ── MASTER COLUMN (full width when active, else collapsed) ──
         let left_clip_rect = Rect::new(left_x, columns_y, master_col_w, columns_h);
@@ -2123,12 +2162,13 @@ impl InspectorCompositePanel {
         self.layer_scroll
             .build_scrollbar(tree, right_x + right_content_w, &SCROLLBAR_STYLE);
 
-        // Both columns' scroll clips (and everything reparented under them
-        // above) are still tree roots at this point — `ScrollContainer::begin`
-        // always mints its clip node with `parent: None`. Sweep them under
-        // the inspector's own clip now that both columns are fully built.
-        let content_clip_count = tree.count() - (content_clip_start + 1);
-        tree.reparent_root_nodes(content_clip_start + 1, content_clip_count, content_clip_id);
+        // Both columns' scroll clips (`ScrollContainer::begin` always mints
+        // its clip node with `parent: None`) are still tree roots here — no
+        // longer swept under a bespoke `content_clip_id` (removed, see the
+        // comment above `columns_y`'s scroll containers begin). The caller's
+        // `begin_region`/`end_region` wrap (`ui_root.rs`) sweeps them
+        // directly, same as every other `None`-rooted node this panel
+        // builds (D1/D4).
 
         // ── MACROS STRIP (pinned to the top, above the tab strip; built last so
         // it draws on top of any column content) ──
@@ -2713,10 +2753,23 @@ mod tests {
             &[InspectorTab::Layer, InspectorTab::Master],
             InspectorTab::Layer,
         );
+        // Post-D1/D4: `ui_root.rs` now wraps the inspector's build in a
+        // region (`begin_region` .. `end_region`) instead of letting it root
+        // itself at the tree — mirror that here so `traverse_range` (which
+        // walks registered regions, not a raw root scan) actually reaches
+        // this panel's content.
+        let region = tree.begin_region(
+            layout.inspector(),
+            crate::tree::ZTier::Base,
+            "inspector",
+            UIFlags::empty(),
+        );
+        let content_start = tree.count();
         panel.build(&mut tree, &layout);
+        tree.end_region(region, content_start);
 
-        let start = panel.first_node();
-        let end = start + panel.node_count();
+        let start = region.root.index();
+        let end = tree.count();
 
         // Collect node indices the full-render traversal actually visits.
         let mut visited = std::collections::HashSet::new();
@@ -2795,6 +2848,138 @@ mod tests {
             "{} gen-card node(s) culled by their effective clip (body would render blank): {:?}",
             culled.len(),
             culled
+        );
+    }
+
+    /// `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` P1 stopgap decision (§ "The
+    /// stopgap removal"): the bespoke, root-parented `content_clip_id`
+    /// (`ClipRegion` at `(rect.x, columns_y, rect.width, columns_h)`) is
+    /// gone — decided empirically, not by reading. With the outer
+    /// `begin_region` clip now covering the WHOLE inspector rect (D1, wired
+    /// in `ui_root.rs`, not reachable from this manifold-ui-only test)
+    /// guaranteeing footer containment regardless, the open question was
+    /// whether `content_clip_id` was ALSO the only thing keeping scrolled
+    /// column content off the pinned macros/tab strip above `columns_y` — a
+    /// DIFFERENT edge the outer region can't fence, since `columns_y` sits
+    /// strictly inside it, not at its boundary.
+    ///
+    /// It wasn't. `master_scroll`/`layer_scroll` (`ScrollContainer::begin`,
+    /// just below) each mint their OWN `CLIPS_CHILDREN` clip starting at the
+    /// SAME `columns_y` — `content_clip_id`'s Y-range was always a strict
+    /// subset of whichever column is active, so it was dead weight even
+    /// before this design existed. Proved with a controlled experiment
+    /// (`content_clip_id`'s `CLIPS_CHILDREN` flag temporarily removed,
+    /// nothing else changed): scroll the layer column hard past its max
+    /// (the same `try_scroll_in_place` real mouse-wheel input drives), so
+    /// several cards' raw bounds land above `columns_y` — squarely where
+    /// the tab strip is drawn — then replicate the GPU cull (same pattern
+    /// as `full_render_traversal_reaches_every_visible_node` above) and
+    /// confirm zero pixels reached the tab strip regardless. This test now
+    /// guards the SIMPLER code that experiment justified: no `content_clip`
+    /// at all, `layer_scroll`'s own clip carrying the whole load.
+    #[test]
+    fn layer_scroll_clip_prevents_scrolled_columns_painting_over_the_tab_strip() {
+        use super::super::param_card::ParamCardKind;
+        use crate::tree::TraversalEvent;
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = {
+            let mut l = ScreenLayout::new(1920.0, 1080.0);
+            l.inspector_width = 500.0;
+            l
+        };
+        // Nine effects, several params each — enough stacked card height to
+        // scroll a long way, the same shape as the BUG-060 gate scene
+        // (`ui_snapshot/fixtures.rs`'s `bug060_scene`).
+        let configs: Vec<_> = (0..9)
+            .map(|i| mk_config(ParamCardKind::Effect, &format!("FX{i}"), 4))
+            .collect();
+        panel.configure_layer_effects(&configs, None);
+        panel.configure_tabs(&[InspectorTab::Layer, InspectorTab::Master], InspectorTab::Layer);
+        panel.build(&mut tree, &layout);
+
+        let columns_y = panel.columns_y;
+        assert!(columns_y > 0.0, "sanity: columns_y must be a real screen position");
+
+        // Scroll far past any real max — `apply_scroll_delta`/`clamp_scroll`
+        // clamp it, so this just guarantees "fully scrolled", not overshoot.
+        let cursor_x = layout.inspector().x + layout.inspector().width - 10.0; // right column
+        let scrolled = panel.try_scroll_in_place(1_000_000.0, cursor_x, &mut tree);
+        assert!(scrolled, "sanity: the panel must report a live scroll container");
+
+        let start = panel.first_node();
+        let end = start + panel.node_count();
+
+        // Sanity: the scroll must have actually moved SOME node's raw bounds
+        // above columns_y — otherwise this test would vacuously pass with
+        // nothing to clip (not enough content to overflow).
+        let mut any_above = false;
+        for i in start..end {
+            let n = tree.get_node(tree.id_at(i)).unwrap();
+            if n.flags.contains(UIFlags::VISIBLE)
+                && n.bounds.width > 0.0
+                && n.bounds.height > 0.0
+                && n.bounds.y < columns_y
+            {
+                any_above = true;
+                break;
+            }
+        }
+        assert!(
+            any_above,
+            "sanity: scrolling must push some node's raw bounds above columns_y \
+             ({columns_y}) or this test proves nothing — increase the effect count"
+        );
+
+        // Replicate the GPU cull exactly as the sibling test above does.
+        fn intersect(a: Rect, b: Rect) -> Rect {
+            let x0 = a.x.max(b.x);
+            let y0 = a.y.max(b.y);
+            let x1 = (a.x + a.width).min(b.x + b.width);
+            let y1 = (a.y + a.height).min(b.y + b.height);
+            Rect::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
+        }
+        let mut clip_stack: Vec<Rect> = Vec::new();
+        let mut painted_over_tab_strip: Vec<(usize, Rect)> = Vec::new();
+        tree.traverse_range(start, end, |ev| match ev {
+            TraversalEvent::PushClip(r) => {
+                let clipped = clip_stack.last().map(|c| intersect(*c, r)).unwrap_or(r);
+                clip_stack.push(clipped);
+            }
+            TraversalEvent::PopClip => {
+                clip_stack.pop();
+            }
+            TraversalEvent::Node(n) => {
+                let b = n.bounds;
+                if !n.flags.contains(UIFlags::VISIBLE) || b.width <= 0.0 || b.height <= 0.0 {
+                    return;
+                }
+                // Only care about nodes whose RAW bounds reach above
+                // columns_y — those are the ones a missing/weakened
+                // content_clip would let bleed into the tab strip.
+                if b.y >= columns_y {
+                    return;
+                }
+                let Some(c) = clip_stack.last() else {
+                    // No active clip ancestor at all — definitely paints
+                    // wherever its raw bounds say, tab strip included.
+                    painted_over_tab_strip.push((n.id.index(), b));
+                    return;
+                };
+                // Effective clip must not extend above columns_y — if it
+                // does, this node's visible (unclipped) portion still
+                // reaches above the tab strip's lower edge.
+                if c.y < columns_y - 0.01 {
+                    painted_over_tab_strip.push((n.id.index(), b));
+                }
+            }
+        });
+        assert!(
+            painted_over_tab_strip.is_empty(),
+            "{} node(s) with raw bounds above columns_y ({columns_y}) are not fully \
+             clipped there — scrolled content would paint over the pinned tab strip: {:?}",
+            painted_over_tab_strip.len(),
+            painted_over_tab_strip
         );
     }
 

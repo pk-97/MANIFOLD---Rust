@@ -92,11 +92,12 @@ fn apply_one(ui: &mut UIRoot, data: &mut SceneData, spec: &str) -> InteractOutco
         Some(("cmd_d", _)) => res(duplicate_selected_clips(data)),
         Some(("drag_clip_toward_zero", rest)) => res(drag_clip_toward_zero(data, rest)),
         Some(("drag_readout", rest)) => res(drag_readout(ui, data, rest)),
+        Some(("scroll_inspector", amount)) => res(scroll_inspector(ui, amount)),
         Some((verb, _)) => miss(format!(
             "unknown interact verb '{verb}' (known: select, collapse, collapse_effect, delete, \
              open, automation_add, automation_move, automation_bend, automation_segment_drag, \
              automation_group_move, automation_group_delete, click_clip, shift_click_clip, \
-             cmd_click_clip, cmd_d, drag_clip_toward_zero, drag_readout)"
+             cmd_click_clip, cmd_d, drag_clip_toward_zero, drag_readout, scroll_inspector)"
         )),
         None if spec == "cmd_d" => res(duplicate_selected_clips(data)),
         None => miss(format!("malformed interact '{spec}' (want verb:target)")),
@@ -548,6 +549,38 @@ fn lane_param_range(data: &SceneData, layer_id: &str, param_id: &str) -> Option<
 /// investigation (`docs/TIMELINE_LAYOUT_P0_SPEC.md` RC1-RC3) lives in the
 /// render/sync path's reaction to the resulting state, not in input dispatch,
 /// so driving the data field directly is the right level for this phase.
+/// `scroll_inspector:<delta>` — calls `UIRoot::try_inspector_scroll` directly,
+/// the SAME real, synchronous method `window_input.rs`'s mouse-wheel handler
+/// calls when the cursor is over the inspector rect. Not sugar for a
+/// `Gesture::Scroll`: the inspector's scroll is a direct call
+/// (`try_scroll_in_place`, offsetting the built content nodes in place), not
+/// routed through the generic `UIEvent::Scroll` → `pending_events` →
+/// `drain_and_dispatch` pipeline `Gesture::Scroll` synthesizes into — that
+/// pipeline is real for the dropdown/timeline, but a no-op here (found while
+/// building `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md`'s BUG-060 gate scene: 15
+/// chained `Gesture::Scroll`s at the inspector moved content ~13px total,
+/// clamped, and stayed there — the event was never reaching
+/// `try_inspector_scroll` at all). `cursor_x` is the inspector rect's
+/// horizontal center, matching whichever column (master/layer) is showing.
+/// Positive `delta` scrolls DOWN (reveals later content) — the same sign
+/// `window_input.rs` passes `dy` in.
+fn scroll_inspector(ui: &mut UIRoot, amount: &str) -> Result<String, String> {
+    let delta: f32 = amount
+        .parse()
+        .map_err(|_| format!("scroll_inspector: '{amount}' is not a number"))?;
+    let rect = ui.layout.inspector();
+    let cursor_x = rect.x + rect.width * 0.5;
+    let handled = ui.try_inspector_scroll(delta, cursor_x);
+    if !handled {
+        // No scroll container built at this cursor_x (e.g. inspector empty) —
+        // structurally a miss, not a silent no-op.
+        return Err(format!(
+            "scroll_inspector: try_inspector_scroll({delta}, {cursor_x}) found no scroll container"
+        ));
+    }
+    Ok(format!("scroll_inspector -> delta={delta} cursor_x={cursor_x}"))
+}
+
 fn collapse_layer(data: &mut SceneData, target: &str) -> Result<String, String> {
     let Some(layer) = data.project.timeline.layers.iter_mut().find(|l| l.layer_id == target)
     else {

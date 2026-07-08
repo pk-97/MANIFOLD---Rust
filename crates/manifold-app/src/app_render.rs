@@ -3470,6 +3470,23 @@ impl Application {
                 ..UIStyle::default()
             };
             let title_x = preview_x;
+            // Protective wrap only — NOT the editor window's P2 region
+            // migration (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` scopes that
+            // separately; dock.rs and the editor's own panel structure are
+            // untouched). Without this, the four `None`-parented nodes below
+            // are exactly the un-migrated per-window root-parenting D4's
+            // debug assertion exists to catch — they would panic the first
+            // time this window renders in a debug build, not just fail a
+            // future gate. `Base` tier: canvas-adjacent preview content,
+            // matching the tier the design's P2 section already names for
+            // canvas-region content.
+            let preview_region = ws.ui_root.tree.begin_region(
+                manifold_ui::Rect::new(0.0, 0.0, preview_width, canvas_height),
+                manifold_ui::ZTier::Base,
+                "editor_preview_column",
+                manifold_ui::UIFlags::empty(),
+            );
+            let preview_region_start = ws.ui_root.tree.count();
             // Backing panel for the whole left column so the two centred monitors
             // sit on a clean, uniform surface rather than a black void. Stops at
             // the column height so it doesn't paint over the bottom strip.
@@ -3554,6 +3571,9 @@ impl Application {
                 "Master Out",
                 title_style,
             );
+            ws.ui_root
+                .tree
+                .end_region(preview_region, preview_region_start);
         }
 
         // Node picker overlays the whole editor window when open. Keep its
@@ -3564,7 +3584,21 @@ impl Application {
             .browser_popup
             .set_screen_size(logical_w as f32, logical_h as f32);
         if ws.ui_root.browser_popup.is_open() {
+            // Protective wrap, same reasoning as the preview-column region
+            // above: `BrowserPopupPanel::build` roots its own content at
+            // `None` and is called directly here (not through the main
+            // window's `build_overlays()` driver), so without this it is
+            // exactly the un-migrated root-parenting D4's debug assertion
+            // exists to catch — not P2's editor-window region work.
+            let region = ws.ui_root.tree.begin_region(
+                manifold_ui::Rect::new(0.0, 0.0, logical_w as f32, logical_h as f32),
+                manifold_ui::ZTier::Overlay,
+                "editor_node_picker",
+                manifold_ui::UIFlags::empty(),
+            );
+            let start = ws.ui_root.tree.count();
             ws.ui_root.browser_popup.build(&mut ws.ui_root.tree);
+            ws.ui_root.tree.end_region(region, start);
         }
 
         // The editor rebuilt its whole tree above, clearing every node's flags.
@@ -4622,7 +4656,15 @@ impl Application {
                         manifold_ui::color::SHADOW,
                     );
                 }
-                ui.render_tree_range(&self.ws.ui_root.tree, start, end);
+                // `render_sub_region`, not `render_tree_range`: each overlay's
+                // `(start, end)` deliberately excludes its own
+                // `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` region root (see
+                // `UIRoot::build_overlays`'s doc comment — keeping `start` at
+                // the first REAL node is what the shadow-peek above depends
+                // on), so a root-scan would never find that region and would
+                // render nothing. `render_sub_region`'s ancestor-aware flat
+                // scan picks up the region's `CLIPS_CHILDREN` regardless.
+                ui.render_sub_region(&self.ws.ui_root.tree, start, end, false);
                 ui.pop_depth();
             }
 

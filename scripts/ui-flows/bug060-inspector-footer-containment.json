@@ -1,0 +1,82 @@
+[
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "OFF",
+          "nth": 0
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Strobe"
+        }
+      },
+      "gesture": {
+        "Scroll": {
+          "delta": {
+            "x": 0.0,
+            "y": 2000.0
+          }
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Strobe"
+        }
+      },
+      "gesture": {
+        "Scroll": {
+          "delta": {
+            "x": 0.0,
+            "y": 2000.0
+          }
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Strobe"
+        }
+      },
+      "gesture": {
+        "Scroll": {
+          "delta": {
+            "x": 0.0,
+            "y": 2000.0
+          }
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "OFF",
+          "nth": 0
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  "Snapshot"
+]

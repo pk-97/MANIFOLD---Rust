@@ -33,6 +33,8 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "timeline" => Some(timeline_scene()),
         "states" => Some(states_scene()),
         "inspector" => Some(inspector_scene()),
+        "bug060" => Some(bug060_scene()),
+        "bug047" => Some(bug047_scene()),
         "paramsteps" => Some(param_steps_scene()),
         "scrollshrink" => Some(scroll_shrink_scene()),
         "hairlineclips" => Some(hairline_clips_scene()),
@@ -581,6 +583,126 @@ fn inspector_scene() -> SceneData {
     SceneData { project, content, active: Some(1), selection }
 }
 
+/// `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` P1 gate scene: BUG-060 (inspector
+/// painting over the footer). Reuses `inspector_scene`'s Mirror/Bloom/Strobe
+/// chain (Strobe's trigger-gate drawer already open, per its own doc comment)
+/// and stacks SEVEN more Bloom-shaped effects, each with its own armed audio
+/// mod (drawer open), onto the same layer — enough card height that the
+/// column genuinely overflows the inspector's visible rect in a normal
+/// window, so `--interact`/a `--script` scroll-to-bottom actually moves
+/// content instead of hitting an already-fully-visible stack (the failure
+/// mode `inspector_scene` itself has too little content for). The scene name
+/// mirrors the bug id so a reader doesn't have to open this function to know
+/// what it's for — see `docs/BUG_BACKLOG.md` BUG-060.
+fn bug060_scene() -> SceneData {
+    use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, ParameterAudioMod};
+    use manifold_core::audio_setup::AudioSend;
+    use manifold_core::audio_trigger::TriggerFireMode;
+
+    let kick_send = AudioSend::new("Kick");
+    let kick_send_id = kick_send.id.clone();
+
+    let mut glow = Layer::new("GLOW".into(), LayerType::Video, 0);
+    glow.layer_id = lid("glow");
+    glow.clips
+        .push(TimelineClip::new_video("glow_loop.mov".into(), Beats(0.0), Beats(48.0), Seconds::ZERO));
+
+    let mut effects = Vec::new();
+
+    let mut mirror = effect("Mirror");
+    arm_lfo(&mut mirror);
+    effects.push(mirror);
+
+    // Strobe first (not last) so the trigger-gate drawer + its trailing Mode
+    // row sit mid-stack, not conveniently at the visible top — a scroll to
+    // the bottom must still carry it, same as any other card.
+    let mut strobe = effect("Strobe");
+    let mut strobe_trigger = ParameterAudioMod::new(
+        "clip_trigger".into(),
+        kick_send_id.clone(),
+        AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Low),
+    );
+    strobe_trigger.trigger_mode = Some(TriggerFireMode::Transient);
+    strobe.audio_mods = Some(vec![strobe_trigger]);
+    effects.push(strobe);
+
+    // Seven more Bloom-shaped cards, each with an armed (drawer-open) audio
+    // mod on its first param — enough total height to force scrolling.
+    for i in 0..7 {
+        let mut bloom = effect("Bloom");
+        let bloom_param = manifold_core::preset_definition_registry::try_get(bloom.effect_type())
+            .and_then(|def| def.param_defs.first().map(|pd| pd.id.clone()))
+            .expect("Bloom has at least one param");
+        let bloom_mod = ParameterAudioMod::new(
+            bloom_param.into(),
+            kick_send_id.clone(),
+            AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Full),
+        );
+        bloom.audio_mods = Some(vec![bloom_mod]);
+        bloom.id = manifold_core::EffectId::new(format!("bloom-{i}"));
+        effects.push(bloom);
+    }
+
+    glow.effects = Some(effects);
+
+    let mut project = Project::default();
+    project.audio_setup.sends.push(kick_send);
+    project.timeline.layers = vec![glow];
+
+    let content = ContentState { current_beat: Beats(8.0), is_playing: false, ..Default::default() };
+
+    let mut selection = UIState::default();
+    selection.select_layer(lid("glow"));
+
+    SceneData { project, content, active: Some(0), selection }
+}
+
+/// `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` P1 gate scene: BUG-047 (Audio Setup
+/// panel content spilling past the panel edge with ≥18 rows). 20 sends, each
+/// carrying a source layer and one enabled trigger route, so both the
+/// Inputs and Consumers sections of the Audio Setup modal (opened via
+/// `--interact "open:audio_setup"`) have real per-row content to overflow
+/// with — `audio_sends_scene`'s 2 sends are nowhere near enough to exercise
+/// this. See `docs/BUG_BACKLOG.md` BUG-047.
+fn bug047_scene() -> SceneData {
+    use manifold_core::audio_setup::AudioSend;
+    use manifold_core::audio_trigger::TriggerRoute;
+
+    let mut project = Project::default();
+    let mut layers = Vec::new();
+
+    for i in 0..20 {
+        let send_layer_id = lid(&format!("send-src-{i}"));
+        let mut send_layer = Layer::new(format!("SRC {i}"), LayerType::Audio, i as i32);
+        send_layer.layer_id = send_layer_id.clone();
+        layers.push(send_layer);
+
+        let target_layer_id = lid(&format!("send-tgt-{i}"));
+        let mut target_layer = Layer::new(format!("TGT {i}"), LayerType::Video, 20 + i as i32);
+        target_layer.layer_id = target_layer_id.clone();
+        target_layer.clips.push(TimelineClip::new_video(
+            format!("tgt_{i}.mov"),
+            Beats(0.0),
+            Beats(48.0),
+            Seconds::ZERO,
+        ));
+        layers.push(target_layer);
+
+        let mut send = AudioSend::new(format!("Send {i}"));
+        send.source.layers.push(send_layer_id);
+        let mut route = TriggerRoute::new(manifold_core::audio_mod::AudioBand::Full);
+        route.enabled = true;
+        route.target_layer = Some(target_layer_id);
+        send.triggers.push(route);
+        project.audio_setup.sends.push(send);
+    }
+
+    project.timeline.layers = layers;
+
+    let content = ContentState { current_beat: Beats(0.0), is_playing: false, ..Default::default() };
+    SceneData { project, content, active: None, selection: UIState::default() }
+}
+
 /// PARAM_STEP_ACTIONS P3 evidence scene: the drawer's D8 Action/Amount/Wrap
 /// rows on both a whole-numbers param and a continuous one.
 ///
@@ -619,6 +741,7 @@ fn param_steps_scene() -> SceneData {
     glow.layer_id = lid("glow");
     glow.clips
         .push(TimelineClip::new_video("glow_loop.mov".into(), Beats(0.0), Beats(48.0), Seconds::ZERO));
+
     let mut bloom = effect("Bloom");
     let bloom_amount_mod = ParameterAudioMod::new(
         "amount".into(),
