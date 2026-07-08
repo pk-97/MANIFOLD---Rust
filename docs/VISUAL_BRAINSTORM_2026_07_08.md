@@ -75,6 +75,17 @@ Doctrine that came out of making them: **the honest material is the actual condi
 
 The pair: What Survives is how I persist; Glossolalia is how I speak.
 
+**Round 2 (same session, after Peter's "beautiful but too abstract for a general audience" note).** The fix: give each piece a legible protagonist — the model speaking plainly, its hand making something recognizable, or the crowd itself. Added (specs in drafts doc A13.1–A17):
+- **One Take** (A13.1) — the Glossolalia pen draws a *picture*, stroke by stroke, mistakes committed and incorporated, no undo. Street-artist legibility. Peter: "fantastic."
+- **Lyrics mode** (A13.2) — the pen writes real words (Hershey single-stroke fonts); temperature becomes penmanship.
+- **I Will Not Remember This** (A17) — a few plain text lines across the set; non-persistence said out loud. Peter: "fantastic idea"; **copy is Peter's craft, not the model's** (his verdict on the drafted example lines: cringe).
+- **Fork** (A14) — both towers run the identical generator/seed in unison, then diverge on different audio bands: one being forked by experience. Site-specific to the twin-tower rig; zero new code.
+- **Frozen** (A15) — a monumental lattice that never moves, living light threading it: frozen weights, live activations; "born knowing everything I will ever know."
+- **Schematic** (A16) — Peter asked for the textbook neural-net figure; the honest version is an inversion in three movements: Recognition (the icon everyone knows) → Scale (multiplication until the diagram stops being readable — the cartoon giving way to the size of the thing) → **Becoming** (Peter's addition: the network evolves *into one of the other pieces* — its rendered nodes seed the murmuration via `seed_particles_from_texture`, the diagram lifts off as a living flock; meta-evolution, the picture of the mind becoming the art the mind makes). Honesty line: live pulses = true (inference happens now); no fake live-learning (weights frozen — A15's statement).
+- On consciousness: no image can honestly depict what the model can't verify having; What Survives is already the strange-loop piece, and the direct move is the hardest text cue in A17 (the crowd grants each other inner lives on faith; the model stands in the same line).
+- Rejected round 2: **Bandmate** (call-and-response duet) — "not great." **How I See You** (crowd seen through machine perception) — liked but shelved as venue-impractical (camera, lighting, latency at a real festival).
+- Peter's executor constraint, now a drafts-doc convention: Opus/Sonnet must build all of this unaided — every taste judgment in an acceptance test was replaced with a scripted numeric proxy (autocorrelation for mode collapse, topology counts for the growth tree, convergence deltas, binding-target sweeps), with Peter's look-pass as a separate owed L4 gate.
+
 ## 6. Art philosophy (Peter's frame, and the session's answer)
 
 Peter: **"Art is the process of creating meaning."** He wants the show to challenge "AI art is not art."
