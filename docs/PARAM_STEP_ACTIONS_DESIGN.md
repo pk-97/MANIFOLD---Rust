@@ -1,6 +1,6 @@
 # Param Step Actions — triggers step, randomize, and sequence any param
 
-**Status:** PROPOSED design, awaiting Peter's read · 2026-07-07 · Fable
+**Status:** APPROVED, IN PROGRESS (P1–P4 building) · designed 2026-07-07 Fable, read + amended by Peter 2026-07-08 (D6 divisor retired — see note in §2), building 2026-07-08 Sonnet orchestrating
 **Prerequisites:** LIVE_AUDIO_TRIGGERS §9 unification (SHIPPED 2026-07-07 @ `14e0a90a`) — this design extends the unified `ParameterAudioMod`, which must exist as landed.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -12,9 +12,9 @@ discrete slider into an audio-clocked sequencer and any continuous slider into
 clocked sample-and-hold, on the perform surface, with zero graph editing. Peter,
 2026-07-07: *"It would let you pseudo make any discrete slider act as a trigger"*
 and *"This will multiply the types of visuals and ways they react and behave very
-easily."* On stage: the kick steps BasicShapes' variant, every 4th snare
-randomizes the palette, one transient advances pattern + reseeds + bumps hue
-together, phase-locked — none of which is reachable today without editing graphs.
+easily."* On stage: the kick steps BasicShapes' variant, a snare hit randomizes
+the palette, one transient advances pattern + reseeds + bumps hue together,
+phase-locked — none of which is reachable today without editing graphs.
 
 Two of Peter's calls decide the shape (both 2026-07-07, this session):
 - *"I think step replacing the base value makes sense"* — a step acts like the
@@ -47,13 +47,12 @@ shadow).
 | Discrete-param vocabulary (`whole_numbers`, `value_labels`) | `crates/manifold-core/src/effect_graph_def.rs:456-463` | exists — defines "discrete slider" |
 | Offline export feeds real analysis into the same tick ("param modulation, param triggers, and live clip triggers — deterministic audio reactivity") | `crates/manifold-app/src/content_export.rs:439-451` | exists — step actions inherit export support with no new work |
 | Clip-edge observation (renderer-side): `acquire_clip` + `clip_count`/`audio_count` | `crates/manifold-renderer/src/generator_renderer.rs:44-92,350-360` | exists — stays for gate cards; steps get an ENGINE-side edge (D5) |
-| Trigger division precedent (`tc_divided` in BasicShapes' Rotation Sequencing group) | `crates/manifold-renderer/assets/generator-presets/BasicShapes.json` | exists in-graph — generalized as `every` (D6) |
 | Drawer UI: standard audio-mod drawer + trailing Mode row; command family (`SetAudioModTriggerModeCommand`) | LIVE_AUDIO_TRIGGERS §9.2 U-P2; `param_slider_shared.rs` (`build_toggle_trigger_row`) | exists — Action rows extend the same drawer (D8/P3) |
 
 Classification: the event sources, edge detection, config home, evaluator walk,
 export determinism, drawer chassis, and editing-command family all **exist**.
 Genuinely new: one enum field + its evaluation arm, an engine-side per-layer
-clip-edge event, the step-state lifecycle, and three drawer rows. This design is
+clip-edge event, the step-state lifecycle, and two drawer rows. This design is
 mostly wiring; the audit is why.
 
 ## 2. Decisions
@@ -94,12 +93,11 @@ mostly wiring; the audit is why.
       Clamp,
   }
   ```
-  Plus one divisor field on the mod itself (not inside the enum, so the drawer
-  row layout is uniform): `every: u32` (serde default 1, skip-when-1) — fire the
-  action on every Nth trigger event (D6). Evaluation for `whole_numbers` /
-  `value_labels` params rounds the stepped result to integers; `amount` defaults
-  to 1.0 there and to `(max-min)/8` for continuous params (UI seeding only —
-  the stored value is whatever the user set).
+  Evaluation for `whole_numbers` / `value_labels` params rounds the stepped
+  result to integers; `amount` defaults to 1.0 there and to `(max-min)/8` for
+  continuous params (UI seeding only — the stored value is whatever the user
+  set; the performer can push it up for a bigger jump per hit or down for a
+  finer one, the same way they'd size any other knob).
 
 - **D3 — Event sources = the trigger events that already exist, gated by
   `trigger_mode`.** A step/random mod fires from (a) its own audio edge — the
@@ -154,11 +152,16 @@ mostly wiring; the audit is why.
   a param move — firing at the musical moment is more correct than firing at
   texture-ready; accepted and documented here so nobody "fixes" it into sync.
 
-- **D6 — `every: u32` divisor, default 1.** "Every 4th kick advances the
-  pattern" is a musical necessity the graphs already prove (`tc_divided`,
-  BasicShapes). Runtime fire-counter on the mod (serde-skip) increments per
-  gated event; the action executes when `counter % every == 0`. The divisor
-  counts events the mode admits (post-`trigger_mode`, pre-action).
+- **D6 — retired 2026-07-08 (Peter, this session).** The original D6 proposed
+  an `every: u32` divisor — fire the step/random action only on every Nth
+  admitted event, generalizing BasicShapes' `tc_divided` node. Peter didn't
+  ask for this and doesn't want it: *"I think Fable might have gotten
+  confused with the 'steps' or 'every nth' as me asking so I can specify the
+  'step size' as a percentage of the slider or number of 'steps' for discrete
+  sliders."* What he meant was step **size**, which is `amount` (D2) — already
+  committed, no new mechanism needed. There is no divisor anywhere in this
+  design: every armed step/random mod fires on every event its `trigger_mode`
+  admits, full stop.
 
 - **D7 — Random is a deterministic hash of the fire ordinal, and never repeats
   the current value.** Reuse the HashToFloat integer hash
@@ -176,8 +179,8 @@ mostly wiring; the audit is why.
   non-toggle, non-trigger param card, the standard audio-mod drawer
   (§9 U2) gains: Segmented **Action** (Cont / Step / Rand); when Step —
   stepper **Amount** (signed, snapped for whole-number params) + Segmented
-  **Wrap** (Wrap/Bounce/Clamp); when Step or Rand — stepper **Every** (1..16)
-  + the Mode row (Clip/Audio/Both) that gate cards already render. Collapsed
+  **Wrap** (Wrap/Bounce/Clamp); when Step or Rand — the Mode row (Clip/Audio/
+  Both) that gate cards already render. Collapsed
   card row shows the action as a badge (the §8 "silent mode trap" rule).
   Commands: one new `EditingService` command per field, shaped like
   `SetAudioModTriggerModeCommand` (the smallest member of the existing
@@ -219,7 +222,7 @@ tick:
         Continuous       → overwrite value                         (unchanged)
         gate / is_trigger → pulse / fire_count                     (unchanged)
         Step / Random    → edge-detect (audio) + layer clip edge
-                           (engine, D5), % every (D6) →
+                           (engine, D5) →
                            advance step_value (D4), snap+wrap (D2)
   evaluate_all_envelopes             — additive                    (unchanged)
 ```
@@ -238,23 +241,27 @@ channel, no new thread, no shared state.
   `audio_mod.rs:344-381` and `modulation.rs:390-462`.
 - **Read-back:** this doc §1–§3; LIVE_AUDIO_TRIGGERS §9.1 (U1–U6); restate D1,
   D4, D7 and forbidden moves F1–F4 before coding.
-- **Deliverables:** `TriggerAction`/`WrapMode` + `action`/`every` fields
-  (`audio_mod.rs`); runtime `step_value`/`step_dir`/divisor counter
-  (serde-skip); the step arm in `evaluate_instance_audio_mods` (audio edge
-  only — clip edge is P2); `apply_step_values` wired into `evaluate_modulation`
-  Phase 1.5; hash-ordinal random with discrete non-repeat; snapping for
-  `whole_numbers`/`value_labels`; `clear`-on-stop joins the BUG-051 path
-  (`engine.stop()` already clears trigger edges — step state clears there too).
+- **Deliverables:** `TriggerAction`/`WrapMode` + `action` field
+  (`audio_mod.rs`); runtime `step_value`/`step_dir` (serde-skip); the step arm
+  in `evaluate_instance_audio_mods` (audio edge only — clip edge is P2);
+  `apply_step_values` wired into `evaluate_modulation` Phase 1.5; hash-ordinal
+  random with discrete non-repeat; snapping for `whole_numbers`/`value_labels`;
+  `clear`-on-stop joins the BUG-051 path (`engine.stop()` already clears
+  trigger edges — step state clears there too).
 - **Gate (positive):** new `modulation::tests::step_*` covering: step advances
-  base-shadow on fire only; wrap/bounce/clamp at both rails; every=N admits
-  every Nth; random never repeats current discrete value across 200 fires;
-  identical fire sequence ⇒ identical value sequence twice in a row
-  (determinism, the export claim at L1); disarm falls back to committed base;
-  serde round-trip with `action` set and absent (old-project bytes identical —
-  assert on a fixture string). Focused: `cargo test -p manifold-core --lib`,
-  `-p manifold-playback --lib`, clippy workspace.
+  base-shadow on fire only; wrap/bounce/clamp at both rails; a small `amount`
+  vs. a large `amount` produce proportionally different jumps per fire
+  (step-size, not step-count, is the tunable); random never repeats current
+  discrete value across 200 fires; identical fire sequence ⇒ identical value
+  sequence twice in a row (determinism, the export claim at L1); disarm falls
+  back to committed base; serde round-trip with `action` set and absent
+  (old-project bytes identical — assert on a fixture string). Focused:
+  `cargo test -p manifold-core --lib`, `-p manifold-playback --lib`, clippy
+  workspace.
 - **Gate (negative):** `rg -n "thread_rng|SmallRng|rand::" crates/manifold-core/src crates/manifold-playback/src`
-  → zero hits; `rg -n "struct ParamStepMod|step_mods" crates` → zero hits.
+  → zero hits; `rg -n "struct ParamStepMod|step_mods" crates` → zero hits;
+  `rg -n "every\s*:\s*u32|fire_count.*every|%\s*every" crates/manifold-core/src crates/manifold-playback/src`
+  → zero hits (D6 retired — no divisor field anywhere).
 - **Demo:** none — L1 (no UI surface yet; the vertical slice lands in P3).
 - **Forbidden moves:** F1–F4 (§6).
 
@@ -284,7 +291,7 @@ channel, no new thread, no shared state.
   `build_audio_mod_drawer` shapes (§9.2 U-P2 moved them recently).
 - **Read-back:** D8; AUDIO_MODULATION_DESIGN §10.2; the §9.2 U-P2 account of
   which drawer pieces are shared.
-- **Deliverables:** Action/Amount/Wrap/Every rows per D8; collapsed-row action
+- **Deliverables:** Action/Amount/Wrap rows per D8; collapsed-row action
   badge; `SetAudioModActionCommand` (+ siblings if field-per-command fits the
   family better — executor's call inside the committed family shape);
   PanelAction + dispatch + state_sync; UI seeding of `amount` defaults (D2).
@@ -318,7 +325,7 @@ channel, no new thread, no shared state.
 - **Forbidden moves:** F6, F7.
 
 **Phasing-completeness check:** design-body commitments → P1 (action model,
-step/random/wrap/every/determinism, D4 lifecycle), P2 (clip-edge source, D3
+step/random/wrap/determinism, D4 lifecycle), P2 (clip-edge source, D3
 gating), P3 (drawer, badge, commands, multi-param via per-param mods — D9 needs
 no build), P4 (one migration exemplar). Deferred carries: beat-clock source,
 driver-edge source, the remaining cycling-preset tranche, trigger-group
@@ -339,7 +346,8 @@ entity. No committed affordance is unowned.
    graphs (class 3) never migrate to steps (D10, Peter verbatim).
 7. Clip edges for steps come from the engine, never from renderer feedback;
    the readiness divergence is accepted (D5).
-8. `every` divisor lives on the mod, counts mode-admitted events (D6).
+8. No `every`/divisor mechanism exists anywhere in this design (D6, retired
+   2026-07-08) — step size is controlled by `amount` (D2) only.
 
 ## 6. Forbidden moves (named for this design)
 
