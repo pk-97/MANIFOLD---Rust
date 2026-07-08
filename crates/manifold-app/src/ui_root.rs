@@ -1172,6 +1172,26 @@ impl UIRoot {
         self.drag_owner = None;
     }
 
+    /// D6/§3.4 (`docs/DRAG_CAPTURE_DESIGN.md`) — after a `PointerDown` is
+    /// consumed by `route_overlay_event`, does any OPEN overlay want
+    /// immediate-drag armed for this press? `route_overlay_event` returns
+    /// only whether an overlay consumed the event, not which one — but only
+    /// the overlay that actually consumed THIS `PointerDown` could have just
+    /// armed anything (every other open overlay never saw the event, and its
+    /// per-press state is cleared every gesture end by `gesture_ended`), so
+    /// polling the whole open set (same `Z_ORDER` walk `broadcast_gesture_end`
+    /// uses) identifies the same overlay without threading its identity back
+    /// out of `route_overlay_event`.
+    fn any_overlay_wants_immediate_drag(&mut self) -> bool {
+        for id in OverlayId::Z_ORDER {
+            let ov = self.overlay_mut(id);
+            if ov.is_open() && ov.wants_immediate_drag() {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Record `id` as closed if it was open before some out-of-band close
     /// attempt and isn't now — for close paths that don't go through
     /// `route_overlay_event`. The graph-editor window's browser popup is the
@@ -1575,6 +1595,16 @@ impl UIRoot {
             // the event through the single driver. If one consumes it (or a modal
             // captures it), lower any stashed selection and skip the panels below.
             if self.route_overlay_event(event, &mut actions) {
+                // D6/§3.4 (`docs/DRAG_CAPTURE_DESIGN.md`): the consuming overlay
+                // may have just armed a precision-drag surface (audio panel's
+                // band divider) on this exact PointerDown — request zero-
+                // threshold drag for the current press so the very next Move
+                // begins the drag instead of waiting for the 4px threshold.
+                if matches!(event, UIEvent::PointerDown { .. })
+                    && self.any_overlay_wants_immediate_drag()
+                {
+                    self.input.request_immediate_drag();
+                }
                 self.drain_overlay_selections(&mut actions);
                 continue;
             }
@@ -3015,4 +3045,95 @@ mod drag_capture_tests {
         assert!(!panel_rect.contains(outside_probe));
         assert!(!ui.overlay_contains_point(outside_probe));
     }
+
+    /// P3 (D6/§3.4): full-stack proof that a PointerDown landing on the audio
+    /// panel's Low/Mid crossover divider requests immediate drag for that
+    /// press, so a 1px Move begins the drag immediately (not after the usual
+    /// `DRAG_THRESHOLD_PX = 4.0`) and the following Drag reaches the panel as
+    /// an `AudioCrossoverChanged` action. Drives the real entry points
+    /// (`pointer_event` → `process_events`) rather than calling
+    /// `request_immediate_drag`/`resolve_drag_owner` directly, so it exercises
+    /// the exact wiring `process_events` does at the `route_overlay_event`
+    /// PointerDown site — the seam this phase resolved.
+    #[test]
+    fn divider_grab_requests_immediate_drag_and_one_pixel_move_yields_crossover_changed() {
+        let mut ui = new_root();
+        ui.audio_setup_panel.open();
+        ui.audio_setup_panel.configure(
+            None,
+            vec![manifold_ui::panels::audio_setup_panel::AudioSendRow {
+                id: manifold_core::AudioSendId::new("s1"),
+                label: "Audio 1".into(),
+                channels: vec![0],
+                channel_label: "Channel 1".into(),
+                gain_db: 0.0,
+                floor_db: manifold_ui::types::FLOOR_DB_OFF,
+                driven_count: 0,
+                source_label: "Cap".into(),
+                layer_fed: false,
+                routings: vec!["Capture: Channel 1".into()],
+                triggers: Vec::new(),
+                feeding_layers: Vec::new(),
+                consumers: Vec::new(),
+            }],
+            None,
+        );
+        let (low_hz, mid_hz, fmin, fmax) = (200.0_f32, 2000.0_f32, 20.0_f32, 20_000.0_f32);
+        ui.audio_setup_panel.set_scope_bands(low_hz, mid_hz, fmin, fmax);
+        ui.build();
+
+        let scope =
+            ui.audio_setup_panel.scope_rect().expect("scope present once open, sent, and built");
+        // Same log-scale mapping `AudioSetupPanel::scope_line_y` documents on
+        // `set_scope_bands` — reproduced here from the public scope_rect() +
+        // the bands just set, rather than reaching into the panel's private
+        // hit-test math, so the test only depends on the panel's public
+        // contract.
+        let yn = (low_hz / fmin).log2() / (fmax / fmin).log2();
+        let divider_y = scope.y + scope.height * (1.0 - yn);
+        let origin = Vec2::new(scope.x + scope.width * 0.5, divider_y);
+
+        ui.pointer_event(origin, PointerAction::Down, 0.0);
+        let down_actions = ui.process_events();
+        assert!(
+            down_actions
+                .iter()
+                .any(|a| matches!(a, PanelAction::AudioCrossoverDragBegin)),
+            "PointerDown on the divider should arm the band grab: {down_actions:?}"
+        );
+        assert!(ui.audio_setup_panel.is_dragging_band(), "divider grab should be armed");
+
+        // First Move: only 1px past the origin. With the global threshold
+        // (4px) this would NOT begin a drag — proving this requires the
+        // wiring having actually called `request_immediate_drag` off the
+        // PointerDown above.
+        let move1 = Vec2::new(origin.x, origin.y + 1.0);
+        ui.pointer_event(move1, PointerAction::Move, 0.01);
+        let move1_actions = ui.process_events();
+        assert!(
+            ui.input.is_dragging(),
+            "a 1px move on an immediate-drag press must begin the drag \
+             immediately, not wait for DRAG_THRESHOLD_PX; actions: {move1_actions:?}"
+        );
+
+        // Second Move: now a Drag (not DragBegin) event fires and reaches the
+        // panel as the crossover-changed action.
+        let move2 = Vec2::new(origin.x, origin.y + 2.0);
+        ui.pointer_event(move2, PointerAction::Move, 0.02);
+        let move2_actions = ui.process_events();
+        assert!(
+            move2_actions
+                .iter()
+                .any(|a| matches!(a, PanelAction::AudioCrossoverChanged(BandDivider::Low, _))),
+            "the Drag following the immediate DragBegin should yield an \
+             AudioCrossoverChanged(Low, _) action: {move2_actions:?}"
+        );
+    }
+
+    // P3 regression guard (buttons still need the ordinary 4px threshold) is
+    // proved directly in `manifold-ui`'s `input.rs` test module — that's
+    // where `DRAG_THRESHOLD`/`immediate_drag_armed` actually live, and it
+    // already has a bare-button test fixture (`setup()`); see
+    // `three_pixel_wiggle_without_immediate_drag_still_resolves_to_click` and
+    // `request_immediate_drag_allows_one_pixel_move_to_begin_drag` there.
 }

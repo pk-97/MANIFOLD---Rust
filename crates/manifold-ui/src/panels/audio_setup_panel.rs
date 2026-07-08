@@ -2403,6 +2403,16 @@ impl Overlay for AudioSetupPanel {
         self.dragging_band = None;
         self.calibration_drag = None;
     }
+
+    /// D6 (`docs/DRAG_CAPTURE_DESIGN.md` §3.4): true iff the `PointerDown` arm
+    /// above just armed a divider grab — `dragging_band` is only ever set
+    /// there and cleared by `DragEnd`/`PointerUp`/`gesture_ended`, so this
+    /// reflects THIS press, never a stale one. Band dividers have no click
+    /// behavior, so the click-forfeiture consequence of arming immediate
+    /// drag costs nothing here.
+    fn wants_immediate_drag(&self) -> bool {
+        self.dragging_band.is_some()
+    }
 }
 
 fn btn_style(active: bool) -> UIStyle {
