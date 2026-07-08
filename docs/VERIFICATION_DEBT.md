@@ -239,6 +239,28 @@ performer gesture live: point the Kick send at BasicShapes' `variant` param, arm
 4-bar loop, watch the shape advance per kick and wrap cleanly at the rail. That's Peter's L4,
 owed. Burn-down: the click-script below in `docs/landings/2026-07-08-param-step-actions.md`.
 
+### VD-018 — UI_CLIP_AND_Z P1: D2 tier-stacking not enforced on the live main-window path — L1 reached / L2 target
+Landed 2026-07-08. Containment (D1) is enforced everywhere — the inspector region clips at its
+rect, which is what actually kills BUG-060 (proven at L2, `bug060.after.png`). But *declared
+stacking* (D2) is tier-sorted only on the `traverse()` render path (headless snapshots + the editor
+window); the live main-window path renders via `panel_cache_info()` + `UICacheManager`, which is
+array-ordered, so D2's "Chrome always wins over Base regardless of build order" is carried on that
+path by containment alone, not by tier order. Invisible today because no main-window Base/Chrome
+regions overlap (disjoint `ScreenLayout` rects) — it becomes load-bearing the first time two tiers'
+regions overlap on the main window. Burn-down: P2 unifies the cache path onto tier-ordered region
+traversal (or makes `panel_cache_info` emit in `(tier, insertion)` order), then a PNG with a
+deliberately overlapping Base/Chrome pair proves the Chrome wins. Flagged to Peter at landing as the
+one design-level call; accepted for P1 because BUG-060 dies by containment independent of it.
+
+### VD-019 — UI_CLIP_AND_Z P1: BUG-060 L3 flow scrolls the inspector but not to true bottom — L2/L3 partial / L3 target
+Landed 2026-07-08. The acceptance flow (`scripts/ui-flows/bug060-inspector-footer-containment.json`)
+drives the real click path and proves the footer stays hit-testable and dispatches with the inspector
+busy and scrolled — but `try_inspector_scroll`'s effective max is ~15-20px on content ~1200px too
+tall (BUG-075), so it never reaches the *very bottom* that is BUG-060's exact repro condition.
+Containment makes bottom-scroll safe by construction (the region clip is unconditional), so this is a
+demonstration gap, not a correctness one. Burn-down: fix BUG-075 (scroll estimator under-counts
+drawer-open card height), then re-run the flow to a true bottom and re-capture.
+
 *(VD-001–004 seeded 2026-07-05 from the memory corpus plus Peter's in-app findings; VD-006 added
 2026-07-05, VD-007 at P2 landing, VD-008 at P3 landing, VD-009 at P4 landing, VD-010 at P5-inspector
 landing. VD-005 closed at P2 landing. The full backfill pass over recent landings is still owed and

@@ -1624,7 +1624,14 @@ _Verification:_ new device-free unit tests at the cache-manager helper layer —
 stale scrollbar). The 2026-07-04 "sections interleaved" sighting (hole #2 + rebuild-while-scrolled)
 is a separate open thread if it recurs.
 
-### BUG-060 — Inspector content paints over the footer bar — FIXED 2026-07-08
+### BUG-060 — Inspector content paints over the footer bar — FIXED 2026-07-08 (structural, UI_CLIP_AND_Z P1 2026-07-08)
+
+**Update (UI_CLIP_AND_Z P1, 2026-07-08):** the per-panel `build_in_rect` hand-clip that first
+fixed this was the forbidden stopgap the region design retires. P1 removed it and made the fix
+structural — the inspector now builds under a `begin_region(Base)` whose `CLIPS_CHILDREN` clip is
+minted by construction, so no inspector pixel can reach the footer regardless of paint order or
+future panel changes. Containment (D1) carries it on the live cache path; D2 tier-order on that path
+is carried as VD-018. Landing: `docs/landings/2026-07-08-ui-clip-z-p1.md`.
 
 **Symptom** (Peter, 2026-07-07; also the prior `f4b895d7` session's subject): with the
 audio-mod drawer open on a Clip Trigger row (`is_trigger_gate`), scrolling the inspector to
