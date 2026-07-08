@@ -3866,8 +3866,13 @@ impl Application {
             cm.ensure_atlas(&gpu.device, logical_w, logical_h);
             let (_, rendered_ranges) =
                 cm.render_dirty_panels(&gpu.device, ui, &self.ws.ui_root.tree, &panel_infos);
-            // Clear dirty flags only for ranges that were actually rendered.
-            // Deferred panels keep their dirty flags for the next frame.
+            // Clear dirty flags for the panel ranges the cache manager rendered.
+            // These are FULL panel ranges (the incremental path returns the whole
+            // panel too, since it only fires when there's no dirt outside its
+            // sub-regions), so this owns all panel-range dirty-flag clearing — the
+            // end-of-frame clear below is narrowed to the overlay region and no
+            // longer erases out-of-sub-region panel dirt before the cache's
+            // fallback-to-full-render can fire (BUG-015).
             for (start, end) in &rendered_ranges {
                 self.ws.ui_root.tree.clear_dirty_range(*start, *end);
             }
@@ -4800,11 +4805,21 @@ impl Application {
         self.ui_profile.add("present.commit", pseg.elapsed());
         pseg = std::time::Instant::now();
 
-        // Clear ALL remaining dirty flags. render_dirty_panels only clears
-        // panel cache ranges — overlay nodes (HUD, playhead, popups) live
-        // outside those ranges and their DIRTY flags were never cleared,
-        // keeping has_dirty permanently true and defeating the fast path.
-        self.ws.ui_root.tree.clear_dirty();
+        // Clear the overlay region's dirty flags. Panel ranges are already
+        // cleared per rendered range above (owned by the cache manager); the
+        // 7 panels contiguously tile [0, overlay_region_start), so this and that
+        // together clear every non-overlay node. Overlay nodes (HUD, playhead,
+        // popups) live at [overlay_region_start, count), are never in
+        // panel_infos, and would otherwise keep has_dirty permanently true and
+        // defeat the idle fast path. This is narrowed from a blanket clear_dirty()
+        // so out-of-sub-region panel dirt is no longer silently erased before the
+        // cache's fallback-to-full-render can fire (BUG-015).
+        let overlay_start = self.ws.ui_root.overlay_region_start;
+        let node_count = self.ws.ui_root.tree.count();
+        self.ws
+            .ui_root
+            .tree
+            .clear_dirty_range(overlay_start, node_count);
 
         // ── Late drawable acquisition ──
         // Acquire the drawable as late as possible to minimize time blocking on

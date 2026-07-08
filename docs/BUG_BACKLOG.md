@@ -44,7 +44,7 @@ or human can read it, and it needs no external tool.
 | BUG-009 | **stateless-gate-miss** | harvest skip resets StateStore-held scalar state (HIGH) |
 | BUG-010 | **wgsl-first-entry** | multi-entry wgsl_compute silently dispatches the first (MED) |
 | BUG-011 | **fused-output-oversize** | fused output buffer sized to max of all inputs (MED) |
-| BUG-015 | **inspector-overlap** | inspector shows stale content (section overlap after scroll; edge/margin ghost fragments) — Fable verdict 07-07: card-ghost hypothesis REFUTED; real hole = out-of-sub-region dirt dropped (stale-chrome class); "video fragment" was the preview window, not a bug (Peter) (MED) |
+| BUG-015 | **inspector-overlap** | stale-chrome class FIXED 2026-07-08 — incremental cache path now falls back to full render on out-of-sub-region dirt (`has_dirty_outside_ranges` + `incremental_path_safe`); blanket `clear_dirty` narrowed to the overlay region so the fallback isn't erased. (2026-07-04 "sections interleaved" sighting = separate open thread if it recurs) |
 | BUG-060 | **inspector-footer-overpaint** | FIXED 2026-07-08 — `build_in_rect` now clips its scrolled column to the inspector rect + `build_toggle_trigger_row` gained the mid-tween reveal clip `build_param_row` already had |
 | BUG-025 | **timeline-scissor-bleed** | clip content bleeds across row bounds (MED, repro needed — scrolled headless render 07-07 clean) |
 | BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
@@ -1447,6 +1447,55 @@ sighting should be re-examined against hole #2 + rebuild-while-scrolled rather t
 cache. The footer-overlap symptom this investigation started from is now its own entry with
 a grounded root cause: **BUG-060** (no inspector-level pixel clip + the trigger-row drawer's
 missing reveal clip).
+
+**Outcome (Opus, 2026-07-08) — hole #2 (out-of-sub-region dirt dropped) FIXED at the root.**
+BUG-060's clip container confirmed on `main` (@ `27557d18`) before starting, per the sequencing
+note. Two-part structural fix:
+
+1. _Incremental path now falls back on out-of-sub-region dirt._ New
+`UITree::has_dirty_outside_ranges(start, end, covered)`
+([tree.rs](../crates/manifold-ui/src/tree.rs)) reports DIRTY nodes in the panel range that lie
+in no sub-region. The cache manager's incremental branch gates on a new `incremental_path_safe`
+helper (`extents_unchanged` AND `!has_dirty_outside_ranges`)
+([ui_cache_manager.rs](../crates/manifold-renderer/src/ui_cache_manager.rs)) — chrome dirt
+(tab strip, cog/Collapse, scrollbar) now forces the full, self-clearing panel render the same
+frame, so the stale-chrome ghost never paints. No one-frame lag: the fallback is same-frame,
+not deferred.
+
+2. _Panel-range dirty-flag clearing moved to the cache manager; blanket clear narrowed to the
+overlay region._ The incremental path now returns the FULL panel range (safe: it only fires
+when there's no out-of-sub-region dirt), so `clear_dirty_range` over `rendered_ranges`
+([app_render.rs:3871](../crates/manifold-app/src/app_render.rs#L3871)) owns all panel-range
+clearing. The end-of-frame blanket `clear_dirty()` at :4807 became
+`clear_dirty_range(overlay_region_start, count)` — it no longer erases out-of-sub-region panel
+dirt before the fallback can fire. The now-false comment at :3870 ("Deferred panels keep their
+dirty flags") was corrected.
+
+_Fast-path safety (the CRITICAL constraint):_ traced the tree layout — the 7 panels contiguously
+tile `[0, overlay_region_start)` with zero gaps (build order: transport→header→footer→inspector
+are back-to-back; the two split/resize handles are the SplitHandles catch-all
+`[inspector_end, scroll_panels_start)`; layer_headers then viewport run to `overlay_region_start`;
+`node_range() == (first, first+count)`). So clearing all rendered panel ranges + the overlay
+range clears every node, exactly as the old blanket clear did — `has_dirty_in_range(0, panel_end)`
+still settles to false and the `offscreen_dirty` idle fast path
+([app_render.rs:3915](../crates/manifold-app/src/app_render.rs#L3915)) stays reachable. Both the
+old and new end-of-frame clears run only on slow-path (dirty) frames — the fast path returns at
+:3961 before either — so there is no clearing-parity change on idle frames. Since every dirty
+panel is always rendered (no deferral in `render_dirty_panels`), no panel-range dirt can survive
+a slow frame. Fast-path preservation is by reasoning + the tiling verification above, NOT a live
+trace (the app is an interactive GPU rig I can't idle-observe headlessly here; `render_ui_to_png`
+bypasses the cache).
+
+_Verification:_ new device-free unit tests at the cache-manager helper layer —
+`out_of_subregion_dirt_forces_full_render` (chrome dirt rejects the incremental path while
+`extents_unchanged` still passes, isolating out-of-region dirt as the sole cause) and
+`incremental_used_when_only_card_dirt` (in-card dirt stays on the fast path). Gate:
+`cargo test -p manifold-renderer -p manifold-app -p manifold-ui` (993 + 158/10/1/3 + 646 passed)
++ `cargo clippy -p manifold-renderer -p manifold-app -p manifold-ui --all-targets -D warnings`
+(clean; only pre-existing manifold-media Obj-C deprecation warnings). Shipped on
+`fix/bug-015-out-of-region-dirt`. **Note:** this closes the stale-chrome-STATE class (ghost hover,
+stale scrollbar). The 2026-07-04 "sections interleaved" sighting (hole #2 + rebuild-while-scrolled)
+is a separate open thread if it recurs.
 
 ### BUG-060 — Inspector content paints over the footer bar — FIXED 2026-07-08
 

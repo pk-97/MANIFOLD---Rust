@@ -205,13 +205,20 @@ impl UICacheManager {
 
             // ── Sub-region incremental path (doesn't count against budget) ──
             // Sound only while every sub-region keeps the extent it had when last
-            // rendered (see `last_sub_regions`). `extents_unchanged` enforces that:
-            // if a region shrank / grew / moved, the Load-preserved pixels outside
-            // the redrawn nodes would be stale, so we drop to the full, self-
-            // clearing panel render below instead.
+            // rendered (see `last_sub_regions`) AND no dirt sits outside the
+            // sub-regions — chrome (tab strip, cog/Collapse, scrollbar) lives in
+            // no sub-region, so the Load path never repaints it and a stale pixel
+            // there would survive. `incremental_path_safe` enforces both; either
+            // failure drops to the full, self-clearing panel render below.
             if self.panel_valid[idx]
                 && let Some(ref subs) = info.sub_regions
-                && Self::extents_unchanged(&self.last_sub_regions[idx], subs, tree)
+                && Self::incremental_path_safe(
+                    &self.last_sub_regions[idx],
+                    subs,
+                    info.node_start,
+                    info.node_end,
+                    tree,
+                )
             {
                 let dirty: Vec<&(usize, usize)> = subs
                     .iter()
@@ -230,10 +237,13 @@ impl UICacheManager {
                     if self.prepare_and_draw(device, ui_renderer) {
                         rendered += 1;
                     }
-                    // Mark only the dirty sub-regions for clearing.
-                    for &(s, e) in &dirty {
-                        rendered_ranges.push((*s, *e));
-                    }
+                    // The incremental path only fires when there is no dirt outside
+                    // the sub-regions (guaranteed by `incremental_path_safe`), so the
+                    // whole panel range is clean after this repaint. Return the full
+                    // range — clearing it (not just the dirty sub-regions) keeps
+                    // panel-range dirty-flag ownership with the cache manager, so the
+                    // caller's blanket clear can be narrowed to the overlay region.
+                    rendered_ranges.push((info.node_start, info.node_end));
                     continue;
                 }
             }
@@ -269,6 +279,31 @@ impl UICacheManager {
             .iter()
             .map(|&(s, e)| (s, e, tree.get_bounds(tree.id_at(s))))
             .collect()
+    }
+
+    /// Whether the incremental sub-region Load path is safe for a panel this
+    /// frame. Two conditions are both required; either failure forces the caller
+    /// onto the full, self-clearing panel render.
+    ///
+    /// First, `extents_unchanged`: every sub-region keeps the extent it had when
+    /// last fully rendered (Load preserves pixels outside the redrawn nodes, so a
+    /// moved/resized region would leave stale pixels).
+    ///
+    /// Second, no dirt outside the sub-regions: the tab strip, cog/Collapse
+    /// controls and scrollbar sit in NO sub-region, so the Load path never
+    /// repaints them. If one of them is dirty (e.g. un-hovering a tab while an
+    /// audio-modulated card repaints its slider every frame), the incremental
+    /// path would drop that repaint and the stale chrome would persist — the
+    /// BUG-015 hole.
+    fn incremental_path_safe(
+        last: &[(usize, usize, Rect)],
+        subs: &[(usize, usize)],
+        node_start: usize,
+        node_end: usize,
+        tree: &UITree,
+    ) -> bool {
+        Self::extents_unchanged(last, subs, tree)
+            && !tree.has_dirty_outside_ranges(node_start, node_end, subs)
     }
 
     /// Whether `subs` matches `last` region-for-region (same ranges and same
@@ -370,5 +405,45 @@ mod tests {
     fn no_subregions_signature_is_empty() {
         let (tree, _) = tree_with_subregions();
         assert!(UICacheManager::sub_region_sig(None, &tree).is_empty());
+    }
+
+    /// A panel [0,4) shaped like the inspector: node 0 = chrome (background /
+    /// tab strip), nodes 1-2 = one card sub-region, node 3 = chrome (scrollbar).
+    /// Nodes 0 and 3 sit in NO sub-region — the incremental Load path can never
+    /// repaint them. Returns the tree and the sub-region partition `[(1,3)]`.
+    fn tree_with_chrome_and_card() -> (UITree, Vec<(usize, usize)>) {
+        let mut tree = UITree::new();
+        tree.add_panel(None, 0.0, 0.0, 100.0, 100.0, UIStyle::default()); // 0: chrome bg
+        tree.add_panel(None, 5.0, 10.0, 90.0, 30.0, UIStyle::default()); // 1: card frame
+        tree.add_panel(None, 8.0, 12.0, 40.0, 10.0, UIStyle::default()); // 2: card content
+        tree.add_panel(None, 0.0, 95.0, 100.0, 5.0, UIStyle::default()); // 3: chrome scrollbar
+        (tree, vec![(1, 3)])
+    }
+
+    #[test]
+    fn incremental_used_when_only_card_dirt() {
+        let (mut tree, subs) = tree_with_chrome_and_card();
+        let sig = UICacheManager::sub_region_sig(Some(&subs), &tree);
+        tree.clear_dirty();
+        // Dirt confined to a node INSIDE the card sub-region — the Load path
+        // reaches it, and the sub-region's first node (index 1) hasn't moved, so
+        // the incremental path stays safe.
+        tree.set_bounds(tree.id_at(2), Rect::new(8.0, 12.0, 50.0, 10.0));
+        assert!(UICacheManager::incremental_path_safe(&sig, &subs, 0, 4, &tree));
+    }
+
+    #[test]
+    fn out_of_subregion_dirt_forces_full_render() {
+        let (mut tree, subs) = tree_with_chrome_and_card();
+        let sig = UICacheManager::sub_region_sig(Some(&subs), &tree);
+        tree.clear_dirty();
+        // Dirty a chrome node (the scrollbar, index 3) that lies in NO sub-region.
+        // Its first-node-of-a-sub-region bounds are untouched, so `extents_unchanged`
+        // still passes — the ONLY reason the incremental path must be rejected is
+        // the out-of-sub-region dirt, which the Load path would never repaint. The
+        // guard must force the full, self-clearing panel render (BUG-015).
+        tree.set_bounds(tree.id_at(3), Rect::new(0.0, 95.0, 80.0, 5.0));
+        assert!(UICacheManager::extents_unchanged(&sig, &subs, &tree));
+        assert!(!UICacheManager::incremental_path_safe(&sig, &subs, 0, 4, &tree));
     }
 }
