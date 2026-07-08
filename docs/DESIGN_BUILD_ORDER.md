@@ -18,6 +18,11 @@ prerequisites aren't shipped, stop.
 
 ## 1. The corpus (approved, not built)
 
+> **Status source = the DESIGN STATUS BOARD** (`python3 .claude/hooks/design_status.py`,
+> auto-injected each session from the design docs' status lines). The status notes in
+> this table are navigational and can lag — trust the board for state; trust this table
+> for the dependency/ordering columns, which is its real job.
+
 | Design doc | Hard prerequisites | Hardening level (§DESIGN_DOC_STANDARD §9) |
 |---|---|---|
 | GIG_RESILIENCE_DESIGN (P1–P2 SHIPPED 2026-07-03; P3–P4 remain) | P3 after PERFORM_SURFACE P1 (see §3) | full |
@@ -33,7 +38,7 @@ prerequisites aren't shipped, stop.
 | MCP_INTERFACE_DESIGN | VOCAB apply; wants COMPONENT_LIBRARY (its authoring surface) | conformance |
 | ML_NODES_DESIGN | none for Vision/CoreML tier; ONNX tier needs VULKAN | conformance |
 | VULKAN_BACKEND_DESIGN | none (Phase 0 scaffold shipped 0c5dde17) | conformance |
-| MATERIAL_SYSTEM_DESIGN (**M1–M5 SHIPPED**, verified 2026-07-04; M6 addendum §11 remains) | none (VOCAB ✅) | conformance + §11 addendum |
+| MATERIAL_SYSTEM_DESIGN (**M1–M6 ALL SHIPPED**, verified 2026-07-04) | none (VOCAB ✅) | conformance |
 | REALTIME_3D_DESIGN (P0 ✅ = MATERIAL M1–M5) | none remaining (VOCAB ✅) | full (written to standard 2026-07-03) |
 | SIMULATIONS_DESIGN | REALTIME_3D P1 for scene composition | full (written to standard 2026-07-03) |
 | IMPORT_DESIGN | per phase: P1–P3 need REALTIME_3D P1 + **MATERIAL M6**; P5 needs SESSION_MODE + MEDIA_BACKEND P2; P6 needs VOCAB ✅ (agent half: MCP) | full (written to standard 2026-07-03; §8 addendum 2026-07-04) |
