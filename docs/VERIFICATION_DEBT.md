@@ -240,6 +240,13 @@ performer gesture live: point the Kick send at BasicShapes' `variant` param, arm
 owed. Burn-down: the click-script below in `docs/landings/2026-07-08-param-step-actions.md`.
 
 ### VD-018 — UI_CLIP_AND_Z P1: D2 tier-stacking not enforced on the live main-window path — L1 reached / L2 target
+**Correction 2026-07-08:** the claim below that "containment kills BUG-060 (proven at L2)" was WRONG
+— `bug060.after.png` renders through `traverse()`, not the live `panel_cache_info`/UICacheManager
+path, so it proved containment in a render path the app never uses. BUG-060 still repros live and is
+REOPENED (see BUG_BACKLOG). This VD is now bigger than a stacking nicety: the live cache path getting
+the region treatment (clip *and* order) is what an actual fix likely needs, so treat it as coupled to
+BUG-060, not deferred cosmetics.
+
 Landed 2026-07-08. Containment (D1) is enforced everywhere — the inspector region clips at its
 rect, which is what actually kills BUG-060 (proven at L2, `bug060.after.png`). But *declared
 stacking* (D2) is tier-sorted only on the `traverse()` render path (headless snapshots + the editor
