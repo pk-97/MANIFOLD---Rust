@@ -4620,6 +4620,7 @@ impl Application {
                         manifold_ui::color::SHADOW,
                     );
                 }
+                ui.set_debug_pass("overlay");
                 ui.render_tree_range(&self.ws.ui_root.tree, start, end);
                 ui.pop_depth();
             }
@@ -4628,6 +4629,7 @@ impl Application {
             // overlay.
             ui.push_depth(Depth::TOOLTIP);
             if let Some(start) = self.ws.ui_root.inspector.card_drag_first_node() {
+                ui.set_debug_pass("card-drag");
                 ui.render_tree_range(&self.ws.ui_root.tree, start, usize::MAX);
             }
             // Text input overlay — last, so it tops everything.

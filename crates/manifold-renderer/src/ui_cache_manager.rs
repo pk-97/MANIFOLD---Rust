@@ -195,17 +195,28 @@ impl UICacheManager {
 
         let mut rendered = 0;
 
+        // BUG-060 footer-leak trace: the footer line = the footer panel's top
+        // edge. Any non-footer draw below it is painting where the footer's
+        // controls live. Set once. No-op unless MANIFOLD_TRACE_FOOTER_LEAK is set.
+        ui_renderer.set_debug_footer_top(
+            panels
+                .iter()
+                .find(|p| p.slot == PanelSlot::Footer)
+                .map(|p| p.rect.y),
+        );
+
         for info in panels {
             let idx = info.slot as usize;
 
-            // BUG-060 footer-leak trace: tell the renderer the inspector must
-            // not paint below its own bottom edge (the footer line). No-op
-            // unless MANIFOLD_TRACE_FOOTER_LEAK is set. Other panels pass None
-            // (the footer legitimately draws to the screen bottom).
-            ui_renderer.set_debug_clip_bottom(if info.slot == PanelSlot::Inspector {
-                Some(info.rect.y + info.rect.height)
-            } else {
-                None
+            // BUG-060 footer-leak trace: label this panel's render pass.
+            ui_renderer.set_debug_pass(match info.slot {
+                PanelSlot::Transport => "transport",
+                PanelSlot::Header => "header",
+                PanelSlot::Footer => "footer",
+                PanelSlot::Inspector => "inspector",
+                PanelSlot::SplitHandles => "split-handles",
+                PanelSlot::LayerHeaders => "layer-headers",
+                PanelSlot::Viewport => "viewport",
             });
 
             // Skip if panel region is valid and no nodes are dirty.
