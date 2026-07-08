@@ -1,6 +1,6 @@
 # Drag Capture — one owner per pointer gesture, from press to release
 
-**Status:** APPROVED design, not built · 2026-07-07 (approved same day by Peter) · Fable
+**Status:** IN PROGRESS — **P1 LANDED 2026-07-08 @ `9bb8ca86`** (single drag-capture ownership D1–D4 + D9, L3); P2–P3 pending · design 2026-07-07 (approved same day by Peter) · Fable
 **Prerequisites:** none (BUG-058 instrumentation + BUG-059 stopgap landed 2026-07-07 @ `fb2bdc07`; P2 deletes the stopgap)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -267,7 +267,7 @@ dragging, until you let go — no matter where your hand travels.**
 
 ## 5. Phasing
 
-### P1 — Ownership + terminal broadcast (the vertical slice)
+### P1 — Ownership + terminal broadcast (the vertical slice) — ✅ LANDED 2026-07-08 @ `9bb8ca86` (L3; report `docs/landings/2026-07-08-drag-capture-p1.md`)
 
 - **Entry state:** tip contains `556578c3` (instrumentation + stopgap):
   `git log --oneline -5` shows it; `rg -n "overlay_drag_active" crates/manifold-app/src/ui_root.rs`

@@ -71,8 +71,29 @@ or human can read it, and it needs no external tool.
 | BUG-064 | **save-rename-before-fsync** | V2 save fsyncs the directory but never the temp file — power loss can leave a valid-named archive with unwritten data blocks (MED) |
 | BUG-065 | **24-bit-snapshot-hash** | save dedup + history identity key on 6 hex chars of SHA-256; a collision skips a real save or restores the wrong snapshot (LOW prob / HIGH cost) |
 | BUG-066 | **fluid3d-corner-drift** | FluidSim3D density herds into one corner (top-right at default params): turbulence noise is a wandering net tide + slope force has a sign-following, feather-scaled diagonal drift; root of the drift NOT yet found — 4 hypotheses refuted with evidence, harness in-repo (MED-HIGH, visible on stage) |
+| BUG-067 | **ui-snapshot-dead-blit-pipeline** | `make_blit_pipeline` (`crates/manifold-app/src/ui_snapshot/render.rs:760`) is never used; `cargo clippy --features manifold-app/ui-snapshot -- -D warnings` fails on it, so any clippy run that chains the ui-snapshot feature (needed for `cargo xtask ui-snap` L3 flows) trips. Pre-existing at `b9304330`, found during DRAG_CAPTURE P1 (LOW) |
+| BUG-068 | **inspector-scene-cliphit-overlap** | the `inspector` ui-snap scene fixture has a clip-vs-panel hit-test overlap at its narrower zoom — a clip can't be both uniquely-labeled and safely positioned over the inspector column, which forced DRAG_CAPTURE P1's L3 flow onto the `timeline` scene. Fixture-only, no runtime impact. Pre-existing at `b9304330` (LOW) |
 
 ## Open
+
+### BUG-067 (ui-snapshot-dead-blit-pipeline) — dead `make_blit_pipeline` fails clippy under the ui-snapshot feature — LOW
+
+**Found 2026-07-08 during DRAG_CAPTURE P1 gating; confirmed pre-existing** (present at base
+`b9304330`, reproduced in a throwaway worktree; `git diff --stat b9304330 -- .../render.rs`
+empty). Symptom: `fn make_blit_pipeline` at `crates/manifold-app/src/ui_snapshot/render.rs:760`
+is never called; under `-D warnings` with the `manifold-app/ui-snapshot` feature the dead-code
+lint denies the build. The no-feature clippy gate is clean, so it only bites a combined
+`clippy --features ui-snapshot` invocation. Root cause: leftover helper. Fix shape: delete it,
+or wire it if the blit path is meant to be used. Not blocking; outside DRAG_CAPTURE's file list.
+
+### BUG-068 (inspector-scene-cliphit-overlap) — `inspector` ui-snap fixture clip/panel hit overlap — LOW
+
+**Found 2026-07-08 during DRAG_CAPTURE P1 L3 authoring; pre-existing at `b9304330`.** The
+`inspector` snapshot scene at its narrower zoom overlaps clip surfaces with the inspector
+column, so no clip in it is simultaneously uniquely-labeled and safely draggable — which is why
+P1's `drag-clip-release-over-inspector.json` flow proves position-independence on the `timeline`
+scene (drag past the tracks' right edge) instead. Fixture-only, no app runtime impact. Fix shape:
+adjust the `inspector` scene's clip layout or zoom so a clip clears the panel.
 
 ### BUG-066 (fluid3d-corner-drift) — FluidSim3D density herds into one corner; two causes isolated, one root still open — MED-HIGH (visible on stage in long-running clips)
 
