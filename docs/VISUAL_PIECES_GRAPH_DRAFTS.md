@@ -352,12 +352,15 @@ source ──┐
 ```
 
 - **Admit Reality** — `wet_dry(dry = source, wet = Memory, mix = Drift)`. Drift 0: every frame is described once from life (reads as a stylize). Drift 1: the loop eats only itself and converges to the prior. The card is the dramaturgy.
-- **Describe** — `edge_detect` · `depth_map` · `person_mask`, all reading the admitted frame.
+- **Generation Clock** — `beat_gate` (Cadence card: every beat / every bar) latching the admitted frame through a `mux_texture` hold. Generations are **discrete and musical**: the image sits perfectly still between re-descriptions, then re-remembers itself once per bar. Lucier's generations were discrete tape passes; per-frame looping is what reads as smear.
+- **Describe** — `edge_detect` · `depth_map` · `person_mask`, all reading the latched frame.
 - **Redraw** — depth → `color_lut(palette)` (tonal fill from distance) → `posterize` (Bands card — the flat, confident fields) → subject re-tinted via `masked_mix(person_mask)` → edges re-inked via `compose(Multiply)` dark strokes (Detail card). Output goes to OUT **and** into Memory.
 
-**Card** (6): **Drift (THE fader — quiet-section dramaturgy in one knob)** · Palette · Detail (edge ink) · Bands · Memory (extra `smoothing`-style blend between generations, 0 = hard) · Reset (trigger — flushes Memory to source).
+**The re-description contract (anti-smear, load-bearing).** This piece is one graph decision away from the day-one TouchDesigner feedback loop (feedback → blur/displace/hue-drift → accumulate), and the build must hold the line that separates them: **the previous generation's pixels never reach the next generation — only the description maps do.** The Redraw group's inputs are exclusively {edges, depth, mask, palette}; there is no wire from Memory into any Redraw compositor, no geometric transform inside the loop, no continuous accumulation. The TD loop *re-processes* pixels and drifts forever; this piece *re-describes* and **converges** — detail below the describers' thresholds is irreversibly gone each generation, which is the entire meaning. If a build change makes the image smear, orbit, or color-cycle instead of settling into flat confident fields, the contract is broken regardless of how good it looks.
 
-**Verify.** Runtime soak: 60 s at Drift 1 from a face fixture — the image must *converge* (stable flat-field portrait-ish state), not strobe or blow out; check `temporal` state resets on export warmup (§8 bug class).
+**Card** (6): **Drift (THE fader — quiet-section dramaturgy in one knob)** · Cadence (beat / bar / free) · Palette · Detail (edge ink) · Bands · Reset (trigger — flushes Memory to source).
+
+**Verify.** The contract is the acceptance test: 60 s soak at Drift 1 from a face fixture — per-generation frame delta must **decrease monotonically toward ~zero** (converge), never oscillate or blow out; a scripted delta check on the PNG series, then look. Also: `temporal` state resets on export warmup (§8 bug class); no wire exists from Memory into Redraw (structural check on the JSON).
 
 ## A13. Glossolalia (generator — self-portrait II)
 
