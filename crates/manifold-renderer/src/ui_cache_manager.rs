@@ -217,6 +217,27 @@ impl UICacheManager {
                     p.slot, p.rect.x, p.rect.y, p.rect.width, p.rect.height,
                     p.node_start, p.node_end,
                 );
+                // For the footer, dump each node's bounds + visibility so we can
+                // see whether Q/FPS are positioned in the bar or misplaced/hidden.
+                if p.slot == PanelSlot::Footer {
+                    for n in p.node_start..p.node_end.min(tree.count()) {
+                        let id = tree.id_at(n);
+                        let b = tree.get_bounds(id);
+                        let (vis, text) = tree
+                            .get_node(id)
+                            .map(|nd| {
+                                (
+                                    nd.flags.contains(manifold_ui::node::UIFlags::VISIBLE),
+                                    nd.text.clone().unwrap_or_default(),
+                                )
+                            })
+                            .unwrap_or((false, String::new()));
+                        eprintln!(
+                            "[FOOTER-DBG]   node {n}: bounds=({:.0},{:.0},{:.0},{:.0}) visible={vis} text={text:?}",
+                            b.x, b.y, b.width, b.height,
+                        );
+                    }
+                }
             }
         }
 
