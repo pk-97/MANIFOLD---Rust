@@ -387,6 +387,12 @@ pub struct UIInputSystem {
     last_drag_pos: Vec2,
     is_dragging: bool,
 
+    // D6 (`docs/DRAG_CAPTURE_DESIGN.md` §3.4): armed by `request_immediate_drag`
+    // while routing the CURRENT press's `PointerDown`; makes the Move arm treat
+    // the drag threshold as 0 for this press only. Cleared on `Up` alongside the
+    // other per-press state — never carries over to the next gesture.
+    immediate_drag_armed: bool,
+
     // Double-click detection (position-based, survives tree rebuilds)
     last_click_time: f32,
     last_click_pos: Vec2,
@@ -410,6 +416,7 @@ impl UIInputSystem {
             press_origin: Vec2::ZERO,
             last_drag_pos: Vec2::ZERO,
             is_dragging: false,
+            immediate_drag_armed: false,
             last_click_time: 0.0,
             last_click_pos: Vec2::new(-100.0, -100.0),
             modifiers: Modifiers::default(),
@@ -444,6 +451,12 @@ impl UIInputSystem {
 
     pub fn is_dragging(&self) -> bool {
         self.is_dragging
+    }
+
+    /// Arm zero-threshold drag for the CURRENT press only (cleared on Up).
+    /// Call while routing the PointerDown of a precision surface (D6).
+    pub fn request_immediate_drag(&mut self) {
+        self.immediate_drag_armed = true;
     }
 
     /// Re-apply HOVERED / PRESSED flags to the live nodes carrying the currently
@@ -540,7 +553,13 @@ impl UIInputSystem {
                 if let Some(pw) = self.pressed_widget {
                     if !self.is_dragging {
                         let dist = screen_pos.distance(self.press_origin);
-                        if dist >= DRAG_THRESHOLD {
+                        // D6: a precision surface armed zero-threshold drag for
+                        // this press (`request_immediate_drag`) — the global
+                        // `DRAG_THRESHOLD` constant is untouched; only this
+                        // press's effective threshold drops to 0.
+                        let threshold =
+                            if self.immediate_drag_armed { 0.0 } else { DRAG_THRESHOLD };
+                        if dist >= threshold {
                             self.is_dragging = true;
                             if input_trace_enabled() {
                                 eprintln!(
@@ -650,6 +669,7 @@ impl UIInputSystem {
                 }
                 self.pressed_widget = None;
                 self.is_dragging = false;
+                self.immediate_drag_armed = false;
             }
         }
     }
@@ -914,6 +934,54 @@ mod tests {
             .filter(|e| matches!(e, UIEvent::Click { .. }))
             .collect();
         assert_eq!(clicks.len(), 0);
+    }
+
+    /// P3 (D6, `docs/DRAG_CAPTURE_DESIGN.md` §3.4): a press that armed
+    /// `request_immediate_drag` begins the drag on the very next Move, no
+    /// matter how small — proving the effective per-press threshold really
+    /// drops to 0, not just "lower". 1px is nowhere near the ordinary 4px
+    /// `DRAG_THRESHOLD`, so this would fail without the override.
+    #[test]
+    fn request_immediate_drag_allows_one_pixel_move_to_begin_drag() {
+        let (mut tree, mut input) = setup();
+
+        input.process_pointer(&mut tree, Vec2::new(60.0, 60.0), PointerAction::Down, 0.0);
+        input.request_immediate_drag();
+        // 1px move — far under the ordinary 4px DRAG_THRESHOLD.
+        input.process_pointer(&mut tree, Vec2::new(61.0, 60.0), PointerAction::Move, 0.01);
+
+        let events = input.drain_events();
+        let begins = events.iter().filter(|e| matches!(e, UIEvent::DragBegin { .. })).count();
+        assert_eq!(begins, 1, "a 1px move must begin the drag once immediate-drag is armed");
+        assert!(input.is_dragging());
+    }
+
+    /// P3 regression guard: a press that never calls `request_immediate_drag`
+    /// keeps the ordinary 4px `DRAG_THRESHOLD` — a 3px wiggle before Up still
+    /// resolves to a `Click`, never a `Drag`/`DragEnd`. Proves the global
+    /// constant is untouched by D6's per-press override, and that the flag
+    /// defaults off / doesn't leak from any prior press.
+    #[test]
+    fn three_pixel_wiggle_without_immediate_drag_still_resolves_to_click() {
+        let (mut tree, mut input) = setup();
+
+        input.process_pointer(&mut tree, Vec2::new(60.0, 60.0), PointerAction::Down, 0.0);
+        // 3px wiggle — under the 4px threshold, no immediate-drag arm.
+        input.process_pointer(&mut tree, Vec2::new(63.0, 60.0), PointerAction::Move, 0.01);
+        assert!(!input.is_dragging(), "a 3px move must stay under DRAG_THRESHOLD_PX");
+
+        input.process_pointer(&mut tree, Vec2::new(63.0, 60.0), PointerAction::Up, 0.02);
+        let events = input.drain_events();
+        assert_eq!(
+            events.iter().filter(|e| matches!(e, UIEvent::Click { .. })).count(),
+            1,
+            "release without crossing the threshold must still resolve to a Click: {events:?}"
+        );
+        assert_eq!(
+            events.iter().filter(|e| matches!(e, UIEvent::DragBegin { .. } | UIEvent::Drag { .. } | UIEvent::DragEnd { .. })).count(),
+            0,
+            "no drag event should fire for a sub-threshold wiggle: {events:?}"
+        );
     }
 
     /// Regression: a drag whose pressed widget LEFT the tree before release must

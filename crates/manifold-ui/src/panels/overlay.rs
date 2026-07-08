@@ -165,6 +165,17 @@ pub trait Overlay {
     /// armed by `claims_drag`/`on_event` (P2: the audio panel's
     /// `dragging_band`/`calibration_drag`).
     fn gesture_ended(&mut self) {}
+
+    /// Did this overlay just arm an immediate-drag surface (D6,
+    /// `docs/DRAG_CAPTURE_DESIGN.md` §3.4) while consuming the `PointerDown`
+    /// just routed to it? Read by `UIRoot` once, immediately after
+    /// `route_overlay_event` consumes a `PointerDown` — never per-event.
+    /// Default: no. Must reflect THIS press, not a stale flag from a
+    /// previous gesture (the audio panel returns true iff it just armed
+    /// `dragging_band` on the `PointerDown` being routed).
+    fn wants_immediate_drag(&self) -> bool {
+        false
+    }
 }
 
 /// Resolve an [`Anchor`] + size to an on-screen rect, clamped so the overlay
