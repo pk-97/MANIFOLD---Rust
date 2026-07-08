@@ -252,7 +252,19 @@ impl UICacheManager {
             // The panel's first node is its opaque, full-rect background, so a full
             // render is self-clearing under LoadOp::Load — no atlas clear needed,
             // and any pre-existing ghost in the region is painted over.
-            ui_renderer.render_tree_range(tree, info.node_start, info.node_end);
+            //
+            // `render_sub_region` (ancestor-aware flat scan), not
+            // `render_tree_range` (root-scan): `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md`
+            // D1 now wraps every panel in a `begin_region` container whose root
+            // sits ONE INDEX BEFORE `info.node_start` (`UIRoot::panel_cache_info`
+            // reports each panel's OWN content range, unchanged, not the
+            // region's) — a root-scan over `[node_start, node_end)` would never
+            // find that root and would render nothing. `render_sub_region` walks
+            // the parent chain from `node_start` instead, so it picks up the
+            // region's `CLIPS_CHILDREN` as a pre-pushed ancestor clip even
+            // though the region root itself is out of range — the same
+            // reparented-node case its own doc comment names.
+            ui_renderer.render_sub_region(tree, info.node_start, info.node_end, false);
             if self.prepare_and_draw(device, ui_renderer) {
                 self.panel_valid[idx] = true;
                 rendered += 1;

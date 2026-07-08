@@ -10,7 +10,7 @@ use crate::input::{Modifiers, UIEvent};
 use crate::layout::ScreenLayout;
 use crate::node::*;
 use crate::scroll_container::{SCROLLBAR_W, ScrollContainer, ScrollbarStyle};
-use crate::tree::UITree;
+use crate::tree::{UITree, ZTier};
 use manifold_foundation::EffectId;
 use manifold_foundation::LayerId;
 use std::collections::HashSet;
@@ -222,6 +222,15 @@ pub struct InspectorCompositePanel {
     card_drag_ghost_id: Option<NodeId>,
     card_drag_indicator_id: Option<NodeId>,
     card_drag_label: String,
+    /// The `Ghost`-tier region (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1–D3)
+    /// wrapping the ghost + indicator, minted fresh in
+    /// [`try_begin_card_drag`](Self::try_begin_card_drag) each time a drag
+    /// starts. Its root sits BEFORE `card_drag_ghost_id` in the tree, so
+    /// [`card_drag_first_node`](Self::card_drag_first_node) reports this
+    /// index (not the ghost label's own) — the render pass's
+    /// `render_tree_range(start, usize::MAX)` walks registered regions, not
+    /// a raw root scan, and would miss the region entirely otherwise.
+    card_drag_region_root: Option<NodeId>,
 
     // Cache tracking
     cache_first_node: usize,
@@ -289,6 +298,7 @@ impl InspectorCompositePanel {
             card_drag_ghost_id: None,
             card_drag_indicator_id: None,
             card_drag_label: String::new(),
+            card_drag_region_root: None,
             cache_first_node: usize::MAX,
             cache_node_count: 0,
             drawer_anim_active: false,
@@ -1255,10 +1265,15 @@ impl InspectorCompositePanel {
     }
 
     /// First node ID of the drag ghost/indicator overlay (for render pass).
-    /// Returns None if no drag is active.
+    /// Returns None if no drag is active. Reports the wrapping `Ghost`-tier
+    /// region's root (not `card_drag_ghost_id`, the label node itself) —
+    /// the render pass's `render_tree_range(start, usize::MAX)` walks
+    /// registered regions, and the region root sits one index before the
+    /// label, so reporting the label's own index would make that walk miss
+    /// the region entirely.
     pub fn card_drag_first_node(&self) -> Option<usize> {
         if self.card_drag_active {
-            self.card_drag_ghost_id.map(|id| id.index())
+            self.card_drag_region_root.map(|id| id.index())
         } else {
             None
         }
@@ -1406,9 +1421,26 @@ impl InspectorCompositePanel {
 
             // Create ghost + indicator nodes — scoped to the correct column
             // Single full-width active column — both tabs drag within it.
+            //
+            // Ghost tier + ALLOW_OVERFLOW (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md`
+            // D1–D3): the ghost tracks the cursor for the drag's whole
+            // lifetime (`update_card_drag` below), so it must be able to
+            // paint outside whatever rect it starts at and outside the
+            // inspector's own region clip — the region mechanism's one
+            // sanctioned overflow case. `try_begin_card_drag` runs from an
+            // input event, not the panel's own `build()`, so this region is
+            // minted fresh per drag (there is no already-open region to
+            // nest under at this point) and torn down in `end_card_drag`.
             let col_x = self.viewport_rect.x + COLUMN_PAD;
             let col_w = (self.viewport_rect.width - COLUMN_PAD * 2.0).max(0.0);
             let ghost_w = (col_w - 24.0).min(160.0);
+            let region = tree.begin_region(
+                self.viewport_rect,
+                ZTier::Ghost,
+                "card_drag_ghost",
+                UIFlags::ALLOW_OVERFLOW,
+            );
+            let region_start = tree.count();
             self.card_drag_ghost_id = Some(tree.add_label(
                 None,
                 0.0,
@@ -1437,6 +1469,8 @@ impl InspectorCompositePanel {
                     ..UIStyle::default()
                 },
             ));
+            tree.end_region(region, region_start);
+            self.card_drag_region_root = Some(region.root);
 
             return true;
         }
@@ -1566,6 +1600,7 @@ impl InspectorCompositePanel {
         self.card_drag_active = false;
         self.card_drag_ghost_id = None;
         self.card_drag_indicator_id = None;
+        self.card_drag_region_root = None;
 
         if is_multi {
             // Multi-select: move all selected effects as a group

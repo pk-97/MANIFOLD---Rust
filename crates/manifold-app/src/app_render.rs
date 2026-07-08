@@ -4620,7 +4620,15 @@ impl Application {
                         manifold_ui::color::SHADOW,
                     );
                 }
-                ui.render_tree_range(&self.ws.ui_root.tree, start, end);
+                // `render_sub_region`, not `render_tree_range`: each overlay's
+                // `(start, end)` deliberately excludes its own
+                // `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` region root (see
+                // `UIRoot::build_overlays`'s doc comment — keeping `start` at
+                // the first REAL node is what the shadow-peek above depends
+                // on), so a root-scan would never find that region and would
+                // render nothing. `render_sub_region`'s ancestor-aware flat
+                // scan picks up the region's `CLIPS_CHILDREN` regardless.
+                ui.render_sub_region(&self.ws.ui_root.tree, start, end, false);
                 ui.pop_depth();
             }
 

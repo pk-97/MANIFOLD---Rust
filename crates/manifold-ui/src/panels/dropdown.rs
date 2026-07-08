@@ -367,7 +367,24 @@ impl DropdownPanel {
         self.anchor = Vec2::new(x, y);
         self.container_bounds = Rect::new(x, y, w, h);
 
+        // `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D3: `open_at` eagerly mints
+        // the dropdown's nodes here (so it's visible the instant it opens,
+        // not waiting for the next full `build_overlays()` cycle) — this runs
+        // from event-handling code, outside `UIRoot::build_overlays()`'s own
+        // `begin_region` bracket, so it needs its own. The LATER rebuild path
+        // (`Overlay::build_at` -> `rebuild_nodes` -> `build_nodes`) runs
+        // INSIDE that bracket already (`open_regions > 0`, so no assertion
+        // risk either way) — this mints a second, nested region there (an
+        // extra small container clipping to the same rect the outer one
+        // already clips to). Harmless — one extra node against a dropdown's
+        // handful, and the D4 structural test only cares that the tree
+        // ROOT's children are all regions, not that regions never nest —
+        // but not free, so a P3 cleanup could hoist this out if it matters.
+        let region =
+            tree.begin_region(self.container_bounds, crate::tree::ZTier::Overlay, "dropdown", UIFlags::empty());
+        let region_start = tree.count();
         self.build_nodes(tree);
+        tree.end_region(region, region_start);
     }
 
     /// Close the dropdown and hide all nodes.

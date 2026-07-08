@@ -651,6 +651,17 @@ impl UIRoot {
     }
 
     /// Build all panels. Call once after creation and after resize.
+    ///
+    /// `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D2: every top-level panel
+    /// builds under a region (`begin_region` .. `end_region`) instead of
+    /// rooting itself at the tree directly — the region mints `CLIPS_CHILDREN`
+    /// by construction and carries a stacking tier, so a panel can never
+    /// paint outside its own rect and Chrome always wins over Base
+    /// regardless of build order. Each panel's own build code is UNCHANGED
+    /// (still mints its own subtree with `None` parents internally); the
+    /// wrap here mechanically sweeps that subtree under the region via
+    /// `end_region`, the same idiom the inspector's own pre-existing
+    /// `ClipRegion` already used before this design generalized it.
     pub fn build(&mut self) {
         self.tree.clear();
         // Invalidate input state — old node IDs are now stale
@@ -660,11 +671,42 @@ impl UIRoot {
 
         // Static panels — preserved during scroll-only rebuilds.
         // Order: transport, header, footer, inspector (non-scroll-affected).
+        // Chrome tier (transport/header/footer): the always-visible frame —
+        // painted after (on top of) Base regardless of this build order.
+        let region =
+            self.tree
+                .begin_region(self.layout.transport_bar(), ZTier::Chrome, "transport", UIFlags::empty());
+        let start = self.tree.count();
         self.transport.build(&mut self.tree, &self.layout);
-        self.header.build(&mut self.tree, &self.layout);
-        self.footer.build(&mut self.tree, &self.layout);
-        self.inspector.build(&mut self.tree, &self.layout);
+        self.tree.end_region(region, start);
 
+        let region = self.tree.begin_region(self.layout.header(), ZTier::Chrome, "header", UIFlags::empty());
+        let start = self.tree.count();
+        self.header.build(&mut self.tree, &self.layout);
+        self.tree.end_region(region, start);
+
+        let region = self.tree.begin_region(self.layout.footer(), ZTier::Chrome, "footer", UIFlags::empty());
+        let start = self.tree.count();
+        self.footer.build(&mut self.tree, &self.layout);
+        self.tree.end_region(region, start);
+
+        // Base tier: main content surfaces.
+        let region = self.tree.begin_region(self.layout.inspector(), ZTier::Base, "inspector", UIFlags::empty());
+        let start = self.tree.count();
+        self.inspector.build(&mut self.tree, &self.layout);
+        self.tree.end_region(region, start);
+
+        // Split handle + inspector resize handle — thin drag affordances at
+        // panel seams. Chrome tier: utility chrome that should never be
+        // occluded, same reasoning as transport/header/footer. One shared
+        // region (mirrors `panel_cache_info`'s existing `SplitHandles` slot,
+        // which already treats these two ad hoc nodes as one unit) at a
+        // full-screen rect — the clip is a no-op (both handles are well
+        // inside the screen) so this is purely stacking/registration, not
+        // containment.
+        let full_screen = Rect::new(0.0, 0.0, self.layout.screen_width, self.layout.screen_height);
+        let region = self.tree.begin_region(full_screen, ZTier::Chrome, "split_handles", UIFlags::empty());
+        let start = self.tree.count();
         // Split handle — thin bar between video and timeline areas.
         // From Unity PanelResizeHandle.cs: idle (transparent), hover, drag color states.
         {
@@ -704,6 +746,7 @@ impl UIRoot {
                 },
             ));
         }
+        self.tree.end_region(region, start);
 
         // Mark boundary — everything after this is rebuilt on scroll.
         self.scroll_panels_start = self.tree.count();
@@ -718,8 +761,14 @@ impl UIRoot {
     /// `inspector` + `tree` field split kept internal, like `build`). The
     /// graph-editor window calls this to host the same inspector column in its
     /// right lane (`dock.right`) — see docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md.
+    /// Base tier region, same as the main window's own inspector build (D1/D5
+    /// — the mechanism is window-agnostic; only the editor window's OWN
+    /// panels, out of P1 scope, remain unmigrated).
     pub fn build_inspector_in_rect(&mut self, rect: Rect) {
+        let region = self.tree.begin_region(rect, ZTier::Base, "inspector_in_rect", UIFlags::empty());
+        let start = self.tree.count();
         self.inspector.build_in_rect(&mut self.tree, rect);
+        self.tree.end_region(region, start);
     }
 
     /// Route pre-drained events through the inspector subset of the main
@@ -869,17 +918,35 @@ impl UIRoot {
         }
     }
 
-    /// Internal: build the scroll-affected panel group.
+    /// Internal: build the scroll-affected panel group. Base tier, same as
+    /// the static Base panels above (D1/D2) — `layer_headers`/`viewport`
+    /// rebuild far more often than transport/header/footer/inspector, but
+    /// the region mechanism costs the same one wrapper node per rebuild
+    /// either way.
     fn build_scroll_panels(&mut self) {
+        let region =
+            self.tree
+                .begin_region(self.layout.layer_controls(), ZTier::Base, "layer_headers", UIFlags::empty());
+        let start = self.tree.count();
         self.layer_headers.build(
             &mut self.tree,
             &self.layout,
             self.viewport.mapper(),
             self.viewport.scroll_y_px(),
         );
-        // Record boundary between layer headers and viewport panels.
+        self.tree.end_region(region, start);
+
+        // Record boundary between layer headers and viewport panels — now the
+        // viewport region's own root index (captured before `begin_region`
+        // mints it), so `truncate_from(viewport_panels_start)` still cleanly
+        // drops the whole viewport region, not just its content.
         self.viewport_panels_start = self.tree.count();
+        let region =
+            self.tree
+                .begin_region(self.layout.timeline_body(), ZTier::Base, "viewport", UIFlags::empty());
+        let start = self.tree.count();
         self.viewport.build(&mut self.tree, &self.layout);
+        self.tree.end_region(region, start);
 
         // All top-level overlays (perf HUD + dropdown + modals) build at the
         // tail of the tree via the single overlay driver — one enumeration for
@@ -890,7 +957,12 @@ impl UIRoot {
     /// Internal: build viewport + remaining scroll panels (skip layer headers).
     /// Used on horizontal-only scroll where layer headers don't change.
     fn build_viewport_panels(&mut self) {
+        let region =
+            self.tree
+                .begin_region(self.layout.timeline_body(), ZTier::Base, "viewport", UIFlags::empty());
+        let start = self.tree.count();
         self.viewport.build(&mut self.tree, &self.layout);
+        self.tree.end_region(region, start);
 
         // Overlays build at the tail of the tree via the single driver.
         self.build_overlays();
@@ -957,6 +1029,21 @@ impl UIRoot {
     /// node range for the draw pass. A modal that requests a dim background gets
     /// a full-screen scrim node first (and a click on it dismisses the modal,
     /// since the scrim is not one of the modal's own nodes).
+    ///
+    /// D1/D2: each open overlay gets its OWN region — `Overlay` tier for
+    /// popups/modals, `Ghost` for the toast (a status message must stay
+    /// legible over an open modal/dropdown, the same reason `Z_ORDER`
+    /// already placed it last/topmost — D2/D3's "drag ghost/toast paths").
+    /// `Z_ORDER`'s bottom→top loop order becomes insertion order WITHIN
+    /// each tier, so relative overlay stacking is unchanged. The region's
+    /// own root index is deliberately kept OUT of the `(start, end)` range
+    /// this records into `overlay_draw` — `app_render.rs`'s shadow-peek
+    /// heuristic (skip a leading full-screen scrim) reads `tree.id_at(start)`
+    /// expecting the first REAL overlay node, not a region wrapper — so
+    /// `app_render.rs` renders these ranges via `render_sub_region` (ancestor-
+    /// aware: it walks the parent chain from `start` and picks up the
+    /// region's `CLIPS_CHILDREN` even though the region root itself sits
+    /// one index before `start`), not `render_tree_range`.
     fn build_overlays(&mut self) {
         let screen = Vec2::new(self.screen_width, self.screen_height);
         // Take the tree out so `overlay_mut` (which borrows all of self) can run
@@ -965,11 +1052,14 @@ impl UIRoot {
         let region_start = tree.count();
         let mut ranges: Vec<(usize, usize)> = Vec::new();
         let mut rects: Vec<(OverlayId, Rect)> = Vec::new();
+        let full_screen = Rect::new(0.0, 0.0, screen.x, screen.y);
         for id in OverlayId::Z_ORDER {
             let ov = self.overlay_mut(id);
             if !ov.is_open() {
                 continue;
             }
+            let tier = if id == OverlayId::Toast { ZTier::Ghost } else { ZTier::Overlay };
+            let region = tree.begin_region(full_screen, tier, "overlay", UIFlags::empty());
             let start = tree.count();
             if let Modality::Modal {
                 dim_background: true,
@@ -998,6 +1088,7 @@ impl UIRoot {
             };
             let rect = compute_overlay_rect(&anchor, size, screen, node_rect);
             ov.build_at(&mut tree, OverlayPlacement { rect, screen });
+            tree.end_region(region, start);
             ranges.push((start, tree.count()));
             rects.push((id, rect));
         }
