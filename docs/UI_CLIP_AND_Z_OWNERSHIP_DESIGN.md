@@ -148,6 +148,17 @@ is the hot path only in the weak sense above (no per-frame work added).
 
 - **BUG-060** — dies in P1: the inspector region clips at its rect; the footer
   lives in `Chrome`, above `Base`, so even an escaped pixel loses.
+  **Evidence upgrade (2026-07-08, Fable, instrumented live repro):** this
+  design's premise is now proven, not assumed. Traced runs on
+  `fix/bug-060-footer-leak-trace` showed the footer draws all 8 nodes with
+  correct bounds and no clipping on every rebuild — yet its right half comes
+  out near-black in the atlas. So the damage is done *after* the footer's
+  pass, by a write the node-level scissor trace cannot see (tree-node draws
+  were all clamped at the footer line; immediate-mode draws are untraced and
+  were never ruled out). Exactly the class P1's binding region scissor kills
+  by construction. Full history: `docs/FOOTER_OVERPAINT_INVESTIGATION.md` on
+  that branch; the worktree binary doubles as the verification rig — rerun the
+  drawer-open + scroll repro after P1 and the footer must be unbreakable.
 - **BUG-047** — the spill becomes clean clipping at the panel edge (correct
   rendering of a layout problem). The panel still needs a scroll container for
   ≥18 rows; the bug stays open, re-scoped to "add scroll", severity unchanged.

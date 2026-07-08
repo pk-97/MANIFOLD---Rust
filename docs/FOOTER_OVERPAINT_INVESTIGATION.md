@@ -1,5 +1,19 @@
 # Footer Overpaint / Disappearance — Investigation Handoff (for Fable)
 
+**UPDATE 2026-07-08 (Fable): fork §5 resolved — it's (B).** A patched trace
+(commits `28d74981`, `6332df8f`: footer-pass draws included, clip early-outs
+logged) plus one live repro proved all 8 footer nodes draw with correct bounds,
+`scissor=None`, on every clear frame. The footer is innocent; something
+overwrites its atlas pixels afterward. §4.1's "scissor proof" only ever covered
+tree-node draws — immediate-mode draws are untraced and remain the prime
+suspect, consistent with the "near-black" bad pixels matching inspector
+card/drawer backgrounds (~18), which §7's "blue overpaint ruled out" reasoning
+wrongly generalized. **Resolution path chosen (Peter):** don't hunt the single
+leaking element — execute `docs/UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` P1 (binding
+per-region GPU scissors), which kills the class by construction. A per-pass
+`[FOOTER-BAND]` probe is built on this branch if pass-level attribution is ever
+still wanted. This branch's binary is the verification rig for P1.
+
 **Status: UNSOLVED.** Two shipped "fixes" did not fix it. This document is the full
 history, evidence, reasoning, and the current impasse. It is written to let a fresh
 reasoner (Fable) pick up without re-deriving. Author: Opus, 2026-07-08 session.
