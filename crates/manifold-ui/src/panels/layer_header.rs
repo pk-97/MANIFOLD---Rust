@@ -1326,14 +1326,25 @@ impl LayerHeaderPanel {
     }
 
     /// Call when a drag begins on a layer header node.
-    /// Returns PanelAction if the drag starts on a drag handle.
-    pub fn handle_drag_begin(&mut self, tree: &mut UITree, node_id: NodeId) -> Vec<PanelAction> {
+    /// Returns PanelAction if the drag starts on a drag handle. `node_id` is
+    /// `Option` (D9, `docs/DRAG_CAPTURE_DESIGN.md`): a `None` means the
+    /// pressed node died before the drag threshold crossed — the existing
+    /// `pending_drag_layer` fallback below already covers exactly this case
+    /// (it was built for a rebuild invalidating the id), so `None` just skips
+    /// straight to it instead of attempting an exact match.
+    pub fn handle_drag_begin(
+        &mut self,
+        tree: &mut UITree,
+        node_id: Option<NodeId>,
+    ) -> Vec<PanelAction> {
         // Try exact node_id match first (works when no rebuild happened since PointerDown).
         let mut matched_index: Option<usize> = None;
-        for (i, row) in self.rows.iter().enumerate() {
-            if row.id(LayerControl::DragHandle) == Some(node_id) {
-                matched_index = Some(i);
-                break;
+        if let Some(node_id) = node_id {
+            for (i, row) in self.rows.iter().enumerate() {
+                if row.id(LayerControl::DragHandle) == Some(node_id) {
+                    matched_index = Some(i);
+                    break;
+                }
             }
         }
         // Fallback: if a tree rebuild invalidated node IDs between PointerDown and

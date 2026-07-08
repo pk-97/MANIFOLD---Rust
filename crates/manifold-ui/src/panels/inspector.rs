@@ -1360,8 +1360,15 @@ impl InspectorCompositePanel {
     // ── Effect card drag-reorder (Unity EffectsListBitmapPanel) ──
 
     /// Try to begin a card drag on a DragBegin event. Returns true if drag started.
-    /// Called from ui_root.rs on DragBegin (needs &mut UITree).
-    pub fn try_begin_card_drag(&mut self, node_id: NodeId, tree: &mut UITree) -> bool {
+    /// Called from ui_root.rs on DragBegin (needs &mut UITree). `node_id` is
+    /// `Option` (D9, `docs/DRAG_CAPTURE_DESIGN.md`) — a `None` means the
+    /// pressed node died before the drag threshold crossed, so no card drag
+    /// can be identified; that's a no-op here, same as a `Some` id matching
+    /// no drag handle.
+    pub fn try_begin_card_drag(&mut self, node_id: Option<NodeId>, tree: &mut UITree) -> bool {
+        let Some(node_id) = node_id else {
+            return false;
+        };
         // Check each tab's effect cards for a drag handle match
         if let Some((tab, card_idx, fx_idx, name)) = self.find_drag_handle(node_id) {
             self.card_drag_active = true;
@@ -2199,8 +2206,15 @@ impl Panel for InspectorCompositePanel {
                 // handle_pointer_down on the sub-panel, overwriting the undo
                 // snapshot captured on PointerDown. Unity's DragBegin just starts
                 // routing Drag events; it doesn't re-apply the slider value.
-                if self.pressed_target.is_none() {
-                    let target = self.find_target_for_node(*node_id);
+                // `node_id` is `Option` (D9): `None` means the pressed node died
+                // before the drag threshold crossed. `pressed_target` is normally
+                // already set from PointerDown (unaffected by D9, still gated on
+                // a live node there) — a `None` here just means no NEW target can
+                // be resolved, same as a `Some` id resolving to no target.
+                if self.pressed_target.is_none()
+                    && let Some(node_id) = *node_id
+                {
+                    let target = self.find_target_for_node(node_id);
                     self.pressed_target = target;
                     if let Some(ref t) = target {
                         self.update_last_effect_tab(t);

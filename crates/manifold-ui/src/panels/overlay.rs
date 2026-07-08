@@ -144,6 +144,27 @@ pub trait Overlay {
     /// manage their own open/close state here (self-close on Escape / outside
     /// click); the driver only reads `is_open()`, so there is no `close()` hook.
     fn on_event(&mut self, event: &UIEvent, tree: &mut UITree) -> OverlayResponse;
+
+    /// Does a drag ORIGINATING at `origin` belong to this overlay? Read by
+    /// `UIRoot::resolve_drag_owner` (`docs/DRAG_CAPTURE_DESIGN.md` §3.2) once,
+    /// at the gesture's first `DragBegin` — never per-event. Default: no.
+    /// Modeless overlays with a drag surface override (the audio panel's
+    /// armed band/calibration drag OR origin inside its panel rect — P2,
+    /// replacing the BUG-059 `swallow_drag` stopgap). A modal always owns
+    /// regardless of this hook (D4); this is only consulted for modeless
+    /// overlays.
+    fn claims_drag(&self, origin: Vec2) -> bool {
+        let _ = origin;
+        false
+    }
+
+    /// Called once per gesture, unconditionally, when the terminal `DragEnd`/
+    /// `PointerUp` broadcasts (`UIRoot::broadcast_gesture_end`, D2) — every
+    /// OPEN overlay gets this regardless of whether it owned the gesture, so
+    /// it must be idempotent. Default: no-op. Overrides clear any drag state
+    /// armed by `claims_drag`/`on_event` (P2: the audio panel's
+    /// `dragging_band`/`calibration_drag`).
+    fn gesture_ended(&mut self) {}
 }
 
 /// Resolve an [`Anchor`] + size to an on-screen rect, clamped so the overlay

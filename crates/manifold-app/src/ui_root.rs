@@ -50,6 +50,24 @@ impl OverlayId {
     ];
 }
 
+/// Who owns the in-flight pointer drag. Resolved once per gesture (D1) by
+/// [`UIRoot::resolve_drag_owner`], cleared by the terminal broadcast (D2).
+/// `docs/DRAG_CAPTURE_DESIGN.md` §3.1 — replaces the old boolean drag-active latch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DragOwner {
+    /// An open overlay claimed it (modal, or origin inside its rect — §3.2).
+    Overlay(OverlayId),
+    /// The timeline tracks surface → stashed to `InteractionOverlay`.
+    TimelineTracks,
+    /// Inspector slider / effect-card drag (`pressed_target` / card-drag).
+    Inspector,
+    /// Layer-header reorder or gain drag.
+    LayerHeaders,
+    /// Timeline ruler scrub (D7 — confirmed kept: `viewport/interaction.rs`'s
+    /// `ViewportDragMode::RulerScrub` consumes `Drag` events).
+    Ruler,
+}
+
 /// Convert an AbletonSession into the picker's thin data struct.
 pub(crate) fn build_picker_session(
     session: &AbletonSession,
@@ -329,11 +347,13 @@ pub struct UIRoot {
     /// `InspectorCompositePanel::update`'s `motion_last_tick`.
     layout_tick_last: std::time::Instant,
 
-    /// True when a DragBegin originated in the tracks area. While active,
-    /// all Drag/DragEnd events are stashed for the InteractionOverlay
-    /// regardless of cursor position — prevents trim/move events from being
-    /// lost when the cursor moves outside the tracks rect.
-    overlay_drag_active: bool,
+    /// Single source of truth for who owns the in-flight pointer drag gesture
+    /// (`docs/DRAG_CAPTURE_DESIGN.md` D1). Resolved once at the gesture's
+    /// first `DragBegin` (`resolve_drag_owner`), cleared by the terminal
+    /// broadcast (`broadcast_gesture_end`) — replaces the old boolean
+    /// drag-active latch + `is_event_in_tracks_area`'s positional gate for
+    /// Drag/DragEnd.
+    drag_owner: Option<DragOwner>,
 
     /// Cached Ableton session for the picker popup.
     pub ableton_session: Option<std::sync::Arc<manifold_playback::ableton_bridge::AbletonSession>>,
@@ -458,7 +478,7 @@ impl UIRoot {
             split_handle_id: None,
             inspector_handle_id: None,
             layout_tick_last: std::time::Instant::now(),
-            overlay_drag_active: false,
+            drag_owner: None,
             ableton_session: None,
             ableton_picker: manifold_ui::panels::ableton_picker::AbletonPickerPopup::new(),
             ableton_picker_context: None,
@@ -1028,6 +1048,91 @@ impl UIRoot {
         consumed
     }
 
+    /// D1 — resolve who owns an in-flight drag gesture, once, at the
+    /// gesture's first `DragBegin`. Fixed order, first claim wins (§3.2):
+    /// open overlays z-top-down → inspector → layer headers → ruler →
+    /// timeline tracks → nobody. `node_id` is accepted for signature parity
+    /// with the design's committed call (`docs/DRAG_CAPTURE_DESIGN.md` §3.2)
+    /// — no resolution step needs it today; every claim is origin/state based.
+    fn resolve_drag_owner(&mut self, origin: Vec2, _node_id: Option<NodeId>) -> Option<DragOwner> {
+        // 1. Open overlays, z-top-down — same walk as `route_overlay_event`,
+        // but this pass only reads `is_open`/`modality`/`claims_drag`; it
+        // never delivers the event (that still happens through the normal
+        // gauntlet). A modal claims unconditionally (D4). A modeless overlay
+        // claims iff `claims_drag(origin)` says so (P1: no overlay overrides
+        // the default `false` yet — the audio panel's override lands P2).
+        // The dropdown specifically: an open dropdown that does NOT claim is
+        // dismissed here as a side effect, WITHOUT consuming (D3) — same UX
+        // as today's outside-click dismiss, minus the BUG-058 eat-arm.
+        let mut tree = std::mem::replace(&mut self.tree, UITree::new());
+        let mut owner = None;
+        for id in OverlayId::Z_ORDER.iter().rev() {
+            let ov = self.overlay_mut(*id);
+            if !ov.is_open() {
+                continue;
+            }
+            if matches!(ov.modality(), Modality::Modal { .. }) {
+                owner = Some(DragOwner::Overlay(*id));
+                break;
+            }
+            if ov.claims_drag(origin) {
+                owner = Some(DragOwner::Overlay(*id));
+                break;
+            }
+            if *id == OverlayId::Dropdown {
+                self.dropdown.close(&mut tree);
+                self.closed_overlays.push(OverlayId::Dropdown);
+                self.overlay_dirty = true;
+            }
+        }
+        self.tree = tree;
+        if owner.is_some() {
+            return owner;
+        }
+
+        // 2. Inspector — slider drag (`pressed_target`, armed on PointerDown)
+        // or effect-card reorder (`card_drag_active`, armed on DragBegin by
+        // the caller just before this resolution runs).
+        if self.inspector.has_pressed_target() || self.inspector.is_card_drag_active() {
+            return Some(DragOwner::Inspector);
+        }
+        // 3. Layer headers — reorder or gain drag (same arm-then-resolve
+        // ordering as the inspector).
+        if self.layer_headers.is_dragging() || self.layer_headers.is_gain_dragging() {
+            return Some(DragOwner::LayerHeaders);
+        }
+        // 4. Ruler (D7 — confirmed kept, `viewport/interaction.rs` scrub is
+        // Drag-based).
+        if self.viewport.ruler_rect().contains(origin) {
+            return Some(DragOwner::Ruler);
+        }
+        // 5. TimelineTracks — the fallback today's stash gate approximated.
+        if self.viewport.tracks_rect().contains(origin) {
+            return Some(DragOwner::TimelineTracks);
+        }
+        // 6. Nobody.
+        None
+    }
+
+    /// D2/§3.3 — the terminal broadcast every gesture that began gets,
+    /// exactly once, no matter who owned it or what ate the routed event.
+    /// Runs on `DragEnd`/`PointerUp` (after the owner's own idempotent
+    /// end-call, which stays unconditional — the precedent this generalizes)
+    /// and as the self-heal on the next `PointerDown` if a stale owner
+    /// survived (a lost OS release — `docs/DRAG_CAPTURE_DESIGN.md` §3.3
+    /// failure story). Every OPEN overlay's `gesture_ended` hook fires
+    /// (default no-op in P1; the audio panel's override lands P2), then
+    /// `drag_owner` clears.
+    fn broadcast_gesture_end(&mut self) {
+        for id in OverlayId::Z_ORDER {
+            let ov = self.overlay_mut(id);
+            if ov.is_open() {
+                ov.gesture_ended();
+            }
+        }
+        self.drag_owner = None;
+    }
+
     /// Record `id` as closed if it was open before some out-of-band close
     /// attempt and isn't now — for close paths that don't go through
     /// `route_overlay_event`. The graph-editor window's browser popup is the
@@ -1404,6 +1509,15 @@ impl UIRoot {
                 self.last_right_click_pos = *pos;
             }
 
+            // Self-heal (§3.3 failure story (b)): a stale owner can only mean
+            // the previous gesture's terminal event never reached the
+            // broadcast (a lost OS release at the window seam — BUG-028
+            // precedent). The next PointerDown clears it, firing the same
+            // unconditional broadcast a normal terminal event would.
+            if matches!(event, UIEvent::PointerDown { .. }) && self.drag_owner.is_some() {
+                self.broadcast_gesture_end();
+            }
+
             // Global: ⌘⇧A toggles the Audio Setup panel. Emit the same action the
             // "audio" button does so the single app-side handler owns the toggle
             // plus its one-shot data sync — rather than toggling here and leaving
@@ -1452,37 +1566,6 @@ impl UIRoot {
             // Tracks-area events stashed for InteractionOverlay in app.rs.
             panel_actions = self.viewport.handle_event(event, &self.tree);
             actions.append(&mut panel_actions);
-
-            // Stash events in the tracks area for overlay processing.
-            // The overlay needs &mut TimelineEditingHost which UIRoot can't provide.
-            if self.is_event_in_tracks_area(event) {
-                // Track drag state so Drag/DragEnd are stashed even outside tracks rect.
-                if matches!(event, UIEvent::DragBegin { .. }) {
-                    self.overlay_drag_active = true;
-                }
-                if matches!(event, UIEvent::DragEnd { .. }) {
-                    self.overlay_drag_active = false;
-                }
-                if manifold_ui::input::input_trace_enabled()
-                    && matches!(event, UIEvent::DragBegin { .. } | UIEvent::DragEnd { .. })
-                {
-                    eprintln!(
-                        "[input-trace] ui_root: {} STASHED for timeline overlay (latch={})",
-                        trace_kind(event),
-                        self.overlay_drag_active
-                    );
-                }
-                self.viewport_events.push(event.clone());
-            } else if manifold_ui::input::input_trace_enabled()
-                && matches!(event, UIEvent::DragBegin { .. } | UIEvent::DragEnd { .. })
-            {
-                eprintln!(
-                    "[input-trace] ui_root: {} NOT in tracks area (latch={}) — timeline \
-                     overlay will not see it",
-                    trace_kind(event),
-                    self.overlay_drag_active
-                );
-            }
         }
 
         // Route Drag/DragEnd/PointerUp to inspector directly (needs &mut tree for
@@ -1495,9 +1578,19 @@ impl UIRoot {
         // handle_drag_end so the sub-panel's dragging state is cleared and the
         // undo snapshot is committed. handle_drag_end is idempotent: if DragEnd
         // already cleared pressed_target, PointerUp is a no-op.
+        //
+        // D1/D2 (`docs/DRAG_CAPTURE_DESIGN.md` §3.2/§3.3): `DragBegin` still arms
+        // the inspector/layer-header drag state unconditionally, exactly as
+        // before — that arming is what `resolve_drag_owner` reads immediately
+        // after, to fix `drag_owner` for the rest of the gesture. `Drag`
+        // continuation is gated on the now-fixed owner instead of re-checking
+        // the private flags directly. `DragEnd`/`PointerUp` keep the existing
+        // unconditional, idempotent end-calls (the broadcast precedent this
+        // design generalizes), then `broadcast_gesture_end` fires once more for
+        // every other overlay's `gesture_ended` hook and clears `drag_owner`.
         for event in &events {
             match event {
-                UIEvent::DragBegin { node_id, .. } => {
+                UIEvent::DragBegin { node_id, origin, .. } => {
                     // Effect card drag handle — try to start card reorder drag
                     self.inspector.try_begin_card_drag(*node_id, &mut self.tree);
                     // Layer header drag handle — needs &mut tree for dim/indicator
@@ -1505,26 +1598,32 @@ impl UIRoot {
                         .layer_headers
                         .handle_drag_begin(&mut self.tree, *node_id);
                     actions.append(&mut lh_actions);
+                    self.drag_owner = self.resolve_drag_owner(*origin, *node_id);
                 }
                 UIEvent::Drag { pos, .. } => {
-                    if self.inspector.is_card_drag_active() {
-                        self.inspector.update_card_drag(*pos, &mut self.tree);
-                    } else if self.inspector.has_pressed_target() {
-                        let mut drag_actions = self.inspector.handle_drag(*pos, &mut self.tree);
-                        actions.append(&mut drag_actions);
+                    if self.drag_owner == Some(DragOwner::Inspector) {
+                        if self.inspector.is_card_drag_active() {
+                            self.inspector.update_card_drag(*pos, &mut self.tree);
+                        } else if self.inspector.has_pressed_target() {
+                            let mut drag_actions =
+                                self.inspector.handle_drag(*pos, &mut self.tree);
+                            actions.append(&mut drag_actions);
+                        }
                     }
-                    if self.layer_headers.is_dragging() {
-                        let mut lh_actions = self.layer_headers.handle_drag(
-                            &mut self.tree,
-                            *pos,
-                            self.viewport.mapper(),
-                        );
-                        actions.append(&mut lh_actions);
-                    }
-                    if self.layer_headers.is_gain_dragging() {
-                        let mut g_actions =
-                            self.layer_headers.handle_gain_drag(&mut self.tree, pos.x);
-                        actions.append(&mut g_actions);
+                    if self.drag_owner == Some(DragOwner::LayerHeaders) {
+                        if self.layer_headers.is_dragging() {
+                            let mut lh_actions = self.layer_headers.handle_drag(
+                                &mut self.tree,
+                                *pos,
+                                self.viewport.mapper(),
+                            );
+                            actions.append(&mut lh_actions);
+                        }
+                        if self.layer_headers.is_gain_dragging() {
+                            let mut g_actions =
+                                self.layer_headers.handle_gain_drag(&mut self.tree, pos.x);
+                            actions.append(&mut g_actions);
+                        }
                     }
                 }
                 UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
@@ -1543,8 +1642,25 @@ impl UIRoot {
                         let mut g_actions = self.layer_headers.handle_gain_drag_end();
                         actions.append(&mut g_actions);
                     }
+                    self.broadcast_gesture_end();
                 }
                 _ => {}
+            }
+
+            // Stash for `InteractionOverlay` (tracks-area events).
+            let stash = self.should_stash_for_tracks(event);
+            if manifold_ui::input::input_trace_enabled()
+                && matches!(event, UIEvent::DragBegin { .. } | UIEvent::DragEnd { .. })
+            {
+                eprintln!(
+                    "[input-trace] ui_root: {} {} for timeline overlay (drag_owner={:?})",
+                    trace_kind(event),
+                    if stash { "STASHED" } else { "NOT stashed" },
+                    self.drag_owner
+                );
+            }
+            if stash {
+                self.viewport_events.push(event.clone());
             }
         }
 
@@ -2479,26 +2595,38 @@ impl UIRoot {
         actions.retain(|action| !self.try_open_dropdown(action, None));
     }
 
-    /// Check if a UI event's position falls within the tracks area.
-    /// When an overlay drag is active (DragBegin originated in tracks), Drag and
-    /// DragEnd events are always stashed regardless of cursor position — this
-    /// prevents trim/move events from being lost when the cursor exits the rect.
+    /// Whether `event` should stash into `viewport_events` for
+    /// `InteractionOverlay` (`docs/DRAG_CAPTURE_DESIGN.md` §3.2). The drag
+    /// family (`DragBegin`/`Drag`/`DragEnd`) stashes by OWNERSHIP,
+    /// unconditionally, no position check — `resolve_drag_owner` fixes
+    /// `drag_owner` on `DragBegin` (see the `process_events` drag loop), and
+    /// it persists across frames for `Drag`/`DragEnd`. This is what makes a
+    /// timeline drag released outside `tracks_rect` (e.g. over the inspector)
+    /// still reach `InteractionOverlay::on_end_drag` — today's positional
+    /// gate would have dropped it. Every other event kind keeps the
+    /// positional classification (`is_event_in_tracks_area`).
+    fn should_stash_for_tracks(&self, event: &manifold_ui::input::UIEvent) -> bool {
+        use manifold_ui::input::UIEvent;
+        match event {
+            UIEvent::DragBegin { .. } | UIEvent::Drag { .. } | UIEvent::DragEnd { .. } => {
+                self.drag_owner == Some(DragOwner::TimelineTracks)
+            }
+            _ => self.is_event_in_tracks_area(event),
+        }
+    }
+
+    /// Check if a UI event's position falls within the tracks area. The drag
+    /// family (`DragBegin`/`Drag`/`DragEnd`) no longer classifies here — it
+    /// stashes by ownership instead (`should_stash_for_tracks`). This keeps
+    /// only the positional classification for discrete/non-drag events.
     fn is_event_in_tracks_area(&self, event: &manifold_ui::input::UIEvent) -> bool {
         use manifold_ui::input::UIEvent;
         let pos = match event {
             UIEvent::Click { pos, .. } => *pos,
             UIEvent::DoubleClick { pos, .. } => *pos,
             UIEvent::RightClick { pos, .. } => *pos,
-            UIEvent::DragBegin { origin, .. } => *origin,
-            UIEvent::Drag { .. } | UIEvent::DragEnd { .. } if self.overlay_drag_active => {
-                return true;
-            }
-            UIEvent::Drag { pos, .. } => *pos,
-            UIEvent::DragEnd { pos, .. } => *pos,
             UIEvent::HoverEnter { pos, .. } => *pos,
             UIEvent::PointerDown { pos, .. } => *pos,
-            // HoverExit has no position — treat as viewport event if overlay is dragging
-            UIEvent::HoverExit { .. } => return true,
             _ => return false,
         };
         self.viewport.tracks_rect().contains(pos)
@@ -2684,5 +2812,129 @@ fn trace_kind(event: &UIEvent) -> &'static str {
         UIEvent::DragBegin { .. } => "DragBegin",
         UIEvent::DragEnd { .. } => "DragEnd",
         _ => "other",
+    }
+}
+
+#[cfg(test)]
+mod drag_capture_tests {
+    //! `docs/DRAG_CAPTURE_DESIGN.md` P1 unit tests. `UIRoot::new()` +
+    //! `resize()` is enough scaffolding for these — `resize` runs `build()`
+    //! (sets `built = true`, computes real `tracks_rect`/`ruler_rect` from
+    //! the layout) without needing a live `Project` (the same sequencing
+    //! `ui_snapshot/script.rs` uses before `sync_build`).
+    use super::*;
+
+    const W: f32 = 1536.0;
+    const H: f32 = 1216.0;
+
+    fn new_root() -> UIRoot {
+        let mut ui = UIRoot::new();
+        ui.resize(W, H);
+        ui
+    }
+
+    fn center(r: Rect) -> Vec2 {
+        Vec2::new(r.x + r.width * 0.5, r.y + r.height * 0.5)
+    }
+
+    /// D4: a modal claims a drag unconditionally, regardless of where the
+    /// drag originated — even far outside the modal's own rect.
+    #[test]
+    fn modal_overlay_claims_drag_unconditionally() {
+        let mut ui = new_root();
+        ui.settings_popup.open();
+        assert!(matches!(ui.settings_popup.modality(), Modality::Modal { .. }));
+
+        let far_away = Vec2::new(W - 1.0, H - 1.0);
+        let owner = ui.resolve_drag_owner(far_away, None);
+        assert_eq!(owner, Some(DragOwner::Overlay(OverlayId::Settings)));
+    }
+
+    /// D3: an open dropdown that does NOT claim a foreign drag is dismissed
+    /// as a side effect of resolution — WITHOUT consuming — and ownership
+    /// passes to the real owner underneath (here, the tracks area). This is
+    /// the BUG-058 wedge fixed by construction: nothing ever routes the
+    /// drag's terminal event to the dropdown for it to eat.
+    #[test]
+    fn dropdown_open_at_drag_start_dismisses_without_consuming_and_falls_through() {
+        let mut ui = new_root();
+        let mut scratch_tree = UITree::new();
+        ui.dropdown.open(
+            vec![],
+            Rect::new(10.0, 10.0, 50.0, 20.0),
+            50.0,
+            &mut scratch_tree,
+        );
+        assert!(ui.dropdown.is_open());
+
+        let tracks_origin = center(ui.viewport.tracks_rect());
+        let owner = ui.resolve_drag_owner(tracks_origin, None);
+
+        assert!(!ui.dropdown.is_open(), "foreign drag dismisses the dropdown");
+        assert_eq!(
+            owner,
+            Some(DragOwner::TimelineTracks),
+            "ownership passes to the real owner instead of being eaten"
+        );
+    }
+
+    /// §3.2 order: Ruler wins over TimelineTracks when the origin is in the
+    /// ruler rect; TimelineTracks wins when it's only in the tracks rect;
+    /// neither wins when the origin is in open space (e.g. above the ruler).
+    #[test]
+    fn owner_resolution_order_ruler_before_tracks_before_none() {
+        let mut ui = new_root();
+
+        let ruler_origin = center(ui.viewport.ruler_rect());
+        assert_eq!(ui.resolve_drag_owner(ruler_origin, None), Some(DragOwner::Ruler));
+
+        let tracks_origin = center(ui.viewport.tracks_rect());
+        assert_eq!(
+            ui.resolve_drag_owner(tracks_origin, None),
+            Some(DragOwner::TimelineTracks)
+        );
+
+        let dead_space = Vec2::new(-100.0, -100.0);
+        assert_eq!(ui.resolve_drag_owner(dead_space, None), None);
+    }
+
+    /// §3.3 failure story (a): a `DragEnd` released outside `tracks_rect`
+    /// (e.g. the cursor drifted over the inspector) must still stash for
+    /// `InteractionOverlay::on_end_drag` — ownership decides, not position.
+    /// The old `is_event_in_tracks_area` positional gate would have dropped
+    /// this exact case (BUG-058's leak-adjacent failure mode).
+    #[test]
+    fn drag_end_stashes_by_ownership_regardless_of_release_position() {
+        let mut ui = new_root();
+        let far_outside = Vec2::new(ui.viewport.tracks_rect().x_max() + 500.0, -200.0);
+        let drag_end = UIEvent::DragEnd { node_id: None, pos: far_outside };
+
+        ui.drag_owner = Some(DragOwner::TimelineTracks);
+        assert!(
+            ui.should_stash_for_tracks(&drag_end),
+            "TimelineTracks owns the gesture, so the release position is irrelevant"
+        );
+
+        ui.drag_owner = Some(DragOwner::Inspector);
+        assert!(
+            !ui.should_stash_for_tracks(&drag_end),
+            "a DragEnd owned by someone else must not stash for the timeline"
+        );
+
+        ui.drag_owner = None;
+        assert!(!ui.should_stash_for_tracks(&drag_end));
+    }
+
+    /// §3.3: the terminal broadcast always clears the owner, so the next
+    /// gesture starts from a clean slate — this is what makes a drag
+    /// released over the inspector followed immediately by a new drag on a
+    /// second clip behave (the no-wedge proof `drag-clip-release-over-
+    /// inspector.json` exercises end-to-end).
+    #[test]
+    fn broadcast_gesture_end_clears_owner() {
+        let mut ui = new_root();
+        ui.drag_owner = Some(DragOwner::TimelineTracks);
+        ui.broadcast_gesture_end();
+        assert_eq!(ui.drag_owner, None);
     }
 }

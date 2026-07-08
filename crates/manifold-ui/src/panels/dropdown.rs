@@ -692,14 +692,18 @@ impl DropdownPanel {
                 // to the viewport underneath.
                 Some(DropdownAction::Dismissed)
             }
-            // Consume right-clicks and drags while open.
-            UIEvent::RightClick { .. }
-            | UIEvent::DragBegin { .. }
-            | UIEvent::Drag { .. }
-            | UIEvent::DragEnd { .. } => {
+            // Consume right-clicks while open.
+            UIEvent::RightClick { .. } => {
                 self.close(tree);
                 Some(DropdownAction::Dismissed)
             }
+            // D3 (`docs/DRAG_CAPTURE_DESIGN.md`): the dropdown used to eat
+            // every drag event unconditionally here — the confirmed BUG-058
+            // eater (an open dropdown swallowed a timeline drag's terminal
+            // event, wedging move/trim). That arm is gone: a foreign drag
+            // falls through to `_ => None` below (Ignored, not consumed) and
+            // now dismisses the dropdown as a side effect of ownership
+            // resolution (`UIRoot::resolve_drag_owner`) instead.
             _ => None,
         }
     }
