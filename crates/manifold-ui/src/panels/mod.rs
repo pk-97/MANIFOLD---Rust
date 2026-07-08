@@ -142,6 +142,16 @@ pub enum TrimKind {
 /// that the app wires to PlaybackEngine/EditingService.
 #[derive(Debug, Clone)]
 pub enum PanelAction {
+    /// Right-click reset of a slider to its default, expressed as the slider's own
+    /// value-change trio (same path a drag uses). The app dispatches the three in
+    /// order, so undo == a drag to `default`. Replaces the per-panel `*RightClick`
+    /// reset actions (BUG-061).
+    SliderReset {
+        snapshot: Box<PanelAction>,
+        changed: Box<PanelAction>, // carries the default value
+        commit: Box<PanelAction>,
+    },
+
     // Transport
     PlayPause,
     Stop,
@@ -259,21 +269,18 @@ pub enum PanelAction {
     MasterOpacitySnapshot,
     MasterOpacityChanged(f32),
     MasterOpacityCommit,
-    MasterOpacityRightClick,
 
     // Inspector chrome — LED
     LedEnabledToggle,
     LedBrightnessSnapshot,
     LedBrightnessChanged(f32),
     LedBrightnessCommit,
-    LedBrightnessRightClick,
 
     // Inspector chrome — Layer
     LayerChromeCollapseToggle,
     LayerOpacitySnapshot,
     LayerOpacityChanged(f32),
     LayerOpacityCommit,
-    LayerOpacityRightClick,
 
     // Inspector chrome — Clip
     ClipChromeCollapseToggle,
@@ -303,14 +310,6 @@ pub enum PanelAction {
     /// Audio clip: route instrument N to a layer (None = Auto / by-name).
     ClipDetectSetLayer(usize, Option<LayerId>),
     ClipLoopToggle,
-    ClipSlipSnapshot,
-    ClipSlipChanged(f32),
-    ClipSlipCommit,
-    ClipSlipRightClick,
-    ClipLoopSnapshot,
-    ClipLoopChanged(f32),
-    ClipLoopCommit,
-    ClipLoopRightClick,
 
     // Effect card (effect_index, param_index where applicable)
     EffectToggle(usize),
@@ -389,7 +388,6 @@ pub enum PanelAction {
         max: f32,
         whole_numbers: bool,
     },
-    ParamRightClick(GraphParamTarget, ParamId, f32), // target, param_id, default_value
     DriverToggle(GraphParamTarget, ParamId),
     EnvelopeToggle(GraphParamTarget, ParamId),
     DriverConfig(GraphParamTarget, ParamId, DriverConfigAction),
@@ -734,7 +732,6 @@ pub enum PanelAction {
     MacroSnapshot(usize),
     MacroChanged(usize, f32),
     MacroCommit(usize),
-    MacroRightClick(usize),
     MacroLabelRightClick(usize), // macro_index — opens mappings dropdown
     MacroLabelRename(usize),     // macro_index — opens inline rename input
 
@@ -776,7 +773,9 @@ pub enum PanelAction {
     AbletonInvertToggle(GraphParamTarget, ParamId),
     AbletonMacroInvertToggle(usize),                             // slot_idx
 
-    // Reset macro from context menu (distinct from MacroRightClick to avoid re-triggering dropdown)
+    // Reset macro from context menu (distinct from the macro slider's own
+    // right-click reset, now the generic SliderReset trio, to avoid
+    // re-triggering the mappings dropdown)
     MacroReset(usize), // macro_idx — reset to 0 from context menu
 
     // Inspector scroll
@@ -859,6 +858,20 @@ pub enum PanelAction {
 
     // Generic dropdown fallback (should not normally reach dispatch)
     DropdownSelected(usize),
+}
+
+impl PanelAction {
+    /// Build a [`PanelAction::SliderReset`] from a slider's own value-change
+    /// trio — the same three actions a drag would emit, with `changed` carrying
+    /// the slider's declared default. Boxing happens here so call sites read as
+    /// plain action literals.
+    pub fn slider_reset(snapshot: PanelAction, changed: PanelAction, commit: PanelAction) -> PanelAction {
+        PanelAction::SliderReset {
+            snapshot: Box::new(snapshot),
+            changed: Box::new(changed),
+            commit: Box::new(commit),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

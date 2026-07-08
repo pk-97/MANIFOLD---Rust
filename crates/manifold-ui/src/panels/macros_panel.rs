@@ -244,6 +244,7 @@ impl MacrosPanel {
                 let spec = SliderSpec {
                     label: Some(format!("M{}", i + 1)),
                     value: v,
+                    default: 0.0,
                     value_text: fmt_macro(v),
                     colors: SliderColors::default_slider(),
                     font_size: FONT_SIZE,
@@ -463,7 +464,15 @@ impl MacrosPanel {
         use crate::intent::Gesture::RightClick;
         for (i, s) in self.sliders.iter().enumerate() {
             if let Some(track) = s.track_id() {
-                intents.on(track, RightClick, PanelAction::MacroRightClick(i));
+                intents.on(
+                    track,
+                    RightClick,
+                    PanelAction::slider_reset(
+                        PanelAction::MacroSnapshot(i),
+                        PanelAction::MacroChanged(i, 0.0),
+                        PanelAction::MacroCommit(i),
+                    ),
+                );
             }
             if let Some(ids) = s.ids()
                 && let Some(label) = ids.label
@@ -579,5 +588,27 @@ mod tests {
         });
         panel.set_ableton_displays(&displays);
         assert!(panel.height() > base);
+    }
+
+    #[test]
+    fn right_click_on_macro_track_resolves_to_slider_reset_with_zero_default() {
+        // BUG-061: the per-macro reset now rides the generic SliderReset trio
+        // (the old per-panel right-click reset action was deleted), carrying
+        // the macro's own default of 0.0.
+        let mut tree = UITree::new();
+        let mut panel = MacrosPanel::new();
+        panel.set_collapsed(false);
+        panel.build(&mut tree, rect());
+
+        let mut reg = crate::intent::IntentRegistry::new();
+        panel.register_intents(&mut reg);
+
+        let track = panel.sliders[0].track_id().unwrap();
+        match reg.resolve(&tree, Some(track), crate::intent::Gesture::RightClick) {
+            Some(PanelAction::SliderReset { changed, .. }) => {
+                assert!(matches!(*changed, PanelAction::MacroChanged(0, v) if v.abs() < f32::EPSILON));
+            }
+            other => panic!("expected SliderReset, got {other:?}"),
+        }
     }
 }

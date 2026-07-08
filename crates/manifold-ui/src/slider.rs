@@ -44,7 +44,8 @@ pub struct SliderNodeIds {
     pub thumb: NodeId,           // non-interactive — thin vertical bar at value position
     pub value_text: NodeId,      // interactive — click to type (in the right gutter)
     pub track_rect: Rect,        // usable track (excludes value gutter); for x_to_normalized()
-    pub default_normalized: f32, // for right-click reset
+    /// The slider's normalized default, for right-click reset.
+    pub default_normalized: f32,
 }
 
 /// Stateless helper for building and updating bitmap slider widgets.
@@ -104,6 +105,7 @@ impl BitmapSlider {
         colors: &SliderColors,
         font_size: u16,
         label_width: f32,
+        default_normalized: f32,
     ) -> SliderNodeIds {
         // track/fill/thumb/value_text are placeholders overwritten below before
         // any read; label stays None unless a label is actually built.
@@ -114,7 +116,7 @@ impl BitmapSlider {
             thumb: NodeId::PLACEHOLDER,
             value_text: NodeId::PLACEHOLDER,
             track_rect: Rect::ZERO,
-            default_normalized: normalized_value,
+            default_normalized,
         };
 
         let mut x = rect.x;
@@ -637,6 +639,7 @@ mod tests {
             &SliderColors::default_slider(),
             11,
             DEFAULT_LABEL_WIDTH,
+            0.75,
         );
 
         assert!(ids.label.is_some());
@@ -661,9 +664,35 @@ mod tests {
             &SliderColors::default_slider(),
             11,
             DEFAULT_LABEL_WIDTH,
+            0.5,
         );
 
         assert_eq!(ids.label, None);
+    }
+
+    #[test]
+    fn build_stores_the_declared_default_not_the_initial_value() {
+        // The slider's initial value and its right-click-reset default are
+        // independent — a slider can be built showing a non-default live value
+        // (e.g. 0.9) while its reset target stays at the param's real default
+        // (e.g. 0.5). `default_normalized` must reflect the latter (BUG-061).
+        let mut tree = UITree::new();
+        let root = tree.add_panel(None, 0.0, 0.0, 400.0, 20.0, UIStyle::default());
+
+        let ids = BitmapSlider::build(
+            &mut tree,
+            Some(root),
+            Rect::new(0.0, 0.0, 400.0, 20.0),
+            Some("Amount"),
+            0.9,
+            "0.90",
+            &SliderColors::default_slider(),
+            11,
+            DEFAULT_LABEL_WIDTH,
+            0.5,
+        );
+
+        assert!((ids.default_normalized - 0.5).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -701,6 +730,7 @@ mod tests {
             &SliderColors::default_slider(),
             11,
             DEFAULT_LABEL_WIDTH,
+            0.5,
         );
 
         tree.clear_dirty();

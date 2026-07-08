@@ -56,14 +56,6 @@ pub(crate) enum ActiveInspectorDrag {
         layer_id: LayerId,
         value: f32,
     },
-    ClipSlip {
-        clip_id: manifold_core::ClipId,
-        value: f32,
-    },
-    ClipLoop {
-        clip_id: manifold_core::ClipId,
-        value: f32,
-    },
     Param {
         target: manifold_core::GraphTarget,
         param_id: manifold_core::effects::ParamId,
@@ -84,16 +76,6 @@ impl ActiveInspectorDrag {
             Self::LayerOpacity { layer_id, value } => {
                 if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id) {
                     layer.opacity = *value;
-                }
-            }
-            Self::ClipSlip { clip_id, value } => {
-                if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
-                    clip.in_point = manifold_core::Seconds::from_f32(*value);
-                }
-            }
-            Self::ClipLoop { clip_id, value } => {
-                if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
-                    clip.loop_duration_beats = manifold_core::Beats::from_f32(*value);
                 }
             }
             Self::Param {

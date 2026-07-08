@@ -174,6 +174,7 @@ impl ChromeHost {
                 &spec.colors,
                 spec.font_size,
                 spec.label_width,
+                spec.default,
             );
             if let Some(k) = key {
                 self.slider_ids.push((k, ids));

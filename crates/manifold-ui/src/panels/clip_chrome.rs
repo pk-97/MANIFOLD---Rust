@@ -15,7 +15,7 @@ use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderDragState};
 use crate::tree::UITree;
-use manifold_foundation::{Beats, Seconds};
+use manifold_foundation::Beats;
 
 // ── Layout constants (from ClipChromeBitmapPanel.cs) ──────────────
 
@@ -236,8 +236,7 @@ impl ClipChromePanel {
         true
     }
 
-    // Kept as no-ops for callers that still reference them
-    pub fn set_slip_range(&mut self, _max: Seconds) {}
+    // Kept as a no-op for callers that still reference it
     pub fn set_loop_range(&mut self, _max_beats: Beats) {}
 
     // ── View description ──────────────────────────────────────────
@@ -415,6 +414,10 @@ impl ClipChromePanel {
                             ONSET_MIN_MS,
                             ONSET_MAX_MS,
                         ),
+                        // Not reset-wired — a detection-config slider excluded
+                        // from BUG-061 (no Snapshot/Commit undo trio). 0ms is
+                        // the natural "no compensation" default.
+                        default: BitmapSlider::value_to_normalized(0.0, ONSET_MIN_MS, ONSET_MAX_MS),
                         value_text: format!("{:+.0}ms", self.cached_onset_ms),
                         colors: SliderColors::default_slider(),
                         font_size: SMALL_FONT_SIZE,
@@ -490,6 +493,10 @@ impl ClipChromePanel {
                 View::slider_row(SliderSpec {
                     label: None,
                     value: inst.sensitivity.clamp(0.0, 1.0),
+                    // Not reset-wired — a detection-config slider excluded
+                    // from BUG-061 (no Snapshot/Commit undo trio). No semantic
+                    // default exists per-instrument; neutral midpoint.
+                    default: 0.5,
                     value_text: String::new(),
                     colors: SliderColors::default_slider(),
                     font_size: SMALL_FONT_SIZE,
@@ -657,7 +664,6 @@ impl ClipChromePanel {
         self.reconcile_chrome(tree);
     }
 
-    pub fn sync_slip(&mut self, _tree: &mut UITree, _value: Seconds) {}
     pub fn sync_loop_duration(&mut self, _tree: &mut UITree, _beats: Beats) {}
 
     pub fn sync_bpm(&mut self, tree: &mut UITree, text: &str) {

@@ -155,6 +155,7 @@ impl LayerChromePanel {
             let spec = SliderSpec {
                 label: Some("Opacity".to_string()),
                 value: v,
+                default: 1.0,
                 value_text: fmt_opacity(v),
                 colors: SliderColors::default_slider(),
                 font_size: FONT_SIZE,
@@ -264,7 +265,11 @@ impl LayerChromePanel {
             intents.on(
                 ids.track,
                 crate::intent::Gesture::RightClick,
-                PanelAction::LayerOpacityRightClick,
+                PanelAction::slider_reset(
+                    PanelAction::LayerOpacitySnapshot,
+                    PanelAction::LayerOpacityChanged(1.0),
+                    PanelAction::LayerOpacityCommit,
+                ),
             );
         }
     }
@@ -351,5 +356,25 @@ mod tests {
             .filter_map(|i| tree.get_node(tree.id_at(i)))
             .any(|n| n.text.as_deref() == Some("Drums Layer"));
         assert!(found);
+    }
+
+    #[test]
+    fn right_click_on_opacity_track_resolves_to_slider_reset_with_declared_default() {
+        // BUG-061: the layer opacity reset now rides the generic SliderReset
+        // trio (the old per-panel right-click reset action was deleted).
+        let mut tree = UITree::new();
+        let mut panel = LayerChromePanel::new();
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+
+        let mut reg = crate::intent::IntentRegistry::new();
+        panel.register_intents(&mut reg);
+
+        let track = panel.opacity.track_id().unwrap();
+        match reg.resolve(&tree, Some(track), crate::intent::Gesture::RightClick) {
+            Some(PanelAction::SliderReset { changed, .. }) => {
+                assert!(matches!(*changed, PanelAction::LayerOpacityChanged(v) if (v - 1.0).abs() < f32::EPSILON));
+            }
+            other => panic!("expected SliderReset, got {other:?}"),
+        }
     }
 }

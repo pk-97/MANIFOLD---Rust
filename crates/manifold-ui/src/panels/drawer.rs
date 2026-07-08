@@ -134,6 +134,11 @@ pub enum DrawerRow {
         label: String,
         /// Normalized fill 0..1.
         norm: f32,
+        /// Normalized position 0..1 the slider resets to on right-click
+        /// (BUG-061) — the source's own default (e.g. `AudioModShape`'s
+        /// `sensitivity`/`attack_ms`/`release_ms` default), not the current
+        /// live value.
+        default_norm: f32,
         /// Display text shown in the slider's value field.
         value_text: String,
         /// Width reserved for the leading label.
@@ -319,6 +324,7 @@ pub fn build(
             DrawerRow::Slider {
                 label,
                 norm,
+                default_norm,
                 value_text,
                 label_w,
             } => {
@@ -338,6 +344,7 @@ pub fn build(
                     &sc,
                     spec.slider_font_size,
                     *label_w,
+                    default_norm.clamp(0.0, 1.0),
                 );
                 sliders.push(ids);
             }
@@ -474,6 +481,7 @@ mod tests {
             rows: vec![DrawerRow::Slider {
                 label: "Decay".into(),
                 norm: 0.25,
+                default_norm: 0.25,
                 value_text: "2.00".into(),
                 label_w: 50.0,
             }],

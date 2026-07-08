@@ -65,7 +65,7 @@ or human can read it, and it needs no external tool.
 | BUG-057 | **ui-snapshot-dead-blit-pipeline** | `cargo clippy -p manifold-app --features ui-snapshot` fails pre-existing on an unused `make_blit_pipeline` fn (LOW, blocks that one feature's clippy gate, not correctness) |
 | BUG-058 | **drag-end-consumable** | timeline sticks in move/trim mode when the drag's terminal DragEnd is consumed mid-route (open dropdown/modal eats it); root = terminal events routable instead of broadcast (HIGH) |
 | BUG-059 | **band-line-grab-falls-through** | Audio Setup crossover lines sticky (4px threshold, seam interceptors, dropdown swallow) AND a missed grab silently drags clips under the modal — position-based stash gate has no z-awareness (HIGH) |
-| BUG-061 | **slider-reset-per-panel-lottery** | right-click reset only works on sliders whose panel hand-wired it twice (bespoke PanelAction + app handler); clip slip/loop regressed silently, drawer/Audio Setup never had it — reset belongs to the slider itself (MED) |
+| BUG-061 | **slider-reset-per-panel-lottery** | ~~right-click reset only works on sliders whose panel hand-wired it twice~~ — **FIXED 2026-07-08 @ 480acf63** (reset is now the slider's own gesture: one generic `SliderReset` re-dispatches the slider's value-change trio with the default baked in) |
 | BUG-062 | **no-forward-version-guard** | an older build opening a newer .manifold silently strips unknown fields/effects and saves the loss back (HIGH, latent) |
 | BUG-063 | **silent-load-repairs** | overlap repair / orphan purge / unknown-effect strip delete project data on load with log-only notice; next save persists the loss (MED-HIGH) |
 | BUG-064 | **save-rename-before-fsync** | V2 save fsyncs the directory but never the temp file — power loss can leave a valid-named archive with unwritten data blocks (MED) |
@@ -74,6 +74,7 @@ or human can read it, and it needs no external tool.
 | BUG-067 | **ui-snapshot-dead-blit-pipeline** | `make_blit_pipeline` (`crates/manifold-app/src/ui_snapshot/render.rs:760`) is never used; `cargo clippy --features manifold-app/ui-snapshot -- -D warnings` fails on it, so any clippy run that chains the ui-snapshot feature (needed for `cargo xtask ui-snap` L3 flows) trips. Pre-existing at `b9304330`, found during DRAG_CAPTURE P1 (LOW) |
 | BUG-068 | **inspector-scene-cliphit-overlap** | the `inspector` ui-snap scene fixture has a clip-vs-panel hit-test overlap at its narrower zoom — a clip can't be both uniquely-labeled and safely positioned over the inspector column, which forced DRAG_CAPTURE P1's L3 flow onto the `timeline` scene. Fixture-only, no runtime impact. Pre-existing at `b9304330` (LOW) |
 | BUG-069 | **shipping-license-audit** | four license problems in shipped components: madmom models + ADTOF (both CC BY-NC-SA), rusty_link crate (GPL-2.0, viral, in manifold-playback), staged ffmpeg copied from the dev machine (likely GPL build); full sweep 2026-07-08, everything else clean (HIGH for commercialization, zero runtime impact) |
+| BUG-070 | **stepper-and-nonstandard-slider-reset** | right-click reset (BUG-061) covers intent-registered slider tracks only; still uncovered: Audio Setup gain `[−]value[＋]` steppers, the overlay-drag audio send-fader, and the envelope-decay drawer slider (LOW) |
 
 ## Open
 
@@ -298,7 +299,22 @@ unrecoverable asset. **Fix shape:** widen to 16 hex chars (64 bits); entry names
 old 6-char history entries stay readable (identity is string equality against the manifest,
 so mixed-width archives keep working as saves roll over).
 
-### BUG-061 (slider-reset-per-panel-lottery) — right-click reset works on some sliders and not others; reset is per-panel hand-wiring instead of a slider behavior — MED (live recovery gesture a performer can't trust; reported by Peter 2026-07-07)
+### BUG-061 (slider-reset-per-panel-lottery) — FIXED 2026-07-08 @ 480acf63 — right-click reset works on some sliders and not others; reset is per-panel hand-wiring instead of a slider behavior — MED (live recovery gesture a performer can't trust; reported by Peter 2026-07-07)
+
+**Fixed (root):** reset is now the slider's own gesture. Every slider carries a real default
+(`BitmapSlider::build` stores it in `SliderNodeIds.default_normalized`; `SliderSpec.default`
+threads through `ChromeHost`), and a single generic `PanelAction::SliderReset { snapshot,
+changed, commit }` re-dispatches the slider's OWN value-change trio with the default baked
+into `changed` — the exact Snapshot→Changed→Commit path a drag uses, so undo behaves like a
+drag to that value (each `*Commit` already guards `old != new`, so resetting an at-default
+slider is a no-op). One app-side handler recurses the trio (`ui_bridge/mod.rs`); the 7 bespoke
+`*RightClick` actions and their duplicated handlers are gone. Covered: effect/generator params,
+macros, master opacity, LED brightness, layer opacity, layer audio gain (new), modulation-drawer
+sliders (new). Clip slip/loop sliders were already removed in `52920ab6` — deleted their dead
+actions/handlers/stubs. Behavior change: a param reset now jumps (the eased snapback lost its
+only caller), consistent with a drag. Guarded by per-surface tests that a right-click on the
+track resolves to `SliderReset` with the declared default, so no panel can silently opt out
+again. Excluded surfaces → BUG-070. Original diagnosis retained below.
 
 **Symptom:** right-click-to-reset-to-default works on effect/generator param sliders, macros,
 master opacity, LED brightness, and layer opacity — and silently does nothing on clip
@@ -336,6 +352,27 @@ collapse into the generic path, and the clip slip/loop regression fixes itself. 
 can't opt out by forgetting. Watch the two non-uniform cases: param-card sliders whose
 right-click currently carries `(target, param_id, default)` context, and label/row right-click
 menus (`ParamLabelRightClick` etc.) which are context menus, not reset — they stay.
+
+### BUG-070 (stepper-and-nonstandard-slider-reset) — right-click reset still absent on the non-slider-track gain controls — LOW (found 2026-07-08 during BUG-061)
+
+**Symptom:** BUG-061 made right-click reset the shared gesture for every intent-registered
+slider *track*, but three gain-ish controls don't render as a slider track and so were left
+out: the Audio Setup gain `[−] value [＋]` steppers and the overlay-drag audio send-fader (both
+in `audio_setup_panel.rs`), and the envelope-decay drawer slider (`param_slider_shared.rs`
+`build_envelope_config`, which rides the same `drawer.rs` path but emits a different
+value-change than the `AudioModShape*` trio BUG-061 wired).
+
+**Root cause:** the steppers are a `[−]value[＋]` control (no track), the send-fader is
+overlay-drag (`AudioSendGainDrag*`, not an intent-registered track), and the decay slider was
+simply not in BUG-061's surface list. None expose the `SliderNodeIds.track` node that
+`SliderReset` registration hangs off.
+
+**Fix shape:** for the drawer decay slider, add a `SliderReset` on its track with the
+envelope-decay default (mechanical, same as the other drawer sliders). For steppers/overlay
+faders, decide whether right-click-reset is even the right affordance (they're not faders); if
+yes, give the stepper a reset on its value cell and the send-fader a reset on its overlay hit
+region — a different gesture wiring than the slider-track path. Not blocking; these all still
+reset via drag-to-value.
 
 ### BUG-052 (sample-rate-dependent-detection) — onset + kick detection mis-tunes at non-48k sample rates — FIXED 2026-07-07 @ 6e0e8988
 

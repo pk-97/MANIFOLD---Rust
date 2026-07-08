@@ -110,6 +110,14 @@ pub(crate) const AUDIO_RELEASE_MAX_MS: f32 = 2000.0;
 /// Leading-label width for the audio shaping sliders.
 pub(crate) const AUDIO_SHAPE_LABEL_W: f32 = 52.0;
 
+// `AudioModShape`'s own field defaults (mirrors `manifold_core::audio_mod`'s
+// `default_sensitivity()`/`default_attack_ms()`/`default_release_ms()` —
+// plain consts here so this crate doesn't need a `manifold-core` type import
+// just to know a slider's right-click-reset target, BUG-061).
+pub(crate) const AUDIO_SENS_DEFAULT: f32 = 1.0;
+pub(crate) const AUDIO_ATTACK_DEFAULT_MS: f32 = 5.0;
+pub(crate) const AUDIO_RELEASE_DEFAULT_MS: f32 = 120.0;
+
 // Arming the envelope shows two controls: the orange target handle on the
 // parameter's own track (the value it's pulled toward) and a single "Decay"
 // slider in a one-row drawer (how fast it falls back).
@@ -849,6 +857,10 @@ pub(crate) fn build_envelope_config(
         rows: vec![DrawerRow::Slider {
             label: "Decay".into(),
             norm: (decay / ENV_DECAY_MAX).clamp(0.0, 1.0),
+            // Not yet reset-wired (no right-click registration exists for the
+            // envelope drawer today — outside BUG-061's surface inventory);
+            // set to the real default so the field is honest if that changes.
+            default_norm: (DEFAULT_ENV_DECAY / ENV_DECAY_MAX).clamp(0.0, 1.0),
             value_text: format!("{decay:.2}"),
             label_w: ENV_DECAY_LABEL_W,
         }],
@@ -1432,9 +1444,10 @@ fn build_audio_mod_drawer(
     let sens = mod_state.audio_sensitivity.get(i).copied().unwrap_or(1.0);
     let attack = mod_state.audio_attack_ms.get(i).copied().unwrap_or(5.0);
     let release = mod_state.audio_release_ms.get(i).copied().unwrap_or(120.0);
-    let shape_slider = |label: &str, norm: f32, value_text: String| DrawerRow::Slider {
+    let shape_slider = |label: &str, norm: f32, default_norm: f32, value_text: String| DrawerRow::Slider {
         label: label.to_string(),
         norm: norm.clamp(0.0, 1.0),
+        default_norm: default_norm.clamp(0.0, 1.0),
         value_text,
         label_w: AUDIO_SHAPE_LABEL_W,
     };
@@ -1459,9 +1472,24 @@ fn build_audio_mod_drawer(
             label: Some("Band".into()),
         },
         DrawerRow::Buttons { buttons: toggle_buttons, width: ButtonWidth::Proportional, label: None },
-        shape_slider("Amount", sens / AUDIO_SENS_MAX, format!("{sens:.2}")),
-        shape_slider("Attack", attack / AUDIO_ATTACK_MAX_MS, format!("{attack:.0} ms")),
-        shape_slider("Release", release / AUDIO_RELEASE_MAX_MS, format!("{release:.0} ms")),
+        shape_slider(
+            "Amount",
+            sens / AUDIO_SENS_MAX,
+            AUDIO_SENS_DEFAULT / AUDIO_SENS_MAX,
+            format!("{sens:.2}"),
+        ),
+        shape_slider(
+            "Attack",
+            attack / AUDIO_ATTACK_MAX_MS,
+            AUDIO_ATTACK_DEFAULT_MS / AUDIO_ATTACK_MAX_MS,
+            format!("{attack:.0} ms"),
+        ),
+        shape_slider(
+            "Release",
+            release / AUDIO_RELEASE_MAX_MS,
+            AUDIO_RELEASE_DEFAULT_MS / AUDIO_RELEASE_MAX_MS,
+            format!("{release:.0} ms"),
+        ),
     ];
     // §9 U2: the trigger-only Mode row, appended last so its flat button
     // index continues right after the Inv/Delta toggles (the three Slider
@@ -1846,6 +1874,10 @@ pub(crate) fn build_param_row(
         slider_colors,
         FONT_SIZE,
         label_width,
+        // `norm` above is already `value_to_normalized(info.default, ..)` — the
+        // row always builds showing the default (sync_values pushes the live
+        // value right after), so it doubles as the reset target.
+        norm,
     );
 
     // Make label interactive for click-to-copy OSC address + Ableton mapping.
