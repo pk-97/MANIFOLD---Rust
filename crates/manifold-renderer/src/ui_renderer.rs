@@ -670,6 +670,15 @@ impl UIRenderer {
         }
     }
 
+    /// One-shot: log that the footer-leak trace armed, so a zero-fire run is
+    /// unambiguous (flag on + no leak) rather than "did the env var take?".
+    /// Called once after construction. Remove with the trace.
+    pub fn log_footer_leak_armed(&self) {
+        if self.debug_footer_leak {
+            eprintln!("[FOOTER-LEAK] trace ARMED — watching for inspector draws below the footer line");
+        }
+    }
+
     // ── Static images (PRESET_LIBRARY_DESIGN P6, D7) ────────────────────
 
     /// Whether `handle` already has a registered GPU texture — the app calls

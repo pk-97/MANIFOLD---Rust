@@ -1962,6 +1962,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 &native_device,
                 manifold_gpu::GpuTextureFormat::Bgra8Unorm,
             ));
+            // BUG-060 footer-leak trace: confirm the flag armed (removed with the trace).
+            if let Some(ui) = self.ui_renderer.as_ref() {
+                ui.log_footer_leak_armed();
+            }
 
             // Create panel cache system
             self.ui_cache_manager = Some(manifold_renderer::ui_cache_manager::UICacheManager::new(
