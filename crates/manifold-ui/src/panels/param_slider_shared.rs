@@ -92,14 +92,31 @@ pub(crate) const WAVEFORM_COUNT: usize = 5;
 
 pub(crate) const ABL_CONFIG_HEIGHT: f32 = 24.0;
 
-/// Height of the per-param audio-modulation drawer. Rows: send selector, the
-/// Level feature row, the Tone feature row, the three shaping sliders
-/// (Amount/Attack/Release), and the modifier toggles (Inv/d-dt). Derived from
-/// the shared drawer metrics so the card's reserved height can't drift from
-/// what's actually drawn. `show_trigger_mode` adds the extra Mode row (§9 U2)
-/// that only an `is_trigger_gate` target's drawer carries.
-pub(crate) fn audio_config_height(show_trigger_mode: bool) -> f32 {
-    crate::panels::drawer::uniform_rows_height(if show_trigger_mode { 8 } else { 7 })
+/// Height of the per-param audio-modulation drawer for param `i`. Rows: send
+/// selector, the Level feature row, the Tone feature row, the three shaping
+/// sliders (Amount/Attack/Release), and the modifier toggles (Inv/d-dt) — 7
+/// rows, always. Derived from the shared drawer metrics so the card's
+/// reserved height can never drift from what's actually drawn.
+///
+/// PARAM_STEP_ACTIONS D8: a non-toggle, non-trigger param (`show_action`,
+/// mirrors `build_audio_mod_drawer`'s own gate) additionally carries the
+/// Action row, and — while armed to Step — the Amount slider + Wrap row.
+/// The trailing Mode row (§9 U2) shows for an `is_trigger_gate` target
+/// unconditionally, or for a slider row armed to Step/Random (D3).
+pub(crate) fn audio_config_height(info: &ParamInfo, mod_state: &ParamModState, i: usize) -> f32 {
+    let mut n = 7;
+    let show_action = !info.is_toggle && !info.is_trigger;
+    let action_idx = mod_state.audio_action_idx.get(i).copied().unwrap_or(0);
+    if show_action {
+        n += 1; // Action row
+        if action_idx == 1 {
+            n += 2; // Step-Amount slider + Wrap row
+        }
+    }
+    if info.is_trigger_gate || (show_action && action_idx != 0) {
+        n += 1; // Mode row
+    }
+    crate::panels::drawer::uniform_rows_height(n)
 }
 
 /// Full-scale for the audio "Amount" (sensitivity) slider: 0..this.
@@ -118,6 +135,68 @@ pub(crate) const AUDIO_SHAPE_LABEL_W: f32 = 52.0;
 pub(crate) const AUDIO_SENS_DEFAULT: f32 = 1.0;
 pub(crate) const AUDIO_ATTACK_DEFAULT_MS: f32 = 5.0;
 pub(crate) const AUDIO_RELEASE_DEFAULT_MS: f32 = 120.0;
+
+// ── PARAM_STEP_ACTIONS D2/D8: the Action/Amount/Wrap rows ──────────────
+//
+// This crate mirrors core enums rather than depending on `manifold-core`
+// directly (the established convention — see `audio_kind_labels`/
+// `AudioFeatureKind::ALL` above, and `AudioModSetTriggerMode`'s doc comment).
+// `TriggerAction`/`WrapMode` are mirrored the same way.
+
+/// Number of Action choices in the drawer's Action row (`[Continuous, Step,
+/// Random]`, D2).
+pub(crate) const AUDIO_ACTION_COUNT: usize = 3;
+/// Number of Wrap choices in the drawer's Wrap row (`[Wrap, Bounce, Clamp]`,
+/// D2), shown only while Action=Step.
+pub(crate) const AUDIO_WRAP_COUNT: usize = 3;
+
+/// Action-row button labels, index-parallel to core's `TriggerAction`
+/// (`Continuous`/`Step`/`Random`).
+pub(crate) fn audio_action_labels() -> [&'static str; AUDIO_ACTION_COUNT] {
+    ["Cont", "Step", "Rand"]
+}
+
+/// Wrap-row button labels, index-parallel to core's `WrapMode`
+/// (`Wrap`/`Bounce`/`Clamp`).
+pub(crate) fn audio_wrap_labels() -> [&'static str; AUDIO_WRAP_COUNT] {
+    ["Wrap", "Bounce", "Clamp"]
+}
+
+/// Mirrors `manifold_core::audio_mod::default_step_amount` — D2's UI-seeding
+/// default for a freshly-armed Step action: 1.0 for a discrete param
+/// (whole_numbers/value_labels — one card-step per fire), or an eighth of the
+/// param's range for a continuous one. Seeding only; once the user sets an
+/// amount this is never consulted again.
+pub(crate) fn default_step_amount(min: f32, max: f32, whole_numbers: bool) -> f32 {
+    if whole_numbers {
+        1.0
+    } else {
+        (max - min) / 8.0
+    }
+}
+
+/// Full-scale span the Step-Amount slider maps across: the param's own
+/// `max - min`, so dragging end-to-end reaches "one full range jump" per
+/// fire in either direction — the same "size any other knob" feel D2 asks
+/// for, without a fixed constant that would misfit wildly different param
+/// ranges (an angle's ±π vs. a 0..200 discrete count).
+fn step_amount_span(min: f32, max: f32) -> f32 {
+    (max - min).abs().max(f32::EPSILON)
+}
+
+/// Map a signed Step amount to the slider's 0..1 fill, centered at 0.5 for
+/// `amount == 0` (no jump), 0.0 at `-span`, 1.0 at `+span`.
+pub(crate) fn step_amount_to_norm(amount: f32, min: f32, max: f32) -> f32 {
+    let span = step_amount_span(min, max);
+    (amount / span * 0.5 + 0.5).clamp(0.0, 1.0)
+}
+
+/// Inverse of [`step_amount_to_norm`] — a dragged 0..1 slider position back to
+/// a signed amount.
+pub(crate) fn norm_to_step_amount(norm: f32, min: f32, max: f32) -> f32 {
+    let span = step_amount_span(min, max);
+    (norm.clamp(0.0, 1.0) - 0.5) * 2.0 * span
+}
 
 // Arming the envelope shows two controls: the orange target handle on the
 // parameter's own track (the value it's pulled toward) and a single "Decay"
@@ -272,6 +351,19 @@ pub struct ParamModState {
     /// `ParameterAudioMod`, not a separate per-instance field.
     pub audio_mode_idx: Vec<i32>,
 
+    /// Per-param: fire ACTION index into `[Continuous, Step, Random]` (D2),
+    /// read off `ParameterAudioMod.action`. Drives the drawer's Action row,
+    /// the collapsed "A"→"S"/"R" glyph (D8's "silent mode trap" badge), and
+    /// gates whether the Amount/Wrap/Mode rows show at all.
+    pub audio_action_idx: Vec<i32>,
+    /// Per-param: the Step action's `amount` (signed, param units) — the
+    /// drawer's Amount slider. Meaningful only while `audio_action_idx == 1`.
+    pub audio_step_amount: Vec<f32>,
+    /// Per-param: the Step action's wrap-mode index into
+    /// `[Wrap, Bounce, Clamp]` (D2) — the drawer's Wrap row. Meaningful only
+    /// while `audio_action_idx == 1`.
+    pub audio_wrap_idx: Vec<i32>,
+
     // ── Automation lane indicator (P4 §7 last bullet) ──
     /// Per-param: an enabled automation lane with ≥1 point exists on this
     /// instance for this param (Live's red "automated" dot).
@@ -370,6 +462,15 @@ pub struct AudioCardState {
     /// into `[ClipEdge, Transient, Both]`. Only meaningful on an
     /// `is_trigger_gate` target; a harmless default elsewhere.
     pub trigger_mode_idx: Vec<i32>,
+    /// Per-param: fire ACTION index (`ParameterAudioMod.action`, D2), into
+    /// `[Continuous, Step, Random]`.
+    pub action_idx: Vec<i32>,
+    /// Per-param: the Step action's `amount` (D2). Meaningful only while
+    /// `action_idx == 1`.
+    pub step_amount: Vec<f32>,
+    /// Per-param: the Step action's wrap-mode index (D2), into
+    /// `[Wrap, Bounce, Clamp]`. Meaningful only while `action_idx == 1`.
+    pub wrap_idx: Vec<i32>,
     /// Card-level: available send labels.
     pub send_labels: Vec<String>,
     /// Card-level: send ids parallel to `send_labels` — what the click handler
@@ -419,6 +520,9 @@ impl ParamModState {
             audio_send_labels: Vec::new(),
             audio_send_ids: Vec::new(),
             audio_mode_idx: vec![0; param_count],
+            audio_action_idx: vec![0; param_count],
+            audio_step_amount: vec![1.0; param_count],
+            audio_wrap_idx: vec![0; param_count],
             automation_active: vec![false; param_count],
             automation_overridden: vec![false; param_count],
         }
@@ -438,6 +542,9 @@ impl ParamModState {
             self.audio_attack_ms[i] = audio.attack_ms.get(i).copied().unwrap_or(5.0);
             self.audio_release_ms[i] = audio.release_ms.get(i).copied().unwrap_or(120.0);
             self.audio_mode_idx[i] = audio.trigger_mode_idx.get(i).copied().unwrap_or(0);
+            self.audio_action_idx[i] = audio.action_idx.get(i).copied().unwrap_or(0);
+            self.audio_step_amount[i] = audio.step_amount.get(i).copied().unwrap_or(1.0);
+            self.audio_wrap_idx[i] = audio.wrap_idx.get(i).copied().unwrap_or(0);
             self.audio_send_idx[i] = audio
                 .send_id
                 .get(i)
@@ -525,6 +632,11 @@ pub(crate) struct ParamDragState {
     /// A trigger-gate row's Amount/Attack/Release sliders ride this SAME path
     /// (§9 unified the drawer) — no separate trigger-mod drag state.
     pub(crate) dragging_audio_shape: Option<(usize, crate::panels::AudioShapeParam)>,
+    /// The Step-Amount slider drag (param index), only ever built while
+    /// Action=Step (PARAM_STEP_ACTIONS D8). Its own slot — `amount` lives on
+    /// `TriggerAction::Step`, not `AudioModShape`, so `AudioShapeParam`
+    /// doesn't apply here.
+    pub(crate) dragging_step_amount: Option<usize>,
 }
 
 impl ParamDragState {
@@ -535,6 +647,7 @@ impl ParamDragState {
             dragging_target_param: -1,
             dragging_decay_param: -1,
             dragging_audio_shape: None,
+            dragging_step_amount: None,
         }
     }
 
@@ -544,6 +657,7 @@ impl ParamDragState {
             || self.dragging_target_param >= 0
             || self.dragging_decay_param >= 0
             || self.dragging_audio_shape.is_some()
+            || self.dragging_step_amount.is_some()
     }
 }
 
@@ -1258,13 +1372,20 @@ pub(crate) fn resolve_active_tab(active: &[ModTab], stored: ModTab) -> Option<Mo
 }
 
 /// Height a single config tab's drawer contributes (excludes the tab strip).
-/// `is_trigger_gate` adds the drawer's extra Mode row (§9 U2) when `tab` is
-/// `Audio` — the only tab a trigger-gate row ever shows.
-pub(crate) fn mod_config_height(tab: ModTab, is_trigger_gate: bool) -> f32 {
+/// `info`/`mod_state`/`i` feed `audio_config_height` when `tab` is `Audio` —
+/// the only tab whose height varies by more than which tab it is (an
+/// `is_trigger_gate` row's Mode row, D8's Action/Amount/Wrap rows on a
+/// slider row armed to Step/Random).
+pub(crate) fn mod_config_height(
+    tab: ModTab,
+    info: &ParamInfo,
+    mod_state: &ParamModState,
+    i: usize,
+) -> f32 {
     match tab {
         ModTab::Envelope => ENV_CONFIG_HEIGHT,
         ModTab::Driver => driver_config_height(),
-        ModTab::Audio => audio_config_height(is_trigger_gate),
+        ModTab::Audio => audio_config_height(info, mod_state, i),
         ModTab::Ableton => ABL_CONFIG_HEIGHT,
     }
 }
@@ -1405,11 +1526,14 @@ pub(crate) struct ToggleParamIds {
 /// drawer's flat button index into send vs. feature/band/mode regions — see
 /// `match_param_row_click`).
 ///
-/// `trigger_mode_idx` is `Some(idx)` only for an `is_trigger_gate` target
-/// (§9 U2): it appends the Mode row (Clip/Audio/Both) after the shaping
-/// sliders, so the drawer is byte-identical to a plain audio mod's plus one
-/// row. `None` for every other target (regular sliders, `is_trigger` fire
-/// buttons) — no Mode row, no height difference from before §9.
+/// PARAM_STEP_ACTIONS D8: a non-toggle, non-trigger `info` (a plain slider
+/// row) additionally gets the Action row (Cont/Step/Rand); while armed to
+/// Step it also gets the Amount slider + Wrap row. The trailing Mode row
+/// (Clip/Audio/Both, §9 U2) appends for an `is_trigger_gate` target
+/// unconditionally, or for a slider row armed to Step/Random (D3) — computed
+/// here from `mod_state`/`info` rather than threaded in by the caller, so
+/// both call sites (`build_toggle_trigger_row`, `build_param_row`) just pass
+/// `info` and let this function derive which extra rows apply.
 #[allow(clippy::too_many_arguments)]
 fn build_audio_mod_drawer(
     tree: &mut UITree,
@@ -1420,11 +1544,11 @@ fn build_audio_mod_drawer(
     mod_state: &ParamModState,
     i: usize,
     config_font: u16,
-    trigger_mode_idx: Option<i32>,
+    info: &ParamInfo,
     target: GraphParamTarget,
-    pid: manifold_foundation::ParamId,
 ) -> (crate::panels::drawer::DrawerIds, usize) {
     use crate::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
+    let pid = info.param_id.clone();
     let send_sel = mod_state.audio_send_idx.get(i).copied().unwrap_or(-1);
     let send_count = mod_state.audio_send_labels.len();
     let send_buttons: Vec<DrawerButton> = mod_state
@@ -1528,10 +1652,68 @@ fn build_audio_mod_drawer(
             shape_reset(AudioShapeParam::Release, AUDIO_RELEASE_DEFAULT_MS),
         ),
     ];
-    // §9 U2: the trigger-only Mode row, appended last so its flat button
-    // index continues right after the Inv/Delta toggles (the three Slider
-    // rows above contribute no buttons) — see `match_param_row_click`.
-    if let Some(mode_sel) = trigger_mode_idx {
+    // D8: the Action row (Cont/Step/Rand) — every non-toggle, non-trigger
+    // param card. Never built for `is_trigger`/`is_trigger_gate` (F2/D8
+    // forbidden move): those rows count events by design, they don't step
+    // them. Appended after the shaping sliders, so its flat button index
+    // continues right after Inv/Delta (the three Slider rows above
+    // contribute no buttons) — see `match_param_row_click`, which must stay
+    // in lockstep with this row order.
+    let show_action = !info.is_toggle && !info.is_trigger;
+    let action_idx = mod_state.audio_action_idx.get(i).copied().unwrap_or(0);
+    if show_action {
+        let action_buttons: Vec<DrawerButton> = audio_action_labels()
+            .iter()
+            .enumerate()
+            .map(|(k, l)| DrawerButton::new(*l, k as i32 == action_idx))
+            .collect();
+        rows.push(DrawerRow::Buttons {
+            buttons: action_buttons,
+            width: ButtonWidth::Uniform,
+            label: Some("Action".into()),
+        });
+        // While armed to Step: the Amount slider (a 4th `DrawerRow::Slider`,
+        // `DrawerIds.sliders[3]`) then the Wrap row.
+        if action_idx == 1 {
+            let default_amount = default_step_amount(info.min, info.max, info.whole_numbers);
+            let amount = mod_state.audio_step_amount.get(i).copied().unwrap_or(default_amount);
+            let value_text = if info.whole_numbers {
+                format!("{amount:.0}")
+            } else {
+                format!("{amount:.2}")
+            };
+            let step_reset = PanelAction::slider_reset(
+                PanelAction::AudioModStepAmountSnapshot(target, pid.clone()),
+                PanelAction::AudioModStepAmountChanged(target, pid.clone(), default_amount),
+                PanelAction::AudioModStepAmountCommit(target, pid.clone()),
+            );
+            rows.push(shape_slider(
+                "Step",
+                step_amount_to_norm(amount, info.min, info.max),
+                step_amount_to_norm(default_amount, info.min, info.max),
+                value_text,
+                step_reset,
+            ));
+            let wrap_sel = mod_state.audio_wrap_idx.get(i).copied().unwrap_or(0);
+            let wrap_buttons: Vec<DrawerButton> = audio_wrap_labels()
+                .iter()
+                .enumerate()
+                .map(|(k, l)| DrawerButton::new(*l, k as i32 == wrap_sel))
+                .collect();
+            rows.push(DrawerRow::Buttons {
+                buttons: wrap_buttons,
+                width: ButtonWidth::Uniform,
+                label: Some("Wrap".into()),
+            });
+        }
+    }
+    // §9 U2/D3: the trailing Mode row (Clip/Audio/Both). An `is_trigger_gate`
+    // row always shows it; a slider row shows it once armed to Step or
+    // Random — a step/random mod fires from the same clip-edge/audio-edge
+    // sources a gate does, gated the same way (D3).
+    let show_mode = info.is_trigger_gate || (show_action && action_idx != 0);
+    if show_mode {
+        let mode_sel = mod_state.audio_mode_idx.get(i).copied().unwrap_or(0);
         let mode_buttons: Vec<DrawerButton> = audio_trigger_mode_labels()
             .iter()
             .enumerate()
@@ -1705,8 +1887,6 @@ pub(crate) fn build_toggle_trigger_row(
             let drawer_x = x + DRAWER_INDENT;
             let row_right = audio_btn_x + DE_BUTTON_SIZE;
             let drawer_w = (row_right - drawer_x).max(1.0);
-            let trigger_mode_idx =
-                info.is_trigger_gate.then(|| mod_state.audio_mode_idx.get(i).copied().unwrap_or(0));
             // P1 drawer tween parity with `build_param_row` (:2089-2101): when a
             // reveal height is supplied, the drawer builds under a clip region of
             // that height (revealing top-down) instead of `parent` directly.
@@ -1734,9 +1914,8 @@ pub(crate) fn build_toggle_trigger_row(
                 mod_state,
                 i,
                 config_font,
-                trigger_mode_idx,
+                info,
                 target,
-                info.param_id.clone(),
             );
             if animate_drawer {
                 cy = drawer_top + drawer_reveal.unwrap_or(0.0).max(0.0);
@@ -1914,10 +2093,14 @@ pub(crate) fn build_param_row(
         // no pad — the drawer's internal TOP_PAD already insets the last row. The top
         // pad folds into card_h so the bottom edge is unchanged.
         // A slider row is never `is_trigger_gate` (that's always a toggle
-        // row, built by `build_toggle_trigger_row` instead) — the Mode row
-        // never applies here.
-        let card_h =
-            MOD_CARD_PAD + ROW_HEIGHT + ROW_SPACING + tab_strip_h + mod_config_height(tab, false);
+        // row, built by `build_toggle_trigger_row` instead) — `mod_config_height`
+        // still derives the Action/Amount/Wrap/Mode rows (D8) from `info`/
+        // `mod_state` for the Audio tab.
+        let card_h = MOD_CARD_PAD
+            + ROW_HEIGHT
+            + ROW_SPACING
+            + tab_strip_h
+            + mod_config_height(tab, info, mod_state, i);
         let card_w = (row_right - x + MOD_CARD_PAD * 2.0).max(1.0);
         tree.add_panel(
             parent,
@@ -2086,7 +2269,15 @@ pub(crate) fn build_param_row(
     );
 
     // Audio-modulation button — third in the lane, right of the driver button.
+    // D8 "silent mode trap": when armed to Step/Random, the glyph swaps to
+    // "S"/"R" so a closed drawer still shows the armed action at a glance —
+    // the same idiom the driver button's waveform-icon swap uses above.
     let audio_active = mod_state.audio_active.get(i).copied().unwrap_or(false);
+    let audio_label = match mod_state.audio_action_idx.get(i).copied().unwrap_or(0) {
+        1 if audio_active => "S",
+        2 if audio_active => "R",
+        _ => "A",
+    };
     ids.audio_btn = add_row_button(
         tree,
         parent,
@@ -2095,7 +2286,7 @@ pub(crate) fn build_param_row(
         DE_BUTTON_SIZE,
         DE_BUTTON_SIZE,
         de_btn_style(audio_active, AUDIO_MOD_ACTIVE_C32),
-        "A",
+        audio_label,
         row_key_base,
         ROW_ROLE_AUDIO,
     );
@@ -2183,11 +2374,11 @@ pub(crate) fn build_param_row(
     // Audio-modulation drawer — shown when the Audio config tab is active.
     // Extracted to `build_audio_mod_drawer` (shared with
     // `build_toggle_trigger_row`'s `is_trigger`/`is_trigger_gate` cases,
-    // D5b/§9). A slider row is never `is_trigger_gate`, so no Mode row here.
+    // D5b/§9). A slider row is never `is_trigger_gate`, but it DOES get the
+    // Action/Amount/Wrap rows (D8) — derived inside from `info`.
     if shown_tab == Some(ModTab::Audio) {
         let (dids, send_count) = build_audio_mod_drawer(
-            tree, drawer_parent, drawer_x, cy, drawer_w, mod_state, i, config_font, None, target,
-            info.param_id.clone(),
+            tree, drawer_parent, drawer_x, cy, drawer_w, mod_state, i, config_font, info, target,
         );
         cy += dids.height;
         ids.audio_config = Some((dids, send_count));
@@ -2239,6 +2430,14 @@ pub(crate) enum RowClick {
     /// index — `[ClipEdge, Transient, Both]`, §9 U3). The drawer's trailing
     /// row, only ever built for a trigger-gate target.
     AudioSelectTriggerMode(usize, usize),
+    /// An Action-row button in a slider row's audio drawer (param index,
+    /// action index — `[Continuous, Step, Random]`, D2). Never built for a
+    /// toggle/trigger row (D8 forbidden move F2: those rows count events,
+    /// they don't step them).
+    AudioSelectAction(usize, usize),
+    /// A Wrap-row button (param index, wrap index — `[Wrap, Bounce, Clamp]`,
+    /// D2), only present while Action=Step.
+    AudioSelectWrap(usize, usize),
     /// The slider's param label, when it carries an OSC address to copy
     /// (param index). The caller performs the copied-flash side effect and
     /// reads `osc_addresses[pi]`.
@@ -2268,6 +2467,7 @@ pub(crate) fn match_param_row_click(
     slider_ids: &[Option<SliderNodeIds>],
     osc_addresses: &[Option<String>],
     param_info: &[ParamInfo],
+    mod_state: &ParamModState,
 ) -> Option<RowClick> {
     // D/E buttons never apply to toggle OR trigger params — neither a sticky
     // on/off nor a fire-once count has a continuous value an LFO/envelope
@@ -2337,11 +2537,15 @@ pub(crate) fn match_param_row_click(
 
     // Audio drawer buttons: one flat index across rows in build order —
     // sends, the Feature (kind) row, the Band row, the two modifier toggles,
-    // then — ONLY on an `is_trigger_gate` target — the trailing Mode row
-    // (§9 U2). The three shaping sliders (Amount/Attack/Release) are
-    // `DrawerRow::Slider`s, not buttons, so they contribute nothing to this
-    // flat index; a non-gate drawer simply has no buttons past Delta, so
-    // `resolve_button` can never produce an `f` that reaches the Mode arm.
+    // then (D8, non-toggle/non-trigger rows only) the Action row, then —
+    // while armed to Step — the Wrap row, then — an `is_trigger_gate` row
+    // unconditionally, or a slider row armed to Step/Random — the trailing
+    // Mode row (§9 U2/D3). Must stay in lockstep with the row order
+    // `build_audio_mod_drawer` actually builds. The shaping/Amount sliders
+    // are `DrawerRow::Slider`s, not buttons, so they contribute nothing to
+    // this flat index; a drawer with fewer trailing rows simply has no
+    // buttons past its last one, so `resolve_button` can never produce an
+    // `f` that reaches an arm that isn't built.
     for (pi, cfg) in audio_configs.iter().enumerate() {
         if let Some((dids, send_count)) = cfg
             && let Some(flat) = dids.resolve_button(id)
@@ -2364,7 +2568,26 @@ pub(crate) fn match_param_row_click(
             if f == 1 {
                 return Some(RowClick::AudioToggleRate(pi));
             }
-            return Some(RowClick::AudioSelectTriggerMode(pi, f - 2));
+            let f = f - 2;
+            let show_action = param_info
+                .get(pi)
+                .map(|p| !p.is_toggle && !p.is_trigger)
+                .unwrap_or(false);
+            if show_action {
+                if f < AUDIO_ACTION_COUNT {
+                    return Some(RowClick::AudioSelectAction(pi, f));
+                }
+                let f = f - AUDIO_ACTION_COUNT;
+                let action_idx = mod_state.audio_action_idx.get(pi).copied().unwrap_or(0);
+                if action_idx == 1 {
+                    if f < AUDIO_WRAP_COUNT {
+                        return Some(RowClick::AudioSelectWrap(pi, f));
+                    }
+                    return Some(RowClick::AudioSelectTriggerMode(pi, f - AUDIO_WRAP_COUNT));
+                }
+                return Some(RowClick::AudioSelectTriggerMode(pi, f));
+            }
+            return Some(RowClick::AudioSelectTriggerMode(pi, f));
         }
     }
 

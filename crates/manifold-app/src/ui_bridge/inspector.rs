@@ -14,8 +14,8 @@ use manifold_editing::commands::drivers::{
     SetDriverFreePeriodCommand, ToggleDriverEnabledCommand, ToggleDriverReversedCommand,
 };
 use manifold_editing::commands::audio_mod::{
-    AddAudioModCommand, RemoveAudioModCommand, SetAudioModShapeCommand, SetAudioModSourceCommand,
-    SetAudioModTriggerModeCommand, ToggleAudioModEnabledCommand,
+    AddAudioModCommand, RemoveAudioModCommand, SetAudioModActionCommand, SetAudioModShapeCommand,
+    SetAudioModSourceCommand, SetAudioModTriggerModeCommand, ToggleAudioModEnabledCommand,
 };
 use manifold_editing::commands::audio_setup::{
     AddAudioSendCommand, RemoveAudioSendCommand, RenameAudioSendCommand, SetAudioCrossoversCommand,
@@ -376,6 +376,7 @@ pub(super) fn dispatch_inspector(
     target_snapshot: &mut Option<f32>,
     decay_snapshot: &mut Option<f32>,
     audio_shape_snapshot: &mut Option<manifold_core::audio_mod::AudioModShape>,
+    audio_action_snapshot: &mut Option<manifold_core::audio_mod::TriggerAction>,
     audio_crossover_snapshot: &mut Option<(f32, f32)>,
     audio_send_gain_drag_snapshot: &mut Option<f32>,
     audio_send_sensitivity_drag_snapshot: &mut Option<Vec<manifold_core::audio_trigger::TriggerRoute>>,
@@ -1413,6 +1414,154 @@ pub(super) fn dispatch_inspector(
                         ));
                     boxed.execute(project);
                     ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
+            }
+            DispatchResult::structural()
+        }
+
+        // PARAM_STEP_ACTIONS D8: the Action segmented row. Entering Step from
+        // a non-Step action seeds `amount`/`wrap` from the param's own spec
+        // (D2's UI-seeding default); re-clicking Step while already Step is a
+        // no-op (keeps the user's dialed-in amount/wrap). Structural: the
+        // Amount/Wrap/Mode rows and the collapsed "A"→"S"/"R" glyph all
+        // depend on which action is armed.
+        PanelAction::AudioModSetActionKind(gpt, param_id, kind_idx) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let (old_action, min, max, whole_numbers) = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        let action = inst.find_audio_mod(param_id.as_ref()).map(|m| m.action);
+                        let spec = inst.params.get(param_id.as_ref());
+                        (
+                            action,
+                            spec.map(|p| p.spec.min).unwrap_or(0.0),
+                            spec.map(|p| p.spec.max).unwrap_or(1.0),
+                            spec.map(|p| p.whole_numbers()).unwrap_or(false),
+                        )
+                    })
+                    .unwrap_or((None, 0.0, 1.0, false));
+                if let Some(old_action) = old_action {
+                    let new_action = match kind_idx {
+                        1 => match old_action {
+                            manifold_core::audio_mod::TriggerAction::Step { .. } => old_action,
+                            _ => manifold_core::audio_mod::TriggerAction::Step {
+                                amount: manifold_core::audio_mod::default_step_amount(
+                                    min,
+                                    max,
+                                    whole_numbers,
+                                ),
+                                wrap: manifold_core::audio_mod::WrapMode::Wrap,
+                            },
+                        },
+                        2 => manifold_core::audio_mod::TriggerAction::Random,
+                        _ => manifold_core::audio_mod::TriggerAction::Continuous,
+                    };
+                    if new_action != old_action {
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(SetAudioModActionCommand::new(
+                                DriverTarget::from(&target),
+                                param_id.clone(),
+                                old_action,
+                                new_action,
+                            ));
+                        boxed.execute(project);
+                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    }
+                }
+            }
+            DispatchResult::structural()
+        }
+
+        PanelAction::AudioModStepAmountSnapshot(gpt, param_id) => {
+            // Capture the pre-drag action so the commit can record one undo step.
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                *audio_action_snapshot = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.find_audio_mod(param_id.as_ref()).map(|m| m.action)
+                    })
+                    .flatten();
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::AudioModStepAmountChanged(gpt, param_id, value) => {
+            // Live edit (no undo entry per frame) — the handle tracks the cursor.
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let v = *value;
+                graph_audio_mod_dual_edit(project, content_tx, &target, param_id.clone(), move |m| {
+                    let wrap = match m.action {
+                        manifold_core::audio_mod::TriggerAction::Step { wrap, .. } => wrap,
+                        _ => manifold_core::audio_mod::WrapMode::Wrap,
+                    };
+                    m.action = manifold_core::audio_mod::TriggerAction::Step { amount: v, wrap };
+                });
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::AudioModStepAmountCommit(gpt, param_id) => {
+            // One undo step: snapshot (old) → current action (new).
+            if let Some(old_action) = audio_action_snapshot.take()
+                && let Some(target) =
+                    resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let new_action = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.find_audio_mod(param_id.as_ref()).map(|m| m.action)
+                    })
+                    .flatten();
+                if let Some(new_action) = new_action
+                    && new_action != old_action
+                {
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        Box::new(SetAudioModActionCommand::new(
+                            DriverTarget::from(&target),
+                            param_id.clone(),
+                            old_action,
+                            new_action,
+                        ));
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
+            }
+            DispatchResult::handled()
+        }
+
+        // The Wrap segmented row — only meaningful while Action=Step; a stray
+        // click while some other action is armed (shouldn't happen — the row
+        // isn't built then) is a harmless no-op.
+        PanelAction::AudioModSetWrap(gpt, param_id, wrap_idx) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let old_action = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.find_audio_mod(param_id.as_ref()).map(|m| m.action)
+                    })
+                    .flatten();
+                if let Some(manifold_core::audio_mod::TriggerAction::Step { amount, .. }) = old_action {
+                    let wrap = match wrap_idx {
+                        1 => manifold_core::audio_mod::WrapMode::Bounce,
+                        2 => manifold_core::audio_mod::WrapMode::Clamp,
+                        _ => manifold_core::audio_mod::WrapMode::Wrap,
+                    };
+                    let new_action = manifold_core::audio_mod::TriggerAction::Step { amount, wrap };
+                    if let Some(old_action) = old_action
+                        && new_action != old_action
+                    {
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(SetAudioModActionCommand::new(
+                                DriverTarget::from(&target),
+                                param_id.clone(),
+                                old_action,
+                                new_action,
+                            ));
+                        boxed.execute(project);
+                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    }
                 }
             }
             DispatchResult::structural()

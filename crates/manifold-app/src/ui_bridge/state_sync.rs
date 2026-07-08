@@ -1786,6 +1786,9 @@ fn build_audio_card_state(
         attack_ms: vec![5.0; n],
         release_ms: vec![120.0; n],
         trigger_mode_idx: vec![0; n],
+        action_idx: vec![0; n],
+        step_amount: vec![1.0; n],
+        wrap_idx: vec![0; n],
         send_labels: Vec::new(),
         send_ids: Vec::new(),
     };
@@ -1807,14 +1810,41 @@ fn build_audio_card_state(
         a.release_ms[pi] = am.shape.release_ms;
         a.kind_idx[pi] = am.source.feature.kind.index() as i32;
         a.band_idx[pi] = am.source.feature.band.index() as i32;
-        a.trigger_mode_idx[pi] = match am
-            .trigger_mode
-            .unwrap_or(manifold_core::audio_trigger::TriggerFireMode::Both)
+        // PARAM_STEP_ACTIONS D3: an unset `trigger_mode`'s effective default
+        // depends on the mod's action — a gate's (or a plain Continuous mod's)
+        // arm-time default is `Both` (adding audio must not silently kill clip
+        // launches, §9 U3); a Step/Random mod's default is `Transient` (a step
+        // mod with no audio intent armed is meaningless — the user opened an
+        // audio drawer). This must track the evaluator's own default exactly,
+        // or the drawer shows a Mode selection that isn't what actually fires.
+        let default_mode = if matches!(am.action, manifold_core::audio_mod::TriggerAction::Continuous)
         {
+            manifold_core::audio_trigger::TriggerFireMode::Both
+        } else {
+            manifold_core::audio_trigger::TriggerFireMode::Transient
+        };
+        a.trigger_mode_idx[pi] = match am.trigger_mode.unwrap_or(default_mode) {
             manifold_core::audio_trigger::TriggerFireMode::ClipEdge => 0,
             manifold_core::audio_trigger::TriggerFireMode::Transient => 1,
             manifold_core::audio_trigger::TriggerFireMode::Both => 2,
         };
+        match am.action {
+            manifold_core::audio_mod::TriggerAction::Continuous => {
+                a.action_idx[pi] = 0;
+            }
+            manifold_core::audio_mod::TriggerAction::Step { amount, wrap } => {
+                a.action_idx[pi] = 1;
+                a.step_amount[pi] = amount;
+                a.wrap_idx[pi] = match wrap {
+                    manifold_core::audio_mod::WrapMode::Wrap => 0,
+                    manifold_core::audio_mod::WrapMode::Bounce => 1,
+                    manifold_core::audio_mod::WrapMode::Clamp => 2,
+                };
+            }
+            manifold_core::audio_mod::TriggerAction::Random => {
+                a.action_idx[pi] = 2;
+            }
+        }
     }
     a
 }

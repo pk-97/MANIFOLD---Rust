@@ -33,6 +33,7 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "timeline" => Some(timeline_scene()),
         "states" => Some(states_scene()),
         "inspector" => Some(inspector_scene()),
+        "paramsteps" => Some(param_steps_scene()),
         "scrollshrink" => Some(scroll_shrink_scene()),
         "hairlineclips" => Some(hairline_clips_scene()),
         "automation" => Some(automation_scene()),
@@ -576,6 +577,76 @@ fn inspector_scene() -> SceneData {
 
     let mut selection = UIState::default();
     selection.select_layer(lid("glow"));
+
+    SceneData { project, content, active: Some(1), selection }
+}
+
+/// PARAM_STEP_ACTIONS P3 evidence scene: the drawer's D8 Action/Amount/Wrap
+/// rows on both a whole-numbers param and a continuous one.
+///
+/// - PLASMA's `pattern` (whole_numbers, 0..7) carries a Step mod, pre-armed
+///   directly (the same "construct the state for evidence" convention
+///   `inspector_scene()` uses for its LFO/trigger-gate rows) — the drawer
+///   renders open with Action=Step, the Amount slider snapped to whole
+///   numbers, and the Wrap row.
+/// - GLOW's Bloom `amount` (continuous, 0..5) starts ARMED but Continuous —
+///   the `scripts/ui-flows/param-step-action.json` acceptance flow selects
+///   GLOW (Bloom's card, and its drawer, builds fresh and SNAPS open at full
+///   height — no reveal tween in flight, see the note below) then clicks
+///   Action=Step through the REAL click path (AudioModSetActionKind), so the
+///   vertical slice (model → command → UI → pixels) is exercised at least
+///   once, not just constructed. Bloom does NOT start unarmed: the P1 drawer
+///   reveal tween (`ParamCardPanel::tick_drawers`) only advances via a
+///   per-frame wall-clock tick that no per-frame loop exists to drive in this
+///   `--script` harness (a real gap, logged as BUG-073 — arming a mod live
+///   inside a script would show a permanently zero-height clip region since
+///   the tween never gets ticked past t=0). Building the card already-armed
+///   sidesteps it entirely: a param count unchanged since the card's own
+///   first `configure()` call snaps `drawer_height_anim` straight to its
+///   target (`param_card.rs`'s "a *new* param... snaps so it never stalls
+///   half-open") — the Action row still requires a REAL click to prove D8's
+///   drawer wiring, it just isn't the FIRST arm of the mod itself.
+fn param_steps_scene() -> SceneData {
+    use manifold_core::audio_mod::{
+        AudioBand, AudioFeature, AudioFeatureKind, ParameterAudioMod, TriggerAction, WrapMode,
+    };
+    use manifold_core::audio_setup::AudioSend;
+
+    let kick_send = AudioSend::new("Kick");
+    let kick_send_id = kick_send.id.clone();
+
+    let mut glow = Layer::new("GLOW".into(), LayerType::Video, 0);
+    glow.layer_id = lid("glow");
+    glow.clips
+        .push(TimelineClip::new_video("glow_loop.mov".into(), Beats(0.0), Beats(48.0), Seconds::ZERO));
+    let mut bloom = effect("Bloom");
+    let bloom_amount_mod = ParameterAudioMod::new(
+        "amount".into(),
+        kick_send_id.clone(),
+        AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Full),
+    );
+    bloom.audio_mods = Some(vec![bloom_amount_mod]);
+    glow.effects = Some(vec![bloom]);
+
+    let mut plasma = Layer::new_generator("PLASMA".into(), manifold_core::PresetTypeId::PLASMA, 1);
+    plasma.layer_id = lid("plasma");
+    plasma.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(48.0)));
+    let mut pattern_step = ParameterAudioMod::new(
+        "pattern".into(),
+        kick_send_id.clone(),
+        AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Low),
+    );
+    pattern_step.action = TriggerAction::Step { amount: 1.0, wrap: WrapMode::Wrap };
+    plasma.gen_params_or_init().audio_mods = Some(vec![pattern_step]);
+
+    let mut project = Project::default();
+    project.audio_setup.sends.push(kick_send);
+    project.timeline.layers = vec![glow, plasma];
+
+    let content = ContentState { current_beat: Beats(8.0), is_playing: false, ..Default::default() };
+
+    let mut selection = UIState::default();
+    selection.select_layer(lid("plasma"));
 
     SceneData { project, content, active: Some(1), selection }
 }

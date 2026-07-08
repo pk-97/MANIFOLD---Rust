@@ -1379,11 +1379,11 @@ impl ParamCardPanel {
         let active = active_mod_tabs(&self.state.mod_state, info, i);
         let h = match active.len() {
             0 => return 0.0,
-            1 => mod_config_height(active[0], info.is_trigger_gate),
+            1 => mod_config_height(active[0], info, &self.state.mod_state, i),
             _ => {
                 let stored = self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver);
                 let shown = resolve_active_tab(&active, stored).unwrap_or(active[0]);
-                MOD_TAB_STRIP_H + mod_config_height(shown, info.is_trigger_gate)
+                MOD_TAB_STRIP_H + mod_config_height(shown, info, &self.state.mod_state, i)
             }
         };
         // Match the build's post-drawer break (see `build_param_row`).
@@ -2952,6 +2952,7 @@ impl ParamCardPanel {
             &self.slider_ids,
             &self.osc_addresses,
             &self.param_info,
+            &self.state.mod_state,
         ) {
             return match rc {
                 RowClick::DriverToggle(pi) => {
@@ -2992,6 +2993,12 @@ impl ParamCardPanel {
                 }
                 RowClick::AudioSelectTriggerMode(pi, m) => {
                     self.audio_set_trigger_mode_action(GraphParamTarget::Effect(ei), pi, m)
+                }
+                RowClick::AudioSelectAction(pi, k) => {
+                    vec![PanelAction::AudioModSetActionKind(GraphParamTarget::Effect(ei), self.pid_at(pi), k)]
+                }
+                RowClick::AudioSelectWrap(pi, w) => {
+                    vec![PanelAction::AudioModSetWrap(GraphParamTarget::Effect(ei), self.pid_at(pi), w)]
                 }
                 RowClick::LabelCopy(pi) => {
                     if let Some(ids) = &self.slider_ids[pi]
@@ -3113,6 +3120,7 @@ impl ParamCardPanel {
             &self.slider_ids,
             &self.osc_addresses,
             &self.param_info,
+            &self.state.mod_state,
         ) {
             return match rc {
                 RowClick::DriverToggle(pi) => {
@@ -3153,6 +3161,12 @@ impl ParamCardPanel {
                 }
                 RowClick::AudioSelectTriggerMode(pi, m) => {
                     self.audio_set_trigger_mode_action(GraphParamTarget::Generator, pi, m)
+                }
+                RowClick::AudioSelectAction(pi, k) => {
+                    vec![PanelAction::AudioModSetActionKind(GraphParamTarget::Generator, self.pid_at(pi), k)]
+                }
+                RowClick::AudioSelectWrap(pi, w) => {
+                    vec![PanelAction::AudioModSetWrap(GraphParamTarget::Generator, self.pid_at(pi), w)]
                 }
                 RowClick::LabelCopy(pi) => {
                     if let Some(ids) = &self.slider_ids[pi]
@@ -3319,6 +3333,30 @@ impl ParamCardPanel {
                         PanelAction::AudioModShapeParamChanged(target, pid, which, value),
                     ];
                 }
+            }
+        }
+
+        // 2c. Step-Amount slider (only present while Action=Step, D8) — its
+        // own drag slot since `amount` lives on `TriggerAction::Step`, not
+        // `AudioModShape` (`AudioShapeParam` doesn't apply here). It's
+        // `DrawerIds.sliders[3]`, one past the three shaping sliders above.
+        for (pi, audio_cfg) in self.audio_configs.iter().enumerate() {
+            let Some((dids, _)) = audio_cfg else { continue };
+            if let Some(sl) = dids.sliders.get(3)
+                && node_id == sl.track
+            {
+                let info = &self.param_info[pi];
+                let norm = BitmapSlider::x_to_normalized(sl.track_rect, pos.x).clamp(0.0, 1.0);
+                let mut value = norm_to_step_amount(norm, info.min, info.max);
+                if info.whole_numbers {
+                    value = value.round();
+                }
+                self.drag.dragging_step_amount = Some(pi);
+                let pid = self.pid_at(pi);
+                return vec![
+                    PanelAction::AudioModStepAmountSnapshot(target, pid.clone()),
+                    PanelAction::AudioModStepAmountChanged(target, pid, value),
+                ];
             }
         }
 
@@ -3574,6 +3612,47 @@ impl ParamCardPanel {
             }
         }
 
+        // Step-Amount slider drag (D8) — its own path, see `handle_pointer_down`
+        // 2c. Updates fill + value and dispatches the live edit.
+        if let Some(pi) = self.drag.dragging_step_amount {
+            let rect = self
+                .audio_configs
+                .get(pi)
+                .and_then(|c| c.as_ref())
+                .and_then(|(d, _)| d.sliders.get(3))
+                .map(|sl| sl.track_rect);
+            if let Some(rect) = rect {
+                let info = &self.param_info[pi];
+                let norm = BitmapSlider::x_to_normalized(rect, pos.x).clamp(0.0, 1.0);
+                let mut value = norm_to_step_amount(norm, info.min, info.max);
+                if info.whole_numbers {
+                    value = value.round();
+                }
+                if let Some(v) = self.state.mod_state.audio_step_amount.get_mut(pi) {
+                    *v = value;
+                }
+                let text =
+                    if info.whole_numbers { format!("{value:.0}") } else { format!("{value:.2}") };
+                let display_norm = step_amount_to_norm(value, info.min, info.max);
+                if let Some((d, _)) = self.audio_configs.get(pi).and_then(|c| c.as_ref())
+                    && let Some(sl) = d.sliders.get(3)
+                {
+                    BitmapSlider::update_value(tree, sl, display_norm, &text);
+                }
+                let pid = self.pid_at(pi);
+                return match self.kind {
+                    ParamCardKind::Effect => {
+                        vec![PanelAction::AudioModStepAmountChanged(GraphParamTarget::Effect(ei), pid, value)]
+                    }
+                    ParamCardKind::Generator => vec![PanelAction::AudioModStepAmountChanged(
+                        GraphParamTarget::Generator,
+                        pid,
+                        value,
+                    )],
+                };
+            }
+        }
+
         // Trim bar drag (driver / Ableton / audio) — one path. Read the kind's
         // current range, clamp the dragged edge, write it back, reposition the
         // bars, emit the change. The clamp and `reposition_trim_bars` are
@@ -3671,6 +3750,17 @@ impl ParamCardPanel {
             return match self.kind {
                 ParamCardKind::Effect => vec![PanelAction::AudioModShapeCommit(GraphParamTarget::Effect(ei), pid)],
                 ParamCardKind::Generator => vec![PanelAction::AudioModShapeCommit(GraphParamTarget::Generator, pid)],
+            };
+        }
+        if let Some(pi) = self.drag.dragging_step_amount.take() {
+            let pid = self.pid_at(pi);
+            return match self.kind {
+                ParamCardKind::Effect => {
+                    vec![PanelAction::AudioModStepAmountCommit(GraphParamTarget::Effect(ei), pid)]
+                }
+                ParamCardKind::Generator => {
+                    vec![PanelAction::AudioModStepAmountCommit(GraphParamTarget::Generator, pid)]
+                }
             };
         }
         if let Some((kind, pi, _)) = self.drag.dragging_trim.take() {
@@ -5300,7 +5390,11 @@ mod tests {
         let expanded_h = panel.compute_height();
 
         assert!(expanded_h > base_h);
-        let audio_h = crate::panels::param_slider_shared::audio_config_height(false);
+        let audio_h = crate::panels::param_slider_shared::audio_config_height(
+            &panel.param_info[0],
+            &panel.state.mod_state,
+            0,
+        );
         // Drawer height includes the post-drawer break (DRAWER_BOTTOM_GAP).
         assert!((expanded_h - base_h - audio_h - DRAWER_BOTTOM_GAP).abs() < 0.1);
     }
