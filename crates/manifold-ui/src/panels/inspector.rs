@@ -1954,6 +1954,25 @@ impl InspectorCompositePanel {
         self.columns_y = columns_y;
         self.columns_height = columns_h;
 
+        // BUG-060 root fix: the inspector's own pixel clip. Everything the
+        // scroll columns build below (cards, drawers, scrollbars) gets swept
+        // under this — see the reparent call after both columns finish —
+        // so no card content can ever paint past the inspector's own bottom
+        // edge into whatever panel renders below it (was relying entirely on
+        // layout math never overflowing). Deliberately covers only the
+        // scrolled column region: the pinned macros strip and tab strip
+        // chrome above stay outside it (already built, so excluded from the
+        // upcoming sweep range regardless).
+        let content_clip_start = tree.count();
+        let content_clip_id = tree.add_node(
+            None,
+            Rect::new(rect.x, columns_y, rect.width, columns_h),
+            UINodeType::ClipRegion,
+            UIStyle::default(),
+            None,
+            UIFlags::VISIBLE | UIFlags::CLIPS_CHILDREN,
+        );
+
         // ── MASTER COLUMN (full width when active, else collapsed) ──
         let left_clip_rect = Rect::new(left_x, columns_y, master_col_w, columns_h);
         self.master_scroll.begin(tree, left_clip_rect);
@@ -2103,6 +2122,13 @@ impl InspectorCompositePanel {
         self.layer_scroll.reparent_content(tree, right_start);
         self.layer_scroll
             .build_scrollbar(tree, right_x + right_content_w, &SCROLLBAR_STYLE);
+
+        // Both columns' scroll clips (and everything reparented under them
+        // above) are still tree roots at this point — `ScrollContainer::begin`
+        // always mints its clip node with `parent: None`. Sweep them under
+        // the inspector's own clip now that both columns are fully built.
+        let content_clip_count = tree.count() - (content_clip_start + 1);
+        tree.reparent_root_nodes(content_clip_start + 1, content_clip_count, content_clip_id);
 
         // ── MACROS STRIP (pinned to the top, above the tab strip; built last so
         // it draws on top of any column content) ──

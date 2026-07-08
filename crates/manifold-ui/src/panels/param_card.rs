@@ -2183,6 +2183,12 @@ impl ParamCardPanel {
                     self.supports_envelopes,
                     has_osc,
                     author.then_some((i as u64) << 8),
+                    // P1 drawer tween: supply the interpolated height only while in
+                    // flight; settled rows pass None → the natural (unclipped) layout.
+                    self.drawer_height_anim
+                        .get(i)
+                        .filter(|a| a.is_animating())
+                        .map(|a| a.value()),
                 );
                 self.toggle_ids[i] = Some(ToggleParamIds {
                     label_id: row.label_id,
@@ -2365,6 +2371,12 @@ impl ParamCardPanel {
                         true, // generators always reserve the driver-column gap
                         has_osc,
                         author.then_some((i as u64) << 8),
+                        // P1 drawer tween: supply the interpolated height only while in
+                        // flight; settled rows pass None → the natural (unclipped) layout.
+                        self.drawer_height_anim
+                            .get(i)
+                            .filter(|a| a.is_animating())
+                            .map(|a| a.value()),
                     );
                     self.toggle_ids[i] = Some(ToggleParamIds {
                         label_id: row.label_id,
@@ -4119,6 +4131,59 @@ mod tests {
             }
             other => panic!("expected AudioModSetTriggerMode, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn trigger_gate_drawer_tween_clips_midflight() {
+        // BUG-060 layer 2: `build_toggle_trigger_row`'s audio-mod drawer had no
+        // reveal clip at all (unlike `build_param_row`'s tween path) — a
+        // mid-flight open/close on an `is_trigger_gate` row rendered its full
+        // natural height every frame instead of growing in. Same end-to-end
+        // shape as `drawer_open_tween_reserves_interpolated_height_clips_then_
+        // settles` above, but for the toggle/trigger row path specifically.
+        let mut closed = effect_config_with_trigger_gate();
+        let gi = closed.params.len() - 1;
+        closed.audio.active[gi] = false; // start disarmed — drawer closed
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&closed);
+        let closed_h = panel.compute_height();
+
+        // Re-arm: retargets the tween to the full drawer height.
+        panel.configure(&effect_config_with_trigger_gate()); // active[gi] = true
+        assert!(
+            panel.drawer_height_anim[gi].is_animating(),
+            "arming the trigger-gate row's audio mod retargets the drawer tween"
+        );
+        let full_target = panel.row_drawer_height(gi);
+        assert!(full_target > 0.0);
+
+        panel.tick_drawers(40.0);
+        assert!(panel.drawer_height_anim[gi].is_animating(), "still mid-flight after 40ms");
+
+        let mut tree = UITree::new();
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+        let clips_midflight =
+            tree.nodes().iter().filter(|n| n.node_type == UINodeType::ClipRegion).count();
+        assert!(clips_midflight >= 1, "an animating trigger-gate drawer builds under a clip region");
+        // The drawer still builds (not skipped) — just clipped to the reveal.
+        assert!(panel.audio_configs[gi].is_some());
+
+        for _ in 0..20 {
+            panel.tick_drawers(20.0);
+        }
+        assert!(!panel.drawer_height_anim[gi].is_animating(), "tween settles");
+        assert!(
+            (panel.compute_height() - (closed_h + full_target)).abs() < 0.1,
+            "settled height = closed + full drawer contribution"
+        );
+        let mut tree2 = UITree::new();
+        panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 400.0));
+        let clips_settled =
+            tree2.nodes().iter().filter(|n| n.node_type == UINodeType::ClipRegion).count();
+        assert!(
+            clips_settled < clips_midflight,
+            "settled build drops the trigger-gate drawer clip: settled={clips_settled} midflight={clips_midflight}"
+        );
     }
 
     #[test]
