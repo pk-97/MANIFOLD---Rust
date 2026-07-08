@@ -1506,7 +1506,7 @@ than it should've been.
 
 **Verified:** `cargo test -p manifold-ui --lib` (646 passed) +
 `cargo clippy -p manifold-ui -p manifold-app --all-targets -- -D warnings` (clean, aside from
-pre-existing unrelated warnings). Shipped on `fix/bug-060-inspector-clip`.
+pre-existing unrelated warnings). Shipped @ `27557d18` on `fix/bug-060-inspector-clip`.
 
 **Order (Fable, 2026-07-07): fix BUG-060 FIRST, then BUG-015's stale-chrome hole.** The
 clip container bounds what the atlas cache can ever be wrong about (no inspector pixel can
