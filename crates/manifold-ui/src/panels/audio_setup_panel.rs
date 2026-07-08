@@ -427,19 +427,9 @@ pub struct AudioSetupPanel {
     scope_fmax: f32,
     /// Which divider line is currently being dragged, if any.
     dragging_band: Option<BandDivider>,
-    /// BUG-059 stopgap (superseded by `docs/DRAG_CAPTURE_DESIGN.md` when that
-    /// lands): true while a drag that STARTED inside the panel rect is in
-    /// flight but armed nothing (missed a divider/label grab). The panel then
-    /// consumes the whole DragBegin/Drag/DragEnd family so the gesture can't
-    /// fall through `is_event_in_tracks_area`'s position-only gate and
-    /// silently move clips / region-select on the timeline underneath — the
-    /// drag analogue of the `Click` arm's `owns_node || point_in_scope`
-    /// swallow. Keyed on the drag's ORIGIN, never its current position, so a
-    /// timeline drag wandering over the panel still passes through.
-    swallow_drag: bool,
     /// Screen rect of the whole panel, set by `build_nodes` — the ownership
-    /// test for `swallow_drag` (and nothing else; node-level hit-testing
-    /// stays the authority for everything with a node).
+    /// test `claims_drag`/`point_in_panel` use (and nothing else; node-level
+    /// hit-testing stays the authority for everything with a node).
     panel_rect: Rect,
     /// The D7 calibration drag currently armed (gain or trigger sensitivity
     /// value label), if any — mirrors `dragging_band` but per-send since gain
@@ -494,7 +484,6 @@ impl Default for AudioSetupPanel {
             scope_fmin: 0.0,
             scope_fmax: 0.0,
             dragging_band: None,
-            swallow_drag: false,
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
             calibration_drag: None,
             band_meter_ids: [(None, None, None); 3],
@@ -747,7 +736,8 @@ impl AudioSetupPanel {
             .host
             .node_id_for_key(KEY_CLOSE)
             .unwrap_or(NodeId::PLACEHOLDER);
-        // Ownership rect for the BUG-059 drag swallow — see `swallow_drag`.
+        // Ownership rect for `claims_drag`/`point_in_panel` — BUG-059,
+        // `docs/DRAG_CAPTURE_DESIGN.md` P2.
         self.panel_rect = Rect::new(x, y, self.panel_w, body_h);
 
         let inner_x = x + PAD;
@@ -1748,8 +1738,8 @@ impl AudioSetupPanel {
     }
 
     /// Whether a screen point lies inside the built panel — the ownership test
-    /// for the BUG-059 drag swallow (`swallow_drag`). False before first build
-    /// (zero rect contains nothing).
+    /// `claims_drag` uses (BUG-059, superseded by `docs/DRAG_CAPTURE_DESIGN.md`
+    /// P2). False before first build (zero rect contains nothing).
     fn point_in_panel(&self, pos: Vec2) -> bool {
         pos.x >= self.panel_rect.x
             && pos.x <= self.panel_rect.x + self.panel_rect.width
@@ -2326,26 +2316,21 @@ impl Overlay for AudioSetupPanel {
                     OverlayResponse::Ignored
                 }
             }
-            // BUG-059 stopgap (superseded by `docs/DRAG_CAPTURE_DESIGN.md`): a
-            // drag that STARTS inside the panel belongs to the panel, whether
-            // or not it grabbed anything. Without this, a missed divider grab
-            // fell through to `is_event_in_tracks_area`'s position-only gate
-            // and silently moved clips / region-selected on the timeline
-            // underneath. Origin-keyed: a timeline drag whose path merely
-            // crosses the panel still passes through untouched.
-            UIEvent::DragBegin { origin, .. } => {
-                if self.dragging_band.is_some()
-                    || self.calibration_drag.is_some()
-                    || self.point_in_panel(*origin)
-                {
-                    self.swallow_drag = true;
+            // P2 (`docs/DRAG_CAPTURE_DESIGN.md`): the BUG-059 missed-grab leak
+            // (a drag that starts inside the panel but grabs nothing,
+            // silently moving clips / region-selecting on the timeline
+            // underneath) is now prevented at the OWNERSHIP layer, not here —
+            // `claims_drag` (below) reports this origin as belonging to the
+            // panel, `UIRoot::resolve_drag_owner` records
+            // `DragOwner::Overlay(AudioSetup)`, and `should_stash_for_tracks`
+            // refuses to stash for the timeline because ownership, not this
+            // arm's Consumed/Ignored return, is what it reads. So this arm
+            // only needs to handle drags that actually armed a divider or
+            // calibration grab; a miss simply falls through unconsumed.
+            UIEvent::DragBegin { .. } => {
+                if self.dragging_band.is_some() || self.calibration_drag.is_some() {
                     OverlayResponse::Consumed(Vec::new())
                 } else {
-                    // A new drag from outside the panel: drop any stale swallow
-                    // (its terminal event may itself have been eaten upstream —
-                    // the BUG-058 class) so a timeline drag crossing the panel
-                    // is never mis-claimed.
-                    self.swallow_drag = false;
                     OverlayResponse::Ignored
                 }
             }
@@ -2374,20 +2359,14 @@ impl Overlay for AudioSetupPanel {
                             ])
                         }
                     }
-                } else if self.swallow_drag {
-                    // BUG-059: panel-owned drag that armed nothing — keep
-                    // swallowing so it can't leak to the timeline beneath.
-                    OverlayResponse::Consumed(Vec::new())
                 } else {
                     OverlayResponse::Ignored
                 }
             }
             UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
                 if self.dragging_band.take().is_some() {
-                    self.swallow_drag = false;
                     OverlayResponse::Consumed(vec![PanelAction::AudioCrossoverCommit])
                 } else if let Some(drag) = self.calibration_drag.take() {
-                    self.swallow_drag = false;
                     OverlayResponse::Consumed(vec![match drag {
                         CalibrationDrag::Gain { send, .. } => {
                             PanelAction::AudioSendGainDragCommit(send)
@@ -2396,15 +2375,33 @@ impl Overlay for AudioSetupPanel {
                             PanelAction::AudioSendSensitivityDragCommit(send, band)
                         }
                     }])
-                } else if std::mem::take(&mut self.swallow_drag) {
-                    // BUG-059: terminal event of a panel-owned missed-grab drag.
-                    OverlayResponse::Consumed(Vec::new())
                 } else {
                     OverlayResponse::Ignored
                 }
             }
             _ => OverlayResponse::Ignored,
         }
+    }
+
+    /// P2 (`docs/DRAG_CAPTURE_DESIGN.md` §3.2): the panel claims a drag
+    /// gesture — read once, at that gesture's first `DragBegin`, by
+    /// `UIRoot::resolve_drag_owner` — iff it already armed a band/calibration
+    /// grab at `PointerDown`, OR the gesture's origin lands inside the panel
+    /// rect even though it grabbed nothing (the BUG-059 missed-grab case;
+    /// this replaces the old origin-rect drag-swallow stopgap at the
+    /// ownership layer). Origin-keyed, never re-evaluated against the drag's
+    /// current position — same guarantee `point_in_panel`'s doc names.
+    fn claims_drag(&self, origin: Vec2) -> bool {
+        self.dragging_band.is_some() || self.calibration_drag.is_some() || self.point_in_panel(origin)
+    }
+
+    /// Idempotent end-of-gesture clear, called on every OPEN overlay by
+    /// `UIRoot::broadcast_gesture_end` regardless of who owned the gesture.
+    /// Replaces the old per-arm drag-swallow resets that were scattered
+    /// across the `on_event` arms above.
+    fn gesture_ended(&mut self) {
+        self.dragging_band = None;
+        self.calibration_drag = None;
     }
 }
 
@@ -2599,12 +2596,17 @@ mod tests {
         assert!(p.scope_rect().is_none());
     }
 
-    /// BUG-059: a drag starting inside the panel that grabs nothing (missed a
-    /// divider by >12px) must be consumed end-to-end — before this, it fell
-    /// through the modeless panel and silently moved clips / region-selected
-    /// on the timeline underneath.
+    /// BUG-059 / P2: a drag starting inside the panel that grabs nothing
+    /// (missed a divider by >12px) must still be CLAIMED — this is the same
+    /// scenario the old on_event-level swallow test proved, but the assertion
+    /// moves to the new seam: `claims_drag`, which is what
+    /// `UIRoot::resolve_drag_owner` reads to keep the gesture from leaking to
+    /// the timeline underneath (`docs/DRAG_CAPTURE_DESIGN.md` §3.2). The
+    /// routed `on_event` cascade no longer needs to consume this case itself
+    /// — ownership handles it one level up — so `DragBegin` for an unarmed
+    /// grab now correctly returns `Ignored` from `on_event`.
     #[test]
-    fn missed_grab_drag_inside_panel_is_swallowed() {
+    fn missed_grab_origin_inside_panel_is_claimed_by_ownership() {
         let mut p = panel_with_two_sends();
         let mut tree = UITree::new();
         p.build(&mut tree, 1280.0, 720.0);
@@ -2620,54 +2622,41 @@ mod tests {
             ),
             OverlayResponse::Consumed(_)
         ));
-        assert!(matches!(
-            p.on_event(
-                &UIEvent::DragBegin {
-                    node_id: Some(p.bg_id),
-                    pos: inside,
-                    origin: inside,
-                    modifiers
-                },
-                &mut tree
+        assert!(
+            p.claims_drag(inside),
+            "a drag originating inside the panel is claimed even though it grabs nothing"
+        );
+        assert!(
+            matches!(
+                p.on_event(
+                    &UIEvent::DragBegin {
+                        node_id: Some(p.bg_id),
+                        pos: inside,
+                        origin: inside,
+                        modifiers
+                    },
+                    &mut tree
+                ),
+                OverlayResponse::Ignored
             ),
-            OverlayResponse::Consumed(_)
-        ));
-        assert!(p.swallow_drag, "panel claims the drag it hosts");
-        let moved = Vec2::new(inside.x + 40.0, inside.y + 40.0);
-        assert!(matches!(
-            p.on_event(
-                &UIEvent::Drag {
-                    node_id: Some(p.bg_id),
-                    pos: moved,
-                    delta: Vec2::new(40.0, 40.0)
-                },
-                &mut tree
-            ),
-            OverlayResponse::Consumed(_)
-        ));
-        assert!(matches!(
-            p.on_event(&UIEvent::DragEnd { node_id: Some(p.bg_id), pos: moved }, &mut tree),
-            OverlayResponse::Consumed(_)
-        ));
-        assert!(!p.swallow_drag, "terminal event clears the swallow");
+            "on_event no longer needs to consume the missed-grab case — ownership does"
+        );
     }
 
-    /// BUG-059 guard-rail: a timeline drag whose PATH crosses the panel (origin
-    /// outside) must pass through untouched — ownership is keyed on the drag's
-    /// origin, never its current position. Also proves a stale swallow (its
-    /// terminal event eaten upstream, the BUG-058 class) is dropped on the next
-    /// outside drag instead of mis-claiming it.
+    /// BUG-059 guard-rail, P2 seam: a timeline drag whose origin is outside
+    /// the panel is never claimed, even with nothing armed — the same
+    /// assertion the old swallow test made, now against `claims_drag`
+    /// directly instead of a stateful flag.
     #[test]
-    fn timeline_drag_crossing_panel_passes_through() {
+    fn claims_drag_false_for_origin_outside_panel_with_nothing_armed() {
         let mut p = panel_with_two_sends();
         let mut tree = UITree::new();
         p.build(&mut tree, 1280.0, 720.0);
 
         let outside = Vec2::new(p.panel_rect.x - 40.0, p.panel_rect.y - 40.0);
-        let inside = Vec2::new(p.panel_rect.x + 20.0, p.panel_rect.y + 20.0);
         let modifiers = Modifiers::default();
 
-        p.swallow_drag = true; // stale from a hypothetical eaten terminal event
+        assert!(!p.claims_drag(outside));
         assert!(matches!(
             p.on_event(
                 &UIEvent::DragBegin {
@@ -2680,22 +2669,32 @@ mod tests {
             ),
             OverlayResponse::Ignored
         ));
-        assert!(!p.swallow_drag, "outside drag drops the stale swallow");
-        assert!(matches!(
-            p.on_event(
-                &UIEvent::Drag {
-                    node_id: Some(p.bg_id),
-                    pos: inside,
-                    delta: Vec2::new(60.0, 60.0)
-                },
-                &mut tree
-            ),
-            OverlayResponse::Ignored
-        ));
-        assert!(matches!(
-            p.on_event(&UIEvent::DragEnd { node_id: Some(p.bg_id), pos: inside }, &mut tree),
-            OverlayResponse::Ignored
-        ));
+    }
+
+    /// P2: `gesture_ended` is the idempotent end-of-gesture clear
+    /// `UIRoot::broadcast_gesture_end` calls on every OPEN overlay regardless
+    /// of ownership — it replaces the per-arm drag-swallow resets that used
+    /// to be scattered through `on_event`, and must be safe to call when
+    /// nothing is armed too.
+    #[test]
+    fn gesture_ended_clears_armed_band_and_calibration_drags() {
+        let mut p = panel_with_two_sends();
+        p.dragging_band = Some(BandDivider::Low);
+        p.calibration_drag = Some(CalibrationDrag::Gain {
+            send: AudioSendId::new("s1"),
+            start_x: 0.0,
+            start_db: 0.0,
+        });
+
+        p.gesture_ended();
+        assert!(p.dragging_band.is_none());
+        assert!(p.calibration_drag.is_none());
+
+        // Idempotent — a broadcast reaching every open overlay must not panic
+        // when this one didn't own the gesture.
+        p.gesture_ended();
+        assert!(p.dragging_band.is_none());
+        assert!(p.calibration_drag.is_none());
     }
 
     #[test]

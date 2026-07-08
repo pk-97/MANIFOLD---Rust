@@ -370,6 +370,18 @@ pub struct UIRoot {
     /// by stack index — so build and draw share one source and cannot drift
     /// (the bug class this system eliminates).
     pub overlay_draw: Vec<(usize, usize)>,
+    /// On-screen rect of each OPEN overlay as of the last `build_overlays` —
+    /// the same `rect` value passed to that overlay's `build_at`. Read by
+    /// `overlay_contains_point` (D5, `docs/DRAG_CAPTURE_DESIGN.md` §2) so the
+    /// window-seam press interceptors in `window_input.rs` can yield to a
+    /// floating overlay instead of punching straight through it. Limitation:
+    /// `Anchor::SelfManaged` overlays (dropdown, browser popup, Ableton
+    /// picker) position themselves inside `build_at` from the raw screen
+    /// size, so their entry here is a placeholder `(0,0,w,h)` rect, not their
+    /// true footprint — none of the three are relevant to the BUG-059 case
+    /// this guards (the docked Audio Setup panel), and the placeholder sits
+    /// at the screen origin, away from where the seams live in practice.
+    overlay_rects: Vec<(OverlayId, Rect)>,
     /// Tree index where the overlay region begins (after all scroll panels).
     /// The waveform/stem-lane overlay render uses this as its upper bound.
     pub overlay_region_start: usize,
@@ -484,6 +496,7 @@ impl UIRoot {
             ableton_picker_context: None,
             ableton_rediscovery_needed: false,
             overlay_draw: Vec::new(),
+            overlay_rects: Vec::new(),
             overlay_region_start: 0,
             overlay_open_snapshot: 0,
             closed_overlays: smallvec::SmallVec::new(),
@@ -951,6 +964,7 @@ impl UIRoot {
         let mut tree = std::mem::replace(&mut self.tree, UITree::new());
         let region_start = tree.count();
         let mut ranges: Vec<(usize, usize)> = Vec::new();
+        let mut rects: Vec<(OverlayId, Rect)> = Vec::new();
         for id in OverlayId::Z_ORDER {
             let ov = self.overlay_mut(id);
             if !ov.is_open() {
@@ -985,10 +999,12 @@ impl UIRoot {
             let rect = compute_overlay_rect(&anchor, size, screen, node_rect);
             ov.build_at(&mut tree, OverlayPlacement { rect, screen });
             ranges.push((start, tree.count()));
+            rects.push((id, rect));
         }
         self.tree = tree;
         self.overlay_region_start = region_start;
         self.overlay_draw = ranges;
+        self.overlay_rects = rects;
         // The tree's overlay region now matches the live open-set — record it so
         // `detect_overlay_open_change` only fires on the next genuine open/close.
         self.overlay_open_snapshot = self.current_overlay_open_mask();
@@ -1046,6 +1062,29 @@ impl UIRoot {
             self.overlay_dirty = true;
         }
         consumed
+    }
+
+    /// D5 — does an OPEN overlay's on-screen rect contain `pos`? Walks
+    /// `Z_ORDER` top-down, same open-check `route_overlay_event` uses, over
+    /// the rects `build_overlays` last recorded (`overlay_rects`) — the same
+    /// rect an overlay was actually placed at, so this agrees with what's on
+    /// screen. Used by `window_input`'s split-handle / inspector-edge press
+    /// checks so a seam visually UNDER a floating overlay (the Audio Setup
+    /// panel docked over the timeline, BUG-059) doesn't steal the press.
+    /// `overlay_rects`' doc comment names the one known gap (`SelfManaged`
+    /// overlays).
+    pub(crate) fn overlay_contains_point(&self, pos: Vec2) -> bool {
+        for id in OverlayId::Z_ORDER.iter().rev() {
+            if !self.overlay_is_open(*id) {
+                continue;
+            }
+            if let Some((_, rect)) = self.overlay_rects.iter().find(|(oid, _)| oid == id)
+                && rect.contains(pos)
+            {
+                return true;
+            }
+        }
+        false
     }
 
     /// D1 — resolve who owns an in-flight drag gesture, once, at the
@@ -2936,5 +2975,44 @@ mod drag_capture_tests {
         ui.drag_owner = Some(DragOwner::TimelineTracks);
         ui.broadcast_gesture_end();
         assert_eq!(ui.drag_owner, None);
+    }
+
+    /// D5 (P2): the docked Audio Setup panel (top-right, 38% width, full
+    /// height) visually overlaps the split handle where the handle's
+    /// full-width band crosses the panel's x-range — this is BUG-059's
+    /// window-seam case. `overlay_contains_point` must say yes there, which
+    /// is what makes `window_input`'s split-handle press branch yield to the
+    /// panel instead of stealing a band-line grab.
+    #[test]
+    fn overlay_contains_point_true_where_audio_panel_overlaps_split_handle() {
+        let mut ui = new_root();
+        ui.audio_setup_panel.open();
+        ui.build();
+
+        let handle = ui.layout.split_handle();
+        let panel_rect = ui
+            .overlay_rects
+            .iter()
+            .find(|(id, _)| *id == OverlayId::AudioSetup)
+            .map(|(_, r)| *r)
+            .expect("audio setup panel should have a resolved rect once open and built");
+
+        let overlap_x_min = handle.x.max(panel_rect.x);
+        let overlap_x_max = (handle.x + handle.width).min(panel_rect.x + panel_rect.width);
+        assert!(
+            overlap_x_min < overlap_x_max,
+            "test setup requires the docked panel to actually overlap the split \
+             handle in x at this viewport size — panel {panel_rect:?}, handle {handle:?}"
+        );
+
+        let probe = Vec2::new((overlap_x_min + overlap_x_max) * 0.5, handle.y + handle.height * 0.5);
+        assert!(ui.overlay_contains_point(probe));
+
+        // Sanity: same y, at the handle's own left edge (outside the panel's
+        // x-range) is not blocked — the guard is specific to where the panel
+        // actually sits, not the whole handle band.
+        let outside_probe = Vec2::new(handle.x + 1.0, handle.y + handle.height * 0.5);
+        assert!(!panel_rect.contains(outside_probe));
+        assert!(!ui.overlay_contains_point(outside_probe));
     }
 }
