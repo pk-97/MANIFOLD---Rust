@@ -42,16 +42,16 @@ BUCKETS = [
 
 
 def status_line(path: Path) -> str | None:
-    """First `**Status` line of a doc, cleaned. None if the doc has none."""
-    for line in path.read_text(errors="replace").splitlines():
-        stripped = line.lstrip()
-        if stripped.startswith("**Status") or stripped.startswith("***Status"):
-            # Drop markdown bold, the "Status:" label, and collapse whitespace.
-            text = stripped.replace("*", "").strip()
-            for label in ("Status:", "Status"):
-                if text.startswith(label):
-                    text = text[len(label):].lstrip(": ").strip()
-                    break
+    """First status line of a doc, cleaned. Matches both the bold `**Status:`
+    form and a plain `Status:` line — several docs use the latter. Scans only the
+    header region to avoid a body sentence that happens to start with "Status".
+    None if the doc declares none."""
+    for line in path.read_text(errors="replace").splitlines()[:40]:
+        core = line.strip().lstrip("*#").lstrip()  # drop leading markdown
+        if core[:6].lower() == "status" and (len(core) == 6 or core[6] in ":* "):
+            text = core.replace("*", "").strip()
+            if text[:6].lower() == "status":
+                text = text[6:].lstrip(": ").strip()
             return " ".join(text.split())
     return None
 
