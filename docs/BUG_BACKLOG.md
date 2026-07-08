@@ -49,7 +49,7 @@ or human can read it, and it needs no external tool.
 | BUG-010 | **wgsl-first-entry** | multi-entry wgsl_compute silently dispatches the first (MED) |
 | BUG-011 | **fused-output-oversize** | fused output buffer sized to max of all inputs (MED) |
 | BUG-015 | **inspector-overlap** | stale-chrome class FIXED 2026-07-08 — incremental cache path now falls back to full render on out-of-sub-region dirt (`has_dirty_outside_ranges` + `incremental_path_safe`); blanket `clear_dirty` narrowed to the overlay region so the fallback isn't erased. (2026-07-04 "sections interleaved" sighting = separate open thread if it recurs) |
-| BUG-060 | **inspector-footer-overpaint** | REOPENED 2026-07-08 — still repros on main after UI_CLIP_AND_Z P1; inspector content bleeds below the panel into/over the footer. NEW: **tab-swap (Layer↔Master) clears it**; generator vs video inspectors differ. P1's region clip was verified only via the headless `traverse()` path; the live app renders via `panel_cache_info`/UICacheManager, which was never checked. Cause OPEN. |
+| BUG-060 | **inspector-footer-overpaint** | REOPENED 2026-07-08. Opus 2nd pass: tree-geometry cause **ELIMINATED on the live cache path** (new `footer_leak_probe` test proves the inspector clips at footer_top through `traverse_flat_range`; footer's own render is correct) — the "inspector escapes into the footer" framing is wrong. Cause localized BELOW the tree, to the cache/dirty or offscreen layer (tab-swap clears it = full recomposite). Two unverified suspects (footer atlas region left un-repainted; incremental dirty-clear range mismatch, BUG-015 class). Needs live atlas+offscreen pixel dump. Cause still OPEN. |
 | BUG-025 | **timeline-scissor-bleed** | clip content bleeds across row bounds (MED, repro needed — scrolled headless render 07-07 clean) |
 | BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
 | BUG-033 | **ui-snapshot-broken** | FIXED — verified in-tree 2026-07-07 (harness builds + runs) |
@@ -1674,6 +1674,67 @@ construction" claim (below) was premature and applies only to `traverse()`.
 
 **Cause: OPEN.** No confirmed root cause — do not assume one from the notes above; investigate the
 live path directly. Next `BUG-NNN` for anything discovered en route.
+
+**Investigation 2026-07-08 (Opus, 2nd pass) — tree-geometry cause ELIMINATED on the LIVE cache
+path; cause localized below the UI tree, to the cache/dirty or offscreen layer.**
+
+A new CPU test drives the *live* render path (`UIRoot::panel_cache_info` →
+`UIRenderer::render_sub_region` → `UITree::traverse_flat_range`), not the headless `traverse()`
+P1 checked. It builds the real `bug060` scene through `UIRoot::build()` (the D1 region wrap),
+scrolls the inspector to the bottom with drawers open — 648 visible nodes, content raw-extending
+to y=2870, **8 nodes straddling the footer edge (y=1180)** — and walks the inspector panel's node
+range exactly as the cache manager does. Findings:
+- **Zero** inspector nodes — rects OR text — paint below the footer top. The region clip is a
+  fixed-bounds ancestor `traverse_flat_range` pre-pushes at *every* scroll offset and tween state
+  ([tree.rs:962-977](../crates/manifold-ui/src/tree.rs#L962-L977)), so nothing can geometrically
+  escape it. Text is CPU-clipped to `clip_bounds` ([native_text.rs:1121](../crates/manifold-renderer/src/native_text.rs#L1121)).
+- The footer's OWN render on the cache path is correct: full-width background `(0,1180 1536×36)`,
+  Q/FPS group intact, every node clipped to the full footer rect.
+- Test: `crates/manifold-app/src/ui_snapshot/mod.rs` →
+  `footer_leak_probe::cache_path_inspector_does_not_paint_below_footer_top` (feature `ui-snapshot`).
+  This is the **footer-edge containment test P1 never had** — the P1 test
+  (`layer_scroll_clip_prevents_scrolled_columns_painting_over_the_tab_strip`) checked the TOP edge
+  (tab strip) via `traverse_range` + `panel.build`, i.e. neither the bottom edge nor the cache path.
+
+So BOTH "inspector escapes its clip into the footer" (P1's claim) and "inspector content bleeds
+below the panel" (this reopen's framing) are **disproven on the live path.** The bug is not a
+mis-drawn or mis-clipped node. (The prior footer-leak session's own scissor trace agreed;
+its "(B) untraced immediate-mode draws overwrite the footer" theory is **unsupported** — the
+inspector/footer use no immediate-mode draws, that's the graph canvas only.)
+
+Cache decision path traced (both layers), which explains the triggers:
+- **Scroll:** `inspector.take_scrolled_in_place()` → `cm.invalidate_inspector()` *only*
+  ([app_render.rs:960-963](../crates/manifold-app/src/app_render.rs#L960-L963)) — no atlas clear,
+  footer's atlas region NOT repainted, frozen from the last clear.
+- **Drawer expand:** `inspector.drawer_anim_active()` forces `needs_rebuild=true` every tween frame
+  ([app_render.rs:2942-2944](../crates/manifold-app/src/app_render.rs#L2942)) → `build()` +
+  `cm.invalidate_all()` → whole-atlas clear + all panels repaint (footer included); settles instantly.
+- **Tab switch:** structural change → same `build()` + `invalidate_all()` → whole-atlas clear +
+  footer repaint. **This is why swapping tabs clears the artifact** — it is a full recomposite.
+- Second cache layer: the composited offscreen is re-blitted from cache unless `offscreen_dirty`
+  ([app_render.rs:3951](../crates/manifold-app/src/app_render.rs#L3951)), set when any panel node in
+  `[0, overlay_region_start)` is dirty ([:3122-3125](../crates/manifold-app/src/app_render.rs#L3122)).
+  The atlas incremental sub-region path ([ui_cache_manager.rs:206-248](../crates/manifold-renderer/src/ui_cache_manager.rs#L206))
+  repaints only dirty cards with `LoadOp::Load` and clears dirty for the whole inspector range — the
+  same shape as **BUG-015** (stale pixels), fixed this week in this same file.
+
+**Honest open gap:** by static reading, *no* write path puts wrong pixels into the footer band —
+every UI draw clips at footer_top, and the footer repaints correctly on every clear. Yet the repro
+persists and only a full clear fixes it, which is a *caching* signature (Peter's read, well-founded).
+So the cause is a state the static read doesn't reveal. Two leading, unverified suspects, both
+dirty/cache-level: (1) the footer's atlas region left un-repainted on a frame where the footer
+panel is skipped/empty — would show **clear-colour dark**, matching the prior session's atlas dumps
+of footer-right at RGB ~9-16; (2) a node-index/range mismatch in the incremental dirty-clear
+(BUG-015 class). Do not treat either as settled.
+
+**Next step (needs LIVE pixels, not the geometry harness):** dump BOTH the atlas and the composited
+offscreen footer band, plus per-frame `panel_valid` / `needs_clear` / `has_dirty_in_range(footer)`,
+across the exact scroll + drawer + tab-swap repro. That is the only oracle that separates "atlas
+footer region wrong" from "offscreen footer region wrong" and shows the flag values at the instant
+it breaks. Prior instrumentation exists on branch `fix/bug-060-footer-leak-trace` (worktree
+`.claude/worktrees/footer-leak`, env `MANIFOLD_TRACE_FOOTER_LEAK=1`) but predates P1 — re-point it
+at current main. The `footer_leak_probe` cache-path containment test landed with this pass is the
+durable regression guard for the geometry half.
 
 **Symptom** (Peter, 2026-07-07; also the prior `f4b895d7` session's subject): with the
 audio-mod drawer open on a Clip Trigger row (`is_trigger_gate`), scrolling the inspector to
