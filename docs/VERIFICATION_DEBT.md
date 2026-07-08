@@ -118,6 +118,16 @@ the residual exposure is only a browser popup or Ableton picker positioned direc
 surfaces there in practice, give `SelfManaged` overlays a real footprint query (the D5-Deferred
 §7 handle→widget-routing conversion also closes it). Not observed; carried.
 
+### VD-019 — DRAG_CAPTURE P3: band-divider immediate-drag feel — L1 reached / L4 target
+Landed 2026-07-08 (`docs/landings/2026-07-08-drag-capture-p3.md`). The zero-threshold
+immediate-drag path for the audio panel's band dividers is proven L1 — a unit test drives a
+`PointerDown`+1px `Move` on a divider and asserts `DragBegin` then `AudioCrossoverChanged`, and
+a companion test proves a 3px wiggle on a normal surface still resolves to a `Click` (global
+threshold untouched). What no test can reach is the feel: whether a ~2px crossover nudge tracks
+naturally under Peter's hand with no sticky first-pixel lag. Owed as the design's stated L4 —
+Peter nudges a crossover by ~2px live and confirms it tracks (D6 / §5 P3 performer gesture).
+Burn-down: Peter's feel pass on the band dividers; no repeatable artifact substitutes for it.
+
 ### VD-006 — BUG-026 batch-2 popup entrance-tween fix: running-app confirmation — L2 reached / L4 target
 Fix landed 2026-07-05 (commit `01c15213`) for the "no popup background until mouseover" bug —
 root-caused as a missing animation-poll (see BUG-026). Gate green (clippy; `manifold-ui --lib`

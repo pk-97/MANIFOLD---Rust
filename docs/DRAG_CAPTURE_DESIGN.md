@@ -1,6 +1,6 @@
 # Drag Capture — one owner per pointer gesture, from press to release
 
-**Status:** IN PROGRESS — **P1 LANDED 2026-07-08 @ `9bb8ca86`** (ownership D1–D4 + D9, L3); **P2 LANDED 2026-07-08 @ `12683746`** (z-aware seams D5 + `swallow_drag` retired, L1; VD-017/018); P3 pending · design 2026-07-07 (approved same day by Peter) · Fable
+**Status:** SHIPPED 2026-07-08 (all phases) — **P1 @ `9bb8ca86`** (ownership D1–D4 + D9, L3); **P2 @ `12683746`** (z-aware seams D5 + `swallow_drag` retired, L1; VD-017/018); **P3 @ `f23fa1f1`** (immediate-drag threshold D6, L1; VD-019 = Peter's crossover-nudge feel pass) · design 2026-07-07 (approved same day by Peter) · Fable
 **Prerequisites:** none (BUG-058 instrumentation + BUG-059 stopgap landed 2026-07-07 @ `fb2bdc07`; P2 deletes the stopgap)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -346,7 +346,7 @@ dragging, until you let go — no matter where your hand travels.**
   (Deferred, §7); keeping `swallow_drag` "for safety".
 - **Test scope:** focused.
 
-### P3 — Immediate-drag threshold for precision surfaces
+### P3 — Immediate-drag threshold for precision surfaces — ✅ LANDED 2026-07-08 @ `f23fa1f1` (L1; VD-019 = L4 feel pass; report `docs/landings/2026-07-08-drag-capture-p3.md`)
 
 - **Entry state:** P1+P2 landed.
 - **Read-back:** D6 + §3.4; restate the click-forfeiture consequence.
