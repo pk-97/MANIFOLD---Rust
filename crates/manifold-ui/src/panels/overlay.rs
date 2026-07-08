@@ -150,7 +150,7 @@ pub trait Overlay {
     /// at the gesture's first `DragBegin` — never per-event. Default: no.
     /// Modeless overlays with a drag surface override (the audio panel's
     /// armed band/calibration drag OR origin inside its panel rect — P2,
-    /// replacing the BUG-059 `swallow_drag` stopgap). A modal always owns
+    /// replacing the BUG-059 origin-rect drag-swallow stopgap). A modal always owns
     /// regardless of this hook (D4); this is only consulted for modeless
     /// overlays.
     fn claims_drag(&self, origin: Vec2) -> bool {

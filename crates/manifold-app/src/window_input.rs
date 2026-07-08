@@ -286,7 +286,19 @@ impl Application {
                                 .ui_root
                                 .layout
                                 .is_near_split_handle(self.cursor_pos)
+                                && !self.ws.ui_root.overlay_contains_point(self.cursor_pos)
                             {
+                                // D5 (`docs/DRAG_CAPTURE_DESIGN.md`): the seam
+                                // is visually UNDER a floating overlay when
+                                // one occupies this point (e.g. the Audio
+                                // Setup panel docked over the timeline) — in
+                                // that case this branch yields and the press
+                                // falls through to the final `else` below,
+                                // which routes it through normal overlay/
+                                // panel dispatch instead of stealing it for a
+                                // split-handle drag (BUG-059's window-seam
+                                // class).
+                                //
                                 // P2 "panel-split snap-back" (D15): a double-
                                 // click resets the split to its default
                                 // instead of starting a drag — checked before
@@ -315,7 +327,11 @@ impl Application {
                                         );
                                     }
                                 }
-                            } else if self.ws.ui_root.is_near_inspector_edge(self.cursor_pos) {
+                            } else if self.ws.ui_root.is_near_inspector_edge(self.cursor_pos)
+                                && !self.ws.ui_root.overlay_contains_point(self.cursor_pos)
+                            {
+                                // D5 — same seam-yields-to-overlay guard as
+                                // the split handle above.
                                 if self.is_double_click(self.inspector_handle_last_click) {
                                     self.inspector_handle_last_click = None;
                                     self.ws.ui_root.layout.reset_inspector_width();
