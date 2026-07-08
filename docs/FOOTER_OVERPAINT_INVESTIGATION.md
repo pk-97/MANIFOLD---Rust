@@ -1,5 +1,19 @@
 # Footer Overpaint / Disappearance — Investigation Handoff (for Fable)
 
+> **CORRECTION 2026-07-08 (Peter + Opus 2nd pass) — READ BEFORE TRUSTING ANYTHING BELOW.**
+> The core measurement this doc is built on is WRONG. §4.2's "footer-right goes dark, RGB ~9-16"
+> is a **harness / atlas-readback failure**, NOT the live symptom. On the real display the footer
+> band retains **stale UI content** — UI colours and button / chrome fragments left over from a
+> prior render — until a full clear (tab-swap) wipes it. So the bug is a **stale-pixel / dirty-clear**
+> failure (BUG-015 class), not a clear-colour gap, and the "(B) something overwrites the footer with
+> darkness" fork below is chasing a phantom. Also disproven since: the inspector does NOT
+> geometrically leak below the footer on the LIVE cache path (`traverse_flat_range`) — proven by
+> `footer_leak_probe` in `crates/manifold-app/src/ui_snapshot/mod.rs`, so §4.1's premise stands but
+> §7's "(B) immediate-mode draws overwrite" is unsupported (the inspector/footer use none). The
+> current, corrected state of this bug lives in `docs/BUG_BACKLOG.md` under BUG-060 — trust that over
+> this doc. Anything in this file keyed to the "dark" reading (§4.2, §4.4's brightness numbers, §5's
+> (A)/(B) fork, §7's ruled-out list) must be re-derived once the atlas readback itself is validated.
+
 **UPDATE 2026-07-08 (Fable): fork §5 resolved — it's (B).** A patched trace
 (commits `28d74981`, `6332df8f`: footer-pass draws included, clip early-outs
 logged) plus one live repro proved all 8 footer nodes draw with correct bounds,
