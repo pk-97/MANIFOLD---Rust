@@ -1757,6 +1757,14 @@ impl AudioSetupPanel {
         self.open.then_some(self.scope_rect).flatten()
     }
 
+    /// The Floor `−` stepper button's current node id, if built (a send is
+    /// selected). Exposed for the cross-crate double-click regression test in
+    /// `manifold-app` (BUG-059 keyed-parent churn) — the field is otherwise
+    /// crate-private.
+    pub fn floor_minus_id(&self) -> Option<NodeId> {
+        self.floor_minus_id
+    }
+
     /// Push the current crossovers (Hz) and the scope's analysed frequency range,
     /// every frame while open. The panel hit-tests the band-divider lines against
     /// these for dragging; the lines themselves are drawn shader-side from the
