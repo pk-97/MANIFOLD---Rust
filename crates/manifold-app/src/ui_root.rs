@@ -3136,4 +3136,113 @@ mod drag_capture_tests {
     // already has a bare-button test fixture (`setup()`); see
     // `three_pixel_wiggle_without_immediate_drag_still_resolves_to_click` and
     // `request_immediate_drag_allows_one_pixel_move_to_begin_drag` there.
+
+    /// One app frame's post-process rebuild: `overlay_dirty` (set whenever an
+    /// overlay consumes an event) drives a VISUAL `rebuild_scroll_panels` — the
+    /// exact path `app_render.rs` takes, which re-runs `build_overlays` and
+    /// re-mints the Audio Setup chrome.
+    fn settle(ui: &mut UIRoot) {
+        if ui.overlay_dirty {
+            ui.overlay_dirty = false;
+            ui.rebuild_scroll_panels(ScrollDirty {
+                visual: true,
+                ..ScrollDirty::default()
+            });
+        }
+    }
+
+    fn open_audio_panel_with_send(ui: &mut UIRoot) {
+        ui.audio_setup_panel.open();
+        ui.audio_setup_panel.configure(
+            None,
+            vec![manifold_ui::panels::audio_setup_panel::AudioSendRow {
+                id: manifold_core::AudioSendId::new("s1"),
+                label: "Audio 1".into(),
+                channels: vec![0],
+                channel_label: "Channel 1".into(),
+                gain_db: 0.0,
+                floor_db: manifold_ui::types::FLOOR_DB_OFF,
+                driven_count: 0,
+                source_label: "Cap".into(),
+                layer_fed: false,
+                routings: vec!["Capture: Channel 1".into()],
+                triggers: Vec::new(),
+                feeding_layers: Vec::new(),
+                consumers: Vec::new(),
+            }],
+            None,
+        );
+        ui.audio_setup_panel.set_scope_bands(200.0, 2000.0, 20.0, 20_000.0);
+        ui.build();
+    }
+
+    /// THE double-click regression (the Audio Setup buttons-need-two-clicks bug).
+    /// Drives TWO real clicks on the Floor `−` stepper through the exact app
+    /// frame loop — Down → process_events → overlay-dirty rebuild → Up →
+    /// process_events — and asserts each fires exactly one `AudioSendFloorStep`.
+    ///
+    /// Root cause it guards: the Audio Setup panel is the only overlay that
+    /// consumes `PointerDown` (BUG-059 leak stopgap), so a press on one of its
+    /// buttons marks the overlay dirty and rebuilds the tree BETWEEN press and
+    /// release. `rebuild_scroll_panels` → `UITree::truncate_from` used to
+    /// recompute `root_count` from the current root-parented survivors, which
+    /// undercounts once a root has been reparented (the inspector wraps its
+    /// subpanels under a ClipRegion) — so the rebuilt overlay chrome root got a
+    /// DIFFERENT salt than at press, its `WidgetId` (and every child's) churned,
+    /// and the release resolved to a different widget than the press → no
+    /// `Click`. Fixed by salting truncate's root count from `root_minted`
+    /// (mint-time parentage). Pre-fix this test sees `steps1 == 0`.
+    #[test]
+    fn floor_stepper_fires_on_a_single_click_across_overlay_rebuild() {
+        let mut ui = new_root();
+        open_audio_panel_with_send(&mut ui);
+
+        let floor0 = ui
+            .audio_setup_panel
+            .floor_minus_id()
+            .expect("floor stepper builds when a send is selected");
+        let fb = ui.tree.get_bounds(floor0);
+        assert_ne!(fb, Rect::ZERO, "floor button must be live in the built tree");
+        let p = Vec2::new(fb.x + fb.width * 0.5, fb.y + fb.height * 0.5);
+        let w_at_build = ui.tree.widget_of(floor0);
+
+        // ── Click 1 ─────────────────────────────────────────────
+        ui.pointer_event(p, PointerAction::Down, 0.0);
+        let _ = ui.process_events();
+        settle(&mut ui); // the consumed PointerDown rebuilt the overlay
+        let w_after_rebuild = ui.audio_setup_panel.floor_minus_id().map(|n| ui.tree.widget_of(n));
+        ui.pointer_event(p, PointerAction::Up, 0.05);
+        let click1 = ui.process_events();
+        settle(&mut ui);
+
+        // ── Click 2 (same pixel) ────────────────────────────────
+        ui.pointer_event(p, PointerAction::Down, 0.20);
+        let _ = ui.process_events();
+        settle(&mut ui);
+        ui.pointer_event(p, PointerAction::Up, 0.25);
+        let click2 = ui.process_events();
+
+        let steps = |acts: &[PanelAction]| {
+            acts.iter()
+                .filter(|a| matches!(a, PanelAction::AudioSendFloorStep(..)))
+                .count()
+        };
+
+        // The button's identity must survive the mid-click rebuild — the whole
+        // failure was this WidgetId churning between press and release.
+        assert_eq!(
+            w_after_rebuild,
+            Some(w_at_build),
+            "the Floor button's WidgetId must survive the overlay rebuild that a \
+             consumed PointerDown triggers (build={:?} after-rebuild={w_after_rebuild:?})",
+            Some(w_at_build),
+        );
+        assert_eq!(
+            steps(&click1),
+            1,
+            "the FIRST click on the Floor stepper must fire one step — a second \
+             click should not be needed. click1={click1:?}"
+        );
+        assert_eq!(steps(&click2), 1, "the second click must also fire one step: click2={click2:?}");
+    }
 }

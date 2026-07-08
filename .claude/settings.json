@@ -106,6 +106,15 @@
             "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/agent-model-guard.py\""
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/worktree-guard.py\""
+          }
+        ]
       }
     ],
     "PostToolUse": [

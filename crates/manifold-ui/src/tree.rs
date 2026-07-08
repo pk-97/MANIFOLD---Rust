@@ -55,6 +55,17 @@ pub struct UITree {
     /// Count of root-level (parentless) nodes added so far — the auto salt source
     /// for roots, mirroring `child_counts` for a virtual root parent.
     root_count: u32,
+    /// Per-slot flag: was this node *minted* as a root (parent_id `None`)?
+    /// Parallel to `nodes`. Set once at mint and NEVER changed by
+    /// [`reparent_root_nodes`](UITree::reparent_root_nodes) — so it records the
+    /// root salt a node actually consumed, which [`truncate_from`](UITree::truncate_from)
+    /// needs to continue the root-salt sequence correctly. Counting current
+    /// `parent_index.is_none()` instead undercounts once a root has been
+    /// reparented (the inspector wraps built subpanels under a ClipRegion),
+    /// which made a partial rebuild re-issue an already-consumed root salt →
+    /// two nodes deriving the same `WidgetId` (a silent widget→node map
+    /// corruption in release; the double-click / mis-target that surfaced).
+    root_minted: Vec<bool>,
     /// Reverse index: durable [`WidgetId`] → its live [`NodeId`] in the *current*
     /// build, for the interactive nodes only (the ones the input system can target
     /// for press / hover / focus). Rebuilt alongside the tree, so a lookup always
@@ -95,6 +106,7 @@ impl UITree {
             names: Vec::with_capacity(INITIAL_CAPACITY),
             child_counts: Vec::with_capacity(INITIAL_CAPACITY),
             root_count: 0,
+            root_minted: Vec::with_capacity(INITIAL_CAPACITY),
             widget_to_node: ahash::AHashMap::with_capacity(INITIAL_CAPACITY),
             count: 0,
             has_dirty: false,
@@ -256,6 +268,7 @@ impl UITree {
         self.widget_ids.push(widget_id);
         self.names.push(None);
         self.child_counts.push(0);
+        self.root_minted.push(parent_id.is_none());
 
         // Only interactive nodes are ever the target of press / hover / focus, so
         // only they need a reverse lookup. Keeping the map interactive-only also
@@ -908,6 +921,7 @@ impl UITree {
         self.widget_ids.clear();
         self.names.clear();
         self.child_counts.clear();
+        self.root_minted.clear();
         self.root_count = 0;
         // Retain the map's capacity — the editor clears+refills it every frame.
         self.widget_to_node.clear();
@@ -953,10 +967,17 @@ impl UITree {
         // invariant guarantees their children all survived), so the rebuilt tail
         // re-salts correctly. Only `root_count` needs recomputing — the rebuilt
         // tail's roots must continue the surviving roots' salt sequence.
-        self.root_count = self.parent_index[..from_index]
+        //
+        // Count roots by `root_minted` (mint-time parentage), NOT current
+        // `parent_index.is_none()`: a survivor minted as a root but later
+        // reparented (the inspector wraps subpanels under a ClipRegion) still
+        // consumed its root salt, and undercounting it here re-issued that salt
+        // to a rebuilt root → a `WidgetId` collision (see `root_minted`).
+        self.root_count = self.root_minted[..from_index]
             .iter()
-            .filter(|p| p.is_none())
+            .filter(|&&r| r)
             .count() as u32;
+        self.root_minted.truncate(from_index);
         self.count = from_index;
         self.has_dirty = true;
         self.structure_version = self.structure_version.wrapping_add(1);
@@ -1190,6 +1211,49 @@ mod tests {
         tree.truncate_from(5);
         assert_eq!(tree.count(), 1);
         assert!(!tree.has_dirty());
+    }
+
+    /// Regression (the Audio Setup double-click root cause): a partial rebuild
+    /// must re-issue the SAME root salt a node had before the rebuild, even when
+    /// an earlier root was REPARENTED (the inspector wraps its subpanels under a
+    /// ClipRegion). Pre-fix, `truncate_from` recomputed `root_count` from the
+    /// current root-parented survivors — undercounting the reparented roots that
+    /// had already consumed a salt — so the rebuilt root got a lower salt: its
+    /// `WidgetId` churned AND collided with the surviving reparented root (a
+    /// press+release then resolved to different widgets → the dead first click).
+    #[test]
+    fn truncate_from_reproduces_root_salt_after_reparent() {
+        let mut tree = UITree::new();
+
+        // A "static region" that mimics the inspector: a container plus three
+        // interactive roots that get wrapped under it. They consume root salts
+        // 1, 2, 3 at mint, then stop being roots.
+        let container = tree.add_panel(None, 0.0, 0.0, 100.0, 100.0, default_style());
+        let start = tree.count();
+        tree.add_button(None, 0.0, 0.0, 10.0, 10.0, default_style(), "a");
+        tree.add_button(None, 0.0, 10.0, 10.0, 10.0, default_style(), "b");
+        tree.add_button(None, 0.0, 20.0, 10.0, 10.0, default_style(), "c");
+        tree.reparent_root_nodes(start, 3, container);
+
+        // A "scroll region" interactive root, built after the static boundary —
+        // its identity must survive a partial rebuild (the overlay-chrome case).
+        let boundary = tree.count();
+        let scroll_btn = tree.add_button(None, 0.0, 40.0, 10.0, 10.0, default_style(), "scroll");
+        let w_before = tree.widget_of(scroll_btn);
+
+        // Partial rebuild from the boundary (mid-click overlay rebuild).
+        tree.truncate_from(boundary);
+        let scroll_btn2 = tree.add_button(None, 0.0, 40.0, 10.0, 10.0, default_style(), "scroll");
+        let w_after = tree.widget_of(scroll_btn2);
+
+        assert_eq!(
+            w_before, w_after,
+            "a rebuilt root must reproduce its salt across a partial rebuild — \
+             reparented roots still consumed their salt, so the count must include them"
+        );
+        // The reparented roots keep distinct WidgetIds from the rebuilt one (no
+        // collision — the debug_assert in `mint` would also catch this).
+        assert_ne!(w_after, tree.widget_of(container));
     }
 
     #[test]
