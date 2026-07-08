@@ -393,5 +393,99 @@ Page turn: `page_turn` trigger → `envelope_follower_ar` inverted into the feed
 **Verify.** CPU determinism test (fixed seed + beat sequence → identical stroke stream); PNG at T=0 (must visibly loop a motif), T=0.7 (script-like), T=2 (scribble). The three-panel look-check *is* the acceptance test — if T=0 doesn't read as "stuck," the habit memory isn't strong enough.
 
 ---
-<!-- CONTINUES -->
+
+# Tier B — committed future vocabulary
+
+Pinned to GAUSSIAN_SPLATS_DESIGN.md §3 (`splat_source`, `mask_splats_by_color`, `mask_splats_by_bounds`, `displace_splats`, `render_splats`) and BOX3D_PHYSICS_DESIGN.md §2–§3 (`physics_world`, `body_set`, `collider_set`, impulse params, P4 `heightfield_collider`; bodies render through the shipped `render_copies` + material/light/camera stack). Anything beyond those docs is flagged.
+
+## B1. Monolith Collapse (set-piece composition)
+
+**Intent.** A photoreal column/facade at 1:1 on the tower, static long enough to be filed as architecture — then it fails, physically, and the screen goes dark. (Full dramaturgy: VISUAL_BRAINSTORM_2026_07_08.md §4.)
+
+**Variant a — statue/organic (splat dissolve):** `splat_source(scan)` → `mask_splats_by_bounds` (crop + reveal volume) → `displace_splats(simplex, amount = Collapse card, mask-weighted so failure starts at the top)` → `render_splats(look_at_camera, static, 1:1 framing)`. D5's displacement-comes-home gives the rebuild for free: Collapse back to 0 re-forms the statue over the outro.
+
+**Variant b — building/masonry (Box3D):** `body_set` (Box shapes, grid spawn in stone courses, density high) + `collider_set` (**static floor at the tower's bottom bezel** + side walls) → `physics_world(gravity, time_scale)` → poses → `render_copies` + `pbr_material` + `light`(Sun, raking) + `look_at_camera`. The drop = one bar-quantized impulse (`beat_gate` → impulse port per the Box3D impulse decision). Reset trigger re-stacks the courses for the next phrase. Dust on impact: `spawn_from_mesh` (ships today) from the body mesh, brief 3D burst into `draw_particles_camera`.
+
+**Shared card sketch** (composition-level): **Collapse / Impulse (trigger, bar-quantized)** · Time Scale (0..2 — bullet-time mid-fall) · Gravity · Reset · Light Angle · Dust · **Dark (master `flash` Opacity→black — the projector-off)**.
+
+**Verify at build:** rubble must come to rest *and persist* at the bezel (no despawn); reset must be deterministic (same stack twice).
+
+## B2. Video-Textured Rubble (composition)
+
+**Intent.** A segmented object in the footage tiles into blocks that carry their own pixels, then avalanches. The inverse of Box3D P4 (footage-as-terrain); together they close the loop: video becomes bodies, bodies land on video.
+
+**Audit.** `person_mask` today, `segment_anything` (ML wave) later — same wire. **PROPOSED new atom** `node.mask_to_blocks` (CPU: greedy box-tiling of a mask → block centers/sizes + per-block source-UV rects). **Two flagged extensions** beyond committed docs: `body_set` needs a spawn-from-array mode (bodies from the block list, not a procedural region), and `render_copies` needs per-instance UV rects so each block samples its own patch of the source frame. Both are additive; both go to the Box3D wave as design inputs, not surprises mid-build.
+
+**Graph sketch:** `person_mask`/`segment` → `mask_to_blocks` → `body_set(from blocks)` → `physics_world` (impulse on trigger) → `render_copies` (textured by the *frozen* source frame — freeze on trigger via `temporal` hold, so the object shatters as it looked at the hit) `compose` over source with the subject hole-punched (`masked_mix`).
+
+**Card sketch:** Shatter (trigger) · Block Size · Force · Gravity · Persist (how long rubble lives) · Freeze Frame (toggle).
+
+## B3. Physics-as-Clip (conventions, not a graph)
+
+Standard card names and behaviours every physics piece adopts, so the performer learns one instrument: **Time Scale** (0..2, port-shadowed everywhere — bullet-time is a fader, not a feature) · **Gravity X/Y/Z** (the towers-sway proxy, C1) · **Impulse** (trigger, always bar-quantized through `beat_gate`) · **Reset** (deterministic re-seed). Hero moments bake through the SIMULATIONS bake lanes and play back as clips: scrub = playback position bound to `beat_ramp`/timeline, reverse = negative rate — a collapse played backwards through the outro is the building rebuilding itself. Bakes make the tempo-mapped stunts (domino run landing on the downbeat, BPM pendulum) deterministic instead of live risks.
+
+## B4. Render Fader (composition)
+
+**Intent.** One master card — **Reality** — slides a scene continuously from photoreal to the machine's vocabulary. The analog→digital thesis as a single knob.
+
+**Mechanism.** Binding fan-out (one card, many targets, each with its own `scale`/`offset` — the FluidSim2D `feather` pattern): Reality 0→1 drives `render_splats.splat_scale` (photoreal → pointillist dust) · `displace_splats.amount` (still → storm) · `color_lut` `wet_dry` (natural color → hard palette) · edge overlay mix (`edge_detect` of the render `compose(Screen)` — wireframe ghost rises) · particle crossfade at the top end (`mux_texture`). Stage-managed: bind Reality to a macro and ride it with the arrangement; the quiet returns it to zero.
+
+**Verify at build:** the slide must be monotone — no register where moving the fader makes the image *less* transformed (dead-zone check across 0→1 in tenths).
+
+## B5. Splats Through Slit-Scan (composition)
+
+`render_splats` color → A9 `frame_history` → `time_displace` with the delay map from `render_splats`' optional `scene_depth` output (committed in the splats design): near-now / far-past on a photoreal scan. Two wires beyond A9. Captured reality bleeding through time — nobody on the circuit has both pieces.
+
+## B6. Cel Screen-Print (composition — core is buildable today)
+
+**Intent.** Cel-shaded 3D through the misregistration press: a gig poster in motion.
+
+**Audit.** `cel_material` **ships today**, as do `platonic_solid_points/edges`, `gltf_mesh_source`, `render_mesh`, `light`, `camera_orbit`. The only gate is A6.
+
+**Graph:** generator side — `gltf_mesh_source` (or platonic) → `rotate_3d`(slow) → `render_mesh(cel_material(bands=3), light(Sun), camera_orbit)`; effect side — A6 misregistration → `node.palette` (Newsprint/Signal). Beat move: cel `bands` stepped by `clip_trigger_index` (3 → 2 → 5 on triggers — the poster re-inks itself).
+
+---
+
+# Tier C — proposed vocabulary (wave designs may rename; flagged throughout)
+
+## C1. Towers as Elements (composition — XPBD wave)
+
+**Intent.** The tower is a real object: a silk banner pinned to its top bezel, water pooling at its bottom bezel, both obeying the venue's gravity. Peter's most-loved direction from the session.
+
+**PROPOSED vocabulary** (inputs to the SIMULATIONS execution design, shaped to its §3 atom sketch): `node.cloth_grid` (rest mesh + pin row) · `node.xpbd_step` (the solver atom the design already sketches) · `node.pin_set` (pin mask; release-on-trigger = the tear-down) · liquid lane per the design's liquid atoms. Committed hooks it composes with today/soon: `flow_field_noise` sampled as wind force; `render_mesh` + materials for the cloth; **gravity-vector convention** (B3) — `gravity_x` on a slow LFO and the banner sways, the water tilts in its glass; the audience reads the tower as swaying.
+
+**Compositions:** *Banner* — cloth pinned top edge, wind = Low band through `smoothing`, torn on the drop (pin release), re-pinned on reset. *Tall Glass* — liquid filling from the bottom bezel, level = integrated Low energy (`smoothing` on a band send), pour between towers when MULTI_DISPLAY's shared stage canvas lands.
+
+**Card sketch:** Wind (mod: Low) · Sway (gravity LFO depth) · **Tear (trigger)** · Fill (mod: energy integral) · Slosh · Palette.
+
+## C2. Lightning Between Towers (composition)
+
+A11 unchanged, plus MULTI_DISPLAY's stage-space canvas: bolt endpoints in *stage* coordinates (tower A top → tower B top), the canvas model splits the render across outputs, and the arc crosses the physical gap — the gap itself becomes part of the instrument. Buildable single-tower today (A11); cross-gap the day multi-display lands. Strike on snare; `flash` on both towers simultaneously sells the shared event.
+
+## C3. Wind Made Visible (generator — honest approximation today, XPBD later)
+
+**Intent.** A tall-grass or kelp field breathing in audible wind — the portrait-native quiet scene.
+
+**Today's approximation (buildable, flagged as such):** `generate_instance_transforms`(grid) → per-instance phase from `simplex_noise_per_copy`/`fractal_noise_per_copy` (time-advected — the gust front moving through the field) → `lerp_instance_fields` between an upright and a bent transform set (bend = pose-lerp, **not** simulation — stated honestly) → `neighbor_smooth` (coherent gusts, not per-blade jitter) → `render_instanced_3d_mesh`(blade strip mesh, `cel_material` or `phong_material`, Sun light) → grade. Gust amount ← Low band through `smoothing`; kelp = same graph, slower, darker palette, camera low.
+
+**XPBD upgrade path:** blades become constraint chains; the pose-lerp group swaps for the solver — graph shape and card surface survive.
+
+**Card sketch:** **Gust (mod: Low band)** · Wind Direction · Height · Density · Sway Speed · Palette · Sun Angle.
+
+## C4. Shadow as Subject / Gallery After Dark (compositions — Realtime-3D P2)
+
+*Shadow as Subject:* one Sun light, the geometry parked offscreen above the framed floor plane — the audience only ever sees the shadow sweeping as the light orbits on a `beat_ramp`. Requires P2 shadow maps in `render_scene` (PROPOSED against that phase); cheap to render, reads as designed, negative space is the composition.
+
+*Gallery After Dark:* `gltf_mesh_source` (scanned sculpture) under one raking Sun → `render_scene` → dissolve via `spawn_from_mesh` (ships today) into `draw_particles_camera`, re-form on reset. Marble → dust → marble. The dissolve arc is buildable **now** via `render_mesh` without shadows; P2 completes the lighting that sells the mass.
+
+**Card sketch:** Light Orbit (beat-bound) · Rake (elevation) · **Dissolve (trigger)** · Re-form · Palette (Bone default).
+
+---
+
+# Build-order note
+
+If the pick is "start playing soonest": **L1 + L2 first** (every density piece inherits them), then **A5 Film Chain** (zero atoms, instant payoff on existing content), then **A2 Cymatics** (zero atoms, quiet-section anchor), then **A1 Murmuration** (first new-atom pair), then the self-portraits **A13/A12** (the big CPU atom and the zero-atom loop). A6/A9/A10/A11 follow by taste. Tier B waits on its waves by design; C1/C3 have today-approximations worth building when the quiet sections need filling.
+
+Every Tier A piece is sized for a Sonnet build session against this spec plus DECOMPOSING_GENERATORS.md and GROUPING_GRAPHS.md; the §2.5 audit here was run against the registry at `048285b9` and must be re-verified at build time (the registry moves).
+
 
