@@ -1206,16 +1206,32 @@ impl UIRenderer {
                 || bounds.y >= clip.y_max()
                 || bounds.y_max() <= clip.y)
         {
+            // BUG-060 footer-leak trace: a footer-pass node clipped out entirely
+            // is invisible to every other probe (no draw call, no scissor batch,
+            // FOOTER-DBG still reports correct bounds/visible) — so (A)-via-clip
+            // would masquerade as (B). Log the suppression explicitly.
+            if self.debug_footer_leak && self.debug_pass == "footer" {
+                eprintln!(
+                    "[FOOTER-LEAK] pass=footer node id={} bounds=({:.1},{:.1},{:.1},{:.1}) \
+                     CLIPPED OUT by {:?}",
+                    node.id.index(),
+                    bounds.x,
+                    bounds.y,
+                    bounds.width,
+                    bounds.height,
+                    self.clip_stack.last(),
+                );
+            }
             return;
         }
 
         // BUG-060 footer-leak trace: this node WILL draw (it survived the clip
-        // early-out). If it reaches into the footer band and this isn't the
-        // footer's own pass, it's painting where the footer's controls live.
-        // Name it + the pass that drew it, so the source is unambiguous no
-        // matter which render path it comes from. Zero cost when the flag is off.
+        // early-out). If it reaches into the footer band, name it + the pass +
+        // the effective scissor. The footer's OWN pass is included deliberately:
+        // its draws' scissors are the (A)-side evidence (a scissor with
+        // y_max = footer_top on a footer node means the band never gets painted).
+        // Zero cost when the flag is off.
         if self.debug_footer_leak
-            && self.debug_pass != "footer"
             && let Some(footer_top) = self.debug_footer_top
             && bounds.y_max() > footer_top + 0.5
         {
