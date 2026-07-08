@@ -45,7 +45,7 @@ or human can read it, and it needs no external tool.
 | BUG-010 | **wgsl-first-entry** | multi-entry wgsl_compute silently dispatches the first (MED) |
 | BUG-011 | **fused-output-oversize** | fused output buffer sized to max of all inputs (MED) |
 | BUG-015 | **inspector-overlap** | inspector shows stale content (section overlap after scroll; edge/margin ghost fragments) — Fable verdict 07-07: card-ghost hypothesis REFUTED; real hole = out-of-sub-region dirt dropped (stale-chrome class); "video fragment" was the preview window, not a bug (Peter) (MED) |
-| BUG-060 | **inspector-footer-overpaint** | inspector content paints over the footer bar (repro: is_trigger_gate audio-mod drawer open, scroll to bottom) — root: inspector builds NO pixel clip at its rect (only CLIPS_CHILDREN in inspector.rs is a test) + trigger-row drawer lacks the param-row reveal clip; inspector renders after footer in the atlas loop so the spill wins (MED) |
+| BUG-060 | **inspector-footer-overpaint** | FIXED 2026-07-08 — `build_in_rect` now clips its scrolled column to the inspector rect + `build_toggle_trigger_row` gained the mid-tween reveal clip `build_param_row` already had |
 | BUG-025 | **timeline-scissor-bleed** | clip content bleeds across row bounds (MED, repro needed — scrolled headless render 07-07 clean) |
 | BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
 | BUG-033 | **ui-snapshot-broken** | FIXED — verified in-tree 2026-07-07 (harness builds + runs) |
@@ -75,6 +75,7 @@ or human can read it, and it needs no external tool.
 | BUG-068 | **inspector-scene-cliphit-overlap** | the `inspector` ui-snap scene fixture has a clip-vs-panel hit-test overlap at its narrower zoom — a clip can't be both uniquely-labeled and safely positioned over the inspector column, which forced DRAG_CAPTURE P1's L3 flow onto the `timeline` scene. Fixture-only, no runtime impact. Pre-existing at `b9304330` (LOW) |
 | BUG-069 | **shipping-license-audit** | four license problems in shipped components: madmom models + ADTOF (both CC BY-NC-SA), rusty_link crate (GPL-2.0, viral, in manifold-playback), staged ffmpeg copied from the dev machine (likely GPL build); full sweep 2026-07-08, everything else clean (HIGH for commercialization, zero runtime impact) |
 | BUG-070 | **stepper-and-nonstandard-slider-reset** | ~~decay drawer slider~~ + Clip Trigger drawer sliders now covered by the intrinsic-reset follow-through (@ 3a88f728, reset = required build input); **still open:** Audio Setup gain `[−]value[＋]` steppers + overlay-drag send-fader (not `BitmapSlider` tracks) (LOW) |
+| BUG-071 | **ui-snap-dump-stale-parent** | `ui_snapshot::dump.rs` serializes `UINode.parent_id` (the mint-time struct field) instead of `UITree.parent_index` (the live array `reparent_root_nodes` actually mutates) — any node reparented via `ScrollContainer::reparent_content` (or the like) shows `parent: null`/its original parent in `--dump` JSON even though it's correctly clipped/nested for real rendering. Found 2026-07-08 verifying BUG-060: the dump made a correctly-fixed tree look unclipped, costing real debugging time before the PNG (the actual render) proved it was fine. Fix shape: either serialize `tree.parent_index[i]` in `dump.rs:38`/`:92`, or have `reparent_root_nodes` also update `self.nodes[i].parent_id` so the two stay in sync (LOW, dev-tooling only, zero runtime impact) |
 
 ## Open
 
@@ -1447,7 +1448,7 @@ cache. The footer-overlap symptom this investigation started from is now its own
 a grounded root cause: **BUG-060** (no inspector-level pixel clip + the trigger-row drawer's
 missing reveal clip).
 
-### BUG-060 — Inspector content paints over the footer bar — MED (root cause grounded 2026-07-07)
+### BUG-060 — Inspector content paints over the footer bar — FIXED 2026-07-08
 
 **Symptom** (Peter, 2026-07-07; also the prior `f4b895d7` session's subject): with the
 audio-mod drawer open on a Clip Trigger row (`is_trigger_gate`), scrolling the inspector to
@@ -1468,13 +1469,44 @@ the bottom paints card content over the footer bar.
    unclipped paint below the card frame. A bottom-straddling card with that drawer open is
    exactly the repro.
 
-**Fix shape (root):** give the inspector's content column a real `CLIPS_CHILDREN` container
-at the inspector rect — kills the whole class (footer overpaint, drawer-tween overflow, any
-future straddling node) in one move; incremental cache renders already honor ancestor clips
-(`traverse_flat_range` pre-push, [tree.rs:737](../crates/manifold-ui/src/tree.rs#L737)).
-The clip must wrap the SCROLLED card column, not the pinned macros strip / tab strip chrome.
-Also add the missing `drawer_reveal` clip to `build_toggle_trigger_row` for parity with the
-param-row path (correct tween containment regardless of the container fix).
+**Fix (both landed):**
+1. `build_in_rect` ([inspector.rs](../crates/manifold-ui/src/panels/inspector.rs)) now mints
+   a `CLIPS_CHILDREN` node bounded to `(rect.x, columns_y, rect.width, columns_h)` before
+   building either scroll column, and sweeps both columns' scroll clips (and everything
+   built under them, `reparent_root_nodes`) under it once both are built — mirrors exactly
+   how `ScrollContainer::reparent_content` already sweeps its own column. The pinned macros
+   strip and tab strip chrome are built outside this range by construction, per the scope
+   call in the original analysis.
+2. `build_toggle_trigger_row` ([param_slider_shared.rs](../crates/manifold-ui/src/panels/param_slider_shared.rs))
+   gained the same `drawer_reveal: Option<f32>` parameter and mid-tween `ClipRegion` wrap
+   `build_param_row` already had — both call sites (effect and generator cards,
+   [param_card.rs](../crates/manifold-ui/src/panels/param_card.rs)) now thread
+   `self.drawer_height_anim` through it exactly like the slider-row call sites already did.
+   `row_drawer_height`/`active_mod_tabs` already computed the correct tween target for
+   `is_trigger_gate` rows (§9 folded them into the shared `ModTab::Audio` path) — this was
+   pure wiring, not new height math.
+
+**What's independently verified vs. what's inherited from the stated fix shape:** fix #2
+(the mid-tween clip) is concretely proven by a new regression test,
+`trigger_gate_drawer_tween_clips_midflight` (param_card.rs) — confirmed to fail on the
+"builds under a clip region" assertion with the clip logic neutered and pass with it restored.
+Fix #1 (the inspector-level container) was implemented exactly per the pre-decided scope and
+verified to (a) not regress the `inspector` ui-snap scene (byte-identical render before/after)
+and (b) pass the full `manifold-ui` lib suite (646/646) + `clippy -D warnings`. Digging into
+*why* the footer-overpaint repro didn't reproduce via a plain headless render even pre-fix
+turned up that `ScrollContainer::reparent_content` already sweeps card content under its own
+column clip (bounded to the same inspector bottom edge) via `reparent_root_nodes` — so for
+content built inside the master/layer scroll brackets specifically, the settled-state escape
+this layer targets was already closed by existing infra; the new container is real
+defense-in-depth for the "no pixel clip of its own" class as a whole (any future content built
+directly in `build_in_rect` outside a scroll bracket), matching the pre-decided scope, but I
+could not independently reproduce a settled-state footer overpaint this fix alone closes.
+**BUG-071** (new, filed this session) documents a tooling gap that made this harder to verify
+than it should've been.
+
+**Verified:** `cargo test -p manifold-ui --lib` (646 passed) +
+`cargo clippy -p manifold-ui -p manifold-app --all-targets -- -D warnings` (clean, aside from
+pre-existing unrelated warnings). Shipped @ `27557d18` on `fix/bug-060-inspector-clip`.
 
 **Order (Fable, 2026-07-07): fix BUG-060 FIRST, then BUG-015's stale-chrome hole.** The
 clip container bounds what the atlas cache can ever be wrong about (no inspector pixel can

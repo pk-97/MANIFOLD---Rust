@@ -1612,6 +1612,11 @@ pub(crate) fn build_toggle_trigger_row(
     build_env_button: bool,
     has_osc: bool,
     row_key_base: Option<u64>,
+    // P1 drawer tween: supplied only while a height tween is in flight
+    // (mirrors `build_param_row`'s `drawer_reveal`) — the drawer then
+    // builds under a clip region of that height instead of its natural
+    // one, so mid-tween or bottom-straddling paint never escapes it.
+    drawer_reveal: Option<f32>,
 ) -> ToggleTriggerRowIds {
     let toggle_btn_x = x + slider_w - TOGGLE_BTN_W;
     // `is_trigger_gate` rows reserve a fixed slot for the collapsed-row mode
@@ -1702,9 +1707,27 @@ pub(crate) fn build_toggle_trigger_row(
             let drawer_w = (row_right - drawer_x).max(1.0);
             let trigger_mode_idx =
                 info.is_trigger_gate.then(|| mod_state.audio_mode_idx.get(i).copied().unwrap_or(0));
+            // P1 drawer tween parity with `build_param_row` (:2089-2101): when a
+            // reveal height is supplied, the drawer builds under a clip region of
+            // that height (revealing top-down) instead of `parent` directly.
+            let drawer_top = cy;
+            let animate_drawer = drawer_reveal.is_some();
+            let drawer_parent: Option<NodeId> = if animate_drawer {
+                let reveal = drawer_reveal.unwrap_or(0.0).max(0.0);
+                Some(tree.add_node(
+                    parent,
+                    Rect::new(x, drawer_top, (row_right - x).max(1.0), reveal),
+                    UINodeType::ClipRegion,
+                    UIStyle::default(),
+                    None,
+                    UIFlags::VISIBLE | UIFlags::CLIPS_CHILDREN,
+                ))
+            } else {
+                parent
+            };
             let (dids, send_count) = build_audio_mod_drawer(
                 tree,
-                parent,
+                drawer_parent,
                 drawer_x,
                 cy,
                 drawer_w,
@@ -1715,11 +1738,15 @@ pub(crate) fn build_toggle_trigger_row(
                 target,
                 info.param_id.clone(),
             );
-            cy += dids.height;
+            if animate_drawer {
+                cy = drawer_top + drawer_reveal.unwrap_or(0.0).max(0.0);
+            } else {
+                cy += dids.height;
+                // Mirrors `row_drawer_height`'s `+ DRAWER_BOTTOM_GAP` for the
+                // ≥1-active-config case, so build and height computation agree.
+                cy += DRAWER_BOTTOM_GAP;
+            }
             audio_config = Some((dids, send_count));
-            // Mirrors `row_drawer_height`'s `+ DRAWER_BOTTOM_GAP` for the
-            // ≥1-active-config case, so build and height computation agree.
-            cy += DRAWER_BOTTOM_GAP;
         }
 
         if info.is_trigger_gate {
