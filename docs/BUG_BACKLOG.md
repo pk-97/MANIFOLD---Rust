@@ -30,6 +30,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-072 | **audio-mixdown-all-targets-clippy-debt** | Pre-existing `--all-targets` clippy failures in audio_mixdown.rs, unrelated to PARAM_STEP_ACTIONS, two one-line fixes (LOW) |
 | BUG-046 | **low-band-kick-deafness-on-mixes** | Low=kick binding near-deaf on bass-heavy full mixes; HPSS measured DEAD 2026-07-06, successor = ridge-motion sweep event; partial (OR'd floored-novelty) on the shelf (HIGH) |
 | BUG-047 | **setup-panel-overflow** | Audio Setup sections clip past bottom when a source has many input/consumer rows (LOW) |
 | BUG-039 | **saw-rotation-wrap** | angle params clamp instead of wrapping; saw LFO can't spin a full rotation (MED, mechanism pinned) |
@@ -353,6 +354,26 @@ collapse into the generic path, and the clip slip/loop regression fixes itself. 
 can't opt out by forgetting. Watch the two non-uniform cases: param-card sliders whose
 right-click currently carries `(target, param_id, default)` context, and label/row right-click
 menus (`ParamLabelRightClick` etc.) which are context menus, not reset — they stay.
+
+### BUG-072 (audio-mixdown-all-targets-clippy-debt) — pre-existing lint failures in audio_mixdown.rs only visible under `--all-targets` — LOW (found 2026-07-08 during PARAM_STEP_ACTIONS P2)
+
+**Symptom:** `cargo clippy --workspace --all-targets -- -D warnings` fails on
+`crates/manifold-playback/src/audio_mixdown.rs:623` (`needless_range_loop`) and `:643`
+(`cloned_ref_to_slice_refs`, `std::slice::from_ref` suggested). Confirmed pre-existing —
+reproduces identically on main at `2682f9f4`, before any PARAM_STEP_ACTIONS change touched
+this file.
+
+**Root cause:** this codebase's standard gate command is `cargo clippy --workspace --
+-D warnings` (no `--all-targets`), which never compiles integration-test binaries or exercises
+lints inside them; these two lints only fire under the stricter `--all-targets` invocation,
+which nothing had run against this file before. Found via the same stricter check adopted
+this session after P1's `load_project.rs` compile break slipped through the non-`--all-targets`
+gate.
+
+**Fix shape:** two one-line clippy-suggested rewrites (`for (i, x) in tapped.iter().enumerate()`,
+`std::slice::from_ref(&analysis_id)`); mechanical, no behavior change. Out of scope for
+PARAM_STEP_ACTIONS (audio_mixdown.rs isn't part of that design) — left untouched per the
+scope-fence rule.
 
 ### BUG-070 (stepper-and-nonstandard-slider-reset) — right-click reset still absent on the non-slider-track gain controls — PARTIALLY FIXED 2026-07-08 @ 3a88f728 — LOW (found 2026-07-08 during BUG-061)
 
