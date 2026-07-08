@@ -198,6 +198,16 @@ impl UICacheManager {
         for info in panels {
             let idx = info.slot as usize;
 
+            // BUG-060 footer-leak trace: tell the renderer the inspector must
+            // not paint below its own bottom edge (the footer line). No-op
+            // unless MANIFOLD_TRACE_FOOTER_LEAK is set. Other panels pass None
+            // (the footer legitimately draws to the screen bottom).
+            ui_renderer.set_debug_clip_bottom(if info.slot == PanelSlot::Inspector {
+                Some(info.rect.y + info.rect.height)
+            } else {
+                None
+            });
+
             // Skip if panel region is valid and no nodes are dirty.
             if self.panel_valid[idx] && !tree.has_dirty_in_range(info.node_start, info.node_end) {
                 continue;

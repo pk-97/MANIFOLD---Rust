@@ -504,6 +504,17 @@ pub struct UIRenderer {
     /// populated or consulted on a per-frame render path — only at the
     /// (rare) point a new key shows up.
     image_textures: ahash::AHashMap<TextureHandle, GpuTexture>,
+
+    // ── BUG-060 footer-leak trace (env MANIFOLD_TRACE_FOOTER_LEAK=1) ──
+    // Debug-only: catches inspector content painting below the panel's own
+    // clip bottom (the footer line) with a scissor that failed to clamp it.
+    // `debug_footer_leak` is read once from the env at construction so the
+    // per-node check in `draw_node` is a cheap bool test when off.
+    // `debug_clip_bottom` is set per-panel by the cache manager (Some for the
+    // inspector, None otherwise). Remove once BUG-060's footer overpaint is
+    // pinned and fixed.
+    debug_footer_leak: bool,
+    debug_clip_bottom: Option<f32>,
 }
 
 impl UIRenderer {
@@ -644,6 +655,18 @@ impl UIRenderer {
             prepared_image_draws: Vec::with_capacity(32),
             prepared_image_slot: 0,
             image_textures: ahash::AHashMap::new(),
+            debug_footer_leak: std::env::var_os("MANIFOLD_TRACE_FOOTER_LEAK").is_some(),
+            debug_clip_bottom: None,
+        }
+    }
+
+    /// BUG-060 footer-leak trace: set the clip bottom the next tree/sub-region
+    /// render must not paint below (the panel's own bottom edge). `None` on
+    /// panels that legitimately draw to the screen bottom (e.g. the footer).
+    /// No-op unless `MANIFOLD_TRACE_FOOTER_LEAK` is set. Remove with the trace.
+    pub fn set_debug_clip_bottom(&mut self, bottom: Option<f32>) {
+        if self.debug_footer_leak {
+            self.debug_clip_bottom = bottom;
         }
     }
 
@@ -1158,6 +1181,36 @@ impl UIRenderer {
                 || bounds.y_max() <= clip.y)
         {
             return;
+        }
+
+        // BUG-060 footer-leak trace: this node WILL draw (it survived the clip
+        // early-out). If it reaches below the panel's clip bottom AND the
+        // effective scissor doesn't clamp it there, it's painting into the
+        // footer's atlas region — the overpaint bug. Name it. A correctly
+        // clamped scissor would have made the early-out above skip it, so this
+        // only fires on a genuine leak. Zero cost when the flag is off.
+        if self.debug_footer_leak
+            && let Some(panel_bottom) = self.debug_clip_bottom
+            && bounds.y_max() > panel_bottom + 0.5
+        {
+            let scissor_permits = match self.clip_stack.last() {
+                Some(clip) => clip.y_max() > panel_bottom + 0.5,
+                None => true,
+            };
+            if scissor_permits {
+                eprintln!(
+                    "[FOOTER-LEAK] node id={} bounds=({:.1},{:.1},{:.1},{:.1}) \
+                     y_max={:.1} > panel_bottom={:.1}; effective scissor={:?}",
+                    node.id.index(),
+                    bounds.x,
+                    bounds.y,
+                    bounds.width,
+                    bounds.height,
+                    bounds.y_max(),
+                    panel_bottom,
+                    self.clip_stack.last(),
+                );
+            }
         }
 
         // Node-local affine (pivot = this node's own rect center — bounds
