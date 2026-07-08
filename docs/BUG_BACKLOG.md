@@ -74,7 +74,7 @@ or human can read it, and it needs no external tool.
 | BUG-067 | **ui-snapshot-dead-blit-pipeline** | `make_blit_pipeline` (`crates/manifold-app/src/ui_snapshot/render.rs:760`) is never used; `cargo clippy --features manifold-app/ui-snapshot -- -D warnings` fails on it, so any clippy run that chains the ui-snapshot feature (needed for `cargo xtask ui-snap` L3 flows) trips. Pre-existing at `b9304330`, found during DRAG_CAPTURE P1 (LOW) |
 | BUG-068 | **inspector-scene-cliphit-overlap** | the `inspector` ui-snap scene fixture has a clip-vs-panel hit-test overlap at its narrower zoom — a clip can't be both uniquely-labeled and safely positioned over the inspector column, which forced DRAG_CAPTURE P1's L3 flow onto the `timeline` scene. Fixture-only, no runtime impact. Pre-existing at `b9304330` (LOW) |
 | BUG-069 | **shipping-license-audit** | four license problems in shipped components: madmom models + ADTOF (both CC BY-NC-SA), rusty_link crate (GPL-2.0, viral, in manifold-playback), staged ffmpeg copied from the dev machine (likely GPL build); full sweep 2026-07-08, everything else clean (HIGH for commercialization, zero runtime impact) |
-| BUG-070 | **stepper-and-nonstandard-slider-reset** | right-click reset (BUG-061) covers intent-registered slider tracks only; still uncovered: Audio Setup gain `[−]value[＋]` steppers, the overlay-drag audio send-fader, and the envelope-decay drawer slider (LOW) |
+| BUG-070 | **stepper-and-nonstandard-slider-reset** | ~~decay drawer slider~~ + Clip Trigger drawer sliders now covered by the intrinsic-reset follow-through (@ 3a88f728, reset = required build input); **still open:** Audio Setup gain `[−]value[＋]` steppers + overlay-drag send-fader (not `BitmapSlider` tracks) (LOW) |
 
 ## Open
 
@@ -353,7 +353,17 @@ can't opt out by forgetting. Watch the two non-uniform cases: param-card sliders
 right-click currently carries `(target, param_id, default)` context, and label/row right-click
 menus (`ParamLabelRightClick` etc.) which are context menus, not reset — they stay.
 
-### BUG-070 (stepper-and-nonstandard-slider-reset) — right-click reset still absent on the non-slider-track gain controls — LOW (found 2026-07-08 during BUG-061)
+### BUG-070 (stepper-and-nonstandard-slider-reset) — right-click reset still absent on the non-slider-track gain controls — PARTIALLY FIXED 2026-07-08 @ 3a88f728 — LOW (found 2026-07-08 during BUG-061)
+
+**Update 2026-07-08 @ 3a88f728 (intrinsic-reset follow-through):** the envelope-decay drawer
+slider is now wired (its `EnvDecay*` trio had a real handler, just no registration). More
+importantly that commit made reset a *required build input* — `BitmapSlider::build` takes a
+`reset` and returns `Slider { ids, reset }`, registered by one shared replay instead of per-panel
+loops — which also closed the real motivating gap: the Clip Trigger drawer's Amount/Attack/Release
+sliders (a trigger-gate row with no main slider, so the old per-panel loop bailed before reaching
+them). **Still open:** the Audio Setup gain `[−]value[＋]` steppers and the overlay-drag audio
+send-fader — neither is a `BitmapSlider` track, so both need a different gesture wiring (see fix
+shape below); decide first whether right-click-reset is even the right affordance for a stepper.
 
 **Symptom:** BUG-061 made right-click reset the shared gesture for every intent-registered
 slider *track*, but three gain-ish controls don't render as a slider track and so were left
