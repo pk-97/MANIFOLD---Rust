@@ -2622,7 +2622,12 @@ mod tests {
         ));
         assert!(matches!(
             p.on_event(
-                &UIEvent::DragBegin { node_id: p.bg_id, pos: inside, origin: inside, modifiers },
+                &UIEvent::DragBegin {
+                    node_id: Some(p.bg_id),
+                    pos: inside,
+                    origin: inside,
+                    modifiers
+                },
                 &mut tree
             ),
             OverlayResponse::Consumed(_)
@@ -2631,7 +2636,11 @@ mod tests {
         let moved = Vec2::new(inside.x + 40.0, inside.y + 40.0);
         assert!(matches!(
             p.on_event(
-                &UIEvent::Drag { node_id: p.bg_id, pos: moved, delta: Vec2::new(40.0, 40.0) },
+                &UIEvent::Drag {
+                    node_id: Some(p.bg_id),
+                    pos: moved,
+                    delta: Vec2::new(40.0, 40.0)
+                },
                 &mut tree
             ),
             OverlayResponse::Consumed(_)
@@ -2661,7 +2670,12 @@ mod tests {
         p.swallow_drag = true; // stale from a hypothetical eaten terminal event
         assert!(matches!(
             p.on_event(
-                &UIEvent::DragBegin { node_id: p.bg_id, pos: outside, origin: outside, modifiers },
+                &UIEvent::DragBegin {
+                    node_id: Some(p.bg_id),
+                    pos: outside,
+                    origin: outside,
+                    modifiers
+                },
                 &mut tree
             ),
             OverlayResponse::Ignored
@@ -2669,7 +2683,11 @@ mod tests {
         assert!(!p.swallow_drag, "outside drag drops the stale swallow");
         assert!(matches!(
             p.on_event(
-                &UIEvent::Drag { node_id: p.bg_id, pos: inside, delta: Vec2::new(60.0, 60.0) },
+                &UIEvent::Drag {
+                    node_id: Some(p.bg_id),
+                    pos: inside,
+                    delta: Vec2::new(60.0, 60.0)
+                },
                 &mut tree
             ),
             OverlayResponse::Ignored
@@ -2821,7 +2839,11 @@ mod tests {
 
         // 20 px right at 0.1 dB/px, starting from send 1's 0 dB.
         match p.on_event(
-            &UIEvent::Drag { node_id: gain_value, pos: Vec2::new(120.0, 50.0), delta: Vec2::new(20.0, 0.0) },
+            &UIEvent::Drag {
+                node_id: Some(gain_value),
+                pos: Vec2::new(120.0, 50.0),
+                delta: Vec2::new(20.0, 0.0)
+            },
             &mut tree,
         ) {
             OverlayResponse::Consumed(actions) => {
@@ -2878,7 +2900,11 @@ mod tests {
 
         // 40 px right at 0.5%/px (0.005/px), starting from 0.0.
         match p.on_event(
-            &UIEvent::Drag { node_id: sens_value, pos: Vec2::new(240.0, 60.0), delta: Vec2::new(40.0, 0.0) },
+            &UIEvent::Drag {
+                node_id: Some(sens_value),
+                pos: Vec2::new(240.0, 60.0),
+                delta: Vec2::new(40.0, 0.0)
+            },
             &mut tree,
         ) {
             OverlayResponse::Consumed(actions) => {

@@ -203,14 +203,22 @@ pub enum UIEvent {
     HoverExit {
         node_id: NodeId,
     },
+    /// `node_id` is best-effort context (D9, added 2026-07-07): the pressed
+    /// widget resolved to a live node WHEN THIS EVENT WAS EMITTED, but the
+    /// motion stream is emitted unconditionally — a `None` means the pressed
+    /// widget left the tree before the drag threshold crossed, not "no
+    /// event". See [`UIInputSystem::process_pointer`].
     DragBegin {
-        node_id: NodeId,
+        node_id: Option<NodeId>,
         pos: Vec2,
         origin: Vec2,
         modifiers: Modifiers,
     },
+    /// `node_id` is best-effort context, same contract as `DragBegin` (D9):
+    /// `None` means the pressed widget is no longer in the build. Position is
+    /// the payload every consumer should route on.
     Drag {
-        node_id: NodeId,
+        node_id: Option<NodeId>,
         pos: Vec2,
         delta: Vec2,
     },
@@ -543,28 +551,30 @@ impl UIInputSystem {
                                     tree.node_for_widget(pw).is_some()
                                 );
                             }
-                            // Resolve the pressed widget to its live node now. If it
-                            // left the build, there is no target — drop the event but
-                            // keep the drag state so Up still tidies up.
-                            if let Some(n) = tree.node_for_widget(pw) {
-                                self.pending_events.push(UIEvent::DragBegin {
-                                    node_id: n,
-                                    pos: screen_pos,
-                                    origin: self.press_origin,
-                                    modifiers: self.modifiers,
-                                });
-                            }
+                            // D9: emit unconditionally. The pressed widget's live
+                            // node is best-effort context, not a delivery
+                            // precondition — a rebuild between Down and the
+                            // threshold crossing (e.g. a panel's own consume
+                            // dirtying the overlay) must not silently swallow the
+                            // whole motion stream (Peter's "first band-line click
+                            // is always dead" trace, `docs/DRAG_CAPTURE_DESIGN.md`
+                            // D9). Ownership routing decides delivery downstream,
+                            // not node identity.
+                            self.pending_events.push(UIEvent::DragBegin {
+                                node_id: tree.node_for_widget(pw),
+                                pos: screen_pos,
+                                origin: self.press_origin,
+                                modifiers: self.modifiers,
+                            });
                         }
                     } else {
                         let delta = screen_pos - self.last_drag_pos;
                         self.last_drag_pos = screen_pos;
-                        if let Some(n) = tree.node_for_widget(pw) {
-                            self.pending_events.push(UIEvent::Drag {
-                                node_id: n,
-                                pos: screen_pos,
-                                delta,
-                            });
-                        }
+                        self.pending_events.push(UIEvent::Drag {
+                            node_id: tree.node_for_widget(pw),
+                            pos: screen_pos,
+                            delta,
+                        });
                     }
                 }
             }
@@ -827,7 +837,8 @@ mod tests {
                 UIEvent::DragBegin { node_id, .. } => Some(node_id),
                 _ => None,
             })
-            .expect("DragBegin must fire after a rebuild");
+            .expect("DragBegin must fire after a rebuild")
+            .expect("the rebuilt button is still live, so node_id must be Some");
         assert_ne!(
             tree.get_bounds(begin),
             Rect::ZERO,
@@ -1083,5 +1094,51 @@ mod tests {
         );
         // Should still fire a click since the button was pressed and released without drag
         // (hit_id at up may differ since pos changed slightly — both are on the button)
+    }
+
+    /// D9 repro (`docs/DRAG_CAPTURE_DESIGN.md`): Peter's live "first band-line
+    /// click is always dead" trace, as a unit test. Press, then the pressed
+    /// node dies (a rebuild dropped it) BEFORE the drag threshold crosses —
+    /// pre-D9 this silently swallowed the entire motion stream (no DragBegin,
+    /// no Drag, ever) because emission was gated on the pressed widget still
+    /// resolving. Under D9 the stream is unconditional: DragBegin and Drag
+    /// still arrive, with `node_id: None` and correct positions.
+    #[test]
+    fn d9_motion_stream_survives_pressed_node_dying_before_threshold() {
+        let (mut tree, mut input) = setup();
+
+        input.process_pointer(&mut tree, Vec2::new(60.0, 60.0), PointerAction::Down, 0.0);
+
+        // The pressed widget dies before the threshold crosses (no button in
+        // the rebuilt tree at all — models an overlay rebuild between Down
+        // and the move that would cross DRAG_THRESHOLD).
+        tree.clear();
+        tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, UIStyle::default());
+
+        // Cross the threshold.
+        input.process_pointer(&mut tree, Vec2::new(80.0, 60.0), PointerAction::Move, 0.0);
+        let events = input.drain_events();
+        let begin = events
+            .iter()
+            .find_map(|e| match e {
+                UIEvent::DragBegin { node_id, pos, .. } => Some((*node_id, *pos)),
+                _ => None,
+            })
+            .expect("DragBegin must still fire even though the pressed node died");
+        assert_eq!(begin.0, None, "node_id must be None — the pressed node is gone");
+        assert_eq!(begin.1, Vec2::new(80.0, 60.0), "position is still the real payload");
+
+        // Continue the drag — Drag must keep flowing too, not just DragBegin.
+        input.process_pointer(&mut tree, Vec2::new(90.0, 60.0), PointerAction::Move, 0.0);
+        let events = input.drain_events();
+        let moved = events
+            .iter()
+            .find_map(|e| match e {
+                UIEvent::Drag { node_id, pos, .. } => Some((*node_id, *pos)),
+                _ => None,
+            })
+            .expect("Drag must still fire for the rest of the gesture");
+        assert_eq!(moved.0, None);
+        assert_eq!(moved.1, Vec2::new(90.0, 60.0));
     }
 }
