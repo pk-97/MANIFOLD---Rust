@@ -120,6 +120,27 @@ not a partition.)
 - **F13 (LOW) — OBJECT_TRACKING P5's anchors predate the ScopeColumn typed-overlay refactor** (KICK_SWEEP's scope lane landed on it 2026-07-07, `b6aed008`). `SCOPE_SCALAR_STRIDE = 7` and the shader-overlay shape may have moved. Re-derive at P5 brief; standard anchor-refresh, noted because the doc's stride plan (7→11) is load-bearing.
 - **F-clean:** KICK_SWEEP↔OBJECT_TRACKING supersessions mirrored ✓ · OBJECT_INGEST↔OBJECT_TRACKING relation contract mirrored ✓ · AUDIO_SETUP_DOCK↔KICK_SWEEP Kick-feature story consistent ✓ · MAPPING_GRAMMAR↔AUTO_POPULATE↔ANALYSIS_ACCURACY addendum chain coherent ✓.
 
+### Cluster: param/card (COMPLETE 2026-07-10 — COMPONENT_LIBRARY + MCP read whole; PARAM_STORAGE status/prereq/companions read, body deliberately skipped: P1–P5 shipped, sole remainder is Peter's library re-save, no unbuilt cross-design seam)
+
+- **PARAM_STORAGE** — effectively shipped; verdict clean-with-remainder (Peter-owned re-save). Board status "IN PROGRESS" is accurate.
+- **COMPONENT_LIBRARY** — surfaces: ComponentDef/registry (manifold-core), GroupParamDef extensions (§4a), BindingDef.extra_targets, component picker (after node-groups canvas). Prereq VOCAB apply ✓ shipped. MCP §5 amendment mirrored on BOTH sides ✓.
+- **MCP_INTERFACE** — surfaces: new manifold-mcp crate, mcp channel into content thread, 14 tools, MoodBoard model on Project. APP_SHELL D6 command-table slot coherent (forward reference, one-way by design) ✓. MULTI_DISPLAY §7.2 stage-summary note additive ✓.
+
+**Cluster finding (kill-passed):**
+- **F14 (MED) — SCENE_BUILD declares "GroupParamDef stays unused" while COMPONENT_LIBRARY's macro layer is built on it.** SCENE_BUILD §1 audit row + Decided-#3 (2026-07-06): Phase D dead, "GroupParamDef stays unused," card bundling = ParamSpecDef.section; §9 defers group interface params "for swappable 'rack' presets with stable knob surfaces." COMPONENT_LIBRARY (2026-07-02) §4a extends GroupParamDef (fan-out targets, labels, ranges) as the component macro schema — and its §9-deferred use case IS components, unnamed. The two compose mechanically (macros are declarations that lower onto ordinary card BindingDefs at expose — no live group-param runtime, so SCENE_BUILD's actual kill target stays dead), but the texts contradict on the type's future and neither cites the other. Amend both: SCENE_BUILD names COMPONENT_LIBRARY as the sanctioned GroupParamDef consumer (declaration-only, lowered to the card path); COMPONENT_LIBRARY notes card sections (ParamSpecDef.section) are orthogonal. Mechanical once the compose-check is confirmed (one Opus/Fable sentence).
+
+### Cluster: io/export/media (COMPLETE — all 4 docs read whole 2026-07-10)
+
+- **VIDEO_IO** — surfaces: manifold-native Syphon/NDI FFI, VideoSendDef in stage.rs/venue file, node.syphon_in/ndi_in source atoms, content-pipeline publish seam. Claims MULTI_DISPLAY P6's "NDI/Syphon outputs" item as its own — correctly, with citation ✓. License clearance §0 thorough (Opus-read NDI agreement).
+- **MEDIA_BACKEND** — §3a addendum resolved (hardening queue item 1 ✓); P1 RE-ISSUABLE. Superseded §3 trait kept for the record ✓ exemplary truth maintenance.
+- **COMMERCIALIZATION** — P4 rides GIG_RESILIENCE P1–P2 (shipped ✓). PANNs CC BY 4.0 risk note present, matching ANALYSIS_ACCURACY's addendum claim ("logged in COMMERCIALIZATION_DESIGN") ✓.
+- **LIVE_RECORDING_PROOFS** — (read in dev-infra pass below.)
+
+**Cluster findings (kill-passed):**
+- **F15 (LOW-MED, mechanical) — NDI/Syphon ownership moved to VIDEO_IO; two docs still point at the old owner.** MULTI_DISPLAY §10 P6 still lists "NDI/Syphon outputs" as its own future work; MEDIA_BACKEND's Deferred line says "NDI/Syphon (multi-display §10 P6 owns those)"; ML_NODES §4/§14 defer "NDI in, Syphon in — same slot later" with no forward pointer. VIDEO_IO (2026-07-09) is now the owner and says so. Cross-patch three one-liners (MULTI_DISPLAY P6, MEDIA_BACKEND deferred, ML_NODES §14) → VIDEO_IO_DESIGN.
+- **F16 (folded into §0) — build-order §3 items 4/6 stale:** "MULTI_DISPLAY P2 ⏸ BLOCKED" and "MEDIA_BACKEND P1 ⏸ PARKED" — both hardening items resolved 2026-07-06, both phases re-issuable. Fixed in the build-order update.
+- **F-clean:** VIDEO_IO↔MULTI_DISPLAY island-send trigger coherent · VIDEO_IO D3 fixture-routing unification carries its own VERIFY-AT-IMPL ✓ · COMMERCIALIZATION↔ANALYSIS_ACCURACY BUG-069 sequencing consistent (build order 13g: P2+P6 before launch-gate item 19) ✓ · MEDIA_BACKEND↔VULKAN §6/§8 pairing consistent both sides (verify VULKAN side in dev-infra pass).
+
 ## Conflict list
 
 (accretes; each entry: severity · the two docs · one-line collision · which doc must change)
