@@ -1,0 +1,30 @@
+[
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "GLOW", "type": "Label" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Amount" } },
+      "check": { "Count": 5 }
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Rate" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Clip Trigger" } },
+      "check": "Exists"
+    }
+  },
+  "Snapshot",
+  "Dump"
+]

@@ -694,6 +694,49 @@ impl Serialize for ManifestSer<'_> {
     }
 }
 
+/// Serializes the instance's graph override with `preset_metadata.params`
+/// rewritten from the live manifest (PARAM_STORAGE_BOUNDARIES_DESIGN.md D12/
+/// D4: `meta.params` is derived on save from the manifest, the sole live
+/// authority — not a second thing calibration keeps in sync by hand). Every
+/// OTHER field on the graph (nodes, wires, `preset_metadata.bindings`,
+/// `skip_mode`, ...) serializes unchanged — this wrapper touches only the
+/// `params` list's per-entry CONTENT, by id, never its shape: which entries
+/// exist is still governed by expose/unexpose (`append_user_binding` /
+/// `remove_user_binding_by_id`), not by this derivation.
+struct GraphWithDerivedParams<'a> {
+    graph: &'a crate::effect_graph_def::EffectGraphDef,
+    manifest: &'a crate::params::ParamManifest,
+}
+
+impl Serialize for GraphWithDerivedParams<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let Some(meta) = self.graph.preset_metadata.as_ref() else {
+            // No metadata to derive onto — serialize the graph as-is.
+            return self.graph.serialize(serializer);
+        };
+        if meta.params.iter().all(|p| self.manifest.get(&p.id).is_none()) {
+            // Nothing on this graph resolves against the manifest (e.g. a
+            // fused/frozen def with no matching live instance) — nothing to
+            // derive; avoid the clone.
+            return self.graph.serialize(serializer);
+        }
+        // Save-time-only cost (not per-frame) — the manifest double-build
+        // this mirrors (D1) is priced the same way.
+        let mut derived = self.graph.clone();
+        if let Some(meta) = derived.preset_metadata.as_mut() {
+            for spec in meta.params.iter_mut() {
+                if let Some(p) = self.manifest.get(&spec.id) {
+                    *spec = p.spec.clone();
+                }
+            }
+        }
+        derived.serialize(serializer)
+    }
+}
+
 /// A minimal `ParamSpecDef` for a `user_added` binding with no matching
 /// `meta.params` entry (pre-spec files): range 0..1, linear, integral-ness
 /// inferred from the binding's convert.
@@ -1007,9 +1050,14 @@ impl Serialize for PresetInstance {
         }
         // `graph` is skipped when None — same round-trip-invariance
         // policy. `None` means "use the catalog default for this
-        // effect type"; only per-instance overrides emit.
+        // effect type"; only per-instance overrides emit. `params` on the
+        // wrapper is derived from the live manifest (D12) — see
+        // `GraphWithDerivedParams`.
         if let Some(graph) = &self.graph {
-            s.serialize_field("graph", graph)?;
+            s.serialize_field(
+                "graph",
+                &GraphWithDerivedParams { graph, manifest: &self.params },
+            )?;
         }
         if let Some(v) = self.legacy_param0 {
             s.serialize_field("param0", &v)?;
@@ -1085,7 +1133,12 @@ impl PresetInstance {
             s.serialize_field("automationLanes", a)?;
         }
         if let Some(g) = &self.graph {
-            s.serialize_field("graph", g)?;
+            // `params` on the wrapper is derived from the live manifest
+            // (D12) — see `GraphWithDerivedParams`.
+            s.serialize_field(
+                "graph",
+                &GraphWithDerivedParams { graph: g, manifest: &self.params },
+            )?;
         }
         if let Some(v) = self.legacy_param_version {
             s.serialize_field("genParamVersion", &v)?;
@@ -4161,6 +4214,126 @@ mod tests {
                 .unwrap()
                 .is_angle
         );
+    }
+
+    /// Regression for PARAM_STORAGE_BOUNDARIES_DESIGN.md P2 (D12): `graph
+    /// .preset_metadata.params` is derived from the live manifest ONLY at
+    /// serialize time — `EditParamMappingCommand` no longer dual-writes it,
+    /// so the sole way a calibrated range can reach the wire is
+    /// `GraphWithDerivedParams`. This builds an instance whose graph carries
+    /// a STALE (template) `amount` spec that nothing in this test ever
+    /// touches again, calibrates ONLY the manifest (mirroring what the
+    /// command does post-P2), and proves the serialized `graph.presetMetadata
+    /// .params` entry reflects the calibration, not the stale shadow — with
+    /// a byte-comparison against the manifest's own spec.
+    #[test]
+    fn calibrated_param_derives_meta_params_on_save_not_the_stale_shadow() {
+        use crate::effect_graph_def::{
+            BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
+        };
+
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.params = crate::params::ParamManifest::from_params(vec![slot("amount", 0.7, true)]);
+        // Calibrate the manifest — the live authority (PARAM_STORAGE_DESIGN
+        // D6) — diverging it from the template range the graph below still
+        // carries untouched.
+        {
+            let p = fx.params.get_mut("amount").unwrap();
+            p.spec.min = 10.0;
+            p.spec.max = 20.0;
+            p.spec.name = "Recalibrated Amount".to_string();
+            p.calibrated = true;
+        }
+        // The graph's own shadow copy — STALE template range (0..1, "Amount").
+        // Nothing after this construction ever writes to it directly; only
+        // the derive-on-save wrapper may change what actually serializes.
+        fx.graph = Some(EffectGraphDef {
+            version: crate::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: Some(PresetMetadata {
+                id: PresetTypeId::BLOOM,
+                display_name: String::new(),
+                category: String::new(),
+                osc_prefix: String::new(),
+                legacy_discriminant: None,
+                available: true,
+                is_line_based: false,
+                params: vec![ParamSpecDef {
+                    id: "amount".to_string(),
+                    name: "Amount".to_string(),
+                    min: 0.0,
+                    max: 1.0,
+                    default_value: 0.7,
+                    whole_numbers: false,
+                    is_toggle: false,
+                    is_trigger: false,
+                    value_labels: Vec::new(),
+                    format_string: None,
+                    osc_suffix: String::new(),
+                    curve: Default::default(),
+                    invert: false,
+                    is_angle: false,
+                    is_trigger_gate: false,
+                }],
+                bindings: vec![BindingDef {
+                    id: "amount".to_string(),
+                    label: "Amount".to_string(),
+                    default_value: 0.7,
+                    target: BindingTarget::Node {
+                        node_id: NodeId::new("grade"),
+                        param: "amount".to_string(),
+                    },
+                    convert: ParamConvert::Float,
+                    user_added: false,
+                    scale: 1.0,
+                    offset: 0.0,
+                }],
+                skip_mode: Default::default(),
+                param_aliases: Vec::new(),
+                value_aliases: Vec::new(),
+                string_params: Vec::new(),
+                string_bindings: Vec::new(),
+            }),
+            nodes: Vec::new(),
+            wires: Vec::new(),
+        });
+
+        let json = serde_json::to_string(&fx).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let on_wire = &parsed["graph"]["presetMetadata"]["params"][0];
+        assert_eq!(
+            on_wire["min"], 10.0,
+            "serialized graph must carry the CALIBRATED min, not the stale template 0.0",
+        );
+        assert_eq!(
+            on_wire["max"], 20.0,
+            "serialized graph must carry the CALIBRATED max, not the stale template 1.0",
+        );
+        assert_eq!(on_wire["name"], "Recalibrated Amount");
+
+        // Byte-comparison guard: the derived wire entry is JSON-identical to
+        // the live manifest spec, serialized independently. Round-trip both
+        // sides through JSON TEXT (not `to_value` directly) so `serde_json`'s
+        // float-formatting path matches on both sides of the comparison
+        // (`to_value` on an f32-sourced f64 keeps its imprecise binary
+        // widening, e.g. `0.7_f32` -> `0.699999988079071`, while the text
+        // path prints/reparses the shortest round-tripping form, `0.7`).
+        let manifest_spec_json: serde_json::Value = serde_json::from_str(
+            &serde_json::to_string(&fx.params.get("amount").unwrap().spec).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            on_wire, &manifest_spec_json,
+            "the derived meta.params entry must be byte-identical to the manifest's own spec",
+        );
+
+        // Round trip: reload and confirm the manifest — the card's
+        // authority — carries the calibrated range through, not just the
+        // one-shot JSON snapshot above.
+        let back: PresetInstance = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.params.get("amount").unwrap().spec.min, 10.0);
+        assert_eq!(back.params.get("amount").unwrap().spec.max, 20.0);
     }
 
     #[test]
