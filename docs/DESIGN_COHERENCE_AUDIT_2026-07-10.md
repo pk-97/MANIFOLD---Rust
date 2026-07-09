@@ -87,6 +87,23 @@ not a partition.)
 
 ---
 
+### Cluster: perform path (COMPLETE — all 8 docs read whole 2026-07-10)
+
+- **SESSION_MODE** — surfaces: session.rs model, SessionRuntime (engine third ref source), session_commands.rs, grid panel (P4) + ContentState session fields (greenfield, P4). Cross-refs PERFORM_SURFACE P2 pairing ✓ both sides.
+- **PERFORM_SURFACE** — surfaces: perform_mode/* (chrome-hosting rewrite, P1 deletes hand-drawn path), SurfaceDef/widget registry, chrome API. P2 = SessionGrid widget.
+- **MULTI_DISPLAY** — surfaces: stage.rs, layer_compositor chain maps (P2 seam table §6.1a), content_pipeline present path (P3), StageUniform + 3 atoms (P4), stage view UI (P5), LED/DMX/MVR/NDI/Syphon (P6). §5a ONE-Stage-surface amendment claims matching addenda in PROJECTION_MAPPING/LED_STRIPS/APP_SHELL — APP_SHELL §8 verified ✓; other two checked in LED cluster.
+- **GIG_RESILIENCE** — surfaces: autosave/alerts (P1 ✓), breadcrumb/--resume (P2 ✓), manifold-understudy crate + perform arming (P3), peripherals (P4). P3's visible widgets = PERFORM_SURFACE §7.0 ✓ both sides.
+- **APP_SHELL** — surfaces: commands.rs table, menu.rs rebuild, two settings windows, AppPrefs. §8 = the slot-contract reconciliation table (2026-07-06) — the strongest cross-doc coherence artifact in the corpus.
+- **ABLETON_SHOW_SYNC** — surfaces: manifold-io/src/als/, AbletonRef/ImportState, CueMarker store, trigger_velocity on TimelineClip, merge command. OSC bridge explicitly unchanged.
+- **DJ_PERFORMANCE / PRO_DJ_LINK** — symmetric pair (D5↔D3 master-tempo mental model, stated on both sides ✓); both post-v1.0, prereqs match build order. PRO_DJ_LINK's "sync-source seam" prereq is now partially SHIPPED (ABLETON_TRANSPORT_SYNC SyncArbiter, 2026-07-07) — anchor refresh at brief time, not a conflict.
+
+**Cluster findings (kill-passed):**
+- **F7 (MED) — PERFORM_SURFACE still commits to a "Perform button" that APP_SHELL D4 (Peter, verbatim, 2026-07-06) forbids.** PERFORM_SURFACE D1 + Decided-#1 + P2 ("Perform-button context routing"): "One Perform button... No setting." APP_SHELL D4/R5 + §1 audit: perform entry is menu-only, "no header/transport PERFORM button, no accelerator" — and as-built header has no mode buttons. APP_SHELL §8 records that it decided the affordance; PERFORM_SURFACE carries no amendment. D1's surviving content (entry follows context: arrangement → timeline perform, session view → session perform) moves onto the menu item's routing. **PERFORM_SURFACE must change** (D1, Decided-#1, P2 wording). Mechanical.
+- **F8 (MED) — GIG_RESILIENCE's D8 caveat was invalidated by a shipped landing.** Header caveat (2026-07-03): "the bridge (`ableton_bridge.rs:250`) has no inbound song-position field... deferred to ABLETON_SHOW_SYNC... decision pending Peter." As-built 2026-07-07 (ABLETON_TRANSPORT_SYNC P1–P3): `song_time` inbound listener exists (`ableton_bridge.rs:242, :891, :2305`). The Ableton-position rejoin branch of `--resume` is now buildable; the deferral pointer aims at the wrong doc (transport belongs to ABLETON_TRANSPORT_SYNC, which shipped it). **GIG_RESILIENCE must change** (header caveat truth-fix; remaining work = wiring --resume rejoin to the shipped listener, a P3/P4-adjacent task). Mechanical + one Peter decision line (build the rejoin branch or drop it).
+- **F9 (LOW) — two deferral triggers have FIRED without the docs noticing:** (a) ABLETON_SHOW_SYNC D16 defers automation-envelope import "once AUTOMATION_LANES is built" — lanes shipped P1–P4 (2026-07-04); the executing session should decide fold-in vs keep-deferred at brief time. (b) ABLETON_SHOW_SYNC §9 defers session-view scenes "after SESSION_MODE ships" — P1–P3 shipped; the SessionLaunchScene id-mapping SESSION_MODE §5 punts to "the Ableton-sync project" is designed NOWHERE. Note in both briefs; no doc contradiction.
+- **F-clean:** SESSION_MODE↔PERFORM_SURFACE pairing coherent both directions · GIG_RESILIENCE§7↔PERFORM_SURFACE§7.0 coherent · MULTI_DISPLAY§5a↔APP_SHELL§8 coherent · DJ_PERFORMANCE↔PRO_DJ_LINK symmetric · APP_SHELL D6↔MCP_INTERFACE catalog rule coherent (verify MCP side in param cluster).
+- **Build-order sharpening (fold into update):** PERFORM_SURFACE P2's true prereq is SESSION_MODE **P4's ContentState plumbing** (the snapshot fields are greenfield P4 work per SESSION_MODE baseline review), not just P1–P3.
+
 ## Conflict list
 
 (accretes; each entry: severity · the two docs · one-line collision · which doc must change)
