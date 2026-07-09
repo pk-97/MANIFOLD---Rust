@@ -42,7 +42,7 @@ templates to copy: manifold-io's guard+test pattern (forward-version guard, fsyn
 | freeze/fusion compiler | sound design, **unenforced contract** (miner's "structurally-wrong" downgraded — see below) | Sonnet fixes + Opus verifier design |
 | manifold-media/recording | structurally-wrong, severe, n=1 (BUG-053 blocks HDR recording) | LIVE_RECORDING_PROOFS design already PROPOSED |
 | manifold-core | sound-but-underspecified; BUG-080 confirmed as its own design item | Opus design (already self-nominated) |
-| manifold-app | sound-but-underspecified; A7 feature-matrix rot = 6 of its bugs, one CI gate kills the class | Sonnet, cheap, do first |
+| manifold-app | sound-but-underspecified; A7 feature-matrix rot = 6 bugs, but a compile+clippy CI gate closes only 4 (029/033/057/067) — 034+073 are separate coverage fixes (see §5) | Sonnet, cheap, do first |
 | manifold-io | closest to target state; export its pattern | BUG-063 remainder only |
 | manifold-audio | sound; export its pattern | — |
 | manifold-editing, manifold-gpu, docs tooling | sound at current n | — |
@@ -104,7 +104,7 @@ Opus design windows:
 4. **BUG-080 param-manifest construction** — already self-nominated for an Opus pass.
 
 Sonnet waves (no design needed, briefs can cite this doc + the backlog fix shapes):
-- A7 feature-matrix CI gate (one job compiling the feature matrix; kills a 6-bug class).
+- A7 feature-matrix CI gate (one job compiling + clippy'ing the feature matrix) — closes BUG-029/033/057/067 (057≈067 same dead fn; 033 already fixed). **BUG-034 and BUG-073 are NOT compile-rot** (a missing atlas-UV test; the `--script` driver not ticking animations) — separate coverage/behavior fixes the gate can't close. See §5.
 - Freeze campaign fixes BUG-006–012/014, gpu-proofs-gated per fix.
 - A5 identity ports: first a direct code comparison (does `EffectId`/`ClipId` duplication lack the
   trait/macro shape `NodeId` has? — dossier Q6), then port the graph-node paste pattern + one
@@ -124,3 +124,30 @@ Sonnet waves (no design needed, briefs can cite this doc + the backlog fix shape
    known undercount.
 5. BUG-069: excluded from architecture verdicts (see §2 table).
 6. Not assumed copy-paste; comparison step is first in the A5 Sonnet brief (§3).
+
+## §5 Re-audit amendment (Opus, 2026-07-09)
+
+Row-by-row re-audit of the dossier §2 table against all 82 backlog entries — the pass §0 deferred.
+**The table holds:** fix-status correct 82/82 (the 48-open / 20-struct / 14-patch totals reconcile
+by hand), evidence line-numbers correct 82/82, class labels all defensible. Three corrections, none
+of which moves a verdict:
+
+1. **A7 is a 4-bug gate, not 6** (corrected in §2 table + §3 in place). The manifold-app
+   process-failures are 029, 033, 034, 057, 067, 073. A feature-matrix compile+clippy job catches
+   only the four compile/lint-under-feature rots (029, 033, 057, 067 — and 057≈067 are the same dead
+   `make_blit_pipeline`; 033 is already FIXED). **BUG-034** (missing test for the live atlas-UV path)
+   and **BUG-073** (headless `--script` driver never ticks animations) compile and lint clean — they
+   are coverage/behavior gaps the gate cannot close. A Sonnet brief citing "6" would leave two open
+   and read as a gate failure.
+2. **Dossier §3 histogram nits** (raw-material doc; noted here, not edited there). manifold-audio is
+   labelled "one-off×8" but two of its eight (052, 055) are convention-mismatch in §2 itself
+   (real split: one-off×6 + convention×2); manifold-core is "identity×3(fixed)" but only 002/003 are
+   identity — the third fixed core bug (005) is missing-invariant, and 079 is dropped from the count.
+   Neither changes the "sound" / "sound-but-underspecified" verdicts.
+3. **BUG-047 enforcement mis-cite** (dossier §2). Its listed test `consumers_fit_within_panel` guards
+   the adjacent, already-fixed ordering bug; the entry itself states "no executable test for this
+   clamp overflow yet." BUG-047's real enforcement is **none**.
+
+Not done: verifying each entry's root cause against the Rust itself — this pass audited the dossier
+against the backlog, not the backlog against the code (per §0's scope). Recommended posture stands:
+verify each Sonnet-wave entry against code at pick-up, one level closer to stage than static reading.

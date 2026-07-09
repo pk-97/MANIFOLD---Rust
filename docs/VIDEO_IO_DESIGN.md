@@ -3,10 +3,37 @@
 <!-- index: Live video interchange with Resolume/TD/OBS — Syphon+NDI, sends as stage virtual outputs, inputs as source atoms; P1–P4 phased, supersedes CAPABILITY_ROADMAP §3 -->
 
 
-**Status:** PROPOSED design, awaiting Peter approval · 2026-07-07 · Fable
+**Status:** APPROVED 2026-07-09 (Peter) — Syphon (BSD, clean) + NDI (royalty-free SDK license, cleared 2026-07-09; conditions in §0) · design 2026-07-07 · Fable
 **Prerequisites:** none for P1–P2 (SharedTextureBridge, stage/venue model, and the
 source-atom slot all exist). P3–P4 need the NDI SDK decision (§D8, VERIFY-AT-IMPL).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+
+## §0. License clearance (verified 2026-07-09, Opus — full NDI SDK License Agreement, Nov 2024, read)
+
+Both mechanisms are cleared for commercial closed-source use. **Syphon:** BSD framework, no
+conditions. **NDI:** MANIFOLD qualifies as a royalty-free licensed "Product" (§1b — desktop
+software on general-purpose Macs interoperating with video products; the §1b exclusions are
+*hardware / fixed-purpose appliances / embedded devices* only, which we are not — this resolves
+the "commercial use now requires…" community concern, which was about the hardware tightening).
+The runtime is redistributable inside our own installer (§2a; §2d — ship only the files the SDK
+docs identify as redistributable).
+
+**Build-time obligations the executor must satisfy (P1 for the sends UI, P3 for NDI itself):**
+1. MANIFOLD's EULA carries the §3d flow-down clauses: prohibit modifying / reverse-engineering the
+   SDK or its protocols, disclaim NDI warranty + liability, include an "NDI, Inc." copyright notice,
+   and require third-party devs building on our product to comply with the NDI SDK terms.
+2. NDI trademark used ONLY as "NDI compatible" with a clear trademark notation, never implying NDI
+   sponsorship, never inside the product name/packaging (§3f); NDI copyright notices where the SDK
+   is incorporated (§3g).
+3. Ship against an SDK version < 30 days old at release if one exists (§2b); keep the bundled
+   runtime current.
+4. Never re-derive the NDI protocol (§3i) — already committed in D9.
+
+**Caveat (not a blocker):** the read was the Nov 2024 agreement; a 6.2.1 (2025) SDK-terms update
+exists that NDI's own docs describe as remaining royalty-free. Re-confirm against the agreement
+that ships with the exact SDK version pulled at build time — this is already the §D8
+VERIFY-AT-IMPL. Governing law is Sweden (§10); a launch-time legal glance over the EULA clauses is
+prudent for a commercial release but does not gate the build.
 
 MANIFOLD joins existing rigs before it replaces them. Syphon-out makes MANIFOLD a
 source inside a Resolume or TouchDesigner show on the same Mac; Syphon-in runs our
