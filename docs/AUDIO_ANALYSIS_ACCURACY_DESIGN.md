@@ -400,3 +400,17 @@ replacement, DALI, learned sections, realtime tuning → Deferred #1–#4.
    row); Peter explicitly wants this (quote in intro).
 5. **Peter's-bounce fixture set for L4 taste** — trigger: Peter supplies bounces;
    they join the metamorphic suite (label-free) + eyeball imports, never the tuned sets.
+
+## Addendum 2026-07-09 — BUG-069 rework reframed (Fable + Peter discussion)
+
+- **Energy/section detection** (what [AUTO_POPULATE_DESIGN.md](AUTO_POPULATE_DESIGN.md)
+  needs — calm/build/drop/groove, bar-snapped) is classic DSP, license-clean, in-house
+  Rust. It survives the madmom/ADTOF removal; only beat/downbeat tracking and drum
+  transcription lose models.
+- **Genre tagging** (opt-in roll-pool weighting): BPM/rhythm heuristic first; model
+  candidate PANNs — **weights CC BY 4.0** (Zenodo record 3987831, license field read
+  directly 2026-07-09; attribution = in-app credit line). YAMNet (Apache 2.0) fallback.
+  ChatGPT claimed the weights carried no separate license — wrong; the Zenodo record
+  attaches CC BY 4.0. Always read the record itself.
+- **Vocal detection**: stems when present (vocal-stem activity — free, exact); full-mix
+  needs a model, separately vetted, never blocks the rest.
