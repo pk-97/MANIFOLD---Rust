@@ -1,6 +1,6 @@
 # Design Build Order — dependency-sequenced roadmap for the approved designs
 
-**Status: NORMATIVE, living · 2026-07-03 · Fable (part of the doc hardening pass)**
+**Status: NORMATIVE, living · 2026-07-03 · Fable (part of the doc hardening pass) · corpus-refreshed 2026-07-10 by the cross-design coherence audit (`docs/DESIGN_COHERENCE_AUDIT_2026-07-10.md`): 10 missing designs added, 6 shipped rows removed, 2 stale ⏸ annotations fixed, render_scene same-file sequencing note added**
 **Scope: every APPROVED-not-built design doc. Update when a design ships, a new one
 lands, or Peter re-ranks.**
 
@@ -26,35 +26,48 @@ prerequisites aren't shipped, stop.
 | Design doc | Hard prerequisites | Hardening level (§DESIGN_DOC_STANDARD §9) |
 |---|---|---|
 | GIG_RESILIENCE_DESIGN (P1–P2 SHIPPED 2026-07-03; P3–P4 remain) | P3 after PERFORM_SURFACE P1 (see §3) | full |
-| MULTI_DISPLAY_DESIGN | none | full |
-| SESSION_MODE_DESIGN | none | full |
-| MEDIA_BACKEND_DESIGN | none for P1–P3; §6 pairs with VULKAN §8 | full |
-| PERFORM_SURFACE_DESIGN | none for P1; P2 needs SESSION_MODE built | full |
+| MULTI_DISPLAY_DESIGN (P1 ✅; §6.1a resolved 2026-07-06 — **P2 RE-ISSUABLE**; P3–P5 remain) | none | full |
+| SESSION_MODE_DESIGN (P1–P3 ✅; P4 grid UI = Peter feel-review; P5 recording) | none | full |
+| MEDIA_BACKEND_DESIGN (§3a resolved 2026-07-06 — **P1 RE-ISSUABLE**) | none for P1–P3; §6 pairs with VULKAN §8 | full |
+| PERFORM_SURFACE_DESIGN | none for P1; P2 needs SESSION_MODE **through P4's ContentState plumbing** (the session snapshot fields are greenfield P4 work per its 2026-07-05 baseline review) | full |
 | LED_STRIPS_DESIGN | none for P1; P2 needs MULTI_DISPLAY P1–P3 | conformance |
 | PROJECTION_MAPPING_DESIGN | MULTI_DISPLAY P1–P3 | conformance |
-| ABLETON_SHOW_SYNC_DESIGN | none | conformance |
-| AUTOMATION_LANES_DESIGN | none | conformance |
-| COMPONENT_LIBRARY_DESIGN | VOCAB apply (names are the vocabulary) | conformance |
-| MCP_INTERFACE_DESIGN | VOCAB apply; wants COMPONENT_LIBRARY (its authoring surface) | conformance |
+| ABLETON_SHOW_SYNC_DESIGN | none. Brief-time note (audit F9): its D16 lanes deferral trigger has FIRED (AUTOMATION_LANES shipped) — decide fold-in vs keep-deferred at brief | conformance |
+| COMPONENT_LIBRARY_DESIGN | VOCAB apply ✅; C3 after node-groups canvas | conformance |
+| MCP_INTERFACE_DESIGN | VOCAB apply ✅; wants COMPONENT_LIBRARY (its authoring surface) | conformance |
 | ML_NODES_DESIGN | none for Vision/CoreML tier; ONNX tier needs VULKAN | conformance |
 | VULKAN_BACKEND_DESIGN | none (Phase 0 scaffold shipped 0c5dde17) | conformance |
-| MATERIAL_SYSTEM_DESIGN (**M1–M6 ALL SHIPPED**, verified 2026-07-04) | none (VOCAB ✅) | conformance |
-| REALTIME_3D_DESIGN (P0 ✅ = MATERIAL M1–M5) | none remaining (VOCAB ✅) | full (written to standard 2026-07-03) |
-| SIMULATIONS_DESIGN | REALTIME_3D P1 for scene composition | full (written to standard 2026-07-03) |
-| IMPORT_DESIGN | per phase: P1–P3 need REALTIME_3D P1 + **MATERIAL M6**; P5 needs SESSION_MODE + MEDIA_BACKEND P2; P6 needs VOCAB ✅ (agent half: MCP) | full (written to standard 2026-07-03; §8 addendum 2026-07-04) |
-| COMMERCIALIZATION_DESIGN (commerce infra: license, watermark, updater, telemetry) | none hard; P4 telemetry rides GIG_RESILIENCE P1–P2 | conformance |
+| REALTIME_3D_DESIGN (P0/P1/P4/§9 ✅; P2/P3/P5–P7 remain) | **P2 shadows: amend first per coherence audit F2** (caster policy under uncapped objects+lights; §7.3 cap text stale); P6 needs SCENE_BUILD P2 (amended D3/D8) | full |
+| SIMULATIONS_DESIGN | REALTIME_3D P1 ✅ | full |
+| IMPORT_DESIGN | **P1: scope re-cut first per coherence audit F5** (reality note understates the shipped `build_import_graph` scene importer); P1–P3 prereqs (REALTIME_3D P1 + MATERIAL M6) ✅; P5 needs SESSION_MODE + MEDIA_BACKEND P2; P6 agent half needs MCP | full |
+| COMMERCIALIZATION_DESIGN | none hard; P4 telemetry rides GIG_RESILIENCE P1–P2 ✅; AUDIO_ANALYSIS_ACCURACY P2+P6 (BUG-069) before launch | conformance |
 | DJ_PERFORMANCE_DESIGN | ABLETON_SHOW_SYNC; PERFORM_SURFACE P1; MEDIA_BACKEND P1 | conformance |
-| PRO_DJ_LINK_DESIGN | PERFORM_SURFACE P1; sync-source seam (timecode/Link infra) | conformance |
-| UI_AUTOMATION_DESIGN | none (dev infra; P1–P2 full, P3–P4 conformance) | full (P1–P2) / conformance (P3–P4) |
-| OVERLAY_SESSIONS_AND_PICKER_DESIGN (added 2026-07-04) | none (extends shipped overlay driver) | full |
-| PRESET_LIBRARY_DESIGN (added 2026-07-04) | P5 needs OVERLAY_SESSIONS P2; P6 verify-at-impl gated | full (P1–P4) / conformance (P5–P6) |
-| TIMELINE_INGEST_DESIGN (added 2026-07-04) | none | full |
-| GAUSSIAN_SPLATS_DESIGN (added 2026-07-05) | none (its P4 consumes shipped `render_scene`) | full |
-| PARAM_STORAGE_DESIGN (added 2026-07-05; **P1–P5 SHIPPED 2026-07-05**) | none | full |
-| PARAM_STORAGE_BOUNDARIES_DESIGN (added 2026-07-06) | PARAM_STORAGE P1–P5 (shipped) | full |
-| SCENE_BUILD_AND_GROUP_PARAMS_DESIGN (added 2026-07-06) | its P3 needs PARAM_STORAGE_BOUNDARIES P1–P2; REALTIME_3D P6 now needs its P2 (amended D3/D8) | full |
-| APP_SHELL_DESIGN (added 2026-07-06) | none for P1–P3; its §8 slots bind their own waves | full (P1–P3) / conformance (§8 slots) |
+| PRO_DJ_LINK_DESIGN | PERFORM_SURFACE P1; sync-source seam (re-derive anchors — ABLETON_TRANSPORT_SYNC landed 2026-07-07) | conformance |
+| UI_AUTOMATION_DESIGN (P1–P2 ✅; P3–P4 remain) | none; UI_HARNESS P2 rewrites the shipped Runner — re-derive anchors (audit F18) | full (P1–P2) / conformance (P3–P4) |
+| TIMELINE_INGEST_DESIGN (P3–P5 ✅) | P1/P2 PARKED on BUG-028 | full |
+| GAUSSIAN_SPLATS_DESIGN | none hard (P4 consumes shipped `render_scene`); D10 re-anchor owed before P3 (audit F4) | full |
+| SCENE_BUILD_AND_GROUP_PARAMS_DESIGN | P3's prereq (PARAM_STORAGE_BOUNDARIES P1–P2) ✅ satisfied 2026-07-09; REALTIME_3D P6 needs its P2 | full |
+| APP_SHELL_DESIGN | none for P1–P3; its §8 slots bind their own waves | full (P1–P3) / conformance (§8 slots) |
+| VIDEO_IO_DESIGN (added 2026-07-09) | none for P1–P2; P3–P4 need the NDI SDK verify (D8; Peter if ambiguous) | full |
+| UI_HARNESS_UNIFICATION_DESIGN (added 2026-07-09) | none unbuilt (UI_AUTOMATION P1–P2 + UI_CLIP_AND_Z P1 shipped) | full |
+| PERF_BUDGET_GATE_DESIGN (added 2026-07-09) | none (UI_HARNESS P0 improves the numbers, doesn't block) | conformance |
+| LIVE_RECORDING_PROOFS_DESIGN (added 2026-07-09; **release-gating**, owns BUG-053) | none | full |
+| BOX3D_PHYSICS_DESIGN (added 2026-07-09) | none for P1–P3; P4 wants depth-estimate (shipped) | full |
+| AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN (added 2026-07-09) | none | full |
+| AUDIO_ANALYSIS_ACCURACY_DESIGN (added 2026-07-08; = §3 item 13g) | none; P2+P6 gate COMMERCIALIZATION (BUG-069) | full |
+| RENDER_SCENE_UNBOUNDED_LIGHTS_DESIGN (added 2026-07-06) | none — see the §2 render_scene same-file note | full |
+| AUDIO_OBJECT_TRACKING_DESIGN (P1–P4 ✅ 2026-07-06; **P5 scope overlay + BUG-045 remain**) | none; P5 re-derives scope anchors (ScopeColumn typed-overlay refactor landed 2026-07-07) | full |
+| AUDIO_OBJECT_INGEST_DESIGN | OBJECT_TRACKING P0–P2 ✅; P1 blocked on Peter (labeled clips) **and on the F10 reconciliation with ANALYSIS_ACCURACY's eval harness** | conformance |
+| KICK_SWEEP_EVENT_DESIGN (P1/P2/P4/P5 ✅) | P3 feel-pass = Peter-owned (L4, not agent-executable) | full |
 
+Directions, pre-queue (not designed to STANDARD, no rows): MAPPING_GRAMMAR (first
+card = future Peter discussion) · AUTO_POPULATE (Opus design owed; gated on the
+BUG-069 rework).
+
+Rows removed as SHIPPED per §5 (2026-07-10 coherence audit): AUTOMATION_LANES ·
+MATERIAL_SYSTEM · OVERLAY_SESSIONS_AND_PICKER · PRESET_LIBRARY · PARAM_STORAGE
+(P1–P5; Peter's one-time library re-save remains, not a build item) ·
+PARAM_STORAGE_BOUNDARIES.
 Not in the queue: **LIVE_AUDIO_TRIGGERS** is SHIPPED (phases 0–7, proven live,
 branch merged). **COMPETITIVE_STEAL_PASS** is a closed record.
 
@@ -75,6 +88,15 @@ OVERLAY_SESSIONS P2 ──→ PRESET_LIBRARY P5  (the browser rides PickerCore; 
 ```
 
 Everything else is edge-free and orders by judgment only.
+
+**Same-file co-claimants — `render_scene.rs` (coherence audit F3, 2026-07-10):** three
+unbuilt designs edit the same primitive's `rebuild`/`evaluate` (and one its shader):
+SCENE_BUILD_AND_GROUP_PARAMS P2 (param→Transform-port swap), RENDER_SCENE_UNBOUNDED_LIGHTS
+P1 (uniform + WGSL + light ports), GAUSSIAN_SPLATS P4 (lazy `depth` output). Any pairwise
+order works, but they must be **sequenced, never concurrent**, and whichever runs later
+re-derives every render_scene anchor (each doc's audit line numbers break when a sibling
+lands). Recommended order: UNBOUNDED_LIGHTS first (smallest, one phase), then SCENE_BUILD
+P2, then SPLATS P4.
 
 **Why VOCAB is first overall:** ~75 `type_id` renames touch presets, bindings,
 saved projects, and docs. Every preset, component, binding, and MCP surface built
@@ -114,12 +136,11 @@ Grouped in waves; within a wave, items are independent and order is free.
 **Wave 1 — the stage foundations.** (2026-07-03: P1s landing in parallel worktrees off `feat/timeline-ui-redesign`.)
 4. MULTI_DISPLAY P1–P3 (core model → island rendering → multi-output present) — the
    widest unblock in the corpus: projection mapping, LED P2, and the rig work all
-   ride it. **P1 ✅ merged (`0cb5114f`); P2 ⏸ BLOCKED pending §6.1 seam-hardening — `docs/DESIGN_HARDENING_QUEUE.md` item 2.**
+   ride it. **P1 ✅ merged (`0cb5114f`); §6.1a seam committed 2026-07-06 — P2 RE-ISSUABLE** (the hardening-queue item is resolved).
 5. SESSION_MODE — second performance surface; unblocks session perform. **P1 (`4f072100`) + P2 (`f852d2bc`) + P3 (`9a069aa4`) ✅ merged. P4 = the grid UI — hand to Peter for feel review, not auto-gated. P5 = recording.**
 6. MEDIA_BACKEND P1–P3 (Metal era) — decode/encode traits; independent of everything.
-   **P1 ⏸ PARKED 2026-07-03: committed §3 trait can't wrap the shipped thread-split +
-   zero-alloc reuse-pool decode — needs a §3 addendum before code
-   (`docs/DESIGN_HARDENING_QUEUE.md` item 1). No near-wave dependent, so parking is free.**
+   **§3a addendum resolved 2026-07-06 (FrameLease + MediaBackends committed against the
+   shipped async protocol) — P1 RE-ISSUABLE.**
 7. GIG_RESILIENCE P2 (breadcrumb + `--resume`) — needs nothing from other designs. **✅ merged (`3dffe29a`). D8 Ableton-position rejoin deferred to ABLETON_SHOW_SYNC (bridge has no inbound song-position); breadcrumb-beat fallback shipped. P3 (understudy) needs PERFORM_SURFACE P1.**
 
 **Wave 2 — the show becomes playable end-to-end.**
@@ -182,6 +203,14 @@ Grouped in waves; within a wave, items are independent and order is free.
     (BUG-069, a commercialization blocker — must land before item 19), and the
     detection-accuracy phases (P4–P5) serve the release-content push (import
     front door). P7 (unattended tuning loop) is post-release; Peter re-ranks.
+13h. **2026-07-09 approvals (added by the 2026-07-10 audit; all zero-hard-edge,
+    re-rankable arbitrarily early — Peter ranks):** AUDIO_SETUP_DOCK P1–P4 (calibration
+    loop + trigger unification; serves set-prep directly) · UI_HARNESS_UNIFICATION
+    P0–P3 (P0 = the BUG-060 red bracket; dev infra whose value compounds like
+    UI_AUTOMATION's) · PERF_BUDGET_GATE P1–P2 (small; standing frame-budget fence) ·
+    LIVE_RECORDING_PROOFS P1–P3 (**release-gating** — must land inside v1.0) ·
+    VIDEO_IO P1–P4 (join-existing-rigs interop; highly demoable) · BOX3D_PHYSICS
+    P1–P4 (differentiator, not release-gating).
 14. COMPONENT_LIBRARY → 15. MCP_INTERFACE (in that order — MCP consumes components).
 16. AUTOMATION_LANES.
 17. ML_NODES Vision/CoreML tier.
