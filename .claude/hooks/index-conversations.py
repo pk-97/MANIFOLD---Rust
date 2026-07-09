@@ -29,11 +29,13 @@ INDEX_FILE = DIGEST_DIR / "INDEX.md"
 
 PROJECT_ROOT = "MANIFOLD - Rust"
 
-# Cap corpus growth: digests older than this are pruned on every indexer run.
-# The searcher only looks at the last 14 days for matching, so older digests
-# are inert as context — they only matter for manual "have we discussed X?"
-# greps, and 30 days of history is plenty for that.
-DIGEST_RETENTION_DAYS = 30
+# Digest pruning is effectively OFF (2026-07-09, Peter's call): the full
+# corpus — raw transcripts AND digests — is retained for offline daemon
+# tuning and replay-testing agents against captured history. The built-in
+# transcript cleanup is likewise disabled via cleanupPeriodDays in
+# ~/.claude/settings.json. The searcher still only matches the last 14 days,
+# so old digests cost disk, not context.
+DIGEST_RETENTION_DAYS = 36500
 
 # --- Sentiment keywords ---
 #
