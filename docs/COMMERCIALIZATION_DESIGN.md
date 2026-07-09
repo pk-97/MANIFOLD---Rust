@@ -65,6 +65,10 @@ watermark as a graph node or project-level flag.
 
 ## 3. Deferred (with triggers)
 
+- **Tutorials + user manual** — a 100% need for launch (Peter, 2026-07-09), not
+  optional polish. Deliberately not started yet; the material would rot while
+  the surface is still moving. Copy register per the product-copy-voice memory
+  (Ableton/TD grade). Trigger: v1.0 feature freeze.
 - **Seat management / license reissue tooling** — manual (email) until volume
   hurts; then a small merchant-of-record webhook → license-file generator.
 - **Windows updater** (Sparkle is macOS-only; WinSparkle or equivalent) — with
