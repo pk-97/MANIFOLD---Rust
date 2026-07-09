@@ -24,6 +24,18 @@ Rules (normative home: `DESIGN_DOC_STANDARD.md` §10):
 
 ## Open
 
+### VD-021 — PROJECT_FILE_INTEGRITY P1: save durability under power loss — L1 reached / L1 carried
+Landed 2026-07-09 (`docs/landings/2026-07-09-project-file-integrity.md`). `save_v2_archive` now
+`sync_all()`s the temp file's *contents* before the atomic rename (BUG-064), keeping the existing
+parent-directory fsync. Verified at L1: code inspection + a negative gate asserting two `sync_all`
+calls (temp-file + parent-dir), and the full save/load + history round-trip suite stays green. The
+actual property — a mid-save power cut can no longer replace a good archive with a torn one — is
+not unit-testable without fault injection (interpose on fsync/rename, kill between them, assert the
+old file survives). Consciously carried: the fix follows the documented write→fsync→rename ordering;
+deeper proof needs a crash-consistency rig no other MANIFOLD test has. Burn-down if ever warranted:
+an `LD_PRELOAD`/`dm-flakey` crash-consistency harness, else Peter accepting L1 for a one-line
+ordering fix.
+
 ### VD-020 — PARAM_STORAGE_BOUNDARIES P2: calibration-drag gesture is L1, not L3 — L1 reached / L3 target
 Landed 2026-07-09 @ P2 (`254792c0`). The card-rendering half reached L3
 (`scripts/ui-flows/calibrated-param-card-reads-manifest.json` — inspector renders

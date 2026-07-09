@@ -183,8 +183,11 @@ pub fn save_v2_archive(
         zip.write_all(manifest_json.as_bytes())
             .map_err(|e| format!("Failed to write manifest entry: {e}"))?;
 
-        zip.finish()
+        let file = zip
+            .finish()
             .map_err(|e| format!("Failed to finish zip: {e}"))?;
+        file.sync_all()
+            .map_err(|e| format!("Failed to fsync temp file: {e}"))?;
 
         Ok(())
     })();
@@ -284,14 +287,16 @@ pub fn get_project_info(path: &str) -> Option<ProjectInfo> {
 // INTERNAL HELPERS
 // ──────────────────────────────────────
 
-/// SHA-256 of data, returns first 6 hex chars.
-/// Port of C# ProjectArchive.ComputeHash (lines 489-498).
+/// SHA-256 of data, returns first 16 hex chars.
+/// Port of C# ProjectArchive.ComputeHash (lines 489-498); widened per
+/// PROJECT_FILE_INTEGRITY_DESIGN D7.
 fn compute_hash(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
     let result = hasher.finalize();
-    // Use first 3 bytes (6 hex chars, 24 bits — 16M+ unique values)
-    format!("{:02x}{:02x}{:02x}", result[0], result[1], result[2])
+    // Use first 8 bytes (16 hex chars, 64 bits — collision-negligible for a
+    // bounded per-archive history).
+    result[..8].iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Write a gzip-compressed ZIP entry.

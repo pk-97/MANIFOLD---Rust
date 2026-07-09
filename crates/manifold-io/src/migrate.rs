@@ -83,6 +83,15 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
     // the next free slot in the one real version chain the project has.
     if is_version_less_than(&version, "1.11.0") {
         crate::migrations::param_storage_v14::migrate(&mut root);
+        // Literal "1.11.0", NOT CURRENT_PROJECT_VERSION: every rung stamps its
+        // own fixed target. When the schema next bumps, ADD a new final rung
+        // targeting the new version and leave this one at "1.11.0". Wiring the
+        // const in here would make this (then-intermediate) rung stamp the newer
+        // version, so the new rung's `is_version_less_than` gate would evaluate
+        // false and its migration would silently never run — a skipped migration
+        // is exactly the silent-corruption class PROJECT_FILE_INTEGRITY_DESIGN
+        // exists to prevent. The ladder-top == CURRENT_PROJECT_VERSION invariant
+        // is pinned by `test_v100_chains_through_to_v140` instead.
         root["projectVersion"] = Value::String("1.11.0".to_string());
     }
 
@@ -721,7 +730,9 @@ fn move_field(
     }
 }
 
-fn is_version_less_than(version: &str, threshold: &str) -> bool {
+/// `pub(crate)`: the forward-compat guard in `loader.rs` reuses this same
+/// comparator (PROJECT_FILE_INTEGRITY_DESIGN §3.3 — do not duplicate it).
+pub(crate) fn is_version_less_than(version: &str, threshold: &str) -> bool {
     let v_parts: Vec<u32> = version.split('.').filter_map(|s| s.parse().ok()).collect();
     let t_parts: Vec<u32> = threshold
         .split('.')
@@ -774,7 +785,12 @@ mod tests {
 
     #[test]
     fn test_v100_chains_through_to_v140() {
-        // V1.0 project should chain all the way to v1.4.
+        // A V1.0 project chains all the way up the ladder. This test doubles as
+        // the INVARIANT PIN: the ladder's top must equal CURRENT_PROJECT_VERSION.
+        // Bump the const without adding a matching final migration rung and this
+        // fails — which is the point (it forces the rung, preventing a version
+        // whose migration never runs). See the "Literal, NOT
+        // CURRENT_PROJECT_VERSION" note at the final rung in migrate_if_needed.
         let json = r#"{
             "projectVersion": "1.0.0",
             "projectName": "test",
@@ -784,7 +800,8 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.11.0")
+            Some(manifold_core::project::CURRENT_PROJECT_VERSION),
+            "migration ladder top must equal CURRENT_PROJECT_VERSION — add a final rung when the const bumps"
         );
     }
 

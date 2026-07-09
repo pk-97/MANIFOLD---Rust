@@ -185,6 +185,10 @@ pub struct ProjectIOAction {
     pub flash_save: bool,
     /// Commands to record in the undo stack.
     pub record_commands: Vec<Box<dyn Command>>,
+    /// Non-blocking notice for the UI toast (e.g. "Opened with repairs: …").
+    /// `None` means nothing to show — the common case. See BUG-063,
+    /// `docs/PROJECT_FILE_INTEGRITY_DESIGN.md` §3.6.
+    pub notice: Option<String>,
 }
 
 // ── ProjectIOService ────────────────────────────────────────────────
@@ -398,10 +402,23 @@ impl ProjectIOService {
                     log::info!("[ProjectIO] Opened project: {} from {}", name, path_str);
                 }
 
+                // Surface silent load-repairs (BUG-063) as a non-blocking
+                // toast — never `alerts::error`, which is D1's blocking
+                // refusal path for a too-new file.
+                let notice = if !project.load_report.is_empty() {
+                    Some(format!(
+                        "Opened with repairs:\n{}",
+                        project.load_report.human_lines().join("\n")
+                    ))
+                } else {
+                    None
+                };
+
                 ProjectIOAction {
                     apply_project: Some(project),
                     needs_structural_sync: true,
                     set_project_path: Some(path.to_path_buf()),
+                    notice,
                     ..Default::default()
                 }
             }
@@ -1084,6 +1101,75 @@ mod tests {
         assert!(!project.timeline.layers[0].has_overlapping_clips());
 
         let _ = std::fs::remove_file(temp_path);
+    }
+
+    // ── BUG-063 — surface silent load-repairs (PROJECT_FILE_INTEGRITY_DESIGN §3.6 P3) ──
+    //
+    // `manifold-app` is bin-only (no `[lib]` target), so an integration test
+    // under `tests/*.rs` can't call `open_project_from_path` at all — only a
+    // `#[cfg(test)]` unit test inside the crate can reach it. This one writes
+    // a real V1 JSON fixture to a temp path (a known-unknown master effect +
+    // an overlapping-clip layer, same repairs `load_report.rs` in
+    // `manifold-io` exercises directly) and opens it through the actual
+    // production seam.
+
+    #[test]
+    fn open_project_from_path_surfaces_repairs_as_a_notice() {
+        use manifold_core::effects::PresetInstance;
+
+        let mut project = Project::default();
+        project.settings.bpm = Bpm(120.0);
+        project
+            .settings
+            .master_effects
+            .push(PresetInstance::new(PresetTypeId::BLOOM));
+        project
+            .settings
+            .master_effects
+            .push(PresetInstance::new(PresetTypeId::UNKNOWN));
+
+        project
+            .timeline
+            .insert_layer(0, Layer::new("Video 1".into(), LayerType::Video, 0));
+        project.timeline.layers[0].restore_clip(TimelineClip {
+            start_beat: manifold_core::Beats::from_f32(0.0),
+            duration_beats: manifold_core::Beats::from_f32(4.0),
+            ..TimelineClip::default()
+        });
+        project.timeline.layers[0].restore_clip(TimelineClip {
+            start_beat: manifold_core::Beats::from_f32(2.0),
+            duration_beats: manifold_core::Beats::from_f32(4.0),
+            ..TimelineClip::default()
+        });
+
+        let fixture_path = std::env::temp_dir().join(format!(
+            "manifold-load-repair-notice-{}.manifold",
+            std::process::id()
+        ));
+        manifold_io::saver::save_project_v1(&project, &fixture_path)
+            .expect("write V1 fixture with repairable content");
+
+        let mut prefs = UserPrefs::load();
+        let mut service = ProjectIOService::new(&prefs);
+        let action = service.open_project_from_path(&fixture_path, &mut prefs);
+
+        let _ = std::fs::remove_file(&fixture_path);
+
+        assert!(
+            action.apply_project.is_some(),
+            "a repairable-but-valid file must still open"
+        );
+        let notice = action
+            .notice
+            .expect("a repairing load must set a non-blocking notice");
+        assert!(
+            notice.contains("unknown effect"),
+            "notice must name the unknown-effect repair: {notice}"
+        );
+        assert!(
+            notice.contains("overlapping clip"),
+            "notice must name the overlap repair: {notice}"
+        );
     }
 
     // ── PRESET_LIBRARY_DESIGN D5/P2 — snapshot-on-save ──────────────────

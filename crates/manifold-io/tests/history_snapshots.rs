@@ -91,6 +91,36 @@ fn unchanged_save_dedups_no_history_spam() {
 }
 
 #[test]
+fn differing_projects_produce_different_hashes() {
+    // Guards the P1 hash widen (24 -> 64 bits, PROJECT_FILE_INTEGRITY_DESIGN D7):
+    // two projects differing by a single field must dedup-hash differently,
+    // and the hash must be the new 16-hex-char (64-bit) width.
+    let path = temp_archive_path("hash-widen");
+    let _ = std::fs::remove_file(&path);
+
+    let mut project = Project {
+        saved_playhead_time: 1.0,
+        ..Default::default()
+    };
+    save(&mut project, &path, false);
+    let manifest = archive::read_manifest(&path.to_string_lossy()).expect("manifest after save 1");
+    let first_hash = manifest.current_hash.clone();
+    assert_eq!(first_hash.len(), 16, "hash must be 16 hex chars (64 bits)");
+
+    // One field differs -> content differs -> must not dedup.
+    project.saved_playhead_time = 2.0;
+    save(&mut project, &path, true);
+    let manifest = archive::read_manifest(&path.to_string_lossy()).expect("manifest after save 2");
+    assert_ne!(
+        manifest.current_hash, first_hash,
+        "a real content change must not collide with the prior hash"
+    );
+    assert_eq!(manifest.history.len(), 2, "differing content must not dedup");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn prune_caps_autosaves_keeps_newest_and_drops_blobs() {
     let path = temp_archive_path("prune");
     let _ = std::fs::remove_file(&path);

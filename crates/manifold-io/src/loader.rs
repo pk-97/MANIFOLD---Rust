@@ -42,7 +42,22 @@ pub fn load_project_with(
 
     // Try V2 ZIP format first
     let (json, is_v2) = match extract_json_from_zip(&file_bytes) {
-        Ok(json) => (json, true),
+        Ok(json) => {
+            // Archive-level guard (D5 site 2, coarse secondary check): refuse
+            // a future container-format bump before touching project.json.
+            if let Some(manifest) = crate::archive::read_manifest(&path.to_string_lossy())
+                && manifest.format_version > crate::manifest::CURRENT_ARCHIVE_FORMAT_VERSION
+            {
+                return Err(LoadError::TooNew {
+                    file_version: format!("archive v{}", manifest.format_version),
+                    this_version: format!(
+                        "archive v{}",
+                        crate::manifest::CURRENT_ARCHIVE_FORMAT_VERSION
+                    ),
+                });
+            }
+            (json, true)
+        }
         Err(_) => {
             // Not a ZIP — treat as plain JSON (V1)
             let json = String::from_utf8(file_bytes)
@@ -136,6 +151,21 @@ fn extract_json_from_zip(bytes: &[u8]) -> Result<String, LoadError> {
     Ok(json)
 }
 
+/// Parse `projectVersion` out of raw JSON without deserializing the full
+/// `Project` (D5 site 1 — the same cheap `serde_json::Value` read
+/// `migrate_if_needed` already does). Never panics: malformed JSON or a
+/// missing/non-string field both degrade to `"1.0.0"`, matching migrate's
+/// own default — a legacy pre-`projectVersion` V1 file is never too new.
+fn raw_project_version(json: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(json)
+        .ok()
+        .and_then(|v| {
+            v.get("projectVersion")
+                .and_then(|pv| pv.as_str().map(str::to_string))
+        })
+        .unwrap_or_else(|| "1.0.0".to_string())
+}
+
 /// Load from raw JSON string. Runs steps 1-2 of post-load validation.
 /// Steps 3-7 (duration mode migration, PathResolver, validate, validate_clips, purge)
 /// are run by load_project after the file path is set. Callers using this directly
@@ -154,6 +184,19 @@ pub fn load_project_from_json_with(
     json: &str,
     register_embedded_presets: impl FnOnce(&[EmbeddedPreset]),
 ) -> Result<Project, LoadError> {
+    // Forward-compat guard (PROJECT_FILE_INTEGRITY_DESIGN D1/D5) — MUST run
+    // before migrate_if_needed: migrate is forward-only and would silently
+    // pass a too-new file straight to deserialize, which drops fields this
+    // build doesn't recognize (BUG-062).
+    let file_version = raw_project_version(json);
+    if migrate::is_version_less_than(manifold_core::project::CURRENT_PROJECT_VERSION, &file_version)
+    {
+        return Err(LoadError::TooNew {
+            file_version,
+            this_version: manifold_core::project::CURRENT_PROJECT_VERSION.to_string(),
+        });
+    }
+
     // Run version migration
     let migrated =
         migrate::migrate_if_needed(json).map_err(|e| LoadError::Migration(e.to_string()))?;
@@ -178,7 +221,7 @@ pub fn load_project_from_json_with(
 
     // Strip unrecognized effect types (e.g. removed effects from Unity projects).
     // Without this, Unknown effects stay in the effect list and show in the UI.
-    project.strip_unknown_effects();
+    project.load_report.unknown_effects_removed = project.strip_unknown_effects();
 
     // Step 1: Rebuild runtime data structures
     project.on_after_deserialize();
@@ -213,6 +256,7 @@ pub fn run_post_load_validation(project: &mut Project) {
             validation.missing_files.join("\n")
         );
     }
+    project.load_report.missing_media_files = validation.missing_files;
 
     // Step 7: Purge orphaned references
     let purge_result = project.purge_orphaned_references();
@@ -223,6 +267,8 @@ pub fn run_post_load_validation(project: &mut Project) {
             purge_result.midi_mappings_removed
         );
     }
+    project.load_report.orphaned_clips_purged = purge_result.timeline_clips_removed;
+    project.load_report.orphaned_midi_purged = purge_result.midi_mappings_removed;
 
     // Step 8: Populate clip.layer_id from structural ownership.
     // layer_id is skip_serializing (not persisted), so it deserializes as empty.
@@ -267,12 +313,13 @@ pub fn run_post_load_validation(project: &mut Project) {
     // Step 10: Repair pre-existing clip overlaps.
     // Projects saved before overlap enforcement was added to all mutation paths
     // may contain overlapping clips. Remove the shorter clip in each collision.
-    repair_overlapping_clips(project);
+    project.load_report.overlapping_clips_repaired = repair_overlapping_clips(project);
 }
 
 /// Repair overlapping clips by removing the shorter clip in each collision pair.
 /// Only needed for projects saved before overlap enforcement was complete.
-fn repair_overlapping_clips(project: &mut Project) {
+/// Returns the count removed (BUG-063 — feeds `Project::load_report`).
+fn repair_overlapping_clips(project: &mut Project) -> usize {
     let mut total_removed = 0usize;
     for layer in &mut project.timeline.layers {
         if !layer.has_overlapping_clips() {
@@ -317,6 +364,7 @@ fn repair_overlapping_clips(project: &mut Project) {
         );
         project.timeline.mark_clip_lookup_dirty();
     }
+    total_removed
 }
 
 #[derive(Debug)]
@@ -324,6 +372,14 @@ pub enum LoadError {
     Io(String),
     Migration(String),
     Deserialize(String),
+    /// The file was written by a newer MANIFOLD than this build can open.
+    /// `file_version` and `this_version` are the project-format versions
+    /// (D4) — for the archive-container guard (§3.3 site 2) they read
+    /// "archive vN" instead.
+    TooNew {
+        file_version: String,
+        this_version: String,
+    },
 }
 
 impl std::fmt::Display for LoadError {
@@ -332,6 +388,13 @@ impl std::fmt::Display for LoadError {
             LoadError::Io(e) => write!(f, "IO error: {e}"),
             LoadError::Migration(e) => write!(f, "Migration error: {e}"),
             LoadError::Deserialize(e) => write!(f, "Deserialize error: {e}"),
+            LoadError::TooNew {
+                file_version,
+                this_version,
+            } => write!(
+                f,
+                "This project was saved by a newer version of MANIFOLD (project format {file_version}) than this build can open ({this_version}). Update MANIFOLD to open it."
+            ),
         }
     }
 }
