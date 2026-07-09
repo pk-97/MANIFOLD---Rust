@@ -24,6 +24,18 @@ Rules (normative home: `DESIGN_DOC_STANDARD.md` §10):
 
 ## Open
 
+### VD-020 — PARAM_STORAGE_BOUNDARIES P2: calibration-drag gesture is L1, not L3 — L1 reached / L3 target
+Landed 2026-07-09 @ P2 (`254792c0`). The card-rendering half reached L3
+(`scripts/ui-flows/calibrated-param-card-reads-manifest.json` — inspector renders
+Mirror/Bloom/Strobe cards with manifest-sourced ranges, PNG confirmed). The literal
+"drag a calibrated slider → reload → real degree range" gesture is only L1 (the
+manifold-core regression `calibrated_param_derives_meta_params_on_save_not_the_stale_shadow`),
+because it lives in the graph-editor mapping popover and `ui-snap --script`'s scene
+whitelist excludes the graph editor (dump-only). **Burn-down:** extend the UI_AUTOMATION
+`--script` harness with a graph-editor scene, then script the drag+reload. Until then the
+round-trip is Rust-proven, not interaction-proven. L4 (Peter dragging it live) remains the
+ultimate target.
+
 ### VD-001 — Automation lanes P1–P4: runtime pointer→command editing path — **L3 reached** / L4 target
 Landed 2026-07-04 @ `8b306de0`. **L3 burned down 2026-07-05 (Opus):**
 `scripts/ui-flows/drag-automation-point.json` resolves Mirror's middle breakpoint by its
