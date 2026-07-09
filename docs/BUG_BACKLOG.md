@@ -307,6 +307,24 @@ across the pipeline; any nonzero count raises a dialog naming what changed, and 
 pre-repair `project.json` gets journaled into `history/` as a labeled snapshot ("before load
 repair") so the original is one restore away.
 
+**Correction 2026-07-09 (verified against the code, after conflating two mechanisms in chat).**
+A **missing media file on disk does NOT remove any clip** — that was wrong when stated. Two
+distinct things:
+- `validate_clips` ([video.rs:118](../crates/manifold-core/src/video.rs#L118)) checks whether
+  each clip's `file_path` exists on disk; a missing file is only **logged as a warning**
+  ([loader.rs:207](../crates/manifold-io/src/loader.rs#L207)). Nothing is deleted. Move a project,
+  break the paths → every clip stays put.
+- `purge_orphaned_references` ([project.rs:1468](../crates/manifold-core/src/project.rs#L1468))
+  removes a timeline clip only when its `video_clip_id` is **absent from the project's video
+  library entirely** — a dangling internal reference, not a missing file. A clip whose file is
+  missing on disk still has its library entry, so its id stays valid and the clip is kept. Purge
+  fires only on structurally broken state normal authoring can't produce.
+So the only load-time repairs that remove real content are `repair_overlapping_clips` (drops the
+shorter of two overlapping clips — can't happen on projects saved by current builds, overlap being
+a write-time invariant) and this dangling-reference purge. Peter's hard requirement — "missing
+media must never delete a clip" — is **already the behavior**; the rescue-path priority drops
+accordingly (a *relink* prompt for missing media would be the higher-value follow-up if any).
+
 ### BUG-076 (inspector-scroll-underestimates-content-height) — `try_inspector_scroll` clamps to a tiny max_scroll on genuinely tall content — LOW (found 2026-07-08 during UI_CLIP_AND_Z_OWNERSHIP_DESIGN P1)
 **Status:** OPEN
 
