@@ -183,3 +183,142 @@ Row format: `Param — tier · feature · mode · envelope · engage`. Omitted e
 - Hands: everything.
 
 ---
+
+# Shipped effects
+
+Effects are spice: most earn one wire or none, and every mapped effect row spends the layer stack's H7 voice budget. An effect whose card is all-hands is *meant* to sit still while the generator moves.
+
+### Bloom (Filmic) — draft-unjudged
+*Signature: the glow leans in with the track — one wire, barely visible, felt not seen.*
+- Amount — bar · energy · cont · a15/r800
+
+### Transform (Spatial) — draft-unjudged
+*Signature: **the zoom-punch** — the frame jolts ~2% on the kick and settles fast. The classic VJ hit, kept tiny.*
+- Zoom — beat · kick · impulse · a5/d200, depth ≤2% · groove+drop
+- Hands: X, Y, Rotation.
+
+### Chromatic Aberration (Filmic) — draft-unjudged
+*Signature: **the thump fringes the frame** — color splits for a blink on the kick.*
+- Amount — beat · kick · impulse · a5/d250 · groove+drop
+- Hands: Offset, Mode, Angle, Falloff.
+
+### Color Grade (Color) — draft-unjudged
+*Signature: **the color drop** — Saturation drains through the build and slams back at the drop. Hue turns only with the section (H4).*
+- Saturation — phrase · riser~ · ride (drain) · snap-back at drop · build
+- Contrast — bar · energy · cont
+- Hue — section · §step† · step
+- Hands: Amount, Gain, Colorize, Tint Hue/Saturation/Focus.
+
+### Strobe (Stylize) — draft-unjudged
+*Signature: **played, not wired** — Rate BPM-locks at roll time; Amount stays a hand fader or pad. Drop-only (H9).*
+- Rate — roll · BPM-locked division
+- Amount — pad / hands · engage drop
+- Hands: Mode. Pad: Clip Trigger.
+
+### Glitch (Filmic) — draft-unjudged
+*Signature: **the snare breaks the picture** — transient impulse, new block pattern every hit. Build+drop only (H9).*
+- Amount — beat · trans · impulse · a0/d150 · build+drop
+- Block Size — beat · trans · random per hit · build+drop
+- Hands: RGB Shift, Scanline, Speed.
+
+### Edge Stretch (Spatial) — draft-unjudged
+*Signature: **the frame tears open into the drop** — Amount rides the riser, snaps shut on the downbeat.*
+- Amount — phrase · riser~ · ride · snap at drop · build
+- Hands: Width, Direction (roll).
+
+### Depth of Field (Filmic) — draft-unjudged
+*Signature: **rack focus at the boundary** — focus steps when the section does; the blur lives in quiet sections.*
+- Focus — section · §step† · step
+- Width — phrase · inv-energy · cont
+- Engage: quiet+build (Amount hands elsewhere)
+- Hands: Amount, Mode, Focus X, Blur, Angle, Quality.
+
+### Highlight Boost (Filmic) — draft-unjudged
+*Signature: the treble lifts the highlights — bright sounds make bright pixels.*
+- Amount — bar · High · cont
+- Hands: Gain, Threshold, Knee.
+
+### Soft Focus (Stylize) — draft-unjudged
+*Signature: quiet sections breathe soft — the image relaxes when the music does.*
+- Amount — phrase · inv-energy · cont · engage quiet
+- Hands: Radius.
+
+### Watercolor (Stylize) — draft-unjudged
+*Signature: a quiet-section skin — pigment jitters with the hats, blooms in the stillness.*
+- Displace — texture · dens~ · cont · engage quiet
+- Amount — phrase · inv-energy · cont · engage quiet
+- Hands: Blur, Decay.
+
+### Dither (Color) — draft-unjudged
+*Signature: lo-fi texture that blooms in breakdowns and vanishes when the track fills.*
+- Amount — phrase · inv-energy · cont · engage quiet
+- Pattern — section · §step† · step
+- Hands: —.
+
+### Digital Drift (Filmic) — draft-unjudged
+*Signature: **transients kick the signal loose** — RGB tears on hits over a drift that tracks the energy.*
+- RGB Shift — beat · trans · impulse · a0/d200 · build+drop
+- Drift — bar · energy · cont
+- Bands — section · §step† · step
+- Hands: Speed.
+
+### Kaleidoscope (Spatial) — draft-unjudged
+*Signature: symmetry is section-weight (H2) — Segments steps at boundaries, never on the kick.*
+- Segments — section · §step† (today: pad) · step
+- Hands: Amount.
+
+### Voronoi Prism (Stylize) — draft-unjudged
+*Signature: the shatter tightens into the drop — cell count steps up each phrase of the build.*
+- Cells — phrase · §step†/riser~ · step per phrase · build
+- Amount — phrase · riser~ · ride · build
+- Hands: Cell Size.
+
+### Infrared (Color) — draft-unjudged
+*Signature: a whole-section look — heat palette steps with the arrangement, not the beat.*
+- Palette — section · §step† · step
+- Contrast — bar · energy · cont
+- Hands: Amount (section engage).
+
+### Invert (Color) — draft-unjudged
+*Signature: **the frame flash** — full invert on the drop downbeat, one beat long, then gone (H9). Rare by design.*
+- Amount — beat · §bound†-downbeat (today: pad) · step-flash, ≤1 beat · drop only
+- Hands: —.
+
+### Mirror (Spatial) — draft-unjudged
+- Mode — section · §step† (today: pad) · step
+- Hands: Amount.
+
+### Quad Mirror (Spatial) — draft-unjudged
+- Amount — section · §step† (today: pad) · step
+- Hands: —.
+
+### Stylized Feedback (Stylize) — draft-unjudged
+*Signature: the tunnel breathes with the sub — continuous, bar-weight, never a kick swell (H1).*
+- Zoom — bar · Low · cont · a100/r1000, subtle depth
+- Rotate — phrase · lfo64 · cont
+- Hands: Amount (section engage).
+
+### Wireframe Depth (Diagnostic) — draft-unjudged
+*Signature: the depth mesh pumps with the sub while density holds phrase-steady.*
+- Z Scale — bar · Low · cont
+- Density — phrase · §step† · step
+- Hands: Amount, Width, Smooth, Subject, Blend, Edge Follow.
+
+### Edge Detect (Diagnostic) — draft-unjudged
+*Signature: **the build strips the image to its bones** — edges-only as the riser peaks, full frame restored at the drop.*
+- Amount — phrase · riser~ · ride · snap-off at drop · build
+- Hands: Threshold, Mode.
+
+### Auto Gain (Stylize) — draft-unjudged
+*Already audio-reactive by construction — card is roll-time config only.*
+- Roll: Target, Sensitivity, Ratio per section energy. Hands: Amount.
+
+### Blob Track (Diagnostic) — draft-unjudged
+*Utility/diagnostic look — no musical wiring proposed.*
+- Hands: everything.
+
+### Color Compass (Spatial) — draft-unjudged
+*Reactivity is built into the effect — roll-time config only.*
+- Roll: Reactivity. Hands: Intensity.
+
+---
