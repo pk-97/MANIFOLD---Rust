@@ -722,7 +722,9 @@ fn move_field(
     }
 }
 
-fn is_version_less_than(version: &str, threshold: &str) -> bool {
+/// `pub(crate)`: the forward-compat guard in `loader.rs` reuses this same
+/// comparator (PROJECT_FILE_INTEGRITY_DESIGN §3.3 — do not duplicate it).
+pub(crate) fn is_version_less_than(version: &str, threshold: &str) -> bool {
     let v_parts: Vec<u32> = version.split('.').filter_map(|s| s.parse().ok()).collect();
     let t_parts: Vec<u32> = threshold
         .split('.')
