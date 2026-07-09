@@ -1,6 +1,6 @@
 # Perf Budget Gate — a standing frame-time regression gate on the canonical show file
 
-**Status:** PROPOSED design, awaiting Peter approval · 2026-07-09 · Fable
+**Status:** APPROVED 2026-07-09 (Peter) — design ready, awaiting build (Sonnet, P1–P2) · design 2026-07-09 · Fable
 **Prerequisites:** none (extends existing harness + trace infra; UI_HARNESS_UNIFICATION P0 makes the numbers more representative but is not a blocker)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
