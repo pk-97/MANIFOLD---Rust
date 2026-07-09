@@ -199,6 +199,56 @@ new:  result[..8].iter().map(|b| format!("{b:02x}")).collect()   // 16 hex chars
 
 No other change — callers treat the hash as an opaque string.
 
+### 3.6 The load report (P3 — single owner: `Project` transient state)
+
+```rust
+// crates/manifold-core/src/project.rs
+#[derive(Default, Clone, Debug)]
+pub struct LoadReport {
+    pub unknown_effects_removed: usize,
+    pub overlapping_clips_repaired: usize,
+    pub orphaned_clips_purged: usize,
+    pub orphaned_midi_purged: usize,
+    pub missing_media_files: Vec<String>,
+}
+impl LoadReport {
+    pub fn is_empty(&self) -> bool { /* every count 0 AND the vec empty */ }
+    /// One human line per NON-ZERO entry ("3 unknown effects removed",
+    /// "1 overlapping clip repaired", "2 missing media files"). Empty vec ⇒ nothing to say.
+    pub fn human_lines(&self) -> Vec<String> { /* … */ }
+}
+```
+
+On `Project`: `#[serde(skip)] pub load_report: LoadReport` — transient runtime state, never
+serialized, recomputed every load (exactly the `clip.layer_id` pattern at loader.rs step 8).
+**Single owner of "what this load altered."** The field lives on `Project` (not a return
+value) so both write sites can reach it without changing the `load_project` signature —
+avoiding a ripple across the ~30 `load_project` call sites.
+
+**Delivery — each repair already computes its count; wire each into `project.load_report`:**
+- `strip_unknown_effects` (loader.rs:179, runs inside `load_project_from_json_with`) → make it
+  *return* the count it removes (today returns `()`); accumulate into the report.
+- `purge_orphaned_references` → `purge_result.timeline_clips_removed` / `.midi_mappings_removed`
+  (already returned).
+- `repair_overlapping_clips` → its local `total_removed` (already tracked; surface it as a return).
+- `validate_clips` → `missing_files` (already returned).
+
+Two write sites (`load_project_from_json_with` for the strip; `run_post_load_validation` for
+the rest) both write the one owner. That is *why* it's a field, not a return.
+
+**App surfacing seam:** `ProjectIOAction` gains `pub notice: Option<String>` (mirrors its
+existing action-field pattern — `apply_project`, `set_project_path`, …). `open_project_from_path`'s
+Ok arm sets `notice = Some("Opened with repairs:\n" + human_lines joined)` iff
+`!project.load_report.is_empty()`. The app's action applier — the same place it already fires
+toasts (`ui_bridge/state_sync.rs`) — calls `ui.toast.show(notice)`. *Rejected: call `alerts`
+directly from `project_io`* — `alerts::error` is the **blocking-modal** path (D1's refusal uses
+it); a repair notice must be **non-blocking**, and the toast is UI-owned, so it routes through
+`ProjectIOAction` like every other UI side-effect, not a direct call.
+
+**Failure story:** the common case is an empty report (clean load) → no `notice`, nothing shown.
+The report can't be malformed or unbounded — counts are bounded by the project's own contents,
+and `human_lines` emits nothing for zero entries.
+
 ## 4. Phasing
 
 Three phases, each one session, each committable and gate-passing on its own. P1 and P3 are
@@ -296,42 +346,48 @@ version comparator instead of widening `is_version_less_than`; a silent fallback
 too-new file read-only or partially (D1 — refuse, full stop); panicking on a malformed
 version field; touching the app layer (the message surfaces through the existing modal).
 
-### P3 — Surface silent load-repairs (BUG-063) · *Peter's call whether this lands in this wave*
+### P3 — Surface silent load-repairs (BUG-063)
 
-Peter flagged 063 as "separate work." It is designed here so it's ready, and phased last so
-the wave can land P1+P2 without it. **Blocking decision for entering P3:** Peter confirms it's
-in this wave (else P3 is deferred with the trigger "when the load-repair-visibility work is
-scheduled").
+Authorized by Peter ("implement in full"). The data model + seams are committed in **§3.6** —
+this phase transcribes them. **No new mutation path is added: this phase only *reports* what
+the existing repairs already do.**
 
 **Entry state:** P1+P2 landed. The repairs to surface are all in
-[loader.rs run_post_load_validation](../crates/manifold-io/src/loader.rs#L197-L271):
-`strip_unknown_effects`, `purge_orphaned_references`, `repair_overlapping_clips`,
-envelope-orphan drops, `validate_clips` missing files. Each is currently `log::warn`/`info`
-only.
+[loader.rs run_post_load_validation](../crates/manifold-io/src/loader.rs#L197-L271) plus
+`strip_unknown_effects` at [loader.rs:179](../crates/manifold-io/src/loader.rs#L179). Prove
+the counts are already computed: `rg -n 'total_removed|timeline_clips_removed|missing_files' crates/manifold-io/src/loader.rs`.
 
-**Read-back (first step):** read this phase + the §3-body note that no new mutation path is
-added (this phase only *reports* what the existing repairs already do). Restate the forbidden
-move: do not change what any repair does — only collect and surface it.
+**Read-back (first step):** read §3.6 and this phase; restate the single-owner rule (the
+report is a `#[serde(skip)]` field on `Project`, written by both load sites), why the notice
+routes through `ProjectIOAction.notice` and not a direct `alerts` call, and the forbidden move
+(change no repair's behavior).
 
-**Deliverables:**
-- A `LoadReport` value (counts + short human lines: "3 unknown effects removed", "1
-  overlapping clip repaired", "2 missing video files") accumulated during
-  `run_post_load_validation` and returned alongside the `Project` (or hung on a field the app
-  reads post-load).
-- App surfacing at [project_io.rs open success arm](../crates/manifold-app/src/project_io.rs#L363-L407):
-  if the report is non-empty, show it via the existing `alerts` / `toast` path — a
-  *non-blocking* notice ("Opened with repairs: …"), distinct from the D1 hard-refuse modal.
-- Test: a fixture (or synthesized project) with a known-unknown effect and an overlapping
-  clip → load → assert the `LoadReport` names both.
+**Deliverables (transcribe §3.6):**
+- `LoadReport` struct + `is_empty()` + `human_lines()` in `manifold-core`; `#[serde(skip)] pub
+  load_report: LoadReport` field on `Project`.
+- `strip_unknown_effects` returns its removed-count; `repair_overlapping_clips` returns
+  `total_removed`. Both write sites populate `project.load_report`; the already-returned
+  purge/validate counts feed it too.
+- `ProjectIOAction.notice: Option<String>`; `open_project_from_path` sets it from
+  `human_lines` when the report is non-empty; the app applier shows it via `ui.toast.show`.
+- Tests: (`manifold-io`) a synthesized project with a known-unknown effect **and** an
+  overlapping clip → load → assert `load_report` counts both. (`manifold-app` unit test, the
+  crate is bin-only so use a `#[cfg(test)]` inner test like the existing snapshot ones) →
+  `open_project_from_path` on that fixture yields `notice: Some(_)` naming both.
 
-**Gate:** `cargo test -p manifold-io` green; report the `LoadReport` contents for the test
-fixture. **Demo (L2):** the notice text in the report; if `scripts/ui-flows` can drive the
-open path, an L3 flow that opens a repairing fixture and asserts the toast.
+**Gate:** `cargo test -p manifold-io -p manifold-core` green; workspace build (the new
+`ProjectIOAction` field + `Project` field must not break app call sites). Report the
+`load_report` and `notice` contents for the test fixture.
+- Negative: `rg -n 'load_report' crates/manifold-core/src/project.rs` shows the field is
+  `#[serde(skip)]` (never serialized); a save→reload round-trip test confirms the field does
+  not appear in the on-disk JSON.
+**Demo (L2):** the notice string in the phase report; if `scripts/ui-flows` can drive the open
+path, an L3 flow that opens a repairing fixture and asserts the toast.
 
 **Forbidden moves:** changing any repair's behavior (delete-shorter-clip, strip-unknown stay
-exactly as they are — this phase is visibility only); making the notice a blocking modal
-(it's a non-blocking report, not an error); scope-creeping into "let the user undo the
-repair" (Deferred).
+exactly as they are — visibility only); a blocking modal for the notice (non-blocking toast,
+per §3.6's rejected-alternative); serializing `load_report` (it is transient — `#[serde(skip)]`);
+scope-creep into "let the user undo the repair" (Deferred).
 
 ## 5. Decided — do not reopen
 
