@@ -1,6 +1,6 @@
 # Box3D Physics — rigid bodies as a graph citizen
 
-**Status: PROPOSED design, awaiting Peter's approval · 2026-07-07 · Fable**
+**Status: APPROVED 2026-07-09 (Peter) — design ready, awaiting build (Sonnet, P1–P4); differentiator, not release-gating; box3d MIT license confirmed 2026-07-09 · design 2026-07-07 · Fable**
 **Prerequisites: none for P1–P3 (renders through the shipped `node.render_copies`).
 P4 (content colliders) wants the depth-estimate primitive, already shipped.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting
