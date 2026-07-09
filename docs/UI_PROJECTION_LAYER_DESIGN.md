@@ -1,8 +1,8 @@
 # UI ↔ Content Projection Layer — enforcing the snapshot seam (A1)
 
-**Status:** ⚠ PRE-FABLE DRAFT — audit complete, architecture fork OPEN. Not PROPOSED yet.
-Opus authored the audit + priced the alternatives; the D-choice in §2 is staged for Fable's
-review window (small budget, ~2026-07-09 +3h) and Peter's one product input (§2, Q-GROWTH).
+**Status:** ⚠ PRE-FABLE DRAFT — audit complete; Q-GROWTH answered (Peter, 2026-07-09: many new
+screens coming), so the fork is resolved to **C-then-A** (§2, D1). One taste call remains for Fable:
+how Shape A is realized (§2.2). Not PROPOSED yet.
 **Prerequisites:** UI_HARNESS_UNIFICATION (approved, Sonnet-executing) closes the *verification*
 half — the real UICacheManager render path in the headless harness. This design is the
 *construction* half. They compose; neither blocks the other's P0.
@@ -71,7 +71,7 @@ orphan-field rot; it does NOT fix stale pixels.** Claiming otherwise is the
 `dont-overclaim-plumbing-as-visual` trap. The honest justification is the 79-commit churn + the 6
 verified orphans, not the render bugs.
 
-## 2. Decisions — architecture fork (OPEN, staged for Fable)
+## 2. Decisions
 
 The kill-test verdict is **scoped-yes, not blanket-yes.** A single declarative table over all ~70
 fields would be mostly escape hatches (the ~18 event/snapshot/hot-path/overlay fields each need
@@ -80,77 +80,100 @@ declarative binding over the **scalar-mirror class** (~40 fields) is genuinely r
 100% of the verified rot. So the enforcement is scoped to the mirror class; the other four classes
 are **named, visible exemptions**, not silently absorbed.
 
-Within that scope, two genuinely different shapes (boundary moved a layer, per DESIGN_AUTHORING §4):
+Two genuinely different shapes were priced (boundary moved a layer, per DESIGN_AUTHORING §4):
+**Shape A** — a declarative mirror table that generates the field + capture write, so an undeclared
+field can't reach the UI; **Shape B** — a `Projected<T>` wrapper that tracks whether each field was
+read and fails a test on any it wasn't. The kill-pass on Shape A (my first instinct, and the
+executor's per §5) surfaced a third, cheaper option hiding underneath:
 
-**Shape A — declarative mirror table / codegen.** One table declares each mirror field
-`(source getter, drag-suppress, dirty condition)`; the `ContentState` field + capture-side write are
-generated; a field not in the table can't reach the UI. Orphan = a table entry with no consumer,
-caught by walking the table.
-- *Cost:* macro/codegen machinery (real indirection). *Forecloses:* per-field bespoke **apply**
-  logic — but the survey shows the apply side is legitimately varied (the MIDI/OSC/Link chips
-  *format*, they don't just mirror), so the table cleanly owns emit + existence + orphan-detection,
-  and the apply half stays hand-written regardless. Heavy machinery whose guarantee lands mostly on
-  the emit half.
+**Shape C — the orphan-coverage test alone.** A single enforcement test that every `ContentState`
+field has an emit *and* a consume site kills the whole verified rot class with near-zero
+architecture (`eliminate-bug-class-at-storage-layer`, minimal form). It does nothing for churn.
 
-**Shape B — `Projected<T>` wrapper + consume-tracking.** Each mirror field becomes a wrapper that
-records whether it was read across a frame; a headless-frame test (or debug-assert) fails on any
-field emitted but never consumed. Boundary moves to the *read* side.
-- *Cost:* wrapping the mirror fields; guarantee is a **test**, not a compile error. *Forecloses:*
-  little — incremental, can wrap fields one at a time.
+So the real fork was never A-vs-B — it was **"how much beyond Shape C,"** and that turned on one
+product fact only Peter has: how many new snapshot-bearing screens the release adds.
 
-**Kill-pass on the favorite (Shape A).** My first instinct — and, per DESIGN_AUTHORING §5, the
-executor's — is "build the declarative projection framework," because it sounds like the root fix.
-The kill-test data refutes the strong form: the codegen's biggest promised win is organizing the
-emit side, but the *verified* pain is (a) orphans and (b) churn — and orphans die to a far cheaper
-thing:
+> **Q-GROWTH — answered (Peter, 2026-07-09):** *"Many Many new screens pages and interactive new
+> UI is coming soon."*
 
-**Shape C (fell out of the kill-pass) — the orphan-coverage test alone.** A single enforcement test
-that every `ContentState` field has both an emit site and a consume site kills the entire verified
-rot class with near-zero architecture (`eliminate-bug-class-at-storage-layer`, minimal form). It
-does nothing for churn.
+**D1 — build C, then A.** Shape C ships first regardless: cheap, fork-independent, kills the verified
+rot. Shape A is now justified — with many new screens, the hand-written emit/apply pair gets paid
+dozens more times, and **interactive** screens add the error-prone part specifically: a control the
+user drags needs the engine's incoming snapshot to *not* overwrite the value mid-drag
+(drag-suppression), and hand-wiring that per control is exactly how stale/fighting-knob bugs breed.
+A owns that declaration, so its payoff rises with interactivity, not just field count.
 
-So the real fork is not A-vs-B but **"how much beyond Shape C."** Shape C is cheap, high-confidence,
-and I'd ship it first regardless. The question of whether to build the churn-reducing declarative
-mirror (A) on top of it is a **product/taste call that depends on future field growth** — which is
-Peter's input, not the codebase's:
+*Consequences, stated honestly:* A adds an indirection layer and (per §2.2) likely a codegen step —
+new fields go through a declaration instead of a struct edit. That is the trade being bought: a
+little ceremony per field in exchange for the orphan class being impossible and the drag/dirty rules
+being declared in one legible place instead of re-derived in `state_sync.rs` each time.
 
-> **Q-GROWTH (for Peter, at the window):** how many new snapshot-bearing screens does the release
-> work add? The release is authoring + export with new surfaces (session mode, multi-display, audio
-> setup dock, scene build). Many new screens → many new mirror fields → churn-reduction codegen (A)
-> earns its keep. Few → Shape C's orphan-test captures ~all the value and A is over-build.
+### 2.1 Shape A, concretely
+One declaration per mirror field — the three things A1 named (source, drag behavior, dirty
+condition):
 
-This is exactly the judgment to spend the Fable window on: **is A worth its indirection, or does
-C + a lint capture 90% of the value at 10% of the cost?** I lean C-first-then-decide-A; I'd want
-Fable's kill-pass on that lean before it's a decision.
+```
+mirror! {
+    bpm:            f64  from |e| e.bpm(),                    dirty: on_change, drag: none,
+    is_playing:     bool from |e| e.is_playing(),            dirty: on_change, drag: none,
+    master_opacity: f32  from |p| p.settings.master_opacity, dirty: on_change,
+                                                             drag: suppress_while(Drag::MasterOpacity),
+}
+```
+It generates the `ContentState` field, the capture-side write, and the consume hook with the
+drag-suppression guard baked in. A field not declared can't reach the UI (I3); a declared field with
+no consumer fails the orphan test (I1). The ~18 bespoke fields live in a separate, explicit
+`bespoke!` block the mirror machinery excludes — a **named** exemption, never a silent escape hatch.
 
-## 3. Invariants & enforcement (provisional — firms up once the fork resolves)
+### 2.2 The one call left for Fable — how A is realized
+Three ways to build the same declaration, same guarantee-shape, different costs:
+- **proc-macro** (compile-time): strongest form of I3 ("undeclared field doesn't compile"), but the
+  generated code is opaque to a session debugging a wiring issue.
+- **table + build.rs**: generates a plain, greppable `.rs`; costs a build step; guarantee still
+  compile-time.
+- **runtime registry**: no codegen at all; simplest; guarantee weakens from "doesn't compile" to
+  "fails a test."
+
+My lean: **build.rs-generated table.** With many sessions adding fields fast, greppable generated
+code matters more than the macro's slightly stronger guarantee — paying the proc-macro's
+debug-opacity cost is backwards when the whole point is making field-adding cheap and legible.
+Honest cost: a build step, and generated code in the tree. This is the taste call to spend the
+window on; my lean is priced but not decided — Fable kill-passes it.
+
+## 3. Invariants & enforcement
 
 - **I1 — no orphan fields.** Every `ContentState` field has an emit site and a consume site.
-  *Enforcement:* the Shape-C coverage test (ships first, fork-independent). Removes the
+  *Enforcement:* the Shape-C coverage test (ships first in P0, fork-independent). Removes the
   `#[allow(dead_code)]`.
 - **I2 — the hot-path packer is exempt and stays exempt.** `modulation_snapshot` is never routed
-  through the projection mechanism. *Enforcement:* the exemption is a named list the mirror
-  machinery excludes; a test asserts `modulation_snapshot`/`project_snapshot` are not table-driven.
-- **I3 (Shape A only) — a mirror field that skips the declaration doesn't compile.** *Enforcement:*
-  codegen is the single source of the field + its capture write.
+  through the projection mechanism. *Enforcement:* it lives in the explicit `bespoke!` block the
+  mirror machinery excludes; a test asserts `modulation_snapshot`/`project_snapshot` are not
+  table-driven.
+- **I3 — a mirror field that skips the declaration can't reach the UI.** *Enforcement:* depends on
+  §2.2's realization — compile-time for proc-macro/build.rs, a test for the runtime registry.
 
-## 4. Phasing (sketch — real briefs after the fork resolves)
+## 4. Phasing
 
 - **P0 — orphan-coverage test + delete the 6 dead fields (Shape C).** Fork-independent, cheap,
   ships the verified win. Removes `#[allow(dead_code)]`. Gate: the coverage test is red before the
-  deletions, green after; `rg` proves the 6 fields gone. *Vertical slice:* this is the whole path
-  for one field-class — emit, consume, enforcement — proven once, thinly.
-- **P1+ — declarative mirror (Shape A) IF Q-GROWTH says build it.** Table + codegen over the ~40
-  mirror fields, exemption list for the other four classes. Deferred pending the fork.
+  deletions, green after; `rg` proves the 6 fields gone. *Vertical slice:* the whole path for one
+  field-class — emit, consume, enforcement — proven once, thinly.
+- **P1 — declarative mirror (Shape A), realization per §2.2.** Table over the ~40 mirror fields with
+  source/drag/dirty declarations; explicit `bespoke!` exemption block for the other four classes;
+  migrate the mirror fields off their hand-written `state_sync.rs` pairs. Gate: named tests that an
+  undeclared field is rejected and a declared-but-unconsumed field fails; byte-identical UI render
+  before/after the migration of a sample field. Real brief written once §2.2 resolves.
 
 ## §. Decided — do not reopen
-1. The hot-path `modulation_snapshot` packer is exempt from any projection mechanism (§0, I2).
-2. Enforcement is scoped to the scalar-mirror class; events/snapshot/overlays are named exemptions,
+1. **D1 — build C then A** (Q-GROWTH = many new screens).
+2. The hot-path `modulation_snapshot` packer is exempt from any projection mechanism (§0, I2).
+3. Enforcement is scoped to the scalar-mirror class; events/snapshot/overlays are named exemptions,
    not absorbed (kill-test verdict).
-3. This design does not claim to fix the stale-pixel bugs (BUG-015/060 etc.) — those are cache/A2
+4. This design does not claim to fix the stale-pixel bugs (BUG-015/060 etc.) — those are cache/A2
    (§1.2).
 
 ## §. Deferred
-- Declarative mirror codegen (Shape A) — revive on Q-GROWTH = "many new screens."
+- **How Shape A is realized (§2.2)** — proc-macro vs build.rs vs registry. Not deferred *whether*,
+  only *how*; resolves at the Fable window, then P1's brief is written.
 - Folding A1 into FOUNDATIONAL_GAPS as resolved — at landing, per the STRUCTURAL_AUDIT_VERDICTS
   convention (keep the branch diff to the design files).
