@@ -42,6 +42,7 @@ impl GeneratorRegistry {
                     256,
                     256,
                     self.target_format,
+                    None,
                 )
             {
                 log::warn!(
@@ -75,14 +76,23 @@ impl GeneratorRegistry {
         height: u32,
     ) -> Option<Box<PresetRuntime>> {
         // No override, no watch context (perf-gate tuning / tests / non-editor
-        // call sites) — fuse normally per the device verdict.
-        self.create_with_override(device, gen_type, None, width, height, false)
+        // call sites) — fuse normally per the device verdict. No instance
+        // manifest in scope here, so the reshape reads the def's own shadow.
+        self.create_with_override(device, gen_type, None, width, height, false, None)
     }
 
     /// Same as [`Self::create`] but routes a per-layer
     /// `EffectGraphDef` override (from `Layer::generator_graph`)
     /// straight into [`PresetRuntime::from_def_with_device`].
     /// `override_def = None` falls back to the bundled JSON preset.
+    ///
+    /// `manifest` is the live per-instance [`ParamManifest`]
+    /// (`Layer.gen_params.params`) on a project-generator rebuild, threaded
+    /// straight into `from_def_with_device` so the reshape sources each
+    /// param's range/curve/invert from the manifest authority instead of the
+    /// graph's stale `preset_metadata.params` shadow (BUG-078). `None` for
+    /// non-instance callers ([`Self::create`], perf-gate tuning) — those read
+    /// the def's own shadow, which is accurate for a fresh-from-disk def.
     ///
     /// Returns `None` if neither the override nor the bundled preset
     /// can be loaded.
@@ -94,6 +104,7 @@ impl GeneratorRegistry {
         width: u32,
         height: u32,
         is_watched: bool,
+        manifest: Option<&manifold_core::params::ParamManifest>,
     ) -> Option<Box<PresetRuntime>> {
         let registry = PrimitiveRegistry::with_builtin();
 
@@ -142,6 +153,7 @@ impl GeneratorRegistry {
                 width,
                 height,
                 self.target_format,
+                manifest,
             ) {
                 Ok(g) => return Some(Box::new(g)),
                 Err(e) => {
@@ -166,6 +178,7 @@ impl GeneratorRegistry {
                     width,
                     height,
                     self.target_format,
+                    manifest,
                 ) {
                     Ok(g) => return Some(Box::new(g)),
                     Err(e) => {

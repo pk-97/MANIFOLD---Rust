@@ -31,7 +31,7 @@ or human can read it, and it needs no external tool.
 | ID | Nickname | One line |
 |---|---|---|
 | BUG-079 | **missing-preset-fails-silently-no-onscreen-signal** | Loading a project that references an unresolvable preset def (deleted, unregistered, or missing on this machine) degrades *safely but silently*: saved params are kept on a placeholder (keep-don't-drop, [`effects.rs:940`](../crates/manifold-core/src/effects.rs#L940)) and the effect falls back to **source passthrough** ([`preset_runtime.rs:808`](../crates/manifold-renderer/src/preset_runtime.rs#L808)) — but the ONLY signal is a console `eprintln`; nothing shows on screen. A performer sees the layer render without its effect (a missing *generator* layer likely renders empty — inferred, unconfirmed) with no visible reason. Fix shape: surface unresolvable presets in-app (a card/badge or a load-time notice). LOW |
-| BUG-078 | **generator-runtime-reshapes-from-stale-meta-params** | Post-PARAM_STORAGE_BOUNDARIES-P2, the renderer's `PresetRuntime::param_reshape` (rebuilt on a `graph_structure_version` bump) reads the in-memory graph `meta.params`, now stale until serialize (D12 derives it at save only). Bounded + non-data-loss (renderer reads a read-only `Arc<Project>` snapshot; authoritative manifest untouched): calibrate → structural graph edit → before-save can momentarily reshape the *rendered* param mapping from the stale shadow. Fix: `param_reshape` reads the manifest, or derive `meta.params` before the reshape (LOW) |
+| BUG-078 | **generator-runtime-reshapes-from-stale-meta-params** | FIXED 2026-07-09 on `fix/bug-078-reshape-manifest` — `PresetRuntime::from_def` built its reshape map from the graph's stale `preset_metadata.params` shadow because the constructor took no `ParamManifest`. Threaded `Option<&ParamManifest>` through `from_def*`/`create*`/`install_layer_generator`; the live `generator_renderer` rebuild path passes `layer.gen_params().params`, every standalone caller passes `None`. Regression test `generator_rebuild_reshape_honors_live_manifest_over_stale_shadow` green in the default suite (LOW) |
 | BUG-077 | **test-fixtures-not-region-wrapped** | ~~17 tests across `manifold-renderer` + `manifold-ui` mint root-parented nodes outside a region and panic on the D4 ownership assertion (`tree.rs:290`) — 6 `manifold-renderer` `ui_cache_manager` unit tests + 6 `manifold-renderer` `tests/ui_color_swatches.rs` + 5 `manifold-ui` `tests/chrome_param_card_proof.rs`; pre-existing on `main`, unrelated to PARAM_STORAGE_BOUNDARIES P3 (LOW, workspace-sweep-visible)~~ — **FIXED 2026-07-09 (`fix/bug-077-uicache-regions`); workspace fully D4-clean** |
 | BUG-076 | **inspector-scroll-underestimates-content-height** | `layer_scroll`/`master_scroll`'s `max_scroll()` clamps to ~13-20px on a 9-card stack that's visibly ~1200px too tall for its viewport — the built content overflows but the scroll estimator doesn't agree (LOW, suspected root cause: `compute_height()` reads a mid-tween drawer-animation value instead of the settled/armed-at-build height) |
 | BUG-074 | **audio-mixdown-flaky-under-parallel-tests** | `render_export_audio_tapped_layer_matches_rendering_alone` fails ~1-in-3 under default parallel `cargo test`, always green with `--test-threads=1`; unrelated to PARAM_STEP_ACTIONS (LOW) |
@@ -401,6 +401,60 @@ dropdown/timeline but a no-op for the inspector's direct-call scroll path) — `
 branches on `ui.layout.inspector().contains(center)` and calls `try_inspector_scroll` directly,
 matching `window_input.rs`'s real dispatch. That fix is real and committed; this bug is what's
 left after it.
+
+### BUG-078 (generator-runtime-reshapes-from-stale-meta-params) — a structural-rebuild's reshape read the graph's stale `preset_metadata.params` shadow because the constructor took no `ParamManifest` — LOW — FIXED 2026-07-09 on `fix/bug-078-reshape-manifest` (confirmed by regression test, then fixed same session)
+
+**Symptom:** calibrate a generator param (widen its range / add a curve) → make
+a structural graph edit (add/remove a node) before saving → the *rendered* param
+mapping could momentarily revert to the pre-calibration reshape. Bounded and
+non-data-loss: the authoritative `PresetInstance.params[id].spec` (the manifest)
+was never touched, and the correct reshape reasserted itself the moment the
+project was saved and reloaded (D12 derives `meta.params` from the manifest at
+serialize time).
+
+**Root cause:** `PresetRuntime::from_def` (`crates/manifold-renderer/src/preset_runtime.rs`)
+built its `param_reshape: AHashMap<String, (min, max, curve, invert)>` — the
+map every generator binding's [`Reshape`](crates/manifold-renderer/src/node_graph/param_binding.rs:273)
+is resolved from at construction — entirely from `doc.preset_metadata.params`,
+the shadow. `from_def` / `from_def_with_device` / `from_json_str_with_device`
+took no `ParamManifest` parameter, so no code path could hand a live,
+post-calibration manifest spec to the reshape. This was the generator analog of
+the effect path's `synth_user_binding` (`manifold-core/src/effects.rs:1752-1783`),
+which already reads the manifest (`self.params.get(&b.id)`) post-P2; generators
+never got the equivalent wiring because their whole binding list (stock +
+user-added) resolves through one shared `doc.preset_metadata` path.
+
+**Fix (shipped):** threaded `Option<&ParamManifest>` through the constructor
+chain — `from_def` / `from_def_with_device` / `from_json_str_with_device` →
+`GeneratorRegistry::create` / `create_with_override` →
+`GeneratorRenderer::install_layer_generator` / `acquire_clip`. When the manifest
+is present, `from_def` overlays each param's reshape (min/max/curve/invert) from
+the manifest `spec` over the shadow, manifest-wins-per-id; when `None` it keeps
+reading the shadow (correct for a fresh-from-disk standalone build). The one live
+caller — `generator_renderer.rs`'s `start_clip` and the per-frame `render_all`
+structural-rebuild sweep — passes `layer.gen_params().params`. Every other caller
+(thumbnails, `check_presets`, `freeze_profile`, gltf import, freeze proofs, the
+cold-start thumbnail path, type-swap rebuild) passes `None` and is byte-identical.
+`from_json_str` (mock/test) keeps its 2-arg signature, passing `None` internally.
+The empty-fast-path and the `preset_metadata.bindings` scale/offset +
+`string_bindings` reads were left untouched.
+
+**Regression test** (now green, in the default suite):
+`crates/manifold-renderer/src/preset_runtime.rs`,
+`generator_runtime_tests::generator_rebuild_reshape_honors_live_manifest_over_stale_shadow`.
+A def whose `preset_metadata.params` `amt` spec is fixed at
+`min=0,max=1,curve=Exponential` (the stale shadow) is rebuilt via
+`PresetRuntime::from_def` with `Some(&values)` where `values` carries the
+recalibrated `min=0,max=2` — the reshape now resolves value 1.0 to `0.5` (the
+fresh 0..2 range), where the pre-fix output was `1.0` (the stale 0..1 range).
+The bug is only observable when the reshape has a non-identity curve/invert
+(`apply_card_reshape` only consults min/max when `invert || curve != Linear`).
+
+**Escaped:** `wave/param-boundaries-p2` (`254792c0`) — dual-write deletion
+(D4) landed correctly for the manifest side but left this generator-only
+construction-time read pointed at the now-unmaintained shadow · caught-by:
+review (audit during PARAM_STORAGE_BOUNDARIES P2, not the wave's own gate —
+no existing test exercised a structural rebuild after a calibration).
 
 ### BUG-077 (test-fixtures-not-region-wrapped) — 17 tests across `manifold-renderer` + `manifold-ui` mint root-parented nodes outside a region and panic on the D4 ownership assertion — LOW (pre-existing, found 2026-07-09 during PARAM_STORAGE_BOUNDARIES P3's full-workspace sweep) — FIXED 2026-07-09 (`fix/bug-077-uicache-regions`); workspace fully D4-clean
 

@@ -2379,14 +2379,28 @@ impl PresetRuntime {
         registry: &PrimitiveRegistry,
     ) -> Result<Self, JsonGeneratorLoadError> {
         let doc: EffectGraphDef = serde_json::from_str(json)?;
-        Self::from_def(doc, registry)
+        // Mock-backend/test convenience path: no per-instance manifest in scope,
+        // so the reshape reads the def's own (fresh) `preset_metadata.params`.
+        Self::from_def(doc, registry, None)
     }
 
     /// Build a generator from an already-parsed [`EffectGraphDef`]. Same path
     /// as [`Self::from_json_str`] minus the JSON parse step.
+    ///
+    /// `manifest` is the live per-instance [`ParamManifest`] (`Layer.gen_params
+    /// .params`) when this build is a rebuild of an on-project generator, else
+    /// `None` for a standalone build (thumbnails / `check_presets` /
+    /// `freeze_profile` / gltf import / freeze proofs). When present, each
+    /// param's reshape (min/max/curve/invert) is sourced from the manifest
+    /// `spec` — the single authority (D4) — instead of the graph's
+    /// `preset_metadata.params` shadow, which is only re-derived from the
+    /// manifest at serialize time (D12) and is therefore stale between a
+    /// calibration and the next save (BUG-078). `None` keeps reading the
+    /// shadow, correct for a fresh-from-disk def whose shadow is accurate.
     pub fn from_def(
         doc: EffectGraphDef,
         registry: &PrimitiveRegistry,
+        manifest: Option<&ParamManifest>,
     ) -> Result<Self, JsonGeneratorLoadError> {
         if doc.version > EFFECT_GRAPH_VERSION_WITH_METADATA {
             return Err(JsonGeneratorLoadError::Load(LoadError::UnsupportedVersion {
@@ -2433,7 +2447,10 @@ impl PresetRuntime {
         // Per-param slider response (preset curve/invert/range), matching the
         // effect path's `ResolvedBinding::from_static` no-note reshape. Identity
         // for every shipped preset. `param_id -> (min, max, curve, invert)`.
-        let param_reshape: ahash::AHashMap<
+        //
+        // Base layer: the graph's `preset_metadata.params` shadow — correct for
+        // a standalone build (`manifest = None`), whose def is fresh-from-disk.
+        let mut param_reshape: ahash::AHashMap<
             String,
             (f32, f32, manifold_core::macro_bank::MacroCurve, bool),
         > = doc
@@ -2446,6 +2463,23 @@ impl PresetRuntime {
                     .collect()
             })
             .unwrap_or_default();
+        // BUG-078: the shadow above is derived from the per-instance manifest
+        // only at serialize time (D12), so between a calibration and the next
+        // save it carries the pre-calibration range. When the live manifest is
+        // available (the generator_renderer rebuild path threads it here), its
+        // `spec` is the authority for each param's reshape (D4) — overlay it,
+        // manifest-wins-per-id, so a post-calibration structural rebuild honors
+        // the fresh range/curve/invert. The effect path already does this via
+        // `synth_user_binding` reading `self.params`; this is the generator's
+        // equivalent for its shared (stock + user) binding path.
+        if let Some(manifest) = manifest {
+            for p in manifest.iter() {
+                param_reshape.insert(
+                    p.spec.id.clone(),
+                    (p.spec.min, p.spec.max, p.spec.curve, p.spec.invert),
+                );
+            }
+        }
         let string_binding_specs: Vec<manifold_core::effect_graph_def::StringBindingDef> = doc
             .preset_metadata
             .as_ref()
@@ -2626,12 +2660,15 @@ impl PresetRuntime {
         width: u32,
         height: u32,
         format: GpuTextureFormat,
+        manifest: Option<&ParamManifest>,
     ) -> Result<Self, JsonGeneratorLoadError> {
         let doc: EffectGraphDef = serde_json::from_str(json)?;
-        Self::from_def_with_device(doc, registry, device, width, height, format)
+        Self::from_def_with_device(doc, registry, device, width, height, format, manifest)
     }
 
     /// Same as [`Self::from_json_str_with_device`] but skips the JSON parse.
+    /// `manifest` follows the [`Self::from_def`] contract: the live per-instance
+    /// [`ParamManifest`] on a project-generator rebuild, `None` standalone.
     pub fn from_def_with_device(
         doc: EffectGraphDef,
         registry: &PrimitiveRegistry,
@@ -2639,8 +2676,9 @@ impl PresetRuntime {
         width: u32,
         height: u32,
         format: GpuTextureFormat,
+        manifest: Option<&ParamManifest>,
     ) -> Result<Self, JsonGeneratorLoadError> {
-        let mut g = Self::from_def(doc, registry)?;
+        let mut g = Self::from_def(doc, registry, manifest)?;
         g.width = width;
         g.height = height;
         let mut backend = MetalBackend::new(device, width, height, format);
@@ -5031,6 +5069,123 @@ mod generator_runtime_tests {
         );
     }
 
+    /// BUG-078 regression (fixed). Post-PARAM_STORAGE_BOUNDARIES-P2 (D4/D12),
+    /// a calibration writes ONLY `PresetInstance.params[id].spec` — the graph's
+    /// `preset_metadata.params` shadow is left stale until save (D12 derives
+    /// it at serialize time, not before). A structural graph edit rebuilds
+    /// the generator's `PresetRuntime` through EXACTLY this constructor
+    /// (`registry.create_with_override` -> `PresetRuntime::from_def_with_device`;
+    /// `from_def` here is the mock-backend equivalent).
+    ///
+    /// The fix threads the live per-instance `ParamManifest` into `from_def`,
+    /// which overlays each param's reshape (range/curve/invert) from the
+    /// manifest `spec` over the graph's shadow — so a post-calibration rebuild
+    /// honors the fresh range. This test passes `Some(&values)` (the fresh
+    /// manifest) and asserts the reshape follows it, not the stale shadow.
+    ///
+    /// The manifest built below stands in for what `EditParamMappingCommand`
+    /// (`manifold-editing/src/commands/effects.rs`, `apply_to_manifest_spec`)
+    /// actually writes into `PresetInstance.params["amt"].spec` on a real
+    /// calibration: only `max` widens, 1.0 -> 2.0, curve stays Exponential so
+    /// the note actually engages (`apply_card_reshape` only consults min/max
+    /// when `invert || curve != Linear` — a min/max-only edit on an
+    /// otherwise-identity binding can't be observed this way).
+    #[test]
+    fn generator_rebuild_reshape_honors_live_manifest_over_stale_shadow() {
+        let json = r#"{
+            "version": 1,
+            "name": "StaleReshapeTest",
+            "presetMetadata": {
+                "id": "StaleReshapeTest",
+                "displayName": "Stale Reshape Test",
+                "category": "Generator",
+                "oscPrefix": "staleReshapeTest",
+                "params": [
+                    { "id": "amt", "name": "Amount", "min": 0.0, "max": 1.0, "defaultValue": 0.0 }
+                ],
+                "bindings": [
+                    { "id": "amt", "label": "Amount", "defaultValue": 0.0,
+                      "target": { "kind": "handleNode", "handle": "so", "param": "offset" },
+                      "convert": { "type": "Float" } }
+                ]
+            },
+            "nodes": [
+                { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+                { "id": 1, "typeId": "node.uv_field", "handle": "uv" },
+                { "id": 2, "typeId": "node.scale_offset_image", "handle": "so" },
+                { "id": 3, "typeId": "system.final_output", "handle": "final_output" }
+            ],
+            "wires": [
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+
+        // The def exactly as it sits in memory right after a calibration:
+        // P2 writes ONLY the manifest, so this shadow still carries the
+        // ORIGINAL (pre-calibration) range — with the curve engaged so
+        // min/max actually enters the transform.
+        let mut def: manifold_core::effect_graph_def::EffectGraphDef =
+            serde_json::from_str(json).expect("parse StaleReshapeTest def");
+        {
+            let meta = def
+                .preset_metadata
+                .as_mut()
+                .expect("StaleReshapeTest carries presetMetadata");
+            let p = meta
+                .params
+                .iter_mut()
+                .find(|p| p.id == "amt")
+                .expect("amt param spec");
+            p.curve = manifold_core::macro_bank::MacroCurve::Exponential;
+            p.min = 0.0;
+            p.max = 1.0; // STALE — pre-calibration range
+        }
+
+        // The freshly-calibrated manifest a rebuild SHOULD honor: same
+        // curve, widened range 0..2 — exactly what `EditParamMappingCommand`
+        // would have just written into `PresetInstance.params["amt"].spec`.
+        let mut values = manifest(&[("amt", 1.0)]);
+        {
+            let p = values.get_mut("amt").expect("amt manifest entry");
+            p.spec.curve = manifold_core::macro_bank::MacroCurve::Exponential;
+            p.spec.min = 0.0;
+            p.spec.max = 2.0; // FRESH — post-calibration
+        }
+
+        // This IS the production rebuild path (mock-backend form of
+        // `PresetRuntime::from_def_with_device`). The fix threads the live
+        // manifest as the reshape authority; the generator_renderer rebuild
+        // path passes `layer.gen_params().params` here.
+        let mut g = PresetRuntime::from_def(def, &PrimitiveRegistry::with_builtin(), Some(&values))
+            .expect("StaleReshapeTest def loads");
+        g.apply_param_values(&values);
+
+        let so_id = g
+            .graph
+            .handles()
+            .find(|(h, _)| *h == "so")
+            .map(|(_, id)| id)
+            .expect("preset declares a `so` handle");
+        let offset = match g.graph.get_node(so_id).unwrap().params.get("offset") {
+            Some(ParamValue::Float(v)) => *v,
+            other => panic!("expected float, got {other:?}"),
+        };
+
+        // Post-fix behavior: amt=1.0 normalized against the FRESH 0..2 range
+        // is 0.5 -> curved (Exponential, n^2) to 0.25 -> re-scaled to 0..2 ->
+        // 0.5. The pre-fix (stale-shadow) output was 1.0 (normalized against
+        // the STALE 0..1 range: 1.0 clamped to n=1.0, curved to 1.0, no
+        // reshape at all). 0.5 proves the manifest's widened range won.
+        assert!(
+            (offset - 0.5).abs() < 1e-5,
+            "a structural rebuild must resolve `amt`'s reshape from the live \
+             manifest spec (min=0,max=2), not the graph's stale \
+             `preset_metadata.params` shadow (min=0,max=1) — got {offset} \
+             (1.0 would be the STALE 0..1 range's output)",
+        );
+    }
+
     fn frame_time() -> FrameTime {
         FrameTime {
             beats: Beats(0.0),
@@ -5136,6 +5291,7 @@ mod generator_runtime_tests {
             1920,
             1080,
             GpuTextureFormat::Rgba16Float,
+            None,
         )
         .expect("bundled StrangeAttractor must load + compile");
         assert_eq!(preset.type_id().as_str(), "StrangeAttractor");
@@ -5153,6 +5309,7 @@ mod generator_runtime_tests {
             1920,
             1080,
             GpuTextureFormat::Rgba16Float,
+            None,
         )
         .expect("bundled Plasma must load + compile");
         assert_eq!(preset.type_id().as_str(), "Plasma");
@@ -5171,6 +5328,7 @@ mod generator_runtime_tests {
             1920,
             1080,
             GpuTextureFormat::Rgba16Float,
+            None,
         )
         .expect("Lissajous preset must load");
 
@@ -5233,6 +5391,7 @@ mod generator_runtime_tests {
             1920,
             1080,
             GpuTextureFormat::Rgba16Float,
+            None,
         )
         .expect("StrangeAttractor preset must load");
 
@@ -5307,6 +5466,7 @@ mod generator_runtime_tests {
                 w,
                 h,
                 GpuTextureFormat::Rgba16Float,
+                None,
             )
             .expect("preset must load");
 

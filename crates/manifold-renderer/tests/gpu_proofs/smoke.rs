@@ -52,6 +52,7 @@ fn every_registered_generator_runs_without_panicking_or_nans() {
             h.width,
             h.height,
             manifold_gpu::GpuTextureFormat::Rgba16Float,
+            None,
         )
         .unwrap_or_else(|e| panic!("generator preset {} failed to build: {e}", id.as_str()));
 

@@ -314,7 +314,7 @@ fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &GpuDevice) {
     //    like profile_generators (the 11.7ms number).
     println!("\n--- B) PresetRuntime::render (production path) ---");
     {
-        let mut generator = PresetRuntime::from_def_with_device(def.clone(), registry, device, w, h, FORMAT).unwrap();
+        let mut generator = PresetRuntime::from_def_with_device(def.clone(), registry, device, w, h, FORMAT, None).unwrap();
         let target = RenderTarget::new(device, w, h, FORMAT, "rec-prod");
         let mk = |t: f64| PresetContext { time: t, beat: t*2.0, dt: 1.0/60.0, width: w, height: h, output_width: w, output_height: h, aspect: w as f32 / h as f32, owner_key: 0, is_clip_level: false, frame_count: 0, anim_progress: 0.0, trigger_count: 0 };
         let params = ParamManifest::default();
@@ -678,7 +678,7 @@ fn profile_scene(registry: &PrimitiveRegistry, device: &GpuDevice, args: &[&str]
     {
         let (w, h) = (640u32, 360u32);
         let mut generator =
-            match PresetRuntime::from_def_with_device(def.clone(), registry, device, w, h, FORMAT)
+            match PresetRuntime::from_def_with_device(def.clone(), registry, device, w, h, FORMAT, None)
             {
                 Ok(g) => g,
                 Err(e) => {
@@ -765,6 +765,7 @@ fn profile_scene(registry: &PrimitiveRegistry, device: &GpuDevice, args: &[&str]
                 w,
                 h,
                 FORMAT,
+                None,
             ) {
                 Ok(g) => g,
                 Err(e) => {
@@ -1546,6 +1547,7 @@ fn profile_generators(registry: &PrimitiveRegistry, device: &GpuDevice) {
                     w,
                     h,
                     FORMAT,
+                    None,
                 )
                 .map_err(|e| e.to_string())?;
                 let target = RenderTarget::new(device, w, h, FORMAT, "freeze-profile-gen");
@@ -1667,7 +1669,7 @@ fn profile_fluidsim_particle_sweep(registry: &PrimitiveRegistry, device: &GpuDev
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut generator =
-                PresetRuntime::from_def_with_device(def, registry, device, w, h, FORMAT)
+                PresetRuntime::from_def_with_device(def, registry, device, w, h, FORMAT, None)
                     .map_err(|e| e.to_string())?;
             let target = RenderTarget::new(device, w, h, FORMAT, "fluidsweep-gen");
             let mk_ctx = |t: f64| PresetContext {
