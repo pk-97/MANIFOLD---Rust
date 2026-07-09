@@ -30,8 +30,9 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-079 | **missing-preset-fails-silently-no-onscreen-signal** | Loading a project that references an unresolvable preset def (deleted, unregistered, or missing on this machine) degrades *safely but silently*: saved params are kept on a placeholder (keep-don't-drop, [`effects.rs:940`](../crates/manifold-core/src/effects.rs#L940)) and the effect falls back to **source passthrough** ([`preset_runtime.rs:808`](../crates/manifold-renderer/src/preset_runtime.rs#L808)) — but the ONLY signal is a console `eprintln`; nothing shows on screen. A performer sees the layer render without its effect (a missing *generator* layer likely renders empty — inferred, unconfirmed) with no visible reason. Fix shape: surface unresolvable presets in-app (a card/badge or a load-time notice). LOW |
 | BUG-078 | **generator-runtime-reshapes-from-stale-meta-params** | FIXED 2026-07-09 on `fix/bug-078-reshape-manifest` — `PresetRuntime::from_def` built its reshape map from the graph's stale `preset_metadata.params` shadow because the constructor took no `ParamManifest`. Threaded `Option<&ParamManifest>` through `from_def*`/`create*`/`install_layer_generator`; the live `generator_renderer` rebuild path passes `layer.gen_params().params`, every standalone caller passes `None`. Regression test `generator_rebuild_reshape_honors_live_manifest_over_stale_shadow` green in the default suite (LOW) |
-| BUG-077 | **ui-cache-manager-tests-not-region-wrapped** | `manifold-renderer`'s `ui_cache_manager` unit tests (6) panic on the D4 region-ownership assertion (`tree.rs:290`) — pre-existing on `main`, unrelated to PARAM_STORAGE_BOUNDARIES P3 (LOW, workspace-sweep-visible) |
+| BUG-077 | **test-fixtures-not-region-wrapped** | ~~17 tests across `manifold-renderer` + `manifold-ui` mint root-parented nodes outside a region and panic on the D4 ownership assertion (`tree.rs:290`) — 6 `manifold-renderer` `ui_cache_manager` unit tests + 6 `manifold-renderer` `tests/ui_color_swatches.rs` + 5 `manifold-ui` `tests/chrome_param_card_proof.rs`; pre-existing on `main`, unrelated to PARAM_STORAGE_BOUNDARIES P3 (LOW, workspace-sweep-visible)~~ — **FIXED 2026-07-09 (`fix/bug-077-uicache-regions`); workspace fully D4-clean** |
 | BUG-076 | **inspector-scroll-underestimates-content-height** | `layer_scroll`/`master_scroll`'s `max_scroll()` clamps to ~13-20px on a 9-card stack that's visibly ~1200px too tall for its viewport — the built content overflows but the scroll estimator doesn't agree (LOW, suspected root cause: `compute_height()` reads a mid-tween drawer-animation value instead of the settled/armed-at-build height) |
 | BUG-074 | **audio-mixdown-flaky-under-parallel-tests** | `render_export_audio_tapped_layer_matches_rendering_alone` fails ~1-in-3 under default parallel `cargo test`, always green with `--test-threads=1`; unrelated to PARAM_STEP_ACTIONS (LOW) |
 | BUG-073 | **ui-snap-script-drawer-tween-never-ticks** | `--script` harness has no per-frame tick, so a mod armed mid-script renders its drawer at a permanently zero-height clip region (unclickable rows) until the fixture pre-arms the state instead (LOW) |
@@ -455,13 +456,9 @@ construction-time read pointed at the now-unmaintained shadow · caught-by:
 review (audit during PARAM_STORAGE_BOUNDARIES P2, not the wave's own gate —
 no existing test exercised a structural rebuild after a calibration).
 
-### BUG-077 (ui-cache-manager-tests-not-region-wrapped) — 6 `manifold-renderer::ui_cache_manager` unit tests panic on the D4 region-ownership assertion — LOW (pre-existing, found 2026-07-09 during PARAM_STORAGE_BOUNDARIES P3's full-workspace sweep)
+### BUG-077 (test-fixtures-not-region-wrapped) — 17 tests across `manifold-renderer` + `manifold-ui` mint root-parented nodes outside a region and panic on the D4 ownership assertion — LOW (pre-existing, found 2026-07-09 during PARAM_STORAGE_BOUNDARIES P3's full-workspace sweep) — FIXED 2026-07-09 (`fix/bug-077-uicache-regions`); workspace fully D4-clean
 
-**Symptom:** `cargo test --workspace` fails 6 tests in `manifold-renderer`'s
-`ui_cache_manager::tests` module — `extent_change_forces_fallback`,
-`extents_unchanged_when_bounds_stable`, `incremental_used_when_only_card_dirt`,
-`no_subregions_signature_is_empty`, `out_of_subregion_dirt_forces_full_render`,
-`partition_change_forces_fallback` — all with the same panic:
+**Symptom:** `cargo test --workspace` fails 17 tests, all with the same panic:
 
 ```
 thread '...' panicked at crates/manifold-ui/src/tree.rs:290:9:
@@ -469,28 +466,89 @@ root-parented node minted outside an open UITree::begin_region — UI_CLIP_AND_Z
 Wrap this subtree's build in begin_region(...)/end_region(...) instead of rooting it at the tree.
 ```
 
+The full failing set (the whole D4-conformance class — enumerated iteratively via
+`--no-fail-fast` runs, each fix surfacing the next binary the previous fail-fast had
+hidden):
+
+- **6 in `manifold-renderer/src/ui_cache_manager.rs` unit tests:**
+  `extent_change_forces_fallback`, `extents_unchanged_when_bounds_stable`,
+  `incremental_used_when_only_card_dirt`, `no_subregions_signature_is_empty`,
+  `out_of_subregion_dirt_forces_full_render`, `partition_change_forces_fallback`
+  (surfaced by the `ui_cache_manager` test filter — found first).
+- **6 in `manifold-renderer/tests/ui_color_swatches.rs` snapshot tests:**
+  `header_demo`, `footer_demo`, `transport_demo`, `modulation_drawer_sheet`,
+  `browser_popup_demo`, `browser_popup_thumbnails_paint` (surface only on a full
+  crate run, not the narrow `ui_cache_manager` filter).
+- **5 in `manifold-ui/tests/chrome_param_card_proof.rs`:**
+  `badge_toggle_is_in_place`, `build_matches_card_structure`,
+  `intents_resolve_and_fold_up`, `opening_drawer_needs_rebuild_then_grows`,
+  `value_change_reconciles_in_place` (surface only on the full-workspace run — a
+  different crate; the 6th test in the file, `validate_catches_unwired_control`,
+  builds no tree and always passed).
+
 **Root cause:** `0bb51dad` ("region mechanism — ZTier, RegionToken,
 begin_region/end_region, D4 enforcement") landed the D4 root-parented-node panic
-guard but the `ui_cache_manager` test fixtures still build their tree directly
-against the root, outside any `begin_region`/`end_region` pair — the tests were
-never updated to the new region contract.
+guard (`mint`'s `debug_assert!` at `tree.rs:290`, `#[cfg(not(test))]` — so it is
+active for any *non-`manifold-ui`* dependent, which every one of these test
+binaries is: `manifold-renderer`'s own tests, and `manifold-ui`'s *integration*
+tests, which compile `manifold-ui` as an external non-test dependency). These test
+fixtures still build their tree directly against the root, outside any
+`begin_region`/`end_region` pair — they were never migrated to the region contract.
+One bug class, three files, two crates.
 
 **Confirmed unrelated to PARAM_STORAGE_BOUNDARIES P3:** `git diff --stat` for the
 P3 session touches only `crates/manifold-io/src/migrations/param_storage_v14.rs`;
-`manifold-ui`/`manifold-renderer` are untouched. The failure reproduces identically
-on the P3 branch's base commit (`10251041`, pre-P3) since P3 never runs code on
-this path — confirmed by inspection (disjoint crates/modules), not by reverting and
-rerunning (out of scope to spend more of this session on).
-
-**Fix shape:** wrap each affected test's tree construction in
-`tree.begin_region(...)`/`tree.end_region(...)` (the pattern the D4 landing commit
-should have applied to these fixtures too) — a `manifold-renderer` / `manifold-ui`
-fix, out of scope for a param-storage migration phase.
+`manifold-ui`/`manifold-renderer` are untouched. The `ui_color_swatches` half was
+additionally confirmed pre-existing by `git stash`ing the `ui_cache_manager` fix
+and rerunning `--test ui_color_swatches` against the base commit `b15e5c20` — the
+same 6 fail identically, so no half is caused or masked by another.
 
 **Escaped:** `wave/param-boundaries-p1` or an earlier UI-region wave (whichever
 landed `0bb51dad` without touching these fixtures) · caught-by: the next phase's
-full-workspace sweep (P3), not that wave's own gate — the region-enforcement
-landing's test scope apparently didn't include a full `cargo test --workspace` run.
+full-workspace sweep (P3) plus this fix session's own crate-wide and workspace gate
+runs, not that wave's own gate — the region-enforcement landing's test scope did not
+include a full `cargo test --workspace` run.
+
+**Fixed** — test files only; no production code touched, `tree.rs:290`'s D4
+assertion unchanged. Every failing fixture now wraps its tree build in a single
+`tree.begin_region(rect, tier, label, UIFlags::empty())` / `tree.end_region(region,
+start)` bracket, matching the idiom real callers use (`ui_root.rs`'s per-panel
+pairs; the closer precedent for these flat, non-tiered fixtures is
+`ui_snapshot/render.rs`'s single-region wrap and the `split_handles` region — both
+use a no-op-clip rect precisely so the region's `CLIPS_CHILDREN` is a guaranteed
+no-op and the rendered pixels are unchanged). Proof of completeness:
+`cargo test --workspace --no-fail-fast 2>&1 | rg 'tree.rs:290'` returns **zero**
+hits — the whole D4 class is gone on this branch.
+
+- `crates/manifold-renderer/src/ui_cache_manager.rs`: the two fixture builders
+  (`tree_with_subregions`, `tree_with_chrome_and_card`) now open one region around
+  their whole build. Wrapping shifts every node index by the region container node
+  `begin_region` mints first, so the fixtures return the panel's own `node_start`
+  (`tree.count()` captured right after `begin_region`) and compute sub-region ranges
+  relative to it; the six tests reference edges via that `start` (or `subs[i].0`,
+  `end - 1`) instead of the old absolute literals.
+- `crates/manifold-renderer/tests/ui_color_swatches.rs`: the six snapshot tests wrap
+  their `panel.build(...)` / `popup.build(...)` / slider+drawer build loop in a
+  full-canvas region (Chrome tier for the transport/header/footer panels, Overlay
+  for the browser popups, Base for the mod-drawer sheet — semantically faithful,
+  but with one region per test the tier only labels intent). Note that since
+  `0bb51dad` `render_tree` walks *registered regions* (`traverse` → `traverse_regions`),
+  not root-parented nodes, so the wrap is also what makes each test's panel/popup
+  tree content render at all — an unwrapped build registers no region for the
+  traversal to visit. Verified by rerunning the suite: all six now produce their
+  PNGs and pass.
+- `crates/manifold-ui/tests/chrome_param_card_proof.rs`: the shared `ProofCard::build`
+  helper (every failing test routes through it) opens one region around the
+  `ChromeHost::build` call, region rect == the card rect. Safe because the region
+  container is minted directly on the tree, NOT through the host — so `ChromeHost`'s
+  own `ids`/`node_count`/DFS indices (which the tests assert on exactly:
+  `host.node_id(N)`, `host.node_count()`, `t.count()`) are untouched; the host bases
+  off `tree.count()` at build start, exactly as its own
+  `build_assigns_contiguous_ids_from_tail` unit test already proves for a mid-tree
+  build. The intent fold-up tests still resolve correctly: `IntentRegistry::resolve`
+  stops at the first ancestor carrying the gesture/area-claim (always a host node
+  below the region), and the region node carries neither, so the extra transparent
+  ancestor changes nothing.
 
 ### BUG-075 (timeline-drag-end-never-finalizes) — the terminal DragEnd for trim/marquee/move was dropped, so on_end_drag never ran — HIGH — FIXED 2026-07-08 (found + fixed same session)
 

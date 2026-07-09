@@ -372,22 +372,37 @@ impl UICacheManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_ui::node::UIStyle;
+    use manifold_ui::node::{UIFlags, UIStyle};
+    use manifold_ui::tree::ZTier;
 
-    /// Two sub-regions: nodes [0,2) and [2,3). Returns the tree and the partition.
-    fn tree_with_subregions() -> (UITree, Vec<(usize, usize)>) {
+    /// Two sub-regions built inside one `begin_region`/`end_region` bracket (the
+    /// only sanctioned way to mint root-parented nodes — `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md`
+    /// D1/D4, enforced by `UITree::mint`'s debug assertion for any non-`manifold-ui`
+    /// dependent, which `manifold-renderer`'s own test binary is). Returns the tree,
+    /// the sub-region partition, and the panel's own `node_start` (the index right
+    /// after the region's container node) — subs and node indices are computed
+    /// relative to it so they stay correct regardless of the region root's index.
+    fn tree_with_subregions() -> (UITree, Vec<(usize, usize)>, usize) {
         let mut tree = UITree::new();
+        let region = tree.begin_region(
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            ZTier::Base,
+            "test_subregions",
+            UIFlags::empty(),
+        );
+        let start = tree.count();
         // Sub-region 0 — first node is the opaque frame at (0,0,100,50).
         tree.add_panel(None, 0.0, 0.0, 100.0, 50.0, UIStyle::default());
         tree.add_panel(None, 10.0, 10.0, 20.0, 20.0, UIStyle::default());
         // Sub-region 1 — first node frame at (0,60,100,40).
         tree.add_panel(None, 0.0, 60.0, 100.0, 40.0, UIStyle::default());
-        (tree, vec![(0, 2), (2, 3)])
+        tree.end_region(region, start);
+        (tree, vec![(start, start + 2), (start + 2, start + 3)], start)
     }
 
     #[test]
     fn extents_unchanged_when_bounds_stable() {
-        let (tree, subs) = tree_with_subregions();
+        let (tree, subs, _start) = tree_with_subregions();
         let sig = UICacheManager::sub_region_sig(Some(&subs), &tree);
         // In-place content change (no bounds change) is the incremental fast path.
         assert!(UICacheManager::extents_unchanged(&sig, &subs, &tree));
@@ -395,17 +410,17 @@ mod tests {
 
     #[test]
     fn extent_change_forces_fallback() {
-        let (mut tree, subs) = tree_with_subregions();
+        let (mut tree, subs, _start) = tree_with_subregions();
         let sig = UICacheManager::sub_region_sig(Some(&subs), &tree);
         // A sub-region's first node grows — Load would leave stale pixels below it,
         // so the guard must report the extent changed (caller falls back to full).
-        tree.set_bounds(tree.id_at(2), Rect::new(0.0, 60.0, 100.0, 80.0));
+        tree.set_bounds(tree.id_at(subs[1].0), Rect::new(0.0, 60.0, 100.0, 80.0));
         assert!(!UICacheManager::extents_unchanged(&sig, &subs, &tree));
     }
 
     #[test]
     fn partition_change_forces_fallback() {
-        let (tree, subs) = tree_with_subregions();
+        let (tree, subs, _start) = tree_with_subregions();
         let sig = UICacheManager::sub_region_sig(Some(&subs), &tree);
         // A different sub-region partition (count / ranges differ) is never safe to
         // trust against an older signature.
@@ -415,47 +430,60 @@ mod tests {
 
     #[test]
     fn no_subregions_signature_is_empty() {
-        let (tree, _) = tree_with_subregions();
+        let (tree, _subs, _start) = tree_with_subregions();
         assert!(UICacheManager::sub_region_sig(None, &tree).is_empty());
     }
 
-    /// A panel [0,4) shaped like the inspector: node 0 = chrome (background /
-    /// tab strip), nodes 1-2 = one card sub-region, node 3 = chrome (scrollbar).
-    /// Nodes 0 and 3 sit in NO sub-region — the incremental Load path can never
-    /// repaint them. Returns the tree and the sub-region partition `[(1,3)]`.
-    fn tree_with_chrome_and_card() -> (UITree, Vec<(usize, usize)>) {
+    /// A panel shaped like the inspector, built inside one `begin_region`/`end_region`
+    /// bracket (see `tree_with_subregions` doc comment for why): first node = chrome
+    /// (background / tab strip), next two = one card sub-region, last node = chrome
+    /// (scrollbar). The chrome nodes sit in NO sub-region — the incremental Load path
+    /// can never repaint them. Returns the tree, the sub-region partition, and the
+    /// panel's own `node_start`.
+    fn tree_with_chrome_and_card() -> (UITree, Vec<(usize, usize)>, usize) {
         let mut tree = UITree::new();
-        tree.add_panel(None, 0.0, 0.0, 100.0, 100.0, UIStyle::default()); // 0: chrome bg
-        tree.add_panel(None, 5.0, 10.0, 90.0, 30.0, UIStyle::default()); // 1: card frame
-        tree.add_panel(None, 8.0, 12.0, 40.0, 10.0, UIStyle::default()); // 2: card content
-        tree.add_panel(None, 0.0, 95.0, 100.0, 5.0, UIStyle::default()); // 3: chrome scrollbar
-        (tree, vec![(1, 3)])
+        let region = tree.begin_region(
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            ZTier::Base,
+            "test_chrome_and_card",
+            UIFlags::empty(),
+        );
+        let start = tree.count();
+        tree.add_panel(None, 0.0, 0.0, 100.0, 100.0, UIStyle::default()); // chrome bg
+        tree.add_panel(None, 5.0, 10.0, 90.0, 30.0, UIStyle::default()); // card frame
+        tree.add_panel(None, 8.0, 12.0, 40.0, 10.0, UIStyle::default()); // card content
+        tree.add_panel(None, 0.0, 95.0, 100.0, 5.0, UIStyle::default()); // chrome scrollbar
+        tree.end_region(region, start);
+        (tree, vec![(start + 1, start + 3)], start)
     }
 
     #[test]
     fn incremental_used_when_only_card_dirt() {
-        let (mut tree, subs) = tree_with_chrome_and_card();
+        let (mut tree, subs, start) = tree_with_chrome_and_card();
         let sig = UICacheManager::sub_region_sig(Some(&subs), &tree);
         tree.clear_dirty();
-        // Dirt confined to a node INSIDE the card sub-region — the Load path
-        // reaches it, and the sub-region's first node (index 1) hasn't moved, so
-        // the incremental path stays safe.
-        tree.set_bounds(tree.id_at(2), Rect::new(8.0, 12.0, 50.0, 10.0));
-        assert!(UICacheManager::incremental_path_safe(&sig, &subs, 0, 4, &tree));
+        let end = tree.count();
+        // Dirt confined to a node INSIDE the card sub-region (the card content
+        // node) — the Load path reaches it, and the sub-region's first node
+        // hasn't moved, so the incremental path stays safe.
+        tree.set_bounds(tree.id_at(start + 2), Rect::new(8.0, 12.0, 50.0, 10.0));
+        assert!(UICacheManager::incremental_path_safe(&sig, &subs, start, end, &tree));
     }
 
     #[test]
     fn out_of_subregion_dirt_forces_full_render() {
-        let (mut tree, subs) = tree_with_chrome_and_card();
+        let (mut tree, subs, start) = tree_with_chrome_and_card();
         let sig = UICacheManager::sub_region_sig(Some(&subs), &tree);
         tree.clear_dirty();
-        // Dirty a chrome node (the scrollbar, index 3) that lies in NO sub-region.
-        // Its first-node-of-a-sub-region bounds are untouched, so `extents_unchanged`
-        // still passes — the ONLY reason the incremental path must be rejected is
-        // the out-of-sub-region dirt, which the Load path would never repaint. The
-        // guard must force the full, self-clearing panel render (BUG-015).
-        tree.set_bounds(tree.id_at(3), Rect::new(0.0, 95.0, 80.0, 5.0));
+        let end = tree.count();
+        // Dirty a chrome node (the scrollbar, the panel's last node) that lies in
+        // NO sub-region. Its first-node-of-a-sub-region bounds are untouched, so
+        // `extents_unchanged` still passes — the ONLY reason the incremental path
+        // must be rejected is the out-of-sub-region dirt, which the Load path
+        // would never repaint. The guard must force the full, self-clearing panel
+        // render (BUG-015).
+        tree.set_bounds(tree.id_at(end - 1), Rect::new(0.0, 95.0, 80.0, 5.0));
         assert!(UICacheManager::extents_unchanged(&sig, &subs, &tree));
-        assert!(!UICacheManager::incremental_path_safe(&sig, &subs, 0, 4, &tree));
+        assert!(!UICacheManager::incremental_path_safe(&sig, &subs, start, end, &tree));
     }
 }
