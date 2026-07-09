@@ -1,6 +1,6 @@
 # Project File Integrity — a save format you can trust your show to
 
-**Status:** APPROVED design, not built · 2026-07-09 · Opus (1M) · Peter in the room
+**Status:** SHIPPED — P1–P3 all landed 2026-07-09 (Opus-orchestrated Sonnet/medium wave; closes BUG-062/063/064/065). Durability (P1 fsync) ships at L1 — verified by code inspection + negative gate, not fault injection (VERIFICATION_DEBT). · 2026-07-09 · Opus (1M) · Peter in the room
 **Prerequisites:** none (touches `manifold-core` version constant + `manifold-io` load/save; no design depends on this landing first)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
