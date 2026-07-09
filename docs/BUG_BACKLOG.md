@@ -9,11 +9,25 @@ or human can read it, and it needs no external tool.
 ## How to use this file
 
 - One entry per known bug, with a stable ID (`BUG-NNN`). Never renumber — IDs are referenced
-  from commits, tests, and memory.
+  from commits, tests, and memory. (One historical exception: 2026-07-09 a duplicate `BUG-031`
+  was split; the unreferenced audio-blip half became `BUG-081`.)
+- **Status lives in one place: a `**Status:` line directly under each `### BUG-NNN` heading.**
+  This is the single source of truth — the `## Open` / `## Fixed` section and the index table
+  are *derived* from it, not authored in parallel (three copies of one fact is how this file
+  drifted). Values: `OPEN` · `FIXED @ <sha>` · `PARTIAL` · `PARKED` · `DEFERRED` · `REOPENED` ·
+  `SUPERSEDED`. `FIXED`/`SUPERSEDED` belong under `## Fixed`; everything else stays under
+  `## Open` and in the index.
+- **Tooling — `python3 .claude/hooks/bug_status.py`** checks the whole file for drift (a Status
+  line that disagrees with its section, a resolved bug still in the index, an open bug whose
+  named fix-design has SHIPPED, a duplicate id, an index row with no entry). `--write` inserts
+  any missing Status lines and reflows entries into the right section behind a content-fidelity
+  guard. The post-merge housekeeper (`design_status_check.py`) runs the same check and prints
+  nudges — mirroring how design-doc statuses stay honest.
 - The strongest form of an open entry is an **executable** one: an `#[ignore = "BUG-NNN"]`
   test that fails for the right reason. The bug is then self-documenting and self-closing —
   remove the `#[ignore]` when the fix lands and the suite enforces it forever.
-- When you fix an entry, move it to **Fixed** with the commit SHA. Don't delete it — the
+- When you fix an entry, set its `**Status:` line to `FIXED @ <sha>` (add a **Fixed:** note on
+  how) and run `bug_status.py --write` to reflow it into **Fixed**. Don't delete it — the
   history is the point.
 - Severity is about the **instrument on stage**, not code aesthetics: `HIGH` = wrong output
   or silent data corruption a performer would hit; `MED` = reachable but narrow; `LOW` =
@@ -32,8 +46,6 @@ or human can read it, and it needs no external tool.
 |---|---|---|
 | BUG-080 | **param-manifest-construction-not-a-unified-safe-gate** | The param manifest (an instance's live knob list) is built at deserialize AND rebuilt by a later `reconcile_param_manifests` pass, because deserialize can't see project-embedded presets yet. Consumers that read `.params` *between* the two — a direct `serde_json::from_str::<PresetInstance>`, the keep-don't-drop backstop, the legacy audio-trigger migration, ~18 tests — depend on the deserialize-time build being correct. It works today only because the double-build papers over the timing; it's a latent hazard, not SOTA: a future load path added without a reconcile silently inherits an empty/partial manifest (the BUG-036 class). Root cause: manifest construction has no single safe gate — "partially built" is an observable, readable state. Fix shape (design pass, NOT a patch): make a half-built manifest un-observable — one construction gate every load/paste/bare-read passes through, OR a type-state where params can't be read until reconciled, OR deserialize carries enough context to build complete in one shot. The naive "build once in reconcile" was tried this session and is unsafe for exactly the reasons above (design doc §2 D1 priced + rejected it; see the 2026-07-09 double-build escalation). MEDIUM (design-quality / latent-robustness; wants an Opus design pass). |
 | BUG-079 | **missing-preset-fails-silently-no-onscreen-signal** | Loading a project that references an unresolvable preset def (deleted, unregistered, or missing on this machine) degrades *safely but silently*: saved params are kept on a placeholder (keep-don't-drop, [`effects.rs:940`](../crates/manifold-core/src/effects.rs#L940)) and the effect falls back to **source passthrough** ([`preset_runtime.rs:808`](../crates/manifold-renderer/src/preset_runtime.rs#L808)) — but the ONLY signal is a console `eprintln`; nothing shows on screen. A performer sees the layer render without its effect (a missing *generator* layer likely renders empty — inferred, unconfirmed) with no visible reason. Fix shape: surface unresolvable presets in-app (a card/badge or a load-time notice). LOW |
-| BUG-078 | **generator-runtime-reshapes-from-stale-meta-params** | FIXED 2026-07-09 on `fix/bug-078-reshape-manifest` — `PresetRuntime::from_def` built its reshape map from the graph's stale `preset_metadata.params` shadow because the constructor took no `ParamManifest`. Threaded `Option<&ParamManifest>` through `from_def*`/`create*`/`install_layer_generator`; the live `generator_renderer` rebuild path passes `layer.gen_params().params`, every standalone caller passes `None`. Regression test `generator_rebuild_reshape_honors_live_manifest_over_stale_shadow` green in the default suite (LOW) |
-| BUG-077 | **test-fixtures-not-region-wrapped** | ~~17 tests across `manifold-renderer` + `manifold-ui` mint root-parented nodes outside a region and panic on the D4 ownership assertion (`tree.rs:290`) — 6 `manifold-renderer` `ui_cache_manager` unit tests + 6 `manifold-renderer` `tests/ui_color_swatches.rs` + 5 `manifold-ui` `tests/chrome_param_card_proof.rs`; pre-existing on `main`, unrelated to PARAM_STORAGE_BOUNDARIES P3 (LOW, workspace-sweep-visible)~~ — **FIXED 2026-07-09 (`fix/bug-077-uicache-regions`); workspace fully D4-clean** |
 | BUG-076 | **inspector-scroll-underestimates-content-height** | `layer_scroll`/`master_scroll`'s `max_scroll()` clamps to ~13-20px on a 9-card stack that's visibly ~1200px too tall for its viewport — the built content overflows but the scroll estimator doesn't agree (LOW, suspected root cause: `compute_height()` reads a mid-tween drawer-animation value instead of the settled/armed-at-build height) |
 | BUG-074 | **audio-mixdown-flaky-under-parallel-tests** | `render_export_audio_tapped_layer_matches_rendering_alone` fails ~1-in-3 under default parallel `cargo test`, always green with `--test-threads=1`; unrelated to PARAM_STEP_ACTIONS (LOW) |
 | BUG-073 | **ui-snap-script-drawer-tween-never-ticks** | `--script` harness has no per-frame tick, so a mod armed mid-script renders its drawer at a permanently zero-height clip region (unclickable rows) until the fixture pre-arms the state instead (LOW) |
@@ -44,7 +56,6 @@ or human can read it, and it needs no external tool.
 | BUG-045 | **gap-ring-down-chase** | tracker follows kernel ring-down down ~2-4 bins in note gaps; notes gate 87.6 vs 90 (LOW) |
 | BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
 | BUG-037 | **glp-first-render-stall** | ~37ms warm-up on a glTF clip's first rendered frame (MED) |
-| BUG-040 | **v13-import-migration-drop** | FIXED 2026-07-09 on `wave/param-boundaries-p3` — `positional_ids` now consults the file's own `embeddedPresets` order before the baked table (LOW) |
 | BUG-038 | **ableton-log-spam** | bridge warns every 1.5s forever when Live absent (LOW) |
 | BUG-006 | **fused-param-noop** | param edits/undo on fused-away nodes silently no-op (HIGH) |
 | BUG-007 | **fusion-exclusion-blind** | particle-loop exclusion misses configured wgsl_compute shapes (HIGH) |
@@ -56,24 +67,20 @@ or human can read it, and it needs no external tool.
 | BUG-060 | **inspector-footer-overpaint** | REOPENED 2026-07-08. Opus 2nd pass: tree-geometry cause **ELIMINATED on the live cache path** (new `footer_leak_probe` test proves the inspector clips at footer_top through `traverse_flat_range`; footer's own render is correct) — the "inspector escapes into the footer" framing is wrong. Cause localized BELOW the tree, to the cache/dirty layer (tab-swap clears it = full recomposite). Artifact is **stale UI content** (UI colours / button fragments left behind), NOT clear/dark — the prior "footer goes dark, RGB 9-16" atlas dump was a HARNESS failure, not the symptom. Stale-pixel / dirty-clear bug, BUG-015 class. Needs live atlas+offscreen pixel dump. Cause still OPEN. |
 | BUG-025 | **timeline-scissor-bleed** | clip content bleeds across row bounds (MED, repro needed — scrolled headless render 07-07 clean) |
 | BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
-| BUG-033 | **ui-snapshot-broken** | FIXED — verified in-tree 2026-07-07 (harness builds + runs) |
 | BUG-050 | **ableton-anchor-yankback** | play-from-cursor snap-backs; anchor fix landed, rig confirmation owed via [ABL-SYNC] logs (HIGH) |
-| BUG-051 | **trigger-clear-unwired** | FIXED 2026-07-07 @ 3089e0a3 — `engine.stop()` now calls `live_trigger_state.clear()` + the new `modulation::clear_all_trigger_edges` |
-| BUG-052 | **sample-rate-dependent-detection** | FIXED 2026-07-07 @ 6e0e8988 — `SpectrogramConfig::with_time_grid_for(sr)` derives hop/n_fft from the device rate so hop≈5.33ms + window≈85ms hold at any rate; unit-test proven across 44.1/48/88.2/96/192k; end-to-end cross-rate harness fire-time match still owed (VD) |
 | BUG-054 | **renderer-device-ptr-dangles** | renderers cache `*const GpuDevice` only `ContentThread::run()` repoints — any other consumer segfaults (MED, latent) |
 | BUG-048 | **arm-two-reds** | ARM idle/armed both red, shade-only difference (LOW, UX call) |
 | BUG-049 | **child-row-right-indent** | group-child right-anchored controls misaligned ~20px (LOW) |
 | BUG-012 | **tex-rename-corrupt** | fragment `tex_` port-rename corrupts `tex_*` scalars (LOW) |
 | BUG-018 | **catalog-stale** | node_catalog.json out of sync test red (LOW) |
-| BUG-031 | **audio-load-blip** | ~10ms of audio leaks when a voice is built (LOW) ⚠ id collides with the positional-layer-menu entry under Fixed — first free id is BUG-042 |
+| BUG-081 | **audio-load-blip** | ~10ms of audio leaks when a voice is built (LOW) |
+| BUG-031 | **layer-menu-positional** | Layer context-menu + rename still address layers positionally (LOW, follow-up to the LayerId migration `877852a9`) |
+| BUG-053 | **hdr-live-recording-structural** | HDR live recording can't work: pool format mismatches the native pixel buffer, nothing PQ-encodes (LOW today, blocks HDR capture) |
 | BUG-034 | **atlas-uv-test-gap** | headless preview doesn't cover live atlas UV path (LOW) |
 | BUG-014 / 030 | parked | NaN content-key hash · color-ratchet red |
 | BUG-019 / 020 / 021 | deferred | group-fold gap · gen-card collapse · snap-back gap |
 | BUG-056 | **audio-mixdown-clippy-debt** | `manifold-playback` clippy gate (`-D warnings`) fails pre-existing on `audio_mixdown.rs` — `cloned_ref_to_slice_refs` + `needless_range_loop` (LOW, blocks the crate's clippy gate, not correctness) |
 | BUG-057 | **ui-snapshot-dead-blit-pipeline** | `cargo clippy -p manifold-app --features ui-snapshot` fails pre-existing on an unused `make_blit_pipeline` fn (LOW, blocks that one feature's clippy gate, not correctness) |
-| BUG-058 | **drag-end-consumable** | timeline sticks in move/trim mode when the drag's terminal DragEnd is consumed mid-route (open dropdown/modal eats it); root = terminal events routable instead of broadcast (HIGH) |
-| BUG-059 | **band-line-grab-falls-through** | Audio Setup crossover lines sticky (4px threshold, seam interceptors, dropdown swallow) AND a missed grab silently drags clips under the modal — position-based stash gate has no z-awareness (HIGH) |
-| BUG-061 | **slider-reset-per-panel-lottery** | ~~right-click reset only works on sliders whose panel hand-wired it twice~~ — **FIXED 2026-07-08 @ 480acf63** (reset is now the slider's own gesture: one generic `SliderReset` re-dispatches the slider's value-change trio with the default baked in) |
 | BUG-062 | **no-forward-version-guard** | an older build opening a newer .manifold silently strips unknown fields/effects and saves the loss back (HIGH, latent) |
 | BUG-063 | **silent-load-repairs** | overlap repair / orphan purge / unknown-effect strip delete project data on load with log-only notice; next save persists the loss (MED-HIGH) |
 | BUG-064 | **save-rename-before-fsync** | V2 save fsyncs the directory but never the temp file — power loss can leave a valid-named archive with unwritten data blocks (MED) |
@@ -87,7 +94,23 @@ or human can read it, and it needs no external tool.
 
 ## Open
 
+### BUG-080 (param-manifest-construction-not-a-unified-safe-gate) — manifest construction has no single safe gate; "partially built" is an observable state — MED (design-quality / latent-robustness; wants an Opus design pass)
+**Status:** OPEN
+
+The param manifest (an instance's live knob list) is built at deserialize AND rebuilt by a later `reconcile_param_manifests` pass, because deserialize can't see project-embedded presets yet. Consumers that read `.params` *between* the two — a direct `serde_json::from_str::<PresetInstance>`, the keep-don't-drop backstop, the legacy audio-trigger migration, ~18 tests — depend on the deserialize-time build being correct. It works today only because the double-build papers over the timing; it's a latent hazard: a future load path added without a reconcile silently inherits an empty/partial manifest (the BUG-036 class). Root cause: manifest construction has no single safe gate — "partially built" is an observable, readable state. **Fix shape (design pass, NOT a patch):** make a half-built manifest un-observable — one construction gate every load/paste/bare-read passes through, OR a type-state where params can't be read until reconciled, OR deserialize carries enough context to build complete in one shot. The naive "build once in reconcile" was tried 2026-07-09 and is unsafe for exactly those reasons (design doc §2 D1 priced + rejected it).
+
+### BUG-079 (missing-preset-fails-silently-no-onscreen-signal) — an unresolvable preset def degrades safely but with no on-screen signal — LOW
+**Status:** OPEN
+
+Loading a project that references an unresolvable preset def (deleted, unregistered, or missing on this machine) degrades *safely but silently*: saved params are kept on a placeholder (keep-don't-drop, `effects.rs:940`) and the effect falls back to **source passthrough** (`preset_runtime.rs:808`) — but the ONLY signal is a console `eprintln`; nothing shows on screen. A performer sees the layer render without its effect (a missing *generator* layer likely renders empty — inferred, unconfirmed) with no visible reason. **Fix shape:** surface unresolvable presets in-app (a card/badge or a load-time notice).
+
+### BUG-071 (ui-snap-dump-stale-parent) — `ui_snapshot::dump.rs` serializes the mint-time parent, not the live reparented one — LOW (dev-tooling only)
+**Status:** OPEN
+
+`ui_snapshot::dump.rs` serializes `UINode.parent_id` (the mint-time struct field) instead of `UITree.parent_index` (the live array `reparent_root_nodes` actually mutates) — any node reparented via `ScrollContainer::reparent_content` (or the like) shows `parent: null`/its original parent in `--dump` JSON even though it's correctly clipped/nested for real rendering. Found 2026-07-08 verifying BUG-060: the dump made a correctly-fixed tree look unclipped, costing real debugging time before the PNG (the actual render) proved it was fine. **Fix shape:** either serialize `tree.parent_index[i]` in `dump.rs:38`/`:92`, or have `reparent_root_nodes` also update `self.nodes[i].parent_id` so the two stay in sync.
+
 ### BUG-069 (shipping-license-audit) — four license problems in shipped components — HIGH at commercialization, latent until then
+**Status:** OPEN
 
 **Found 2026-07-08 (Fable, audio-analysis design session; full sweep same day — Python
 runtime deps read from `requirements.runtime.mac.txt`, all Rust crate licenses swept via
@@ -133,6 +156,7 @@ are NOT affected — eval-only, never bundled.
 COMMERCIALIZATION_DESIGN's license review must consume this entry wholesale.
 
 ### BUG-067 (ui-snapshot-dead-blit-pipeline) — dead `make_blit_pipeline` fails clippy under the ui-snapshot feature — LOW
+**Status:** OPEN
 
 **Found 2026-07-08 during DRAG_CAPTURE P1 gating; confirmed pre-existing** (present at base
 `b9304330`, reproduced in a throwaway worktree; `git diff --stat b9304330 -- .../render.rs`
@@ -143,6 +167,7 @@ lint denies the build. The no-feature clippy gate is clean, so it only bites a c
 or wire it if the blit path is meant to be used. Not blocking; outside DRAG_CAPTURE's file list.
 
 ### BUG-068 (inspector-scene-cliphit-overlap) — `inspector` ui-snap fixture clip/panel hit overlap — LOW
+**Status:** OPEN
 
 **Found 2026-07-08 during DRAG_CAPTURE P1 L3 authoring; pre-existing at `b9304330`.** The
 `inspector` snapshot scene at its narrower zoom overlaps clip surfaces with the inspector
@@ -152,6 +177,7 @@ scene (drag past the tracks' right edge) instead. Fixture-only, no app runtime i
 adjust the `inspector` scene's clip layout or zoom so a clip clears the panel.
 
 ### BUG-066 (fluid3d-corner-drift) — FluidSim3D density herds into one corner; two causes isolated, one root still open — MED-HIGH (visible on stage in long-running clips)
+**Status:** OPEN
 
 **Found 2026-07-07 by Peter on the live output (subtle top-right dominance, no container and
 cube container), bisected headless the same session.** Harness:
@@ -259,7 +285,10 @@ slope_only — if the drift dies, root found (and the fix is exactly that manual
 toroidally — mixed boundary conventions couple opposite faces asymmetrically once the kernel
 reaches the volume edge. Fix at whichever level the probe convicts; then rerun the harness
 matrix (slope_only + slope_feather40 must go ≈25% flat) and give Peter a look-pass, since
-zero-mean turbulence (item 2) changes the fluid's feel. — an older build opening a newer .manifold silently strips it and saves the loss back — HIGH (latent; becomes live the day two builds coexist)
+zero-mean turbulence (item 2) changes the fluid's feel.
+
+### BUG-062 (no-forward-version-guard) — an older build opening a newer .manifold silently strips unknown fields/effects and saves the loss back — HIGH (latent; becomes live the day two builds coexist)
+**Status:** OPEN
 
 **Found 2026-07-07 by the PROJECT_IO_MAP read (docs/PROJECT_IO_MAP.md §9 E1).**
 `migrate_if_needed` (migrate.rs:5) only gates on `is_version_less_than` — there is no check
@@ -274,6 +303,7 @@ show file once. **Fix shape:** before the typed deserialize, compare the file's
 read-only with autosave disabled). One constant + one comparison + one alert.
 
 ### BUG-063 (silent-load-repairs) — load-time repairs delete project data with log-only notice — MED-HIGH (silent data alteration; compounds BUG-062)
+**Status:** OPEN
 
 **Found 2026-07-07 by the PROJECT_IO_MAP read (§9 E2).** Three load steps mutate the project
 destructively and report only to the log: `repair_overlapping_clips` (loader.rs:282) removes
@@ -286,6 +316,7 @@ pre-repair `project.json` gets journaled into `history/` as a labeled snapshot (
 repair") so the original is one restore away.
 
 ### BUG-064 (save-rename-before-fsync) — V2 save renames before fsyncing the temp file — MED (power-loss window replaces a good save with a torn one)
+**Status:** OPEN
 
 **Found 2026-07-07 by the PROJECT_IO_MAP read (§9 E3).** `save_v2_archive` (archive.rs:196)
 writes the zip to a temp file, atomically renames it over the archive, then fsyncs the
@@ -298,6 +329,7 @@ exactly the environment GIG_RESILIENCE_DESIGN plans for. **Fix shape:** one line
 temp path).
 
 ### BUG-065 (24-bit-snapshot-hash) — save dedup and history identity key on 6 hex chars of SHA-256 — LOW probability / HIGH cost
+**Status:** OPEN
 
 **Found 2026-07-07 by the PROJECT_IO_MAP read (§9 E4).** `compute_hash` (archive.rs:289)
 truncates SHA-256 to 24 bits for both the "no changes detected → skip save" dedup
@@ -308,61 +340,8 @@ unrecoverable asset. **Fix shape:** widen to 16 hex chars (64 bits); entry names
 old 6-char history entries stay readable (identity is string equality against the manifest,
 so mixed-width archives keep working as saves roll over).
 
-### BUG-061 (slider-reset-per-panel-lottery) — FIXED 2026-07-08 @ 480acf63 — right-click reset works on some sliders and not others; reset is per-panel hand-wiring instead of a slider behavior — MED (live recovery gesture a performer can't trust; reported by Peter 2026-07-07)
-
-**Fixed (root):** reset is now the slider's own gesture. Every slider carries a real default
-(`BitmapSlider::build` stores it in `SliderNodeIds.default_normalized`; `SliderSpec.default`
-threads through `ChromeHost`), and a single generic `PanelAction::SliderReset { snapshot,
-changed, commit }` re-dispatches the slider's OWN value-change trio with the default baked
-into `changed` — the exact Snapshot→Changed→Commit path a drag uses, so undo behaves like a
-drag to that value (each `*Commit` already guards `old != new`, so resetting an at-default
-slider is a no-op). One app-side handler recurses the trio (`ui_bridge/mod.rs`); the 7 bespoke
-`*RightClick` actions and their duplicated handlers are gone. Covered: effect/generator params,
-macros, master opacity, LED brightness, layer opacity, layer audio gain (new), modulation-drawer
-sliders (new). Clip slip/loop sliders were already removed in `52920ab6` — deleted their dead
-actions/handlers/stubs. Behavior change: a param reset now jumps (the eased snapback lost its
-only caller), consistent with a drag. Guarded by per-surface tests that a right-click on the
-track resolves to `SliderReset` with the declared default, so no panel can silently opt out
-again. Excluded surfaces → BUG-070. Original diagnosis retained below.
-
-**Symptom:** right-click-to-reset-to-default works on effect/generator param sliders, macros,
-master opacity, LED brightness, and layer opacity — and silently does nothing on clip
-slip/loop sliders, the modulation drawer sliders, and the Audio Setup gain sliders. On stage
-this is the recovery gesture (crank a param too far, snap it home in one click); a gesture
-that only works on some faders is one you can't use without thinking.
-
-**Root cause (structural, investigated 2026-07-07):** reset is not a slider behavior — it's a
-per-panel contract wired twice: each panel registers a bespoke `PanelAction` on the track node
-in `register_intents` (e.g. `ParamRightClick` at `param_card.rs:3707`, `MacroRightClick` at
-`macros_panel.rs:466`, `MasterOpacityRightClick`/`LedBrightnessRightClick` at
-`master_chrome.rs:365-368`, `LayerOpacityRightClick` at `layer_chrome.rs:267`), and
-`ui_bridge/inspector.rs` handles each one separately, re-deriving the default. Any panel that
-skips or loses either half silently has no reset. Two proofs it's the wiring model:
-
-- **Clip slip/loop is a regression.** Reset shipped in `b78dc9ba` (March), then `52920ab6`
-  deleted clip_chrome's legacy event handler during the intent-registry migration and the
-  right-click was never re-registered. The app-side handlers still sit dead at
-  `ui_bridge/inspector.rs:1017` (`ClipSlipRightClick`) and `:1032` (`ClipLoopRightClick`) —
-  no UI code emits those actions anymore.
-- **The infra has a vestigial field.** `SliderNodeIds.default_normalized` (`slider.rs:47`),
-  commented "for right-click reset", is written once with the *initial* value (not the
-  default) and read by nothing — reset was meant to live in the widget and never did.
-
-Drawer sliders (`drawer.rs:331`) and Audio Setup gain sliders never had reset at all. The
-graph editor's inline param sliders use right-click for the mapping popover instead —
-intentional, but decide explicitly whether that surface keeps the divergent gesture.
-
-**Fix shape (root):** make reset the slider's own gesture. Every slider already has a
-value-change path (Snapshot → Changed → Commit, same one a drag uses); give
-`BitmapSlider`/`SliderSpec`/`SliderController` a real `default` value and have right-click on
-any track synthesize "set to default" through that existing path. Every slider gets reset by
-construction, the bespoke `*RightClick` actions and their duplicated app-side handlers
-collapse into the generic path, and the clip slip/loop regression fixes itself. New sliders
-can't opt out by forgetting. Watch the two non-uniform cases: param-card sliders whose
-right-click currently carries `(target, param_id, default)` context, and label/row right-click
-menus (`ParamLabelRightClick` etc.) which are context menus, not reset — they stay.
-
 ### BUG-076 (inspector-scroll-underestimates-content-height) — `try_inspector_scroll` clamps to a tiny max_scroll on genuinely tall content — LOW (found 2026-07-08 during UI_CLIP_AND_Z_OWNERSHIP_DESIGN P1)
+**Status:** OPEN
 
 **Symptom:** built a headless gate scene (`ui_snapshot/fixtures.rs`'s `bug060_scene`, added this
 session) with 9 stacked effect cards, several with audio-mod drawers open — visibly, per the
@@ -403,185 +382,8 @@ branches on `ui.layout.inspector().contains(center)` and calls `try_inspector_sc
 matching `window_input.rs`'s real dispatch. That fix is real and committed; this bug is what's
 left after it.
 
-### BUG-078 (generator-runtime-reshapes-from-stale-meta-params) — a structural-rebuild's reshape read the graph's stale `preset_metadata.params` shadow because the constructor took no `ParamManifest` — LOW — FIXED 2026-07-09 on `fix/bug-078-reshape-manifest` (confirmed by regression test, then fixed same session)
-
-**Symptom:** calibrate a generator param (widen its range / add a curve) → make
-a structural graph edit (add/remove a node) before saving → the *rendered* param
-mapping could momentarily revert to the pre-calibration reshape. Bounded and
-non-data-loss: the authoritative `PresetInstance.params[id].spec` (the manifest)
-was never touched, and the correct reshape reasserted itself the moment the
-project was saved and reloaded (D12 derives `meta.params` from the manifest at
-serialize time).
-
-**Root cause:** `PresetRuntime::from_def` (`crates/manifold-renderer/src/preset_runtime.rs`)
-built its `param_reshape: AHashMap<String, (min, max, curve, invert)>` — the
-map every generator binding's [`Reshape`](crates/manifold-renderer/src/node_graph/param_binding.rs:273)
-is resolved from at construction — entirely from `doc.preset_metadata.params`,
-the shadow. `from_def` / `from_def_with_device` / `from_json_str_with_device`
-took no `ParamManifest` parameter, so no code path could hand a live,
-post-calibration manifest spec to the reshape. This was the generator analog of
-the effect path's `synth_user_binding` (`manifold-core/src/effects.rs:1752-1783`),
-which already reads the manifest (`self.params.get(&b.id)`) post-P2; generators
-never got the equivalent wiring because their whole binding list (stock +
-user-added) resolves through one shared `doc.preset_metadata` path.
-
-**Fix (shipped):** threaded `Option<&ParamManifest>` through the constructor
-chain — `from_def` / `from_def_with_device` / `from_json_str_with_device` →
-`GeneratorRegistry::create` / `create_with_override` →
-`GeneratorRenderer::install_layer_generator` / `acquire_clip`. When the manifest
-is present, `from_def` overlays each param's reshape (min/max/curve/invert) from
-the manifest `spec` over the shadow, manifest-wins-per-id; when `None` it keeps
-reading the shadow (correct for a fresh-from-disk standalone build). The one live
-caller — `generator_renderer.rs`'s `start_clip` and the per-frame `render_all`
-structural-rebuild sweep — passes `layer.gen_params().params`. Every other caller
-(thumbnails, `check_presets`, `freeze_profile`, gltf import, freeze proofs, the
-cold-start thumbnail path, type-swap rebuild) passes `None` and is byte-identical.
-`from_json_str` (mock/test) keeps its 2-arg signature, passing `None` internally.
-The empty-fast-path and the `preset_metadata.bindings` scale/offset +
-`string_bindings` reads were left untouched.
-
-**Regression test** (now green, in the default suite):
-`crates/manifold-renderer/src/preset_runtime.rs`,
-`generator_runtime_tests::generator_rebuild_reshape_honors_live_manifest_over_stale_shadow`.
-A def whose `preset_metadata.params` `amt` spec is fixed at
-`min=0,max=1,curve=Exponential` (the stale shadow) is rebuilt via
-`PresetRuntime::from_def` with `Some(&values)` where `values` carries the
-recalibrated `min=0,max=2` — the reshape now resolves value 1.0 to `0.5` (the
-fresh 0..2 range), where the pre-fix output was `1.0` (the stale 0..1 range).
-The bug is only observable when the reshape has a non-identity curve/invert
-(`apply_card_reshape` only consults min/max when `invert || curve != Linear`).
-
-**Escaped:** `wave/param-boundaries-p2` (`254792c0`) — dual-write deletion
-(D4) landed correctly for the manifest side but left this generator-only
-construction-time read pointed at the now-unmaintained shadow · caught-by:
-review (audit during PARAM_STORAGE_BOUNDARIES P2, not the wave's own gate —
-no existing test exercised a structural rebuild after a calibration).
-
-### BUG-077 (test-fixtures-not-region-wrapped) — 17 tests across `manifold-renderer` + `manifold-ui` mint root-parented nodes outside a region and panic on the D4 ownership assertion — LOW (pre-existing, found 2026-07-09 during PARAM_STORAGE_BOUNDARIES P3's full-workspace sweep) — FIXED 2026-07-09 (`fix/bug-077-uicache-regions`); workspace fully D4-clean
-
-**Symptom:** `cargo test --workspace` fails 17 tests, all with the same panic:
-
-```
-thread '...' panicked at crates/manifold-ui/src/tree.rs:290:9:
-root-parented node minted outside an open UITree::begin_region — UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md D1/D4.
-Wrap this subtree's build in begin_region(...)/end_region(...) instead of rooting it at the tree.
-```
-
-The full failing set (the whole D4-conformance class — enumerated iteratively via
-`--no-fail-fast` runs, each fix surfacing the next binary the previous fail-fast had
-hidden):
-
-- **6 in `manifold-renderer/src/ui_cache_manager.rs` unit tests:**
-  `extent_change_forces_fallback`, `extents_unchanged_when_bounds_stable`,
-  `incremental_used_when_only_card_dirt`, `no_subregions_signature_is_empty`,
-  `out_of_subregion_dirt_forces_full_render`, `partition_change_forces_fallback`
-  (surfaced by the `ui_cache_manager` test filter — found first).
-- **6 in `manifold-renderer/tests/ui_color_swatches.rs` snapshot tests:**
-  `header_demo`, `footer_demo`, `transport_demo`, `modulation_drawer_sheet`,
-  `browser_popup_demo`, `browser_popup_thumbnails_paint` (surface only on a full
-  crate run, not the narrow `ui_cache_manager` filter).
-- **5 in `manifold-ui/tests/chrome_param_card_proof.rs`:**
-  `badge_toggle_is_in_place`, `build_matches_card_structure`,
-  `intents_resolve_and_fold_up`, `opening_drawer_needs_rebuild_then_grows`,
-  `value_change_reconciles_in_place` (surface only on the full-workspace run — a
-  different crate; the 6th test in the file, `validate_catches_unwired_control`,
-  builds no tree and always passed).
-
-**Root cause:** `0bb51dad` ("region mechanism — ZTier, RegionToken,
-begin_region/end_region, D4 enforcement") landed the D4 root-parented-node panic
-guard (`mint`'s `debug_assert!` at `tree.rs:290`, `#[cfg(not(test))]` — so it is
-active for any *non-`manifold-ui`* dependent, which every one of these test
-binaries is: `manifold-renderer`'s own tests, and `manifold-ui`'s *integration*
-tests, which compile `manifold-ui` as an external non-test dependency). These test
-fixtures still build their tree directly against the root, outside any
-`begin_region`/`end_region` pair — they were never migrated to the region contract.
-One bug class, three files, two crates.
-
-**Confirmed unrelated to PARAM_STORAGE_BOUNDARIES P3:** `git diff --stat` for the
-P3 session touches only `crates/manifold-io/src/migrations/param_storage_v14.rs`;
-`manifold-ui`/`manifold-renderer` are untouched. The `ui_color_swatches` half was
-additionally confirmed pre-existing by `git stash`ing the `ui_cache_manager` fix
-and rerunning `--test ui_color_swatches` against the base commit `b15e5c20` — the
-same 6 fail identically, so no half is caused or masked by another.
-
-**Escaped:** `wave/param-boundaries-p1` or an earlier UI-region wave (whichever
-landed `0bb51dad` without touching these fixtures) · caught-by: the next phase's
-full-workspace sweep (P3) plus this fix session's own crate-wide and workspace gate
-runs, not that wave's own gate — the region-enforcement landing's test scope did not
-include a full `cargo test --workspace` run.
-
-**Fixed** — test files only; no production code touched, `tree.rs:290`'s D4
-assertion unchanged. Every failing fixture now wraps its tree build in a single
-`tree.begin_region(rect, tier, label, UIFlags::empty())` / `tree.end_region(region,
-start)` bracket, matching the idiom real callers use (`ui_root.rs`'s per-panel
-pairs; the closer precedent for these flat, non-tiered fixtures is
-`ui_snapshot/render.rs`'s single-region wrap and the `split_handles` region — both
-use a no-op-clip rect precisely so the region's `CLIPS_CHILDREN` is a guaranteed
-no-op and the rendered pixels are unchanged). Proof of completeness:
-`cargo test --workspace --no-fail-fast 2>&1 | rg 'tree.rs:290'` returns **zero**
-hits — the whole D4 class is gone on this branch.
-
-- `crates/manifold-renderer/src/ui_cache_manager.rs`: the two fixture builders
-  (`tree_with_subregions`, `tree_with_chrome_and_card`) now open one region around
-  their whole build. Wrapping shifts every node index by the region container node
-  `begin_region` mints first, so the fixtures return the panel's own `node_start`
-  (`tree.count()` captured right after `begin_region`) and compute sub-region ranges
-  relative to it; the six tests reference edges via that `start` (or `subs[i].0`,
-  `end - 1`) instead of the old absolute literals.
-- `crates/manifold-renderer/tests/ui_color_swatches.rs`: the six snapshot tests wrap
-  their `panel.build(...)` / `popup.build(...)` / slider+drawer build loop in a
-  full-canvas region (Chrome tier for the transport/header/footer panels, Overlay
-  for the browser popups, Base for the mod-drawer sheet — semantically faithful,
-  but with one region per test the tier only labels intent). Note that since
-  `0bb51dad` `render_tree` walks *registered regions* (`traverse` → `traverse_regions`),
-  not root-parented nodes, so the wrap is also what makes each test's panel/popup
-  tree content render at all — an unwrapped build registers no region for the
-  traversal to visit. Verified by rerunning the suite: all six now produce their
-  PNGs and pass.
-- `crates/manifold-ui/tests/chrome_param_card_proof.rs`: the shared `ProofCard::build`
-  helper (every failing test routes through it) opens one region around the
-  `ChromeHost::build` call, region rect == the card rect. Safe because the region
-  container is minted directly on the tree, NOT through the host — so `ChromeHost`'s
-  own `ids`/`node_count`/DFS indices (which the tests assert on exactly:
-  `host.node_id(N)`, `host.node_count()`, `t.count()`) are untouched; the host bases
-  off `tree.count()` at build start, exactly as its own
-  `build_assigns_contiguous_ids_from_tail` unit test already proves for a mid-tree
-  build. The intent fold-up tests still resolve correctly: `IntentRegistry::resolve`
-  stops at the first ancestor carrying the gesture/area-claim (always a host node
-  below the region), and the region node carries neither, so the extra transparent
-  ancestor changes nothing.
-
-### BUG-075 (timeline-drag-end-never-finalizes) — the terminal DragEnd for trim/marquee/move was dropped, so on_end_drag never ran — HIGH — FIXED 2026-07-08 (found + fixed same session)
-
-**Symptom:** after the DRAG_CAPTURE landing (P1 `6e4bddcb`), timeline
-trim-drag and click-drag marquee/region-select never finalized on release —
-the trim didn't commit, the selection box stayed live, `drag_mode` stuck.
-Clip *move* looked fine but silently lost its undo snapshot and left the
-same stuck `drag_mode` (its live per-frame preview masked the miss).
-
-**Root cause:** ordering bug in `ui_root::process_events`. The terminal
-`DragEnd`/`PointerUp` arm called `broadcast_gesture_end()`, which set
-`drag_owner = None`, BEFORE the post-match `should_stash_for_tracks(event)`
-read `drag_owner` to decide whether to stash the event for
-`InteractionOverlay`. With the owner already nulled, the terminal `DragEnd`
-was never pushed to `viewport_events`, and `on_end_drag` (the sole finalizer,
-`app_render.rs`) never ran. Confirmed empirically by an adversarial repro
-driving the real `process_events` path: stashed kinds = PointerDown,
-DragBegin, Drag — no DragEnd. The existing ownership unit tests set
-`drag_owner` by hand and called `should_stash_for_tracks` directly, bypassing
-the broadcast-before-stash seam, which is why it shipped.
-
-**Fix:** split `broadcast_gesture_end` into `fire_gesture_end_hooks()`
-(overlay hooks only) + the fused clear. The terminal arm fires the hooks but
-defers the `drag_owner = None` clear to the end of the iteration, after the
-stash read; the PointerDown self-heal keeps the fused `broadcast_gesture_end`
-so a lost-OS-release still clears a stale owner. Guarded by a new
-`process_events`-driven regression test
-(`timeline_drag_end_reaches_viewport_events_through_process_events`) that
-drives Down→Move→Up and asserts the terminal DragEnd reaches
-`drain_viewport_events()`.
-
 ### BUG-074 (audio-mixdown-flaky-under-parallel-tests) — a manifold-playback test fails intermittently only under the default parallel runner — LOW (found 2026-07-08 during PARAM_STEP_ACTIONS P3)
+**Status:** OPEN
 
 **Symptom:** `cargo test -p manifold-playback` (default, parallel) fails
 `audio_mixdown::tests::render_export_audio_tapped_layer_matches_rendering_alone`
@@ -602,6 +404,7 @@ intra-module or cross-module contention, then apply the standard fix
 (dedicated resource per test, or `#[serial]`-style gating).
 
 ### BUG-073 (ui-snap-script-drawer-tween-never-ticks) — the headless `--script` driver has no per-frame animation tick, so a mod armed mid-script renders an unclickable, zero-height drawer — LOW (found 2026-07-08 during PARAM_STEP_ACTIONS P3)
+**Status:** OPEN
 
 **Symptom:** in a `cargo xtask ui-snap <scene> --script <flow>.json` run, a
 click that newly arms a param's audio mod (or otherwise grows an EXISTING
@@ -644,6 +447,7 @@ unconditionally before every `Snapshot`/`Dump`/`Pointer`. Either closes the
 gap for every future script that arms something mid-flow, not just this one.
 
 ### BUG-072 (audio-mixdown-all-targets-clippy-debt) — pre-existing lint failures in audio_mixdown.rs only visible under `--all-targets` — LOW (found 2026-07-08 during PARAM_STEP_ACTIONS P2)
+**Status:** OPEN
 
 **Symptom:** `cargo clippy --workspace --all-targets -- -D warnings` fails on
 `crates/manifold-playback/src/audio_mixdown.rs:623` (`needless_range_loop`) and `:643`
@@ -664,6 +468,7 @@ PARAM_STEP_ACTIONS (audio_mixdown.rs isn't part of that design) — left untouch
 scope-fence rule.
 
 ### BUG-070 (stepper-and-nonstandard-slider-reset) — right-click reset still absent on the non-slider-track gain controls — PARTIALLY FIXED 2026-07-08 @ 3a88f728 — LOW (found 2026-07-08 during BUG-061)
+**Status:** PARTIAL
 
 **Update 2026-07-08 @ 3a88f728 (intrinsic-reset follow-through):** the envelope-decay drawer
 slider is now wired (its `EnvDecay*` trio had a real handler, just no registration). More
@@ -694,44 +499,8 @@ yes, give the stepper a reset on its value cell and the send-fader a reset on it
 region — a different gesture wiring than the slider-track path. Not blocking; these all still
 reset via drag-to-value.
 
-### BUG-052 (sample-rate-dependent-detection) — onset + kick detection mis-tunes at non-48k sample rates — FIXED 2026-07-07 @ 6e0e8988
-
-**Fixed:** `SpectrogramConfig::with_time_grid_for(sample_rate)` (manifold-spectral) rescales
-`hop`/`n_fft` from the 48k reference so a hop is always ~5.33 ms and the window ~85 ms; the
-analyzer applies it at build (`analysis.rs` `StreamingSendAnalyzer::new`). Frequency bins were
-already SR-invariant, so nothing there changed. No-op at 48k, exact 2× at 96k. Proven by
-`time_grid_holds_hop_and_window_duration_across_rates` across 44.1/48/88.2/96/192k plus the full
-manifold-audio analysis suite (46 tests green). **Still owed (VD, cheap):** the end-to-end proof
-named in the original gate — resample a fixture to 96k, run the harness, confirm fire TIMES in
-seconds match the 48k run. The grid-invariance test makes this belt-and-suspenders, not load-bearing.
-Original diagnosis retained below.
-
-
-
-**Found 2026-07-07 (Peter's question during the kick-detector discussion).** The audio
-analysis runs at the DEVICE'S native rate — `audio_mod_runtime.rs:322` sets the analyzer
-rate to `device_rate`, and the resampler only aligns layer audio to that rate, never to a
-canonical one. Every timing constant is in HOPS (`ODF_MEDIAN_HOPS`, `ONSET_REFRACTORY_HOPS`,
-`KICK_WIN`/`KICK_AGE_CAP`) and every rate constant is bins-per-hop (`KICK_STEP_MAX`, the D5
-tracker slew), while a hop is `256/sample_rate` seconds. At 96k a hop is 2.7 ms (half of
-48k's 5.3 ms), so the kick detector's "14 bins within a 10-hop window" spans only 27 ms and
-the kick's ~90 ms chirp has descended only ~10 bins by then — under the 14-bin threshold, so
-**the kick detector goes near-deaf at 96k** (the whole onset analysis mis-tunes, though the
-adaptive-threshold/refractory parts degrade more gently). Bins are already SR-invariant
-(log-freq CQT anchored at 10 Hz), so `drop_bins` needs no change. Confirmed by arithmetic +
-the device-rate code path; NOT observed on a 96k run (Peter: no need to prove in code).
-
-**Fix shape (root, Peter-directed):** normalize the analysis TIME GRID, not the sample rate
-(no resampling) — derive `hop` and `n_fft` in samples from the device SR so a hop is always
-~5.3 ms and the window ~85 ms (`SR/n_fft` stays 11.7 Hz, so frequency resolution is
-unchanged). Then every hop-count and bins-per-hop constant is literally unchanged and
-automatically invariant; no fixed ODF ring becomes a Vec. Cost: larger FFT at higher rates
-(proportional to the extra data). Rejected alternative: keep hop=256 samples and scale all
-hop-COUNTS with SR — more blast radius (dynamic ring sizes) for no gain. Gate: resample a
-fixture to 96k, run the harness, confirm fire TIMES in seconds match the 48k run (the eval
-already grades in seconds). Fold into the kick time-constant rework.
-
 ### BUG-056 (audio-mixdown-clippy-debt) — `manifold-playback` fails `cargo clippy -D warnings` pre-existing on `audio_mixdown.rs` — LOW (blocks the crate's clippy gate, not correctness)
+**Status:** OPEN
 
 **Found 2026-07-07** while gating U-P1 of `LIVE_AUDIO_TRIGGERS_DESIGN.md` §9 (the
 `AudioTriggerMod` → `ParameterAudioMod` unification). Not this wave's fault: reproduces
@@ -751,6 +520,7 @@ only `--tests -- -D warnings` fails). Not fixed here — out of scope for the au
 unification and touching `audio_mixdown.rs` wasn't part of this phase's brief.
 
 ### BUG-057 (ui-snapshot-dead-blit-pipeline) — `manifold-app --features ui-snapshot` fails `cargo clippy -D warnings` pre-existing on an unused fn — LOW (blocks that feature's clippy gate, not correctness)
+**Status:** OPEN
 
 **Found 2026-07-07** while gating U-P2 of `LIVE_AUDIO_TRIGGERS_DESIGN.md` §9 (the trigger-gate
 UI unification). Not this wave's fault — `crates/manifold-app/src/ui_snapshot/render.rs`
@@ -768,129 +538,8 @@ unaffected (only `clippy --features ui-snapshot -- -D warnings` fails); plain `c
 out of scope for the audio-trigger unification and touching `render.rs` wasn't part of this
 phase's brief.
 
-### BUG-058 (drag-end-consumable) — timeline stuck in move/trim mode: DragEnd is a routable/consumable event, but N independent drag-state owners depend on receiving it — HIGH (live editing gesture wedges; reported by Peter 2026-07-07)
-
-**Symptom** — sometimes a clip move/trim doesn't release: after the mouse leaves the
-timeline (typically onto the inspector) and the button is released, the timeline stays in
-move/trim mode (cursor stuck as Move/ResizeHorizontal, next interaction behaves as if the
-drag were still live). Self-heals on the next clip press (`on_begin_drag` overwrites
-`drag_mode`), which is why it reads as intermittent.
-
-**Root cause (architecture)** — a drag's terminal event must reach every drag-state owner,
-but the routing treats it as consumable, first-match-wins. `InteractionOverlay.drag_mode`
-(EXCLUSIVE owner of clip move/trim/region state, `interaction_overlay.rs`) is only cleared
-by `on_end_drag`, which only runs if the `DragEnd` survives `process_events`' routing
-gauntlet (`ui_root.rs:1411` overlay-first) and reaches the tracks-area stash
-(`ui_root.rs:1445`). Confirmed eaters:
-- `dropdown.rs:695-702` — an open dropdown consumes ALL `DragBegin`/`Drag`/`DragEnd`
-  unconditionally (e.g. an accidental two-finger right-click mid-drag opens the clip context
-  menu; the release's DragEnd is then eaten by the menu).
-- any `Modality::Modal` overlay open at release captures everything, even events it ignores
-  (`ui_root.rs:1003-1006`).
-The input layer already learned this lesson twice: `859bbceb` made `DragEnd`/`PointerUp`
-unconditional at the `UIInputSystem` level, and `process_events` routes
-`DragEnd|PointerUp` to the inspector + layer_headers in a dedicated UNCONDITIONAL second
-loop (`ui_root.rs:1499-1515`) — but the timeline overlay's DragEnd still travels the
-consumable path plus a positional gate (`is_event_in_tracks_area`) patched by a boolean
-latch (`overlay_drag_active`). Also unverified at the OS seam: winit-macOS delivery of
-`MouseInput(Released)` when the release lands outside the window (inspector is at the right
-edge; BUG-028 precedent says winit macOS seams are real). Cheap decisive oracle if the
-eater-list explanation doesn't hold: eprintln at four seams (Up received in
-`primary_mouse_input` / DragEnd emitted in `input.rs` / stashed in `process_events` /
-`on_end_drag` entered), reproduce once, read which link broke.
-
-**Instrumentation SHIPPED 2026-07-07** (`feat/drag-capture-instrumentation`): launch with
-`MANIFOLD_INPUT_TRACE=1` and every discrete pointer transition prints a `[input-trace]`
-line at each seam — window interceptors, input-system press/release/drag-begin, overlay
-routing (which overlay consumed/captured), tracks-area stash gate (with latch state), and
-timeline-overlay begin/end (with drag mode). One repro of the stuck state names the broken
-link. Root fix is `docs/DRAG_CAPTURE_DESIGN.md`.
-
-**Fix shape (root)** — make drag-terminal events non-consumable broadcasts: every
-drag-state owner (InteractionOverlay, inspector, layer_headers, every overlay panel with an
-armed drag) receives `DragEnd`/`PointerUp` regardless of routing outcome; overlays may
-still *act* on it but never block it. Cleaner still: single drag-capture ownership — at
-`DragBegin` one owner is recorded, all subsequent `Drag`/`DragEnd` route to that owner by
-identity (not position), killing the latch, the positional gate, and the eater class in one
-move.
-
-### BUG-059 (band-line-grab-falls-through) — Audio Setup band-divider grabs are sticky, and a MISSED grab silently drags clips/region under the modal — HIGH (silent project edits during calibration; reported by Peter 2026-07-07)
-
-**Symptom** — the horizontal crossover lines in the Audio Setup spectrogram are hard to
-grab: fine adjustments stick, grabs sometimes do nothing, and (unreported but confirmed in
-code) a missed grab over the timeline area starts an invisible clip move / region select
-UNDERNEATH the modal, committing real project edits.
-
-**Root cause (several, stacked)** —
-- **Missed-grab fall-through (the HIGH):** the panel's `PointerDown` arm returns `Ignored`
-  when the press misses a divider/label (`audio_setup_panel.rs:2269-2294`), and the panel is
-  `Modality::Modeless`, so the whole DragBegin/Drag/DragEnd family falls through to the
-  layers beneath. The tracks-area stash gate classifies by RAW POSITION with zero z-order
-  awareness (`ui_root.rs:2455` `is_event_in_tracks_area`), so a drag starting on the modal
-  background over the timeline is stashed and `InteractionOverlay` hit-tests clips by
-  position (clips aren't tree nodes) — editing the project through the modal. The `Click`
-  arm was already patched to swallow exactly this (`owns_node(id) || point_in_scope(*pos)`,
-  the prior fix attempt Peter remembers); the drag family wasn't.
-- **4px dead zone:** the global `DRAG_THRESHOLD_PX = 4.0` (`color.rs:837`) applies to a
-  precision control — no `Drag` event fires for the first 4px, so sub-4px nudges are
-  impossible and every grab starts sticky.
-- **Window-seam interceptors punch through the modal:** `primary_mouse_input` checks
-  `is_near_split_handle` (6px full-width band at the timeline's top edge) and
-  `is_near_inspector_edge` (±4px at `insp.x`, full window height) BEFORE overlay routing and
-  BEFORE hit-testing (`window_input.rs:274-310`) — when the centered modal overlaps those
-  zones, a press on a band line there is stolen for a panel-resize drag.
-- **Dropdown-dismiss swallow:** with any dropdown open (the panel has device/layer
-  dropdowns), the next press outside it is consumed by the dismiss branch
-  (`window_input.rs:269-273`) — first grab after touching a dropdown always dies.
-- **Scope-dark deadness:** `scope_fmin <= 0` (no capture yet) makes dividers ungrabbable by
-  design (`audio_setup_panel.rs:422`) — reads as "sometimes it just doesn't work" if lines
-  are visible before audio flows.
-- **First-click-dead — TRACE-CONFIRMED 2026-07-07 (Peter, `MANIFOLD_INPUT_TRACE=1`), the
-  dominant "always the second click works" mechanism:** the press arms the band drag and is
-  consumed by the panel, but by threshold-crossing the pressed node no longer resolves
-  (`DRAG-BEGIN … resolves=false` in the trace; dead and working clicks carried different
-  WidgetIds) — and `input.rs` `process_pointer` emits `DragBegin` and every `Drag` ONLY
-  while the pressed widget resolves, so the entire motion stream is silently swallowed and
-  the armed position-based drag never hears a move. Same disease `859bbceb` fixed for the
-  terminal events, unfixed for motion. Probable node-death path (inferred): the panel's own
-  consume sets `overlay_dirty` → overlay rebuild between Down and threshold. Root fix:
-  `DRAG_CAPTURE_DESIGN.md` D9 (added same day) — unconditional `DragBegin`/`Drag` emission
-  with `node_id: Option<NodeId>`, in P1.
-
-**Fix shape** — same root as BUG-058's capture model plus locals: (1) the modeless panel's
-`PointerDown`/drag family must swallow anything inside the panel rect (mirror the `Click`
-arm) — that alone kills the silent-edit hole; (2) per-widget drag threshold (0 for the
-divider lines — arm on press, track raw moves); (3) window-seam interceptors must respect
-z-order (both handles already have tree nodes — route them through hit-testing instead of
-raw-position pre-checks); (4) hover-glow the grab zone only when actually grabbable
-(scope live).
-
-**(1) SHIPPED 2026-07-07 as an explicit stopgap** (`feat/drag-capture-instrumentation`,
-superseded by `docs/DRAG_CAPTURE_DESIGN.md`): the panel now claims the whole
-DragBegin/Drag/DragEnd family for any drag whose ORIGIN is inside `panel_rect`
-(`swallow_drag`), keyed on origin so a timeline drag crossing the panel still passes
-through; unit tests `missed_grab_drag_inside_panel_is_swallowed` +
-`timeline_drag_crossing_panel_passes_through`. The silent-edit hole is closed; the feel
-items (2)–(4) remain for the design.
-
-Next free id: BUG-061.
-
-### BUG-055 (eval-harness-stale-time-grid) — both audio eval harnesses used the unscaled default hop on non-48k files — FIXED 2026-07-07 (kick P5 retune branch)
-
-**Symptom:** kick exact-match gate drifted ±1–5 fires per 44.1 kHz drums fixture; mod_harness
-CSV `time_s`, PNG bar grid, and printed hop line stretched 8.8% on 44.1k files. **Root cause:**
-BUG-052 made the LIVE analyzer's time grid rate-invariant (`with_time_grid_for`), but neither
-example harness followed: `hpss_proto::build_clip` hopped 256 native samples, and `mod_harness`
-built its own unscaled `SpectrogramConfig` for its feed cadence and time base — so it pushed
-256-sample chunks against a 235-sample analyzer hop and sampled `latest()` at the wrong rate,
-silently missing/duplicating fires in every per-hop record on 44.1k input. The P2/P4 kick
-"exact match" was measured through this sampler. **Fix:** both harnesses now scale their config
-(`with_time_grid_for`); `StreamingSendAnalyzer::hop()` accessor added so consumers can't
-re-derive it stale; `mod_harness` `debug_assert`s its grid equals the analyzer's. Residual
-documented in KICK_SWEEP_EVENT_DESIGN §P5: offline replay vs live stream legitimately diverge
-for ridges born during the fade-in (window-fill) region only.
-
 ### BUG-054 (renderer-device-ptr-dangles) — renderers cache a raw `*const GpuDevice` that only `ContentThread::run()` repoints — MED (latent; every new headless/embedded consumer of ContentThread hits it)
+**Status:** OPEN
 
 **Found 2026-07-07 by the OFFLINE_AUDIO_REACTIVE_EXPORT P3 harness (first code path ever to
 drive `run_export` outside the app's thread spawn).** `GeneratorRenderer` / `VideoRenderer` /
@@ -911,6 +560,7 @@ brief that constructs `ContentThread` outside `Application::resumed()` must name
 step.
 
 ### BUG-053 (hdr-live-recording-structural) — HDR live recording cannot work: pool format mismatches the native pixel buffer, and nothing PQ-encodes — LOW today (UI can't reach it), blocks any HDR-capture ambition
+**Status:** OPEN
 
 **Found 2026-07-07 by Fable during the LIVE_RECORDING_PROOFS design audit (statically
 derived, not yet observed — no runtime repro attempted).** The recording texture pool is
@@ -931,6 +581,7 @@ values with correct color tagging — decide at design time), then replace the
 this bug's acceptance test. See `docs/LIVE_RECORDING_PROOFS_DESIGN.md` §2 D7.
 
 ### BUG-050 (ableton-anchor-yankback) — Play-from-cursor: Ableton repeatedly snaps back to the gesture beat, then MANIFOLD clock-dragged after retries exhaust — HIGH (live transport; partial fix landed 2026-07-07, rig confirmation owed)
+**Status:** PARTIAL
 
 **Found 2026-07-07 by Peter, first L4 run of the ABLETON_TRANSPORT_SYNC wave (checklist
 step 1).** Symptom: press play in MANIFOLD; Ableton keeps snapping back to the gesture
@@ -954,6 +605,7 @@ harness's FakeAbleton was fixture-overfit (instant first listener report, atomic
 play+seek apply, prompt query replies); no scenario modeled a starved ack channel.
 
 ### BUG-049 (child-row-right-indent) — Group-child header rows double-pay the indent on right-anchored controls — LOW (visual misalignment, ~20px)
+**Status:** OPEN
 
 **Found 2026-07-07 by the label-collision fix worker (timeline-ux pass), verified in the
 Liveschool after-PNG.** `layer_header.rs:489`: `handle_x = w - pad - HANDLE_W - 8.0` uses
@@ -966,6 +618,7 @@ tighter than necessary (it contributed to how early BUG-fixed label truncation k
 own small pass, not a drive-by. **Oracle:** the frozen-layout test + a child-row render.
 
 ### BUG-048 (arm-two-reds) — Automation ARM idle vs armed are both red, distinguished only by shade — LOW (stage-legibility; behavior-changing mode)
+**Status:** OPEN
 
 **Found 2026-07-07 (timeline-ux headless audit).** `transport.rs::automation_group`:
 idle ARM = `RECORD_RED`, armed = `RECORD_ACTIVE` — a deliberate mirror of the REC
@@ -980,6 +633,7 @@ see `docs/TIMELINE_UX_AUDIT_2026-07-07.md` item 2.5. **Oracle:** the
 with the fix.
 
 ### BUG-047 (setup-panel-overflow) — Audio Setup panel content clips past the bottom edge when chrome exceeds viewport − SCOPE_H_MIN — LOW (needs ~18 combined input/consumer rows on one source at full height; ~5 extra rows at a 720px window)
+**Status:** OPEN
 
 **Found 2026-07-06 during AUDIO_SENDS_UX P3 review** (orchestrated wave, found by the
 worker's own analysis after an orchestrator-caught clipping defect was root-caused —
@@ -997,6 +651,7 @@ test `consumers_fit_within_panel_on_first_build_after_configure` guards the fixe
 ordering bug; no executable test for this clamp overflow yet.
 
 ### BUG-046 (low-band-kick-deafness-on-mixes) — The canonical Low=kick binding is near-deaf on full mixes with active basslines — HIGH for the streaming/live-trigger use case
+**Status:** OPEN
 
 **Found 2026-07-06 (post-BUG-044 measurement, prompted by Peter):** on full mixes,
 the Low band catches almost no kicks while Full catches plenty — bad_guy mix Low 6
@@ -1051,6 +706,7 @@ Peter). Crossover-defaults sweep: independent report-only task; does not
 address this bug (kick and bass share bins — re-confirmed at the bin level).
 
 ### BUG-045 (gap-ring-down-chase) — Tracker chases the transform's kernel ring-down during inter-note gaps — LOW (2.4 points on the notes gate; real-clip impact small)
+**Status:** OPEN
 
 **Found 2026-07-06 while fixing BUG-042** (its remaining accuracy misses after the
 re-acquire-window fix). After every note release, the VQT's kernel memory presents a
@@ -1074,6 +730,7 @@ raising SETTLE_STREAK (swept 2/3/4 — 69.2/87.6/86.1, K=3 is the plateau), or
 re-clamping super-slew continuation (resurrects the 7-st gap-chase).
 
 ### BUG-039 (saw-rotation-wrap) — Angle params clamp at range ends, so a saw LFO / automation can't drive a smooth full rotation — MED (enhancement, performer-facing)
+**Status:** OPEN
 
 **Symptom** (Peter, 2026-07-06) — binding a saw LFO or an automation ramp to a rotation
 param and sweeping 0→360° hitches at the wrap point: the effective value clamps at the
@@ -1100,6 +757,7 @@ and generators.
 code region; land the audit's verified ground first.
 
 ### BUG-037 (glp-first-render-stall) — First render of a glTF scene layer stalls the content thread ~37ms (warm-up on the frame, not at load) — MED
+**Status:** OPEN
 
 **Symptom** — trace run 2026-07-06 (`meshImportTests.manifold`): the first frame after the
 project's glp layer became active showed `generators=37.1ms` (RENDER_TRACE frame=421) —
@@ -1118,6 +776,7 @@ path so frame 1 of the clip renders at steady-state cost. Verify with the same
 MANIFOLD_RENDER_TRACE run: no >20ms frame on first clip render.
 
 ### BUG-038 (ableton-log-spam) — AbletonBridge retries + WARN-spams every ~1.5s forever when Live isn't running — LOW (log hygiene)
+**Status:** OPEN
 
 **Symptom** — any session without Ableton running logs
 `[AbletonBridge] OSC send failed for /live/song/get/num_tracks: Connection refused` at
@@ -1127,60 +786,8 @@ WARN level every ~1.5s indefinitely (see any 2026-07-06 trace-run log).
 succeeds (state flip logs "reconnected" at info). Optionally back off the poll while
 refused. `manifold-playback/src/ableton_bridge.rs`, small.
 
-### BUG-036 (dead-LFO-on-reload) — LFO on an imported-glb generator's card param is dead after project reload; re-importing the same .glb revives it — MED — FIXED 2026-07-06
-
-**FIXED 2026-07-06** — both halves of the fix shape below, plus two siblings the audit
-found in the same class:
-- **Ordering (root):** `manifold_io::loader` gained `_with` variants that hand the file's
-  `embeddedPresets` to an installer BEFORE the typed `Project` deserialize
-  ([loader.rs](../crates/manifold-io/src/loader.rs) `EmbeddedPresetsPrePass`); the app
-  passes `install_embedded_presets` so the overlay + core registry are populated when the
-  V1.4 param loader resolves each instance ([project_io.rs](../crates/manifold-app/src/project_io.rs)).
-- **Keep-don't-drop (class-kill):** `build_param_manifest` now only drops an unknown id
-  when the template actually RESOLVED and says the id is gone (informed deprecation).
-  With no template at all, the entry is kept on a placeholder spec — state is never lost
-  to a missing template ([effects.rs](../crates/manifold-core/src/effects.rs)).
-- **Sibling 1:** history-snapshot restore/open-copy never installed the snapshot's
-  overlay at all (params dropped AND stale overlay left live) — now go through
-  `load_project_snapshot_with` + an unconditional overlay install at the
-  `apply_project_io_action` seam.
-- **Sibling 2:** New Project never cleared the previous project's overlay (fork leak) —
-  covered by the same apply-seam install.
-Verified against the real repro: `meshImportTests.manifold` loads with all 17 imported
-card params present and the saved `cam_orbit` driver resolving; regression test
-`crates/manifold-app/tests/project_local_preset_reload.rs` proves both defenses
-independently.
-
-**Symptom** (Peter, 2026-07-06, `~/Downloads/meshImportTests.manifold`) — a project saved
-with a glb auto-built graph (the `assemble_import_graph` door) reloads fine visually, but
-an LFO bound to one of its card params (Camera Orbit) doesn't run. Deleting the layer and
-re-creating it by dropping the SAME .glb makes the identical LFO run. So the modulation
-path works against a freshly-imported instance and not against the deserialized one.
-
-**Root cause — SMOKING GUN in the 2026-07-06 trace-run log.** On project load, EVERY card
-param of the imported preset is dropped at deserialization:
-`[manifold-core] dropping unknown param id "cam_orbit" on PresetTypeId(cc0_japanese_apricot_prunus_mume#2) load (no template descriptor, no inline spec)`
-— same for cam_dist/cam_fov/cam_tilt, sun_int/x/y/z, metal_0..3, rough_0..3, env_bright.
-The LFO is inert because its target param no longer exists in the loaded manifest. The
-drop lines appear BEFORE `[presets] merging 4 project generator preset(s)` in the log:
-the V1.4 param loader resolves specs against the template registry, and project-local
-(imported) preset templates are merged into the registry only AFTER the project's layer
-data deserializes — so every param keyed to a project-local preset type resolves to "no
-template descriptor" and is dropped. Re-importing works because a fresh import registers
-the template first. Almost certainly a param-storage-redesign (landed 2026-07-05)
-load-ordering regression, cousin of the known-RED `expose_mirror` test.
-
-**Fix shape** — order the loader so project-local preset templates register before layer
-param deserialization; AND (class-kill, per `eliminate-bug-class-at-storage-layer`)
-make the loader keep an unresolvable param as an inline spec instead of dropping it —
-silent data loss on load is the storage-layer bug class this repo already decided to
-eliminate. The drop log line should become a hard test assertion (load the repro project,
-assert zero drops).
-
-**Repro** — load `meshImportTests.manifold`, press play: Camera Orbit LFO inert. Delete
-layer, drag the .glb back in, rebind: runs.
-
 ### BUG-035 (authoring-hitch) — 3D scenes hitch when a camera/light param is animated — MED — re-encode hypothesis MEASURED AND REFUTED 2026-07-06; cause is app-side, still open
+**Status:** OPEN
 
 **Measurement (2026-07-06, Fable)** — `freeze-profile scene <glb> [param] [frames]` (new bench
 arm): drives the production import door (`assemble_import_graph`) + production
@@ -1286,7 +893,8 @@ fix. (Not run this session — the app isn't headless and Peter didn't want the 
 **Design owner** — queued to Fable for a proper design doc (`docs/*_DESIGN.md`), per
 [[fable-priority-queue]]. Reasoned diagnosis only; verify the measurement first.
 
-### BUG-031 — Audible blip when an audio clip's voice is built (play-then-pause leaks ~10ms of the file's start) — LOW
+### BUG-081 — Audible blip when an audio clip's voice is built (play-then-pause leaks ~10ms of the file's start) — LOW
+**Status:** OPEN
 
 **Symptom** — a very subtle pop/click from the speakers at the moment an audio file is
 loaded onto the timeline (e.g. Finder drag-drop). Reported by Peter 2026-07-05.
@@ -1306,59 +914,8 @@ per-tick sync path already restores the real volume via `set_volume(volume, decl
 so activation is unaffected. This kills the whole class including the race where an audio
 callback fires between play and pause. One-line-ish, `manifold-playback` only.
 
-### BUG-029 — `profiling` feature doesn't compile: rotted against the Beats/Bpm newtypes — FIXED 2026-07-06
-
-**Fix** — the three newtype casts (`.as_f32()` / `.0`) applied; `cargo check -p manifold-app
---features profiling` and clippy are clean, default build untouched. Un-parked because the
-profiler is the next oracle for BUG-035 (per-frame content-thread phase breakdown, LFO on vs
-off). Toggling the perf HUD starts/stops a session when built with `--features profiling`
-(input_host.rs `toggle_performance_hud`); sessions land in `profiling_sessions/`. Note: GPU
-pass-level numbers are still zero on native Metal (pre-migration profiler) — the CPU phase
-breakdown (engine tick / render_content / gpu_poll) is the usable signal.
-
-**Root cause** — the `#[cfg(feature = "profiling")]` blocks in `manifold-app` predate the
-`Beats`/`Bpm`/`Seconds` newtype migration and still treat those values as raw `f32`/`u32`.
-Three sites: [content_thread.rs:854](../crates/manifold-app/src/content_thread.rs#L854)
-(`Beats as u32` — non-primitive cast), [content_thread.rs:988](../crates/manifold-app/src/content_thread.rs#L988)
-(`expected f32, found Beats`), and [content_commands.rs:933](../crates/manifold-app/src/content_commands.rs#L933)
-(`expected f32, found Bpm`).
-
-**Symptom** — `cargo build -p manifold-app --features profiling` fails with 3 `E0308`/`E0605`
-type errors. The default build (profiling off) is unaffected, which is why the rot went
-unnoticed — the feature evidently hasn't been compiled since the newtype migration landed.
-
-**Found during** — PARAM_STORAGE P2 (2026-07-05), while compile-checking the profiling path
-after migrating its param readout from the deleted positional `param_values` to `ParamManifest`
-(that param-side migration is done and correct; these 3 errors are unrelated newtype-cast rot
-in the same blocks).
-
-**Fix shape** — wrap each site in the Beats/Bpm accessor instead of a raw cast (~3 one-line
-fixes). Unrelated to param storage, so parked here rather than folded into P2.
-
-### BUG-033 — `ui-snapshot` feature build broken: `manifold_core::effects::resolve_param_in` no longer exists — FIXED (verified in-tree 2026-07-07)
-
-**Fixed note (2026-07-07, timeline-ux pass)** — `lane_param_range` now reads
-`param.spec.min/max` directly (interact.rs:497), the broken `resolve_param_in` call is gone,
-and the harness builds AND runs on the 2026-07-07 tip (`cargo build -p manifold-app --features
-ui-snapshot` clean; all scenes + `--script` flows rendered this session). Fixed by a landing
-between 07-05 and 07-07 that didn't close this entry; closing on direct evidence.
-
-**Root cause** — [interact.rs:500](../crates/manifold-app/src/ui_snapshot/interact.rs#L500) (`lane_param_range`, an
-automation-lane interact verb) calls `manifold_core::effects::resolve_param_in(&def, fx, param_id)`
-to read a param's `(min, max)`. That function/module path is gone after the PARAM_STORAGE
-refactor (the range now lives on the `ParamManifest`/spec, not a `resolve_param_in` helper).
-
-**Symptom** — `cargo build --bin manifold --features ui-snapshot` fails with `E0425` (unknown
-function) + a knock-on `E0433`. The DEFAULT build is unaffected, so it went unnoticed — but it
-means the entire `ui-snap` headless harness (graph/editor/timeline PNG + `--script` driver) can't
-compile on trunk. Found 2026-07-05 (Opus) while rendering a BUG-027 verification PNG; worked
-around with a temporary local stub (reverted) to get the render.
-
-**Fix shape** — resolve the param spec through the current manifest API and read its min/max
-(mirror whatever `lane_param_range`'s live-app equivalent now does). Owner: PARAM_STORAGE P2 (its
-refactor moved the range); ~1 site. Unrelated to the LayerId / node-preview work in this session.
-
 ### BUG-034 — Headless preview verification doesn't cover the live atlas UV path — LOW (test-coverage gap, follow-up to BUG-027)
+**Status:** OPEN
 
 **Gap** — the inline node-preview fix (BUG-027) is pixel-verified headless only through the
 per-node-texture path (`ui_snapshot/render.rs`, whole-texture UV `[0,0,1,1]`). The LIVE app packs
@@ -1374,6 +931,7 @@ shared helper. Then a single graph PNG proves the live cell math, not a copy of 
 Gated behind BUG-033 (the `ui-snapshot` harness doesn't compile on trunk).
 
 ### BUG-030 — Design-token ratchet red on trunk: raw `Color32::new(` count 201 vs baseline 200 — LOW (parked, not param-storage)
+**Status:** PARKED
 
 **Root cause** — a UI landing added one raw `Color32::new(` literal in `crates/manifold-ui/src`
 without tokenizing it or bumping the ratchet. [design_tokens.rs:40](../crates/manifold-ui/tests/design_tokens.rs#L40)
@@ -1402,6 +960,7 @@ transcripts: the workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ### BUG-006 — Param edits/undo on fused-away nodes silently no-op until an unrelated rebuild — HIGH
+**Status:** OPEN
 
 **Root cause** — [bound_graph.rs:114-133](../crates/manifold-renderer/src/node_graph/bound_graph.rs#L114-L133):
 `apply_inner_param_overrides` looks each node's `node_id` up in `slot.node_map` and silently
@@ -1423,6 +982,7 @@ the retarget map to `(fused node, n{i}_field)` and apply there. Test: fuse, valu
 assert the fused node's param moved without a rebuild.
 
 ### BUG-007 — Particle-loop fusion exclusion is blind to configured `node.wgsl_compute` shapes — HIGH
+**Status:** OPEN
 
 **Root cause** — [region.rs:834](../crates/manifold-renderer/src/node_graph/freeze/region.rs#L834):
 `cycle_contains_array` uses a bare `registry.construct(type_id)` — the ONE hold-out in the
@@ -1445,6 +1005,7 @@ have the same pattern — audit while there). Test: a loop through a configured 
 particle node must classify its texture atoms Boundary.
 
 ### BUG-008 — Fused buffer region with mismatched array lengths reads out of bounds — HIGH
+**Status:** OPEN
 
 **Root cause** — [codegen.rs:1777-1813](../crates/manifold-renderer/src/node_graph/freeze/codegen.rs#L1777-L1813):
 `generate_fused_buffer` anchors the dispatch guard to the FIRST array external's
@@ -1463,6 +1024,7 @@ lengths today; user graphs are unprotected.
 (`idx < arrayLength(&src_e)` with a defined fallback element). Pair with BUG-011.
 
 ### BUG-009 — Segment "stateless" gate misses StateStore-held scalar state; harvest skip resets it — HIGH
+**Status:** OPEN
 
 **Root cause** — [segment.rs:153-171](../crates/manifold-renderer/src/node_graph/freeze/segment.rs#L153-L171):
 `def_is_segment_stateless` checks only `state_capture_input_ports` + `aliased_array_io`.
@@ -1486,6 +1048,7 @@ also checks. Stop-gap is a hard-coded exclusion list, which is exactly the patte
 module refuses everywhere else — prefer the flag.
 
 ### BUG-010 — `wgsl_compute` silently dispatches the first of multiple entry points — MED
+**Status:** OPEN
 
 **Root cause** — [wgsl_compute.rs:615-624](../crates/manifold-renderer/src/node_graph/primitives/wgsl_compute.rs#L615-L624):
 `introspect()` takes `module.entry_points[0]` with no `len() == 1` check (the module doc at
@@ -1504,6 +1067,7 @@ by name; if absent, fail validation with the warning the doc already promises. K
 dispatch-side pick in lockstep.
 
 ### BUG-011 — Fused `@fused_output` buffer sized to max of ALL array inputs, not the member's own rule — MED
+**Status:** OPEN
 
 **Root cause** — [wgsl_compute.rs:1828-1829](../crates/manifold-renderer/src/node_graph/primitives/wgsl_compute.rs#L1828-L1829):
 the fresh-output branch of `array_output_capacity` returns
@@ -1521,6 +1085,7 @@ refused, this is unreachable; if guarded instead, size `dst` from the anchor ext
 zero-fill or guard the tail.
 
 ### BUG-012 — Fragment `tex_` port-rename corrupts scalar params named `tex_*` — LOW
+**Status:** OPEN
 
 **Root cause** — [wgsl_compute.rs:544-548](../crates/manifold-renderer/src/node_graph/primitives/wgsl_compute.rs#L544-L548):
 the fragment-form rename loop strips a literal `tex_` prefix from EVERY input port name with
@@ -1534,41 +1099,8 @@ moves the value. Latent — no shipped preset uses a `tex_`-prefixed param name.
 
 **Fix shape** — filter the rename to texture-typed ports, mirroring lines 549-561. One-line.
 
-### BUG-013 — `commit_and_wait_completed` never checks command-buffer status (likely the GPU-proof flake mechanism) — FIXED 2026-07-05
-
-**Root cause** — [encoder.rs:1655-1662](../crates/manifold-gpu/src/metal/encoder.rs#L1655-L1662):
-`waitUntilCompleted()` returns on ANY terminal state including `Error`; no caller checks
-`status()`/`error()`. Every heavy freeze proof and `TextureDiff::compare` submit through this
-call and read the result back as if it succeeded. Under cross-binary GPU contention
-(documented in `.config/nextest.toml` and the `GPU_TEST_LOCK` comment; three call sites build
-unlocked devices), a transiently failed buffer reads back stale/partial → spurious large diff.
-
-**Status** — split verdict, judged REAL-as-flake-mechanism: it precisely explains the
-observed signature (several heavy tests, random divergence sizes, never reproducing
-isolated). It is test-infra, not a compiler miscompile — but it gates trust in the entire
-oracle suite, so it blocks using the suite as a hard gate for agent work.
-
-**Fix shape** — check the buffer's terminal status in `commit_and_wait_completed`; on error,
-panic in tests (fail loudly, retryable) and log in production. Then re-baseline the flake:
-if red runs now report command-buffer errors instead of pixel diffs, the mechanism is
-confirmed; if divergences persist with clean status, keep hunting.
-
-**FIXED 2026-07-05** — [encoder.rs](../crates/manifold-gpu/src/metal/encoder.rs) now calls a
-`verify_completed()` helper after `waitUntilCompleted()`: if the buffer's status isn't
-`Completed`, it reads `status`/`error()` and, in `debug_assertions` builds (tests + dev),
-panics with the code+message; in release (the live show) it logs and continues rather than
-crash mid-set. The dev-vs-release split via `cfg!(debug_assertions)` gives "loud in tests,
-survivable on stage" without a test-only cfg (the helper lives in `manifold-gpu`, whose tests
-aren't where the flake showed up). The `GPU_TEST_LOCK` "three unlocked sites" note above was
-partly stale: the lock is a `parking_lot` reentrant mutex inside `test_device()`, and every
-lib GPU test acquires it; the only unlocked device is the `gpu_proofs` integration binary's
-own `GpuDevice::new()`, which runs in a separate process. That cross-process contention is now
-self-reporting (a contended failure panics instead of reading stale pixels) rather than
-silent, so a dedicated cross-process lock is no longer needed. Landed alongside the GPU-test
-`gpu-proofs` feature gate (default `cargo test` is now GPU-free; run `--features gpu-proofs`
-to exercise the proofs).
-
 ### BUG-014 — Content key collapses NaN/±Inf param values to one hash — LOW (parked)
+**Status:** PARKED
 
 **Root cause** — [install.rs:205-215](../crates/manifold-renderer/src/node_graph/freeze/install.rs#L205-L215):
 `def_content_key` hashes `serde_json::to_vec(def)`, and serde_json writes non-finite floats
@@ -1582,6 +1114,7 @@ this becomes live. Cheapest closure: reject non-finite values at the `Serialized
 boundary (the eliminate-bug-class-at-storage-layer pattern).
 
 ### BUG-015 — Inspector sections render overlapping / at stale offsets after scroll — MED (repro needed)
+**Status:** OPEN
 
 **Symptom** — observed once by Peter, 2026-07-04, right after the timeline-P0 / multi-select
 UX changes landed: the layer inspector drew its sections interleaved — the MIDI block
@@ -1783,6 +1316,7 @@ stale scrollbar). The 2026-07-04 "sections interleaved" sighting (hole #2 + rebu
 is a separate open thread if it recurs.
 
 ### BUG-060 — Inspector content paints over the footer bar — REOPENED 2026-07-08 (UI_CLIP_AND_Z P1 verified the wrong render path)
+**Status:** REOPENED
 
 **REOPENED 2026-07-08 (Peter, on latest main after P1 landed).** Still repros. New observations,
 none yet explained:
@@ -1948,7 +1482,702 @@ precisely because leftover dirty flags once defeated the idle fast path — a ca
 reintroduces that regression; verify by reasoning + a unit test at the
 `render_dirty_panels` helper layer (no snapshot can show it).
 
+### BUG-018 — `node_graph::catalog_gen::tests::regenerates_in_sync` red on main: `docs/node_catalog.json` stale against the node registry — LOW
+**Status:** OPEN
+
+**Symptom** — found 2026-07-04, same full-workspace sweep as BUG-017, same shape: confirmed
+pre-existing on origin/main (`90ab8531`) before the automation-P4 landing branch touched
+anything — reproduced standalone in a disposable worktree at that exact commit.
+`cargo test -p manifold-renderer --lib node_graph::catalog_gen::tests::regenerates_in_sync`
+fails with `docs/node_catalog.json is stale`.
+
+**Root cause** — not investigated; some session added/changed a node-graph primitive without
+re-running `cargo run -p manifold-renderer --bin gen_node_catalog` afterward. Given `node_count`
+sits at 214 in the checked-in file, worth diffing against the live-generated output to see
+which node(s) are missing/changed before just overwriting.
+
+**Fix shape** — mechanical: `cargo run -p manifold-renderer --bin gen_node_catalog`, commit
+the regenerated `docs/node_catalog.json`. Same reasoning as BUG-017 for not fixing it this
+session (unrelated to the work at hand, and worth doing once rather than mid-churn).
+
+### BUG-019 — Motion "group fold" (D17) has no UI surface to fold — DESIGN GAP (deferred)
+**Status:** DEFERRED
+
+**Symptom** — found 2026-07-04 completing UI motion P2. D17 lists "group fold: children
+collapse into header," but the animation has nothing to animate: `EffectGroup.collapsed`
+exists at the model layer (`crates/manifold-core/src/effects.rs:3194`) with zero rendering
+surface — no group header, no collapse toggle, no child-card grouping by `group_id` in the
+inspector (`rg EffectGroup crates/manifold-ui/src` → 0 hits).
+
+**Root cause** — the design assumed a foldable effect-group UI in the inspector that was
+never built. Group fold is a *new feature* (group header + child-card filtering + collapse
+toggle), not an animation retrofit — correctly out of the motion layer's scope.
+
+**Fix shape** — build the effect-group inspector UI first (own small design: header row,
+`group_id`-keyed child filtering, collapse toggle), THEN the fold animation is a `FlipList`
++ exit-state retrofit like the other P2 collapses. Needs a design/build decision from Peter.
+
+### BUG-020 — Card collapse animates effect cards but not generator cards — LOW (deferred)
+**Status:** DEFERRED
+
+**Symptom** — found 2026-07-04 (UI motion P2 batch 1). Effect cards collapse/expand with the
+`collapse_anim` reflow; generator cards do not — their rows parent at root (`None`) in
+`ParamCardPanel::build_generator`, so there is no `ClipRegion` seam to clip the collapsing
+body the way `build_effect` has.
+
+**Fix shape** — give `build_generator` the same parent/clip-region seam `build_effect` uses,
+then reuse the existing `collapse_anim`. Small, localized to `param_card.rs`.
+
+### BUG-021 — Value snap-back is Perform-inspector only, not the graph-editor param cards — LOW (deferred)
+**Status:** DEFERRED
+
+**Symptom** — found 2026-07-04 (UI motion P2 closer). Right-click value-reset eases the fill
+(EASE_SNAP) on Perform-context inspector cards; the graph editor owns a separate
+`ParamCardPanel` instance not reachable from the `ParamRightClick` dispatch site
+(`ui_bridge/inspector.rs:1140`), so its value resets snap without the settle.
+
+**Fix shape** — thread the snap-back trigger to the graph-editor's `ParamCardPanel` too, or
+lift the reset-with-settle into shared `ParamCardPanel` logic both dispatch sites reach.
+
+### BUG-025 — Timeline layer/header scissoring: clip content bleeds across row bounds — MED (repro needed)
+**Status:** OPEN
+
+**Symptom** — reported by Peter 2026-07-05 (screenshot in session transcript) as "layer and
+header scissoring": in the arrangement view, the bottom layer's purple clip body renders far
+beyond its row — a solid block filling the timeline from its row down to the window edge —
+while the layer-header column at bottom-left shows the Plasma MIDI drawer (MIDI / CHANNEL /
+DEVICE) overlapping into that region. Clip content and header-column content are not being
+mutually clipped to their rows/panes.
+
+**Root cause** — unknown. Suspect surface: the per-row scissor rect for clip bodies (last or
+expanded row), the `track-header-invariant` / `single-source-y-layout` class, or a stale
+subregion scissor (`subregion-scissor-invariant`). Likely same family as BUG-015 (inspector
+sections at stale offsets) — both smell like Y-layout/scissor divergence after the recent
+timeline waves.
+
+**Repro** — not pinned; NOT reproduced headless (2026-07-05 Opus). Snapshotted the `states`
+and `timeline` scenes (both carry a selected generator layer with an open MIDI/CHANNEL/DEVICE
+drawer, the closest fixtures to Peter's screenshot) — both render correctly: every clip body is
+scissored to its row, every header drawer stays in the left column, group nesting clips fine.
+A scroll-down + re-snapshot on `timeline` also did not reproduce (and scroll may not be fully
+wired in the headless tracks path). So the general scissoring path is sound; the bug is
+state-specific. Triage narrows it to a config the fixtures don't hit — most likely the
+*last* row being a selected generator whose clip fills the remaining viewport height, and/or a
+live scroll offset. Pin it with either a targeted fixture (selected generator as the final
+layer) or a running-app repro from Peter's project.
+
+**Repro attempt 2026-07-07 (timeline-ux audit)** — the 07-05 note's "scroll may not be fully
+wired in the headless tracks path" is now explained: `--scroll` was seeded AFTER the base
+render (fixed this branch), so every prior "scrolled" base PNG was actually unscrolled. With
+scroll genuinely applied (via the interact after-render), headers + lanes offset together and
+clip bodies stay scissored to their rows — still not reproduced. The state-specific triage
+above stands.
+
+**Fix shape** — TBD after repro. If it's the invariant class (likely, given BUG-015 is the same
+family), fix at the single Y-layout source, not per-widget patches.
+
+### BUG-026 — Batch-2 popups: entrance fade freezes at t=0 (transparent bg) until an input re-dirties the frame — MED — FIX LANDED, running-app verification owed
+**Status:** OPEN
+
+**Symptom** — reported by Peter 2026-07-05 (before/after screenshots): opening the Add Effect
+browser renders the search field, filter chips, and preset cells floating directly over the
+timeline — the popup's dark background panel is missing. Moving the mouse over the popup makes
+the background appear and it then looks correct.
+
+**Root cause (FOUND)** — not the alpha math, a missing animation-poll in the dirty-driven
+renderer. The batch-2 popups (browser / ableton picker / settings) run a D17 entrance tween:
+`enter_anim` starts at `t=0` and, while `t<0.999`, `BrowserPopupPanel::build` multiplies the
+modal container's background + border alpha by `t` (browser_popup.rs:451,469-474) — so frame 0
+draws the panel fully transparent while the cells (opaque, not `t`-gated) float on top. The
+tween is ticked inside each popup's `update()`, which only re-runs while the frame stays dirty.
+The inspector drawer + panel-split tweens self-sustain via a `needs_rebuild` poll after
+`UIRoot::update()` (app_render.rs ~2927), but the batch-2 popups were added to `update()` and
+never to that poll. Opening a popup dirties exactly one frame (drawing it invisible); nothing
+re-dirties it, so the fade freezes at `t=0` until an unrelated input (mouseover) re-dirties the
+frame — the "no background until mouseover" symptom.
+
+**Fix (LANDED)** — added `is_animating()` to each batch-2 popup and the matching poll in the
+app motion block, mirroring `drawer_anim_active` exactly. Gate: clippy `-D warnings` clean;
+`manifold-ui --lib` 604/604. Commit `01c15213` (branch `fix/popup-enter-anim`).
+
+**Verification owed (L4)** — the headless `--script` driver has no frame loop and its
+`enter_anim` ticks off wall-clock, so it cannot exercise this timing bug; a running-app check
+(open the Add Effect browser, confirm the background is present immediately without moving the
+mouse) is the remaining proof. Tracked in VERIFICATION_DEBT (VD-006).
+
+### BUG-031 — Layer context-menu + rename still address layers positionally — LOW (follow-up to the LayerId migration `877852a9`)
+**Status:** OPEN
+
+**Root cause** — the primary layer-header actions were migrated to carry a stable `LayerId`
+(commit `877852a9`, kills the panel-index-vs-live-model collision). Two related clusters were
+deliberately left positional to keep that diff bounded:
+- The **`Context*Layer` right-click-menu family** (`ContextPasteAtLayer`, `ContextImportMidi`,
+  `ContextAddVideoLayer/GeneratorLayer/AudioLayer`, `ContextDuplicateLayer`, `ContextUngroup`,
+  `ContextDeleteLayer`, `DropdownContext::LayerContext`) still carry a `usize`. `LayerHeaderRightClicked`
+  now carries the id and `ui_root` resolves it to the current row synchronously when the menu opens,
+  so there's no regression — but the menu ITEMS bake in that index, leaving a (rare) stale window
+  between menu-open and item-click.
+- **`TextInputField::LayerName(usize)`** (layer rename): the enum derives `Copy`, and `LayerId`
+  isn't `Copy`, so migrating it forces dropping `Copy` and cascades through the whole text-input
+  subsystem (`app.rs` field handling). The double-click intercept resolves id→index locally, so the
+  rename has the same (unchanged) stale window it always had.
+
+**Symptom** — none observed; latent. A context-menu action or a rename committed after the layer
+list changed under it (another command, undo/redo, MIDI phantom layer) could hit the wrong layer.
+Same bug class as the migration killed for the primary controls.
+
+**Fix shape** — carry `LayerId` in the `Context*Layer` family (thread it from
+`LayerHeaderRightClicked` through the menu items) and switch `TextInputField::LayerName` to
+`LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
+
+## Fixed
+
+### BUG-061 (slider-reset-per-panel-lottery) — FIXED 2026-07-08 @ 480acf63 — right-click reset works on some sliders and not others; reset is per-panel hand-wiring instead of a slider behavior — MED (live recovery gesture a performer can't trust; reported by Peter 2026-07-07)
+**Status:** FIXED @ 480acf63
+
+**Fixed (root):** reset is now the slider's own gesture. Every slider carries a real default
+(`BitmapSlider::build` stores it in `SliderNodeIds.default_normalized`; `SliderSpec.default`
+threads through `ChromeHost`), and a single generic `PanelAction::SliderReset { snapshot,
+changed, commit }` re-dispatches the slider's OWN value-change trio with the default baked
+into `changed` — the exact Snapshot→Changed→Commit path a drag uses, so undo behaves like a
+drag to that value (each `*Commit` already guards `old != new`, so resetting an at-default
+slider is a no-op). One app-side handler recurses the trio (`ui_bridge/mod.rs`); the 7 bespoke
+`*RightClick` actions and their duplicated handlers are gone. Covered: effect/generator params,
+macros, master opacity, LED brightness, layer opacity, layer audio gain (new), modulation-drawer
+sliders (new). Clip slip/loop sliders were already removed in `52920ab6` — deleted their dead
+actions/handlers/stubs. Behavior change: a param reset now jumps (the eased snapback lost its
+only caller), consistent with a drag. Guarded by per-surface tests that a right-click on the
+track resolves to `SliderReset` with the declared default, so no panel can silently opt out
+again. Excluded surfaces → BUG-070. Original diagnosis retained below.
+
+**Symptom:** right-click-to-reset-to-default works on effect/generator param sliders, macros,
+master opacity, LED brightness, and layer opacity — and silently does nothing on clip
+slip/loop sliders, the modulation drawer sliders, and the Audio Setup gain sliders. On stage
+this is the recovery gesture (crank a param too far, snap it home in one click); a gesture
+that only works on some faders is one you can't use without thinking.
+
+**Root cause (structural, investigated 2026-07-07):** reset is not a slider behavior — it's a
+per-panel contract wired twice: each panel registers a bespoke `PanelAction` on the track node
+in `register_intents` (e.g. `ParamRightClick` at `param_card.rs:3707`, `MacroRightClick` at
+`macros_panel.rs:466`, `MasterOpacityRightClick`/`LedBrightnessRightClick` at
+`master_chrome.rs:365-368`, `LayerOpacityRightClick` at `layer_chrome.rs:267`), and
+`ui_bridge/inspector.rs` handles each one separately, re-deriving the default. Any panel that
+skips or loses either half silently has no reset. Two proofs it's the wiring model:
+
+- **Clip slip/loop is a regression.** Reset shipped in `b78dc9ba` (March), then `52920ab6`
+  deleted clip_chrome's legacy event handler during the intent-registry migration and the
+  right-click was never re-registered. The app-side handlers still sit dead at
+  `ui_bridge/inspector.rs:1017` (`ClipSlipRightClick`) and `:1032` (`ClipLoopRightClick`) —
+  no UI code emits those actions anymore.
+- **The infra has a vestigial field.** `SliderNodeIds.default_normalized` (`slider.rs:47`),
+  commented "for right-click reset", is written once with the *initial* value (not the
+  default) and read by nothing — reset was meant to live in the widget and never did.
+
+Drawer sliders (`drawer.rs:331`) and Audio Setup gain sliders never had reset at all. The
+graph editor's inline param sliders use right-click for the mapping popover instead —
+intentional, but decide explicitly whether that surface keeps the divergent gesture.
+
+**Fix shape (root):** make reset the slider's own gesture. Every slider already has a
+value-change path (Snapshot → Changed → Commit, same one a drag uses); give
+`BitmapSlider`/`SliderSpec`/`SliderController` a real `default` value and have right-click on
+any track synthesize "set to default" through that existing path. Every slider gets reset by
+construction, the bespoke `*RightClick` actions and their duplicated app-side handlers
+collapse into the generic path, and the clip slip/loop regression fixes itself. New sliders
+can't opt out by forgetting. Watch the two non-uniform cases: param-card sliders whose
+right-click currently carries `(target, param_id, default)` context, and label/row right-click
+menus (`ParamLabelRightClick` etc.) which are context menus, not reset — they stay.
+
+### BUG-078 (generator-runtime-reshapes-from-stale-meta-params) — a structural-rebuild's reshape read the graph's stale `preset_metadata.params` shadow because the constructor took no `ParamManifest` — LOW — FIXED 2026-07-09 on `fix/bug-078-reshape-manifest` (confirmed by regression test, then fixed same session)
+**Status:** FIXED (2026-07-09)
+
+**Symptom:** calibrate a generator param (widen its range / add a curve) → make
+a structural graph edit (add/remove a node) before saving → the *rendered* param
+mapping could momentarily revert to the pre-calibration reshape. Bounded and
+non-data-loss: the authoritative `PresetInstance.params[id].spec` (the manifest)
+was never touched, and the correct reshape reasserted itself the moment the
+project was saved and reloaded (D12 derives `meta.params` from the manifest at
+serialize time).
+
+**Root cause:** `PresetRuntime::from_def` (`crates/manifold-renderer/src/preset_runtime.rs`)
+built its `param_reshape: AHashMap<String, (min, max, curve, invert)>` — the
+map every generator binding's [`Reshape`](crates/manifold-renderer/src/node_graph/param_binding.rs:273)
+is resolved from at construction — entirely from `doc.preset_metadata.params`,
+the shadow. `from_def` / `from_def_with_device` / `from_json_str_with_device`
+took no `ParamManifest` parameter, so no code path could hand a live,
+post-calibration manifest spec to the reshape. This was the generator analog of
+the effect path's `synth_user_binding` (`manifold-core/src/effects.rs:1752-1783`),
+which already reads the manifest (`self.params.get(&b.id)`) post-P2; generators
+never got the equivalent wiring because their whole binding list (stock +
+user-added) resolves through one shared `doc.preset_metadata` path.
+
+**Fix (shipped):** threaded `Option<&ParamManifest>` through the constructor
+chain — `from_def` / `from_def_with_device` / `from_json_str_with_device` →
+`GeneratorRegistry::create` / `create_with_override` →
+`GeneratorRenderer::install_layer_generator` / `acquire_clip`. When the manifest
+is present, `from_def` overlays each param's reshape (min/max/curve/invert) from
+the manifest `spec` over the shadow, manifest-wins-per-id; when `None` it keeps
+reading the shadow (correct for a fresh-from-disk standalone build). The one live
+caller — `generator_renderer.rs`'s `start_clip` and the per-frame `render_all`
+structural-rebuild sweep — passes `layer.gen_params().params`. Every other caller
+(thumbnails, `check_presets`, `freeze_profile`, gltf import, freeze proofs, the
+cold-start thumbnail path, type-swap rebuild) passes `None` and is byte-identical.
+`from_json_str` (mock/test) keeps its 2-arg signature, passing `None` internally.
+The empty-fast-path and the `preset_metadata.bindings` scale/offset +
+`string_bindings` reads were left untouched.
+
+**Regression test** (now green, in the default suite):
+`crates/manifold-renderer/src/preset_runtime.rs`,
+`generator_runtime_tests::generator_rebuild_reshape_honors_live_manifest_over_stale_shadow`.
+A def whose `preset_metadata.params` `amt` spec is fixed at
+`min=0,max=1,curve=Exponential` (the stale shadow) is rebuilt via
+`PresetRuntime::from_def` with `Some(&values)` where `values` carries the
+recalibrated `min=0,max=2` — the reshape now resolves value 1.0 to `0.5` (the
+fresh 0..2 range), where the pre-fix output was `1.0` (the stale 0..1 range).
+The bug is only observable when the reshape has a non-identity curve/invert
+(`apply_card_reshape` only consults min/max when `invert || curve != Linear`).
+
+**Escaped:** `wave/param-boundaries-p2` (`254792c0`) — dual-write deletion
+(D4) landed correctly for the manifest side but left this generator-only
+construction-time read pointed at the now-unmaintained shadow · caught-by:
+review (audit during PARAM_STORAGE_BOUNDARIES P2, not the wave's own gate —
+no existing test exercised a structural rebuild after a calibration).
+
+### BUG-077 (test-fixtures-not-region-wrapped) — 17 tests across `manifold-renderer` + `manifold-ui` mint root-parented nodes outside a region and panic on the D4 ownership assertion — LOW (pre-existing, found 2026-07-09 during PARAM_STORAGE_BOUNDARIES P3's full-workspace sweep) — FIXED 2026-07-09 (`fix/bug-077-uicache-regions`); workspace fully D4-clean
+**Status:** FIXED (2026-07-09)
+
+**Symptom:** `cargo test --workspace` fails 17 tests, all with the same panic:
+
+```
+thread '...' panicked at crates/manifold-ui/src/tree.rs:290:9:
+root-parented node minted outside an open UITree::begin_region — UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md D1/D4.
+Wrap this subtree's build in begin_region(...)/end_region(...) instead of rooting it at the tree.
+```
+
+The full failing set (the whole D4-conformance class — enumerated iteratively via
+`--no-fail-fast` runs, each fix surfacing the next binary the previous fail-fast had
+hidden):
+
+- **6 in `manifold-renderer/src/ui_cache_manager.rs` unit tests:**
+  `extent_change_forces_fallback`, `extents_unchanged_when_bounds_stable`,
+  `incremental_used_when_only_card_dirt`, `no_subregions_signature_is_empty`,
+  `out_of_subregion_dirt_forces_full_render`, `partition_change_forces_fallback`
+  (surfaced by the `ui_cache_manager` test filter — found first).
+- **6 in `manifold-renderer/tests/ui_color_swatches.rs` snapshot tests:**
+  `header_demo`, `footer_demo`, `transport_demo`, `modulation_drawer_sheet`,
+  `browser_popup_demo`, `browser_popup_thumbnails_paint` (surface only on a full
+  crate run, not the narrow `ui_cache_manager` filter).
+- **5 in `manifold-ui/tests/chrome_param_card_proof.rs`:**
+  `badge_toggle_is_in_place`, `build_matches_card_structure`,
+  `intents_resolve_and_fold_up`, `opening_drawer_needs_rebuild_then_grows`,
+  `value_change_reconciles_in_place` (surface only on the full-workspace run — a
+  different crate; the 6th test in the file, `validate_catches_unwired_control`,
+  builds no tree and always passed).
+
+**Root cause:** `0bb51dad` ("region mechanism — ZTier, RegionToken,
+begin_region/end_region, D4 enforcement") landed the D4 root-parented-node panic
+guard (`mint`'s `debug_assert!` at `tree.rs:290`, `#[cfg(not(test))]` — so it is
+active for any *non-`manifold-ui`* dependent, which every one of these test
+binaries is: `manifold-renderer`'s own tests, and `manifold-ui`'s *integration*
+tests, which compile `manifold-ui` as an external non-test dependency). These test
+fixtures still build their tree directly against the root, outside any
+`begin_region`/`end_region` pair — they were never migrated to the region contract.
+One bug class, three files, two crates.
+
+**Confirmed unrelated to PARAM_STORAGE_BOUNDARIES P3:** `git diff --stat` for the
+P3 session touches only `crates/manifold-io/src/migrations/param_storage_v14.rs`;
+`manifold-ui`/`manifold-renderer` are untouched. The `ui_color_swatches` half was
+additionally confirmed pre-existing by `git stash`ing the `ui_cache_manager` fix
+and rerunning `--test ui_color_swatches` against the base commit `b15e5c20` — the
+same 6 fail identically, so no half is caused or masked by another.
+
+**Escaped:** `wave/param-boundaries-p1` or an earlier UI-region wave (whichever
+landed `0bb51dad` without touching these fixtures) · caught-by: the next phase's
+full-workspace sweep (P3) plus this fix session's own crate-wide and workspace gate
+runs, not that wave's own gate — the region-enforcement landing's test scope did not
+include a full `cargo test --workspace` run.
+
+**Fixed** — test files only; no production code touched, `tree.rs:290`'s D4
+assertion unchanged. Every failing fixture now wraps its tree build in a single
+`tree.begin_region(rect, tier, label, UIFlags::empty())` / `tree.end_region(region,
+start)` bracket, matching the idiom real callers use (`ui_root.rs`'s per-panel
+pairs; the closer precedent for these flat, non-tiered fixtures is
+`ui_snapshot/render.rs`'s single-region wrap and the `split_handles` region — both
+use a no-op-clip rect precisely so the region's `CLIPS_CHILDREN` is a guaranteed
+no-op and the rendered pixels are unchanged). Proof of completeness:
+`cargo test --workspace --no-fail-fast 2>&1 | rg 'tree.rs:290'` returns **zero**
+hits — the whole D4 class is gone on this branch.
+
+- `crates/manifold-renderer/src/ui_cache_manager.rs`: the two fixture builders
+  (`tree_with_subregions`, `tree_with_chrome_and_card`) now open one region around
+  their whole build. Wrapping shifts every node index by the region container node
+  `begin_region` mints first, so the fixtures return the panel's own `node_start`
+  (`tree.count()` captured right after `begin_region`) and compute sub-region ranges
+  relative to it; the six tests reference edges via that `start` (or `subs[i].0`,
+  `end - 1`) instead of the old absolute literals.
+- `crates/manifold-renderer/tests/ui_color_swatches.rs`: the six snapshot tests wrap
+  their `panel.build(...)` / `popup.build(...)` / slider+drawer build loop in a
+  full-canvas region (Chrome tier for the transport/header/footer panels, Overlay
+  for the browser popups, Base for the mod-drawer sheet — semantically faithful,
+  but with one region per test the tier only labels intent). Note that since
+  `0bb51dad` `render_tree` walks *registered regions* (`traverse` → `traverse_regions`),
+  not root-parented nodes, so the wrap is also what makes each test's panel/popup
+  tree content render at all — an unwrapped build registers no region for the
+  traversal to visit. Verified by rerunning the suite: all six now produce their
+  PNGs and pass.
+- `crates/manifold-ui/tests/chrome_param_card_proof.rs`: the shared `ProofCard::build`
+  helper (every failing test routes through it) opens one region around the
+  `ChromeHost::build` call, region rect == the card rect. Safe because the region
+  container is minted directly on the tree, NOT through the host — so `ChromeHost`'s
+  own `ids`/`node_count`/DFS indices (which the tests assert on exactly:
+  `host.node_id(N)`, `host.node_count()`, `t.count()`) are untouched; the host bases
+  off `tree.count()` at build start, exactly as its own
+  `build_assigns_contiguous_ids_from_tail` unit test already proves for a mid-tree
+  build. The intent fold-up tests still resolve correctly: `IntentRegistry::resolve`
+  stops at the first ancestor carrying the gesture/area-claim (always a host node
+  below the region), and the region node carries neither, so the extra transparent
+  ancestor changes nothing.
+
+### BUG-075 (timeline-drag-end-never-finalizes) — the terminal DragEnd for trim/marquee/move was dropped, so on_end_drag never ran — HIGH — FIXED 2026-07-08 (found + fixed same session)
+**Status:** FIXED (2026-07-08)
+
+**Symptom:** after the DRAG_CAPTURE landing (P1 `6e4bddcb`), timeline
+trim-drag and click-drag marquee/region-select never finalized on release —
+the trim didn't commit, the selection box stayed live, `drag_mode` stuck.
+Clip *move* looked fine but silently lost its undo snapshot and left the
+same stuck `drag_mode` (its live per-frame preview masked the miss).
+
+**Root cause:** ordering bug in `ui_root::process_events`. The terminal
+`DragEnd`/`PointerUp` arm called `broadcast_gesture_end()`, which set
+`drag_owner = None`, BEFORE the post-match `should_stash_for_tracks(event)`
+read `drag_owner` to decide whether to stash the event for
+`InteractionOverlay`. With the owner already nulled, the terminal `DragEnd`
+was never pushed to `viewport_events`, and `on_end_drag` (the sole finalizer,
+`app_render.rs`) never ran. Confirmed empirically by an adversarial repro
+driving the real `process_events` path: stashed kinds = PointerDown,
+DragBegin, Drag — no DragEnd. The existing ownership unit tests set
+`drag_owner` by hand and called `should_stash_for_tracks` directly, bypassing
+the broadcast-before-stash seam, which is why it shipped.
+
+**Fix:** split `broadcast_gesture_end` into `fire_gesture_end_hooks()`
+(overlay hooks only) + the fused clear. The terminal arm fires the hooks but
+defers the `drag_owner = None` clear to the end of the iteration, after the
+stash read; the PointerDown self-heal keeps the fused `broadcast_gesture_end`
+so a lost-OS-release still clears a stale owner. Guarded by a new
+`process_events`-driven regression test
+(`timeline_drag_end_reaches_viewport_events_through_process_events`) that
+drives Down→Move→Up and asserts the terminal DragEnd reaches
+`drain_viewport_events()`.
+
+### BUG-052 (sample-rate-dependent-detection) — onset + kick detection mis-tunes at non-48k sample rates — FIXED 2026-07-07 @ 6e0e8988
+**Status:** FIXED @ 6e0e8988
+
+**Fixed:** `SpectrogramConfig::with_time_grid_for(sample_rate)` (manifold-spectral) rescales
+`hop`/`n_fft` from the 48k reference so a hop is always ~5.33 ms and the window ~85 ms; the
+analyzer applies it at build (`analysis.rs` `StreamingSendAnalyzer::new`). Frequency bins were
+already SR-invariant, so nothing there changed. No-op at 48k, exact 2× at 96k. Proven by
+`time_grid_holds_hop_and_window_duration_across_rates` across 44.1/48/88.2/96/192k plus the full
+manifold-audio analysis suite (46 tests green). **Still owed (VD, cheap):** the end-to-end proof
+named in the original gate — resample a fixture to 96k, run the harness, confirm fire TIMES in
+seconds match the 48k run. The grid-invariance test makes this belt-and-suspenders, not load-bearing.
+Original diagnosis retained below.
+
+
+
+**Found 2026-07-07 (Peter's question during the kick-detector discussion).** The audio
+analysis runs at the DEVICE'S native rate — `audio_mod_runtime.rs:322` sets the analyzer
+rate to `device_rate`, and the resampler only aligns layer audio to that rate, never to a
+canonical one. Every timing constant is in HOPS (`ODF_MEDIAN_HOPS`, `ONSET_REFRACTORY_HOPS`,
+`KICK_WIN`/`KICK_AGE_CAP`) and every rate constant is bins-per-hop (`KICK_STEP_MAX`, the D5
+tracker slew), while a hop is `256/sample_rate` seconds. At 96k a hop is 2.7 ms (half of
+48k's 5.3 ms), so the kick detector's "14 bins within a 10-hop window" spans only 27 ms and
+the kick's ~90 ms chirp has descended only ~10 bins by then — under the 14-bin threshold, so
+**the kick detector goes near-deaf at 96k** (the whole onset analysis mis-tunes, though the
+adaptive-threshold/refractory parts degrade more gently). Bins are already SR-invariant
+(log-freq CQT anchored at 10 Hz), so `drop_bins` needs no change. Confirmed by arithmetic +
+the device-rate code path; NOT observed on a 96k run (Peter: no need to prove in code).
+
+**Fix shape (root, Peter-directed):** normalize the analysis TIME GRID, not the sample rate
+(no resampling) — derive `hop` and `n_fft` in samples from the device SR so a hop is always
+~5.3 ms and the window ~85 ms (`SR/n_fft` stays 11.7 Hz, so frequency resolution is
+unchanged). Then every hop-count and bins-per-hop constant is literally unchanged and
+automatically invariant; no fixed ODF ring becomes a Vec. Cost: larger FFT at higher rates
+(proportional to the extra data). Rejected alternative: keep hop=256 samples and scale all
+hop-COUNTS with SR — more blast radius (dynamic ring sizes) for no gain. Gate: resample a
+fixture to 96k, run the harness, confirm fire TIMES in seconds match the 48k run (the eval
+already grades in seconds). Fold into the kick time-constant rework.
+
+### BUG-058 (drag-end-consumable) — timeline stuck in move/trim mode: DragEnd is a routable/consumable event, but N independent drag-state owners depend on receiving it — HIGH (live editing gesture wedges; reported by Peter 2026-07-07) — FIXED 2026-07-08 (DRAG_CAPTURE P1–P3)
+**Status:** FIXED (2026-07-08)
+
+**Fixed 2026-07-08 — DRAG_CAPTURE P1–P3.** The root fix shipped: single drag-capture ownership (P1 `6e4bddcb`, D1–D4) makes drag-terminal events non-consumable broadcasts routed to the owner by identity, eliminating the eater class (open dropdown/modal can no longer swallow the terminal DragEnd). P2 `12683746` z-aware window seams; P3 `2fc4cfbd` per-widget immediate-drag threshold. The P1 landing also exposed and fixed BUG-075 (dropped terminal DragEnd). Original report retained below.
+
+**Symptom** — sometimes a clip move/trim doesn't release: after the mouse leaves the
+timeline (typically onto the inspector) and the button is released, the timeline stays in
+move/trim mode (cursor stuck as Move/ResizeHorizontal, next interaction behaves as if the
+drag were still live). Self-heals on the next clip press (`on_begin_drag` overwrites
+`drag_mode`), which is why it reads as intermittent.
+
+**Root cause (architecture)** — a drag's terminal event must reach every drag-state owner,
+but the routing treats it as consumable, first-match-wins. `InteractionOverlay.drag_mode`
+(EXCLUSIVE owner of clip move/trim/region state, `interaction_overlay.rs`) is only cleared
+by `on_end_drag`, which only runs if the `DragEnd` survives `process_events`' routing
+gauntlet (`ui_root.rs:1411` overlay-first) and reaches the tracks-area stash
+(`ui_root.rs:1445`). Confirmed eaters:
+- `dropdown.rs:695-702` — an open dropdown consumes ALL `DragBegin`/`Drag`/`DragEnd`
+  unconditionally (e.g. an accidental two-finger right-click mid-drag opens the clip context
+  menu; the release's DragEnd is then eaten by the menu).
+- any `Modality::Modal` overlay open at release captures everything, even events it ignores
+  (`ui_root.rs:1003-1006`).
+The input layer already learned this lesson twice: `859bbceb` made `DragEnd`/`PointerUp`
+unconditional at the `UIInputSystem` level, and `process_events` routes
+`DragEnd|PointerUp` to the inspector + layer_headers in a dedicated UNCONDITIONAL second
+loop (`ui_root.rs:1499-1515`) — but the timeline overlay's DragEnd still travels the
+consumable path plus a positional gate (`is_event_in_tracks_area`) patched by a boolean
+latch (`overlay_drag_active`). Also unverified at the OS seam: winit-macOS delivery of
+`MouseInput(Released)` when the release lands outside the window (inspector is at the right
+edge; BUG-028 precedent says winit macOS seams are real). Cheap decisive oracle if the
+eater-list explanation doesn't hold: eprintln at four seams (Up received in
+`primary_mouse_input` / DragEnd emitted in `input.rs` / stashed in `process_events` /
+`on_end_drag` entered), reproduce once, read which link broke.
+
+**Instrumentation SHIPPED 2026-07-07** (`feat/drag-capture-instrumentation`): launch with
+`MANIFOLD_INPUT_TRACE=1` and every discrete pointer transition prints a `[input-trace]`
+line at each seam — window interceptors, input-system press/release/drag-begin, overlay
+routing (which overlay consumed/captured), tracks-area stash gate (with latch state), and
+timeline-overlay begin/end (with drag mode). One repro of the stuck state names the broken
+link. Root fix is `docs/DRAG_CAPTURE_DESIGN.md`.
+
+**Fix shape (root)** — make drag-terminal events non-consumable broadcasts: every
+drag-state owner (InteractionOverlay, inspector, layer_headers, every overlay panel with an
+armed drag) receives `DragEnd`/`PointerUp` regardless of routing outcome; overlays may
+still *act* on it but never block it. Cleaner still: single drag-capture ownership — at
+`DragBegin` one owner is recorded, all subsequent `Drag`/`DragEnd` route to that owner by
+identity (not position), killing the latch, the positional gate, and the eater class in one
+move.
+
+### BUG-059 (band-line-grab-falls-through) — Audio Setup band-divider grabs are sticky, and a MISSED grab silently drags clips/region under the modal — HIGH (silent project edits during calibration; reported by Peter 2026-07-07) — FIXED 2026-07-08 (DRAG_CAPTURE P1–P3)
+**Status:** FIXED (2026-07-08)
+
+**Fixed 2026-07-08 — DRAG_CAPTURE P1–P3.** The silent-edit fall-through (the HIGH) was first closed 2026-07-07 by the `swallow_drag` origin-claim stopgap, then superseded by P2 `12683746` z-aware window seams; P3 `2fc4cfbd` added the per-widget immediate-drag threshold for the divider lines (the 4px dead-zone). Root: DRAG_CAPTURE single-owner capture. Original report retained below.
+
+**Symptom** — the horizontal crossover lines in the Audio Setup spectrogram are hard to
+grab: fine adjustments stick, grabs sometimes do nothing, and (unreported but confirmed in
+code) a missed grab over the timeline area starts an invisible clip move / region select
+UNDERNEATH the modal, committing real project edits.
+
+**Root cause (several, stacked)** —
+- **Missed-grab fall-through (the HIGH):** the panel's `PointerDown` arm returns `Ignored`
+  when the press misses a divider/label (`audio_setup_panel.rs:2269-2294`), and the panel is
+  `Modality::Modeless`, so the whole DragBegin/Drag/DragEnd family falls through to the
+  layers beneath. The tracks-area stash gate classifies by RAW POSITION with zero z-order
+  awareness (`ui_root.rs:2455` `is_event_in_tracks_area`), so a drag starting on the modal
+  background over the timeline is stashed and `InteractionOverlay` hit-tests clips by
+  position (clips aren't tree nodes) — editing the project through the modal. The `Click`
+  arm was already patched to swallow exactly this (`owns_node(id) || point_in_scope(*pos)`,
+  the prior fix attempt Peter remembers); the drag family wasn't.
+- **4px dead zone:** the global `DRAG_THRESHOLD_PX = 4.0` (`color.rs:837`) applies to a
+  precision control — no `Drag` event fires for the first 4px, so sub-4px nudges are
+  impossible and every grab starts sticky.
+- **Window-seam interceptors punch through the modal:** `primary_mouse_input` checks
+  `is_near_split_handle` (6px full-width band at the timeline's top edge) and
+  `is_near_inspector_edge` (±4px at `insp.x`, full window height) BEFORE overlay routing and
+  BEFORE hit-testing (`window_input.rs:274-310`) — when the centered modal overlaps those
+  zones, a press on a band line there is stolen for a panel-resize drag.
+- **Dropdown-dismiss swallow:** with any dropdown open (the panel has device/layer
+  dropdowns), the next press outside it is consumed by the dismiss branch
+  (`window_input.rs:269-273`) — first grab after touching a dropdown always dies.
+- **Scope-dark deadness:** `scope_fmin <= 0` (no capture yet) makes dividers ungrabbable by
+  design (`audio_setup_panel.rs:422`) — reads as "sometimes it just doesn't work" if lines
+  are visible before audio flows.
+- **First-click-dead — TRACE-CONFIRMED 2026-07-07 (Peter, `MANIFOLD_INPUT_TRACE=1`), the
+  dominant "always the second click works" mechanism:** the press arms the band drag and is
+  consumed by the panel, but by threshold-crossing the pressed node no longer resolves
+  (`DRAG-BEGIN … resolves=false` in the trace; dead and working clicks carried different
+  WidgetIds) — and `input.rs` `process_pointer` emits `DragBegin` and every `Drag` ONLY
+  while the pressed widget resolves, so the entire motion stream is silently swallowed and
+  the armed position-based drag never hears a move. Same disease `859bbceb` fixed for the
+  terminal events, unfixed for motion. Probable node-death path (inferred): the panel's own
+  consume sets `overlay_dirty` → overlay rebuild between Down and threshold. Root fix:
+  `DRAG_CAPTURE_DESIGN.md` D9 (added same day) — unconditional `DragBegin`/`Drag` emission
+  with `node_id: Option<NodeId>`, in P1.
+
+**Fix shape** — same root as BUG-058's capture model plus locals: (1) the modeless panel's
+`PointerDown`/drag family must swallow anything inside the panel rect (mirror the `Click`
+arm) — that alone kills the silent-edit hole; (2) per-widget drag threshold (0 for the
+divider lines — arm on press, track raw moves); (3) window-seam interceptors must respect
+z-order (both handles already have tree nodes — route them through hit-testing instead of
+raw-position pre-checks); (4) hover-glow the grab zone only when actually grabbable
+(scope live).
+
+**(1) SHIPPED 2026-07-07 as an explicit stopgap** (`feat/drag-capture-instrumentation`,
+superseded by `docs/DRAG_CAPTURE_DESIGN.md`): the panel now claims the whole
+DragBegin/Drag/DragEnd family for any drag whose ORIGIN is inside `panel_rect`
+(`swallow_drag`), keyed on origin so a timeline drag crossing the panel still passes
+through; unit tests `missed_grab_drag_inside_panel_is_swallowed` +
+`timeline_drag_crossing_panel_passes_through`. The silent-edit hole is closed; the feel
+items (2)–(4) remain for the design.
+
+### BUG-055 (eval-harness-stale-time-grid) — both audio eval harnesses used the unscaled default hop on non-48k files — FIXED 2026-07-07 (kick P5 retune branch)
+**Status:** FIXED (2026-07-07)
+
+**Symptom:** kick exact-match gate drifted ±1–5 fires per 44.1 kHz drums fixture; mod_harness
+CSV `time_s`, PNG bar grid, and printed hop line stretched 8.8% on 44.1k files. **Root cause:**
+BUG-052 made the LIVE analyzer's time grid rate-invariant (`with_time_grid_for`), but neither
+example harness followed: `hpss_proto::build_clip` hopped 256 native samples, and `mod_harness`
+built its own unscaled `SpectrogramConfig` for its feed cadence and time base — so it pushed
+256-sample chunks against a 235-sample analyzer hop and sampled `latest()` at the wrong rate,
+silently missing/duplicating fires in every per-hop record on 44.1k input. The P2/P4 kick
+"exact match" was measured through this sampler. **Fix:** both harnesses now scale their config
+(`with_time_grid_for`); `StreamingSendAnalyzer::hop()` accessor added so consumers can't
+re-derive it stale; `mod_harness` `debug_assert`s its grid equals the analyzer's. Residual
+documented in KICK_SWEEP_EVENT_DESIGN §P5: offline replay vs live stream legitimately diverge
+for ridges born during the fade-in (window-fill) region only.
+
+### BUG-036 (dead-LFO-on-reload) — LFO on an imported-glb generator's card param is dead after project reload; re-importing the same .glb revives it — MED — FIXED 2026-07-06
+**Status:** FIXED (2026-07-06)
+
+**FIXED 2026-07-06** — both halves of the fix shape below, plus two siblings the audit
+found in the same class:
+- **Ordering (root):** `manifold_io::loader` gained `_with` variants that hand the file's
+  `embeddedPresets` to an installer BEFORE the typed `Project` deserialize
+  ([loader.rs](../crates/manifold-io/src/loader.rs) `EmbeddedPresetsPrePass`); the app
+  passes `install_embedded_presets` so the overlay + core registry are populated when the
+  V1.4 param loader resolves each instance ([project_io.rs](../crates/manifold-app/src/project_io.rs)).
+- **Keep-don't-drop (class-kill):** `build_param_manifest` now only drops an unknown id
+  when the template actually RESOLVED and says the id is gone (informed deprecation).
+  With no template at all, the entry is kept on a placeholder spec — state is never lost
+  to a missing template ([effects.rs](../crates/manifold-core/src/effects.rs)).
+- **Sibling 1:** history-snapshot restore/open-copy never installed the snapshot's
+  overlay at all (params dropped AND stale overlay left live) — now go through
+  `load_project_snapshot_with` + an unconditional overlay install at the
+  `apply_project_io_action` seam.
+- **Sibling 2:** New Project never cleared the previous project's overlay (fork leak) —
+  covered by the same apply-seam install.
+Verified against the real repro: `meshImportTests.manifold` loads with all 17 imported
+card params present and the saved `cam_orbit` driver resolving; regression test
+`crates/manifold-app/tests/project_local_preset_reload.rs` proves both defenses
+independently.
+
+**Symptom** (Peter, 2026-07-06, `~/Downloads/meshImportTests.manifold`) — a project saved
+with a glb auto-built graph (the `assemble_import_graph` door) reloads fine visually, but
+an LFO bound to one of its card params (Camera Orbit) doesn't run. Deleting the layer and
+re-creating it by dropping the SAME .glb makes the identical LFO run. So the modulation
+path works against a freshly-imported instance and not against the deserialized one.
+
+**Root cause — SMOKING GUN in the 2026-07-06 trace-run log.** On project load, EVERY card
+param of the imported preset is dropped at deserialization:
+`[manifold-core] dropping unknown param id "cam_orbit" on PresetTypeId(cc0_japanese_apricot_prunus_mume#2) load (no template descriptor, no inline spec)`
+— same for cam_dist/cam_fov/cam_tilt, sun_int/x/y/z, metal_0..3, rough_0..3, env_bright.
+The LFO is inert because its target param no longer exists in the loaded manifest. The
+drop lines appear BEFORE `[presets] merging 4 project generator preset(s)` in the log:
+the V1.4 param loader resolves specs against the template registry, and project-local
+(imported) preset templates are merged into the registry only AFTER the project's layer
+data deserializes — so every param keyed to a project-local preset type resolves to "no
+template descriptor" and is dropped. Re-importing works because a fresh import registers
+the template first. Almost certainly a param-storage-redesign (landed 2026-07-05)
+load-ordering regression, cousin of the known-RED `expose_mirror` test.
+
+**Fix shape** — order the loader so project-local preset templates register before layer
+param deserialization; AND (class-kill, per `eliminate-bug-class-at-storage-layer`)
+make the loader keep an unresolvable param as an inline spec instead of dropping it —
+silent data loss on load is the storage-layer bug class this repo already decided to
+eliminate. The drop log line should become a hard test assertion (load the repro project,
+assert zero drops).
+
+**Repro** — load `meshImportTests.manifold`, press play: Camera Orbit LFO inert. Delete
+layer, drag the .glb back in, rebind: runs.
+
+### BUG-029 — `profiling` feature doesn't compile: rotted against the Beats/Bpm newtypes — FIXED 2026-07-06
+**Status:** FIXED (2026-07-06)
+
+**Fix** — the three newtype casts (`.as_f32()` / `.0`) applied; `cargo check -p manifold-app
+--features profiling` and clippy are clean, default build untouched. Un-parked because the
+profiler is the next oracle for BUG-035 (per-frame content-thread phase breakdown, LFO on vs
+off). Toggling the perf HUD starts/stops a session when built with `--features profiling`
+(input_host.rs `toggle_performance_hud`); sessions land in `profiling_sessions/`. Note: GPU
+pass-level numbers are still zero on native Metal (pre-migration profiler) — the CPU phase
+breakdown (engine tick / render_content / gpu_poll) is the usable signal.
+
+**Root cause** — the `#[cfg(feature = "profiling")]` blocks in `manifold-app` predate the
+`Beats`/`Bpm`/`Seconds` newtype migration and still treat those values as raw `f32`/`u32`.
+Three sites: [content_thread.rs:854](../crates/manifold-app/src/content_thread.rs#L854)
+(`Beats as u32` — non-primitive cast), [content_thread.rs:988](../crates/manifold-app/src/content_thread.rs#L988)
+(`expected f32, found Beats`), and [content_commands.rs:933](../crates/manifold-app/src/content_commands.rs#L933)
+(`expected f32, found Bpm`).
+
+**Symptom** — `cargo build -p manifold-app --features profiling` fails with 3 `E0308`/`E0605`
+type errors. The default build (profiling off) is unaffected, which is why the rot went
+unnoticed — the feature evidently hasn't been compiled since the newtype migration landed.
+
+**Found during** — PARAM_STORAGE P2 (2026-07-05), while compile-checking the profiling path
+after migrating its param readout from the deleted positional `param_values` to `ParamManifest`
+(that param-side migration is done and correct; these 3 errors are unrelated newtype-cast rot
+in the same blocks).
+
+**Fix shape** — wrap each site in the Beats/Bpm accessor instead of a raw cast (~3 one-line
+fixes). Unrelated to param storage, so parked here rather than folded into P2.
+
+### BUG-033 — `ui-snapshot` feature build broken: `manifold_core::effects::resolve_param_in` no longer exists — FIXED (verified in-tree 2026-07-07)
+**Status:** FIXED (2026-07-07)
+
+**Fixed note (2026-07-07, timeline-ux pass)** — `lane_param_range` now reads
+`param.spec.min/max` directly (interact.rs:497), the broken `resolve_param_in` call is gone,
+and the harness builds AND runs on the 2026-07-07 tip (`cargo build -p manifold-app --features
+ui-snapshot` clean; all scenes + `--script` flows rendered this session). Fixed by a landing
+between 07-05 and 07-07 that didn't close this entry; closing on direct evidence.
+
+**Root cause** — [interact.rs:500](../crates/manifold-app/src/ui_snapshot/interact.rs#L500) (`lane_param_range`, an
+automation-lane interact verb) calls `manifold_core::effects::resolve_param_in(&def, fx, param_id)`
+to read a param's `(min, max)`. That function/module path is gone after the PARAM_STORAGE
+refactor (the range now lives on the `ParamManifest`/spec, not a `resolve_param_in` helper).
+
+**Symptom** — `cargo build --bin manifold --features ui-snapshot` fails with `E0425` (unknown
+function) + a knock-on `E0433`. The DEFAULT build is unaffected, so it went unnoticed — but it
+means the entire `ui-snap` headless harness (graph/editor/timeline PNG + `--script` driver) can't
+compile on trunk. Found 2026-07-05 (Opus) while rendering a BUG-027 verification PNG; worked
+around with a temporary local stub (reverted) to get the render.
+
+**Fix shape** — resolve the param spec through the current manifest API and read its min/max
+(mirror whatever `lane_param_range`'s live-app equivalent now does). Owner: PARAM_STORAGE P2 (its
+refactor moved the range); ~1 site. Unrelated to the LayerId / node-preview work in this session.
+
+### BUG-013 — `commit_and_wait_completed` never checks command-buffer status (likely the GPU-proof flake mechanism) — FIXED 2026-07-05
+**Status:** FIXED (2026-07-05)
+
+**Root cause** — [encoder.rs:1655-1662](../crates/manifold-gpu/src/metal/encoder.rs#L1655-L1662):
+`waitUntilCompleted()` returns on ANY terminal state including `Error`; no caller checks
+`status()`/`error()`. Every heavy freeze proof and `TextureDiff::compare` submit through this
+call and read the result back as if it succeeded. Under cross-binary GPU contention
+(documented in `.config/nextest.toml` and the `GPU_TEST_LOCK` comment; three call sites build
+unlocked devices), a transiently failed buffer reads back stale/partial → spurious large diff.
+
+**Status** — split verdict, judged REAL-as-flake-mechanism: it precisely explains the
+observed signature (several heavy tests, random divergence sizes, never reproducing
+isolated). It is test-infra, not a compiler miscompile — but it gates trust in the entire
+oracle suite, so it blocks using the suite as a hard gate for agent work.
+
+**Fix shape** — check the buffer's terminal status in `commit_and_wait_completed`; on error,
+panic in tests (fail loudly, retryable) and log in production. Then re-baseline the flake:
+if red runs now report command-buffer errors instead of pixel diffs, the mechanism is
+confirmed; if divergences persist with clean status, keep hunting.
+
+**FIXED 2026-07-05** — [encoder.rs](../crates/manifold-gpu/src/metal/encoder.rs) now calls a
+`verify_completed()` helper after `waitUntilCompleted()`: if the buffer's status isn't
+`Completed`, it reads `status`/`error()` and, in `debug_assertions` builds (tests + dev),
+panics with the code+message; in release (the live show) it logs and continues rather than
+crash mid-set. The dev-vs-release split via `cfg!(debug_assertions)` gives "loud in tests,
+survivable on stage" without a test-only cfg (the helper lives in `manifold-gpu`, whose tests
+aren't where the flake showed up). The `GPU_TEST_LOCK` "three unlocked sites" note above was
+partly stale: the lock is a `parking_lot` reentrant mutex inside `test_device()`, and every
+lib GPU test acquires it; the only unlocked device is the `gpu_proofs` integration binary's
+own `GpuDevice::new()`, which runs in a separate process. That cross-process contention is now
+self-reporting (a contended failure panics instead of reading stale pixels) rather than
+silent, so a dedicated cross-process lock is no longer needed. Landed alongside the GPU-test
+`gpu-proofs` feature gate (default `cargo test` is now GPU-free; run `--features gpu-proofs`
+to exercise the proofs).
+
 ### BUG-016 — Imported .glb layers are black boxes: no card params, no Model File picker, edit paths silently no-op — FIXED 2026-07-04 (`2d5e4dc6`)
+**Status:** FIXED (2026-07-04)
 
 **Resolution** — PRESET_LIBRARY P0 (D9) shipped: the drop now registers the assembled
 graph as a project-embedded preset (`origin: Saved`) and the layer TRACKS it (`graph:
@@ -1980,6 +2209,7 @@ and the layer tracks it; assembler emits curated performance bindings. Not per-c
 fallbacks.
 
 ### BUG-017 — `docs_index_is_in_sync_with_docs_dir` red on main: two design docs never regenerated the index — FIXED 2026-07-05
+**Status:** FIXED (2026-07-05)
 
 **Symptom** — found 2026-07-04 running the full workspace sweep for the automation-P4
 landing (unrelated to that work — pre-existing on origin/main before the landing branch
@@ -2000,60 +2230,8 @@ this out.
 **Fixed 2026-07-05** — regenerated while adding `VERIFICATION_DEBT.md` (orchestration-quality
 pass); `cargo test -p manifold-core --test docs_index_sync` green, 103 docs indexed.
 
-### BUG-018 — `node_graph::catalog_gen::tests::regenerates_in_sync` red on main: `docs/node_catalog.json` stale against the node registry — LOW
-
-**Symptom** — found 2026-07-04, same full-workspace sweep as BUG-017, same shape: confirmed
-pre-existing on origin/main (`90ab8531`) before the automation-P4 landing branch touched
-anything — reproduced standalone in a disposable worktree at that exact commit.
-`cargo test -p manifold-renderer --lib node_graph::catalog_gen::tests::regenerates_in_sync`
-fails with `docs/node_catalog.json is stale`.
-
-**Root cause** — not investigated; some session added/changed a node-graph primitive without
-re-running `cargo run -p manifold-renderer --bin gen_node_catalog` afterward. Given `node_count`
-sits at 214 in the checked-in file, worth diffing against the live-generated output to see
-which node(s) are missing/changed before just overwriting.
-
-**Fix shape** — mechanical: `cargo run -p manifold-renderer --bin gen_node_catalog`, commit
-the regenerated `docs/node_catalog.json`. Same reasoning as BUG-017 for not fixing it this
-session (unrelated to the work at hand, and worth doing once rather than mid-churn).
-
-### BUG-019 — Motion "group fold" (D17) has no UI surface to fold — DESIGN GAP (deferred)
-
-**Symptom** — found 2026-07-04 completing UI motion P2. D17 lists "group fold: children
-collapse into header," but the animation has nothing to animate: `EffectGroup.collapsed`
-exists at the model layer (`crates/manifold-core/src/effects.rs:3194`) with zero rendering
-surface — no group header, no collapse toggle, no child-card grouping by `group_id` in the
-inspector (`rg EffectGroup crates/manifold-ui/src` → 0 hits).
-
-**Root cause** — the design assumed a foldable effect-group UI in the inspector that was
-never built. Group fold is a *new feature* (group header + child-card filtering + collapse
-toggle), not an animation retrofit — correctly out of the motion layer's scope.
-
-**Fix shape** — build the effect-group inspector UI first (own small design: header row,
-`group_id`-keyed child filtering, collapse toggle), THEN the fold animation is a `FlipList`
-+ exit-state retrofit like the other P2 collapses. Needs a design/build decision from Peter.
-
-### BUG-020 — Card collapse animates effect cards but not generator cards — LOW (deferred)
-
-**Symptom** — found 2026-07-04 (UI motion P2 batch 1). Effect cards collapse/expand with the
-`collapse_anim` reflow; generator cards do not — their rows parent at root (`None`) in
-`ParamCardPanel::build_generator`, so there is no `ClipRegion` seam to clip the collapsing
-body the way `build_effect` has.
-
-**Fix shape** — give `build_generator` the same parent/clip-region seam `build_effect` uses,
-then reuse the existing `collapse_anim`. Small, localized to `param_card.rs`.
-
-### BUG-021 — Value snap-back is Perform-inspector only, not the graph-editor param cards — LOW (deferred)
-
-**Symptom** — found 2026-07-04 (UI motion P2 closer). Right-click value-reset eases the fill
-(EASE_SNAP) on Perform-context inspector cards; the graph editor owns a separate
-`ParamCardPanel` instance not reachable from the `ParamRightClick` dispatch site
-(`ui_bridge/inspector.rs:1140`), so its value resets snap without the settle.
-
-**Fix shape** — thread the snap-back trigger to the graph-editor's `ParamCardPanel` too, or
-lift the reset-with-settle into shared `ParamCardPanel` logic both dispatch sites reach.
-
 ### BUG-022 — Main-window browser popup: Escape while the search field is focused cancels the text session but leaves the popup open — FIXED 2026-07-05
+**Status:** FIXED (2026-07-05)
 
 **Resolution** — applied the documented fix shape: in the main-window `text_input.active` Escape arm
 (`window_input.rs`), when `field == SearchFilter`, also call
@@ -2095,6 +2273,7 @@ gap outside P1/P2's stated deliverables (which target orphaned-session-on-close,
 missing-close-on-cancel).
 
 ### BUG-024 — Generator preset thumbnails render on a WHITE background (unrepresentative) — FIXED 2026-07-05
+**Status:** FIXED (2026-07-05)
 
 **Resolution** — root cause was (a) from the suspect list: generators leave their background
 transparent (alpha 0), and `readback_tonemapped_rgba8` saved that alpha into the PNG, so viewers
@@ -2109,6 +2288,7 @@ without audio modulation or a colormap param is desaturated). Not the white-bg b
 "bare look" issue, low priority — leave for a thumbnail-polish pass if it matters on the picker.
 
 ### BUG-024-ORIG — original analysis (Generator thumbnails on WHITE background) — superseded by the FIXED note above
+**Status:** SUPERSEDED
 
 **Symptom** — found 2026-07-05 eyeballing the committed `assets/preset-thumbnails/generators/*.png`
 after adding warm-up frames (PRESET_LIBRARY P6). Effect thumbnails (rendered over the gradient
@@ -2133,6 +2313,7 @@ Effects are unaffected. Until fixed, generator thumbnails are present but not vi
 P6 image-cell display infra is correct; the generator render output is not.
 
 ### BUG-023 — `no_new_raw_color_literals` red on main: real count (201) one above baseline (200) — FIXED 2026-07-05 (in the P6 landing)
+**Status:** FIXED (2026-07-05)
 
 **Resolution** — the extra raw literal was localized (not a "prior session" — it was THIS
 orchestration's own P5 landing `0d6e857e`): `browser_popup.rs` carried
@@ -2166,71 +2347,8 @@ on that line (count back to 200), or (c) bump `COLOR_BASELINE` to 201 if it's ac
 fixed this session — the gate confirms the diff at hand is P6-clean; picking apart an unrelated
 pre-existing count belongs to whoever next touches `manifold-ui/src`'s colour call sites.
 
-### BUG-025 — Timeline layer/header scissoring: clip content bleeds across row bounds — MED (repro needed)
-
-**Symptom** — reported by Peter 2026-07-05 (screenshot in session transcript) as "layer and
-header scissoring": in the arrangement view, the bottom layer's purple clip body renders far
-beyond its row — a solid block filling the timeline from its row down to the window edge —
-while the layer-header column at bottom-left shows the Plasma MIDI drawer (MIDI / CHANNEL /
-DEVICE) overlapping into that region. Clip content and header-column content are not being
-mutually clipped to their rows/panes.
-
-**Root cause** — unknown. Suspect surface: the per-row scissor rect for clip bodies (last or
-expanded row), the `track-header-invariant` / `single-source-y-layout` class, or a stale
-subregion scissor (`subregion-scissor-invariant`). Likely same family as BUG-015 (inspector
-sections at stale offsets) — both smell like Y-layout/scissor divergence after the recent
-timeline waves.
-
-**Repro** — not pinned; NOT reproduced headless (2026-07-05 Opus). Snapshotted the `states`
-and `timeline` scenes (both carry a selected generator layer with an open MIDI/CHANNEL/DEVICE
-drawer, the closest fixtures to Peter's screenshot) — both render correctly: every clip body is
-scissored to its row, every header drawer stays in the left column, group nesting clips fine.
-A scroll-down + re-snapshot on `timeline` also did not reproduce (and scroll may not be fully
-wired in the headless tracks path). So the general scissoring path is sound; the bug is
-state-specific. Triage narrows it to a config the fixtures don't hit — most likely the
-*last* row being a selected generator whose clip fills the remaining viewport height, and/or a
-live scroll offset. Pin it with either a targeted fixture (selected generator as the final
-layer) or a running-app repro from Peter's project.
-
-**Repro attempt 2026-07-07 (timeline-ux audit)** — the 07-05 note's "scroll may not be fully
-wired in the headless tracks path" is now explained: `--scroll` was seeded AFTER the base
-render (fixed this branch), so every prior "scrolled" base PNG was actually unscrolled. With
-scroll genuinely applied (via the interact after-render), headers + lanes offset together and
-clip bodies stay scissored to their rows — still not reproduced. The state-specific triage
-above stands.
-
-**Fix shape** — TBD after repro. If it's the invariant class (likely, given BUG-015 is the same
-family), fix at the single Y-layout source, not per-widget patches.
-
-### BUG-026 — Batch-2 popups: entrance fade freezes at t=0 (transparent bg) until an input re-dirties the frame — MED — FIX LANDED, running-app verification owed
-
-**Symptom** — reported by Peter 2026-07-05 (before/after screenshots): opening the Add Effect
-browser renders the search field, filter chips, and preset cells floating directly over the
-timeline — the popup's dark background panel is missing. Moving the mouse over the popup makes
-the background appear and it then looks correct.
-
-**Root cause (FOUND)** — not the alpha math, a missing animation-poll in the dirty-driven
-renderer. The batch-2 popups (browser / ableton picker / settings) run a D17 entrance tween:
-`enter_anim` starts at `t=0` and, while `t<0.999`, `BrowserPopupPanel::build` multiplies the
-modal container's background + border alpha by `t` (browser_popup.rs:451,469-474) — so frame 0
-draws the panel fully transparent while the cells (opaque, not `t`-gated) float on top. The
-tween is ticked inside each popup's `update()`, which only re-runs while the frame stays dirty.
-The inspector drawer + panel-split tweens self-sustain via a `needs_rebuild` poll after
-`UIRoot::update()` (app_render.rs ~2927), but the batch-2 popups were added to `update()` and
-never to that poll. Opening a popup dirties exactly one frame (drawing it invisible); nothing
-re-dirties it, so the fade freezes at `t=0` until an unrelated input (mouseover) re-dirties the
-frame — the "no background until mouseover" symptom.
-
-**Fix (LANDED)** — added `is_animating()` to each batch-2 popup and the matching poll in the
-app motion block, mirroring `drawer_anim_active` exactly. Gate: clippy `-D warnings` clean;
-`manifold-ui --lib` 604/604. Commit `01c15213` (branch `fix/popup-enter-anim`).
-
-**Verification owed (L4)** — the headless `--script` driver has no frame loop and its
-`enter_anim` ticks off wall-clock, so it cannot exercise this timing bug; a running-app check
-(open the Add Effect browser, confirm the background is present immediately without moving the
-mouse) is the remaining proof. Tracked in VERIFICATION_DEBT (VD-006).
-
 ### BUG-027 — Graph-editor node previews composite on the wrong z-layer vs. node chrome — MED — FIXED 2026-07-05
+**Status:** FIXED (2026-07-05)
 
 **Fix** — node previews now draw INLINE via a new `Painter::draw_image_uv` primitive, emitted by
 `GraphCanvas::draw_node` right after each node's body, with each node pushed to its OWN increasing
@@ -2281,6 +2399,7 @@ renderer change (Painter trait + UIRenderer + canvas render + both blit-pass del
 headless-verifiable. Not a "patch the overlap cases" job.
 
 ### BUG-028 — File-drop targeting can't read the live pointer during a Finder drag (both AppKit poll sources frozen) — MED — FIXED 2026-07-05 (`wave/timeline-drop`, landed on main 2026-07-05; Peter's live-drag verification still owed)
+**Status:** FIXED (2026-07-05)
 
 **Symptom** — dragging an audio file onto an existing audio lane lands it on a NEW lane
 instead of the target lane. Verified 2026-07-05 (Peter, live drag test).
@@ -2321,6 +2440,7 @@ existing audio lane → joins that lane at the pointer's beat, ghost clip shows 
 drop; an image drop lands under the pointer.
 
 ### BUG-032 — glTF import: a model with >2 materials fails to load ("unknown parameter 'pos_x_2'") and renders black — HIGH — FIXED 2026-07-05 (`dc97bbe6`)
+**Status:** FIXED (2026-07-05)
 
 > Id note: originally logged as BUG-029 (commit `dc97bbe6`, commit-message and
 > the `prove-render-path` memory still say 029). A concurrent PARAM_STORAGE P2
@@ -2355,33 +2475,8 @@ apricot `.glb` (4 objects) now loads clean through `PresetRuntime::from_def`. Re
 `render_scene_with_three_objects_loads_per_object_transform_params` (synthetic, portable) +
 `held_out_gltf_generator_loads_through_from_def` (`#[ignore]`, env-gated on a >2-material `.glb`).
 
-### BUG-031 — Layer context-menu + rename still address layers positionally — LOW (follow-up to the LayerId migration `877852a9`)
-
-**Root cause** — the primary layer-header actions were migrated to carry a stable `LayerId`
-(commit `877852a9`, kills the panel-index-vs-live-model collision). Two related clusters were
-deliberately left positional to keep that diff bounded:
-- The **`Context*Layer` right-click-menu family** (`ContextPasteAtLayer`, `ContextImportMidi`,
-  `ContextAddVideoLayer/GeneratorLayer/AudioLayer`, `ContextDuplicateLayer`, `ContextUngroup`,
-  `ContextDeleteLayer`, `DropdownContext::LayerContext`) still carry a `usize`. `LayerHeaderRightClicked`
-  now carries the id and `ui_root` resolves it to the current row synchronously when the menu opens,
-  so there's no regression — but the menu ITEMS bake in that index, leaving a (rare) stale window
-  between menu-open and item-click.
-- **`TextInputField::LayerName(usize)`** (layer rename): the enum derives `Copy`, and `LayerId`
-  isn't `Copy`, so migrating it forces dropping `Copy` and cascades through the whole text-input
-  subsystem (`app.rs` field handling). The double-click intercept resolves id→index locally, so the
-  rename has the same (unchanged) stale window it always had.
-
-**Symptom** — none observed; latent. A context-menu action or a rename committed after the layer
-list changed under it (another command, undo/redo, MIDI phantom layer) could hit the wrong layer.
-Same bug class as the migration killed for the primary controls.
-
-**Fix shape** — carry `LayerId` in the `Context*Layer` family (thread it from
-`LayerHeaderRightClicked` through the menu items) and switch `TextInputField::LayerName` to
-`LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
-
-## Fixed
-
 ### BUG-040 (v13-import-migration-drop) — V1.3→V1.4 migration drops positional params of a project-local (imported) generator — LOW (narrow window) — FIXED 2026-07-09 (`wave/param-boundaries-p3`, PARAM_STORAGE_BOUNDARIES_DESIGN.md P3)
+**Status:** FIXED (2026-07-09)
 
 **Found** during the 2026-07-06 param-system post-refactor audit (BUG-036 sibling hunt),
 by reading `crates/manifold-io/src/migrations/param_storage_v14.rs` — not reproduced on a
@@ -2419,6 +2514,7 @@ Still pure `Value → Value`; no consult of the live registry added; the baked t
 untouched.
 
 ### BUG-051 (trigger-clear-unwired) — `LiveTriggerState::clear()` never called; armed flags survive transport stop — FIXED 2026-07-07 @ 3089e0a3
+**Status:** FIXED @ 3089e0a3
 
 **Was:** `LiveTriggerState::clear()`'s own doc said "call on transport stop /
 project reset so a stale 'fired, not yet re-armed' flag can't suppress the
@@ -2439,6 +2535,7 @@ this entry originally specified. Regression proof:
 `modulation::tests::clear_all_trigger_edges_rearms_generator_edge`.
 
 ### BUG-044 (mix-trigger-deafness) — Transient detection near-silent on dense full mixes — FIXED 2026-07-06 (novelty-vs-recent-max dual criterion; Sonnet agent build, orchestrator-verified)
+**Status:** FIXED (2026-07-06)
 
 **Was:** the adaptive threshold `median(ODF)×7+48` self-raised on dense productions
 (continuous broadband change keeps the median elevated) — feel mix 1 Full fire in
@@ -2479,6 +2576,7 @@ means any future shortening of the median window below ~2 spike periods
 resurrects BUG-041 — greppable warning lives here.
 
 ### BUG-042 (onset-settle-grab) — Tracker re-acquired garbage pitch during the post-attack settle window — FIXED 2026-07-06 (third design: position-anchored re-acquire window)
+**Status:** FIXED (2026-07-06)
 
 **Was:** D5's onset re-acquire teleported to `strongest_peak()` on the fire hop; the
 VQT needs ~12 hops to settle post-attack, so the estimate was wrong ~70 ms on EVERY
@@ -2510,6 +2608,7 @@ octave jumps; jumps drop across ~all 25 clips (bad_guy bass 26→13, vocals ~hal
 presence flat-to-up everywhere; apricots bass stays perfect (0 jumps, 0.83).
 
 ### BUG-043 (deep-bass-floor-anchor) — Tracker anchored at the spectrum bottom on deep sub-bass — FIXED 2026-07-06 (apex-masked salience comb)
+**Status:** FIXED (2026-07-06)
 
 **Was:** on real deep-sub stems (bad_guy, apricots bass) the Full/Low tracker sat at
 10–18 Hz under the real ~40–80 Hz fundamental for whole clips; presence dark.
@@ -2551,6 +2650,7 @@ presence oracle (BUG-042's) went 43.6%→95.2% PASS; notes accuracy baseline mov
 61.9%→56.4% (still the open BUG-042 target).
 
 ### BUG-041 (superflux-glide-fire) — Transients fire continuously through a pure pitch glide — FIXED 2026-07-06 (AUDIO_OBJECT_TRACKING P3)
+**Status:** FIXED (2026-07-06)
 
 **Symptom** (found 2026-07-06, mod_harness selftest) — the `dive` scenario (7-voice
 supersaw gliding 1200→150 Hz, no attacks anywhere in the signal) lights the Transients
@@ -2592,6 +2692,7 @@ All five entries below were fixed 2026-06-23, with a test per path:
 The fresh-copy carry-rule (id always fresh; drop Ableton/MIDI + audio mods; drop cross-chain group; keep drivers/envelopes) is settled and lives in `PresetInstance::duplicated()`.
 
 ### BUG-001 — Pasting an effect shares the source's `EffectId` — HIGH — ✅ FIXED (`2e3dc4f3`)
+**Status:** FIXED
 
 Copy/paste of an effect card clones the `PresetInstance` verbatim and keeps the original's
 `EffectId`. Nothing mints a fresh id. The two cards then share one identity, and the whole
@@ -2627,6 +2728,7 @@ same pass. Add a paste test mirroring the graph-node one.
 ---
 
 ### BUG-002 — `Clip::clone_with_new_id` doesn't regenerate nested effect ids — MED — ✅ FIXED (`2e3dc4f3`)
+**Status:** FIXED
 
 Same class as BUG-001, one layer down. `Clip::clone_with_new_id` mints a fresh `ClipId` but
 bare-`.clone()`s everything else, including `effects: Vec<PresetInstance>`
@@ -2662,6 +2764,7 @@ Make `Clip::clone_with_new_id` deep-regenerate `cloned.effects[*].id` (and clip-
 ---
 
 ### BUG-003 — Duplicating a grouped effect leaves `group_id` pointing at the source's group — LOW — ✅ FIXED (`2e3dc4f3`)
+**Status:** FIXED
 
 A pasted/duplicated effect keeps its `group_id`, which still references a group on the
 **source's** chain. `Layer::clone_with_new_ids` remaps this for layer effects
@@ -2675,6 +2778,7 @@ ref.
 ---
 
 ### BUG-004 — Effect paste carries Ableton/automation bindings; generator paste drops them — LOW — ✅ FIXED (`2e3dc4f3`)
+**Status:** FIXED
 
 Effect paste clones the whole `PresetInstance`, so `ableton_mappings`, `drivers`, `envelopes`,
 and `audio_mods` all ride along — a pasted effect ends up mapped to the **same Ableton
@@ -2691,6 +2795,7 @@ carry hardware/MIDI mappings onto a paste) and make both paths match.
 ---
 
 ### BUG-005 — Macro targets can't disambiguate two same-type effects on one layer — LOW — ✅ FIXED (`9f43f183`)
+**Status:** FIXED
 
 `MacroMappingTarget` addresses an effect param by `(layer_id | master, effect_type, param_id)`
 ([macro_bank.rs:64-82](../crates/manifold-core/src/macro_bank.rs#L64-L82)) — **not** by

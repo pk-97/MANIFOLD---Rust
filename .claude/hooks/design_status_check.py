@@ -109,19 +109,39 @@ def main() -> int:
             candidates.append((name, "code shipped, status line not updated in this merge",
                                current, subs))
 
-    if not candidates:
-        return 0
+    if candidates:
+        print("\n⚠  design-status housekeeper — possible stale doc status:", file=sys.stderr)
+        claude_bin = find_claude() if os.environ.get("DESIGN_STATUS_HAIKU", "1") != "0" else None
+        for name, reason, current, subs in candidates:
+            print(f"  · {name}: {reason}", file=sys.stderr)
+            suggestion = ask_haiku(claude_bin, name, current, subs) if claude_bin else ""
+            if suggestion:
+                print(f"      Haiku suggests: {suggestion}", file=sys.stderr)
+        print("  Update the doc's **Status line if these shipped (the board reads it).\n",
+              file=sys.stderr)
 
-    print("\n⚠  design-status housekeeper — possible stale doc status:", file=sys.stderr)
-    claude_bin = find_claude() if os.environ.get("DESIGN_STATUS_HAIKU", "1") != "0" else None
-    for name, reason, current, subs in candidates:
-        print(f"  · {name}: {reason}", file=sys.stderr)
-        suggestion = ask_haiku(claude_bin, name, current, subs) if claude_bin else ""
-        if suggestion:
-            print(f"      Haiku suggests: {suggestion}", file=sys.stderr)
-    print("  Update the doc's **Status line if these shipped (the board reads it).\n",
-          file=sys.stderr)
+    bug_backlog_check()
     return 0
+
+
+def bug_backlog_check() -> None:
+    """Same honesty check for the bug tracker: the ``**Status:`` line is the truth, and a
+    bug whose named fix-design has SHIPPED (the hole that let BUG-058/059 sit 'open' after
+    DRAG_CAPTURE shipped) or that's filed under the wrong section gets a nudge. Print-only,
+    whole-file — stays quiet while the backlog is clean. Run: bug_status.py --check."""
+    try:
+        sys.path.insert(0, str(HOOKS_DIR))
+        import bug_status
+        problems = bug_status.check(bug_status.BACKLOG.read_text())
+    except Exception:
+        return
+    if not problems:
+        return
+    print("\n⚠  bug-backlog housekeeper — status drift (bug_status.py):", file=sys.stderr)
+    for p in problems:
+        print(f"  · {p}", file=sys.stderr)
+    print("  Fix the **Status: line / index / section, or run bug_status.py --write.\n",
+          file=sys.stderr)
 
 
 if __name__ == "__main__":
