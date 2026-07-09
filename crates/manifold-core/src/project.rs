@@ -89,6 +89,14 @@ pub struct Project {
     #[serde(default)]
     pub saved_playhead_time: f32,
 
+    /// What the last load silently repaired (unknown effects stripped,
+    /// overlapping clips removed, orphaned references purged, missing media
+    /// files). Transient runtime state, recomputed every load — never
+    /// serialized, exactly the `clip.layer_id` pattern (`BUG-063`,
+    /// `docs/PROJECT_FILE_INTEGRITY_DESIGN.md` §3.6).
+    #[serde(skip)]
+    pub load_report: LoadReport,
+
     /// Project-scoped presets ("forks") — self-contained preset defs that live
     /// in this project rather than the global catalog. Resolved by id via the
     /// catalog overlay when the project loads. Empty for projects that have
@@ -146,10 +154,14 @@ pub struct Project {
 impl Project {
     /// Remove effects with unrecognized types (e.g. removed Unity effects).
     /// Called before on_after_deserialize so they never enter the runtime.
-    pub fn strip_unknown_effects(&mut self) {
+    /// Returns the count removed (BUG-063 — feeds `Project::load_report`).
+    pub fn strip_unknown_effects(&mut self) -> usize {
         use crate::preset_type_id::PresetTypeId;
-        let strip = |effects: &mut Vec<crate::effects::PresetInstance>| {
+        let mut removed = 0usize;
+        let mut strip = |effects: &mut Vec<crate::effects::PresetInstance>| {
+            let before = effects.len();
             effects.retain(|fx| *fx.effect_type() != PresetTypeId::UNKNOWN);
+            removed += before - effects.len();
         };
         // Master effects
         strip(&mut self.settings.master_effects);
@@ -159,6 +171,7 @@ impl Project {
                 strip(effects);
             }
         }
+        removed
     }
 
     /// Post-deserialization initialization. Rebuild caches and run migrations.
@@ -1506,6 +1519,81 @@ impl PurgeResult {
     }
 }
 
+/// What the last `load_project` call silently repaired. Written by both
+/// post-load call sites (`strip_unknown_effects` inside
+/// `load_project_from_json_with`; `run_post_load_validation`'s overlap
+/// repair, orphan purge, and missing-file detection) into
+/// `Project::load_report` — the single owner of "what this load altered"
+/// (`BUG-063`, `docs/PROJECT_FILE_INTEGRITY_DESIGN.md` §3.6).
+#[derive(Debug, Clone, Default)]
+pub struct LoadReport {
+    pub unknown_effects_removed: usize,
+    pub overlapping_clips_repaired: usize,
+    pub orphaned_clips_purged: usize,
+    pub orphaned_midi_purged: usize,
+    pub missing_media_files: Vec<String>,
+}
+
+impl LoadReport {
+    pub fn is_empty(&self) -> bool {
+        self.unknown_effects_removed == 0
+            && self.overlapping_clips_repaired == 0
+            && self.orphaned_clips_purged == 0
+            && self.orphaned_midi_purged == 0
+            && self.missing_media_files.is_empty()
+    }
+
+    /// One human line per non-zero entry, e.g. "3 unknown effects removed".
+    /// Singular/plural is correct for count == 1.
+    pub fn human_lines(&self) -> Vec<String> {
+        fn plural(n: usize, singular: &str, plural: &str) -> String {
+            if n == 1 {
+                singular.to_string()
+            } else {
+                plural.to_string()
+            }
+        }
+
+        let mut lines = Vec::new();
+        if self.unknown_effects_removed > 0 {
+            lines.push(format!(
+                "{} unknown {} removed",
+                self.unknown_effects_removed,
+                plural(self.unknown_effects_removed, "effect", "effects")
+            ));
+        }
+        if self.overlapping_clips_repaired > 0 {
+            lines.push(format!(
+                "{} overlapping {} repaired",
+                self.overlapping_clips_repaired,
+                plural(self.overlapping_clips_repaired, "clip", "clips")
+            ));
+        }
+        if self.orphaned_clips_purged > 0 {
+            lines.push(format!(
+                "{} orphaned {} purged",
+                self.orphaned_clips_purged,
+                plural(self.orphaned_clips_purged, "clip", "clips")
+            ));
+        }
+        if self.orphaned_midi_purged > 0 {
+            lines.push(format!(
+                "{} orphaned MIDI {} purged",
+                self.orphaned_midi_purged,
+                plural(self.orphaned_midi_purged, "mapping", "mappings")
+            ));
+        }
+        if !self.missing_media_files.is_empty() {
+            lines.push(format!(
+                "{} missing media {}",
+                self.missing_media_files.len(),
+                plural(self.missing_media_files.len(), "file", "files")
+            ));
+        }
+        lines
+    }
+}
+
 impl Default for Project {
     fn default() -> Self {
         Self {
@@ -1520,6 +1608,7 @@ impl Default for Project {
             recording_provenance: RecordingProvenance::default(),
             last_saved_path: String::new(),
             saved_playhead_time: 0.0,
+            load_report: LoadReport::default(),
             embedded_presets: Vec::new(),
             session: SessionGrid::default(),
             legacy_perc_audio_path: None,

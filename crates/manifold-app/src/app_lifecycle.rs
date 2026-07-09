@@ -740,6 +740,13 @@ impl Application {
             self.needs_structural_sync = true;
         }
 
+        // Non-blocking load-repair notice (BUG-063,
+        // `docs/PROJECT_FILE_INTEGRITY_DESIGN.md` §3.6). Never a blocking
+        // modal — that's D1's `alerts::error` refusal path for a too-new file.
+        if let Some(notice) = action.notice {
+            self.ws.ui_root.toast.show(notice);
+        }
+
         // Mark clean on content thread (save succeeded)
         if action.mark_clean {
             self.send_content_cmd(ContentCommand::MarkClean);

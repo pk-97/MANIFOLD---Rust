@@ -221,7 +221,7 @@ pub fn load_project_from_json_with(
 
     // Strip unrecognized effect types (e.g. removed effects from Unity projects).
     // Without this, Unknown effects stay in the effect list and show in the UI.
-    project.strip_unknown_effects();
+    project.load_report.unknown_effects_removed = project.strip_unknown_effects();
 
     // Step 1: Rebuild runtime data structures
     project.on_after_deserialize();
@@ -256,6 +256,7 @@ pub fn run_post_load_validation(project: &mut Project) {
             validation.missing_files.join("\n")
         );
     }
+    project.load_report.missing_media_files = validation.missing_files;
 
     // Step 7: Purge orphaned references
     let purge_result = project.purge_orphaned_references();
@@ -266,6 +267,8 @@ pub fn run_post_load_validation(project: &mut Project) {
             purge_result.midi_mappings_removed
         );
     }
+    project.load_report.orphaned_clips_purged = purge_result.timeline_clips_removed;
+    project.load_report.orphaned_midi_purged = purge_result.midi_mappings_removed;
 
     // Step 8: Populate clip.layer_id from structural ownership.
     // layer_id is skip_serializing (not persisted), so it deserializes as empty.
@@ -310,12 +313,13 @@ pub fn run_post_load_validation(project: &mut Project) {
     // Step 10: Repair pre-existing clip overlaps.
     // Projects saved before overlap enforcement was added to all mutation paths
     // may contain overlapping clips. Remove the shorter clip in each collision.
-    repair_overlapping_clips(project);
+    project.load_report.overlapping_clips_repaired = repair_overlapping_clips(project);
 }
 
 /// Repair overlapping clips by removing the shorter clip in each collision pair.
 /// Only needed for projects saved before overlap enforcement was complete.
-fn repair_overlapping_clips(project: &mut Project) {
+/// Returns the count removed (BUG-063 — feeds `Project::load_report`).
+fn repair_overlapping_clips(project: &mut Project) -> usize {
     let mut total_removed = 0usize;
     for layer in &mut project.timeline.layers {
         if !layer.has_overlapping_clips() {
@@ -360,6 +364,7 @@ fn repair_overlapping_clips(project: &mut Project) {
         );
         project.timeline.mark_clip_lookup_dirty();
     }
+    total_removed
 }
 
 #[derive(Debug)]
