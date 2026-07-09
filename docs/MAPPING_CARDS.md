@@ -322,3 +322,137 @@ Effects are spice: most earn one wire or none, and every mapped effect row spend
 - Roll: Reactivity. Hands: Intensity.
 
 ---
+
+# Draft pieces (VISUAL_PIECES_GRAPH_DRAFTS.md)
+
+Cards for unbuilt pieces — the mod intents come from the drafts themselves; these rows formalize them into the grammar. Judged only after the piece builds.
+
+### A1 Murmuration — draft-unjudged
+*Signature: **the kick scatters the flock; the build compresses it into a ball the drop detonates.** Two structural moves, one organism.*
+- Scatter — beat · kick · impulse · a10/d600 · groove+drop
+- Cohesion — phrase · riser~ · ride (compress) · snap-release at drop · build
+- Regroup — phrase · inv-energy · cont · a500/r2000
+- Speed — bar · Low · cont
+- Trail — section · §class† · step (quiet long, drop short)
+- Palette — section · §step† · step
+- Hands: Alignment, Separation, Sight (H5 — flock character). Roll: Birds.
+
+### A2 Cymatics — draft-unjudged
+*Signature: **pitch rearranges the sand** — Mode X/Y step to the music's harmonic register; drops shake the plate.*
+- Mode X / Mode Y — phrase · pitch†/band (today: pad) · step through curated (n,m) table
+- Settle — phrase · inv-energy · cont (drops shake the plate loose)
+- Jiggle — texture · dens~ · cont
+- Palette — section · §step† · step
+- Hands: Symmetry, Trail. Roll: Sand. Pad: Cycle Modes.
+
+### A3 Reaction–Diffusion — draft-unjudged
+*Signature: **the kick seeds life** — Inject drops a colony on the hit; Feed/Kill tour regimes at phrase scale (spots→stripes→waves is a journey, not a jitter).*
+- Inject — beat · kick · impulse-trigger · groove+drop
+- Inject X/Y — beat · kick · random per hit
+- Feed / Kill — phrase · lfo64 (paired tour) or riser~ ride into drop · cont
+- Speed — bar · energy · cont
+- Hands: Diffusion.
+
+### A4 Caustics — draft-unjudged
+*Signature: **the water gets violent with the low end** — Depth on sub; treble disperses the light.*
+- Depth — bar · Low · cont · a100/r800
+- Dispersion — texture · High · cont
+- Sharpness — phrase · inv-energy · cont
+- Sun Angle — section · §step† · step (slow)
+- Hands: Scale, Speed.
+
+### A5 Film Master Chain — draft-unjudged
+*Signature: **none — the chain sits still while other things move** (stated in the draft). All hands.*
+- Hands: everything (Halation, Grain, Weave, Vignette, Warmth).
+
+### A6 Print Misregistration — draft-unjudged
+*Signature: **the plates drift apart as the track leans in — and snap back into register on the drop.***
+- Register — bar · energy · cont (drift apart)
+- Snap — beat · §bound†-downbeat (today: pad) · step-flash · drop (plates realign)
+- Angle Jitter — texture · dens~ · cont
+- Hands: Dot Size, Ink, Paper, Drift Speed.
+
+### A7 Pressure — draft-unjudged
+*Signature: **this card IS the effect** — Punch on the Low band send; the frame is a membrane the sub pushes through.*
+- Punch — beat · Low (send) · cont-impulse hybrid per draft · a10/d~sub
+- Hands: Center X/Y, Fringe, Elasticity (feel — tuned by eye).
+
+### A8 Mask → Explode — draft-unjudged
+*Signature: **the subject detonates on the drop marker** — one trigger, pre-armed, always loaded.*
+- Explode — section · §bound† (today: pad/drop marker) · trigger · drop
+- Hands: Force, Turbulence, Gravity, Fade, Palette. Auto: Re-arm.
+
+### A9 Slit-Scan / Time Displacement — draft-unjudged
+*Signature: **riding Delay pumps time itself** — a hand fader first; inverse energy makes quiet sections smear long.*
+- Delay — phrase · hands or inv-energy · cont
+- Smear — phrase · inv-energy · cont · engage quiet
+- Map — section · §step† · step
+- Hands: Direction, Resolution (roll).
+
+### A10 Growth — grow, then explode — draft-unjudged
+*Signature: **the piece IS the Grow fader** — the structure climbs the tower over the 8-bar build; Explode detonates it at the drop.*
+- Grow — phrase · beat32 (or riser~ ride) · ride 0→1 across the build · build
+- Explode — section · §bound† (today: pad/drop marker) · trigger · drop
+- Glow — bar · energy · cont
+- Seed — roll · re-roll per section (a new tree per drop)
+- Hands: Shape, Density, Twist, Burst, Palette.
+
+### A11 Lightning — draft-unjudged
+*Signature: **the snare is the strike** — the instrument answers the backbeat, not the kick (counterpoint with whatever the kick already owns).*
+- Strike — beat · trans (snare-band) · trigger per hit
+- Flash — beat · fan of Strike (same voice)
+- Reach — bar · energy · cont
+- Hands: Jaggedness, Branches, Afterglow, Palette.
+
+### A12 What Survives — draft-unjudged
+*Signature: **Drift is quiet-section dramaturgy in one knob** — ride it by hand; Cadence locks re-description to the grid.*
+- Drift — phrase · hands (or inv-energy) · cont · engage quiet
+- Cadence — roll · beat/bar lock
+- Reset — section · §bound† (today: pad) · trigger (flush Memory to source)
+- Hands: Palette, Detail, Bands.
+
+### A13 Glossolalia — draft-unjudged
+*Signature: **Temperature is the piece** — freeze it in a breakdown and the writing gets stuck in loops; slam it at a drop and the script goes wild. Inverse energy as default wire, hands for the performance.*
+- Temperature — phrase · energy · cont · a500/r2000 (quiet freezes the writing into stuck loops; loud runs it wild — both directions are the piece)
+- Tempo — roll · BPM-locked subdivision
+- Hands: Ink Fade, Ghosts, Glyph Size, Columns (authoring). Pad: variant switches.
+
+### A15 Frozen — draft-unjudged
+*Signature: **the light lives, the lattice doesn't** — Current on energy; Pulse flashes the beat through a structure that never moves.*
+- Current — bar · energy · cont
+- Pulse — beat · kick · impulse · a5/d300 · groove+drop
+- Drift — roll · glacial cap (stated)
+- Hands: Trails, Density, Palette.
+
+### A16 Schematic — draft-unjudged
+*Signature: **Scale steps beat-quantized from 4 elements to thousands** — zoom-out as arrangement; Become hands the drawing to the flock at the drop.*
+- Scale — phrase · §step†/pad · beat-quantized steps
+- Pulse Rate — texture · dens~ · cont
+- Become — section · §bound† (today: pad) · trigger · drop
+- Hands: Layers, Sparsity. (Flock rows inherit A1's card.)
+
+### A14 Fork / A17 I Will Not Remember This / B3 Physics-as-Clip — no cards
+*A14 is a routing pattern; A17 is timeline-authored text cues (H5 — message layer); B3 is conventions. Nothing to map.*
+
+### B-tier compositions — draft-unjudged (sketch level)
+- **B1 Monolith Collapse:** Collapse — trigger · §bound†/pad · drop. Camera — phrase (H8). Rest hands until the XPBD wave lands.
+- **B2 Video-Textured Rubble:** Shatter — trigger · drop. Persist — roll per section. Pad: Freeze Frame.
+- **B4 Render Fader:** the fader — phrase · hands or riser~ ride (wireframe→lit render as the build resolves).
+- **B5 Splats Through Slit-Scan:** inherits A9's card whole.
+- **B6 Cel Screen-Print:** inherits A6's card (Register on energy is the same move in cel clothing).
+
+### C-tier compositions — draft-unjudged (sketch level)
+- **C1 Towers as Elements:** Wind — bar · Low · cont. Fill — phrase · energy-integral · ride (the build literally accumulates). Tear — trigger · drop. Slosh — bar · Low · cont.
+- **C2 Lightning Between Towers:** inherits A11 (Strike on snare-band).
+- **C3 Wind Made Visible:** Gust — bar · Low · cont (stated). Sway — phrase · lfo32 · cont. Hands: Height, Density, Palette, Sun Angle.
+- **C4 Shadow as Subject / Gallery After Dark:** Light Orbit — roll · beat-bound (stated). Dissolve — trigger · §bound†/pad · drop. Rake — phrase · §step† · step. Palette: Bone default, §step†.
+
+---
+
+## Open questions for Peter (first judging pass)
+
+1. **H3 depth:** is one kick param per preset right, or per *stack* (generator + effects share the one kick)? Current cards assume per-preset, so a generator + Transform zoom-punch = two kick moves when stacked. H7 catches it, but the rule could be stricter.
+2. **Zoom-punch legality (Transform):** the classic VJ move, kept at ≤2%. If it reads as cheese on the towers, veto it and it dies corpus-wide.
+3. **Inverse-energy defaults:** several quiet-register cards (Soft Focus, Dither, Watercolor, Glossolalia's Temperature) assume "quiet = more texture." If your instinct is the opposite (quiet = cleaner), that's one house-rule flip.
+4. **H13 (engage = clip placement)** needs your structural confirm — it's derived, not verified.
+
