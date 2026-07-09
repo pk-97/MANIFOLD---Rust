@@ -132,6 +132,7 @@ fn check_one(
             CHECK_CANVAS_W,
             CHECK_CANVAS_H,
             CHECK_FORMAT,
+            None,
         )
         .map_err(|e: JsonGeneratorLoadError| e.to_string())?;
     }

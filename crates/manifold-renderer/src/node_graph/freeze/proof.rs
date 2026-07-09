@@ -1056,7 +1056,7 @@ fn wireframe_generator_background_is_black() {
         trigger_count: 0,
     };
 
-    let mut generator = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT)
+    let mut generator = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT, None)
         .expect("generator builds");
     let target = RenderTarget::new(&device, w, h, FMT, "wz-bg");
     for _ in 0..3 {
@@ -1845,6 +1845,7 @@ fn every_fused_generator_executes_one_frame() {
                 w,
                 h,
                 FMT,
+                None,
             )
             .expect("fused generator builds");
             let target = RenderTarget::new(&device, w, h, FMT, "fused-gen-smoke");
@@ -1932,7 +1933,7 @@ fn fused_generator_renders_like_unfused() {
     };
     let render = |def: EffectGraphDef| -> RenderTarget {
         let mut g =
-            PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT)
+            PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT, None)
                 .expect("generator builds");
         let target = RenderTarget::new(&device, w, h, FMT, "freeze-gen-out");
         let mut enc = device.create_encoder("freeze-gen");
@@ -2010,7 +2011,7 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
     };
     // Warm up a few frames (instance/particle buffers populate), then capture.
     let render = |def: EffectGraphDef| -> RenderTarget {
-        let mut g = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT)
+        let mut g = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT, None)
             .expect("generator builds");
         let target = RenderTarget::new(&device, w, h, FMT, "freeze-dp-out");
         for i in 0..6u32 {
@@ -2188,7 +2189,7 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
         trigger_count: 0,
     };
     let render = |def: EffectGraphDef| -> RenderTarget {
-        let mut g = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT)
+        let mut g = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT, None)
             .expect("FluidSim2D builds");
         let target = RenderTarget::new(&device, w, h, FMT, "freeze-fluid-fusion");
         for i in 0..8u32 {
@@ -2284,7 +2285,7 @@ fn fluidsim3d_buffer_fusion_includes_3d_sampler_and_renders_like_unfused() {
         trigger_count: 0,
     };
     let render = |def: EffectGraphDef| -> RenderTarget {
-        let mut g = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT)
+        let mut g = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT, None)
             .expect("FluidSim3D builds");
         let target = RenderTarget::new(&device, w, h, FMT, "freeze-fluid3d-fusion");
         for i in 0..8u32 {
@@ -2364,7 +2365,7 @@ fn fluidsim_renders_deterministically_from_fresh_state() {
     // Warm the feedback loop a handful of frames so any frame-0 divergence has
     // time to amplify through the density→force→position loop, then capture.
     let render = |def: EffectGraphDef| -> RenderTarget {
-        let mut g = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT)
+        let mut g = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT, None)
             .expect("FluidSim2D builds");
         let target = RenderTarget::new(&device, w, h, FMT, "freeze-fluid-determinism");
         for i in 0..8u32 {
@@ -2423,7 +2424,7 @@ fn render_generator_8_frames(
         anim_progress: 0.0,
         trigger_count: 0,
     };
-    let mut g = PresetRuntime::from_def_with_device(def, registry, device, w, h, FMT)
+    let mut g = PresetRuntime::from_def_with_device(def, registry, device, w, h, FMT, None)
         .expect("preset builds");
     let target = RenderTarget::new(device, w, h, FMT, "freeze-gen-fusion");
     for i in 0..8u32 {
@@ -3130,7 +3131,7 @@ fn particletext_production_region_diag() {
         .unwrap_or(8);
     println!("frames: {frames}");
     let run = |d: EffectGraphDef| -> (PresetRuntime, RenderTarget) {
-        let mut g = PresetRuntime::from_def_with_device(d, &registry, &device, w, h, FMT)
+        let mut g = PresetRuntime::from_def_with_device(d, &registry, &device, w, h, FMT, None)
             .expect("preset builds");
         let target = RenderTarget::new(&device, w, h, FMT, "prod-diag");
         for i in 0..frames {

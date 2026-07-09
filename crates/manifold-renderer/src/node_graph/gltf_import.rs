@@ -845,7 +845,7 @@ mod tests {
 
         let (def, _report) = assemble_import_graph(&path).expect("assemble azalea");
         let registry = PrimitiveRegistry::with_builtin();
-        PresetRuntime::from_def(def, &registry)
+        PresetRuntime::from_def(def, &registry, None)
             .expect("assembled azalea graph must compile through PresetRuntime::from_def");
     }
 
@@ -991,7 +991,7 @@ mod tests {
 
         // Finally, it must build through the production loader (which flattens).
         let registry = PrimitiveRegistry::with_builtin();
-        PresetRuntime::from_def(def, &registry)
+        PresetRuntime::from_def(def, &registry, None)
             .expect("grouped import graph must build through PresetRuntime::from_def");
     }
 
@@ -1071,7 +1071,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("assemble {glb}: {e}"));
         println!("held-out import report: {report:?}");
         let registry = PrimitiveRegistry::with_builtin();
-        PresetRuntime::from_def(def, &registry).unwrap_or_else(|e| {
+        PresetRuntime::from_def(def, &registry, None).unwrap_or_else(|e| {
             panic!("held-out glTF generator failed to load through from_def: {e}")
         });
         println!("held-out glTF generator loaded clean ({} objects)", report.object_count);
@@ -1147,7 +1147,7 @@ mod tests {
         let registry = PrimitiveRegistry::with_builtin();
 
         let mut generator =
-            PresetRuntime::from_def_with_device(def, &registry, &device, w, h, format)
+            PresetRuntime::from_def_with_device(def, &registry, &device, w, h, format, None)
                 .expect("assembled azalea graph must build through PresetRuntime::from_def_with_device");
 
         let target = RenderTarget::new(&device, w, h, format, "imported-azalea");
@@ -1300,7 +1300,7 @@ mod tests {
         // is_watched = false -> production render path, INCLUDING the on-demand
         // fusion attempt the raw from_def proof never exercised.
         let mut generator = registry
-            .create_with_override(&device, &preset_id, Some(&def), w, h, false)
+            .create_with_override(&device, &preset_id, Some(&def), w, h, false, None)
             .expect(
                 "create_with_override must build the imported generator from its override def, \
                  even though the preset id is not in the bundled catalog",

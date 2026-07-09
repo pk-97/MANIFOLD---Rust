@@ -389,7 +389,7 @@ mod tests {
         let device = GpuDevice::new();
         let registry = PrimitiveRegistry::with_builtin();
         let mut generator =
-            PresetRuntime::from_json_str_with_device(&json, &registry, &device, w, h, FMT)
+            PresetRuntime::from_json_str_with_device(&json, &registry, &device, w, h, FMT, None)
                 .expect("build BlackHole generator");
         let target = RenderTarget::new(&device, w, h, FMT, "dump-target");
         let params = ParamManifest::default();
@@ -541,6 +541,7 @@ mod tests {
                 w,
                 h,
                 FMT,
+                None,
             )
             .expect("build variant");
             let target = RenderTarget::new(&device, w, h, FMT, "sweep-target");

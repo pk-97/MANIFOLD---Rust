@@ -122,8 +122,16 @@ fn render_generator(device: &GpuDevice, def: &EffectGraphDef, size: u32) -> Resu
     let registry = PrimitiveRegistry::with_builtin();
     let format = GpuTextureFormat::Rgba16Float;
     let mut runtime =
-        PresetRuntime::from_def_with_device(def.clone(), &registry, device, size, size, format)
-            .map_err(|e| format!("generator build failed: {e}"))?;
+        PresetRuntime::from_def_with_device(
+            def.clone(),
+            &registry,
+            device,
+            size,
+            size,
+            format,
+            None,
+        )
+        .map_err(|e| format!("generator build failed: {e}"))?;
 
     let target = RenderTarget::new(device, size, size, format, "preset-thumb-gen-target");
 

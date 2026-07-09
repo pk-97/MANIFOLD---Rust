@@ -177,6 +177,7 @@ mod tests {
                 1920,
                 1080,
                 GpuTextureFormat::Rgba16Float,
+                None,
             ) {
                 failures.push(format!("{preset_id}: {e}"));
             }
@@ -231,7 +232,7 @@ mod tests {
 
         for (preset_id, json) in GENERATOR_CATALOG.load().entries() {
             let mut g = match PresetRuntime::from_json_str_with_device(
-                &json, &registry, &device, w, h, format,
+                &json, &registry, &device, w, h, format, None,
             ) {
                 Ok(g) => g,
                 Err(e) => {

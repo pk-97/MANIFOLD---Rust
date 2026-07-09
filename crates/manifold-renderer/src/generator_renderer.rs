@@ -358,6 +358,10 @@ impl GeneratorRenderer {
         override_version: u32,
         param_version: u32,
         clip_edge_enabled: bool,
+        // The layer's live per-instance manifest, forwarded to
+        // `install_layer_generator` when this clip start triggers a build so
+        // the reshape sources from the manifest, not the stale shadow (BUG-078).
+        manifest: Option<&ParamManifest>,
     ) -> bool {
         if self.active_clips.contains_key(clip_id) {
             return true;
@@ -409,6 +413,7 @@ impl GeneratorRenderer {
                 preserved_clip_count,
                 preserved_audio_count,
                 std::collections::BTreeMap::new(),
+                manifest,
             ) {
                 return false;
             }
@@ -558,6 +563,10 @@ impl GeneratorRenderer {
                 .unwrap_or((0, 0));
             let gen_type = layer.generator_type().clone();
             let override_def = layer.generator_graph();
+            // Structural rebuild via the per-frame sweep: hand the live
+            // manifest so a reshape recalibrated since the last save wins
+            // over the graph's stale shadow (BUG-078).
+            let manifest = layer.gen_params().map(|gp| &gp.params);
             self.install_layer_generator(
                 layer_id.clone(),
                 gen_type,
@@ -567,6 +576,7 @@ impl GeneratorRenderer {
                 preserved_clip_count,
                 preserved_audio_count,
                 std::collections::BTreeMap::new(),
+                manifest,
             );
         }
 
@@ -809,6 +819,9 @@ impl GeneratorRenderer {
                 old_clip_count,
                 old_audio_count,
                 old_defaults,
+                // Fresh type → bundled build; the old instance's manifest
+                // describes the old param set, so no manifest to honor here.
+                None,
             );
         }
     }
@@ -853,6 +866,12 @@ impl GeneratorRenderer {
         clip_count: u32,
         audio_count: u32,
         layer_string_defaults: std::collections::BTreeMap<String, String>,
+        // The layer's live per-instance param manifest (`gen_params.params`),
+        // threaded into the generator build so a post-calibration rebuild
+        // sources each param's reshape range/curve/invert from the manifest
+        // authority, not the graph's stale `preset_metadata.params` shadow
+        // (BUG-078). `None` for the type-swap path (fresh bundled build).
+        manifest: Option<&ParamManifest>,
     ) -> bool {
         // A layer open in the graph editor renders unfused (per-node preview +
         // live edits). The registry's fuse gate consults this; the rebuild
@@ -865,6 +884,7 @@ impl GeneratorRenderer {
             self.width,
             self.height,
             is_watched,
+            manifest,
         ) else {
             return false;
         };
@@ -935,6 +955,9 @@ impl GeneratorRenderer {
                 THUMB_W,
                 THUMB_H,
                 false,
+                // Cold-start thumbnail shows the bundled default look, not
+                // live override/calibration state (see fn doc) — no manifest.
+                None,
             )?;
             let rt = RenderTarget::new(
                 self.device(),
@@ -1059,6 +1082,10 @@ impl ClipRenderer for GeneratorRenderer {
             .and_then(|l| l.gen_params())
             .map(|gp| gp.clip_edge_enabled())
             .unwrap_or(true);
+        // The layer's live per-instance manifest — its `spec`s are the reshape
+        // authority a first-clip build must honor over the graph shadow
+        // (BUG-078). Borrowed from the external `layers` slice, not `self`.
+        let manifest = layer.and_then(|l| l.gen_params()).map(|gp| &gp.params);
         let acquired = self.acquire_clip(
             &clip.id,
             gen_type,
@@ -1069,6 +1096,7 @@ impl ClipRenderer for GeneratorRenderer {
             override_version,
             param_version,
             clip_edge_enabled,
+            manifest,
         );
 
         // Populate layer string defaults by scanning ALL clips on this layer.
@@ -1255,6 +1283,7 @@ mod tests {
                 0,
                 0,
                 std::collections::BTreeMap::new(),
+                None,
             ),
             "seed install of TrivialPassthrough must succeed",
         );
@@ -1386,6 +1415,7 @@ mod tests {
                 0,
                 0,
                 std::collections::BTreeMap::new(),
+                None,
             ),
             "seed install must succeed",
         );
@@ -1402,6 +1432,7 @@ mod tests {
             0,
             0,
             true,
+            None,
         ));
         assert!(renderer.acquire_clip(
             "clip-2",
@@ -1413,6 +1444,7 @@ mod tests {
             0,
             0,
             true,
+            None,
         ));
         assert_eq!(
             renderer.layer_generators.get(&layer_id).unwrap().clip_count,
@@ -1442,6 +1474,7 @@ mod tests {
             0,
             0,
             false,
+            None,
         ));
         assert_eq!(
             renderer.layer_generators.get(&layer_id).unwrap().clip_count,

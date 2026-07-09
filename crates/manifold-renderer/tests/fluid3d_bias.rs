@@ -195,6 +195,7 @@ fn fluid3d_force_bias_bisection() {
             W,
             H,
             GpuTextureFormat::Rgba16Float,
+            None,
         )
         .unwrap_or_else(|e| panic!("FluidSim3D failed to build: {e}"));
 
