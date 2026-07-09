@@ -1,6 +1,6 @@
 # Mapping Grammar — the taste layer for audio-reactive mappings
 
-**Status:** DIRECTION captured 2026-07-09 · Fable + Peter discussion · not a full design, not built. First worked mapping card = FUTURE DISCUSSION with Peter (his call 2026-07-09) — do not author cards without him.
+**Status:** DIRECTION captured 2026-07-09 · Fable + Peter discussion · not a full design, not built. **Card corpus DRAFTED 2026-07-10** (Peter authorized bulk drafting, Fable authored): [MAPPING_CARDS.md](MAPPING_CARDS.md) — house rules + cards for every shipped preset and draft piece, all `draft-unjudged`. Peter's judging against real music converts drafts to authoritative cards; his rejections feed the veto list here.
 **Companion docs:** [AUTO_POPULATE_DESIGN.md](AUTO_POPULATE_DESIGN.md) (consumes cards), [VISUAL_PIECES_GRAPH_DRAFTS.md](VISUAL_PIECES_GRAPH_DRAFTS.md) (the 24 drafts cards will be written for).
 
 ## The claim
@@ -49,5 +49,6 @@ is a small feature — check before any card claims it.
 
 ## Owed
 
-- First worked card on one of the 24 drafts, with Peter — future discussion.
-- The veto list — empty until real cards get judged.
+- ~~First worked card~~ superseded 2026-07-10: full draft corpus in MAPPING_CARDS.md. Now owed: **Peter's first judging pass at the rig** — wire one shipped card (Tesseract or Fluid Sim 2D recommended: kick + band sends cover their signature rows today) and judge against real music. Text review validates structure only, never taste (Peter, 2026-07-10).
+- The veto list — empty until real cards get judged. MAPPING_CARDS.md §Open questions holds the first four candidates.
+- H13 (engage = clip placement) — structural confirm from Peter.
