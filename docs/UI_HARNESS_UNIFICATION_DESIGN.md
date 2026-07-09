@@ -1,7 +1,7 @@
 # UI Harness Unification — one headless test path that runs the app's real render, not a lookalike
 
-**Status:** PROPOSED design, not built · 2026-07-09 · Opus (1M) · awaiting Fable review, then Peter approval
-**Prerequisites:** none unbuilt. Builds on UI_AUTOMATION P1–P2 (shipped: the `--script` driver + `AutomationAction`) and UI_CLIP_AND_Z P1 (shipped: per-panel `begin_region` wrap). Relates to open BUG-060 and BUG-015.
+**Status:** APPROVED design, not built · 2026-07-09 · Opus (1M) · Fable review 2026-07-09: every audit anchor re-verified against code; amended (D8–D9 added, §4 signals now `&mut`, §5 recipe strengthened to full-sequence replay, P0/P2 deliverables extended, BUG-071 pulled into P0) · Peter approved for Sonnet execution 2026-07-09
+**Prerequisites:** none unbuilt. Builds on UI_AUTOMATION P1–P2 (shipped: the `--script` driver + `AutomationAction`) and UI_CLIP_AND_Z P1 (shipped: per-panel `begin_region` wrap). Relates to open BUG-060 and BUG-015; fixes BUG-071 in P0 (D9c).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
 **The governing insight: the app renders its main-window UI through a stateful GPU atlas cache (`UICacheManager`), and *not one test touches that code.* Both existing headless harnesses reimplement a lookalike of it — one renders the whole tree fresh every frame on the GPU (`render_ui_to_png`), the other walks node bounds in pure CPU with no pixels (`footer_leak_probe`). A stale-pixel bug lives only in the cache's incremental update, so both lookalikes are structurally blind to it. That blindness is why BUG-060 has been "fixed" and reopened ~4 times: every fix was proven green in a path the performer never runs.** This design makes the app's real render path callable, drives it from a single headless harness that also feeds real input, and proves the harness faithful by making it fail on a known-broken commit before it's trusted.
@@ -19,7 +19,7 @@ Companion docs: [HEADLESS_UI_HARNESS.md](HEADLESS_UI_HARNESS.md) (the existing `
 | Piece | Where | State |
 |---|---|---|
 | Live main-window render | `app_render.rs` `tick_and_render` (524) → `present_all_windows` (3882) | The real path. Extend, don't replace. |
-| Atlas cache | `manifold-renderer/src/ui_cache_manager.rs` `UICacheManager` (45) | Persistent atlas texture, per-panel `panel_valid`, incremental `LoadOp::Load` sub-regions. **Referenced by zero tests.** |
+| Atlas cache | `manifold-renderer/src/ui_cache_manager.rs` `UICacheManager` (45) | Persistent atlas texture, per-panel `panel_valid`, incremental `LoadOp::Load` sub-regions. **No test constructs one or renders a pixel through it** — the `#[cfg(test)]` block in the same file (372–487) unit-tests the guard predicates (`incremental_path_safe`, `extents_unchanged`, `sub_region_sig`) CPU-side, zero pixels. |
 | Incremental repaint + its documented hazard | `ui_cache_manager.rs` `render_dirty_panels` (175), `incremental_path_safe` (296) | Comments at 206–213, 296–325 name the exact BUG-060 mechanism: chrome/scrollbar "lives in no sub-region, so the Load path never repaints it and a stale pixel there would survive." |
 | Invalidation decisions | `app_render.rs`: `invalidate_inspector` scroll path (963); rebuild/structural + `invalidate_all` (2821–2845); `invalidate_scroll_panels` (2828, 2850) | Driven by `UIRoot` flags (`needs_rebuild`, `needs_structural_sync`, `scroll_dirty`, drag guards). Cohesive block, extractable. |
 | Offscreen composite | `app_render.rs` `present_all_windows`: `panel_cache_info` (3890) → `render_dirty_panels` (3904) → clear-to-black (4011) + full-atlas blit (4023–4039) + video-band blit (4042–4064) | Every dirty frame re-copies the whole atlas onto a cleared offscreen; the footer is not in the video band, so its pixels come **only** from the atlas. Confirms the atlas is the sole persistent surface that can hold a stale footer. |
@@ -36,7 +36,7 @@ Companion docs: [HEADLESS_UI_HARNESS.md](HEADLESS_UI_HARNESS.md) (the existing `
 
 Classification: the render path, the cache, the input driver, the fixtures, and the readback all **exist** — this is mostly wiring. **Genuinely new:** two extracted shared functions (§4), a differential atlas-band assertion (§5), a heavy fixture (§7), and the discipline that proves faithfulness (D2). The design shrinks to those four.
 
-Negative claim, checked: `rg "UICacheManager|render_sub_region"` over `crates/**/*.rs` returns only the renderer definition and the live-app call sites — **no test file constructs it.** Verified 2026-07-09.
+Negative claim, checked: `rg "UICacheManager|render_sub_region"` over `crates/**/*.rs` returns the renderer definition, the live-app call sites, comments in `ui_snapshot/mod.rs`, and the CPU-side predicate tests inside `ui_cache_manager.rs` itself — **no test constructs a `UICacheManager` or renders through it.** Verified 2026-07-09; re-verified at Fable review the same day.
 
 ---
 
@@ -55,6 +55,10 @@ Negative claim, checked: `rg "UICacheManager|render_sub_region"` over `crates/**
 **D6 — Phasing is beachhead-then-refactor: catch the bug with zero live-code change first, extract the hot-path seam only after the harness is proven faithful.** Rationale: the seam extraction touches `present_all_windows`, which runs every frame of the live show — maximum blast radius. Doing it first bets the rig's render path on a harness that hasn't yet caught anything. P0 (the ~40–60-line direct-API driver) proves the harness sees the bug with no risk; P1 does the refactor against a harness that already works. Rejected: *extract-first* — front-loads the highest-risk change before any evidence the approach pays.
 
 **D7 — Fixtures are realistic, matching the repro conditions, not toy scenes.** A heavy generator fixture (multiple effects on a generator layer + dense modulation draws, per Peter's observed repro) plus the existing `project:<path>` real-project load. Rationale: Peter reports BUG-060 is content-sensitive — worst with many effects and heavy modulation while scrolling. A light scene may not reproduce it; a harness that passes only because its fixture is too small is fixture-overfitting (DESIGN_AUTHORING §5). Rejected: *toy fixtures only* — risks a green harness on a bug that reproduces only under load.
+
+**D8 — Fidelity contract (added 2026-07-09, Fable review): the harness renders the real layout at scale factor 1.0 and the fixture's logical size; the three gaps to the MacBook screen are named, not implied.** The live app sizes the atlas in *logical* pixels and passes Retina scale separately — `cm.set_scale_factor(scale)` then `cm.ensure_atlas(&gpu.device, logical_w, logical_h)` (app_render.rs:3901–3902) — so the harness gets the identical layout, wrapping, and scroll geometry by calling the same API with `scale_factor = 1.0` at the fixtures' existing logical size (1536-wide; already a multiple of 64 per the readback constraint, render.rs:841). Layout is pixel-exact by construction; the raster is ~4× cheaper than a 2x pass. The three honest gaps to what Peter sees on the rig: (1) *scale* — a 2x-only raster artifact is invisible at 1x; the knob exists (`set_scale_factor(2.0)`) as a deliberate Deferred variant, never the default. (2) *video band* — `composite_main_ui_frame` takes `video: None`; UI chrome is 1:1, compositor content is absent. (3) *time* — the driver's clock advances only on `Step` at a fixed 60 fps DT (script.rs:55–56, 225), deterministic where the live app follows the display clock; that determinism is a feature for reproducibility and the reason a genuinely timing-dependent artifact lands in P0's escalation branch rather than being missed silently. Rejected: *shrinking the window for speed* — layout is a function of logical size, so a smaller window tests a different layout, not a cheaper render of Peter's.
+
+**D9 — Captures are agent-legible (added 2026-07-09, Fable review): motion as filmstrips, input as pointer stamps, structure as a truthful dump.** The harness's consumers are agents that cannot watch the app; captures must carry what a human gets by watching. Three commitments: (a) **Filmstrip** — a capture mode that saves the composited frame after every stepped frame between two script actions and assembles a contact sheet (one PNG, N tiles), so a drawer tween or a landing flash is readable in a single file read; the fixed DT means the same script produces the same frames every run. (b) **Pointer stamp** — saved captures carry a crosshair at the gesture point(s) the Runner synthesized (the centers and interpolated path points fed to `pointer_event`, script.rs:343–398), drawn CPU-side on the readback bytes AFTER that frame's assertions have run — never into the atlas or offscreen, which would poison the differential. This is the difference between "the flow failed" and "the click landed 40px left of the button." (c) **The dump tells the truth** — BUG-071 (`ui_snapshot/dump.rs` serializes the mint-time `parent_id` instead of the live `tree.parent_index` a reparent actually mutates) is fixed in P0 by serializing `tree.parent_index[i]` at dump.rs:38/:92. That is the read-only fix shape; the backlog's alternative (mutating `nodes[i].parent_id` inside `reparent_root_nodes`) touches live UI code and is rejected for P0's zero-live-code rule. Rationale: agents target elements through the dump + selector surface and judge results through pixels; a dump that lies about hierarchy already cost a real debugging session (it's how BUG-071 was found).
 
 ---
 
@@ -96,10 +100,17 @@ pub(crate) struct UiFrameSignals {
 /// `UICacheManager::invalidate_*` exactly as tick_and_render does today. THE
 /// single place these decisions live. Precedent: app_render.rs:2819–2852 + 963,
 /// moved, not rewritten.
+///
+/// `signals` is `&mut` because the block WRITES BACK (amended 2026-07-09, Fable
+/// review): it clears `needs_rebuild` when it rebuilds, and deliberately KEEPS
+/// it set when an active inspector/layer drag defers the rebuild to the next
+/// frame (app_render.rs:2821–2834). By-value signals cannot express the defer.
+/// The live caller copies the residual flags back into its own state after the
+/// call; the harness carries them to its next frame.
 pub(crate) fn apply_ui_frame_invalidations(
     ui_root: &mut UIRoot,
     cache: &mut UICacheManager,
-    signals: UiFrameSignals,
+    signals: &mut UiFrameSignals,
 );
 
 /// Composites the main-window UI for one frame into `offscreen`:
@@ -131,17 +142,24 @@ Three layers, per D4. The reliability-critical one is the differential:
 **Differential atlas-band (stale-pixel / dirty-clear).** The recipe, which is also the BUG-060 repro:
 
 ```
-build heavy fixture; ensure_atlas; invalidate_all
-composite_main_ui_frame(...)                       // frame 1: full, self-clearing render
-BAND_0 = readback(atlas, footer_band_rows)
-apply the scroll gesture (try_inspector_scroll to the bottom)
-apply_ui_frame_invalidations(...)                  // the live decision: inspector-only invalidation
-composite_main_ui_frame(...)                       // frame 2: incremental Load path
-BAND_1 = readback(atlas, footer_band_rows)
-assert BAND_1 == BAND_0                             // footer must not change on an inspector-only scroll
+build heavy fixture; ensure_atlas (scale 1.0, D8); invalidate_all
+composite frame                                     // full, self-clearing render
+REF = readback(atlas, footer_band_rows)             // baseline after a full clear
+for each frame of the repro sequence:               // scroll to bottom · expand a drawer
+                                                    //   (tween forces needs_rebuild every frame,
+                                                    //   app_render.rs:2942–2944) · scroll ·
+                                                    //   swap tab Layer↔Master · scroll again
+    apply the live invalidation decision            // P0: transcribed; P2+: apply_ui_frame_invalidations
+    composite frame
+    if the footer panel was invalidated this frame (the invalidate_all path):
+        REF = readback(atlas, footer_band_rows)     // re-baseline: footer legitimately repainted
+    else:
+        assert readback(atlas, footer_band_rows) == REF   // a skipped panel's pixels must not change
 ```
 
-The footer is a different panel from the inspector and is not invalidated by a scroll, so its pixels must be identical across the two frames. If BUG-060 fires, frame 2's footer band carries stale inspector chrome and the bands differ — RED. Both readbacks come from the same device in the same run, so there is no golden file and no cross-environment drift. The footer band is `[footer_top, footer_top + footer_height)` in atlas rows; readback width stays a multiple of 64 (readback helper constraint, render.rs:841).
+The invariant asserted is exactly the cache's own contract: **a panel `render_dirty_panels` skips keeps its pixels byte-identical.** Re-baselining after every full clear means the assertion never depends on cross-repaint raster determinism — only on "skipped means untouched." The sequence is the full observed repro (scroll + drawer tween + tab swap, interleaved — the reopen notes' trigger set), not a single scroll (amended 2026-07-09, Fable review: the original single-scroll recipe encoded exactly one suspect and could have fired the timing/environment escalation off an under-powered replay). If BUG-060 fires, some incremental frame's footer band differs from the last baseline — RED. All readbacks come from the same device in the same run, so there is no golden file and no cross-environment drift. The footer band is `[footer_top, footer_top + footer_height)` in atlas rows; readback width stays a multiple of 64 (readback helper constraint, render.rs:841).
+
+Gestures go through the real input paths — `try_inspector_scroll` for scrolls, `pointer_event`/`process_events` for the drawer-header and tab clicks, per the Runner's vocabulary (script.rs:328–420) — so the invalidation signals arise from real `UIRoot` state, never hand-set flags. Default for the tab swap: resolve the tab as an `AutomationTarget` and click it; if the selector cannot resolve it, drive the inspector's own tab-switch API instead and note the substitution in the phase report.
 
 **Geometry / containment.** Keep `footer_leak_probe` as-is. It proves no node geometrically escapes into the footer — true and worth pinning — and it is honestly labeled as a bounds check, not a pixel check.
 
@@ -181,9 +199,9 @@ The main window is the only one with the stale-pixel class, so it is the only on
 The vertical slice: real fixture → real cache → real pixels → assertion. No extraction yet; the driver calls the public `UICacheManager` API directly in the app's order.
 
 - **Entry state:** `rg -n "fn render_dirty_panels|fn atlas_texture|fn invalidate_inspector|fn invalidate_all|fn ensure_atlas" crates/manifold-renderer/src/ui_cache_manager.rs` matches the audit lines (175/163/126/101/131); `rg "fn panel_cache_info" crates/manifold-app/src/ui_root.rs` exists; `footer_leak_probe` compiles under `--features ui-snapshot`.
-- **Read-back (first step):** read `ui_cache_manager.rs:175–281`, `app_render.rs:3882–4064`, `ui_snapshot/mod.rs:420–549` (footer_leak_probe), `ui_snapshot/render.rs:26–145` + `:841` (readback). Restate: the invalidation order the live tick uses, the readback width constraint, and D1/D2/D7.
-- **Deliverables:** `bug060heavy` fixture (`fixtures.rs`); a new test module `cache_path_footer_differential` under feature `ui-snapshot` (structure like `footer_leak_probe`, rendering through a real `UICacheManager` + `UIRenderer` + atlas like `present_all_windows`); the differential recipe of §5; a saved PNG of both footer bands + a printed changed-row count as the artifact.
-- **Gate (positive):** run the driver against **current `main`** and produce a **non-empty** footer-band diff (the RED bracket, D2). Report the changed-pixel count and save the two band PNGs. Then, on the branch that carries the eventual BUG-060 fix, the same driver goes GREEN. **Escalation branch (a legitimate P0 outcome, not a failure):** if the diff is empty on broken `main`, the bug is not a deterministic function of the replayed sequence — stop and document what the driver replays vs. what the live frame does (dual-device IOSurface, CVDisplayLink cadence, drawable pooling, or a content-state signal the fixture doesn't carry). That result reframes BUG-060 as timing/environment and is worth more than a false green.
+- **Read-back (first step):** read `ui_cache_manager.rs:175–281`, `app_render.rs:3882–4064`, `ui_snapshot/mod.rs:420–549` (footer_leak_probe), `ui_snapshot/render.rs:26–145` + `:841` (readback). Restate: the invalidation order the live tick uses, the readback width constraint, and D1/D2/D7/D8 + D9c (the dump fix).
+- **Deliverables:** `bug060heavy` fixture (`fixtures.rs`); a new test module `cache_path_footer_differential` under feature `ui-snapshot` (structure like `footer_leak_probe`, rendering through a real `UICacheManager` + `UIRenderer` + atlas like `present_all_windows`, at scale factor 1.0 per D8 — `cm.set_scale_factor(1.0)` + `ensure_atlas`, mirroring app_render.rs:3901–3902); the **full** §5 sequence replayed with the band assertion after every incremental frame; a saved PNG of both footer bands + a printed changed-row count as the artifact. Plus the **BUG-071 dump fix** (D9c): `dump.rs` serializes `tree.parent_index[i]` at :38/:92 instead of the mint-time `parent_id`, and its BUG_BACKLOG entry is closed — every later phase debugs through dumps, so the dump stops lying first.
+- **Gate (positive):** run the driver against **current `main`** and produce a **non-empty** footer-band diff (the RED bracket, D2). Report the changed-pixel count and save the two band PNGs. **The RED bracket counts only if the differing pixels are stale UI chrome, confirmed by reading the saved band PNGs** — a diff from a legitimately repainted footer is not the bracket, and an all-dark or clear-colour band means a broken readback, not the bug found (the 2026-07-08 backlog correction: the earlier "dark band" readings were a harness failure; do not chase clear-colour theories). Then, on the branch that carries the eventual BUG-060 fix, the same driver goes GREEN. **Escalation branch (a legitimate P0 outcome, not a failure):** if the diff is empty on broken `main` **after the full §5 sequence — including the drawer tweens and tab swaps — has been replayed**, the bug is not a deterministic function of the replayed sequence — stop and document what the driver replays vs. what the live frame does (dual-device IOSurface, CVDisplayLink cadence, drawable pooling, or a content-state signal the fixture doesn't carry). That result reframes BUG-060 as timing/environment and is worth more than a false green.
 - **Gate (negative):** `rg "render_ui_to_png|traverse_flat_range" ` in the new test file returns zero hits — proving the driver renders through the cache, not a lookalike (D1).
 - **Acceptance demo:** the printed changed-row count + the two band PNGs, read by a reviewer. **L2** (a headless test whose artifact is looked at). No flow driver reaches this internal path, so L3 does not apply.
 - **Forbidden moves:** rendering via `render_ui_to_png` or any full-repaint (D1) · asserting on node bounds instead of pixels · a toy fixture that can't reproduce under load (D7) · declaring the test done while green-only (D2 — it must be shown red first) · fixing BUG-060 in this phase (out of scope; P0 delivers the *observatory*, not the fix).
@@ -206,11 +224,11 @@ The vertical slice: real fixture → real cache → real pixels → assertion. N
 ### P2 — Repoint the input driver and headless harness at the seam (kill the drift)
 
 - **Entry state:** P1 landed; `apply_ui_frame_invalidations` + `composite_main_ui_frame` exist and the app calls them.
-- **Read-back:** read `script.rs:150–260` (Runner + step), `:403` and `:542` (its rebuild), `:651` (its render call). Restate D3 and the forbidden-moves list.
-- **Deliverables:** the P0 differential driver and `script.rs`'s `Runner` both drive frames through `apply_ui_frame_invalidations` + `composite_main_ui_frame`. The Runner's parallel `rebuild()` invalidation logic is **deleted**, not wrapped. `render_ui_to_png`'s fake whole-tree *panel* pass is replaced by the seam; its genuinely-separate immediate-mode passes (clips, thumbs, automation lanes, overlays — the live app draws these as immediate passes too, `app_render` 4b/5) are kept only after confirming they match the live app's passes. `⚠ VERIFY-AT-IMPL (P2): diff render_ui_to_png's clip/thumb/lane/overlay passes against the live immediate-mode passes; a pass that doesn't match is an escalation, not a silent keep.`
-- **Gate (positive):** the two shipped flows `scripts/ui-flows/select-and-inspect.json` and `scripts/ui-flows/drag-clip.json` still exit 0 via `cargo xtask ui-snap <scene> --script <flow.json>`; the P0 differential still brackets BUG-060. **Gate (negative):** `rg "needs_rebuild|invalidate_layers" crates/manifold-app/src/ui_snapshot/script.rs` returns zero hits (the Runner's parallel decision state is gone); the Runner no longer calls a private `rebuild` (rg proof). One update+composite path, three callers: live app, headless differential, script runner.
-- **Acceptance demo:** both ui-flows green through the shared seam. **L3** (scripted flows drive the real input path — the target level since UI_AUTOMATION landed).
-- **Forbidden moves:** keeping the Runner's `rebuild` "just for scripts" (adapter/parallel-path — forbidden by name) · silently keeping a `render_ui_to_png` panel pass that diverges from the live passes · widening scope to refactor the flow format.
+- **Read-back:** read `script.rs:150–260` (Runner + step), `:403` and `:542` (its rebuild), `:651` (its render call). Restate D3, D9 (filmstrip + stamp constraints), and the forbidden-moves list.
+- **Deliverables:** the P0 differential driver and `script.rs`'s `Runner` both drive frames through `apply_ui_frame_invalidations` + `composite_main_ui_frame`. The Runner's parallel `rebuild()` invalidation logic is **deleted**, not wrapped. `render_ui_to_png`'s fake whole-tree *panel* pass is replaced by the seam; its genuinely-separate immediate-mode passes (clips, thumbs, automation lanes, overlays — the live app draws these as immediate passes too, `app_render` 4b/5) are kept only after confirming they match the live app's passes. `⚠ VERIFY-AT-IMPL (P2): diff render_ui_to_png's clip/thumb/lane/overlay passes against the live immediate-mode passes; a pass that doesn't match is an escalation, not a silent keep.` Plus the two agent-legibility captures (D9): **filmstrip mode** — save the composited frame after every stepped frame between two script actions (the `Step` clock, script.rs:225; fixed 60 fps DT, :55–56) and assemble a contact sheet (one PNG, N tiles); **pointer stamp** — a crosshair at the Runner's synthesized gesture points (script.rs:343–398), drawn CPU-side on the readback bytes after that frame's assertions have run.
+- **Gate (positive):** the two shipped flows `scripts/ui-flows/select-and-inspect.json` and `scripts/ui-flows/drag-clip.json` still exit 0 via `cargo xtask ui-snap <scene> --script <flow.json>`; the P0 differential still brackets BUG-060, **and still brackets it with filmstrip capture enabled on the same run** (capture must not perturb the render). **Gate (negative):** `rg "needs_rebuild|invalidate_layers" crates/manifold-app/src/ui_snapshot/script.rs` returns zero hits (the Runner's parallel decision state is gone); the Runner no longer calls a private `rebuild` (rg proof). One update+composite path, three callers: live app, headless differential, script runner.
+- **Acceptance demo:** both ui-flows green through the shared seam, plus a contact-sheet PNG of the inspector drawer tween (8–12 tiles) read by the reviewer. **L3** (scripted flows drive the real input path — the target level since UI_AUTOMATION landed).
+- **Forbidden moves:** keeping the Runner's `rebuild` "just for scripts" (adapter/parallel-path — forbidden by name) · silently keeping a `render_ui_to_png` panel pass that diverges from the live passes · drawing stamps or any annotation into a texture an assertion reads — overlays are CPU-side on the readback copy only (D9b) · widening scope to refactor the flow format.
 - **Test scope:** `manifold-app --features ui-snapshot` + the ui-flows; workspace sweep at end.
 
 ### P3 — Generalize the scaffolding to the editor window (and stub the monitor path)
@@ -235,6 +253,10 @@ The vertical slice: real fixture → real cache → real pixels → assertion. N
 6. Order is P0 beachhead (zero live-code change) before P1 hot-path extraction. (D6)
 7. Fixtures reproduce the real repro conditions; toy-only fixtures are insufficient. (D7)
 8. Drawable acquire/present and the offscreen fast path stay winit-side in `present_all_windows`; the seam ends at the offscreen texture.
+9. The harness renders at scale factor 1.0 at the fixtures' logical size, exactly as the live app sizes the atlas (logical dims + scale passed separately). Shrinking the window for speed is forbidden — layout is a function of logical size. Retina (2x) runs are a Deferred variant. (D8)
+10. Captures are agent-legible: filmstrip for motion, pointer stamps CPU-side after assertions (never into an asserted texture), and a truthful dump — BUG-071 fixed in P0 in `dump.rs`, not by mutating live UI state. (D9)
+11. The differential asserts "a skipped panel's pixels never change," re-baselined after every full clear; the P0 escalation branch fires only after the full §5 repro sequence has been replayed. (§5, amended 2026-07-09)
+12. `apply_ui_frame_invalidations` takes `&mut UiFrameSignals` — the block writes residual flags back (the drag-defer case keeps `needs_rebuild` set). (§4, amended 2026-07-09)
 
 ## Deferred
 
@@ -242,3 +264,6 @@ The vertical slice: real fixture → real cache → real pixels → assertion. N
 - **The BUG-060 fix itself** — this design delivers the observatory and the gate, not the fix. Revive immediately after P0 brackets it (the fix is a separate change that turns the P0 differential green). If P0's escalation branch fires (bug not reproduced headless), the fix work reopens as a timing/environment hunt instead.
 - **CI wiring of the differential** — running the harness on every push. Revive once P0–P2 are green and stable; until then it runs deliberately (GPU path, minutes-long, per CLAUDE.md test-scope discipline).
 - **Perform-mode surfaces (track HUD, session grid)** — additional render entries under the same scaffolding. Revive when a perform-surface render bug needs headless proof.
+- **Playback-stepped capture (agents watch a timeline play)** — step `PlaybackEngine::tick` (`crates/manifold-playback/src/engine.rs:713`) with a fixed dt alongside the UI frame loop, so playback-driven UI motion (playhead, clip starts/ends) becomes filmstrip-capturable. The engine is an ordinary tickable struct today; LIVE_RECORDING_PROOFS (proposed, unbuilt) plans the same headless stepping for its own ends — coordinate, don't duplicate. Revive when a bug or feature needs headless proof of playback-driven UI motion, or when LIVE_RECORDING_PROOFS starts building.
+- **Retina (2x) capture runs** — the same driver with `set_scale_factor(2.0)`. Revive on the first suspected scale-dependent artifact (visible on the MacBook, absent at 1x). Until then every run is 1x per D8.
+- **Full-app auto-drive (agents driving the real running app)** — the seam built here is already the plug-in point: an in-app driver would sit exactly where the harness sits, above `apply_ui_frame_invalidations`, with only drawable acquire/present beyond it. Revive under UI_AUTOMATION's later phases; nothing in this design forks the path it will need.
