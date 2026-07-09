@@ -1,6 +1,6 @@
 # Param Storage Boundaries — load reconcile, card single-source, migration self-containment
 
-**Status:** IN PROGRESS · P1 SHIPPED (`wave/param-boundaries-p1`) · P2 SHIPPED (`wave/param-boundaries-p2`) · P3 not built · 2026-07-06 · Fable
+**Status:** SHIPPED — P1 (`0438b60e`) + P2 (`254792c0`) + P3 (`eec807cd`) all landed on main 2026-07-09 (Opus-orchestrated Sonnet wave; design 2026-07-06 · Fable). Load reconcile stage, card single-source + derive-on-save, and the BUG-040 migration are all live. Follow-up: three `meta.params` shadow-readers flagged in §P2 (renderer-side, non-data-loss); BUG-040 closed; unrelated trunk-red BUG-077 (UI test fixtures) found during the P3 sweep.
 **Prerequisites:** PARAM_STORAGE_DESIGN.md P1–P5 (all SHIPPED 2026-07-05) + the BUG-036
 fix wave (`b2f78725`, `0434da5e`, 2026-07-06). Nothing else.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
@@ -340,7 +340,26 @@ the inspector on a calibrated param and asserts the displayed range text — the
 performer gesture: *drag a calibrated Camera Orbit slider and see its real degree
 range, after a reload*.
 
-### P3 — migration reads `embeddedPresets` (BUG-040) + wave sweep (one short session)
+### P3 — migration reads `embeddedPresets` (BUG-040) + wave sweep (one short session) — SHIPPED
+
+Landed on `wave/param-boundaries-p3`. The D5 lookup arm ("case 1.5") sits between
+the existing own-graph arm and the WireframeDepth/baked-table arms in
+`positional_ids` (`param_storage_v14.rs`): a generator instance with no own
+`graph.presetMetadata.params` now consults a lookup built once per `migrate()`
+call from the file's own `embeddedPresets` (`embedded_param_orders`, read-only,
+built before the mutable per-instance walk) before falling through to the frozen
+baked table. Three new tests: matching-embedded-preset resolves by its order,
+no-match falls through to the baked table/loud-drop (BUG-040's two required
+fixtures), and a third proving the own-graph arm still wins when both exist.
+BUG-040 entry updated to FIXED in the same commit.
+
+Full workspace sweep run: 6 pre-existing failures found in
+`manifold-renderer::ui_cache_manager` (D4 region-ownership panic, `tree.rs:290`)
+— confirmed via `git merge-base --is-ancestor` that the causing commit
+(`0bb51dad`) is already on `main`, predating this entire wave; logged as BUG-077,
+not fixed here (out of scope — a `manifold-ui`/`manifold-renderer` UI-region test
+gap, unrelated to param storage). All `manifold-io` tests, including the BUG-040
+fixtures, are green; clippy is clean.
 
 **Entry state:** P1 landed (P3 is independent of P2; run in either order after P1).
 **Read-back:** BUG-040 entry in `docs/BUG_BACKLOG.md`; `param_storage_v14.rs` §
