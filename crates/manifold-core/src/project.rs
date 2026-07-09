@@ -53,6 +53,11 @@ impl EmbeddedPreset {
     }
 }
 
+/// The schema version this build writes and is the newest it can open. Bumped
+/// by every migration step that changes on-disk field shape; the migrate chain's
+/// final target and the forward-compat guard both read it. Single source of truth.
+pub const CURRENT_PROJECT_VERSION: &str = "1.11.0";
+
 /// Root project aggregate. Contains all project data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1505,7 +1510,7 @@ impl Default for Project {
     fn default() -> Self {
         Self {
             project_name: String::new(),
-            project_version: "1.11.0".to_string(),
+            project_version: CURRENT_PROJECT_VERSION.to_string(),
             timeline: Timeline::default(),
             video_library: VideoLibrary::default(),
             midi_config: MidiMappingConfig::default(),

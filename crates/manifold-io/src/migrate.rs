@@ -83,7 +83,8 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
     // the next free slot in the one real version chain the project has.
     if is_version_less_than(&version, "1.11.0") {
         crate::migrations::param_storage_v14::migrate(&mut root);
-        root["projectVersion"] = Value::String("1.11.0".to_string());
+        root["projectVersion"] =
+            Value::String(manifold_core::project::CURRENT_PROJECT_VERSION.to_string());
     }
 
     serde_json::to_string_pretty(&root)
