@@ -30,7 +30,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
-| BUG-078 | **generator-runtime-reshapes-from-stale-meta-params** | Post-PARAM_STORAGE_BOUNDARIES-P2, the renderer's `PresetRuntime::param_reshape` (rebuilt on a `graph_structure_version` bump) reads the in-memory graph `meta.params`, now stale until serialize (D12 derives it at save only). Bounded + non-data-loss (renderer reads a read-only `Arc<Project>` snapshot; authoritative manifest untouched): calibrate → structural graph edit → before-save can momentarily reshape the *rendered* param mapping from the stale shadow. Fix: `param_reshape` reads the manifest, or derive `meta.params` before the reshape (LOW) |
+| BUG-078 | **generator-runtime-reshapes-from-stale-meta-params** | Confirmed 2026-07-09 by regression test (`preset_runtime.rs::generator_rebuild_reshape_reads_stale_graph_shadow_not_the_manifest`, `#[ignore]`): `PresetRuntime::from_def` (preset_runtime.rs:2436-2448) builds its reshape map from `doc.preset_metadata.params` because the constructor takes no `ParamManifest` at all — reachable only when curve/invert is non-identity. Fix escalated: the manifest isn't reachable at ~14 of `from_def`'s 15 call sites; needs a scoped design (thread `Option<&ParamManifest>` through `from_def*`/`create*`, or a post-rebuild reshape-refresh method) before a session executes it — see the `## Open` entry (LOW) |
 | BUG-077 | **ui-cache-manager-tests-not-region-wrapped** | `manifold-renderer`'s `ui_cache_manager` unit tests (6) panic on the D4 region-ownership assertion (`tree.rs:290`) — pre-existing on `main`, unrelated to PARAM_STORAGE_BOUNDARIES P3 (LOW, workspace-sweep-visible) |
 | BUG-076 | **inspector-scroll-underestimates-content-height** | `layer_scroll`/`master_scroll`'s `max_scroll()` clamps to ~13-20px on a 9-card stack that's visibly ~1200px too tall for its viewport — the built content overflows but the scroll estimator doesn't agree (LOW, suspected root cause: `compute_height()` reads a mid-tween drawer-animation value instead of the settled/armed-at-build height) |
 | BUG-074 | **audio-mixdown-flaky-under-parallel-tests** | `render_export_audio_tapped_layer_matches_rendering_alone` fails ~1-in-3 under default parallel `cargo test`, always green with `--test-threads=1`; unrelated to PARAM_STEP_ACTIONS (LOW) |
@@ -400,6 +400,85 @@ dropdown/timeline but a no-op for the inspector's direct-call scroll path) — `
 branches on `ui.layout.inspector().contains(center)` and calls `try_inspector_scroll` directly,
 matching `window_input.rs`'s real dispatch. That fix is real and committed; this bug is what's
 left after it.
+
+### BUG-078 (generator-runtime-reshapes-from-stale-meta-params) — a structural-rebuild's reshape reads the graph's stale `preset_metadata.params` shadow because the constructor has no `ParamManifest` parameter to read the fresh spec from — LOW, confirmed by regression test, fix scope escalated (2026-07-09)
+
+**Symptom (unchanged from the original entry):** calibrate a generator param
+(widen its range / add a curve) → make a structural graph edit (add/remove a
+node) before saving → the *rendered* param mapping can momentarily revert to
+the pre-calibration reshape. Bounded and non-data-loss: the authoritative
+`PresetInstance.params[id].spec` (the manifest) is never touched, and the
+correct reshape reasserts itself the moment the project is saved and reloaded
+(D12 derives `meta.params` from the manifest at serialize time).
+
+**Root cause, confirmed:** `PresetRuntime::from_def` (`crates/manifold-renderer/src/preset_runtime.rs:2436-2448`)
+builds its `param_reshape: AHashMap<String, (min, max, curve, invert)>` — the
+map every generator binding's [`Reshape`](crates/manifold-renderer/src/node_graph/param_binding.rs:273)
+is resolved from at construction (`preset_runtime.rs:2514-2520`) — entirely
+from `doc.preset_metadata.params`, the `EffectGraphDef` passed in. **`from_def`
+/ `from_def_with_device` / `from_json_str_with_device` take no `ParamManifest`
+parameter at all** — there is no code path by which a live, post-calibration
+manifest spec could ever reach this constructor, staleness aside. This is the
+generator analog of the effect path's `fx.user_param_bindings()`
+(`manifold-core/src/effects.rs:1743`, `synth_user_binding` at :1752-1783) —
+which for effects already reads the manifest correctly (`self.params.get(&b.id)`
+at :1764) post-P2. Generators never got the equivalent wiring because their
+whole binding list (stock + user-added alike) resolves through one shared
+`doc.preset_metadata.bindings`/`.params` path, not through the effect side's
+split static-prefix/user-tail construction.
+
+**Confirmed by regression test** (`crates/manifold-renderer/src/preset_runtime.rs`,
+`generator_runtime_tests::generator_rebuild_reshape_reads_stale_graph_shadow_not_the_manifest`,
+`#[ignore = "BUG-078"]`, fails for the right reason): a def with `amt`'s
+`preset_metadata.params` spec fixed at `min=0,max=1,curve=Exponential` (the
+STALE shadow) is rebuilt via `PresetRuntime::from_def` and fed a manifest
+where `amt`'s spec has since been recalibrated to `min=0,max=2` (the FRESH,
+post-calibration authority) — value 1.0 resolves to `1.0` (exactly the STALE
+0..1 range's output — clamped-then-curved-to-1.0) instead of the
+manifest-honoring `0.5`. Only reproducible when the reshape has a non-identity
+curve/invert (`apply_card_reshape` only consults `min`/`max` at all when
+`invert || curve != Linear` — see `manifold-core/src/effects.rs:394-416`); a
+min/max-only calibration with an otherwise-identity binding is unaffected
+because min/max never enters the transform in that case. Reachable on BOTH
+stock and user-added generator bindings (generators have no static/user split
+the way effects do).
+
+**Why this session escalated instead of fixing:** the brief's localized fix
+("`param_reshape` reads the manifest") requires a `ParamManifest` be reachable
+at `PresetRuntime::from_def`'s call site. It isn't — `from_def`/
+`from_def_with_device`/`from_json_str_with_device` have ~15 call sites across
+`manifold-renderer` (`preset_thumbnail.rs`, `bin/check_presets.rs`,
+`generators/bundled_generator_presets.rs`, `bin/freeze_profile.rs` ×6,
+`node_graph/gltf_import.rs` ×3, `node_graph/freeze/proof.rs` ×8,
+`generators/registry.rs`), and only ONE of them — the live rebuild path
+(`generator_renderer.rs`'s `start_clip`/`render_all` sweep →
+`GeneratorRegistry::create_with_override` → `from_def_with_device`) — has a
+`&Layer` (hence `layer.gen_params()`, the manifest) in scope at all; every
+other caller constructs a generator standalone with no instance context. A
+correct fix is one of: (a) thread `Option<&ParamManifest>` through the whole
+`from_def*`/`create*` chain (a real signature-rippling change touching ~8
+files, most call sites passing `None`), or (b) add a NEW post-construction
+"refresh reshape from manifest" method that `generator_renderer.rs` calls
+right after a rebuild — which needs `Reshape`'s private `scale`/`offset`
+fields (`param_binding.rs:273-280`) exposed so a patch can preserve the
+binding's own affine recipe while only touching min/max/curve/invert, a small
+new mechanism, not a swap. Both are real design decisions, not obviously one
+"the" clean fix, and the brief's own forbidden-list named exactly this shape
+("a signature change rippling through the renderer") as an escalation
+trigger.
+
+**Fix shape for the next session:** pick (a) or (b) above as a short design
+note before touching code; (a) is more mechanical but touches more files,
+(b) is more contained but needs the `Reshape` accessor work first. Either way,
+un-ignore `generator_rebuild_reshape_reads_stale_graph_shadow_not_the_manifest`
+once the reshape correctly reads `min=0,max=2` (the test's fresh manifest) and
+resolves to `0.5`.
+
+**Escaped:** `wave/param-boundaries-p2` (`254792c0`) — dual-write deletion
+(D4) landed correctly for the manifest side but left this generator-only
+construction-time read pointed at the now-unmaintained shadow · caught-by:
+review (audit during PARAM_STORAGE_BOUNDARIES P2, not the wave's own gate —
+no existing test exercised a structural rebuild after a calibration).
 
 ### BUG-077 (ui-cache-manager-tests-not-region-wrapped) — 6 `manifold-renderer::ui_cache_manager` unit tests panic on the D4 region-ownership assertion — LOW (pre-existing, found 2026-07-09 during PARAM_STORAGE_BOUNDARIES P3's full-workspace sweep)
 

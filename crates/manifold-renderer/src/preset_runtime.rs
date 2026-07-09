@@ -5031,6 +5031,128 @@ mod generator_runtime_tests {
         );
     }
 
+    /// BUG-078 repro. Post-PARAM_STORAGE_BOUNDARIES-P2 (D4/D12), a
+    /// calibration writes ONLY `PresetInstance.params[id].spec` — the graph's
+    /// `preset_metadata.params` shadow is left stale until save (D12 derives
+    /// it at serialize time, not before). A structural graph edit rebuilds
+    /// the generator's `PresetRuntime` through EXACTLY this constructor
+    /// (`registry.create_with_override` -> `PresetRuntime::from_def_with_device`;
+    /// `from_def` here is the mock-backend equivalent) — and `from_def`
+    /// resolves each binding's reshape (range/curve/invert) from
+    /// `doc.preset_metadata.params` (preset_runtime.rs `param_reshape`,
+    /// ~line 2436) because there is NO `ParamManifest` parameter anywhere in
+    /// this call chain for it to consult instead.
+    ///
+    /// The manifest built below stands in for what `EditParamMappingCommand`
+    /// (`manifold-editing/src/commands/effects.rs`, `apply_to_manifest_spec`)
+    /// actually writes into `PresetInstance.params["amt"].spec` on a real
+    /// calibration: only `max` widens, 1.0 -> 2.0, curve stays Exponential so
+    /// the note actually engages (`apply_card_reshape` only consults min/max
+    /// when `invert || curve != Linear` — a min/max-only edit on an
+    /// otherwise-identity binding can't be observed this way).
+    ///
+    /// `#[ignore]`: fails for the right reason today (asserts the desired,
+    /// manifest-honoring output); un-ignore when BUG-078's fix lands.
+    #[test]
+    #[ignore = "BUG-078: PresetRuntime::from_def/from_def_with_device take no \
+                ParamManifest, so a structural-rebuild's reshape can only ever \
+                read the graph's stale `preset_metadata.params` shadow, never a \
+                post-calibration manifest spec, until the shadow is re-derived \
+                at save (D12). See docs/BUG_BACKLOG.md BUG-078."]
+    fn generator_rebuild_reshape_reads_stale_graph_shadow_not_the_manifest() {
+        let json = r#"{
+            "version": 1,
+            "name": "StaleReshapeTest",
+            "presetMetadata": {
+                "id": "StaleReshapeTest",
+                "displayName": "Stale Reshape Test",
+                "category": "Generator",
+                "oscPrefix": "staleReshapeTest",
+                "params": [
+                    { "id": "amt", "name": "Amount", "min": 0.0, "max": 1.0, "defaultValue": 0.0 }
+                ],
+                "bindings": [
+                    { "id": "amt", "label": "Amount", "defaultValue": 0.0,
+                      "target": { "kind": "handleNode", "handle": "so", "param": "offset" },
+                      "convert": { "type": "Float" } }
+                ]
+            },
+            "nodes": [
+                { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+                { "id": 1, "typeId": "node.uv_field", "handle": "uv" },
+                { "id": 2, "typeId": "node.scale_offset_image", "handle": "so" },
+                { "id": 3, "typeId": "system.final_output", "handle": "final_output" }
+            ],
+            "wires": [
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+
+        // The def exactly as it sits in memory right after a calibration:
+        // P2 writes ONLY the manifest, so this shadow still carries the
+        // ORIGINAL (pre-calibration) range — with the curve engaged so
+        // min/max actually enters the transform.
+        let mut def: manifold_core::effect_graph_def::EffectGraphDef =
+            serde_json::from_str(json).expect("parse StaleReshapeTest def");
+        {
+            let meta = def
+                .preset_metadata
+                .as_mut()
+                .expect("StaleReshapeTest carries presetMetadata");
+            let p = meta
+                .params
+                .iter_mut()
+                .find(|p| p.id == "amt")
+                .expect("amt param spec");
+            p.curve = manifold_core::macro_bank::MacroCurve::Exponential;
+            p.min = 0.0;
+            p.max = 1.0; // STALE — pre-calibration range
+        }
+
+        // The freshly-calibrated manifest a rebuild SHOULD honor: same
+        // curve, widened range 0..2 — exactly what `EditParamMappingCommand`
+        // would have just written into `PresetInstance.params["amt"].spec`.
+        let mut values = manifest(&[("amt", 1.0)]);
+        {
+            let p = values.get_mut("amt").expect("amt manifest entry");
+            p.spec.curve = manifold_core::macro_bank::MacroCurve::Exponential;
+            p.spec.min = 0.0;
+            p.spec.max = 2.0; // FRESH — post-calibration
+        }
+
+        // This IS the production rebuild path (mock-backend form of
+        // `PresetRuntime::from_def_with_device`) — no manifest parameter
+        // exists anywhere in this constructor to consult `values.spec`.
+        let mut g = PresetRuntime::from_def(def, &PrimitiveRegistry::with_builtin())
+            .expect("StaleReshapeTest def loads");
+        g.apply_param_values(&values);
+
+        let so_id = g
+            .graph
+            .handles()
+            .find(|(h, _)| *h == "so")
+            .map(|(_, id)| id)
+            .expect("preset declares a `so` handle");
+        let offset = match g.graph.get_node(so_id).unwrap().params.get("offset") {
+            Some(ParamValue::Float(v)) => *v,
+            other => panic!("expected float, got {other:?}"),
+        };
+
+        // Desired (post-fix) behavior: amt=1.0 normalized against the FRESH
+        // 0..2 range is 0.5 -> curved (Exponential, n^2) to 0.25 -> re-scaled
+        // to 0..2 -> 0.5. Today's actual output is 1.0 (normalized against
+        // the STALE 0..1 range: 1.0 clamped to n=1.0, curved to 1.0, no
+        // reshape at all) — the manifest's widened range never took effect.
+        assert!(
+            (offset - 0.5).abs() < 1e-5,
+            "a structural rebuild must resolve `amt`'s reshape from the live \
+             manifest spec (min=0,max=2), not the graph's stale \
+             `preset_metadata.params` shadow (min=0,max=1) — got {offset} \
+             (1.0 is exactly what the STALE 0..1 range produces)",
+        );
+    }
+
     fn frame_time() -> FrameTime {
         FrameTime {
             beats: Beats(0.0),
