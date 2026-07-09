@@ -1,8 +1,9 @@
 # UI ↔ Content Projection Layer — enforcing the snapshot seam (A1)
 
 **Status:** ⚠ PRE-FABLE DRAFT — audit complete; Q-GROWTH answered (Peter, 2026-07-09: many new
-screens coming), so the fork is resolved to **C-then-A** (§2, D1). One taste call remains for Fable:
-how Shape A is realized (§2.2). Not PROPOSED yet.
+screens coming). That fact is settled; the **recommendation** it points to is C-then-A (§2), for
+Peter/Fable to ratify at the window — not locked here. The open call for Fable is how Shape A is
+realized (§2.2). Not PROPOSED yet.
 **Prerequisites:** UI_HARNESS_UNIFICATION (approved, Sonnet-executing) closes the *verification*
 half — the real UICacheManager render path in the headless harness. This design is the
 *construction* half. They compose; neither blocks the other's P0.
@@ -96,7 +97,8 @@ product fact only Peter has: how many new snapshot-bearing screens the release a
 > **Q-GROWTH — answered (Peter, 2026-07-09):** *"Many Many new screens pages and interactive new
 > UI is coming soon."*
 
-**D1 — build C, then A.** Shape C ships first regardless: cheap, fork-independent, kills the verified
+**Recommendation (rests on the settled fact above; for the window to ratify) — build C, then A.**
+Shape C ships first regardless: cheap, fork-independent, kills the verified
 rot. Shape A is now justified — with many new screens, the hand-written emit/apply pair gets paid
 dozens more times, and **interactive** screens add the error-prone part specifically: a control the
 user drags needs the engine's incoming snapshot to *not* overwrite the value mid-drag
@@ -165,7 +167,8 @@ window on; my lean is priced but not decided — Fable kill-passes it.
   before/after the migration of a sample field. Real brief written once §2.2 resolves.
 
 ## §. Decided — do not reopen
-1. **D1 — build C then A** (Q-GROWTH = many new screens).
+1. Q-GROWTH is answered — many new screens are coming (Peter, 2026-07-09). The *fact* is settled;
+   the C-then-A build plan it points to is a recommendation for the window to ratify, not locked.
 2. The hot-path `modulation_snapshot` packer is exempt from any projection mechanism (§0, I2).
 3. Enforcement is scoped to the scalar-mirror class; events/snapshot/overlays are named exemptions,
    not absorbed (kill-test verdict).
