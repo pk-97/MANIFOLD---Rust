@@ -37,7 +37,7 @@ templates to copy: manifold-io's guard+test pattern (forward-version guard, fsyn
 
 | Subsystem | Verdict | Fix owner |
 |---|---|---|
-| manifold-ui ↔ content projection seam | **structurally-wrong** (= A1, confirmed) | Opus design |
+| manifold-ui ↔ content projection seam | ~~structurally-wrong (= A1, confirmed)~~ **DOWNGRADED 2026-07-09 (Fable, §6): sound-but-under-enforced; A1's kill-test came back KILL** — enforcement shipped same day (UI_PROJECTION_LAYER_DESIGN P0), declarative layer rejected | ~~Opus design~~ done |
 | manifold-playback | sound-but-underspecified; ONE structural fault: engine mutation authority (F5) | Opus design |
 | freeze/fusion compiler | sound design, **unenforced contract** (miner's "structurally-wrong" downgraded — see below) | Sonnet fixes + Opus verifier design |
 | manifold-media/recording | structurally-wrong, severe, n=1 (BUG-053 blocks HDR recording) | LIVE_RECORDING_PROOFS design already PROPOSED |
@@ -98,7 +98,7 @@ requires reading `docs/VSYNC_AND_FRAME_PACING.md` first and a soak run before la
 ## §3 Execution queue (in order)
 
 Opus design windows:
-1. **A1 UI projection layer** — release-critical, gates every new screen. Method: DESIGN_AUTHORING.md; verification half already covered by UI_HARNESS_UNIFICATION.
+1. ~~**A1 UI projection layer** — release-critical, gates every new screen.~~ **RESOLVED 2026-07-09 (Fable, §6):** kill-test killed the layer; the enforceable gap (orphan fields) shipped as a compiler gate the same day. Nothing here gates new screens anymore.
 2. **ENGINE_STATE_AUTHORITY** — resolves F5 and triages F1–F17.
 3. **FREEZE_VERIFIER (A8)** — after or parallel to the Sonnet fix wave.
 4. **BUG-080 param-manifest construction** — already self-nominated for an Opus pass.
@@ -151,3 +151,27 @@ of which moves a verdict:
 Not done: verifying each entry's root cause against the Rust itself — this pass audited the dossier
 against the backlog, not the backlog against the code (per §0's scope). Recommended posture stands:
 verify each Sonnet-wave entry against code at pick-up, one level closer to stage than static reading.
+
+**§5 confirmed (Fable, 2026-07-09, second pass):** all three corrections re-verified against
+dossier + backlog — A7 four-bug gate ✓ (034 = coverage, 073 = behavior; 057≈067 same slug),
+audio one-off×6 + convention×2 ✓ (052/055 rows), core identity×2 ✓ (005 = missing-invariant),
+BUG-047 real enforcement none ✓ (the cited test guards the adjacent fixed ordering bug);
+48/14/20 totals reconcile ✓.
+
+## §6 A1 verdict amendment (Fable, 2026-07-09, second pass)
+
+The §2 "structurally-wrong" verdict for the projection seam is **downgraded to
+sound-but-under-enforced**, and the queue's #1 design window is **dissolved**. What changed:
+working the pre-Fable A1 draft against the code showed (a) the emit half of the seam was
+already compiler-enforced (exhaustive struct literal), (b) the orphan class was a suppressed
+compiler lint, not a missing system — un-suppressing it became UI_PROJECTION_LAYER_DESIGN P0,
+shipped same day, and immediately exposed two real product gaps (BUG-083 export progress,
+BUG-084 recording drops); (c) the A1 bug-evidence list dissolves on re-read (015/060 are
+A2/cache — 015 OPEN, 060 REOPENED; 026 animation poll; 036 load ordering) — zero corpus bugs
+in the class a declarative table would govern; (d) drag suppression already exists generically
+(`ActiveInspectorDrag`). Full evidence chain and the reviving trigger:
+UI_PROJECTION_LAYER_DESIGN.md §1.1/§2. The "every field hand-threaded" churn is real but lives
+in view-model/display code no table can generate — it stays covered by the ui_translate
+boundary and UI_HARNESS_UNIFICATION's verification half. Headline unchanged: the codebase's
+disease is unenforced right designs — this amendment is that thesis applying to the audit's
+own #1 item (the enforcement existed; it was suppressed).

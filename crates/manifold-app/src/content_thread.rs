@@ -173,7 +173,6 @@ pub struct ContentThread {
     // ── Cached ContentState strings (Arc<str> — clone = refcount bump, zero alloc) ──
     pub cached_midi_clock_position: Arc<str>,
     pub cached_midi_clock_device: Arc<str>,
-    pub cached_osc_timecode: Arc<str>,
     pub cached_perc_message: Arc<str>,
     /// Last-sent MIDI device names — only reallocated when the list changes.
     pub last_sent_midi_device_names: Arc<[String]>,
@@ -1090,9 +1089,6 @@ impl ContentThread {
         if new_dev != &*self.cached_midi_clock_device {
             self.cached_midi_clock_device = Arc::from(new_dev);
         }
-        if self.osc_sync.current_timecode_display != *self.cached_osc_timecode {
-            self.cached_osc_timecode = Arc::from(self.osc_sync.current_timecode_display.as_str());
-        }
         let new_perc = self.percussion_orchestrator.status_message();
         if new_perc != &*self.cached_perc_message {
             self.cached_perc_message = Arc::from(new_perc);
@@ -1192,31 +1188,16 @@ impl ContentThread {
                 .link_sync
                 .as_ref()
                 .is_some_and(|s| s.is_link_enabled()),
-            link_tempo: self
-                .transport_controller
-                .link_sync
-                .as_ref()
-                .map_or(120.0, |s| s.link_tempo),
             link_peers: self
                 .transport_controller
                 .link_sync
                 .as_ref()
                 .map_or(0, |s| s.num_peers),
-            link_is_playing: self
-                .transport_controller
-                .link_sync
-                .as_ref()
-                .is_some_and(|s| s.link_is_playing),
             midi_clock_enabled: self
                 .transport_controller
                 .midi_clock_sync
                 .as_ref()
                 .is_some_and(|s| s.is_midi_clock_enabled()),
-            midi_clock_bpm: self
-                .transport_controller
-                .midi_clock_sync
-                .as_ref()
-                .map_or(Bpm(120.0), |s| Bpm(s.current_clock_bpm())),
             midi_clock_position_display: self.cached_midi_clock_position.clone(),
             midi_clock_receiving: self
                 .transport_controller
@@ -1236,8 +1217,6 @@ impl ContentThread {
             spectrogram_mid_hz,
             spectrogram_features,
             osc_sender_enabled: self.transport_controller.osc_sender_enabled,
-            osc_receiving_timecode: self.osc_sync.is_receiving_timecode,
-            osc_timecode_display: self.cached_osc_timecode.clone(),
             percussion_importing: self.percussion_orchestrator.is_import_in_progress(),
             percussion_status_message: self.cached_perc_message.clone(),
             percussion_progress: if perc_progress < 0.0 {
@@ -1267,25 +1246,10 @@ impl ContentThread {
                 }
             },
             led_enabled: self.led_controller.as_ref().is_some_and(|c| c.is_enabled()),
-            led_initialized: self
-                .led_controller
-                .as_ref()
-                .is_some_and(|c| c.is_initialized()),
             #[cfg(target_os = "macos")]
             is_live_recording: self.content_pipeline.recording_session.is_some(),
             #[cfg(not(target_os = "macos"))]
             is_live_recording: false,
-            #[cfg(target_os = "macos")]
-            recording_dropped_frames: self
-                .content_pipeline
-                .recording_session
-                .as_ref()
-                .map_or(0, |s| s.frames_dropped()),
-            #[cfg(not(target_os = "macos"))]
-            recording_dropped_frames: 0,
-            is_exporting: false,
-            export_progress: 0.0,
-            export_status: Arc::from(""),
             export_finished: None,
             undo_redo_event: self.pending_undo_redo_event.take(),
             ableton_session: if self.ableton_bridge.session_changed() {

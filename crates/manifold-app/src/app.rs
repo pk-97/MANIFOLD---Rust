@@ -2246,7 +2246,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 audio_mod_runtime: crate::audio_mod_runtime::AudioModRuntime::default(),
                 cached_midi_clock_position: Arc::from(""),
                 cached_midi_clock_device: Arc::from(""),
-                cached_osc_timecode: Arc::from(""),
                 cached_perc_message: Arc::from(""),
                 last_sent_midi_device_names: Arc::from([]),
                 // No project is live at construction, so no forks yet.
