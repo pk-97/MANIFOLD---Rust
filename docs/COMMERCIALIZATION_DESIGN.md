@@ -74,3 +74,8 @@ watermark as a graph node or project-level flag.
 - **Windows updater** (Sparkle is macOS-only; WinSparkle or equivalent) — with
   the v1.5 Vulkan/Windows release, not before.
 - **Venue/team multi-seat licenses** — when a venue actually asks.
+- **Third-party model attribution** — if PANNs ships (weights CC BY 4.0, Zenodo
+  3987831, verified 2026-07-09), an in-app credits entry is required. Risk note:
+  AudioSet-family models (PANNs, YAMNet) are trained on YouTube-derived data — an
+  industry-wide gray zone, not a license clause; accepted risk, revisit if the
+  legal weather changes.
