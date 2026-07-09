@@ -1,6 +1,6 @@
 # Param Storage Boundaries — load reconcile, card single-source, migration self-containment
 
-**Status:** IN PROGRESS · P1 SHIPPED (`wave/param-boundaries-p1`) · P2–P3 not built · 2026-07-06 · Fable
+**Status:** IN PROGRESS · P1 SHIPPED (`wave/param-boundaries-p1`) · P2 SHIPPED (`wave/param-boundaries-p2`) · P3 not built · 2026-07-06 · Fable
 **Prerequisites:** PARAM_STORAGE_DESIGN.md P1–P5 (all SHIPPED 2026-07-05) + the BUG-036
 fix wave (`b2f78725`, `0434da5e`, 2026-07-06). Nothing else.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
@@ -257,7 +257,47 @@ Test scope: focused crates above + `cargo clippy --workspace -- -D warnings`; no
 workspace test sweep (P3 runs the single sweep for the wave).
 **Demo:** none visible — L1, plus the L2 repro-load log artifact above.
 
-### P2 — card single-source + derive-on-save; the dual-write dies (one session)
+### P2 — card single-source + derive-on-save; the dual-write dies (one session) — SHIPPED
+
+Landed on `wave/param-boundaries-p2` (worktree `.claude/worktrees/param-bound-p2`):
+`state_sync`'s row-building collapsed to one `rows_from_manifest(inst)` helper
+called for both kinds (the registry arm, the user-binding append loop, and
+the overlay block all deleted); `GraphWithDerivedParams` implemented and
+wired into both `PresetInstance` serialize arms (resolves the §3
+⚠ VERIFY-AT-IMPL marker); `EditParamMappingCommand` no longer writes
+`meta.params` — its execute/undo now source name/min/max/invert/curve from
+the manifest only, while scale/offset (which have no manifest home) still
+land on the graph's `BindingDef` exactly as before. Two existing unit tests
+(`edit_stock_param_seeds_graph_and_roundtrips`,
+`edit_gen_param_seeds_graph_and_roundtrips`) asserted the OLD dual-write
+behavior directly and were updated to assert against the manifest instead
+(scale assertions against the graph binding are unchanged). New regression:
+`calibrated_param_derives_meta_params_on_save_not_the_stale_shadow`
+(manifold-core) proves a calibrated manifest spec reaches the wire via the
+derive wrapper — including a byte-comparison of the derived `meta.params`
+entry against the manifest's own spec — while a graph literal seeded with
+stale template values is never touched again after construction.
+
+Shadow-reader inventory (run against `rg -n "meta\.params|m\.params\b" crates/
+manifold-app/src crates/manifold-renderer/src --type rust`) found three
+readers beyond the card path and the migration/catalog-build sites (those
+are load-seed/test-fixture, unaffected): the graph-editor mapping-drawer
+popover (`manifold-app/src/app_render.rs` `full_reshape_from_def` /
+`watched_full_reshape`), the Save-to-Library / Push-to-Library / Make-Unique
+/ Export path (`manifold-app/src/ui_bridge/inspector.rs` `preset_source_def`,
+which clones `inst.graph` directly — not through `GraphWithDerivedParams`),
+and the GENERATOR runtime's own reshape construction (`manifold-renderer/src/
+preset_runtime.rs` `param_reshape` inside `PresetRuntime::from_def`, rebuilt
+only when `generator_renderer.rs`'s per-frame sweep sees a
+`graph_structure_version` bump — a plain calibration edit bumps only
+`graph_version`, so this reshape was ALREADY not refreshed by a second
+same-editor-session recalibration pre-P2; the FIRST calibration on a
+catalog-default instance is the one case where deleting the dual-write
+narrows behavior, until save+reload — which D12 now makes robust for N
+calibrations, not just the first). All three read fresher-than-last-save
+data outside the card path per this phase's own escalation rule, and were
+left untouched (fixing any of them is an architecture call outside P2's
+scope) — flagged here for a follow-up decision rather than adapted around.
 
 **Entry state:** P1 landed (`rg "reconcile_param_manifests" crates/manifold-io` hits);
 `cargo test -p manifold-app --test user_param_bindings_e2e` green.

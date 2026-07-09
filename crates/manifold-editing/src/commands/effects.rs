@@ -747,14 +747,18 @@ pub struct BindingMappingEdit {
 }
 
 impl BindingMappingEdit {
-    /// Apply each touched field onto the preset's authoring surface: range +
-    /// curve + invert + label go on the `ParamSpecDef`, scale/offset on the
-    /// matching `BindingDef`. The preset is the single reshape source now (no
-    /// per-instance note). Returns the PRE-edit values for undo.
-    fn apply_to_spec(
+    /// Apply the label/min/max/invert/curve fields onto the LIVE manifest
+    /// entry's spec — the sole authority a card/renderer reads
+    /// (PARAM_STORAGE_DESIGN.md D6). Returns the PRE-edit values for undo.
+    ///
+    /// PARAM_STORAGE_BOUNDARIES_DESIGN.md D4: the graph's `preset_metadata
+    /// .params` (`meta.params`) is a save-time-derived shadow now, not a
+    /// second live target — this method never touches it. Writing these
+    /// fields onto both the manifest AND `meta.params` was exactly the
+    /// dual-write P2 deletes (two owners of one fact).
+    fn apply_to_manifest_spec(
         &self,
         spec: &mut manifold_core::effect_graph_def::ParamSpecDef,
-        binding: Option<&mut manifold_core::effect_graph_def::BindingDef>,
     ) -> SpecReshapeSnapshot {
         let prev = SpecReshapeSnapshot {
             name: spec.name.clone(),
@@ -762,8 +766,6 @@ impl BindingMappingEdit {
             max: spec.max,
             invert: spec.invert,
             curve: spec.curve,
-            scale: binding.as_ref().map(|b| b.scale),
-            offset: binding.as_ref().map(|b| b.offset),
         };
         if let Some(label) = &self.label {
             spec.name = label.clone();
@@ -780,19 +782,31 @@ impl BindingMappingEdit {
         if let Some(curve) = self.curve {
             spec.curve = curve;
         }
-        if let Some(b) = binding {
-            if let Some(scale) = self.scale {
-                b.scale = scale;
-            }
-            if let Some(offset) = self.offset {
-                b.offset = offset;
-            }
+        prev
+    }
+
+    /// Apply the scale/offset fields onto the graph's live `BindingDef` — the
+    /// ONLY home for them (no manifest field: scale/offset live on the
+    /// binding recipe, which synth reads directly, per PARAM_STORAGE_DESIGN
+    /// D6). Unlike the spec fields above, this write is NOT part of the
+    /// `meta.params` dual-write P2 deletes — it survives untouched. Returns
+    /// the PRE-edit `(scale, offset)` for undo.
+    fn apply_scale_offset(
+        &self,
+        binding: &mut manifold_core::effect_graph_def::BindingDef,
+    ) -> (f32, f32) {
+        let prev = (binding.scale, binding.offset);
+        if let Some(scale) = self.scale {
+            binding.scale = scale;
+        }
+        if let Some(offset) = self.offset {
+            binding.offset = offset;
         }
         prev
     }
 }
 
-/// Pre-edit snapshot of a preset param's reshape, for undo.
+/// Pre-edit snapshot of the manifest spec half of a reshape edit, for undo.
 #[derive(Debug, Clone)]
 struct SpecReshapeSnapshot {
     name: String,
@@ -800,48 +814,47 @@ struct SpecReshapeSnapshot {
     max: f32,
     invert: bool,
     curve: manifold_core::macro_bank::MacroCurve,
-    scale: Option<f32>,
-    offset: Option<f32>,
 }
 
 impl SpecReshapeSnapshot {
-    fn restore(
-        &self,
-        spec: &mut manifold_core::effect_graph_def::ParamSpecDef,
-        binding: Option<&mut manifold_core::effect_graph_def::BindingDef>,
-    ) {
+    fn restore(&self, spec: &mut manifold_core::effect_graph_def::ParamSpecDef) {
         spec.name = self.name.clone();
         spec.min = self.min;
         spec.max = self.max;
         spec.invert = self.invert;
         spec.curve = self.curve;
-        if let Some(b) = binding {
-            if let Some(scale) = self.scale {
-                b.scale = scale;
-            }
-            if let Some(offset) = self.offset {
-                b.offset = offset;
-            }
-        }
     }
+}
+
+/// Full pre-edit reverse for the single-shot undo path: the manifest spec
+/// snapshot (always captured — the manifest entry is guaranteed by the
+/// `execute()` guard) plus the graph binding's pre-edit `(scale, offset)`,
+/// `None` when the graph carried no matching `BindingDef` (nothing to
+/// restore there; the manifest half still applies unconditionally).
+#[derive(Debug, Clone)]
+struct MappingReverse {
+    spec: SpecReshapeSnapshot,
+    scale: Option<f32>,
+    offset: Option<f32>,
 }
 
 /// Edit one card param's reshape — its display label, min/max range, invert
 /// flag, response curve, or scale/offset — on an effect or generator addressed
 /// by a [`GraphTarget`].
 ///
-/// The reshape lives in the PRESET's authoring surface (its `ParamSpecDef` +
-/// `BindingDef`), the single source after `ParamMapping` was deleted. The edit
-/// targets the instance's per-instance graph override (`graph` for an effect,
-/// `generator_graph` for a generator): if the instance is still on the catalog
-/// default (`graph: None`), the caller-supplied `seed_def` (the catalog graph,
-/// resolved renderer-side) materializes it first, so a recalibration becomes a
-/// per-instance override exactly like a topology edit. The param is addressed by
-/// its stable id (never mutated — drivers/Ableton/OSC reference it).
+/// The reshape lives in TWO places now (PARAM_STORAGE_BOUNDARIES_DESIGN.md D4):
+/// label/min/max/invert/curve on the instance's live [`manifold_core::params
+/// ::ParamManifest`] entry (the sole authority a card/renderer reads); scale/
+/// offset on the instance's per-instance graph override's `BindingDef` (their
+/// only home). The per-instance graph override (`graph` for an effect,
+/// `generator_graph` for a generator) is materialized from the caller-supplied
+/// `seed_def` first if the instance is still on the catalog default (`graph:
+/// None`), so a recalibration becomes a per-instance override exactly like a
+/// topology edit — the manifest already exists regardless, seeded at
+/// instantiation/load. The param is addressed by its stable id (never mutated
+/// — drivers/Ableton/OSC reference it).
 ///
-/// On first execute the pre-edit spec values are snapshotted for undo; the graph
-/// version bump makes the renderer rebuild the binding (which reads its reshape
-/// from the spec) next frame.
+/// On first execute the pre-edit values are snapshotted for undo.
 #[derive(Debug)]
 pub struct EditParamMappingCommand {
     target: GraphTarget,
@@ -859,7 +872,7 @@ pub struct EditParamMappingCommand {
     explicit_reverse: Option<BindingMappingEdit>,
     /// Pre-edit snapshot, captured on first execute for the single-shot path
     /// (when `explicit_reverse` is `None`).
-    reverse: Option<SpecReshapeSnapshot>,
+    reverse: Option<MappingReverse>,
 }
 
 impl EditParamMappingCommand {
@@ -901,6 +914,27 @@ impl EditParamMappingCommand {
     }
 }
 
+/// Apply the scale/offset half of `edit` onto `binding_id`'s live
+/// `BindingDef`, if the graph override carries a matching one. Returns the
+/// PRE-edit `(scale, offset)`, or `None` if there was no matching binding to
+/// touch (nothing to restore there on undo). Shared by `execute` and both
+/// undo paths so the "find the binding, apply, bump the graph version"
+/// sequence lives in one place.
+fn apply_scale_offset_on_graph(
+    host: &mut PresetInstance,
+    binding_id: &str,
+    edit: &BindingMappingEdit,
+) -> Option<(f32, f32)> {
+    let prev = host
+        .graph_def_mut()
+        .as_mut()
+        .and_then(|g| g.preset_metadata.as_mut())
+        .and_then(|meta| meta.bindings.iter_mut().find(|b| b.id == binding_id))
+        .map(|b| edit.apply_scale_offset(b));
+    host.bump_graph_version();
+    prev
+}
+
 impl Command for EditParamMappingCommand {
     fn execute(&mut self, project: &mut Project) {
         let binding_id = self.binding_id.clone();
@@ -912,32 +946,41 @@ impl Command for EditParamMappingCommand {
         let snap = project
             .with_preset_graph_mut(&self.target, |host| {
                 // Materialize the per-instance graph override if the instance is
-                // still on the catalog default, so the reshape has a home.
+                // still on the catalog default, so scale/offset (the binding
+                // half of the reshape) have a home.
                 if host.graph_def().is_none() {
                     let seed = seed_def?;
                     *host.graph_def_mut() = Some(seed);
                     host.bump_graph_structure_version();
                 }
-                let snap = {
-                    let graph = host.graph_def_mut().as_mut()?;
-                    let meta = graph.preset_metadata.as_mut()?;
-                    let spec = meta.params.iter_mut().find(|p| p.id == binding_id)?;
-                    let binding = meta.bindings.iter_mut().find(|b| b.id == binding_id);
-                    new.apply_to_spec(spec, binding)
-                };
-                host.bump_graph_version();
-                // The manifest entry's `spec` is the LIVE reshape the renderer
-                // reads (`synth_user_binding` for a user param, calibration for a
-                // stock one — PARAM_STORAGE_DESIGN.md D6); `meta.params` is only a
-                // save-time shadow. Mirror the same edit onto the manifest so the
-                // range / curve / invert / label actually take effect. scale and
-                // offset have no manifest home (they live on the BindingDef, which
-                // synth reads directly), so pass `None`.
-                if let Some(p) = host.params.get_mut(&binding_id) {
-                    new.apply_to_spec(&mut p.spec, None);
-                    p.calibrated = true;
-                }
-                Some(snap)
+                // Guard: nothing to calibrate if the manifest doesn't carry
+                // this id (mirrors the old `meta.params.find(...)?` guard,
+                // now against the manifest — the actual authority a
+                // card/renderer reads. PARAM_STORAGE_BOUNDARIES_DESIGN.md D4).
+                host.params.get(&binding_id)?;
+
+                // scale/offset have no manifest home (they live on the
+                // BindingDef, which synth reads directly) — apply them onto
+                // the graph's binding, the only place they live. NOT part of
+                // the `meta.params` dual-write P2 deletes.
+                let prev_binding = apply_scale_offset_on_graph(host, &binding_id, &new);
+
+                // The manifest entry's `spec` is the LIVE reshape the
+                // renderer reads (`synth_user_binding` for a user param,
+                // calibration for a stock one — PARAM_STORAGE_DESIGN.md D6).
+                // `meta.params` on the graph is derived from the manifest at
+                // serialize time now (D12) — writing it here too would be
+                // the exact dual-write P2 deletes, so this is the SOLE spec
+                // write.
+                let p = host.params.get_mut(&binding_id)?;
+                let spec_snap = new.apply_to_manifest_spec(&mut p.spec);
+                p.calibrated = true;
+
+                Some(MappingReverse {
+                    spec: spec_snap,
+                    scale: prev_binding.map(|(s, _)| s),
+                    offset: prev_binding.map(|(_, o)| o),
+                })
             })
             .flatten();
         if keep_snapshot {
@@ -951,20 +994,9 @@ impl Command for EditParamMappingCommand {
         // the fields the drag moved), landing on the true pre-drag values.
         if let Some(reverse_edit) = self.explicit_reverse.clone() {
             project.with_preset_graph_mut(&self.target, |host| {
-                let Some(graph) = host.graph_def_mut().as_mut() else {
-                    return;
-                };
-                let Some(meta) = graph.preset_metadata.as_mut() else {
-                    return;
-                };
-                if let Some(spec) = meta.params.iter_mut().find(|p| p.id == binding_id) {
-                    let binding = meta.bindings.iter_mut().find(|b| b.id == binding_id);
-                    reverse_edit.apply_to_spec(spec, binding);
-                }
-                host.bump_graph_version();
-                // Mirror the reverse onto the live manifest spec (see execute).
+                apply_scale_offset_on_graph(host, &binding_id, &reverse_edit);
                 if let Some(p) = host.params.get_mut(&binding_id) {
-                    reverse_edit.apply_to_spec(&mut p.spec, None);
+                    reverse_edit.apply_to_manifest_spec(&mut p.spec);
                 }
             });
             return;
@@ -974,20 +1006,20 @@ impl Command for EditParamMappingCommand {
             return;
         };
         project.with_preset_graph_mut(&self.target, |host| {
-            let Some(graph) = host.graph_def_mut().as_mut() else {
-                return;
-            };
-            let Some(meta) = graph.preset_metadata.as_mut() else {
-                return;
-            };
-            if let Some(spec) = meta.params.iter_mut().find(|p| p.id == binding_id) {
-                let binding = meta.bindings.iter_mut().find(|b| b.id == binding_id);
-                reverse.restore(spec, binding);
+            if let (Some(scale), Some(offset)) = (reverse.scale, reverse.offset)
+                && let Some(b) = host
+                    .graph_def_mut()
+                    .as_mut()
+                    .and_then(|g| g.preset_metadata.as_mut())
+                    .and_then(|meta| meta.bindings.iter_mut().find(|b| b.id == binding_id))
+            {
+                b.scale = scale;
+                b.offset = offset;
             }
             host.bump_graph_version();
-            // Mirror the reverse onto the live manifest spec (see execute).
+            // Restore the manifest spec (see execute) — the sole live authority.
             if let Some(p) = host.params.get_mut(&binding_id) {
-                reverse.restore(&mut p.spec, None);
+                reverse.spec.restore(&mut p.spec);
             }
         });
     }
@@ -1112,7 +1144,12 @@ mod tests {
     }
 
     /// Read a stock card param's `(invert, max, scale)` straight out of an
-    /// instance's per-instance graph spec — the single reshape home.
+    /// instance's per-instance graph spec + binding. Post-P2
+    /// (PARAM_STORAGE_BOUNDARIES_DESIGN.md D4) `invert`/`max` here are only
+    /// the SEEDED values (the graph's `preset_metadata.params` is a
+    /// save-time-derived shadow now, not a live target) — `scale` is still
+    /// live, since it has no manifest home. Use [`manifest_reshape`] to read
+    /// the live invert/max after a calibration edit.
     fn spec_reshape(graph: &Option<manifold_core::effect_graph_def::EffectGraphDef>, id: &str) -> (bool, f32, f32) {
         let meta = graph
             .as_ref()
@@ -1126,6 +1163,42 @@ mod tests {
             .map(|b| b.scale)
             .expect("binding present");
         (spec.invert, spec.max, scale)
+    }
+
+    /// Read a param's live `(invert, max)` off the MANIFEST — the sole
+    /// authority a card/renderer reads after a calibration edit
+    /// (PARAM_STORAGE_BOUNDARIES_DESIGN.md D4).
+    fn manifest_reshape(inst: &manifold_core::effects::PresetInstance, id: &str) -> (bool, f32) {
+        let p = inst.params.get(id).expect("manifest entry present");
+        (p.spec.invert, p.spec.max)
+    }
+
+    /// Manually seed `inst`'s manifest with a bundled [`Param`] matching
+    /// [`seed_def_with_param`]'s `ParamSpecDef` — mirrors what
+    /// `build_param_manifest` does for a REAL registered preset at
+    /// instantiation. `manifold-editing` doesn't depend on
+    /// `manifold-renderer` (no registry to consult in this crate's tests),
+    /// so `EditParamMappingCommand`'s manifest-first guard needs the entry
+    /// seeded by hand here.
+    fn seed_manifest_param(inst: &mut manifold_core::effects::PresetInstance, param_id: &str) {
+        use manifold_core::effect_graph_def::ParamSpecDef;
+        inst.params.push(Param::bundled(ParamSpecDef {
+            id: param_id.to_string(),
+            name: "Amount".to_string(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.0,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: MacroCurve::Linear,
+            invert: false,
+            is_angle: false,
+            is_trigger_gate: false,
+        }));
     }
 
     #[test]
@@ -1247,14 +1320,20 @@ mod tests {
 
     /// A STOCK param (no user binding) on an instance still at the catalog
     /// default (`graph: None`) materializes the per-instance graph from the
-    /// supplied `seed_def`, then edits the reshape on that graph's spec — the
-    /// post-`ParamMapping` model. Undo restores the seeded spec values.
+    /// supplied `seed_def` (its scale/offset home) and calibrates the
+    /// manifest spec (its invert/max home) — the post-P2 model
+    /// (PARAM_STORAGE_BOUNDARIES_DESIGN.md D4). Undo restores both to their
+    /// seeded values. `manifold-editing` has no renderer registry to seed
+    /// the manifest from at instantiation, so the test hand-seeds it
+    /// (`seed_manifest_param`) to mirror what a real registered preset gets
+    /// for free via `build_param_manifest`.
     #[test]
     fn edit_stock_param_seeds_graph_and_roundtrips() {
         let mut project = Project::default();
         let fx = PresetInstance::new(PresetTypeId::new("ColorGrade"));
         let effect_id = fx.id.clone();
         project.settings.master_effects.push(fx);
+        seed_manifest_param(&mut project.settings.master_effects[0], "amount");
         assert!(
             project.settings.master_effects[0].graph.is_none(),
             "instance starts on the catalog default (no per-instance graph)",
@@ -1274,29 +1353,34 @@ mod tests {
             Some(seed_def_with_param("amount")),
         );
 
-        // execute: materializes the graph + applies the reshape to its spec.
+        // execute: materializes the graph (for scale/offset's sake) + applies
+        // invert/max to the manifest, scale to the graph binding.
         cmd.execute(&mut project);
         assert!(
             project.settings.master_effects[0].graph.is_some(),
             "editing a stock param materializes the per-instance graph",
         );
         assert_eq!(
-            spec_reshape(&project.settings.master_effects[0].graph, "amount"),
-            (true, 5.0, 2.0),
-            "reshape lands on the materialized graph's spec + binding",
+            manifest_reshape(&project.settings.master_effects[0], "amount"),
+            (true, 5.0),
+            "invert/max land on the manifest — the sole live authority",
         );
+        let (_, _, scale) = spec_reshape(&project.settings.master_effects[0].graph, "amount");
+        assert_eq!(scale, 2.0, "scale lands on the materialized graph's binding");
         assert_ne!(
             project.settings.master_effects[0].graph_version, v0,
             "editing a stock param bumps graph_version",
         );
 
-        // undo: the seeded spec values are restored.
+        // undo: the seeded values are restored on both sides.
         cmd.undo(&mut project);
         assert_eq!(
-            spec_reshape(&project.settings.master_effects[0].graph, "amount"),
-            (false, 1.0, 1.0),
-            "undo restores the seeded spec (invert false, max 1.0, scale 1.0)",
+            manifest_reshape(&project.settings.master_effects[0], "amount"),
+            (false, 1.0),
+            "undo restores the seeded manifest spec (invert false, max 1.0)",
         );
+        let (_, _, scale) = spec_reshape(&project.settings.master_effects[0].graph, "amount");
+        assert_eq!(scale, 1.0, "undo restores scale to identity on the graph binding");
     }
 
     /// An id that is neither a user binding nor present in the seed def, with
@@ -1336,6 +1420,12 @@ mod tests {
         use manifold_core::layer::Layer;
 
         let mut project = Project::default();
+        // Unlike an effect type (ColorGrade), "Plasma" is a compiled-in
+        // generator registration (`generator_metadata_submissions.rs`) that
+        // `manifold-core` itself carries — reachable without the renderer's
+        // registry — so `Layer::new_generator`'s `init_defaults()` already
+        // seeds the manifest with a real "complexity" entry (min 0.0, max
+        // 1.0, invert false); no manual seed needed here.
         let layer = Layer::new_generator("Gen".into(), PresetTypeId::new("Plasma"), 0);
         let layer_id = layer.layer_id.clone();
         project.timeline.insert_layer(0, layer);
@@ -1361,15 +1451,19 @@ mod tests {
                 .expect("layer present");
             // The generator graph lives on gen_params now (graph-home unification).
             let gp = layer.gen_params().expect("gen params present");
-            let (invert, _max, scale) = spec_reshape(&gp.graph, "complexity");
+            // invert: the manifest, the sole live authority (D4). scale: the
+            // graph binding, its only home.
+            let (invert, _max) = manifest_reshape(gp, "complexity");
+            let (_, _, scale) = spec_reshape(&gp.graph, "complexity");
             (invert, scale)
         };
 
-        // execute: materializes generator_graph + applies the reshape.
+        // execute: materializes generator_graph (scale's home) + calibrates
+        // the manifest (invert's home).
         cmd.execute(&mut project);
         assert_eq!(reshape(&project, layer_id.as_str()), (true, 2.0));
 
-        // undo restores the seeded spec values.
+        // undo restores the seeded values.
         cmd.undo(&mut project);
         assert_eq!(reshape(&project, layer_id.as_str()), (false, 1.0));
 

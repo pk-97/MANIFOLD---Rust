@@ -1525,7 +1525,6 @@ pub fn sync_inspector_data(
                         gp,
                         lid,
                         clip_string_params,
-                        layer.generator_graph(),
                         automation_latched,
                     )
                 });
@@ -1911,7 +1910,6 @@ fn effects_to_configs(
                 i,
                 osc_scope,
                 None,
-                None,
                 automation_latched,
             )
         })
@@ -1973,169 +1971,81 @@ fn empty_generator_config(inst: &PresetInstance) -> ParamCardConfig {
     }
 }
 
+/// One `SpecRow` per manifest entry, in card order (PARAM_STORAGE_BOUNDARIES
+/// D4: the manifest is the single owner of every card-row fact — descriptor +
+/// state, id-keyed). Shared by both kinds; the id/name/whole_numbers fields
+/// come straight off `Param.spec` unchanged by calibration or exposure.
+fn rows_from_manifest(inst: &PresetInstance) -> Vec<SpecRow> {
+    inst.params
+        .iter()
+        .map(|p| SpecRow {
+            id: p.id().to_string(),
+            name: p.spec.name.clone(),
+            min: p.spec.min,
+            max: p.spec.max,
+            default: p.spec.default_value,
+            whole_numbers: p.spec.whole_numbers,
+            is_angle: p.spec.is_angle,
+            is_toggle: p.spec.is_toggle,
+            is_trigger: p.spec.is_trigger,
+            is_trigger_gate: p.spec.is_trigger_gate,
+            value_labels: if p.spec.value_labels.is_empty() {
+                None
+            } else {
+                Some(p.spec.value_labels.clone())
+            },
+            exposed: p.exposed,
+        })
+        .collect()
+}
+
 /// Unified card-config builder for any [`PresetInstance`] (effect or
 /// generator). Fork #9: the two parallel builders (`effects_to_configs` body
 /// and `gen_params_to_config`) collapse here — the kind fork is confined to
-/// param-sourcing (effects: registry static prefix + user tail; generators:
-/// graph metadata if present, else registry) and a handful of card fields.
-/// Everything downstream — the `ParamInfo` construction, the `id->index`
-/// lookup, [`build_card_modulation`], the `ParamCardConfig` assembly — is
-/// shared. Returns `None` only for an effect whose preset def is missing
-/// (skipped as a card); a generator with no source returns the empty card.
+/// the "skip this card" guard (effects: def-less; generators: no resolvable
+/// param source) and a handful of card fields; row-sourcing itself is now
+/// ONE path for both kinds ([`rows_from_manifest`], P2 of
+/// PARAM_STORAGE_BOUNDARIES_DESIGN.md). Everything downstream — the
+/// `ParamInfo` construction, the `id->index` lookup,
+/// [`build_card_modulation`], the `ParamCardConfig` assembly — is shared.
+/// Returns `None` only for an effect whose preset def is missing (skipped as
+/// a card); a generator with no source returns the empty card.
 fn preset_to_config(
     inst: &PresetInstance,
     kind: manifold_core::preset_def::PresetKind,
     effect_index: usize,
     osc_scope: OscScope<'_>,
     clip_string_params: Option<&std::collections::BTreeMap<String, String>>,
-    generator_graph: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
 ) -> Option<ParamCardConfig> {
     use manifold_core::preset_def::PresetKind;
     let preset_type = inst.effect_type();
     let reg_def = manifold_core::preset_definition_registry::try_get(preset_type);
 
-    // ── Source the normalized spec rows per kind ──
-    let mut rows: Vec<SpecRow> = match kind {
+    // ── Source the normalized spec rows: ONE walk over the manifest, for
+    // both kinds (PARAM_STORAGE_BOUNDARIES_DESIGN.md D4). `inst.params`
+    // already carries every fact a row needs — descriptor (spec) + state
+    // (exposed), id-keyed, insertion order IS card order — because
+    // `build_param_manifest` resolved the registry-vs-graph-metadata
+    // authority chain ONCE at instantiation/load. State_sync reads that
+    // result; it does not re-derive the authority chain or re-read a
+    // per-instance graph override live (that override, `meta.params`, is a
+    // save-time-derived shadow now — D12 — not a second live source).
+    let rows: Vec<SpecRow> = match kind {
         PresetKind::Effect => {
-            // Effects: registry static prefix + per-instance user-tail bindings.
-            let reg_def = reg_def.as_deref()?; // skip cards for def-less effects
-            let mut rows: Vec<SpecRow> = reg_def
-                .param_defs
-                .iter()
-                .map(|pd| SpecRow {
-                    id: pd.id.clone(),
-                    name: pd.name.clone(),
-                    min: pd.min,
-                    max: pd.max,
-                    default: pd.default_value,
-                    whole_numbers: pd.whole_numbers,
-                    is_angle: false,
-                    // §8.4 P3b: effect params CAN be toggle/trigger rows now
-                    // (Strobe's `clip_trigger` card, D6) — read the real flag
-                    // instead of hardcoding false. This was the actual root
-                    // cause of the Task A render bug: the JSON preset and the
-                    // param-card build path both already supported it, but
-                    // this translation boundary stripped it before either
-                    // saw it.
-                    is_toggle: pd.is_toggle,
-                    is_trigger: pd.is_trigger,
-                    is_trigger_gate: pd.is_trigger_gate,
-                    value_labels: pd.value_labels.clone(),
-                    exposed: inst.is_param_exposed(pd.id.as_ref()),
-                })
-                .collect();
-            for ub in inst.user_param_bindings().iter() {
-                rows.push(SpecRow {
-                    id: ub.id.clone(),
-                    name: ub.label.clone(),
-                    min: ub.min,
-                    max: ub.max,
-                    default: ub.default_value,
-                    whole_numbers: matches!(
-                        ub.convert,
-                        manifold_core::effects::ParamConvert::IntRound
-                            | manifold_core::effects::ParamConvert::EnumRound
-                    ),
-                    is_angle: ub.is_angle,
-                    // Mirrors `spec_from_binding`'s convert->flag mapping
-                    // (`manifold_core::effects`) — a user-tail binding can
-                    // carry `BoolThreshold`/`Trigger` convert too.
-                    is_toggle: matches!(ub.convert, manifold_core::effects::ParamConvert::BoolThreshold),
-                    is_trigger: matches!(ub.convert, manifold_core::effects::ParamConvert::Trigger),
-                    // A user-exposed inner-graph param is never the
-                    // trigger-gate card — that's the preset-authored
-                    // `clip_trigger` outer card only (mirrors
-                    // `append_user_binding`'s same comment in core).
-                    is_trigger_gate: false,
-                    value_labels: None,
-                    exposed: inst.is_param_exposed(ub.id.as_ref()),
-                });
-            }
-            rows
+            reg_def.as_deref()?; // skip cards for def-less effects
+            rows_from_manifest(inst)
         }
         PresetKind::Generator => {
-            // Generators: graph metadata params (includes user-added at the
-            // tail) when present, else the registry def. All visible sliders.
-            let graph_meta = generator_graph.and_then(|g| g.preset_metadata.as_ref());
-            if let Some(m) = graph_meta.filter(|m| !m.params.is_empty()) {
-                m.params
-                    .iter()
-                    .map(|pd| SpecRow {
-                        id: pd.id.clone(),
-                        name: pd.name.clone(),
-                        min: pd.min,
-                        max: pd.max,
-                        default: pd.default_value,
-                        whole_numbers: pd.whole_numbers,
-                        is_angle: false,
-                        is_toggle: pd.is_toggle,
-                        is_trigger: pd.is_trigger,
-                        is_trigger_gate: pd.is_trigger_gate,
-                        value_labels: if pd.value_labels.is_empty() {
-                            None
-                        } else {
-                            Some(pd.value_labels.clone())
-                        },
-                        exposed: true,
-                    })
-                    .collect()
-            } else if let Some(def) = reg_def.as_deref() {
-                def.param_defs
-                    .iter()
-                    .map(|pd| SpecRow {
-                        id: pd.id.clone(),
-                        name: pd.name.clone(),
-                        min: pd.min,
-                        max: pd.max,
-                        default: pd.default_value,
-                        whole_numbers: pd.whole_numbers,
-                        is_angle: false,
-                        is_toggle: pd.is_toggle,
-                        is_trigger: pd.is_trigger,
-                        is_trigger_gate: pd.is_trigger_gate,
-                        value_labels: pd.value_labels.clone(),
-                        exposed: true,
-                    })
-                    .collect()
-            } else {
+            if inst.params.is_empty() {
+                // No resolvable param source (mirrors the old
+                // graph-metadata-empty + registry-empty fallback chain,
+                // now resolved once inside `build_param_manifest`).
                 return Some(empty_generator_config(inst));
             }
+            rows_from_manifest(inst)
         }
     };
-
-    // ── Overlay the per-instance reshape onto the rows ──
-    // The mapping popover writes a recalibrated range / label to the instance's
-    // graph OVERRIDE (`ParamSpecDef` in `preset_metadata` — the single reshape
-    // source). The effect rows above are sourced from the registry def, which
-    // never sees that edit, so without this overlay a remapped effect param
-    // keeps showing the catalog range on its card slider. Generators source
-    // their rows straight from `generator_graph` (their override), so the
-    // overlay is a harmless no-op there. Keyed by stable param id; covers both
-    // the static prefix and the user tail.
-    let override_def = match kind {
-        PresetKind::Effect => inst.graph_def().as_ref(),
-        PresetKind::Generator => generator_graph,
-    };
-    if let Some(meta) = override_def.and_then(|d| d.preset_metadata.as_ref()) {
-        let specs: ahash::AHashMap<&str, &manifold_core::effect_graph_def::ParamSpecDef> =
-            meta.params.iter().map(|p| (p.id.as_str(), p)).collect();
-        for row in rows.iter_mut() {
-            if let Some(spec) = specs.get(row.id.as_str()) {
-                row.min = spec.min;
-                row.max = spec.max;
-                row.name = spec.name.clone();
-                row.whole_numbers = spec.whole_numbers;
-                // The angle flag lives on the manifest/graph spec now (its single
-                // home), so the card shows degrees for a user-exposed angle param
-                // instead of the dead-fed `false` the row was built with above.
-                row.is_angle = spec.is_angle;
-                if !spec.value_labels.is_empty() {
-                    row.value_labels = Some(spec.value_labels.clone());
-                }
-            }
-        }
-    }
 
     // ── Shared: ParamInfo construction + id->index lookup ──
     // Card position == value index for both kinds (effect static prefix then
@@ -2326,7 +2236,6 @@ fn gen_params_to_config(
     gp: &manifold_core::effects::PresetInstance,
     layer_id: &str,
     clip_string_params: Option<&std::collections::BTreeMap<String, String>>,
-    generator_graph: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
 ) -> ParamCardConfig {
     preset_to_config(
@@ -2335,7 +2244,6 @@ fn gen_params_to_config(
         0,
         OscScope::Layer(layer_id),
         clip_string_params,
-        generator_graph,
         automation_latched,
     )
     .expect("generator preset_to_config always yields a config")
