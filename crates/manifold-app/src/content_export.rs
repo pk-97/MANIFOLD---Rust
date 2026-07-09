@@ -2,8 +2,6 @@
 //! Contains `run_export`, `export_one_frame`, `get_metal_texture_ptr`,
 //! `send_export_progress`, and `send_export_finished`.
 
-use std::sync::Arc;
-
 use crossbeam_channel::{Receiver, Sender};
 
 use manifold_core::{Beats, Seconds};
@@ -508,7 +506,7 @@ impl ContentThread {
         self.engine.reclaim_tick_result(tick_result);
 
         if frame_idx.is_multiple_of(10) {
-            self.send_export_progress(state_tx, session);
+            self.send_export_progress(state_tx);
         }
 
         None
@@ -523,15 +521,14 @@ impl ContentThread {
 
     /// Send export progress to the UI thread.
     #[cfg(target_os = "macos")]
-    fn send_export_progress(
-        &self,
-        state_tx: &Sender<ContentState>,
-        session: &manifold_media::export_session::ExportSession,
-    ) {
+    fn send_export_progress(&self, state_tx: &Sender<ContentState>) {
+        // Transport keep-alive while the export loop owns the content thread.
+        // The progress fields this used to carry (is_exporting / export_progress /
+        // export_status, from ExportSession) were never read by any UI code —
+        // deleted 2026-07-09 in the ContentState orphan purge
+        // (UI_PROJECTION_LAYER_DESIGN.md P0). An export progress display is
+        // BUG-083; restore the fields WITH their consumer from this commit's parent.
         let state = ContentState {
-            is_exporting: true,
-            export_progress: session.progress(),
-            export_status: Arc::from(session.status_text()),
             current_beat: self.engine.current_beat(),
             current_time: self.engine.current_time(),
             is_playing: self.engine.is_playing(),

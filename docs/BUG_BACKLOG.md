@@ -44,6 +44,8 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-083 | **video-export-has-no-progress-display** | Exporting video shows nothing until the finish toast — the content thread's per-10-frame progress snapshots never had a UI consumer (found 2026-07-09 by the A1 orphan lint; fields deleted, restore WITH a display from the P0 purge commit's parent). A multi-minute export looks like a hang. MED |
+| BUG-084 | **recording-drop-counter-never-surfaced** | `recording_dropped_frames` (pool-exhaustion drops during live recording) was emitted every tick, read nowhere — a set-recording silently dropping frames is invisible to the performer. Surface on the recording indicator when non-zero; same restore path as BUG-083. LOW |
 | BUG-082 | **trigger-fire-mode-level-features-near-dead** | The audio-mod drawer on a trigger/trigger-gate card offers all seven `AudioFeatureKind`s, but the fire chassis (`trigger_edge.advance` at 0.5 on the shaped signal) is tuned for impulses — Transients/Kick fire per hit; level features (Amplitude/Centroid/Flux/Pitch/Presence) cross mid once when the track gets loud and then sit disarmed, silently near-dead from the performer's view. Fix shape (AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION D6, lands P3): a live fire meter with the 0.5 threshold drawn as a line beside Amount on every fire-mode drawer — the engine honors level features as an invisible Schmitt trigger; visibility is what's missing. Feature restriction was considered and rejected (walks back LIVE_AUDIO_TRIGGERS U2). The separable widening (first-class level-crossing detector) is that design's Deferred #1 (MED) |
 | BUG-080 | **param-manifest-construction-not-a-unified-safe-gate** | The param manifest (an instance's live knob list) is built at deserialize AND rebuilt by a later `reconcile_param_manifests` pass, because deserialize can't see project-embedded presets yet. Consumers that read `.params` *between* the two — a direct `serde_json::from_str::<PresetInstance>`, the keep-don't-drop backstop, the legacy audio-trigger migration, ~18 tests — depend on the deserialize-time build being correct. It works today only because the double-build papers over the timing; it's a latent hazard, not SOTA: a future load path added without a reconcile silently inherits an empty/partial manifest (the BUG-036 class). Root cause: manifest construction has no single safe gate — "partially built" is an observable, readable state. Fix shape (design pass, NOT a patch): make a half-built manifest un-observable — one construction gate every load/paste/bare-read passes through, OR a type-state where params can't be read until reconciled, OR deserialize carries enough context to build complete in one shot. The naive "build once in reconcile" was tried this session and is unsafe for exactly the reasons above (design doc §2 D1 priced + rejected it; see the 2026-07-09 double-build escalation). MEDIUM (design-quality / latent-robustness; wants an Opus design pass). |
 | BUG-079 | **missing-preset-fails-silently-no-onscreen-signal** | Loading a project that references an unresolvable preset def (deleted, unregistered, or missing on this machine) degrades *safely but silently*: saved params are kept on a placeholder (keep-don't-drop, [`effects.rs:940`](../crates/manifold-core/src/effects.rs#L940)) and the effect falls back to **source passthrough** ([`preset_runtime.rs:808`](../crates/manifold-renderer/src/preset_runtime.rs#L808)) — but the ONLY signal is a console `eprintln`; nothing shows on screen. A performer sees the layer render without its effect (a missing *generator* layer likely renders empty — inferred, unconfirmed) with no visible reason. Fix shape: surface unresolvable presets in-app (a card/badge or a load-time notice). LOW |
@@ -91,6 +93,30 @@ or human can read it, and it needs no external tool.
 | BUG-071 | **ui-snap-dump-stale-parent** | `ui_snapshot::dump.rs` serializes `UINode.parent_id` (the mint-time struct field) instead of `UITree.parent_index` (the live array `reparent_root_nodes` actually mutates) — any node reparented via `ScrollContainer::reparent_content` (or the like) shows `parent: null`/its original parent in `--dump` JSON even though it's correctly clipped/nested for real rendering. Found 2026-07-08 verifying BUG-060: the dump made a correctly-fixed tree look unclipped, costing real debugging time before the PNG (the actual render) proved it was fine. Fix shape: either serialize `tree.parent_index[i]` in `dump.rs:38`/`:92`, or have `reparent_root_nodes` also update `self.nodes[i].parent_id` so the two stay in sync (LOW, dev-tooling only, zero runtime impact) |
 
 ## Open
+
+### BUG-083 (video-export-has-no-progress-display) — exporting video gives zero on-screen feedback until the finish toast — MED (export is a release pillar; long exports look like a hang)
+**Status:** OPEN
+
+Found 2026-07-09 (A1 orphan purge: the un-suppressed dead-code lint flagged `is_exporting` /
+`export_progress` / `export_status` as never read; `git log -S` confirmed **no consumer ever
+existed** — only the intro commit `d754eb08` and a lint sweep ever touched them). The content
+thread's export loop faithfully sent progress snapshots every 10 frames into a void; the only
+user-visible export feedback is the D17 finish toast (`export_finished`, which IS wired). From
+the performer's view a multi-minute export is indistinguishable from a hang. **Fix shape:**
+build the display (transport-bar strip or toast-with-progress), reading from re-added
+`ContentState` fields — restore the emit side from the parent of the P0 purge commit
+(`send_export_progress` in `content_export.rs` still runs as a keep-alive; its comment points
+here). Per UI_PROJECTION_LAYER_DESIGN I1, the fields land WITH the consumer or not at all.
+
+### BUG-084 (recording-drop-counter-never-surfaced) — live-recording dropped frames counted but never shown — LOW (gig-resilience visibility gap)
+**Status:** OPEN
+
+Same discovery path as BUG-083: `recording_dropped_frames` (fed by
+`recording_session.frames_dropped()`, pool-exhaustion drops) was emitted every tick and read
+nowhere. A recording silently dropping frames during a set is exactly the failure the performer
+needs to see. **Fix shape:** surface it on the recording indicator (count or warning tint) when
+non-zero; re-add the field with its consumer, emit side restorable from the P0 purge commit's
+parent. Owner context: LIVE_RECORDING_PROOFS / gig-resilience territory.
 
 ### BUG-082 (trigger-fire-mode-level-features-near-dead) — fire-mode audio mods silently near-dead on non-impulse features — MED
 **Status:** OPEN

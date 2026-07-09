@@ -18,7 +18,17 @@ Entries are ranked by stage risk — what it costs mid-set — not by churn coun
 
 ## Part A — patch-trail clusters
 
-### A1. UI↔content state sync: projection layer with no enforcement (stage risk: HIGH)
+### A1. UI↔content state sync: projection layer with no enforcement (stage risk: HIGH) — **KILL-TEST RAN 2026-07-09: layer KILLED, enforcement SHIPPED**
+
+**Outcome (Fable, 2026-07-09).** The kill-test below fired, one level deeper than the field
+survey: the mirror fields' emit half was already compiler-enforced (exhaustive literal) and
+their consume half is bespoke display logic no table can generate — the declarative layer
+would have been escape hatches all the way down. The orphan-field rot was a *suppressed
+compiler lint* (`#[allow(dead_code)]` on `ContentState`; manifold-app is a bin crate):
+un-suppressed and purged as UI_PROJECTION_LAYER_DESIGN P0 (10 dead fields — the purge exposed
+BUG-083/084, export-progress and recording-drop displays that never existed). Verdict record,
+rejected shapes, and the reviving trigger: `UI_PROJECTION_LAYER_DESIGN.md`. Original entry
+kept below for the evidence trail.
 
 **Evidence.** `ui_bridge/state_sync.rs` is the highest-churn non-app file in
 the repo (~79 commits matching fix-mining since March; log read 2026-07-07).
@@ -184,8 +194,8 @@ harness.
 1. **A7** — half a day, kills a class, no design needed.
 2. **B1 follow-through** — work PROJECT_IO_MAP honest edges; show files are
    the one unrecoverable asset.
-3. **A1** — design the declarative projection (survey fields first; kill-test
-   is cheap).
+3. ~~**A1** — design the declarative projection (survey fields first; kill-test
+   is cheap).~~ Done 2026-07-09: kill-test killed the layer, enforcement shipped (see A1 entry).
 4. **B (media map)** — before the ~Aug release push leans hard on export.
 5. **A2 → A3** — after drag capture ships; B3 map first, then extend the
    single-owner pattern.

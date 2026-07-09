@@ -1,182 +1,162 @@
-# UI ↔ Content Projection Layer — enforcing the snapshot seam (A1)
+# UI ↔ Content Projection Layer — the A1 kill-test, run to completion
 
-**Status:** ⚠ PRE-FABLE DRAFT — audit complete; Q-GROWTH answered (Peter, 2026-07-09: many new
-screens coming). That fact is settled; the **recommendation** it points to is C-then-A (§2), for
-Peter/Fable to ratify at the window — not locked here. The open call for Fable is how Shape A is
-realized (§2.2). Not PROPOSED yet.
-**Prerequisites:** UI_HARNESS_UNIFICATION (approved, Sonnet-executing) closes the *verification*
-half — the real UICacheManager render path in the headless harness. This design is the
-*construction* half. They compose; neither blocks the other's P0.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before any phase. Design method:
-DESIGN_AUTHORING.md (this doc's audit was run against §2; its kill-test is FOUNDATIONAL_GAPS A1's).
+**Status:** SHIPPED (P0, the only surviving phase) · 2026-07-09 · Fable. The A1 kill-test came
+back **KILL** for the declarative projection layer; the surviving piece — compiler-enforced
+orphan coverage — landed the same session. This reverses the pre-Fable draft's C-then-A
+recommendation (`0271934b`); Peter may override — §2 names the trigger that would revive the layer.
+**Prerequisites:** none. UI_HARNESS_UNIFICATION (approved, Sonnet-executing) is the
+*verification* half of the seam story and is unaffected.
+**Execution contract:** nothing left to execute. This doc is the record that stops the
+declarative layer being re-proposed without new evidence — read §2 before reopening.
 
-## 0. Binding constraints (named first, per DESIGN_AUTHORING §1)
+**What happened.** FOUNDATIONAL_GAPS A1 pre-registered a kill-test: survey the actual snapshot
+fields; kill the declarative layer if it would be mostly escape hatches. The draft surveyed
+field **classes**, found four bespoke classes, scoped the table to the regular scalar-mirror
+class, and answered scoped-yes. This pass surveyed each field's **halves** and inventoried
+existing enforcement (§1.1): the emit half is already compiler-enforced, the consume half is
+bespoke display logic no table can generate. The table would generate the only part that never
+breaks. Kill.
 
-Two of the five bind, and they decide the shape more than the feature does:
+## 0. Binding constraints (unchanged from the draft — re-confirmed)
 
-- **Thread residency (conform, never renegotiate).** Content thread owns `Project`; the UI thread
-  sees it only through `ContentState` snapshots on a bounded channel; commands go the other way.
-  Settled house model — this design makes the *seam* enforceable, it does not move it.
-- **Hot path (hard exemption).** `ContentState.modulation_snapshot` is rebuilt **every content
-  frame** ([content_state.rs:290](../crates/manifold-app/src/content_state.rs#L290) `capture_into`)
-  as a hand-tuned zero-alloc flat-buffer packer with D8 topology guards. Per CLAUDE.md hot-path
-  discipline this must **not** be routed through any generic/declarative mechanism. Any projection
-  layer that touches it is wrong by construction.
+- **Thread residency.** Content thread owns `Project`; UI sees `ContentState` snapshots on a
+  bounded channel; commands go the other way. Conform, never renegotiate.
+- **Hot path.** `ContentState.modulation_snapshot` (zero-alloc flat-buffer packer, D8 topology
+  guards) must never route through a generic mechanism. Held trivially: no mechanism exists.
 
-Persistence does **not** bind: `ContentState` is transient, never serialized. Time-model does not
-bind. That keeps the blast radius off the two most expensive constraints.
+Persistence and time-model do not bind (`ContentState` is transient, never serialized).
 
-## 1. Audit — what exists (verified 2026-07-09)
+## 1. Audit — what exists (verified 2026-07-09, Fable; supersedes the draft's numbers)
 
-The seam is three concrete pieces, all in `manifold-app`:
-- **Emit side:** [content_state.rs](../crates/manifold-app/src/content_state.rs) — the `ContentState`
-  struct (~70 fields) built each content tick, plus the `ModulationSnapshot` packer.
-- **Apply side:** [ui_bridge/state_sync.rs](../crates/manifold-app/src/ui_bridge/state_sync.rs)
-  (**2457 lines, the highest-churn non-app file — ~79 fix-commits since March**) — `push_state`
-  (:173), `sync_project_data` (:850), `sync_inspector_data` (:1234). Each field is hand-consumed.
-- **Translation boundary:** [ui_translate.rs](../crates/manifold-app/src/ui_translate.rs) (673 lines).
+- **Emit:** [content_state.rs](../crates/manifold-app/src/content_state.rs) — `ContentState`,
+  **56 fields post-P0** (66 pre; the draft said ~70), built as an **exhaustive struct literal**
+  at [content_thread.rs:1161](../crates/manifold-app/src/content_thread.rs#L1161). Export-path
+  literals spread from `Default` deliberately (degraded keep-alive snapshots).
+- **Apply:** [ui_bridge/state_sync.rs](../crates/manifold-app/src/ui_bridge/state_sync.rs)
+  (2457 lines) — `push_state` :173, `sync_project_data` :850, `sync_inspector_data` :1234.
+- **Boundary:** [ui_translate.rs](../crates/manifold-app/src/ui_translate.rs) (673 lines).
+- **Churn, recounted:** 191 commits on state_sync.rs since March, 35 with fix/bug/stale
+  subjects. Composition (sampled): inspector/view-model display semantics (`sync_*_data`
+  territory) — **not** scalar-mirror threading.
+- **Field classes (counts corrected):** scalar mirror ~49 · gated overlay 13 (`spectrogram_*` 8
+  + editor/graph 5) · one-shot events 2 · `project_snapshot` 1 · `modulation_snapshot` 1.
+- **Orphans: 10, not 6.** The FIXME named 6 (and 3 `stem_*` fields that no longer existed —
+  the note itself had rotted). When P0 un-suppressed the lint, it found 4 more the draft's
+  survey missed: `is_exporting`, `export_progress`, `export_status`,
+  `recording_dropped_frames`. Git shows the last four **never had a consumer** — video export
+  has no progress display and never did (BUG-083), the recording drop counter was never
+  surfaced (BUG-084).
 
-FOUNDATIONAL_GAPS A1 says the mechanism is *well-built and mapped* (UI_ARCHITECTURE_AUDIT.md,
-2026-06-18); what's missing is **enforcement**. A1 pre-registered a kill-test: *survey the actual
-snapshot fields; kill the declarative layer if they're too irregular to tabulate — the tell is a
-"declarative" layer that's mostly escape hatches.* This audit runs that survey.
+### 1.1 The enforcement inventory that flips the verdict (each claim observed, not derived)
 
-### 1.1 Field survey — the kill-test data
+1. **Emit is compiler-enforced.** The snapshot is an exhaustive struct literal — a
+   declared-but-never-written field cannot compile.
+2. **Orphan enforcement already existed in the compiler.** `manifold-app` is a bin crate, so
+   rustc's `dead_code` lint sees every read site; the struct-level `#[allow(dead_code)]` was
+   suppressing exactly what the draft's Shape C proposed to build as a new test. Proof:
+   `cargo rustc -p manifold-app --bin manifold -- --force-warn dead_code` names precisely the
+   orphans and skips every read field.
+3. **Drag suppression already exists, generically:**
+   [`ActiveInspectorDrag`](../crates/manifold-app/src/app.rs) (app.rs:52) — its `Param` variant
+   covers *any* param via `GraphTarget` + `ParamId`, applied after snapshot acceptance. Its
+   targets are **`Project` fields riding the project/modulation snapshots, not `ContentState`
+   mirrors**. The draft's flagship `mirror!` example (`master_opacity`) is not a
+   `ContentState` field.
+4. **Per-field dirty tracking has no substrate.** `push_state` re-pushes every UI frame
+   through display caches (`TransportDisplayCache`); `dirty: on_change` declared a concept the
+   mechanism doesn't have or need.
 
-Classifying every `ContentState` field by projection shape (this is the whole design decision):
+And the consume half itself (read `push_state` :186–:402): play-state colors, BPM authority
+arbitration, three-state Link/CLK/SYNC displays, edge-trigger toast guards — bespoke
+presentation per field, all the way down. That is the escape-hatch tell, inside the very class
+the table was scoped to.
 
-| Class | ~count | Shape | Regular? |
-|---|---|---|---|
-| **Scalar mirror** | ~40 | engine getter → scalar field → UI reads/formats | **yes** — tabulatable |
-| One-shot event | 2 | `Option<T>`, set on the tick it happens, fires a toast (`export_finished`, `undo_redo_event`) | own lifecycle |
-| Structural snapshot | 1 | `project_snapshot: Option<Arc<Project>>`, only on `data_version` change | bespoke, correct |
-| **Hot-path packer** | 1 | `modulation_snapshot` — per-frame zero-alloc flat buffer (§0) | **must stay bespoke** |
-| Gated live overlay | ~16 | "empty unless X open", perf-sensitive: the `spectrogram_*` cluster (11), editor/graph (`active_graph_snapshot`, `node_preview_info`, `live_node_params`, `node_atlas_layout`, `clip_atlas_layout`) | irregular per-cluster |
+### 1.2 Bug evidence (draft's correction confirmed, one fix)
 
-**Verified rot (negative claim, checked 2026-07-09).** The struct's own FIXME
-([content_state.rs:59](../crates/manifold-app/src/content_state.rs#L59)) names fields "written by
-content thread but never read by UI." Confirmed by grep across `manifold-ui` + the UI-read side:
-`link_tempo`, `link_is_playing`, `midi_clock_bpm`, `osc_receiving_timecode`, `osc_timecode_display`,
-`led_initialized` — **6 fields, 0 read sites each.** Every verified orphan is in the scalar-mirror
-class. This is the rot A1 predicts: a field's emit half lands, its consume half never does (or gets
-deleted), and nothing catches the orphan. The whole struct carries `#[allow(dead_code)]` to paper
-over it.
+BUG-026 is a missing animation poll; BUG-036 is load-ordering — not projection. Fix to the
+draft's wording: BUG-015 is **OPEN** (repro needed) and BUG-060 is **REOPENED** (live path via
+`panel_cache_info()`/`UICacheManager`, cause open) — not "already fixed/addressed". Both are
+A2/cache territory. **Corpus bugs in the class the mirror table would govern: zero.**
 
-### 1.2 Audit finding that corrects A1's framing
+## 2. The verdict, priced
 
-A1's bug-evidence list (BUG-015, 026, 036, 060) is **mostly not snapshot-projection bugs** — read
-end-to-end this session: BUG-015 and BUG-060 are `UICacheManager`/atlas stale-pixel bugs (A2
-territory, already fixed/addressed), BUG-026 is a missing animation poll, BUG-036 is load-ordering
-(embedded presets registered after param deserialize). **This design fixes hand-threading churn and
-orphan-field rot; it does NOT fix stale pixels.** Claiming otherwise is the
-`dont-overclaim-plumbing-as-visual` trap. The honest justification is the 79-commit churn + the 6
-verified orphans, not the render bugs.
+| `mirror!` table would buy | Reality (observed) |
+|---|---|
+| I1: no orphan fields | Already in the compiler; suppressed by one attribute. Shipped as P0. |
+| I3: undeclared field can't reach UI | No observed bug in class; emit literal-checked, consume lint-checked. |
+| Drag suppression per field | Exists, generic, at a different seam (project snapshots). |
+| Dirty conditions per field | No per-field dirty machinery exists to declare into. |
+| Kills hand-threading churn | The churn is display/view-model semantics a table can't generate. |
+| Kills a stale-state bug class | Zero corpus bugs in the mirror class (§1.2). |
 
-## 2. Decisions
+Cost side (from the draft, still true): an indirection layer, likely codegen, generated code in
+the tree, ceremony per field.
 
-The kill-test verdict is **scoped-yes, not blanket-yes.** A single declarative table over all ~70
-fields would be mostly escape hatches (the ~18 event/snapshot/hot-path/overlay fields each need
-special handling) — that version is the plausible-wrong turn (`dont-cascade-redesign`). A
-declarative binding over the **scalar-mirror class** (~40 fields) is genuinely regular and holds
-100% of the verified rot. So the enforcement is scoped to the mirror class; the other four classes
-are **named, visible exemptions**, not silently absorbed.
+> **Q-GROWTH — answered (Peter, 2026-07-09):** *"Many Many new screens pages and interactive
+> new UI is coming soon."*
 
-Two genuinely different shapes were priced (boundary moved a layer, per DESIGN_AUTHORING §4):
-**Shape A** — a declarative mirror table that generates the field + capture write, so an undeclared
-field can't reach the UI; **Shape B** — a `Projected<T>` wrapper that tracks whether each field was
-read and fails a test on any it wasn't. The kill-pass on Shape A (my first instinct, and the
-executor's per §5) surfaced a third, cheaper option hiding underneath:
+The fact stands; the inference does not. A new screen hand-writes view-model translation and
+display logic (table can't help), gets param drags free (`ActiveInspectorDrag::Param`), and a
+new mirror field costs one struct line + one literal line, both compiler-checked. **The
+multiplier is real; the multiplicand is approximately zero.**
 
-**Shape C — the orphan-coverage test alone.** A single enforcement test that every `ContentState`
-field has an emit *and* a consume site kills the whole verified rot class with near-zero
-architecture (`eliminate-bug-class-at-storage-layer`, minimal form). It does nothing for churn.
+**Rejected (for the future session that will reinvent these at 2am):**
+- **Shape A — declarative mirror table**, all §2.2 realizations (proc-macro / build.rs /
+  registry; that fork is moot): every claimed benefit dissolves against §1.1/§1.2.
+- **Shape B — `Projected<T>` read-tracking:** a runtime, test-dependent version of what the
+  `dead_code` lint does statically, for free.
+- **Shape C as a new test:** inventing infra that exists — the lint IS the coverage test; the
+  gate is the existing `cargo clippy --workspace -- -D warnings`.
 
-So the real fork was never A-vs-B — it was **"how much beyond Shape C,"** and that turned on one
-product fact only Peter has: how many new snapshot-bearing screens the release adds.
+**Reviving trigger, stated honestly:** a real bug class in mirror threading — say three backlog
+bugs whose root cause is a mis-threaded mirror field. Today's count: zero.
 
-> **Q-GROWTH — answered (Peter, 2026-07-09):** *"Many Many new screens pages and interactive new
-> UI is coming soon."*
-
-**Recommendation (rests on the settled fact above; for the window to ratify) — build C, then A.**
-Shape C ships first regardless: cheap, fork-independent, kills the verified
-rot. Shape A is now justified — with many new screens, the hand-written emit/apply pair gets paid
-dozens more times, and **interactive** screens add the error-prone part specifically: a control the
-user drags needs the engine's incoming snapshot to *not* overwrite the value mid-drag
-(drag-suppression), and hand-wiring that per control is exactly how stale/fighting-knob bugs breed.
-A owns that declaration, so its payoff rises with interactivity, not just field count.
-
-*Consequences, stated honestly:* A adds an indirection layer and (per §2.2) likely a codegen step —
-new fields go through a declaration instead of a struct edit. That is the trade being bought: a
-little ceremony per field in exchange for the orphan class being impossible and the drag/dirty rules
-being declared in one legible place instead of re-derived in `state_sync.rs` each time.
-
-### 2.1 Shape A, concretely
-One declaration per mirror field — the three things A1 named (source, drag behavior, dirty
-condition):
-
-```
-mirror! {
-    bpm:            f64  from |e| e.bpm(),                    dirty: on_change, drag: none,
-    is_playing:     bool from |e| e.is_playing(),            dirty: on_change, drag: none,
-    master_opacity: f32  from |p| p.settings.master_opacity, dirty: on_change,
-                                                             drag: suppress_while(Drag::MasterOpacity),
-}
-```
-It generates the `ContentState` field, the capture-side write, and the consume hook with the
-drag-suppression guard baked in. A field not declared can't reach the UI (I3); a declared field with
-no consumer fails the orphan test (I1). The ~18 bespoke fields live in a separate, explicit
-`bespoke!` block the mirror machinery excludes — a **named** exemption, never a silent escape hatch.
-
-### 2.2 The one call left for Fable — how A is realized
-Three ways to build the same declaration, same guarantee-shape, different costs:
-- **proc-macro** (compile-time): strongest form of I3 ("undeclared field doesn't compile"), but the
-  generated code is opaque to a session debugging a wiring issue.
-- **table + build.rs**: generates a plain, greppable `.rs`; costs a build step; guarantee still
-  compile-time.
-- **runtime registry**: no codegen at all; simplest; guarantee weakens from "doesn't compile" to
-  "fails a test."
-
-My lean: **build.rs-generated table.** With many sessions adding fields fast, greppable generated
-code matters more than the macro's slightly stronger guarantee — paying the proc-macro's
-debug-opacity cost is backwards when the whole point is making field-adding cheap and legible.
-Honest cost: a build step, and generated code in the tree. This is the taste call to spend the
-window on; my lean is priced but not decided — Fable kill-passes it.
+**The one live residual:** *source-arbitration* bugs — which side of the seam is authoritative
+for a field while the user edits it. Two observed, both fixed: BPM (`101616e4`, `7a946218`;
+the worked pattern is the arbitration comment at state_sync.rs:202) and VSync (`0da7f99e`).
+Per-field semantic judgment — no table or lint checks it. n=2; UI_HARNESS_UNIFICATION's L3
+flows are its observability net. Third bite → fold the pattern into `ui-state-sync-path`.
 
 ## 3. Invariants & enforcement
 
-- **I1 — no orphan fields.** Every `ContentState` field has an emit site and a consume site.
-  *Enforcement:* the Shape-C coverage test (ships first in P0, fork-independent). Removes the
-  `#[allow(dead_code)]`.
-- **I2 — the hot-path packer is exempt and stays exempt.** `modulation_snapshot` is never routed
-  through the projection mechanism. *Enforcement:* it lives in the explicit `bespoke!` block the
-  mirror machinery excludes; a test asserts `modulation_snapshot`/`project_snapshot` are not
-  table-driven.
-- **I3 — a mirror field that skips the declaration can't reach the UI.** *Enforcement:* depends on
-  §2.2's realization — compile-time for proc-macro/build.rs, a test for the runtime registry.
+- **I1 — no orphan fields.** Emit: exhaustive struct literal (compile error). Consume: rustc
+  `dead_code`, live since P0 removed the allow, failing the existing pre-commit
+  `cargo clippy --workspace -- -D warnings` gate. A field staged "for later" fails by design —
+  land the field WITH its consumer, or don't land it. Feature-gated consumers only count under
+  their feature: the A7 feature-matrix clippy job (STRUCTURAL_AUDIT_VERDICTS §3) is what makes
+  I1 sound across the matrix.
+- **I2 — the hot-path packer stays bespoke.** No mechanism exists to route it through; this
+  line is the record of why one must not be built.
 
 ## 4. Phasing
 
-- **P0 — orphan-coverage test + delete the 6 dead fields (Shape C).** Fork-independent, cheap,
-  ships the verified win. Removes `#[allow(dead_code)]`. Gate: the coverage test is red before the
-  deletions, green after; `rg` proves the 6 fields gone. *Vertical slice:* the whole path for one
-  field-class — emit, consume, enforcement — proven once, thinly.
-- **P1 — declarative mirror (Shape A), realization per §2.2.** Table over the ~40 mirror fields with
-  source/drag/dirty declarations; explicit `bespoke!` exemption block for the other four classes;
-  migrate the mirror fields off their hand-written `state_sync.rs` pairs. Gate: named tests that an
-  undeclared field is rejected and a declared-but-unconsumed field fails; byte-identical UI render
-  before/after the migration of a sample field. Real brief written once §2.2 resolves.
+- **P0 — orphan purge + un-suppression. SHIPPED 2026-07-09 (Fable).** Deleted: all 10 orphan
+  fields, their emit writes, and the write-only `cached_osc_timecode` cache the deletion
+  orphaned in turn (field, maintenance block, two initializers); `send_export_progress`
+  demoted to a documented transport keep-alive; stale FIXME and struct-level
+  `#[allow(dead_code)]` removed — the struct doc-comment now names the enforcement and forbids
+  re-adding the allow. Gate (run this session): workspace clippy `-D warnings` green WITH the
+  allow gone; `cargo test -p manifold-app` green (163+10+1+3); negative `rg` for the field
+  names in `manifold-app/src` zero (the one repo hit left is `LinkSync`'s own `link_tempo` —
+  a different struct). Demo: none — L1; the observation was the lint firing pre-deletion
+  (§1.1 proof command).
+- **No further phases.** P1 (the table) killed per §2.
+
+Side-note from the probe: three more never-read fields exist behind their own allows
+(`input_host.rs:34` cfg-gated, `project_io.rs:185 flash_save`, `workspace.rs:42 kind`) — each
+names its un-suppression trigger per the CLAUDE.md rule. Sanctioned pending work, not orphans.
 
 ## §. Decided — do not reopen
-1. Q-GROWTH is answered — many new screens are coming (Peter, 2026-07-09). The *fact* is settled;
-   the C-then-A build plan it points to is a recommendation for the window to ratify, not locked.
-2. The hot-path `modulation_snapshot` packer is exempt from any projection mechanism (§0, I2).
-3. Enforcement is scoped to the scalar-mirror class; events/snapshot/overlays are named exemptions,
-   not absorbed (kill-test verdict).
-4. This design does not claim to fix the stale-pixel bugs (BUG-015/060 etc.) — those are cache/A2
-   (§1.2).
+
+1. **The declarative mirror layer is KILLED** by A1's own kill-test (§1.1/§2). Reviving
+   trigger in §2. Reverses the pre-Fable draft's C-then-A; Peter may override.
+2. `modulation_snapshot` is exempt from any projection mechanism, current or future.
+3. This design never claimed the stale-pixel bugs: BUG-015 (OPEN) / BUG-060 (REOPENED) are
+   A2/cache — UI_CLIP_AND_Z_OWNERSHIP_DESIGN + UI_HARNESS_UNIFICATION.
+4. Q-GROWTH's fact is settled and does NOT revive the table (§2).
 
 ## §. Deferred
-- **How Shape A is realized (§2.2)** — proc-macro vs build.rs vs registry. Not deferred *whether*,
-  only *how*; resolves at the Fable window, then P1's brief is written.
-- Folding A1 into FOUNDATIONAL_GAPS as resolved — at landing, per the STRUCTURAL_AUDIT_VERDICTS
-  convention (keep the branch diff to the design files).
+
+- **Export progress display (BUG-083)** and **recording drop counter (BUG-084)** — the product
+  gaps P0's lint exposed. When built, their fields return WITH consumers (I1 enforces this).
+- **Source-arbitration write-up** — trigger: a third bug in the class (§2 residual).

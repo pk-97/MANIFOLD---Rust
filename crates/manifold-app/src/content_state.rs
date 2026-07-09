@@ -7,7 +7,7 @@
 use manifold_core::effects::ParamId;
 use manifold_core::project::Project;
 use manifold_core::types::{ClockAuthority, LayerType, OscSyncMode};
-use manifold_core::{Beats, Bpm, EffectId, Seconds};
+use manifold_core::{Beats, EffectId, Seconds};
 use std::sync::Arc;
 
 /// Live state of the editor's node-output preview, pushed each frame so the
@@ -56,11 +56,13 @@ pub struct UndoRedoEvent {
 
 /// State snapshot sent from the content thread to the UI thread.
 /// The UI thread drains these from a bounded channel and uses the latest.
-// FIXME(dead-code-audit): several fields written by content thread but never
-// read by UI (link_tempo, link_is_playing, midi_clock_bpm, osc_receiving_timecode,
-// osc_timecode_display, stem_expanded, stem_ready, stem_available, led_initialized).
+///
+/// Orphan enforcement (UI_PROJECTION_LAYER_DESIGN.md P0): manifold-app is a
+/// bin crate, so rustc's dead_code lint sees every read site — a field written
+/// by the content thread but never read on the UI side fails
+/// `cargo clippy -- -D warnings`. Never re-add `#[allow(dead_code)]` here;
+/// delete the orphan field (and its emit write) instead.
 #[derive(Clone)]
-#[allow(dead_code)]
 pub struct ContentState {
     // ── Transport ──────────────────────────────────────────────────
     pub current_beat: Beats,
@@ -87,11 +89,8 @@ pub struct ContentState {
 
     // ── Transport controller state ────────────────────────────────
     pub link_enabled: bool,
-    pub link_tempo: f64,
     pub link_peers: i32,
-    pub link_is_playing: bool,
     pub midi_clock_enabled: bool,
-    pub midi_clock_bpm: Bpm,
     pub midi_clock_position_display: Arc<str>,
     pub midi_clock_receiving: bool,
     pub midi_clock_device_name: Arc<str>,
@@ -125,8 +124,6 @@ pub struct ContentState {
     /// per-band level meters. `None` when no send feeds the scope.
     pub spectrogram_features: Option<manifold_core::SendFeatures>,
     pub osc_sender_enabled: bool,
-    pub osc_receiving_timecode: bool,
-    pub osc_timecode_display: Arc<str>,
 
     // ── Percussion status ─────────────────────────────────────────
     pub percussion_importing: bool,
@@ -143,22 +140,16 @@ pub struct ContentState {
     // ── LED output ────────────────────────────────────────────────
     /// Whether LED output is enabled.
     pub led_enabled: bool,
-    /// Whether the LED pipeline is initialized and ready.
-    pub led_initialized: bool,
 
     // ── Live Recording ─────────────────────────────────────────────
     /// Whether a live recording is currently in progress.
     pub is_live_recording: bool,
-    /// Number of video frames dropped during recording (pool exhaustion).
-    pub recording_dropped_frames: u32,
 
     // ── Export ────────────────────────────────────────────────────
-    /// Whether an export is currently in progress.
-    pub is_exporting: bool,
-    /// Export progress (0.0..1.0).
-    pub export_progress: f32,
-    /// Export status text (e.g. "Exporting 120/600 (20%)").
-    pub export_status: Arc<str>,
+    // (An export *progress* display never existed — the old is_exporting /
+    // export_progress / export_status fields were emitted into a void and were
+    // deleted 2026-07-09; BUG-083 tracks building the display. Same for the
+    // recording drop counter, BUG-084.)
     /// Set once when export finishes (success or failure).
     pub export_finished: Option<ExportFinishedEvent>,
 
@@ -449,11 +440,8 @@ impl Default for ContentState {
             clock_authority: ClockAuthority::Internal,
             time_signature_numerator: 4,
             link_enabled: false,
-            link_tempo: 120.0,
             link_peers: 0,
-            link_is_playing: false,
             midi_clock_enabled: false,
-            midi_clock_bpm: Bpm(120.0),
             midi_clock_position_display: Arc::from(""),
             midi_clock_receiving: false,
             midi_clock_device_name: Arc::from(""),
@@ -469,8 +457,6 @@ impl Default for ContentState {
             spectrogram_mid_hz: manifold_core::audio_setup::DEFAULT_MID_HZ,
             spectrogram_features: None,
             osc_sender_enabled: false,
-            osc_receiving_timecode: false,
-            osc_timecode_display: Arc::from(""),
             percussion_importing: false,
             percussion_status_message: Arc::from(""),
             percussion_progress: 0.0,
@@ -478,12 +464,7 @@ impl Default for ContentState {
             profiling_active: false,
             profiling_frame_count: 0,
             led_enabled: false,
-            led_initialized: false,
             is_live_recording: false,
-            recording_dropped_frames: 0,
-            is_exporting: false,
-            export_progress: 0.0,
-            export_status: Arc::from(""),
             export_finished: None,
             undo_redo_event: None,
             ableton_session: None,
