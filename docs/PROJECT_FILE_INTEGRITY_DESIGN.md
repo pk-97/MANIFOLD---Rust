@@ -64,14 +64,16 @@ chain is keyed to it); it is the tightest predictor of "this build might not und
 file." The guard also does a coarse secondary check on `format_version` (D5) to catch a
 future container-format bump, but the primary gate is `projectVersion`.
 
-**D3 — One constant: `CURRENT_PROJECT_VERSION`.** The `"1.11.0"` literal at project.rs:1508
-and migrate.rs:86 becomes a single `pub const CURRENT_PROJECT_VERSION: &str` in
-`manifold-core`, read by (a) the `Project` default, (b) the migrate chain's final target,
-(c) the forward guard's ceiling. *Rejected: leave the two literals and add a third for the
-guard* — three copies of the schema version is exactly the drift class this file exists to
-kill (mirrors the BUG_BACKLOG `**Status:` single-source fix). The migrate chain's
-*intermediate* threshold literals (`"1.1.0"`…`"1.10.0"`) stay as-is: they are historical
-constants, not the current version.
+**D3 — One constant: `CURRENT_PROJECT_VERSION`.** The `Project`-default literal (project.rs:1508)
+becomes a single `pub const CURRENT_PROJECT_VERSION: &str` in `manifold-core`, read by (a) the
+`Project` default and (b) the forward guard's ceiling. *Rejected: leave the default literal
+and add another for the guard* — two copies of the schema version is the drift class this file
+exists to kill (mirrors the BUG_BACKLOG `**Status:` single-source fix). **The migrate chain
+does NOT read the const** — every rung (intermediate *and* final) keeps its own fixed literal
+target, because wiring the const into the final rung is a version-bump footgun (see §3.1). The
+const's tie to the ladder is enforced by a test (ladder-top == `CURRENT_PROJECT_VERSION`), not
+by sharing the literal. So the migrate.rs:86 final-target literal *stays* `"1.11.0"`; only the
+project.rs:1508 default literal is replaced by the const.
 
 **D4 — The refuse message names the project-format version, not a marketing version.** No
 schema-version → app-release-version map exists today. The message states the format number
@@ -119,8 +121,15 @@ pub const CURRENT_PROJECT_VERSION: &str = "1.11.0";
 ```
 
 `Project::default()` sets `project_version: CURRENT_PROJECT_VERSION.to_string()`. The migrate
-chain's final step (migrate.rs:84-87) targets `CURRENT_PROJECT_VERSION` instead of the
-`"1.11.0"` literal.
+chain does **not** wire the const into any rung: every migration step stamps its own fixed
+literal target (the final step stays `"1.11.0"`). Wiring the const into the final rung is a
+version-bump footgun — when the schema next bumps, that (now-intermediate) rung would stamp
+the *newer* version, so the new rung's `is_version_less_than` gate evaluates false and its
+migration silently never runs (a skipped migration = the exact silent-corruption class this
+doc fights). Instead, the const's tie to the ladder is enforced by a test: the "chain all the
+way up" test (`test_v100_chains_through_to_v140`) asserts the ladder's top equals
+`CURRENT_PROJECT_VERSION`, so bumping the const without adding a matching final rung fails the
+suite. Only `Project::default()` and the forward guard read the const.
 
 ### 3.2 The load error (manifold-io)
 
