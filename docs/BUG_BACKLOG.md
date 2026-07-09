@@ -30,6 +30,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-077 | **ui-cache-manager-tests-not-region-wrapped** | `manifold-renderer`'s `ui_cache_manager` unit tests (6) panic on the D4 region-ownership assertion (`tree.rs:290`) — pre-existing on `main`, unrelated to PARAM_STORAGE_BOUNDARIES P3 (LOW, workspace-sweep-visible) |
 | BUG-076 | **inspector-scroll-underestimates-content-height** | `layer_scroll`/`master_scroll`'s `max_scroll()` clamps to ~13-20px on a 9-card stack that's visibly ~1200px too tall for its viewport — the built content overflows but the scroll estimator doesn't agree (LOW, suspected root cause: `compute_height()` reads a mid-tween drawer-animation value instead of the settled/armed-at-build height) |
 | BUG-074 | **audio-mixdown-flaky-under-parallel-tests** | `render_export_audio_tapped_layer_matches_rendering_alone` fails ~1-in-3 under default parallel `cargo test`, always green with `--test-threads=1`; unrelated to PARAM_STEP_ACTIONS (LOW) |
 | BUG-073 | **ui-snap-script-drawer-tween-never-ticks** | `--script` harness has no per-frame tick, so a mod armed mid-script renders its drawer at a permanently zero-height clip region (unclickable rows) until the fixture pre-arms the state instead (LOW) |
@@ -40,7 +41,7 @@ or human can read it, and it needs no external tool.
 | BUG-045 | **gap-ring-down-chase** | tracker follows kernel ring-down down ~2-4 bins in note gaps; notes gate 87.6 vs 90 (LOW) |
 | BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
 | BUG-037 | **glp-first-render-stall** | ~37ms warm-up on a glTF clip's first rendered frame (MED) |
-| BUG-040 | **v13-import-migration-drop** | V1.3→V1.4 migration drops positional params of imported generators; 1-day save window (LOW) |
+| BUG-040 | **v13-import-migration-drop** | FIXED 2026-07-09 on `wave/param-boundaries-p3` — `positional_ids` now consults the file's own `embeddedPresets` order before the baked table (LOW) |
 | BUG-038 | **ableton-log-spam** | bridge warns every 1.5s forever when Live absent (LOW) |
 | BUG-006 | **fused-param-noop** | param edits/undo on fused-away nodes silently no-op (HIGH) |
 | BUG-007 | **fusion-exclusion-blind** | particle-loop exclusion misses configured wgsl_compute shapes (HIGH) |
@@ -398,6 +399,43 @@ dropdown/timeline but a no-op for the inspector's direct-call scroll path) — `
 branches on `ui.layout.inspector().contains(center)` and calls `try_inspector_scroll` directly,
 matching `window_input.rs`'s real dispatch. That fix is real and committed; this bug is what's
 left after it.
+
+### BUG-077 (ui-cache-manager-tests-not-region-wrapped) — 6 `manifold-renderer::ui_cache_manager` unit tests panic on the D4 region-ownership assertion — LOW (pre-existing, found 2026-07-09 during PARAM_STORAGE_BOUNDARIES P3's full-workspace sweep)
+
+**Symptom:** `cargo test --workspace` fails 6 tests in `manifold-renderer`'s
+`ui_cache_manager::tests` module — `extent_change_forces_fallback`,
+`extents_unchanged_when_bounds_stable`, `incremental_used_when_only_card_dirt`,
+`no_subregions_signature_is_empty`, `out_of_subregion_dirt_forces_full_render`,
+`partition_change_forces_fallback` — all with the same panic:
+
+```
+thread '...' panicked at crates/manifold-ui/src/tree.rs:290:9:
+root-parented node minted outside an open UITree::begin_region — UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md D1/D4.
+Wrap this subtree's build in begin_region(...)/end_region(...) instead of rooting it at the tree.
+```
+
+**Root cause:** `0bb51dad` ("region mechanism — ZTier, RegionToken,
+begin_region/end_region, D4 enforcement") landed the D4 root-parented-node panic
+guard but the `ui_cache_manager` test fixtures still build their tree directly
+against the root, outside any `begin_region`/`end_region` pair — the tests were
+never updated to the new region contract.
+
+**Confirmed unrelated to PARAM_STORAGE_BOUNDARIES P3:** `git diff --stat` for the
+P3 session touches only `crates/manifold-io/src/migrations/param_storage_v14.rs`;
+`manifold-ui`/`manifold-renderer` are untouched. The failure reproduces identically
+on the P3 branch's base commit (`10251041`, pre-P3) since P3 never runs code on
+this path — confirmed by inspection (disjoint crates/modules), not by reverting and
+rerunning (out of scope to spend more of this session on).
+
+**Fix shape:** wrap each affected test's tree construction in
+`tree.begin_region(...)`/`tree.end_region(...)` (the pattern the D4 landing commit
+should have applied to these fixtures too) — a `manifold-renderer` / `manifold-ui`
+fix, out of scope for a param-storage migration phase.
+
+**Escaped:** `wave/param-boundaries-p1` or an earlier UI-region wave (whichever
+landed `0bb51dad` without touching these fixtures) · caught-by: the next phase's
+full-workspace sweep (P3), not that wave's own gate — the region-enforcement
+landing's test scope apparently didn't include a full `cargo test --workspace` run.
 
 ### BUG-075 (timeline-drag-end-never-finalizes) — the terminal DragEnd for trim/marquee/move was dropped, so on_end_drag never ran — HIGH — FIXED 2026-07-08 (found + fixed same session)
 
@@ -946,30 +984,6 @@ and generators.
 
 **Sequencing** — AFTER the param-system post-refactor audit (Fable queue item 1): same
 code region; land the audit's verified ground first.
-
-### BUG-040 (v13-import-migration-drop) — V1.3→V1.4 migration drops positional params of a project-local (imported) generator — LOW (narrow window)
-
-**Found** during the 2026-07-06 param-system post-refactor audit (BUG-036 sibling hunt),
-by reading `crates/manifold-io/src/migrations/param_storage_v14.rs` — not reproduced on a
-real file.
-
-**Mechanism** — the migration maps positional `paramValues` to ids via (a) the instance's
-own `graph.presetMetadata.params` order, else (b) the baked `LEGACY_PARAM_ORDER` table.
-A TRACKING instance of an imported/forked generator has `graph: None` and its type id is
-project-local, so it's absent from the baked table → arm (b) drops the values with the
-"not in the baked LEGACY_PARAM_ORDER" warning and the instance loads with template
-defaults. The file itself carries the missing order: `embeddedPresets[type].def
-.presetMetadata.params`.
-
-**Exposure** — only projects saved between the glTF import door landing (2026-07-04) and
-the V1.4 wire landing (2026-07-05) can hold positional params for a project-local type;
-anything saved since writes the id-keyed map. The drop is loud (warning), one-time, and
-values-only (defaults still load).
-
-**Fix shape** — in `param_storage_v14`, between the per-instance-graph arm and the baked
-table, consult the project tree's own `embeddedPresets` for the type's
-`def.presetMetadata.params` order (pure `Value → Value`, self-contained in the same
-file). Unit fixture: positional generator instance + matching embedded preset.
 
 ### BUG-037 (glp-first-render-stall) — First render of a glTF scene layer stalls the content thread ~37ms (warm-up on the frame, not at load) — MED
 
@@ -2252,6 +2266,43 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-040 (v13-import-migration-drop) — V1.3→V1.4 migration drops positional params of a project-local (imported) generator — LOW (narrow window) — FIXED 2026-07-09 (`wave/param-boundaries-p3`, PARAM_STORAGE_BOUNDARIES_DESIGN.md P3)
+
+**Found** during the 2026-07-06 param-system post-refactor audit (BUG-036 sibling hunt),
+by reading `crates/manifold-io/src/migrations/param_storage_v14.rs` — not reproduced on a
+real file.
+
+**Mechanism** — the migration maps positional `paramValues` to ids via (a) the instance's
+own `graph.presetMetadata.params` order, else (b) the baked `LEGACY_PARAM_ORDER` table.
+A TRACKING instance of an imported/forked generator has `graph: None` and its type id is
+project-local, so it's absent from the baked table → arm (b) drops the values with the
+"not in the baked LEGACY_PARAM_ORDER" warning and the instance loads with template
+defaults. The file itself carries the missing order: `embeddedPresets[type].def
+.presetMetadata.params`.
+
+**Exposure** — only projects saved between the glTF import door landing (2026-07-04) and
+the V1.4 wire landing (2026-07-05) can hold positional params for a project-local type;
+anything saved since writes the id-keyed map. The drop is loud (warning), one-time, and
+values-only (defaults still load).
+
+**Fix shape** — in `param_storage_v14`, between the per-instance-graph arm and the baked
+table, consult the project tree's own `embeddedPresets` for the type's
+`def.presetMetadata.params` order (pure `Value → Value`, self-contained in the same
+file). Unit fixture: positional generator instance + matching embedded preset.
+
+**Fixed** — `positional_ids` (`crates/manifold-io/src/migrations/param_storage_v14.rs`)
+gained a new arm ("case 1.5") between the own-graph arm and the WireframeDepth/baked-table
+arms: a generator with no own `graph.presetMetadata.params` now consults
+`embedded_param_orders(root)` — a lookup keyed by each `embeddedPresets[i].def
+.presetMetadata.id`, built once (read-only) before the mutable per-instance walk — before
+falling through to `LEGACY_PARAM_ORDER`. Three tests cover it:
+`bug040_positional_generator_with_matching_embedded_preset_resolves_by_its_order` (the fix),
+`bug040_positional_generator_without_matching_embedded_preset_falls_to_baked_table` (unchanged
+drop behavior when no embedded match exists either), and
+`bug040_generator_own_graph_order_still_wins_over_embedded_preset` (priority order preserved).
+Still pure `Value → Value`; no consult of the live registry added; the baked table is
+untouched.
 
 ### BUG-051 (trigger-clear-unwired) — `LiveTriggerState::clear()` never called; armed flags survive transport stop — FIXED 2026-07-07 @ 3089e0a3
 
