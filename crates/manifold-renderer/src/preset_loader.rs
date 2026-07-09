@@ -248,40 +248,6 @@ pub fn clear_project_presets() -> u64 {
     set_project_presets(Vec::new(), Vec::new())
 }
 
-/// Opaque snapshot of all four project-overlay tiers.
-///
-/// Exists for exactly one caller shape: a project load pre-installs the
-/// CANDIDATE file's embedded presets before deserializing it (the V1.4 param
-/// loader needs them in the registry — BUG-036), so if that load then fails,
-/// the live project would be stranded on the wrong overlay. Snapshot before,
-/// [`restore_project_presets`] on failure.
-pub struct ProjectPresetsSnapshot {
-    effect_saved: Arc<OverlayEntries>,
-    effect_snapshot: Arc<OverlayEntries>,
-    generator_saved: Arc<OverlayEntries>,
-    generator_snapshot: Arc<OverlayEntries>,
-}
-
-/// Capture the current project overlay (cheap: four `Arc` clones).
-pub fn project_presets_snapshot() -> ProjectPresetsSnapshot {
-    ProjectPresetsSnapshot {
-        effect_saved: PROJECT_EFFECT_PRESETS_SAVED.load_full(),
-        effect_snapshot: PROJECT_EFFECT_PRESETS_SNAPSHOT.load_full(),
-        generator_saved: PROJECT_GENERATOR_PRESETS_SAVED.load_full(),
-        generator_snapshot: PROJECT_GENERATOR_PRESETS_SNAPSHOT.load_full(),
-    }
-}
-
-/// Reinstate a captured overlay and re-derive catalogs + core registry.
-/// Returns the new catalog generation.
-pub fn restore_project_presets(snap: &ProjectPresetsSnapshot) -> u64 {
-    PROJECT_EFFECT_PRESETS_SAVED.store(snap.effect_saved.clone());
-    PROJECT_EFFECT_PRESETS_SNAPSHOT.store(snap.effect_snapshot.clone());
-    PROJECT_GENERATOR_PRESETS_SAVED.store(snap.generator_saved.clone());
-    PROJECT_GENERATOR_PRESETS_SNAPSHOT.store(snap.generator_snapshot.clone());
-    apply_reload()
-}
-
 /// The `Saved`-tier project overlay entries for a catalog kind (by
 /// `KindDirs::label`) — merges on top of stock+user in [`build_catalog`].
 fn project_saved_overlay_for(label: &str) -> Arc<OverlayEntries> {

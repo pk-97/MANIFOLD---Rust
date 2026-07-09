@@ -509,6 +509,18 @@ pub struct PresetInstance {
     /// stale; the field is also the serialize-time gate for whether `base`
     /// appears on the wire at all. Not serialized; derived on load.
     pub base_tracked: bool,
+    /// Raw V1.4 wire entries, held between deserialize and the loader's
+    /// reconcile pass (`PARAM_STORAGE_BOUNDARIES_DESIGN.md` D1/D3). The
+    /// custom `Serialize` impl above never reads this field, so it never
+    /// rides the wire. `Some` from the moment `Deserialize`/`into_instance`
+    /// builds the manifest until [`Self::reconcile_manifest`] rebuilds it
+    /// against a registry that has since resolved the template — cleared at
+    /// that point (the common case: one load, one reconcile). Stays `Some`
+    /// across a reconcile call that still can't resolve a template (the
+    /// keep-don't-drop path — BUG-036), so a *later* reconcile — after the
+    /// registry catches up — can retry. `None` on a freshly-constructed
+    /// instance (`new`/`new_generator`), which never had a wire to stash.
+    pending_wire: Option<std::collections::BTreeMap<String, ParamEntryWire>>,
     pub drivers: Option<Vec<ParameterDriver>>,
     /// Per-instance ADSR/Random envelopes, keyed by `param_id`. Envelope-home
     /// unification: both effects and generators store their envelopes here (the
@@ -798,6 +810,26 @@ fn gather_known_params(
     out
 }
 
+/// Whether a descriptor authority resolves for this instance right now: an
+/// inline generator graph's own `meta.params`, or a registry template.
+/// Shared by [`build_param_manifest`] (decides informed-drop vs
+/// keep-don't-drop) and [`PresetInstance::reconcile_manifest`] (decides
+/// whether a reconcile pass definitively resolved the instance, so its
+/// `pending_wire` stash can be cleared, or whether it should stay parked for
+/// a later retry — BUG-036's class).
+fn template_known_for(
+    is_generator: bool,
+    effect_type: &PresetTypeId,
+    graph: &Option<EffectGraphDef>,
+) -> bool {
+    (is_generator
+        && graph
+            .as_ref()
+            .and_then(|g| g.preset_metadata.as_ref())
+            .is_some_and(|m| !m.params.is_empty()))
+        || crate::preset_definition_registry::try_get(effect_type).is_some()
+}
+
 /// Build a `PresetInstance`'s manifest from its V1.4 `params` wire map (§4 load
 /// reconcile): seed known descriptors, overlay each file entry's state +
 /// calibration by id (alias-aware), append self-describing inline-`spec`
@@ -844,12 +876,7 @@ fn build_param_manifest(
     // placeholder spec instead: state (value/base/exposed/calibration) is
     // everything the file stores for a bundled param, and the next load
     // with the template present reconciles it against the real descriptor.
-    let template_known = (is_generator
-        && graph
-            .as_ref()
-            .and_then(|g| g.preset_metadata.as_ref())
-            .is_some_and(|m| !m.params.is_empty()))
-        || crate::preset_definition_registry::try_get(effect_type).is_some();
+    let template_known = template_known_for(is_generator, effect_type, graph);
 
     let mut base_tracked = false;
     if let Some(wire) = wire {
@@ -1160,7 +1187,12 @@ impl<'de> Deserialize<'de> for PresetInstance {
         // V1.4 §4 reconcile: seed the manifest from the effect's registry
         // template + the graph's `user_added` bindings, then overlay the
         // incoming `params` map (value/exposed/base/calibration by id, inline
-        // spec for self-describing user params).
+        // spec for self-describing user params). Stash a copy of the wire
+        // map first (PARAM_STORAGE_BOUNDARIES_DESIGN.md D1) — the loader's
+        // `reconcile_param_manifests` re-runs this same build later, against
+        // whatever registry state exists once the project's own embedded
+        // presets have been installed.
+        let pending_wire = raw.params.clone();
         let (params, base_tracked) =
             build_param_manifest(false, &raw.effect_type, &raw.graph, raw.params);
 
@@ -1177,6 +1209,7 @@ impl<'de> Deserialize<'de> for PresetInstance {
             collapsed: raw.collapsed,
             params,
             base_tracked,
+            pending_wire,
             drivers: raw.drivers,
             envelopes: raw.envelopes,
             ableton_mappings: raw.ableton_mappings,
@@ -1236,7 +1269,9 @@ impl GeneratorInstanceRaw {
     fn into_instance(self) -> PresetInstance {
         // V1.4 §4 reconcile: a graph-backed generator's own `meta.params` is
         // the descriptor authority (else the registry); overlay the incoming
-        // `params` map by id.
+        // `params` map by id. Stash a copy of the wire map first (D1) — see
+        // the effect-kind `Deserialize` impl above for the same pattern.
+        let pending_wire = self.params.clone();
         let (params, base_tracked) =
             build_param_manifest(true, &self.generator_type, &self.graph, self.params);
         let mut audio_mods = self.audio_mods;
@@ -1251,6 +1286,7 @@ impl GeneratorInstanceRaw {
             collapsed: false,
             params,
             base_tracked,
+            pending_wire,
             drivers: self.drivers,
             envelopes: self.envelopes,
             ableton_mappings: self.ableton_mappings,
@@ -1345,6 +1381,7 @@ impl PresetInstance {
             collapsed: false,
             params: crate::params::ParamManifest::default(),
             base_tracked: false,
+            pending_wire: None,
             drivers: None,
             envelopes: None,
             ableton_mappings: None,
@@ -1374,6 +1411,7 @@ impl PresetInstance {
             collapsed: false,
             params: crate::params::ParamManifest::default(),
             base_tracked: false,
+            pending_wire: None,
             drivers: None,
             envelopes: None,
             ableton_mappings: None,
@@ -1391,6 +1429,32 @@ impl PresetInstance {
         };
         s.init_defaults();
         s
+    }
+
+    /// Rebuild this instance's `ParamManifest` from its stashed wire entries
+    /// (D1) against the CURRENT registry — called by
+    /// [`crate::project::Project::reconcile_param_manifests`] once the
+    /// project's own embedded presets have been installed. No-op if there is
+    /// no stash (a freshly-constructed instance, or one already resolved).
+    ///
+    /// Idempotent, and safe to call more than once: if this pass still can't
+    /// resolve a template for the instance (`template_known_for` false —
+    /// BUG-036's class, e.g. a project-local preset not registered yet), the
+    /// stash is kept rather than cleared, so a *later* reconcile call — once
+    /// the registry catches up — can retry from the same wire entries. Once
+    /// a pass resolves a real template, the stash is cleared; this is the
+    /// common case (one load, one reconcile).
+    pub(crate) fn reconcile_manifest(&mut self) {
+        let Some(wire) = self.pending_wire.clone() else {
+            return;
+        };
+        let (params, base_tracked) =
+            build_param_manifest(self.is_generator(), &self.effect_type, &self.graph, Some(wire));
+        self.params = params;
+        self.base_tracked = base_tracked;
+        if template_known_for(self.is_generator(), &self.effect_type, &self.graph) {
+            self.pending_wire = None;
+        }
     }
 
     #[inline]
@@ -3764,6 +3828,7 @@ mod tests {
             // `params` serializes empty; the instance is never lost.
             params: crate::params::ParamManifest::default(),
             base_tracked: false,
+            pending_wire: None,
             drivers: None,
             envelopes: None,
             ableton_mappings: None,
@@ -3799,6 +3864,7 @@ mod tests {
                 slot("beta", 0.2, false),
             ]),
             base_tracked: false,
+            pending_wire: None,
             drivers: None,
             envelopes: None,
             ableton_mappings: None,

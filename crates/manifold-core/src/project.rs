@@ -936,6 +936,47 @@ impl Project {
         out
     }
 
+    /// Mutable-walk sibling of [`Self::tracking_preset_ids`]: visits every
+    /// `PresetInstance` home in the project — master effects, every layer's
+    /// effects, every clip's effects, every layer's generator — INCLUDING
+    /// diverged instances (`graph: Some`), unlike the read-only walk above.
+    /// A diverged instance still deserializes its own `params` wire map and
+    /// still needs it reconciled, so this walker doesn't filter by
+    /// `graph.is_none()` the way `tracking_preset_ids` does.
+    fn for_each_preset_instance_mut(
+        &mut self,
+        mut f: impl FnMut(&mut crate::effects::PresetInstance),
+    ) {
+        for fx in &mut self.settings.master_effects {
+            f(fx);
+        }
+        for layer in &mut self.timeline.layers {
+            if let Some(effects) = layer.effects.as_mut() {
+                for fx in effects {
+                    f(fx);
+                }
+            }
+            for clip in &mut layer.clips {
+                for fx in &mut clip.effects {
+                    f(fx);
+                }
+            }
+            if let Some(gp) = layer.gen_params_mut() {
+                f(gp);
+            }
+        }
+    }
+
+    /// Rebuild every instance's `ParamManifest` from its stashed wire entries
+    /// against the CURRENT registry (PARAM_STORAGE_BOUNDARIES_DESIGN.md D1) —
+    /// call after the project's embedded presets are installed. Idempotent:
+    /// instances with no stash (freshly constructed, or already resolved by
+    /// an earlier call) are untouched. Walks exactly the homes
+    /// `tracking_preset_ids` walks (its mut sibling, above).
+    pub fn reconcile_param_manifests(&mut self) {
+        self.for_each_preset_instance_mut(|fx| fx.reconcile_manifest());
+    }
+
     /// Remove every `Snapshot`-origin embedded preset whose id is not in
     /// `referenced` (D5) — the stale-snapshot prune that keeps the overlay
     /// from accumulating ids no tracking instance uses anymore (e.g. after

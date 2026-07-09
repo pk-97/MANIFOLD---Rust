@@ -58,8 +58,8 @@ fn empty_scene() -> SceneData {
 /// Real-project scene (`project:<abs-or-relative-path>`): loads an actual
 /// `.manifold` file through the SAME path the live app uses
 /// (`ProjectIOService::open_project_from_path`) — `load_project_with` plus the
-/// pre-deserialize embedded-preset hook, so project-local forked presets
-/// resolve their params exactly as the app would show them (BUG-036). Missing
+/// embedded-preset install hook, so project-local forked presets resolve
+/// their params exactly as the app would show them (BUG-036). Missing
 /// media does not fail the load: `run_post_load_validation` only logs
 /// (`manifold-io/src/loader.rs`'s step 6), so real projects with unreachable
 /// source files still render — no special-casing needed here. Default
