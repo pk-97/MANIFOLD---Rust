@@ -1,6 +1,6 @@
 # Live Recording Proofs — headless end-to-end tests for the show recorder
 
-**Status:** PROPOSED design, not built · 2026-07-07 · Fable
+**Status:** APPROVED 2026-07-09 (Peter) — design ready, awaiting build (Sonnet, P1–P3); release-gating per STRUCTURAL_AUDIT_VERDICTS (owns BUG-053) · design 2026-07-07 · Fable
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
