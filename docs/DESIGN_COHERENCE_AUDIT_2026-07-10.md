@@ -1,6 +1,6 @@
 # Cross-Design Coherence Audit — running ledger
 
-**Status: IN PROGRESS · 2026-07-10 · Fable (fresh session, per the approved brief)**
+**Status: COMPLETE · 2026-07-10 · Fable (fresh session, per the approved brief). All 7 clusters audited; 19 findings kill-passed; conflict list + verdicts + handoff split final; DESIGN_BUILD_ORDER updated in the same landing.**
 **Scope: every board entry APPROVED-not-built or IN PROGRESS as of 2026-07-10 (board regenerated this session). 36 designs.**
 
 Method (per brief): build-order completeness check → cluster by seams → per-design ledger
@@ -141,18 +141,63 @@ not a partition.)
 - **F16 (folded into §0) — build-order §3 items 4/6 stale:** "MULTI_DISPLAY P2 ⏸ BLOCKED" and "MEDIA_BACKEND P1 ⏸ PARKED" — both hardening items resolved 2026-07-06, both phases re-issuable. Fixed in the build-order update.
 - **F-clean:** VIDEO_IO↔MULTI_DISPLAY island-send trigger coherent · VIDEO_IO D3 fixture-routing unification carries its own VERIFY-AT-IMPL ✓ · COMMERCIALIZATION↔ANALYSIS_ACCURACY BUG-069 sequencing consistent (build order 13g: P2+P6 before launch-gate item 19) ✓ · MEDIA_BACKEND↔VULKAN §6/§8 pairing consistent both sides (verify VULKAN side in dev-infra pass).
 
-## Conflict list
+### Cluster: LED/output + dev infra (COMPLETE 2026-07-10 — LED_STRIPS, PROJECTION_MAPPING, UI_HARNESS, PERF_BUDGET_GATE read whole; LIVE_RECORDING_PROOFS read through §3 (decisions+seams — remainder is test detail with no cross-doc surface); UI_AUTOMATION assessed via its shipped P1–P2 + UI_HARNESS's audit of it; VULKAN checked at status/§8/prereq lines)
 
-(accretes; each entry: severity · the two docs · one-line collision · which doc must change)
+- **LED_STRIPS / PROJECTION_MAPPING** — both carry the MULTI_DISPLAY §5a home amendments (LED §5a, PROJ §6) dated 2026-07-06, matching APP_SHELL §8's account exactly. The §5a cross-patch claim is fully verified across all four docs ✓.
+- **UI_HARNESS_UNIFICATION** — surfaces: ui_frame.rs seam (new), UICacheManager harness path, script.rs Runner rewrite (P2), dump.rs BUG-071 fix (P0). Cites UI_CLIP_AND_Z's wrong-path PNG gate as the precedent failure ✓; pre-coordinates with LIVE_RECORDING_PROOFS on playback stepping ("coordinate, don't duplicate") ✓.
+- **PERF_BUDGET_GATE** — extends trace + harness; D2 posture mirrors gpu-proofs; P2 wires GIG_RESILIENCE's checklist.
+- **LIVE_RECORDING_PROOFS** — owns BUG-053 (HDR structurally broken, D7 defers behind it); injection seams zero-cost; Tier-2 = manual pre-gig recorder soak.
+- **VULKAN** — background track; MEDIA_BACKEND §6 pairing consistent both sides ✓; ML ONNX gating consistent ✓.
+
+**Cluster findings:**
+- **F17 (LOW) — three docs each add a pre-gig ritual with no shared home:** GIG_RESILIENCE §10 (kill-drill), PERF_BUDGET_GATE P2 (perf soak "in GIG_RESILIENCE's checklist"), LIVE_RECORDING_PROOFS Tier 2 (recorder soak). Convergent, not conflicting — but the first to land should make GIG_RESILIENCE §10 the single checklist naming all three. Mechanical.
+- **F18 (LOW) — UI_HARNESS P2 rewrites UI_AUTOMATION's shipped Runner** (deletes its parallel rebuild, re-points its render). UI_AUTOMATION's doc gains a forward note so its P3–P4 briefs re-derive Runner anchors. Mechanical.
+- **F19 (LOW) — LED_STRIPS D8's H807SA UDP hardware-blackout rung isn't in GIG_RESILIENCE P3's understudy brief.** Compatible with the understudy independence rule (UDP send, no manifold deps, config-passed) but unbriefed; LED_STRIPS says "cross-reference added there at implementation" — make it a named P3-brief line item so it isn't forgotten. Mechanical.
 
 ---
+
+## Conflict list (final — severity · docs · collision · which doc changes)
+
+| # | Sev | Finding (one line) | Doc(s) that change |
+|---|---|---|---|
+| F2 | **HIGH** | REALTIME_3D P2 shadows priced against "8 objects, 4 lights" caps that shipped code (objects=64) + UNBOUNDED_LIGHTS (64/127) killed; §7.3 "do not reopen" text now false; shadow caster budget undecided | REALTIME_3D (Opus) |
+| F5 | **MED-HIGH** | IMPORT's reality note calls the shipped scene-assembly importer (`build_import_graph`: named groups, camera+sun, card, cap warning) "a single-mesh source"; P1 as written rebuilds shipped code | IMPORT (Opus re-cut + mech note; fold F6 cap text 8→64) |
+| F10 | **MED-HIGH** | ANALYSIS_ACCURACY and AUDIO_OBJECT_INGEST both build measurement harnesses and both claim the basic_pitch/synth-stem surface, with opposite fixture doctrines and no cross-reference | AUDIO_OBJECT_INGEST (Opus); ANALYSIS_ACCURACY (mech companion+sequencing line) |
+| F7 | MED | PERFORM_SURFACE D1/Decided-1/P2 commit to a "Perform button"; APP_SHELL D4 (Peter verbatim) made entry menu-only, no button — amendment one-sided | PERFORM_SURFACE (mech) |
+| F8 | MED | GIG_RESILIENCE D8 caveat ("bridge has no inbound song-position") invalidated by ABLETON_TRANSPORT_SYNC landing (`ableton_bridge.rs:242/:2305`); deferral points at the wrong doc | GIG_RESILIENCE (mech + 1 Peter line: build --resume rejoin?) |
+| F11 | MED | AUDIO_OBJECT_TRACKING header says "not built" while its own body shows P1–P4 SHIPPED — the status board under-reports a mostly-shipped design | AUDIO_OBJECT_TRACKING header (mech) |
+| F12 | MED | AUDIO_SETUP_DOCK amends APP_SHELL §7/Decided-9, AUDIO_SENDS D6/§3.3, AUDIO_INFRASTRUCTURE §7 — none carries a back-reference | APP_SHELL, AUDIO_SENDS_UX, AUDIO_INFRASTRUCTURE (mech) |
+| F14 | MED | SCENE_BUILD "GroupParamDef stays unused" vs COMPONENT_LIBRARY §4 macro layer built on GroupParamDef; compose fine (declaration→card bindings) but texts contradict, no cross-refs | SCENE_BUILD + COMPONENT_LIBRARY (mech after 1 compose-confirm sentence) |
+| F4 | MED | GAUSSIAN_SPLATS D10 cites the render_scene per-object-TRS-params convention SCENE_BUILD deletes; splat placement invisible to P6 gizmos without a Transform port | GAUSSIAN_SPLATS (mech re-anchor + 1 Opus line: params vs Transform port) |
+| F3 | MED | Three unbuilt designs (SCENE_BUILD P2, UNBOUNDED_LIGHTS P1, SPLATS P4) edit `render_scene.rs`'s same functions, each claiming independence | DESIGN_BUILD_ORDER (sequencing note, this session) + UNBOUNDED_LIGHTS prereq line (mech) |
+| F15 | LOW-MED | NDI/Syphon ownership moved to VIDEO_IO; MULTI_DISPLAY P6, MEDIA_BACKEND deferred-line, ML_NODES §14 still point at the old owner | those three (mech one-liners) |
+| F1 | LOW-MED | DESIGN_BUILD_ORDER missing all 10 post-07-06 approvals, carries 6 shipped rows, 2 stale ⏸ annotations | DESIGN_BUILD_ORDER (fixed this session) |
+| F9 | LOW | Fired deferral triggers unnoticed: ABLETON_SHOW_SYNC D16 (lanes shipped) + session-scene id-mapping designed nowhere | brief-time notes (mech) |
+| F13 | LOW | OBJECT_TRACKING P5 scope-overlay anchors predate the ScopeColumn typed-overlay refactor | brief-time re-derive (mech) |
+| F17 | LOW | Pre-gig ritual accretes from 3 docs with no shared checklist home | GIG_RESILIENCE §10 when first lands (mech) |
+| F18 | LOW | UI_HARNESS P2 rewrites UI_AUTOMATION's shipped Runner; no forward note | UI_AUTOMATION (mech) |
+| F19 | LOW | LED hardware-blackout rung absent from GIG_RESILIENCE P3 brief | GIG_RESILIENCE P3 brief (mech) |
 
 ## Per-design verdicts
 
-(clean / needs amendment (named) / stale anchors (named))
+**Needs amendment (named above):** REALTIME_3D (F2) · IMPORT (F5/F6) · AUDIO_OBJECT_INGEST (F10) · ANALYSIS_ACCURACY (F10, minor) · PERFORM_SURFACE (F7) · GIG_RESILIENCE (F8/F17/F19) · AUDIO_OBJECT_TRACKING (F11 header) · APP_SHELL + AUDIO_SENDS_UX + AUDIO_INFRASTRUCTURE (F12) · SCENE_BUILD + COMPONENT_LIBRARY (F14) · GAUSSIAN_SPLATS (F4) · UNBOUNDED_LIGHTS (F3 prereq line) · MULTI_DISPLAY + MEDIA_BACKEND + ML_NODES (F15 pointers) · UI_AUTOMATION (F18) · ABLETON_SHOW_SYNC (F9 note).
 
----
+**Clean (composition-coherent as written):** SESSION_MODE · MULTI_DISPLAY (body; F15 pointer only) · APP_SHELL (body; F12 note only) · SIMULATIONS · BOX3D_PHYSICS · SCENE_BUILD (body; F14 note only) · KICK_SWEEP_EVENT · AUDIO_SETUP_DOCK · MAPPING_GRAMMAR · AUTO_POPULATE · VIDEO_IO · MEDIA_BACKEND (body) · COMMERCIALIZATION · LIVE_RECORDING_PROOFS · UI_HARNESS_UNIFICATION · PERF_BUDGET_GATE · UI_AUTOMATION (body) · VULKAN_BACKEND · LED_STRIPS · PROJECTION_MAPPING · DJ_PERFORMANCE · PRO_DJ_LINK · MCP_INTERFACE · COMPONENT_LIBRARY (body) · ML_NODES (body) · PARAM_STORAGE (clean-with-remainder: Peter's library re-save).
+
+**Stale anchors (re-derive at brief time, no amendment owed):** OBJECT_TRACKING P5 (F13) · PRO_DJ_LINK sync-seam anchors (ABLETON_TRANSPORT_SYNC landed) · SCENE_BUILD header's "BOUNDARIES must land before P3" phrasing (prereq now satisfied) · every doc auditing render_scene.rs line numbers once any F3 sibling lands.
 
 ## Handoff split
 
-(Opus amendment session vs mechanical fixes)
+**Opus amendment session (one sitting, ~4 items):**
+1. F2 — REALTIME_3D: shadow caster budget/policy under uncapped objects+lights; strike D3/§7.3 cap text. (The one finding that can produce rework-by-construction if P2 executes first.)
+2. F5 — IMPORT: P1 scope re-cut against the shipped importer (what remains: report, undo-transaction, Khronos conformance, light mapping, manifold-io placement question).
+3. F10 — AUDIO_OBJECT_INGEST ↔ ANALYSIS_ACCURACY: one measurement harness, sequenced detector ownership on synth/pad stems.
+4. F4(b) + F14 — two one-sentence judgment confirmations (splat Transform port; GroupParamDef compose).
+
+**Peter decisions surfaced (fold into the Opus session or a session start):**
+- F8: build the --resume Ableton-position rejoin now that the listener exists, or drop it?
+- F2: shadow caster cap value (a constant, but a cost-policy call).
+
+**Mechanical fixes (any Sonnet session; no judgment):** F3 · F4(a,c) · F6 · F7 · F9 · F11 · F12 · F13 · F15 · F17 · F18 · F19 + board regen after the header fixes.
+
+**Fixed this session:** F1/F16 (DESIGN_BUILD_ORDER update, committed with this ledger).
