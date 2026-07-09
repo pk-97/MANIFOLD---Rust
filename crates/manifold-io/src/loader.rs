@@ -4,22 +4,6 @@ use manifold_core::project::{EmbeddedPreset, Project};
 use std::io::Read;
 use std::path::Path;
 
-/// Pre-pass view of the project file: just the project-scoped preset defs.
-///
-/// The V1.4 param loader resolves every instance's params against the global
-/// preset-definition registry *while `Project` deserializes* — so a project's
-/// embedded (forked / imported) presets must be registered BEFORE the full
-/// deserialize, or every param keyed to a project-local preset type resolves
-/// to "no template" (BUG-036: dropped params, dead modulation targets on
-/// reload). The `_with` loader variants extract this subset first and hand it
-/// to the caller's installer, then deserialize.
-#[derive(Default, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct EmbeddedPresetsPrePass {
-    #[serde(default)]
-    embedded_presets: Vec<EmbeddedPreset>,
-}
-
 /// Load a .manifold project file with full post-load validation.
 ///
 /// Supports both formats:
@@ -40,12 +24,16 @@ pub fn load_project(path: &Path) -> Result<Project, LoadError> {
     load_project_with(path, |_| {})
 }
 
-/// [`load_project`] with a pre-deserialize hook: `register_embedded_presets`
-/// receives the file's project-scoped presets BEFORE the `Project` itself
+/// [`load_project`] with an install hook: `register_embedded_presets` receives
+/// the file's own project-scoped presets right after the typed `Project`
 /// deserializes, so the caller (the app — the one seam that reaches both the
 /// project and the renderer's catalog) can install them into the catalog
-/// overlay + core definition registry in time for the V1.4 param loader to
-/// resolve project-local preset types. See [`EmbeddedPresetsPrePass`].
+/// overlay + core definition registry BEFORE
+/// [`Project::reconcile_param_manifests`] rebuilds every instance's param
+/// manifest against the now-complete registry
+/// (`PARAM_STORAGE_BOUNDARIES_DESIGN.md` D1–D3 — supersedes the old
+/// pre-deserialize JSON pre-scan, which raced project-local preset types
+/// against their own file's layer data, BUG-036).
 pub fn load_project_with(
     path: &Path,
     register_embedded_presets: impl FnOnce(&[EmbeddedPreset]),
@@ -101,9 +89,9 @@ pub fn load_project_snapshot(archive_path: &Path, hash: &str) -> Result<Project,
     load_project_snapshot_with(archive_path, hash, |_| {})
 }
 
-/// [`load_project_snapshot`] with the same pre-deserialize hook as
-/// [`load_project_with`] — a snapshot's embedded presets must be registered
-/// before its layers deserialize, exactly like a normal open.
+/// [`load_project_snapshot`] with the same install hook as
+/// [`load_project_with`] — a snapshot's embedded presets are installed and
+/// reconciled exactly like a normal open.
 pub fn load_project_snapshot_with(
     archive_path: &Path,
     hash: &str,
@@ -156,9 +144,12 @@ pub fn load_project_from_json(json: &str) -> Result<Project, LoadError> {
     load_project_from_json_with(json, |_| {})
 }
 
-/// [`load_project_from_json`] with the pre-deserialize embedded-presets hook
-/// (see [`load_project_with`]). The hook runs on the migrated JSON, before
-/// the typed `Project` deserialize that needs the registry populated.
+/// [`load_project_from_json`] with the embedded-presets install hook (see
+/// [`load_project_with`]). Ordering (`PARAM_STORAGE_BOUNDARIES_DESIGN.md`
+/// D1–D3), all inside this one function so no caller can get it wrong:
+/// deserialize (each instance stashes its raw `params` wire map) → install
+/// the file's own embedded presets into the registry → reconcile every
+/// instance's manifest against that now-complete registry.
 pub fn load_project_from_json_with(
     json: &str,
     register_embedded_presets: impl FnOnce(&[EmbeddedPreset]),
@@ -167,21 +158,23 @@ pub fn load_project_from_json_with(
     let migrated =
         migrate::migrate_if_needed(json).map_err(|e| LoadError::Migration(e.to_string()))?;
 
-    // Pre-pass: hand the project-scoped presets to the caller BEFORE the
-    // typed deserialize below resolves params against the registry. A
-    // pre-pass parse failure is logged loud, not fatal — if the JSON is
-    // genuinely broken the full deserialize below reports the real error.
-    match serde_json::from_str::<EmbeddedPresetsPrePass>(&migrated) {
-        Ok(pre) => register_embedded_presets(&pre.embedded_presets),
-        Err(e) => log::warn!(
-            "[Loader] embedded-presets pre-pass failed ({e}); project-local preset \
-             types may not resolve during this load"
-        ),
-    }
-
-    // Deserialize
+    // Deserialize. Each `PresetInstance` stashes its raw V1.4 `params` wire
+    // map (`pending_wire`) rather than resolving it fully here — this
+    // project's own embedded (forked / imported) preset types haven't been
+    // installed into the registry yet.
     let mut project: Project =
         serde_json::from_str(&migrated).map_err(|e| LoadError::Deserialize(format!("{e}")))?;
+
+    // Install the file's own embedded presets NOW — typed, post-parse. The
+    // caller (the app) installs them into the catalog overlay + core
+    // definition registry.
+    register_embedded_presets(&project.embedded_presets);
+
+    // Reconcile: rebuild every instance's manifest from its stash against
+    // the now-complete registry. Unconditional — this is what makes BUG-036
+    // (project-local preset types registering after their own layer data
+    // deserialized) unreachable by construction, not just correctly ordered.
+    project.reconcile_param_manifests();
 
     // Strip unrecognized effect types (e.g. removed effects from Unity projects).
     // Without this, Unknown effects stay in the effect list and show in the UI.

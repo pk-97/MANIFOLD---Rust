@@ -2,19 +2,32 @@
 //! (imported / forked) preset must survive project reload.
 //!
 //! The V1.4 param loader resolves each instance's params against the global
-//! preset-definition registry while `Project` deserializes. A project-local
-//! preset's template only enters that registry via the catalog overlay — and
-//! the app used to install the overlay AFTER deserialize, so every param
-//! keyed to a project-local preset type resolved to "no template" and was
-//! dropped (LFO/driver targets vanished; re-importing the same .glb revived
-//! them because import registers the template first).
+//! preset-definition registry. A project-local preset's template only enters
+//! that registry via the catalog overlay — and the app used to install the
+//! overlay AFTER deserialize, so every param keyed to a project-local preset
+//! type resolved to "no template" and was dropped (LFO/driver targets
+//! vanished; re-importing the same .glb revived them because import
+//! registers the template first).
 //!
-//! Two independent defenses are proven here:
-//! 1. Ordering (root fix): `load_project_from_json_with` hands the file's
-//!    embedded presets to an installer BEFORE the typed deserialize.
+//! Three defenses are proven here (PARAM_STORAGE_BOUNDARIES_DESIGN.md P1):
+//! 1. Ordering (root fix): `load_project_from_json_with` installs the file's
+//!    own embedded presets right after the typed deserialize, then calls
+//!    `Project::reconcile_param_manifests` to rebuild every instance's
+//!    manifest from its stashed wire entries against the now-complete
+//!    registry — all inside one loader function, so no caller can get the
+//!    order wrong.
 //! 2. Keep-don't-drop (class-kill backstop): even with NO template
 //!    resolvable, `build_param_manifest` keeps the entry on a placeholder
 //!    spec instead of silently losing state.
+//! 3. Order independence by construction (P1): install + reconcile don't
+//!    have to happen inside the same loader call. A bare deserialize (no
+//!    installer) keeps every unresolved instance's wire stash around
+//!    (`reconcile_manifest` only clears it once a real template resolves);
+//!    installing the overlay and calling `reconcile_param_manifests`
+//!    afterward, on an already-returned `Project`, retries from that same
+//!    stash and reaches full template resolution. This sequence was
+//!    impossible pre-P1 — the ordering used to live entirely inside one
+//!    pre-deserialize hook.
 //!
 //! Own integration-test binary (own process): it mutates the process-global
 //! preset catalog via `set_project_presets`, which would race other
@@ -128,11 +141,12 @@ fn project_local_generator_params_survive_reload() {
         );
     }
 
-    // Root-fix path: the loader hands embedded presets to the installer
-    // BEFORE deserialize, so params resolve against the REAL template.
+    // Root-fix path: the loader installs the file's own embedded presets
+    // right after deserialize, then reconciles against the REAL template —
+    // all inside one `load_project_from_json_with` call.
     clear_project_presets();
     let reloaded = manifold_io::loader::load_project_from_json_with(&json, install)
-        .expect("reload with pre-install hook");
+        .expect("reload with install hook");
     {
         let gp = reloaded.timeline.layers[0]
             .gen_params()
@@ -148,6 +162,50 @@ fn project_local_generator_params_survive_reload() {
             (spec.min - template_min).abs() < f32::EPSILON
                 && (spec.max - template_max).abs() < f32::EPSILON,
             "param resolved against the real template spec, not a placeholder"
+        );
+    }
+
+    // ── Arm 3 (P1): order independence by construction. A bare deserialize
+    // (no installer) leaves the instance on a placeholder — exactly arm 1's
+    // outcome — but because the template still didn't resolve on this pass,
+    // `reconcile_manifest` keeps the wire stash instead of clearing it.
+    // Installing the overlay AFTER the load already returned, then calling
+    // `reconcile_param_manifests()` directly (no loader call involved this
+    // time), retries from that same stash and reaches full resolution. This
+    // sequence — recovering a load that already returned — was impossible
+    // pre-P1: the old ordering lived entirely inside one pre-deserialize
+    // hook, so install-after-the-fact had nothing left to retry against.
+    clear_project_presets();
+    let mut reloaded = manifold_io::loader::load_project_from_json(&json)
+        .expect("bare reload, no installer");
+    {
+        let gp = reloaded.timeline.layers[0]
+            .gen_params()
+            .expect("generator instance");
+        assert_eq!(
+            gp.params.len(),
+            template_len,
+            "keep-don't-drop before a later install"
+        );
+    }
+    install(&reloaded.embedded_presets);
+    reloaded.reconcile_param_manifests();
+    {
+        let gp = reloaded.timeline.layers[0]
+            .gen_params()
+            .expect("generator instance");
+        assert_eq!(gp.params.len(), template_len, "full template manifest");
+        assert!(
+            (gp.get_param(&param_id) - written_value).abs() < f32::EPSILON,
+            "written value survives a deferred reconcile"
+        );
+        let spec = &gp.params.iter().next().unwrap().spec;
+        assert_eq!(spec.id, param_id, "card order preserved");
+        assert!(
+            (spec.min - template_min).abs() < f32::EPSILON
+                && (spec.max - template_max).abs() < f32::EPSILON,
+            "param resolved against the real template spec after a deferred \
+             reconcile, not a placeholder"
         );
     }
 

@@ -1,6 +1,6 @@
 # Param Storage Boundaries — load reconcile, card single-source, migration self-containment
 
-**Status:** APPROVED design, not built · 2026-07-06 · Fable
+**Status:** IN PROGRESS · P1 SHIPPED (`wave/param-boundaries-p1`) · P2–P3 not built · 2026-07-06 · Fable
 **Prerequisites:** PARAM_STORAGE_DESIGN.md P1–P5 (all SHIPPED 2026-07-05) + the BUG-036
 fix wave (`b2f78725`, `0434da5e`, 2026-07-06). Nothing else.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
@@ -172,7 +172,42 @@ within the two serialize fns, before writing the wrapper.
 
 ## 4. Phasing
 
-### P1 — reconcile stage + delete the ordering machinery (one session)
+### P1 — reconcile stage + delete the ordering machinery (one session) — SHIPPED
+
+Landed on `wave/param-boundaries-p1` (worktree `.claude/worktrees/param-bound-p1`):
+`pending_wire` stash + `Project::reconcile_param_manifests()` (with a
+keep-vs-clear refinement not spelled out in §3 — see below); the loader
+reshaped per §3, `EmbeddedPresetsPrePass` and the JSON pre-scan deleted; the
+rollback API (`ProjectPresetsSnapshot` + both fns + 3 call sites + its test)
+deleted; the three-arm `project_local_preset_reload` test green (order
+independence proven live); round-trip gate green against
+`~/Downloads/meshImportTests.manifold` (a real BUG-036 specimen — its saved
+`gen_params.params` serializes empty; post-P1 all 17 template params resolve
+and the `cam_orbit` driver resolves against a real one, zero
+dropping/placeholder log lines).
+
+Implementation note beyond §3's literal snippet: `pending_wire` does NOT
+clear unconditionally on the first `reconcile_manifest()` call. If that pass
+still can't resolve a template (`template_known_for` false — the
+keep-don't-drop path), the stash is kept so a *later* reconcile call — after
+the registry catches up, e.g. an overlay installed after the load already
+returned — can retry from the same wire entries. It clears once a pass
+resolves a real template (the common case: one load, one reconcile). This is
+what makes the P1 brief's third test arm (bare load → install → reconcile
+directly, order-independence) actually possible; a destructive `.take()` on
+every call would make that sequence a no-op. Also: `#[serde(skip)]` from
+§3's snippet doesn't apply here — `PresetInstance` has hand-written
+`Serialize`/`Deserialize` impls (not derived), so the attribute isn't a
+registered helper and won't compile; the field is simply never written by
+the custom `Serialize` impl, achieving the same "never on the wire" property
+without the attribute.
+
+Re-derivation audit finding: the doc's call-site count (3 loader fns, 3 app
+sites, 2 tests) undercounted by one — `manifold-app/src/ui_snapshot/fixtures.rs:69`
+(`project_scene`, the headless ui-snap harness) also calls `load_project_with`.
+No behavior change was needed there (D3 keeps the installer signature and
+contract unchanged), so only its stale comment (referencing the deleted
+pre-deserialize hook) was corrected.
 
 **Entry state:** `git log --oneline -1` includes or descends from `0434da5e`;
 `cargo test -p manifold-app --test project_local_preset_reload` green;

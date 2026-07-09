@@ -9,8 +9,7 @@ use std::sync::Mutex;
 use manifold_core::PresetTypeId;
 use manifold_core::project::EmbeddedOrigin;
 use manifold_renderer::preset_loader::{
-    EFFECT_CATALOG, GENERATOR_CATALOG, clear_project_presets, project_presets_snapshot,
-    restore_project_presets, set_project_presets,
+    EFFECT_CATALOG, GENERATOR_CATALOG, clear_project_presets, set_project_presets,
 };
 
 /// The test harness runs `#[test]` fns in this binary on separate threads by
@@ -104,50 +103,6 @@ fn fake_effect_preset(id: &str, marker: &str) -> String {
             "wires": []
         }}"#
     )
-}
-
-/// Failed-load rollback (BUG-036 fix rider): a project open pre-installs the
-/// CANDIDATE file's presets before deserializing; if the load then fails, the
-/// app restores the captured overlay so the live project's forks keep
-/// resolving. Prove the snapshot/restore round-trip through both stores.
-#[test]
-fn overlay_snapshot_restores_after_a_candidate_install() {
-    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let live_id = "TestLiveProjectGen_rollback";
-    let candidate_id = "TestCandidateGen_rollback";
-
-    // Live project's overlay.
-    set_project_presets(
-        Vec::new(),
-        vec![(live_id.to_string(), fake_generator_preset(live_id), EmbeddedOrigin::Saved)],
-    );
-    let snap = project_presets_snapshot();
-
-    // Candidate project's overlay replaces it (the pre-deserialize hook).
-    set_project_presets(
-        Vec::new(),
-        vec![(candidate_id.to_string(), fake_generator_preset(candidate_id), EmbeddedOrigin::Saved)],
-    );
-    assert!(GENERATOR_CATALOG.load().json(live_id).is_none());
-    assert!(GENERATOR_CATALOG.load().json(candidate_id).is_some());
-
-    // Load failed — roll back.
-    restore_project_presets(&snap);
-    assert!(
-        GENERATOR_CATALOG.load().json(live_id).is_some(),
-        "live project's preset must resolve again after rollback"
-    );
-    assert!(
-        GENERATOR_CATALOG.load().json(candidate_id).is_none(),
-        "candidate's preset must be gone after rollback"
-    );
-    let preset_id = PresetTypeId::from_string(live_id.to_string());
-    assert!(
-        manifold_core::preset_definition_registry::try_get(&preset_id).is_some(),
-        "core registry must also be restored"
-    );
-
-    clear_project_presets();
 }
 
 /// D5 (PRESET_LIBRARY_DESIGN P2): a `Snapshot`-origin overlay entry sits
