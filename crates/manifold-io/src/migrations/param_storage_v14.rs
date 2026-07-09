@@ -41,6 +41,8 @@
 //! no longer exists in ANY live registry snapshot — it predates even the
 //! generation date above.
 
+use std::collections::HashMap;
+
 use serde_json::Value;
 
 use manifold_core::effect_registration::{ParamAlias, resolve_param_alias};
@@ -177,15 +179,63 @@ fn aliases_for(type_id: &str) -> &'static [ParamAlias] {
 /// Migrate every preset instance's `paramValues`/`baseParamValues` in the
 /// project tree to the V1.4 `params` shape. Entry point wired into
 /// `crate::migrate::migrate_if_needed`.
+///
+/// Reads the file's own `embeddedPresets` ONCE, up front (read-only, before
+/// the mutable per-instance walk below) — this is the D5/BUG-040 lookup
+/// table (`docs/PARAM_STORAGE_BOUNDARIES_DESIGN.md` §2 D5): a positional
+/// generator instance without its own inline graph order consults the
+/// matching embedded preset's param order before falling to the frozen
+/// baked table. Still pure `Value → Value`, self-contained in the same
+/// JSON tree — the quarantine rule (this module never consults the live
+/// runtime registry, only the JSON tree and its baked tables) is untouched.
 pub(crate) fn migrate(root: &mut Value) {
-    crate::migrate::for_each_preset_instance(root, migrate_one_instance);
+    let embedded = embedded_param_orders(root);
+    crate::migrate::for_each_preset_instance(root, |fx| migrate_one_instance(fx, &embedded));
+}
+
+/// Build the D5 lookup: embedded preset type id → its
+/// `def.presetMetadata.params` order (ids only, in array order). Skips
+/// entries with no metadata/id or an empty `params` array so a miss falls
+/// straight through to the baked table, unchanged. Read-only over
+/// `embeddedPresets` — this migration never mutates that array.
+fn embedded_param_orders(root: &Value) -> HashMap<String, Vec<String>> {
+    let mut out = HashMap::new();
+    let Some(presets) = root.get("embeddedPresets").and_then(|v| v.as_array()) else {
+        return out;
+    };
+    for preset in presets {
+        let Some(meta) = preset.get("def").and_then(|d| d.get("presetMetadata")) else {
+            continue;
+        };
+        let Some(id) = meta.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(params) = meta.get("params").and_then(|p| p.as_array()) else {
+            continue;
+        };
+        if params.is_empty() {
+            continue;
+        }
+        let ids: Vec<String> = params
+            .iter()
+            .map(|p| {
+                p.get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect();
+        out.insert(id.to_string(), ids);
+    }
+    out
 }
 
 /// Migrate a single preset instance (effect or generator) JSON object.
 /// A no-op if the instance carries neither legacy field (already V1.4, or
 /// a bare stub with no param state at all) — makes the whole migration
 /// idempotent by construction, matching every other step in this chain.
-pub(crate) fn migrate_one_instance(fx: &mut Value) {
+/// `embedded` is the D5 lookup built once by [`migrate`]'s caller.
+pub(crate) fn migrate_one_instance(fx: &mut Value, embedded: &HashMap<String, Vec<String>>) {
     let Value::Object(map) = fx else { return };
     if !map.contains_key("paramValues") && !map.contains_key("baseParamValues") {
         return;
@@ -202,9 +252,17 @@ pub(crate) fn migrate_one_instance(fx: &mut Value) {
     let base_param_values = map.remove("baseParamValues");
 
     let mut params = serde_json::Map::new();
-    apply_values(map, &type_id, is_generator, param_values, &mut params, false);
+    apply_values(
+        map,
+        &type_id,
+        is_generator,
+        param_values,
+        &mut params,
+        false,
+        embedded,
+    );
     if let Some(bpv) = base_param_values {
-        apply_values(map, &type_id, is_generator, bpv, &mut params, true);
+        apply_values(map, &type_id, is_generator, bpv, &mut params, true, embedded);
     }
 
     map.insert("params".to_string(), Value::Object(params));
@@ -218,6 +276,7 @@ fn positional_ids(
     type_id: &str,
     is_generator: bool,
     array_len: usize,
+    embedded: &HashMap<String, Vec<String>>,
 ) -> Vec<String> {
     // Case 1 (§4 step 2, first case): a generator with its own per-instance
     // graph carries the full [bundled | user-added] order in
@@ -241,6 +300,22 @@ fn positional_ids(
                     .to_string()
             })
             .collect();
+    }
+
+    // Case 1.5 (D5, BUG-040): a generator TRACKING instance has no inline
+    // graph override, so case 1 above found nothing — but if it's a
+    // project-local (imported/forked) type, it's also absent from the
+    // frozen `LEGACY_PARAM_ORDER` table (case 3 below), so falling straight
+    // through would silently drop every positional value. Before that
+    // happens, consult the file's OWN `embeddedPresets` entry for this
+    // type: its `def.presetMetadata.params` carries the exact order that
+    // was live when the project was saved. Pure `Value → Value`, built once
+    // by `migrate`'s caller — no registry consult.
+    if is_generator
+        && let Some(ids) = embedded.get(type_id)
+        && !ids.is_empty()
+    {
+        return ids.clone();
     }
 
     // Case 2: WireframeDepth's retired 14-slot shape.
@@ -306,11 +381,12 @@ fn apply_values(
     values: Value,
     out: &mut serde_json::Map<String, Value>,
     is_base: bool,
+    embedded: &HashMap<String, Vec<String>>,
 ) {
     let field_name = if is_base { "baseParamValues" } else { "paramValues" };
     match values {
         Value::Array(arr) => {
-            let ids = positional_ids(instance, type_id, is_generator, arr.len());
+            let ids = positional_ids(instance, type_id, is_generator, arr.len(), embedded);
             for (i, v) in arr.into_iter().enumerate() {
                 let Some(id) = ids.get(i) else {
                     // Array longer than the table's order: truncate, warn
@@ -419,7 +495,7 @@ mod tests {
     use serde_json::json;
 
     fn migrate_fx(mut fx: Value) -> Value {
-        migrate_one_instance(&mut fx);
+        migrate_one_instance(&mut fx, &HashMap::new());
         fx
     }
 
@@ -673,5 +749,136 @@ mod tests {
             root["timeline"]["layers"][0]["genParams"]["params"]["pattern"]["value"].as_f64(),
             Some(1.0)
         );
+    }
+
+    // ── D5 / BUG-040: project-local generator consults `embeddedPresets` ──
+    //
+    // A TRACKING instance of an imported/forked generator has no per-instance
+    // `graph.presetMetadata.params` (case 1 finds nothing) and its type id is
+    // project-local, so it's absent from the baked `LEGACY_PARAM_ORDER` table
+    // (case 3 would drop it). The file's own `embeddedPresets` entry for that
+    // type carries the order that was live at save time — case 1.5 must find
+    // it before falling through to the baked table.
+
+    #[test]
+    fn bug040_positional_generator_with_matching_embedded_preset_resolves_by_its_order() {
+        let mut root = json!({
+            "projectVersion": "1.10.0",
+            "embeddedPresets": [{
+                "kind": "generator",
+                "origin": "saved",
+                "def": {
+                    "version": 1,
+                    "nodes": [],
+                    "wires": [],
+                    "presetMetadata": {
+                        "id": "ImportedMesh",
+                        "displayName": "Imported Mesh",
+                        "category": "Spatial",
+                        "oscPrefix": "imported_mesh",
+                        "params": [
+                            { "id": "cam_orbit" },
+                            { "id": "cam_dist" },
+                            { "id": "scale" }
+                        ]
+                    }
+                }
+            }],
+            "timeline": {
+                "layers": [
+                    { "genParams": {
+                        "generatorType": "ImportedMesh",
+                        "paramValues": [45.0, 3.5, 1.2]
+                    } }
+                ]
+            }
+        });
+        migrate(&mut root);
+        let params = &root["timeline"]["layers"][0]["genParams"]["params"];
+        assert_eq!(
+            params["cam_orbit"]["value"].as_f64(),
+            Some(45.0),
+            "slot 0 lands on the embedded preset's first param id"
+        );
+        assert_eq!(params["cam_dist"]["value"].as_f64(), Some(3.5));
+        assert_eq!(params["scale"]["value"].as_f64(), Some(1.2));
+        assert_eq!(
+            params.as_object().unwrap().len(),
+            3,
+            "all 3 positional values resolved — none silently dropped"
+        );
+    }
+
+    #[test]
+    fn bug040_positional_generator_without_matching_embedded_preset_falls_to_baked_table() {
+        // Same shape, but `embeddedPresets` is empty (or has no entry for
+        // this type) — unchanged pre-P3 behavior: not in the baked table
+        // either, so every positional value is loudly dropped, not
+        // defaulted or panicked.
+        let mut root = json!({
+            "projectVersion": "1.10.0",
+            "embeddedPresets": [],
+            "timeline": {
+                "layers": [
+                    { "genParams": {
+                        "generatorType": "SomeOtherProjectLocalGen",
+                        "paramValues": [45.0, 3.5, 1.2]
+                    } }
+                ]
+            }
+        });
+        migrate(&mut root);
+        let params = &root["timeline"]["layers"][0]["genParams"]["params"];
+        assert_eq!(
+            params.as_object().unwrap().len(),
+            0,
+            "no embedded match and no baked entry: values dropped, matching \
+             today's unregistered-type policy"
+        );
+    }
+
+    #[test]
+    fn bug040_generator_own_graph_order_still_wins_over_embedded_preset() {
+        // Case 1 (own inline graph) must still take priority over the new
+        // case 1.5 (embedded lookup) — an instance-level user-added tail
+        // would otherwise be lost if the embedded lookup fired first.
+        let mut root = json!({
+            "projectVersion": "1.10.0",
+            "embeddedPresets": [{
+                "kind": "generator",
+                "origin": "saved",
+                "def": {
+                    "version": 1,
+                    "nodes": [],
+                    "wires": [],
+                    "presetMetadata": {
+                        "id": "ImportedMesh",
+                        "displayName": "Imported Mesh",
+                        "category": "Spatial",
+                        "oscPrefix": "imported_mesh",
+                        "params": [
+                            { "id": "wrong_slot_order" }
+                        ]
+                    }
+                }
+            }],
+            "timeline": {
+                "layers": [
+                    { "genParams": {
+                        "generatorType": "ImportedMesh",
+                        "paramValues": [7.0],
+                        "graph": {
+                            "presetMetadata": {
+                                "params": [ { "id": "own_graph_order" } ]
+                            }
+                        }
+                    } }
+                ]
+            }
+        });
+        migrate(&mut root);
+        let params = &root["timeline"]["layers"][0]["genParams"]["params"];
+        assert_eq!(params["own_graph_order"]["value"].as_f64(), Some(7.0));
+        assert!(params.get("wrong_slot_order").is_none());
     }
 }
