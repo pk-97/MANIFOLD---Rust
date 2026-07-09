@@ -159,6 +159,7 @@ struct KickRidges {
     peaks: Vec<u16>,          // pre-allocated peak-pick scratch, capacity = low_bin
 }
 struct KickTrack { bins: [u16; WIN], len: u8, gap: u8, fired: bool, birth: u32 }
+// As-built (P2/P5): bins are [f32; KICK_WIN] — sub-bin apex, not u16 (analysis.rs KickTrack).
 ```
 
 Per Low-band hop (the exact logic proven in `hpss_proto.rs::replay_fires_dump`, the ridge
@@ -307,7 +308,11 @@ kicks 8, busymix 7, densemix 8(≥6), riser **0**, growl 0.
 3. Multi-ridge, not global apex (D2). v0's apex approach is dead.
 4. Masked-novelty is replaced, not kept alongside (D4).
 5. The kick tracker is a new struct, not the pitch `RidgeTracker` (D6).
-6. Config constants are D5's; the P2 gate is exact-match against `--family ridge-final`.
+6. ~~Config constants are D5's; the P2 gate is exact-match against `--family ridge-final`.~~
+   **Superseded by P5 (2026-07-07):** shipped constants are `drop_bins=10, win=6,
+   KICK_ABS_FLOOR=0.005` (analysis.rs `KICK_*` consts); the current exact-match reference is
+   `--family ridge-one --drop 10 --win 6 --absfloor 0.005 --ridge-only`. D5's d14/w10 remains
+   only as the historical P2-gate record.
 7. ~~No serialized state, no per-send toggle — always-on parity with masked-novelty.~~
    **Superseded by P4:** Kick is now a first-class selectable `AudioFeatureKind` (ridge-only),
    separate from `Transients` (plain flux). No fallback inside either detector (Peter: fallbacks
