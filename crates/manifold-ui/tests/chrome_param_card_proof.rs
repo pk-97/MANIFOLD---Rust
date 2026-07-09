@@ -17,9 +17,9 @@
 
 use manifold_ui::chrome::{validate, Align, ChromeHost, Pad, Reconcile, Sizing, View};
 use manifold_ui::intent::{Gesture, IntentRegistry};
-use manifold_ui::node::{Color32, FontWeight, Rect, UINodeType, Vec2};
+use manifold_ui::node::{Color32, FontWeight, Rect, UIFlags, UINodeType, Vec2};
 use manifold_ui::text::TextMeasure;
-use manifold_ui::tree::UITree;
+use manifold_ui::tree::{UITree, ZTier};
 use manifold_ui::{GraphParamTarget, PanelAction};
 use manifold_foundation::ParamId;
 
@@ -164,7 +164,16 @@ impl ProofCard {
 
     fn build(&mut self, tree: &mut UITree, rect: Rect) {
         let v = self.view();
+        // D4: the host mints a root-parented card subtree, so build it inside a
+        // region bracket (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D4). The region
+        // container is minted directly on the tree — NOT through the host — so
+        // `host.node_id`/`node_count` and the DFS indices these tests assert on
+        // are unaffected (the host bases off `tree.count()` at build start). The
+        // region rect == the card rect, so the clip is a no-op.
+        let region = tree.begin_region(rect, ZTier::Base, "proof_card", UIFlags::empty());
+        let start = tree.count();
         self.host.build(tree, &v, rect);
+        tree.end_region(region, start);
     }
 
     fn update(&mut self, tree: &mut UITree, rect: Rect) -> Reconcile {

@@ -120,7 +120,7 @@ fn footer_demo() {
     use manifold_ui::layout::ScreenLayout;
     use manifold_ui::panels::Panel;
     use manifold_ui::panels::footer::FooterPanel;
-    use manifold_ui::UITree;
+    use manifold_ui::{Rect, UIFlags, UITree, ZTier};
 
     let device = GpuDevice::new();
     let mut ui = UIRenderer::new(&device, FORMAT);
@@ -132,7 +132,19 @@ fn footer_demo() {
     footer.set_selection_info("Layers: 5   |   Clips: 5");
     let layout = ScreenLayout::new(W as f32, H as f32);
     let mut tree = UITree::new();
+    // D4: root-parented panel nodes must be built inside a region bracket
+    // (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D4). Full-canvas rect so the
+    // region clip is a no-op — the same "clip never crops" idiom the
+    // split-handles region and the ui-snapshot single-region wrap use.
+    let region = tree.begin_region(
+        Rect::new(0.0, 0.0, W as f32, H as f32),
+        ZTier::Chrome,
+        "footer",
+        UIFlags::empty(),
+    );
+    let start = tree.count();
     footer.build(&mut tree, &layout);
+    tree.end_region(region, start);
 
     ui.begin_frame();
     ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_0);
@@ -160,7 +172,7 @@ fn transport_demo() {
     use manifold_ui::layout::ScreenLayout;
     use manifold_ui::panels::Panel;
     use manifold_ui::panels::transport::TransportPanel;
-    use manifold_ui::UITree;
+    use manifold_ui::{Rect, UIFlags, UITree, ZTier};
 
     let device = GpuDevice::new();
     let mut ui = UIRenderer::new(&device, FORMAT);
@@ -174,7 +186,16 @@ fn transport_demo() {
     // is unnecessary — just render the left+center which fit in W.
     let layout = ScreenLayout::new(1920.0, H as f32);
     let mut tree = UITree::new();
+    // D4: build under a region (see footer_demo). Full-canvas rect → no-op clip.
+    let region = tree.begin_region(
+        Rect::new(0.0, 0.0, 1920.0, H as f32),
+        ZTier::Chrome,
+        "transport",
+        UIFlags::empty(),
+    );
+    let start = tree.count();
     transport.build(&mut tree, &layout);
+    tree.end_region(region, start);
 
     ui.begin_frame();
     ui.draw_rect(0.0, 0.0, 1920.0, H as f32, color::BG_0);
@@ -201,7 +222,7 @@ fn header_demo() {
     use manifold_ui::layout::ScreenLayout;
     use manifold_ui::panels::Panel;
     use manifold_ui::panels::header::HeaderPanel;
-    use manifold_ui::UITree;
+    use manifold_ui::{Rect, UIFlags, UITree, ZTier};
 
     let device = GpuDevice::new();
     let mut ui = UIRenderer::new(&device, FORMAT);
@@ -212,7 +233,16 @@ fn header_demo() {
     let mut header = HeaderPanel::new();
     let layout = ScreenLayout::new(1920.0, H as f32);
     let mut tree = UITree::new();
+    // D4: build under a region (see footer_demo). Full-canvas rect → no-op clip.
+    let region = tree.begin_region(
+        Rect::new(0.0, 0.0, 1920.0, H as f32),
+        ZTier::Chrome,
+        "header",
+        UIFlags::empty(),
+    );
+    let start = tree.count();
     header.build(&mut tree, &layout);
+    tree.end_region(region, start);
 
     ui.begin_frame();
     ui.draw_rect(0.0, 0.0, 1920.0, H as f32, color::BG_0);
@@ -424,7 +454,7 @@ fn browser_popup_demo() {
     };
     use manifold_ui::panels::picker_core::PickerItem;
     use manifold_ui::panels::InspectorTab;
-    use manifold_ui::UITree;
+    use manifold_ui::{Rect, UIFlags, UITree, ZTier};
 
     let device = GpuDevice::new();
     let mut ui = UIRenderer::new(&device, FORMAT);
@@ -464,7 +494,18 @@ fn browser_popup_demo() {
     });
 
     let mut tree = UITree::new();
+    // D4: the popup mints root-parented nodes; build them inside a region
+    // bracket (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D4). Overlay tier matches
+    // the modal's real stacking; full-canvas rect → no-op clip.
+    let region = tree.begin_region(
+        Rect::new(0.0, 0.0, W as f32, H as f32),
+        ZTier::Overlay,
+        "browser_popup",
+        UIFlags::empty(),
+    );
+    let start = tree.count();
     popup.build(&mut tree);
+    tree.end_region(region, start);
 
     ui.begin_frame();
     // A lighter fill so the dark modal + its 1px border stand out (the popup's
@@ -500,7 +541,7 @@ fn browser_popup_thumbnails_paint() {
     };
     use manifold_ui::panels::picker_core::PickerItem;
     use manifold_ui::panels::InspectorTab;
-    use manifold_ui::UITree;
+    use manifold_ui::{Rect, UIFlags, UITree, ZTier};
 
     let device = GpuDevice::new();
     let mut ui = UIRenderer::new(&device, FORMAT);
@@ -547,7 +588,17 @@ fn browser_popup_thumbnails_paint() {
     });
 
     let mut tree = UITree::new();
+    // D4: build the popup's root-parented nodes inside a region bracket
+    // (see browser_popup_demo). Overlay tier; full-canvas rect → no-op clip.
+    let region = tree.begin_region(
+        Rect::new(0.0, 0.0, W as f32, H as f32),
+        ZTier::Overlay,
+        "browser_popup",
+        UIFlags::empty(),
+    );
+    let start = tree.count();
     popup.build(&mut tree);
+    tree.end_region(region, start);
 
     ui.begin_frame();
     ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_3);
@@ -1242,7 +1293,7 @@ fn modulation_drawer_sheet() {
     use manifold_ui::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
     use manifold_ui::panels::PanelAction;
     use manifold_ui::slider::{BitmapSlider, SliderColors};
-    use manifold_ui::UITree;
+    use manifold_ui::{UIFlags, UITree, ZTier};
 
     // Headless swatch render: sliders never receive a right-click, so any valid
     // reset action serves as a placeholder for the now-required field/param.
@@ -1379,7 +1430,17 @@ fn modulation_drawer_sheet() {
         y += card_h + 18.0;
     }
 
-    // Now the slider + drawer nodes on top of each card.
+    // Now the slider + drawer nodes on top of each card. D4: these mint
+    // root-parented nodes, so build them inside a region bracket
+    // (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D4). Full-canvas rect → no-op
+    // clip; the immediate-mode cards above stay behind (drawn pre-render_tree).
+    let region = tree.begin_region(
+        Rect::new(0.0, 0.0, W as f32, H as f32),
+        ZTier::Base,
+        "mod_drawer_sheet",
+        UIFlags::empty(),
+    );
+    let region_start = tree.count();
     for (card_top, _card_h, spec) in placed {
         let _ = BitmapSlider::build(
             &mut tree,
@@ -1403,6 +1464,7 @@ fn modulation_drawer_sheet() {
             spec,
         );
     }
+    tree.end_region(region, region_start);
 
     ui.render_tree(&tree, None);
     let drew = ui.prepare(&device, W, H, 1.0);
