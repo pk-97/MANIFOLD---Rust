@@ -56,6 +56,7 @@ your first: `GIG_RESILIENCE_DESIGN.md` (failure-audit shape),
 ## 1. Audit — what exists (verified <date>)
 ## 2. Decisions            (D-numbered, rationale, rejected alternatives)
 ## 3..n Design body        (data model, seams, architecture — committed, not sketched)
+## §. Invariants & enforcement   (each invariant + the machine check that fails when it breaks)
 ## §. Phasing              (one brief per phase, per §5)
 ## §. Decided — do not reopen   (numbered, terse)
 ## §. Deferred             (explicitly not v1, with the trigger that would revive each)
@@ -84,6 +85,17 @@ Section-by-section requirements:
 - **Design body** — committed signatures for load-bearing types (§4), seams specified
   precisely, interiors left free. Honest-cost paragraphs where a decision has real
   downsides ("Consequences, stated honestly:" — see MULTI_DISPLAY §6.1).
+- **Invariants & enforcement (added 2026-07-09, from the structural audit)** — every
+  invariant the design introduces or leans on, each paired with its enforcement: the
+  named machine check that fails when the invariant is violated — a test by name, a
+  negative `rg` gate, a compile-time shape (newtype, exhaustive match), a hook, or a
+  `debug_assert!` on the governed path. A map doc, memory file, or CLAUDE.md rule is
+  prose, not enforcement. `Enforcement: none — <reason>` is permitted but is an
+  honest-cost line the reviewer may challenge, never a default. Evidence for the
+  requirement (docs/STRUCTURAL_AUDIT_VERDICTS.md, 2026-07-09): 31 of 82 backlog bugs
+  were violations of invariants that existed in prose only, and the corpus's own
+  cleanest datapoint — the one duplication path with a regression test never
+  regressed; every path without one did.
 - **Decided — do not reopen** — the terse numbered recap of every settled question.
   This is the section an executor re-reads mid-task; keep it scannable.
 - **Deferred** — everything consciously excluded, each with what would revive it.
@@ -241,6 +253,11 @@ brief is not executable — that's the definition.
   silently dropping unresolvable data on a load path · landing a wave with a red test
   it caused (a red test is either fixed before landing or gets a BUG entry + explicit
   Peter ping — "another session owns it" is not a landing state).
+- **Invariant enforcement deliverable (added 2026-07-09, from the structural audit).**
+  A phase that introduces a new invariant, or first builds on one named in the doc's
+  Invariants & enforcement section, lists that invariant's machine check among its
+  deliverables by name. The invariant is not landed while its check doesn't exist —
+  the class fix IS the check.
 - **Test scope** — which tier per the CLAUDE.md scope rule (focused vs full workspace
   sweep), stated per phase so the executor doesn't decide. Calibrate it to the failure
   class the phase can actually produce (an id rename can't change pixels → no parity
