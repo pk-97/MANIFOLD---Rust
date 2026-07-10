@@ -432,6 +432,19 @@ impl PlaybackEngine {
     pub fn compositor_dirty_deadline(&self) -> f64 {
         self.compositor_dirty_deadline
     }
+    /// The engine's real wall clock, as of the most recent `tick()` (or
+    /// `set_clock()` for pre-first-tick callers) — the epoch every
+    /// clip-lifecycle timing gate (`recently_started_times`, pending-pause,
+    /// `compositor_dirty_deadline`) is anchored on. See F4 (CORE_ENGINE_MAP.md §5).
+    pub fn last_realtime_now(&self) -> f64 {
+        self.last_realtime_now
+    }
+    /// The realtime clock value `recently_started_times` was last stamped
+    /// with for a given clip, if it has one. `None` once the compositor's
+    /// gate has cleared the entry (`filter_ready_clips`'s retain).
+    pub fn recently_started_time(&self, clip_id: &str) -> Option<f64> {
+        self.recently_started_times.get(clip_id).copied()
+    }
 
     // ─── Renderer access ───
 
@@ -1313,7 +1326,21 @@ impl PlaybackEngine {
             self.stop_clip(clip_id);
         }
 
-        // Use realtime 0.0 as fallback since this is called outside tick context.
+        // F4: `start_clip` below is stamped with `self.last_realtime_now`, not
+        // a zero epoch. `sync_clips_to_time` is called from outside `tick()`
+        // (play/seek/session commands), but `last_realtime_now` is still the
+        // real wall clock — `tick()` stamps it unconditionally every frame
+        // regardless of playback state (engine.rs `last_realtime_now =
+        // ctx.realtime_now.0`), and `set_clock` covers pre-first-tick callers.
+        // A `Seconds::ZERO` epoch here would silently defeat three downstream
+        // gates fed by `start_clip`'s `realtime_now` parameter: the
+        // compositor-exclusion window (`recently_started_times`,
+        // `should_exclude_recently_started`), the pending-pause deadline, and
+        // `mark_compositor_dirty`'s own deadline — all three compare against
+        // `last_realtime_now`, so a 0.0 stamp is already "expired" the moment
+        // the engine has been running longer than the gate window. Matches
+        // `check_preparing_clips`'s video re-anchor and the seek path's
+        // `compositor_dirty_deadline` (both anchor on `last_realtime_now`).
         // Resolve full TimelineClip from project (timeline) or live_clip_manager.
         // Swap scratch in to break borrow — capacity preserved across frames.
         let mut starts = std::mem::take(&mut self.sync_start_scratch);
@@ -1350,15 +1377,19 @@ impl PlaybackEngine {
                     .cloned()
             };
             if let Some(ref clip) = clip {
-                self.start_clip(clip, Seconds::ZERO, entry.layer_index);
+                self.start_clip(clip, Seconds(self.last_realtime_now), entry.layer_index);
             }
         }
         self.sync_start_scratch = starts;
 
         if !sync_result.to_stop.is_empty() {
+            // F4: anchor on `last_realtime_now`, mirroring the seek path
+            // (`seek_to`'s `compositor_dirty_deadline` update) — never a zero
+            // epoch, which is already in the past the instant the engine has
+            // been running longer than `COMPOSITOR_DIRTY_TIME`.
             self.compositor_dirty_deadline = self
                 .compositor_dirty_deadline
-                .max(0.0 + COMPOSITOR_DIRTY_TIME as f64);
+                .max(self.last_realtime_now + COMPOSITOR_DIRTY_TIME as f64);
         }
 
         // Reclaim buffers for reuse on the next sync call (zero allocation).

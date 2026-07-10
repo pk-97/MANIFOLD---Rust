@@ -157,6 +157,7 @@ impl ClipLauncher {
             in_point,
             beat_stamp,
             event_absolute_tick,
+            true, // MIDI note launch — F2 launch-quantize applies
             realtime_now,
             midi_note,
         );
@@ -376,6 +377,7 @@ impl ClipLauncher {
                 generator_duration,
                 beat_stamp,
                 event_absolute_tick,
+                true, // MIDI note launch — F2 launch-quantize applies
                 realtime_now,
                 midi_note,
             );
@@ -477,6 +479,7 @@ impl ClipLauncher {
             in_point,
             beat_stamp,
             event_absolute_tick,
+            true, // MIDI note launch — F2 launch-quantize applies
             realtime_now,
             midi_note,
         );

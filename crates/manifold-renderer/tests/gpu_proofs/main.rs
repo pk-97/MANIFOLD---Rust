@@ -22,4 +22,5 @@ mod harness;
 
 mod alpha_contract;
 mod fragment_storage;
+mod render_scene_lights;
 mod smoke;
