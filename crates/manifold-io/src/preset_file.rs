@@ -104,6 +104,7 @@ mod tests {
                     invert: false,
                     is_angle: false,
                     is_trigger_gate: false,
+                    section: None,
                 }],
                 bindings: vec![BindingDef {
                     id: "speed".to_string(),

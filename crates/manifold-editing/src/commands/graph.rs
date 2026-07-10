@@ -2230,6 +2230,7 @@ mod tests {
             invert: false,
             is_angle: false,
             is_trigger_gate: false,
+            section: None,
         });
         p.value = value;
         p.base = value;
@@ -2763,6 +2764,7 @@ mod tests {
                 invert: false,
                 is_angle: false,
                 is_trigger_gate: false,
+                section: None,
             }],
             bindings: vec![BindingDef {
                 id: "amount".into(),
@@ -3412,6 +3414,7 @@ mod tests {
                         invert: false,
                         is_angle: false,
                         is_trigger_gate: false,
+                        section: None,
                     },
                     ParamSpecDef {
                         id: "scale".into(),
@@ -3429,6 +3432,7 @@ mod tests {
                         is_angle: false,
                         invert: false,
                         is_trigger_gate: false,
+                        section: None,
                     },
                 ],
                 bindings: vec![
@@ -3672,6 +3676,7 @@ mod tests {
                         invert: false,
                         is_angle: false,
                         is_trigger_gate: false,
+                        section: None,
                     },
                     ParamSpecDef {
                         id: "user.render.animate.1".into(),
@@ -3689,6 +3694,7 @@ mod tests {
                         invert: false,
                         is_angle: false,
                         is_trigger_gate: false,
+                        section: None,
                     },
                 ],
                 bindings: vec![
@@ -4117,6 +4123,7 @@ mod tests {
                     invert: false,
                     is_angle: false,
                     is_trigger_gate: false,
+                    section: None,
                 }],
                 bindings: vec![BindingDef {
                     id: "pattern".into(),
