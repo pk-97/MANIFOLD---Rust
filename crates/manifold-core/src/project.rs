@@ -1409,6 +1409,41 @@ impl Project {
         out
     }
 
+    /// Consumers for the Audio Setup panel's Consumers section that are
+    /// layer-owned `LayerClipTrigger` configs (P3, D2) rather than
+    /// `PresetInstance` audio mods — the walk `audio_mod_consumers` above
+    /// can't reach, since a clip trigger has no `param_id`/effect to name.
+    /// Mirrors that method's shape: `(owning layer, display label)`, enabled
+    /// configs sourcing `send_id` only. Label style matches the deleted
+    /// Triggers matrix's rows ("Low → LayerName") for the common Transients
+    /// case; other features spell out the detector ("Centroid Full → Name").
+    pub fn clip_trigger_consumers(
+        &self,
+        send_id: &crate::id::AudioSendId,
+    ) -> Vec<(Option<crate::id::LayerId>, String)> {
+        let mut out = Vec::new();
+        for layer in &self.timeline.layers {
+            for cfg in &layer.clip_triggers {
+                if !cfg.enabled || &cfg.source.send_id != send_id {
+                    continue;
+                }
+                let feature = cfg.source.feature;
+                let feature_label = match feature.kind {
+                    crate::audio_mod::AudioFeatureKind::Transients => {
+                        feature.band.label().to_string()
+                    }
+                    crate::audio_mod::AudioFeatureKind::Kick => "Kick".to_string(),
+                    kind => format!("{} {}", kind.label(), feature.band.label()),
+                };
+                out.push((
+                    Some(layer.layer_id.clone()),
+                    format!("{feature_label} \u{2192} {}", layer.name),
+                ));
+            }
+        }
+        out
+    }
+
     /// Run `f` against the [`crate::effects::PresetInstance`] that a
     /// [`crate::graph_target::GraphTarget`] resolves to, returning its
     /// result (`None` if the target doesn't resolve). The one entry point
@@ -2658,5 +2693,67 @@ mod tests {
         assert_eq!(b_consumers.len(), 1);
         assert_eq!(b_consumers[0].0, None, "master-effects mod has no owning layer");
         assert!(b_consumers[0].1.starts_with("Master \u{2022} "));
+    }
+
+    // ─── clip_trigger_consumers (P3, AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN D2) ───
+
+    #[test]
+    fn clip_trigger_consumers_resolves_layer_and_band_label() {
+        use crate::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, AudioModSource};
+        use crate::audio_trigger::LayerClipTrigger;
+
+        let mut p = Project::default();
+        let send_a = send_with_id("Kick", "send-a");
+        p.audio_setup.sends.push(send_a.clone());
+
+        let mut layer = crate::layer::Layer::new("STROBE".into(), crate::types::LayerType::Video, 0);
+        layer.layer_id = crate::LayerId::new("strobe-layer");
+        let mut cfg = LayerClipTrigger::new(AudioModSource {
+            send_id: send_a.id.clone(),
+            feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Low),
+        });
+        cfg.enabled = true;
+        layer.clip_triggers.push(cfg);
+        p.timeline.layers.push(layer);
+
+        let consumers = p.clip_trigger_consumers(&send_a.id);
+        assert_eq!(consumers.len(), 1);
+        assert_eq!(consumers[0].0, Some(crate::LayerId::new("strobe-layer")));
+        assert_eq!(consumers[0].1, "Low \u{2192} STROBE", "Transients formats as the bare band label");
+    }
+
+    #[test]
+    fn clip_trigger_consumers_excludes_disabled_configs_and_other_sends() {
+        use crate::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, AudioModSource};
+        use crate::audio_trigger::LayerClipTrigger;
+
+        let mut p = Project::default();
+        let send_a = send_with_id("A", "send-a");
+        let send_b = send_with_id("B", "send-b");
+        p.audio_setup.sends.push(send_a.clone());
+        p.audio_setup.sends.push(send_b.clone());
+
+        let mut layer = crate::layer::Layer::new("L".into(), crate::types::LayerType::Video, 0);
+        layer.layer_id = crate::LayerId::new("l1");
+        // Disabled — excluded even though it sources send_a.
+        let mut disabled = LayerClipTrigger::new(AudioModSource {
+            send_id: send_a.id.clone(),
+            feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+        });
+        disabled.enabled = false;
+        layer.clip_triggers.push(disabled);
+        // Enabled but sources send_b — excluded from send_a's consumers.
+        let mut other_send = LayerClipTrigger::new(AudioModSource {
+            send_id: send_b.id.clone(),
+            feature: AudioFeature::new(AudioFeatureKind::Centroid, AudioBand::Full),
+        });
+        other_send.enabled = true;
+        layer.clip_triggers.push(other_send);
+        p.timeline.layers.push(layer);
+
+        assert!(p.clip_trigger_consumers(&send_a.id).is_empty(), "disabled config excluded");
+        let b_consumers = p.clip_trigger_consumers(&send_b.id);
+        assert_eq!(b_consumers.len(), 1);
+        assert_eq!(b_consumers[0].1, "Centroid Full \u{2192} L", "non-Transients spells out the detector");
     }
 }

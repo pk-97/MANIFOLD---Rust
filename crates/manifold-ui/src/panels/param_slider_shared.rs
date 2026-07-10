@@ -162,6 +162,29 @@ pub(crate) fn audio_wrap_labels() -> [&'static str; AUDIO_WRAP_COUNT] {
     ["Wrap", "Bounce", "Clamp"]
 }
 
+/// Length-row musical divisions (beats), for a clip trigger's `one_shot_beats`
+/// (P3, D4). Same musical range the deleted Triggers matrix's stepper covered
+/// (0.25..16 beats) collapsed to a fixed button row instead of a −/＋ stepper
+/// — the drawer's other rows are all fixed button sets, not steppers.
+pub(crate) const LENGTH_OPTIONS: [f32; 6] = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0];
+
+/// Length-row button labels, "1b"-style, index-parallel to [`LENGTH_OPTIONS`].
+pub(crate) fn length_labels() -> [String; 6] {
+    LENGTH_OPTIONS.map(format_beats)
+}
+
+/// Nearest [`LENGTH_OPTIONS`] index to a `one_shot_beats` value — used both to
+/// highlight the current selection and (by the clip-trigger caller) to snap a
+/// legacy-migrated value that doesn't land exactly on an option.
+pub(crate) fn length_option_index(beats: f32) -> usize {
+    LENGTH_OPTIONS
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| (**a - beats).abs().total_cmp(&(**b - beats).abs()))
+        .map(|(i, _)| i)
+        .unwrap_or(2) // default 1b
+}
+
 /// Mirrors `manifold_core::audio_mod::default_step_amount` — D2's UI-seeding
 /// default for a freshly-armed Step action: 1.0 for a discrete param
 /// (whole_numbers/value_labels — one card-step per fire), or an eighth of the
@@ -1515,6 +1538,24 @@ pub(crate) struct ToggleParamIds {
     pub(crate) button_id: NodeId,
 }
 
+/// Format a one-shot length (beats) compactly for a drawer's Length row.
+/// Common musical divisions read as fractions; whole beats get a "b" suffix.
+/// Moved from `audio_setup_panel.rs` (the deleted Triggers matrix's stepper
+/// label) so `build_audio_mod_drawer`'s new Length row (P3, D4/D5) can reuse
+/// the exact "1b"-style formatting instead of re-deriving it.
+pub(crate) fn format_beats(b: f32) -> String {
+    let near = |v: f32| (b - v).abs() < 0.01;
+    if near(0.25) {
+        "1/4".to_string()
+    } else if near(0.5) {
+        "1/2".to_string()
+    } else if b.fract().abs() < 0.01 {
+        format!("{}b", b.round() as i32)
+    } else {
+        format!("{b:.2}")
+    }
+}
+
 /// Build the per-param audio-modulation config drawer (Source/Feature/Band/
 /// Inv-Delta toggles + Amount/Attack/Release shaping sliders, plus an optional
 /// trailing Mode row). Shared by `build_param_row`'s Audio mod-tab branch
@@ -1534,6 +1575,16 @@ pub(crate) struct ToggleParamIds {
 /// here from `mod_state`/`info` rather than threaded in by the caller, so
 /// both call sites (`build_toggle_trigger_row`, `build_param_row`) just pass
 /// `info` and let this function derive which extra rows apply.
+///
+/// `length_beats` (P3, D4/D5) is the ONE genuinely-parameterized addition: a
+/// trailing Length row (`one_shot_beats`, "1b"-style stepper labels) appends
+/// when `Some`. Unlike Mode, Length isn't derivable from `info`/`mod_state`
+/// (a `LayerClipTrigger` has no `ParamInfo`/`ParamModState` backing at all —
+/// P3's layer-side caller synthesizes both, `is_trigger: true` so Action/Wrap/
+/// Mode all correctly suppress via the existing `show_action`/`show_mode`
+/// logic above) — it carries the config's actual `one_shot_beats` value, so
+/// the row can show which length is currently selected. `None` (both existing
+/// callers) omits the row entirely — behavior unchanged.
 #[allow(clippy::too_many_arguments)]
 fn build_audio_mod_drawer(
     tree: &mut UITree,
@@ -1546,6 +1597,7 @@ fn build_audio_mod_drawer(
     config_font: u16,
     info: &ParamInfo,
     target: GraphParamTarget,
+    length_beats: Option<f32>,
 ) -> (crate::panels::drawer::DrawerIds, usize) {
     use crate::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
     let pid = info.param_id.clone();
@@ -1723,6 +1775,25 @@ fn build_audio_mod_drawer(
             buttons: mode_buttons,
             width: ButtonWidth::Uniform,
             label: Some("Mode".into()),
+        });
+    }
+    // P3 D4/D5: the trailing Length row — clip triggers only (`Some`), never
+    // param/gate cards (`None`, unchanged). Appended last so its flat button
+    // index is easy for the clip-trigger caller to derive: total buttons
+    // across every row above (Source/Feature/Band/Inv-Delta; never Action/
+    // Wrap/Mode since the clip-trigger caller's synthesized `info.is_trigger`
+    // is true, suppressing `show_action`/`show_mode` above).
+    if let Some(beats) = length_beats {
+        let length_sel = length_option_index(beats);
+        let length_buttons: Vec<DrawerButton> = length_labels()
+            .into_iter()
+            .enumerate()
+            .map(|(k, l)| DrawerButton::new(l, k == length_sel))
+            .collect();
+        rows.push(DrawerRow::Buttons {
+            buttons: length_buttons,
+            width: ButtonWidth::Uniform,
+            label: Some("Length".into()),
         });
     }
     let spec = DrawerSpec {
@@ -1916,6 +1987,7 @@ pub(crate) fn build_toggle_trigger_row(
                 config_font,
                 info,
                 target,
+                None, // no Length row — this caller is a param/gate card, not a clip trigger
             );
             if animate_drawer {
                 cy = drawer_top + drawer_reveal.unwrap_or(0.0).max(0.0);
@@ -2379,6 +2451,7 @@ pub(crate) fn build_param_row(
     if shown_tab == Some(ModTab::Audio) {
         let (dids, send_count) = build_audio_mod_drawer(
             tree, drawer_parent, drawer_x, cy, drawer_w, mod_state, i, config_font, info, target,
+            None, // no Length row — this caller is a param/gate card, not a clip trigger
         );
         cy += dids.height;
         ids.audio_config = Some((dids, send_count));
@@ -2602,4 +2675,52 @@ pub(crate) fn match_param_row_click(
     }
 
     None
+}
+
+#[cfg(test)]
+mod length_row_tests {
+    use super::*;
+
+    // P3 D4/D5: the drawer's new Length row — `format_beats` (moved from the
+    // deleted Triggers matrix), `length_labels`, and `length_option_index`.
+    // These are the pure functions `build_audio_mod_drawer`'s Length row
+    // (`length_beats: Option<f32>`) is built from; a UITree-level test of the
+    // drawer itself would need to replicate `param_card.rs`'s fixture
+    // scaffolding, so correctness of the row's actual content is proven here
+    // at the value level, matching this crate's usual split (pure logic
+    // tested directly, layout proven by the headless PNG demo).
+
+    #[test]
+    fn format_beats_matches_musical_divisions() {
+        assert_eq!(format_beats(0.25), "1/4");
+        assert_eq!(format_beats(0.5), "1/2");
+        assert_eq!(format_beats(1.0), "1b");
+        assert_eq!(format_beats(2.0), "2b");
+        assert_eq!(format_beats(4.0), "4b");
+        assert_eq!(format_beats(8.0), "8b");
+    }
+
+    #[test]
+    fn length_labels_are_format_beats_of_length_options() {
+        let labels = length_labels();
+        for (label, beats) in labels.iter().zip(LENGTH_OPTIONS.iter()) {
+            assert_eq!(label, &format_beats(*beats));
+        }
+    }
+
+    #[test]
+    fn length_option_index_snaps_to_nearest() {
+        // Exact hits.
+        assert_eq!(length_option_index(0.25), 0);
+        assert_eq!(length_option_index(1.0), 2);
+        assert_eq!(length_option_index(8.0), 5);
+        // A legacy-migrated value that doesn't land exactly on an option
+        // (BUG-079's sensitivity→Amount U5 mapping is the same "not exact,
+        // snap" shape) snaps to the closer neighbor.
+        assert_eq!(length_option_index(0.9), 2, "0.9 nearer to 1.0 than 0.5");
+        assert_eq!(length_option_index(0.6), 1, "0.6 nearer to 0.5 than 1.0");
+        assert_eq!(length_option_index(0.4), 1, "0.4 nearer to 0.5 than 0.25");
+        assert_eq!(length_option_index(100.0), 5, "clamps to the largest option");
+        assert_eq!(length_option_index(0.0), 0, "clamps to the smallest option");
+    }
 }

@@ -9,7 +9,6 @@
 
 use crate::command::Command;
 use manifold_core::audio_setup::{AudioDeviceRef, AudioSend, SendAnalysisConfig};
-use manifold_core::audio_trigger::TriggerRoute;
 use manifold_core::id::{AudioSendId, LayerId};
 use manifold_core::project::Project;
 
@@ -304,41 +303,10 @@ impl Command for SetAudioSendAnalysisCommand {
     }
 }
 
-/// Set a send's live audio → visual trigger routes. Captures the whole route
-/// vector (not a single route) so adding, removing, re-pointing, or tuning a
-/// route is one undo step regardless of which field the UI touched. Applied
-/// live by the trigger evaluator without restarting capture — like gain and
-/// analysis, the routes act at evaluation time.
-#[derive(Debug)]
-pub struct SetAudioSendTriggersCommand {
-    id: AudioSendId,
-    old: Vec<TriggerRoute>,
-    new: Vec<TriggerRoute>,
-}
-
-impl SetAudioSendTriggersCommand {
-    pub fn new(id: AudioSendId, old: Vec<TriggerRoute>, new: Vec<TriggerRoute>) -> Self {
-        Self { id, old, new }
-    }
-}
-
-impl Command for SetAudioSendTriggersCommand {
-    fn execute(&mut self, project: &mut Project) {
-        if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
-            s.triggers = self.new.clone();
-        }
-    }
-
-    fn undo(&mut self, project: &mut Project) {
-        if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
-            s.triggers = self.old.clone();
-        }
-    }
-
-    fn description(&self) -> &str {
-        "Set Audio Send Triggers"
-    }
-}
+// The send-owned Triggers matrix's whole-vec editing command is deleted
+// (P3, D2): `AudioSend.triggers` is deserialize-only legacy now (P2), never
+// written. Clip triggers are authored on the layer only, through
+// `Add/Remove/SetLayerClipTriggerCommand` (`commands/layer.rs`).
 
 /// Route an audio **layer** to feed a send (or to feed none). A layer feeds at
 /// most one send, so this moves the layer off whatever send it fed before —
@@ -492,24 +460,10 @@ mod tests {
     }
 
 
-    #[test]
-    fn triggers_round_trip() {
-        use manifold_core::audio_mod::AudioBand;
-        let mut project = Project::default();
-        let send = AudioSend::new("Kick");
-        let id = send.id.clone();
-        project.audio_setup.sends.push(send);
-        assert!(project.audio_setup.find_send(&id).unwrap().triggers.is_empty());
-
-        let mut route = TriggerRoute::new(AudioBand::Full);
-        route.enabled = true;
-        let mut cmd = SetAudioSendTriggersCommand::new(id.clone(), Vec::new(), vec![route]);
-        cmd.execute(&mut project);
-        assert_eq!(project.audio_setup.find_send(&id).unwrap().triggers.len(), 1);
-        assert!(project.audio_setup.find_send(&id).unwrap().has_active_triggers());
-        cmd.undo(&mut project);
-        assert!(project.audio_setup.find_send(&id).unwrap().triggers.is_empty());
-    }
+    // `triggers_round_trip` (the deleted matrix-editing command's test) is
+    // deleted with the command (P3, D2). Clip-trigger round-trip coverage
+    // lives in `manifold-editing::commands::layer` (P2) and
+    // `manifold-io`/`manifold-playback`'s migration + evaluator tests.
 
     #[test]
     fn rename_round_trips() {

@@ -17,7 +17,7 @@
 //! gain trim. Per-send labels are auto-assigned ("Audio N") until a text-field
 //! rename lands; multi-channel downmix and the v2 analysis toggles are future.
 
-use crate::types::{AudioBand, AudioDeviceRef};
+use crate::types::AudioDeviceRef;
 use manifold_foundation::{AudioSendId, LayerId};
 
 use crate::chrome::{ChromeHost, Pad, Sizing, View};
@@ -74,24 +74,9 @@ const fn send_row_key(i: usize, offset: u64) -> u64 {
     KEY_SEND_ROW_BASE + (i as u64) * KEY_SEND_ROW_STRIDE + offset
 }
 
-/// Per-send trigger config-row controls (fixed 4 rows — Whole/Low/Mid/High
-/// in `TRIG_BANDS` order, for the currently selected send): enable,
-/// sens_minus, sens_plus, len_minus, len_plus, layer — 6 controls, stride
-/// 20 leaves headroom.
-const KEY_CONFIG_ROW_BASE: u64 = 72_000;
-const KEY_CONFIG_ROW_STRIDE: u64 = 20;
-const CFG_OFF_ENABLE: u64 = 0;
-const CFG_OFF_SENS_MINUS: u64 = 1;
-const CFG_OFF_SENS_PLUS: u64 = 2;
-const CFG_OFF_LEN_MINUS: u64 = 3;
-const CFG_OFF_LEN_PLUS: u64 = 4;
-const CFG_OFF_LAYER: u64 = 5;
-
-/// Stable key for a per-band trigger config-row control at index `i` with
-/// the given control offset (`CFG_OFF_*`).
-const fn config_row_key(i: usize, offset: u64) -> u64 {
-    KEY_CONFIG_ROW_BASE + (i as u64) * KEY_CONFIG_ROW_STRIDE + offset
-}
+// The Audio Setup Triggers matrix's config-row key block (KEY_CONFIG_ROW_BASE,
+// CFG_OFF_*, config_row_key) is deleted (P3, D2/D5): clip triggers are
+// authored on the layer only. See AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.
 
 /// Inputs section: one remove (×) button per feeding layer of the selected
 /// send, indexed by position in that send's `feeding_layers`.
@@ -149,11 +134,14 @@ pub struct AudioSendRow {
     /// capture device (when channels are assigned) plus one line per feeding
     /// layer. Built by `state_sync`.
     pub routings: Vec<String>,
-    /// Live audio → visual trigger rows for this send, one per band in
-    /// [`AudioBand::ALL`] order (Whole/Low/Mid/High). Always four entries (a
-    /// band with no route reads as a disabled default), so the inspector renders
-    /// a fixed four-row matrix. Built by `state_sync` from the send's routes.
-    pub triggers: Vec<TriggerRouteRow>,
+    // The Audio Setup Triggers matrix field (`triggers: Vec<TriggerRouteRow>`)
+    // is deleted (P3, D2): clip triggers are authored on the layer only
+    // (`LayerClipTrigger`). `consumers` below is the panel's sole surviving
+    // trigger display.
+    /// Whether any enabled `LayerClipTrigger` sources this send — drives the
+    /// send label's amber "active trigger" accent (P3; replaces the matrix's
+    /// per-route `enabled` check). Built by `state_sync`.
+    pub has_clip_triggers: bool,
     /// Audio layers feeding this send (id + name), for the Inputs section's
     /// per-layer remove row. Built by `state_sync` from the send's
     /// `source.layers` — the single source of truth for the layer↔send
@@ -180,23 +168,8 @@ pub struct SendConsumerRow {
     pub layer_id: Option<LayerId>,
 }
 
-/// One band's trigger row in the Audio Setup modal — the display state of a
-/// (potential) audio trigger route (the engine's `TriggerRoute`).
-#[derive(Clone, Debug, Default)]
-pub struct TriggerRouteRow {
-    /// Whether a route exists for this band and is enabled.
-    pub enabled: bool,
-    /// 0..1 sensitivity (the route threshold), shown as a percent on the stepper.
-    pub sensitivity: f32,
-    /// The fire line in transient-impulse space (0..1), derived from
-    /// `sensitivity` by core's `TriggerRoute::threshold()`. The row meter marks
-    /// it so tuning is "does the level cross this line," not a blind percent.
-    pub threshold: f32,
-    /// One-shot length in beats — how long a fired clip holds (flash vs sustain).
-    pub one_shot_beats: f32,
-    /// Resolved target label: "Auto" (route by name) or a layer's name.
-    pub layer_label: String,
-}
+// `TriggerRouteRow` (the Audio Setup Triggers matrix's row display state) is
+// deleted (P3, D2) along with the matrix that built it.
 
 /// Height of the spectrogram scope section (title + waterfall).
 const SCOPE_TITLE_H: f32 = 18.0;
@@ -232,119 +205,21 @@ fn band_color(band: usize) -> Color32 {
 /// L/M/H labels in band order.
 const BAND_METER_LABELS: [&str; 3] = ["L", "M", "H"];
 
-/// Trigger-row band colour, indexed in `TRIG_BANDS` order: Whole (0) is neutral
-/// (it's the whole-signal onset, not a frequency slab), Low/Mid/High reuse the
-/// spectrogram's red/green/blue so the row meters read against the same legend.
-fn trigger_band_color(row: usize) -> Color32 {
-    match row {
-        0 => Color32::new(190, 190, 200, 255), // Whole — neutral
-        n => band_color(n - 1),                 // Low/Mid/High
-    }
-}
+// `trigger_band_color` (the matrix's per-row band colour) and `dim_color`
+// (its resting-meter-fill dimmer) are deleted with the matrix (P3, D2).
+// Per-source-row level meters (D7, deferred to a later phase) will need an
+// equivalent dimmer when built — re-add rather than resurrect this exact fn
+// if the new meter's dimming curve differs.
 
-/// Scale a colour's RGB toward black by `f` (0..1), preserving alpha. Used to dim
-/// a band colour for the resting meter fill so the firing flash reads brighter.
-fn dim_color(c: Color32, f: f32) -> Color32 {
-    Color32::new(
-        (c.r as f32 * f) as u8,
-        (c.g as f32 * f) as u8,
-        (c.b as f32 * f) as u8,
-        c.a,
-    )
-}
-
-/// Trigger section geometry.
+/// Section header row height (Triggers/Inputs/Consumers all shared this before
+/// the matrix's deletion; kept for the two survivors).
 const TRIG_TITLE_H: f32 = 18.0;
-const TRIG_ROW_H: f32 = 22.0;
-/// Row layout widths: source label, sensitivity stepper [−] val [＋].
-const TRIG_LABEL_W: f32 = 52.0;
-const TRIG_ENABLE_W: f32 = 22.0;
-const TRIG_SENS_BTN_W: f32 = 16.0;
-const TRIG_SENS_VAL_W: f32 = 40.0;
-/// One-shot length value width (shows "1/4", "1b", "2b" …).
-const TRIG_LEN_VAL_W: f32 = 34.0;
 
-/// Format a one-shot length (beats) compactly for the row stepper. Common
-/// musical divisions read as fractions; whole beats get a "b" suffix.
-fn format_beats(b: f32) -> String {
-    let near = |v: f32| (b - v).abs() < 0.01;
-    if near(0.25) {
-        "1/4".to_string()
-    } else if near(0.5) {
-        "1/2".to_string()
-    } else if b.fract().abs() < 0.01 {
-        format!("{}b", b.round() as i32)
-    } else {
-        format!("{b:.2}")
-    }
-}
-/// Per-row band, in `AudioBand::ALL` order, with its display label. `Full` reads
-/// as "Whole" — the whole-signal onset for a separated stem.
-const TRIG_BANDS: [(AudioBand, &str); 4] = [
-    (AudioBand::Full, "Whole"),
-    (AudioBand::Low, "Low"),
-    (AudioBand::Mid, "Mid"),
-    (AudioBand::High, "High"),
-];
-
-/// Per-trigger-row interactive node ids (one row per band).
-///
-/// Every id is assigned from an `add_*` call in `build_trigger_section` before
-/// the row is pushed, so the fields always hold real nodes; the `Default` impl's
-/// `NodeId(0)` placeholders (matching `slider.rs`) only ever exist transiently
-/// inside the builder.
-#[derive(Clone)]
-struct TriggerRowIds {
-    enable: NodeId,
-    sens_minus: NodeId,
-    sens_plus: NodeId,
-    /// The sensitivity value label between the steppers — a D7 horizontal
-    /// drag zone (`pointer-down` arms
-    /// [`AudioSetupPanel::sensitivity_drag_target`]).
-    sens_value: NodeId,
-    len_minus: NodeId,
-    len_plus: NodeId,
-    layer: NodeId,
-    // Live level meter (resized in place each frame by `update_trigger_levels`):
-    // a track + a band-coloured fill = the transient level, with a threshold
-    // tick marking the fire line. `flash` is the swatch styled bright on a fire.
-    meter_track: NodeId,
-    meter_fill: NodeId,
-    thresh_tick: NodeId,
-    meter_x: f32,
-    meter_y: f32,
-    meter_w: f32,
-    meter_h: f32,
-    /// Band index (0..3) for colour + level lookup, and the row's threshold +
-    /// enabled state, captured at build so the per-frame update is self-contained.
-    band: usize,
-    threshold: f32,
-    enabled: bool,
-}
-
-impl Default for TriggerRowIds {
-    fn default() -> Self {
-        Self {
-            enable: NodeId::PLACEHOLDER,
-            sens_minus: NodeId::PLACEHOLDER,
-            sens_plus: NodeId::PLACEHOLDER,
-            sens_value: NodeId::PLACEHOLDER,
-            len_minus: NodeId::PLACEHOLDER,
-            len_plus: NodeId::PLACEHOLDER,
-            layer: NodeId::PLACEHOLDER,
-            meter_track: NodeId::PLACEHOLDER,
-            meter_fill: NodeId::PLACEHOLDER,
-            thresh_tick: NodeId::PLACEHOLDER,
-            meter_x: 0.0,
-            meter_y: 0.0,
-            meter_w: 0.0,
-            meter_h: 0.0,
-            band: 0,
-            threshold: 0.0,
-            enabled: false,
-        }
-    }
-}
+// `TRIG_ROW_H`/`TRIG_LABEL_W`/`TRIG_ENABLE_W`/`TRIG_SENS_BTN_W`/
+// `TRIG_SENS_VAL_W`/`TRIG_LEN_VAL_W`, `format_beats` (moved to
+// `param_slider_shared::format_beats` for the drawer's new Length row),
+// `TRIG_BANDS`, and `TriggerRowIds` (+ its `Default`) are deleted with the
+// Audio Setup Triggers matrix (P3, D2).
 
 /// Per-send interactive node ids.
 ///
@@ -411,12 +286,8 @@ enum CalibrationDrag {
         start_x: f32,
         start_db: f32,
     },
-    Sensitivity {
-        send: AudioSendId,
-        band: AudioBand,
-        start_x: f32,
-        start_frac: f32,
-    },
+    // `Sensitivity` (the matrix's per-band sensitivity drag) is deleted with
+    // the Audio Setup Triggers matrix (P3, D2).
 }
 
 /// The Audio Setup modal panel.
@@ -507,9 +378,6 @@ pub struct AudioSetupPanel {
     /// frame by [`AudioSetupPanel::update_band_meters`] so they track the moving
     /// crossovers. `None` when not built.
     band_meter_ids: [(Option<NodeId>, Option<NodeId>, Option<NodeId>); 3],
-    /// Per-band trigger-row node ids for the selected send (Whole/Low/Mid/High
-    /// order). Rebuilt with the panel; clicks map back via [`TRIG_BANDS`].
-    trigger_row_ids: Vec<TriggerRowIds>,
     /// Inputs section (selected send): one remove (×) button per feeding
     /// layer, index-aligned with that send's `feeding_layers`, plus the
     /// "+ layer" add-row trigger. Rebuilt with the panel.
@@ -556,7 +424,6 @@ impl Default for AudioSetupPanel {
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
             calibration_drag: None,
             band_meter_ids: [(None, None, None); 3],
-            trigger_row_ids: Vec::new(),
             inputs_remove_ids: Vec::new(),
             add_layer_id: NodeId::PLACEHOLDER,
             consumer_row_ids: Vec::new(),
@@ -835,7 +702,7 @@ impl AudioSetupPanel {
             // send with active trigger routes reads in an amber accent, so which
             // sends fire visuals is legible without selecting each one.
             let label_x = inner_x + SWATCH_W + 6.0;
-            let has_triggers = send.triggers.iter().any(|t| t.enabled);
+            let has_triggers = send.has_clip_triggers;
             let mut lbl_style = label_button_style();
             if has_triggers {
                 lbl_style.text_color = Color32::new(240, 196, 110, 255); // amber
@@ -1260,11 +1127,12 @@ impl AudioSetupPanel {
             // meter updates); `update_scope_lane_labels` re-tracks resizes.
             self.update_scope_lane_labels(tree);
 
-            // ── Live triggers (selected send) — laid out below the scope ──
+            // The Audio Setup Triggers matrix (`build_trigger_section`) is
+            // deleted (P3, D2): clip triggers are authored on the layer only.
+            // Consumers (below) is the panel's sole surviving trigger display.
             cy += self.scope_h + ROW_GAP;
-            cy = self.build_trigger_section(tree, inner_x, inner_w, cy);
 
-            // ── Consumers (selected send) — below the trigger matrix ──
+            // ── Consumers (selected send) ──
             cy = self.build_consumers_section(tree, inner_x, inner_w, cy);
         }
 
@@ -1284,246 +1152,6 @@ impl AudioSetupPanel {
         // body overflows (the container hides it otherwise).
         let sb_x = x + self.panel_w - SCROLLBAR_W - 2.0;
         self.scroll.build_scrollbar(tree, sb_x, &scrollbar_style());
-    }
-
-    /// Build the four-band trigger matrix for the selected send. Each row:
-    /// `[enable swatch] [band] [−] sens% [＋]  ->  [ layer ▼ ]`. The swatch's
-    /// colour matches the scope's per-band transient ticks (Whole = neutral), so
-    /// the legend reads across the scope and the routes. Click-only controls,
-    /// consistent with the panel's gain stepper and channel dropdown — no drag.
-    fn build_trigger_section(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        mut cy: f32,
-    ) -> f32 {
-        self.trigger_row_ids.clear();
-
-        let sel_label = self
-            .selected_send
-            .as_ref()
-            .and_then(|id| self.sends.iter().find(|s| &s.id == id))
-            .map(|s| s.label.as_str())
-            .unwrap_or("—");
-        tree.add_label(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            inner_w,
-            TRIG_TITLE_H,
-            &format!("Triggers — {sel_label}"),
-            UIStyle {
-                text_color: color::TEXT_DIMMED,
-                font_size: color::FONT_LABEL,
-                text_align: TextAlign::Left,
-                ..UIStyle::default()
-            },
-        );
-        cy += TRIG_TITLE_H;
-
-        // The selected send's four band rows (Whole/Low/Mid/High), defaulting to
-        // a disabled row when the send carries no route for a band yet.
-        let rows: Vec<TriggerRouteRow> = self
-            .selected_send
-            .as_ref()
-            .and_then(|id| self.sends.iter().find(|s| &s.id == id))
-            .map(|s| s.triggers.clone())
-            .unwrap_or_default();
-
-        for (i, (_band, band_label)) in TRIG_BANDS.iter().enumerate() {
-            let row = rows.get(i).cloned().unwrap_or_default();
-            let mut ids = TriggerRowIds::default();
-            let mut x = inner_x;
-
-            // Enable swatch — band-coloured (Whole = neutral), dim when disabled.
-            ids.enable = tree.add_button_keyed(
-                Some(self.content_parent),
-                x,
-                cy,
-                TRIG_ENABLE_W,
-                TRIG_ROW_H,
-                trigger_swatch_style(i, row.enabled),
-                "",
-                config_row_key(i, CFG_OFF_ENABLE),
-            );
-            x += TRIG_ENABLE_W + 4.0;
-
-            // Band label — brighter when the route is active.
-            tree.add_label(
-                Some(self.content_parent),
-                x,
-                cy,
-                TRIG_LABEL_W,
-                TRIG_ROW_H,
-                band_label,
-                UIStyle {
-                    text_color: if row.enabled {
-                        Color32::new(214, 214, 220, 255)
-                    } else {
-                        Color32::new(120, 120, 130, 255)
-                    },
-                    font_size: BTN_FONT,
-                    text_align: TextAlign::Left,
-                    ..UIStyle::default()
-                },
-            );
-            x += TRIG_LABEL_W + 4.0;
-
-            // Sensitivity stepper [−] value [＋] (percent), matching the gain
-            // stepper's glyphs and discrete-step behaviour.
-            ids.sens_minus = tree.add_button_keyed(
-                Some(self.content_parent),
-                x,
-                cy,
-                TRIG_SENS_BTN_W,
-                TRIG_ROW_H,
-                btn_style(false),
-                "\u{2212}",
-                config_row_key(i, CFG_OFF_SENS_MINUS),
-            );
-            // Value label doubles as a D7 horizontal drag zone — pointer-down
-            // arms `sensitivity_drag_target`, matching the crossover-drag
-            // pattern.
-            ids.sens_value = tree.add_label(
-                Some(self.content_parent),
-                x + TRIG_SENS_BTN_W,
-                cy,
-                TRIG_SENS_VAL_W,
-                TRIG_ROW_H,
-                &format!("{}%", (row.sensitivity.clamp(0.0, 1.0) * 100.0).round() as i32),
-                UIStyle {
-                    text_color: Color32::new(190, 190, 198, 255),
-                    font_size: color::FONT_LABEL,
-                    text_align: TextAlign::Center,
-                    ..UIStyle::default()
-                },
-            );
-            ids.sens_plus = tree.add_button_keyed(
-                Some(self.content_parent),
-                x + TRIG_SENS_BTN_W + TRIG_SENS_VAL_W,
-                cy,
-                TRIG_SENS_BTN_W,
-                TRIG_ROW_H,
-                btn_style(false),
-                "\u{002B}",
-                config_row_key(i, CFG_OFF_SENS_PLUS),
-            );
-            x += TRIG_SENS_BTN_W * 2.0 + TRIG_SENS_VAL_W + 4.0;
-
-            // One-shot length stepper [−] Nb [＋] — how long a fired clip holds.
-            // Multiplicative steps (halve/double) keep it on musical divisions.
-            ids.len_minus = tree.add_button_keyed(
-                Some(self.content_parent),
-                x,
-                cy,
-                TRIG_SENS_BTN_W,
-                TRIG_ROW_H,
-                btn_style(false),
-                "\u{2212}",
-                config_row_key(i, CFG_OFF_LEN_MINUS),
-            );
-            tree.add_label(
-                Some(self.content_parent),
-                x + TRIG_SENS_BTN_W,
-                cy,
-                TRIG_LEN_VAL_W,
-                TRIG_ROW_H,
-                &format_beats(row.one_shot_beats),
-                UIStyle {
-                    text_color: Color32::new(190, 190, 198, 255),
-                    font_size: color::FONT_LABEL,
-                    text_align: TextAlign::Center,
-                    ..UIStyle::default()
-                },
-            );
-            ids.len_plus = tree.add_button_keyed(
-                Some(self.content_parent),
-                x + TRIG_SENS_BTN_W + TRIG_LEN_VAL_W,
-                cy,
-                TRIG_SENS_BTN_W,
-                TRIG_ROW_H,
-                btn_style(false),
-                "\u{002B}",
-                config_row_key(i, CFG_OFF_LEN_PLUS),
-            );
-            x += TRIG_SENS_BTN_W * 2.0 + TRIG_LEN_VAL_W + 4.0;
-
-            // Target-layer dropdown trigger (Auto or a layer name).
-            let layer_w = (inner_x + inner_w - x).max(40.0);
-            let layer_left = x;
-            ids.layer = tree.add_button_keyed(
-                Some(self.content_parent),
-                x,
-                cy,
-                layer_w,
-                TRIG_ROW_H,
-                dropdown_trigger_style(),
-                &row.layer_label,
-                config_row_key(i, CFG_OFF_LAYER),
-            );
-
-            // Live level meter — a thin underline across the tuning zone (band
-            // label → layer dropdown). Fill = the band's transient level; the
-            // tick marks the fire threshold. Resized + flashed every frame by
-            // `update_trigger_levels`. Added last so it draws over the row's
-            // bottom edge as a clean underline.
-            let meter_h = 3.0;
-            let meter_x = inner_x + TRIG_ENABLE_W + 4.0;
-            let meter_w = (layer_left - 6.0 - meter_x).max(8.0);
-            let meter_y = cy + TRIG_ROW_H - meter_h;
-            let bandc = trigger_band_color(i);
-            ids.meter_track = tree.add_panel(
-                Some(self.content_parent),
-                meter_x,
-                meter_y,
-                meter_w,
-                meter_h,
-                UIStyle { bg_color: Color32::new(40, 40, 46, 255), ..UIStyle::default() },
-            );
-            ids.meter_fill = tree.add_panel(
-                Some(self.content_parent),
-                meter_x,
-                meter_y,
-                0.0, // width set per frame
-                meter_h,
-                UIStyle { bg_color: dim_color(bandc, 0.55), ..UIStyle::default() },
-            );
-            let tick_x = meter_x + row.threshold.clamp(0.0, 1.0) * meter_w;
-            ids.thresh_tick = tree.add_panel(
-                Some(self.content_parent),
-                tick_x,
-                meter_y - 2.0,
-                1.5,
-                meter_h + 4.0,
-                UIStyle { bg_color: Color32::new(225, 225, 235, 255), ..UIStyle::default() },
-            );
-            ids.meter_x = meter_x;
-            ids.meter_y = meter_y;
-            ids.meter_w = meter_w;
-            ids.meter_h = meter_h;
-            ids.band = i;
-            ids.threshold = row.threshold;
-            ids.enabled = row.enabled;
-
-            // Group divider after the Whole row: it's the whole-signal onset
-            // (the parent); Low/Mid/High below are the frequency split. A faint
-            // rule in the row gap signals that without reflowing the layout.
-            if i == 0 {
-                tree.add_panel(
-                    Some(self.content_parent),
-                    inner_x,
-                    cy + TRIG_ROW_H + (ROW_GAP * 0.5),
-                    inner_w,
-                    1.0,
-                    UIStyle { bg_color: Color32::new(70, 70, 80, 255), ..UIStyle::default() },
-                );
-            }
-
-            self.trigger_row_ids.push(ids);
-            cy += TRIG_ROW_H + ROW_GAP;
-        }
-        cy
     }
 
     /// Build the Inputs section for the selected send: one row per feeding
@@ -1845,23 +1473,8 @@ impl AudioSetupPanel {
             .map(|(_, send)| (send.id.clone(), send.gain_db))
     }
 
-    /// Selected send id + band + current sensitivity (0..1) for a trigger
-    /// sensitivity-value label node, if `id` is one — arms the D7
-    /// sensitivity drag on `PointerDown`. The row's band is positional
-    /// ([`TRIG_BANDS`] order), matching how `build_trigger_section` reads it.
-    fn sensitivity_drag_target(&self, id: NodeId) -> Option<(AudioSendId, AudioBand, f32)> {
-        let send_id = self.selected_send.clone()?;
-        let i = self.trigger_row_ids.iter().position(|ids| ids.sens_value == id)?;
-        let band = TRIG_BANDS.get(i).map(|(b, _)| *b)?;
-        let frac = self
-            .sends
-            .iter()
-            .find(|s| s.id == send_id)
-            .and_then(|s| s.triggers.get(i))
-            .map(|r| r.sensitivity)
-            .unwrap_or(0.0);
-        Some((send_id, band, frac))
-    }
+    // `sensitivity_drag_target` (the matrix's D7 sensitivity drag) is deleted
+    // with the Audio Setup Triggers matrix (P3, D2).
 
     /// Whether `id` is any node this panel owns (background or an interactive
     /// control) — the caller swallows such clicks so they don't fall through to
@@ -1887,17 +1500,6 @@ impl AudioSetupPanel {
                 || id == r.gain_value
                 || id == r.stereo
                 || id == r.delete
-        }) {
-            return true;
-        }
-        if self.trigger_row_ids.iter().any(|r| {
-            id == r.enable
-                || id == r.sens_minus
-                || id == r.sens_plus
-                || id == r.sens_value
-                || id == r.len_minus
-                || id == r.len_plus
-                || id == r.layer
         }) {
             return true;
         }
@@ -2007,30 +1609,10 @@ impl AudioSetupPanel {
         }
     }
 
-    /// Drive the per-row trigger meters from the selected send's live per-band
-    /// transient levels (`[whole, low, mid, high]`, each 0..1), every frame while
-    /// open. The fill grows to the level; when the level crosses the row's
-    /// threshold the fill flashes to the bright band colour (the fire cue). The
-    /// transient impulse already decays, so the flash blinks once per onset with
-    /// no extra timer. `None` / a dark scope rests every meter. No rebuild.
-    pub fn update_trigger_levels(&self, tree: &mut UITree, levels: Option<[f32; 4]>) {
-        for ids in &self.trigger_row_ids {
-            let level = levels.map_or(0.0, |l| l[ids.band].clamp(0.0, 1.0));
-            let w = ids.meter_w * level;
-            tree.set_bounds(
-                ids.meter_fill,
-                Rect::new(ids.meter_x, ids.meter_y, w, ids.meter_h),
-            );
-            // Flash: enabled row whose level has crossed its fire line.
-            let bandc = trigger_band_color(ids.band);
-            let firing = ids.enabled && level >= ids.threshold && ids.threshold > 0.0;
-            let fill_color = if firing { bandc } else { dim_color(bandc, 0.55) };
-            tree.set_style(
-                ids.meter_fill,
-                UIStyle { bg_color: fill_color, ..UIStyle::default() },
-            );
-        }
-    }
+    // `update_trigger_levels` (the matrix's per-row live meter) is deleted
+    // with the Audio Setup Triggers matrix (P3, D2). The D6 fire meter that
+    // replaces it lives in the audio-mod drawer, not this panel — deferred to
+    // a follow-up phase (see this phase's landing notes).
 
     /// Update the scope's hover readout text in place (no rebuild). `Some(text)`
     /// shows it (freq + dB under the cursor); `None` hides it. Called every frame
@@ -2151,40 +1733,8 @@ impl AudioSetupPanel {
                 None
             }
         });
-        // Trigger-row controls (selected send's band routes). Checked before the
-        // send-row `hit?` early-return so a trigger click isn't swallowed.
-        if let Some((band, ctl)) = self.trigger_row_ids.iter().enumerate().find_map(|(ri, ids)| {
-            let band = TRIG_BANDS.get(ri).map(|(b, _)| *b)?;
-            if id == ids.enable {
-                Some((band, TrigControl::Toggle))
-            } else if id == ids.sens_minus {
-                Some((band, TrigControl::SensDown))
-            } else if id == ids.sens_plus {
-                Some((band, TrigControl::SensUp))
-            } else if id == ids.len_minus {
-                Some((band, TrigControl::LenDown))
-            } else if id == ids.len_plus {
-                Some((band, TrigControl::LenUp))
-            } else if id == ids.layer {
-                Some((band, TrigControl::Layer))
-            } else {
-                None
-            }
-        }) {
-            self.delete_armed = None;
-            let send = self.selected_send.clone()?;
-            return Some(match ctl {
-                TrigControl::Toggle => PanelAction::AudioTriggerToggled(send, band),
-                TrigControl::SensDown => {
-                    PanelAction::AudioTriggerSensitivityStep(send, band, -0.1)
-                }
-                TrigControl::SensUp => PanelAction::AudioTriggerSensitivityStep(send, band, 0.1),
-                // Length steps are multiplicative (musical halve/double).
-                TrigControl::LenDown => PanelAction::AudioTriggerLengthStep(send, band, 0.5),
-                TrigControl::LenUp => PanelAction::AudioTriggerLengthStep(send, band, 2.0),
-                TrigControl::Layer => PanelAction::AudioTriggerLayerClicked(send, band),
-            });
-        }
+        // The Audio Setup Triggers matrix's click block (band routes:
+        // toggle/sensitivity/length/layer) is deleted with the matrix (P3, D2).
 
         let (i, control) = hit?;
         let send_id = self.sends[i].id.clone();
@@ -2241,15 +1791,8 @@ impl AudioSetupPanel {
     }
 }
 
-/// Which interactive control of a trigger row was clicked.
-enum TrigControl {
-    Toggle,
-    SensDown,
-    SensUp,
-    LenDown,
-    LenUp,
-    Layer,
-}
+// `TrigControl` (the matrix row's click-control enum) is deleted with the
+// Audio Setup Triggers matrix (P3, D2).
 
 /// Which interactive control of a send row was clicked.
 enum RowControl {
@@ -2299,12 +1842,13 @@ impl AudioSetupPanel {
                     (false, Vec::new())
                 }
             }
-            // ── Band-divider drag (Low/Mid/High crossovers) + D7 calibration
-            // drags (gain / trigger sensitivity value labels) ──────────
+            // ── Band-divider drag (Low/Mid/High crossovers) + D7 gain-value
+            // calibration drag ──────────────────────────────────────
             // Arm on press if it lands on a divider line or a value label;
             // thereafter the drag owns the gesture until release. Divider
             // lines are drawn shader-side (hit-test by position); value
-            // labels are real nodes (hit-test by node id).
+            // labels are real nodes (hit-test by node id). (The matrix's
+            // sensitivity-value drag arm is deleted with the matrix, P3 D2.)
             UIEvent::PointerDown { node_id, pos, .. } => {
                 if let Some(band) = self.divider_at(*pos) {
                     self.dragging_band = Some(band);
@@ -2316,16 +1860,6 @@ impl AudioSetupPanel {
                         start_db,
                     });
                     (true, vec![PanelAction::AudioSendGainDragBegin(send)])
-                } else if let Some((send, band, start_frac)) =
-                    self.sensitivity_drag_target(*node_id)
-                {
-                    self.calibration_drag = Some(CalibrationDrag::Sensitivity {
-                        send: send.clone(),
-                        band,
-                        start_x: pos.x,
-                        start_frac,
-                    });
-                    (true, vec![PanelAction::AudioSendSensitivityDragBegin(send, band)])
                 } else if self.owns_node(*node_id) || self.point_in_scope(*pos) {
                     (true, Vec::new())
                 } else {
@@ -2353,10 +1887,6 @@ impl AudioSetupPanel {
                             let new_db = start_db + (pos.x - start_x) * 0.1;
                             (true, vec![PanelAction::AudioSendGainDragChanged(send, new_db)])
                         }
-                        CalibrationDrag::Sensitivity { send, band, start_x, start_frac } => {
-                            let new_frac = start_frac + (pos.x - start_x) * 0.005;
-                            (true, vec![PanelAction::AudioSendSensitivityDragChanged(send, band, new_frac)])
-                        }
                     }
                 } else {
                     (false, Vec::new())
@@ -2368,9 +1898,6 @@ impl AudioSetupPanel {
                 } else if let Some(drag) = self.calibration_drag.take() {
                     (true, vec![match drag {
                         CalibrationDrag::Gain { send, .. } => PanelAction::AudioSendGainDragCommit(send),
-                        CalibrationDrag::Sensitivity { send, band, .. } => {
-                            PanelAction::AudioSendSensitivityDragCommit(send, band)
-                        }
                     }])
                 } else {
                     (false, Vec::new())
@@ -2428,26 +1955,8 @@ fn label_style() -> UIStyle {
     }
 }
 
-/// Enable swatch for a trigger row: filled with the band colour when enabled
-/// (Whole = neutral white, Low/Mid/High = red/green/blue, matching the scope
-/// ticks), a bordered dark cell when disabled. `row` is the row index in
-/// [`TRIG_BANDS`] order.
-fn trigger_swatch_style(row: usize, enabled: bool) -> UIStyle {
-    let band = if row == 0 {
-        Color32::new(190, 190, 200, 255) // Whole — neutral
-    } else {
-        band_color(row - 1)
-    };
-    UIStyle {
-        bg_color: if enabled { band } else { Color32::new(40, 40, 46, 255) },
-        hover_bg_color: if enabled { band } else { Color32::new(56, 56, 64, 255) },
-        pressed_bg_color: Color32::new(30, 30, 34, 255),
-        border_color: Color32::new(70, 70, 78, 255),
-        border_width: 1.0,
-        corner_radius: color::BUTTON_RADIUS,
-        ..UIStyle::default()
-    }
-}
+// `trigger_swatch_style` (the matrix row's enable-swatch style) is deleted
+// with the matrix (P3, D2).
 
 /// The send-name button — looks like a label, hovers like an editable field.
 fn label_button_style() -> UIStyle {
@@ -2501,7 +2010,7 @@ mod tests {
                     source_label: "Cap".into(),
                     layer_fed: false,
                     routings: vec!["Capture: Channel 1".into()],
-                    triggers: Vec::new(),
+                    has_clip_triggers: false,
                     feeding_layers: Vec::new(),
                     consumers: Vec::new(),
                 },
@@ -2516,7 +2025,7 @@ mod tests {
                     source_label: "Cap".into(),
                     layer_fed: false,
                     routings: vec!["Capture: Channel 1".into()],
-                    triggers: Vec::new(),
+                    has_clip_triggers: false,
                     feeding_layers: Vec::new(),
                     consumers: Vec::new(),
                 },
@@ -2563,39 +2072,8 @@ mod tests {
         assert!(matches!(acts.as_slice(), [PanelAction::OpenAudioSetup]));
     }
 
-    #[test]
-    fn trigger_row_clicks_resolve_to_actions() {
-        let mut p = panel_with_two_sends();
-        // Selected send (s1) gets four band rows so the section renders.
-        p.sends[0].triggers = vec![TriggerRouteRow::default(); 4];
-        let mut tree = UITree::new();
-        p.build_docked(&mut tree, test_dock_rect());
-        assert_eq!(p.trigger_row_ids.len(), 4);
-
-        // Whole (row 0) enable → toggle on the selected send + Full band.
-        match p.handle_click(p.trigger_row_ids[0].enable) {
-            Some(PanelAction::AudioTriggerToggled(id, band)) => {
-                assert_eq!(id.as_str(), "s1");
-                assert_eq!(band, AudioBand::Full);
-            }
-            other => panic!("expected toggle, got {other:?}"),
-        }
-        // Low (row 1) [＋] → positive sensitivity step.
-        match p.handle_click(p.trigger_row_ids[1].sens_plus) {
-            Some(PanelAction::AudioTriggerSensitivityStep(_, band, d)) => {
-                assert_eq!(band, AudioBand::Low);
-                assert!(d > 0.0);
-            }
-            other => panic!("expected sens step, got {other:?}"),
-        }
-        // High (row 3) layer field → opens the layer dropdown.
-        match p.handle_click(p.trigger_row_ids[3].layer) {
-            Some(PanelAction::AudioTriggerLayerClicked(_, band)) => {
-                assert_eq!(band, AudioBand::High);
-            }
-            other => panic!("expected layer dropdown open, got {other:?}"),
-        }
-    }
+    // `trigger_row_clicks_resolve_to_actions` (the matrix row-click test) is
+    // deleted with the Audio Setup Triggers matrix (P3, D2).
 
     #[test]
     fn swatch_click_selects_send_and_scope_rect_present() {
@@ -2841,53 +2319,8 @@ mod tests {
         assert!(!p.is_dragging_band(), "gain drag must not arm the crossover drag flag");
     }
 
-    #[test]
-    fn sensitivity_drag_begin_changed_commit_sequence() {
-        let mut p = panel_with_two_sends();
-        p.sends[0].triggers = vec![TriggerRouteRow::default(); 4]; // all 0% sensitivity
-        let mut tree = UITree::new();
-        p.build_docked(&mut tree, test_dock_rect());
-        // TRIG_BANDS order is [Full, Low, Mid, High] — row 1 is Low.
-        let sens_value = p.trigger_row_ids[1].sens_value;
-        let modifiers = Modifiers::default();
-
-        let (consumed, actions) = p.handle_event(&UIEvent::PointerDown {
-            node_id: sens_value,
-            pos: Vec2::new(200.0, 60.0),
-            modifiers,
-        });
-        assert!(consumed);
-        assert!(matches!(
-            actions.as_slice(),
-            [PanelAction::AudioSendSensitivityDragBegin(id, band)]
-                if id.as_str() == "s1" && *band == AudioBand::Low
-        ));
-
-        // 40 px right at 0.5%/px (0.005/px), starting from 0.0.
-        let (_, actions) = p.handle_event(&UIEvent::Drag {
-            node_id: Some(sens_value),
-            pos: Vec2::new(240.0, 60.0),
-            delta: Vec2::new(40.0, 0.0),
-        });
-        match actions.as_slice() {
-            [PanelAction::AudioSendSensitivityDragChanged(id, band, frac)] => {
-                assert_eq!(id.as_str(), "s1");
-                assert_eq!(*band, AudioBand::Low);
-                assert!((frac - 0.2).abs() < 1e-4, "expected 0.2, got {frac}");
-            }
-            other => panic!("expected AudioSendSensitivityDragChanged, got {other:?}"),
-        }
-
-        let (_, actions) = p.handle_event(&UIEvent::PointerUp {
-            node_id: Some(sens_value),
-            pos: Vec2::new(240.0, 60.0),
-        });
-        assert!(matches!(
-            actions.as_slice(),
-            [PanelAction::AudioSendSensitivityDragCommit(id, band)]
-                if id.as_str() == "s1" && *band == AudioBand::Low
-        ));
-    }
+    // `sensitivity_drag_begin_changed_commit_sequence` (the matrix's D7
+    // sensitivity-drag test) is deleted with the matrix (P3, D2).
 
     #[test]
     fn tall_source_body_scrolls_and_scope_present() {
@@ -2918,7 +2351,7 @@ mod tests {
                 source_label: "Cap".into(),
                 layer_fed: true,
                 routings: vec!["Capture: Channel 1".into()],
-                triggers: vec![TriggerRouteRow::default(); 4],
+                has_clip_triggers: false,
                 feeding_layers: feeding,
                 consumers,
             }],

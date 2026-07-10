@@ -1243,9 +1243,8 @@ pub fn sync_inspector_data(
     // the modal is up) gives each send row its real channel name, grouped or
     // not, instead of a bare index.
     if ui.audio_setup_panel.is_open() {
-        use manifold_core::audio_mod::AudioBand;
         use manifold_core::AudioSourceKind;
-        use manifold_ui::panels::audio_setup_panel::{AudioSendRow, TriggerRouteRow};
+        use manifold_ui::panels::audio_setup_panel::AudioSendRow;
         let dir = manifold_audio::directory::system_directory();
         // Tap sources (system / app output) don't live in the input-device list,
         // so resolving them there would always read "missing". Only resolve a
@@ -1297,53 +1296,22 @@ pub fn sync_inspector_data(
                 for lid in s.layers() {
                     routings.push(format!("Layer \u{2022} {}", layer_name(lid)));
                 }
-                // One trigger row per band (Whole/Low/Mid/High), defaulting when
-                // the send carries no route for that band yet. The target label
-                // resolves to the layer's name, or "Auto" (route by send name).
-                // Also the single pass that feeds the Consumers section's
-                // trigger rows below — an enabled route's resolved layer +
-                // label are exactly what a "Low → LayerName" consumer row needs.
-                let mut consumers: Vec<manifold_ui::panels::audio_setup_panel::SendConsumerRow> =
+                // Consumers section: named audio mods (param gate/continuous
+                // cards) plus enabled layer-owned `LayerClipTrigger` configs
+                // (P3, D2 — the matrix's per-band route walk is gone; clip
+                // triggers are authored on the layer only). Both are purely
+                // navigational rows (D3): click selects the owning layer.
+                let clip_triggers = project.clip_trigger_consumers(&s.id);
+                let has_clip_triggers = !clip_triggers.is_empty();
+                let consumers: Vec<manifold_ui::panels::audio_setup_panel::SendConsumerRow> =
                     project
                         .audio_mod_consumers(&s.id)
                         .into_iter()
+                        .chain(clip_triggers)
                         .map(|(layer_id, label)| {
                             manifold_ui::panels::audio_setup_panel::SendConsumerRow { label, layer_id }
                         })
                         .collect();
-                let triggers: Vec<TriggerRouteRow> = AudioBand::ALL
-                    .iter()
-                    .zip(["Whole", "Low", "Mid", "High"])
-                    .map(|(&band, band_label)| {
-                        let route = s.trigger_for(band);
-                        let target_layer = route.and_then(|r| r.target_layer.as_ref());
-                        let layer_label = target_layer
-                            .and_then(|lid| {
-                                project.timeline.layers.iter().find(|l| &l.layer_id == lid)
-                            })
-                            .map(|l| l.name.clone())
-                            .unwrap_or_else(|| "Auto".to_string());
-                        if route.is_some_and(|r| r.enabled) {
-                            consumers.push(manifold_ui::panels::audio_setup_panel::SendConsumerRow {
-                                label: format!("{band_label} \u{2192} {layer_label}"),
-                                layer_id: target_layer.cloned(),
-                            });
-                        }
-                        TriggerRouteRow {
-                            enabled: route.is_some_and(|r| r.enabled),
-                            sensitivity: route.map_or(0.5, |r| r.sensitivity),
-                            // The fire line in transient-impulse space (0..1), so
-                            // the row meter can mark it without re-deriving the
-                            // sensitivity→threshold mapping (which lives in core).
-                            threshold: route.map_or_else(
-                                || manifold_core::audio_trigger::TriggerRoute::new(band).threshold(),
-                                |r| r.threshold(),
-                            ),
-                            one_shot_beats: route.map_or(1.0, |r| r.one_shot_beats.as_f32()),
-                            layer_label,
-                        }
-                    })
-                    .collect();
                 // Inputs section: audio layers feeding this send (id + name).
                 let feeding_layers: Vec<(manifold_core::LayerId, String)> =
                     s.layers().iter().map(|lid| (lid.clone(), layer_name(lid))).collect();
@@ -1359,7 +1327,7 @@ pub fn sync_inspector_data(
                     source_label,
                     layer_fed,
                     routings,
-                    triggers,
+                    has_clip_triggers,
                     feeding_layers,
                     consumers,
                 }
@@ -1402,16 +1370,8 @@ pub fn sync_inspector_data(
             status_warning,
         );
 
-        // Candidate target layers for the trigger rows' layer dropdowns (every
-        // non-group layer), so a fire can be pointed at any look.
-        let trigger_layers: Vec<(manifold_core::LayerId, String)> = project
-            .timeline
-            .layers
-            .iter()
-            .filter(|l| l.layer_type != manifold_core::types::LayerType::Group)
-            .map(|l| (l.layer_id.clone(), l.name.clone()))
-            .collect();
-        ui.set_audio_trigger_layers(trigger_layers);
+        // The matrix's trigger-row layer-dropdown cache (`set_audio_trigger_layers`)
+        // is deleted with the matrix (P3, D2).
 
         // Candidate audio layers for the Inputs section's "+ Layer" dropdown
         // (`AudioSendAddLayerClicked`) — every `LayerType::Audio` layer, id +
