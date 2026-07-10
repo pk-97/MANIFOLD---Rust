@@ -43,9 +43,10 @@ struct Vertex {
 };
 
 // Superset uniform, rebuilt once per object per draw call. 16-byte
-// aligned throughout (two mat4x4s + nine vec4s + the trailing
-// array<vec4,8> — every member is already a vec4/mat4 multiple, so no
-// manual padding is needed). Total 400 bytes.
+// aligned throughout (two mat4x4s + nine vec4s — every member is already
+// a vec4/mat4 multiple, so no manual padding is needed). Total 272 bytes.
+// Lights are NO LONGER in here: they live in the `@binding(8)` storage
+// buffer below (a scene can carry any number of lights, not the old 4).
 struct Uniforms {
     view_proj: mat4x4<f32>,
     // This object's world transform, composed CPU-side from
@@ -73,14 +74,10 @@ struct Uniforms {
     // x: alpha_mode (1.0 = Mask/cutout, 0.0 = Opaque), y: alpha_cutoff,
     // z/w: reserved.
     alpha_params: vec4<f32>,
-    // x: light_count (as f32, 0..=4), y: ambient (this object's
-    // material.ambient), z/w: reserved.
+    // x: light_count (as f32, unbounded — the `lights` storage buffer is
+    // runtime-sized), y: ambient (this object's material.ambient),
+    // z/w: reserved.
     scene_params: vec4<f32>,
-    // Up to 4 lights, 2 vec4s each:
-    //   lights[i*2]   = (dir.xyz: from-surface-toward-light, w: intensity)
-    //   lights[i*2+1] = (color.rgb PREMULTIPLIED with intensity, w: unused)
-    // Only the first `scene_params.x` entries are meaningful.
-    lights: array<vec4<f32>, 8>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -95,6 +92,14 @@ struct Uniforms {
 @group(0) @binding(5) var roughness_map: texture_2d<f32>;
 @group(0) @binding(6) var base_color_map: texture_2d<f32>;
 @group(0) @binding(7) var metallic_map: texture_2d<f32>;
+// Scene lights, 2 vec4s each, runtime-sized (was a fixed `array<vec4,8>`
+// inside Uniforms; the old cap of 4 lights is gone). Only the first
+// `scene_params.x` entries are meaningful — count flows through the
+// uniform, NOT `arrayLength` (D1). At zero lights the CPU still binds one
+// zeroed entry so Metal always sees a bound buffer (D4).
+//   lights[i*2]   = (dir.xyz: from-surface-toward-light, w: intensity)
+//   lights[i*2+1] = (color.rgb PREMULTIPLIED with intensity, w: unused)
+@group(0) @binding(8) var<storage, read> lights: array<vec4<f32>>;
 
 struct VsOut {
     @builtin(position) clip_pos: vec4<f32>,
@@ -182,8 +187,8 @@ fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
     var lit = vec3<f32>(0.0);
     let light_count = u32(u.scene_params.x);
     for (var i = 0u; i < light_count; i = i + 1u) {
-        let l_dir = u.lights[i * 2u];
-        let l_col = u.lights[i * 2u + 1u];
+        let l_dir = lights[i * 2u];
+        let l_col = lights[i * 2u + 1u];
         let L = normalize(l_dir.xyz);
         let H = normalize(L + V);
         let n_dot_l = max(dot(N, L), 0.0);
@@ -228,8 +233,8 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     var direct = vec3<f32>(0.0);
     let light_count = u32(u.scene_params.x);
     for (var i = 0u; i < light_count; i = i + 1u) {
-        let l_dir = u.lights[i * 2u];
-        let l_col = u.lights[i * 2u + 1u];
+        let l_dir = lights[i * 2u];
+        let l_col = lights[i * 2u + 1u];
         let L = normalize(l_dir.xyz);
         let H = normalize(L + V);
         let n_dot_l = max(dot(N, L), 0.0);
@@ -284,8 +289,8 @@ fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
     var lit = vec3<f32>(0.0);
     let light_count = u32(u.scene_params.x);
     for (var i = 0u; i < light_count; i = i + 1u) {
-        let l_dir = u.lights[i * 2u];
-        let l_col = u.lights[i * 2u + 1u];
+        let l_dir = lights[i * 2u];
+        let l_col = lights[i * 2u + 1u];
         let L = normalize(l_dir.xyz);
         let n_dot_l = max(dot(N, L), 0.0);
         let snapped = floor(n_dot_l * bands) / (bands - 1.0);
