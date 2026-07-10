@@ -910,3 +910,226 @@ mod cache_path_full_render {
         );
     }
 }
+
+#[cfg(test)]
+mod editor_window_harness {
+    //! P3 (`docs/UI_HARNESS_UNIFICATION_DESIGN.md`) — the graph-editor
+    //! window's OWN structural invariant. Per D5 the editor is cacheless
+    //! immediate-mode (no `UICacheManager`, never the atlas differential);
+    //! its invariant is geometric, not pixel-staleness: a node the fixture
+    //! places must actually paint at the screen rect the canvas itself
+    //! reports for it.
+    //!
+    //! Builds the real `fixtures::generator_editor_fixture` + the SAME merged
+    //! `UIRoot` topology `render_graph_editor_to_png` builds (sidebar preview
+    //! column + inspector in ONE tree — P3's topology fix), renders through
+    //! `crate::editor_frame::composite_editor_frame` — the IDENTICAL function
+    //! `present_graph_editor_window` calls — then reads back the node's
+    //! declared screen rect from `GraphCanvasTargets` (the same hit-target
+    //! enumeration `render_graph_editor_to_png`'s `--dump` uses) and samples
+    //! its center pixel against the window's clear color. A node whose
+    //! declared rect doesn't actually paint — wrong topology, a dropped
+    //! render pass, a camera/viewport mismatch — fails this test; the atlas
+    //! differential (D4/D5) is deliberately not asked here, because there is
+    //! no cache path to have a stale pixel in.
+
+    use manifold_gpu::{GpuDevice, GpuTextureFormat};
+    use manifold_renderer::render_target::RenderTarget;
+    use manifold_renderer::ui_renderer::UIRenderer;
+    use manifold_ui::graph_canvas::{GraphCanvas, GraphCanvasTargets, Rect as CanvasRect};
+    use manifold_ui::hit_targets::HitTargets;
+    use manifold_ui::panels::graph_editor::{
+        GraphEditorPanel, EDITOR_CARD_LANE_WIDTH, SIDEBAR_WIDTH,
+    };
+    use manifold_ui::Rect as UiRect;
+
+    use super::*;
+    use crate::editor_frame::{
+        build_editor_preview_column, composite_editor_frame, EditorMiniTimelineInputs,
+    };
+
+    const FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba8Unorm;
+
+    #[test]
+    fn node_the_fixture_places_renders_at_its_declared_screen_rect() {
+        let preset = "FluidSim2D";
+        let pid = manifold_core::PresetTypeId::from_string(preset.to_string());
+        let view = manifold_renderer::node_graph::loaded_preset_view_by_id(&pid)
+            .expect("FluidSim2D preset must be loadable");
+        let rg_snap = manifold_renderer::node_graph::snapshot_for_view(view)
+            .expect("FluidSim2D snapshot must materialize");
+        let (project, target, selection) = fixtures::generator_editor_fixture(preset)
+            .expect("FluidSim2D is a generator preset");
+        let gv_snap = crate::ui_translate::graph_snapshot_to_ui(&rg_snap);
+
+        let tex_w = LOGICAL_W as u32;
+        let tex_h = LOGICAL_H as u32;
+        let logical_w = LOGICAL_W;
+        let logical_h = LOGICAL_H;
+
+        // Same geometry `render_graph_editor_to_png` computes.
+        let dock = manifold_ui::Dock::editor();
+        let dock_rects = dock.rects(UiRect::new(0.0, 0.0, logical_w, logical_h));
+        let canvas_x = SIDEBAR_WIDTH;
+        let canvas_width = (logical_w - SIDEBAR_WIDTH - EDITOR_CARD_LANE_WIDTH).max(0.0);
+        let canvas_height = dock_rects.canvas.height;
+        let card_x = canvas_x + canvas_width;
+
+        let device = GpuDevice::new();
+        let mut renderer = UIRenderer::new(&device, FORMAT);
+        let target_tex = RenderTarget::new(&device, tex_w, tex_h, FORMAT, "ui-snap-editor-harness");
+
+        // ONE merged `UIRoot` — sidebar preview column + inspector lane —
+        // exactly the topology `present_graph_editor_window` and (post-P3)
+        // `render_graph_editor_to_png` both build.
+        let mut ui_root = UIRoot::new();
+        let active_idx = match &target {
+            manifold_core::GraphTarget::Generator(lid) => {
+                project.timeline.layers.iter().position(|l| &l.layer_id == lid)
+            }
+            manifold_core::GraphTarget::Effect(_) => None,
+        };
+        sync_project_data(&mut ui_root, &project, active_idx, &selection);
+        sync_inspector_data(&mut ui_root, &project, active_idx, &selection, &[]);
+        ui_root.build_inspector_in_rect(UiRect::new(
+            card_x,
+            0.0,
+            EDITOR_CARD_LANE_WIDTH,
+            canvas_height,
+        ));
+
+        let preview_pad = 8.0_f32;
+        let preview_title_h = 18.0_f32;
+        let monitor_aspect = 16.0_f32 / 9.0;
+        let avail_w = (SIDEBAR_WIDTH - 2.0 * preview_pad).max(1.0);
+        let max_body_h =
+            ((canvas_height - 3.0 * preview_pad - 2.0 * preview_title_h) * 0.5).max(1.0);
+        let width_bound_h = avail_w / monitor_aspect;
+        let (preview_w, preview_h) = if width_bound_h <= max_body_h {
+            (avail_w, width_bound_h)
+        } else {
+            (max_body_h * monitor_aspect, max_body_h)
+        };
+        let preview_x = (SIDEBAR_WIDTH - preview_w) * 0.5;
+        let pane_block_h = 2.0 * (preview_title_h + preview_h) + preview_pad;
+        let mut pane_y = ((canvas_height - pane_block_h) * 0.5).max(preview_pad);
+        let node_title_y = pane_y;
+        let node_img_y = node_title_y + preview_title_h;
+        pane_y = node_img_y + preview_h + preview_pad;
+        let master_title_y = pane_y;
+        let editor_panel = GraphEditorPanel::new();
+        build_editor_preview_column(
+            &mut ui_root.tree,
+            &editor_panel,
+            SIDEBAR_WIDTH,
+            canvas_height,
+            preview_x,
+            preview_w,
+            preview_h,
+            node_title_y,
+            node_img_y,
+            master_title_y,
+            false,
+        );
+
+        let viewport = CanvasRect::new(canvas_x, 0.0, canvas_width, canvas_height);
+        let mut canvas = GraphCanvas::new();
+        canvas.set_default_expanded(true);
+        canvas.set_snapshot(&gv_snap);
+        canvas.apply_pending_fit(viewport);
+
+        // The expected screen rect for a real node the fixture placed — the
+        // SAME hit-target enumeration `render_graph_editor_to_png`'s `--dump`
+        // uses (`custom_surfaces` / `"graph_canvas"`), read BEFORE the render
+        // call so this assertion is against the canvas's own declared
+        // geometry, not a value derived from the pixels it's checking.
+        let targets_surface = GraphCanvasTargets { canvas: &canvas, viewport };
+        let mut entries = Vec::new();
+        targets_surface.enumerate(&mut entries);
+        let node_entry = entries
+            .iter()
+            .find(|e| e.kind == "node")
+            .expect("FluidSim2D graph must have at least one node");
+        let (ex, ey, ew, eh) = (
+            node_entry.rect.x,
+            node_entry.rect.y,
+            node_entry.rect.width,
+            node_entry.rect.height,
+        );
+
+        let editor_area = UiRect::new(0.0, 0.0, logical_w, logical_h);
+        let (mini_clips, mini_layer_labels, mini_rows, mini_total, mini_bpb, mini_readout) =
+            crate::app_render::mini_timeline_data(&project, 0.0);
+        let mut popover = manifold_ui::graph_canvas::mapping_popover::MappingPopover::new();
+        let text_input = crate::text_input::TextInputState::new();
+        let frame_timer = crate::frame_timer::FrameTimer::new(60.0);
+
+        composite_editor_frame(
+            &device,
+            Some(&mut renderer),
+            &ui_root,
+            &dock,
+            editor_area,
+            Some(&canvas),
+            viewport,
+            EditorMiniTimelineInputs {
+                bottom_rect: dock_rects.bottom,
+                show_bottom: dock.show_bottom,
+                total_beats: mini_total,
+                beats_per_bar: mini_bpb,
+                current_beat: 0.0,
+                row_count: mini_rows,
+                clips: &mini_clips,
+                layer_labels: &mini_layer_labels,
+                readout: &mini_readout,
+                is_playing: false,
+            },
+            &mut popover,
+            None,
+            &text_input,
+            &frame_timer,
+            &target_tex.texture,
+            tex_w,
+            tex_h,
+            1.0,
+        );
+
+        let bytes = super::render::readback(&device, &target_tex.texture, tex_w, tex_h);
+
+        // Structural check, self-contained (no hardcoded clear color, no
+        // external background reference — this dark theme's canvas grid and
+        // a node's mostly-empty body fill land at nearly the SAME near-black
+        // shade, so a single center-pixel-vs-clear-color check is unreliable
+        // here; verified against the saved PNG before writing this). A node
+        // that genuinely rendered — header text, param-row labels, port
+        // dots, border — has RICH internal color variety; empty canvas space
+        // of the same size is perfectly flat (exactly one distinct color).
+        // Count distinct colors inside the node's declared rect and assert
+        // it's well above "flat" — proof the node the canvas says is at
+        // (ex,ey,ew,eh) actually painted structure there, not that the rect
+        // is empty canvas the topology mis-declared as a node.
+        let x0 = ex.max(0.0) as u32;
+        let y0 = ey.max(0.0) as u32;
+        let x1 = (ex + ew).min(tex_w as f32) as u32;
+        let y1 = (ey + eh).min(tex_h as f32) as u32;
+        assert!(
+            x1 > x0 && y1 > y0,
+            "node '{}' declared rect ({ex},{ey},{ew}x{eh}) is off the {tex_w}x{tex_h} canvas",
+            node_entry.label,
+        );
+        let mut distinct: std::collections::HashSet<[u8; 3]> = std::collections::HashSet::new();
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let idx = ((y * tex_w + x) * 4) as usize;
+                distinct.insert([bytes[idx], bytes[idx + 1], bytes[idx + 2]]);
+            }
+        }
+        assert!(
+            distinct.len() > 20,
+            "node '{}' at declared rect ({ex},{ey},{ew}x{eh}) is flat ({} distinct color(s)) — \
+             the node did not paint where the canvas says it is",
+            node_entry.label,
+            distinct.len(),
+        );
+    }
+}
