@@ -548,3 +548,406 @@ mod footer_leak_probe {
         );
     }
 }
+
+#[cfg(test)]
+mod cache_path_full_render {
+    //! P0 (`docs/UI_HARNESS_UNIFICATION_DESIGN.md` — read the "Reframe
+    //! 2026-07-10" block before this comment; it governs P0 now) — a
+    //! faithful FULL-APP headless render of the main window. Unlike
+    //! `footer_leak_probe` (CPU bounds walk, zero pixels) and the sibling
+    //! `render` module's whole-tree-fresh-every-frame harness (structurally
+    //! blind to a stale-atlas-pixel bug — see that module's own doc
+    //! comment), this test builds a REAL `UICacheManager` + `UIRenderer` +
+    //! atlas texture and renders through `render_dirty_panels` exactly as
+    //! `present_all_windows` does — the mirrored call order
+    //! (`panel_cache_info` -> `set_scale_factor` -> `ensure_atlas` ->
+    //! `render_dirty_panels` -> `atlas_texture()`, app_render.rs:3890-3904/
+    //! 4017) — then reads back the WHOLE atlas and saves it as a PNG, plus a
+    //! filmstrip contact sheet of the inspector-drawer tween (D9a).
+    //!
+    //! The atlas readback IS the composited main window: `present_all_
+    //! windows`'s "Atlas Blit" pass (app_render.rs:4013-4040) is a fullscreen
+    //! draw of the atlas onto the offscreen at 1:1 (same dimensions, scale
+    //! 1.0), so a bare atlas readback equals that offscreen minus the
+    //! compositor-video blit — which the harness has no compositor texture
+    //! for anyway (D8 gap #2: `video: None`, UI chrome is 1:1).
+    //!
+    //! D8: scale factor one at the fixture's logical size — layout is
+    //! pixel-exact, and the raster is far cheaper than a Retina pass.
+    //!
+    //! The BUG-060 differential/red-bracket model this module used to run is
+    //! RETIRED (Reframe 2026-07-10, D2/D4a) — BUG-060 was root-caused and
+    //! closed independently of this harness. There is no baseline, no
+    //! byte-equality assertion, and no red/green bracket here. The only
+    //! automated check is a smoke test (drew something, not blank); the real
+    //! verification is a human/agent reading the saved PNGs.
+    //!
+    //! P0 is the beachhead (D6): the invalidation decision below is
+    //! TRANSCRIBED from `app_render.rs:955-965` (scroll-in-place) and
+    //! `2819-2852` (rebuild/structural), not yet the shared
+    //! `apply_ui_frame_invalidations` seam (P1, D3) — this driver never
+    //! drags, so the drag-guard branches app_render.rs has are correctly
+    //! omitted here, not silently dropped.
+
+    use std::time::Duration;
+
+    use manifold_core::LayerId;
+    use manifold_gpu::{GpuDevice, GpuTextureFormat};
+    use manifold_renderer::ui_cache_manager::UICacheManager;
+    use manifold_renderer::ui_renderer::UIRenderer;
+    use manifold_ui::automation::{self, AutomationTarget, SelectorQuery};
+    use manifold_ui::input::PointerAction;
+    use manifold_ui::node::Vec2;
+
+    use super::*;
+    use crate::content_state::ContentState;
+    use crate::user_prefs::UserPrefs;
+
+    /// The per-frame decision flags `apply_ui_frame_invalidations` will own
+    /// at P1 (D3) — carried by hand here, exactly transcribing
+    /// app_render.rs's persistence (a flag set THIS frame's tween-poll is
+    /// consumed by NEXT frame's decision block, never immediately — see
+    /// `app_render.rs:2942` vs `:2821`).
+    #[derive(Default)]
+    struct Signals {
+        needs_rebuild: bool,
+        needs_structural_sync: bool,
+    }
+
+    /// Mirrors app_render.rs:2819-2845 minus the inspector/layer drag guards
+    /// (this driver never drags — the guards would never fire, so omitting
+    /// them changes nothing observable).
+    fn apply_decision(ui: &mut UIRoot, cache: &mut UICacheManager, signals: &mut Signals) {
+        if signals.needs_rebuild || signals.needs_structural_sync {
+            signals.needs_rebuild = false;
+            signals.needs_structural_sync = false;
+            ui.build();
+            ui.inspector.apply_selection_visuals(&mut ui.tree);
+            cache.invalidate_all();
+        }
+    }
+
+    /// Mirrors app_render.rs:3890-3904 — up to, and not past, reading
+    /// `atlas_texture()` (the offscreen clear/blit/video-band steps at
+    /// 4011-4064 are winit-presentation-only; see the module doc comment for
+    /// why a bare atlas readback already equals that composite here).
+    /// Returns the FULL panel ranges rendered this frame so dirty-flag
+    /// clearing matches the live contract across steps.
+    fn composite_frame(
+        device: &GpuDevice,
+        ui_renderer: &mut UIRenderer,
+        cache: &mut UICacheManager,
+        ui: &mut UIRoot,
+    ) {
+        let panel_infos = ui.panel_cache_info();
+        let (_, rendered_ranges) =
+            cache.render_dirty_panels(device, ui_renderer, &ui.tree, &panel_infos);
+        for (start, end) in &rendered_ranges {
+            ui.tree.clear_dirty_range(*start, *end);
+        }
+    }
+
+    /// Read back the WHOLE atlas — the composited main window (see module
+    /// doc comment for why this equals `present_all_windows`'s offscreen
+    /// here, D8 gap #2: no compositor video band).
+    fn full_atlas_bytes(
+        device: &GpuDevice,
+        cache: &UICacheManager,
+        atlas_w: u32,
+        atlas_h: u32,
+    ) -> Vec<u8> {
+        let atlas = cache.atlas_texture().expect("atlas texture must exist by frame 0");
+        super::render::readback(device, atlas, atlas_w, atlas_h)
+    }
+
+    /// Save a BGRA8 byte buffer as an RGBA8 PNG (`image::save_buffer` has no
+    /// BGRA color type, so swap B/R per pixel — a display-only swizzle,
+    /// applied only at save time, never to bytes any check reads).
+    fn save_bgra_png(bgra: &[u8], w: u32, h: u32, path: &std::path::Path) {
+        let mut rgba = bgra.to_vec();
+        for px in rgba.chunks_exact_mut(4) {
+            px.swap(0, 2);
+        }
+        image::save_buffer(path, &rgba, w, h, image::ExtendedColorType::Rgba8)
+            .unwrap_or_else(|e| panic!("save {}: {e}", path.display()));
+    }
+
+    /// Assemble filmstrip tiles (each `tile_w`x`tile_h`, raw BGRA8 atlas
+    /// readback bytes) into ONE contact-sheet PNG, `cols` tiles per row
+    /// (trailing cells on an incomplete last row stay black).
+    fn save_filmstrip_png(
+        tiles: &[Vec<u8>],
+        tile_w: u32,
+        tile_h: u32,
+        cols: u32,
+        path: &std::path::Path,
+    ) {
+        assert!(!tiles.is_empty(), "filmstrip must have at least one tile");
+        let n = tiles.len() as u32;
+        let rows = n.div_ceil(cols);
+        let sheet_w = tile_w * cols;
+        let sheet_h = tile_h * rows;
+        let mut sheet = vec![0u8; (sheet_w * sheet_h * 4) as usize];
+        let row_bytes = (tile_w * 4) as usize;
+        for (i, tile) in tiles.iter().enumerate() {
+            let i = i as u32;
+            let (col, row) = (i % cols, i / cols);
+            let (ox, oy) = (col * tile_w, row * tile_h);
+            for y in 0..tile_h {
+                let src_off = y as usize * row_bytes;
+                let dst_off = (((oy + y) * sheet_w + ox) as usize) * 4;
+                sheet[dst_off..dst_off + row_bytes].copy_from_slice(&tile[src_off..src_off + row_bytes]);
+            }
+        }
+        save_bgra_png(&sheet, sheet_w, sheet_h, path);
+    }
+
+    /// The only automated assertion in this module (per the Reframe): the
+    /// render drew *something* — not empty, not a single flat colour
+    /// end-to-end.
+    fn assert_not_blank(bgra: &[u8], label: &str) {
+        assert!(!bgra.is_empty(), "{label}: readback is empty");
+        let first = &bgra[0..4];
+        let all_same = bgra.chunks_exact(4).all(|px| px == first);
+        assert!(!all_same, "{label}: readback is a uniform single colour — drew nothing");
+    }
+
+    /// Resolve `text` (exact node-text match, `type: "Button"`) to its
+    /// screen-space center — selector-first, per the brief's decided default
+    /// for the tab swap (and reused for the compact-toggle "cog").
+    fn resolve_button_center(ui: &UIRoot, text: &str) -> Option<Vec2> {
+        let target = AutomationTarget::Query(SelectorQuery {
+            text: Some(text.to_string()),
+            node_type: Some("Button".to_string()),
+            ..Default::default()
+        });
+        automation::resolve(&ui.tree, &[], &target)
+            .ok()
+            .map(|r| Vec2::new(r.rect.x + r.rect.width * 0.5, r.rect.y + r.rect.height * 0.5))
+    }
+
+    /// Click through the REAL input path (`pointer_event` -> `process_events`
+    /// -> `crate::ui_bridge::dispatch`, the same real bridge call
+    /// `script.rs`'s Runner uses) and report whether any dispatched action
+    /// was structural — the ONLY signal this driver reads to decide
+    /// `needs_structural_sync`, never a hand-set flag. Per-gesture drag/undo
+    /// snapshots are scratch-local: this harness only ever clicks, never
+    /// drags, so they never carry state between calls.
+    #[allow(clippy::too_many_arguments)]
+    fn click(
+        ui: &mut UIRoot,
+        data: &mut fixtures::SceneData,
+        pos: Vec2,
+        clock: f32,
+        active_layer: &mut Option<LayerId>,
+        content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+        content_state: &ContentState,
+        user_prefs: &mut UserPrefs,
+    ) -> bool {
+        ui.pointer_event(pos, PointerAction::Down, clock);
+        ui.pointer_event(pos, PointerAction::Up, clock);
+        let actions = ui.process_events();
+        let mut structural = false;
+        let mut drag_snapshot: Option<f32> = None;
+        let mut trim_snapshot: Option<(f32, f32)> = None;
+        let mut target_snapshot: Option<f32> = None;
+        let mut decay_snapshot: Option<f32> = None;
+        let mut audio_shape_snapshot: Option<manifold_core::audio_mod::AudioModShape> = None;
+        let mut audio_action_snapshot: Option<manifold_core::audio_mod::TriggerAction> = None;
+        let mut audio_crossover_snapshot: Option<(f32, f32)> = None;
+        let mut audio_send_gain_drag_snapshot: Option<f32> = None;
+        let mut audio_send_sensitivity_drag_snapshot: Option<
+            Vec<manifold_core::audio_trigger::TriggerRoute>,
+        > = None;
+        let mut active_inspector_drag: Option<crate::app::ActiveInspectorDrag> = None;
+        for action in &actions {
+            let result = crate::ui_bridge::dispatch(
+                action,
+                &mut data.project,
+                content_tx,
+                content_state,
+                ui,
+                &mut data.selection,
+                active_layer,
+                &mut drag_snapshot,
+                &mut trim_snapshot,
+                &mut target_snapshot,
+                &mut decay_snapshot,
+                &mut audio_shape_snapshot,
+                &mut audio_action_snapshot,
+                &mut audio_crossover_snapshot,
+                &mut audio_send_gain_drag_snapshot,
+                &mut audio_send_sensitivity_drag_snapshot,
+                user_prefs,
+                &mut active_inspector_drag,
+                None,
+            );
+            structural |= result.structural_change;
+        }
+        structural
+    }
+
+    #[test]
+    fn cache_path_full_render() {
+        let mut data = fixtures::build("bug060heavy").expect("bug060heavy scene");
+        let mut ui = UIRoot::new();
+        ui.resize(LOGICAL_W, LOGICAL_H);
+        ui.layout.inspector_width = 600.0;
+        ui.layout.timeline_split_ratio = 0.6;
+        sync_build(&mut ui, &data, 24.0);
+
+        let device = GpuDevice::new();
+        let mut ui_renderer = UIRenderer::new(&device, GpuTextureFormat::Bgra8Unorm);
+        // D8: scale factor 1.0 always, at the fixture's logical size — layout
+        // is a function of logical size, never shrink the window for speed.
+        let mut cache = UICacheManager::new(GpuTextureFormat::Bgra8Unorm, 1.0);
+        cache.set_scale_factor(1.0);
+        let atlas_w = LOGICAL_W as u32;
+        let atlas_h = LOGICAL_H as u32;
+        cache.ensure_atlas(&device, atlas_w, atlas_h);
+        cache.invalidate_all();
+
+        let out_dir = std::path::PathBuf::from("target/ui-snapshots/bug060heavy/full_render");
+        std::fs::create_dir_all(&out_dir).expect("create full_render output dir");
+
+        let mut signals = Signals::default();
+
+        // Frame 0: initial full, self-clearing composite.
+        composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui);
+
+        let (content_tx, _content_rx) =
+            crossbeam_channel::bounded::<crate::content_command::ContentCommand>(64);
+        let content_state = ContentState::default();
+        let mut user_prefs = UserPrefs::in_memory();
+        let mut active_layer: Option<LayerId> = data
+            .active
+            .and_then(|i| data.project.timeline.layers.get(i))
+            .map(|l| l.layer_id.clone());
+        let mut clock = 0.0_f32;
+        let mut tab_swap_fallback_used = false;
+        let mut filmstrip: Vec<Vec<u8>> = Vec::new();
+
+        // ── scroll to bottom ──
+        let insp = ui.layout.inspector();
+        let cursor_x = insp.x + insp.width * 0.5;
+        assert!(
+            ui.try_inspector_scroll(1_000_000.0, cursor_x),
+            "sanity: inspector must report a live scroll container"
+        );
+        if ui.inspector.take_scrolled_in_place() {
+            cache.invalidate_inspector();
+        }
+        apply_decision(&mut ui, &mut cache, &mut signals);
+        composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui);
+
+        // ── expand/collapse every armed drawer at once (the compact toggle
+        // "cog") — a real click, real dispatch, real structural result; the
+        // tween it starts is polled below exactly as app_render.rs:2942-2944
+        // does. The click's own post-composite frame opens the filmstrip. ──
+        let cog_text = manifold_ui::icons::Icon::Cog.text();
+        let cog_pos =
+            resolve_button_center(&ui, &cog_text).expect("compact-toggle (cog) button must resolve");
+        if click(&mut ui, &mut data, cog_pos, clock, &mut active_layer, &content_tx, &content_state, &mut user_prefs) {
+            signals.needs_structural_sync = true;
+        }
+        apply_decision(&mut ui, &mut cache, &mut signals);
+        composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui);
+        filmstrip.push(full_atlas_bytes(&device, &cache, atlas_w, atlas_h));
+
+        // ── poll the drawer tween to settlement, capturing a filmstrip tile
+        // after every stepped frame (D9a). `InspectorCompositePanel::update`'s
+        // `tick_drawers` derives dt from `Instant::now()`, not a fixed step
+        // (unlike script.rs's driver clock) — a real, small wall-clock sleep
+        // between polls is the honest way to advance it; see the report's
+        // Shortcuts note. MOTION_MED_MS is 160ms, so ~8 ticks at 25ms plus
+        // one settle frame comfortably covers it. ──
+        for i in 0..16 {
+            std::thread::sleep(Duration::from_millis(25));
+            clock += 25.0 / 1000.0;
+            ui.update();
+            let still_active = ui.inspector.drawer_anim_active();
+            if still_active {
+                signals.needs_rebuild = true;
+            }
+            apply_decision(&mut ui, &mut cache, &mut signals);
+            composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui);
+            filmstrip.push(full_atlas_bytes(&device, &cache, atlas_w, atlas_h));
+            if !still_active && i > 0 {
+                break;
+            }
+        }
+
+        // ── scroll again ──
+        assert!(
+            ui.try_inspector_scroll(1_000_000.0, cursor_x),
+            "sanity: second scroll must still hit the live container"
+        );
+        if ui.inspector.take_scrolled_in_place() {
+            cache.invalidate_inspector();
+        }
+        apply_decision(&mut ui, &mut cache, &mut signals);
+        composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui);
+
+        // ── swap tab Layer -> Master -> Layer. Selector-first (orchestrator's
+        // decided fork): resolve the tab strip's own "Master"/"Layer" button
+        // by text; only on a resolve failure fall back to the inspector's
+        // own `configure_tabs` API directly (noted in the report if it
+        // fires). ──
+        for tab_text in ["Master", "Layer"] {
+            match resolve_button_center(&ui, tab_text) {
+                Some(pos) => {
+                    if click(&mut ui, &mut data, pos, clock, &mut active_layer, &content_tx, &content_state, &mut user_prefs) {
+                        signals.needs_structural_sync = true;
+                    }
+                }
+                None => {
+                    tab_swap_fallback_used = true;
+                    let tab = if tab_text == "Master" {
+                        manifold_ui::InspectorTab::Master
+                    } else {
+                        manifold_ui::InspectorTab::Layer
+                    };
+                    ui.inspector.configure_tabs(
+                        &[manifold_ui::InspectorTab::Layer, manifold_ui::InspectorTab::Master],
+                        tab,
+                    );
+                    signals.needs_structural_sync = true;
+                }
+            }
+            apply_decision(&mut ui, &mut cache, &mut signals);
+            composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui);
+        }
+
+        // ── final scroll — the last step of the sequence ──
+        assert!(
+            ui.try_inspector_scroll(1_000_000.0, cursor_x),
+            "sanity: final scroll must still hit the live container"
+        );
+        if ui.inspector.take_scrolled_in_place() {
+            cache.invalidate_inspector();
+        }
+        apply_decision(&mut ui, &mut cache, &mut signals);
+        composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui);
+
+        // ── save the full-app PNG (the composited main window's atlas — no
+        // compositor video, D8 gap #2) ──
+        let final_bytes = full_atlas_bytes(&device, &cache, atlas_w, atlas_h);
+        assert_not_blank(&final_bytes, "full-app render");
+        let frame_png = out_dir.join("frame.png");
+        save_bgra_png(&final_bytes, atlas_w, atlas_h, &frame_png);
+
+        // ── assemble the drawer-tween filmstrip into one contact sheet ──
+        let filmstrip_png = out_dir.join("drawer_filmstrip.png");
+        let cols = (filmstrip.len() as u32).clamp(1, 4);
+        save_filmstrip_png(&filmstrip, atlas_w, atlas_h, cols, &filmstrip_png);
+
+        println!(
+            "cache_path_full_render: wrote {} and {} ({} tile(s) in the drawer-tween filmstrip). \
+             tab_swap_fallback_used={}",
+            frame_png.display(),
+            filmstrip_png.display(),
+            filmstrip.len(),
+            tab_swap_fallback_used,
+        );
+    }
+}

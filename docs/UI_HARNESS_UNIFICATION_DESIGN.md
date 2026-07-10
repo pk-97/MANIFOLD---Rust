@@ -1,6 +1,6 @@
 # UI Harness Unification — one headless test path that runs the app's real render, not a lookalike
 
-**Status:** APPROVED design, REFRAMED 2026-07-10 (Opus + Peter) — **read the "Reframe 2026-07-10" block immediately below before anything else; it supersedes D2, demotes D4a/§5, and restates P0.** P0 BUILT-UNLANDED on `feat/ui-harness-p0` @ `b51e6bbc` (worktree `ui-harness-p0`) · 2026-07-09 · Opus (1M) · Fable review 2026-07-09: every audit anchor re-verified against code; amended (D8–D9 added, §4 signals now `&mut`, §5 recipe strengthened to full-sequence replay, P0/P2 deliverables extended, BUG-071 pulled into P0) · Peter approved for Sonnet execution 2026-07-09 · 2026-07-10 re-cut (Fable): BUG-060 was root-caused and CLOSED independently of this wave.
+**Status:** REFRAMED 2026-07-10 (Opus + Peter) — **read the "Reframe 2026-07-10" block immediately below before anything else; it supersedes D2, demotes D4a/§5, and restates P0.** **P0 SHIPPED 2026-07-10** (faithful full-app render + drawer filmstrip through the real `UICacheManager`; BUG-071 dump fix; feature-clippy debt BUG-057/067/093 cleared) — landed on `main` via `feat/ui-harness-p0`. **P1–P3 remain** (seam extraction · repoint runner + captures · editor window). History: Opus (1M) authored 2026-07-09, Fable-reviewed (D8–D9 added, §4 `&mut`, §5 full-sequence replay, BUG-071 pulled into P0), Peter approved for Sonnet execution; BUG-060 root-caused + closed out-of-band same day, which is what triggered the reframe away from a BUG-060 differential.
 
 ---
 
@@ -26,7 +26,7 @@
 **Fixture:** no BUG-060-worst-case fixture is needed. A realistically heavy scene for general coverage suffices; the existing `project:<abs-path>` real-project load (the Liveschool fixture) provides it. The D7 "which generator, how many effects" question is closed — not asked.
 
 Phasing is unchanged in shape (P0 beachhead → P1 seam extraction → P2 repoint the runner + captures → P3 editor window); only P0's deliverable and gate change, restated in the P0 phase block below. Where the sections further down still speak of the red bracket, the differential-as-gate, or BUG-060 as the target, **this block wins.**
-**Prerequisites:** none unbuilt. Builds on UI_AUTOMATION P1–P2 (shipped: the `--script` driver + `AutomationAction`) and UI_CLIP_AND_Z P1 (shipped: per-panel `begin_region` wrap). Relates to BUG-060 (CLOSED 2026-07-10 @ `cc4eeb37`) and open BUG-015; fixes BUG-071 in P0 (D9c).
+**Prerequisites:** none unbuilt. Builds on UI_AUTOMATION P1–P2 (shipped: the `--script` driver + `AutomationAction`) and UI_CLIP_AND_Z P1 (shipped: per-panel `begin_region` wrap). Relates to BUG-060 (CLOSED 2026-07-10 @ `cc4eeb37`); fixes BUG-071 in P0 (D9c).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
 **The governing insight: the app renders its main-window UI through a stateful GPU atlas cache (`UICacheManager`), and *not one test touches that code.* Both existing headless harnesses reimplement a lookalike of it — one renders the whole tree fresh every frame on the GPU (`render_ui_to_png`), the other walks node bounds in pure CPU with no pixels (`footer_leak_probe`). A stale-pixel bug lives only in the cache's incremental update, so both lookalikes are structurally blind to it. That blindness is why BUG-060 has been "fixed" and reopened ~4 times: every fix was proven green in a path the performer never runs.** This design makes the app's real render path callable, drives it from a single headless harness that also feeds real input, and proves the harness faithful by making it fail on a known-broken commit before it's trusted.
@@ -219,24 +219,9 @@ The main window is the only one with the stale-pixel class, so it is the only on
 
 ## Phasing
 
-### Phasing amendment 2026-07-10 (Fable) — BUG-060 closed out-of-band; P0 restaged
+> **Anchor note (2026-07-10 class-kill).** The BUG-060 fix (`39836352`, landed `cc4eeb37`) refactored the UI renderer's flush machinery: clip+depth are now bound per command at enqueue and all flush-time scissor inference was deleted (invariant in `docs/DEVELOPMENT_REFERENCE.md`, "UI Renderer Invariant"). So the §Audit/§3/§4 anchors into `app_render.rs` and the renderer must be re-derived against current `main` before each phase. P0's worker did this and confirmed no drift; **P1–P3 must repeat it for their own anchors.** (Historical detail — P0 built-unlanded on the pre-fix renderer, the old differential's mis-placed bands, and the BUG-060 hunt — is in git history and the BUG-060 backlog entry; it is not re-litigated here.)
 
-What happened between approval and execution:
-
-- **P0 was built** (2026-07-10, `feat/ui-harness-p0` @ `b51e6bbc`, worktree `ui-harness-p0`) but **not landed**. Its differential ran clean on then-broken `main` — the escalation branch fired, in a form the design didn't enumerate: the bug was deterministic and replayable, but **the asserted bands were the wrong rows**. The differential asserted the footer band `[footer_top, footer_top+h)`; rig screenshots relocated the artifact to the scroll viewport's clip edges INSIDE the inspector (bottom sliver above `footer_top` on both tabs; top sliver under the tab strip on Master). See the BUG-060 backlog entry for the full trail.
-- **BUG-060 was then root-caused on the rig, not in the harness**: a flush-time scissor theft (`push/pop_transform`/`push/pop_depth` cut the pending rect run and batched tree rects under the immediate clip). Fixed @ `39836352`, rig-verified, landed on main @ `cc4eeb37` (2026-07-10), then **class-killed** the same day: clip+depth are now bound per command at enqueue and ALL flush-time scissor inference was deleted (invariant recorded in `docs/DEVELOPMENT_REFERENCE.md`, "UI Renderer Invariant"). BUG-060 is CLOSED.
-- **The design's thesis is strengthened, not weakened**: the old harness said "0 diff" while the rig showed dirt — a green harness lied again. But the flush machinery P0 renders through has since been refactored by the class-kill, so **every §Audit/§3/§4 anchor into `app_render.rs` and the UI renderer must be re-derived against post-`cc4eeb37` main before any phase runs.**
-
-P0's restaged execution (supersedes the Gate-positive staging below; everything else in P0 stands):
-
-1. Rebase/merge `feat/ui-harness-p0` onto current `main`; re-verify entry-state anchors.
-2. **Extend the differential's asserted bands to cover the two clip-edge slivers** (where BUG-060 actually lived) in addition to the footer band. The "stop extending the harness" ruling in the backlog applied to the *hunt*, which is over; band coverage is now informed by a known artifact location.
-3. **RED half of the bracket:** run the driver in a worktree checked out at the pre-fix commit (`cc4eeb37^` on the first-parent line, or `39836352^`) — the extended bands must show a non-empty diff of stale UI chrome, confirmed by reading the band PNGs. **GREEN half:** same driver on current `main` shows zero diff. This satisfies D2/D6 with a real known-broken commit; the regression test `transform_boundary_keeps_tree_scissor_on_pending_batch` (landed with the fix) is the unit-level sibling, not a substitute — D6 wants the *harness* proven faithful.
-4. Land P0 (BUG-071's backlog entry closes with it), then P1–P3 proceed unchanged.
-
-### P0 — Faithful full-app headless render + inspectable captures (zero live-code change)
-
-> **Superseded framing — the "Reframe 2026-07-10" block at the top governs this phase.** P0 is no longer a differential or a red bracket; it is a faithful render of the whole app to a PNG plus a drawer-tween filmstrip that a reviewer looks at. The **Entry state** and **Read-back** steps below still stand (they establish the real render path); the **Deliverables** and **Gate** are restated here for the reframe. The "Phasing amendment 2026-07-10" block above (red-bracket restaging, clip-edge bands) is retired with D2.
+### P0 — Faithful full-app headless render + inspectable captures (zero live-code change) — SHIPPED 2026-07-10
 
 The vertical slice: real fixture → real cache → real pixels → a saved full-app PNG + a drawer-tween filmstrip a reviewer looks at. No extraction yet; the driver calls the public `UICacheManager` API directly in the app's order.
 
