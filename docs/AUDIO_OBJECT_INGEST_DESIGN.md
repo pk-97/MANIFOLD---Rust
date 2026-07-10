@@ -86,13 +86,43 @@ detector. The pipeline JSON contract is additive during transition — but the t
 ends inside the same phase that starts it (no permanent dual path; the losing detector
 for a row is removed from that row's flow in the same change,
 per no-transitional-states).
+**[AMENDED 2026-07-10 (F10) — the number to beat is the *post-precision-pass* Basic
+Pitch, not raw Basic Pitch.** `AUDIO_ANALYSIS_ACCURACY_DESIGN.md` P4 tunes Basic Pitch's
+post-processing on these same synth/pad stems. Replacing a detector before that pass runs
+would replace one the pass might fix. So D4's per-instrument replacement is **sequenced
+after ANALYSIS_ACCURACY P3 (baseline) + P4 (Basic Pitch precision pass)**: the object
+segmenter must beat the post-P4 Basic Pitch F₁ on those stems, measured in the *same*
+harness (D5), or it does not replace it.]**
+
+**D5 — One measurement harness: consume `AUDIO_ANALYSIS_ACCURACY`'s `eval/`, don't build
+a second. [NEW 2026-07-10 (F10).]** `AUDIO_ANALYSIS_ACCURACY_DESIGN.md` (2 days newer than
+this doc) builds the real measurement substrate — `tools/audio_analysis/eval/` with frozen
+per-instrument P/R/F₁ metrics (its D10), fixture tiers, and an untouchable held-out split
+(its D9). This doc's P1 originally specified "a scoring script (Python, beside the
+pipeline)"; that would be a second harness contesting the same Basic-Pitch/synth-stem
+surface with an opposite fixture doctrine. Reconciled: **there is one harness (`eval/`),
+and this doc consumes it.** The two uses don't conflict because they are different
+questions — ANALYSIS_ACCURACY runs a *tuning-and-baseline* loop (tuned `dev` sets, held-out
+`test`); this doc's P1 runs a *one-shot component measurement* ("does Basic Pitch measure
+weak on Peter's material?") using `eval/`'s `metrics.py` with Peter's labeled clips as a
+**measurement-only fixture tier** — never a tuning set (consistent with ANALYSIS_ACCURACY
+Deferred #5, "Peter material is never the tuned sets"). **Chord-emitter seam:**
+ANALYSIS_ACCURACY §4.3 clusters Basic Pitch notes on the synth/pad stem into `Chord`
+events. If D4 drops Basic Pitch from those stems, §4.3's chord clustering must re-point to
+the object segmenter's output (or the two coexist — segmenter for sustained-object gestures,
+§4.3 chords as a separate emitter). Name and preserve this seam in the P3 brief; do not
+silently break §4.3.
 
 ## 3. Phasing (briefs at conformance level; full briefs written when P0–P2 of the realtime doc land)
 
 **P1 — Measurement.** *Blocked on Peter (named decider): labeled clips.* Deliverables:
-fixture folder convention, a scoring script (Python, beside the pipeline; tolerance
+Peter's labeled clips added as a measurement-only fixture tier in
+`AUDIO_ANALYSIS_ACCURACY`'s `eval/` harness (D5 — **not** a bespoke script), a
+per-instrument component-measurement run through `eval/`'s `metrics.py` (tolerance
 ±30 ms events / ±100 ms boundaries), per-instrument P/R table committed to this doc's
-§1. Gate: the table exists and names the weak rows; no code changed.
+§1. Gate: the table exists and names the weak rows; no new harness, no code changed in the
+detectors. *Entry note: if `eval/` has not landed yet (ANALYSIS_ACCURACY P1), this phase
+waits on it rather than forking a parallel scorer.*
 Demo: the table — L2.
 
 **P2 — Offline mode in the harness.** `mod_harness --segments`: non-causal pass (D2)
@@ -122,12 +152,17 @@ Demo: detect-and-group on a labeled clip, before/after timelines — L2 minimum,
   detector each (D4).
 - **You will want to shape the segmenter around the labeled clips** — the P3 gate
   uses held-out material (STANDARD §5 fixture-overfitting rule).
+- **You will want to write "a quick scoring script beside the pipeline"** — no. That is
+  the second harness F10 killed; measurement runs through `AUDIO_ANALYSIS_ACCURACY`'s
+  `eval/` (D5). One harness, one set of frozen metrics.
 
 ## 5. Decided — do not reopen
 1. One core, two regimes; offline adds passes, never forks (relation contract).
 2. Measurement precedes replacement; per-instrument, not wholesale (D1/D4).
 3. Integration is in-process Rust on the existing stems; Python keeps separation +
    whatever measures well (D3).
+4. One measurement harness — `AUDIO_ANALYSIS_ACCURACY`'s `eval/`, consumed here, never
+   forked; replacement is sequenced after that doc's P3/P4 baselines (D5/D4, F10).
 
 ## 6. Deferred
 - **Wobble-rate/phase and object-texture metadata on ingested clips** — after the

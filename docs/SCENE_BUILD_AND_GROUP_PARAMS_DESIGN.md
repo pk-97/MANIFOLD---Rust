@@ -60,7 +60,7 @@ a moved anchor is an escalation, not a guess.
 | Card rendering | `crates/manifold-ui/src/panels/param_card.rs:2205` (`build_generator`) + `build_effect` | Flat slider list, manifest order. **No section concept exists anywhere in the card UI** (searched panels/) |
 | Node-face rows | `GRAPH_EDITOR_REDESIGN.md` on-node phases 1–6 (all ✅ 2026-07-01); `graph_canvas/model.rs` (`NodeRow`, `compute_node_rows`) | Regular nodes render param rows with sliders/checkboxes/editors; the row substrate P4 reuses. Canvas already computes wire-driven/outer-driven state (`apply_driven_state`, `outer_routings`) |
 | Group box rendering | `graph_canvas/model.rs:114-123` (`is_group`, `group_tint`) | Groups draw as tinted boxes with interface ports only — no param rows |
-| Group exposure policy | `NODE_GROUPS_UI_DESIGN.md` status | Phase D (interface editing) **dropped** — Peter 2026-06-13: organisation-only, exposure direct-to-card. This design keeps that; `GroupParamDef` stays unused |
+| Group exposure policy | `NODE_GROUPS_UI_DESIGN.md` status | Phase D (interface editing) **dropped** — Peter 2026-06-13: organisation-only, exposure direct-to-card. This design keeps that; **no live group-param runtime**. *(F14 clarification 2026-07-10: `COMPONENT_LIBRARY_DESIGN.md` §4/§4a is the sanctioned `GroupParamDef` consumer — but declaration-only: component macros are `GroupParamDef` entries that **lower onto ordinary card `BindingDef`s at expose** (COMPONENT §4b), so the thing this design kills — a live group-param interface runtime — stays dead. "`GroupParamDef` stays unused" was too strong; "no live group-param runtime" is the real invariant.)* |
 | glTF importer | `crates/manifold-renderer/src/node_graph/gltf_import.rs:274-669` (`build_import_graph`) | Already builds one named+tinted group per material with stable inner `node_id`s; curates a 13-slider card (camera/sun/reflections + per-object metallic/roughness with " 2"-style suffixes); sets recenter via `pos_x_{k}` params ON the render node (`:510-518`); **no transform sliders on the card at all** |
 | Stale importer cap | `gltf_import.rs:45` (`MAX_RENDER_SCENE_OBJECTS = 8`) | Comment says "mirrored from node.render_scene's own MAX_OBJECTS" — that constant was deleted 2026-07-05 (`render_scene.rs:64`, `OBJECT_SLIDER_MAX = 64`). Imports silently drop materials past 8 while the renderer is uncapped. Fixed in P2 |
 | Migration chain | `crates/manifold-io/src/migrate.rs:5-84` | Version-gated `Value → Value` steps, top currently `1.11.0`; `migrations/param_storage_v14.rs` is the quarantined-module precedent |
@@ -154,10 +154,14 @@ header row (name + fold triangle + row count when folded); `None` runs render ex
 as today. Fold state is UI-local (workspace state, like node collapse), not
 serialized — honest cost: folds reset on app restart; persistence is Deferred with a
 trigger (§9).
-Rejected: **reviving `GroupParamDef` / NODE_GROUPS_UI Phase D** — a second
-card-to-node resolution path beside the just-audited manifest/binding system, its own
-authoring UI, and its one real superpower (one knob → many targets) already exists as
-fan-out `BindingDef`s. Peter re-confirmed the kill 2026-07-06 after full pricing.
+Rejected: **reviving `GroupParamDef` as a live group-param runtime / NODE_GROUPS_UI
+Phase D** — a second card-to-node resolution path beside the just-audited manifest/binding
+system, its own authoring UI, and its one real superpower (one knob → many targets) already
+exists as fan-out `BindingDef`s. Peter re-confirmed the kill 2026-07-06 after full pricing.
+*(F14, 2026-07-10: this rejects a **live runtime**, not the `GroupParamDef` **type** —
+`COMPONENT_LIBRARY` §4 reuses the type as a declaration schema that lowers to those same
+fan-out `BindingDef`s at expose. Same kill target, different word: no live group-param
+runtime.)*
 
 **D6 — Group boxes render their exposed params as live rows.** (Peter, 2026-07-06:
 groups get "sliders and checkboxes like standard nodes so you can play with the
@@ -430,8 +434,10 @@ stop).
    not renderer params. The renderer's params are deleted, not shadowed.
 2. `node.transform_3d` / `PortType::Transform` naming (Peter, 2026-07-06).
 3. Card bundling = `ParamSpecDef.section`, seeded from group names, stored on the
-   manifest spec, never derived at display. Phase D / `GroupParamDef` stays dropped
-   (re-confirmed 2026-07-06 after pricing).
+   manifest spec, never derived at display. Phase D (the live group-param runtime) stays
+   dropped (re-confirmed 2026-07-06 after pricing). *(F14, 2026-07-10: the `GroupParamDef`
+   **type** is not dropped — `COMPONENT_LIBRARY` §4 reuses it as a declaration schema that
+   lowers to card `BindingDef`s; card sections here are orthogonal to component macros.)*
 4. Group boxes render their exposed-param rows; same command path as the card —
    three surfaces, one value, zero new machinery.
 5. Exposure stays direct-to-card by nodeId (2026-06-13 decision intact).
@@ -467,13 +473,20 @@ stop).
 - **`parent: Transform` input on `node.transform_3d`** (hierarchy v2) — revive when
   glTF hierarchy import lands or totemed set pieces demand parenting. Compose
   parent × local; no type changes (REALTIME_3D D1's promise, kept).
-- **Transform port on `render_mesh` / `render_copies`** — additive; revive on first
-  real ask.
+- **Transform port on `render_mesh` / `render_copies` / `render_splats`** — additive;
+  revive on first real ask. *(F4, 2026-07-10: `GAUSSIAN_SPLATS` D10 keeps port-shadowed
+  TRS params for single-object placement and defers its optional `transform: Transform`
+  override to **this** trigger — splat placement becomes P6-gizmo-addressable by the same
+  mechanism and at the same time as meshes.)*
 - **Card section fold persistence** — revive if Peter asks for folds surviving
   restart during set prep; home would be workspace serialization, never the spec.
 - **Virtual auto-grow sockets** (wire into a ghost port → objects bumps) — revive if
   the add-object button proves insufficient; canvas-only change.
 - **Group interface params (Phase D)** — revive only for swappable "rack" presets
   with stable knob surfaces (contents change, knobs don't). Sections don't block it.
+  *(F14, 2026-07-10: that "rack presets" use case **is** `COMPONENT_LIBRARY` — it reuses
+  `GroupParamDef` as a declaration schema lowered to card `BindingDef`s (its §4b), which is
+  a component macro layer, not the live Phase-D runtime this doc kills. Named so the two
+  don't read as contradicting.)*
 - **Per-object normal/roughness/metallic map ports** — pre-existing render_scene
   deferral, unchanged by this design.

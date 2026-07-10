@@ -1,7 +1,7 @@
 # Gig Resilience — Red-Teaming the Live Show
 
 **Status: IN PROGRESS — P1 (`3dffe29a` P2 merge) and P2 built + merged into `feat/timeline-ui-redesign` (2026-07-03); P3–P4 not implemented. Sonnet-executable. Phases in §9.**
-**D8 caveat (shipped in P2):** the "rejoin to live Ableton position" branch is NOT built — the bridge (`ableton_bridge.rs:250`) has no inbound song-position field (position is outbound-only). P2 shipped D8's breadcrumb-beat fallback (autonomous, plays immediately). Building Ableton-position rejoin needs a new inbound OSC listener; deferred to ABLETON_SHOW_SYNC (where inbound transport belongs) — decision pending Peter.
+**D8 status (updated 2026-07-10 — F8):** P2 shipped D8's breadcrumb-beat fallback (autonomous, plays immediately). The 2026-07-03 caveat said the "rejoin to live Ableton position" branch could not be built because the bridge had no inbound song-position field — **that is now false.** `ABLETON_TRANSPORT_SYNC` (P1–P3, landed 2026-07-07) added the inbound listener: `ableton_bridge.rs` parses `/live/song/get/current_song_time` into `PendingTransportState::song_time` (`:242`, `:891`). **Peter's decision (2026-07-10): build the `--resume` Ableton-position rejoin now.** It is remaining work here (wiring `--resume`'s D8 rejoin to the shipped `song_time` listener — a P3/P4-adjacent task; see §5.2 and §9 P4). The old "deferred to ABLETON_SHOW_SYNC, decision pending Peter" pointer is retired — transport landed in ABLETON_TRANSPORT_SYNC, and the rejoin consumes it from here.
 **Prerequisites: none for P1–P2. P3 after PERFORM_SURFACE_DESIGN P1 (`docs/DESIGN_BUILD_ORDER.md` §2).**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.**
 
@@ -213,6 +213,11 @@ are score-addressed.
    window (~2 s), else breadcrumb beat. Start playing without waiting for the
    bridge — re-seek when it connects (the score is beat-anchored; a re-seek is
    a snap, not a scrub — see `timecode-locks-score-not-render` memory).
+   **[F8, 2026-07-10 — the Ableton-position branch is now buildable and Peter approved
+   building it.** Wire it to the shipped inbound listener: read
+   `PendingTransportState::song_time` (`ableton_bridge.rs:242/:891`, added by
+   ABLETON_TRANSPORT_SYNC) — if it has updated within the ~2 s window, seek to that beat;
+   else breadcrumb beat. This is the remaining `--resume` work, briefed in §9 P4.]**
 5. First frame presented → `PRESENTED` to the understudy.
 
 Engineering the number: project load at canonical scale (2 928 clips, 53
@@ -341,8 +346,9 @@ not grow); any rung that needs human input mid-set (D3).
   seeks breadcrumb beat, display-UUID topology restore), panic-hook beat stamp
   (single atomic). Reads beat via the existing `ContentState` channel — `sync_clips_to_time`
   untouched, `Arc<Mutex>` count unchanged. 10/10 breadcrumb unit + resume/crash tests +
-  workspace sweep green. **D8 Ableton-position rejoin deferred (see status caveat above);
-  breadcrumb-beat fallback shipped.** Live kill→relaunch crash-to-picture profiling is a
+  workspace sweep green. **D8 breadcrumb-beat fallback shipped; the Ableton-position
+  rejoin branch is now approved and buildable (F8, 2026-07-10 — the inbound listener
+  landed in ABLETON_TRANSPORT_SYNC; remaining work is in P4).** Live kill→relaunch crash-to-picture profiling is a
   PETER manual drill (documented in the P2 report; instrumentation at `app_lifecycle.rs:575`
   + a `[Resume]` log line) — not yet run.
   Breadcrumb sidecar + `--resume` boot path + output
@@ -368,12 +374,17 @@ not grow); any rung that needs human input mid-set (D3).
   table §4.2 is the test surface.
 - **P4 — Peripherals + polish.** MIDI hotplug, audio rebuild/device-follow,
   GPU CB status wiring, thermal glyph, quarantine heuristic (§5.3),
-  Result-hardening pass on worker threads (D7). Read-back: §8, the
-  Ableton-bridge template (`ableton_bridge.rs:564,675,702`). Forbidden:
-  quarantine cleverness beyond the two §5.3 heuristics. Gate: focused
-  per-crate tests + manual unplug/replug drill per peripheral; for D7, `rg -n
-  'unwrap\(\)|expect\(' ` over the three named worker threads' fallible paths
-  returns only cases with a stated infallibility reason.
+  Result-hardening pass on worker threads (D7), **`--resume` Ableton-position rejoin
+  (F8, Peter-approved 2026-07-10): wire §5 step 4's Ableton-first branch to the shipped
+  `PendingTransportState::song_time` listener (`ableton_bridge.rs:242/:891`) — seek to the
+  live song beat if it updated within the ~2 s window, else breadcrumb beat.** Read-back:
+  §8, §5.2, the Ableton-bridge template (`ableton_bridge.rs:564,675,702`) + the inbound
+  transport parse (`:891`). Forbidden: quarantine cleverness beyond the two §5.3
+  heuristics. Gate: focused per-crate tests + manual unplug/replug drill per peripheral;
+  **for the rejoin, a kill→relaunch drill with Ableton playing lands the show at Ableton's
+  current beat, not the breadcrumb beat, when the bridge reconnects inside the window;**
+  for D7, `rg -n 'unwrap\(\)|expect\(' ` over the three named worker threads' fallible
+  paths returns only cases with a stated infallibility reason.
 
 Testing note: P3's drills belong in a script (`scripts/gig_drill.sh`): launch,
 enter perform mode, kill/-STOP the process, assert understudy state

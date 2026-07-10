@@ -188,16 +188,31 @@ not a partition.)
 
 ## Handoff split
 
-**Opus amendment session (one sitting, ~4 items):**
-1. F2 — REALTIME_3D: shadow caster budget/policy under uncapped objects+lights; strike D3/§7.3 cap text. (The one finding that can produce rework-by-construction if P2 executes first.)
-2. F5 — IMPORT: P1 scope re-cut against the shipped importer (what remains: report, undo-transaction, Khronos conformance, light mapping, manifold-io placement question).
-3. F10 — AUDIO_OBJECT_INGEST ↔ ANALYSIS_ACCURACY: one measurement harness, sequenced detector ownership on synth/pad stems.
-4. F4(b) + F14 — two one-sentence judgment confirmations (splat Transform port; GroupParamDef compose).
+**Opus amendment session — DONE 2026-07-10 (this landing).** Peter's decisions applied:
+shadow caster cap `K = MAX_SHADOW_CASTING_LIGHTS = 4` (first-K-lights policy); F8 rejoin =
+build it.
+1. ✅ F2 — REALTIME_3D: D4 sets the `MAX_SHADOW_CASTING_LIGHTS = 4` caster cap (first-K by
+   slot, extras still illuminate); D3/§3/§6/§7.3 stale "8 objects, 4 lights" cap text struck
+   and re-anchored to `OBJECT_SLIDER_MAX = 64` + UNBOUNDED_LIGHTS; P2 gate gains the
+   >K-casters assertion.
+2. ✅ F5/F6 — IMPORT: reality note refreshed (the assembler `assemble_import_graph` +
+   per-material groups + camera/sun/IBL + `ImportReport` + single-undo-transaction install
+   already ship; placement resolved = manifold-renderer, D1/§3's manifold-io superseded); P1
+   re-cut to remaining work (light mapping, camera consumption, report surfacing, alphaMode/
+   normal/doubleSided report lines, hierarchy pre-compose, cap 8→64, Khronos conformance).
+3. ✅ F10 — OBJECT_INGEST D5 (consume ANALYSIS_ACCURACY's `eval/`, don't fork) + D4 sequenced
+   after ANALYSIS P3/P4 baselines + chord-emitter seam named; ANALYSIS_ACCURACY companion +
+   §4.3 seam note added.
+4. ✅ F4 — GAUSSIAN_SPLATS D10 re-anchored to render_mesh/render_copies; Transform-port
+   override deferred to SCENE_BUILD §9's shared trigger (F4b judgment); SCENE_BUILD §9 names
+   render_splats (F4a/c folded in).
+5. ✅ F14 — SCENE_BUILD (audit row + Rejected + Decided-3 + §9) and COMPONENT_LIBRARY §4 both
+   amended: the kill target is a *live group-param runtime*, not the `GroupParamDef` type;
+   COMPONENT_LIBRARY reuses it declaration-only (lowers to card `BindingDef`s); sections ⊥ macros.
+6. ✅ F8 — GIG_RESILIENCE D8 caveat truth-fixed (inbound `song_time` listener landed in
+   ABLETON_TRANSPORT_SYNC, `:242/:891`); `--resume` Ableton-position rejoin added as named P4
+   remaining work per Peter's decision to build it.
 
-**Peter decisions surfaced (fold into the Opus session or a session start):**
-- F8: build the --resume Ableton-position rejoin now that the listener exists, or drop it?
-- F2: shadow caster cap value (a constant, but a cost-policy call).
+**Still owed (mechanical, any Sonnet session; no judgment):** F3 · F7 · F9 · F11 · F12 · F13 · F15 · F17 · F18 · F19 + board regen after the header fixes. *(F4a/c and F6 folded into the Opus edits above.)*
 
-**Mechanical fixes (any Sonnet session; no judgment):** F3 · F4(a,c) · F6 · F7 · F9 · F11 · F12 · F13 · F15 · F17 · F18 · F19 + board regen after the header fixes.
-
-**Fixed this session:** F1/F16 (DESIGN_BUILD_ORDER update, committed with this ledger).
+**Fixed earlier this session:** F1/F16 (DESIGN_BUILD_ORDER update, committed with this ledger).
