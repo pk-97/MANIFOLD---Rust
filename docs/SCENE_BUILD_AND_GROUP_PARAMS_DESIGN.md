@@ -1,6 +1,11 @@
 # Scene Build + Group Params — named objects, transform atoms, sectioned cards
 
-**Status:** IN PROGRESS · design 2026-07-06 · Fable. **P1 SHIPPED 2026-07-10** (main `3a6e30b7`):
+**Status:** ✅ **DONE — WAVE COMPLETE 2026-07-10 (P1–P5 all shipped).** Design 2026-07-06 · Fable;
+built by an Opus-orchestrated Sonnet wave. Scene-building is now named per-object card sections,
+transforms as composable `Transform`-port atoms (beat-modulatable), group boxes that carry their
+sub-node sliders, and one-click "+ Object"/"+ Light" that spawn wired/lit/visible — all verified on
+the real azalea glTF import. Owed: Peter's L4 feel-pass on the P5 gestures (click-script in
+`docs/landings/2026-07-10-scene-build-p5.md`). Per-phase detail below. · design 2026-07-06 · Fable. **P1 SHIPPED 2026-07-10** (main `3a6e30b7`):
 `PortType::Transform` + `node.transform_3d` atom. **P2 SHIPPED 2026-07-10**: `render_scene` sheds
 all per-object transform params for `transform_n` ports; v1.12.0 migration carries old saves across
 (values + card bindings re-pointed); glTF importer emits the end-state shape. Migration parity vs
@@ -18,7 +23,11 @@ Verified on the REAL azalea import: the "QS1694-W02-1-1"/"Material.001" object b
 Metallic/Roughness sliders. Fixed the payoff-blocking BUG-103 (`outer_routings_from_view` never
 recursed into group bodies, so in-group material bindings were dropped for exactly the imported
 scenes the wave targets — 9/13 → 13/13 routings). Landings:
-`docs/landings/2026-07-10-scene-build-p{1,2,3,4}.md`. **P5 remains** (add-object/add-light + ribbons).
+`docs/landings/2026-07-10-scene-build-p{1,2,3,4}.md`.
+**P5 SHIPPED 2026-07-10** (`AddSceneObjectCommand` + `AddSceneLightCommand` with node-face "+ Object"/
+"+ Light" buttons, D7a light defaults incl. `cast_shadows` ON; same-pair wire ribbons with `×N` badge).
+Both gestures verified on the real azalea import (node/wire counts 8→9/12→15 add-object, 8→9/12→13
+add-light). Landing: `docs/landings/2026-07-10-scene-build-p5.md`. **Wave complete.**
 **Prerequisites:** PARAM_STORAGE_DESIGN P1–P5 (SHIPPED). PARAM_STORAGE_BOUNDARIES_DESIGN
 P1–P2 must land **before this doc's P3 only** (the card phase reads specs straight off
 the manifest; building it against the pre-boundaries dual-source card path would wire it

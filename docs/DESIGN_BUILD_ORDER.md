@@ -46,7 +46,7 @@ prerequisites aren't shipped, stop.
 | UI_AUTOMATION_DESIGN (P1–P2 ✅; P3–P4 remain) | none; UI_HARNESS P2 rewrites the shipped Runner — re-derive anchors (audit F18) | full (P1–P2) / conformance (P3–P4) |
 | TIMELINE_INGEST_DESIGN (P3–P5 ✅) | P1/P2 PARKED on BUG-028 | full |
 | GAUSSIAN_SPLATS_DESIGN | none hard (P4 consumes shipped `render_scene`); D10 re-anchor owed before P3 (audit F4) | full |
-| SCENE_BUILD_AND_GROUP_PARAMS_DESIGN (P1 ✅ @ `3a6e30b7`, P2 ✅ @ `5c0f86f2`, P3 ✅ @ `de35da32`, P4 ✅ 2026-07-10 (group-face param rows); **P5 remains** — add-object/add-light + wire ribbons, wave-closer) | P3's prereq (PARAM_STORAGE_BOUNDARIES P1–P2) ✅ satisfied 2026-07-09; REALTIME_3D P6 needs its P2 (landed) | full |
+| SCENE_BUILD_AND_GROUP_PARAMS_DESIGN ✅ **WAVE COMPLETE 2026-07-10** (P1–P5 all shipped: Transform port+atom, render_scene port swap+v1.12.0 migration+importer, card sections, group-face rows, add-object/light+ribbons) — Peter L4 feel-pass on P5 gestures owed | (satisfied) REALTIME_3D P6 now unblocked (its P2 dep landed) | full |
 | APP_SHELL_DESIGN | none for P1–P3; its §8 slots bind their own waves | full (P1–P3) / conformance (§8 slots) |
 | VIDEO_IO_DESIGN (added 2026-07-09) | none for P1–P2; P3–P4 need the NDI SDK verify (D8; Peter if ambiguous) | full |
 | UI_HARNESS_UNIFICATION_DESIGN (added 2026-07-09) | none unbuilt (UI_AUTOMATION P1–P2 + UI_CLIP_AND_Z P1 shipped) | full |
