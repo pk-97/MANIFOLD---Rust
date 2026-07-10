@@ -1,0 +1,64 @@
+[
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "AUDIO TRIGGERS", "type": "Label" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "▶",
+          "type": "Button",
+          "under_text": "AUDIO TRIGGERS"
+        }
+      },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "▸ Low → Kick", "type": "Button" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "+ Add Trigger", "type": "Button" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "▸ Full → Amplitude", "type": "Button" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "▸ Full → Amplitude", "type": "Button" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": { "text": "Low", "type": "Button", "under_text": "▼ Full → Amplitude" }
+      },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "▼ Low → Amplitude", "type": "Button" } },
+      "check": "Exists"
+    }
+  }
+]

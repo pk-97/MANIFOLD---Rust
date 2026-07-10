@@ -387,6 +387,18 @@ pub fn dispatch(
         | PanelAction::AudioModStepAmountChanged(..)
         | PanelAction::AudioModStepAmountCommit(..)
         | PanelAction::AudioModSetWrap(..)
+        | PanelAction::AudioTriggerSectionToggle
+        | PanelAction::AudioTriggerRowExpandToggle(..)
+        | PanelAction::AudioTriggerAdd(..)
+        | PanelAction::AudioTriggerRemove(..)
+        | PanelAction::AudioTriggerEnabledToggle(..)
+        | PanelAction::AudioTriggerSetSource(..)
+        | PanelAction::AudioTriggerSetInvert(..)
+        | PanelAction::AudioTriggerSetRateOfChange(..)
+        | PanelAction::AudioTriggerShapeSnapshot(..)
+        | PanelAction::AudioTriggerShapeParamChanged(..)
+        | PanelAction::AudioTriggerShapeCommit(..)
+        | PanelAction::AudioTriggerSetLength(..)
         | PanelAction::AudioSetDevice(..)
         | PanelAction::AudioAddSend
         | PanelAction::AudioRemoveSend(..)

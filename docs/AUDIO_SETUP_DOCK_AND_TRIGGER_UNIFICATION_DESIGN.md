@@ -1,6 +1,6 @@
 # Audio Setup Dock & Trigger Unification — the panel becomes a workspace column; clip triggers become layer-owned audio mods
 
-**Status:** IN PROGRESS · P1 SHIPPED 2026-07-10 (dock column + overlay-path deletion + scroll, `36a96791`; closes BUG-047) · P2 SHIPPED 2026-07-10 (`LayerClipTrigger` model + load migration + evaluator + analysis-gating arm, `feat/audio-dock-p2` @ `e4aa01bf`; round-trip + real-fixture gated; L1 model phase — see `docs/landings/2026-07-10-audio-dock-p2.md`) · P3 SPLIT: P3a SHIPPED 2026-07-10 (Triggers-matrix deleted + shared-drawer Length-row capability, `47f2a112`; Consumers re-pointed to layers — see `docs/landings/2026-07-10-audio-dock-p3a.md`) · **P3b BLOCKED on a placement decision** (layer-side authoring UI + fire meter/BUG-082; see Phase 3 note) · P4 remains · design 2026-07-09 · Fable
+**Status:** IN PROGRESS · P1 SHIPPED 2026-07-10 (dock column + overlay-path deletion + scroll, `36a96791`; closes BUG-047) · P2 SHIPPED 2026-07-10 (`LayerClipTrigger` model + load migration + evaluator + analysis-gating arm, `feat/audio-dock-p2` @ `e4aa01bf`; round-trip + real-fixture gated; L1 model phase — see `docs/landings/2026-07-10-audio-dock-p2.md`) · P3 SPLIT: P3a SHIPPED 2026-07-10 (Triggers-matrix deleted + shared-drawer Length-row capability, `47f2a112`; Consumers re-pointed to layers — see `docs/landings/2026-07-10-audio-dock-p3a.md`) · P3b SHIPPED 2026-07-10 (inspector AUDIO TRIGGERS authoring section — top of layer inspector, default-collapsed; one-builder drawer w/ Length row, no Mode row; `feat/audio-dock-p3b` @ `5c4fbcca`; L3 add-trigger flow — see `docs/landings/2026-07-10-audio-dock-p3b.md`) · **P3c remains** (fire meter/D6 + BUG-082) · P4 remains · design 2026-07-09 · Fable
 **Prerequisites:** none (runs against shipped AUDIO_SENDS_UX P1–P4 and LIVE_AUDIO_TRIGGERS §9 U-P1/U-P2 code)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -334,11 +334,28 @@ carry over unchanged.
 > header (`layer_header.rs`), whose row height is the fixed `TRACK_HEIGHT` constant with a
 > test forbidding per-type exceptions. A **variable-length** list of clip-trigger drawers
 > cannot fit a fixed-height row without breaking the `single-source-y-layout` /
-> `track-header-invariant` invariants. **Resolution (Peter, 2026-07-10):** _[to be filled by
-> the placement AskUserQuestion — inspector "AUDIO TRIGGERS" section is the orchestrator's
-> recommendation: the inspector already hosts the identical `build_audio_mod_drawer`
-> machinery per effect card and is variable-height/scrollable]_. P3b (authoring UI + fire
-> meter/D6 + BUG-082 + state_sync rows) resumes once decided.
+> `track-header-invariant` invariants. **Resolution (Peter, 2026-07-10, AskUserQuestion):**
+> _"Inspector AUDIO TRIGGERS drawer... a single section that sits at the top of the inspector
+> for the layer and is default collapsed."_ ONE collapsible section pinned at the top of the
+> selected layer's inspector (not per-effect-card), default-collapsed so it doesn't eat space
+> until opened; the inspector already hosts the identical `build_audio_mod_drawer` machinery
+> and is variable-height/scrollable.
+>
+> **P3 further split into P3b + P3c** (the fire meter is net-new content-thread→UI live-value
+> plumbing touching EVERY fire-mode drawer, a distinct work class with its own hot-path gate —
+> keeping it out of the authoring phase):
+> - **P3b (authoring):** the inspector AUDIO TRIGGERS section (single, top, default-collapsed)
+>   + the clip-trigger drawer (D5 Length row `Some`, NO Mode row per D4) + a parallel additive
+>   `PanelAction` command family (the existing `build_audio_mod_drawer` action vocabulary is
+>   keyed on `(GraphParamTarget, ParamId)`, which `LayerClipTrigger` — addressed by `LayerId`
+>   + index — cannot express; per P2, the commands are whole-value-replace) + the state_sync
+>   view-model rows. Restores authoring, closing P3a's interim gap. UI-only, no thread crossing.
+> - **P3c (fire meter, D6 + BUG-082):** the live level meter with the 0.5 threshold line beside
+>   the Amount row of EVERY fire-mode drawer (param gate cards + clip triggers). Reads the
+>   shaped `shape.condition()` signal (per the D3 AS-BUILT note). Net-new content-thread→UI
+>   snapshot of the per-config shaped value — gated with `MANIFOLD_RENDER_TRACE=1` (no per-frame
+>   content-thread allocation; the deleted `update_trigger_levels` per-frame pattern is the
+>   precedent). This is BUG-082's fix; U2 stands (no Feature-row restriction).
 - **Entry state:** P2 landed; `param_slider_shared.rs:1518` drawer builder re-anchored;
   U-P2's Mode-row parameterization read.
 - **Read-back:** D4/D5/D6; `build_audio_mod_drawer` + the U-P2 landing notes in
