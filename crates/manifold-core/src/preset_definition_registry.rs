@@ -578,6 +578,11 @@ fn param_spec_def_to_param_def(p: &ParamSpecDef) -> ParamDef {
         // is_trigger_gate`'s doc comment for why a stock, never-forked
         // instance needs it here.
         is_trigger_gate: p.is_trigger_gate,
+        // D5 (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2), same reasoning as
+        // `is_trigger_gate` above: a glTF-imported generator's card sections
+        // ride the JSON catalog through here, not a per-instance graph
+        // override (it deliberately has none — D9/BUG-016).
+        section: p.section.clone(),
     }
 }
 

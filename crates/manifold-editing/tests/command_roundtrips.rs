@@ -1047,6 +1047,7 @@ fn change_effect_param_undo_roundtrip_on_user_tail_binding() {
         scale: 1.0,
         offset: 0.0,
         value_labels: Vec::new(),
+        section: None,
     });
     project.settings.master_effects.push(fx);
 
@@ -1789,6 +1790,7 @@ fn expose_already_exposed_is_idempotent_noop() {
         scale: 1.0,
         offset: 0.0,
         value_labels: Vec::new(),
+        section: None,
     });
     project.settings.master_effects.push(fx);
 
@@ -1840,6 +1842,7 @@ fn unexpose_effect_param_command_undo_roundtrip() {
         scale: 1.0,
         offset: 0.0,
         value_labels: Vec::new(),
+        section: None,
     });
     // Drag the slider — the user-tail entry changed.
     {
@@ -1931,6 +1934,7 @@ fn generate_user_param_id_collision_probe() {
             scale: 1.0,
             offset: 0.0,
             value_labels: Vec::new(),
+            section: None,
         },
         UserParamBinding {
             id: "user.uv_transform.translate.2".to_string(),
@@ -1947,6 +1951,7 @@ fn generate_user_param_id_collision_probe() {
             scale: 1.0,
             offset: 0.0,
             value_labels: Vec::new(),
+            section: None,
         },
     ];
     let existing_ids: Vec<String> = existing.iter().map(|b| b.id.clone()).collect();
@@ -1988,6 +1993,7 @@ fn unexpose_prunes_orphan_drivers_and_undo_restores_them() {
         scale: 1.0,
         offset: 0.0,
         value_labels: Vec::new(),
+        section: None,
     });
     // Attach a driver keyed to the user binding's id. Plus a driver
     // for the static `amount` param — that one must survive the
@@ -2092,6 +2098,7 @@ fn unexpose_prunes_orphan_ableton_mappings_and_undo_restores_them() {
         scale: 1.0,
         offset: 0.0,
         value_labels: Vec::new(),
+        section: None,
     });
     let address = AbletonMacroAddress {
         track_id: 0,
@@ -2168,6 +2175,7 @@ fn unexpose_prunes_orphan_envelopes_and_undo_restores_them() {
         scale: 1.0,
         offset: 0.0,
         value_labels: Vec::new(),
+        section: None,
     });
     // Envelope-home unification: envelopes ride on the instance, keyed by
     // param_id. Plant one on the unexposed binding (pruned) and one on an

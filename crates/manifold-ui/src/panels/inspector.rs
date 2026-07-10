@@ -2509,6 +2509,7 @@ mod tests {
             ableton_display: None,
             ableton_range: None,
             mappable: false,
+            section: None,
         }
     }
 

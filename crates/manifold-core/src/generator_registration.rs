@@ -189,6 +189,10 @@ impl ParamSpec {
             // trigger-gate card ships via the JSON preset path
             // (`ParamSpecDef`/`preset_metadata_to_def`), not this one.
             is_trigger_gate: false,
+            // Same story for D5 sections: an inventory-submitted (hand-
+            // written Rust) generator has no section — only JSON-authored/
+            // glTF-imported presets do, via `preset_metadata_to_def`.
+            section: None,
         }
     }
 }

@@ -1933,6 +1933,10 @@ struct SpecRow {
     is_trigger_gate: bool,
     value_labels: Option<Vec<String>>,
     exposed: bool,
+    /// Card-bundling section name (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2
+    /// D5) — straight off the manifest spec, never derived from graph
+    /// structure at display time.
+    section: Option<String>,
 }
 
 /// The empty generator card (no resolvable param source). Mirrors the old
@@ -1995,6 +1999,7 @@ fn rows_from_manifest(inst: &PresetInstance) -> Vec<SpecRow> {
                 Some(p.spec.value_labels.clone())
             },
             exposed: p.exposed,
+            section: p.spec.section.clone(),
         })
         .collect()
 }
@@ -2103,6 +2108,7 @@ fn preset_to_config(
                 ableton_display,
                 ableton_range,
                 mappable: true,
+                section: row.section.clone(),
             }
         })
         .collect();

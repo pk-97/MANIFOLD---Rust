@@ -1473,6 +1473,10 @@ pub(crate) const ROW_ROLE_DRV: u64 = 2;
 pub(crate) const ROW_ROLE_AUDIO: u64 = 3;
 pub(crate) const ROW_ROLE_CHEVRON: u64 = 4;
 pub(crate) const ROW_ROLE_TOGGLE: u64 = 5;
+/// D5 card-section header row (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2) —
+/// keyed by the run's first param index, same base scheme as the per-param
+/// roles above.
+pub(crate) const ROW_ROLE_SECTION_HEADER: u64 = 6;
 
 /// Add a row arm button: explicitly keyed (`base | role`) when a row key base is
 /// supplied (editor card), else auto-salted by sibling index (perform inspector,

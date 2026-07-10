@@ -1,0 +1,24 @@
+[
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "QS1694-W02-1-1", "type": "Label" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Metallic", "type": "Label" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "QS1694-W02-1-1", "type": "Label" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  "Dump"
+]

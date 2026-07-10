@@ -6,7 +6,13 @@ all per-object transform params for `transform_n` ports; v1.12.0 migration carri
 (values + card bindings re-pointed); glTF importer emits the end-state shape. Migration parity vs
 the real `meshImportTests` project is pixel-identical; a wired LFO→`rot_y` spins an imported object.
 This realizes REALTIME_3D's amended D3 (object transforms are now a `transform_n: Transform` port).
-Landings: `docs/landings/2026-07-10-scene-build-p{1,2}.md`. P3–P5 remain.
+**P3 SHIPPED 2026-07-10**: card sections from group names (`ParamSpecDef.section` seeded at expose +
+by importer; collapsible headers with UI-local fold state; group-rename sweep; manifest-only mapping
+write). A glTF-imported scene's card is now named foldable blocks (`QS1694-W02-1-1`, `Material.001`,
+`Camera`/`Sun`/`Environment`), not a flat slider wall — verified via faithful-render capture + a
+field-level fold proof. Also fixed a load-bearing registry gap (`ParamDef` lacked the `section`
+mirror, silently dropping sections for glTF-imported generators). Landings:
+`docs/landings/2026-07-10-scene-build-p{1,2,3}.md`. P4–P5 remain.
 **Prerequisites:** PARAM_STORAGE_DESIGN P1–P5 (SHIPPED). PARAM_STORAGE_BOUNDARIES_DESIGN
 P1–P2 must land **before this doc's P3 only** (the card phase reads specs straight off
 the manifest; building it against the pre-boundaries dual-source card path would wire it

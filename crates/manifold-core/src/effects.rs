@@ -80,6 +80,22 @@ pub struct ParamDef {
     /// byte-identical.
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_trigger_gate: bool,
+    /// Card-bundling section name (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2
+    /// D5) — mirrors [`crate::effect_graph_def::ParamSpecDef::section`] here
+    /// too, not just the graph-metadata twin, for the SAME reason
+    /// `is_trigger_gate` above does: a STOCK instance whose graph is `None`
+    /// (never forked) reads its card descriptors from here. This is load-
+    /// bearing for glTF-imported generators specifically — D9/BUG-016
+    /// deliberately makes them TRACK their embedded preset (`graph: None`)
+    /// rather than carry an inline override, so `gather_known_params`'s only
+    /// descriptor source for them IS this registry path; without this field,
+    /// every section the importer seeds is silently dropped the moment
+    /// `param_spec_def_to_param_def` converts the catalog JSON into the
+    /// registry. `false`/`None` by default, skipped on serialize (registry
+    /// entries aren't part of a saved project anyway, but the field must
+    /// still round-trip through the JSON catalog file itself).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
 }
 
 /// serde `skip_serializing_if` for [`ParamDef::curve`] / [`ParamSpecDef::curve`].
@@ -109,6 +125,7 @@ impl Default for ParamDef {
             curve: crate::macro_bank::MacroCurve::Linear,
             invert: false,
             is_trigger_gate: false,
+            section: None,
         }
     }
 }
@@ -141,10 +158,14 @@ impl ParamDef {
             // onto the spec in `append_user_binding`.
             is_angle: false,
             is_trigger_gate: self.is_trigger_gate,
-            // Bundled/registry `ParamDef` has no section concept — sections
-            // are seeded at expose time or by the glTF importer, never on
-            // the base registry template (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D5).
-            section: None,
+            // Carries through now (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2
+            // D5, load-bearing fix): a glTF-imported generator TRACKS its
+            // embedded preset (`graph: None`, D9/BUG-016), so this registry
+            // path is its ONLY descriptor source — without this, the
+            // importer's per-object sections would silently vanish the
+            // moment `param_spec_def_to_param_def` round-tripped them
+            // through the catalog.
+            section: self.section.clone(),
         }
     }
 }
@@ -168,6 +189,7 @@ pub(crate) fn param_def_from_spec(s: &crate::effect_graph_def::ParamSpecDef) -> 
         curve: s.curve,
         invert: s.invert,
         is_trigger_gate: s.is_trigger_gate,
+        section: s.section.clone(),
     }
 }
 
@@ -358,6 +380,14 @@ pub struct UserParamBinding {
     /// reshape overlay. `serde(default)` keeps pre-existing projects loading.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub value_labels: Vec<String>,
+    /// Card-bundling section name (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2
+    /// D5), captured from the innermost enclosing group's display name at
+    /// expose time and carried onto the appended [`crate::effect_graph_def
+    /// ::ParamSpecDef`] so the card reads it through the normal manifest
+    /// path. `None` for a top-level (unscoped) expose. `serde(default)`
+    /// keeps pre-existing projects loading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
 }
 
 /// serde default for [`UserParamBinding::scale`] — identity is `1.0`, not the
@@ -1785,6 +1815,7 @@ impl PresetInstance {
             scale: b.scale,
             offset: b.offset,
             value_labels: spec.map(|s| s.value_labels.clone()).unwrap_or_default(),
+            section: spec.and_then(|s| s.section.clone()),
         }
     }
 
@@ -1855,9 +1886,10 @@ impl PresetInstance {
             // (that's the preset-authored `clip_trigger` outer card only).
             is_trigger_gate: false,
             // Section seeding from the innermost enclosing group's display
-            // name is P3's deliverable (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md
-            // §2 D5) — this P2 session only lands the field itself.
-            section: None,
+            // name (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D5) — resolved
+            // by the expose command (`mirror_effect_side`) and carried on
+            // the `UserParamBinding` this fn receives.
+            section: binding.section.clone(),
         };
 
         // The per-instance graph is the single binding-storage list.
@@ -2039,7 +2071,12 @@ impl PresetInstance {
             // angle flag off the captured binding, same as `append_user_binding`.
             is_angle: binding.is_angle,
             is_trigger_gate: false,
-            section: None,
+            // Same carry-through as `append_user_binding` — this shadow entry
+            // is inert anyway (D12 re-derives `meta.params` from the live
+            // manifest at serialize time), but keeping it consistent avoids a
+            // misleading `None` sitting next to a real section value on the
+            // manifest entry `self.params.insert_at` restores below.
+            section: binding.section.clone(),
         });
 
         // Re-insert the manifest entry at its original display position among
@@ -4058,6 +4095,7 @@ mod tests {
             scale: 1.0,
             offset: 0.0,
             value_labels: Vec::new(),
+            section: None,
         }
     }
 
@@ -4587,6 +4625,7 @@ mod tests {
             scale: 1.0,
             offset: 0.0,
             value_labels: Vec::new(),
+            section: None,
         });
         let pd = ParamSource::get_param_def(&fx, "user.uv.translate.1");
         assert_eq!(pd.id, "user.uv.translate.1");
