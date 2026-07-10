@@ -1326,6 +1326,7 @@ fn modulation_drawer_sheet() {
         label_w: 52.0,
         default_norm: norm,
         reset: placeholder_reset(),
+        show_meter: false,
     };
 
     // Trigger (orange) — a single Decay slider.

@@ -100,7 +100,7 @@ or human can read it, and it needs no external tool.
 | BUG-066 | **fluid3d-corner-drift** | PARTIAL — the dominant defect (screen-scale quadrant anatomy + wandering tide from the noise lattice at 2 cells/volume) FIXED 2026-07-10 via `turb_scale` on `node.turbulence_3d` + "Turb Detail" card param (default 8); the smaller slope-force diagonal tide (~0.5% of peak, measured by the harness force meter) remains open — precision + executor + mean-projection hypotheses all refuted with evidence (MED → LOW-MED after the fix, needs Peter look-pass) |
 | BUG-068 | **inspector-scene-cliphit-overlap** | the `inspector` ui-snap scene fixture has a clip-vs-panel hit-test overlap at its narrower zoom — a clip can't be both uniquely-labeled and safely positioned over the inspector column, which forced DRAG_CAPTURE P1's L3 flow onto the `timeline` scene. Fixture-only, no runtime impact. Pre-existing at `b9304330` (LOW) |
 | BUG-069 | **shipping-license-audit** | four license problems in shipped components: madmom models + ADTOF (both CC BY-NC-SA), rusty_link crate (GPL-2.0, viral, in manifold-playback), staged ffmpeg copied from the dev machine (likely GPL build); full sweep 2026-07-08, everything else clean (HIGH for commercialization, zero runtime impact) |
-| BUG-070 | **stepper-and-nonstandard-slider-reset** | ~~decay drawer slider~~ + Clip Trigger drawer sliders now covered by the intrinsic-reset follow-through (@ 3a88f728, reset = required build input); **still open:** Audio Setup gain `[−]value[＋]` steppers + overlay-drag send-fader (not `BitmapSlider` tracks) (LOW) |
+| ~~BUG-070~~ FIXED | **stepper-and-nonstandard-slider-reset** | ~~decay drawer slider~~ + Clip Trigger drawer sliders covered by the intrinsic-reset follow-through (@ 3a88f728). Remainder FIXED (AUDIO_SETUP_DOCK P4): Audio Setup gain `[−]value[＋]` steppers + the D7 overlay-drag value-label gain zone (not `BitmapSlider` tracks, so no `SliderReset` registration existed) now right-click-reset to unity via `PanelAction::slider_reset` replaying the existing `AudioSendGainDrag{Begin,Changed,Commit}` trio at 0.0 dB — the SAME gesture BUG-105 names as "every card/panel slider in the app." `feat/audio-dock-p4`. |
 
 ## Open
 
@@ -110,7 +110,7 @@ or human can read it, and it needs no external tool.
 **Root cause:** unknown (not investigated). Suspects: (a) the button's y-anchor computed from a card content-height that omits the new P3 section-header row heights → a SCENE_BUILD P3 regression; (b) the concurrently-landed P3b `AUDIO TRIGGERS` inspector section shifting the composite-panel layout the button anchors to; (c) a sticky/overlay button pinned while sectioned content scrolled under it.
 **Also:** the mangled "ừ" glyph prefixing each section header is a SEPARATE bug — BUG-107 (font-coverage/fallback rasterization), triggered here by P3's section-marker glyph.
 **Honesty note:** this floating "+ Add Effect" was VISIBLE in this session's own P3/P4 verification PNGs; the orchestrator saw it and wrote it off as fixture noise instead of a real layout defect. The harness rendered it faithfully; the miss was in the looking, and no bounds-overlap assertion exists to catch it programmatically.
-**Fix shape:** re-derive the "+ Add Effect" anchor from the true rendered card height (section headers included), or confirm the composite-panel layout accounts for the AUDIO TRIGGERS section; and add a tree-dump bounds-overlap assertion to the UI harness so this class fails a gate. MED (the card is the live performance surface).
+**Fix shape:** re-derive the "+ Add Effect" anchor from the true rendered card height (section headers included), or confirm the composite-panel layout accounts for the AUDIO TRIGGERS section; and add a tree-dump bounds-overlap assertion to the UI harness so this class fails a gate. MED (the card is the live performance surface). **Class net designed 2026-07-10:** `docs/UI_LAYOUT_INVARIANT_LINTS_PROPOSAL.md` — the generic intra-stratum overlap lint would have failed this scene mechanically; this fix's phase delivers the I3 anchored assertion ("+ Add Effect below the last card row") via that doc's `painted_rect_of` helper.
 
 ### BUG-107 (text-rasterizer-draws-fallback-glyph-ids-with-base-font) — any character the UI font lacks renders as a wrong real glyph (mangled "ủ"-style symbols) — MED
 **Status:** OPEN — reported by Peter 2026-07-10 (screenshots of mangled prefix glyphs on row labels; likely the graph canvas's D6 "↳ <outer label>" mirror rows from the gltfeditor scene).
@@ -819,38 +819,6 @@ gate.
 `std::slice::from_ref(&analysis_id)`); mechanical, no behavior change. Out of scope for
 PARAM_STEP_ACTIONS (audio_mixdown.rs isn't part of that design) — left untouched per the
 scope-fence rule.
-
-### BUG-070 (stepper-and-nonstandard-slider-reset) — right-click reset still absent on the non-slider-track gain controls — PARTIALLY FIXED 2026-07-08 @ 3a88f728 — LOW (found 2026-07-08 during BUG-061)
-**Status:** PARTIAL
-
-**Update 2026-07-08 @ 3a88f728 (intrinsic-reset follow-through):** the envelope-decay drawer
-slider is now wired (its `EnvDecay*` trio had a real handler, just no registration). More
-importantly that commit made reset a *required build input* — `BitmapSlider::build` takes a
-`reset` and returns `Slider { ids, reset }`, registered by one shared replay instead of per-panel
-loops — which also closed the real motivating gap: the Clip Trigger drawer's Amount/Attack/Release
-sliders (a trigger-gate row with no main slider, so the old per-panel loop bailed before reaching
-them). **Still open:** the Audio Setup gain `[−]value[＋]` steppers and the overlay-drag audio
-send-fader — neither is a `BitmapSlider` track, so both need a different gesture wiring (see fix
-shape below); decide first whether right-click-reset is even the right affordance for a stepper.
-
-**Symptom:** BUG-061 made right-click reset the shared gesture for every intent-registered
-slider *track*, but three gain-ish controls don't render as a slider track and so were left
-out: the Audio Setup gain `[−] value [＋]` steppers and the overlay-drag audio send-fader (both
-in `audio_setup_panel.rs`), and the envelope-decay drawer slider (`param_slider_shared.rs`
-`build_envelope_config`, which rides the same `drawer.rs` path but emits a different
-value-change than the `AudioModShape*` trio BUG-061 wired).
-
-**Root cause:** the steppers are a `[−]value[＋]` control (no track), the send-fader is
-overlay-drag (`AudioSendGainDrag*`, not an intent-registered track), and the decay slider was
-simply not in BUG-061's surface list. None expose the `SliderNodeIds.track` node that
-`SliderReset` registration hangs off.
-
-**Fix shape:** for the drawer decay slider, add a `SliderReset` on its track with the
-envelope-decay default (mechanical, same as the other drawer sliders). For steppers/overlay
-faders, decide whether right-click-reset is even the right affordance (they're not faders); if
-yes, give the stepper a reset on its value cell and the send-fader a reset on its overlay hit
-region — a different gesture wiring than the slider-track path. Not blocking; these all still
-reset via drag-to-value.
 
 ### BUG-056 (audio-mixdown-clippy-debt) — `manifold-playback` fails `cargo clippy -D warnings` pre-existing on `audio_mixdown.rs` — LOW (blocks the crate's clippy gate, not correctness)
 **Status:** OPEN
@@ -1962,6 +1930,52 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-070 (stepper-and-nonstandard-slider-reset) — right-click reset was absent on the non-slider-track gain controls — FIXED 2026-07-10 (AUDIO_SETUP_DOCK P4, `feat/audio-dock-p4`), decay drawer PARTIALLY FIXED 2026-07-08 @ 3a88f728 — LOW (found 2026-07-08 during BUG-061)
+**Status:** FIXED
+
+**Update 2026-07-10 (AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md P4, D8):** closed the
+remainder. `audio_setup_panel.rs`'s `handle_event` gained a `UIEvent::RightClick` arm that hit-tests
+against `gain_minus`/`gain_value`/`gain_plus` for the row it belongs to and, on a hit, emits
+`PanelAction::slider_reset(AudioSendGainDragBegin(send), AudioSendGainDragChanged(send, 0.0),
+AudioSendGainDragCommit(send))` — replaying the SAME drag-commit trio a real drag already uses, at
+0.0 dB (unity), through the SAME generic `SliderReset` dispatcher every other reset in the app goes
+through (`ui_bridge/mod.rs:189`). Verified: this is the "every card/panel slider in the app"
+convention BUG-105 names, not a new gesture — the panel's OWN other reset (double-click on the
+dock's resize *handle*, `window_input.rs:343`) resets a layout WIDTH, a different affordance from
+resetting a control's VALUE, so it wasn't the precedent to match. Covers all three of the gain
+control's interaction surfaces (the two step buttons + the D7 drag-value zone/"overlay-drag
+send-fader") in one hit-test, since they're the same logical control. L3-gated:
+`scripts/ui-flows/audio-setup-hygiene.json` steps the gain to +3 dB via 3 clicks, right-clicks it,
+and asserts the value reads 0 dB again (count-based, not just existence) — exit 0. Added
+`Gesture::RightClick` to the flow-script vocabulary (`automation.rs`/`script.rs`) to make the
+gesture scriptable at all; it didn't exist before this phase.
+
+**Update 2026-07-08 @ 3a88f728 (intrinsic-reset follow-through):** the envelope-decay drawer
+slider is now wired (its `EnvDecay*` trio had a real handler, just no registration). More
+importantly that commit made reset a *required build input* — `BitmapSlider::build` takes a
+`reset` and returns `Slider { ids, reset }`, registered by one shared replay instead of per-panel
+loops — which also closed the real motivating gap: the Clip Trigger drawer's Amount/Attack/Release
+sliders (a trigger-gate row with no main slider, so the old per-panel loop bailed before reaching
+them).
+
+**Symptom:** BUG-061 made right-click reset the shared gesture for every intent-registered
+slider *track*, but three gain-ish controls don't render as a slider track and so were left
+out: the Audio Setup gain `[−] value [＋]` steppers and the overlay-drag audio send-fader (both
+in `audio_setup_panel.rs`), and the envelope-decay drawer slider (`param_slider_shared.rs`
+`build_envelope_config`, which rides the same `drawer.rs` path but emits a different
+value-change than the `AudioModShape*` trio BUG-061 wired).
+
+**Root cause:** the steppers are a `[−]value[＋]` control (no track), the send-fader is
+overlay-drag (`AudioSendGainDrag*`, not an intent-registered track), and the decay slider was
+simply not in BUG-061's surface list. None expose the `SliderNodeIds.track` node that
+`SliderReset` registration hangs off.
+
+**Fix shape (as built):** rather than force the stepper/drag-zone controls onto the
+intent-registered `SliderNodeIds.track` path (they have no track), `audio_setup_panel.rs`
+handles `RightClick` directly in its own bespoke `handle_event` (the panel isn't migrated to the
+node-intent system) and reuses the drag-commit action trio it already had for D7's drag gesture —
+no new command, no new `PanelAction` variant needed.
 
 ### BUG-082 (trigger-fire-mode-level-features-near-dead) — fire-mode audio mods silently near-dead on non-impulse features — MED
 **Status:** FIXED @ `12fbc37d`

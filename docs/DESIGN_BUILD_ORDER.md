@@ -212,7 +212,7 @@ Grouped in waves; within a wave, items are independent and order is free.
        no dependency on the harness — different crates — so it may run in
        parallel with it in a separate worktree).
     3. AUDIO_SETUP_DOCK P1–P4 (calibration loop + trigger unification; serves
-       set-prep directly). **P1 + P2 + P3a + P3b + P3c SHIPPED 2026-07-10** (`36a96791`, `e4aa01bf`, `47f2a112`, `5c4fbcca`, `12fbc37d`); only P4 (readability/hygiene) remains.
+       set-prep directly). ✅ **WAVE COMPLETE 2026-07-10** — P1–P4 all shipped (`36a96791`, `e4aa01bf`, `47f2a112`, `5c4fbcca`, `12fbc37d`, `a649f62a`); closed BUG-047/070/082. Peter L4 feel-pass + Cap+N/St/Mo tooltips (Deferred) owed.
     4. BOX3D_PHYSICS P1–P4 (differentiator, not release-gating; Peter: opens new
        visuals).
     Parked at the back (Peter 2026-07-10): VIDEO_IO P1–P4 (join-existing-rigs

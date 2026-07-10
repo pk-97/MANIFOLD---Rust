@@ -1274,7 +1274,9 @@ pub fn sync_inspector_data(
                         .iter()
                         .find(|l| &l.layer_id == lid)
                         .map(|l| l.name.clone())
-                        .unwrap_or_else(|| "(missing layer)".to_string())
+                        .unwrap_or_else(|| {
+                            manifold_ui::panels::audio_setup_panel::MISSING_LAYER_LABEL.to_string()
+                        })
                 };
                 let first_layer = s
                     .layers()

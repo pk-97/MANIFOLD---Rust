@@ -104,6 +104,13 @@ const GAIN_BTN_W: f32 = 16.0;
 const GAIN_VAL_W: f32 = 50.0;
 const GAIN_W: f32 = GAIN_BTN_W * 2.0 + GAIN_VAL_W;
 
+/// Sentinel `state_sync.rs` resolves a feeding layer's name to when its
+/// `LayerId` no longer exists in the project (routed, then the layer was
+/// deleted). One constant, not a literal duplicated in each crate, so the
+/// D8 "(missing layer)" repair-copy check in [`AudioSetupPanel`] can't drift
+/// out of sync with the string `state_sync` actually emits.
+pub const MISSING_LAYER_LABEL: &str = "(missing layer)";
+
 /// One send's display data, supplied by `configure`.
 #[derive(Clone, Debug)]
 pub struct AudioSendRow {
@@ -204,12 +211,21 @@ fn band_color(band: usize) -> Color32 {
 }
 /// L/M/H labels in band order.
 const BAND_METER_LABELS: [&str; 3] = ["L", "M", "H"];
+/// Onset lane-legend chip geometry (D7 readability): the small backed chip
+/// each lane label sits in, over the waterfall's left edge for the three
+/// frequency-named lanes (see [`AudioSetupPanel::update_scope_lane_labels`]),
+/// or in the axis gutter for any other lane.
+const LANE_CHIP_W: f32 = 34.0;
+const LANE_CHIP_H: f32 = 14.0;
 
 // `trigger_band_color` (the matrix's per-row band colour) and `dim_color`
 // (its resting-meter-fill dimmer) are deleted with the matrix (P3, D2).
-// Per-source-row level meters (D7, deferred to a later phase) will need an
-// equivalent dimmer when built — re-add rather than resurrect this exact fn
-// if the new meter's dimming curve differs.
+// Per-source-row level meters: NOT deferred — `SendRowIds::meter_fill` /
+// `AudioSetupPanel::update_meters` already ship a live RMS meter under each
+// send's channel dropdown (Phase 5.3, predates this design). D7's "each
+// source row gains an inline level meter" is satisfied by that existing
+// meter; nothing new was built for it in P4 (verified by headless render —
+// see docs/landings/2026-07-10-audio-dock-p4.md).
 
 /// Section header row height (Triggers/Inputs/Consumers all shared this before
 /// the matrix's deletion; kept for the two survivors).
@@ -345,11 +361,17 @@ pub struct AudioSetupPanel {
     /// doesn't depend on spectral) via
     /// [`AudioSetupPanel::set_scope_lane_legend`]. Labels are created by
     /// `build` and positioned each frame by
-    /// [`AudioSetupPanel::update_scope_lane_labels`] in the axis gutter, one
-    /// per lane, in that lane's colour.
+    /// [`AudioSetupPanel::update_scope_lane_labels`] (D7: the three frequency-
+    /// named lanes — "Low"/"Mid"/"High" — are pulled onto their divider lines
+    /// as small backed chips over the waterfall's left edge; any other lane
+    /// name, e.g. "Kick", keeps the original bottom-stacked axis-gutter
+    /// position, now uncrowded since only non-band lanes land there).
     scope_lane_legend: Vec<(String, Color32)>,
     scope_lane_frac: f32,
     scope_lane_label_ids: Vec<NodeId>,
+    /// Backing chip panel per lane, parallel to `scope_lane_label_ids` (D7
+    /// readability: a plain label is illegible over a busy spectrogram frame).
+    scope_lane_chip_ids: Vec<NodeId>,
     /// Pre-analysis floor stepper [−]/[＋] in the scope title row (the spectrogram
     /// squelch). `None` when not built.
     floor_minus_id: Option<NodeId>,
@@ -414,6 +436,7 @@ impl Default for AudioSetupPanel {
             scope_lane_legend: Vec::new(),
             scope_lane_frac: 0.0,
             scope_lane_label_ids: Vec::new(),
+            scope_lane_chip_ids: Vec::new(),
             floor_minus_id: None,
             floor_plus_id: None,
             scope_low_hz: 0.0,
@@ -677,6 +700,29 @@ impl AudioSetupPanel {
             // scope. The selected row's swatch fills the row height; others are a
             // small dot.
             let selected = Some(&send.id) == self.selected_send.as_ref();
+            // D7: an explicit row highlight for the selected send — the swatch
+            // height difference alone reads as noise, not selection (the
+            // master-detail scoping below, "Spectrogram — <name>", was
+            // otherwise invisible). Painted first so every row control below
+            // draws on top of it; identity-coloured at low alpha so it stays
+            // legible without competing with the row's own accents.
+            if selected {
+                let sc = super::audio_send_color(&send.id);
+                tree.add_panel(
+                    Some(self.content_parent),
+                    inner_x - 4.0,
+                    cy - 1.0,
+                    inner_w + 8.0,
+                    ROW_H + 2.0,
+                    UIStyle {
+                        bg_color: Color32::new(sc.r, sc.g, sc.b, 28),
+                        border_color: Color32::new(sc.r, sc.g, sc.b, 110),
+                        border_width: 1.0,
+                        corner_radius: color::SMALL_RADIUS,
+                        ..UIStyle::default()
+                    },
+                );
+            }
             let (swatch_h, swatch_y) = if selected {
                 (ROW_H, cy)
             } else {
@@ -766,6 +812,13 @@ impl AudioSetupPanel {
                 "\u{2212}", // −
                 send_row_key(i, SEND_OFF_GAIN_MINUS),
             );
+            // Stable structural names (D8 flow-testing seam): the row's own
+            // "−"/"+" glyphs collide with the timeline zoom control's
+            // identical text, so an automation `Query{text:"+"}` picks the
+            // wrong widget without a `name` to disambiguate by node type.
+            // `nth` still does the per-row pick among rows sharing this name
+            // (`&'static str` per `set_name`'s contract — see `tree.rs`).
+            tree.set_name(self.send_ids[i].gain_minus, "audio_setup.gain_minus");
             // Value label doubles as a D7 horizontal drag zone — pointer-down
             // arms `gain_drag_target`, matching the crossover-drag pattern.
             self.send_ids[i].gain_value = tree.add_label(
@@ -792,6 +845,8 @@ impl AudioSetupPanel {
                 "\u{002B}", // +
                 send_row_key(i, SEND_OFF_GAIN_PLUS),
             );
+            tree.set_name(self.send_ids[i].gain_plus, "audio_setup.gain_plus");
+            tree.set_name(self.send_ids[i].gain_value, "audio_setup.gain_value");
 
             // Source indicator (read-only): "Cap" for a capture send, or the
             // feeding audio layer's name (accented). A send doesn't pick its
@@ -1059,12 +1114,30 @@ impl AudioSetupPanel {
             // follow the crossovers and the live levels. Fill + label share the
             // band colour (red/green/blue), so the colours double as the legend
             // across the meters and the spectrogram's transient ticks.
-            // Onset tick-lane legend: one label per lane in the axis gutter,
-            // right-aligned against the scope's left edge, in the lane's
-            // colour. Created at zero size; positioned every frame by
-            // `update_scope_lane_labels` (the lanes track the resizable scope).
+            // Onset tick-lane legend, as small backed chips (D7 readability —
+            // plain text was illegible stacked over a busy spectrogram
+            // frame). "Low"/"Mid"/"High" are repositioned onto their divider
+            // lines every frame by `update_scope_lane_labels`; any other lane
+            // (e.g. "Kick") keeps the original bottom-stacked axis-gutter
+            // slot. Chip background + label created at zero size here; both
+            // positioned/resized every frame by `update_scope_lane_labels`.
             self.scope_lane_label_ids.clear();
+            self.scope_lane_chip_ids.clear();
             for (name, color) in &self.scope_lane_legend {
+                let chip = tree.add_panel(
+                    Some(self.content_parent),
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    UIStyle {
+                        bg_color: Color32::new(12, 12, 15, 220),
+                        border_color: Color32::new(color.r, color.g, color.b, 130),
+                        border_width: 1.0,
+                        corner_radius: color::HAIRLINE_RADIUS,
+                        ..UIStyle::default()
+                    },
+                );
                 let id = tree.add_label(
                     Some(self.content_parent),
                     0.0,
@@ -1075,10 +1148,11 @@ impl AudioSetupPanel {
                     UIStyle {
                         text_color: *color,
                         font_size: color::FONT_LABEL,
-                        text_align: TextAlign::Right,
+                        text_align: TextAlign::Center,
                         ..UIStyle::default()
                     },
                 );
+                self.scope_lane_chip_ids.push(chip);
                 self.scope_lane_label_ids.push(id);
             }
 
@@ -1193,14 +1267,34 @@ impl AudioSetupPanel {
         cy += TRIG_TITLE_H;
 
         for (i, (_layer_id, name)) in feeding.iter().enumerate() {
+            // D8: a feeding layer that no longer exists (deleted since it was
+            // routed) reads as bare "(missing layer)" today — the sentinel
+            // `state_sync.rs` returns when `layer_name` can't resolve the id.
+            // Say what happened and point at the repair instead of leaving it
+            // cryptic; the "+ Layer" row right below is that repair (add a
+            // replacement, then × this dangling entry) — no new picker
+            // needed, the affordance already exists, it just wasn't named.
+            let (row_text, row_style) = if name == MISSING_LAYER_LABEL {
+                (
+                    "Input layer was deleted \u{2014} choose a replacement below".to_string(),
+                    UIStyle {
+                        text_color: Color32::new(232, 168, 92, 255), // amber
+                        font_size: color::FONT_LABEL,
+                        text_align: TextAlign::Left,
+                        ..UIStyle::default()
+                    },
+                )
+            } else {
+                (name.clone(), label_style())
+            };
             tree.add_label(
                 Some(self.content_parent),
                 inner_x,
                 cy,
                 inner_w - STEP_W,
                 ROW_H,
-                name,
-                label_style(),
+                &row_text,
+                row_style,
             );
             let remove_id = tree.add_button_keyed(
                 Some(self.content_parent),
@@ -1535,32 +1629,61 @@ impl AudioSetupPanel {
         self.scope_lane_frac = lane_frac;
     }
 
-    /// Position the tick-lane legend labels in the axis gutter, each centred
-    /// on its lane where possible. The lanes (`lane_frac` of the scope each)
-    /// are shorter than a line of text, so labels stack upward from the bottom
-    /// lane with a minimum spacing — colour, order, and proximity carry the
-    /// mapping. Called every frame beside [`Self::update_band_meters`].
+    /// Position the tick-lane legend (D7 readability fix). The original
+    /// scheme packed every lane's label bottom-up inside its `lane_frac` of
+    /// the scope (~1.4% each) — four rows of text crammed into a corner a
+    /// few px tall, which is the collision Peter's 2026-07-09 screenshot
+    /// showed. The three frequency-named lanes now anchor to the SAME
+    /// divider-line y [`Self::scope_line_y`] already computes for the drag
+    /// hit-test, as a small backed chip over the waterfall's left edge:
+    /// "Low" sits on the low/mid divider, "Mid" on the mid/high divider,
+    /// "High" (no divider above it) sits just under the scope's top edge.
+    /// Any other lane name (e.g. "Kick" — not a frequency band) keeps the
+    /// original bottom-stacked axis-gutter slot; with the three band lanes
+    /// pulled out, that slot no longer collides. Called every frame beside
+    /// [`Self::update_band_meters`].
     pub fn update_scope_lane_labels(&self, tree: &mut UITree) {
-        let label_h = 12.0;
+        let label_h = LANE_CHIP_H;
         let Some(rect) = self.scope_rect().filter(|_| self.scope_lane_frac > 0.0) else {
             for &id in &self.scope_lane_label_ids {
+                tree.set_visible(id, false);
+            }
+            for &id in &self.scope_lane_chip_ids {
                 tree.set_visible(id, false);
             }
             return;
         };
         let gutter_x = rect.x - SCOPE_AXIS_W + 2.0;
         let gutter_w = SCOPE_AXIS_W - 6.0;
+        let chip_x = rect.x + 4.0;
+        let range_valid = self.scope_fmin > 0.0 && self.scope_fmax > self.scope_fmin;
         let mut prev_top = f32::INFINITY;
-        for (i, &id) in self.scope_lane_label_ids.iter().enumerate() {
-            // Lane i's vertical centre, bottom-up; then keep at least one
-            // label-height below the label beneath (labels are taller than
-            // lanes, so upper ones get pushed up).
-            let lane_center =
-                rect.y + rect.height * (1.0 - self.scope_lane_frac * (i as f32 + 0.5));
-            let y = (lane_center - label_h * 0.5).min(prev_top - label_h);
-            prev_top = y;
-            tree.set_bounds(id, Rect::new(gutter_x, y, gutter_w, label_h));
-            tree.set_visible(id, true);
+        for (i, (&label_id, &chip_id)) in
+            self.scope_lane_label_ids.iter().zip(self.scope_lane_chip_ids.iter()).enumerate()
+        {
+            let name = self.scope_lane_legend.get(i).map(|(n, _)| n.as_str()).unwrap_or("");
+            let divider_y = match name {
+                "Low" => self.scope_line_y(self.scope_low_hz),
+                "Mid" => self.scope_line_y(self.scope_mid_hz),
+                "High" if range_valid => Some(rect.y + 2.0 + label_h * 0.5),
+                _ => None,
+            };
+            let (x, w, y) = if let Some(center_y) = divider_y {
+                (chip_x, LANE_CHIP_W, center_y - label_h * 0.5)
+            } else {
+                // Bottom-stacked fallback: any lane not named above (e.g.
+                // "Kick"), or a band lane whose divider isn't valid yet
+                // (scope dark / crossovers not pushed this frame).
+                let lane_center =
+                    rect.y + rect.height * (1.0 - self.scope_lane_frac * (i as f32 + 0.5));
+                let y = (lane_center - label_h * 0.5).min(prev_top - label_h);
+                prev_top = y;
+                (gutter_x, gutter_w, y)
+            };
+            tree.set_bounds(chip_id, Rect::new(x, y, w, label_h));
+            tree.set_bounds(label_id, Rect::new(x, y, w, label_h));
+            tree.set_visible(chip_id, true);
+            tree.set_visible(label_id, true);
         }
     }
 
@@ -1838,6 +1961,42 @@ impl AudioSetupPanel {
                     // A panel-owned control or the waterfall — swallow so the
                     // click doesn't fall through to a panel below the dock.
                     (true, Vec::new())
+                } else {
+                    (false, Vec::new())
+                }
+            }
+            // D8/BUG-070 remainder: right-click resets the gain stepper to
+            // unity (0 dB) — the SAME intrinsic-reset gesture every other
+            // value control in the app uses (`PanelAction::slider_reset`,
+            // e.g. the layer header's audio-gain fader at
+            // `layer_header.rs:1997` and the audio-mod drawer's Amount/
+            // Attack/Release/Decay sliders, `param_slider_shared.rs`).
+            // Verified, not assumed: this panel's own gesture inventory has
+            // exactly one OTHER reset — double-click on the dock's resize
+            // HANDLE (`window_input.rs:343`) — but that resets a layout
+            // WIDTH, a different affordance from resetting a CONTROL's
+            // VALUE; every value-reset precedent in the codebase is
+            // right-click, so the gain stepper (a value control) matches
+            // that family, not the resize handle. Hits any of the three
+            // gain-row nodes (minus / value / plus) for the row it belongs
+            // to. Replays the drag trio at 0.0 so undo == a drag to unity,
+            // same as every other `slider_reset` site.
+            UIEvent::RightClick { node_id: Some(id), .. } => {
+                let id = *id;
+                if let Some((_, send)) =
+                    self.send_ids.iter().zip(self.sends.iter()).find(|(ids, _)| {
+                        id == ids.gain_minus || id == ids.gain_value || id == ids.gain_plus
+                    })
+                {
+                    let send_id = send.id.clone();
+                    (
+                        true,
+                        vec![PanelAction::slider_reset(
+                            PanelAction::AudioSendGainDragBegin(send_id.clone()),
+                            PanelAction::AudioSendGainDragChanged(send_id.clone(), 0.0),
+                            PanelAction::AudioSendGainDragCommit(send_id),
+                        )],
+                    )
                 } else {
                     (false, Vec::new())
                 }
