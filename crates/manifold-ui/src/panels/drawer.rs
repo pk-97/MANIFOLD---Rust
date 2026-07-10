@@ -43,6 +43,22 @@ const STATUS_PAD: f32 = 6.0;
 /// Label glyph box height inside a status strip — matches the Ableton drawer.
 const STATUS_LABEL_H: f32 = 12.0;
 
+/// D6 fire meter (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` P3c,
+/// BUG-082's fix) — height reserved below an Amount slider whose
+/// `show_meter` is set: a thin track+fill+threshold-tick underline,
+/// mirroring the deleted `TriggerRowIds`/`update_trigger_levels` meter
+/// (470228ec, `audio_setup_panel.rs`), generalized from a fixed per-send row
+/// to any fire-mode drawer's Amount row.
+const METER_STRIP_H: f32 = 6.0;
+/// Bar thickness within the reserved strip.
+const METER_BAR_H: f32 = 3.0;
+/// Track/idle fill colors — a dim, always-visible well so the meter reads
+/// even at level 0.
+const METER_TRACK_COLOR: Color32 = Color32::new(40, 40, 46, 255);
+/// The fixed 0.5 fire-threshold tick — bright and neutral so it reads over
+/// any drawer accent color.
+const METER_TICK_COLOR: Color32 = Color32::new(225, 225, 235, 255);
+
 /// How a [`DrawerRow::Buttons`] row distributes width across its buttons.
 pub enum ButtonWidth {
     /// Widths proportional to label length (`chars + 1`), so mixed-width labels
@@ -150,6 +166,16 @@ pub enum DrawerRow {
         /// param_slider_shared) supplies it; [`DrawerIds::slider_resets`]
         /// carries it back out in the same order as [`DrawerIds::sliders`].
         reset: PanelAction,
+        /// D6 fire meter: this Amount slider tunes a fire-mode config against
+        /// the fixed 0.5 edge — reserve a live shaped-signal meter strip
+        /// beneath it (track + fill + threshold tick, [`METER_STRIP_H`]
+        /// tall). `false` for every non-Amount slider row (Attack/Release/
+        /// Step) and every non-fire-mode drawer; the caller
+        /// (`build_audio_mod_drawer`) decides. The fill's live level is NEVER
+        /// carried through this field — that would go stale between
+        /// `configure()` calls — it's pushed in place every UI tick by
+        /// [`MeterIds::update`], addressed via [`DrawerIds::meters`].
+        show_meter: bool,
     },
     /// A status strip (see [`StatusStrip`]).
     Status(StatusStrip),
@@ -157,10 +183,12 @@ pub enum DrawerRow {
 
 impl DrawerRow {
     /// The intrinsic height this row occupies. Buttons/Slider rows use the
-    /// shared [`ROW_H`]; a status strip carries its own.
+    /// shared [`ROW_H`] (plus [`METER_STRIP_H`] when a Slider's `show_meter`
+    /// is set); a status strip carries its own.
     fn height(&self) -> f32 {
         match self {
             DrawerRow::Status(s) => s.height,
+            DrawerRow::Slider { show_meter: true, .. } => ROW_H + METER_STRIP_H,
             _ => ROW_H,
         }
     }
@@ -206,6 +234,46 @@ pub(crate) fn uniform_rows_height(n: usize) -> f32 {
     TOP_PAD * 2.0 + ROW_H * n as f32 + ROW_GAP * (n as f32 - 1.0)
 }
 
+/// D6 fire meter node ids for one `Slider` row whose `show_meter` was set —
+/// updated in place every UI tick from the live `FireMeterCapture` snapshot,
+/// never rebuilt. Mirrors the deleted `TriggerRowIds`/`update_trigger_levels`
+/// underline meter (470228ec).
+#[derive(Clone, Copy)]
+pub struct MeterIds {
+    fill: NodeId,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+impl MeterIds {
+    /// Push the current shaped-signal level (0..1) onto this meter's fill —
+    /// in place, no rebuild. `accent` recolors the fill to the drawer's own
+    /// identity color when the level has crossed the fixed 0.5 threshold
+    /// (the fire-flash cue); idle stays a dimmed version of that color.
+    pub fn update(&self, tree: &mut UITree, level: f32, accent: Color32) {
+        let level = level.clamp(0.0, 1.0);
+        tree.set_bounds(self.fill, Rect::new(self.x, self.y, self.w * level, self.h));
+        let firing = level >= 0.5;
+        let fill_color = if firing { accent } else { dim(accent, 0.55) };
+        tree.set_style(self.fill, UIStyle { bg_color: fill_color, ..UIStyle::default() });
+    }
+}
+
+/// Scale an RGB color's channels toward black by `factor` (0..1), keeping
+/// alpha — the idle/dim state for a [`MeterIds`] fill. No generic color-blend
+/// helper exists in this crate yet; kept local rather than inventing one for
+/// a single caller.
+fn dim(c: Color32, factor: f32) -> Color32 {
+    Color32::new(
+        (c.r as f32 * factor) as u8,
+        (c.g as f32 * factor) as u8,
+        (c.b as f32 * factor) as u8,
+        c.a,
+    )
+}
+
 /// The `UITree` node ids a built drawer produced, plus the mapping needed to
 /// resolve a click. Buttons are enumerated **flat across all rows in order**
 /// (row 0's buttons first, then row 1's, …) — that flat index is what
@@ -221,6 +289,9 @@ pub struct DrawerIds {
     /// so existing `sliders[i].track`/`.track_rect` access sites are
     /// untouched (BUG-070 follow-through).
     pub slider_resets: Vec<PanelAction>,
+    /// D6 fire meter node ids, parallel to [`Self::sliders`] (same index) —
+    /// `Some` only for the `Slider` row whose `show_meter` was `true`.
+    pub meters: Vec<Option<MeterIds>>,
     /// Total height the drawer occupied.
     pub height: f32,
 }
@@ -282,6 +353,7 @@ pub fn build(
     let mut button_ids: Vec<NodeId> = Vec::new();
     let mut sliders: Vec<SliderNodeIds> = Vec::new();
     let mut slider_resets: Vec<PanelAction> = Vec::new();
+    let mut meters: Vec<Option<MeterIds>> = Vec::new();
     let avail_w = w - PAD_H * 2.0;
     let mut row_y = y + TOP_PAD;
 
@@ -341,6 +413,7 @@ pub fn build(
                 value_text,
                 label_w,
                 reset,
+                show_meter,
             } => {
                 let sx = x + PAD_H;
                 let slider_w = w - PAD_H * 2.0;
@@ -363,6 +436,50 @@ pub fn build(
                 );
                 sliders.push(built.ids);
                 slider_resets.push(built.reset);
+
+                if *show_meter {
+                    // D6: track + fill span the slider's tuning zone (after
+                    // the label column, matching the track's own left edge);
+                    // fixed 0.5 threshold tick — never configurable, the
+                    // same edge every fire-mode evaluator detects on.
+                    let meter_y = row_y + ROW_H + 1.0;
+                    let meter_x = sx + *label_w;
+                    let meter_w = (slider_w - *label_w).max(4.0);
+                    tree.add_panel(
+                        Some(container),
+                        meter_x,
+                        meter_y,
+                        meter_w,
+                        METER_BAR_H,
+                        UIStyle { bg_color: METER_TRACK_COLOR, ..UIStyle::default() },
+                    );
+                    let fill = tree.add_panel(
+                        Some(container),
+                        meter_x,
+                        meter_y,
+                        0.0, // live level set per UI tick by MeterIds::update
+                        METER_BAR_H,
+                        UIStyle { bg_color: dim(sc.fill, 0.55), ..UIStyle::default() },
+                    );
+                    let tick_x = meter_x + 0.5 * meter_w;
+                    tree.add_panel(
+                        Some(container),
+                        tick_x,
+                        meter_y - 2.0,
+                        1.5,
+                        METER_BAR_H + 4.0,
+                        UIStyle { bg_color: METER_TICK_COLOR, ..UIStyle::default() },
+                    );
+                    meters.push(Some(MeterIds {
+                        fill,
+                        x: meter_x,
+                        y: meter_y,
+                        w: meter_w,
+                        h: METER_BAR_H,
+                    }));
+                } else {
+                    meters.push(None);
+                }
             }
             DrawerRow::Status(s) => {
                 // Leading dot (centered in the row).
@@ -431,6 +548,7 @@ pub fn build(
         button_ids,
         sliders,
         slider_resets,
+        meters,
         height,
     }
 }
@@ -510,6 +628,7 @@ mod tests {
                 value_text: "2.00".into(),
                 label_w: 50.0,
                 reset: placeholder_reset(),
+                show_meter: false,
             }],
             btn_font_size: 10,
             slider_font_size: 11,

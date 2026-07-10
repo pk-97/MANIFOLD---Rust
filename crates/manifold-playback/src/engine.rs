@@ -143,6 +143,15 @@ pub struct PlaybackEngine {
     // one-shot fires from incoming audio transients each tick.
     live_trigger_state: crate::live_trigger::LiveTriggerState,
 
+    // D6 fire meter (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
+    // P3c, BUG-082's fix): the current tick's shaped-signal capture for every
+    // fire-mode config, written by `evaluate_modulation` (param gate cards)
+    // and `tick_audio_triggers` (clip triggers) into ONE shared instance,
+    // reset at the top of each `tick_playing`/`tick_non_playing`. `Copy`, so
+    // resetting and reading it costs nothing — see
+    // `manifold_core::audio_trigger::FireMeterCapture`.
+    fire_meters: manifold_core::audio_trigger::FireMeterCapture,
+
     // Compositor
     compositor_dirty_deadline: f64,
 
@@ -299,6 +308,7 @@ impl PlaybackEngine {
             live_clip_manager: None,
             session_runtime: SessionRuntime::new(),
             live_trigger_state: crate::live_trigger::LiveTriggerState::default(),
+            fire_meters: manifold_core::audio_trigger::FireMeterCapture::default(),
             compositor_dirty_deadline: 0.0,
             sync_clips_dirty: false,
             live_external_tempo: None,
@@ -376,6 +386,12 @@ impl PlaybackEngine {
     /// Read the current per-send audio feature snapshot (for UI meters).
     pub fn audio_snapshot(&self) -> &manifold_core::audio_features::AudioFeatureSnapshot {
         &self.audio_snapshot
+    }
+    /// The D6 fire meter's per-config shaped-signal capture from the tick
+    /// just run — content thread → `ContentState::fire_meters` → UI drawer
+    /// meters. `Copy`, so reading it is free.
+    pub fn fire_meters(&self) -> manifold_core::audio_trigger::FireMeterCapture {
+        self.fire_meters
     }
     pub fn current_beat_f64(&self) -> f64 {
         self.current_beat
@@ -879,6 +895,10 @@ impl PlaybackEngine {
         // after this call so an edge from an out-of-tick sync is never lost.
         let mut clip_edges = std::mem::take(&mut self.clip_edge_layers);
         let audio = &self.audio_snapshot;
+        // D6 fire meter: reset for this tick before either evaluator writes
+        // (param gate cards here, clip triggers in `tick_audio_triggers`
+        // below) — see the field doc comment.
+        self.fire_meters = manifold_core::audio_trigger::FireMeterCapture::default();
         let modulation_dirty = if let Some(project) = &mut self.project {
             crate::modulation::evaluate_modulation(
                 project,
@@ -888,6 +908,7 @@ impl PlaybackEngine {
                 &mut timing,
                 &mut pulses,
                 &clip_edges,
+                &mut self.fire_meters,
             )
         } else {
             false
@@ -961,6 +982,12 @@ impl PlaybackEngine {
         // same drain-queue shape, so a scrub-while-stopped's own sync (step 1
         // above, when dirty) still reaches modulation this tick.
         let mut clip_edges = std::mem::take(&mut self.clip_edge_layers);
+        // D6 fire meter: reset for this tick — see the field doc comment.
+        // Clip triggers don't evaluate while stopped (`tick_audio_triggers`
+        // isn't called from here), so only param gate-card levels update on
+        // a stopped tick; that matches "clip triggers don't fire while
+        // stopped" already being true of this code path.
+        self.fire_meters = manifold_core::audio_trigger::FireMeterCapture::default();
         let dirty = {
             let audio = &self.audio_snapshot;
             if let Some(project) = &mut self.project {
@@ -972,6 +999,7 @@ impl PlaybackEngine {
                     &mut timing,
                     &mut pulses,
                     &clip_edges,
+                    &mut self.fire_meters,
                 )
             } else {
                 false
@@ -1712,6 +1740,7 @@ impl PlaybackEngine {
                     &project.audio_setup,
                     &project.timeline.layers,
                     dt,
+                    &mut self.fire_meters,
                 )
             } else {
                 Vec::new()

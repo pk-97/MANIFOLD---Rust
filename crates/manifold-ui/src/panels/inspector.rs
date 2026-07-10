@@ -775,6 +775,28 @@ impl InspectorCompositePanel {
         &mut self.audio_trigger_section
     }
 
+    /// D6 fire meter (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
+    /// P3c, BUG-082's fix): push this tick's live shaped-signal levels onto
+    /// every open fire-mode drawer's Amount meter across the inspector — in
+    /// place, no rebuild (never gated behind `needs_structural_sync`; the
+    /// caller runs this every UI tick regardless, mirroring
+    /// `AudioSetupPanel::update_meters`/the deleted `update_trigger_levels`).
+    /// Walks every card that can host a fire-mode drawer: master effects,
+    /// active-layer effects, the active layer's generator, and the layer's
+    /// own clip triggers.
+    pub fn update_fire_meters(&self, tree: &mut UITree, fire_level: &dyn Fn(u64) -> Option<f32>) {
+        for card in &self.master_effects {
+            card.update_fire_meters(tree, fire_level);
+        }
+        for card in &self.layer_effects {
+            card.update_fire_meters(tree, fire_level);
+        }
+        if let Some(gp) = &self.gen_params {
+            gp.update_fire_meters(tree, fire_level);
+        }
+        self.audio_trigger_section.update_fire_meters(tree, fire_level);
+    }
+
     pub fn is_dragging(&self) -> bool {
         self.dragging_scrollbar
             || self.card_drag_active

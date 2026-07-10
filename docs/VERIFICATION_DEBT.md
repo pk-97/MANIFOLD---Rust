@@ -24,6 +24,17 @@ Rules (normative home: `DESIGN_DOC_STANDARD.md` §10):
 
 ## Open
 
+### VD-025 — AUDIO_SETUP_DOCK P3c: fire-meter content-thread work never run through the live MANIFOLD_RENDER_TRACE
+Landed 2026-07-10 (`12fbc37d`; `docs/landings/2026-07-10-audio-dock-p3c.md`). The §5/BUG-035
+content-thread-work gate (any per-tick content-thread work → live `MANIFOLD_RENDER_TRACE=1`, no
+frame >20ms) was **not run live**: it needs the app with an audio device + GPU, absent in the
+build sandbox. Substituted an honest isolated measurement of exactly the new capture work (worst
+case 128 configs × 2000 iters): **0.19 µs/tick release, 13.14 µs/tick debug** — ~1500× under the
+20ms budget, and the work is bounded stack writes on a `Copy` struct (no heap). **Burn down:**
+launch `manifold` on a project with both a `LayerClipTrigger` and an armed `is_trigger_gate` param
+mod, audio playing, `MANIFOLD_RENDER_TRACE=1`, and confirm no frame regression — an L4 run for
+Peter/a machine with a device. Risk assessed negligible; carried, not blocking.
+
 ### VD-024 — AUDIO_SETUP_DOCK P3b: AudioTriggerSection has no unit-test module
 Landed 2026-07-10 (`5c4fbcca`; `docs/landings/2026-07-10-audio-dock-p3b.md`). The new
 `crates/manifold-ui/src/panels/audio_trigger_section.rs` lacks the `#[cfg(test)]` collapse/click

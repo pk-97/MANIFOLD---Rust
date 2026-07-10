@@ -82,7 +82,7 @@ Addendum, 2026-07-08 (Fable): Peter asked me to make art today — not visuals f
 | `manifold-audio` | Audio capture behind one `CaptureBackend` trait → lock-free ring buffer + off-RT analysis worker; consumed by recording and audio modulation. Two source families: cpal **input devices**, and CoreAudio **output taps** (system / per-app audio, macOS 14.4+) — see `docs/AUDIO_INFRASTRUCTURE.md` §11. Plus the native CoreAudio device directory. See `docs/AUDIO_MODULATION_DESIGN.md` |
 | `manifold-app` | winit entry, Application, ContentThread, ContentPipeline |
 
-Dependencies: `core` and `gpu` have none. `editing`/`playback`/`ui`/`io` depend on `core`. `renderer` depends on `core` + `gpu` + `native` + `playback` + `ui`. `media` depends on `core` + `playback` + `gpu`. `led` depends on `gpu`. `app` depends on all.
+Dependencies: `foundation` and `gpu` have none; `core` depends only on `foundation` (and re-exports its vocabulary types at their historical paths). `editing`/`playback`/`io` depend on `core`; **`ui` depends only on `foundation`, NOT `core`** (post UI_LAYERING_INVERSION — put UI-reachable shared types in `foundation`). `renderer` depends on `core` + `gpu` + `native` + `playback` + `ui`. `media` depends on `core` + `playback` + `gpu`. `led` depends on `gpu`. `app` depends on all.
 
 ## Invariants
 

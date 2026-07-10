@@ -3005,6 +3005,22 @@ impl UIRoot {
         self.audio_setup_panel.update_meters(&mut self.tree, levels);
     }
 
+    /// D6 fire meter (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
+    /// P3c, BUG-082's fix): push this tick's live shaped-signal levels onto
+    /// every open fire-mode drawer's Amount meter in the inspector — in
+    /// place, every UI tick, unconditional (unlike `update_audio_meters`
+    /// above, this isn't gated on any panel being open — the inspector's own
+    /// drawers decide what's visible). `fire_meters` is
+    /// `ContentState::fire_meters`; the closure adapts it to the plain
+    /// `Fn(u64) -> Option<f32>` `manifold-ui` can call without depending on
+    /// `manifold-core` (`docs/UI_LAYERING_INVERSION.md`).
+    pub fn update_fire_meters(
+        &mut self,
+        fire_meters: &manifold_core::audio_trigger::FireMeterCapture,
+    ) {
+        self.inspector.update_fire_meters(&mut self.tree, &|key| fire_meters.get(key));
+    }
+
     /// Update the audio scope's hover readout (freq + dB under the cursor), or
     /// hide it when not hovering. In place, every frame — see `update_meters`.
     pub fn update_audio_scope_readout(&mut self, text: Option<&str>) {
