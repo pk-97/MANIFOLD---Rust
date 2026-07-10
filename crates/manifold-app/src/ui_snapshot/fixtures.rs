@@ -34,6 +34,7 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "states" => Some(states_scene()),
         "inspector" => Some(inspector_scene()),
         "bug060" => Some(bug060_scene()),
+        "bug060heavy" => Some(bug060heavy_scene()),
         "bug047" => Some(bug047_scene()),
         "paramsteps" => Some(param_steps_scene()),
         "scrollshrink" => Some(scroll_shrink_scene()),
@@ -653,6 +654,103 @@ fn bug060_scene() -> SceneData {
 
     let mut selection = UIState::default();
     selection.select_layer(lid("glow"));
+
+    SceneData { project, content, active: Some(0), selection }
+}
+
+/// `UI_HARNESS_UNIFICATION_DESIGN.md` P0 (D7): Peter's stated BUG-060
+/// worst-case — a Plasma GENERATOR layer (selected/active, so the inspector
+/// shows its own card too), carrying a stacked Color Compass effect (3
+/// instances — the reopen notes' "Plasma + stacked Color Compass" repro)
+/// plus 6 additional DISTINCT effects chosen for high param counts / dense
+/// modulation draws (`docs/NODE_CATALOG.md` §6.1 param counts):
+/// ColorGrade(9), DepthOfField(8), WireframeDepth(8), ChromaticAberration(5),
+/// Glitch(5), Strobe(4). 9 cards total. Several carry an armed (open)
+/// audio-mod drawer — the heaviest per-frame modulation draw case, matching
+/// Peter's "heavy modulation while scrolling" repro — and Strobe carries an
+/// armed TRIGGER-GATE (`clip_trigger`) mod, the concrete BUG-060 escape
+/// named in `docs/BUG_BACKLOG.md`. WireframeDepth and one Color Compass
+/// instance are left plain (no mod) so the compact-toggle (§6b) gesture the
+/// differential drives exercises a mix of armed/unarmed cards, not an
+/// all-or-nothing set.
+fn bug060heavy_scene() -> SceneData {
+    use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, ParameterAudioMod};
+    use manifold_core::audio_setup::AudioSend;
+    use manifold_core::audio_trigger::TriggerFireMode;
+
+    let kick_send = AudioSend::new("Kick");
+    let kick_send_id = kick_send.id.clone();
+
+    // Arm an enabled ParameterAudioMod on `fx`'s first param — an open,
+    // standard drawer at build time (mirrors `inspector_scene`'s Bloom).
+    let arm_audio_mod = |fx: &mut PresetInstance, kick_send_id: &manifold_core::AudioSendId| {
+        let param_id = manifold_core::preset_definition_registry::try_get(fx.effect_type())
+            .and_then(|def| def.param_defs.first().map(|pd| pd.id.clone()));
+        if let Some(param_id) = param_id {
+            let am = ParameterAudioMod::new(
+                param_id.into(),
+                kick_send_id.clone(),
+                AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Full),
+            );
+            fx.audio_mods = Some(vec![am]);
+        }
+    };
+
+    let mut plasma = Layer::new_generator("PLASMA".into(), PresetTypeId::PLASMA, 0);
+    plasma.layer_id = lid("plasma-heavy");
+    plasma.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(48.0)));
+
+    let mut effects = Vec::new();
+
+    // Stacked Color Compass: LFO-armed, audio-mod-armed, plain.
+    let mut cc0 = effect("ColorCompass");
+    arm_lfo(&mut cc0);
+    effects.push(cc0);
+    let mut cc1 = effect("ColorCompass");
+    arm_audio_mod(&mut cc1, &kick_send_id);
+    effects.push(cc1);
+    effects.push(effect("ColorCompass")); // plain — no drawer
+
+    // 6 distinct, high-param-count effects.
+    let mut color_grade = effect("ColorGrade");
+    arm_audio_mod(&mut color_grade, &kick_send_id);
+    effects.push(color_grade);
+
+    let mut depth_of_field = effect("DepthOfField");
+    arm_audio_mod(&mut depth_of_field, &kick_send_id);
+    effects.push(depth_of_field);
+
+    effects.push(effect("WireframeDepth")); // plain — no drawer
+
+    let mut chromatic_aberration = effect("ChromaticAberration");
+    arm_audio_mod(&mut chromatic_aberration, &kick_send_id);
+    effects.push(chromatic_aberration);
+
+    let mut glitch = effect("Glitch");
+    arm_audio_mod(&mut glitch, &kick_send_id);
+    effects.push(glitch);
+
+    // Strobe: the trigger-gate escape (BUG-060's concrete named case).
+    let mut strobe = effect("Strobe");
+    let mut strobe_trigger = ParameterAudioMod::new(
+        "clip_trigger".into(),
+        kick_send_id,
+        AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Low),
+    );
+    strobe_trigger.trigger_mode = Some(TriggerFireMode::Transient);
+    strobe.audio_mods = Some(vec![strobe_trigger]);
+    effects.push(strobe);
+
+    plasma.effects = Some(effects);
+
+    let mut project = Project::default();
+    project.audio_setup.sends.push(kick_send);
+    project.timeline.layers = vec![plasma];
+
+    let content = ContentState { current_beat: Beats(8.0), is_playing: false, ..Default::default() };
+
+    let mut selection = UIState::default();
+    selection.select_layer(lid("plasma-heavy"));
 
     SceneData { project, content, active: Some(0), selection }
 }

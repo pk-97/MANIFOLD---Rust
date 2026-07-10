@@ -90,7 +90,7 @@ or human can read it, and it needs no external tool.
 | BUG-068 | **inspector-scene-cliphit-overlap** | the `inspector` ui-snap scene fixture has a clip-vs-panel hit-test overlap at its narrower zoom — a clip can't be both uniquely-labeled and safely positioned over the inspector column, which forced DRAG_CAPTURE P1's L3 flow onto the `timeline` scene. Fixture-only, no runtime impact. Pre-existing at `b9304330` (LOW) |
 | BUG-069 | **shipping-license-audit** | four license problems in shipped components: madmom models + ADTOF (both CC BY-NC-SA), rusty_link crate (GPL-2.0, viral, in manifold-playback), staged ffmpeg copied from the dev machine (likely GPL build); full sweep 2026-07-08, everything else clean (HIGH for commercialization, zero runtime impact) |
 | BUG-070 | **stepper-and-nonstandard-slider-reset** | ~~decay drawer slider~~ + Clip Trigger drawer sliders now covered by the intrinsic-reset follow-through (@ 3a88f728, reset = required build input); **still open:** Audio Setup gain `[−]value[＋]` steppers + overlay-drag send-fader (not `BitmapSlider` tracks) (LOW) |
-| BUG-071 | **ui-snap-dump-stale-parent** | `ui_snapshot::dump.rs` serializes `UINode.parent_id` (the mint-time struct field) instead of `UITree.parent_index` (the live array `reparent_root_nodes` actually mutates) — any node reparented via `ScrollContainer::reparent_content` (or the like) shows `parent: null`/its original parent in `--dump` JSON even though it's correctly clipped/nested for real rendering. Found 2026-07-08 verifying BUG-060: the dump made a correctly-fixed tree look unclipped, costing real debugging time before the PNG (the actual render) proved it was fine. Fix shape: either serialize `tree.parent_index[i]` in `dump.rs:38`/`:92`, or have `reparent_root_nodes` also update `self.nodes[i].parent_id` so the two stay in sync (LOW, dev-tooling only, zero runtime impact) |
+| BUG-071 | **ui-snap-dump-stale-parent** | FIXED 2026-07-10 (UI_HARNESS_UNIFICATION P0, D9c) — `dump.rs` now serializes `tree.parent_of(n.id)`, not `n.parent_id`; committed on `feat/ui-harness-p0` |
 
 ## Open
 
@@ -134,7 +134,14 @@ The param manifest (an instance's live knob list) is built at deserialize AND re
 Loading a project that references an unresolvable preset def (deleted, unregistered, or missing on this machine) degrades *safely but silently*: saved params are kept on a placeholder (keep-don't-drop, `effects.rs:940`) and the effect falls back to **source passthrough** (`preset_runtime.rs:808`) — but the ONLY signal is a console `eprintln`; nothing shows on screen. A performer sees the layer render without its effect (a missing *generator* layer likely renders empty — inferred, unconfirmed) with no visible reason. **Fix shape:** surface unresolvable presets in-app (a card/badge or a load-time notice).
 
 ### BUG-071 (ui-snap-dump-stale-parent) — `ui_snapshot::dump.rs` serializes the mint-time parent, not the live reparented one — LOW (dev-tooling only)
-**Status:** OPEN
+**Status:** FIXED 2026-07-10 (`UI_HARNESS_UNIFICATION_DESIGN.md` P0, D9c) — `dump_tree_ex`
+(`dump.rs:38`) and `terse` (`dump.rs:92`, now ~95/~99 after the comment) both serialize
+`tree.parent_of(n.id)` (the live, already-`pub`, `parent_index`-backed accessor) instead of
+`n.parent_id`. The rejected alternative (mutating `nodes[i].parent_id` inside
+`reparent_root_nodes`) was NOT taken — it would touch live UI code, which P0's zero-live-code
+rule forbids; the dump-only fix was already the design's stated preference. Committed on
+`feat/ui-harness-p0` (not yet landed to main at time of writing — see that branch's history for
+the exact SHA once merged).
 
 `ui_snapshot::dump.rs` serializes `UINode.parent_id` (the mint-time struct field) instead of `UITree.parent_index` (the live array `reparent_root_nodes` actually mutates) — any node reparented via `ScrollContainer::reparent_content` (or the like) shows `parent: null`/its original parent in `--dump` JSON even though it's correctly clipped/nested for real rendering. Found 2026-07-08 verifying BUG-060: the dump made a correctly-fixed tree look unclipped, costing real debugging time before the PNG (the actual render) proved it was fine. **Fix shape:** either serialize `tree.parent_index[i]` in `dump.rs:38`/`:92`, or have `reparent_root_nodes` also update `self.nodes[i].parent_id` so the two stay in sync.
 
