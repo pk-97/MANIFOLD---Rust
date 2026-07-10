@@ -473,6 +473,107 @@ fn pool_accounting_consistent() {
 }
 
 // ---------------------------------------------------------------------
+// Test 5 — kill_mid_take_leaves_recoverable_file (failure class 1's
+// durability proof — silent writer death at ~2:20, fixed by fragmented MOV
+// + resilient finalize, 2b621085).
+// ---------------------------------------------------------------------
+
+/// Spawns the soak bin directly (not the proofs harness — the point is a
+/// hard kill of a REAL separate process, so a mid-write SIGKILL can't also
+/// tear down this test's own process/thread state) at a small resolution,
+/// unpaced, with a large frame budget so it keeps writing well past the
+/// polling window; polls the growing output file; SIGKILLs the child once
+/// it's written enough to prove sustained encoding (not just startup);
+/// probes what's left. Per design §4 item 5, this gate is deliberately only
+/// "readable content survives a hard kill" — fragment-flush cadence is
+/// media-time driven, not something this test controls or asserts on.
+#[test]
+fn kill_mid_take_leaves_recoverable_file() {
+    let _guard = proofs::gpu_guard();
+
+    let out = scratch_output("kill_mid_take_leaves_recoverable_file");
+    // Stale file from a previous run would defeat the size-growth poll below.
+    let _ = std::fs::remove_file(&out);
+
+    let soak_bin = env!("CARGO_BIN_EXE_recording-soak");
+    let mut child = std::process::Command::new(soak_bin)
+        .args([
+            "--width",
+            "1280",
+            "--height",
+            "720",
+            "--minutes",
+            "10", // large budget — the kill lands long before this completes
+            "--no-audio",
+            "--keep",
+            "--output",
+        ])
+        .arg(&out)
+        .spawn()
+        .expect("spawn recording-soak child process");
+
+    const SIZE_THRESHOLD_BYTES: u64 = 30 * 1024 * 1024;
+    const POLL_TIMEOUT: Duration = Duration::from_secs(60);
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+    let poll_start = std::time::Instant::now();
+    let mut reached_threshold = false;
+    loop {
+        if let Ok(meta) = std::fs::metadata(&out) {
+            if meta.len() >= SIZE_THRESHOLD_BYTES {
+                reached_threshold = true;
+                break;
+            }
+        }
+        if poll_start.elapsed() >= POLL_TIMEOUT {
+            break;
+        }
+        // Child exiting on its own (crash, early completion, fail-fast)
+        // before reaching the size threshold is itself a test failure —
+        // check without blocking so the poll loop keeps its own timeout.
+        if let Ok(Some(status)) = child.try_wait() {
+            panic!(
+                "recording-soak child exited on its own before reaching {SIZE_THRESHOLD_BYTES} \
+                 bytes (status: {status:?}) — cannot test a hard kill on a process that already ended"
+            );
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    assert!(
+        reached_threshold,
+        "output file never reached {SIZE_THRESHOLD_BYTES} bytes within {POLL_TIMEOUT:?} — \
+         recording-soak child may be stalled or too slow at 1280x720 unpaced"
+    );
+
+    // The hard kill — no graceful stop(), no finalize(). This is the whole
+    // point: prove the fragmented-MOV format survives losing the writer
+    // mid-take, per the class-1 failure this test regression-fences.
+    child.kill().expect("SIGKILL recording-soak child");
+    let _ = child.wait();
+
+    let report = proofs::probe(&out, false).expect("probe the killed file (ffprobe must open it)");
+    assert!(
+        report.video_frame_count >= 1,
+        "expected >=1 readable video frame in the killed file, got {}",
+        report.video_frame_count
+    );
+    assert!(
+        is_strictly_increasing(&report.pts),
+        "PTS of surviving frames not strictly increasing: {:?}",
+        report.pts
+    );
+
+    println!(
+        "kill_mid_take_leaves_recoverable_file: killed at {} bytes, {} frames recovered, \
+         PTS strictly increasing, kept at {}",
+        std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0),
+        report.video_frame_count,
+        out.display(),
+    );
+}
+
+// ---------------------------------------------------------------------
 // Test 6 — hdr_blocked_by_bug_053
 // ---------------------------------------------------------------------
 
