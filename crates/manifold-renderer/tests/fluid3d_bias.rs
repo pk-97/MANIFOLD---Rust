@@ -224,35 +224,44 @@ fn force_meter(device: &Arc<GpuDevice>, runtime: &PresetRuntime, tag: &str) {
                 "f32" => 1,
                 _ => continue, // i32/u32 ids carry no momentum information
             };
-            let mut sum = vec![0f64; comps];
-            let mut max_abs = vec![0f64; comps];
-            let mut live = 0u64;
+            // Two accumulators: low vs high index half. A fixed index
+            // subrange behaving differently (count mismatch, stale subrange,
+            // per-index branch) shows up as diverging halves.
+            let mut sum = vec![[0f64; 2]; comps];
+            let mut max_abs = vec![[0f64; 2]; comps];
+            let mut live = [0u64; 2];
             for i in 0..n {
                 if let Some(m) = &mask
                     && !m.get(i).copied().unwrap_or(false)
                 {
                     continue;
                 }
-                live += 1;
+                let h = usize::from(i >= n / 2);
+                live[h] += 1;
                 let base = i * stride + *off as usize;
                 for (c, s) in sum.iter_mut().enumerate() {
                     let o = base + c * 4;
                     let v = f64::from(f32::from_le_bytes(bytes[o..o + 4].try_into().unwrap()));
-                    *s += v;
-                    max_abs[c] = max_abs[c].max(v.abs());
+                    s[h] += v;
+                    max_abs[c][h] = max_abs[c][h].max(v.abs());
                 }
             }
-            let d = live.max(1) as f64;
-            let means: Vec<String> = sum.iter().map(|s| format!("{:+.3e}", s / d)).collect();
-            let maxes: Vec<String> = max_abs.iter().map(|m| format!("{m:.2e}")).collect();
-            eprintln!(
-                "METER {tag} {}[{}].{} {fname}: mean [{}] max|.| [{}] live {live}",
-                a.type_id,
-                a.name,
-                a.port,
-                means.join(" "),
-                maxes.join(" "),
-            );
+            for h in 0..2 {
+                let d = live[h].max(1) as f64;
+                let means: Vec<String> =
+                    sum.iter().map(|s| format!("{:+.3e}", s[h] / d)).collect();
+                let maxes: Vec<String> =
+                    max_abs.iter().map(|m| format!("{:.2e}", m[h])).collect();
+                eprintln!(
+                    "METER {tag} {}[{}].{} {fname} half{h}: mean [{}] max|.| [{}] live {}",
+                    a.type_id,
+                    a.name,
+                    a.port,
+                    means.join(" "),
+                    maxes.join(" "),
+                    live[h],
+                );
+            }
         }
     }
 }
@@ -274,16 +283,41 @@ fn fluid3d_force_bias_bisection() {
     //   slope + flow +0.01 (sign flip)         → mirrors to BL (sign-following)
     //   slope + rotate_y 1.0 (camera 180°)     → mirrors on screen (sim-space)
     //   slope + feather 4                      → bias GONE; feather 40 → TR 50%
-    // Turb-detail sweep (2026-07-10): FULL default look (turbulence + curl +
-    // slope all on) at noise lattice frequencies 2 (the legacy baked constant,
-    // the quadrant-anatomy "before") through 12. Judge the PNGs by eye; the
-    // meter rows quantify the wandering-tide shrink as detail rises.
+    // Peter's live repro (2026-07-10 screenshot): turbulence OFF, strong flow,
+    // curl 85, feather 43, full-volume cube, 2M particles — the top-right
+    // quadrant cube survives the turb_detail fix, implicating the curl-wobble
+    // trig pattern (2 periods across the volume). Baseline must reproduce the
+    // artifact before any wobble change is judged against it.
+    let peter_repro: &[(&str, f32)] = &[
+        ("flow", -0.10),
+        ("feather", 43.0),
+        ("turbulence", 0.0),
+        ("turb_detail", 16.0),
+        ("ctr_scale", 1.0),
+        ("count_m", 2.0),
+    ];
     let scenarios: &[(&str, &[(&str, f32)])] = &[
-        ("detail2_legacy", &[("turb_detail", 2.0)]),
-        ("detail4", &[("turb_detail", 4.0)]),
-        ("detail6", &[("turb_detail", 6.0)]),
-        ("detail8", &[("turb_detail", 8.0)]),
-        ("detail12", &[("turb_detail", 12.0)]),
+        ("peter_repro", peter_repro),
+        (
+            "repro_ctr09",
+            &[
+                ("flow", -0.10),
+                ("feather", 43.0),
+                ("turbulence", 0.0),
+                ("ctr_scale", 0.9),
+                ("count_m", 2.0),
+            ],
+        ),
+        (
+            "repro_ctr08",
+            &[
+                ("flow", -0.10),
+                ("feather", 43.0),
+                ("turbulence", 0.0),
+                ("ctr_scale", 0.8),
+                ("count_m", 2.0),
+            ],
+        ),
     ];
 
     for (name, overrides) in scenarios {

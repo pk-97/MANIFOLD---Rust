@@ -1,6 +1,13 @@
 # render_scene Unbounded Lights — lights move from a fixed uniform array to a storage buffer
 
-**Status:** APPROVED design, not built · 2026-07-06 · Fable 5
+**Status:** BUILT + LANDED 2026-07-10 (Opus) — P1 complete on `feat/render-scene-unbounded-lights`,
+merged to main. Lights now ride `@binding(8) var<storage, read>`; `MAX_LIGHTS` deleted;
+`LIGHT_SLIDER_MAX = 64` soft bound; uniform 400→272. Proven: 12/12 render_scene unit tests
+(incl. `lights_generalize_well_past_the_old_cap_of_4`), naga validates the shader across all three
+lit entry points, gpu-proofs `fragment_storage` (D7) green, and a NEW gpu-proofs
+`render_scene_lights` binary — an 8-light plane (lights 0–3 red, 4–7 green) renders green-dominant
+(read as a PNG: lights past index 3 reach binding 8 in the real depth-MSAA batch path), and a
+zero-light plane renders finite with no validation error (D4). Original design · 2026-07-06 · Fable 5
 **Prerequisites:** none hard, but same-file co-claimants (coherence audit F3, 2026-07-10):
 SCENE_BUILD_AND_GROUP_PARAMS P2 and GAUSSIAN_SPLATS P4 also edit `render_scene.rs`'s
 `rebuild`/`evaluate`. Independent of everything in flight in the sense that no other

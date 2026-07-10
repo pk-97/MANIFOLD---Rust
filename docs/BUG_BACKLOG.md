@@ -44,6 +44,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-092 | **gltf-import-caps-render-scene-objects-at-8-stale-mirror** | `gltf_import.rs`'s `MAX_RENDER_SCENE_OBJECTS = 8` truncates an imported glTF to its 8 largest-by-vertex materials (`materials.truncate(...)`, `assemble_render_scene_graph`), dropping the rest with a warning — but this constant is a stale mirror of `node.render_scene`'s OLD object cap. render_scene generalized object count to a soft `OBJECT_SLIDER_MAX = 64` (2026-07-05) and the comment at gltf_import.rs:60 still cites a non-existent render_scene `MAX_OBJECTS`. Effect: importing a model with >8 distinct materials silently loses objects that render_scene could now draw. Fix shape: raise/retire `MAX_RENDER_SCENE_OBJECTS` to track `OBJECT_SLIDER_MAX` (or import unbounded and let the slider clamp), and refresh the comment. Found 2026-07-10 while landing RENDER_SCENE_UNBOUNDED_LIGHTS (unrelated axis — that change uncapped *lights*; this is *objects*). LOW (import-time truncation with a user-visible warning, not a crash; only bites multi-material glTF imports). |
 | BUG-091 | **osc-drop-frame-timecode-uses-approximate-divisor** | `OscSyncController::timecode_to_seconds`'s drop-frame branch divides the computed `total_frames` by the literal constant `29.97`, not the true SMPTE/NTSC drop-frame rate `30000/1001` (≈29.970029970...) — and ignores the configurable `timecode_frame_rate` field entirely in this branch (only the non-drop-frame `else` arm reads it). The frame-*drop pattern* itself (which display numbers get skipped, ten-minute exemption) is correct per SMPTE 12M; only the absolute seconds-per-frame divisor is off. Drift is tiny (~60µs per elapsed minute, ~3.6ms per hour) and self-correcting on every incoming OSC message (the controller nudges/seeks to the newly-received timecode every frame while playing), so it is invisible on any realistic set length — found by F3 while building drop-frame test vectors against the true standard (`docs/CORE_ENGINE_MAP.md` doesn't rule on the exact divisor; only the SMPTE drop-count *pattern* was safe to pin as a test). LOW (self-correcting, sub-frame magnitude, no observed practical impact). |
 | BUG-090 | **audio-mixdown-analysis-only-test-flakes-under-parallel-run** | `audio_mixdown::tests::render_export_audio_analysis_only_layer_taps_but_never_hits_master` (an exact `assert_eq!` on two separately-rendered `f32` audio buffers) failed once during F2's full `cargo test -p manifold-playback` gate run, then passed both standalone and in an immediate full-suite rerun — a parallel-execution flake, not a deterministic failure; root cause unknown (suspects: shared `TestDir` temp-path collision across threads, or thread-scheduling-sensitive float summation order in the mixdown path). Found 2026-07-10 running F2's gate; file untouched by F2 (confirmed via `git diff` against F2's base commit). LOW (test-only, intermittent — but an exact-equality float assertion under parallel test execution is a fragile pattern worth a look). |
 | BUG-089 | **live-clip-pending-tick-queue-dead-on-all-live-paths** | `LiveClipManager`'s tick-based pending-launch queue (`pending_by_tick`/`pending_by_layer`/`pending_by_clip_id`, `PendingLiveLaunch.target_tick`, `queue_pending`, `activate_due_pending_launches[_at_tick]`, `has_pending_activations`) can only ever be written when `event_absolute_tick >= 0`, but midir events always set `absolute_tick = -1` (`midi_input.rs`) and it is the sole producer of `MidiNoteEvent` in the whole workspace; `fire_layer_oneshot` also always passes `tick = -1`. `activate_due_pending_launches_at_tick` is the only live caller (`engine.rs:803`, fed `self.last_frame_count`, a frame counter, not a real clock tick) and drains a map that can never be non-empty in production — confirmed by exhaustive grep, not inference. Found 2026-07-10 while scoping F2's tick-queue deletion call; left OPEN rather than deleted because the dead footprint is the whole subsystem (7 items across 2 files plus a dead cancellation branch in `commit_live_clip`), wider than the single function F2 was scoped to evaluate — a clean full removal deserves its own dedicated pass. LOW (dead code, zero runtime cost beyond an empty-map check per tick; risk is only in a future session doing a partial removal). |
@@ -209,6 +210,36 @@ synthetic UDP packet had actually been processed, until the test was changed to 
 field up) so the timeout check can never pass before a real message sets it. One-line change;
 left open because it's outside F1's scoped wiring fix and the exact boot-time semantics
 ("ported from Unity") deserved a dedicated look rather than a same-session drive-by.
+
+### BUG-092 (gltf-import-caps-render-scene-objects-at-8-stale-mirror) — glTF import truncates to 8 objects mirroring render_scene's REMOVED object cap — LOW (import-time truncation with a user warning, multi-material models only)
+**Status:** OPEN
+
+Found 2026-07-10 while landing RENDER_SCENE_UNBOUNDED_LIGHTS (an unrelated axis — that change
+uncapped *lights*; this is *objects*). `crates/manifold-renderer/src/node_graph/gltf_import.rs`:
+
+```rust
+const MAX_RENDER_SCENE_OBJECTS: usize = 8;
+// ...
+let dropped_over_cap = materials.len().saturating_sub(MAX_RENDER_SCENE_OBJECTS);
+materials.truncate(MAX_RENDER_SCENE_OBJECTS);
+```
+
+The comment at gltf_import.rs:60 says the cap is "mirrored from `node.render_scene`'s own
+`MAX_OBJECTS`" — but that constant no longer exists. render_scene generalized object count to a
+soft `OBJECT_SLIDER_MAX = 64` on 2026-07-05 (per-object `mesh_n/material_n` ports are generated
+by `format!`, one draw call each, no structural cap). So the import path drops objects that
+render_scene is now perfectly able to draw: a glTF with, say, 12 distinct materials imports as 8
+objects and silently loses 4, with a warning.
+
+**Why LOW:** it's import-time truncation with a user-visible warning, not a crash or a wrong
+render; and it only bites models with more than 8 distinct materials. But it's a real capability
+regression against the generalized renderer, and the stale comment actively misleads.
+
+**Fix shape:** raise `MAX_RENDER_SCENE_OBJECTS` to track `OBJECT_SLIDER_MAX` (64), or drop the
+import-side cap entirely and let render_scene's `objects` slider clamp — importing unbounded and
+clamping at the editor is the cleaner match to the "soft editor bound, no structural cap" model.
+Refresh the gltf_import.rs:60 comment either way. Left open rather than fixed while landing the
+lights change because it's a different axis (objects, not lights) and out of that phase's scope.
 
 ### BUG-091 (osc-drop-frame-timecode-uses-approximate-divisor) — SMPTE drop-frame seconds conversion divides by literal `29.97` instead of the true `30000/1001` rate — LOW (self-correcting, sub-frame magnitude)
 **Status:** FIXED 2026-07-10 — drop-frame branch now computes `(total_frames as f64 * 1001.0 / 30000.0) as f32` (osc_sync.rs); 00:01:00:02 DF is now exactly 60.06s. Exact-value test `drop_frame_absolute_seconds_are_standards_exact`.
@@ -585,6 +616,44 @@ tap range in `blur_3d_separable` (a `[-r, r-1]`-style kernel = half-voxel shift 
 pass, same sign every axis — fits all-axes-equal tide, feather scaling, legacy
 drifting slower, and survives parity because the oracle would share the defect).
 Read the blur kernel before building anything.
+
+**2026-07-10 part 2 (same session, after Peter's live falsification at flow −0.10 /
+feather 43 / turbulence 0 / ctr_scale 1.0 / 2M particles — the TR cube survives the
+Turb Detail fix because turbulence isn't even running):**
+
+*Shipped:* **hash-lane decorrelation.** `hash_float3` in the FluidSim3D seed pattern
+and `dfp_hash_float3` in `diffuse_force_3d_at_particles` (body + hand oracle) chained
+their lanes (h1 = hash(h0)), correlating x/y/z at 0.75/0.75/0.50 (CPU-verified) — the
+default seed cluster was a corner-to-corner diagonal CIGAR, and every anti-clump kick
+leaned diagonal. Fixed to independent lanes (seed XOR distinct constants; corr ≈ 0.01
+after). Real defects, worth having fixed — but NOT the cube's root: the artifact
+survived unchanged. **`BlackHole.json` carries the same chained-hash pattern — unfixed,
+needs its own look pass.**
+
+*Falsified this part, with evidence:* curl-wobble anatomy (cube survives curl=0 —
+though the wobble trig IS 2-periods-across-volume and its axis_raw CAN pass near
+zero; cosmetic hazard, still worth a later look); volume-edge convention mixing (cube
+unchanged at ctr_scale 1.0/0.9/0.8); blur kernel asymmetry (read: taps and weights
+exactly mirrored); container bounds + Euler integrator (read: symmetric);
+`flatten_to_camera_plane` at flatten=0 (read: clean early-out); Texture3D
+allocation-vs-dispatch mismatch (all vol_res/vol_depth params 128, plan sizes volumes
+from those params); two-population/index-identity split (half-split meter: all 2M
+live particles uniform in the low half of a 4M buffer, forces present for all).
+
+*Open clues for the next session:* (a) center of mass at f900 sits at
+**[0.58, 0.41, 0.27] — the displacement is z-DOMINANT**, invisible in the 2D view and
+unexplained by any surface theory; (b) peak |force| at flow −0.10 is **0.137/frame ≈
+14% of the volume per Euler step** — wildly over-CFL; the churn cube may be a
+numerical-instability zone whose location is set by whatever seeds the z asymmetry;
+(c) the artifact needs strong flow (−0.10); at −0.01 only mild TR pooling.
+
+*Next instrument (build BEFORE more hypothesis testing):* a **Texture3D slice
+viewer** — render z-slices of each stage's volume (density, blurred density,
+gradient, force, blurred force) to PNGs from the harness, and LOOK at which stage
+the cube/asymmetry first enters. Bisects the pipeline in one run instead of testing
+mechanisms one at a time; also a graph-editor gap (no Texture3D preview exists), so
+the work serves the product. The half-split meter machinery in `fluid3d_bias.rs`
+stays.
 
 ### BUG-063 (silent-load-repairs) — load-time repairs delete project data with log-only notice — MED-HIGH (silent data alteration; compounds BUG-062)
 **Status:** PARTIAL
