@@ -21,14 +21,15 @@ fn dfp_wang_hash(seed_in: u32) -> u32 {
     return seed;
 }
 
+// Independent lanes per component (seed XOR distinct constants). The previous
+// chained form (h1 = hash(h0), h2 = hash(h1)) correlates the three components
+// (corr ≈ 0.5–0.75 measured), so every "random" kick leaned along the main
+// diagonal — one input to BUG-066's deterministic corner anisotropy.
 fn dfp_hash_float3(seed: u32) -> vec3<f32> {
-    let h0 = dfp_wang_hash(seed);
-    let h1 = dfp_wang_hash(h0);
-    let h2 = dfp_wang_hash(h1);
     return vec3<f32>(
-        f32(h0) / 4294967296.0,
-        f32(h1) / 4294967296.0,
-        f32(h2) / 4294967296.0,
+        f32(dfp_wang_hash(seed)) / 4294967296.0,
+        f32(dfp_wang_hash(seed ^ 0x68bc21ebu)) / 4294967296.0,
+        f32(dfp_wang_hash(seed ^ 0x02e5be93u)) / 4294967296.0,
     );
 }
 

@@ -617,6 +617,44 @@ pass, same sign every axis — fits all-axes-equal tide, feather scaling, legacy
 drifting slower, and survives parity because the oracle would share the defect).
 Read the blur kernel before building anything.
 
+**2026-07-10 part 2 (same session, after Peter's live falsification at flow −0.10 /
+feather 43 / turbulence 0 / ctr_scale 1.0 / 2M particles — the TR cube survives the
+Turb Detail fix because turbulence isn't even running):**
+
+*Shipped:* **hash-lane decorrelation.** `hash_float3` in the FluidSim3D seed pattern
+and `dfp_hash_float3` in `diffuse_force_3d_at_particles` (body + hand oracle) chained
+their lanes (h1 = hash(h0)), correlating x/y/z at 0.75/0.75/0.50 (CPU-verified) — the
+default seed cluster was a corner-to-corner diagonal CIGAR, and every anti-clump kick
+leaned diagonal. Fixed to independent lanes (seed XOR distinct constants; corr ≈ 0.01
+after). Real defects, worth having fixed — but NOT the cube's root: the artifact
+survived unchanged. **`BlackHole.json` carries the same chained-hash pattern — unfixed,
+needs its own look pass.**
+
+*Falsified this part, with evidence:* curl-wobble anatomy (cube survives curl=0 —
+though the wobble trig IS 2-periods-across-volume and its axis_raw CAN pass near
+zero; cosmetic hazard, still worth a later look); volume-edge convention mixing (cube
+unchanged at ctr_scale 1.0/0.9/0.8); blur kernel asymmetry (read: taps and weights
+exactly mirrored); container bounds + Euler integrator (read: symmetric);
+`flatten_to_camera_plane` at flatten=0 (read: clean early-out); Texture3D
+allocation-vs-dispatch mismatch (all vol_res/vol_depth params 128, plan sizes volumes
+from those params); two-population/index-identity split (half-split meter: all 2M
+live particles uniform in the low half of a 4M buffer, forces present for all).
+
+*Open clues for the next session:* (a) center of mass at f900 sits at
+**[0.58, 0.41, 0.27] — the displacement is z-DOMINANT**, invisible in the 2D view and
+unexplained by any surface theory; (b) peak |force| at flow −0.10 is **0.137/frame ≈
+14% of the volume per Euler step** — wildly over-CFL; the churn cube may be a
+numerical-instability zone whose location is set by whatever seeds the z asymmetry;
+(c) the artifact needs strong flow (−0.10); at −0.01 only mild TR pooling.
+
+*Next instrument (build BEFORE more hypothesis testing):* a **Texture3D slice
+viewer** — render z-slices of each stage's volume (density, blurred density,
+gradient, force, blurred force) to PNGs from the harness, and LOOK at which stage
+the cube/asymmetry first enters. Bisects the pipeline in one run instead of testing
+mechanisms one at a time; also a graph-editor gap (no Texture3D preview exists), so
+the work serves the product. The half-split meter machinery in `fluid3d_bias.rs`
+stays.
+
 ### BUG-063 (silent-load-repairs) — load-time repairs delete project data with log-only notice — MED-HIGH (silent data alteration; compounds BUG-062)
 **Status:** PARTIAL
 

@@ -50,14 +50,13 @@ fn wang_hash(seed_in: u32) -> u32 {
     return seed;
 }
 
+// Independent lanes (seed XOR distinct constants) — the chained form
+// correlated the components along the main diagonal (BUG-066).
 fn hash_float3(seed: u32) -> vec3<f32> {
-    let h0 = wang_hash(seed);
-    let h1 = wang_hash(h0);
-    let h2 = wang_hash(h1);
     return vec3<f32>(
-        f32(h0) / 4294967296.0,
-        f32(h1) / 4294967296.0,
-        f32(h2) / 4294967296.0,
+        f32(wang_hash(seed)) / 4294967296.0,
+        f32(wang_hash(seed ^ 0x68bc21ebu)) / 4294967296.0,
+        f32(wang_hash(seed ^ 0x02e5be93u)) / 4294967296.0,
     );
 }
 
