@@ -87,7 +87,7 @@ or human can read it, and it needs no external tool.
 | BUG-056 | **audio-mixdown-clippy-debt** | `manifold-playback` clippy gate (`-D warnings`) fails pre-existing on `audio_mixdown.rs` — `cloned_ref_to_slice_refs` + `needless_range_loop` (LOW, blocks the crate's clippy gate, not correctness) |
 | BUG-057 | **ui-snapshot-dead-blit-pipeline** | `cargo clippy -p manifold-app --features ui-snapshot` fails pre-existing on an unused `make_blit_pipeline` fn (LOW, blocks that one feature's clippy gate, not correctness) |
 | BUG-063 | **silent-load-repairs** | PARTIAL — load-repairs now surface as a non-blocking "opened with repairs" toast (P3, no longer silent); the heavier rescue path (blocking ack dialog + journal the pre-repair project.json to history/) is deferred (MED-HIGH) |
-| BUG-066 | **fluid3d-corner-drift** | FluidSim3D density herds into one corner (top-right at default params): turbulence noise is a wandering net tide + slope force has a sign-following, feather-scaled diagonal drift; root of the drift NOT yet found — 4 hypotheses refuted with evidence, harness in-repo (MED-HIGH, visible on stage) |
+| BUG-066 | **fluid3d-corner-drift** | PARTIAL — the dominant defect (screen-scale quadrant anatomy + wandering tide from the noise lattice at 2 cells/volume) FIXED 2026-07-10 via `turb_scale` on `node.turbulence_3d` + "Turb Detail" card param (default 8); the smaller slope-force diagonal tide (~0.5% of peak, measured by the harness force meter) remains open — precision + executor + mean-projection hypotheses all refuted with evidence (MED → LOW-MED after the fix, needs Peter look-pass) |
 | BUG-067 | **ui-snapshot-dead-blit-pipeline** | `make_blit_pipeline` (`crates/manifold-app/src/ui_snapshot/render.rs:760`) is never used; `cargo clippy --features manifold-app/ui-snapshot -- -D warnings` fails on it, so any clippy run that chains the ui-snapshot feature (needed for `cargo xtask ui-snap` L3 flows) trips. Pre-existing at `b9304330`, found during DRAG_CAPTURE P1 (LOW) |
 | BUG-068 | **inspector-scene-cliphit-overlap** | the `inspector` ui-snap scene fixture has a clip-vs-panel hit-test overlap at its narrower zoom — a clip can't be both uniquely-labeled and safely positioned over the inspector column, which forced DRAG_CAPTURE P1's L3 flow onto the `timeline` scene. Fixture-only, no runtime impact. Pre-existing at `b9304330` (LOW) |
 | BUG-069 | **shipping-license-audit** | four license problems in shipped components: madmom models + ADTOF (both CC BY-NC-SA), rusty_link crate (GPL-2.0, viral, in manifold-playback), staged ffmpeg copied from the dev machine (likely GPL build); full sweep 2026-07-08, everything else clean (HIGH for commercialization, zero runtime impact) |
@@ -295,7 +295,7 @@ scene (drag past the tracks' right edge) instead. Fixture-only, no app runtime i
 adjust the `inspector` scene's clip layout or zoom so a clip clears the panel.
 
 ### BUG-066 (fluid3d-corner-drift) — FluidSim3D density herds into one corner; two causes isolated, one root still open — MED-HIGH (visible on stage in long-running clips)
-**Status:** OPEN
+**Status:** PARTIAL — dominant defect fixed 2026-07-10 (see the dated addendum at the end of this entry); the smaller slope-force tide remains open
 
 **Found 2026-07-07 by Peter on the live output (subtle top-right dominance, no container and
 cube container), bisected headless the same session.** Harness:
@@ -404,6 +404,52 @@ toroidally — mixed boundary conventions couple opposite faces asymmetrically o
 reaches the volume edge. Fix at whichever level the probe convicts; then rerun the harness
 matrix (slope_only + slope_feather40 must go ≈25% flat) and give Peter a look-pass, since
 zero-mean turbulence (item 2) changes the fluid's feel.
+
+**2026-07-10 session (Fable + Peter) — dominant defect FIXED, projection fix REFUTED, meter now in-repo:**
+
+*The force meter (next-step 1b) is built* into `fluid3d_bias.rs`: `set_dump_all` +
+buffer readback prints per-axis mean/max force for every per-particle array at
+checkpoint frames (note: `Array<[f32;3]>` decodes as three scalar `f32` fields, not
+`vec3f`; and the in-place force chain aliases one buffer, so every force-node row
+shows the same post-accumulation content — attribute terms via scenario nulls, not
+rows). Measured: the slope tide is real — slope_only holds a persistent
++5e-5/axis mean (~0.5% of peak force) for 900 frames; the null control reads ~1e-7.
+
+*Refuted this session, with evidence:* (e) hardware trilinear rounding (2b) — a
+manual exact-f32 8-tap trilerp in the sample body left the tide and pooling
+unchanged; ALL precision theories are now dead. (f) uniform zero-mean projection as
+the fix — built (`node.remove_drift_3d`, three-pass reduce+subtract, GPU-oracle
+proven, registered but UNCONSUMED — shelf atom) and wired into the preset: it
+*inverted and amplified* the pooling (slope_only TR 37% → BL 46%; no-container BL
+63%). The imbalance is spatially concentrated (wall bands), so cancelling its net
+uniformly injects a volume-coherent counter-force — coherence is the amplifier.
+(g) volume-edge convention mixing (blur clamps / gradient wraps) — refuted by
+logic over existing data: no-container puts particles AT the volume edges and
+measures clean. Fused vs `MANIFOLD_FREEZE=0` renders bit-identical (weak evidence
+against the executor-schedule suspect; the toggle's effect on this path unverified).
+
+*The DOMINANT visible defect was a different bug at a higher level* (Peter's call —
+he saw quadrant-structured turbulence on the live output, one cube-shaped region
+behaving differently, stable across resolutions): the turbulence noise lattice.
+`node.turbulence_3d` sampled its 3-plane simplex at `pos * 2.0` (baked constant) —
+~2 lattice cells across the whole volume, so one noise cell reads as a quadrant of
+the sim, and a 2-cell field can't average to zero (= the item-2 wandering tide).
+**Fixed:** `turb_scale` param (port-shadowed, default 2.0 = legacy so old saves
+render unchanged) + "Turb Detail" card param on FluidSim3D (default 8.0). Sweep
+(detail 2/4/6/8/12, full defaults, 900f): quadrant anatomy gone from ~6 up,
+quadrant shares stable within ~2 points (legacy sloshes 10+), wandering tide 3–10×
+smaller. Peter look-pass at the rig owed (default 8 = my eye, not his yet).
+
+*Still open (the original slope tide, now LOW-MED):* root cause of the +diagonal
+~0.5%-of-peak slope-force mean. Next instruments, in order: (1) the synthetic
+antisymmetry probe (upload a mirror-symmetric density, run blur→gradient→slope→blur
+via the standalone kernels, find the first stage where F(p) ≠ −F(mirror p));
+(1b) octant-conditioned meter means (10-line harness change) to confirm the
+wall-band concentration; (2) unverified hypothesis from this session: an off-center
+tap range in `blur_3d_separable` (a `[-r, r-1]`-style kernel = half-voxel shift per
+pass, same sign every axis — fits all-axes-equal tide, feather scaling, legacy
+drifting slower, and survives parity because the oracle would share the defect).
+Read the blur kernel before building anything.
 
 ### BUG-063 (silent-load-repairs) — load-time repairs delete project data with log-only notice — MED-HIGH (silent data alteration; compounds BUG-062)
 **Status:** PARTIAL

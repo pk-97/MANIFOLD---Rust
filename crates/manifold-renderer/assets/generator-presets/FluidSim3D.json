@@ -56,6 +56,17 @@
         "formatString": "F4"
       },
       {
+        "id": "turb_detail",
+        "name": "Turb Detail",
+        "min": 1.0,
+        "max": 16.0,
+        "defaultValue": 8.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F1"
+      },
+      {
         "id": "speed",
         "name": "Speed",
         "min": 0.1,
@@ -305,6 +316,19 @@
           "kind": "node",
           "nodeId": "noise_final",
           "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "turb_detail",
+        "label": "Turb Detail",
+        "defaultValue": 8.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "noise_force",
+          "param": "turb_scale"
         },
         "convert": {
           "type": "Float"
@@ -3065,6 +3089,10 @@
               "anti_clump": {
                 "type": "Float",
                 "value": 20.0
+              },
+              "turb_scale": {
+                "type": "Float",
+                "value": 8.0
               },
               "turbulence": {
                 "type": "Float",
