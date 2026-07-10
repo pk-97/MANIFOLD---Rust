@@ -62,7 +62,7 @@ addendum on the heavy-window corpus afterwards.
    graded in live_grades.session.jsonl, same evidence-outside-window family
    as verify-claim's top FP class.
 
-## Pass 2 grading results (Opus, 2026-07-10) — PENDING FABLE QC
+## Pass 2 grading results (Opus, 2026-07-10) — FABLE QC PASSED same day
 
 First Opus grading pass. Graded 103 corrective/detector fires (post-boundary,
 07-07 20:26 Sydney -> 07-10 01:19, ts <= telemetry snapshot 1783647157.63),
@@ -105,6 +105,53 @@ budget+throttle fix is UNVALIDATED (no post-fix telemetry). 13 FN misses folded
 observation (>=3 specimens). Corpus hygiene: check_grades vocab extended
 (correct+="unclear", effective+="n/a") + legacy TP/FP/y/n normalized in place;
 tracked file now 0 lint violations. Full QC packet: the session's final report.
+
+**Fable QC (2026-07-10):** all overrides upheld; grading quality good (RUNBOOK
+correct-definition applied consistently, the first-time-grader failure mode).
+Two reviewer notes in eval/observations.session.jsonl: fire 523 lean c=false
+(coin-flip, changes no action); fire 597 = payload defect, ungrounded-chat-claim
+needs a price-the-verification clause ("mark as recall" is the right branch when
+verifying costs more than the claim is worth).
+
+### Post-window addendum agenda (run after the ~Jul 13 heavy window)
+
+1. git-landing: confirm the is-ancestor exemption kills the compliant-delete
+   class post-23d78699; diagnose + fix the 3 post-T1 non-git misfires
+   (SendMessage message-text, PostToolUse-on-Read). If FPs persist, mute.
+2. escalate/checkpoint: escalation code counts fires, not same-move recurrence
+   (agenda gap f) — one-concern code edit, post-freeze.
+3. verify-claim: measure the claim-gate via verify_claim_suppressed telemetry
+   (0 pre-window; observers pick it up on revive); attribute separately from
+   the still-unscored pass-1 rework.
+4. permission-creep + landing-doc-reflex: add the cheap context-checks
+   (observation 452b8f46) — both over-fire on contexts the signature excludes.
+5. Worker whispers: grade the heavy window's worker_shadow_fire corpus (18
+   pre-window fires look stronger than night-half's 1/6) → per-move delivery
+   decision.
+6. ask-gate + stop-wait validation: verdicts vs skipped-throttled vs timeouts
+   at the 30s budget; post-fix durationMs distribution (cap-clustering only on
+   fire turns = classifier latency is the binding constraint → async
+   classification is the next lever).
+7. New moves: author derivation-substitutes-for-observation (>=3 specimens,
+   ready); triage the single-specimen candidates (gate-command-completeness,
+   decided-D-check, dropped-deliverable-at-boundary,
+   final-message-carries-deliverable, coherence-back-reference, trust-the-
+   instrument, user-asserts-existing-mechanism). Payload fix: fire 597's
+   price-the-verification clause on ungrounded-chat-claim.
+8. §2d phase rules: keep shadow; no-verify-before-reporting needs a done-claim
+   precondition before any delivery flip.
+9. **Retire the aggregate 80% precision gate (Peter-endorsed 2026-07-10).**
+   It failed every pass while the system got more useful — wrong target.
+   Replace with per-move precision floors + the per-session noise ceiling
+   (<1 corrective FP/session). Peter's stated bar: ~0.7 FP per multi-hour
+   session is "actually a really strong number" — alert-blindness is per-move
+   (git-landing's 19-in-a-row), not global; don't sacrifice recall chasing an
+   aggregate number. Update DESIGN.md §4 gates accordingly.
+10. **Shadow-week policy for new mechanical detectors (Fable recommendation).**
+   Every deterministic detector shipped so far grew a live-only failure mode
+   (git-landing on SendMessage text, landing-doc-reflex on bug-hunt landings,
+   unverified-done-claim 0/3 muted). New mechanical moves log-only for one
+   graded window before delivery, same as §2d phase rules. Decide at addendum.
 
 ## Night-half results (Fable grading session, 2026-07-07 late — item 12's answer)
 
