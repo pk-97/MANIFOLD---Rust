@@ -2327,3 +2327,79 @@ fn nested_group_row_lives_on_the_currently_viewed_level_only() {
     assert_eq!(inner_group.params.len(), 1, "the row re-homed one level down with the group that now visibly contains leaf");
     assert_eq!(inner_group.params[0].label, "Amount");
 }
+
+// ── scene build P5: "+ Object" / "+ Light" action rows, same-pair ribbons ──
+
+#[test]
+fn render_scene_node_gets_add_object_and_add_light_action_rows() {
+    let mut n = node(1, "node.render_scene", Some("render"));
+    n.parameters = vec![float_param("objects", 2.0), float_param("lights", 1.0)];
+    let snap = GraphSnapshot {
+        nodes: vec![n],
+        wires: Vec::new(),
+        outer_routings: Vec::new(),
+    };
+    let mut canvas = GraphCanvas::new();
+    canvas.set_snapshot(&snap);
+
+    let view = canvas.find_node(1).expect("render_scene node view");
+    assert!(view.is_render_scene);
+
+    let objects_row = view
+        .rows
+        .iter()
+        .position(|r| matches!(r, NodeRow::Param { param, .. } if view.params[*param].name == "objects"))
+        .expect("objects param row");
+    assert!(
+        matches!(view.rows[objects_row + 1], NodeRow::Action(NodeActionKind::AddSceneObject)),
+        "+ Object button spliced right after the objects row"
+    );
+
+    let lights_row = view
+        .rows
+        .iter()
+        .position(|r| matches!(r, NodeRow::Param { param, .. } if view.params[*param].name == "lights"))
+        .expect("lights param row");
+    assert!(
+        matches!(view.rows[lights_row + 1], NodeRow::Action(NodeActionKind::AddSceneLight)),
+        "+ Light button spliced right after the lights row"
+    );
+}
+
+#[test]
+fn ordinary_node_gets_no_action_rows() {
+    let mut n = node(1, "node.blur", Some("blur"));
+    n.parameters = vec![float_param("amount", 0.5)];
+    let snap = GraphSnapshot {
+        nodes: vec![n],
+        wires: Vec::new(),
+        outer_routings: Vec::new(),
+    };
+    let mut canvas = GraphCanvas::new();
+    canvas.set_snapshot(&snap);
+
+    let view = canvas.find_node(1).expect("blur node view");
+    assert!(!view.is_render_scene);
+    assert!(
+        !view.rows.iter().any(|r| matches!(r, NodeRow::Action(_))),
+        "only render_scene gets gesture-button rows"
+    );
+}
+
+#[test]
+fn group_wires_by_pair_collapses_shared_endpoints_leaves_singletons_alone() {
+    let wires = vec![
+        WireView { from_node: 1, from_port: "vertices".into(), to_node: 9, to_port: "mesh_0".into() },
+        WireView { from_node: 1, from_port: "material".into(), to_node: 9, to_port: "material_0".into() },
+        WireView { from_node: 1, from_port: "transform".into(), to_node: 9, to_port: "transform_0".into() },
+        WireView { from_node: 2, from_port: "out".into(), to_node: 9, to_port: "camera".into() },
+    ];
+    let groups = group_wires_by_pair(wires.iter());
+    assert_eq!(groups.len(), 2, "two distinct (from_node, to_node) pairs");
+
+    let ribboned = groups.iter().find(|(k, _)| *k == (1, 9)).expect("the 3-wire pair");
+    assert_eq!(ribboned.1.len(), 3, "all three same-pair wires grouped into one ribbon");
+
+    let singleton = groups.iter().find(|(k, _)| *k == (2, 9)).expect("the 1-wire pair");
+    assert_eq!(singleton.1.len(), 1, "a lone wire between a pair stays its own group (no ribbon)");
+}

@@ -2692,6 +2692,50 @@ impl Application {
                     self.send_content_cmd(ContentCommand::SetNodePreviewNormalize(*on));
                     continue;
                 }
+                manifold_ui::GraphEditCommand::AddSceneObject {
+                    scope_path,
+                    render_scene_node_id,
+                    next_index,
+                    centroid,
+                } => {
+                    if let (Some(target), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::AddSceneObjectCommand::new(
+                            target.clone(),
+                            scope_path.clone(),
+                            *render_scene_node_id,
+                            *next_index,
+                            *centroid,
+                            default.clone(),
+                        );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::AddSceneLight {
+                    scope_path,
+                    render_scene_node_id,
+                    next_index,
+                    pos,
+                } => {
+                    if let (Some(target), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::AddSceneLightCommand::new(
+                            target.clone(),
+                            scope_path.clone(),
+                            *render_scene_node_id,
+                            *next_index,
+                            *pos,
+                            default.clone(),
+                        );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
             }
         }
 

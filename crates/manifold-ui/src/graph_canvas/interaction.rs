@@ -721,6 +721,55 @@ impl GraphCanvas {
             }
             return;
         }
+        // "+ Object" / "+ Light" gesture buttons on `render_scene`'s face
+        // (D7/D7a, `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2). Checked
+        // before the expose glyph / param scrub below — Action rows carry no
+        // param so `param_row_under` already skips them, but checking first
+        // keeps the gesture's dispatch next to the other whole-row hit-tests
+        // (port drag, header chrome) rather than buried past the param path.
+        if let Some((node_id, kind)) = self.action_row_under(viewport, sx, sy) {
+            self.select_single(node_id);
+            if let Some(node) = self.nodes.iter().find(|n| n.id == node_id) {
+                let scope_path = self.scope.clone();
+                let (nx, ny) = node.pos_graph;
+                match kind {
+                    NodeActionKind::AddSceneObject => {
+                        let next_index = node
+                            .params
+                            .iter()
+                            .find(|p| p.name == "objects")
+                            .map(|p| p.current_value.round().max(0.0) as u32)
+                            .unwrap_or(0);
+                        // Stagger successive object groups below-right of
+                        // render_scene so repeated clicks don't stack new
+                        // boxes exactly on top of each other; drag to taste.
+                        let centroid = (nx + NODE_WIDTH + 80.0, ny + next_index as f32 * 220.0);
+                        self.pending_actions.push(GraphEditCommand::AddSceneObject {
+                            scope_path,
+                            render_scene_node_id: node_id,
+                            next_index,
+                            centroid,
+                        });
+                    }
+                    NodeActionKind::AddSceneLight => {
+                        let next_index = node
+                            .params
+                            .iter()
+                            .find(|p| p.name == "lights")
+                            .map(|p| p.current_value.round().max(0.0) as u32)
+                            .unwrap_or(0);
+                        let pos = (nx - 260.0, ny + next_index as f32 * 140.0);
+                        self.pending_actions.push(GraphEditCommand::AddSceneLight {
+                            scope_path,
+                            render_scene_node_id: node_id,
+                            next_index,
+                            pos,
+                        });
+                    }
+                }
+            }
+            return;
+        }
         // Expose glyph at a param row's left edge → toggle whether the inner
         // param feeds the outer performance card (Blender-style on-node expose).
         // Checked before the row scrub so a click on the dot exposes rather than
