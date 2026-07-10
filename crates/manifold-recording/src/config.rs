@@ -47,7 +47,8 @@ impl LiveRecordingConfig {
 /// Result returned after a recording session ends.
 #[derive(Clone, Debug)]
 pub struct RecordingResult {
-    /// Path to the recorded MP4 file.
+    /// Path to the recorded file (.mov — ProRes 422 Proxy for SDR, HEVC
+    /// Main10 for HDR; see `LiveRecordingConfig::default_to_desktop`).
     pub output_path: String,
     /// Total video frames written.
     pub frames_recorded: u32,

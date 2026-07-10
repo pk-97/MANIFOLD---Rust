@@ -2427,6 +2427,7 @@ dependencies = [
  "manifold-audio",
  "manifold-gpu",
  "ringbuf 0.4.8",
+ "serde_json",
 ]
 
 [[package]]

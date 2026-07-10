@@ -8,7 +8,7 @@ use std::ffi::{CString, c_void};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Sender, bounded};
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
@@ -41,6 +41,26 @@ pub struct LiveRecordingSession {
 
 unsafe impl Send for LiveRecordingSession {}
 
+/// Where the recording session gets its audio.
+///
+/// `AudioConsumer` is neither `Clone` nor `Debug` and `LiveRecordingConfig`
+/// crosses `ContentCommand`, so the feed cannot live in the config — it is a
+/// constructor-time choice instead (see docs/LIVE_RECORDING_PROOFS_DESIGN.md D2).
+pub enum AudioFeed {
+    /// Open a capture device by name (the production path — today's
+    /// `config.audio_device`).
+    Device(String),
+    /// Pre-built ring-buffer consumer (harness / future routing). The
+    /// session does not own a device in this case.
+    Injected {
+        consumer: manifold_audio::capture::AudioConsumer,
+        sample_rate: u32,
+        channels: u16,
+    },
+    /// Video only.
+    None,
+}
+
 impl LiveRecordingSession {
     /// Create and start a new live recording session.
     ///
@@ -53,6 +73,24 @@ impl LiveRecordingSession {
         height: u32,
         fps: f32,
     ) -> Result<Self, String> {
+        let feed = match config.audio_device.clone() {
+            Some(device_name) => AudioFeed::Device(device_name),
+            None => AudioFeed::None,
+        };
+        Self::new_with_audio_feed(config, device, width, height, fps, feed)
+    }
+
+    /// Create and start a new live recording session with an explicit audio
+    /// feed. `new()` delegates here after mapping `config.audio_device` to
+    /// [`AudioFeed::Device`]/[`AudioFeed::None`] — see [`AudioFeed`].
+    pub fn new_with_audio_feed(
+        config: LiveRecordingConfig,
+        device: &GpuDevice,
+        width: u32,
+        height: u32,
+        fps: f32,
+        feed: AudioFeed,
+    ) -> Result<Self, String> {
         let device_ptr = device.raw_device_ptr();
         let output_path = config.output_path.clone();
 
@@ -63,8 +101,8 @@ impl LiveRecordingSession {
         let format_converter = FormatConverter::new(device);
 
         // -- Audio capture (optional) --
-        let (audio_capture, audio_consumer, sample_rate, channels) =
-            if let Some(ref device_name) = config.audio_device {
+        let (audio_capture, audio_consumer, sample_rate, channels) = match feed {
+            AudioFeed::Device(device_name) => {
                 let audio_config = manifold_audio::capture::AudioCaptureConfig {
                     device_name: Some(device_name.clone()),
                 };
@@ -86,9 +124,14 @@ impl LiveRecordingSession {
                         (None, None, 0, 0)
                     }
                 }
-            } else {
-                (None, None, 0, 0)
-            };
+            }
+            AudioFeed::Injected {
+                consumer,
+                sample_rate,
+                channels,
+            } => (None, Some(consumer), sample_rate, channels),
+            AudioFeed::None => (None, None, 0, 0),
+        };
 
         // -- Native encoder --
         let c_path =
@@ -136,7 +179,6 @@ impl LiveRecordingSession {
                     sample_rate,
                     channels,
                     stop_clone,
-                    start_time,
                 )
             })
             .map_err(|e| format!("Failed to spawn recording thread: {e}"))?;
@@ -203,6 +245,19 @@ impl LiveRecordingSession {
         pool_slot: PoolSlot,
         fence: Arc<crate::recording_thread::GpuFence>,
     ) {
+        let elapsed = self.start_time.elapsed();
+        self.submit_frame_at(pool_slot, fence, elapsed);
+    }
+
+    /// Test/harness entry: submit a frame with an explicit elapsed-since-start
+    /// timestamp, bypassing `Instant::now()`. `submit_frame` delegates here
+    /// with `self.start_time.elapsed()` — production behavior is unchanged.
+    pub fn submit_frame_at(
+        &mut self,
+        pool_slot: PoolSlot,
+        fence: Arc<crate::recording_thread::GpuFence>,
+        elapsed: Duration,
+    ) {
         let Some(ref frame_tx) = self.frame_tx else {
             pool_slot.release();
             self.frames_dropped += 1;
@@ -211,7 +266,7 @@ impl LiveRecordingSession {
 
         let frame = RecordingFrame {
             pool_slot,
-            wall_timestamp: Instant::now(),
+            elapsed,
             gpu_complete: fence,
         };
 
