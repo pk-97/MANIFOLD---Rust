@@ -9143,19 +9143,20 @@
             "Floor",
             "Ceil",
             "Modulo",
-            "Exp2"
+            "Exp2",
+            "Sqrt"
           ],
           "label": "Operation",
           "name": "op",
           "range": [
             "0",
-            "13"
+            "14"
           ],
           "tooltip": "What to do with the two values, like add, multiply, min, or max.",
           "type": "enum"
         }
       ],
-      "purpose": "Scalar arithmetic. Combines two control signals into one with the selected op (add / subtract / multiply / divide / min / max / atan2 / sin / cos / reciprocal / floor / ceil / modulo). Composition glue for control wires. `b` is unused for unary ops (sin, cos, reciprocal, floor, ceil). Both `a` and `b` are port-shadows-param: when an input wire isn't connected the inline param value is used, so constants can be set on the node without dragging a Value node in.",
+      "purpose": "Scalar arithmetic. Combines two control signals into one with the selected op (add / subtract / multiply / divide / min / max / atan2 / sin / cos / reciprocal / floor / ceil / modulo / exp2 / sqrt). Composition glue for control wires. `b` is unused for unary ops (sin, cos, reciprocal, floor, ceil, exp2, sqrt). Both `a` and `b` are port-shadows-param: when an input wire isn't connected the inline param value is used, so constants can be set on the node without dragging a Value node in.",
       "role": "Control",
       "stratum": "driver",
       "summary": "Combines two control signals into one with a chosen op, like add, multiply, min, or max. The basic calculator for modulation.",
