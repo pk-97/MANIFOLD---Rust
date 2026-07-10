@@ -1129,6 +1129,141 @@ def test_stop_wait_stable_file_pays_exactly_one_stat_gap():
     with_temp_verdicts(run)
 
 
+# ---- Stop-wait CONVERT fix (sleep pass 2, PASS2_AGENDA item 1): the hook
+# pokes the observer to classify the turn-final window, and stops waiting the
+# instant the observer clears the poke (verdict delivered, or no drift) instead
+# of burning the full cap. The observer here is SIMULATED by a thread exactly
+# as the existing catch-up tests simulate it. ----
+
+
+def _poke_path(td, session):
+    return os.path.join(td, f"{session}.classify-now")
+
+
+def test_stop_wait_converts_no_fire_turn_breaks_early_when_poke_cleared():
+    def run(td):
+        session = "sess-convert-nofire"
+        transcript = os.path.join(td, "t.jsonl")
+        write_transcript(transcript, "Here is the summary of what I found.")
+        plant_observer(td, session, 0)  # alive, heartbeat NEVER reaches target
+        poke_path = _poke_path(td, session)
+        import threading
+
+        def observer_classifies_then_clears():
+            # Wait for the hook's poke, then clear it with NO verdict — the
+            # observer classified the turn-final text and found no drift.
+            for _ in range(400):
+                if os.path.exists(poke_path):
+                    break
+                time.sleep(0.02)
+            time.sleep(0.3)
+            try:
+                os.remove(poke_path)
+            except OSError:
+                pass
+
+        t = threading.Thread(target=observer_classifies_then_clears)
+        t.start()
+        start = time.time()
+        out = run_hook({"session_id": session, "prompt_id": "pcn1", "transcript_path": transcript}, td)
+        elapsed = time.time() - start
+        t.join()
+        # THE conversion: pre-fix this burns the full ~10s cap (heartbeat never
+        # reaches target); with the poke-clear early-break it ends promptly.
+        check("no-fire turn breaks early on poke-clear, not the full cap", elapsed < 3.0, elapsed)
+        check("no-fire turn delivers nothing", not out, out)
+
+    with_temp_verdicts(run)
+
+
+def test_stop_wait_delivers_when_poke_cleared_with_verdict():
+    def run(td):
+        session = "sess-convert-fire"
+        transcript = os.path.join(td, "t.jsonl")
+        write_transcript(transcript, "The fix is in and the tests pass.")
+        plant_observer(td, session, 0)
+        poke_path = _poke_path(td, session)
+        import threading
+
+        def observer_fires_then_clears():
+            for _ in range(400):
+                if os.path.exists(poke_path):
+                    break
+                time.sleep(0.02)
+            time.sleep(0.3)
+            # Verdict written inside the (priority) drain, then the poke cleared.
+            write_verdict(td, session, "anchor/verify-claim", seq=1)
+            try:
+                os.remove(poke_path)
+            except OSError:
+                pass
+
+        t = threading.Thread(target=observer_fires_then_clears)
+        t.start()
+        start = time.time()
+        out = run_hook({"session_id": session, "prompt_id": "pcf1", "transcript_path": transcript}, td)
+        elapsed = time.time() - start
+        t.join()
+        d = json.loads(out) if out else None
+        check("turn-final verdict delivered within the wait", d and d.get("decision") == "block", out)
+        check("delivered via the wait, not the cap", elapsed < 3.0, elapsed)
+
+    with_temp_verdicts(run)
+
+
+def test_stop_wait_writes_poke_for_observer():
+    def run(td):
+        session = "sess-pokewritten"
+        transcript = os.path.join(td, "t.jsonl")
+        write_transcript(transcript, "Here is the summary of what I found.")
+        plant_observer(td, session, 0)  # alive, behind -> the wait engages
+        poke_path = _poke_path(td, session)
+        seen = {"poke": False, "target": None}
+        import threading
+
+        def watch_for_poke():
+            for _ in range(600):
+                if os.path.exists(poke_path):
+                    seen["poke"] = True
+                    try:
+                        with open(poke_path, encoding="utf-8") as f:
+                            seen["target"] = int(f.read().strip())
+                    except (OSError, ValueError):
+                        pass
+                    try:
+                        os.remove(poke_path)  # let the hook finish fast
+                    except OSError:
+                        pass
+                    return
+                time.sleep(0.02)
+
+        t = threading.Thread(target=watch_for_poke)
+        t.start()
+        run_hook({"session_id": session, "prompt_id": "ppw1", "transcript_path": transcript}, td)
+        t.join()
+        check("Stop wrote a poke while waiting", seen["poke"], seen)
+        check("poke target is the transcript size", seen["target"] == os.path.getsize(transcript), seen)
+        check("poke cleaned up after the wait", not os.path.exists(poke_path))
+
+    with_temp_verdicts(run)
+
+
+def test_stop_wait_no_poke_when_observer_dead():
+    def run(td):
+        # Heartbeat present but no pid file => dead observer => the wait (and so
+        # the poke) is gated off entirely; fail-open, no poke ever written.
+        session = "sess-deadnopoke"
+        transcript = os.path.join(td, "t.jsonl")
+        write_transcript(transcript, "Here is the summary of what I found.")
+        with open(os.path.join(td, f"{session}.offset"), "w", encoding="utf-8") as f:
+            f.write("0")
+        out = run_hook({"session_id": session, "prompt_id": "pdn1", "transcript_path": transcript}, td)
+        check("dead observer: no poke written", not os.path.exists(_poke_path(td, session)))
+        check("dead observer: no block", not out, out)
+
+    with_temp_verdicts(run)
+
+
 def test_stop_wait_skip_paths_pay_no_stat_gap():
     def run(td):
         # Dead observer: the §2h.6(a) double-stat sits BEHIND the liveness
@@ -1546,6 +1681,10 @@ def main():
         test_stop_wait_bounded_when_observer_stalls,
         test_stop_wait_snapshot_race_growth_during_gap_triggers_wait,
         test_stop_wait_stable_file_pays_exactly_one_stat_gap,
+        test_stop_wait_converts_no_fire_turn_breaks_early_when_poke_cleared,
+        test_stop_wait_delivers_when_poke_cleared_with_verdict,
+        test_stop_wait_writes_poke_for_observer,
+        test_stop_wait_no_poke_when_observer_dead,
         test_stop_wait_skip_paths_pay_no_stat_gap,
         test_stop_wait_never_runs_for_workers,
         test_session_gradeable_fires_filters_prefix_agent_and_null_seq,

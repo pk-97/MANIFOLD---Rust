@@ -36,6 +36,12 @@ RUBRIC_PATH = os.path.join(DAEMON_DIR, "rubric.md")
 MUTES_DIR = os.path.join(VERDICTS_DIR, "mutes")
 
 POLL_SECONDS = 1  # 1s, not 3: bounds the Stop hook's catch-up wait (DESIGN.md §2, re-ruled 2026-07-05) — the loop body is one stat when idle, so the extra polls are ~free
+# DESIGN.md §2 Stop-wait CONVERT fix (sleep pass 2, PASS2_AGENDA item 1): when a
+# `<session>.classify-now` poke is present (the Stop hook dropped it while
+# waiting for the turn-final verdict), poll faster than the idle cadence so the
+# turn-final window is classified and its verdict is in the mailbox WITHIN the
+# Stop wait, not on the next turn. Matches the Stop hook's own 0.25s wait poll.
+POKE_POLL_SECONDS = 0.25
 IDLE_TIMEOUT_S = 600  # DESIGN.md §1: idle > 10 min ends the daemon
 ESCALATE_AFTER = 2  # "flagged again after two injections" -> the 3rd fire escalates
 
@@ -160,6 +166,13 @@ class Daemon:
         # verdict written — "offset caught up" means "nothing more is coming
         # for this turn", no separate in-flight marker needed.
         self.offset_path = os.path.join(VERDICTS_DIR, f"{session_id}.offset")
+        # DESIGN.md §2 Stop-wait CONVERT fix (sleep pass 2): the Stop hook writes
+        # this poke (the transcript byte offset it is waiting for) when it starts
+        # a catch-up wait. We honor it by classifying the turn-final window FIRST
+        # (see _drain's priority path) and removing the poke once we have
+        # classified through that offset — the hook then delivers any verdict and
+        # stops waiting instead of burning the full cap on a no-drift turn.
+        self.poke_path = os.path.join(VERDICTS_DIR, f"{session_id}.classify-now")
 
         self.moves = common.parse_moves(common.read(MOVES_PATH))
         self.system_prompt = common.build_system_prompt(common.read(RUBRIC_PATH), self.moves)
@@ -244,7 +257,7 @@ class Daemon:
         # concurrent tailer with colliding seq numbers.
         if not self.owns_pidfile:
             return
-        for p in (self.pid_path, self.stop_path, self.offset_path):
+        for p in (self.pid_path, self.stop_path, self.offset_path, self.poke_path):
             try:
                 os.remove(p)
             except OSError:
@@ -339,6 +352,13 @@ class Daemon:
             os.remove(self.stop_path)
         except OSError:
             pass
+        # A poke left by a previous session's Stop is stale — a fresh spawn
+        # rebuilds offset via catchup and would otherwise honor an offset that
+        # means nothing to it.
+        try:
+            os.remove(self.poke_path)
+        except OSError:
+            pass
         prior = self._read_verdict_file() or {}
         prior_seq = (prior.get("flag") or {}).get("seq") or 0
         self.next_seq = max(self._read_consumed(), prior_seq) + 1
@@ -362,21 +382,29 @@ class Daemon:
             if os.path.exists(self.stop_path):
                 _log(logf, "stop sentinel seen, exiting")
                 break
+            # DESIGN.md §2 Stop-wait CONVERT fix (sleep pass 2): a poke means a
+            # Stop is waiting for the turn-final verdict. Drain in priority mode
+            # (turn-final window classified FIRST) and clear the poke once we've
+            # classified through it, so the hook delivers/stops within the wait.
+            poke = self._read_poke()
             try:
                 size = os.path.getsize(self.transcript_path)
             except OSError:
                 size = offset
             if size > offset:
-                offset = self._drain(offset, logf, classify=True)
+                offset = self._drain(offset, logf, classify=True, priority=poke is not None)
                 self._publish_offset(offset)
                 last_activity = time.time()
             elif time.time() - last_activity > IDLE_TIMEOUT_S:
                 _log(logf, "idle timeout, exiting")
                 break
+            self._maybe_clear_poke(poke, offset, size, logf)
             self._check_deliveries(logf)
             self._score_pending(logf)
             self._scan_agents(logf)
-            time.sleep(POLL_SECONDS)
+            # Poll faster while an unsatisfied poke is pending — cut the up-to-1s
+            # latency between the turn-final text landing and its classification.
+            time.sleep(POKE_POLL_SECONDS if (poke is not None and offset < poke) else POLL_SECONDS)
 
     # ---- worker nudges (DESIGN.md §2b, shipped OFF) ----
 
@@ -534,6 +562,32 @@ class Daemon:
         except OSError:
             pass
 
+    def _read_poke(self):
+        """The transcript byte offset the Stop hook is waiting on, or None when
+        no Stop is currently waiting. Fail-open: unreadable/malformed = None."""
+        try:
+            with open(self.poke_path, encoding="utf-8") as f:
+                return int(f.read().strip() or "0")
+        except (OSError, ValueError):
+            return None
+
+    def _maybe_clear_poke(self, poke, offset, size, logf):
+        """Remove the Stop hook's poke once this observer has classified through
+        it — either the poked offset is reached (`offset >= poke`) or the whole
+        transcript on disk is drained (`offset >= size`, a stale/over-read
+        target we can do nothing more about). Clearing it lets the waiting Stop
+        hook stop instead of burning the cap; any verdict was written to the
+        mailbox first (inside _drain), so the hook's own mailbox check — run
+        before it inspects the poke — always wins the race. No-op when no poke."""
+        if poke is None:
+            return
+        if offset >= poke or offset >= size:
+            try:
+                os.remove(self.poke_path)
+            except OSError:
+                pass
+            _log(logf, f"poke cleared (classified through offset {offset}, poke target {poke})")
+
     def _catchup(self, logf):
         """Replay everything already on disk to rebuild window state (task,
         recent texts, ledger) without spending classifier calls on history —
@@ -545,14 +599,24 @@ class Daemon:
         _log(logf, f"catchup done, offset={offset}, task={self.state.current_task!r}")
         return offset
 
-    def _drain(self, offset, logf, classify):
+    def _drain(self, offset, logf, classify, priority=False):
         """Read whole lines from `offset` to EOF, feed each into WindowState,
         classify any window it closes (if `classify`), and return the new
-        offset. A trailing partial line (mid-write) is left for next poll."""
+        offset. A trailing partial line (mid-write) is left for next poll.
+
+        `priority` (DESIGN.md §2 Stop-wait CONVERT fix): a Stop is waiting, so
+        classify the newest closed window FIRST and any earlier ones after —
+        the turn-final window's verdict then reaches the mailbox WITHIN the wait,
+        ahead of any backlog windows that closed earlier in the same drain.
+        priority=False classifies inline in strict FIFO order, byte-identical to
+        before this fix. Deterministic mechanical fires (stopgap/git-landing/…)
+        still fire inline from _feed_line regardless of priority — only the
+        classifier-window dispatch is reordered."""
         # errors="replace": a torn multi-byte char at EOF (writer mid-write)
         # would otherwise raise UnicodeDecodeError and kill the daemon for
         # the rest of the session; the torn line has no trailing \n, so it is
         # re-read intact on the next poll either way.
+        deferred = []
         with open(self.transcript_path, encoding="utf-8", errors="replace") as f:
             f.seek(offset)
             while True:
@@ -563,12 +627,27 @@ class Daemon:
                 if not line or not line.endswith("\n"):
                     break
                 try:
-                    self._feed_line(line, classify, logf)
+                    closed = self._feed_line(line, classify, logf)
+                    if closed is not None:
+                        if priority:
+                            deferred.append(closed)
+                        else:
+                            self._handle_window(closed, logf)
                 except Exception:
                     # one malformed transcript line must cost one line, not
                     # the whole week of observation
                     _log(logf, "feed_line error:\n" + traceback.format_exc())
                 offset = f.tell()
+        if deferred:
+            # newest first (the turn-final window), then the rest oldest->newest.
+            # _resolve_fire's one-whisper gate means a fire on the newest window
+            # pre-empts the backlog for the mailbox slot — the fresh turn-final
+            # drift the Stop wait exists to deliver.
+            for w in [deferred[-1]] + deferred[:-1]:
+                try:
+                    self._handle_window(w, logf)
+                except Exception:
+                    _log(logf, "handle_window error:\n" + traceback.format_exc())
         return offset
 
     def _feed_line(self, line, classify, logf):
@@ -618,8 +697,10 @@ class Daemon:
                     self._check_unread_edit(name, input_, event_count, logf, live=classify)
                     if classify:
                         self._check_primer(event_count, logf)
-        if closed and classify:
-            self._handle_window(closed, logf)
+        # Return the closed window (if any) to _drain, which owns the
+        # _handle_window dispatch so it can reorder it in Stop-wait priority
+        # mode. catchup (classify=False) replays state only — never classifies.
+        return closed if (closed and classify) else None
 
     def _peek_tool_events(self, state, content):
         """Read-only pass over tool_result blocks -> [(name, input, status)],
@@ -878,6 +959,25 @@ class Daemon:
         move_id = common.validate_move_id(raw_flag, self.moves)
         if raw_flag and not move_id:
             _log(logf, f"rejected unknown/invalid move id from classifier: {raw_flag!r}")
+
+        # DESIGN.md §2 / PASS2_AGENDA item 3: verify-claim's class-(a) FP fix.
+        # The classifier flagged a success-claim check on a window with no
+        # stated claim in it (recon read, task-start prompt, cadence fire in a
+        # tool-heavy stretch). Suppress deterministically — this post-filter
+        # can only REMOVE a fire, never add one, so it cannot re-introduce a
+        # noise class. `has_claim` defaults True for any window that predates
+        # the field (mailbox/other paths), so the gate never over-suppresses.
+        if move_id == "anchor/verify-claim" and not window.get("has_claim", True):
+            _log(logf, f"suppressed anchor/verify-claim — no claim in window (PASS2 item 3, end={window['end_event_count']})")
+            valve.append_telemetry({
+                "ts": time.time(),
+                "session_id": self.session_id,
+                "agent_id": getattr(mb, "agent_id", None),
+                "event": "verify_claim_suppressed",
+                "reason": "no-claim-in-window",
+                "end_event_count": window.get("end_event_count"),
+            })
+            move_id = None
 
         flag_out = self._resolve_fire(window["end_event_count"], move_id, verdict, logf, mailbox=mailbox) if move_id else None
 

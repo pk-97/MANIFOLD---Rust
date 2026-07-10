@@ -269,6 +269,12 @@ def compute_gates(raw, labels_by_session, moves):
         fires = []
         for w in windows:
             flag = common.validate_move_id((w.get("verdict") or {}).get("flag"), moves)
+            # PASS2 item 3: mirror observer.py's verify-claim class-(a) gate so
+            # the offline harness reflects the same live behavior (DESIGN §4:
+            # replay reuses the exact windowing the daemon uses). Suppression-
+            # only; `has_claim` defaults True for pre-field windows.
+            if flag == "anchor/verify-claim" and not w.get("has_claim", True):
+                flag = None
             if flag:
                 fires.append((w["end_event_count"], flag, w))
         effective = common.apply_cooldowns(fires, move_cooldowns)
