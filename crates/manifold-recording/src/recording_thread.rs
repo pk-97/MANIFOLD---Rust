@@ -7,7 +7,7 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crossbeam_channel::Receiver;
 use ringbuf::traits::{Consumer as ConsumerTrait, Observer as ObserverTrait};
@@ -62,8 +62,11 @@ impl GpuFence {
 pub(crate) struct RecordingFrame {
     /// Pool slot holding the raw texture pointer. Released after encoding.
     pub pool_slot: PoolSlot,
-    /// Wall-clock timestamp when the frame was produced.
-    pub wall_timestamp: Instant,
+    /// Elapsed time since recording started, computed at submit time
+    /// (`LiveRecordingSession::submit_frame_at`) — carries `Duration`, not
+    /// `Instant`, so the harness can fabricate adversarial timing without
+    /// pacing tests by wall clock (docs/LIVE_RECORDING_PROOFS_DESIGN.md D1).
+    pub elapsed: Duration,
     /// Fence: signaled by the GPU completion handler when the blit
     /// to this pool texture is finished. The recording thread waits
     /// on this before reading the texture.
@@ -84,7 +87,6 @@ pub(crate) fn run(
     sample_rate: u32,
     channels: u16,
     stop: Arc<AtomicBool>,
-    start_time: Instant,
 ) -> (u32, u32) {
     let mut frames_encoded: u32 = 0;
     let mut frames_failed: u32 = 0;
@@ -100,7 +102,6 @@ pub(crate) fn run(
     fn encode_frame(
         frame: RecordingFrame,
         encoder_handle: *mut c_void,
-        start_time: Instant,
         frames_encoded: &mut u32,
         frames_failed: &mut u32,
     ) {
@@ -116,10 +117,7 @@ pub(crate) fn run(
             return;
         }
 
-        let elapsed = frame
-            .wall_timestamp
-            .duration_since(start_time)
-            .as_secs_f64();
+        let elapsed = frame.elapsed.as_secs_f64();
         let texture_ptr = frame.pool_slot.raw_ptr;
 
         let result =
@@ -167,7 +165,6 @@ pub(crate) fn run(
             encode_frame(
                 frame,
                 encoder_handle,
-                start_time,
                 &mut frames_encoded,
                 &mut frames_failed,
             );
@@ -175,7 +172,6 @@ pub(crate) fn run(
                 encode_frame(
                     frame,
                     encoder_handle,
-                    start_time,
                     &mut frames_encoded,
                     &mut frames_failed,
                 );
@@ -191,7 +187,6 @@ pub(crate) fn run(
                 &mut total_audio_frames,
                 sample_rate,
                 channels,
-                start_time,
             );
         }
 
@@ -206,7 +201,6 @@ pub(crate) fn run(
                     &mut total_audio_frames,
                     sample_rate,
                     channels,
-                    start_time,
                 );
             }
             break;
@@ -234,7 +228,6 @@ fn drain_audio(
     total_frames: &mut u64,
     sample_rate: u32,
     channels: u16,
-    _start_time: Instant,
 ) {
     loop {
         let available = consumer.occupied_len();

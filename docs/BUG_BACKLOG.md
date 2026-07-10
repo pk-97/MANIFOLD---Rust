@@ -44,6 +44,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-085 | **recording-frames-recorded-overstates-async-append-drops** | `LiveRecorder_EncodeVideoFrame` returns success (and Rust's `frames_recorded` counts it) as soon as the synchronous GPU blit into the CVPixelBuffer completes — but the actual `appendPixelBuffer:` call happens later, async, on `state->appendQueue`, and silently drops the frame (`"[LiveRecorder] VideoToolbox backpressure — dropped frame"`, no counter incremented) if `videoIn.isReadyForMoreMediaData` is false at that moment. Under heavy backpressure `frames_recorded` can overstate the file's real packet count by the async-drop count. Found 2026-07-10 building LIVE_RECORDING_PROOFS P1 (`pool_accounting_consistent`'s bounded-retry-recovery variant hit it once: 107 counted vs 106 actual packets). MED (accounting-only — the file itself stays valid, PTS stays monotonic; but a post-set frame count could read wrong). LOW in practice — the async drop needs genuinely sustained backpressure a real 60fps show submission rate is unlikely to hit. |
 | BUG-083 | **video-export-has-no-progress-display** | Exporting video shows nothing until the finish toast — the content thread's per-10-frame progress snapshots never had a UI consumer (found 2026-07-09 by the A1 orphan lint; fields deleted, restore WITH a display from the P0 purge commit's parent). A multi-minute export looks like a hang. MED |
 | BUG-084 | **recording-drop-counter-never-surfaced** | `recording_dropped_frames` (pool-exhaustion drops during live recording) was emitted every tick, read nowhere — a set-recording silently dropping frames is invisible to the performer. Surface on the recording indicator when non-zero; same restore path as BUG-083. LOW |
 | BUG-082 | **trigger-fire-mode-level-features-near-dead** | The audio-mod drawer on a trigger/trigger-gate card offers all seven `AudioFeatureKind`s, but the fire chassis (`trigger_edge.advance` at 0.5 on the shaped signal) is tuned for impulses — Transients/Kick fire per hit; level features (Amplitude/Centroid/Flux/Pitch/Presence) cross mid once when the track gets loud and then sit disarmed, silently near-dead from the performer's view. Fix shape (AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION D6, lands P3): a live fire meter with the 0.5 threshold drawn as a line beside Amount on every fire-mode drawer — the engine honors level features as an invisible Schmitt trigger; visibility is what's missing. Feature restriction was considered and rejected (walks back LIVE_AUDIO_TRIGGERS U2). The separable widening (first-class level-crossing detector) is that design's Deferred #1 (MED) |
@@ -93,6 +94,39 @@ or human can read it, and it needs no external tool.
 | BUG-071 | **ui-snap-dump-stale-parent** | `ui_snapshot::dump.rs` serializes `UINode.parent_id` (the mint-time struct field) instead of `UITree.parent_index` (the live array `reparent_root_nodes` actually mutates) — any node reparented via `ScrollContainer::reparent_content` (or the like) shows `parent: null`/its original parent in `--dump` JSON even though it's correctly clipped/nested for real rendering. Found 2026-07-08 verifying BUG-060: the dump made a correctly-fixed tree look unclipped, costing real debugging time before the PNG (the actual render) proved it was fine. Fix shape: either serialize `tree.parent_index[i]` in `dump.rs:38`/`:92`, or have `reparent_root_nodes` also update `self.nodes[i].parent_id` so the two stay in sync (LOW, dev-tooling only, zero runtime impact) |
 
 ## Open
+
+### BUG-085 (recording-frames-recorded-overstates-async-append-drops) — `frames_recorded` can overstate the file's real packet count under sustained backpressure — MED accounting / LOW practical likelihood
+**Status:** OPEN
+
+Found 2026-07-10 building `LIVE_RECORDING_PROOFS` P1's `pool_accounting_consistent` test
+(`crates/manifold-recording/tests/recording_proofs.rs`), during a bounded-retry-recovery variant
+that deliberately holds pool slots un-released to simulate a slow encoder. `session.stop()`
+reported `frames_recorded: 107`; the file the harness's independent ffprobe oracle actually
+opened had 106 video packets. Root cause, in
+[`LiveRecordingPlugin.m`](../crates/manifold-recording/native/LiveRecordingPlugin.m) around
+line 490: `LiveRecorder_EncodeVideoFrame` returns `LR_OK` (line 519) as soon as the *synchronous*
+GPU blit into the CVPixelBuffer finishes — but the actual `[adaptor appendPixelBuffer:...]` call
+happens **later, asynchronously**, on `state->appendQueue` (`dispatch_async`, lines 490-516).
+Inside that async block, if `videoIn.isReadyForMoreMediaData` is false at the moment it runs
+(real VideoToolbox backpressure), the frame is silently dropped —
+`NSLog(@"[LiveRecorder] VideoToolbox backpressure — dropped frame at %.3fs", ...)` — with **no
+counter incremented anywhere Rust can see**. Rust's `frames_encoded` (→
+`RecordingResult::frames_recorded`) only reflects the synchronous return value, so it can never
+observe this drop. The container file itself stays completely valid (PTS strictly monotonic,
+no corruption) — this is purely an accounting gap: a post-set "N frames recorded" readout could
+overstate the truth by however many frames VideoToolbox silently dropped under backpressure.
+**Fix shape:** wire `atomic_int* appendedCounter` (already tracked at line 489, incremented at
+line 500 on real success) back out through the FFI — e.g. a `LiveRecorder_AppendedCount(handle)`
+query at `stop()`/finalize time, or have `LiveRecorder_Finalize`'s return value report the true
+appended count instead of (or alongside) the synchronous-call count — and have
+`LiveRecordingSession::stop()` prefer it. **Practical severity is LOW**: this needs genuinely
+sustained `isReadyForMoreMediaData == false` backpressure, which the harness's artificial
+fence-holding produces on purpose but a real 60fps show submission rate is very unlikely to
+sustain (VideoToolbox's ProRes proxy encode is comfortably faster than realtime at these
+resolutions). No `#[ignore]`-able regression test yet — `pool_accounting_consistent`'s current
+gate (`frames_recorded + frames_dropped == frames_submitted_total`, tracked entirely
+Rust-side) is internally consistent and doesn't touch this gap; a future test would need to
+assert `probe(file).pts.len() <= frames_recorded` under intentional backpressure instead.
 
 ### BUG-083 (video-export-has-no-progress-display) — exporting video gives zero on-screen feedback until the finish toast — MED (export is a release pillar; long exports look like a hang)
 **Status:** OPEN
