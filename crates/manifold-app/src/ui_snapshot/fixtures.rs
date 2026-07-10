@@ -771,12 +771,12 @@ fn bug047_scene() -> SceneData {
 
     for i in 0..20 {
         let send_layer_id = lid(&format!("send-src-{i}"));
-        let mut send_layer = Layer::new(format!("SRC {i}"), LayerType::Audio, i as i32);
+        let mut send_layer = Layer::new(format!("SRC {i}"), LayerType::Audio, i);
         send_layer.layer_id = send_layer_id.clone();
         layers.push(send_layer);
 
         let target_layer_id = lid(&format!("send-tgt-{i}"));
-        let mut target_layer = Layer::new(format!("TGT {i}"), LayerType::Video, 20 + i as i32);
+        let mut target_layer = Layer::new(format!("TGT {i}"), LayerType::Video, 20 + i);
         target_layer.layer_id = target_layer_id.clone();
         target_layer.clips.push(TimelineClip::new_video(
             format!("tgt_{i}.mov"),

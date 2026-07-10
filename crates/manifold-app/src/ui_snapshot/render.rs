@@ -781,34 +781,6 @@ fn resource_for_output(
         .and_then(|s| s.outputs.iter().find(|(name, _)| *name == port).map(|(_, id)| *id))
 }
 
-/// A fullscreen-triangle texture blit pipeline targeting the snapshot format —
-/// the same raw blit the live workspace/atlas preview uses, to composite a node
-/// output texture into a thumbnail viewport.
-fn make_blit_pipeline(device: &GpuDevice) -> manifold_gpu::GpuRenderPipeline {
-    let shader = r#"
-@group(0) @binding(0) var t_source: texture_2d<f32>;
-@group(0) @binding(1) var s_source: sampler;
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-};
-@vertex
-fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
-    var out: VertexOutput;
-    let x = f32(i32(idx) / 2) * 4.0 - 1.0;
-    let y = f32(i32(idx) % 2) * 4.0 - 1.0;
-    out.position = vec4<f32>(x, y, 0.0, 1.0);
-    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
-    return out;
-}
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(t_source, s_source, in.uv);
-}
-"#;
-    device.create_render_pipeline(shader, "vs_main", "fs_main", FORMAT, None, "Node Thumbnail Blit")
-}
-
 /// A fullscreen-triangle pipeline that fills the target with a UV gradient
 /// (R=u, G=v, B=(u+v)/2) — the neutral source fixture for effect graphs, so a
 /// spatial effect's output is legible in its node thumbnail.
