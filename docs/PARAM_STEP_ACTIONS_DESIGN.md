@@ -362,6 +362,23 @@ entity. No committed affordance is unowned.
    the readiness divergence is accepted (D5).
 8. No `every`/divisor mechanism exists anywhere in this design (D6, retired
    2026-07-08) — step size is controlled by `amount` (D2) only.
+9. **Trim handles are the travel zone in every action mode; fire detection
+   sees the conditioned signal, never the range map** (amendment 2026-07-10,
+   Peter-approved). As shipped, P1 evaluated Step/Random on the param's raw
+   `min`/`max` rails and edge-detected the range-*mapped* signal — so the
+   drawer's trim handles were dead as rails and actively harmful to firing
+   (`range_min ≥ 0.5` fired once and never re-armed at `REARM_RATIO` 0.6;
+   `range_max ≤ 0.5` never fired). Root cause: the range map lived inside
+   `AudioModShape::apply`, i.e. in signal shaping, while Step/Random demote
+   the shaped signal to an edge source. The fix relocates the meaning:
+   `AudioModShape::condition` (sensitivity → follower → invert → curve) feeds
+   the 0.5 edge threshold — invert deliberately stays visible so "fire on the
+   quiet gaps" works — and `AudioModShape::zone(min, max)` gives Step/Random
+   their wrap/bounce/clamp/random rails in param units. Discrete params snap
+   the zone to the inclusive integer grid (`ceil(lo)..floor(hi)`; an
+   integer-free zone collapses to its rounded center). Default handles
+   (0.0/1.0) reproduce the old behavior exactly, so existing projects are
+   untouched. Continuous is unchanged — its output *is* the range map.
 
 ## 6. Forbidden moves (named for this design)
 
