@@ -144,7 +144,13 @@ impl OscSyncController {
             cached_tc_f: -1,
 
             was_receiving: false,
-            last_timecode_received_time: Seconds::ZERO,
+            // BUG-087 fix: far-past sentinel so `is_receiving_timecode` cannot
+            // read a false positive in the first `transport_timeout` window of
+            // a session. With `Seconds::ZERO`, `(now - last) < transport_timeout`
+            // is true at boot (now ≈ 0) before any timecode has arrived — which
+            // could even trip a spurious follow-transport PLAY. A far-past
+            // default keeps the delta huge until a real frame lands.
+            last_timecode_received_time: Seconds(f64::NEG_INFINITY),
 
             pending_timecode_seconds: Seconds(-1.0),
             has_new_timecode: false,
@@ -463,7 +469,11 @@ impl OscSyncController {
             let dropped_frames = 2 * (total_minutes - total_minutes / 10);
             let total_frames =
                 108000 * hours + 1800 * minutes + 30 * seconds + frames - dropped_frames;
-            total_frames as f32 / 29.97
+            // BUG-091 fix: true NTSC drop-frame rate is 30000/1001
+            // (≈29.970029970…), not the literal 29.97. Computed in f64 to keep
+            // the divisor exact, then narrowed. At 00:01:00:02 this now yields
+            // exactly 60.06s.
+            (total_frames as f64 * 1001.0 / 30000.0) as f32
         } else {
             hours as f32 * 3600.0
                 + minutes as f32 * 60.0
@@ -513,16 +523,12 @@ mod tests {
 
     // ── Drop-frame timecode vectors ──────────────────────────────────────
     //
-    // GUARD: `timecode_to_seconds`'s drop-frame branch divides by the
-    // *literal* constant 29.97, not the true NTSC drop-frame rate
-    // 30000/1001 (≈29.970029970...). Asserting an absolute expected-seconds
-    // value computed from the true standard would FAIL against the code —
-    // that mismatch is real and is logged below (VERIFY-WITH-PETER / bug
-    // backlog), not pinned by a passing test. What IS safe to pin from the
-    // SMPTE 12M standard is the *frame-drop pattern* itself (which display
-    // numbers get skipped, and which minute is exempt) — tested here as a
-    // self-consistent frame-duration delta so the disputed absolute divisor
-    // cancels out of the comparison.
+    // BUG-091 FIXED: the drop-frame branch now divides by the true NTSC rate
+    // 30000/1001, so the absolute seconds value is standards-exact and pinned
+    // directly (see `drop_frame_absolute_seconds_are_standards_exact`). The two
+    // *frame-drop pattern* tests below remain valid — they assert which display
+    // numbers get skipped and which minute is exempt, as a self-consistent
+    // frame-duration delta, independent of the exact divisor.
 
     #[test]
     fn drop_frame_skips_two_frame_numbers_at_non_tenth_minute_boundary() {
@@ -557,6 +563,19 @@ mod tests {
             (after - before - one_frame).abs() < 1e-4,
             "the tenth-minute boundary must NOT skip (00:09:59:29 -> 00:10:00:00 \
              is a plain +1 frame): before={before}, after={after}, one_frame={one_frame}"
+        );
+    }
+
+    /// BUG-091 fixed: the drop-frame divisor is the exact NTSC rate
+    /// 30000/1001, so the absolute value is standards-exact. SMPTE 12M:
+    /// 00:01:00:02 DF is exactly 60.06s (1800 raw frames × 1001/30000).
+    #[test]
+    fn drop_frame_absolute_seconds_are_standards_exact() {
+        let ctrl = OscSyncController::new();
+        let s = ctrl.timecode_to_seconds(0, 1, 0, 2);
+        assert!(
+            (s - 60.06).abs() < 1e-3,
+            "00:01:00:02 drop-frame must be 60.06s (standards-exact), got {s}"
         );
     }
 
@@ -788,6 +807,43 @@ mod tests {
         assert!(
             arb_target.paused,
             "timecode silence beyond transport_timeout while playing must pause"
+        );
+    }
+
+    /// BUG-087 regression: a fresh controller that has NEVER received timecode
+    /// must not report receiving — nor trip a spurious follow-transport PLAY —
+    /// in the first `transport_timeout` window of a session. Under the old
+    /// `Seconds::ZERO` default this FAILED: at boot `now ≈ 0` and `last = 0`,
+    /// so `(now - last) < transport_timeout` read true and stopped transport
+    /// played. The far-past sentinel default fixes it.
+    #[test]
+    fn osc_update_no_false_receive_at_startup_before_any_timecode() {
+        let mut ctrl = OscSyncController::new();
+        ctrl.is_osc_enabled = true; // enabled, but no timecode has EVER arrived
+        let sync_target = FakeSyncTarget {
+            state: PlaybackState::Stopped,
+            time: Seconds(0.0),
+            project: Some(Project::default()),
+        };
+        let mut arb_target = FakeArbTarget::default();
+        let mut arbiter = SyncArbiter::new();
+
+        // First frames of the session, wall clock ≈ 0.
+        ctrl.update(
+            Seconds(0.05),
+            &sync_target,
+            &mut arbiter,
+            &mut arb_target,
+            ClockAuthority::Osc,
+        );
+
+        assert!(
+            !ctrl.is_receiving_timecode,
+            "no timecode has arrived — must not report receiving at startup"
+        );
+        assert!(
+            !arb_target.played,
+            "startup false-positive must not trigger a spurious play"
         );
     }
 }

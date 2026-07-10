@@ -26,7 +26,7 @@ the decision-log memory so it isn't re-proposed).
 | F10 | Implement live prewarm (currently a stub) | P2 | OPEN |
 | F11 | Re-enable AbletonOSC inbound transport (echo-safe) | P3 | OPEN |
 | F12 | f32 seams in beat plumbing | P3 | OPEN |
-| F13 | Gate live external tempo by authority (or bless the override) | P3 | DECISION NEEDED |
+| F13 | Gate live external tempo by authority (or bless the override) | P3 | ESCALATED → Fable 2026-07-10 (premise in doubt; verify by observation) |
 | F14 | Adaptive/measured round-trip windows (seek cooldown, ownership grace) | P3 | OPEN |
 | F15 | Session P2 seams (launch-from-stopped flash; phantom vs session-override) | P3 | OPEN |
 | F16 | Stable MIDI device identity (ports are positional) | P3 | OPEN |
@@ -83,9 +83,18 @@ orchestrator against the worktree manifest before landing.
   "move settings.bpm to runtime" — ~80 read sites correctly want the authored anchor;
   the fix is to split each field and reclassify only the *display* reads. That
   classification wants a written decision, not a mechanical sweep.
-- **F13 — awaiting Peter's ruling.** Split live display tempo from rate tempo (lean), or
-  bless Link/CLK feeding video rates under Internal authority. Gates no code; log the
-  decision either way.
+- **F13 — ESCALATED TO FABLE (verify by observation, not decision).** The premise itself
+  is in doubt. Peter distrusted the "external tempo retimes video under Internal authority"
+  claim (2026-07-10), and tracing the setting path bears him out: `set_live_external_tempo`
+  is called ONLY when Link has active peers (`content_thread.rs:1481`) or CLK is receiving
+  (`:1515`), and the frame's authority auto-detect (`:1460-1468`) promotes Link/CLK to
+  authority under exactly those same conditions — so live external tempo being set implies
+  authority is NOT Internal through the normal path. The map's §13.5 wording ("even under
+  Internal authority") appears contradicted by the code. Unresolved: whether a manual
+  authority override or the F5 one-frame-overwrite window opens a real Internal-with-live-tempo
+  gap. This was DERIVED by reading, not observed on a running instance — do not decide (either
+  "bug" or "not a bug") until a running MANIFOLD confirms the actual behavior. Fable: start
+  from this trace.
 - **Live-hardware checks owed (not verifiable headless):** F1 — a real Ableton/LiveMTC
   timecode lock on the rig; F2 — pad-launch tightness feel. Both are Peter's rig pass.
 - **BUG-087** — timecode `is_receiving_timecode` can read a false positive in the first
