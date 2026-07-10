@@ -14,6 +14,7 @@ import re
 import shlex
 import subprocess
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -930,6 +931,51 @@ def extract_json(text):
     return None
 
 
+# --- classifier latency stamp (synchronous-caller throttle detection) -------
+# Keep in lockstep with valve.VERDICTS_DIR (same env override, same default);
+# common can't import valve without inverting the dependency direction.
+VERDICTS_DIR = os.environ.get("DAEMON_VERDICTS_DIR") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "verdicts"
+)
+CLASSIFIER_STAMP = os.path.join(VERDICTS_DIR, "classifier_latency.json")
+
+
+def _write_classifier_stamp(duration_s, timed_out):
+    """Record the latest classifier call's latency (any caller — observer or
+    gate hooks). Latency is bimodal (~3s healthy, minutes under rate-limit
+    saturation — see call_classifier's timeout comment), so one recent sample
+    is a usable throttle signal for synchronous callers that can't afford the
+    saturated mode. Best-effort: never raises."""
+    try:
+        os.makedirs(VERDICTS_DIR, exist_ok=True)
+        tmp = f"{CLASSIFIER_STAMP}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(
+                {"ts": time.time(), "duration_s": round(duration_s, 2), "timed_out": timed_out},
+                f,
+            )
+        os.replace(tmp, CLASSIFIER_STAMP)
+    except OSError:
+        pass
+
+
+def classifier_throttled(fresh_s=600, slow_s=20):
+    """True when the latest classifier call suggests the account is currently
+    rate-limit saturated: stamp younger than fresh_s, and that call either
+    timed out or ran slow_s or slower. Missing / stale / unreadable stamps all
+    read as healthy — synchronous callers should try (their own call fails
+    open anyway); the point here is only to skip a wait that recent evidence
+    says is dead."""
+    try:
+        with open(CLASSIFIER_STAMP, encoding="utf-8") as f:
+            d = json.load(f)
+        if time.time() - float(d.get("ts", 0)) > fresh_s:
+            return False
+        return bool(d.get("timed_out")) or float(d.get("duration_s", 0)) >= slow_s
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def call_classifier(system_prompt, window_text, model=MODEL, timeout=180, cwd=None):
     # timeout=180, not 60: classifier latency is bimodal — ~3s healthy, or
     # minutes when the account is rate-limit saturated (orchestrator fleets).
@@ -953,14 +999,18 @@ def call_classifier(system_prompt, window_text, model=MODEL, timeout=180, cwd=No
         "--no-session-persistence",
         window_text,
     ]
+    t0 = time.monotonic()
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd or NEUTRAL_CWD
         )
     except subprocess.TimeoutExpired:
+        _write_classifier_stamp(timeout, True)
         return {"error": "timeout"}
     except OSError as e:
+        # spawn failure says nothing about API latency — leave the stamp alone
         return {"error": f"spawn failed: {e}"}
+    _write_classifier_stamp(time.monotonic() - t0, False)
     if proc.returncode != 0:
         # error detail can land on either stream; stderr is often empty
         detail = (proc.stderr.strip() or proc.stdout.strip())[:200]
