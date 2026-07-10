@@ -205,6 +205,7 @@ fn port_type_str(ty: &PortType) -> String {
         PortType::Camera => "Camera".into(),
         PortType::Light => "Light".into(),
         PortType::Material => "Material".into(),
+        PortType::Transform => "Transform".into(),
     }
 }
 

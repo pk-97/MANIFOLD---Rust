@@ -603,6 +603,7 @@ fn port_kind_to_ui(k: &rg::PortKindSnapshot) -> gv::PortKindSnapshot {
         rg::PortKindSnapshot::Camera => gv::PortKindSnapshot::Camera,
         rg::PortKindSnapshot::Light => gv::PortKindSnapshot::Light,
         rg::PortKindSnapshot::Material => gv::PortKindSnapshot::Material,
+        rg::PortKindSnapshot::Transform => gv::PortKindSnapshot::Transform,
     }
 }
 

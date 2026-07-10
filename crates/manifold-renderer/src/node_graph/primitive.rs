@@ -1087,6 +1087,9 @@ macro_rules! __primitive_port_type {
     (Material) => {
         $crate::node_graph::ports::PortType::Material
     };
+    (Transform) => {
+        $crate::node_graph::ports::PortType::Transform
+    };
     // `Channels[permissive]` — a port that accepts any Channels signature.
     // Used by generic transform operators (rename_channel, reorder_channels,
     // select_channels, channel_math). The §11.4 allow-list gates which
