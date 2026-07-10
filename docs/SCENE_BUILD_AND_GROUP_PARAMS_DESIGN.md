@@ -191,6 +191,25 @@ mid-gesture; the placeholder keeps the contract intact (nothing is ever silently
 skipped) while making the gesture completable. Remove = the existing delete-group +
 decrement, no new command.
 
+**⚠ OPEN GAP — no `AddSceneLightCommand` twin (raised 2026-07-10, Opus; for Fable review).**
+D7 gives *objects* a one-click add. **Lights have no equivalent gesture in this doc** —
+adding a light is still the two-step "bump the `lights` count, then wire a `node.light`
+into the new `light_k` port" that D7 exists to eliminate for objects. This surfaced from
+Peter directly (the `lights` count reads as a wart: "shouldn't it be like Blender, where
+you *add* a light?"). The symmetric fix is obvious — an `AddSceneLightCommand` button on
+the `render_scene` node face next to the `lights` row: bump `lights` by one, spawn a
+`node.light` (sensible default: Sun, overhead, white, `cast_shadows` per D4's caster
+budget), wire it into the new `light_k` port. Same magenta-under-no-silent-fallbacks
+reasoning applies (an unwired `light_k` is optional, so it wouldn't hard-error like an
+unwired `mesh_k`, but leaving the count bumped with no light is still a dead-gesture the
+button avoids). **Decisions for Fable:** (1) is this in-scope for this doc's phasing or a
+separate follow-up; (2) does the added light land in its own named group like objects do,
+or bare on the canvas (lights have no transform/material triple, so the group may be
+overkill); (3) default light params. Context: `RENDER_SCENE_UNBOUNDED_LIGHTS` (landed
+2026-07-10) lifted the light *ceiling* to 64/127 but deliberately kept the count-param +
+per-`light_N`-port model (REALTIME_3D D3 rejected an `Array<Light>` fan-in port) — so the
+count is here to stay; this gap is purely the missing *authoring gesture* over it.
+
 **D8 — Same-pair wire ribbons (canvas-wide).** When ≥2 wires connect the same
 (source node, dest node) pair, the canvas draws them as ONE ribbon with an `×N` badge;
 hover (or either endpoint selected) expands to the individual wires for picking. Pure
