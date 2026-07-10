@@ -356,3 +356,126 @@ impl Drop for OscReceiver {
         self.stop_listening();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Subscribes a callback that records every dispatch into a shared log,
+    /// so tests can assert exactly what (and how often) the receiver fired.
+    fn recording_receiver(address: &str) -> (OscReceiver, Arc<Mutex<Vec<(String, Vec<f32>)>>>) {
+        let mut receiver = OscReceiver::new();
+        let log: Arc<Mutex<Vec<(String, Vec<f32>)>>> = Arc::new(Mutex::new(Vec::new()));
+        let log_clone = Arc::clone(&log);
+        receiver.subscribe(
+            address,
+            Box::new(move |addr, values| {
+                log_clone.lock().push((addr.to_string(), values.to_vec()));
+            }),
+        );
+        (receiver, log)
+    }
+
+    /// Round-trips a message through rosc's real encode/decode (the same
+    /// `decode_udp` the background UDP thread calls), feeds it through
+    /// `handle_packet` (the real dispatch path), then drains via the public
+    /// `update()` — the same sequence a real UDP packet goes through, minus
+    /// the socket itself.
+    #[test]
+    fn osc_message_round_trip_preserves_address_and_args() {
+        let (mut receiver, log) = recording_receiver("/manifold/test");
+        let packet = rosc::OscPacket::Message(rosc::OscMessage {
+            addr: "/manifold/test".to_string(),
+            args: vec![rosc::OscType::Float(1.5), rosc::OscType::Float(-2.25)],
+        });
+        let bytes = rosc::encoder::encode(&packet).expect("encode");
+        let (_, decoded) = rosc::decoder::decode_udp(&bytes).expect("decode");
+
+        OscReceiver::handle_packet(decoded, &receiver.queue);
+        receiver.update();
+
+        let entries = log.lock();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, "/manifold/test");
+        assert_eq!(entries[0].1, vec![1.5, -2.25]);
+    }
+
+    /// `handle_packet` converts `OscType::Int` to f32 and silently drops
+    /// non-numeric arg types (matches the filter_map in `handle_packet`).
+    #[test]
+    fn osc_message_filters_non_numeric_args_and_converts_ints() {
+        let (mut receiver, log) = recording_receiver("/manifold/mixed");
+        let packet = rosc::OscPacket::Message(rosc::OscMessage {
+            addr: "/manifold/mixed".to_string(),
+            args: vec![
+                rosc::OscType::Int(7),
+                rosc::OscType::String("ignored".to_string()),
+                rosc::OscType::Float(3.5),
+            ],
+        });
+        let bytes = rosc::encoder::encode(&packet).expect("encode");
+        let (_, decoded) = rosc::decoder::decode_udp(&bytes).expect("decode");
+
+        OscReceiver::handle_packet(decoded, &receiver.queue);
+        receiver.update();
+
+        let entries = log.lock();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].1,
+            vec![7.0, 3.5],
+            "Int converts to f32; String is dropped"
+        );
+    }
+
+    /// Two arrivals at the SAME address before a drain must coalesce: only
+    /// the newest values dispatch, and the subscriber fires exactly once —
+    /// `MessageQueue::push`'s latest-per-address semantics.
+    #[test]
+    fn osc_latest_per_address_coalesces_to_newest() {
+        let (mut receiver, log) = recording_receiver("/manifold/coalesce");
+
+        for value in [1.0_f32, 2.0_f32] {
+            let packet = rosc::OscPacket::Message(rosc::OscMessage {
+                addr: "/manifold/coalesce".to_string(),
+                args: vec![rosc::OscType::Float(value)],
+            });
+            let bytes = rosc::encoder::encode(&packet).expect("encode");
+            let (_, decoded) = rosc::decoder::decode_udp(&bytes).expect("decode");
+            OscReceiver::handle_packet(decoded, &receiver.queue);
+        }
+        receiver.update();
+
+        let entries = log.lock();
+        assert_eq!(entries.len(), 1, "only one dispatch per address per drain");
+        assert_eq!(entries[0].1, vec![2.0], "the newest value must win");
+    }
+
+    /// `handle_packet` recurses into nested bundles (bundle-of-bundle).
+    #[test]
+    fn osc_bundle_recursion_dispatches_nested_messages() {
+        let (mut receiver, log) = recording_receiver("/manifold/nested");
+        let inner_message = rosc::OscPacket::Message(rosc::OscMessage {
+            addr: "/manifold/nested".to_string(),
+            args: vec![rosc::OscType::Float(9.0)],
+        });
+        let inner_bundle = rosc::OscPacket::Bundle(rosc::OscBundle {
+            timetag: rosc::OscTime::from((0u32, 0u32)),
+            content: vec![inner_message],
+        });
+        let outer_bundle = rosc::OscPacket::Bundle(rosc::OscBundle {
+            timetag: rosc::OscTime::from((0u32, 0u32)),
+            content: vec![inner_bundle],
+        });
+        let bytes = rosc::encoder::encode(&outer_bundle).expect("encode");
+        let (_, decoded) = rosc::decoder::decode_udp(&bytes).expect("decode");
+
+        OscReceiver::handle_packet(decoded, &receiver.queue);
+        receiver.update();
+
+        let entries = log.lock();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, "/manifold/nested");
+        assert_eq!(entries[0].1, vec![9.0]);
+    }
+}

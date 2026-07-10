@@ -14,12 +14,12 @@ the decision-log memory so it isn't re-proposed).
 
 | # | Item | Priority | Status |
 |---|---|---|---|
-| F1 | Wire the SMPTE/OSC timecode receive path | P0 | OPEN |
-| F2 | Make MIDI launch quantization real | P0 | OPEN |
-| F3 | Test the external-sync stack (currently zero tests) | P1 | OPEN |
-| F4 | Fix the wrong-clock-epoch calls inside `sync_clips_to_time` | P1 | OPEN |
-| F5 | Stop mutating serialized settings per-frame (authority + BPM) | P1 | DECISION NEEDED |
-| F6 | Fix `suppress_next_transport` staleness | P1 | OPEN |
+| F1 | Wire the SMPTE/OSC timecode receive path | P0 | SHIPPED 2026-07-10 · `cf1f3dc6` (+`fd519bdf` clippy) |
+| F2 | Make MIDI launch quantization real | P0 | SHIPPED 2026-07-10 · `04301b37` |
+| F3 | Test the external-sync stack (currently zero tests) | P1 | SHIPPED 2026-07-10 · `e4f51459` (35 tests) |
+| F4 | Fix the wrong-clock-epoch calls inside `sync_clips_to_time` | P1 | SHIPPED 2026-07-10 · `48f3a259` |
+| F5 | Stop mutating serialized settings per-frame (authority + BPM) | P1 | DEFERRED 2026-07-10 → Fable design pass (verdict: runtime; scoping note below) |
+| F6 | Fix `suppress_next_transport` staleness | P1 | RESOLVED 2026-07-10 (live path pre-fixed `2026-07-07`; setter pinned by F3) |
 | F7 | Hot-path allocation + linear-scan cleanup in the engine tick | P2 | OPEN |
 | F8 | `ActiveTimelineClipWindow`: wire it or delete it | P2 | DECISION NEEDED |
 | F9 | Tempo-map lookup cost on long recorded lanes | P2 | OPEN |
@@ -31,6 +31,65 @@ the decision-log memory so it isn't re-proposed).
 | F15 | Session P2 seams (launch-from-stopped flash; phantom vs session-override) | P3 | OPEN |
 | F16 | Stable MIDI device identity (ports are positional) | P3 | OPEN |
 | F17 | Delete or fix `subscribe_keyed` key scheme | P3 | OPEN |
+
+---
+
+## Landed 2026-07-10 — F1–F4 + F6 (Opus orchestration, Sonnet workers)
+
+Branch `fix/core-engine-findings`, worktree off `cc4eeb37`. Each fix landed with the
+pinning test that would have caught the bug; each independently re-verified by the
+orchestrator against the worktree manifest before landing.
+
+- **F1 `cf1f3dc6`** (+ `fd519bdf` clippy nit in its test): OSC/SMPTE timecode receive
+  is wired — a shared pending slot (mirroring `OscParamRouter`) drained in
+  `tick_sync_controllers` before `osc_sync.update()`. Two deeper causes the read had
+  missed and the worker fixed: `enable_osc` was never *called* (now enabled on
+  `OscSyncMode::M4L`), and the default timecode address `"time"` lacked a leading `/`
+  so `rosc` silently dropped every packet (now `"/time"`). Proven by two UDP-socket
+  integration tests (`tests/osc_timecode.rs`). Note: **SMPTE-over-OSC**, not raw MTC
+  over a MIDI cable.
+- **F2 `04301b37`**: MIDI launch positions snap forward (ceil) to the project's
+  quantize grid via `SessionRuntime::ceil_to_boundary` (promoted to `pub(crate)` — one
+  ceil function, not two). Audio-transient one-shots stay immediate (threaded
+  `apply_launch_quantize: bool` through the shared trigger path). The worker also fixed
+  a pre-existing bug where the `beat_stamp` branch quantized audio one-shots off-grid.
+  Tests in `tests/live_clip.rs` (incl. a non-120-BPM case). The dead MIDI tick-queue
+  subsystem was left for a dedicated removal pass (**BUG-089**).
+- **F3 `e4f51459`**: 35 tests for the external-sync stack (arbiter matrix, `MidiClockState`
+  pack/unpack + BPM estimator + SPP reset, CLK/OSC nudge-vs-seek, drop-frame *pattern*,
+  OSC round-trip, engine drift/loop integration). Per the guard it pinned only
+  map-ruled behavior and logged the drop-frame divisor discrepancy as **BUG-091** rather
+  than enshrining it.
+- **F4 `48f3a259`**: `sync_clips_to_time` now stamps clip-start timing gates
+  (`recently_started_times`, pending-pause deadline, to-stop dirty-deadline) off the real
+  engine clock `last_realtime_now`, not `Seconds::ZERO`. Worker empirically confirmed the
+  bug (reverted → `0.0` vs `1.98` → restored). Test in `tests/sync_engine_integration.rs`.
+- **F6 RESOLVED (no new code)**: the live-path staleness was already fixed
+  `2026-07-07` (the AbletonOSC transport rewrite clears the flag each frame in
+  AbletonOSC mode, `content_thread.rs:644-645`), and F3 pins the arbiter setter contract
+  the fix depends on (`sync.rs:298`). The only residue is the retired M4L
+  `OscPositionSender` — deferred with that sender's eventual deletion
+  (ABLETON_TRANSPORT_SYNC_DESIGN §8). No content-thread test harness exists and building
+  one for a dead path is unwarranted.
+
+### VERIFY-WITH-PETER (nothing below is pinned as correct)
+
+- **BUG-091 — OSC drop-frame divisor.** `timecode_to_seconds` divides by the literal
+  `29.97` instead of the true NTSC `30000/1001`. ~60µs at `00:01:00:02`, ~3.6ms/hour.
+  Self-correcting (re-nudges every incoming message), so LOW — but standards-inexact.
+  F3 pinned the frame-drop *pattern*, not the seconds value.
+- **F5 verdict = runtime, deferred to a Fable design pass.** The per-site
+  authored-vs-live scoping note is `docs/CORE_ENGINE_F5_SCOPING.md`. The fix is not
+  "move settings.bpm to runtime" — ~80 read sites correctly want the authored anchor;
+  the fix is to split each field and reclassify only the *display* reads. That
+  classification wants a written decision, not a mechanical sweep.
+- **F13 — awaiting Peter's ruling.** Split live display tempo from rate tempo (lean), or
+  bless Link/CLK feeding video rates under Internal authority. Gates no code; log the
+  decision either way.
+- **Live-hardware checks owed (not verifiable headless):** F1 — a real Ableton/LiveMTC
+  timecode lock on the rig; F2 — pad-launch tightness feel. Both are Peter's rig pass.
+- **BUG-087** — timecode `is_receiving_timecode` can read a false positive in the first
+  0.5s of a session (startup epoch). Logged, unfixed.
 
 ---
 
