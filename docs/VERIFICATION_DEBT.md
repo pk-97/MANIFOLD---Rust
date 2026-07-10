@@ -24,6 +24,21 @@ Rules (normative home: `DESIGN_DOC_STANDARD.md` §10):
 
 ## Open
 
+### VD-022 — LIVE_RECORDING_PROOFS P2: full-scale pre-gig soak + BUG-086 — L2 reached / L4 carried
+Landed 2026-07-10 (`docs/landings/2026-07-10-live-recording-proofs.md`, P2 @ `091290e3`). The
+`recording-soak` bin and its decoded-index PASS gate are verified at L2 via a short 1080p/2-minute
+run the orchestrator executed and whose `.mov` it opened. **Two carried gaps:**
+(a) The **full-scale 4K60 20-minute soak has never been run** — by design (§6 P2), its first
+execution is Peter's pre-gig ritual on the rig; the short soak is the wave's proxy, so the show
+configuration at full data volume (~17.5 GB, past every historical failure threshold) is L2/proxy,
+not L4/real. Close when Peter runs the full soak and it PASSes on the rig.
+(b) **BUG-086** (unpaced-mode audio-coverage shortfall) is logged, not fixed. A `--realtime`
+2-minute run gave full audio (120.0s), so show-path severity is assessed LOW and the fix is
+deferred — but the silent `LR_OK`-on-drop native path has no counter/log and stays a latent
+audio-loss risk until fixed. Revisit-upward trigger: the full-scale soak's audio figure coming
+in materially short. Close when the native audio-drop path gets a counter/log (BUG-085's sibling
+fix) or the full soak confirms no scaling.
+
 ### VD-021 — PROJECT_FILE_INTEGRITY P1: save durability under power loss — L1 reached / L1 carried
 Landed 2026-07-09 (`docs/landings/2026-07-09-project-file-integrity.md`). `save_v2_archive` now
 `sync_all()`s the temp file's *contents* before the atomic rename (BUG-064), keeping the existing
