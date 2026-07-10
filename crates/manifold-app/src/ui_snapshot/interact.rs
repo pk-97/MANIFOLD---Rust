@@ -77,8 +77,12 @@ fn apply_one(ui: &mut UIRoot, data: &mut SceneData, spec: &str) -> InteractOutco
             hit("open -> settings popup".to_string())
         }
         Some(("open", "audio_setup")) => {
+            // Docked column (D1): open the panel AND open the layout column so
+            // `sync_build` → `ui.build()` builds the dock and the content area
+            // shrinks to make room — the same two-halves toggle the app does.
             ui.audio_setup_panel.open();
-            hit("open -> audio setup panel".to_string())
+            ui.layout.audio_setup_width = manifold_ui::color::DEFAULT_AUDIO_SETUP_WIDTH;
+            hit("open -> audio setup dock".to_string())
         }
         Some(("automation_add", rest)) => res(automation_add_point(data, rest)),
         Some(("automation_move", rest)) => res(automation_move_point(data, rest)),

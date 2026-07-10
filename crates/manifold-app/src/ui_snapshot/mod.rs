@@ -220,12 +220,15 @@ fn render_ui_scene(
     // Build the UI through the REAL core→UI translation path, render the base.
     let mut ui = UIRoot::new();
     ui.resize(LOGICAL_W, LOGICAL_H);
-    if scene == "inspector" || scene == "bug060" || scene == "paramsteps" {
+    if scene == "inspector" || scene == "bug060" || scene == "paramsteps" || scene == "bug047" {
         // The inspector IS the subject: keep it at a generous width and give the
         // timeline a normal split so the selected layer's cards have room.
         // `bug060` (UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md P1 gate scene) and
         // `paramsteps` (PARAM_STEP_ACTIONS P3) get the same treatment — both are
-        // scrolled/inspector-subject scenes, not timeline ones.
+        // scrolled/inspector-subject scenes, not timeline ones. `bug047` is the
+        // AUDIO_SETUP_DOCK D1 gate: the inspector must stay visible on the right
+        // so the docked column (built LEFT of it) reads as pushing content, not
+        // replacing the inspector.
         ui.layout.inspector_width = 600.0;
         ui.layout.timeline_split_ratio = 0.6;
     } else {

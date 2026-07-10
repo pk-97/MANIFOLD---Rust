@@ -138,7 +138,12 @@ pub fn run(scene: &str, script_path: &str) {
     let zoom_ppb = super::zoom_ppb_for_scene(scene);
     let mut ui = UIRoot::new();
     ui.resize(super::LOGICAL_W, super::LOGICAL_H);
-    if scene == "inspector" || scene == "bug060" || scene == "bug060heavy" || scene == "paramsteps" {
+    if scene == "inspector"
+        || scene == "bug060"
+        || scene == "bug060heavy"
+        || scene == "paramsteps"
+        || scene == "bug047"
+    {
         ui.layout.inspector_width = 600.0;
         ui.layout.timeline_split_ratio = 0.6;
     } else {
