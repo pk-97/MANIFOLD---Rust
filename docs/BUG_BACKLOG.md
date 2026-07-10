@@ -46,7 +46,7 @@ or human can read it, and it needs no external tool.
 |---|---|---|
 | BUG-100 | **gltf-fresh-import-renders-near-black-for-non-azalea-geometry** | `assemble_import_graph`'s fixed default sun (`pos 5,2,3` / `intensity 3.5`) + material `ambient 0.18` were tuned specifically for the azalea fixture's geometry/orientation; a FRESH import of `cc0__japanese_apricot_prunus_mume.glb` or `lowe.glb` (both held-out fixtures) renders visibly near-black (silhouette only, no legible surface) despite passing the >2% non-black structural threshold. Confirmed pre-existing and unrelated to SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md P2's render_scene param->port swap (`git diff` against P2's base commit shows zero changes to any sun/ambient/intensity/distance default). Found 2026-07-10 visually inspecting P2's held-out-input demo PNGs (a `git diff` audit alone wouldn't have caught this — the render had to actually be looked at, not just structurally validated). Fix shape: scale sun position/intensity to the model's own bbox radius (like camera distance already does) instead of fixed world-space numbers, or lift ambient for fresh imports. LOW (cosmetic default-tuning gap on first import; a performer would immediately notice and just raise Sun Intensity/Reflections on the card — the sliders exist and work). |
 | BUG-098 | **film-grain-drifts-and-reads-as-blocky-pixels** | FilmGrain.json's grain slides toward a corner instead of re-rolling (the time jitter is a smooth linear offset, `time x 39.7/61.3`, which TRANSLATES the hash field - a moving offset is a pan, not a re-roll), and the grain itself reads as hard blocky pixels at 4K (unfiltered square hash cells at noise scale ~1000). Peter 2026-07-10: "drifts to the top left corner and it just looks like blocky pixels not real film grain." Fix shape: derive the offset from frame parity/hash so every frame jumps >= 1 cell (decorrelate, no slide), and soften the grain (finer cells + slight blur, or a Value-noise blend / luma-weighted response) so it reads as emulsion rather than pixel snow. MED (shipped effect looks wrong at its one job; Peter deferred to a dedicated session). |
-| BUG-097 | **ui-snap-render-overlay-pass-uses-wrong-traversal** | (was BUG-094, renumbered 2026-07-10 — concurrent-session ID collision with fluidsim3d's BUG-094.) `render_ui_to_png`/`Runner::write_png`'s overlay pass calls `render_tree_range`; the live app uses `render_sub_region` for the same job, and the live app's own comment says the former can render nothing for an overlay range that excludes its own region root. Not confirmed against an actual failing overlay — found by reading the two code paths side by side (P2's VERIFY-AT-IMPL diff), not a repro. Fix shape: swap to `render_sub_region`, matching `app_render.rs:4617`. LOW. |
+| ~~BUG-097~~ FIXED | **ui-snap-render-overlay-pass-uses-wrong-traversal** | FIXED 2026-07-10 by construction (HARNESS_FIDELITY_INVARIANT §4 step 2): the harness's parallel overlay pass was DELETED along with `draw_immediate_passes`, and the overlay assembly now has one owner — `ui_frame::render_main_ui_passes` — which uses `render_sub_region` @ `Depth::OVERLAY`. Not point-fixed. Confirmed reproducible after all: `build_overlays` ALWAYS records `start` after the region root, so EVERY open overlay excluded its root (the "may be latent" caveat was wrong). Permanent proof: `overlay_fidelity_proof::bug097_...` (mod.rs) shows `render_tree_range` leaves the range byte-identical (blank) while `render_sub_region` + the seam draw it. See detail below. |
 | BUG-090 | **audio-mixdown-analysis-only-test-flakes-under-parallel-run** | `audio_mixdown::tests::render_export_audio_analysis_only_layer_taps_but_never_hits_master` (an exact `assert_eq!` on two separately-rendered `f32` audio buffers) failed once during F2's full `cargo test -p manifold-playback` gate run, then passed both standalone and in an immediate full-suite rerun — a parallel-execution flake, not a deterministic failure; root cause unknown (suspects: shared `TestDir` temp-path collision across threads, or thread-scheduling-sensitive float summation order in the mixdown path). Found 2026-07-10 running F2's gate; file untouched by F2 (confirmed via `git diff` against F2's base commit). LOW (test-only, intermittent — but an exact-equality float assertion under parallel test execution is a fragile pattern worth a look). |
 | BUG-089 | **live-clip-pending-tick-queue-dead-on-all-live-paths** | `LiveClipManager`'s tick-based pending-launch queue (`pending_by_tick`/`pending_by_layer`/`pending_by_clip_id`, `PendingLiveLaunch.target_tick`, `queue_pending`, `activate_due_pending_launches[_at_tick]`, `has_pending_activations`) can only ever be written when `event_absolute_tick >= 0`, but midir events always set `absolute_tick = -1` (`midi_input.rs`) and it is the sole producer of `MidiNoteEvent` in the whole workspace; `fire_layer_oneshot` also always passes `tick = -1`. `activate_due_pending_launches_at_tick` is the only live caller (`engine.rs:803`, fed `self.last_frame_count`, a frame counter, not a real clock tick) and drains a map that can never be non-empty in production — confirmed by exhaustive grep, not inference. Found 2026-07-10 while scoping F2's tick-queue deletion call; left OPEN rather than deleted because the dead footprint is the whole subsystem (7 items across 2 files plus a dead cancellation branch in `commit_live_clip`), wider than the single function F2 was scoped to evaluate — a clean full removal deserves its own dedicated pass. LOW (dead code, zero runtime cost beyond an empty-map check per tick; risk is only in a future session doing a partial removal). |
 | BUG-088 | **pre-existing-clippy-tests-gate-dirty-since-f1-landing** | `cargo clippy -p manifold-playback --tests -- -D warnings` fails on the base commit `cf1f3dc6` (F1's own landing) — `doc_lazy_continuation` in `tests/osc_timecode.rs:172` and three `cloned_ref_to_slice_refs`/`needless_range_loop` hits in `src/audio_mixdown.rs` (589/623/643) — none of which F2 touched (confirmed byte-identical via `git diff cf1f3dc6`). The plain `cargo clippy -p manifold-playback -- -D warnings` (no `--tests`) and a target-scoped `--test live_clip` both pass clean, so F2's own diff is clippy-clean; the full `--tests` sweep just wasn't clean at the commit F2 started from. Found 2026-07-10 running F2's gate. LOW (cosmetic/lint-only, not a correctness bug; blocks a fully-green `--tests` gate for whoever lands next until a small cleanup pass fixes the 2 files). |
@@ -116,37 +116,6 @@ or human can read it, and it needs no external tool.
 **Root cause (known):** two authoring mistakes in `FilmGrain.json`. (1) The animation wires `time x 39.7 -> noise.offset_x` / `time x 61.3 -> offset_y` — a CONTINUOUS offset translates the hash lattice, so the pattern pans (the drift direction is just the sign of the multipliers); real grain must decorrelate every frame, not slide. (2) `node.noise` type Random emits unfiltered square hash cells; at scale ~1000 on a 4K canvas each cell spans several pixels — crisp squares, not emulsion.
 **Fix shape:** re-roll instead of pan — quantize the offset per frame (e.g. `floor(time * fps) * large_prime`, or hash the frame index) so consecutive frames jump whole cells; then make the grain read soft: finer cells (~2x canvas density) plus a half-pixel blur, or blend a Value-noise octave, and consider a luma-weighted response so grain sits in midtones (the Overlay blend already helps). All JSON-level; no new primitives expected.
 **Where:** `crates/manifold-renderer/assets/effect-presets/FilmGrain.json` (nodes `grain_jitter_x/y`, `grain_noise`).
-
-### BUG-097 (ui-snap-render-overlay-pass-uses-wrong-traversal) — `render_ui_to_png`'s overlay pass calls `render_tree_range` where the live app uses `render_sub_region`, and the live app's own comment says the former can render nothing for some overlay ranges — LOW (found 2026-07-10 during UI_HARNESS_UNIFICATION P2's VERIFY-AT-IMPL diff)
-**Status:** OPEN — **renumbered from BUG-094 on 2026-07-10** to resolve a concurrent-session ID collision (fluidsim3d's session independently claimed BUG-094 for `fluidsim3d-clip-trigger-turbulence-mux-double-wire`, now FIXED, further down this file). This overlay bug landed on main first (P2 @ `b8fa192f`) but has no code/test references, so renumbering it — rather than the fluidsim entry — orphans nothing but the immutable P2 commit message `5965d44d`.
-
-**Symptom (potential, unconfirmed against a real repro):** `render.rs`'s Pass 5
-(`ui_snap`'s `render_ui_to_png`, and `script.rs`'s `Runner::write_png` via the
-shared `draw_immediate_passes`) draws each `overlay_draw` range with
-`renderer.render_tree_range(&ui.tree, start, end)`
-([`render.rs`](../crates/manifold-app/src/ui_snapshot/render.rs), Pass 5). The
-live app's equivalent pass
-([`app_render.rs:4617`](../crates/manifold-app/src/app_render.rs#L4617)) uses
-`render_sub_region` instead, with an explicit comment: an overlay's
-`(start, end)` deliberately EXCLUDES its own
-`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` region root, and `render_tree_range` is a
-root-scan (`UITree::traverse_range`) that finds no roots in such a range and
-renders NOTHING — whereas `render_sub_region`'s flat, ancestor-aware scan
-(`traverse_flat_range`) picks the children up regardless. The live app also
-wraps each range in `push_depth`/`draw_shadow`/`pop_depth`, none of which the
-headless pass does. **Not confirmed against an actual failing overlay** — no
-scene exercised by the current test suite or the two shipped `ui-flows`
-happens to open an overlay whose range excludes its own root, so this may be
-latent rather than currently biting; it was found by reading the two code
-paths side by side (the P2 phase brief's mandatory VERIFY-AT-IMPL diff), not
-by a failing render. **Fix shape:** swap `render_tree_range` for
-`render_sub_region` in `draw_immediate_passes`' overlay loop, matching the
-live app; add the shadow/depth wrapping too if a future scene needs a modal
-proven visually. Left unfixed this session (escalation, not a silent keep —
-the P2 phase brief's Forbidden-moves list names this exact move) because
-confirming which overlay ranges, if any, actually exclude their root wasn't
-scoped to P2 and a same-session fix risked changing rendered output nobody
-asked this phase to verify.
 
 ### BUG-086 (recording-audio-track-under-covers-duration-on-longer-takes) — the recorded audio track can silently fall short of the intended duration on longer takes, no counter, root cause unknown — MED
 **Status:** OPEN
@@ -1928,6 +1897,40 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-097 (ui-snap-render-overlay-pass-uses-wrong-traversal) — `render_ui_to_png`'s overlay pass calls `render_tree_range` where the live app uses `render_sub_region`, and the live app's own comment says the former can render nothing for some overlay ranges — FIXED 2026-07-10 (found during UI_HARNESS_UNIFICATION P2's VERIFY-AT-IMPL diff)
+
+**Status:** FIXED 2026-07-10, by construction — not point-fixed. HARNESS_FIDELITY_INVARIANT §4 step 2 deleted the harness's parallel immediate-pass assembly (`draw_immediate_passes` + its overlay loop) and made `ui_frame::render_main_ui_passes` the single owner of the overlay pass; that owner uses `render_sub_region` @ `Depth::OVERLAY` (with the shadow-peek wrapping), so there is no longer a second copy that could pick `render_tree_range`. The "may be latent" hedge below turned out to be wrong: `UIRoot::build_overlays` takes `start = tree.count()` AFTER `begin_region`, so EVERY open overlay records a range that excludes its own region root — the trigger is universal, not scene-dependent. Permanent regression proof: `crate::ui_snapshot::overlay_fidelity_proof::bug097_render_sub_region_draws_root_excluding_overlay_that_render_tree_range_blanks` (GPU test, passing) opens a real overlay and proves on the SAME range that `render_tree_range` leaves the offscreen byte-identical (blank) while `render_sub_region` and the production seam both draw it. Reverting the seam to `render_tree_range` fails that test.
+
+**Original report (kept for the record):** renumbered from BUG-094 on 2026-07-10 to resolve a concurrent-session ID collision (fluidsim3d's session independently claimed BUG-094 for `fluidsim3d-clip-trigger-turbulence-mux-double-wire`, now FIXED, further down this file). This overlay bug landed on main first (P2 @ `b8fa192f`) but has no code/test references, so renumbering it — rather than the fluidsim entry — orphans nothing but the immutable P2 commit message `5965d44d`.
+
+**Symptom (potential, unconfirmed against a real repro):** `render.rs`'s Pass 5
+(`ui_snap`'s `render_ui_to_png`, and `script.rs`'s `Runner::write_png` via the
+shared `draw_immediate_passes`) draws each `overlay_draw` range with
+`renderer.render_tree_range(&ui.tree, start, end)`
+([`render.rs`](../crates/manifold-app/src/ui_snapshot/render.rs), Pass 5). The
+live app's equivalent pass
+([`app_render.rs:4617`](../crates/manifold-app/src/app_render.rs#L4617)) uses
+`render_sub_region` instead, with an explicit comment: an overlay's
+`(start, end)` deliberately EXCLUDES its own
+`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` region root, and `render_tree_range` is a
+root-scan (`UITree::traverse_range`) that finds no roots in such a range and
+renders NOTHING — whereas `render_sub_region`'s flat, ancestor-aware scan
+(`traverse_flat_range`) picks the children up regardless. The live app also
+wraps each range in `push_depth`/`draw_shadow`/`pop_depth`, none of which the
+headless pass does. **Not confirmed against an actual failing overlay** — no
+scene exercised by the current test suite or the two shipped `ui-flows`
+happens to open an overlay whose range excludes its own root, so this may be
+latent rather than currently biting; it was found by reading the two code
+paths side by side (the P2 phase brief's mandatory VERIFY-AT-IMPL diff), not
+by a failing render. **Fix shape:** swap `render_tree_range` for
+`render_sub_region` in `draw_immediate_passes`' overlay loop, matching the
+live app; add the shadow/depth wrapping too if a future scene needs a modal
+proven visually. Left unfixed this session (escalation, not a silent keep —
+the P2 phase brief's Forbidden-moves list names this exact move) because
+confirming which overlay ranges, if any, actually exclude their root wasn't
+scoped to P2 and a same-session fix risked changing rendered output nobody
+asked this phase to verify.
 
 ### BUG-047 (setup-panel-overflow) — Audio Setup panel content clips past the bottom edge when chrome exceeds viewport − SCOPE_H_MIN — LOW (needs ~18 combined input/consumer rows on one source at full height; ~5 extra rows at a 720px window)
 **Status:** FIXED 2026-07-10 (AUDIO_SETUP_DOCK P1, `36a96791`) — the docked panel body is now a `ScrollContainer` (GPU scissor), and `scope_h` is a fixed fraction of the panel rect rather than "absorb remaining space", so control rows overflow into the scroll region instead of clamping the spectrogram at `SCOPE_H_MIN` and running sections past the bottom. See `docs/landings/2026-07-10-audio-dock-p1.md`. (Follow-on BUG-101 tracks the spectrogram blit not yet following the scroll offset.)

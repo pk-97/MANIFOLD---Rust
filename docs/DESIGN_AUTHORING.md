@@ -151,6 +151,34 @@ verification from the inside and is not. What survives becomes D-numbered decisi
 what dies becomes "Rejected: X, because Y" — written for the future executor who will
 independently reinvent X at 2am, which is the entire reason rejections get recorded.
 
+**"Reimplement-and-verify" is a drift carve-out — a match-audit is a missing seam.**
+When a design's entire value is fidelity *by construction* (the harness shows the real
+app; the exporter writes the real bytes; the preview is the real render; the fused graph
+matches the unfused one), a phase step that says *"reimplement this part and verify it
+matches the live path"* reintroduces the exact drift the design exists to kill — just at
+a smaller granularity, where it hides longer. A `VERIFY-AT-IMPL: does X match the live
+path?` gate is the tell that a seam is missing. The catch that works is a seam; the
+catch that decays is an audit — a manual, discretionary "does it match?" read that
+holds only while someone is paying attention. There are two fixes, and the smell is the
+same in both; diagnose by asking *does this duplication carry information the other copy
+doesn't?*
+
+- **No → accidental duplication → extract a seam.** The second copy exists only because
+  the code got written twice. Share the one function; there was nothing to verify.
+  (Specimen: UI_HARNESS_UNIFICATION kept the immediate-pass assembly as a parallel
+  harness copy behind a match-audit and produced two lookalikes — the editor 3-tree
+  topology and BUG-097's overlay pass — in a single execution session. The fix,
+  `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md`, deletes the copy.)
+- **Yes → essential duplication → automate the equivalence.** Sometimes two
+  implementations *are* the feature: freeze/fusion parity, an exporter's fast path vs.
+  its reference path. You can't collapse them — the point is that two paths agree. The
+  net is an **automated value-level equivalence test** run every build (this repo's
+  `gpu_proofs` value-parity suite is the model), never a person eyeballing "looks the
+  same."
+
+Whichever case, the thing being retired is the manual match-audit. When a fidelity
+design's phase gate reads "verify it matches," stop and pick the real net.
+
 ## 5. Foreseeing the plausible-wrong turn
 
 The standard requires each design to forbid its tempting wrong architecture *by name*

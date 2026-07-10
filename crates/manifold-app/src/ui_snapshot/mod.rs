@@ -1218,3 +1218,185 @@ mod editor_window_harness {
         );
     }
 }
+
+#[cfg(test)]
+mod overlay_fidelity_proof {
+    //! BUG-097 — the permanent RED→GREEN regression proof for the overlay
+    //! pass, closed by construction in
+    //! `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` §4 step 2.
+    //!
+    //! `UIRoot::build_overlays` mints each open overlay as its own region and
+    //! records `(start, end)` with `start = tree.count()` taken AFTER
+    //! `begin_region` — so the region's own root sits at `start - 1`,
+    //! deliberately OUTSIDE the recorded range (the shadow-peek heuristic in
+    //! the overlay pass depends on `start` being the first REAL node). That
+    //! makes the render-call choice load-bearing:
+    //!
+    //! - `render_tree_range(start, end)` is a ROOT scan (`traverse_range`): it
+    //!   finds no region root inside `[start, end)` and renders NOTHING — the
+    //!   old harness's bug (BUG-097). Every open overlay — dropdown, modal,
+    //!   perf HUD — would render blank in a harness PNG.
+    //! - `render_sub_region(start, end, false)` is an ancestor-aware FLAT scan
+    //!   (`traverse_flat_range`): it walks the parent chain from `start` and
+    //!   picks up the region's `CLIPS_CHILDREN` regardless — it DRAWS the
+    //!   overlay. This is the call `render_main_ui_passes` (the shared seam)
+    //!   makes; there is no longer a second, divergent copy to pick the wrong
+    //!   one.
+    //!
+    //! The test proves both halves on the SAME real overlay range, comparing
+    //! one offscreen before/after each render call (never two separate
+    //! composites — that sidesteps the ~172px of font/GPU nondeterminism a
+    //! fresh composite carries). Keep the GREEN assertion: reverting the seam
+    //! to `render_tree_range` makes `sub_region_drew` false and this fails.
+
+    use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTextureFormat};
+    use manifold_renderer::ui_cache_manager::UICacheManager;
+    use manifold_renderer::ui_renderer::UIRenderer;
+
+    use super::composite_resources::{composite_frame, CompositeResources};
+    use super::render::readback;
+    use super::{fixtures, sync_build};
+    use crate::ui_frame::{render_main_ui_passes, MainUiPassInputs};
+    use crate::ui_root::UIRoot;
+
+    /// The minimal `MainUiPassInputs` a headless overlay-only frame needs —
+    /// every timeline/clip/VQT input absent (`None`/empty), exactly as
+    /// `render_ui_to_png` fills them (§3: input presence, not caller
+    /// identity). Only the overlay pass, which reads off `ui_root`, produces
+    /// pixels here.
+    fn overlay_only_inputs<'a>(
+        res: &'a CompositeResources,
+        text_input: &'a crate::text_input::TextInputState,
+        frame_timer: &'a crate::frame_timer::FrameTimer,
+    ) -> MainUiPassInputs<'a> {
+        MainUiPassInputs {
+            layer_bitmap_gpu: None,
+            clip_bodies: &[],
+            clip_rects: &[],
+            clip_content_gpu: None,
+            thumb: None,
+            timeline_overlays: manifold_ui::panels::viewport::TimelineOverlays::default(),
+            markers: &[],
+            landing_flash: None,
+            automation_lanes: &[],
+            cursor_pos: manifold_ui::node::Vec2::ZERO,
+            text_input,
+            frame_timer,
+            vqt: None,
+            blit_pipeline: &res.blit_pipeline,
+            blit_sampler: &res.blit_sampler,
+            gpu_sink: None,
+        }
+    }
+
+    #[test]
+    fn bug097_render_sub_region_draws_root_excluding_overlay_that_render_tree_range_blanks() {
+        let w = super::LOGICAL_W as u32;
+        let h = super::LOGICAL_H as u32;
+        let data = fixtures::build("bug060heavy").expect("bug060heavy scene");
+
+        let mut ui = UIRoot::new();
+        ui.resize(super::LOGICAL_W, super::LOGICAL_H);
+        // Open the Perf HUD (an `OverlayId::PerfHud`, still in the overlay
+        // `Z_ORDER`) BEFORE the build, so `build_overlays` records its
+        // root-excluding range this frame. (Audio Setup was the original
+        // specimen but became a docked column, not an overlay, in
+        // AUDIO_SETUP_DOCK P1 — any Z_ORDER overlay proves the same mechanism,
+        // since build_overlays excludes the region root for ALL of them.)
+        ui.perf_hud.toggle();
+        sync_build(&mut ui, &data, 24.0);
+
+        assert!(
+            !ui.overlay_draw.is_empty(),
+            "opening the Perf HUD must record an overlay range (build_overlays)"
+        );
+        let (start, end) = ui.overlay_draw[0];
+        assert!(end > start, "overlay range must be non-empty ({start}..{end})");
+        // The mechanism under test: the region root is at `start - 1`, outside
+        // the recorded range. If this ever stops holding, the whole premise of
+        // BUG-097 is gone and this test should be revisited, not silently pass.
+        assert!(start >= 1, "overlay range must exclude its region root at start-1");
+
+        let device = GpuDevice::new();
+        let mut renderer = UIRenderer::new(&device, GpuTextureFormat::Bgra8Unorm);
+        let mut cache = UICacheManager::new(GpuTextureFormat::Bgra8Unorm, 1.0);
+        cache.set_scale_factor(1.0);
+        cache.ensure_atlas(&device, w, h);
+        let res = CompositeResources::new(&device, w, h);
+
+        // Helper: paint just the overlay range through `f` onto a FRESH
+        // composite of the same panels, and return (base_before, after).
+        // Comparing before/after the SAME offscreen keeps the assertion immune
+        // to the font/GPU nondeterminism a second composite would introduce.
+        let mut paint_range = |renderer: &mut UIRenderer,
+                               cache: &mut UICacheManager,
+                               ui: &mut UIRoot,
+                               sub_region: bool|
+         -> (Vec<u8>, Vec<u8>) {
+            cache.invalidate_all();
+            composite_frame(&device, renderer, cache, ui, &res, 1.0);
+            let before = readback(&device, &res.offscreen, w, h);
+            renderer.begin_frame();
+            if sub_region {
+                renderer.render_sub_region(&ui.tree, start, end, false);
+            } else {
+                renderer.render_tree_range(&ui.tree, start, end);
+            }
+            if renderer.prepare(&device, w, h, 1.0) {
+                let mut enc = device.create_encoder("bug097-overlay-range");
+                renderer.render(&mut enc, &res.offscreen, GpuLoadAction::Load);
+                enc.commit_and_wait_completed();
+            }
+            let after = readback(&device, &res.offscreen, w, h);
+            (before, after)
+        };
+
+        // RED — the old harness call: render_tree_range renders NOTHING for a
+        // root-excluding overlay range. The offscreen is byte-identical
+        // before/after: the overlay is blank.
+        let (red_before, red_after) = paint_range(&mut renderer, &mut cache, &mut ui, false);
+        assert_eq!(
+            red_before, red_after,
+            "render_tree_range drew pixels for a root-excluding overlay range — \
+             the BUG-097 premise no longer holds; revisit this test"
+        );
+
+        // GREEN — the seam's call: render_sub_region DRAWS the overlay. The
+        // offscreen changes.
+        let (green_before, green_after) = paint_range(&mut renderer, &mut cache, &mut ui, true);
+        let sub_region_drew = green_before != green_after;
+        assert!(
+            sub_region_drew,
+            "render_sub_region drew nothing for the open overlay — the seam's \
+             overlay pass is broken (BUG-097 regressed)"
+        );
+
+        // Tie to the production path: `render_main_ui_passes` (the seam the
+        // live app + harness both call) makes the render_sub_region choice
+        // above internally. Run it end-to-end with the overlay open and
+        // confirm it draws (changes the composited base) without panicking —
+        // a smoke check that the real seam executes the overlay pass, not a
+        // hand-rolled render_sub_region.
+        cache.invalidate_all();
+        composite_frame(&device, &mut renderer, &mut cache, &mut ui, &res, 1.0);
+        let seam_before = readback(&device, &res.offscreen, w, h);
+        let text_input = crate::text_input::TextInputState::new();
+        let frame_timer = crate::frame_timer::FrameTimer::new(60.0);
+        render_main_ui_passes(
+            &device,
+            &mut renderer,
+            &mut ui,
+            &res.offscreen,
+            w,
+            h,
+            1.0,
+            overlay_only_inputs(&res, &text_input, &frame_timer),
+        );
+        let seam_after = readback(&device, &res.offscreen, w, h);
+        assert_ne!(
+            seam_before, seam_after,
+            "render_main_ui_passes drew nothing with an overlay open — the \
+             production seam is not executing the overlay pass"
+        );
+    }
+}
