@@ -1009,6 +1009,13 @@ pub(super) fn dispatch_inspector(
             // with the newly-selected config. No model mutation.
             DispatchResult::structural()
         }
+        PanelAction::SectionFoldToggled => {
+            // D5 — the card already flipped its own `section_folded` UI-only
+            // state in handle_click; this just forces a rebuild so the
+            // folded/unfolded rows repaint. No model mutation (fold state is
+            // workspace-local, never serialized).
+            DispatchResult::structural()
+        }
         PanelAction::ModsCompactToggled => {
             // §6b — the inspector already flipped its own compact flag in
             // route_click; rebuild so every card hides/shows its mod drawers.

@@ -501,6 +501,7 @@ impl Command for ToggleEffectParamExposeCommand {
                     scale: 1.0,
                     offset: 0.0,
                     value_labels: Vec::new(),
+                    section: None,
                 };
                 effect.append_user_binding(binding);
                 ReverseState::Exposed { user_param_id: id }
@@ -744,6 +745,13 @@ pub struct BindingMappingEdit {
     /// `offset = 0.0` is identity.
     pub scale: Option<f32>,
     pub offset: Option<f32>,
+    /// Card-bundling section name (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2
+    /// D5). Outer `Option` = "this edit touches the field" (the usual
+    /// `BindingMappingEdit` convention); inner `Option<String>` = the new
+    /// value, where `None` clears the row back to unsectioned. Manifest-only
+    /// (BOUNDARIES D4) — applied by [`Self::apply_to_manifest_spec`] like
+    /// every other spec field here; never written to `meta.params`.
+    pub section: Option<Option<String>>,
 }
 
 impl BindingMappingEdit {
@@ -766,6 +774,7 @@ impl BindingMappingEdit {
             max: spec.max,
             invert: spec.invert,
             curve: spec.curve,
+            section: spec.section.clone(),
         };
         if let Some(label) = &self.label {
             spec.name = label.clone();
@@ -781,6 +790,9 @@ impl BindingMappingEdit {
         }
         if let Some(curve) = self.curve {
             spec.curve = curve;
+        }
+        if let Some(section) = &self.section {
+            spec.section = section.clone();
         }
         prev
     }
@@ -814,6 +826,7 @@ struct SpecReshapeSnapshot {
     max: f32,
     invert: bool,
     curve: manifold_core::macro_bank::MacroCurve,
+    section: Option<String>,
 }
 
 impl SpecReshapeSnapshot {
@@ -823,6 +836,7 @@ impl SpecReshapeSnapshot {
         spec.max = self.max;
         spec.invert = self.invert;
         spec.curve = self.curve;
+        spec.section = self.section.clone();
     }
 }
 
@@ -1052,6 +1066,7 @@ mod tests {
             scale: 1.0,
             offset: 0.0,
             value_labels: Vec::new(),
+            section: None,
         }
     }
 
@@ -1219,6 +1234,7 @@ mod tests {
             curve: Some(MacroCurve::SCurve),
             scale: Some(0.017453293),
             offset: Some(1.5),
+            section: None,
         };
         let mut cmd =
             EditParamMappingCommand::new(GraphTarget::Effect(effect_id), binding_id.clone(), edit, None);
@@ -1293,6 +1309,47 @@ mod tests {
         assert!(!b.invert);
         assert_eq!(b.curve, MacroCurve::Linear);
         assert_eq!(b.label, "Original Label");
+    }
+
+    #[test]
+    fn edit_mapping_writes_and_undoes_section() {
+        // D5 (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2): the calibration
+        // popover's section edit — manifest-only (BOUNDARIES D4), same
+        // one-shot execute/undo shape as every other reshape field here.
+        let (mut project, effect_id, binding_id) = project_with_one_user_binding();
+        let edit = BindingMappingEdit {
+            section: Some(Some("Leaf".to_string())),
+            ..Default::default()
+        };
+        let mut cmd = EditParamMappingCommand::new(
+            GraphTarget::Effect(effect_id.clone()),
+            binding_id.clone(),
+            edit,
+            None,
+        );
+        cmd.execute(&mut project);
+        let b = master_binding(&project, &binding_id);
+        assert_eq!(b.section.as_deref(), Some("Leaf"));
+        // Untouched fields keep their original values.
+        assert_eq!(b.label, "Original Label");
+
+        cmd.undo(&mut project);
+        let b = master_binding(&project, &binding_id);
+        assert_eq!(b.section, None, "undo restores the pre-edit (absent) section");
+
+        // Clearing back to unsectioned: `Some(None)` is a real edit, distinct
+        // from `None` (untouched). Re-set it, then clear it.
+        cmd.execute(&mut project);
+        assert_eq!(master_binding(&project, &binding_id).section.as_deref(), Some("Leaf"));
+        let clear = BindingMappingEdit {
+            section: Some(None),
+            ..Default::default()
+        };
+        let mut clear_cmd =
+            EditParamMappingCommand::new(GraphTarget::Effect(effect_id), binding_id.clone(), clear, None);
+        clear_cmd.execute(&mut project);
+        let b = master_binding(&project, &binding_id);
+        assert_eq!(b.section, None, "Some(None) clears the section back to unsectioned");
     }
 
     #[test]

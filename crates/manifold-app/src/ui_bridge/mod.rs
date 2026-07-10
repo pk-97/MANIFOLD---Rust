@@ -364,6 +364,7 @@ pub fn dispatch(
         | PanelAction::EffectCollapseToggle(_)
         | PanelAction::SetAllCardsCollapsed { .. }
         | PanelAction::ModConfigTabChanged
+        | PanelAction::SectionFoldToggled
         | PanelAction::ModsCompactToggled
         | PanelAction::EffectCardClicked(_)
         | PanelAction::ParamSnapshot(..)
@@ -574,6 +575,7 @@ pub fn dispatch(
         | PanelAction::EffectMappingRangeChanged { .. }
         | PanelAction::EffectMappingRangeCommit { .. }
         | PanelAction::EffectMappingLabel { .. }
+        | PanelAction::EffectMappingSection { .. }
         | PanelAction::EffectMappingInvert { .. }
         | PanelAction::EffectMappingCurve { .. }
         | PanelAction::EffectMappingAffineSnapshot { .. }

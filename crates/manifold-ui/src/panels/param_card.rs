@@ -150,6 +150,12 @@ pub struct ParamInfo {
     /// `editor_card_config` sets this `true` for both kinds. Drives the sideways
     /// mapping-drawer chevron, which only appears in [`CardContext::Author`].
     pub mappable: bool,
+    /// Card-bundling section name (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2
+    /// D5). Contiguous runs of rows sharing the same `Some(name)` draw under
+    /// one collapsible header; `None` rows render exactly as today (a flat
+    /// slider, no header). Comes straight off the manifest spec — never
+    /// derived from graph structure here.
+    pub section: Option<String>,
 }
 
 /// A generator string parameter — rendered as a clickable text-field row
@@ -558,6 +564,19 @@ pub struct ParamCardPanel {
     // Per-param OSC addresses (for click-to-copy). Indexed by param index.
     osc_addresses: Vec<Option<String>>,
 
+    /// D5 card-section fold state (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md
+    /// §2), keyed by section name. UI-local workspace state — same home as
+    /// the graph canvas's `GraphCanvas::collapsed` (survives rebuilds of
+    /// this panel instance, never serialized to the project; folds reset on
+    /// app restart, persistence Deferred). Missing entry = unfolded
+    /// (default). A section not present in the current `param_info` is
+    /// simply never consulted — no pruning needed.
+    section_folded: ahash::AHashMap<String, bool>,
+    /// Rebuilt every build pass: `(header_node_id, section_name)` for every
+    /// section-header row drawn this frame, so `handle_click` can resolve a
+    /// header click back to its section without a second id → name map.
+    section_header_ids: Vec<(NodeId, String)>,
+
     copied_flash: CopyToClipboardLabelState,
 
     // Drag state
@@ -698,6 +717,8 @@ impl ParamCardPanel {
             string_param_btn_ids: Vec::new(),
             mapping_chevron_ids: Vec::new(),
             osc_addresses: Vec::new(),
+            section_folded: ahash::AHashMap::new(),
+            section_header_ids: Vec::new(),
             copied_flash: CopyToClipboardLabelState::default(),
             drag: ParamDragState::new(),
             param_cache: Vec::new(),
@@ -2119,6 +2140,143 @@ impl ParamCardPanel {
         self.reposition_effect_badges(tree);
     }
 
+    /// Contiguous runs of `param_info[..].section` — the D5 display-grouping
+    /// unit (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2): a run is a maximal
+    /// span of consecutive rows sharing the same section value (`None`
+    /// included — an unsectioned run renders with no header at all). A
+    /// repeated section name after a gap is intentionally a SECOND run/header
+    /// (display grouping only groups contiguous rows; forbidden move: do not
+    /// reorder rows to force contiguity). Returns `(start_index, len,
+    /// section)` triples covering `0..param_info.len()` with no gaps.
+    fn section_runs(&self) -> Vec<(usize, usize, Option<String>)> {
+        let mut runs = Vec::new();
+        let mut i = 0;
+        while i < self.param_info.len() {
+            let section = self.param_info[i].section.clone();
+            let mut j = i + 1;
+            while j < self.param_info.len() && self.param_info[j].section == section {
+                j += 1;
+            }
+            runs.push((i, j - i, section));
+            i = j;
+        }
+        runs
+    }
+
+    /// Build one D5 section-header row: a clickable bar with a fold triangle,
+    /// the section name (its own label node, so a UI-flow assertion can match
+    /// the bare name exactly), and — when folded — a row-count chip. Returns
+    /// the row's own clickable node id; the caller registers `(id, name)`
+    /// into `section_header_ids` so `handle_click` can resolve a click back
+    /// to the section without a second lookup. Fold state itself lives in
+    /// `section_folded` (UI-local workspace state, not serialized — see its
+    /// doc comment); this fn only reads `folded`, it does not toggle it.
+    fn build_section_header(
+        &mut self,
+        tree: &mut UITree,
+        parent: Option<NodeId>,
+        x: f32,
+        y: f32,
+        w: f32,
+        name: &str,
+        folded: bool,
+        row_count: usize,
+        key_base: u64,
+    ) -> NodeId {
+        let header_id = tree.add_button_keyed(
+            parent,
+            x,
+            y,
+            w,
+            ROW_HEIGHT,
+            UIStyle {
+                bg_color: color::INSPECTOR_BG,
+                hover_bg_color: color::HOVER_OVERLAY,
+                pressed_bg_color: color::PRESS_OVERLAY,
+                corner_radius: color::SMALL_RADIUS,
+                ..UIStyle::default()
+            },
+            "",
+            key_base | ROW_ROLE_SECTION_HEADER,
+        );
+        let triangle_w = 16.0;
+        let triangle = if folded { "\u{25B8}" } else { "\u{25BE}" }; // ▸ / ▾
+        tree.add_label(
+            Some(header_id),
+            x + GAP,
+            y,
+            triangle_w,
+            ROW_HEIGHT,
+            triangle,
+            UIStyle {
+                text_color: color::TEXT_DIMMED_C32,
+                font_size: FONT_SIZE,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            },
+        );
+        let count_w = if folded { 40.0 } else { 0.0 };
+        tree.add_label(
+            Some(header_id),
+            x + GAP + triangle_w,
+            y,
+            (w - GAP * 2.0 - triangle_w - count_w).max(0.0),
+            ROW_HEIGHT,
+            name,
+            UIStyle {
+                text_color: color::TEXT_WHITE_C32,
+                font_size: FONT_SIZE,
+                text_align: TextAlign::Left,
+                ..UIStyle::default()
+            },
+        );
+        if folded {
+            tree.add_label(
+                Some(header_id),
+                x + w - GAP - count_w,
+                y,
+                count_w,
+                ROW_HEIGHT,
+                &format!("({row_count})"),
+                UIStyle {
+                    text_color: color::TEXT_DIMMED_C32,
+                    font_size: color::FONT_CAPTION,
+                    text_align: TextAlign::Right,
+                    ..UIStyle::default()
+                },
+            );
+        }
+        header_id
+    }
+
+    /// Reset every per-index interactive-id slot for row `i` to "nothing
+    /// built this frame" — called for a folded section's rows so a stale id
+    /// from a PRIOR build (a different frame, a different `UITree`
+    /// instance — two trees can mint numerically colliding ids) is never
+    /// mistaken for a live widget in the CURRENT tree. Scoped to the D5
+    /// fold-skip path only (the pre-existing `!exposed` skip is untouched —
+    /// out of scope for this phase).
+    fn clear_row_ids(&mut self, i: usize) {
+        self.slider_ids[i] = None;
+        self.slider_resets[i] = None;
+        self.row_catcher_ids[i] = None;
+        self.driver_btn_ids[i] = None;
+        self.envelope_btn_ids[i] = None;
+        self.driver_config_ids[i] = None;
+        self.audio_btn_ids[i] = None;
+        self.audio_configs[i] = None;
+        self.audio_trigger_mode_badge_ids[i] = None;
+        self.target_ids[i] = None;
+        self.envelope_config_ids[i] = None;
+        self.trim_ids[i] = None;
+        self.ableton_trim_ids[i] = None;
+        self.audio_trim_ids[i] = None;
+        self.ableton_config_ids[i] = None;
+        self.mapping_chevron_ids[i] = None;
+        self.toggle_ids[i] = None;
+        self.mod_tab_ids[i] = Vec::new();
+    }
+
     fn build_effect_sliders(
         &mut self,
         tree: &mut UITree,
@@ -2150,7 +2308,39 @@ impl ParamCardPanel {
             - DE_BUTTON_GAP * 2.0
             - chevron_lane;
 
-        for i in 0..self.param_info.len() {
+        self.section_header_ids.clear();
+        let runs = self.section_runs();
+        for (start, len, section) in runs {
+            if let Some(name) = &section {
+                let folded = self.section_folded.get(name).copied().unwrap_or(false);
+                let header_id = self.build_section_header(
+                    tree,
+                    Some(parent),
+                    x + PADDING,
+                    cy,
+                    w - PADDING * 2.0,
+                    name,
+                    folded,
+                    len,
+                    (start as u64) << 8,
+                );
+                self.section_header_ids.push((header_id, name.clone()));
+                cy += ROW_HEIGHT + ROW_SPACING;
+                if folded {
+                    // Folded run: no rows built for start..start+len. Clear
+                    // every per-index id explicitly (`clear_row_ids`) rather
+                    // than leaving stale ones from a prior build — a fold
+                    // toggles at runtime (unlike `!exposed`, an authoring-time
+                    // state), so a click on the now-hidden space must never
+                    // resolve against a widget from a different frame's tree.
+                    for i in start..start + len {
+                        self.clear_row_ids(i);
+                    }
+                    continue;
+                }
+            }
+
+        for i in start..start + len {
             // Hidden params: leave slider_ids[i] = None and skip widget
             // construction entirely. Slot-index semantics for any attached
             // driver/Ableton mapping/envelope are preserved.
@@ -2285,6 +2475,7 @@ impl ParamCardPanel {
             }
             cy = row.new_cy;
         }
+        }
     }
 
     fn build_generator(&mut self, tree: &mut UITree, rect: Rect) {
@@ -2345,7 +2536,35 @@ impl ParamCardPanel {
             // Same growth rule as the effect card (see build_effect_sliders).
             let label_width = crate::slider::label_width_for_row(content_w);
 
-            for i in 0..self.param_info.len() {
+            self.section_header_ids.clear();
+            let runs = self.section_runs();
+            for (start, len, section) in runs {
+                if let Some(name) = &section {
+                    let folded = self.section_folded.get(name).copied().unwrap_or(false);
+                    let header_id = self.build_section_header(
+                        tree,
+                        None,
+                        cx,
+                        cy,
+                        content_w,
+                        name,
+                        folded,
+                        len,
+                        (start as u64) << 8,
+                    );
+                    self.section_header_ids.push((header_id, name.clone()));
+                    cy += ROW_HEIGHT + ROW_SPACING;
+                    if folded {
+                        // See the effect-card twin of this branch for why
+                        // this clears rather than leaves stale ids.
+                        for i in start..start + len {
+                            self.clear_row_ids(i);
+                        }
+                        continue;
+                    }
+                }
+
+            for i in start..start + len {
                 let info = self.param_info[i].clone();
 
                 if info.is_toggle || info.is_trigger {
@@ -2461,6 +2680,7 @@ impl ParamCardPanel {
                     }
                     cy = row.new_cy;
                 }
+            }
             }
 
             // ── String param rows (clickable text fields) ──
@@ -2900,6 +3120,16 @@ impl ParamCardPanel {
             return vec![PanelAction::OpenGraphEditor(ei)];
         }
 
+        // D5 section header (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2) →
+        // flip this section's fold state (UI-only; no model mutation) and
+        // ask for a rebuild so the folded/unfolded rows repaint.
+        if let Some((_, name)) = self.section_header_ids.iter().find(|(hid, _)| *hid == id) {
+            let name = name.clone();
+            let folded = self.section_folded.entry(name).or_insert(false);
+            *folded = !*folded;
+            return vec![PanelAction::SectionFoldToggled];
+        }
+
         // Mapping-drawer chevron (Author context) → open the sideways
         // range/scale/offset/invert/curve drawer for this row's binding.
         if let Some(pi) = self
@@ -3054,6 +3284,14 @@ impl ParamCardPanel {
         // Cog → open graph editor for this generator
         if self.cog_btn_id == Some(id) {
             return vec![PanelAction::OpenGeneratorGraphEditor];
+        }
+
+        // D5 section header — same fold-toggle as the effect card.
+        if let Some((_, name)) = self.section_header_ids.iter().find(|(hid, _)| *hid == id) {
+            let name = name.clone();
+            let folded = self.section_folded.entry(name).or_insert(false);
+            *folded = !*folded;
+            return vec![PanelAction::SectionFoldToggled];
         }
 
         // Mapping-drawer chevron (Author context) → open the sideways
@@ -3911,6 +4149,7 @@ mod tests {
                     ableton_display: None,
                     ableton_range: None,
                     mappable: false,
+                    section: None,
                 },
                 ParamInfo {
                     param_id: std::borrow::Cow::Borrowed("strength"),
@@ -3929,6 +4168,7 @@ mod tests {
                     ableton_display: None,
                     ableton_range: None,
                     mappable: false,
+                    section: None,
                 },
             ],
             has_drv: false,
@@ -3976,6 +4216,7 @@ mod tests {
             ableton_display: None,
             ableton_range: None,
             mappable: false,
+            section: None,
         });
         c.params.push(ParamInfo {
             param_id: std::borrow::Cow::Borrowed("reset"),
@@ -3994,6 +4235,7 @@ mod tests {
             ableton_display: None,
             ableton_range: None,
             mappable: false,
+            section: None,
         });
         let n = c.params.len();
         c.driver_active.resize(n, false);
@@ -4107,6 +4349,7 @@ mod tests {
             ableton_display: None,
             ableton_range: None,
             mappable: false,
+            section: None,
         });
         let n = c.params.len();
         c.driver_active.resize(n, false);
@@ -5216,6 +5459,7 @@ mod tests {
                     ableton_display: None,
                     ableton_range: None,
                     mappable: false,
+                    section: None,
                 },
                 ParamInfo {
                     param_id: std::borrow::Cow::Borrowed("invert"),
@@ -5234,6 +5478,7 @@ mod tests {
                     ableton_display: None,
                     ableton_range: None,
                     mappable: false,
+                    section: None,
                 },
                 ParamInfo {
                     param_id: std::borrow::Cow::Borrowed("scale"),
@@ -5252,6 +5497,7 @@ mod tests {
                     ableton_display: None,
                     ableton_range: None,
                     mappable: false,
+                    section: None,
                 },
             ],
             string_params: vec![],
@@ -5305,6 +5551,85 @@ mod tests {
         let actions = panel.handle_click(panel.name_label_id.unwrap());
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], PanelAction::GenCardClicked));
+    }
+
+    /// D5 card sections (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2): Speed +
+    /// Invert sectioned under "Leaf" (a contiguous run), Scale unsectioned.
+    fn gen_config_with_sections() -> ParamCardConfig {
+        let mut c = gen_config();
+        c.params[0].section = Some("Leaf".to_string());
+        c.params[1].section = Some("Leaf".to_string());
+        c.params[2].section = None;
+        c
+    }
+
+    #[test]
+    fn section_runs_groups_contiguous_same_section_rows() {
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&gen_config_with_sections());
+        let runs = panel.section_runs();
+        assert_eq!(
+            runs,
+            vec![(0, 2, Some("Leaf".to_string())), (2, 1, None)],
+            "one run for the contiguous Leaf pair, one for the trailing unsectioned row"
+        );
+    }
+
+    #[test]
+    fn build_generator_draws_one_header_for_a_sectioned_run_and_none_for_unsectioned() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&gen_config_with_sections());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+
+        assert_eq!(panel.section_header_ids.len(), 1, "exactly one header — the Leaf run");
+        assert_eq!(panel.section_header_ids[0].1, "Leaf");
+        // Every row still builds (unfolded by default) — Speed/Invert/Scale
+        // widgets all present, same as the no-sections case.
+        assert!(panel.slider_ids[0].is_some());
+        assert!(panel.toggle_ids[1].is_some());
+        assert!(panel.slider_ids[2].is_some());
+    }
+
+    #[test]
+    fn clicking_a_section_header_folds_it_and_a_rebuild_skips_its_rows() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&gen_config_with_sections());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+
+        let header_id = panel.section_header_ids[0].0;
+        let actions = panel.handle_click(header_id);
+        assert!(
+            matches!(actions.as_slice(), [PanelAction::SectionFoldToggled]),
+            "fold click is UI-local — no model-mutating action"
+        );
+        assert_eq!(
+            panel.section_folded.get("Leaf"),
+            Some(&true),
+            "handle_click flips this panel's own fold state"
+        );
+
+        // Rebuild on a fresh tree (a new frame) with the section now folded:
+        // the Leaf run's rows (Speed, Invert) are skipped entirely; the
+        // header still draws (so it can be clicked again to unfold); Scale
+        // (unsectioned, outside the run) is unaffected. `section_folded`
+        // survives the rebuild — the same "preserved across rebuilds"
+        // convention `mod_active_tab`/`drawer_height_anim` already use.
+        let mut tree2 = UITree::new();
+        panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 300.0));
+        assert_eq!(panel.section_header_ids.len(), 1, "the header itself still draws while folded");
+        assert!(panel.slider_ids[0].is_none(), "Speed's row was skipped (folded)");
+        assert!(panel.toggle_ids[1].is_none(), "Invert's row was skipped (folded)");
+        assert!(panel.slider_ids[2].is_some(), "Scale (outside the folded run) still builds");
+
+        // Click again — unfolds.
+        let actions = panel.handle_click(header_id);
+        assert!(matches!(actions.as_slice(), [PanelAction::SectionFoldToggled]));
+        assert_eq!(panel.section_folded.get("Leaf"), Some(&false));
+        let mut tree3 = UITree::new();
+        panel.build(&mut tree3, Rect::new(0.0, 0.0, 280.0, 300.0));
+        assert!(panel.slider_ids[0].is_some(), "Speed's row is back once unfolded");
     }
 
     #[test]

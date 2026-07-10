@@ -752,6 +752,28 @@ mod tests {
     }
 
     #[test]
+    fn param_spec_no_section_skipped_on_serialize() {
+        // SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D5: `section: None` (every
+        // existing preset, and any spec expose/importer never touched) must
+        // not appear on the wire, so a no-section preset stays byte-identical
+        // to the on-disk source (the `is_angle`/`curve` precedent above).
+        let json = serde_json::to_string(&sample_param_spec()).unwrap();
+        assert!(!json.contains("section"), "absent section must be skipped: {json}");
+        let back: ParamSpecDef = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.section, None);
+    }
+
+    #[test]
+    fn param_spec_section_round_trips() {
+        let mut p = sample_param_spec();
+        p.section = Some("Leaf".to_string());
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"section\":\"Leaf\""), "{json}");
+        let back: ParamSpecDef = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.section.as_deref(), Some("Leaf"));
+    }
+
+    #[test]
     fn empty_graph_round_trips() {
         let def = EffectGraphDef {
             version: EFFECT_GRAPH_VERSION,

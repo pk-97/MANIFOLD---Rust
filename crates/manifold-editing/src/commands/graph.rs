@@ -1384,7 +1384,7 @@ impl Command for ToggleNodeParamExposeCommand {
         // bundled node's stable `node_id` is empty and won't locate anything.
         let scope = self.scope_path.clone();
         let node_u32_id = self.node_u32_id;
-        let graph_result: Option<(bool, Option<usize>)> = with_target_graph_mut(
+        let graph_result: Option<(bool, Option<usize>, Option<String>)> = with_target_graph_mut(
             project,
             &self.target,
             &self.catalog_default,
@@ -1395,14 +1395,20 @@ impl Command for ToggleNodeParamExposeCommand {
                 // document-global), then descend to flip the target node.
                 materialize_binding_exposures(def);
                 let static_slot = static_slot_for(def, &node_id, &inner_param);
+                // D5 section seed: resolve the innermost enclosing group's
+                // display name from the ROOT nodes + scope_path BEFORE
+                // descend_level narrows the borrow to the target level (an
+                // immutable read; the &mut borrow below starts only after
+                // this value is fully owned).
+                let inner_section = innermost_group_display_name(&def.nodes, &scope);
                 let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
                 let prev_in_set = flip_node_exposed(nodes, node_u32_id, &inner_param, expose)?;
-                Some((prev_in_set, static_slot))
+                Some((prev_in_set, static_slot, inner_section))
             },
         )
         .flatten();
 
-        let Some((prev_in_set, static_slot)) = graph_result else {
+        let Some((prev_in_set, static_slot, inner_section)) = graph_result else {
             // Target / scope / node didn't resolve — nothing to undo.
             self.reverse = NodeExposeReverse::None;
             return;
@@ -1438,6 +1444,7 @@ impl Command for ToggleNodeParamExposeCommand {
                 inner_convert,
                 inner_is_angle,
                 &inner_value_labels,
+                inner_section,
             ),
             // Instance vanished between the graph borrow and the mirror borrow.
             // Capture just the graph bit so undo restores it.
@@ -1509,6 +1516,13 @@ fn mirror_effect_side(
     inner_convert: manifold_core::effects::ParamConvert,
     inner_is_angle: bool,
     inner_value_labels: &[String],
+    // D5 (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2): the innermost
+    // enclosing group's display name, resolved by the caller from
+    // `scope_path` BEFORE this fn runs. Only used on the append-new-binding
+    // path (a static-slot toggle flips an EXISTING bundled spec, whose
+    // section is whatever the preset author/importer set — expose never
+    // overwrites it).
+    inner_section: Option<String>,
 ) -> EffectMirrorReverse {
     use manifold_core::effects::UserParamBinding;
 
@@ -1562,6 +1576,7 @@ fn mirror_effect_side(
             scale: 1.0,
             offset: 0.0,
             value_labels: inner_value_labels.to_vec(),
+            section: inner_section,
         };
         effect.append_user_binding(binding);
         EffectMirrorReverse::AppendedUserBinding {
@@ -1716,6 +1731,41 @@ fn descend_level<'a>(
             let group = nodes.iter_mut().find(|n| n.id == *gid)?;
             let body = group.group.as_deref_mut()?;
             descend_level(&mut body.nodes, &mut body.wires, rest)
+        }
+    }
+}
+
+/// Resolve the display name (`handle`) of the innermost group named by
+/// `scope` — the group whose name an exposed param's card `section` is
+/// stamped with (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D5). `scope` is a
+/// path of group-node ids from the document root; the LAST id is the
+/// innermost group. Returns `None` for a top-level node (empty scope), or if
+/// any hop doesn't resolve to a named group (an anonymous boundary node has
+/// `handle: None` — matches D5's "top-level nodes get `None`" for that edge
+/// case too, rather than a panic).
+fn innermost_group_display_name(nodes: &[EffectGraphNode], scope: &[u32]) -> Option<String> {
+    let mut level = nodes;
+    let mut name = None;
+    for gid in scope {
+        let node = level.iter().find(|n| n.id == *gid)?;
+        name = node.handle.clone();
+        level = node.group.as_deref()?.nodes.as_slice();
+    }
+    name
+}
+
+/// Collect every populated stable [`NodeId`] within `nodes` and all nested
+/// group bodies, at any depth — used by `RenameGroupCommand`'s D5
+/// section-sweep to test "does this binding's target live inside the group
+/// we just renamed." Includes nested groups' own ids (a binding could in
+/// principle target a group node directly), not just leaves.
+fn collect_node_ids(nodes: &[EffectGraphNode], out: &mut Vec<NodeId>) {
+    for n in nodes {
+        if !n.node_id.is_empty() {
+            out.push(n.node_id.clone());
+        }
+        if let Some(body) = n.group.as_deref() {
+            collect_node_ids(&body.nodes, out);
         }
     }
 }
@@ -1973,6 +2023,13 @@ pub struct RenameGroupCommand {
     /// Pre-edit handle. `Some(prev)` once captured (the rename was applied);
     /// stays `None` when the rename was rejected or never executed.
     prev: Option<Option<String>>,
+    /// D5 rename-sweep undo state (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2):
+    /// `(param_id, prior_section)` for every card spec whose `section`
+    /// followed this rename (it equaled the OLD group name and its binding
+    /// target resolved inside the renamed group). Empty when nothing
+    /// matched, or on a rejected/no-op rename. A hand-edited section (any
+    /// other string) never lands here — it's untouched by the sweep.
+    swept: Vec<(String, Option<String>)>,
 }
 
 impl RenameGroupCommand {
@@ -1990,6 +2047,26 @@ impl RenameGroupCommand {
             new_handle,
             catalog_default,
             prev: None,
+            swept: Vec::new(),
+        }
+    }
+
+    /// Resolve the `&mut PresetInstance` this command's `target` addresses —
+    /// same match every `graph.rs` command uses (mirrors
+    /// `ToggleNodeParamExposeCommand`'s identical resolve for its mirror
+    /// step). Used by the D5 sweep, which needs the manifest (`.params`)
+    /// alongside the graph — outside `with_target_graph_mut`'s narrower
+    /// `&mut EffectGraphDef` view.
+    fn resolve_instance<'p>(
+        &self,
+        project: &'p mut Project,
+    ) -> Option<&'p mut manifold_core::effects::PresetInstance> {
+        match &self.target {
+            GraphTarget::Effect(effect_id) => project.find_effect_by_id_mut(effect_id),
+            GraphTarget::Generator(layer_id) => project
+                .timeline
+                .find_layer_by_id_mut(layer_id)
+                .map(|(_, layer)| layer.gen_params_or_init()),
         }
     }
 }
@@ -1999,6 +2076,11 @@ impl Command for RenameGroupCommand {
         let scope = self.scope_path.clone();
         let id = self.group_node_id;
         let new_handle = self.new_handle.clone();
+        // Guard against a repeated execute() (e.g. a defensive double-call
+        // with no intervening undo) re-deriving `prev`/re-sweeping from an
+        // already-renamed state — same guard shape the original code used
+        // for `self.prev` alone.
+        let first_time = self.prev.is_none();
         let captured =
             with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
                 let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
@@ -2018,14 +2100,77 @@ impl Command for RenameGroupCommand {
                 node.group.as_ref()?;
                 let prev = node.handle.clone();
                 node.handle = Some(new_handle.clone());
-                Some(prev)
+                // D5 sweep prep: every stable NodeId inside the renamed
+                // group's subtree (any depth) — the "does this binding
+                // target live inside the group we just renamed" test below.
+                let mut inside = Vec::new();
+                if let Some(body) = node.group.as_deref() {
+                    collect_node_ids(&body.nodes, &mut inside);
+                }
+                Some((prev, inside))
             });
-        if self.prev.is_none() {
-            self.prev = captured.flatten();
+        let Some((prev, inside)) = captured.flatten() else {
+            return;
+        };
+        if first_time {
+            self.prev = Some(prev.clone());
+        }
+        if !first_time {
+            // Sweep already ran on the genuine first execute; a repeated
+            // call is a no-op past the handle write above.
+            return;
+        }
+
+        // D5 rename-sweep: any card spec whose `section` equals the OLD
+        // group name AND whose binding target resolves inside the renamed
+        // group follows the rename — one undoable command, both writes.
+        let Some(old_name) = prev else {
+            // The group had no name before this rename — nothing could have
+            // been sectioned under it.
+            return;
+        };
+        let Some(inst) = self.resolve_instance(project) else {
+            return;
+        };
+        let target_ids: Vec<String> = inst
+            .graph
+            .as_ref()
+            .and_then(|g| g.preset_metadata.as_ref())
+            .map(|m| {
+                m.bindings
+                    .iter()
+                    .filter(|b| match &b.target {
+                        manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. } => {
+                            inside.contains(node_id)
+                        }
+                        manifold_core::effect_graph_def::BindingTarget::Composite { .. } => false,
+                    })
+                    .map(|b| b.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.swept.clear();
+        for param_id in target_ids {
+            if let Some(p) = inst.params.get_mut(&param_id)
+                && p.spec.section.as_deref() == Some(old_name.as_str())
+            {
+                self.swept.push((param_id, p.spec.section.clone()));
+                p.spec.section = Some(new_handle.clone());
+            }
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
+        if !self.swept.is_empty()
+            && let Some(inst) = self.resolve_instance(project)
+        {
+            for (param_id, prev_section) in self.swept.drain(..) {
+                if let Some(p) = inst.params.get_mut(&param_id) {
+                    p.spec.section = prev_section;
+                }
+            }
+        }
+
         let Some(prev) = self.prev.clone() else {
             return;
         };
@@ -2846,6 +2991,7 @@ mod tests {
                 scale: 1.0,
                 offset: 0.0,
                 value_labels: Vec::new(),
+                section: None,
             });
             fx.create_driver(manifold_core::effects::ParamId::from("user.a.b.1"));
             assert!(fx.find_driver("user.a.b.1").is_some());
@@ -3363,6 +3509,159 @@ mod tests {
         assert!(
             !body_has_rotation(&project),
             "undo restored the nested node's exposed_params"
+        );
+    }
+
+    // ─── D5 card sections (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2) ────
+
+    #[test]
+    fn exposing_inside_a_group_stamps_section_from_the_group_name() {
+        let (mut project, fx) = project_with_graph(mirror_catalog_default());
+
+        let mut group = GroupNodesCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            vec![1],
+            "g".to_string(),
+            (0.0, 0.0),
+            mirror_catalog_default(),
+        );
+        group.execute(&mut project);
+        let g_id = graph_of(&project, &fx)
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("g"))
+            .unwrap()
+            .id;
+
+        let mut expose = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            manifold_core::NodeId::default(),
+            1,
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            true,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            manifold_core::effects::ParamConvert::Float,
+            false,
+            Vec::new(),
+        )
+        .with_scope(vec![g_id]);
+        expose.execute(&mut project);
+
+        let fx_inst = project.find_effect_by_id(&fx).unwrap();
+        let ub = fx_inst.user_param_bindings();
+        assert_eq!(ub.len(), 1);
+        let entry = fx_inst.params.get(&ub[0].id).expect("manifest entry for the new binding");
+        assert_eq!(
+            entry.spec.section.as_deref(),
+            Some("g"),
+            "expose-time seeding stamps the innermost enclosing group's display name"
+        );
+
+        // Undo removes the whole binding (spec + section together) — no
+        // dangling manifest entry.
+        expose.undo(&mut project);
+        let fx_inst = project.find_effect_by_id(&fx).unwrap();
+        assert!(fx_inst.params.get(&ub[0].id).is_none(), "undo removed the manifest entry entirely");
+    }
+
+    #[test]
+    fn exposing_at_top_level_leaves_section_none() {
+        let (mut project, fx) = project_with_graph(mirror_catalog_default());
+
+        // No grouping — expose `rotation` directly at the document root
+        // (empty scope_path).
+        let mut expose = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            manifold_core::NodeId::default(),
+            1,
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            true,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            manifold_core::effects::ParamConvert::Float,
+            false,
+            Vec::new(),
+        );
+        expose.execute(&mut project);
+
+        let fx_inst = project.find_effect_by_id(&fx).unwrap();
+        let ub = fx_inst.user_param_bindings();
+        assert_eq!(ub.len(), 1);
+        let entry = fx_inst.params.get(&ub[0].id).unwrap();
+        assert_eq!(entry.spec.section, None, "a top-level expose gets no section");
+    }
+
+    #[test]
+    fn exposing_survives_json_round_trip_with_section() {
+        let (mut project, fx) = project_with_graph(mirror_catalog_default());
+        let mut group = GroupNodesCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            vec![1],
+            "g".to_string(),
+            (0.0, 0.0),
+            mirror_catalog_default(),
+        );
+        group.execute(&mut project);
+        let g_id = graph_of(&project, &fx)
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("g"))
+            .unwrap()
+            .id;
+        let mut expose = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            manifold_core::NodeId::default(),
+            1,
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            true,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            manifold_core::effects::ParamConvert::Float,
+            false,
+            Vec::new(),
+        )
+        .with_scope(vec![g_id]);
+        expose.execute(&mut project);
+
+        let fx_inst = project.find_effect_by_id(&fx).unwrap();
+        let ub_id = fx_inst.user_param_bindings()[0].id.clone();
+
+        // "save" — serialize the instance (this is what the project save
+        // path emits per effect; PARAM_STORAGE_BOUNDARIES_DESIGN D12 derives
+        // `graph.preset_metadata.params` from the live manifest here).
+        let json = serde_json::to_string(fx_inst).unwrap();
+        // "reload"
+        let back: manifold_core::effects::PresetInstance = serde_json::from_str(&json).unwrap();
+        let spec = back
+            .graph
+            .as_ref()
+            .unwrap()
+            .preset_metadata
+            .as_ref()
+            .unwrap()
+            .params
+            .iter()
+            .find(|p| p.id == ub_id)
+            .expect("the exposed param's spec survived the round trip");
+        assert_eq!(
+            spec.section.as_deref(),
+            Some("g"),
+            "the card row is still sectioned after save -> reload"
         );
     }
 
@@ -4413,6 +4712,100 @@ mod tests {
                 .as_deref(),
             Some("g"),
             "invalid name left the group unchanged"
+        );
+    }
+
+    /// D5 rename-sweep setup: `project_with_group("g")` (node "b" grouped
+    /// under "g") plus an exposed param on "b", scoped inside the group so
+    /// its section seeds to `Some("g")`. Returns `(project, fx, gid,
+    /// user_param_id)`.
+    fn project_with_group_and_sectioned_param() -> (Project, EffectId, u32, String) {
+        let (mut project, fx, gid) = project_with_group("g");
+        let mut expose = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            manifold_core::NodeId::default(),
+            1,
+            "b".to_string(),
+            "amount".to_string(),
+            true,
+            mirror_catalog_default(),
+            "Amount".to_string(),
+            0.0,
+            1.0,
+            0.5,
+            manifold_core::effects::ParamConvert::Float,
+            false,
+            Vec::new(),
+        )
+        .with_scope(vec![gid]);
+        expose.execute(&mut project);
+        let ub_id = project
+            .find_effect_by_id(&fx)
+            .unwrap()
+            .user_param_bindings()[0]
+            .id
+            .clone();
+        assert_eq!(
+            project.find_effect_by_id(&fx).unwrap().params.get(&ub_id).unwrap().spec.section.as_deref(),
+            Some("g"),
+            "setup: expose seeded the section from the group name"
+        );
+        (project, fx, gid, ub_id)
+    }
+
+    #[test]
+    fn rename_group_sweeps_matching_sections_and_undo_restores() {
+        let (mut project, fx, gid, ub_id) = project_with_group_and_sectioned_param();
+
+        let mut rn = RenameGroupCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            gid,
+            "leaf".to_string(),
+            mirror_catalog_default(),
+        );
+        rn.execute(&mut project);
+        assert_eq!(
+            project.find_effect_by_id(&fx).unwrap().params.get(&ub_id).unwrap().spec.section.as_deref(),
+            Some("leaf"),
+            "section follows the rename"
+        );
+
+        rn.undo(&mut project);
+        assert_eq!(
+            project.find_effect_by_id(&fx).unwrap().params.get(&ub_id).unwrap().spec.section.as_deref(),
+            Some("g"),
+            "undo restores the pre-rename section"
+        );
+    }
+
+    #[test]
+    fn rename_group_leaves_hand_edited_section_untouched() {
+        let (mut project, fx, gid, ub_id) = project_with_group_and_sectioned_param();
+
+        // Hand-edit the section via the mapping editor to something that no
+        // longer matches the group's current name.
+        project
+            .find_effect_by_id_mut(&fx)
+            .unwrap()
+            .params
+            .get_mut(&ub_id)
+            .unwrap()
+            .spec
+            .section = Some("Custom".to_string());
+
+        let mut rn = RenameGroupCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            gid,
+            "leaf2".to_string(),
+            mirror_catalog_default(),
+        );
+        rn.execute(&mut project);
+        assert_eq!(
+            project.find_effect_by_id(&fx).unwrap().params.get(&ub_id).unwrap().spec.section.as_deref(),
+            Some("Custom"),
+            "a hand-edited section (no longer matching the old group name) survives the rename sweep"
         );
     }
 

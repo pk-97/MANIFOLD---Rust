@@ -1397,6 +1397,19 @@ impl Application {
                     }
                     continue;
                 }
+                PanelAction::EffectMappingSection { binding_id, section } => {
+                    if let Some(t) = self.mapping_target() {
+                        self.commit_mapping(
+                            &t,
+                            binding_id,
+                            BindingMappingEdit {
+                                section: Some(section.clone()),
+                                ..Default::default()
+                            },
+                        );
+                    }
+                    continue;
+                }
                 PanelAction::EffectMappingInvert { binding_id, invert } => {
                     if let Some(t) = self.mapping_target() {
                         self.commit_mapping(

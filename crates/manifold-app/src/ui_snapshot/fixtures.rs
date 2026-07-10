@@ -43,6 +43,7 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "automationplaceholder" => Some(automation_placeholder_scene()),
         "selectionclips" => Some(selection_clips_scene()),
         "audiosends" => Some(audio_sends_scene()),
+        "gltfscene" => Some(gltf_scene()),
         "empty" => Some(empty_scene()),
         _ => None,
     }
@@ -79,6 +80,57 @@ fn project_scene(path: &str) -> Option<SceneData> {
         }
     };
     Some(SceneData { project, content: ContentState::default(), active: None, selection: UIState::default() })
+}
+
+/// `gltfscene`: a fresh glTF import (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md
+/// P3's demo vehicle), driven through the REAL production path — the same
+/// `assemble_import_graph` + `ImportModelLayerCommand` sequence
+/// `Application::import_model_file` runs on a real drop — so the resulting
+/// card carries genuine importer-seeded `section`s (D9/D5), not a hand-built
+/// stand-in. Selects the imported layer so its card renders immediately.
+fn gltf_scene() -> SceneData {
+    use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset};
+    use manifold_editing::command::Command;
+    use manifold_editing::commands::layer::ImportModelLayerCommand;
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb");
+    let (def, report) = manifold_renderer::node_graph::gltf_import::assemble_import_graph(&path)
+        .unwrap_or_else(|e| panic!("ui-snap gltfscene: assemble_import_graph({}) failed: {e}", path.display()));
+    eprintln!("ui-snap gltfscene: import report: {report:?}");
+
+    let display_name = def
+        .preset_metadata
+        .as_ref()
+        .map(|m| m.display_name.clone())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "Azalea".to_string());
+    let embedded = EmbeddedPreset {
+        kind: manifold_core::preset_def::PresetKind::Generator,
+        def,
+        origin: EmbeddedOrigin::Saved,
+    };
+
+    // Install the overlay BEFORE the layer is created — `Layer::new_generator`
+    // → `init_defaults` reads the process-global preset-definition registry to
+    // seed the curated card values, and the tracking layer's id only resolves
+    // once the overlay knows it (mirrors `Application::import_model_file`'s
+    // ordering, `app_lifecycle.rs`'s D9 deliverable-3 comment).
+    crate::project_io::install_embedded_presets(std::slice::from_ref(&embedded));
+
+    let mut project = Project::default();
+    let mut cmd = ImportModelLayerCommand::new(display_name, embedded, 0, None);
+    cmd.execute(&mut project);
+    // Same post-install step the real loader/import path runs after
+    // registering an embedded preset: resolve the tracking layer's manifest
+    // against it (PARAM_STORAGE_BOUNDARIES_DESIGN.md D1).
+    project.reconcile_param_manifests();
+
+    let lid = cmd.inserted_layer_id().expect("layer inserted");
+    let mut selection = UIState::default();
+    selection.select_layer(lid);
+
+    SceneData { project, content: ContentState::default(), active: Some(0), selection }
 }
 
 /// A fully-initialized effect-kind `PresetInstance` of `type_id`, params seeded
