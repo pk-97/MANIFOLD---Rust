@@ -35,7 +35,12 @@ pub fn dump_tree_ex(tree: &UITree, surfaces: &[&dyn HitTargets]) -> Value {
             json!({
                 "id": n.id.index(),
                 "gen": n.id.generation(),
-                "parent": n.parent_id.map(|p| p.index()),
+                // BUG-071: the LIVE reparented parent (`UITree::parent_of`,
+                // backed by `parent_index`), not `n.parent_id` — the mint-time
+                // struct field `reparent_root_nodes` never updates. Serializing
+                // the stale field made a correctly reparented (and correctly
+                // clipped/rendered) tree look unclipped in the dump.
+                "parent": tree.parent_of(n.id).map(|p| p.index()),
                 "type": format!("{:?}", n.node_type),
                 "rect": [n.bounds.x, n.bounds.y, n.bounds.width, n.bounds.height],
                 "text": n.text,
@@ -89,7 +94,9 @@ pub fn terse(tree: &UITree) -> String {
     let _ = writeln!(out, "{} nodes:", tree.nodes().len());
     for n in tree.nodes() {
         let s = &n.style;
-        let parent = n.parent_id.map_or_else(|| "-".to_string(), |p| p.index().to_string());
+        // BUG-071: live reparented parent, not the mint-time `n.parent_id` —
+        // see the matching comment in `dump_tree_ex` above.
+        let parent = tree.parent_of(n.id).map_or_else(|| "-".to_string(), |p| p.index().to_string());
         let _ = write!(
             out,
             "#{:<3} {:<9} p={:<3} ({:>6.1},{:>6.1} {:>6.1}x{:>5.1}) bg={}",
