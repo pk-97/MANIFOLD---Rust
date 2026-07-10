@@ -37,7 +37,7 @@ prerequisites aren't shipped, stop.
 | MCP_INTERFACE_DESIGN | VOCAB apply ✅; wants COMPONENT_LIBRARY (its authoring surface) | conformance |
 | ML_NODES_DESIGN | none for Vision/CoreML tier; ONNX tier needs VULKAN | conformance |
 | VULKAN_BACKEND_DESIGN | none (Phase 0 scaffold shipped 0c5dde17) | conformance |
-| REALTIME_3D_DESIGN (P0/P1/P4/§9 ✅; P2/P3/P5–P7 remain) | **P2 shadows: amend first per coherence audit F2** (caster policy under uncapped objects+lights; §7.3 cap text stale); P6 needs SCENE_BUILD P2 (amended D3/D8) | full |
+| REALTIME_3D_DESIGN (P0/P1/P2/P3/P4/§9 ✅; P5–P7 remain) | **P2 shadows + P3 fog SHIPPED 2026-07-11** (`bf0e1a5d`; gpu-proofs `render_scene_shadows`+`render_scene_fog`, PNG-verified; F2 caster policy built as specified); P6 needs SCENE_BUILD P2 (amended D3/D8) | full |
 | SIMULATIONS_DESIGN | REALTIME_3D P1 ✅ | full |
 | IMPORT_DESIGN | **P1: scope re-cut first per coherence audit F5** (reality note understates the shipped `build_import_graph` scene importer); P1–P3 prereqs (REALTIME_3D P1 + MATERIAL M6) ✅; P5 needs SESSION_MODE + MEDIA_BACKEND P2; P6 agent half needs MCP | full |
 | COMMERCIALIZATION_DESIGN | none hard; P4 telemetry rides GIG_RESILIENCE P1–P2 ✅; AUDIO_ANALYSIS_ACCURACY P2+P6 (BUG-069) before launch | conformance |
