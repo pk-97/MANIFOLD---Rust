@@ -1,6 +1,6 @@
 # Live Recording Proofs — headless end-to-end tests for the show recorder
 
-**Status:** IN PROGRESS 2026-07-10 — P1 SHIPPED @ `ef12c14b` (clock/audio injection seams `submit_frame_at`/`AudioFeed`; Tier-1 proof harness: tests 1–4,6, ffprobe oracle, 26-block pattern shader; found+logged BUG-085). P2 (kill test + soak bin + runbook) and P3 (in-app record smoke, L3) pending. Release-gating per STRUCTURAL_AUDIT_VERDICTS (owns BUG-053) · design 2026-07-07 · Fable · approved 2026-07-09 Peter
+**Status:** IN PROGRESS 2026-07-10 — P1 SHIPPED @ `ef12c14b`, P2 SHIPPED @ `091290e3` (`recording-soak` bin unpaced+realtime with a decoded-index PASS gate; kill-durability test 5; `docs/DEVELOPMENT_REFERENCE.md` runbook; found BUG-086 audio-coverage shortfall and disambiguated it as unpaced-stress-only via a `--realtime` run giving full audio). P3 (in-app record smoke, L3) pending. Two verification debts carried (VD-022): Peter's first full-scale 4K60 20-minute soak on the rig (design §6 P2 — the ritual, deliberately unexecuted by the wave), and BUG-086's silent audio-drop fix. Release-gating per STRUCTURAL_AUDIT_VERDICTS (owns BUG-053) · design 2026-07-07 · Fable · approved 2026-07-09 Peter
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -383,7 +383,7 @@ this is the instrument-check that catches the next one before it costs a show.
   `-p manifold-app --lib`); no workspace sweep (blast radius is one crate + one
   signature-stable caller).
 
-### P2 — Kill test + soak bin + runbook (one session)
+### P2 — Kill test + soak bin + runbook (one session) — ✅ SHIPPED 2026-07-10 @ `091290e3`
 
 - **Entry state:** P1 landed; its gates re-run green.
 - **Read-back:** this doc §4 item 5 + §5; P1's phase report.
