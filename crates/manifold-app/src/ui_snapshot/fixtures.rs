@@ -610,6 +610,20 @@ fn inspector_scene() -> SceneData {
 
     glow.effects = Some(vec![mirror, bloom, strobe]);
 
+    // P3b: one enabled `LayerClipTrigger` on GLOW itself — the layer this
+    // scene selects — so the inspector's AUDIO TRIGGERS section (P3b,
+    // AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md) has a real row to
+    // show/expand. Kick + Low mirrors the design doc's own row-label example
+    // verbatim ("Low → Kick").
+    let mut glow_trigger = manifold_core::audio_trigger::LayerClipTrigger::new(
+        manifold_core::audio_mod::AudioModSource {
+            send_id: kick_send_id.clone(),
+            feature: AudioFeature::new(AudioFeatureKind::Kick, AudioBand::Low),
+        },
+    );
+    glow_trigger.enabled = true;
+    glow.clip_triggers.push(glow_trigger);
+
     // Plasma: the generator-side proof, mode Both (the arm-time default,
     // §9 U3) — drawer open, badge reads "Both".
     let mut plasma = Layer::new_generator("PLASMA".into(), manifold_core::PresetTypeId::PLASMA, 2);

@@ -30,6 +30,9 @@ use manifold_editing::commands::effects::{
 use manifold_editing::commands::envelopes::{
     ChangeEnvelopeDecayCommand, ChangeEnvelopeTargetCommand,
 };
+use manifold_editing::commands::layer::{
+    AddLayerClipTriggerCommand, RemoveLayerClipTriggerCommand, SetLayerClipTriggerCommand,
+};
 use manifold_editing::commands::settings::{
     ChangeLayerOpacityCommand, ChangeLedBrightnessCommand, ChangeMacroCommand,
     ChangeMasterOpacityCommand, PasteGeneratorCommand,
@@ -170,6 +173,41 @@ fn graph_audio_mod_dual_edit<F>(
                     edit2(m);
                 }
             });
+        })),
+    );
+}
+
+/// Live (non-undo) edit of one `LayerClipTrigger`'s shape, mirroring
+/// `graph_audio_mod_dual_edit` — applies `edit` to the UI-side `project`
+/// snapshot immediately AND queues the same edit onto the content thread's
+/// live project via `MutateProjectLive`, so a drag reads back correctly on
+/// both sides without an undo entry per frame (the commit, on drag-end,
+/// records the one undo step).
+fn clip_trigger_shape_dual_edit<F>(
+    project: &mut Project,
+    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    layer_id: &LayerId,
+    index: usize,
+    edit: F,
+) where
+    F: Fn(&mut manifold_core::audio_mod::AudioModShape) + Clone + Send + 'static,
+{
+    use crate::content_command::ContentCommand;
+    if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id)
+        && let Some(t) = layer.clip_triggers.get_mut(index)
+    {
+        edit(&mut t.shape);
+    }
+    let edit2 = edit.clone();
+    let lid = layer_id.clone();
+    ContentCommand::send(
+        content_tx,
+        ContentCommand::MutateProjectLive(Box::new(move |p| {
+            if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&lid)
+                && let Some(t) = layer.clip_triggers.get_mut(index)
+            {
+                edit2(&mut t.shape);
+            }
         })),
     );
 }
@@ -1568,6 +1606,176 @@ pub(super) fn dispatch_inspector(
                         boxed.execute(project);
                         ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
                     }
+                }
+            }
+            DispatchResult::structural()
+        }
+
+        // ── Layer-owned clip triggers (P3b, AUDIO_SETUP_DOCK_AND_TRIGGER_
+        // UNIFICATION_DESIGN.md D2/D5) — the inspector's AUDIO TRIGGERS
+        // section. Addressed directly by `LayerId` + index (no
+        // `resolve_graph_target`/`editor_target` involved — a clip trigger
+        // isn't a graph param). Mutations route through P2's
+        // Add/Remove/SetLayerClipTriggerCommand — whole-value-replace, same
+        // shape as `SetAudioModTriggerModeCommand`.
+        PanelAction::AudioTriggerSectionToggle => {
+            ui.inspector.audio_trigger_section_mut().toggle_collapsed();
+            DispatchResult::structural()
+        }
+        PanelAction::AudioTriggerRowExpandToggle(_layer_id, index) => {
+            ui.inspector.audio_trigger_section_mut().toggle_row_expanded(*index);
+            DispatchResult::structural()
+        }
+        PanelAction::AudioTriggerAdd(layer_id) => {
+            // Mirrors `AudioModToggle`'s "arm" no-send case: inert until the
+            // Audio Setup dock defines at least one send.
+            if let Some(send_id) = project.audio_setup.sends.first().map(|s| s.id.clone()) {
+                let trigger = manifold_core::audio_trigger::LayerClipTrigger::new(
+                    manifold_core::audio_mod::AudioModSource {
+                        send_id,
+                        feature: manifold_core::AudioFeature::default(),
+                    },
+                );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                    Box::new(AddLayerClipTriggerCommand::new(layer_id.clone(), trigger));
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::AudioTriggerRemove(layer_id, index) => {
+            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                Box::new(RemoveLayerClipTriggerCommand::new(layer_id.clone(), *index));
+            boxed.execute(project);
+            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            DispatchResult::structural()
+        }
+        PanelAction::AudioTriggerEnabledToggle(layer_id, index) => {
+            let old = project
+                .timeline
+                .find_layer_by_id_mut(layer_id)
+                .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
+            if let Some(old) = old {
+                let mut new = old.clone();
+                new.enabled = !old.enabled;
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
+                    SetLayerClipTriggerCommand::new(layer_id.clone(), *index, old, new),
+                );
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::AudioTriggerSetSource(layer_id, index, send_id, feature) => {
+            let old = project
+                .timeline
+                .find_layer_by_id_mut(layer_id)
+                .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
+            if let Some(old) = old {
+                let mut new = old.clone();
+                new.source = manifold_core::audio_mod::AudioModSource {
+                    send_id: send_id.clone(),
+                    feature: crate::ui_translate::audio_feature_to_core(*feature),
+                };
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
+                    SetLayerClipTriggerCommand::new(layer_id.clone(), *index, old, new),
+                );
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::AudioTriggerSetInvert(layer_id, index) => {
+            let old = project
+                .timeline
+                .find_layer_by_id_mut(layer_id)
+                .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
+            if let Some(old) = old {
+                let mut new = old.clone();
+                new.shape.invert = !old.shape.invert;
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
+                    SetLayerClipTriggerCommand::new(layer_id.clone(), *index, old, new),
+                );
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::AudioTriggerSetRateOfChange(layer_id, index) => {
+            let old = project
+                .timeline
+                .find_layer_by_id_mut(layer_id)
+                .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
+            if let Some(old) = old {
+                let mut new = old.clone();
+                new.shape.rate_of_change = !old.shape.rate_of_change;
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
+                    SetLayerClipTriggerCommand::new(layer_id.clone(), *index, old, new),
+                );
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::AudioTriggerShapeSnapshot(layer_id, index) => {
+            // Reuses `audio_shape_snapshot` (the param-mod shaping-slider
+            // slot) rather than a dedicated field: only one drawer slider
+            // can be mid-drag at a time (single-threaded UI dispatch), so
+            // the snapshot/commit pair for this target never overlaps a
+            // param-mod drag's own use of the same slot.
+            *audio_shape_snapshot = project
+                .timeline
+                .find_layer_by_id_mut(layer_id)
+                .and_then(|(_, l)| l.clip_triggers.get(*index))
+                .map(|t| t.shape);
+            DispatchResult::handled()
+        }
+        PanelAction::AudioTriggerShapeParamChanged(layer_id, index, which, value) => {
+            let which = *which;
+            let v = *value;
+            clip_trigger_shape_dual_edit(project, content_tx, layer_id, *index, move |shape| {
+                match which {
+                    AudioShapeParam::Sensitivity => shape.sensitivity = v,
+                    AudioShapeParam::Attack => shape.attack_ms = v,
+                    AudioShapeParam::Release => shape.release_ms = v,
+                }
+            });
+            DispatchResult::handled()
+        }
+        PanelAction::AudioTriggerShapeCommit(layer_id, index) => {
+            if let Some(old_shape) = audio_shape_snapshot.take() {
+                let current = project
+                    .timeline
+                    .find_layer_by_id_mut(layer_id)
+                    .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
+                if let Some(current) = current
+                    && current.shape != old_shape
+                {
+                    let mut old = current.clone();
+                    old.shape = old_shape;
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
+                        SetLayerClipTriggerCommand::new(layer_id.clone(), *index, old, current),
+                    );
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::AudioTriggerSetLength(layer_id, index, beats) => {
+            let old = project
+                .timeline
+                .find_layer_by_id_mut(layer_id)
+                .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
+            if let Some(old) = old {
+                let mut new = old.clone();
+                new.one_shot_beats = manifold_core::Beats(*beats as f64);
+                if new != old {
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
+                        SetLayerClipTriggerCommand::new(layer_id.clone(), *index, old, new),
+                    );
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
                 }
             }
             DispatchResult::structural()
