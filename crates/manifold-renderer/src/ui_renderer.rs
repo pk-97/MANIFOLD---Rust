@@ -466,6 +466,10 @@ pub struct UIRenderer {
     transform_stack: Vec<Affine2>,
     // Scissor batches accumulated during tree traversal.
     scissor_batches: Vec<ScissorBatch>,
+    // BUG-060 trace: current panel slot (set by the cache manager per panel
+    // render) so batch logs can name the pass. Plain usize store — free when
+    // the trace is disarmed. Remove with BUG-060.
+    pub bug060_pass: usize,
     // Index into rect_commands where the current batch started.
     current_batch_start: usize,
     // GPU-ready batches produced by prepare().
@@ -629,6 +633,7 @@ impl UIRenderer {
             depth_stack: Vec::with_capacity(4),
             transform_stack: Vec::with_capacity(4),
             scissor_batches: Vec::with_capacity(8),
+            bug060_pass: 0,
             current_batch_start: 0,
             prepared_batches: Vec::with_capacity(8),
             prepared_depths: Vec::with_capacity(8),
@@ -1029,6 +1034,7 @@ impl UIRenderer {
     fn flush_immediate_run(&mut self) {
         let count = self.rect_commands.len() - self.current_batch_start;
         if count > 0 {
+            self.bug060_log_batch("immediate", self.immediate_clip, self.current_batch_start, count);
             self.scissor_batches.push(ScissorBatch {
                 scissor: self.immediate_clip,
                 rect_start: self.current_batch_start,
@@ -1051,14 +1057,49 @@ impl UIRenderer {
     fn flush_scissor_batch(&mut self) {
         let count = self.rect_commands.len() - self.current_batch_start;
         if count > 0 {
+            let scissor = self.clip_stack.last().copied();
+            self.bug060_log_batch("tree", scissor, self.current_batch_start, count);
             self.scissor_batches.push(ScissorBatch {
-                scissor: self.clip_stack.last().copied(),
+                scissor,
                 rect_start: self.current_batch_start,
                 rect_count: count,
                 depth: self.current_depth(),
             });
         }
         self.current_batch_start = self.rect_commands.len();
+    }
+
+    /// BUG-060 trace: with `MANIFOLD_BUG060_TRACE=x0,y0,x1,y1` (logical px) set,
+    /// log every rect in the closing batch that intersects that band, with the
+    /// batch's effective scissor, origin (tree vs immediate) and the panel slot
+    /// set by the cache manager. Attributes escaped pixels found in the surface
+    /// dumps to the exact draw that produced them. One `Option` check when
+    /// disarmed. Remove with BUG-060.
+    fn bug060_log_batch(&self, origin: &str, scissor: Option<Rect>, start: usize, count: usize) {
+        let Some(band) = bug060_trace_band() else {
+            return;
+        };
+        for rc in &self.rect_commands[start..start + count] {
+            let intersects = rc.x < band[2]
+                && rc.x + rc.w > band[0]
+                && rc.y < band[3]
+                && rc.y + rc.h > band[1];
+            if intersects {
+                eprintln!(
+                    "[BUG060-TRACE] {origin} pass={} rect=({:.1},{:.1} {:.1}x{:.1}) color=({:.3},{:.3},{:.3},{:.3}) scissor={:?}",
+                    self.bug060_pass,
+                    rc.x,
+                    rc.y,
+                    rc.w,
+                    rc.h,
+                    rc.color[0],
+                    rc.color[1],
+                    rc.color[2],
+                    rc.color[3],
+                    scissor,
+                );
+            }
+        }
     }
 
     /// Handle a PushClip event: flush current batch, push clip, start new batch.
@@ -1961,6 +2002,18 @@ impl UIRenderer {
             self.text_renderer.render_depth_in_pass(encoder, depth);
         }
     }
+}
+
+/// BUG-060 trace band: parsed once from `MANIFOLD_BUG060_TRACE=x0,y0,x1,y1`
+/// (logical px). `None` when unset — the trace is fully disarmed. Remove with
+/// BUG-060.
+fn bug060_trace_band() -> Option<[f32; 4]> {
+    static BAND: std::sync::OnceLock<Option<[f32; 4]>> = std::sync::OnceLock::new();
+    *BAND.get_or_init(|| {
+        let v = std::env::var("MANIFOLD_BUG060_TRACE").ok()?;
+        let p: Vec<f32> = v.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+        (p.len() == 4).then(|| [p[0], p[1], p[2], p[3]])
+    })
 }
 
 /// Implement TextMeasure for UIRenderer so panels can compute layout.
