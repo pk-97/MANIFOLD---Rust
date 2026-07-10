@@ -15462,7 +15462,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Combine a vec3 gradient Texture3D into a force field: cross the gradient with a curl-noise reference axis for swirl (tangential orbit around density peaks) and add the gradient scaled by slope (radial push/pull). axis = normalize(ref_axis + smooth spatial wobble of the voxel position); force = cross(gradient, axis) * curl_strength + gradient * slope_strength. Writes a vec3 force Texture3D. The per-voxel axis wobble keeps the swirl even across the volume instead of pooling in one octant. The curl+slope half of the decomposed node.fluid_gradient_curl_3d; pair downstream of node.edge_slope_3d.",
+      "purpose": "Combine a vec3 gradient Texture3D into a force field: cross the gradient with a rotating reference axis for swirl (tangential orbit around density peaks) and add the gradient scaled by slope (radial push/pull). force = cross(gradient, ref_axis) * curl_strength + gradient * slope_strength; ref_axis is normalized CPU-side and applies to the whole volume (rotate it over time upstream so the swirl's quiet pole wanders). Writes a vec3 force Texture3D. The curl+slope half of the decomposed node.fluid_gradient_curl_3d; pair downstream of node.edge_slope_3d.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies.",
