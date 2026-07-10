@@ -21,8 +21,13 @@ pub(super) struct CompositeResources {
     pub(super) offscreen: GpuTexture,
     atlas_pipeline: manifold_gpu::GpuRenderPipeline,
     atlas_sampler: manifold_gpu::GpuSampler,
-    blit_pipeline: manifold_gpu::GpuRenderPipeline,
-    blit_sampler: manifold_gpu::GpuSampler,
+    // `pub(super)`, not private: `render.rs`'s `render_ui_to_png` also needs
+    // these to call `crate::ui_frame::render_main_ui_passes` (`inputs.
+    // blit_pipeline`/`blit_sampler`, the VQT-blit resources — `None`/absent
+    // in the harness, but the seam's signature still requires the plain
+    // refs since the live app always has them once GPU is initialized).
+    pub(super) blit_pipeline: manifold_gpu::GpuRenderPipeline,
+    pub(super) blit_sampler: manifold_gpu::GpuSampler,
 }
 
 impl CompositeResources {
