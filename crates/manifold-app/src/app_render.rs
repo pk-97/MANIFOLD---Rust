@@ -3018,6 +3018,14 @@ impl Application {
             self.needs_rebuild = true;
         }
 
+        // 6·fire-meter. D6 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
+        // P3c, BUG-082's fix): push this tick's live shaped-signal levels onto
+        // every open fire-mode drawer's Amount meter in the inspector — in
+        // place, no rebuild. Unconditional (unlike the Audio Setup meters
+        // below): a fire-mode drawer can be open in the inspector whether or
+        // not the Audio Setup dock is.
+        self.ws.ui_root.update_fire_meters(&self.content_state.fire_meters);
+
         // 6·audio. Live per-send level meters in the Audio Setup modal — in-place
         // node resize from the latest content-state levels, no rebuild.
         if self.ws.ui_root.audio_setup_panel.is_open() {

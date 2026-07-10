@@ -924,6 +924,33 @@ impl ParamCardPanel {
     pub fn effect_id(&self) -> &EffectId {
         &self.effect_id
     }
+    /// D6 fire meter (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
+    /// P3c, BUG-082's fix): push this tick's live shaped-signal level onto
+    /// every open `is_trigger_gate` row's Amount meter — in place, no
+    /// rebuild. Keyed on `(effect_id, param_id)` hashed via
+    /// `manifold_foundation::fire_meter_key` — the SAME hash the
+    /// content-thread capture uses — so `fire_level` (built at the app
+    /// boundary from `ContentState::fire_meters`, a `manifold-core` type
+    /// `manifold-ui` cannot depend on — `docs/UI_LAYERING_INVERSION.md`)
+    /// resolves it. Amount is always the first `Slider` row
+    /// `build_audio_mod_drawer` builds (`DrawerIds::meters[0]`), regardless
+    /// of which trailing rows follow.
+    pub fn update_fire_meters(&self, tree: &mut UITree, fire_level: &dyn Fn(u64) -> Option<f32>) {
+        for (pi, cfg) in self.audio_configs.iter().enumerate() {
+            let Some((dids, _)) = cfg else { continue };
+            let Some(info) = self.param_info.get(pi) else { continue };
+            if !info.is_trigger_gate {
+                continue;
+            }
+            let Some(Some(meter)) = dids.meters.first() else { continue };
+            let key = manifold_foundation::fire_meter_key(&[
+                self.effect_id.as_str().as_bytes(),
+                info.param_id.as_bytes(),
+            ]);
+            let level = fire_level(key).unwrap_or(0.0);
+            meter.update(tree, level, AUDIO_MOD_ACTIVE_C32);
+        }
+    }
     pub fn effect_name(&self) -> &str {
         &self.name
     }

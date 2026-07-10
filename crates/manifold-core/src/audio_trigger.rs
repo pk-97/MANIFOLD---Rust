@@ -239,6 +239,158 @@ impl LayerClipTrigger {
     }
 }
 
+/// Maximum fire-mode configs [`FireMeterCapture`] tracks in one analysis
+/// block — a real project runs a handful of trigger-gate cards and clip
+/// triggers; 128 is generous headroom, not a tight budget. Configs beyond
+/// this are dropped (matches `manifold_audio::analysis::MAX_SENDS`'s
+/// truncate-and-warn policy).
+pub const MAX_FIRE_METERS: usize = 128;
+
+/// Re-exported at its historical path so `manifold-playback` call sites
+/// written against `manifold_core::audio_trigger::fire_meter_key` are
+/// unchanged. The hash itself lives in `manifold-foundation`
+/// (`manifold-ui` cannot depend on `manifold-core` —
+/// `docs/UI_LAYERING_INVERSION.md` — so a pure, zero-domain-semantics byte
+/// hash belongs in the shared zero-dependency vocabulary crate, mirroring
+/// how `id.rs`'s ID types moved there for the same reason).
+pub use manifold_foundation::fire_meter_key;
+
+/// Live shaped-signal capture for every fire-mode config evaluated this
+/// analysis block — the content-thread side of the D6 fire meter
+/// (`docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` P3c, BUG-082's
+/// fix). Two evaluators write into ONE shared instance each tick:
+/// `manifold_playback::modulation::evaluate_instance_audio_mods` (param
+/// gate cards, keyed on `fire_meter_key(&[effect_id, param_id])`) and
+/// `manifold_playback::live_trigger::LiveTriggerState::evaluate` (clip
+/// triggers, keyed on `fire_meter_key(&[layer_id, &idx.to_le_bytes()])`).
+/// Both push the SAME pre-range-map `shape.condition()` output the evaluator
+/// edge-detects against the fixed 0.5 threshold (D3 AS-BUILT) — the drawer
+/// meter shows exactly what decides whether the config fires.
+///
+/// Fixed-size, fully `Copy` (`u64` hash keys, never the ID types themselves)
+/// — the whole buffer, and the `ContentState` snapshot clone that carries it
+/// to the UI thread, allocate nothing. Generalizes `audio_send_levels`'s
+/// `[f32; MAX_SENDS]` (`content_state.rs`) from position-indexed sends
+/// (a fixed, small, positionally stable list) to identity-hashed fire
+/// configs (an unordered, variable set addressed by two different identity
+/// shapes) — the position-indexed array precedent doesn't fit that identity
+/// shape, so this generalizes to a linear-scan key/value pair, still O(1)
+/// heap allocation (zero) per tick.
+#[derive(Debug, Clone, Copy)]
+pub struct FireMeterCapture {
+    keys: [u64; MAX_FIRE_METERS],
+    levels: [f32; MAX_FIRE_METERS],
+    count: usize,
+}
+
+impl Default for FireMeterCapture {
+    fn default() -> Self {
+        Self { keys: [0; MAX_FIRE_METERS], levels: [0.0; MAX_FIRE_METERS], count: 0 }
+    }
+}
+
+impl FireMeterCapture {
+    /// Record one config's shaped signal this tick. Silently drops beyond
+    /// [`MAX_FIRE_METERS`] — see the module doc.
+    pub fn push(&mut self, key: u64, level: f32) {
+        if self.count < MAX_FIRE_METERS {
+            self.keys[self.count] = key;
+            self.levels[self.count] = level;
+            self.count += 1;
+        }
+    }
+
+    /// The most recently captured level for `key`, if any config with that
+    /// identity fired this tick's evaluation walk.
+    pub fn get(&self, key: u64) -> Option<f32> {
+        self.keys[..self.count].iter().position(|&k| k == key).map(|i| self.levels[i])
+    }
+}
+
+#[cfg(test)]
+mod fire_meter_tests {
+    use super::*;
+
+    #[test]
+    fn push_then_get_round_trips() {
+        let mut cap = FireMeterCapture::default();
+        let k1 = fire_meter_key(&[b"effect-1", b"amount"]);
+        let k2 = fire_meter_key(&[b"layer-1", &1u64.to_le_bytes()]);
+        cap.push(k1, 0.75);
+        cap.push(k2, 0.2);
+        assert_eq!(cap.get(k1), Some(0.75));
+        assert_eq!(cap.get(k2), Some(0.2));
+    }
+
+    #[test]
+    fn unknown_key_is_none() {
+        let cap = FireMeterCapture::default();
+        assert_eq!(cap.get(fire_meter_key(&[b"nothing"])), None);
+    }
+
+    #[test]
+    fn distinct_parts_never_collide_across_a_boundary() {
+        // ("ab", "c") must hash differently from ("a", "bc") — the separator
+        // byte between parts is what prevents this.
+        let a = fire_meter_key(&[b"ab", b"c"]);
+        let b = fire_meter_key(&[b"a", b"bc"]);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn push_beyond_capacity_is_dropped_not_panicking() {
+        let mut cap = FireMeterCapture::default();
+        for i in 0..MAX_FIRE_METERS + 8 {
+            cap.push(i as u64 + 1, 1.0);
+        }
+        // The overflow entries never landed, but nothing panicked and the
+        // first MAX_FIRE_METERS keys are still readable.
+        assert_eq!(cap.get(1), Some(1.0));
+        assert_eq!(cap.get(MAX_FIRE_METERS as u64), Some(1.0));
+        assert_eq!(cap.get(MAX_FIRE_METERS as u64 + 1), None);
+    }
+
+    /// Content-thread work gate (DESIGN_DOC_STANDARD §5/BUG-035) — the two
+    /// live evaluators (`manifold-playback::modulation`,
+    /// `manifold-playback::live_trigger`) run inside `PlaybackEngine::tick`,
+    /// which `MANIFOLD_RENDER_TRACE`'s spike-triggered breakdown does NOT
+    /// cover (that instrument brackets `content_pipeline.rs`'s compositor/
+    /// generator render sections only, a LATER phase of the same
+    /// `tick_frame`). This isolates and measures the actual per-tick
+    /// addition — hashing + pushing a config's identity every fire-mode
+    /// evaluation, at `MAX_FIRE_METERS` (the worst case any real project can
+    /// hit) — against a budget two orders of magnitude under the 20ms/frame
+    /// spike threshold. Not a substitute for a live in-app run (this can't
+    /// see GPU/compositor cost); see the P3c report for the run that would.
+    #[test]
+    fn worst_case_capture_cost_is_negligible_against_the_20ms_frame_budget() {
+        let iterations = 2000;
+        let start = std::time::Instant::now();
+        for _ in 0..iterations {
+            let mut cap = FireMeterCapture::default();
+            for i in 0..MAX_FIRE_METERS {
+                let key = fire_meter_key(&[b"effect-id-1234567890", &(i as u64).to_le_bytes()]);
+                cap.push(key, 0.5);
+            }
+            std::hint::black_box(&cap);
+        }
+        let elapsed = start.elapsed();
+        let per_tick_us = elapsed.as_secs_f64() * 1_000_000.0 / iterations as f64;
+        eprintln!(
+            "fire-meter capture: {MAX_FIRE_METERS} configs/tick, {per_tick_us:.2} us/tick \
+             (budget: 20000 us/frame)"
+        );
+        // Two orders of magnitude of headroom under the 20ms frame-spike
+        // threshold — generous on purpose; this guards against a future
+        // change turning `push` into something non-trivial, not against
+        // today's genuinely tiny cost.
+        assert!(
+            per_tick_us < 200.0,
+            "fire-meter capture cost grew unexpectedly: {per_tick_us:.2} us/tick"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

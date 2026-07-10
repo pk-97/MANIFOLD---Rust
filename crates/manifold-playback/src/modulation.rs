@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use manifold_core::audio_features::{AudioFeatureSnapshot, SendFeatures};
 use manifold_core::audio_mod::{TriggerAction, WrapMode, random_step_value};
-use manifold_core::audio_trigger::TriggerFireMode;
+use manifold_core::audio_trigger::{FireMeterCapture, TriggerFireMode, fire_meter_key};
 use manifold_core::id::AudioSendId;
 use manifold_core::{Beats, Seconds};
 use manifold_core::effects::{PresetInstance, ParamEnvelope, ParameterDriver};
@@ -290,6 +290,7 @@ pub fn evaluate_modulation(
     timing_scratch: &mut Vec<(Beats, Beats)>,
     trigger_pulses: &mut Vec<TriggerPulse>,
     clip_edge_layers: &[i32],
+    fire_meters: &mut FireMeterCapture,
 ) -> bool {
     // Phase 1: Reset all effective values to base
     reset_all_effectives(project);
@@ -319,7 +320,8 @@ pub fn evaluate_modulation(
     // ACTIONS D5) is the engine-computed set of `timeline.layers` indices
     // with a clip-start edge since this function's last call — the Step/
     // Random arm's second fire source, gated by `trigger_mode` (D3).
-    let any_audio = evaluate_all_audio_mods(project, audio, dt, trigger_pulses, clip_edge_layers);
+    let any_audio =
+        evaluate_all_audio_mods(project, audio, dt, trigger_pulses, clip_edge_layers, fire_meters);
 
     // Pre-compute per-layer active clip timing for envelope phases.
     // Avoids O(total_clips) scan in each envelope function.
@@ -422,6 +424,7 @@ pub fn evaluate_all_audio_mods(
     dt: Seconds,
     pulses: &mut Vec<TriggerPulse>,
     clip_edge_layers: &[i32],
+    fire_meters: &mut FireMeterCapture,
 ) -> bool {
     pulses.clear();
     if snapshot.is_empty() || project.audio_setup.sends.is_empty() {
@@ -444,7 +447,7 @@ pub fn evaluate_all_audio_mods(
     let mut any = false;
 
     for fx in project.settings.master_effects.iter_mut() {
-        if evaluate_instance_audio_mods(fx, &by_send, dt, None, false, pulses) {
+        if evaluate_instance_audio_mods(fx, &by_send, dt, None, false, pulses, fire_meters) {
             any = true;
         }
     }
@@ -460,13 +463,22 @@ pub fn evaluate_all_audio_mods(
                     Some(layer_id.clone()),
                     clip_edge,
                     pulses,
+                    fire_meters,
                 ) {
                     any = true;
                 }
             }
         }
         if let Some(gp) = layer.gen_params_mut()
-            && evaluate_instance_audio_mods(gp, &by_send, dt, Some(layer_id), clip_edge, pulses)
+            && evaluate_instance_audio_mods(
+                gp,
+                &by_send,
+                dt,
+                Some(layer_id),
+                clip_edge,
+                pulses,
+                fire_meters,
+            )
         {
             any = true;
         }
@@ -489,6 +501,7 @@ fn evaluate_instance_audio_mods(
     layer_id: Option<manifold_core::id::LayerId>,
     clip_edge: bool,
     pulses: &mut Vec<TriggerPulse>,
+    fire_meters: &mut FireMeterCapture,
 ) -> bool {
     if !fx.enabled {
         return false;
@@ -529,6 +542,14 @@ fn evaluate_instance_audio_mods(
         let out_norm = shape.map_range(conditioned);
 
         if is_trigger_gate {
+            // D6 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` P3c,
+            // BUG-082's fix): capture the SAME pre-range-map `conditioned`
+            // signal the edge detector below reads, keyed on this mod's
+            // owning effect/generator + param — the drawer meter shows
+            // exactly what decides whether the card fires. Push happens
+            // before the edge check so the meter reflects the level even on
+            // a tick that doesn't cross the fixed 0.5 threshold.
+            fire_meters.push(fire_meter_key(&[fx.id.as_str().as_bytes(), m.param_id.as_bytes()]), conditioned);
             // §9 U1: the mod's target is a trigger-gate card (e.g.
             // `clip_trigger`) — never write the toggle's value (R2's
             // continuous-mod flapping stays dead; the toggle is a user
@@ -1103,7 +1124,7 @@ mod tests {
         attach_full_range_low_mod(&mut project, &send_id);
 
         let snap = snapshot_low(1.0);
-        let active = evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016), &mut Vec::new(), &[]);
+        let active = evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default());
         assert!(active, "an audio mod with signal reports modulation");
 
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
@@ -1122,7 +1143,7 @@ mod tests {
 
         // Empty snapshot → no features → no write.
         let empty = AudioFeatureSnapshot::default();
-        assert!(!evaluate_all_audio_mods(&mut project, &empty, Seconds(0.016), &mut Vec::new(), &[]));
+        assert!(!evaluate_all_audio_mods(&mut project, &empty, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default()));
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         assert_eq!(fx.params.get("amount").unwrap().value, 0.0, "param untouched");
     }
@@ -1138,7 +1159,7 @@ mod tests {
             .enabled = false;
 
         let snap = snapshot_low(1.0);
-        assert!(!evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016), &mut Vec::new(), &[]));
+        assert!(!evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default()));
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         assert_eq!(fx.params.get("amount").unwrap().value, 0.0);
     }
@@ -1152,7 +1173,7 @@ mod tests {
         project.audio_setup.sends.push(AudioSend::new("Other"));
 
         let snap = snapshot_low(1.0);
-        assert!(!evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016), &mut Vec::new(), &[]));
+        assert!(!evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default()));
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         assert_eq!(fx.params.get("amount").unwrap().value, 0.0);
     }
@@ -1187,7 +1208,7 @@ mod tests {
         );
 
         let snap = snapshot_low(1.0);
-        assert!(evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016), &mut Vec::new(), &[]));
+        assert!(evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default()));
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         assert!(
             (fx.params.get("amount").unwrap().value - 0.5).abs() < 1e-6,
@@ -1278,7 +1299,7 @@ mod tests {
 
         let hot = snapshot_full_transient(0.99);
         let mut pulses = Vec::new();
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[]);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[], &mut FireMeterCapture::default());
         assert_eq!(pulses, vec![TriggerPulse { layer_id: Some(layer_id) }]);
     }
 
@@ -1298,10 +1319,10 @@ mod tests {
 
         let hot = snapshot_full_transient(0.99);
         let mut pulses = Vec::new();
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[]);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[], &mut FireMeterCapture::default());
         assert_eq!(pulses.len(), 1, "rising edge fires");
 
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[]);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[], &mut FireMeterCapture::default());
         assert!(pulses.is_empty(), "still hot (held high), no re-fire");
     }
 
@@ -1321,7 +1342,7 @@ mod tests {
 
         let hot = snapshot_full_transient(0.99);
         let mut pulses = Vec::new();
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[]);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[], &mut FireMeterCapture::default());
         assert!(pulses.is_empty(), "ClipEdge mode (default) must not react to audio");
     }
 
@@ -1338,7 +1359,7 @@ mod tests {
 
         let hot = snapshot_full_transient(0.99);
         let mut pulses = Vec::new();
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[]);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[], &mut FireMeterCapture::default());
         assert_eq!(pulses, vec![TriggerPulse { layer_id: None }]);
     }
 
@@ -1358,13 +1379,13 @@ mod tests {
 
         let hot = snapshot_full_transient(0.99);
         let mut pulses = Vec::new();
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[]);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[], &mut FireMeterCapture::default());
         assert_eq!(pulses.len(), 1);
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[]);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[], &mut FireMeterCapture::default());
         assert!(pulses.is_empty(), "disarmed");
 
         clear_all_trigger_edges(&mut project);
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[]);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut pulses, &[], &mut FireMeterCapture::default());
         assert_eq!(
             pulses.len(),
             1,
@@ -1389,7 +1410,7 @@ mod tests {
         let hot = snapshot_low(1.0);
         let cold = snapshot_low(0.0);
 
-        assert!(evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[]));
+        assert!(evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default()));
         let value = |p: &Project| p.timeline.layers[0].effects.as_ref().unwrap()[0]
             .params
             .get("fire")
@@ -1398,12 +1419,12 @@ mod tests {
         assert_eq!(value(&project), 1.0, "first rising edge bumps the count to 1");
 
         // Still hot: no re-fire, count holds at 1.
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[]);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default());
         assert_eq!(value(&project), 1.0);
 
         // Decay below the rearm floor, then fire again: count bumps to 2.
-        evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[]);
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[]);
+        evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default());
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default());
         assert_eq!(value(&project), 2.0);
     }
 
@@ -1459,9 +1480,9 @@ mod tests {
         let cold = snapshot_full_transient(0.0);
         let mut out = Vec::with_capacity(n);
         for _ in 0..n {
-            evaluate_all_audio_mods(project, &hot, Seconds(0.016), &mut Vec::new(), &[]);
+            evaluate_all_audio_mods(project, &hot, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default());
             out.push(step_value_of(project).expect("armed after a fire"));
-            evaluate_all_audio_mods(project, &cold, Seconds(0.016), &mut Vec::new(), &[]);
+            evaluate_all_audio_mods(project, &cold, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default());
         }
         out
     }
@@ -1478,12 +1499,12 @@ mod tests {
 
         let hot = snapshot_full_transient(0.9);
         // First rising edge: shadow seeds from base (0) and steps by 1.
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[]);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default());
         assert_eq!(step_value_of(&project), Some(1.0));
 
         // Signal stays hot: the edge is disarmed, so the SAME call again must
         // not advance the shadow a second time.
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[]);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default());
         assert_eq!(
             step_value_of(&project),
             Some(1.0),
@@ -1587,7 +1608,7 @@ mod tests {
         );
 
         let hot = snapshot_full_transient(0.9);
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[]);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default());
         assert_eq!(step_value_of(&project), Some(1.0));
 
         // Phase 1 then Phase 1.5, exactly as `evaluate_modulation` orders them.
@@ -1711,7 +1732,7 @@ mod tests {
         // advances the runtime shadow; `p.value` is written by Phase 1.5 on
         // the NEXT tick) — assert on `step_value`, not the return value,
         // matching every P1 step test's convention.
-        evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[0]);
+        evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[0], &mut FireMeterCapture::default());
         assert_eq!(
             step_value_of(&project),
             Some(1.0),
@@ -1735,7 +1756,7 @@ mod tests {
             .trigger_mode = Some(TriggerFireMode::Transient);
 
         let cold = snapshot_full_transient(0.0);
-        assert!(!evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[0]));
+        assert!(!evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[0], &mut FireMeterCapture::default()));
         assert_eq!(step_value_of(&project), None, "Transient mode never reacts to a clip edge");
     }
 
@@ -1755,7 +1776,7 @@ mod tests {
         // trigger_mode left at attach_action_mod's default: None.
 
         let cold = snapshot_full_transient(0.0);
-        assert!(!evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[0]));
+        assert!(!evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[0], &mut FireMeterCapture::default()));
         assert_eq!(
             step_value_of(&project),
             None,
@@ -1780,13 +1801,13 @@ mod tests {
 
         // Clip edge alone (no audio signal) fires once.
         let cold = snapshot_full_transient(0.0);
-        evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[0]);
+        evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[0], &mut FireMeterCapture::default());
         assert_eq!(step_value_of(&project), Some(1.0));
 
         // A hot audio signal with NO clip edge this time also fires — Both
         // sums the two sources rather than requiring either exclusively.
         let hot = snapshot_full_transient(0.9);
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[]);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default());
         assert_eq!(
             step_value_of(&project),
             Some(2.0),
@@ -1811,7 +1832,7 @@ mod tests {
 
         let cold = snapshot_full_transient(0.0);
         // The edge is reported for layer 7 — this mod lives on layer 0.
-        assert!(!evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[7]));
+        assert!(!evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[7], &mut FireMeterCapture::default()));
         assert_eq!(
             step_value_of(&project),
             None,
@@ -1842,7 +1863,7 @@ mod tests {
         project.settings.master_effects.push(fx);
 
         let cold = snapshot_full_transient(0.0);
-        assert!(!evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[0]));
+        assert!(!evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[0], &mut FireMeterCapture::default()));
         let step = project.settings.master_effects[0].audio_mods.as_ref().unwrap()[0].step_value;
         assert_eq!(
             step, None,
@@ -1948,7 +1969,7 @@ mod tests {
             .push(m);
 
         let hot = snapshot_full_transient(0.9);
-        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[]);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default());
 
         let step = project.timeline.layers[0]
             .gen_params()
@@ -1997,7 +2018,7 @@ mod tests {
         let hot = snapshot_full_transient(0.9);
         let cold = snapshot_full_transient(0.0);
         for _ in 0..100 {
-            evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[]);
+            evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default());
             let step = project.timeline.layers[0]
                 .gen_params()
                 .unwrap()
@@ -2008,7 +2029,7 @@ mod tests {
             if let Some(v) = step {
                 assert!((2.0..=8.0).contains(&v), "random value {v} escaped the zone 2..8");
             }
-            evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[]);
+            evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default());
         }
     }
 

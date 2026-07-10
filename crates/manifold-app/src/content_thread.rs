@@ -1208,6 +1208,11 @@ impl ContentThread {
             midi_device_names: self.last_sent_midi_device_names.clone(),
             audio_send_levels,
             audio_send_count,
+            // D6 fire meter (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_
+            // DESIGN.md` P3c, BUG-082's fix): the tick just run's shaped-
+            // signal capture for every fire-mode config, `Copy` off the
+            // engine — no allocation. See `PlaybackEngine::fire_meters`.
+            fire_meters: self.engine.fire_meters(),
             spectrogram_columns,
             spectrogram_col_scalars,
             spectrogram_num_bins,

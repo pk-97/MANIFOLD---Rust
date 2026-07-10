@@ -1029,6 +1029,7 @@ pub(crate) fn build_envelope_config(
             value_text: format!("{decay:.2}"),
             label_w: ENV_DECAY_LABEL_W,
             reset: reset.clone(),
+            show_meter: false,
         }],
         btn_font_size: FONT_SIZE,
         slider_font_size: FONT_SIZE,
@@ -1691,15 +1692,29 @@ pub(crate) fn build_audio_mod_drawer(
     let sens = mod_state.audio_sensitivity.get(i).copied().unwrap_or(1.0);
     let attack = mod_state.audio_attack_ms.get(i).copied().unwrap_or(5.0);
     let release = mod_state.audio_release_ms.get(i).copied().unwrap_or(120.0);
-    let shape_slider =
-        |label: &str, norm: f32, default_norm: f32, value_text: String, reset: PanelAction| DrawerRow::Slider {
-            label: label.to_string(),
-            norm: norm.clamp(0.0, 1.0),
-            default_norm: default_norm.clamp(0.0, 1.0),
-            value_text,
-            label_w: AUDIO_SHAPE_LABEL_W,
-            reset,
-        };
+    // D6 (P3c, BUG-082's fix): the Amount slider on a fire-mode drawer — a
+    // param gate card (`is_trigger_gate`) or ANY clip trigger — gets the live
+    // shaped-signal meter beside it. Never a plain continuous/step card, and
+    // never a fire-BUTTON (`is_trigger`, not `is_trigger_gate`) card: U2/D6
+    // scope this to the two configs that fire from a hidden Schmitt trigger a
+    // performer can't currently see (`AudioModDrawerTarget::ClipTrigger` is
+    // always one; `Param` is one exactly when `info.is_trigger_gate`).
+    let show_amount_meter =
+        matches!(target, AudioModDrawerTarget::ClipTrigger(..)) || info.is_trigger_gate;
+    let shape_slider = |label: &str,
+                         norm: f32,
+                         default_norm: f32,
+                         value_text: String,
+                         reset: PanelAction,
+                         show_meter: bool| DrawerRow::Slider {
+        label: label.to_string(),
+        norm: norm.clamp(0.0, 1.0),
+        default_norm: default_norm.clamp(0.0, 1.0),
+        value_text,
+        label_w: AUDIO_SHAPE_LABEL_W,
+        reset,
+        show_meter,
+    };
     // Each shaping slider's right-click reset — AudioModShape's own default.
     // BUG-070: these never had a reset gesture before this (the drawer only
     // opens when armed, gated the same way the drag hit-test already is).
@@ -1752,6 +1767,7 @@ pub(crate) fn build_audio_mod_drawer(
             AUDIO_SENS_DEFAULT / AUDIO_SENS_MAX,
             format!("{sens:.2}"),
             shape_reset(AudioShapeParam::Sensitivity, AUDIO_SENS_DEFAULT),
+            show_amount_meter,
         ),
         shape_slider(
             "Attack",
@@ -1759,6 +1775,7 @@ pub(crate) fn build_audio_mod_drawer(
             AUDIO_ATTACK_DEFAULT_MS / AUDIO_ATTACK_MAX_MS,
             format!("{attack:.0} ms"),
             shape_reset(AudioShapeParam::Attack, AUDIO_ATTACK_DEFAULT_MS),
+            false,
         ),
         shape_slider(
             "Release",
@@ -1766,6 +1783,7 @@ pub(crate) fn build_audio_mod_drawer(
             AUDIO_RELEASE_DEFAULT_MS / AUDIO_RELEASE_MAX_MS,
             format!("{release:.0} ms"),
             shape_reset(AudioShapeParam::Release, AUDIO_RELEASE_DEFAULT_MS),
+            false,
         ),
     ];
     // D8: the Action row (Cont/Step/Rand) — every non-toggle, non-trigger
@@ -1818,6 +1836,7 @@ pub(crate) fn build_audio_mod_drawer(
                 step_amount_to_norm(default_amount, info.min, info.max),
                 value_text,
                 step_reset,
+                false,
             ));
             let wrap_sel = mod_state.audio_wrap_idx.get(i).copied().unwrap_or(0);
             let wrap_buttons: Vec<DrawerButton> = audio_wrap_labels()

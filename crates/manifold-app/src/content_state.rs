@@ -101,6 +101,16 @@ pub struct ContentState {
     pub audio_send_levels: [f32; manifold_audio::analysis::MAX_SENDS],
     /// Number of valid entries in [`Self::audio_send_levels`].
     pub audio_send_count: usize,
+    /// D6 fire meter (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
+    /// P3c, BUG-082's fix): the shaped `AudioModShape::condition()` signal
+    /// for every fire-mode config (param gate cards + clip triggers)
+    /// evaluated this tick — the SAME value the evaluator edge-detects
+    /// against the fixed 0.5 threshold (D3 AS-BUILT). `Copy`/fixed-size
+    /// (`manifold_core::audio_trigger::FireMeterCapture`), so this field
+    /// costs nothing extra to carry across the content→UI snapshot. Read by
+    /// `ui_root.rs::update_fire_meters` every UI tick to push live levels
+    /// onto already-built drawer meters, in place — never rebuilt.
+    pub fire_meters: manifold_core::audio_trigger::FireMeterCapture,
     /// New VQT spectrogram columns produced since the last snapshot, flattened
     /// (`k * spectrogram_num_bins` magnitudes, oldest → newest). Empty unless the
     /// Audio Setup scope is open on a send.
@@ -448,6 +458,7 @@ impl Default for ContentState {
             midi_device_names: Arc::from([]),
             audio_send_levels: [0.0; manifold_audio::analysis::MAX_SENDS],
             audio_send_count: 0,
+            fire_meters: manifold_core::audio_trigger::FireMeterCapture::default(),
             spectrogram_columns: Vec::new(),
             spectrogram_col_scalars: Vec::new(),
             spectrogram_num_bins: 0,

@@ -30,10 +30,11 @@
 use super::drawer::DrawerIds;
 use super::param_card::ParamInfo;
 use super::param_slider_shared::{
-    AUDIO_ATTACK_MAX_MS, AUDIO_BAND_COUNT, AUDIO_KIND_COUNT, AUDIO_RELEASE_MAX_MS, AUDIO_SENS_MAX,
-    AudioCardState, AudioModDrawerTarget, DRAWER_BOTTOM_GAP, FONT_SIZE,
-    LENGTH_OPTIONS, ParamModState, ROW_HEIGHT, audio_band_from_index, audio_config_height,
-    audio_kind_from_index, build_audio_mod_drawer, de_btn_style, toggle_btn_style,
+    AUDIO_ATTACK_MAX_MS, AUDIO_BAND_COUNT, AUDIO_KIND_COUNT, AUDIO_MOD_ACTIVE_C32,
+    AUDIO_RELEASE_MAX_MS, AUDIO_SENS_MAX, AudioCardState, AudioModDrawerTarget, DRAWER_BOTTOM_GAP,
+    FONT_SIZE, LENGTH_OPTIONS, ParamModState, ROW_HEIGHT, audio_band_from_index,
+    audio_config_height, audio_kind_from_index, build_audio_mod_drawer, de_btn_style,
+    toggle_btn_style,
 };
 use super::{AudioShapeParam, PanelAction};
 use crate::chrome::{Align, ChromeHost, Sizing, View};
@@ -597,6 +598,27 @@ impl AudioTriggerSection {
 
     pub fn is_dragging(&self) -> bool {
         self.dragging_shape.is_some()
+    }
+
+    /// D6 fire meter (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
+    /// P3c, BUG-082's fix): push this tick's live shaped-signal level onto
+    /// every open row's Amount meter — in place, no rebuild. Every clip
+    /// trigger is a fire-mode config (D6: "clip triggers alike" — no
+    /// `is_trigger_gate` gate needed here, unlike `ParamCardPanel`). Keyed
+    /// on `(layer_id, row index)` hashed via `manifold_foundation::
+    /// fire_meter_key` — the SAME hash the content-thread capture uses.
+    pub fn update_fire_meters(&self, tree: &mut UITree, fire_level: &dyn Fn(u64) -> Option<f32>) {
+        let Some(layer_id) = self.layer_id.as_ref() else { return };
+        for (i, cfg) in self.audio_configs.iter().enumerate() {
+            let Some((dids, _)) = cfg else { continue };
+            let Some(Some(meter)) = dids.meters.first() else { continue };
+            let key = manifold_foundation::fire_meter_key(&[
+                layer_id.as_str().as_bytes(),
+                &(i as u64).to_le_bytes(),
+            ]);
+            let level = fire_level(key).unwrap_or(0.0);
+            meter.update(tree, level, AUDIO_MOD_ACTIVE_C32);
+        }
     }
 
     /// Right-click resets on the shaping sliders — the drawer's own
