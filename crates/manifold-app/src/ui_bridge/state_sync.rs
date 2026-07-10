@@ -2343,6 +2343,7 @@ mod param_label_tests {
             invert: false,
             is_angle: false,
             is_trigger_gate: false,
+            section: None,
         }
     }
 

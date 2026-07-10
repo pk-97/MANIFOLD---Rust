@@ -36,8 +36,12 @@ use std::path::{Path, PathBuf};
 // the graph-editor redesign (c89605ea..35f42ff9) added 69 raw literals mid-design;
 // re-baselined so the ratchet stays live for NEW drift while that pass is in
 // flight. DEBT: tokenize those 69 before the graph-editor redesign closes, then
-// ratchet back down toward the §15 ramp.)
-const COLOR_BASELINE: usize = 200;
+// ratchet back down toward the §15 ramp. 200→201, 2026-07-10: SCENE_BUILD P1
+// added an 8th port-pin-colour const (`PORT_TRANSFORM_COLOR`) in graph_canvas,
+// matching the seven grandfathered pin-colour consts beside it (Texture2D/3D,
+// Scalar, Array, Camera, Light, Material) — same defined-once-const pattern, folded
+// into the same pin-colour debt the §15 ramp will tokenise together.)
+const COLOR_BASELINE: usize = 201;
 const RADIUS_BASELINE: usize = 0;
 
 #[test]

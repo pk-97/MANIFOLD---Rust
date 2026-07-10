@@ -95,6 +95,20 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.11.0".to_string());
     }
 
+    // v1.11.0 -> v1.12.0: SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D3/D4.
+    // `node.render_scene` sheds its nine-per-object TRS params for a
+    // `transform_n: Transform` port; this rung synthesizes one
+    // `node.transform_3d` node per legacy object (inside the object's own
+    // group when the importer shape traces `mesh_n` there, else top-level),
+    // carries the old values across, and re-points any card binding that
+    // targeted the retired params.
+    if is_version_less_than(&version, "1.12.0") {
+        crate::migrations::scene_transform_v1120::migrate(&mut root);
+        // Literal "1.12.0" — see the "1.11.0" rung above for why this must
+        // NOT be `CURRENT_PROJECT_VERSION`.
+        root["projectVersion"] = Value::String("1.12.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
 }
 
@@ -779,7 +793,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.11.0")
+            Some("1.12.0")
         );
     }
 
@@ -815,7 +829,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.11.0")
+            Some("1.12.0")
         );
     }
 
@@ -830,7 +844,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.11.0")
+            Some("1.12.0")
         );
     }
 
@@ -874,7 +888,7 @@ mod tests {
         // The "Ghost" envelope had no matching effect → dropped.
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.11.0")
+            Some("1.12.0")
         );
     }
 
@@ -1122,7 +1136,7 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v["projectVersion"].as_str(), Some("1.11.0"));
+        assert_eq!(v["projectVersion"].as_str(), Some("1.12.0"));
         assert_eq!(
             v["settings"]["masterEffects"][0]["effectType"].as_str(),
             Some("WireframeDepth")
@@ -1178,7 +1192,7 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v["projectVersion"].as_str(), Some("1.11.0"));
+        assert_eq!(v["projectVersion"].as_str(), Some("1.12.0"));
 
         // Corrupted generator: effectType → generatorType, effectType removed.
         let gp0 = &v["timeline"]["layers"][0]["genParams"];
@@ -1252,7 +1266,7 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v["projectVersion"].as_str(), Some("1.11.0"));
+        assert_eq!(v["projectVersion"].as_str(), Some("1.12.0"));
 
         let master = &v["settings"]["masterEffects"][0]["audioMods"];
         assert_eq!(master[0]["source"]["feature"]["kind"].as_str(), Some("centroid"));
@@ -1303,7 +1317,7 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v["projectVersion"].as_str(), Some("1.11.0"));
+        assert_eq!(v["projectVersion"].as_str(), Some("1.12.0"));
         let sends = v["audioSetup"]["sends"].as_array().unwrap();
 
         // Legacy layer → layer set.

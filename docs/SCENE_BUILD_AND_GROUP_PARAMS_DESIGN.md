@@ -1,9 +1,12 @@
 # Scene Build + Group Params — named objects, transform atoms, sectioned cards
 
 **Status:** IN PROGRESS · design 2026-07-06 · Fable. **P1 SHIPPED 2026-07-10** (main `3a6e30b7`):
-`PortType::Transform` + `node.transform_3d` atom land end-to-end (ports, both backends, executor
-drain, editor pin color, UI mirror-enum boundary); `render_scene` untouched. Landing:
-`docs/landings/2026-07-10-scene-build-p1.md`. P2–P5 remain.
+`PortType::Transform` + `node.transform_3d` atom. **P2 SHIPPED 2026-07-10**: `render_scene` sheds
+all per-object transform params for `transform_n` ports; v1.12.0 migration carries old saves across
+(values + card bindings re-pointed); glTF importer emits the end-state shape. Migration parity vs
+the real `meshImportTests` project is pixel-identical; a wired LFO→`rot_y` spins an imported object.
+This realizes REALTIME_3D's amended D3 (object transforms are now a `transform_n: Transform` port).
+Landings: `docs/landings/2026-07-10-scene-build-p{1,2}.md`. P3–P5 remain.
 **Prerequisites:** PARAM_STORAGE_DESIGN P1–P5 (SHIPPED). PARAM_STORAGE_BOUNDARIES_DESIGN
 P1–P2 must land **before this doc's P3 only** (the card phase reads specs straight off
 the manifest; building it against the pre-boundaries dual-source card path would wire it

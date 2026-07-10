@@ -1118,6 +1118,7 @@ mod tests {
                     invert: false,
                     is_angle: false,
                     is_trigger_gate: false,
+                    section: None,
                 }],
                 bindings: vec![BindingDef {
                     id: param_id.to_string(),
@@ -1198,6 +1199,7 @@ mod tests {
             invert: false,
             is_angle: false,
             is_trigger_gate: false,
+            section: None,
         }));
     }
 
