@@ -12665,7 +12665,6 @@
       ],
       "category": "Math & Convert",
       "examples": [
-        "BlackHole",
         "FluidSim2D",
         "FluidSim3D",
         "ParticleText",
@@ -14939,7 +14938,6 @@
       ],
       "category": "Particles 2D",
       "examples": [
-        "BlackHole",
         "FluidSim3D",
         "ParticleText",
         "StrangeAttractor"
@@ -18117,6 +18115,13 @@
           "name": "Rotate"
         },
         {
+          "default": "0",
+          "id": "roll",
+          "max": "180",
+          "min": "-180",
+          "name": "Roll"
+        },
+        {
           "default": "150",
           "id": "steps",
           "max": "500",
@@ -18164,20 +18169,6 @@
           "max": "1",
           "min": "-1",
           "name": "Spin"
-        },
-        {
-          "default": "0",
-          "id": "particles",
-          "max": "1",
-          "min": "0",
-          "name": "Particles"
-        },
-        {
-          "default": "0.5",
-          "id": "turbulence",
-          "max": "5",
-          "min": "0",
-          "name": "Turbulence"
         },
         {
           "default": "0",

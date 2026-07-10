@@ -3320,3 +3320,18 @@ field silently breaks identity), and `project_invariant_audit` (its "Positional 
 category is marked *already fixed*; BUG-001/002 are live counterexamples — correct that claim
 when one is fixed).
 
+
+### BUG-094 (fluidsim3d-clip-trigger-turbulence-mux-double-wire) — turbulence burst fires on EVERY clip-trigger mode, not just mode 0 — MED
+**Symptom:** any clip trigger (Rot Flip / Flow Inv / Pattern / Inject) also detonates the 10x turbulence boost; the legacy generator boosted only in mode 0 ("Turbulence").
+**Root cause:** in FluidSim3D.json's Clip Triggers group, `noise_factor.b` has TWO wires (`mux_noise.out` and `env_x9.out`); the loader keeps the last wire (graph.rs connect() replaces), so `env_x9` wins unconditionally and `mux_noise` (with its `const_one` feed) is dead. Found during the 2026-07-10 full old-vs-new diff.
+**Fix shape:** rewire — `env_x9.out -> mux_noise.in_0`, delete `const_one -> mux_noise.in_0` and the direct `env_x9 -> noise_factor.b` wire, keep `mux_noise.out -> noise_factor.b`. Consider a check_presets lint for duplicate wires into one input (silently last-wins today).
+
+### BUG-095 (fluidsim3d-boot-seed-center-cluster-not-random) — sim boots from a center-cluster seed instead of the legacy random fill — LOW-MED
+**Symptom:** on load, all particles boot in a tight Gaussian at the volume centre (pattern 0); the legacy generator booted with a uniform random fill (pattern 255). First seconds of the sim look clumped instead of smoky.
+**Root cause:** the seed kernel's `pattern` port is wired from `clip_trigger_cycle` (modulus 8), whose first emission at trigger_count 0 is `0 % 8 = 0` (center cluster). The node's static `pattern=7` param (random fill) is shadowed by the wire.
+**Fix shape:** boot-time pattern should be 7 (random) — e.g. initialise ClipTriggerCycle's first emission, or gate the cycle wire behind the first real trigger. Related divergence, deliberate to keep: cycle modulus 8 (random joins the rotation; legacy cycled 7).
+
+### BUG-096 (camera-rotate-sliders-jump-no-degrees) — FluidSim3D Rotate X/Y/Z sliders jump instead of rotating smoothly, no degrees readout — LOW (UX)
+**Symptom:** dragging Rotate X/Y/Z on the Fluid Sim 3D card makes the view jump rather than turn continuously; values display as raw -1..1 floats (F2), not degrees. Reported by Peter 2026-07-10 (screenshot session).
+**Root cause:** unknown — suspects: orbit param snapping through the binding path, the orbit camera pole at tilt=+-0.5 (cos(tilt) sign flip makes the view flip 180 deg), or slider quantisation interacting with the 90-degree orbit phase offset vs the legacy camera (orbit_perspective puts orbit=0 on +X; the legacy Euler camera sat on +Z — tilt also runs inverted vs legacy).
+**Fix shape:** observe first (drag while logging orbit/tilt values); add a degrees formatString to the rotate params; consider re-phasing orbit_perspective (or the tilt/orbit_to_rad scale_offsets in the preset) so rot=0 matches the legacy +Z view and direction.

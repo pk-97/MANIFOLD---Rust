@@ -140,6 +140,17 @@ enum TexDim {
     D3,
 }
 
+/// Threads per axis of every GENERATED 3D-volume kernel — the value behind the
+/// `workgroup: "4, 4, 4"` string in [`dim_forms`]. A volume primitive's `run()`
+/// MUST size its dispatch grid `div_ceil(VOLUME_WORKGROUP_3D)`; sizing it from a
+/// hand shader's historical 8×8×8 grid silently computes only an EIGHTH of the
+/// volume (the FluidSim3D "top-right cube" bug, 2026-07-10: edge_slope_3d and
+/// swirl_force_3d under-dispatched, so the force field existed in one octant and
+/// the whole sim's dynamics parked there). Kernel parity tests can't catch this —
+/// they dispatch with the test's own grid — so the constant is shared instead:
+/// the kernel emission and every run() read the same number.
+pub const VOLUME_WORKGROUP_3D: u32 = 4;
+
 /// Per-dimension WGSL fragments for the iteration wrapper. (Input texture types
 /// are emitted per-input, not here, so a 3D input can feed a 2D-output atom.)
 struct DimForms {
@@ -163,6 +174,8 @@ fn dim_forms(dim: TexDim) -> DimForms {
         },
         TexDim::D3 => DimForms {
             storage_ty: "texture_storage_3d<rgba16float, write>",
+            // Must spell out VOLUME_WORKGROUP_3D per axis — a unit test
+            // (volume_workgroup_constant_matches_emitted_kernel) pins them together.
             workgroup: "4, 4, 4",
             guard: "id.x >= dims.x || id.y >= dims.y || id.z >= dims.z",
             uv_expr: "(vec3<f32>(id) + 0.5) / vec3<f32>(dims)",
@@ -2463,6 +2476,26 @@ fn chain_member_args(
         return Err(CodegenError::BadInput);
     }
     Ok(args)
+}
+
+#[cfg(test)]
+mod dispatch_contract_tests {
+    use super::*;
+
+    /// Pins the `dim_forms` D3 workgroup string to [`VOLUME_WORKGROUP_3D`], the
+    /// constant every volume primitive's `run()` sizes its dispatch grid with.
+    /// If either side changes without the other, generated kernels and host
+    /// dispatches silently disagree and only a fraction of the volume computes
+    /// (the FluidSim3D one-octant force field, 2026-07-10).
+    #[test]
+    fn volume_workgroup_constant_matches_emitted_kernel() {
+        let n = VOLUME_WORKGROUP_3D;
+        assert_eq!(
+            dim_forms(TexDim::D3).workgroup,
+            format!("{n}, {n}, {n}"),
+            "dim_forms D3 workgroup drifted from VOLUME_WORKGROUP_3D"
+        );
+    }
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]

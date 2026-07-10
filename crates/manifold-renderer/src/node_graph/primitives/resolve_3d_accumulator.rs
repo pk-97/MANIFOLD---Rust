@@ -132,7 +132,11 @@ impl Primitive for Resolve3DAccumulator {
                     texture: density,
                 },
             ],
-            [vol_res.div_ceil(4), vol_res.div_ceil(4), vol_depth.div_ceil(4)],
+            [
+                vol_res.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
+                vol_res.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
+                vol_depth.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
+            ],
             "node.resolve_scatter_3d",
         );
     }
@@ -247,7 +251,11 @@ mod gpu_tests {
                 GpuBinding::Buffer { binding: 1, buffer: &accum, offset: 0 },
                 GpuBinding::Texture { binding: 2, texture: &density },
             ],
-            [vr.div_ceil(4), vr.div_ceil(4), vd.div_ceil(4)],
+            [
+                vr.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
+                vr.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
+                vd.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
+            ],
             "resolve3d-oracle",
         );
         enc.commit_and_wait_completed();

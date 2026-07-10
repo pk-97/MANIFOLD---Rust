@@ -169,7 +169,11 @@ impl Primitive for Blur3DSeparable {
                     texture: dst,
                 },
             ],
-            [vol_res.div_ceil(4), vol_res.div_ceil(4), vol_res.div_ceil(4)],
+            [
+                vol_res.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
+                vol_res.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
+                vol_res.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
+            ],
             "node.blur_3d",
         );
     }
