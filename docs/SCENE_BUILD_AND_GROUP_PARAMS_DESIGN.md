@@ -203,11 +203,16 @@ it into the new `light_k` port (Peter's ruling: add means added — both command
 click, never leaving a count bumped with a dead port). Defaults: Sun, white, intensity
 1.0, ~45° elevation (a straight-overhead sun flattens the scene; 45° is why Blender's
 default reads as lit), **`cast_shadows` ON (Peter's call, 2026-07-10)**. The shadow flag
-is inert until REALTIME_3D P2 ships; P2 inherits a requirement from this default: its
-caster policy (the coherence-audit F2 amendment — not this doc's D4, which is the
-migration step) must handle a scene where every light is a default caster gracefully
-(budget/priority), not assume casters are opt-in. Remove = delete the light node + the
-existing decrement, no new command. Context: `RENDER_SCENE_UNBOUNDED_LIGHTS` (landed
+is inert until REALTIME_3D P2 ships; P2 inherits a requirement from this default,
+**revised same day (Peter's ruling, supersedes the earlier "budget/priority" phrasing):
+every caster renders accurate shadows, always — no silent caster budget, no
+priority-based dropping (that would be the silent-fallback pattern this codebase bans;
+a scene that quietly stops casting on light N looks subtly wrong with no cause).
+Shadow cost is the user's to spend; the design owes them VISIBLE cost feedback
+(perf-HUD weight per caster or equivalent) so adding lights is an informed gesture,
+not a discovered stutter.** This lands in the coherence-audit F2 amendment to
+REALTIME_3D P2 (not this doc's D4, which is the migration step). Remove = delete the
+light node + the existing decrement, no new command. Context: `RENDER_SCENE_UNBOUNDED_LIGHTS` (landed
 2026-07-10) lifted the light ceiling to 64/127 but kept the count-param + per-`light_N`-
 port model (REALTIME_3D D3 rejected an `Array<Light>` fan-in port); D7a is the authoring
 gesture over that model.
