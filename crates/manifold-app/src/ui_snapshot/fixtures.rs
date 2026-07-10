@@ -88,7 +88,7 @@ fn project_scene(path: &str) -> Option<SceneData> {
 /// `Application::import_model_file` runs on a real drop — so the resulting
 /// card carries genuine importer-seeded `section`s (D9/D5), not a hand-built
 /// stand-in. Selects the imported layer so its card renders immediately.
-fn gltf_scene() -> SceneData {
+pub(super) fn gltf_scene() -> SceneData {
     use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset};
     use manifold_editing::command::Command;
     use manifold_editing::commands::layer::ImportModelLayerCommand;

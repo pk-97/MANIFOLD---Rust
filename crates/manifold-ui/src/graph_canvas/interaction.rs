@@ -29,7 +29,11 @@ pub(crate) enum DragMode {
     /// from `press_origin_x` maps to a value delta over
     /// `PARAM_SCRUB_FULL_RANGE_PX`, anchored on `start_value` so a long
     /// drag doesn't accumulate float error. Emits `SetGraphNodeParam` each
-    /// pointer move, matching the inspector sidebar.
+    /// pointer move, matching the inspector sidebar — unless `outer_param_id`
+    /// is `Some`, meaning this row is a group-face mirror (D6): the drag then
+    /// emits `GraphEditCommand::SetOuterParam` instead, the card's own write
+    /// path (the parity invariant), and `node_id`/`param_name` are unused for
+    /// addressing (kept only so the group box stays the visual selection).
     ParamScrub {
         node_id: u32,
         param_name: String,
@@ -37,6 +41,7 @@ pub(crate) enum DragMode {
         start_value: f32,
         is_int: bool,
         press_origin_x: f32,
+        outer_param_id: Option<String>,
     },
     /// Scrubbing one channel of a `Color` / `Vec2..4` param via its row in the
     /// open [`VecEditor`](super::VecEditor) panel. `base` is the whole vector at
@@ -441,6 +446,7 @@ impl GraphCanvas {
                 start_value,
                 is_int,
                 press_origin_x,
+                outer_param_id,
             } => {
                 let node_id = *node_id;
                 let param_name = param_name.clone();
@@ -448,6 +454,7 @@ impl GraphCanvas {
                 let start_value = *start_value;
                 let is_int = *is_int;
                 let press_origin_x = *press_origin_x;
+                let outer_param_id = outer_param_id.clone();
                 let span = (max - min).max(f32::EPSILON);
                 let delta_px = sx - press_origin_x;
                 let mut v =
@@ -455,11 +462,21 @@ impl GraphCanvas {
                 if is_int {
                     v = v.round();
                 }
-                self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
-                    node_id,
-                    param_name,
-                    new_value: crate::SerializedParamValue::Float { value: v },
-                });
+                // D6 parity invariant: a group-face row scrubs the exact same
+                // outer card param, through the card's own write path — never
+                // the inner node's `SetGraphNodeParam` addressing.
+                if let Some(outer_param_id) = outer_param_id {
+                    self.pending_actions.push(GraphEditCommand::SetOuterParam {
+                        outer_param_id,
+                        new_value: v,
+                    });
+                } else {
+                    self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
+                        node_id,
+                        param_name,
+                        new_value: crate::SerializedParamValue::Float { value: v },
+                    });
+                }
             }
             DragMode::VecScrub {
                 node_id,
@@ -530,11 +547,18 @@ impl GraphCanvas {
         if let Some(dd) = self.enum_dropdown.take() {
             if let Some(idx) = dd.option_at(sx, sy) {
                 if idx != dd.current {
-                    self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
-                        node_id: dd.node_id,
-                        param_name: dd.param_name.clone(),
-                        new_value: crate::SerializedParamValue::Enum { value: idx as u32 },
-                    });
+                    if let Some(outer_param_id) = dd.outer_param_id.clone() {
+                        self.pending_actions.push(GraphEditCommand::SetOuterParam {
+                            outer_param_id,
+                            new_value: idx as f32,
+                        });
+                    } else {
+                        self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
+                            node_id: dd.node_id,
+                            param_name: dd.param_name.clone(),
+                            new_value: crate::SerializedParamValue::Enum { value: idx as u32 },
+                        });
+                    }
                 }
                 return;
             }
@@ -747,6 +771,7 @@ impl GraphCanvas {
                         start_value: s.current_value,
                         is_int: s.is_int,
                         press_origin_x: sx,
+                        outer_param_id: p.outer_param_id,
                     };
                     return;
                 }
@@ -773,24 +798,47 @@ impl GraphCanvas {
                 }
                 use crate::graph_view::ParamSnapshotKind as K;
                 match p.kind {
-                    // Bool → flip; Trigger → fire (+1). Both emit an absolute
-                    // SetGraphNodeParam, parity with the sidebar's value cell.
-                    K::Bool => self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
-                        node_id,
-                        param_name: p.name,
-                        new_value: crate::SerializedParamValue::Bool {
-                            value: p.current_value < 0.5,
-                        },
-                    }),
-                    K::Trigger => self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
-                        node_id,
-                        param_name: p.name,
-                        new_value: crate::SerializedParamValue::Float {
-                            value: p.current_value + 1.0,
-                        },
-                    }),
+                    // Bool → flip; Trigger → fire (+1). Both normally emit an
+                    // absolute SetGraphNodeParam (parity with the sidebar's
+                    // value cell) — unless this is a group-face mirror row
+                    // (D6), which emits SetOuterParam instead (the card's own
+                    // write path, the parity invariant).
+                    K::Bool => {
+                        let new_value = if p.current_value < 0.5 { 1.0 } else { 0.0 };
+                        if let Some(outer_param_id) = p.outer_param_id {
+                            self.pending_actions.push(GraphEditCommand::SetOuterParam {
+                                outer_param_id,
+                                new_value,
+                            });
+                        } else {
+                            self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
+                                node_id,
+                                param_name: p.name,
+                                new_value: crate::SerializedParamValue::Bool {
+                                    value: new_value >= 0.5,
+                                },
+                            });
+                        }
+                    }
+                    K::Trigger => {
+                        let new_value = p.current_value + 1.0;
+                        if let Some(outer_param_id) = p.outer_param_id {
+                            self.pending_actions.push(GraphEditCommand::SetOuterParam {
+                                outer_param_id,
+                                new_value,
+                            });
+                        } else {
+                            self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
+                                node_id,
+                                param_name: p.name,
+                                new_value: crate::SerializedParamValue::Float { value: new_value },
+                            });
+                        }
+                    }
                     // Enum → open a dropdown anchored on this row; picking an
-                    // option emits the SetGraphNodeParam (handled at the top).
+                    // option emits SetGraphNodeParam, or SetOuterParam for a
+                    // group-face mirror row (`outer_param_id` rides the
+                    // dropdown to the pick handler at the top of this fn).
                     K::Enum => {
                         if !p.enum_labels.is_empty()
                             && let Some(anchor) = self.param_row_rect(viewport, node_id, pi)
@@ -805,6 +853,7 @@ impl GraphCanvas {
                                 options: p.enum_labels,
                                 current: cur_idx,
                                 anchor,
+                                outer_param_id: p.outer_param_id,
                             });
                         }
                     }

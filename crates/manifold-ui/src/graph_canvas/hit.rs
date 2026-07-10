@@ -120,6 +120,12 @@ impl GraphCanvas {
     ) -> Option<(u32, usize)> {
         let (node_id, pi) = self.param_row_under(viewport, sx, sy)?;
         let node = self.find_node(node_id)?;
+        // A group-face row (D6) is already the live mirror of an exposed card
+        // param — it shows the card surface, not an authoring picker, so it
+        // never draws or accepts an expose glyph of its own.
+        if node.is_group {
+            return None;
+        }
         let p = node.params.get(pi)?;
         if !kind_is_exposable(p.kind) {
             return None;

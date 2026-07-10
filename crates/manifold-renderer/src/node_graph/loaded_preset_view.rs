@@ -222,6 +222,27 @@ pub fn snapshot_for_view(view: &LoadedPresetView) -> Option<GraphSnapshot> {
     Some(snap)
 }
 
+/// Collect `node_id → handle` for every node in `nodes`, descending into
+/// group bodies so a binding targeting a node inside a group still resolves
+/// (BUG-103). Handles are unique within a display def (the flattener's
+/// group-name prefixing is a runtime-build step, not applied to this def), so
+/// keying by the raw `node_id` and reading the raw `handle` matches how the
+/// editor's grouped snapshot names its inner rows. Boundary nodes (empty
+/// `node_id`, `handle: None`) are skipped by the `handle.as_deref()` filter.
+pub fn collect_node_handles<'a>(
+    nodes: &'a [manifold_core::effect_graph_def::EffectGraphNode],
+    out: &mut std::collections::HashMap<&'a str, &'a str>,
+) {
+    for n in nodes {
+        if let Some(h) = n.handle.as_deref() {
+            out.insert(n.node_id.as_str(), h);
+        }
+        if let Some(group) = n.group.as_deref() {
+            collect_node_handles(&group.nodes, out);
+        }
+    }
+}
+
 /// Translate a [`LoadedPresetView`]'s bindings into editor
 /// [`OuterParamRouting`]s — same projection
 /// `EffectRegistry::outer_routings_for` used to perform off a
@@ -234,12 +255,21 @@ pub fn outer_routings_from_view(view: &LoadedPresetView) -> Vec<OuterParamRoutin
     // the editor keys its per-node rows by handle within a single
     // snapshot (where handles are unique); the binding addresses by id,
     // resolved here against the canonical def's nodes.
-    let handle_by_id: std::collections::HashMap<&str, &str> = view
-        .canonical_def
-        .nodes
-        .iter()
-        .filter_map(|n| n.handle.as_deref().map(|h| (n.node_id.as_str(), h)))
-        .collect();
+    //
+    // Recurses into group bodies (BUG-103): a binding whose target lives
+    // INSIDE a group — the glTF importer's per-object Metallic/Roughness
+    // knobs target `mat_k` nodes that sit inside each object's group box —
+    // is dropped by a top-level-only handle map, so the outer→inner routing
+    // never reaches the editor and the group face shows no D6 mirror row for
+    // exactly the imported-scene case the feature exists for. Inner handles
+    // stay unprefixed in the grouped canonical def (the flattener's
+    // group-name prefixing happens only when the runtime graph is built, not
+    // on this display def), so the recursive map keys them the same way the
+    // UI snapshot's group bodies do — the routing's `node_handle` then
+    // matches the group-face row join (`find_node_by_handle`) exactly.
+    let mut handle_by_id: std::collections::HashMap<&str, &str> =
+        std::collections::HashMap::new();
+    collect_node_handles(&view.canonical_def.nodes, &mut handle_by_id);
     let mut out = Vec::with_capacity(view.bindings.len());
     for binding in view.bindings {
         let (node_id, inner_param) = match &binding.target {
@@ -270,5 +300,71 @@ mod tests {
     fn loaded_preset_view_returns_none_for_unknown_id() {
         let unknown = PresetTypeId::from_string("NotARealEffect".to_string());
         assert!(loaded_preset_view_by_id(&unknown).is_none());
+    }
+
+    /// BUG-103 regression: a glTF-imported scene's per-object Metallic /
+    /// Roughness card knobs target the `mat_k` material node that lives
+    /// INSIDE that object's group box. `outer_routings_from_view` used to
+    /// build its `node_id → handle` map from top-level nodes only, so those
+    /// in-group bindings were silently dropped — the routing never reached
+    /// the editor and the group face showed no D6 mirror row for exactly the
+    /// imported-scene case the feature exists for. Pre-fix this returned 9
+    /// routings (the top-level camera/sun/environment spine); post-fix it
+    /// returns all 13, including the 4 in-group `mat_0`/`mat_1`
+    /// metallic/roughness ones. Drives the REAL importer + the REAL
+    /// resolution path, exactly what the pristine `graph_snapshot` arm runs
+    /// (`snapshot_for_view` → `outer_routings_from_view`).
+    #[test]
+    fn gltf_import_group_material_bindings_resolve_through_groups() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb");
+        if !path.exists() {
+            println!("gltf fixture missing at {}, skipping", path.display());
+            return;
+        }
+        let (def, _report) = crate::node_graph::gltf_import::assemble_import_graph(&path)
+            .expect("assemble azalea import graph");
+
+        // Build the LoadedPresetView the pristine path builds — same
+        // canonical_def + leaked bindings + skip_mode `build_view` produces,
+        // just from the imported def instead of a bundled catalog entry.
+        let def: &'static EffectGraphDef = Box::leak(Box::new(def));
+        let meta = def.preset_metadata.as_ref().expect("import def carries metadata");
+        let view = LoadedPresetView {
+            type_id: PresetTypeId::from_string("test.gltf_import".to_string()),
+            canonical_def: def,
+            bindings: leak_bindings(meta),
+            skip_mode: skip_mode_from_def(&meta.skip_mode),
+            fused_retarget: AHashMap::default(),
+        };
+
+        let routings = outer_routings_from_view(&view);
+
+        // Every canonical binding that targets a node resolves now — the 13
+        // the importer emits for the 2-object azalea (4 camera + 4 sun + 1
+        // environment + 2×(metallic + roughness)).
+        assert_eq!(
+            routings.len(),
+            meta.bindings.len(),
+            "every node-targeting card binding must resolve, in-group ones included"
+        );
+
+        // The payoff: the in-group material knobs are present, keyed by the
+        // material node's own (unprefixed) handle so the D6 group-face join
+        // (`find_node_by_handle`) finds them inside the group body.
+        let has = |handle: &str, param: &str| {
+            routings
+                .iter()
+                .any(|r| r.node_handle == handle && r.inner_param == param)
+        };
+        assert!(has("mat_0", "metallic"), "object 0's Metallic knob resolves inside its group");
+        assert!(has("mat_0", "roughness"), "object 0's Roughness knob resolves inside its group");
+        assert!(has("mat_1", "metallic"), "object 1's Metallic knob resolves inside its group");
+        assert!(has("mat_1", "roughness"), "object 1's Roughness knob resolves inside its group");
+
+        // And the top-level spine still resolves (no regression on the 9 that
+        // always worked).
+        assert!(has("camera", "orbit"), "top-level camera binding still resolves");
+        assert!(has("sun", "intensity"), "top-level sun binding still resolves");
     }
 }

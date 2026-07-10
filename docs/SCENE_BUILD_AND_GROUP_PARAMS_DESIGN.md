@@ -11,8 +11,14 @@ by importer; collapsible headers with UI-local fold state; group-rename sweep; m
 write). A glTF-imported scene's card is now named foldable blocks (`QS1694-W02-1-1`, `Material.001`,
 `Camera`/`Sun`/`Environment`), not a flat slider wall — verified via faithful-render capture + a
 field-level fold proof. Also fixed a load-bearing registry gap (`ParamDef` lacked the `section`
-mirror, silently dropping sections for glTF-imported generators). Landings:
-`docs/landings/2026-07-10-scene-build-p{1,2,3}.md`. P4–P5 remain.
+mirror, silently dropping sections for glTF-imported generators).
+**P4 SHIPPED 2026-07-10**: group boxes render their exposed param rows on the node face (same
+`ChangeGraphParamCommand` path as the card — one value, three surfaces; collapsed → "N params" chip).
+Verified on the REAL azalea import: the "QS1694-W02-1-1"/"Material.001" object boxes carry live
+Metallic/Roughness sliders. Fixed the payoff-blocking BUG-103 (`outer_routings_from_view` never
+recursed into group bodies, so in-group material bindings were dropped for exactly the imported
+scenes the wave targets — 9/13 → 13/13 routings). Landings:
+`docs/landings/2026-07-10-scene-build-p{1,2,3,4}.md`. **P5 remains** (add-object/add-light + ribbons).
 **Prerequisites:** PARAM_STORAGE_DESIGN P1–P5 (SHIPPED). PARAM_STORAGE_BOUNDARIES_DESIGN
 P1–P2 must land **before this doc's P3 only** (the card phase reads specs straight off
 the manifest; building it against the pre-boundaries dual-source card path would wire it

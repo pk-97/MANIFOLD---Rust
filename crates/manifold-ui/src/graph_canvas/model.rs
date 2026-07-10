@@ -506,6 +506,17 @@ pub(crate) struct ParamView {
     /// reclaim control if moved. `None` for un-routed params. Wire-driven wins
     /// when both apply. Recomputed per snapshot from `outer_routings`. (Phase 5.)
     pub(crate) outer_driver: Option<String>,
+    /// `Some(outer_param_id)` for a **group-face mirror row** (D6,
+    /// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2): this `ParamView`
+    /// isn't an inner node's own param row, it's a group box's live copy of an
+    /// already-exposed card param whose binding target resolves inside the
+    /// group. `None` for every ordinary node-face row. Drives the scrub/click
+    /// dispatch: a `Some` row emits `GraphEditCommand::SetOuterParam` (the
+    /// card's own write path — the parity invariant) instead of
+    /// `SetGraphNodeParam`, and it never draws/hit-tests an expose glyph (the
+    /// group face shows the card surface, not an authoring picker). Built by
+    /// [`build_group_param_rows`], never by [`format_param_for_node`].
+    pub(crate) outer_param_id: Option<String>,
 }
 
 /// Whether a `String` param names a filesystem path — folder / file / dir /
@@ -661,7 +672,89 @@ pub(crate) fn format_param_for_node(p: &crate::graph_view::ParamSnapshot) -> Par
         // outer routings are in scope (they aren't per-param on the snapshot).
         wire_driven: false,
         outer_driver: None,
+        // Ordinary node-face row — never a group-face mirror. See
+        // `build_group_param_rows` for the other constructor.
+        outer_param_id: None,
     }
+}
+
+/// Recursively find the [`crate::graph_view::NodeSnapshot`] with the given
+/// author-assigned `handle` inside `body` — descending into nested group
+/// bodies too, since a card param can be exposed arbitrarily deep. Returns
+/// the node alongside the [`crate::graph_view::WireSnapshot`]s of the level
+/// it actually lives at (wires address by structural id *within their own
+/// level*, so wire-driven detection must use that level's wires, not the
+/// caller's). `None` if no node in the (sub)tree carries this handle.
+fn find_node_by_handle<'a>(
+    body: &'a crate::graph_view::GroupSnapshot,
+    handle: &str,
+) -> Option<(&'a crate::graph_view::NodeSnapshot, &'a [crate::graph_view::WireSnapshot])> {
+    for n in &body.nodes {
+        if n.node_handle.as_deref() == Some(handle) {
+            return Some((n, &body.wires));
+        }
+        if let Some(inner) = n.group.as_deref()
+            && let Some(found) = find_node_by_handle(inner, handle)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Build a group `NodeView`'s on-face param rows (D6,
+/// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2): one [`ParamView`] per
+/// `outer_routings` entry whose binding target (`node_handle`, `inner_param`)
+/// resolves to a node inside `body`, transitively through nested groups —
+/// the same join the canvas already computes for the "↳ outer-driven" hint
+/// (`apply_driven_state`), just walked from the group's own body instead of
+/// the current level's flat node list. Reuses [`format_param_for_node`]'s
+/// value/fill/scrub formatting verbatim, so a group-face row looks and drags
+/// identically to the same param's ordinary node-face row; only the label
+/// (the outer card's own label), the row identity (`name` — set to the
+/// routing's `outer_param_id` so it can never collide with one of the
+/// group's own interface port names in `compute_node_rows`'s shadow-match),
+/// and `outer_param_id` itself (the scrub-dispatch marker) are overwritten.
+/// Called fresh on every `set_snapshot` push — both the full rebuild and the
+/// topology-unchanged param refresh — so wire-driven state and live values
+/// never go stale even though this group's inner wires live at a level
+/// that's never `self.wires` (the currently *viewed* level's wires) unless
+/// you happen to be inside this exact group.
+pub(crate) fn build_group_param_rows(
+    body: &crate::graph_view::GroupSnapshot,
+    outer_routings: &[crate::graph_view::OuterParamRouting],
+) -> Vec<ParamView> {
+    let mut out = Vec::with_capacity(outer_routings.len());
+    for r in outer_routings {
+        let Some((node, wires)) = find_node_by_handle(body, &r.node_handle) else {
+            continue;
+        };
+        let Some(ps) = node.parameters.iter().find(|p| p.name == r.inner_param) else {
+            continue;
+        };
+        let mut pv = format_param_for_node(ps);
+        pv.name = r.outer_param_id.clone();
+        pv.label = r.outer_label.clone();
+        pv.wire_driven = wires
+            .iter()
+            .any(|w| w.to_node == node.id && w.to_port == r.inner_param);
+        // The row itself IS the outer routing — a second "↳ <outer>" hint on
+        // top of itself would be noise, not information.
+        pv.outer_driver = None;
+        pv.outer_param_id = Some(r.outer_param_id.clone());
+        out.push(pv);
+    }
+    out
+}
+
+/// The collapsed-face summary for a group carrying [`build_group_param_rows`]
+/// rows — a compact "N params" chip drawn by the existing collapsed-summary
+/// line (`NodeView::summary`), so a folded group with exposed inner params
+/// still tells you it has knobs instead of going silent. `None` for a group
+/// with no mirrored rows (renders exactly like any other empty collapsed
+/// node) — no size threshold, collapse state is the only switch (D6).
+pub(crate) fn group_param_summary(rows: &[ParamView]) -> Option<String> {
+    (!rows.is_empty()).then(|| format!("{} params", rows.len()))
 }
 
 /// Component count for a multi-component param kind: `Color`/`Vec4` → 4,
@@ -1004,13 +1097,35 @@ impl GraphCanvas {
             // auto-layout.
             for node in &mut self.nodes {
                 if let Some(sn) = level_nodes.iter().find(|s| s.id == node.id) {
-                    // Param tooltips ride the snapshot (baked at translation),
-                    // so `format_param_for_node` carries them straight through —
-                    // no re-resolve, no carry-forward-by-index dance.
-                    node.params = sn.parameters.iter().map(format_param_for_node).collect();
-                    node.summary = node_summary(&sn.parameters);
+                    if sn.type_id == GROUP_TYPE_ID {
+                        // D6: a group's face rows are the live mirror of
+                        // whichever card params route inside it — that set
+                        // (and the values/wire-driven state on it) can change
+                        // without this level's own topology hash moving
+                        // (exposing/un-exposing an inner param is a manifest
+                        // edit, not a wire/node edit), so it's recomputed here
+                        // too, every push, not just on a full rebuild.
+                        let rows = sn
+                            .group
+                            .as_deref()
+                            .map(|body| build_group_param_rows(body, &snap.outer_routings))
+                            .unwrap_or_default();
+                        node.summary = group_param_summary(&rows);
+                        node.params = rows;
+                    } else {
+                        // Param tooltips ride the snapshot (baked at translation),
+                        // so `format_param_for_node` carries them straight through —
+                        // no re-resolve, no carry-forward-by-index dance.
+                        node.params = sn.parameters.iter().map(format_param_for_node).collect();
+                        node.summary = node_summary(&sn.parameters);
+                    }
                 }
             }
+            // Row *count* can change here too now (a group's mirrored rows
+            // appear/disappear with expose state, not just topology), so the
+            // row layout — and the heights/hit-rects derived from it — must
+            // be rebuilt alongside the values, not just on a full rebuild.
+            self.rebuild_rows();
             // Wire / outer-driven state is a topology property, but exposing a
             // param (adding an outer routing) can leave the level hash unchanged,
             // so recompute it here too — cheap, and it keeps the "↳ outer" hint
@@ -1034,16 +1149,35 @@ impl GraphCanvas {
         let preview_aspect = self.preview_aspect;
         let new_nodes: Vec<NodeView> = level_nodes
             .iter()
-            .map(|n| NodeView {
+            .map(|n| {
+                // D6: a group's face rows are the live mirror of whichever
+                // card params route to a node inside it, not its own
+                // (nonexistent) `parameters` — build those instead of the
+                // ordinary per-node formatter.
+                let (params, summary) = if n.type_id == GROUP_TYPE_ID {
+                    let rows = n
+                        .group
+                        .as_deref()
+                        .map(|body| build_group_param_rows(body, &snap.outer_routings))
+                        .unwrap_or_default();
+                    let summary = group_param_summary(&rows);
+                    (rows, summary)
+                } else {
+                    (
+                        n.parameters.iter().map(format_param_for_node).collect(),
+                        node_summary(&n.parameters),
+                    )
+                };
+                NodeView {
                 id: n.id,
                 node_id: n.node_id.clone(),
                 handle: n.node_handle.clone(),
                 title: n.title.clone(),
-                params: n.parameters.iter().map(format_param_for_node).collect(),
+                params,
                 // Filled from inputs/outputs/params once the struct is built
                 // (they aren't in scope as slices inside this literal).
                 rows: Vec::new(),
-                summary: node_summary(&n.parameters),
+                summary,
                 collapsed: self
                     .collapsed
                     .get(&n.id)
@@ -1085,6 +1219,7 @@ impl GraphCanvas {
                 // Filled by `rebuild_rows` below (needs the level's wires).
                 hideable_ports: 0,
                 revealed: false,
+                }
             })
             .collect();
         self.nodes = new_nodes;
@@ -1188,6 +1323,19 @@ impl GraphCanvas {
         // Split the borrow: read `wires`, mutate `nodes`.
         let Self { wires, nodes, .. } = self;
         for node in nodes.iter_mut() {
+            // Group-face mirror rows (D6) already carry their own correct
+            // `wire_driven` — computed by `build_group_param_rows` against the
+            // wires of whatever *inner* level the target node actually lives
+            // at, which is never `self.wires` here (the currently viewed
+            // level) unless the target happens to live at the group's own
+            // top level. Same-level `to_node == node.id` matching (below)
+            // would either miss entirely or, worse, coincidentally hit an
+            // unrelated wire landing on the group's own interface input of
+            // the same structural id — so groups are skipped, not folded into
+            // the general loop.
+            if node.is_group {
+                continue;
+            }
             let handle = node.handle.clone();
             for p in &mut node.params {
                 p.wire_driven = wires

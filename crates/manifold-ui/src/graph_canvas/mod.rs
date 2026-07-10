@@ -787,6 +787,21 @@ impl GraphCanvas {
         self.default_collapsed = !on;
     }
 
+    /// Force one node's collapse state, overriding `default_collapsed` for
+    /// just that id. No live gesture drives this yet (no on-canvas fold
+    /// affordance — see `draw_node`'s "no collapse +/- toggle" comment); this
+    /// exists for verification surfaces (the headless snapshot harness) that
+    /// need to show a specific node collapsed regardless of the canvas-wide
+    /// default, e.g. proving D6's "N params" chip
+    /// (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2) on a group box next
+    /// to an expanded sibling in the same capture.
+    pub fn set_collapsed(&mut self, node_id: u32, collapsed: bool) {
+        self.collapsed.insert(node_id, collapsed);
+        if let Some(n) = self.nodes.iter_mut().find(|n| n.id == node_id) {
+            n.collapsed = collapsed;
+        }
+    }
+
     /// Tell the canvas whether the watched effect is currently on its
     /// bundled-preset default (`false`) or carries a per-card graph
     /// override (`true`). When `true`, the header surfaces a
@@ -848,6 +863,11 @@ pub(crate) struct EnumDropdown {
     /// Screen-space rect of the param row it opened from. The list stacks
     /// directly below it, one row per option at the same height and width.
     pub(crate) anchor: Rect,
+    /// `Some(outer_param_id)` when this dropdown was opened from a
+    /// group-face mirror row (D6): a pick emits `SetOuterParam` (the card's
+    /// own write path) instead of `SetGraphNodeParam`. `None` for an ordinary
+    /// node-face enum row.
+    pub(crate) outer_param_id: Option<String>,
 }
 
 impl EnumDropdown {
