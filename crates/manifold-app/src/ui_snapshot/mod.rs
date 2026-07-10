@@ -7,6 +7,7 @@
 //! See `docs/HEADLESS_UI_HARNESS.md`.
 
 mod compare;
+mod composite_resources;
 mod dump;
 mod fixtures;
 mod interact;
@@ -193,7 +194,7 @@ fn render_ui_scene(
     }
 
     render_and_dump(
-        &ui,
+        &mut ui,
         &data.selection,
         &data.content.automation_latched_params,
         &dir,
@@ -231,7 +232,7 @@ fn render_ui_scene(
         }
         sync_build(&mut ui, &data, zoom_ppb);
         render_and_dump(
-            &ui,
+            &mut ui,
             &data.selection,
             &data.content.automation_latched_params,
             &dir,
@@ -327,11 +328,17 @@ fn run_editor_preset(preset: &str, want_dump: bool) {
     println!("ui-snap: wrote {} ({preset})", png.display());
 }
 
-/// The real translation path: structural sync → zoom-to-fit → build → push state.
+/// The data-sync half of `sync_build` (P2 split, `UI_HARNESS_UNIFICATION_
+/// DESIGN.md` D3): re-derive `ui`'s selection/inspector/zoom fields from
+/// `data`. Deliberately does NOT rebuild the tree — every non-script caller
+/// still does that unconditionally right after (see `sync_build` below);
+/// `script.rs`'s `Runner` instead gates it through
+/// `crate::ui_frame::apply_ui_frame_invalidations`, matching the live App's
+/// own gated rebuild instead of `sync_build`'s old unconditional `ui.build()`.
 /// `zoom_ppb` is the scene's pixels-per-beat (24.0 for the 48-beat fixtures;
 /// `render_ui_scene` overrides it per scene name — see the `hairlineclips`
 /// far-zoom case).
-fn sync_build(ui: &mut UIRoot, data: &fixtures::SceneData, zoom_ppb: f32) {
+fn sync_data(ui: &mut UIRoot, data: &fixtures::SceneData, zoom_ppb: f32) {
     sync_project_data(ui, &data.project, data.active, &data.selection);
     // Configure the inspector (tabs + the active layer's effect/gen cards) from
     // the selection — the live app calls this whenever the active layer changes.
@@ -347,25 +354,40 @@ fn sync_build(ui: &mut UIRoot, data: &fixtures::SceneData, zoom_ppb: f32) {
     // Zoom so the fixture's clips fit the lane width (set before build so the
     // ruler ticks and the clip rects agree on px/beat).
     ui.viewport.set_zoom(zoom_ppb);
-    ui.build();
+}
+
+/// The push-state/reconcile tail half of `sync_build` (P2 split) — pushes
+/// display-only setters and reconciles them into the (already built) tree.
+/// Unconditional regardless of whether a rebuild happened this pass: mirrors
+/// the live app's per-frame call (`app_render.rs`'s "6. Lightweight update"
+/// after its own `push_state`). Every panel's `set_*` methods are "store
+/// only; the reconcile applies them" (see `TransportPanel`'s doc comment);
+/// without this the harness only ever showed each panel's `::new()`
+/// hardcoded defaults, silently — every existing scene's fixture
+/// `ContentState` happened to already match those defaults (paused, not
+/// recording, no BPM reset/clear pending), so the gap never surfaced until
+/// the `automation` scene (P4a) deliberately diverged (armed + a latch).
+fn reconcile_state(ui: &mut UIRoot, data: &fixtures::SceneData) {
     let mut tcache = TransportDisplayCache::new();
     push_state(ui, &data.project, &data.content, data.active, &data.selection, false, None, &mut tcache);
-    // Reconcile the `push_state` setters into the tree — mirrors the live
-    // app's per-frame call (`app_render.rs`'s "6. Lightweight update" after its
-    // own `push_state`). Every panel's `set_*` methods are "store only; the
-    // reconcile applies them" (see `TransportPanel`'s doc comment); without
-    // this the harness only ever showed each panel's `::new()` hardcoded
-    // defaults, silently — every existing scene's fixture `ContentState`
-    // happened to already match those defaults (paused, not recording, no BPM
-    // reset/clear pending), so the gap never surfaced until the `automation`
-    // scene (P4a) deliberately diverged (armed + a latch).
     ui.update();
+}
+
+/// The real translation path: structural sync → zoom-to-fit → build → push
+/// state. Unconditional full build — every caller except `script.rs`'s
+/// `Runner` (P2), which gates the build decision through
+/// `crate::ui_frame::apply_ui_frame_invalidations` instead; see `sync_data`/
+/// `reconcile_state` above.
+fn sync_build(ui: &mut UIRoot, data: &fixtures::SceneData, zoom_ppb: f32) {
+    sync_data(ui, data, zoom_ppb);
+    ui.build();
+    reconcile_state(ui, data);
 }
 
 /// Render to `<scene><suffix>.png`, and (if requested) the tree dump as JSON +
 /// a terse stdout summary.
 fn render_and_dump(
-    ui: &UIRoot,
+    ui: &mut UIRoot,
     selection: &manifold_ui::UIState,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
     dir: &Path,
@@ -582,7 +604,7 @@ mod cache_path_full_render {
     use std::time::Duration;
 
     use manifold_core::LayerId;
-    use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
+    use manifold_gpu::{GpuDevice, GpuTextureFormat};
     use manifold_renderer::ui_cache_manager::UICacheManager;
     use manifold_renderer::ui_renderer::UIRenderer;
     use manifold_ui::automation::{self, AutomationTarget, SelectorQuery};
@@ -590,8 +612,9 @@ mod cache_path_full_render {
     use manifold_ui::node::Vec2;
 
     use super::*;
+    use super::composite_resources::{composite_frame as seam_composite_frame, CompositeResources};
     use crate::content_state::ContentState;
-    use crate::ui_frame::{apply_ui_frame_invalidations, composite_main_ui_frame, UiFrameSignals};
+    use crate::ui_frame::{apply_ui_frame_invalidations, UiFrameSignals};
     use crate::user_prefs::UserPrefs;
 
     /// P1 (D3): the invalidation decision and the atlas/offscreen composite
@@ -611,98 +634,14 @@ mod cache_path_full_render {
         apply_ui_frame_invalidations(ui, Some(cache), signals);
     }
 
-    /// The one-time GPU resources `composite_main_ui_frame` needs and the
-    /// live app builds once at GPU init (`Application::resumed`,
-    /// app.rs:1840-1922) — copied verbatim (not synthesized) so the harness
-    /// draws through the identical blit/atlas pipelines the show does.
-    struct CompositeResources {
-        offscreen: GpuTexture,
-        atlas_pipeline: manifold_gpu::GpuRenderPipeline,
-        atlas_sampler: manifold_gpu::GpuSampler,
-        blit_pipeline: manifold_gpu::GpuRenderPipeline,
-        blit_sampler: manifold_gpu::GpuSampler,
-    }
+    // `CompositeResources` (the offscreen target + atlas/blit pipelines
+    // `composite_main_ui_frame` needs) now lives in `composite_resources.rs`
+    // (P2, `UI_HARNESS_UNIFICATION_DESIGN.md` D3) — shared with `render.rs`'s
+    // `render_ui_to_png`, which needed the identical resources. Was a private
+    // copy duplicated in this test module; see that file's module doc.
 
-    impl CompositeResources {
-        fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
-            // Fullscreen triangle from vertex_index — verbatim from
-            // app.rs:1844-1864 (blit) and :1880-1900 (atlas; same shader,
-            // separate pipeline object for its distinct blend state).
-            let blit_shader = r#"
-@group(0) @binding(0) var t_source: texture_2d<f32>;
-@group(0) @binding(1) var s_source: sampler;
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-};
-@vertex
-fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
-    var out: VertexOutput;
-    let x = f32(i32(idx) / 2) * 4.0 - 1.0;
-    let y = f32(i32(idx) % 2) * 4.0 - 1.0;
-    out.position = vec4<f32>(x, y, 0.0, 1.0);
-    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
-    return out;
-}
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(t_source, s_source, in.uv);
-}
-"#;
-            let blit_pipeline = device.create_render_pipeline(
-                blit_shader,
-                "vs_main",
-                "fs_main",
-                GpuTextureFormat::Bgra8Unorm,
-                None,
-                "Blit Pipeline",
-            );
-            let blit_sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
-                min_filter: manifold_gpu::GpuFilterMode::Linear,
-                mag_filter: manifold_gpu::GpuFilterMode::Linear,
-                ..Default::default()
-            });
-
-            let premultiplied_blend = manifold_gpu::GpuBlendState {
-                src_factor: manifold_gpu::GpuBlendFactor::One,
-                dst_factor: manifold_gpu::GpuBlendFactor::OneMinusSrcAlpha,
-                operation: manifold_gpu::GpuBlendOp::Add,
-                src_alpha_factor: manifold_gpu::GpuBlendFactor::One,
-                dst_alpha_factor: manifold_gpu::GpuBlendFactor::OneMinusSrcAlpha,
-                alpha_operation: manifold_gpu::GpuBlendOp::Add,
-            };
-            let atlas_pipeline = device.create_render_pipeline(
-                blit_shader,
-                "vs_main",
-                "fs_main",
-                GpuTextureFormat::Bgra8Unorm,
-                Some(premultiplied_blend),
-                "Atlas Blit Pipeline",
-            );
-            let atlas_sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
-                min_filter: manifold_gpu::GpuFilterMode::Nearest,
-                mag_filter: manifold_gpu::GpuFilterMode::Nearest,
-                ..Default::default()
-            });
-
-            // Mirrors `Application::resize_ui_offscreen` (app.rs:2905-2920).
-            let offscreen = device.create_texture(&manifold_gpu::GpuTextureDesc {
-                width,
-                height,
-                depth: 1,
-                format: GpuTextureFormat::Bgra8Unorm,
-                dimension: manifold_gpu::GpuTextureDimension::D2,
-                usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
-                label: "UI Offscreen (harness)",
-                mip_levels: 1,
-            });
-
-            Self { offscreen, atlas_pipeline, atlas_sampler, blit_pipeline, blit_sampler }
-        }
-    }
-
-    /// Calls the shared seam (`composite_main_ui_frame`) with `video: None`
-    /// (D8 gap #2 — no compositor output in the harness).
+    /// D8: scale factor 1.0 always in this test — see
+    /// `composite_resources::composite_frame`'s `scale_factor` param.
     fn composite_frame(
         device: &GpuDevice,
         ui_renderer: &mut UIRenderer,
@@ -710,20 +649,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         ui: &mut UIRoot,
         res: &CompositeResources,
     ) {
-        composite_main_ui_frame(
-            device,
-            ui_renderer,
-            cache,
-            ui,
-            &res.offscreen,
-            &res.atlas_pipeline,
-            &res.atlas_sampler,
-            &res.blit_pipeline,
-            &res.blit_sampler,
-            1.0,
-            None,
-            (0.0, 0.0),
-        );
+        seam_composite_frame(device, ui_renderer, cache, ui, res, 1.0);
     }
 
     /// Read back the composited offscreen — the real main-window frame,
@@ -732,47 +658,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         super::render::readback(device, &res.offscreen, w, h)
     }
 
-    /// Save a BGRA8 byte buffer as an RGBA8 PNG (`image::save_buffer` has no
-    /// BGRA color type, so swap B/R per pixel — a display-only swizzle,
-    /// applied only at save time, never to bytes any check reads).
-    fn save_bgra_png(bgra: &[u8], w: u32, h: u32, path: &std::path::Path) {
-        let mut rgba = bgra.to_vec();
-        for px in rgba.chunks_exact_mut(4) {
-            px.swap(0, 2);
-        }
-        image::save_buffer(path, &rgba, w, h, image::ExtendedColorType::Rgba8)
-            .unwrap_or_else(|e| panic!("save {}: {e}", path.display()));
-    }
-
-    /// Assemble filmstrip tiles (each `tile_w`x`tile_h`, raw BGRA8 atlas
-    /// readback bytes) into ONE contact-sheet PNG, `cols` tiles per row
-    /// (trailing cells on an incomplete last row stay black).
-    fn save_filmstrip_png(
-        tiles: &[Vec<u8>],
-        tile_w: u32,
-        tile_h: u32,
-        cols: u32,
-        path: &std::path::Path,
-    ) {
-        assert!(!tiles.is_empty(), "filmstrip must have at least one tile");
-        let n = tiles.len() as u32;
-        let rows = n.div_ceil(cols);
-        let sheet_w = tile_w * cols;
-        let sheet_h = tile_h * rows;
-        let mut sheet = vec![0u8; (sheet_w * sheet_h * 4) as usize];
-        let row_bytes = (tile_w * 4) as usize;
-        for (i, tile) in tiles.iter().enumerate() {
-            let i = i as u32;
-            let (col, row) = (i % cols, i / cols);
-            let (ox, oy) = (col * tile_w, row * tile_h);
-            for y in 0..tile_h {
-                let src_off = y as usize * row_bytes;
-                let dst_off = (((oy + y) * sheet_w + ox) as usize) * 4;
-                sheet[dst_off..dst_off + row_bytes].copy_from_slice(&tile[src_off..src_off + row_bytes]);
-            }
-        }
-        save_bgra_png(&sheet, sheet_w, sheet_h, path);
-    }
+    // `save_bgra_png`/`save_filmstrip_png` now live in `render.rs` (P2,
+    // `UI_HARNESS_UNIFICATION_DESIGN.md` D3) — shared with `script.rs`'s
+    // `Runner`, which needed the identical helpers for its own filmstrip/
+    // snapshot artifacts. Were private copies duplicated in this test
+    // module; see `render.rs`'s doc comments on both.
+    use super::render::{save_bgra_png, save_filmstrip_png};
 
     /// The only automated assertion in this module (per the Reframe): the
     /// render drew *something* — not empty, not a single flat colour
