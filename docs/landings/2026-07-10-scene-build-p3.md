@@ -9,7 +9,7 @@
 - **Expose-time seeding** — `manifold-editing/src/commands/graph.rs`: `innermost_group_display_name` (:1746) resolves the group name from `scope_path`; `ToggleNodeParamExposeCommand::execute` threads it through `mirror_effect_side`'s new `inner_section` into `UserParamBinding.section` (new field, `manifold-core/src/effects.rs:98`). Top-level (empty scope) → `None`. Static-slot toggles never touch section.
 - **Rename-sweep** — `RenameGroupCommand` (graph.rs:2017) gained `swept: Vec<(String, Option<String>)>`; on rename it rewrites `section` on every spec whose value equals the old name AND whose binding target resolves inside the renamed subtree (`collect_node_ids` at :1762); `undo` restores each. Hand-edited sections (different string) untouched.
 - **Card header + fold** — `manifold-ui/src/panels/param_card.rs`: `section_runs` (:2151) groups contiguous same-section rows; `build_section_header` (:2174) draws the clickable header (fold triangle + name + row-count chip when folded); `PanelAction::SectionFoldToggled` triggers a pure rebuild (no model write). Fold state is UI-local workspace state — no second home in the model.
-- **Mapping editor** — `BindingMappingEdit.section` (`manifold-editing/src/commands/effects.rs:754`); `EditParamMappingCommand` writes it to the **manifest spec only** (BOUNDARIES D4). The popover text-input widget itself is deferred (BUG-101; the command-side write is real + tested).
+- **Mapping editor** — `BindingMappingEdit.section` (`manifold-editing/src/commands/effects.rs:754`); `EditParamMappingCommand` writes it to the **manifest spec only** (BOUNDARIES D4). The popover text-input widget itself is deferred (BUG-102; the command-side write is real + tested).
 - **Root-cause fix (found, not asked):** `ParamDef.section` (`manifold-core/src/effects.rs:83`) — the registry-facing twin of `ParamSpecDef` was missing the `section` mirror, so every glTF-imported generator (which tracks its embedded preset via the registry, `graph: None`) would silently lose every seeded section on catalog round-trip. Threaded through `to_spec`/`param_def_from_spec`/`param_spec_def_to_param_def`. Without this, P3 does nothing for the exact case it exists to serve.
 
 ## Gate (orchestrator-verified on the merged tree)
@@ -32,5 +32,5 @@ Re-ran the worker's `gltfscene` scene + `scripts/ui-flows/gltf-import-card-secti
 
 ## Shortcuts / owed
 
-- BUG-101 (mapping-popover section text field not wired — label editing was already deferred for the same reason) logged, command-side write is real + tested.
+- BUG-102 (mapping-popover section text field not wired — label editing was already deferred for the same reason) logged, command-side write is real + tested.
 - Fold-state persistence across restart: Deferred per §9, unchanged.
