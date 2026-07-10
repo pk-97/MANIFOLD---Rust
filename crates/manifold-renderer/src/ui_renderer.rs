@@ -1316,11 +1316,27 @@ impl UIRenderer {
 
         // Text (or icon if the first char is an atlas-icon codepoint — see
         // `manifold_ui::icons::Icon`).
+        // Overrunning text cuts TEXT_CLIP_PAD_X inside the node edge, not
+        // flush against it — a hard cut touching the border reads as broken;
+        // a small gap reads as deliberate truncation. Applied to the text
+        // clip only (icons are already inset, the caret is pinned inside),
+        // horizontal only (glyphs never legitimately hug a side edge, but
+        // ascenders/descenders can sit close to top/bottom on short chips).
+        // Well-fitted labels never touch the clip, so they're unaffected.
+        // The pad is halved-out on nodes too narrow to afford it rather
+        // than letting the clip invert and blank the label.
+        const TEXT_CLIP_PAD_X: f32 = 3.0;
         #[cfg(target_os = "macos")]
         if let Some(text) = &node.text
             && !text.is_empty()
         {
-            let clip_bounds = Some(node_clip);
+            let pad = TEXT_CLIP_PAD_X.min((node_clip[2] - node_clip[0]) * 0.25);
+            let clip_bounds = Some([
+                node_clip[0] + pad,
+                node_clip[1],
+                node_clip[2] - pad,
+                node_clip[3],
+            ]);
             let text_color = if disabled {
                 [
                     style.text_color.r,
@@ -1355,7 +1371,9 @@ impl UIRenderer {
                     icon_w,
                     icon_h,
                     text_color,
-                    clip_bounds,
+                    // Un-padded: the icon is already inset + square-fit above;
+                    // the text pad would shave its edge on narrow chips.
+                    Some(node_clip),
                     depth,
                     transform,
                 );

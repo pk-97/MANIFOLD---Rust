@@ -108,11 +108,18 @@ fn overlong_label_stays_inside_button() {
     }
     assert!(inside > 20, "label never drew inside the button ({inside} px)");
 
-    // 2. The invariant: nothing painted outside the button rect. Scan the
-    //    whole canvas minus the rect (+1px guard band for the snapped quad's
-    //    far edge landing on the boundary pixel).
-    let (x0, y0) = (BTN_X as u32 - 1, BTN_Y as u32 - 1);
-    let (x1, y1) = ((BTN_X + BTN_W) as u32 + 1, (BTN_Y + BTN_H) as u32 + 1);
+    // 2. The invariant: nothing painted outside the button rect — and
+    //    overrunning text also respects the horizontal comfort pad
+    //    (`TEXT_CLIP_PAD_X` in ui_renderer.rs), so the cut sits a couple of
+    //    pixels inside the edge instead of flush against it. Scan the whole
+    //    canvas minus the padded rect (+1px guard band for the snapped
+    //    quad's far edge landing on the boundary pixel).
+    const PAD_X: f32 = 3.0; // mirror of ui_renderer's TEXT_CLIP_PAD_X
+    let (x0, y0) = ((BTN_X + PAD_X) as u32 - 1, BTN_Y as u32 - 1);
+    let (x1, y1) = (
+        (BTN_X + BTN_W - PAD_X) as u32 + 1,
+        (BTN_Y + BTN_H) as u32 + 1,
+    );
     let mut leaked = Vec::new();
     for y in 0..H {
         for x in 0..W {
