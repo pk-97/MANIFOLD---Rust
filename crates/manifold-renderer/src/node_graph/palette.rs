@@ -234,6 +234,10 @@ mod tests {
                 "Sum Into Bins",
                 "Texture Size",
                 "Track Persist",
+                // `node.transform_3d` (P1, SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md):
+                // this literal enumeration wasn't updated when the atom
+                // landed — a pre-existing gap from that phase, not this one.
+                "Transform 3D",
                 "Trigger Ease To",
                 "Trigger Gate",
                 "Value",

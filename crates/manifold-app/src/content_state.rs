@@ -511,6 +511,7 @@ mod modulation_topology_guard_tests {
             invert: false,
             is_angle: false,
             is_trigger_gate: false,
+            section: None,
         }
     }
 

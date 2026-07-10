@@ -103,6 +103,7 @@ fn slot(id: &str, value: f32, exposed: bool) -> manifold_core::params::Param {
         invert: false,
         is_angle: false,
         is_trigger_gate: false,
+        section: None,
     });
     p.value = value;
     p.base = value;

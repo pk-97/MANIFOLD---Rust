@@ -160,7 +160,7 @@ mod remap;
 mod remove_drift_3d;
 mod render_3d_mesh;
 mod render_instanced_3d_mesh;
-mod render_scene;
+pub(crate) mod render_scene;
 mod render_filled_rects;
 mod render_lines;
 mod render_text;
