@@ -9,7 +9,7 @@
 //   capped        = local_density / (1 + local_density)
 //   adaptive_amp  = turbulence * (1 + capped * anti_clump)
 //   noise_time    = time2 * 0.1
-//   noise_pos     = p.position * 2.0
+//   noise_pos     = p.position * turb_scale (legacy constant: 2.0)
 //   nx = (simplex2d(noise_pos.yz + noise_time)        - 0.5) * 2
 //   ny = (simplex2d(noise_pos.xz + noise_time + 100)  - 0.5) * 2
 //   nz = (simplex2d(noise_pos.xy + noise_time + 200)  - 0.5) * 2
@@ -20,6 +20,10 @@ struct Uniforms {
     turbulence: f32,
     anti_clump: f32,
     time2: f32,
+    turb_scale: f32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 };
 
 struct Particle {
@@ -112,7 +116,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let adaptive_amp = u.turbulence * (1.0 + capped_density * u.anti_clump);
 
     let noise_time = u.time2 * 0.1;
-    let noise_pos = pos * 2.0;
+    let noise_pos = pos * u.turb_scale;
     let nx = (simplex_noise_2d(noise_pos.yz + vec2<f32>(noise_time)) - 0.5) * 2.0;
     let ny = (simplex_noise_2d(noise_pos.xz + vec2<f32>(noise_time + 100.0)) - 0.5) * 2.0;
     let nz = (simplex_noise_2d(noise_pos.xy + vec2<f32>(noise_time + 200.0)) - 0.5) * 2.0;

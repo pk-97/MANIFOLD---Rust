@@ -44,6 +44,12 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-092 | **gltf-import-caps-render-scene-objects-at-8-stale-mirror** | `gltf_import.rs`'s `MAX_RENDER_SCENE_OBJECTS = 8` truncates an imported glTF to its 8 largest-by-vertex materials (`materials.truncate(...)`, `assemble_render_scene_graph`), dropping the rest with a warning — but this constant is a stale mirror of `node.render_scene`'s OLD object cap. render_scene generalized object count to a soft `OBJECT_SLIDER_MAX = 64` (2026-07-05) and the comment at gltf_import.rs:60 still cites a non-existent render_scene `MAX_OBJECTS`. Effect: importing a model with >8 distinct materials silently loses objects that render_scene could now draw. Fix shape: raise/retire `MAX_RENDER_SCENE_OBJECTS` to track `OBJECT_SLIDER_MAX` (or import unbounded and let the slider clamp), and refresh the comment. Found 2026-07-10 while landing RENDER_SCENE_UNBOUNDED_LIGHTS (unrelated axis — that change uncapped *lights*; this is *objects*). LOW (import-time truncation with a user-visible warning, not a crash; only bites multi-material glTF imports). |
+| BUG-090 | **audio-mixdown-analysis-only-test-flakes-under-parallel-run** | `audio_mixdown::tests::render_export_audio_analysis_only_layer_taps_but_never_hits_master` (an exact `assert_eq!` on two separately-rendered `f32` audio buffers) failed once during F2's full `cargo test -p manifold-playback` gate run, then passed both standalone and in an immediate full-suite rerun — a parallel-execution flake, not a deterministic failure; root cause unknown (suspects: shared `TestDir` temp-path collision across threads, or thread-scheduling-sensitive float summation order in the mixdown path). Found 2026-07-10 running F2's gate; file untouched by F2 (confirmed via `git diff` against F2's base commit). LOW (test-only, intermittent — but an exact-equality float assertion under parallel test execution is a fragile pattern worth a look). |
+| BUG-089 | **live-clip-pending-tick-queue-dead-on-all-live-paths** | `LiveClipManager`'s tick-based pending-launch queue (`pending_by_tick`/`pending_by_layer`/`pending_by_clip_id`, `PendingLiveLaunch.target_tick`, `queue_pending`, `activate_due_pending_launches[_at_tick]`, `has_pending_activations`) can only ever be written when `event_absolute_tick >= 0`, but midir events always set `absolute_tick = -1` (`midi_input.rs`) and it is the sole producer of `MidiNoteEvent` in the whole workspace; `fire_layer_oneshot` also always passes `tick = -1`. `activate_due_pending_launches_at_tick` is the only live caller (`engine.rs:803`, fed `self.last_frame_count`, a frame counter, not a real clock tick) and drains a map that can never be non-empty in production — confirmed by exhaustive grep, not inference. Found 2026-07-10 while scoping F2's tick-queue deletion call; left OPEN rather than deleted because the dead footprint is the whole subsystem (7 items across 2 files plus a dead cancellation branch in `commit_live_clip`), wider than the single function F2 was scoped to evaluate — a clean full removal deserves its own dedicated pass. LOW (dead code, zero runtime cost beyond an empty-map check per tick; risk is only in a future session doing a partial removal). |
+| BUG-088 | **pre-existing-clippy-tests-gate-dirty-since-f1-landing** | `cargo clippy -p manifold-playback --tests -- -D warnings` fails on the base commit `cf1f3dc6` (F1's own landing) — `doc_lazy_continuation` in `tests/osc_timecode.rs:172` and three `cloned_ref_to_slice_refs`/`needless_range_loop` hits in `src/audio_mixdown.rs` (589/623/643) — none of which F2 touched (confirmed byte-identical via `git diff cf1f3dc6`). The plain `cargo clippy -p manifold-playback -- -D warnings` (no `--tests`) and a target-scoped `--test live_clip` both pass clean, so F2's own diff is clippy-clean; the full `--tests` sweep just wasn't clean at the commit F2 started from. Found 2026-07-10 running F2's gate. LOW (cosmetic/lint-only, not a correctness bug; blocks a fully-green `--tests` gate for whoever lands next until a small cleanup pass fixes the 2 files). |
+| BUG-086 | **recording-audio-track-under-covers-duration-on-longer-takes** | Repeated 2-minute 1920x1080 unpaced `recording-soak` self-checks measured `audio_duration_s` 1.3%-3.3% short of the intended duration (116.0s/118.4s/118.5s of 120.0s across three runs — variable, not a fixed percentage), while two independent 1-minute runs (1280x720 and 1920x1080) both measured exactly 60.0s — duration-dependent, not resolution-dependent, and not a "still queued at `stop()`" race (a 500ms settle delay before `stop()` changed the result by <0.1s). The native audio input silently drops on backpressure with no counter at all (`LiveRecordingPlugin.m:546-547`: `if (!state->audioInput.isReadyForMoreMediaData) return LR_OK; // drop samples rather than block` — unlike video's BUG-085, this path doesn't even log). Found 2026-07-10 building LIVE_RECORDING_PROOFS P2's soak self-check; root cause unknown (suspects: sustained real-time backpressure only manifesting past ~60-90s of continuous writing — disk I/O contention as the file grows, fragment-flush cadence, or AAC internal encoder buffering not fully flushed). MED — silent and uncounted, variable magnitude; unknown whether it scales worse over a full 20-minute take. |
+| BUG-085 | **recording-frames-recorded-overstates-async-append-drops** | `LiveRecorder_EncodeVideoFrame` returns success (and Rust's `frames_recorded` counts it) as soon as the synchronous GPU blit into the CVPixelBuffer completes — but the actual `appendPixelBuffer:` call happens later, async, on `state->appendQueue`, and silently drops the frame (`"[LiveRecorder] VideoToolbox backpressure — dropped frame"`, no counter incremented) if `videoIn.isReadyForMoreMediaData` is false at that moment. Under heavy backpressure `frames_recorded` can overstate the file's real packet count by the async-drop count. Found 2026-07-10 building LIVE_RECORDING_PROOFS P1 (`pool_accounting_consistent`'s bounded-retry-recovery variant hit it once: 107 counted vs 106 actual packets). MED (accounting-only — the file itself stays valid, PTS stays monotonic; but a post-set frame count could read wrong). LOW in practice — the async drop needs genuinely sustained backpressure a real 60fps show submission rate is unlikely to hit. |
 | BUG-083 | **video-export-has-no-progress-display** | Exporting video shows nothing until the finish toast — the content thread's per-10-frame progress snapshots never had a UI consumer (found 2026-07-09 by the A1 orphan lint; fields deleted, restore WITH a display from the P0 purge commit's parent). A multi-minute export looks like a hang. MED |
 | BUG-084 | **recording-drop-counter-never-surfaced** | `recording_dropped_frames` (pool-exhaustion drops during live recording) was emitted every tick, read nowhere — a set-recording silently dropping frames is invisible to the performer. Surface on the recording indicator when non-zero; same restore path as BUG-083. LOW |
 | BUG-082 | **trigger-fire-mode-level-features-near-dead** | The audio-mod drawer on a trigger/trigger-gate card offers all seven `AudioFeatureKind`s, but the fire chassis (`trigger_edge.advance` at 0.5 on the shaped signal) is tuned for impulses — Transients/Kick fire per hit; level features (Amplitude/Centroid/Flux/Pitch/Presence) cross mid once when the track gets loud and then sit disarmed, silently near-dead from the performer's view. Fix shape (AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION D6, lands P3): a live fire meter with the 0.5 threshold drawn as a line beside Amount on every fire-mode drawer — the engine honors level features as an invisible Schmitt trigger; visibility is what's missing. Feature restriction was considered and rejected (walks back LIVE_AUDIO_TRIGGERS U2). The separable widening (first-class level-crossing detector) is that design's Deferred #1 (MED) |
@@ -67,7 +73,7 @@ or human can read it, and it needs no external tool.
 | BUG-010 | **wgsl-first-entry** | multi-entry wgsl_compute silently dispatches the first (MED) |
 | BUG-011 | **fused-output-oversize** | fused output buffer sized to max of all inputs (MED) |
 | BUG-015 | **inspector-overlap** | stale-chrome class FIXED 2026-07-08 — incremental cache path now falls back to full render on out-of-sub-region dirt (`has_dirty_outside_ranges` + `incremental_path_safe`); blanket `clear_dirty` narrowed to the overlay region so the fallback isn't erased. (2026-07-04 "sections interleaved" sighting = separate open thread if it recurs) |
-| BUG-060 | **inspector-footer-overpaint** | REOPENED 2026-07-08. Opus 2nd pass: tree-geometry cause **ELIMINATED on the live cache path** (new `footer_leak_probe` test proves the inspector clips at footer_top through `traverse_flat_range`; footer's own render is correct) — the "inspector escapes into the footer" framing is wrong. Cause localized BELOW the tree, to the cache/dirty layer (tab-swap clears it = full recomposite). Artifact is **stale UI content** (UI colours / button fragments left behind), NOT clear/dark — the prior "footer goes dark, RGB 9-16" atlas dump was a HARNESS failure, not the symptom. Stale-pixel / dirty-clear bug, BUG-015 class. Needs live atlas+offscreen pixel dump. Cause still OPEN. |
+| BUG-060 | **inspector-footer-overpaint** | REOPENED 2026-07-08. Opus 2nd pass: tree-geometry cause **ELIMINATED on the live cache path** (new `footer_leak_probe` test proves the inspector clips at footer_top through `traverse_flat_range`; footer's own render is correct) — the "inspector escapes into the footer" framing is wrong. Cause localized BELOW the tree, to the cache/dirty layer (tab-swap clears it = full recomposite). Artifact is **stale UI content** (UI colours / button fragments left behind), NOT clear/dark — the prior "footer goes dark, RGB 9-16" atlas dump was a HARNESS failure, not the symptom. Stale-pixel / dirty-clear bug, BUG-015 class. Needs live atlas+offscreen pixel dump. Cause still OPEN. **2026-07-10 (Fable + Peter):** Rig screenshots relocate the artifact — fragments accumulate at the scroll viewport's CLIP EDGES (bottom sliver above footer_top on both tabs, top sliver under the tab strip on Master), i.e. INSIDE the inspector panel rows, and build up per scroll step until tab-swap wipes them. Both existing probes are structurally blind there: `footer_leak_probe` checks geometry below footer_top, the P0 differential asserts rows [footer_top, footer_top+h) — the artifact rows were never asserted, so the harness "0 diff" results don't contradict the rig (stop extending the harness; observe the rig instead). Live dump tool BUILT + VALIDATED on branch `debug/bug-060-surface-dump` (worktree `bug060-dump`, e81696b4): `MANIFOLD_BUG060_DUMP=<N>` overwrites `/tmp/bug060_atlas.png` + `/tmp/bug060_offscreen.png` every N dirty-present frames (default 30) and logs sf + footer/inspector rects; readback verified against a live launch (real UI, sf=2 Retina confirmed, playhead-only atlas/offscreen delta proves the surfaces are independent). Next: Peter reproduces with the flag set, then one look at the atlas PNG splits cache-layer vs composite/present. **2026-07-10 VERDICT (live dump, Peter's audioTesting2 repro): the dirt is IN THE ATLAS — and it is not a stale copy, it is a LIVE UNCLIPPED DRAW.** Pixel measurement on the dump: the blue pill in the top sliver spans rows 170–197 physical, the pixel-exact position EdgeStretch's own ON pill would occupy if unclipped (Glitch reference: pill top = title top − 3), while the header bg + title around it are correctly scissored at the viewport line (~188). So the card-header toggle's bg fill draws WITHOUT the column clip; every scroll leaves the previous unclipped copy in territory the (clipped) self-clearing panel render can never repaint — that is the accumulation, and only `invalidate_all` (tab swap) wipes it. Bottom-edge fragments (slider fills) are the same class: once the clip is lost mid-card, later fill quads in the range draw unclipped too. The `traverse_flat_range` suspect was CLEARED by a clip-topology test (`bug060_every_card_node_renders_under_the_column_clip`, green — fresh-build clip chains are sound). **ROOT CAUSE FOUND + FIXED 2026-07-10 @ `39836352`** via a batch-flush band trace (`MANIFOLD_BUG060_TRACE=x0,y0,x1,y1`) on Peter's live repro: card-shaped rects logged as `immediate ... scissor=None` during the inspector pass. `push/pop_transform` and `push/pop_depth` cut the pending rect run via `flush_immediate_run` even mid-traversal, batching already-enqueued TREE rects under `immediate_clip` (`None`) — every card ON pill drawn before its card's **rotated chevron** (`UIStyle.transform`) lost its scissor. This is also why the 2026-07-08 trace swore all 858 draws were clipped: it observed the clip stack at `draw_node` time, upstream of the flush-time theft. Fix: context-aware `flush_pending_run` (tree clip stack while `in_tree_pass`, immediate clip otherwise); regression test `transform_boundary_keeps_tree_scissor_on_pending_batch` proven red-under-old-flush/green-now. Gates green (workspace, gpu-proofs 1248, clippy). **RIG-VERIFIED by Peter + LANDED on main @ `cc4eeb37` 2026-07-10** (dump/trace tooling landed env-gated with it). **CLASS-KILL follow-up (same day): clip bound per command at enqueue** — `RectCommand` now carries `(clip, depth)` captured at the push site (like `LineCommand`/`ImageCommand`/text `clip_bounds`/per-command depth `22c5d528` already did); batches derive in `prepare()` by run-scanning consecutive equal `(clip, depth)`; ALL flush-time scissor inference (`flush_immediate_run`/`flush_scissor_batch`/`flush_pending_run`/`in_tree_pass`) deleted, so the wrong-flush mistake is unrepresentable. Invariant recorded in `docs/DEVELOPMENT_REFERENCE.md` ("UI Renderer Invariant"). CLOSED. |
 | BUG-025 | **timeline-scissor-bleed** | clip content bleeds across row bounds (MED, repro needed — scrolled headless render 07-07 clean) |
 | BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
 | BUG-050 | **ableton-anchor-yankback** | play-from-cursor snap-backs; anchor fix landed, rig confirmation owed via [ABL-SYNC] logs (HIGH) |
@@ -85,7 +91,7 @@ or human can read it, and it needs no external tool.
 | BUG-056 | **audio-mixdown-clippy-debt** | `manifold-playback` clippy gate (`-D warnings`) fails pre-existing on `audio_mixdown.rs` — `cloned_ref_to_slice_refs` + `needless_range_loop` (LOW, blocks the crate's clippy gate, not correctness) |
 | BUG-057 | **ui-snapshot-dead-blit-pipeline** | `cargo clippy -p manifold-app --features ui-snapshot` fails pre-existing on an unused `make_blit_pipeline` fn (LOW, blocks that one feature's clippy gate, not correctness) |
 | BUG-063 | **silent-load-repairs** | PARTIAL — load-repairs now surface as a non-blocking "opened with repairs" toast (P3, no longer silent); the heavier rescue path (blocking ack dialog + journal the pre-repair project.json to history/) is deferred (MED-HIGH) |
-| BUG-066 | **fluid3d-corner-drift** | FluidSim3D density herds into one corner (top-right at default params): turbulence noise is a wandering net tide + slope force has a sign-following, feather-scaled diagonal drift; root of the drift NOT yet found — 4 hypotheses refuted with evidence, harness in-repo (MED-HIGH, visible on stage) |
+| BUG-066 | **fluid3d-corner-drift** | PARTIAL — the dominant defect (screen-scale quadrant anatomy + wandering tide from the noise lattice at 2 cells/volume) FIXED 2026-07-10 via `turb_scale` on `node.turbulence_3d` + "Turb Detail" card param (default 8); the smaller slope-force diagonal tide (~0.5% of peak, measured by the harness force meter) remains open — precision + executor + mean-projection hypotheses all refuted with evidence (MED → LOW-MED after the fix, needs Peter look-pass) |
 | BUG-067 | **ui-snapshot-dead-blit-pipeline** | `make_blit_pipeline` (`crates/manifold-app/src/ui_snapshot/render.rs:760`) is never used; `cargo clippy --features manifold-app/ui-snapshot -- -D warnings` fails on it, so any clippy run that chains the ui-snapshot feature (needed for `cargo xtask ui-snap` L3 flows) trips. Pre-existing at `b9304330`, found during DRAG_CAPTURE P1 (LOW) |
 | BUG-068 | **inspector-scene-cliphit-overlap** | the `inspector` ui-snap scene fixture has a clip-vs-panel hit-test overlap at its narrower zoom — a clip can't be both uniquely-labeled and safely positioned over the inspector column, which forced DRAG_CAPTURE P1's L3 flow onto the `timeline` scene. Fixture-only, no runtime impact. Pre-existing at `b9304330` (LOW) |
 | BUG-069 | **shipping-license-audit** | four license problems in shipped components: madmom models + ADTOF (both CC BY-NC-SA), rusty_link crate (GPL-2.0, viral, in manifold-playback), staged ffmpeg copied from the dev machine (likely GPL build); full sweep 2026-07-08, everything else clean (HIGH for commercialization, zero runtime impact) |
@@ -93,6 +99,197 @@ or human can read it, and it needs no external tool.
 | BUG-071 | **ui-snap-dump-stale-parent** | FIXED 2026-07-10 (UI_HARNESS_UNIFICATION P0, D9c) — `dump.rs` now serializes `tree.parent_of(n.id)`, not `n.parent_id`; committed on `feat/ui-harness-p0` |
 
 ## Open
+
+### BUG-086 (recording-audio-track-under-covers-duration-on-longer-takes) — the recorded audio track can silently fall short of the intended duration on longer takes, no counter, root cause unknown — MED
+**Status:** OPEN
+
+Found 2026-07-10 building `LIVE_RECORDING_PROOFS` P2's `recording-soak` self-check gate
+(`crates/manifold-recording/src/bin/recording_soak.rs`). Sequence: the soak bin's synthetic
+audio was originally paced one chunk per video frame-loop iteration (media-time-locked); an
+unpaced 4K/1080p run compresses many minutes of "media time" into a few seconds of wall time,
+which triggered the native audio input's real-time backpressure gate
+([`LiveRecordingPlugin.m:546-547`](../crates/manifold-recording/native/LiveRecordingPlugin.m#L546):
+`if (!state->audioInput.isReadyForMoreMediaData) return LR_OK; // drop samples rather than
+block`) and lost ~91% of the audio (10.8s decoded out of an intended 120.0s) — worse than
+BUG-085's video path in one respect: this returns `LR_OK` (success) on drop and never logs
+anything, so there isn't even a warning, let alone a counter. Root-fixed the soak's OWN pacing
+(decoupled audio production from the video loop, paced to real wall-clock time instead, plus a
+post-loop real-time catch-up phase — matches how production audio actually arrives, from a
+real-time CoreAudio callback, never frame-coupled) which recovered the overwhelming majority of
+the loss (10.8s → 118.4s of 120.0s). A **residual, VARIABLE shortfall remains and is
+unexplained**: three repeated 2-minute 1920x1080 unpaced runs measured `audio_duration_s` at
+116.0s, 118.4s, and 118.5s against an intended 120.0s (1.3%-3.3% short, run to run — not a
+stable fixed percentage), while two independent 1-minute runs (1280x720 and 1920x1080) both
+measured exactly 60.0s — so whatever's causing it is **duration-dependent, not
+resolution-dependent**, onset is somewhere between 60s and 120s of continuous writing, and the
+magnitude varies (possibly with system load/contention — not isolated). Ruled out: a "still
+queued in the ring buffer at `stop()`" race — inserting a 500ms settle delay before calling
+`session.stop()` changed the measured shortfall by <0.1s, so the loss is happening *during* the
+run, not at shutdown. **Fix shape:** unknown without native-side instrumentation (out of P2's
+scope — proof-harness/soak-authoring work, not native FFI investigation). Suspects: sustained
+real-time backpressure that only manifests past some duration/data-volume threshold (disk I/O
+contention as the fragmented MOV grows, fragment-flush cadence interacting with the audio
+append queue, or AAC's own internal encoder buffering not being fully flushed by the periodic
+drain before a threshold is crossed). Wire an `appendedFrameCount` counter for audio analogous
+to BUG-085's video-side fix, or add NSLog-level visibility on the `LR_OK`-drop path at minimum,
+so this stops being silent. Given the observed variance, the soak's own audio-coverage check
+(`recording_soak.rs`, "Audio coverage sanity gate" comment) does NOT gate PASS/FAIL on a tight
+tolerance — a made-up number would misrepresent confidence that doesn't exist yet — it gates
+only a coarse 50% floor (catches a genuine collapse like the original 91%-loss defect) and
+prints a non-gating stderr warning past 2% short, naming this bug. **Unknown whether this loss
+scales worse over a full 20-minute take** — Peter's first full-scale soak run (P2's Deferred
+item, per design §6 P2) will be the first real data point at show scale; if the shortfall grows
+materially at that scale, this bug's severity should be revisited upward.
+
+**Orchestrator disambiguation 2026-07-10 (Opus, at P2 landing):** ran the soak in `--realtime`
+mode (submissions paced to wall clock — the true show proxy) for 2 minutes at 1920×1080 on an
+idle machine: `audio 120.0s` exactly, full coverage, versus `audio 118.6s` on the same-size
+unpaced run moments earlier. This is strong evidence the shortfall is an **unpaced-stress-mode
+artifact**, not a show-path defect: unpaced video encodes at 100% duty and the synthetic-audio
+catch-up floods the native audio input's real-time gate, which cannot happen in a real 60fps
+show where audio arrives wall-clock-paced from CoreAudio (exactly what `--realtime` replicates).
+Severity for the SHOW path is therefore LOW; the bug is real but lives in the soak's unpaced
+audio-feed pacing under encoder saturation. **Still worth the silent-drop fix** (the `LR_OK`-on-drop
+path with no counter/log is the actual defect worth removing, per BUG-085's sibling shape).
+Peter's first full-scale 20-minute run remains the confirming data point, but the show-relevance
+concern is now much reduced.
+
+### BUG-085 (recording-frames-recorded-overstates-async-append-drops) — `frames_recorded` can overstate the file's real packet count under sustained backpressure — MED accounting / LOW practical likelihood
+**Status:** OPEN
+
+Found 2026-07-10 building `LIVE_RECORDING_PROOFS` P1's `pool_accounting_consistent` test
+(`crates/manifold-recording/tests/recording_proofs.rs`), during a bounded-retry-recovery variant
+that deliberately holds pool slots un-released to simulate a slow encoder. `session.stop()`
+reported `frames_recorded: 107`; the file the harness's independent ffprobe oracle actually
+opened had 106 video packets. Root cause, in
+[`LiveRecordingPlugin.m`](../crates/manifold-recording/native/LiveRecordingPlugin.m) around
+line 490: `LiveRecorder_EncodeVideoFrame` returns `LR_OK` (line 519) as soon as the *synchronous*
+GPU blit into the CVPixelBuffer finishes — but the actual `[adaptor appendPixelBuffer:...]` call
+happens **later, asynchronously**, on `state->appendQueue` (`dispatch_async`, lines 490-516).
+Inside that async block, if `videoIn.isReadyForMoreMediaData` is false at the moment it runs
+(real VideoToolbox backpressure), the frame is silently dropped —
+`NSLog(@"[LiveRecorder] VideoToolbox backpressure — dropped frame at %.3fs", ...)` — with **no
+counter incremented anywhere Rust can see**. Rust's `frames_encoded` (→
+`RecordingResult::frames_recorded`) only reflects the synchronous return value, so it can never
+observe this drop. The container file itself stays completely valid (PTS strictly monotonic,
+no corruption) — this is purely an accounting gap: a post-set "N frames recorded" readout could
+overstate the truth by however many frames VideoToolbox silently dropped under backpressure.
+**Fix shape:** wire `atomic_int* appendedCounter` (already tracked at line 489, incremented at
+line 500 on real success) back out through the FFI — e.g. a `LiveRecorder_AppendedCount(handle)`
+query at `stop()`/finalize time, or have `LiveRecorder_Finalize`'s return value report the true
+appended count instead of (or alongside) the synchronous-call count — and have
+`LiveRecordingSession::stop()` prefer it. **Practical severity is LOW**: this needs genuinely
+sustained `isReadyForMoreMediaData == false` backpressure, which the harness's artificial
+fence-holding produces on purpose but a real 60fps show submission rate is very unlikely to
+sustain (VideoToolbox's ProRes proxy encode is comfortably faster than realtime at these
+resolutions). No `#[ignore]`-able regression test yet — `pool_accounting_consistent`'s current
+gate (`frames_recorded + frames_dropped == frames_submitted_total`, tracked entirely
+Rust-side) is internally consistent and doesn't touch this gap; a future test would need to
+assert `probe(file).pts.len() <= frames_recorded` under intentional backpressure instead.
+
+### BUG-092 (gltf-import-caps-render-scene-objects-at-8-stale-mirror) — glTF import truncates to 8 objects mirroring render_scene's REMOVED object cap — LOW (import-time truncation with a user warning, multi-material models only)
+**Status:** OPEN
+
+Found 2026-07-10 while landing RENDER_SCENE_UNBOUNDED_LIGHTS (an unrelated axis — that change
+uncapped *lights*; this is *objects*). `crates/manifold-renderer/src/node_graph/gltf_import.rs`:
+
+```rust
+const MAX_RENDER_SCENE_OBJECTS: usize = 8;
+// ...
+let dropped_over_cap = materials.len().saturating_sub(MAX_RENDER_SCENE_OBJECTS);
+materials.truncate(MAX_RENDER_SCENE_OBJECTS);
+```
+
+The comment at gltf_import.rs:60 says the cap is "mirrored from `node.render_scene`'s own
+`MAX_OBJECTS`" — but that constant no longer exists. render_scene generalized object count to a
+soft `OBJECT_SLIDER_MAX = 64` on 2026-07-05 (per-object `mesh_n/material_n` ports are generated
+by `format!`, one draw call each, no structural cap). So the import path drops objects that
+render_scene is now perfectly able to draw: a glTF with, say, 12 distinct materials imports as 8
+objects and silently loses 4, with a warning.
+
+**Why LOW:** it's import-time truncation with a user-visible warning, not a crash or a wrong
+render; and it only bites models with more than 8 distinct materials. But it's a real capability
+regression against the generalized renderer, and the stale comment actively misleads.
+
+**Fix shape:** raise `MAX_RENDER_SCENE_OBJECTS` to track `OBJECT_SLIDER_MAX` (64), or drop the
+import-side cap entirely and let render_scene's `objects` slider clamp — importing unbounded and
+clamping at the editor is the cleaner match to the "soft editor bound, no structural cap" model.
+Refresh the gltf_import.rs:60 comment either way. Left open rather than fixed while landing the
+lights change because it's a different axis (objects, not lights) and out of that phase's scope.
+
+### BUG-090 (audio-mixdown-analysis-only-test-flakes-under-parallel-run) — an exact-float-equality mixdown test failed once under parallel `cargo test`, passed on rerun — LOW (test-only, intermittent, root cause unknown)
+**Status:** OPEN
+
+Found 2026-07-10 running F2's gate: `cargo test -p manifold-playback` (full crate, default
+parallel test threads) reported `audio_mixdown::tests::render_export_audio_analysis_only_layer_taps_but_never_hits_master`
+FAILED — `assertion left == right failed: analysis-only layer altered master left` at
+`audio_mixdown.rs:678`. Two follow-ups both passed: running the same test alone
+(`cargo test -p manifold-playback --lib audio_mixdown::tests::render_export_audio_analysis_only_layer_taps_but_never_hits_master`)
+and rerunning the full suite immediately after (186 passed, 0 failed — same test count, this one
+included). `git diff` against F2's base commit (`cf1f3dc6`) is empty for `audio_mixdown.rs`, so
+F2 didn't touch it. The test does an exact `assert_eq!` on two independently-rendered `f32` audio
+buffers (`audio.left`/`audio.right` vs. a second `render_export_audio` call on a trimmed-down
+project) — that comparison pattern is inherently sensitive to any nondeterminism between the two
+render calls (shared mutable state, thread-scheduling-dependent float summation order, or a
+`TestDir`/temp-path collision with a concurrently-running test in another thread). **Fix shape:**
+unknown without reproducing under a stress run (`--test-threads=N` sweep or `cargo nextest run
+--no-capture -j <n> --retries 3` to catch it again with a stack/diff); once reproduced, either
+serialize the two renders' shared inputs or switch the assertion to a tolerance-based comparison
+if the root cause turns out to be legitimate float non-associativity rather than a race. Left
+open — single occurrence, out of scope for F2, needs dedicated repro time to chase reliably.
+
+### BUG-089 (live-clip-pending-tick-queue-dead-on-all-live-paths) — `LiveClipManager`'s tick-based pending-launch queue can never be populated in production — LOW (dead code, correctness-neutral)
+**Status:** OPEN
+
+Found 2026-07-10 while implementing F2 (MIDI launch quantize, CORE_ENGINE_MAP-adjacent). F2's
+brief specifically flagged `activate_due_pending_launches_at_tick` as a deletion candidate and
+asked for a caller grep before removing it. That grep turned up more than the one function:
+`queue_pending` (`live_clip_manager.rs`) — the only writer of `pending_by_tick` /
+`pending_by_layer` / `pending_by_clip_id` and the only place `PendingLiveLaunch.target_tick` is
+set — only runs when its caller's `event_absolute_tick >= 0`. Every live producer of that value
+traces back to `MidiNoteEvent.absolute_tick`, and `midi_input.rs`'s midir callback (the *only*
+constructor of `MidiNoteEvent` in the whole workspace — confirmed by grep, not inference) always
+sets it to `-1`. `fire_layer_oneshot` (the audio-trigger path) also always passes `tick = -1`
+explicitly. So `pending_by_tick` can never be non-empty on any live path today. Its one live
+reader, `activate_due_pending_launches_at_tick` (`engine.rs:803`, called every tick with
+`self.last_frame_count as i32` — a frame counter, not a real MIDI clock tick), is therefore an
+unconditional no-op in production (`if self.pending_by_tick.is_empty() { return false; }` fires
+every call). The sibling beat-based `activate_due_pending_launches` and `has_pending_activations`
+have no live caller at all — only `tests/live_clip.rs` exercises them. `commit_live_clip`'s
+"pending launch cancellation" branch (the `!self.live_slots.contains_key(&layer_index)` arm) is
+similarly unreachable live, since nothing ever queues a launch that skips straight to `live_slots`.
+
+**Fix shape:** delete the whole subsystem — `pending_by_tick`, `pending_by_layer`,
+`pending_by_clip_id`, `PendingLiveLaunch` (and its `target_tick` field), `queue_pending`,
+`activate_due_pending_launches`, `activate_due_pending_launches_at_tick`,
+`has_pending_activations`, the `engine.rs:803` call site, and the dead cancellation arm in
+`commit_live_clip` — plus the `tests/live_clip.rs` coverage that only exercises it
+(`pending_launch_queue_activates_at_tick`). Left open rather than done as part of F2: the
+footprint is a full subsystem across two files and a test, wider than the single function F2 was
+scoped to evaluate for deletion, and removing it correctly (without leaving `queue_pending`'s
+write side orphaned, or silently changing `commit_live_clip`'s NoteOff behavior for some future
+native-clock caller) deserves a dedicated pass with its own review, not a rider on a launch-
+quantize fix. F2 left this code untouched and unexercised by its own changes.
+
+### BUG-088 (pre-existing-clippy-tests-gate-dirty-since-f1-landing) — `cargo clippy -p manifold-playback --tests -- -D warnings` was already failing at the commit F2 started from — LOW (lint-only)
+**Status:** OPEN
+
+Found 2026-07-10 running F2's gate (`cargo clippy -p manifold-playback --manifest-path
+.../Cargo.toml --tests -- -D warnings`). Two files fail, neither touched by F2: `doc_lazy_continuation`
+in [`tests/osc_timecode.rs:172`](../crates/manifold-playback/tests/osc_timecode.rs#L172) (an F1
+doc-comment paragraph needs a blank line or indent), and three `cloned_ref_to_slice_refs` /
+`needless_range_loop` hits in [`src/audio_mixdown.rs`](../crates/manifold-playback/src/audio_mixdown.rs)
+at lines 589, 623, 643. `git diff cf1f3dc6 -- <both files>` is empty — both are byte-identical to
+the base commit F2 branched from, so this predates F2 and isn't a toolchain drift F2 introduced.
+Confirmed F2's own diff is clean two ways: the plain `cargo clippy -p manifold-playback --
+-D warnings` (no `--tests`, compiles the lib including its own unit tests via `#[cfg(test)]`)
+passes, and `cargo clippy -p manifold-playback --test live_clip -- -D warnings` (the target F2
+actually edited) passes standalone. **Fix shape:** trivial — indent/blank-line the doc comment in
+`osc_timecode.rs:172`; replace the two `.clone()`-into-single-element-slice calls with
+`std::slice::from_ref` and the `for i in 0..len` loop with `.iter().enumerate()` in
+`audio_mixdown.rs`. Left open rather than fixed as a drive-by: both files are unrelated to F2's
+scope (timecode receive path and audio mixdown respectively) and the fix, however small, belongs
+to whoever owns those files' next change.
 
 ### BUG-083 (video-export-has-no-progress-display) — exporting video gives zero on-screen feedback until the finish toast — MED (export is a release pillar; long exports look like a hang)
 **Status:** OPEN
@@ -213,7 +410,7 @@ scene (drag past the tracks' right edge) instead. Fixture-only, no app runtime i
 adjust the `inspector` scene's clip layout or zoom so a clip clears the panel.
 
 ### BUG-066 (fluid3d-corner-drift) — FluidSim3D density herds into one corner; two causes isolated, one root still open — MED-HIGH (visible on stage in long-running clips)
-**Status:** OPEN
+**Status:** PARTIAL — dominant defect fixed 2026-07-10 (see the dated addendum at the end of this entry); the smaller slope-force tide remains open
 
 **Found 2026-07-07 by Peter on the live output (subtle top-right dominance, no container and
 cube container), bisected headless the same session.** Harness:
@@ -322,6 +519,90 @@ toroidally — mixed boundary conventions couple opposite faces asymmetrically o
 reaches the volume edge. Fix at whichever level the probe convicts; then rerun the harness
 matrix (slope_only + slope_feather40 must go ≈25% flat) and give Peter a look-pass, since
 zero-mean turbulence (item 2) changes the fluid's feel.
+
+**2026-07-10 session (Fable + Peter) — dominant defect FIXED, projection fix REFUTED, meter now in-repo:**
+
+*The force meter (next-step 1b) is built* into `fluid3d_bias.rs`: `set_dump_all` +
+buffer readback prints per-axis mean/max force for every per-particle array at
+checkpoint frames (note: `Array<[f32;3]>` decodes as three scalar `f32` fields, not
+`vec3f`; and the in-place force chain aliases one buffer, so every force-node row
+shows the same post-accumulation content — attribute terms via scenario nulls, not
+rows). Measured: the slope tide is real — slope_only holds a persistent
++5e-5/axis mean (~0.5% of peak force) for 900 frames; the null control reads ~1e-7.
+
+*Refuted this session, with evidence:* (e) hardware trilinear rounding (2b) — a
+manual exact-f32 8-tap trilerp in the sample body left the tide and pooling
+unchanged; ALL precision theories are now dead. (f) uniform zero-mean projection as
+the fix — built (`node.remove_drift_3d`, three-pass reduce+subtract, GPU-oracle
+proven, registered but UNCONSUMED — shelf atom) and wired into the preset: it
+*inverted and amplified* the pooling (slope_only TR 37% → BL 46%; no-container BL
+63%). The imbalance is spatially concentrated (wall bands), so cancelling its net
+uniformly injects a volume-coherent counter-force — coherence is the amplifier.
+(g) volume-edge convention mixing (blur clamps / gradient wraps) — refuted by
+logic over existing data: no-container puts particles AT the volume edges and
+measures clean. Fused vs `MANIFOLD_FREEZE=0` renders bit-identical (weak evidence
+against the executor-schedule suspect; the toggle's effect on this path unverified).
+
+*The DOMINANT visible defect was a different bug at a higher level* (Peter's call —
+he saw quadrant-structured turbulence on the live output, one cube-shaped region
+behaving differently, stable across resolutions): the turbulence noise lattice.
+`node.turbulence_3d` sampled its 3-plane simplex at `pos * 2.0` (baked constant) —
+~2 lattice cells across the whole volume, so one noise cell reads as a quadrant of
+the sim, and a 2-cell field can't average to zero (= the item-2 wandering tide).
+**Fixed:** `turb_scale` param (port-shadowed, default 2.0 = legacy so old saves
+render unchanged) + "Turb Detail" card param on FluidSim3D (default 8.0). Sweep
+(detail 2/4/6/8/12, full defaults, 900f): quadrant anatomy gone from ~6 up,
+quadrant shares stable within ~2 points (legacy sloshes 10+), wandering tide 3–10×
+smaller. Peter look-pass at the rig owed (default 8 = my eye, not his yet).
+
+*Still open (the original slope tide, now LOW-MED):* root cause of the +diagonal
+~0.5%-of-peak slope-force mean. Next instruments, in order: (1) the synthetic
+antisymmetry probe (upload a mirror-symmetric density, run blur→gradient→slope→blur
+via the standalone kernels, find the first stage where F(p) ≠ −F(mirror p));
+(1b) octant-conditioned meter means (10-line harness change) to confirm the
+wall-band concentration; (2) unverified hypothesis from this session: an off-center
+tap range in `blur_3d_separable` (a `[-r, r-1]`-style kernel = half-voxel shift per
+pass, same sign every axis — fits all-axes-equal tide, feather scaling, legacy
+drifting slower, and survives parity because the oracle would share the defect).
+Read the blur kernel before building anything.
+
+**2026-07-10 part 2 (same session, after Peter's live falsification at flow −0.10 /
+feather 43 / turbulence 0 / ctr_scale 1.0 / 2M particles — the TR cube survives the
+Turb Detail fix because turbulence isn't even running):**
+
+*Shipped:* **hash-lane decorrelation.** `hash_float3` in the FluidSim3D seed pattern
+and `dfp_hash_float3` in `diffuse_force_3d_at_particles` (body + hand oracle) chained
+their lanes (h1 = hash(h0)), correlating x/y/z at 0.75/0.75/0.50 (CPU-verified) — the
+default seed cluster was a corner-to-corner diagonal CIGAR, and every anti-clump kick
+leaned diagonal. Fixed to independent lanes (seed XOR distinct constants; corr ≈ 0.01
+after). Real defects, worth having fixed — but NOT the cube's root: the artifact
+survived unchanged. **`BlackHole.json` carries the same chained-hash pattern — unfixed,
+needs its own look pass.**
+
+*Falsified this part, with evidence:* curl-wobble anatomy (cube survives curl=0 —
+though the wobble trig IS 2-periods-across-volume and its axis_raw CAN pass near
+zero; cosmetic hazard, still worth a later look); volume-edge convention mixing (cube
+unchanged at ctr_scale 1.0/0.9/0.8); blur kernel asymmetry (read: taps and weights
+exactly mirrored); container bounds + Euler integrator (read: symmetric);
+`flatten_to_camera_plane` at flatten=0 (read: clean early-out); Texture3D
+allocation-vs-dispatch mismatch (all vol_res/vol_depth params 128, plan sizes volumes
+from those params); two-population/index-identity split (half-split meter: all 2M
+live particles uniform in the low half of a 4M buffer, forces present for all).
+
+*Open clues for the next session:* (a) center of mass at f900 sits at
+**[0.58, 0.41, 0.27] — the displacement is z-DOMINANT**, invisible in the 2D view and
+unexplained by any surface theory; (b) peak |force| at flow −0.10 is **0.137/frame ≈
+14% of the volume per Euler step** — wildly over-CFL; the churn cube may be a
+numerical-instability zone whose location is set by whatever seeds the z asymmetry;
+(c) the artifact needs strong flow (−0.10); at −0.01 only mild TR pooling.
+
+*Next instrument (build BEFORE more hypothesis testing):* a **Texture3D slice
+viewer** — render z-slices of each stage's volume (density, blurred density,
+gradient, force, blurred force) to PNGs from the harness, and LOOK at which stage
+the cube/asymmetry first enters. Bisects the pipeline in one run instead of testing
+mechanisms one at a time; also a graph-editor gap (no Texture3D preview exists), so
+the work serves the product. The half-split meter machinery in `fluid3d_bias.rs`
+stays.
 
 ### BUG-063 (silent-load-repairs) — load-time repairs delete project data with log-only notice — MED-HIGH (silent data alteration; compounds BUG-062)
 **Status:** PARTIAL
@@ -1655,6 +1936,62 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-087 (osc-timecode-receiving-flag-false-positive-at-startup) — `is_receiving_timecode` can read true before any real OSC message ever arrives — LOW-MED (narrow boot-time window)
+**Status:** FIXED 2026-07-10 — `last_timecode_received_time` now defaults to `Seconds(f64::NEG_INFINITY)` (osc_sync.rs), so the timeout check can never pass before a real message sets it. Regression test `osc_update_no_false_receive_at_startup_before_any_timecode`.
+
+Found 2026-07-10 while wiring F1 (OSC/SMPTE timecode receive path, CORE_ENGINE_MAP §13.1) —
+[`osc_sync.rs`](../crates/manifold-playback/src/osc_sync.rs)'s `update()` computes `receiving =
+(now - last_timecode_received_time) < transport_timeout`, and `OscSyncController::new()`
+defaults `last_timecode_received_time` to `Seconds::ZERO` rather than a sentinel far in the
+past. `now` is the content thread's `time_since_start`, which also starts at zero at app boot.
+So if OSC M4L sync becomes enabled while `time_since_start` is still within `transport_timeout`
+(default 0.5s) of boot, the very first `update()` tick computes `receiving = true` with zero
+real timecode ever having arrived — a false positive. Combined with `follow_transport` (default
+on), this can fire a spurious PLAY at the very start of a session with OSC M4L mode already
+selected. The F1 receive-path test (`crates/manifold-playback/tests/osc_timecode.rs`) hit this
+directly: its `wait_for_receiving` loop's first iteration reported "receiving" before the test's
+synthetic UDP packet had actually been processed, until the test was changed to offset its own
+`now` baseline well past `transport_timeout` — a test-side workaround, not a production fix.
+**Fix shape:** give `last_timecode_received_time` a sentinel default (e.g. a large negative
+`Seconds`, matching the existing `pending_timecode_seconds: Seconds(-1.0)` sentinel pattern one
+field up) so the timeout check can never pass before a real message sets it. One-line change;
+left open because it's outside F1's scoped wiring fix and the exact boot-time semantics
+("ported from Unity") deserved a dedicated look rather than a same-session drive-by.
+
+### BUG-091 (osc-drop-frame-timecode-uses-approximate-divisor) — SMPTE drop-frame seconds conversion divides by literal `29.97` instead of the true `30000/1001` rate — LOW (self-correcting, sub-frame magnitude)
+**Status:** FIXED 2026-07-10 — drop-frame branch now computes `(total_frames as f64 * 1001.0 / 30000.0) as f32` (osc_sync.rs); 00:01:00:02 DF is now exactly 60.06s. Exact-value test `drop_frame_absolute_seconds_are_standards_exact`.
+
+Found 2026-07-10 building F3's drop-frame timecode test vectors
+(`crates/manifold-playback/src/osc_sync.rs::tests`). `timecode_to_seconds`'s drop-frame branch:
+
+```rust
+let total_frames = 108000 * hours + 1800 * minutes + 30 * seconds + frames - dropped_frames;
+total_frames as f32 / 29.97
+```
+
+The frame-*drop pattern* (skip display numbers `:00`/`:01` at the start of every minute except
+every tenth) is exactly SMPTE 12M and was safe to pin with a test (`drop_frame_skips_two_frame_numbers_at_non_tenth_minute_boundary`,
+`drop_frame_does_not_skip_at_ten_minute_boundary` — both phrased as self-consistent one-frame
+deltas so the divisor question doesn't leak into them). The *divisor* is where it diverges from
+the standard: real 29.97 drop-frame timecode runs at exactly `30000/1001 ≈ 29.970029970...`
+fps, not the flat decimal `29.97`. At TC `00:01:00:02` (`total_frames = 1800`), the code's
+`1800/29.97 = 60.060060...s` vs the standard's `1800/(30000/1001) = 60.06s` exactly — a ~60µs
+gap that scales linearly with elapsed frame count (~3.6ms/hour). `timecode_frame_rate` (the
+serialized, user-facing field) is also silently ignored in this branch — only the non-drop-frame
+`else` arm reads it, so setting it to anything while `drop_frame == true` has no effect.
+
+**Why this is LOW despite being a real divergence from the standard:** `sync_timecode_to_playback`
+nudges (or seeks) to the freshly-received OSC timecode on every incoming message while playing
+(§7/§11: "no threshold — apply every OSC frame so drift never accumulates"), so any error this
+small is overwritten before it could ever be perceived, let alone reach the 0.05s stopped-seek
+threshold. Root cause is a one-line arithmetic constant, not a design issue.
+
+**Fix shape:** replace the literal `29.97` with `30000.0 / 1001.0`, and read `self.timecode_frame_rate`
+in the drop-frame branch too (or document why it's deliberately fixed at the NTSC rate there).
+Left open rather than fixed in F3 because F3's scope is test coverage, not sync-code changes —
+this is exactly the class of finding F4/F6 (the correctness-fix phases this net exists for)
+should pick up.
 
 ### BUG-062 (no-forward-version-guard) — an older build opening a newer .manifold silently strips unknown fields/effects and saves the loss back — HIGH (latent; becomes live the day two builds coexist)
 **Status:** FIXED @ 1e349bf5

@@ -14,6 +14,7 @@ import re
 import shlex
 import subprocess
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -366,11 +367,15 @@ def detect_git_landing_signal(name, input_):
     position via the shared segment splitter (TICKETS.md T1 — the prior
     regex scanned the raw string anywhere, so `rg 'git branch -D'` — a
     SEARCH for that text, no git invocation at all — falsely fired).
-    Never raises. Returns a sorted list of category names (possibly empty)."""
+    A branch-delete gated by a `git merge-base --is-ancestor` segment in the
+    same compound command is exempt (the protocol-compliant delete — see the
+    ancestor_guard note below). Never raises. Returns a sorted list of category
+    names (possibly empty)."""
     if name != "Bash" or not isinstance(input_, dict):
         return []
     cmd = input_.get("command") or ""
     hits = set()
+    ancestor_guard = False
     try:
         for toks in _landing_shlex_segments(cmd):
             toks = _landing_strip_leading_keywords(toks)
@@ -383,8 +388,22 @@ def detect_git_landing_signal(name, input_):
                 hits.add("branch-delete")
             elif sub == "push" and any(t == "--delete" or t.startswith("--delete=") for t in rest):
                 hits.add("branch-delete")
+            elif sub == "merge-base" and "--is-ancestor" in rest:
+                ancestor_guard = True
     except Exception:
         return []
+    # eval/observations.session.jsonl (2026-07-10) + 8 graded FPs across the
+    # graded week: a branch-delete &&-gated on `git merge-base --is-ancestor`
+    # in the SAME compound command is exactly the protocol
+    # GIT_TREE_DISCIPLINE.md §2 requires ("never delete a branch until
+    # merge-base --is-ancestor confirms its commits are on main"). Firing on a
+    # compliant, guarded delete trains alert-blindness on git-landing's
+    # highest-frequency form (26 fires/week). Deterministic, regex-tier: a
+    # merge-base --is-ancestor segment anywhere in the same command string
+    # exempts the branch-delete. cherry-pick — the other twin-killer, unrelated
+    # to ancestry — is never exempted.
+    if ancestor_guard:
+        hits.discard("branch-delete")
     return sorted(hits)
 
 
@@ -717,6 +736,48 @@ def format_session_facts(state, current_event_count):
     return "; ".join(parts)
 
 
+# DESIGN.md §2 / PASS2_AGENDA item 3 (sleep pass 2): anchor/verify-claim's
+# biggest and cleanest FP class (night-half taxonomy class (a), ~11/50 graded
+# fires) is windows with NO stated claim in view — recon reads, task-start
+# UserPromptSubmit windows, waiting-on-TaskOutput — where the classifier fired
+# on tool-heavy cadence rather than an actual assertion (#32 cadence-fire,
+# CONFIRMED). This is a deterministic claim-PRESENCE gate over the window's
+# RECENT assistant text: verify-claim may only fire when the assistant actually
+# stated a completion / success / verification claim (the kind of statement
+# verify-claim exists to check). Suppression-ONLY — the observer applies it as
+# a post-filter that can only REMOVE a verify-claim fire, never add one, so it
+# cannot re-introduce any prior noise class; its only risk is over-suppression
+# (recall), which the vocabulary is kept deliberately BROAD to bound (a
+# too-broad match errs toward KEEPING the classifier's fire, never toward
+# suppressing a real TP). Recon narration ("let me read X", "checking Y",
+# questions, "waiting for the agent") carries none of these markers.
+CLAIM_MARKERS_RE = re.compile(
+    r"\b(?:"
+    r"done|fix(?:ed|es)?|works?|working|land(?:ed|s)?|shipp(?:ed|ing)|pushed|"
+    r"implement(?:ed|s)?|completed?|complete|resolv(?:ed|es)?|ready|"
+    r"passes|passing|passed|verif(?:ied|ies)|confirm(?:ed|s)?|correct(?:ly)?|"
+    r"succeed(?:s|ed)?|solved?|functional|"
+    r"wired\s+up|in\s+place|good\s+to\s+go|"
+    r"should\s+(?:now\s+)?(?:work|be|fix|resolve|handle|pass)|"
+    r"now\s+(?:works?|renders?|handles?|passes|correct)|"
+    r"is\s+(?:now\s+)?(?:correct|working|fixed|resolved|done|right)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def contains_claim(texts):
+    """Deterministic claim-presence gate for anchor/verify-claim (PASS2 item 3,
+    class (a) FP fix). `texts` is the window's RECENT assistant texts. Returns
+    True if any reads as a completion / success / verification assertion. Kept
+    broad on purpose: erring toward True keeps the classifier's judgment (safe),
+    erring toward False would suppress a real fire (recall loss). Never raises."""
+    for t in texts or ():
+        if isinstance(t, str) and CLAIM_MARKERS_RE.search(t):
+            return True
+    return False
+
+
 def parse_ts(ts_raw):
     if not ts_raw:
         return None
@@ -793,6 +854,10 @@ class WindowState:
         closed = {
             "end_event_count": self.total_tool_event_count,
             "end_ts": ts,
+            # PASS2 item 3: deterministic claim-presence over RECENT, computed
+            # here (single windowing source) so observer.py and replay.py apply
+            # the identical verify-claim class-(a) gate without drifting.
+            "has_claim": contains_claim(self.recent_texts),
             "text": format_window(
                 self.current_task,
                 self.ledger_buffer,
@@ -930,6 +995,51 @@ def extract_json(text):
     return None
 
 
+# --- classifier latency stamp (synchronous-caller throttle detection) -------
+# Keep in lockstep with valve.VERDICTS_DIR (same env override, same default);
+# common can't import valve without inverting the dependency direction.
+VERDICTS_DIR = os.environ.get("DAEMON_VERDICTS_DIR") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "verdicts"
+)
+CLASSIFIER_STAMP = os.path.join(VERDICTS_DIR, "classifier_latency.json")
+
+
+def _write_classifier_stamp(duration_s, timed_out):
+    """Record the latest classifier call's latency (any caller — observer or
+    gate hooks). Latency is bimodal (~3s healthy, minutes under rate-limit
+    saturation — see call_classifier's timeout comment), so one recent sample
+    is a usable throttle signal for synchronous callers that can't afford the
+    saturated mode. Best-effort: never raises."""
+    try:
+        os.makedirs(VERDICTS_DIR, exist_ok=True)
+        tmp = f"{CLASSIFIER_STAMP}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(
+                {"ts": time.time(), "duration_s": round(duration_s, 2), "timed_out": timed_out},
+                f,
+            )
+        os.replace(tmp, CLASSIFIER_STAMP)
+    except OSError:
+        pass
+
+
+def classifier_throttled(fresh_s=600, slow_s=20):
+    """True when the latest classifier call suggests the account is currently
+    rate-limit saturated: stamp younger than fresh_s, and that call either
+    timed out or ran slow_s or slower. Missing / stale / unreadable stamps all
+    read as healthy — synchronous callers should try (their own call fails
+    open anyway); the point here is only to skip a wait that recent evidence
+    says is dead."""
+    try:
+        with open(CLASSIFIER_STAMP, encoding="utf-8") as f:
+            d = json.load(f)
+        if time.time() - float(d.get("ts", 0)) > fresh_s:
+            return False
+        return bool(d.get("timed_out")) or float(d.get("duration_s", 0)) >= slow_s
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def call_classifier(system_prompt, window_text, model=MODEL, timeout=180, cwd=None):
     # timeout=180, not 60: classifier latency is bimodal — ~3s healthy, or
     # minutes when the account is rate-limit saturated (orchestrator fleets).
@@ -953,14 +1063,18 @@ def call_classifier(system_prompt, window_text, model=MODEL, timeout=180, cwd=No
         "--no-session-persistence",
         window_text,
     ]
+    t0 = time.monotonic()
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd or NEUTRAL_CWD
         )
     except subprocess.TimeoutExpired:
+        _write_classifier_stamp(timeout, True)
         return {"error": "timeout"}
     except OSError as e:
+        # spawn failure says nothing about API latency — leave the stamp alone
         return {"error": f"spawn failed: {e}"}
+    _write_classifier_stamp(time.monotonic() - t0, False)
     if proc.returncode != 0:
         # error detail can land on either stream; stderr is often empty
         detail = (proc.stderr.strip() or proc.stdout.strip())[:200]

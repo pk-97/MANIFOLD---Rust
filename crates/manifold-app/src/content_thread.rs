@@ -1549,8 +1549,22 @@ impl ContentThread {
         };
         self.ableton_active_last_frame = ableton_active;
 
-        // OSC timecode sync — M4L mode only.
+        // OSC timecode sync — M4L mode only. `enable_osc`/`disable_osc` had
+        // zero callers anywhere in the app before this fix (F1,
+        // CORE_ENGINE_MAP) — is_osc_enabled could never become true, so
+        // `update()` below always returned on its first line. Track
+        // enablement against the live mode here, mirroring how the
+        // AbletonOsc branch above is itself gated on osc_sync_mode. Both
+        // calls are idempotent (each checks its own is_osc_enabled first).
         if osc_sync_mode == OscSyncMode::M4L {
+            if !self.osc_sync.is_osc_enabled {
+                self.osc_sync.enable_osc(&mut self.osc_receiver);
+            }
+            // Drain the latest timecode message captured by the subscription
+            // callback (osc_receiver.update() already dispatched it above,
+            // before this block) into on_timecode_received, BEFORE update().
+            self.osc_sync.drain_pending_osc_timecode(now);
+
             let snap = SyncTargetSnapshot::from_engine(&self.engine);
             self.osc_sync.update(
                 now,
@@ -1559,6 +1573,8 @@ impl ContentThread {
                 &mut self.engine,
                 authority,
             );
+        } else if self.osc_sync.is_osc_enabled {
+            self.osc_sync.disable_osc(Some(&mut self.osc_receiver));
         }
 
         // AbletonOSC inbound transport relay — closed-loop via the transport

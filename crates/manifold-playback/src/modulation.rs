@@ -518,7 +518,15 @@ fn evaluate_instance_audio_mods(
         };
         let raw = m.source.feature.extract(features);
         let shape = m.shape;
-        let out_norm = shape.apply(raw, dt_s, &mut m.smoothed, &mut m.prev_raw);
+        // `conditioned` is the pre-range-map signal (sensitivity, smoothing,
+        // invert, curve) — edge detection (trigger-gate/trigger/Step/Random
+        // fire arms below) reads THIS, never the range-mapped `out_norm`, so
+        // the trim handles never distort whether/when a mod fires (BUG:
+        // range_min >= 0.5 fired once and never re-armed; range_max <= 0.5
+        // never fired at all). `out_norm` stays the range-mapped value for
+        // Continuous, which is exactly what the range map is for.
+        let conditioned = shape.condition(raw, dt_s, &mut m.smoothed, &mut m.prev_raw);
+        let out_norm = shape.map_range(conditioned);
 
         if is_trigger_gate {
             // §9 U1: the mod's target is a trigger-gate card (e.g.
@@ -528,8 +536,10 @@ fn evaluate_instance_audio_mods(
             // fire pushes a pulse for the renderer's `audio_count` instead of
             // a monotonic count. Mode gates only whether the pulse EMITS, not
             // whether the edge advances, so switching mode live never leaves
-            // the armed flag out of sync with the audio signal.
-            if m.trigger_edge.advance(out_norm, 0.5)
+            // the armed flag out of sync with the audio signal. Detection
+            // runs on `conditioned` (pre-range-map) so trim handles never
+            // distort firing.
+            if m.trigger_edge.advance(conditioned, 0.5)
                 && m.trigger_mode.unwrap_or(TriggerFireMode::Both).wants_transient()
             {
                 pulses.push(TriggerPulse { layer_id: layer_id.clone() });
@@ -545,8 +555,10 @@ fn evaluate_instance_audio_mods(
             // unchanged. `action` is irrelevant here — the drawer never
             // offers an Action row on an `is_trigger`/`is_trigger_gate` card
             // (D8), so this arm's behavior is untouched by PARAM_STEP_ACTIONS.
+            // Detection runs on `conditioned` (pre-range-map) so trim handles
+            // never distort firing.
             if let Some(p) = params.get_mut(m.param_id.as_ref()) {
-                if m.trigger_edge.advance(out_norm, 0.5) {
+                if m.trigger_edge.advance(conditioned, 0.5) {
                     m.fire_count = m.fire_count.wrapping_add(1);
                 }
                 p.value = p.base + m.fire_count as f32;
@@ -576,31 +588,53 @@ fn evaluate_instance_audio_mods(
                 // the step. `None` defaults to Transient here, NOT `Both`
                 // like gate cards (D3: a step mod with no audio intent is
                 // meaningless — arming it required opening an audio drawer).
-                let audio_edge = m.trigger_edge.advance(out_norm, 0.5);
+                // Detection runs on `conditioned` (pre-range-map) so trim
+                // handles never distort firing.
+                let audio_edge = m.trigger_edge.advance(conditioned, 0.5);
                 let mode = m.trigger_mode.unwrap_or(TriggerFireMode::Transient);
                 let fires =
                     (mode.wants_transient() && audio_edge) || (mode.wants_clip_edge() && clip_edge);
                 if fires {
-                    let base = params.get(m.param_id.as_ref()).map(|p| p.base).unwrap_or(min);
-                    let current = m.step_value.unwrap_or(base);
-                    // A discrete param's reachable set is the INCLUSIVE
-                    // integer grid {min, min+1, ..., max} — max-min+1
-                    // positions, one more than a continuous cycle's
-                    // max-min. `Wrap` must land one-past-max exactly on
-                    // min, so its cycle length needs that +1; `Bounce`/
-                    // `Clamp` reflect/saturate at the true max regardless
-                    // (max IS a reachable, real rail either way).
+                    // The trim-handle zone is what Step travels within, not
+                    // the param's full min/max rails — a trimmed handle bounds
+                    // Step/Random exactly the way it already bounds Continuous.
+                    let (mut lo, mut hi) = shape.zone(min, max);
+                    if whole_numbers {
+                        // Snap the zone rails to the integer grid inside it.
+                        let lo_i = lo.ceil();
+                        let hi_i = hi.floor();
+                        if hi_i < lo_i {
+                            // No integer lands inside this (sub-1-wide) zone —
+                            // collapse to the nearest integer to its center.
+                            let collapsed = ((lo + hi) * 0.5).round().clamp(min, max);
+                            lo = collapsed;
+                            hi = collapsed;
+                        } else {
+                            lo = lo_i;
+                            hi = hi_i;
+                        }
+                    }
+                    let base = params.get(m.param_id.as_ref()).map(|p| p.base).unwrap_or(lo);
+                    // A base outside the zone (e.g. left over from before the
+                    // handles were trimmed) enters at the nearest rail.
+                    let current = m.step_value.unwrap_or(base).clamp(lo, hi);
+                    // A discrete zone's reachable set is the INCLUSIVE integer
+                    // grid {lo, lo+1, ..., hi} — hi-lo+1 positions, one more
+                    // than a continuous cycle's hi-lo. `Wrap` must land
+                    // one-past-hi exactly on lo, so its cycle length needs
+                    // that +1; `Bounce`/`Clamp` reflect/saturate at the true
+                    // hi regardless (hi IS a reachable, real rail either way).
                     let wrap_max = if whole_numbers && matches!(wrap, WrapMode::Wrap) {
-                        max + 1.0
+                        hi + 1.0
                     } else {
-                        max
+                        hi
                     };
-                    let (mut next, dir) = wrap.advance(current, amount, m.step_dir, min, wrap_max);
+                    let (mut next, dir) = wrap.advance(current, amount, m.step_dir, lo, wrap_max);
                     if whole_numbers {
                         next = next.round();
                     }
                     m.step_dir = dir;
-                    m.step_value = Some(next.clamp(min, max));
+                    m.step_value = Some(next.clamp(lo, hi));
                 }
             }
             TriggerAction::Random => {
@@ -609,20 +643,38 @@ fn evaluate_instance_audio_mods(
                 // above are mutually exclusive per mod (is_trigger `continue`s
                 // before this match), so there's no shared-meaning collision.
                 // D3 event-source gating: same shape as the Step arm above.
-                let audio_edge = m.trigger_edge.advance(out_norm, 0.5);
+                // Detection runs on `conditioned` (pre-range-map) so trim
+                // handles never distort firing.
+                let audio_edge = m.trigger_edge.advance(conditioned, 0.5);
                 let mode = m.trigger_mode.unwrap_or(TriggerFireMode::Transient);
                 let fires =
                     (mode.wants_transient() && audio_edge) || (mode.wants_clip_edge() && clip_edge);
                 if fires {
                     m.fire_count = m.fire_count.wrapping_add(1);
-                    let base = params.get(m.param_id.as_ref()).map(|p| p.base).unwrap_or(min);
-                    let current = m.step_value.unwrap_or(base);
+                    // Same trim-handle zone as Step: Random jumps within the
+                    // rails the handles define, not the param's full range.
+                    let (mut lo, mut hi) = shape.zone(min, max);
+                    if whole_numbers {
+                        let lo_i = lo.ceil();
+                        let hi_i = hi.floor();
+                        if hi_i < lo_i {
+                            let collapsed = ((lo + hi) * 0.5).round().clamp(min, max);
+                            lo = collapsed;
+                            hi = collapsed;
+                        } else {
+                            lo = lo_i;
+                            hi = hi_i;
+                        }
+                    }
+                    let base = params.get(m.param_id.as_ref()).map(|p| p.base).unwrap_or(lo);
+                    let current = m.step_value.unwrap_or(base).clamp(lo, hi);
                     let discrete_count =
-                        whole_numbers.then(|| ((max - min).round().max(0.0) as u32) + 1);
-                    let current_index =
-                        discrete_count.map(|_| (current - min).round().max(0.0) as u32).unwrap_or(0);
-                    let next = random_step_value(m.fire_count, min, max, discrete_count, current_index);
-                    m.step_value = Some(next.clamp(min, max));
+                        whole_numbers.then(|| ((hi - lo).round().max(0.0) as u32) + 1);
+                    let current_index = discrete_count
+                        .map(|n| ((current - lo).round().max(0.0) as u32).min(n.saturating_sub(1)))
+                        .unwrap_or(0);
+                    let next = random_step_value(m.fire_count, lo, hi, discrete_count, current_index);
+                    m.step_value = Some(next.clamp(lo, hi));
                 }
             }
         }
@@ -1795,5 +1847,234 @@ mod tests {
             step, None,
             "master-chain instances never see a clip edge, regardless of clip_edge_layers contents"
         );
+    }
+
+    // ── trim-handle zone rails (BUG class-kill): detection reads the
+    //    conditioned (pre-range-map) signal; Step/Random travel within the
+    //    zone the handles define, not the param's full min/max ──────────────
+
+    #[test]
+    fn step_fires_repeatedly_when_range_min_would_have_killed_detection() {
+        // OLD behavior: edge detection ran on the range-mapped signal. With
+        // range_min = 0.6, the mapped floor never drops below 0.6 (>= the 0.5
+        // threshold), so the mod fires once and never re-arms. Detection must
+        // run on the conditioned (pre-map) signal instead, so the mod keeps
+        // firing on every repeated hit exactly like the default-handle case.
+        let (mut project, send_id) = project_with_audio_send();
+        attach_action_mod(
+            &mut project,
+            &send_id,
+            "segs",
+            TriggerAction::Step { amount: 1.0, wrap: WrapMode::Wrap },
+        );
+        project.timeline.layers[0].effects.as_mut().unwrap()[0]
+            .audio_mods
+            .as_mut()
+            .unwrap()[0]
+            .shape
+            .range_min = 0.6;
+
+        let got = fire_n_times(&mut project, 5);
+        for (i, pair) in got.windows(2).enumerate() {
+            assert_ne!(
+                pair[0], pair[1],
+                "fire {i}->{}: mod must re-arm and step every hit even with range_min=0.6, got {:?}",
+                i + 1,
+                got
+            );
+        }
+    }
+
+    #[test]
+    fn step_fires_repeatedly_when_range_max_would_have_killed_detection() {
+        // OLD behavior: with range_max = 0.4, the mapped ceiling never rises
+        // above 0.4 (< the 0.5 threshold), so the mod NEVER fires at all.
+        // Detection on the conditioned signal must fire normally.
+        let (mut project, send_id) = project_with_audio_send();
+        attach_action_mod(
+            &mut project,
+            &send_id,
+            "segs",
+            TriggerAction::Step { amount: 1.0, wrap: WrapMode::Wrap },
+        );
+        project.timeline.layers[0].effects.as_mut().unwrap()[0]
+            .audio_mods
+            .as_mut()
+            .unwrap()[0]
+            .shape
+            .range_max = 0.4;
+
+        let got = fire_n_times(&mut project, 5);
+        for (i, pair) in got.windows(2).enumerate() {
+            assert_ne!(
+                pair[0], pair[1],
+                "fire {i}->{}: mod must fire every hit even with range_max=0.4, got {:?}",
+                i + 1,
+                got
+            );
+        }
+    }
+
+    #[test]
+    fn step_wrap_respects_the_trim_handle_zone_not_the_full_param_range() {
+        // Continuous param 0..10 (TestEnvGen's "speed"). Handles 0.2/0.8 map
+        // to rails 2..8. Wrap from a seeded current of 7 with amount 2 must
+        // land at 3 (wraps past 8, not past the param's true max of 10).
+        let layer = generator_layer();
+        let mut project = project_with(layer);
+        let send = AudioSend::new("Kick");
+        let send_id = send.id.clone();
+        project.audio_setup.sends.push(send);
+
+        let mut m = ParameterAudioMod::new(
+            "speed".into(),
+            send_id,
+            AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+        );
+        m.shape = AudioModShape {
+            attack_ms: 0.0,
+            release_ms: 0.0,
+            range_min: 0.2,
+            range_max: 0.8,
+            ..Default::default()
+        };
+        m.action = TriggerAction::Step { amount: 2.0, wrap: WrapMode::Wrap };
+        m.step_value = Some(7.0); // seed the current directly inside the zone
+        project.timeline.layers[0]
+            .gen_params_mut()
+            .unwrap()
+            .audio_mods_mut()
+            .push(m);
+
+        let hot = snapshot_full_transient(0.9);
+        evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[]);
+
+        let step = project.timeline.layers[0]
+            .gen_params()
+            .unwrap()
+            .audio_mods
+            .as_ref()
+            .unwrap()[0]
+            .step_value;
+        assert_eq!(
+            step,
+            Some(3.0),
+            "zone 2..8 (handles 0.2/0.8 on speed's 0..10 range): 7 + 2 wraps past 8 to 3"
+        );
+    }
+
+    #[test]
+    fn random_stays_inside_the_trim_handle_zone_across_many_fires() {
+        // Continuous param 0..10, handles 0.2/0.8 -> zone 2..8. Every random
+        // step_value across many fires must stay within the zone, never
+        // reaching into the untrimmed 0..2 or 8..10 slivers.
+        let layer = generator_layer();
+        let mut project = project_with(layer);
+        let send = AudioSend::new("Kick");
+        let send_id = send.id.clone();
+        project.audio_setup.sends.push(send);
+
+        let mut m = ParameterAudioMod::new(
+            "speed".into(),
+            send_id,
+            AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+        );
+        m.shape = AudioModShape {
+            attack_ms: 0.0,
+            release_ms: 0.0,
+            range_min: 0.2,
+            range_max: 0.8,
+            ..Default::default()
+        };
+        m.action = TriggerAction::Random;
+        project.timeline.layers[0]
+            .gen_params_mut()
+            .unwrap()
+            .audio_mods_mut()
+            .push(m);
+
+        let hot = snapshot_full_transient(0.9);
+        let cold = snapshot_full_transient(0.0);
+        for _ in 0..100 {
+            evaluate_all_audio_mods(&mut project, &hot, Seconds(0.016), &mut Vec::new(), &[]);
+            let step = project.timeline.layers[0]
+                .gen_params()
+                .unwrap()
+                .audio_mods
+                .as_ref()
+                .unwrap()[0]
+                .step_value;
+            if let Some(v) = step {
+                assert!((2.0..=8.0).contains(&v), "random value {v} escaped the zone 2..8");
+            }
+            evaluate_all_audio_mods(&mut project, &cold, Seconds(0.016), &mut Vec::new(), &[]);
+        }
+    }
+
+    #[test]
+    fn discrete_zone_random_only_produces_the_snapped_integer_rails() {
+        // "segs" recalibrated to 0..9 (whole numbers). Handles 0.25/0.75 snap
+        // to the integer rails 3..6 (zone() gives 2.25..6.75, ceil/floor snaps
+        // to 3..6). Random must only ever land on {3,4,5,6} and never repeat
+        // the current value back-to-back.
+        let (mut project, send_id) = project_with_audio_send();
+        override_stock_param_range(
+            &mut project.timeline.layers[0].effects.as_mut().unwrap()[0],
+            "segs",
+            0.0,
+            9.0,
+        );
+        attach_action_mod(&mut project, &send_id, "segs", TriggerAction::Random);
+        {
+            let m = &mut project.timeline.layers[0].effects.as_mut().unwrap()[0]
+                .audio_mods
+                .as_mut()
+                .unwrap()[0];
+            m.shape.range_min = 0.25;
+            m.shape.range_max = 0.75;
+        }
+
+        let got = fire_n_times(&mut project, 200);
+        for v in &got {
+            assert!(
+                [3.0, 4.0, 5.0, 6.0].contains(v),
+                "random must stay within the snapped integer rails 3..6, got {v}"
+            );
+        }
+        for pair in got.windows(2) {
+            assert_ne!(pair[0], pair[1], "adjacent random fires must never repeat the current value");
+        }
+    }
+
+    #[test]
+    fn discrete_zone_step_wrap_cycles_within_the_snapped_integer_rails() {
+        // Same recalibrated "segs" (0..9) + handles 0.25/0.75 -> rails 3..6.
+        // Step Wrap from the committed base (0, clamped into the zone at 3)
+        // cycles 3 -> 4 -> 5 -> 6 -> 3, never touching 0, 1, 2, 7, 8, or 9.
+        let (mut project, send_id) = project_with_audio_send();
+        override_stock_param_range(
+            &mut project.timeline.layers[0].effects.as_mut().unwrap()[0],
+            "segs",
+            0.0,
+            9.0,
+        );
+        attach_action_mod(
+            &mut project,
+            &send_id,
+            "segs",
+            TriggerAction::Step { amount: 1.0, wrap: WrapMode::Wrap },
+        );
+        {
+            let m = &mut project.timeline.layers[0].effects.as_mut().unwrap()[0]
+                .audio_mods
+                .as_mut()
+                .unwrap()[0];
+            m.shape.range_min = 0.25;
+            m.shape.range_max = 0.75;
+        }
+
+        let expect = [4.0, 5.0, 6.0, 3.0];
+        let got = fire_n_times(&mut project, expect.len());
+        assert_eq!(got, expect, "wrap cycles 4,5,6,3 within the snapped integer rails 3..6, got {got:?}");
     }
 }

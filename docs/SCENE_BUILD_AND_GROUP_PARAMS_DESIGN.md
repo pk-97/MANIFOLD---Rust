@@ -191,6 +191,27 @@ mid-gesture; the placeholder keeps the contract intact (nothing is ever silently
 skipped) while making the gesture completable. Remove = the existing delete-group +
 decrement, no new command.
 
+**D7a — `AddSceneLightCommand`, the light twin (resolved 2026-07-10, Fable + Peter;
+supersedes the OPEN GAP raised by Opus the same day).** D7 gives objects a one-click
+add; lights get the symmetric gesture, in scope for this doc, shipping in P5 beside
+`AddSceneObjectCommand`. One composite undoable command on a "+ Light" button on the
+`render_scene` node face next to the `lights` row: (1) bump `lights` by one, (2) spawn
+a `node.light` — **bare on the canvas, no group** (an object's group earns its box by
+holding three nodes; a light is one node, and a one-node group taxes every future edit
+for zero legibility) — named "Light N", placed adjacent to its port, (3) **auto-wire**
+it into the new `light_k` port (Peter's ruling: add means added — both commands wire on
+click, never leaving a count bumped with a dead port). Defaults: Sun, white, intensity
+1.0, ~45° elevation (a straight-overhead sun flattens the scene; 45° is why Blender's
+default reads as lit), **`cast_shadows` ON (Peter's call, 2026-07-10)**. The shadow flag
+is inert until REALTIME_3D P2 ships; P2 inherits a requirement from this default: its
+caster policy (the coherence-audit F2 amendment — not this doc's D4, which is the
+migration step) must handle a scene where every light is a default caster gracefully
+(budget/priority), not assume casters are opt-in. Remove = delete the light node + the
+existing decrement, no new command. Context: `RENDER_SCENE_UNBOUNDED_LIGHTS` (landed
+2026-07-10) lifted the light ceiling to 64/127 but kept the count-param + per-`light_N`-
+port model (REALTIME_3D D3 rejected an `Array<Light>` fan-in port); D7a is the authoring
+gesture over that model.
+
 **D8 — Same-pair wire ribbons (canvas-wide).** When ≥2 wires connect the same
 (source node, dest node) pair, the canvas draws them as ONE ribbon with an `×N` badge;
 hover (or either endpoint selected) expands to the individual wires for picking. Pure
@@ -398,23 +419,27 @@ port types beyond `Transform` · widening into REALTIME_3D P5/P6 viewport work.
 ### P5 — gestures: add-object + wire ribbons (one session, closes the wave)
 
 - **Entry state:** P2 landed (transform atoms exist for the composite to spawn).
-- **Read-back:** §2 D7/D8; the compound-command precedent (D7 VERIFY marker);
+- **Read-back:** §2 D7/D7a/D8; the compound-command precedent (D7 VERIFY marker);
   `graph_canvas` wire render (`render.rs` wire pass) + hover-highlight code (the
   "must preserve" list in GRAPH_EDITOR_REDESIGN §7).
 - **Deliverables:** `AddSceneObjectCommand` + node-face "+ Object" button on
   `render_scene` (a `NodeRow` action row, same geometry-source discipline);
+  `AddSceneLightCommand` + "+ Light" button per D7a (bare `node.light`, auto-wired,
+  D7a defaults incl. `cast_shadows` ON);
   same-pair ribbon render + `×N` badge + hover/selection expansion (keep wire
   hover-dim, arc routing, feedback-wire styling intact).
-- **Gate.** Positive: command tests — add → objects bumped, group + 3 wires exist,
-  undo restores exactly (inverse-pair test); canvas tests — ≥2 same-pair wires
-  produce one ribbon view, hover expands, single wires unaffected. **Full workspace
-  sweep + clippy** (wave-closing phase). Negative:
+- **Gate.** Positive: command tests — add object → objects bumped, group + 3 wires
+  exist, undo restores exactly (inverse-pair test); add light → lights bumped, bare
+  `node.light` wired to `light_k` with D7a defaults, undo restores exactly; canvas
+  tests — ≥2 same-pair wires produce one ribbon view, hover expands, single wires
+  unaffected. **Full workspace sweep + clippy** (wave-closing phase). Negative:
   `rg -n "virtual.*socket|auto_grow" crates/manifold-ui` → 0 (the deferred
   auto-grow didn't sneak in).
 - **Demo (L2 + gesture):** headless editor PNG before/after one Add Object — a new
   tinted "Object 3" box, a cube visible in the preview pane, ribbons where the wall
-  was. **Performer gesture:** click "+ Object" once; something appears on screen
-  without touching a port.
+  was; and one Add Light — the preview visibly re-lit, a wired "Light N" node beside
+  the render node. **Performer gesture:** click "+ Object" or "+ Light" once;
+  something appears on screen without touching a port.
 - **Test scope:** full sweep (final phase).
 
 ## 6. Performance (stated honestly)

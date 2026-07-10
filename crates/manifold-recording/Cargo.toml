@@ -9,12 +9,45 @@ log = { workspace = true }
 crossbeam-channel = "0.5"
 ringbuf = "0.4"
 manifold-audio = { path = "../manifold-audio" }
+# ffprobe JSON parsing for the recording-proofs oracle (src/proofs.rs). Only
+# enters the dependency graph behind the `recording-proofs` feature — the
+# default build stays free of it.
+serde_json = { version = "1", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 manifold-gpu = { path = "../manifold-gpu" }
 
 [build-dependencies]
 cc = "1"
+
+# Recording-proof integration test: drives the real LiveRecordingSession into
+# the real AVAssetWriter encoder at realistic frame counts with adversarial
+# timing, then interrogates the output with ffprobe. Gated behind
+# `recording-proofs` (see [features]) so it's excluded from the default
+# `cargo test` sweep — run deliberately with
+# `cargo test -p manifold-recording --features recording-proofs`.
+# Mirrors manifold-renderer's `gpu-proofs` wiring.
+[[test]]
+name = "recording_proofs"
+path = "tests/recording_proofs.rs"
+required-features = ["recording-proofs"]
+
+# Pre-gig soak (Tier 2): the show configuration (4K60 SDR ProRes + audio,
+# 20 media-minutes), run manually before a gig as a soundcheck for the
+# recorder. Gated the same way as the proof-suite test above -- see
+# docs/LIVE_RECORDING_PROOFS_DESIGN.md §5 / §6 P2.
+[[bin]]
+name = "recording-soak"
+path = "src/bin/recording_soak.rs"
+required-features = ["recording-proofs"]
+
+[features]
+# Proof-harness tests: real AVAssetWriter encode + ffprobe oracle, slow and
+# needing a real Metal device + ffmpeg/ffprobe on PATH. Off by default so the
+# workspace test sweep stays fast and deterministic. Gates the `proofs`
+# support module, `tests/recording_proofs.rs`, and (P2) the soak bin.
+# See docs/LIVE_RECORDING_PROOFS_DESIGN.md D5.
+recording-proofs = ["dep:serde_json"]
 
 [lints]
 workspace = true

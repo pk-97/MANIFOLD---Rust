@@ -3319,4 +3319,83 @@ mod tests {
             "removing an effect in-place still routes through the collapse"
         );
     }
+
+    /// BUG-060 (stale fragments at the scroll-viewport edges): every node of
+    /// every effect card must render UNDER the scroll column's clip. Renders a
+    /// card's sub-region exactly the way the cache manager's incremental path
+    /// does — `traverse_flat_range` with its pre-pushed ancestor clips,
+    /// intersecting on push like `UIRenderer::handle_push_clip` — and asserts
+    /// the effective clip at every background-filled node is bounded by the
+    /// scroll viewport. A node whose effective clip reaches past the viewport
+    /// (or that draws with no clip at all) paints into the tab-strip band;
+    /// its abandoned copies after each scroll step are exactly the live-rig
+    /// artifact (the escaped ON pill measured in the 2026-07-10 atlas dump).
+    #[test]
+    fn bug060_every_card_node_renders_under_the_column_clip() {
+        use crate::tree::TraversalEvent;
+        use crate::ParamCardKind;
+
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
+        panel.configure_master_effects(&[mk_config(ParamCardKind::Effect, "EdgeStretch", 3)]);
+        let layout = inspector_layout();
+        panel.build(&mut tree, &layout);
+
+        let viewport = panel.master_scroll.viewport();
+        assert!(viewport.height > 0.0, "sanity: master column viewport exists");
+        let card = &panel.master_effects[0];
+        let (start, end) = (card.first_node(), card.first_node() + card.node_count());
+        assert!(end > start, "sanity: card built nodes");
+
+        fn intersect(a: Rect, b: Rect) -> Rect {
+            let x = a.x.max(b.x);
+            let y = a.y.max(b.y);
+            let x2 = (a.x + a.width).min(b.x + b.width);
+            let y2 = (a.y + a.height).min(b.y + b.height);
+            Rect::new(x, y, (x2 - x).max(0.0), (y2 - y).max(0.0))
+        }
+
+        let mut clip_stack: Vec<Rect> = Vec::new();
+        let mut violations: Vec<String> = Vec::new();
+        let mut checked = 0usize;
+        tree.traverse_flat_range(start, end, false, |ev| match ev {
+            TraversalEvent::PushClip(r) => {
+                let clipped = clip_stack.last().map_or(r, |c| intersect(*c, r));
+                clip_stack.push(clipped);
+            }
+            TraversalEvent::PopClip => {
+                clip_stack.pop();
+            }
+            TraversalEvent::Node(node) => {
+                // Only nodes that draw an opaque fill can deposit artifact
+                // pixels — labels and transparent buttons paint no background.
+                if node.style.bg_color.a == 0 {
+                    return;
+                }
+                checked += 1;
+                let ok = clip_stack.last().is_some_and(|c| {
+                    c.y >= viewport.y - 0.5
+                        && c.y + c.height <= viewport.y + viewport.height + 0.5
+                });
+                if !ok {
+                    violations.push(format!(
+                        "node {:?} text={:?} bounds={:?} effective_clip={:?} (viewport {:?})",
+                        node.id,
+                        node.text,
+                        node.bounds,
+                        clip_stack.last(),
+                        viewport,
+                    ));
+                }
+            }
+        });
+        assert!(checked > 0, "sanity: card produced background-filled nodes");
+        assert!(
+            violations.is_empty(),
+            "{} card node(s) render without a viewport-bounded clip:\n{}",
+            violations.len(),
+            violations.join("\n")
+        );
+    }
 }

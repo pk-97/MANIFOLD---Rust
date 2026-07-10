@@ -502,6 +502,7 @@ impl LiveClipManager {
         in_point: f32,
         beat_stamp: Option<f32>,
         event_absolute_tick: i32,
+        apply_launch_quantize: bool,
         realtime_now: f64,
         midi_note: i32,
     ) -> Option<TimelineClip> {
@@ -519,6 +520,7 @@ impl LiveClipManager {
             event_absolute_tick,
             project.settings.quantize_mode,
             project.settings.time_signature_numerator,
+            apply_launch_quantize,
         );
 
         // Compute duration
@@ -593,6 +595,7 @@ impl LiveClipManager {
         duration_seconds: f32,
         beat_stamp: Option<f32>,
         event_absolute_tick: i32,
+        apply_launch_quantize: bool,
         realtime_now: f64,
         midi_note: i32,
     ) -> Option<TimelineClip> {
@@ -608,6 +611,7 @@ impl LiveClipManager {
             event_absolute_tick,
             project.settings.quantize_mode,
             project.settings.time_signature_numerator,
+            apply_launch_quantize,
         );
 
         let duration_beats = Self::compute_duration_beats(
@@ -703,6 +707,7 @@ impl LiveClipManager {
                 duration_seconds,
                 beat_stamp,
                 tick,
+                false, // audio trigger — never launch-quantized (trap 1)
                 realtime_now,
                 AUDIO_TRIGGER_NOTE,
             )?,
@@ -729,6 +734,7 @@ impl LiveClipManager {
                     0.0,
                     beat_stamp,
                     tick,
+                    false, // audio trigger — never launch-quantized (trap 1)
                     realtime_now,
                     AUDIO_TRIGGER_NOTE,
                 )?
@@ -777,6 +783,14 @@ impl LiveClipManager {
         ended
     }
 
+    /// `apply_launch_quantize` distinguishes a MIDI note launch (quantize
+    /// launch *position* to the grid, F2) from an audio-transient one-shot
+    /// (fire immediately at the playhead — the music's own timing; quantizing
+    /// it would fire a kick beats late). Both `trigger_live_clip` and
+    /// `trigger_live_generator_clip` are shared by the MIDI NoteOn path
+    /// (`clip_launcher.rs`) and the audio one-shot path (`fire_layer_oneshot`
+    /// below), so this can't be decided from which of the two functions
+    /// called in — it must be threaded down from the actual caller.
     fn compute_trigger_snap_beat(
         &self,
         host: &dyn LiveClipHost,
@@ -784,6 +798,7 @@ impl LiveClipManager {
         event_absolute_tick: i32,
         quantize_mode: QuantizeMode,
         time_sig_numerator: i32,
+        apply_launch_quantize: bool,
     ) -> Beats {
         if event_absolute_tick >= 0 {
             Self::compute_snap_beat_from_tick(
@@ -793,7 +808,13 @@ impl LiveClipManager {
                 true, // ceil to next grid for NoteOn
             )
         } else if let Some(stamp) = beat_stamp {
-            if quantize_mode != QuantizeMode::Off {
+            // `apply_launch_quantize` gates this arm too: today only
+            // `fire_layer_oneshot` ever supplies a synthetic `beat_stamp`
+            // here (real midir events never carry one — see the fallback arm
+            // below), so unguarded this branch was rounding audio one-shots
+            // to the nearest grid line whenever the playhead fell off-grid,
+            // silently contradicting "audio fires at the raw current beat".
+            if apply_launch_quantize && quantize_mode != QuantizeMode::Off {
                 let interval = match quantize_mode {
                     QuantizeMode::QuarterBeat => 0.25,
                     QuantizeMode::Beat => 1.0,
@@ -805,7 +826,30 @@ impl LiveClipManager {
                 Beats::from_f32(stamp)
             }
         } else {
-            host.get_beat_snapped_beat()
+            // The live midir path: no clock-domain tick (midi_input.rs sets
+            // absolute_tick = -1 always) and therefore no beat_stamp either
+            // (midi_input.rs only derives one from a real tick). F2 root
+            // cause: without this arm, a MIDI launch here landed exactly
+            // where the finger hit, ignoring QuantizeMode entirely. Snap
+            // FORWARD (ceil) to the next grid boundary, matching Ableton —
+            // the live-slot scheduler (`scheduler.rs::compute_sync`) already
+            // gates a slot's activation on `current_beat >= start_beat`, so
+            // handing back a future beat here simply arms the clip; it does
+            // not delay this function's own bookkeeping.
+            let raw = host.get_beat_snapped_beat();
+            if apply_launch_quantize && quantize_mode != QuantizeMode::Off {
+                let interval = match quantize_mode {
+                    QuantizeMode::QuarterBeat => 0.25,
+                    QuantizeMode::Beat => 1.0,
+                    QuantizeMode::Bar => time_sig_numerator as f64,
+                    QuantizeMode::Off => unreachable!("guarded above"),
+                };
+                Beats(crate::session_state::SessionRuntime::ceil_to_boundary(
+                    raw.0, interval,
+                ))
+            } else {
+                raw
+            }
         }
     }
 
