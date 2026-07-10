@@ -174,7 +174,7 @@ _Generated from the node registry. Do not hand-edit. 217 nodes registered, group
 | Push Mesh | `node.push_mesh` | Filter | Pushes a mesh's points up and down by reading a height image, turning a flat grid into bumpy terrain. The 3D version of a displacement. |
 | Render Copies | `node.render_copies` | Filter | Draws many copies of one mesh in a single pass, each placed by a list of transforms. The fast way to render a field of repeated objects. |
 | Render Mesh | `node.render_mesh` | Filter | Draws a 3D mesh to the screen with a camera, a light, and a material. The final step that turns geometry into an image. |
-| Render Scene | `node.render_scene` | Filter | Draws several 3D objects into one scene so the nearer ones correctly block the farther ones, each with its own position and material, lit by up to four shared … |
+| Render Scene | `node.render_scene` | Filter | Draws several 3D objects into one scene so the nearer ones correctly block the farther ones, each with its own position and material, lit by any number of shar… |
 | Repeat Outline (rings) | `node.repeat_outline` | Filter | Stacks scaled copies of an outline into concentric rings, turning one shape into a set of nested rings. |
 | Rotate 3D | `node.rotate_3d` | Filter | Spins a 3D mesh around the X, Y, and Z axes. Wire an LFO or a beat into the angles to keep it turning. |
 | Rotate 4D | `node.rotate_4d` | Filter | Spins 4D geometry through its rotation planes, the move that makes a tesseract appear to turn inside out. |

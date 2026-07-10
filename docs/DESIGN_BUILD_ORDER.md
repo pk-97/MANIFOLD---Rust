@@ -55,7 +55,7 @@ prerequisites aren't shipped, stop.
 | BOX3D_PHYSICS_DESIGN (added 2026-07-09) | none for P1–P3; P4 wants depth-estimate (shipped) | full |
 | AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN (added 2026-07-09) | none | full |
 | AUDIO_ANALYSIS_ACCURACY_DESIGN (added 2026-07-08; = §3 item 13g) | none; P2+P6 gate COMMERCIALIZATION (BUG-069) | full |
-| RENDER_SCENE_UNBOUNDED_LIGHTS_DESIGN (added 2026-07-06) | none — see the §2 render_scene same-file note | full |
+| RENDER_SCENE_UNBOUNDED_LIGHTS_DESIGN (✅ BUILT + LANDED 2026-07-10; single phase) | none — see the §2 render_scene same-file note; anchors now MOVED, re-derive before SCENE_BUILD P2 / GAUSSIAN P4 | full |
 | AUDIO_OBJECT_TRACKING_DESIGN (P1–P4 ✅ 2026-07-06; **P5 scope overlay + BUG-045 remain**) | none; P5 re-derives scope anchors (ScopeColumn typed-overlay refactor landed 2026-07-07) | full |
 | AUDIO_OBJECT_INGEST_DESIGN | OBJECT_TRACKING P0–P2 ✅; P1 blocked on Peter (labeled clips) **and on the F10 reconciliation with ANALYSIS_ACCURACY's eval harness** | conformance |
 | KICK_SWEEP_EVENT_DESIGN (P1/P2/P4/P5 ✅) | P3 feel-pass = Peter-owned (L4, not agent-executable) | full |
