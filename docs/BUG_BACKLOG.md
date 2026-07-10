@@ -932,24 +932,6 @@ see `docs/TIMELINE_UX_AUDIT_2026-07-07.md` item 2.5. **Oracle:** the
 `automation_state_toggles_update_styles_in_place` test pins current colors; it changes
 with the fix.
 
-### BUG-047 (setup-panel-overflow) — Audio Setup panel content clips past the bottom edge when chrome exceeds viewport − SCOPE_H_MIN — LOW (needs ~18 combined input/consumer rows on one source at full height; ~5 extra rows at a 720px window)
-**Status:** FIXED 2026-07-10 (AUDIO_SETUP_DOCK P1, `36a96791`) — the docked panel body is now a `ScrollContainer` (GPU scissor), and `scope_h` is a fixed fraction of the panel rect rather than "absorb remaining space", so control rows overflow into the scroll region instead of clamping the spectrogram at `SCOPE_H_MIN` and running sections past the bottom. See `docs/landings/2026-07-10-audio-dock-p1.md`. (Follow-on BUG-101 tracks the spectrogram blit not yet following the scroll offset.)
-
-**Found 2026-07-06 during AUDIO_SENDS_UX P3 review** (orchestrated wave, found by the
-worker's own analysis after an orchestrator-caught clipping defect was root-caused —
-the clamp behavior below is the designed residue, not the bug that was fixed).
-The panel sizes its spectrogram as `viewport − chrome_height()` floored at
-`SCOPE_H_MIN` (200px). When a selected send's Inputs + Consumers rows (28px each)
-push `chrome_height()` past `viewport − SCOPE_H_MIN`, the scope clamps at the floor
-and the sections below it run past the panel's bottom edge — same visual as the
-fixed P3 bug, different cause. **Symptom:** bottom consumer rows invisible on a
-heavily-bound source. **Fix shape:** cap the consumers list at N rows + a "+N more"
-summary row, or wrap the sections in the existing ScrollContainer (see
-`guide_scroll_and_clipping` memory) — a deliberate UX call, not a mechanical fix;
-don't improvise it inside an unrelated wave. **Oracle:** `audio_setup_panel.rs`
-test `consumers_fit_within_panel_on_first_build_after_configure` guards the fixed
-ordering bug; no executable test for this clamp overflow yet.
-
 ### BUG-101 (setup-spectrogram-scroll-offset) — Docked Audio Setup spectrogram blit doesn't follow the body scroll offset — LOW
 **Status:** OPEN
 
@@ -1946,6 +1928,24 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-047 (setup-panel-overflow) — Audio Setup panel content clips past the bottom edge when chrome exceeds viewport − SCOPE_H_MIN — LOW (needs ~18 combined input/consumer rows on one source at full height; ~5 extra rows at a 720px window)
+**Status:** FIXED 2026-07-10 (AUDIO_SETUP_DOCK P1, `36a96791`) — the docked panel body is now a `ScrollContainer` (GPU scissor), and `scope_h` is a fixed fraction of the panel rect rather than "absorb remaining space", so control rows overflow into the scroll region instead of clamping the spectrogram at `SCOPE_H_MIN` and running sections past the bottom. See `docs/landings/2026-07-10-audio-dock-p1.md`. (Follow-on BUG-101 tracks the spectrogram blit not yet following the scroll offset.)
+
+**Found 2026-07-06 during AUDIO_SENDS_UX P3 review** (orchestrated wave, found by the
+worker's own analysis after an orchestrator-caught clipping defect was root-caused —
+the clamp behavior below is the designed residue, not the bug that was fixed).
+The panel sizes its spectrogram as `viewport − chrome_height()` floored at
+`SCOPE_H_MIN` (200px). When a selected send's Inputs + Consumers rows (28px each)
+push `chrome_height()` past `viewport − SCOPE_H_MIN`, the scope clamps at the floor
+and the sections below it run past the panel's bottom edge — same visual as the
+fixed P3 bug, different cause. **Symptom:** bottom consumer rows invisible on a
+heavily-bound source. **Fix shape:** cap the consumers list at N rows + a "+N more"
+summary row, or wrap the sections in the existing ScrollContainer (see
+`guide_scroll_and_clipping` memory) — a deliberate UX call, not a mechanical fix;
+don't improvise it inside an unrelated wave. **Oracle:** `audio_setup_panel.rs`
+test `consumers_fit_within_panel_on_first_build_after_configure` guards the fixed
+ordering bug; no executable test for this clamp overflow yet.
 
 ### BUG-099 (design-tokens-raw-color-literal-count-drifted-past-baseline) — `manifold-ui`'s `no_new_raw_color_literals` ratchet test failed (baseline 200, live 201) — FIXED
 **Status:** FIXED @ 54a80448 (SCENE_BUILD P2 landing, orchestrator). Found running P2's full workspace sweep gate; the P2 worker confirmed it pre-existed on the P2 base `ab215ab8` and logged it as unknown-root-cause drift (correctly, from the worker's render/migration scope). The orchestrator, owning the whole SCENE_BUILD wave, identified the actual cause: it was P1's own addition, masked because P1's landing sweep short-circuited on an inherited docs-index failure and wasn't re-run after that fix.
