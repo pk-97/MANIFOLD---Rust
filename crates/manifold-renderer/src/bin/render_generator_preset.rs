@@ -34,6 +34,10 @@ struct Args {
     frames: u32,
     out: PathBuf,
     overrides: Vec<(String, f32)>,
+    /// Fire a clip trigger every N frames (0 = never) — trigger_count
+    /// advances as frame/N so trigger-responsive presets can be exercised
+    /// headlessly.
+    trigger_every: u32,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -46,6 +50,7 @@ fn parse_args() -> Result<Args, String> {
         frames: 90,
         out: PathBuf::from("/tmp/preset-render.png"),
         overrides: Vec::new(),
+        trigger_every: 0,
     };
     while let Some(flag) = argv.next() {
         let value = argv
@@ -63,6 +68,9 @@ fn parse_args() -> Result<Args, String> {
                 args.frames = value.parse().map_err(|e| format!("bad frames: {e}"))?;
             }
             "--out" => args.out = PathBuf::from(value),
+            "--triggers" => {
+                args.trigger_every = value.parse().map_err(|e| format!("bad triggers: {e}"))?;
+            }
             "--param" => {
                 let (id, v) = value
                     .split_once('=')
@@ -148,7 +156,11 @@ fn main() {
             is_clip_level: false,
             frame_count: frame as i64,
             anim_progress: (frame as f32 / args.frames.max(1) as f32).min(1.0),
-            trigger_count: 0,
+            trigger_count: if args.trigger_every > 0 {
+                frame / args.trigger_every
+            } else {
+                0
+            },
         };
         let mut enc = device.create_encoder("look-dev-frame");
         {

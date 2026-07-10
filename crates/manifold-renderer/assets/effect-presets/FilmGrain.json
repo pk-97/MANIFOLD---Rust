@@ -1,0 +1,278 @@
+{
+  "version": 2,
+  "name": "FilmGrain",
+  "description": "Animated film grain, meant to sit last in a chain. Random per-pixel noise re-rolls every frame (the time input jitters the hash field's offset so grain never slides or freezes), gets splatted to monochrome by the Channel Mixer, and composites over the source in Overlay mode - grain rides the midtones and stays out of deep blacks and clipped whites, the way emulsion grain behaves.\n\nAmount is the wet control; at zero the source passes through untouched. Size scales the grain structure from fine (low values) to coarse (high values) by dividing the noise field's cell density.\n\nDoubles as a banding fix: slow smooth gradients that posterize on an 8-bit display dissolve under even a low Amount, because the grain dithers the final quantization step.",
+  "presetMetadata": {
+    "id": "FilmGrain",
+    "displayName": "Film Grain",
+    "category": "Stylize",
+    "oscPrefix": "film_grain",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.35,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "size",
+        "name": "Size",
+        "min": 1.0,
+        "max": 8.0,
+        "defaultValue": 1.6,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F1"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 0.35,
+        "target": {
+          "kind": "node",
+          "nodeId": "grain_mix",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "size",
+        "label": "Size",
+        "defaultValue": 1.6,
+        "target": {
+          "kind": "node",
+          "nodeId": "grain_size_to_scale",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "source",
+      "typeId": "system.source",
+      "handle": "source"
+    },
+    {
+      "id": 1,
+      "nodeId": "frame_input",
+      "typeId": "system.generator_input",
+      "handle": "frame_input"
+    },
+    {
+      "id": 2,
+      "nodeId": "grain_jitter_x",
+      "typeId": "node.math",
+      "handle": "grain_jitter_x",
+      "title": "Grain Jitter X",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 39.7
+        },
+        "op": {
+          "type": "Enum",
+          "value": 2
+        }
+      }
+    },
+    {
+      "id": 3,
+      "nodeId": "grain_jitter_y",
+      "typeId": "node.math",
+      "handle": "grain_jitter_y",
+      "title": "Grain Jitter Y",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 61.3
+        },
+        "op": {
+          "type": "Enum",
+          "value": 2
+        }
+      }
+    },
+    {
+      "id": 4,
+      "nodeId": "grain_size_to_scale",
+      "typeId": "node.math",
+      "handle": "grain_size_to_scale",
+      "title": "Size to Noise Scale",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 1600.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 1.6
+        },
+        "op": {
+          "type": "Enum",
+          "value": 3
+        }
+      }
+    },
+    {
+      "id": 5,
+      "nodeId": "grain_noise",
+      "typeId": "node.noise",
+      "handle": "grain_noise",
+      "title": "Grain Noise",
+      "params": {
+        "type": {
+          "type": "Enum",
+          "value": 2
+        },
+        "scale": {
+          "type": "Float",
+          "value": 1000.0
+        },
+        "octaves": {
+          "type": "Int",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 6,
+      "nodeId": "grain_mono",
+      "typeId": "node.channel_mix",
+      "handle": "grain_mono",
+      "title": "Grain to Monochrome",
+      "params": {
+        "row0": {
+          "type": "Vec4",
+          "value": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row1": {
+          "type": "Vec4",
+          "value": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row2": {
+          "type": "Vec4",
+          "value": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 7,
+      "nodeId": "grain_mix",
+      "typeId": "node.mix",
+      "handle": "grain_mix",
+      "title": "Grain Overlay",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": 6
+        },
+        "amount": {
+          "type": "Float",
+          "value": 0.35
+        }
+      }
+    },
+    {
+      "id": 8,
+      "nodeId": "output",
+      "typeId": "system.final_output",
+      "handle": "output"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 1,
+      "fromPort": "time",
+      "toNode": 2,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "time",
+      "toNode": 3,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "offset_x"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "offset_y"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "scale"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "in"
+    }
+  ]
+}
