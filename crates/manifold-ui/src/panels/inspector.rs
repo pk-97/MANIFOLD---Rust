@@ -1,5 +1,6 @@
 use super::clip_chrome::ClipChromePanel;
 use super::layer_chrome::LayerChromePanel;
+use super::audio_trigger_section::AudioTriggerSection;
 use super::macros_panel::MacrosPanel;
 use super::master_chrome::MasterChromePanel;
 use super::param_card::{ParamCardConfig, ParamCardPanel};
@@ -98,6 +99,7 @@ const DRAG_INDICATOR_COLOR: Color32 = color::ACCENT_BLUE_C32;
 #[derive(Debug, Clone, Copy)]
 enum PressedTarget {
     Macros,
+    AudioTriggers,
     MasterChrome,
     LayerChrome,
     ClipChrome,
@@ -126,6 +128,10 @@ enum PressedTarget {
 pub struct InspectorCompositePanel {
     // Sub-panels
     macros_panel: MacrosPanel,
+    /// P3b: layer-owned clip-trigger authoring (AUDIO_SETUP_DOCK_AND_TRIGGER_
+    /// UNIFICATION_DESIGN.md). Pinned at the TOP of the layer column's
+    /// content, above `gen_params`/`layer_effects` — see `build_in_rect`.
+    audio_trigger_section: AudioTriggerSection,
     master_chrome: MasterChromePanel,
     layer_chrome: LayerChromePanel,
     clip_chrome: ClipChromePanel,
@@ -257,6 +263,7 @@ impl InspectorCompositePanel {
     pub fn new() -> Self {
         Self {
             macros_panel: MacrosPanel::new(),
+            audio_trigger_section: AudioTriggerSection::new(),
             master_chrome: MasterChromePanel::new(),
             layer_chrome: LayerChromePanel::new(),
             clip_chrome: ClipChromePanel::new(),
@@ -761,10 +768,18 @@ impl InspectorCompositePanel {
         self.macros_panel.label_rect(tree, index)
     }
 
+    pub fn audio_trigger_section(&self) -> &AudioTriggerSection {
+        &self.audio_trigger_section
+    }
+    pub fn audio_trigger_section_mut(&mut self) -> &mut AudioTriggerSection {
+        &mut self.audio_trigger_section
+    }
+
     pub fn is_dragging(&self) -> bool {
         self.dragging_scrollbar
             || self.card_drag_active
             || self.macros_panel.is_dragging()
+            || self.audio_trigger_section.is_dragging()
             || self.master_chrome.is_dragging()
             || self.layer_chrome.is_dragging()
             || self.clip_chrome.is_dragging()
@@ -850,12 +865,18 @@ impl InspectorCompositePanel {
     }
 
     /// Content height for the layer column (right).
-    /// Order: layer chrome → gen params → layer effects → add effect button.
+    /// Order: layer chrome → AUDIO TRIGGERS (P3b) → gen params → layer
+    /// effects → add effect button.
     fn layer_column_height(&self) -> f32 {
         let mut h = 0.0;
         if self.layer_visible() {
             h += SECTION_CARD_PAD + self.layer_chrome.compute_height();
             if !self.layer_chrome.is_collapsed() {
+                // AUDIO TRIGGERS (P3b) sits at the top of the layer's detail
+                // content — above gen params and layer effects (Peter,
+                // 2026-07-10: "a single section that sits at the top of the
+                // inspector for the layer").
+                h += self.audio_trigger_section.height() + SECTION_GAP;
                 // Gen params sit above layer effects
                 if let Some(ref gp) = self.gen_params {
                     h += gp.compute_height() + SECTION_GAP;
@@ -909,7 +930,8 @@ impl InspectorCompositePanel {
             // Layer tab — not Clip.
             PressedTarget::LayerChrome
             | PressedTarget::LayerEffect(_)
-            | PressedTarget::GenParam => {
+            | PressedTarget::GenParam
+            | PressedTarget::AudioTriggers => {
                 self.last_effect_tab = InspectorTab::Layer;
             }
             PressedTarget::ClipChrome => {
@@ -1189,6 +1211,10 @@ impl InspectorCompositePanel {
         if self.macros_panel.owns_node(node_id) {
             return Some(PressedTarget::Macros);
         }
+        // AUDIO TRIGGERS section (top of the layer column's content)
+        if self.audio_trigger_section.owns_node(node_id) {
+            return Some(PressedTarget::AudioTriggers);
+        }
 
         // Scrollbars
         if Some(node_id) == self.master_scroll.track_id()
@@ -1307,6 +1333,7 @@ impl InspectorCompositePanel {
         if let Some(target) = self.pressed_target {
             match target {
                 PressedTarget::Macros => self.macros_panel.handle_drag(pos.x, tree),
+                PressedTarget::AudioTriggers => self.audio_trigger_section.handle_drag(pos.x, tree),
                 PressedTarget::MasterChrome => self.master_chrome.handle_drag(pos, tree),
                 PressedTarget::LayerChrome => self.layer_chrome.handle_drag(pos, tree),
                 PressedTarget::ClipChrome => self.clip_chrome.handle_drag(pos, tree),
@@ -1344,6 +1371,7 @@ impl InspectorCompositePanel {
         let actions = if let Some(target) = self.pressed_target {
             match target {
                 PressedTarget::Macros => self.macros_panel.handle_release(),
+                PressedTarget::AudioTriggers => self.audio_trigger_section.handle_release(),
                 PressedTarget::MasterChrome => self.master_chrome.handle_drag_end(tree),
                 PressedTarget::LayerChrome => self.layer_chrome.handle_drag_end(tree),
                 PressedTarget::ClipChrome => self.clip_chrome.handle_drag_end(tree),
@@ -1723,6 +1751,7 @@ impl InspectorCompositePanel {
             self.update_last_effect_tab(&target);
             match target {
                 PressedTarget::Macros => self.macros_panel.handle_click(node_id),
+                PressedTarget::AudioTriggers => self.audio_trigger_section.handle_click(node_id),
                 PressedTarget::MasterChrome => self.master_chrome.handle_click(node_id),
                 PressedTarget::LayerChrome => self.layer_chrome.handle_click(node_id),
                 PressedTarget::ClipChrome => self.clip_chrome.handle_click(node_id),
@@ -1839,6 +1868,9 @@ impl InspectorCompositePanel {
 
             let mut actions = match target {
                 PressedTarget::Macros => self.macros_panel.handle_press(node_id, pos.x),
+                PressedTarget::AudioTriggers => {
+                    self.audio_trigger_section.handle_press(node_id, pos.x)
+                }
                 PressedTarget::MasterChrome => {
                     self.master_chrome.handle_pointer_down(node_id, pos)
                 }
@@ -1910,6 +1942,7 @@ impl InspectorCompositePanel {
         self.master_chrome.clear_nodes();
         self.layer_chrome.clear_nodes();
         self.clip_chrome.clear_nodes();
+        self.audio_trigger_section.clear_nodes();
         if let Some(gp) = self.gen_params.as_mut() {
             gp.clear_nodes();
         }
@@ -2100,6 +2133,13 @@ impl InspectorCompositePanel {
                 cy += chrome_h;
 
                 if !self.layer_chrome.is_collapsed() {
+                    // AUDIO TRIGGERS (P3b) — pinned at the top of the layer's
+                    // detail content, above gen params and layer effects.
+                    let at_h = self.audio_trigger_section.height();
+                    self.audio_trigger_section
+                        .build(tree, Rect::new(inner_x, cy, inner_w, at_h));
+                    cy += at_h + SECTION_GAP;
+
                     if let Some(ref mut gp) = self.gen_params {
                         let gp_h = gp.compute_height();
                         gp.build(tree, Rect::new(inner_x, cy, inner_w, gp_h));
@@ -2307,6 +2347,7 @@ impl Panel for InspectorCompositePanel {
         // `register_intents` no-ops), and the chrome sections are gated on
         // `node_count() > 0` here — one signal, the same the rest of the panel uses.
         self.macros_panel.register_intents(intents);
+        self.audio_trigger_section.register_intents(intents);
         if self.master_chrome.node_count() > 0 {
             self.master_chrome.register_intents(intents);
         }

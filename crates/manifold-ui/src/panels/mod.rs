@@ -1,5 +1,6 @@
 pub mod ableton_picker;
 pub mod audio_setup_panel;
+pub mod audio_trigger_section;
 pub mod browser_popup;
 pub mod clip_chrome;
 pub mod copy_to_clipboard_label;
@@ -465,6 +466,52 @@ pub enum PanelAction {
     /// Set a Step action's wrap mode — index into `[Wrap, Bounce, Clamp]`
     /// (D2) — the drawer's Wrap segmented row, shown only while Action=Step.
     AudioModSetWrap(GraphParamTarget, ParamId, usize),
+
+    // ── Layer-owned clip triggers (P3b, AUDIO_SETUP_DOCK_AND_TRIGGER_
+    // UNIFICATION_DESIGN.md D2/D5) — the inspector's "AUDIO TRIGGERS"
+    // section. A `LayerClipTrigger` has no `GraphParamTarget`/`ParamId` (it
+    // addresses by `LayerId` + its index in `Layer.clip_triggers`), so this
+    // is an ADDITIVE family parallel to `AudioMod*` above, not a repurposing
+    // of it — `build_audio_mod_drawer` (the ONE shared drawer builder, D5)
+    // is parameterized by `AudioModDrawerTarget` to emit whichever family
+    // fits its caller.
+    /// Toggle the AUDIO TRIGGERS section's collapse state — UI-local (mirrors
+    /// `MacrosCollapseToggle`; no `Project` write, no persistence).
+    AudioTriggerSectionToggle,
+    /// Expand/collapse one row's drawer — UI-local, same as the section toggle.
+    AudioTriggerRowExpandToggle(LayerId, usize),
+    /// Append a new (disabled) `LayerClipTrigger` to the layer, sourcing the
+    /// project's first audio send. No-op when no sends exist (mirrors
+    /// `AudioModToggle`'s "arm" no-send case).
+    AudioTriggerAdd(LayerId),
+    /// Remove the clip trigger at `index`.
+    AudioTriggerRemove(LayerId, usize),
+    /// Flip `enabled` on the clip trigger at `index` — the row's own ON/OFF
+    /// button (D4: a clip trigger has no Mode row to arbitrate with, so its
+    /// existence isn't its enabled state the way a param audio-mod's is;
+    /// `LayerClipTrigger::new` starts disabled by design — "the user enables
+    /// a row once they've tuned it").
+    AudioTriggerEnabledToggle(LayerId, usize),
+    /// Set a clip trigger's source: which send + which feature (mirrors
+    /// `AudioModSetSource`).
+    AudioTriggerSetSource(LayerId, usize, AudioSendId, AudioFeature),
+    /// Toggle a clip trigger's invert flag (mirrors `AudioModSetInvert`).
+    AudioTriggerSetInvert(LayerId, usize),
+    /// Toggle a clip trigger's rate-of-change flag (mirrors
+    /// `AudioModSetRateOfChange`).
+    AudioTriggerSetRateOfChange(LayerId, usize),
+    /// Snapshot a clip trigger's shape before a drawer-slider drag (undo
+    /// start) — mirrors `AudioModShapeSnapshot`.
+    AudioTriggerShapeSnapshot(LayerId, usize),
+    /// Live-edit one shape scalar during a drawer-slider drag (no undo
+    /// entry) — mirrors `AudioModShapeParamChanged`.
+    AudioTriggerShapeParamChanged(LayerId, usize, AudioShapeParam, f32),
+    /// Commit a shape-slider drag as one undo step — mirrors
+    /// `AudioModShapeCommit`.
+    AudioTriggerShapeCommit(LayerId, usize),
+    /// Set the one-shot fire length (`one_shot_beats`) — the drawer's Length
+    /// row (D4/D5), clip triggers only.
+    AudioTriggerSetLength(LayerId, usize, f32),
 
     // ── Audio Setup panel (project-level send routing) ──
     /// Open the input-device dropdown (anchored to the clicked trigger).

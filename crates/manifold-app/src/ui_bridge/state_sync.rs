@@ -1458,6 +1458,46 @@ pub fn sync_inspector_data(
     // Active layer effects + gen params → inspector
     if let Some(idx) = active_layer {
         if let Some(layer) = project.timeline.layers.get(idx) {
+            // AUDIO TRIGGERS (P3b, AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_
+            // DESIGN.md) — the layer's own `clip_triggers`, structurally
+            // configured alongside gen params/layer effects below. state_sync
+            // stays the sole panel data boundary: the inspector never reads
+            // `Project` directly. Row label is "{band} → {feature kind}"
+            // (the design's own example, "Low → Kick").
+            {
+                use manifold_ui::panels::audio_trigger_section::{
+                    AudioTriggerRowConfig, AudioTriggerSectionConfig,
+                };
+                let send_labels: Vec<String> =
+                    project.audio_setup.sends.iter().map(|s| s.label.clone()).collect();
+                let send_ids: Vec<manifold_core::AudioSendId> =
+                    project.audio_setup.sends.iter().map(|s| s.id.clone()).collect();
+                let rows: Vec<AudioTriggerRowConfig> = layer
+                    .clip_triggers
+                    .iter()
+                    .map(|t| {
+                        let feature = t.source.feature;
+                        AudioTriggerRowConfig {
+                            enabled: t.enabled,
+                            label: format!("{} \u{2192} {}", feature.band.label(), feature.kind.label()),
+                            kind_idx: feature.kind.index() as i32,
+                            band_idx: feature.band.index() as i32,
+                            invert: t.shape.invert,
+                            rate_of_change: t.shape.rate_of_change,
+                            sensitivity: t.shape.sensitivity,
+                            attack_ms: t.shape.attack_ms,
+                            release_ms: t.shape.release_ms,
+                            send_id: Some(t.source.send_id.clone()),
+                            one_shot_beats: t.one_shot_beats.0 as f32,
+                        }
+                    })
+                    .collect();
+                ui.inspector.audio_trigger_section_mut().configure(
+                    Some(layer.layer_id.clone()),
+                    &AudioTriggerSectionConfig { rows, send_labels, send_ids },
+                );
+            }
+
             // Layer effects — envelopes ride on each effect instance now.
             let lid = layer.layer_id.as_str();
             let mut layer_effects = layer
@@ -1497,10 +1537,16 @@ pub fn sync_inspector_data(
         } else {
             ui.inspector.configure_layer_effects(&[], None);
             ui.inspector.configure_gen_params(None, None);
+            ui.inspector
+                .audio_trigger_section_mut()
+                .configure(None, &manifold_ui::panels::audio_trigger_section::AudioTriggerSectionConfig::default());
         }
     } else {
         ui.inspector.configure_layer_effects(&[], None);
         ui.inspector.configure_gen_params(None, None);
+        ui.inspector
+            .audio_trigger_section_mut()
+            .configure(None, &manifold_ui::panels::audio_trigger_section::AudioTriggerSectionConfig::default());
     }
 
     // Clip chrome → inspector (per-clip effects removed)
