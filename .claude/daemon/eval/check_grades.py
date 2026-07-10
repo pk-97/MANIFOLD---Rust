@@ -14,8 +14,18 @@ import json
 import os
 import sys
 
-CORRECT_OK = (True, False, "miss")
-EFFECTIVE_OK = (True, False, "unclear")
+# Canonical grade vocabulary (RUNBOOK step 2). Extended 2026-07-10 (Opus sleep
+# pass 2) to be symmetric and honest about the two undeterminable cases the
+# corpus actually contains:
+#   correct: "unclear" — the drift's *existence* could not be determined from
+#     the available evidence (worker fires whose move_id/window is lost to
+#     mailbox overwrite or colliding attribution; redelivery suspects). Parallels
+#     effective:"unclear"; excluded from precision denominators, never guessed.
+#   effective: "n/a" — meaningful ONLY on a correct:"miss" record (a false
+#     negative). No payload was delivered, so "did behavior move in the payload's
+#     direction" is undefined, not merely unknown.
+CORRECT_OK = (True, False, "miss", "unclear")
+EFFECTIVE_OK = (True, False, "unclear", "n/a")
 REQUIRED = ("ts", "session_id", "move_id", "correct", "effective")
 
 
