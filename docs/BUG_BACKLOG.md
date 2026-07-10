@@ -211,6 +211,36 @@ field up) so the timeout check can never pass before a real message sets it. One
 left open because it's outside F1's scoped wiring fix and the exact boot-time semantics
 ("ported from Unity") deserved a dedicated look rather than a same-session drive-by.
 
+### BUG-092 (gltf-import-caps-render-scene-objects-at-8-stale-mirror) — glTF import truncates to 8 objects mirroring render_scene's REMOVED object cap — LOW (import-time truncation with a user warning, multi-material models only)
+**Status:** OPEN
+
+Found 2026-07-10 while landing RENDER_SCENE_UNBOUNDED_LIGHTS (an unrelated axis — that change
+uncapped *lights*; this is *objects*). `crates/manifold-renderer/src/node_graph/gltf_import.rs`:
+
+```rust
+const MAX_RENDER_SCENE_OBJECTS: usize = 8;
+// ...
+let dropped_over_cap = materials.len().saturating_sub(MAX_RENDER_SCENE_OBJECTS);
+materials.truncate(MAX_RENDER_SCENE_OBJECTS);
+```
+
+The comment at gltf_import.rs:60 says the cap is "mirrored from `node.render_scene`'s own
+`MAX_OBJECTS`" — but that constant no longer exists. render_scene generalized object count to a
+soft `OBJECT_SLIDER_MAX = 64` on 2026-07-05 (per-object `mesh_n/material_n` ports are generated
+by `format!`, one draw call each, no structural cap). So the import path drops objects that
+render_scene is now perfectly able to draw: a glTF with, say, 12 distinct materials imports as 8
+objects and silently loses 4, with a warning.
+
+**Why LOW:** it's import-time truncation with a user-visible warning, not a crash or a wrong
+render; and it only bites models with more than 8 distinct materials. But it's a real capability
+regression against the generalized renderer, and the stale comment actively misleads.
+
+**Fix shape:** raise `MAX_RENDER_SCENE_OBJECTS` to track `OBJECT_SLIDER_MAX` (64), or drop the
+import-side cap entirely and let render_scene's `objects` slider clamp — importing unbounded and
+clamping at the editor is the cleaner match to the "soft editor bound, no structural cap" model.
+Refresh the gltf_import.rs:60 comment either way. Left open rather than fixed while landing the
+lights change because it's a different axis (objects, not lights) and out of that phase's scope.
+
 ### BUG-091 (osc-drop-frame-timecode-uses-approximate-divisor) — SMPTE drop-frame seconds conversion divides by literal `29.97` instead of the true `30000/1001` rate — LOW (self-correcting, sub-frame magnitude)
 **Status:** OPEN
 
