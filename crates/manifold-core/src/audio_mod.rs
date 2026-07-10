@@ -298,12 +298,20 @@ impl Default for AudioModShape {
 }
 
 impl AudioModShape {
-    /// Smooth and map `raw` to a normalized 0..1 output within the target
-    /// param's range. Advances `smoothed` (the envelope-follower state) and
-    /// `prev_raw` (the rate-of-change differentiator's last sample) in place.
-    /// `dt_seconds` is real wall time, so both attack/release and the rate are
-    /// frame-rate independent — a 120 ms release feels the same at 60 or 144 fps.
-    pub fn apply(&self, raw: f32, dt_seconds: f32, smoothed: &mut f32, prev_raw: &mut f32) -> f32 {
+    /// Condition `raw` into a normalized 0..1 signal: sensitivity/rate-of-change,
+    /// the attack/release envelope follower, invert, and the response curve —
+    /// everything EXCEPT the output range map. Advances `smoothed` (the
+    /// envelope-follower state) and `prev_raw` (the rate-of-change
+    /// differentiator's last sample) in place. `dt_seconds` is real wall time,
+    /// so both attack/release and the rate are frame-rate independent — a
+    /// 120 ms release feels the same at 60 or 144 fps.
+    ///
+    /// This is the signal edge detection (Step/Random fire arms, `is_trigger`,
+    /// `is_trigger_gate`) must read — the trim handles (`range_min`/`range_max`)
+    /// must never distort whether/when a mod fires. `invert` deliberately stays
+    /// visible here (before the range map) so "fire on the quiet gaps" keeps
+    /// working.
+    pub fn condition(&self, raw: f32, dt_seconds: f32, smoothed: &mut f32, prev_raw: &mut f32) -> f32 {
         // Rate-of-change differentiates the feature over real time (per second),
         // scaled by sensitivity and centered at 0.5 so a steady signal reads as
         // mid-range while motion pushes it up (rising) or down (falling). The
@@ -331,8 +339,33 @@ impl AudioModShape {
         if self.invert {
             s = 1.0 - s;
         }
-        let curved = self.curve.apply(s);
-        self.range_min + (self.range_max - self.range_min) * curved
+        self.curve.apply(s)
+    }
+
+    /// Map a conditioned (post-`condition`) 0..1 signal onto the trim-handle
+    /// output range.
+    pub fn map_range(&self, conditioned: f32) -> f32 {
+        self.range_min + (self.range_max - self.range_min) * conditioned
+    }
+
+    /// Smooth and map `raw` to a normalized 0..1 output within the target
+    /// param's range — `map_range(condition(...))`, kept as one call for
+    /// existing continuous-value callers (e.g. the `mod_harness` example).
+    pub fn apply(&self, raw: f32, dt_seconds: f32, smoothed: &mut f32, prev_raw: &mut f32) -> f32 {
+        self.map_range(self.condition(raw, dt_seconds, smoothed, prev_raw))
+    }
+
+    /// The param-unit travel zone the trim handles (`range_min`/`range_max`)
+    /// define on `[min, max]` — the rails Step/Random advance within, so a
+    /// trimmed handle bounds the fire actions exactly the way it already
+    /// bounds Continuous. Defensive: if a crossed handle pair (`range_min >
+    /// range_max`) ever reaches here, the rails are swapped rather than
+    /// producing an inverted (lo > hi) zone — the UI shouldn't produce this,
+    /// but the math must not break if it does.
+    pub fn zone(&self, min: f32, max: f32) -> (f32, f32) {
+        let lo = min + self.range_min * (max - min);
+        let hi = min + self.range_max * (max - min);
+        if lo > hi { (hi, lo) } else { (lo, hi) }
     }
 }
 
@@ -684,6 +717,87 @@ mod tests {
         assert!(rising > 0.5, "rising feature pushes above center, got {rising}");
         let falling = shape.apply(0.5, 0.016, &mut s, &mut prev);
         assert!(falling < 0.5, "falling feature pushes below center, got {falling}");
+    }
+
+    #[test]
+    fn map_range_of_condition_equals_apply() {
+        // condition() then map_range() must reproduce apply() exactly, for a
+        // handful of shapes/raws — the split is a pure refactor.
+        let shapes = [
+            AudioModShape::default(),
+            AudioModShape { range_min: 0.2, range_max: 0.8, ..Default::default() },
+            AudioModShape { invert: true, range_min: 0.1, range_max: 0.4, ..Default::default() },
+            AudioModShape { rate_of_change: true, sensitivity: 2.0, ..Default::default() },
+        ];
+        for shape in shapes {
+            for raw in [0.0_f32, 0.3, 0.5, 0.7, 1.0] {
+                let mut s1 = 0.0;
+                let mut p1 = 0.0;
+                let apply_out = shape.apply(raw, 0.016, &mut s1, &mut p1);
+
+                let mut s2 = 0.0;
+                let mut p2 = 0.0;
+                let conditioned = shape.condition(raw, 0.016, &mut s2, &mut p2);
+                let mapped = shape.map_range(conditioned);
+
+                assert!(
+                    (apply_out - mapped).abs() < 1e-6,
+                    "apply({raw}) = {apply_out}, map_range(condition({raw})) = {mapped}"
+                );
+                assert_eq!(s1, s2, "condition() must advance smoothed identically to apply()");
+                assert_eq!(p1, p2, "condition() must advance prev_raw identically to apply()");
+            }
+        }
+    }
+
+    #[test]
+    fn condition_does_not_leak_the_range_map() {
+        // range 0.2..0.8 must not appear in condition()'s output — a
+        // full-scale signal must still reach 1.0 pre-map (what edge detection
+        // sees), while apply() (post-map) caps at 0.8.
+        let shape = AudioModShape {
+            attack_ms: 0.0,
+            release_ms: 0.0,
+            range_min: 0.2,
+            range_max: 0.8,
+            ..Default::default()
+        };
+        let mut s = 0.0;
+        let mut p = 0.0;
+        let conditioned = shape.condition(1.0, 0.016, &mut s, &mut p);
+        assert!((conditioned - 1.0).abs() < 1e-6, "conditioned signal ignores the range map, got {conditioned}");
+
+        let mut s2 = 0.0;
+        let mut p2 = 0.0;
+        let applied = shape.apply(1.0, 0.016, &mut s2, &mut p2);
+        assert!((applied - 0.8).abs() < 1e-6, "apply() caps at the range ceiling, got {applied}");
+    }
+
+    #[test]
+    fn zone_maps_range_handles_into_param_units() {
+        let shape = AudioModShape { range_min: 0.2, range_max: 0.8, ..Default::default() };
+        let (lo, hi) = shape.zone(0.0, 10.0);
+        assert!((lo - 2.0).abs() < 1e-6, "lo = {lo}");
+        assert!((hi - 8.0).abs() < 1e-6, "hi = {hi}");
+    }
+
+    #[test]
+    fn zone_swaps_crossed_handles() {
+        // Defensive: a crossed range_min > range_max must not produce an
+        // inverted (lo > hi) zone.
+        let shape = AudioModShape { range_min: 0.9, range_max: 0.1, ..Default::default() };
+        let (lo, hi) = shape.zone(0.0, 10.0);
+        assert!(lo <= hi, "zone() must never return an inverted (lo > hi) pair, got ({lo}, {hi})");
+        assert!((lo - 1.0).abs() < 1e-6);
+        assert!((hi - 9.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn zone_default_handles_span_the_full_param_range() {
+        let shape = AudioModShape::default();
+        let (lo, hi) = shape.zone(-5.0, 5.0);
+        assert_eq!(lo, -5.0);
+        assert_eq!(hi, 5.0);
     }
 
     #[test]

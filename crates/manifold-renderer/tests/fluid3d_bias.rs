@@ -63,6 +63,7 @@ fn base_params() -> Vec<(&'static str, f32)> {
         ("feather", 20.0),
         ("curl", 85.0),
         ("turbulence", 0.001),
+        ("turb_detail", 8.0),
         ("speed", 1.0),
         ("contrast", 3.5),
         ("scale", 1.0),
@@ -163,6 +164,99 @@ fn save_png(lum: &[f32], path: &str) {
     img.save(path).expect("write png");
 }
 
+/// BUG-066 next-step (1b): the momentum meter. Read back every dumped
+/// per-particle `Array` output and print per-component means over the live
+/// particles — a nonzero mean on a force array IS the conservation break,
+/// visible in one frame instead of a 900-frame drift, and comparing arrays
+/// down the force chain attributes it to a stage. Run the whole harness a
+/// second time with `MANIFOLD_FREEZE=0` to compare fused vs unfused executor
+/// schedules (BUG-066 suspect 2). Requires `set_dump_all(true)` before the
+/// metered frame's render.
+fn force_meter(device: &Arc<GpuDevice>, runtime: &PresetRuntime, tag: &str) {
+    let arrays = runtime.dump_arrays_all();
+
+    let read_back = |a: &manifold_renderer::compositor::ArrayDump<'_>| -> Vec<u8> {
+        let size = a.buffer.size();
+        let staging = device.create_buffer_shared(size);
+        let mut enc = device.create_encoder("meter-readback");
+        enc.copy_buffer_to_buffer(a.buffer, &staging, size);
+        enc.commit_and_wait_completed();
+        let ptr = staging.mapped_ptr().expect("shared staging buffer");
+        unsafe { std::slice::from_raw_parts(ptr, size as usize) }.to_vec()
+    };
+
+    // The particle-state array (the one with a `life` field) provides the
+    // live-index mask; the coincident per-particle arrays share its index
+    // space, and entries past the live set are uninitialised garbage.
+    let mut mask: Option<Vec<bool>> = None;
+    for a in &arrays {
+        if let Some((_, _, off)) = a.fields.iter().find(|(n, _, _)| n == "life") {
+            let bytes = read_back(a);
+            let stride = a.item_size as usize;
+            let n = if stride == 0 { 0 } else { bytes.len() / stride };
+            mask = Some(
+                (0..n)
+                    .map(|i| {
+                        let o = i * stride + *off as usize;
+                        f32::from_le_bytes(bytes[o..o + 4].try_into().unwrap()) > 0.0
+                    })
+                    .collect(),
+            );
+            break;
+        }
+    }
+
+    for a in &arrays {
+        let stride = a.item_size as usize;
+        if stride == 0 {
+            continue;
+        }
+        let bytes = read_back(a);
+        let n = bytes.len() / stride;
+        // Per-field per-component stats. Array<[f32;3]> decomposes to three
+        // scalar f32 fields (x, y, z), NOT one vec3f — cover every numeric
+        // kind or the force buffers are silently skipped.
+        for (fname, kind, off) in &a.fields {
+            let comps = match *kind {
+                "vec2f" => 2,
+                "vec3f" => 3,
+                "vec4f" => 4,
+                "f32" => 1,
+                _ => continue, // i32/u32 ids carry no momentum information
+            };
+            let mut sum = vec![0f64; comps];
+            let mut max_abs = vec![0f64; comps];
+            let mut live = 0u64;
+            for i in 0..n {
+                if let Some(m) = &mask
+                    && !m.get(i).copied().unwrap_or(false)
+                {
+                    continue;
+                }
+                live += 1;
+                let base = i * stride + *off as usize;
+                for (c, s) in sum.iter_mut().enumerate() {
+                    let o = base + c * 4;
+                    let v = f64::from(f32::from_le_bytes(bytes[o..o + 4].try_into().unwrap()));
+                    *s += v;
+                    max_abs[c] = max_abs[c].max(v.abs());
+                }
+            }
+            let d = live.max(1) as f64;
+            let means: Vec<String> = sum.iter().map(|s| format!("{:+.3e}", s / d)).collect();
+            let maxes: Vec<String> = max_abs.iter().map(|m| format!("{m:.2e}")).collect();
+            eprintln!(
+                "METER {tag} {}[{}].{} {fname}: mean [{}] max|.| [{}] live {live}",
+                a.type_id,
+                a.name,
+                a.port,
+                means.join(" "),
+                maxes.join(" "),
+            );
+        }
+    }
+}
+
 #[test]
 #[ignore = "BUG-066 investigation tool, not a regression gate — run with --ignored"]
 fn fluid3d_force_bias_bisection() {
@@ -180,11 +274,16 @@ fn fluid3d_force_bias_bisection() {
     //   slope + flow +0.01 (sign flip)         → mirrors to BL (sign-following)
     //   slope + rotate_y 1.0 (camera 180°)     → mirrors on screen (sim-space)
     //   slope + feather 4                      → bias GONE; feather 40 → TR 50%
+    // Turb-detail sweep (2026-07-10): FULL default look (turbulence + curl +
+    // slope all on) at noise lattice frequencies 2 (the legacy baked constant,
+    // the quadrant-anatomy "before") through 12. Judge the PNGs by eye; the
+    // meter rows quantify the wandering-tide shrink as detail rises.
     let scenarios: &[(&str, &[(&str, f32)])] = &[
-        ("default", &[]),
-        ("all_field_off", &[("turbulence", 0.0), ("curl", 0.0), ("flow", 0.0)]),
-        ("slope_only", &[("turbulence", 0.0), ("curl", 0.0)]),
-        ("slope_feather40", &[("turbulence", 0.0), ("curl", 0.0), ("feather", 40.0)]),
+        ("detail2_legacy", &[("turb_detail", 2.0)]),
+        ("detail4", &[("turb_detail", 4.0)]),
+        ("detail6", &[("turb_detail", 6.0)]),
+        ("detail8", &[("turb_detail", 8.0)]),
+        ("detail12", &[("turb_detail", 12.0)]),
     ];
 
     for (name, overrides) in scenarios {
@@ -203,6 +302,12 @@ fn fluid3d_force_bias_bisection() {
         let target = RenderTarget::new(&device, W, H, GpuTextureFormat::Rgba16Float, "bias-target");
 
         for frame in 0..FRAMES {
+            let f = frame + 1;
+            // Meter early (f30, before pooling develops) and at checkpoints.
+            let meter = f == 30 || f % CHECKPOINT == 0;
+            if meter {
+                runtime.set_dump_all(true);
+            }
             let c = ctx(frame as f64 / 60.0, frame as i64);
             let mut enc = device.create_encoder("bias-frame");
             {
@@ -210,8 +315,11 @@ fn fluid3d_force_bias_bisection() {
                 runtime.render(&mut gpu, &target.texture, &c, &params);
             }
             enc.commit_and_wait_completed();
+            if meter {
+                force_meter(&device, &runtime, &format!("{name} f{f}"));
+                runtime.set_dump_all(false);
+            }
 
-            let f = frame + 1;
             if f % CHECKPOINT == 0 {
                 let lum = luminance(&device, &target.texture);
                 let q = quadrant_shares(&lum);

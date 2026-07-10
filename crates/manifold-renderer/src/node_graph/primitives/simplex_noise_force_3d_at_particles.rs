@@ -21,20 +21,20 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`turbulence`,
-/// `anti_clump` f32, `active_count` Int → i32) then the derived `time2`
-/// (= seconds) then the codegen-injected `dispatch_count`, padded to a 16-byte
-/// multiple. 5 words + 3 pad = 32 bytes.
+/// `anti_clump`, `turb_scale` f32, `active_count` Int → i32) then the derived
+/// `time2` (= seconds) then the codegen-injected `dispatch_count`, padded to a
+/// 16-byte multiple. 6 words + 2 pad = 32 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct NoiseUniforms {
     turbulence: f32,
     anti_clump: f32,
+    turb_scale: f32,
     active_count: i32,
     time2: f32,
     dispatch_count: u32,
     _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
 }
 
 crate::primitive! {
@@ -47,6 +47,7 @@ crate::primitive! {
         density: Texture3D required,
         turbulence: ScalarF32 optional,
         anti_clump: ScalarF32 optional,
+        turb_scale: ScalarF32 optional,
         active_count: ScalarF32 optional,
     },
     outputs: {
@@ -67,6 +68,17 @@ crate::primitive! {
             ty: ParamType::Float,
             default: ParamValue::Float(20.0),
             range: Some((0.0, 60.0)),
+            enum_values: &[],
+        },
+        // Noise lattice cells across the unit volume. Default = the legacy
+        // baked constant, so existing saves render unchanged; the FluidSim3D
+        // card retunes it (BUG-066: at 2.0 one cell reads as a quadrant).
+        ParamDef {
+            name: Cow::Borrowed("turb_scale"),
+            label: "Turbulence Detail",
+            ty: ParamType::Float,
+            default: ParamValue::Float(2.0),
+            range: Some((0.5, 32.0)),
             enum_values: &[],
         },
         ParamDef {
@@ -120,6 +132,7 @@ impl Primitive for SimplexNoiseForce3DAtParticles {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let turbulence = ctx.scalar_or_param("turbulence", 0.001);
         let anti_clump = ctx.scalar_or_param("anti_clump", 20.0);
+        let turb_scale = ctx.scalar_or_param("turb_scale", 2.0);
         let active_count = ctx
             .scalar_or_param("active_count", 100_000.0)
             .round()
@@ -168,12 +181,12 @@ impl Primitive for SimplexNoiseForce3DAtParticles {
         let uniforms = NoiseUniforms {
             turbulence,
             anti_clump,
+            turb_scale,
             active_count: active_count as i32,
             time2,
             dispatch_count: active_count,
             _pad0: 0,
             _pad1: 0,
-            _pad2: 0,
         };
 
         // Generated binding order follows INPUTS: `in` (force) → buf_in(1),
@@ -238,7 +251,15 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            vec!["in", "particles", "density", "turbulence", "anti_clump", "active_count"]
+            vec![
+                "in",
+                "particles",
+                "density",
+                "turbulence",
+                "anti_clump",
+                "turb_scale",
+                "active_count"
+            ]
         );
         assert_eq!(
             SimplexNoiseForce3DAtParticles::INPUTS[0].ty,
@@ -265,7 +286,7 @@ mod tests {
 
     #[test]
     fn turbulence_and_anti_clump_port_shadow_params() {
-        for name in ["turbulence", "anti_clump"] {
+        for name in ["turbulence", "anti_clump", "turb_scale"] {
             let has_port = SimplexNoiseForce3DAtParticles::INPUTS
                 .iter()
                 .any(|p| p.name == name);
@@ -393,24 +414,30 @@ mod gpu_tests {
         let forces: [[f32; 3]; 4] =
             [[0.1, 0.2, 0.3], [-0.1, 0.0, 0.2], [0.05, 0.05, 0.05], [0.9, 0.9, 0.9]];
         let n = particles.len() as u32;
-        let (turbulence, anti_clump, time2) = (0.02f32, 20.0f32, 1.7f32);
+        // Non-default turb_scale so the new lattice-frequency uniform is
+        // actually exercised by the parity comparison.
+        let (turbulence, anti_clump, turb_scale, time2) = (0.02f32, 20.0f32, 5.0f32, 1.7f32);
 
-        // Hand layout: active_count(u32), turbulence(f32), anti_clump(f32), time2(f32).
+        // Hand layout: active_count(u32), turbulence(f32), anti_clump(f32),
+        //   time2(f32), turb_scale(f32), 3 pad.
         let mut hand = Vec::new();
         hand.extend_from_slice(&n.to_le_bytes());
         hand.extend_from_slice(&turbulence.to_le_bytes());
         hand.extend_from_slice(&anti_clump.to_le_bytes());
         hand.extend_from_slice(&time2.to_le_bytes());
+        hand.extend_from_slice(&turb_scale.to_le_bytes());
+        hand.extend_from_slice(&[0u8; 12]);
 
-        // Generated layout: turbulence(f32), anti_clump(f32), active_count(i32),
-        //   time2(f32), dispatch_count(u32), 3 pad.
+        // Generated layout: turbulence(f32), anti_clump(f32), turb_scale(f32),
+        //   active_count(i32), time2(f32), dispatch_count(u32), 2 pad.
         let mut gen_bytes = Vec::new();
         gen_bytes.extend_from_slice(&turbulence.to_le_bytes());
         gen_bytes.extend_from_slice(&anti_clump.to_le_bytes());
+        gen_bytes.extend_from_slice(&turb_scale.to_le_bytes());
         gen_bytes.extend_from_slice(&(n as i32).to_le_bytes());
         gen_bytes.extend_from_slice(&time2.to_le_bytes());
         gen_bytes.extend_from_slice(&n.to_le_bytes());
-        gen_bytes.extend_from_slice(&[0u8; 12]);
+        gen_bytes.extend_from_slice(&[0u8; 8]);
 
         let hand_wgsl = include_str!("shaders/simplex_noise_force_3d_at_particles.wgsl");
         let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<
