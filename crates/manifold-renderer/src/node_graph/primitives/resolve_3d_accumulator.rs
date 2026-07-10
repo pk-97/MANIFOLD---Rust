@@ -28,14 +28,14 @@ use crate::node_graph::primitive::Primitive;
 struct Resolve3DUniforms {
     vol_res: i32,
     vol_depth: i32,
+    fixed_point_scale: f32,
     _pad0: u32,
-    _pad1: u32,
 }
 
 crate::primitive! {
     name: Resolve3DAccumulator,
     type_id: "node.resolve_scatter_3d",
-    purpose: "Read a u32 fixed-point 3D accumulator buffer (produced by node.draw_particles_3d), divide by 4096 (FluidSim3D's FIXED_POINT_MULTIPLIER), and write the result as a density Texture3D. Self-clears the accumulator to zero atomically as part of the same dispatch so the next frame starts fresh.",
+    purpose: "Read a u32 fixed-point 3D accumulator buffer (produced by node.draw_particles_3d), divide by fixed_point_scale (default 4096, FluidSim3D's legacy FIXED_POINT_MULTIPLIER), and write the result as a density Texture3D. Self-clears the accumulator to zero atomically as part of the same dispatch so the next frame starts fresh.",
     inputs: {
         accum: Array(u32) required,
     },
@@ -59,6 +59,17 @@ crate::primitive! {
             range: Some((16.0, 512.0)),
             enum_values: &[],
         },
+        // Mirrors the 2D resolve_scatter: raise together with the splat energy
+        // when fractional per-particle energies are needed (density-normalized
+        // containers run 16x = 65536).
+        ParamDef {
+            name: Cow::Borrowed("fixed_point_scale"),
+            label: "Fixed Point Scale",
+            ty: ParamType::Float,
+            default: ParamValue::Float(4096.0),
+            range: Some((256.0, 1_048_576.0)),
+            enum_values: &[],
+        },
     ],
     composition_notes: "vol_res × vol_res × vol_depth must match the producing ScatterParticles3D primitive. Output Texture3D must be Rgba16Float — the shader writes via texture_storage_3d<rgba16float, write>. The output volume is pre-bound by the chain build at the same dimensions; the accumulator buffer is sized vol_res² × vol_depth × 4 bytes.",
     examples: [],
@@ -80,6 +91,11 @@ impl Primitive for Resolve3DAccumulator {
         let vol_depth = match ctx.params.get("vol_depth") {
             Some(ParamValue::Float(n)) => n.round().max(1_f32) as u32,
             _ => 128,
+        };
+
+        let fixed_point_scale = match ctx.params.get("fixed_point_scale") {
+            Some(ParamValue::Float(n)) if *n > 0.0 => *n,
+            _ => 4096.0,
         };
 
         let Some(accum) = ctx.inputs.array("accum") else {
@@ -106,8 +122,8 @@ impl Primitive for Resolve3DAccumulator {
         let uniforms = Resolve3DUniforms {
             vol_res: vol_res as i32,
             vol_depth: vol_depth as i32,
+            fixed_point_scale,
             _pad0: 0,
-            _pad1: 0,
         };
 
         // Generated binding order follows the resolve path: uniform(0),
@@ -170,7 +186,7 @@ mod tests {
     #[test]
     fn resolve_3d_uniform_struct_matches_generated_layout() {
         // The generated standalone kernel is single-entry → no 112-byte same-
-        // binding padding. 2 i32 params + 2 pad = 16 bytes.
+        // binding padding. 2 i32 + fixed_point_scale f32 + 1 pad = 16 bytes.
         assert_eq!(std::mem::size_of::<Resolve3DUniforms>(), 16);
     }
 
@@ -240,8 +256,8 @@ mod gpu_tests {
         let uniforms = Resolve3DUniforms {
             vol_res: vr as i32,
             vol_depth: vd as i32,
+            fixed_point_scale: 4096.0,
             _pad0: 0,
-            _pad1: 0,
         };
         let mut enc = device.create_encoder("resolve3d-oracle");
         enc.dispatch_compute(
