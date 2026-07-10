@@ -489,6 +489,10 @@ pub struct Application {
     /// new mechanism.
     pub(crate) split_handle_last_click: Option<std::time::Instant>,
     pub(crate) inspector_handle_last_click: Option<std::time::Instant>,
+    /// Double-click detect for the Audio Setup dock resize handle (D1) —
+    /// double-click snaps the width back to its default, same shape as the
+    /// inspector/split handles above.
+    pub(crate) audio_setup_handle_last_click: Option<std::time::Instant>,
 
     // Output window double-click fullscreen toggle.
     // Double-click fullscreen toggle for the output window.
@@ -723,6 +727,7 @@ impl Application {
             split_was_hovered: false,
             split_handle_last_click: None,
             inspector_handle_last_click: None,
+            audio_setup_handle_last_click: None,
             output_last_click: None,
             output_saved_frame: None,
             current_project_path: None,
@@ -859,6 +864,20 @@ impl Application {
             return;
         }
         self.ws.ui_root.set_inspector_handle_idle();
+
+        // Priority 2b: Audio Setup dock resize edge hover (D1)
+        if self.ws.ui_root.audio_setup_resize_dragging
+            || self.ws.ui_root.is_near_audio_setup_edge(self.cursor_pos)
+        {
+            self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
+            if self.ws.ui_root.audio_setup_resize_dragging {
+                self.ws.ui_root.set_audio_setup_handle_drag();
+            } else {
+                self.ws.ui_root.set_audio_setup_handle_hover();
+            }
+            return;
+        }
+        self.ws.ui_root.set_audio_setup_handle_idle();
 
         // Priority 3: Video/timeline split handle hover
         // Use the same hit test as click detection (layout.split_handle rect).

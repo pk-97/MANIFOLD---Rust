@@ -24,7 +24,9 @@ use manifold_ui::*;
 pub(crate) enum OverlayId {
     PerfHud,
     Dropdown,
-    AudioSetup,
+    // Audio Setup is no longer an overlay — it is a `ScreenLayout` dock column
+    // built from the root pass and routed at the docked-panel site
+    // (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` D1/§3.5).
     Settings,
     BrowserPopup,
     AbletonPicker,
@@ -39,9 +41,8 @@ impl OverlayId {
     /// it must render above whatever spawned it. The toast (D11,
     /// `UI_CRAFT_AND_MOTION_PLAN.md` P2) sits topmost of all — a status message
     /// must stay legible over an open modal/dropdown, not be hidden by one.
-    const Z_ORDER: [OverlayId; 7] = [
+    const Z_ORDER: [OverlayId; 6] = [
         OverlayId::PerfHud,
-        OverlayId::AudioSetup,
         OverlayId::Settings,
         OverlayId::BrowserPopup,
         OverlayId::AbletonPicker,
@@ -296,6 +297,11 @@ pub struct UIRoot {
     inspector_drag_start_x: f32,
     inspector_drag_start_width: f32,
 
+    // Audio Setup dock resize state (D1) — mirror of the inspector pair.
+    pub audio_setup_resize_dragging: bool,
+    audio_setup_drag_start_x: f32,
+    audio_setup_drag_start_width: f32,
+
     /// Set when overlay state changes (popup open/close, scroll, category change).
     /// Consumed by app.rs to trigger rebuild_scroll_panels.
     pub overlay_dirty: bool,
@@ -342,6 +348,9 @@ pub struct UIRoot {
     split_handle_id: Option<NodeId>,
     /// Node ID for the inspector resize handle (vertical bar at inspector right edge).
     inspector_handle_id: Option<NodeId>,
+    /// Node ID for the Audio Setup dock resize handle (vertical bar at the
+    /// dock's LEFT edge). `None` while the dock is closed. (D1)
+    audio_setup_handle_id: Option<NodeId>,
     /// P2 "panel-split snap-back" (D15): self-tracked elapsed time for
     /// `layout.tick_splits`, same self-contained-`Instant` shape as
     /// `InspectorCompositePanel::update`'s `motion_last_tick`.
@@ -477,6 +486,9 @@ impl UIRoot {
             inspector_resize_dragging: false,
             inspector_drag_start_x: 0.0,
             inspector_drag_start_width: 0.0,
+            audio_setup_resize_dragging: false,
+            audio_setup_drag_start_x: 0.0,
+            audio_setup_drag_start_width: 0.0,
             overlay_dirty: false,
             effect_clipboard_count: 0,
             gen_clipboard: manifold_editing::clipboard::GeneratorClipboard::new(),
@@ -489,6 +501,7 @@ impl UIRoot {
             macro_ableton_mapped: [false; manifold_core::MACRO_COUNT],
             split_handle_id: None,
             inspector_handle_id: None,
+            audio_setup_handle_id: None,
             layout_tick_last: std::time::Instant::now(),
             drag_owner: None,
             ableton_session: None,
@@ -696,6 +709,20 @@ impl UIRoot {
         self.inspector.build(&mut self.tree, &self.layout);
         self.tree.end_region(region, start);
 
+        // Audio Setup dock (D1) — a Base-tier column between the content area
+        // and the inspector, built from the root pass when open. It's no longer
+        // an overlay; opening/closing changes `audio_setup_width`, which shrinks
+        // the content area, so a full rebuild lands here at the new geometry.
+        // Guard on the WIDTH (the geometry), not the panel's `open` flag, so an
+        // open-without-width state can never build a degenerate zero-rect dock.
+        if self.layout.audio_setup_width > 0.0 {
+            let dock = self.layout.audio_setup();
+            let region = self.tree.begin_region(dock, ZTier::Base, "audio_setup", UIFlags::empty());
+            let start = self.tree.count();
+            self.audio_setup_panel.build_docked(&mut self.tree, dock);
+            self.tree.end_region(region, start);
+        }
+
         // Split handle + inspector resize handle — thin drag affordances at
         // panel seams. Chrome tier: utility chrome that should never be
         // occluded, same reasoning as transport/header/footer. One shared
@@ -740,6 +767,25 @@ impl UIRoot {
                 insp.y,
                 4.0,
                 insp.height,
+                manifold_ui::node::UIStyle {
+                    bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
+                    ..manifold_ui::node::UIStyle::default()
+                },
+            ));
+        }
+
+        // Audio Setup dock resize handle — thin vertical bar at the dock's LEFT
+        // edge (D1). Dragging it LEFT widens the dock (it expands leftward,
+        // pushing the content). Only present while the dock is open.
+        self.audio_setup_handle_id = None;
+        if self.layout.audio_setup_width > 0.0 {
+            let dock = self.layout.audio_setup();
+            self.audio_setup_handle_id = Some(self.tree.add_panel(
+                None,
+                dock.x,
+                dock.y,
+                4.0,
+                dock.height,
                 manifold_ui::node::UIStyle {
                     bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
                     ..manifold_ui::node::UIStyle::default()
@@ -979,7 +1025,6 @@ impl UIRoot {
         match id {
             OverlayId::PerfHud => &mut self.perf_hud,
             OverlayId::Dropdown => &mut self.dropdown,
-            OverlayId::AudioSetup => &mut self.audio_setup_panel,
             OverlayId::Settings => &mut self.settings_popup,
             OverlayId::BrowserPopup => &mut self.browser_popup,
             OverlayId::AbletonPicker => &mut self.ableton_picker,
@@ -995,7 +1040,6 @@ impl UIRoot {
         match id {
             OverlayId::PerfHud => self.perf_hud.is_open(),
             OverlayId::Dropdown => self.dropdown.is_open(),
-            OverlayId::AudioSetup => self.audio_setup_panel.is_open(),
             OverlayId::Settings => self.settings_popup.is_open(),
             OverlayId::BrowserPopup => self.browser_popup.is_open(),
             OverlayId::AbletonPicker => self.ableton_picker.is_open(),
@@ -1260,6 +1304,11 @@ impl UIRoot {
             if ov.is_open() {
                 ov.gesture_ended();
             }
+        }
+        // The Audio Setup dock is no longer an overlay (D1) but keeps the same
+        // idempotent end-of-gesture clear for its band/calibration drags.
+        if self.audio_setup_panel.is_open() {
+            self.audio_setup_panel.gesture_ended();
         }
     }
 
@@ -1711,6 +1760,35 @@ impl UIRoot {
                 }
                 self.drain_overlay_selections(&mut actions);
                 continue;
+            }
+
+            // Escape closes the Audio Setup dock (D1/§3.5) — the ONE key path,
+            // handled AFTER overlays (a dropdown/settings opened over the app
+            // gets Escape first) and routed through the same `OpenAudioSetup`
+            // toggle the header button and the × use.
+            if self.audio_setup_panel.is_open()
+                && matches!(event, UIEvent::KeyDown { key: Key::Escape, .. })
+            {
+                actions.push(PanelAction::OpenAudioSetup);
+                continue;
+            }
+
+            // Audio Setup dock (D1) — a docked panel routed here, not an
+            // overlay. It handles its own clicks + band/calibration drags and
+            // consumes them so they don't fall through to the panels beneath.
+            // A `PointerDown` that armed a band-divider grab requests immediate
+            // drag so a 1px move begins the drag (no 4px threshold wait).
+            if self.audio_setup_panel.is_open() {
+                let (consumed, mut acts) = self.audio_setup_panel.handle_event(event);
+                actions.append(&mut acts);
+                if consumed {
+                    if matches!(event, UIEvent::PointerDown { .. })
+                        && self.audio_setup_panel.wants_immediate_drag()
+                    {
+                        self.input.request_immediate_drag();
+                    }
+                    continue;
+                }
             }
 
             // Node-intent dispatch: discrete gestures (click / double-click /
@@ -2694,6 +2772,87 @@ impl UIRoot {
         self.inspector_resize_dragging = false;
     }
 
+    // ── Audio Setup dock resize (D1) — mirror of the inspector pair ──
+    const AUDIO_SETUP_MIN_W: f32 = manifold_ui::color::MIN_AUDIO_SETUP_WIDTH;
+    const AUDIO_SETUP_MAX_W: f32 = manifold_ui::color::MAX_AUDIO_SETUP_WIDTH;
+
+    /// True if `pos` is near the Audio Setup dock's LEFT edge (its resize
+    /// handle). False when the dock is closed (zero width).
+    pub fn is_near_audio_setup_edge(&self, pos: Vec2) -> bool {
+        if self.layout.audio_setup_width <= 0.0 {
+            return false;
+        }
+        let dock = self.layout.audio_setup();
+        (pos.x - dock.x).abs() < Self::RESIZE_EDGE_PX && pos.y >= dock.y && pos.y <= dock.y + dock.height
+    }
+
+    /// Begin an Audio Setup dock resize drag.
+    pub fn begin_audio_setup_resize(&mut self, x: f32) {
+        self.audio_setup_resize_dragging = true;
+        self.audio_setup_drag_start_x = x;
+        self.audio_setup_drag_start_width = self.layout.audio_setup_width;
+    }
+
+    /// Update dock width during resize. The dock expands LEFTWARD, so dragging
+    /// the handle left (negative delta) widens it. Returns true if width moved.
+    pub fn update_audio_setup_resize(&mut self, x: f32) -> bool {
+        if !self.audio_setup_resize_dragging {
+            return false;
+        }
+        let delta = x - self.audio_setup_drag_start_x;
+        let new_width = (self.audio_setup_drag_start_width - delta)
+            .clamp(Self::AUDIO_SETUP_MIN_W, Self::AUDIO_SETUP_MAX_W);
+        if (new_width - self.layout.audio_setup_width).abs() > 1.0 {
+            self.layout.audio_setup_width = new_width;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// End Audio Setup dock resize drag.
+    pub fn end_audio_setup_resize(&mut self) {
+        self.audio_setup_resize_dragging = false;
+    }
+
+    /// Toggle the Audio Setup dock (D1). The panel's `open` flag and the
+    /// layout's `audio_setup_width` are the two halves of "docked" — `open`
+    /// gates build/update, the width is the geometry `content_area()`
+    /// subtracts. Keep them in lockstep: set the width from the NEW open state
+    /// so this is a true toggle regardless of entry state. Both the live app
+    /// (`app_render`'s `OpenAudioSetup` arm) and the headless script harness
+    /// (`ui_bridge::dispatch`'s arm) call this ONE method so the toggle is
+    /// reachable on both paths; the caller schedules the structural rebuild.
+    pub fn toggle_audio_dock(&mut self) {
+        self.audio_setup_panel.toggle();
+        let open = self.audio_setup_panel.is_open();
+        self.layout.audio_setup_width = if open {
+            manifold_ui::color::DEFAULT_AUDIO_SETUP_WIDTH
+        } else {
+            0.0
+        };
+    }
+
+    /// Audio Setup dock resize-handle colour feedback (idle/hover/drag).
+    pub fn set_audio_setup_handle_hover(&mut self) {
+        self.set_handle_color(self.audio_setup_handle_id, manifold_ui::color::RESIZE_HANDLE_HOVER);
+    }
+    pub fn set_audio_setup_handle_drag(&mut self) {
+        self.set_handle_color(self.audio_setup_handle_id, manifold_ui::color::RESIZE_HANDLE_DRAG);
+    }
+    pub fn set_audio_setup_handle_idle(&mut self) {
+        self.set_handle_color(self.audio_setup_handle_id, manifold_ui::color::RESIZE_HANDLE_IDLE);
+    }
+
+    fn set_handle_color(&mut self, id: Option<NodeId>, color: manifold_ui::node::Color32) {
+        if let Some(id) = id {
+            self.tree.set_style(
+                id,
+                manifold_ui::node::UIStyle { bg_color: color, ..manifold_ui::node::UIStyle::default() },
+            );
+        }
+    }
+
     // ── Split handle color feedback ─────────────────────────────
 
     /// Update split handle color to hover state.
@@ -3186,58 +3345,19 @@ mod drag_capture_tests {
         );
     }
 
-    /// D5 (P2): the docked Audio Setup panel (top-right, 38% width, full
-    /// height) visually overlaps the split handle where the handle's
-    /// full-width band crosses the panel's x-range — this is BUG-059's
-    /// window-seam case. `overlay_contains_point` must say yes there, which
-    /// is what makes `window_input`'s split-handle press branch yield to the
-    /// panel instead of stealing a band-line grab.
-    #[test]
-    fn overlay_contains_point_true_where_audio_panel_overlaps_split_handle() {
-        let mut ui = new_root();
-        ui.audio_setup_panel.open();
-        ui.build();
-
-        let handle = ui.layout.split_handle();
-        let panel_rect = ui
-            .overlay_rects
-            .iter()
-            .find(|(id, _)| *id == OverlayId::AudioSetup)
-            .map(|(_, r)| *r)
-            .expect("audio setup panel should have a resolved rect once open and built");
-
-        let overlap_x_min = handle.x.max(panel_rect.x);
-        let overlap_x_max = (handle.x + handle.width).min(panel_rect.x + panel_rect.width);
-        assert!(
-            overlap_x_min < overlap_x_max,
-            "test setup requires the docked panel to actually overlap the split \
-             handle in x at this viewport size — panel {panel_rect:?}, handle {handle:?}"
-        );
-
-        let probe = Vec2::new((overlap_x_min + overlap_x_max) * 0.5, handle.y + handle.height * 0.5);
-        assert!(ui.overlay_contains_point(probe));
-
-        // Sanity: same y, at the handle's own left edge (outside the panel's
-        // x-range) is not blocked — the guard is specific to where the panel
-        // actually sits, not the whole handle band.
-        let outside_probe = Vec2::new(handle.x + 1.0, handle.y + handle.height * 0.5);
-        assert!(!panel_rect.contains(outside_probe));
-        assert!(!ui.overlay_contains_point(outside_probe));
-    }
-
-    /// P3 (D6/§3.4): full-stack proof that a PointerDown landing on the audio
-    /// panel's Low/Mid crossover divider requests immediate drag for that
+    /// D1/§3.5: full-stack proof that a PointerDown landing on the docked Audio
+    /// Setup panel's Low/Mid crossover divider requests immediate drag for that
     /// press, so a 1px Move begins the drag immediately (not after the usual
-    /// `DRAG_THRESHOLD_PX = 4.0`) and the following Drag reaches the panel as
-    /// an `AudioCrossoverChanged` action. Drives the real entry points
-    /// (`pointer_event` → `process_events`) rather than calling
-    /// `request_immediate_drag`/`resolve_drag_owner` directly, so it exercises
-    /// the exact wiring `process_events` does at the `route_overlay_event`
-    /// PointerDown site — the seam this phase resolved.
+    /// `DRAG_THRESHOLD_PX = 4.0`) and the following Drag reaches the panel as an
+    /// `AudioCrossoverChanged` action. Drives the real entry points
+    /// (`pointer_event` → `process_events`) so it exercises the exact
+    /// docked-panel routing `process_events` does — the seam this phase built.
     #[test]
     fn divider_grab_requests_immediate_drag_and_one_pixel_move_yields_crossover_changed() {
         let mut ui = new_root();
         ui.audio_setup_panel.open();
+        // Open the dock column so `ui.build()` builds it into `audio_setup()`.
+        ui.layout.audio_setup_width = manifold_ui::color::DEFAULT_AUDIO_SETUP_WIDTH;
         ui.audio_setup_panel.configure(
             None,
             vec![manifold_ui::panels::audio_setup_panel::AudioSendRow {
@@ -3332,6 +3452,9 @@ mod drag_capture_tests {
 
     fn open_audio_panel_with_send(ui: &mut UIRoot) {
         ui.audio_setup_panel.open();
+        // Open the dock column too (the real toggle sets both — D1); without a
+        // width the dock rect is ZERO and the body clips to nothing.
+        ui.layout.audio_setup_width = manifold_ui::color::DEFAULT_AUDIO_SETUP_WIDTH;
         ui.audio_setup_panel.configure(
             None,
             vec![manifold_ui::panels::audio_setup_panel::AudioSendRow {
