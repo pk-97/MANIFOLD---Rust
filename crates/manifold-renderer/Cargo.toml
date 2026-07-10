@@ -52,6 +52,10 @@ path = "src/bin/freeze_profile.rs"
 name = "generate-preset-thumbnails"
 path = "src/bin/generate_preset_thumbnails.rs"
 
+[[bin]]
+name = "render-generator-preset"
+path = "src/bin/render_generator_preset.rs"
+
 # GPU-proof integration binary: the alpha-contract sweep + generator smoke.
 # Gated behind `gpu-proofs` (see [features]) so it's excluded from the
 # default `cargo test` / `cargo nextest` sweep — run it deliberately with
