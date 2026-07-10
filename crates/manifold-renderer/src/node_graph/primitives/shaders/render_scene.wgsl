@@ -79,6 +79,14 @@ struct Uniforms {
     // runtime-sized), y: ambient (this object's material.ambient),
     // z/w: reserved.
     scene_params: vec4<f32>,
+    // Atmosphere (P3), scene-wide (same in every object's uniform).
+    // fog_color.rgb = colour distant geometry fades toward.
+    fog_color: vec4<f32>,
+    // x: fog_density (0 = no fog), y: height_falloff (0 = uniform),
+    // z/w: reserved.
+    fog_params: vec4<f32>,
+    // rgb: ambient/sky tint multiplier on the ambient term (1,1,1 = neutral).
+    ambient_tint: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -232,6 +240,25 @@ fn resolve_metallic(uv: vec2<f32>) -> f32 {
     return u.pbr_metallic_roughness.x;
 }
 
+// Exponential depth fog (P3), applied to a lit fragment's STRAIGHT
+// (non-premultiplied) rgb just before return. Distance is camera→fragment;
+// height_falloff scales density by exp(-falloff·max(y,0)) so fog thins with
+// altitude (ground haze). Alpha is left untouched — fog composits OVER the
+// premultiplied-alpha contract, it does not replace it, so a transparent
+// fragment stays transparent and keys downstream. fog_density 0 → factor 0
+// → identity, so an unwired atmosphere is byte-identical to no atmosphere.
+fn apply_fog(rgb: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
+    let density = u.fog_params.x;
+    if density <= 0.0 {
+        return rgb;
+    }
+    let falloff = u.fog_params.y;
+    let dist = length(u.camera_pos.xyz - world_pos);
+    let h = exp(-falloff * max(world_pos.y, 0.0));
+    let fog = clamp(1.0 - exp(-density * dist * h), 0.0, 1.0);
+    return mix(rgb, u.fog_color.rgb, fog);
+}
+
 // ===== Material kind fragment entry points =====
 
 // Unlit — flat colour passthrough plus emission. No lighting math, no
@@ -242,7 +269,7 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
-    let rgb = albedo.rgb + u.emission.rgb;
+    let rgb = apply_fog(albedo.rgb + u.emission.rgb, in.world_pos);
     return vec4<f32>(rgb, albedo.a);
 }
 
@@ -275,8 +302,9 @@ fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
         let vis = shadow_factor(in.world_pos, l_col.w);
         lit = lit + (diffuse + spec) * l_col.rgb * l_dir.w * vis;
     }
-    let ambient = albedo.rgb * u.scene_params.y;
-    return vec4<f32>(lit + ambient + u.emission.rgb, albedo.a);
+    let ambient = albedo.rgb * u.scene_params.y * u.ambient_tint.rgb;
+    let rgb = apply_fog(lit + ambient + u.emission.rgb, in.world_pos);
+    return vec4<f32>(rgb, albedo.a);
 }
 
 // PBR — Cook-Torrance microfacet specular + Lambert diffuse, summed over
@@ -343,8 +371,8 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let f_view = F0 + (1.0 - F0) * pow(clamp(1.0 - n_dot_v, 0.0, 1.0), 5.0);
     let ibl = f_view * ibl_sample * ibl_strength;
 
-    let ambient = albedo.rgb * u.scene_params.y;
-    let rgb = direct + ibl + ambient + u.emission.rgb;
+    let ambient = albedo.rgb * u.scene_params.y * u.ambient_tint.rgb;
+    let rgb = apply_fog(direct + ibl + ambient + u.emission.rgb, in.world_pos);
     return vec4<f32>(rgb, albedo.a);
 }
 
@@ -377,6 +405,7 @@ fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
         let vis = shadow_factor(in.world_pos, l_col.w);
         lit = lit + albedo.rgb * level * l_col.rgb * l_dir.w * vis;
     }
-    let ambient = albedo.rgb * u.scene_params.y;
-    return vec4<f32>(lit + ambient + u.emission.rgb, albedo.a);
+    let ambient = albedo.rgb * u.scene_params.y * u.ambient_tint.rgb;
+    let rgb = apply_fog(lit + ambient + u.emission.rgb, in.world_pos);
+    return vec4<f32>(rgb, albedo.a);
 }

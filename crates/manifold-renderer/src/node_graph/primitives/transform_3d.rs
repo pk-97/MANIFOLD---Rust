@@ -249,6 +249,7 @@ mod tests {
         let mut light_scratch = Vec::new();
         let mut material_scratch = Vec::new();
         let mut transform_scratch = Vec::new();
+        let mut atmosphere_scratch = Vec::new();
         let inputs = NodeInputs::new(&wire_slots, &backend);
         let outputs = NodeOutputs::new(
             outputs_bindings,
@@ -258,6 +259,7 @@ mod tests {
             &mut light_scratch,
             &mut material_scratch,
             &mut transform_scratch,
+            &mut atmosphere_scratch,
         );
         let time = frame_time();
         let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None);

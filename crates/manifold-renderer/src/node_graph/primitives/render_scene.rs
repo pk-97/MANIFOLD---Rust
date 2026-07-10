@@ -49,6 +49,7 @@ use ahash::AHashMap;
 use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::MeshVertex;
+use crate::node_graph::atmosphere::Atmosphere;
 use crate::node_graph::camera::Camera;
 use crate::node_graph::effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, ParamValues,
@@ -159,11 +160,19 @@ struct RenderSceneUniforms {
     /// truth for how many `@binding(8)` entries the shader reads — NOT
     /// `arrayLength` (D1).
     scene_params: [f32; 4],
+    /// Atmosphere (P3): fog colour (rgb; a reserved). Scene-wide — the same
+    /// values are copied into every object's uniform.
+    fog_color: [f32; 4],
+    /// `(fog_density, height_falloff, 0, 0)`. `fog_density == 0` → no fog
+    /// (unwired atmosphere = byte-identical to no atmosphere).
+    fog_params: [f32; 4],
+    /// Scene-wide ambient/sky tint (rgb multiplier on the ambient term).
+    ambient_tint: [f32; 4],
 }
 
-// 272 = 17 × 16 → the naga 16-byte uniform-size rule holds. Was 400 with
-// the old fixed `lights: [[f32;4]; 8]` array (128 B) baked in.
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 272);
+// 320 = 20 × 16 → the naga 16-byte uniform-size rule holds. Was 272 before
+// the P3 atmosphere fields (fog_color + fog_params + ambient_tint = 3 vec4).
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 320);
 
 /// Per-(caster, object) uniform for the shadow depth pass
 /// (`shaders/shadow_depth.wgsl`). The vertex shader composes
@@ -259,6 +268,14 @@ impl RenderScene {
         inputs.push(NodePort {
             name: std::borrow::Cow::Borrowed("envmap"),
             ty: PortType::Texture2D,
+            kind: PortKind::Input,
+            required: false,
+        });
+        // Optional scene-wide atmosphere (P3). Unwired = fog off,
+        // byte-identical to no atmosphere.
+        inputs.push(NodePort {
+            name: std::borrow::Cow::Borrowed("atmosphere"),
+            ty: PortType::Atmosphere,
             kind: PortKind::Input,
             required: false,
         });
@@ -593,6 +610,7 @@ fn build_uniforms(
     cam: &Camera,
     material: &Material,
     light_count: f32,
+    atmosphere: &Atmosphere,
 ) -> RenderSceneUniforms {
     RenderSceneUniforms {
         view_proj,
@@ -624,6 +642,9 @@ fn build_uniforms(
             0.0,
         ],
         scene_params: [light_count, material.ambient, 0.0, 0.0],
+        fog_color: atmosphere.fog_color,
+        fog_params: [atmosphere.fog_density, atmosphere.height_falloff, 0.0, 0.0],
+        ambient_tint: atmosphere.ambient_tint,
     }
 }
 
@@ -669,6 +690,10 @@ impl EffectNode for RenderScene {
             .camera("camera")
             .unwrap_or_else(Camera::default_perspective);
         let envmap_wired = ctx.inputs.texture_2d("envmap");
+        // Scene-wide atmosphere (P3). Unwired = Atmosphere::default() = fog
+        // density 0 = no fog (the shader's exp fog collapses to identity), so
+        // an unwired atmosphere is byte-identical to no atmosphere.
+        let atmosphere = ctx.inputs.atmosphere("atmosphere").unwrap_or_default();
 
         // Build the shared lights buffer from whichever light_N ports are
         // actually wired (unwired slots simply don't contribute — 0 lights
@@ -804,6 +829,7 @@ impl EffectNode for RenderScene {
                 &cam,
                 &material,
                 light_count as f32,
+                &atmosphere,
             );
             if base_color_map.is_some() {
                 uniforms.texture_flags[2] = 1.0; // z = base_color_map present (matches resolve_albedo's texture_flags.z gate)
@@ -1109,9 +1135,16 @@ mod tests {
     #[test]
     fn defaults_to_two_objects_one_light() {
         let s = RenderScene::new();
-        // camera + envmap + light_0 + (mesh_0,material_0,base_color_map_0,transform_0) +
+        // camera + envmap + atmosphere + light_0 +
+        // (mesh_0,material_0,base_color_map_0,transform_0) +
         // (mesh_1,material_1,base_color_map_1,transform_1)
-        assert_eq!(s.inputs().len(), 2 + 1 + 8);
+        assert_eq!(s.inputs().len(), 3 + 1 + 8);
+        assert!(s.inputs().iter().any(|p| p.name == "atmosphere"));
+        assert!(!s.inputs().iter().find(|p| p.name == "atmosphere").unwrap().required);
+        assert_eq!(
+            s.inputs().iter().find(|p| p.name == "atmosphere").unwrap().ty,
+            PortType::Atmosphere
+        );
         assert!(s.inputs().iter().any(|p| p.name == "mesh_1"));
         assert!(s.inputs().iter().any(|p| p.name == "material_1"));
         assert!(!s.inputs().iter().any(|p| p.name == "mesh_2"));

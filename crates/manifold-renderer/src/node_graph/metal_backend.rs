@@ -157,6 +157,10 @@ pub struct MetalBackend {
     /// Same shape as `materials` — drained from per-step scratch by the
     /// executor after the producing `node.transform_3d` atom's `evaluate`.
     transforms: AHashMap<Slot, crate::node_graph::transform::Transform>,
+    /// CPU-only [`Atmosphere`] values written via [`Backend::set_atmosphere`].
+    /// Same shape as `transforms` — drained after `node.atmosphere`'s
+    /// `evaluate`.
+    atmospheres: AHashMap<Slot, crate::node_graph::atmosphere::Atmosphere>,
 }
 
 // Safety: the raw `*const GpuDevice` points to a device owned by the
@@ -196,6 +200,7 @@ impl MetalBackend {
             lights: AHashMap::default(),
             materials: AHashMap::default(),
             transforms: AHashMap::default(),
+            atmospheres: AHashMap::default(),
         }
     }
 
@@ -226,6 +231,7 @@ impl MetalBackend {
             lights: AHashMap::default(),
             materials: AHashMap::default(),
             transforms: AHashMap::default(),
+            atmospheres: AHashMap::default(),
         }
     }
 
@@ -664,6 +670,14 @@ impl Backend for MetalBackend {
 
     fn set_transform(&mut self, slot: Slot, value: crate::node_graph::transform::Transform) {
         self.transforms.insert(slot, value);
+    }
+
+    fn atmosphere(&self, slot: Slot) -> Option<crate::node_graph::atmosphere::Atmosphere> {
+        self.atmospheres.get(&slot).copied()
+    }
+
+    fn set_atmosphere(&mut self, slot: Slot, value: crate::node_graph::atmosphere::Atmosphere) {
+        self.atmospheres.insert(slot, value);
     }
 
     fn array_buffer(&self, slot: Slot) -> Option<&GpuBuffer> {

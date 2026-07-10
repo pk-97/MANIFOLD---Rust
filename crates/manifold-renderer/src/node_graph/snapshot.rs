@@ -305,6 +305,7 @@ pub enum PortKindSnapshot {
     Light,
     Material,
     Transform,
+    Atmosphere,
 }
 
 fn channel_element_type_to_display(ty: ChannelElementType) -> &'static str {
@@ -360,6 +361,7 @@ impl From<PortType> for PortKindSnapshot {
             PortType::Light => Self::Light,
             PortType::Material => Self::Material,
             PortType::Transform => Self::Transform,
+            PortType::Atmosphere => Self::Atmosphere,
         }
     }
 }

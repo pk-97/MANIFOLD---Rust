@@ -20,6 +20,7 @@ use manifold_gpu::{GpuBuffer, GpuTexture, GpuTextureFormat};
 use crate::node_graph::bindings::Slot;
 use crate::node_graph::camera::Camera;
 use crate::node_graph::execution_plan::ResourceId;
+use crate::node_graph::atmosphere::Atmosphere;
 use crate::node_graph::light::Light;
 use crate::node_graph::material::Material;
 use crate::node_graph::parameters::ParamValue;
@@ -194,6 +195,18 @@ pub trait Backend: Send {
     /// scratch by the executor, same shape as `set_material` / `set_light`.
     fn set_transform(&mut self, _slot: Slot, _value: Transform) {}
 
+    /// [`Atmosphere`] value bound to a slot. Mirrors `transform` for the
+    /// [`PortType::Atmosphere`] wire shape — CPU-only struct payload set by the
+    /// producing `node.atmosphere` atom's evaluate and drained by the executor
+    /// before consumers run. Default impls return `None`.
+    fn atmosphere(&self, _slot: Slot) -> Option<Atmosphere> {
+        None
+    }
+
+    /// Write an [`Atmosphere`] value into a slot. Drained from the per-step
+    /// scratch by the executor, same shape as `set_transform`.
+    fn set_atmosphere(&mut self, _slot: Slot, _value: Atmosphere) {}
+
     /// Backend-specific downcast hook. Default implementation returns
     /// `None`. Real backends override to expose themselves for
     /// implementation-specific calls (e.g., the chain's swap-based
@@ -280,6 +293,8 @@ pub struct MockBackend {
     materials: AHashMap<Slot, Material>,
     /// Transform values written via [`Backend::set_transform`] — same shape.
     transforms: AHashMap<Slot, Transform>,
+    /// Atmosphere values written via [`Backend::set_atmosphere`] — same shape.
+    atmospheres: AHashMap<Slot, Atmosphere>,
     /// Skip-passthrough aliases installed this frame via
     /// [`Backend::alias_2d`]. Mock has no textures to re-point; recording
     /// the pairs (and returning `true`) lets executor tests observe the
@@ -298,6 +313,7 @@ impl MockBackend {
             lights: AHashMap::default(),
             materials: AHashMap::default(),
             transforms: AHashMap::default(),
+            atmospheres: AHashMap::default(),
             skip_aliases: Vec::new(),
         }
     }
@@ -409,6 +425,14 @@ impl Backend for MockBackend {
 
     fn set_transform(&mut self, slot: Slot, value: Transform) {
         self.transforms.insert(slot, value);
+    }
+
+    fn atmosphere(&self, slot: Slot) -> Option<Atmosphere> {
+        self.atmospheres.get(&slot).copied()
+    }
+
+    fn set_atmosphere(&mut self, slot: Slot, value: Atmosphere) {
+        self.atmospheres.insert(slot, value);
     }
 
     fn alias_2d(&mut self, src_slot: Slot, dst_slot: Slot) -> bool {

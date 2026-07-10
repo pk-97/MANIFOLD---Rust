@@ -206,6 +206,7 @@ mod tests {
         assert_eq!(
             drivers,
             &[
+                "Atmosphere",
                 "Beat Gate",
                 "Beat Ramp",
                 "Canvas Area Scale",
