@@ -1,6 +1,9 @@
 # Scene Build + Group Params — named objects, transform atoms, sectioned cards
 
-**Status:** APPROVED design, not built · 2026-07-06 · Fable
+**Status:** IN PROGRESS · design 2026-07-06 · Fable. **P1 SHIPPED 2026-07-10** (main `3a6e30b7`):
+`PortType::Transform` + `node.transform_3d` atom land end-to-end (ports, both backends, executor
+drain, editor pin color, UI mirror-enum boundary); `render_scene` untouched. Landing:
+`docs/landings/2026-07-10-scene-build-p1.md`. P2–P5 remain.
 **Prerequisites:** PARAM_STORAGE_DESIGN P1–P5 (SHIPPED). PARAM_STORAGE_BOUNDARIES_DESIGN
 P1–P2 must land **before this doc's P3 only** (the card phase reads specs straight off
 the manifest; building it against the pre-boundaries dual-source card path would wire it
