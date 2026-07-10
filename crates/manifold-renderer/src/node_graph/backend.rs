@@ -24,6 +24,7 @@ use crate::node_graph::light::Light;
 use crate::node_graph::material::Material;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::ports::PortType;
+use crate::node_graph::transform::Transform;
 
 /// Abstracts physical resource allocation behind the slot-based runtime.
 pub trait Backend: Send {
@@ -181,6 +182,18 @@ pub trait Backend: Send {
     /// scratch by the executor, same shape as `set_light` / `set_camera`.
     fn set_material(&mut self, _slot: Slot, _value: Material) {}
 
+    /// [`Transform`] value bound to a slot. Mirrors `material` for the
+    /// [`PortType::Transform`] wire shape — CPU-only struct payload set by
+    /// the producing `node.transform_3d` atom's evaluate and drained by the
+    /// executor before consumers run. Default impls return `None`.
+    fn transform(&self, _slot: Slot) -> Option<Transform> {
+        None
+    }
+
+    /// Write a [`Transform`] value into a slot. Drained from the per-step
+    /// scratch by the executor, same shape as `set_material` / `set_light`.
+    fn set_transform(&mut self, _slot: Slot, _value: Transform) {}
+
     /// Backend-specific downcast hook. Default implementation returns
     /// `None`. Real backends override to expose themselves for
     /// implementation-specific calls (e.g., the chain's swap-based
@@ -265,6 +278,8 @@ pub struct MockBackend {
     lights: AHashMap<Slot, Light>,
     /// Material values written via [`Backend::set_material`] — same shape.
     materials: AHashMap<Slot, Material>,
+    /// Transform values written via [`Backend::set_transform`] — same shape.
+    transforms: AHashMap<Slot, Transform>,
     /// Skip-passthrough aliases installed this frame via
     /// [`Backend::alias_2d`]. Mock has no textures to re-point; recording
     /// the pairs (and returning `true`) lets executor tests observe the
@@ -282,6 +297,7 @@ impl MockBackend {
             cameras: AHashMap::default(),
             lights: AHashMap::default(),
             materials: AHashMap::default(),
+            transforms: AHashMap::default(),
             skip_aliases: Vec::new(),
         }
     }
@@ -385,6 +401,14 @@ impl Backend for MockBackend {
 
     fn set_material(&mut self, slot: Slot, value: Material) {
         self.materials.insert(slot, value);
+    }
+
+    fn transform(&self, slot: Slot) -> Option<Transform> {
+        self.transforms.get(&slot).copied()
+    }
+
+    fn set_transform(&mut self, slot: Slot, value: Transform) {
+        self.transforms.insert(slot, value);
     }
 
     fn alias_2d(&mut self, src_slot: Slot, dst_slot: Slot) -> bool {

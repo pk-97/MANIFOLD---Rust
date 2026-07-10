@@ -51,6 +51,14 @@ pub enum PortType {
     /// shaded surface (kind + base colour + roughness/metallic/etc.).
     /// Same CPU-struct lifetime model as `Camera` / `Light`.
     Material,
+    /// CPU-only struct wire carrying a [`Transform`](crate::node_graph::transform::Transform)
+    /// (local TRS: `pos` / `rot_euler` radians / `scale`). Produced by
+    /// `node.transform_3d`, consumed by `render_scene`'s `transform_n` ports
+    /// as a single struct input replacing nine per-object TRS params. Same
+    /// CPU-struct lifetime model as `Camera` / `Light` / `Material` — no GPU
+    /// resource on the wire, matrices are composed by consumers, never
+    /// carried on the wire itself.
+    Transform,
 }
 
 impl PortType {

@@ -13,6 +13,7 @@ mod bindings;
 pub mod camera;
 pub mod light;
 pub mod material;
+pub mod transform;
 mod binding_migration;
 mod boundary_nodes;
 mod bound_graph;
@@ -57,6 +58,7 @@ pub use bindings::{NodeInputs, NodeOutputs, Slot};
 pub use camera::{Camera, CameraMode};
 pub use light::{Light, LightMode, ShadowSoftness};
 pub use material::{Material, MaterialKind};
+pub use transform::Transform;
 pub use boundary_nodes::{
     FINAL_OUTPUT_TYPE_ID, FinalOutput, GENERATOR_INPUT_TYPE_ID, GeneratorInput, SOURCE_TYPE_ID,
     Source,

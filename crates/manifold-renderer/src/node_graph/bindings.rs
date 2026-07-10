@@ -19,6 +19,7 @@ use crate::node_graph::camera::Camera;
 use crate::node_graph::light::Light;
 use crate::node_graph::material::Material;
 use crate::node_graph::parameters::ParamValue;
+use crate::node_graph::transform::Transform;
 
 /// Opaque physical-buffer index handed out by the runtime's resource pool.
 ///
@@ -112,6 +113,14 @@ impl<'a> NodeInputs<'a> {
         self.backend.material(self.slot(port)?)
     }
 
+    /// [`Transform`] bound to the named [`PortType::Transform`] input port.
+    /// `None` if unwired. Same CPU-struct drain shape as `Camera` / `Light` /
+    /// `Material` — produced by `node.transform_3d`, consumed by
+    /// `render_scene`'s `transform_n` ports.
+    pub fn transform(&self, port: &str) -> Option<Transform> {
+        self.backend.transform(self.slot(port)?)
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&'static str, Slot)> + '_ {
         self.bindings.iter().copied()
     }
@@ -150,9 +159,12 @@ pub struct NodeOutputs<'a> {
     pending_light_writes: &'a mut Vec<(Slot, Light)>,
     /// Sibling scratch for `Material` writes — same shape as lights.
     pending_material_writes: &'a mut Vec<(Slot, Material)>,
+    /// Sibling scratch for `Transform` writes — same shape as materials.
+    pending_transform_writes: &'a mut Vec<(Slot, Transform)>,
 }
 
 impl<'a> NodeOutputs<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         bindings: &'a [(&'static str, Slot)],
         backend: &'a dyn Backend,
@@ -160,6 +172,7 @@ impl<'a> NodeOutputs<'a> {
         pending_camera_writes: &'a mut Vec<(Slot, Camera)>,
         pending_light_writes: &'a mut Vec<(Slot, Light)>,
         pending_material_writes: &'a mut Vec<(Slot, Material)>,
+        pending_transform_writes: &'a mut Vec<(Slot, Transform)>,
     ) -> Self {
         Self {
             bindings,
@@ -168,6 +181,7 @@ impl<'a> NodeOutputs<'a> {
             pending_camera_writes,
             pending_light_writes,
             pending_material_writes,
+            pending_transform_writes,
         }
     }
 
@@ -246,6 +260,15 @@ impl<'a> NodeOutputs<'a> {
         }
     }
 
+    /// Queue a [`Transform`] write to the named output port. Drained by the
+    /// executor into the backend after `evaluate` returns; same semantics
+    /// as `set_material`.
+    pub fn set_transform(&mut self, port: &str, value: Transform) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_transform_writes.push((slot, value));
+        }
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&'static str, Slot)> + '_ {
         self.bindings.iter().copied()
     }
@@ -301,6 +324,7 @@ mod array_accessor_tests {
         let mut cam_scratch = Vec::new();
         let mut light_scratch = Vec::new();
         let mut material_scratch = Vec::new();
+        let mut transform_scratch = Vec::new();
         let outputs = NodeOutputs::new(
             bindings,
             &backend,
@@ -308,6 +332,7 @@ mod array_accessor_tests {
             &mut cam_scratch,
             &mut light_scratch,
             &mut material_scratch,
+            &mut transform_scratch,
         );
 
         let got = outputs.array("particles_out").expect("should resolve");
