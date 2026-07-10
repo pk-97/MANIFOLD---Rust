@@ -1,7 +1,7 @@
 # UI Harness Unification — one headless test path that runs the app's real render, not a lookalike
 
-**Status:** APPROVED design, not built · 2026-07-09 · Opus (1M) · Fable review 2026-07-09: every audit anchor re-verified against code; amended (D8–D9 added, §4 signals now `&mut`, §5 recipe strengthened to full-sequence replay, P0/P2 deliverables extended, BUG-071 pulled into P0) · Peter approved for Sonnet execution 2026-07-09
-**Prerequisites:** none unbuilt. Builds on UI_AUTOMATION P1–P2 (shipped: the `--script` driver + `AutomationAction`) and UI_CLIP_AND_Z P1 (shipped: per-panel `begin_region` wrap). Relates to open BUG-060 and BUG-015; fixes BUG-071 in P0 (D9c).
+**Status:** APPROVED design; P0 BUILT-UNLANDED on `feat/ui-harness-p0` @ `b51e6bbc` (worktree `ui-harness-p0`) · 2026-07-09 · Opus (1M) · Fable review 2026-07-09: every audit anchor re-verified against code; amended (D8–D9 added, §4 signals now `&mut`, §5 recipe strengthened to full-sequence replay, P0/P2 deliverables extended, BUG-071 pulled into P0) · Peter approved for Sonnet execution 2026-07-09 · **2026-07-10 re-cut (Fable): BUG-060 was root-caused and CLOSED independently of this wave — read the "Phasing amendment 2026-07-10" under §Phasing before executing; P0's red bracket is restaged there.**
+**Prerequisites:** none unbuilt. Builds on UI_AUTOMATION P1–P2 (shipped: the `--script` driver + `AutomationAction`) and UI_CLIP_AND_Z P1 (shipped: per-panel `begin_region` wrap). Relates to BUG-060 (CLOSED 2026-07-10 @ `cc4eeb37`) and open BUG-015; fixes BUG-071 in P0 (D9c).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
 **The governing insight: the app renders its main-window UI through a stateful GPU atlas cache (`UICacheManager`), and *not one test touches that code.* Both existing headless harnesses reimplement a lookalike of it — one renders the whole tree fresh every frame on the GPU (`render_ui_to_png`), the other walks node bounds in pure CPU with no pixels (`footer_leak_probe`). A stale-pixel bug lives only in the cache's incremental update, so both lookalikes are structurally blind to it. That blindness is why BUG-060 has been "fixed" and reopened ~4 times: every fix was proven green in a path the performer never runs.** This design makes the app's real render path callable, drives it from a single headless harness that also feeds real input, and proves the harness faithful by making it fail on a known-broken commit before it's trusted.
@@ -193,6 +193,21 @@ The main window is the only one with the stale-pixel class, so it is the only on
 ---
 
 ## Phasing
+
+### Phasing amendment 2026-07-10 (Fable) — BUG-060 closed out-of-band; P0 restaged
+
+What happened between approval and execution:
+
+- **P0 was built** (2026-07-10, `feat/ui-harness-p0` @ `b51e6bbc`, worktree `ui-harness-p0`) but **not landed**. Its differential ran clean on then-broken `main` — the escalation branch fired, in a form the design didn't enumerate: the bug was deterministic and replayable, but **the asserted bands were the wrong rows**. The differential asserted the footer band `[footer_top, footer_top+h)`; rig screenshots relocated the artifact to the scroll viewport's clip edges INSIDE the inspector (bottom sliver above `footer_top` on both tabs; top sliver under the tab strip on Master). See the BUG-060 backlog entry for the full trail.
+- **BUG-060 was then root-caused on the rig, not in the harness**: a flush-time scissor theft (`push/pop_transform`/`push/pop_depth` cut the pending rect run and batched tree rects under the immediate clip). Fixed @ `39836352`, rig-verified, landed on main @ `cc4eeb37` (2026-07-10), then **class-killed** the same day: clip+depth are now bound per command at enqueue and ALL flush-time scissor inference was deleted (invariant recorded in `docs/DEVELOPMENT_REFERENCE.md`, "UI Renderer Invariant"). BUG-060 is CLOSED.
+- **The design's thesis is strengthened, not weakened**: the old harness said "0 diff" while the rig showed dirt — a green harness lied again. But the flush machinery P0 renders through has since been refactored by the class-kill, so **every §Audit/§3/§4 anchor into `app_render.rs` and the UI renderer must be re-derived against post-`cc4eeb37` main before any phase runs.**
+
+P0's restaged execution (supersedes the Gate-positive staging below; everything else in P0 stands):
+
+1. Rebase/merge `feat/ui-harness-p0` onto current `main`; re-verify entry-state anchors.
+2. **Extend the differential's asserted bands to cover the two clip-edge slivers** (where BUG-060 actually lived) in addition to the footer band. The "stop extending the harness" ruling in the backlog applied to the *hunt*, which is over; band coverage is now informed by a known artifact location.
+3. **RED half of the bracket:** run the driver in a worktree checked out at the pre-fix commit (`cc4eeb37^` on the first-parent line, or `39836352^`) — the extended bands must show a non-empty diff of stale UI chrome, confirmed by reading the band PNGs. **GREEN half:** same driver on current `main` shows zero diff. This satisfies D2/D6 with a real known-broken commit; the regression test `transform_boundary_keeps_tree_scissor_on_pending_batch` (landed with the fix) is the unit-level sibling, not a substitute — D6 wants the *harness* proven faithful.
+4. Land P0 (BUG-071's backlog entry closes with it), then P1–P3 proceed unchanged.
 
 ### P0 — Atlas-band differential driver + BUG-060 red bracket (zero live-code change)
 
