@@ -44,6 +44,9 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-090 | **audio-mixdown-analysis-only-test-flakes-under-parallel-run** | `audio_mixdown::tests::render_export_audio_analysis_only_layer_taps_but_never_hits_master` (an exact `assert_eq!` on two separately-rendered `f32` audio buffers) failed once during F2's full `cargo test -p manifold-playback` gate run, then passed both standalone and in an immediate full-suite rerun — a parallel-execution flake, not a deterministic failure; root cause unknown (suspects: shared `TestDir` temp-path collision across threads, or thread-scheduling-sensitive float summation order in the mixdown path). Found 2026-07-10 running F2's gate; file untouched by F2 (confirmed via `git diff` against F2's base commit). LOW (test-only, intermittent — but an exact-equality float assertion under parallel test execution is a fragile pattern worth a look). |
+| BUG-089 | **live-clip-pending-tick-queue-dead-on-all-live-paths** | `LiveClipManager`'s tick-based pending-launch queue (`pending_by_tick`/`pending_by_layer`/`pending_by_clip_id`, `PendingLiveLaunch.target_tick`, `queue_pending`, `activate_due_pending_launches[_at_tick]`, `has_pending_activations`) can only ever be written when `event_absolute_tick >= 0`, but midir events always set `absolute_tick = -1` (`midi_input.rs`) and it is the sole producer of `MidiNoteEvent` in the whole workspace; `fire_layer_oneshot` also always passes `tick = -1`. `activate_due_pending_launches_at_tick` is the only live caller (`engine.rs:803`, fed `self.last_frame_count`, a frame counter, not a real clock tick) and drains a map that can never be non-empty in production — confirmed by exhaustive grep, not inference. Found 2026-07-10 while scoping F2's tick-queue deletion call; left OPEN rather than deleted because the dead footprint is the whole subsystem (7 items across 2 files plus a dead cancellation branch in `commit_live_clip`), wider than the single function F2 was scoped to evaluate — a clean full removal deserves its own dedicated pass. LOW (dead code, zero runtime cost beyond an empty-map check per tick; risk is only in a future session doing a partial removal). |
+| BUG-088 | **pre-existing-clippy-tests-gate-dirty-since-f1-landing** | `cargo clippy -p manifold-playback --tests -- -D warnings` fails on the base commit `cf1f3dc6` (F1's own landing) — `doc_lazy_continuation` in `tests/osc_timecode.rs:172` and three `cloned_ref_to_slice_refs`/`needless_range_loop` hits in `src/audio_mixdown.rs` (589/623/643) — none of which F2 touched (confirmed byte-identical via `git diff cf1f3dc6`). The plain `cargo clippy -p manifold-playback -- -D warnings` (no `--tests`) and a target-scoped `--test live_clip` both pass clean, so F2's own diff is clippy-clean; the full `--tests` sweep just wasn't clean at the commit F2 started from. Found 2026-07-10 running F2's gate. LOW (cosmetic/lint-only, not a correctness bug; blocks a fully-green `--tests` gate for whoever lands next until a small cleanup pass fixes the 2 files). |
 | BUG-087 | **osc-timecode-receiving-flag-false-positive-at-startup** | `OscSyncController`'s `is_receiving_timecode` reads `(now - last_timecode_received_time) < transport_timeout`, and `last_timecode_received_time` defaults to `Seconds::ZERO`. If OSC M4L sync is enabled while the content thread's `time_since_start` is still within `transport_timeout` (0.5s) of boot — i.e., early in the session — the check passes on the very first `update()` tick with zero real timecode ever received, and (`follow_transport`) can fire a spurious PLAY. Found 2026-07-10 while building the F1 receive-path wiring test (`crates/manifold-playback/tests/osc_timecode.rs`); the test worked around it by offsetting its own `now` baseline, but the app itself has no such offset. LOW-MED (narrow boot-time window; only bites if OSC M4L mode is already selected at app start, which needs a project default + hardware present). |
 | BUG-086 | **recording-audio-track-under-covers-duration-on-longer-takes** | Repeated 2-minute 1920x1080 unpaced `recording-soak` self-checks measured `audio_duration_s` 1.3%-3.3% short of the intended duration (116.0s/118.4s/118.5s of 120.0s across three runs — variable, not a fixed percentage), while two independent 1-minute runs (1280x720 and 1920x1080) both measured exactly 60.0s — duration-dependent, not resolution-dependent, and not a "still queued at `stop()`" race (a 500ms settle delay before `stop()` changed the result by <0.1s). The native audio input silently drops on backpressure with no counter at all (`LiveRecordingPlugin.m:546-547`: `if (!state->audioInput.isReadyForMoreMediaData) return LR_OK; // drop samples rather than block` — unlike video's BUG-085, this path doesn't even log). Found 2026-07-10 building LIVE_RECORDING_PROOFS P2's soak self-check; root cause unknown (suspects: sustained real-time backpressure only manifesting past ~60-90s of continuous writing — disk I/O contention as the file grows, fragment-flush cadence, or AAC internal encoder buffering not fully flushed). MED — silent and uncounted, variable magnitude; unknown whether it scales worse over a full 20-minute take. |
 | BUG-085 | **recording-frames-recorded-overstates-async-append-drops** | `LiveRecorder_EncodeVideoFrame` returns success (and Rust's `frames_recorded` counts it) as soon as the synchronous GPU blit into the CVPixelBuffer completes — but the actual `appendPixelBuffer:` call happens later, async, on `state->appendQueue`, and silently drops the frame (`"[LiveRecorder] VideoToolbox backpressure — dropped frame"`, no counter incremented) if `videoIn.isReadyForMoreMediaData` is false at that moment. Under heavy backpressure `frames_recorded` can overstate the file's real packet count by the async-drop count. Found 2026-07-10 building LIVE_RECORDING_PROOFS P1 (`pool_accounting_consistent`'s bounded-retry-recovery variant hit it once: 107 counted vs 106 actual packets). MED (accounting-only — the file itself stays valid, PTS stays monotonic; but a post-set frame count could read wrong). LOW in practice — the async drop needs genuinely sustained backpressure a real 60fps show submission rate is unlikely to hit. |
@@ -205,6 +208,80 @@ synthetic UDP packet had actually been processed, until the test was changed to 
 field up) so the timeout check can never pass before a real message sets it. One-line change;
 left open because it's outside F1's scoped wiring fix and the exact boot-time semantics
 ("ported from Unity") deserved a dedicated look rather than a same-session drive-by.
+
+### BUG-090 (audio-mixdown-analysis-only-test-flakes-under-parallel-run) — an exact-float-equality mixdown test failed once under parallel `cargo test`, passed on rerun — LOW (test-only, intermittent, root cause unknown)
+**Status:** OPEN
+
+Found 2026-07-10 running F2's gate: `cargo test -p manifold-playback` (full crate, default
+parallel test threads) reported `audio_mixdown::tests::render_export_audio_analysis_only_layer_taps_but_never_hits_master`
+FAILED — `assertion left == right failed: analysis-only layer altered master left` at
+`audio_mixdown.rs:678`. Two follow-ups both passed: running the same test alone
+(`cargo test -p manifold-playback --lib audio_mixdown::tests::render_export_audio_analysis_only_layer_taps_but_never_hits_master`)
+and rerunning the full suite immediately after (186 passed, 0 failed — same test count, this one
+included). `git diff` against F2's base commit (`cf1f3dc6`) is empty for `audio_mixdown.rs`, so
+F2 didn't touch it. The test does an exact `assert_eq!` on two independently-rendered `f32` audio
+buffers (`audio.left`/`audio.right` vs. a second `render_export_audio` call on a trimmed-down
+project) — that comparison pattern is inherently sensitive to any nondeterminism between the two
+render calls (shared mutable state, thread-scheduling-dependent float summation order, or a
+`TestDir`/temp-path collision with a concurrently-running test in another thread). **Fix shape:**
+unknown without reproducing under a stress run (`--test-threads=N` sweep or `cargo nextest run
+--no-capture -j <n> --retries 3` to catch it again with a stack/diff); once reproduced, either
+serialize the two renders' shared inputs or switch the assertion to a tolerance-based comparison
+if the root cause turns out to be legitimate float non-associativity rather than a race. Left
+open — single occurrence, out of scope for F2, needs dedicated repro time to chase reliably.
+
+### BUG-089 (live-clip-pending-tick-queue-dead-on-all-live-paths) — `LiveClipManager`'s tick-based pending-launch queue can never be populated in production — LOW (dead code, correctness-neutral)
+**Status:** OPEN
+
+Found 2026-07-10 while implementing F2 (MIDI launch quantize, CORE_ENGINE_MAP-adjacent). F2's
+brief specifically flagged `activate_due_pending_launches_at_tick` as a deletion candidate and
+asked for a caller grep before removing it. That grep turned up more than the one function:
+`queue_pending` (`live_clip_manager.rs`) — the only writer of `pending_by_tick` /
+`pending_by_layer` / `pending_by_clip_id` and the only place `PendingLiveLaunch.target_tick` is
+set — only runs when its caller's `event_absolute_tick >= 0`. Every live producer of that value
+traces back to `MidiNoteEvent.absolute_tick`, and `midi_input.rs`'s midir callback (the *only*
+constructor of `MidiNoteEvent` in the whole workspace — confirmed by grep, not inference) always
+sets it to `-1`. `fire_layer_oneshot` (the audio-trigger path) also always passes `tick = -1`
+explicitly. So `pending_by_tick` can never be non-empty on any live path today. Its one live
+reader, `activate_due_pending_launches_at_tick` (`engine.rs:803`, called every tick with
+`self.last_frame_count as i32` — a frame counter, not a real MIDI clock tick), is therefore an
+unconditional no-op in production (`if self.pending_by_tick.is_empty() { return false; }` fires
+every call). The sibling beat-based `activate_due_pending_launches` and `has_pending_activations`
+have no live caller at all — only `tests/live_clip.rs` exercises them. `commit_live_clip`'s
+"pending launch cancellation" branch (the `!self.live_slots.contains_key(&layer_index)` arm) is
+similarly unreachable live, since nothing ever queues a launch that skips straight to `live_slots`.
+
+**Fix shape:** delete the whole subsystem — `pending_by_tick`, `pending_by_layer`,
+`pending_by_clip_id`, `PendingLiveLaunch` (and its `target_tick` field), `queue_pending`,
+`activate_due_pending_launches`, `activate_due_pending_launches_at_tick`,
+`has_pending_activations`, the `engine.rs:803` call site, and the dead cancellation arm in
+`commit_live_clip` — plus the `tests/live_clip.rs` coverage that only exercises it
+(`pending_launch_queue_activates_at_tick`). Left open rather than done as part of F2: the
+footprint is a full subsystem across two files and a test, wider than the single function F2 was
+scoped to evaluate for deletion, and removing it correctly (without leaving `queue_pending`'s
+write side orphaned, or silently changing `commit_live_clip`'s NoteOff behavior for some future
+native-clock caller) deserves a dedicated pass with its own review, not a rider on a launch-
+quantize fix. F2 left this code untouched and unexercised by its own changes.
+
+### BUG-088 (pre-existing-clippy-tests-gate-dirty-since-f1-landing) — `cargo clippy -p manifold-playback --tests -- -D warnings` was already failing at the commit F2 started from — LOW (lint-only)
+**Status:** OPEN
+
+Found 2026-07-10 running F2's gate (`cargo clippy -p manifold-playback --manifest-path
+.../Cargo.toml --tests -- -D warnings`). Two files fail, neither touched by F2: `doc_lazy_continuation`
+in [`tests/osc_timecode.rs:172`](../crates/manifold-playback/tests/osc_timecode.rs#L172) (an F1
+doc-comment paragraph needs a blank line or indent), and three `cloned_ref_to_slice_refs` /
+`needless_range_loop` hits in [`src/audio_mixdown.rs`](../crates/manifold-playback/src/audio_mixdown.rs)
+at lines 589, 623, 643. `git diff cf1f3dc6 -- <both files>` is empty — both are byte-identical to
+the base commit F2 branched from, so this predates F2 and isn't a toolchain drift F2 introduced.
+Confirmed F2's own diff is clean two ways: the plain `cargo clippy -p manifold-playback --
+-D warnings` (no `--tests`, compiles the lib including its own unit tests via `#[cfg(test)]`)
+passes, and `cargo clippy -p manifold-playback --test live_clip -- -D warnings` (the target F2
+actually edited) passes standalone. **Fix shape:** trivial — indent/blank-line the doc comment in
+`osc_timecode.rs:172`; replace the two `.clone()`-into-single-element-slice calls with
+`std::slice::from_ref` and the `for i in 0..len` loop with `.iter().enumerate()` in
+`audio_mixdown.rs`. Left open rather than fixed as a drive-by: both files are unrelated to F2's
+scope (timecode receive path and audio mixdown respectively) and the fix, however small, belongs
+to whoever owns those files' next change.
 
 ### BUG-083 (video-export-has-no-progress-display) — exporting video gives zero on-screen feedback until the finish toast — MED (export is a release pillar; long exports look like a hang)
 **Status:** OPEN
