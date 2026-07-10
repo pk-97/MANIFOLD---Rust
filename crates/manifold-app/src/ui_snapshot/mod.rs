@@ -11,6 +11,7 @@ mod composite_resources;
 mod dump;
 mod fixtures;
 mod interact;
+mod readback;
 mod render;
 mod script;
 mod thumbs;
@@ -44,6 +45,35 @@ fn sanitize_scene_name(scene: &str) -> String {
 /// argument slice starting at `"ui-snap"`.
 pub fn run(args: &[String]) {
     let scene = args.get(1).map(String::as_str).unwrap_or("timeline");
+
+    // Standalone read-verb subcommands (`readback.rs`) — no GPU, no scene
+    // render, just reading an already-written PNG or tree-dump JSON. Dispatch
+    // before any of the scene-render machinery below.
+    if scene == "diff" {
+        let (Some(a), Some(b)) = (args.get(2), args.get(3)) else {
+            eprintln!("ui-snap diff: usage: cargo xtask ui-snap diff <a.json> <b.json>");
+            std::process::exit(2);
+        };
+        readback::cmd_diff(a, b);
+        return;
+    }
+    if scene == "probe" {
+        let (Some(png), Some(coords)) = (args.get(2), arg_value(args, "--probe")) else {
+            eprintln!("ui-snap probe: usage: cargo xtask ui-snap probe <file.png> --probe x,y[;x,y...]");
+            std::process::exit(2);
+        };
+        readback::cmd_probe(png, &coords);
+        return;
+    }
+    if scene == "crop" {
+        let (Some(png), Some(rect)) = (args.get(2), arg_value(args, "--crop")) else {
+            eprintln!("ui-snap crop: usage: cargo xtask ui-snap crop <file.png> --crop x,y,w,h");
+            std::process::exit(2);
+        };
+        readback::cmd_crop(png, &rect);
+        return;
+    }
+
     let want_dump = args.iter().any(|a| a == "--dump");
     let want_vs_mockup = args.iter().any(|a| a == "--vs-mockup");
     let want_thumbs = args.iter().any(|a| a == "--thumbs");
@@ -57,6 +87,12 @@ pub fn run(args: &[String]) {
     // seeds state that predates the interaction being tested, not an action
     // being tested itself.
     let scroll_seed: Option<f32> = arg_value(args, "--scroll").and_then(|s| s.parse().ok());
+    // `--probe x,y[;x,y...]` / `--crop x,y,w,h` (`readback.rs`): applied to
+    // the scene's BASE PNG only, right after it's written — see
+    // `render_ui_scene`'s own comment on why (an `--interact` "after" render
+    // or the `all` sweep make "which PNG" ambiguous).
+    let probe_spec = arg_value(args, "--probe");
+    let crop_spec = arg_value(args, "--crop");
 
     // `--script <file.json>` (UI_AUTOMATION_DESIGN.md §6, P2): a JSON array of
     // `AutomationAction`s executed in order. Fully owns its own build + gate
@@ -70,8 +106,12 @@ pub fn run(args: &[String]) {
     // change. Skips the per-scene-only flags (mockup, interact); pass those to a
     // single scene when you need them.
     if scene == "all" {
+        // `--probe`/`--crop` are not applied here — which of the five PNGs
+        // this sweep writes would "the" target be is ambiguous by design; use
+        // the standalone `ui-snap probe`/`ui-snap crop` form on a specific
+        // file instead.
         for s in ["timeline", "states", "inspector"] {
-            render_ui_scene(s, want_dump, false, want_thumbs, None, None);
+            render_ui_scene(s, want_dump, false, want_thumbs, None, None, None, None);
         }
         run_graph_preset("Mirror");
         run_editor_preset("FluidSim2D", want_dump);
@@ -107,7 +147,16 @@ pub fn run(args: &[String]) {
         return;
     }
 
-    render_ui_scene(scene, want_dump, want_vs_mockup, want_thumbs, interact, scroll_seed);
+    render_ui_scene(
+        scene,
+        want_dump,
+        want_vs_mockup,
+        want_thumbs,
+        interact,
+        scroll_seed,
+        probe_spec.as_deref(),
+        crop_spec.as_deref(),
+    );
 }
 
 /// P0.3 (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): `hairlineclips` needs genuine far
@@ -123,6 +172,7 @@ fn zoom_ppb_for_scene(scene: &str) -> f32 {
 /// Build + render one UITree scene (`timeline` / `states` / `inspector`) through
 /// the real core→UI translation path, plus an optional `--interact` "after" pass
 /// and mockup composite. Unknown scene name exits 2.
+#[allow(clippy::too_many_arguments)]
 fn render_ui_scene(
     scene: &str,
     want_dump: bool,
@@ -130,6 +180,8 @@ fn render_ui_scene(
     want_thumbs: bool,
     interact: Option<String>,
     scroll_seed: Option<f32>,
+    probe_spec: Option<&str>,
+    crop_spec: Option<&str>,
 ) {
     let Some(mut data) = fixtures::build(scene) else {
         eprintln!(
@@ -203,6 +255,21 @@ fn render_ui_scene(
         want_dump,
         want_thumbs,
     );
+
+    // `--probe`/`--crop` (`readback.rs`): applied to the BASE PNG only, right
+    // after it's written — an `--interact` "after" render below would make
+    // "which PNG" ambiguous, so this is the one well-defined attachment
+    // point. Standalone `ui-snap probe`/`ui-snap crop` cover any other PNG
+    // (including a `.after` one).
+    if probe_spec.is_some() || crop_spec.is_some() {
+        let base_png = dir.join(format!("{scene}.png"));
+        if let Some(spec) = probe_spec {
+            readback::probe_png(&base_png, spec);
+        }
+        if let Some(spec) = crop_spec {
+            readback::crop_png(&base_png, spec);
+        }
+    }
 
     // Optional: render the HTML mockup and composite app | mockup side by side.
     if want_vs_mockup {
