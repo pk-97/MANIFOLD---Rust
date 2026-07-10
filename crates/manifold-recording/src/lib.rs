@@ -23,6 +23,10 @@ pub mod config;
 mod ffi;
 #[cfg(target_os = "macos")]
 mod format_converter;
+/// Feature-gated proof-harness support (pattern writer + ffprobe oracle).
+/// See docs/LIVE_RECORDING_PROOFS_DESIGN.md §4.
+#[cfg(all(target_os = "macos", feature = "recording-proofs"))]
+pub mod proofs;
 #[cfg(target_os = "macos")]
 mod recording_thread;
 #[cfg(target_os = "macos")]
@@ -34,4 +38,4 @@ pub use config::{AudioCodec, LiveRecordingConfig, RecordingResult};
 #[cfg(target_os = "macos")]
 pub use recording_thread::GpuFence;
 #[cfg(target_os = "macos")]
-pub use session::LiveRecordingSession;
+pub use session::{AudioFeed, LiveRecordingSession};
