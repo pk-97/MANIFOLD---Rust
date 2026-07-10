@@ -4930,6 +4930,104 @@ impl Application {
         present_enc.present_drawable(&drawable);
         present_enc.commit();
         self.ui_profile.add("present.blit_present", pseg.elapsed());
+
+        // BUG-060 surface dump: attribute live stale-pixel dirt to a surface.
+        // Runs only on dirty-present frames, so scrolling produces fresh dumps
+        // and idle frames cost nothing.
+        if let Some(every) = bug060_dump_every() {
+            let n = BUG060_DUMP_FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if n.is_multiple_of(every) {
+                let footer = self.ws.ui_root.layout.footer();
+                let inspector = self.ws.ui_root.layout.inspector();
+                eprintln!(
+                    "[BUG-060] dump #{n}: sf={sf} offscreen={}x{} footer=({:.1},{:.1} {:.1}x{:.1}) inspector=({:.1},{:.1} {:.1}x{:.1})",
+                    offscreen.width,
+                    offscreen.height,
+                    footer.x,
+                    footer.y,
+                    footer.width,
+                    footer.height,
+                    inspector.x,
+                    inspector.y,
+                    inspector.width,
+                    inspector.height,
+                );
+                bug060_dump_png(&gpu.device, offscreen, "/tmp/bug060_offscreen.png");
+                if let Some(atlas) = self.ui_cache_manager.as_ref().and_then(|cm| cm.atlas_texture())
+                {
+                    bug060_dump_png(&gpu.device, atlas, "/tmp/bug060_atlas.png");
+                }
+            }
+        }
+    }
+}
+
+// ── BUG-060 surface dump (env-gated debug instrumentation) ──────────────────
+// The stale-sliver artifact (docs/BUG_BACKLOG.md BUG-060) reproduces only on
+// the live rig; every headless probe of the atlas has come back clean. These
+// dumps attribute observed dirt to a surface: present in the atlas PNG → the
+// cache/clear layer; in the offscreen PNG only → composite/blit; on screen but
+// in neither → IOSurface/present. Readback + PNG encode stall the render
+// thread — they run only under MANIFOLD_BUG060_DUMP. Remove with BUG-060.
+
+static BUG060_DUMP_FRAME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Dump cadence: `MANIFOLD_BUG060_DUMP=<N>` dumps every N dirty-present frames
+/// (minimum 2); any other non-empty value (e.g. `=1`) means the default of 30.
+/// Unset → `None`, and the dump code is never reached.
+fn bug060_dump_every() -> Option<u64> {
+    static EVERY: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    *EVERY.get_or_init(|| {
+        std::env::var("MANIFOLD_BUG060_DUMP")
+            .ok()
+            .map(|v| v.parse::<u64>().ok().filter(|&e| e >= 2).unwrap_or(30))
+    })
+}
+
+/// Read `tex` (Bgra8Unorm) back and overwrite `path` with an opaque RGBA8 PNG.
+/// Alpha is forced to 255 so viewers don't render the atlas's cleared-to-zero
+/// regions as white; B/R are swapped for the PNG only.
+fn bug060_dump_png(
+    device: &manifold_gpu::GpuDevice,
+    tex: &manifold_gpu::GpuTexture,
+    path: &str,
+) {
+    let (w, h) = (tex.width, tex.height);
+    if w == 0 || h == 0 {
+        return;
+    }
+    let bytes_per_row = w * 4;
+    let total = u64::from(h) * u64::from(bytes_per_row);
+    let buf = device.create_buffer_shared(total);
+    let mut enc = device.create_encoder("bug060-dump");
+    enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
+    enc.commit_and_wait_completed();
+    let Some(ptr) = buf.mapped_ptr() else {
+        eprintln!("[BUG-060] {path}: readback buffer not mapped");
+        return;
+    };
+    let bytes: &[u8] = unsafe { std::slice::from_raw_parts(ptr, total as usize) };
+    let mut rgba = bytes.to_vec();
+    for px in rgba.chunks_exact_mut(4) {
+        px.swap(0, 2);
+        px[3] = 255;
+    }
+    let file = match std::fs::File::create(path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("[BUG-060] {path}: {e}");
+            return;
+        }
+    };
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), w, h);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    match encoder
+        .write_header()
+        .and_then(|mut writer| writer.write_image_data(&rgba))
+    {
+        Ok(()) => eprintln!("[BUG-060] wrote {path} ({w}x{h})"),
+        Err(e) => eprintln!("[BUG-060] {path}: {e}"),
     }
 }
 

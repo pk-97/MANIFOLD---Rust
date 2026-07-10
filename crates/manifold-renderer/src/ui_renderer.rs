@@ -466,6 +466,17 @@ pub struct UIRenderer {
     transform_stack: Vec<Affine2>,
     // Scissor batches accumulated during tree traversal.
     scissor_batches: Vec<ScissorBatch>,
+    // True between begin/end_scissor_tracking, i.e. while a tree traversal is
+    // enqueuing rects. Depth/transform boundaries must flush the pending run
+    // under the TREE clip stack while this holds — flushing it as an
+    // immediate run strips the tree scissor from already-enqueued rects
+    // (BUG-060: card chrome escaping the inspector's column clip whenever a
+    // transformed node — a rotated chevron — followed it in the same card).
+    in_tree_pass: bool,
+    // BUG-060 trace: current panel slot (set by the cache manager per panel
+    // render) so batch logs can name the pass. Plain usize store — free when
+    // the trace is disarmed. Remove with BUG-060.
+    pub bug060_pass: usize,
     // Index into rect_commands where the current batch started.
     current_batch_start: usize,
     // GPU-ready batches produced by prepare().
@@ -629,6 +640,8 @@ impl UIRenderer {
             depth_stack: Vec::with_capacity(4),
             transform_stack: Vec::with_capacity(4),
             scissor_batches: Vec::with_capacity(8),
+            in_tree_pass: false,
+            bug060_pass: 0,
             current_batch_start: 0,
             prepared_batches: Vec::with_capacity(8),
             prepared_depths: Vec::with_capacity(8),
@@ -753,14 +766,14 @@ impl UIRenderer {
     /// Must be balanced before `prepare` runs; an unbalanced push would
     /// silently float everything after it.
     pub fn push_depth(&mut self, depth: Depth) {
-        self.flush_immediate_run();
+        self.flush_pending_run();
         self.depth_stack.push(depth);
     }
 
     /// Return to the depth that was active before the matching push.
     pub fn pop_depth(&mut self) {
         debug_assert!(!self.depth_stack.is_empty(), "pop_depth without push");
-        self.flush_immediate_run();
+        self.flush_pending_run();
         self.depth_stack.pop();
     }
 
@@ -777,7 +790,7 @@ impl UIRenderer {
     /// Flushes the pending immediate-mode run first, exactly like
     /// [`Self::push_depth`]/[`Self::push_immediate_clip`].
     pub fn push_transform(&mut self, transform: Affine2) {
-        self.flush_immediate_run();
+        self.flush_pending_run();
         let composed = match self.transform_stack.last() {
             Some(top) => top.mul(&transform),
             None => transform,
@@ -788,7 +801,7 @@ impl UIRenderer {
     /// Return to the transform that was active before the matching push.
     pub fn pop_transform(&mut self) {
         debug_assert!(!self.transform_stack.is_empty(), "pop_transform without push");
-        self.flush_immediate_run();
+        self.flush_pending_run();
         self.transform_stack.pop();
     }
 
@@ -1029,6 +1042,7 @@ impl UIRenderer {
     fn flush_immediate_run(&mut self) {
         let count = self.rect_commands.len() - self.current_batch_start;
         if count > 0 {
+            self.bug060_log_batch("immediate", self.immediate_clip, self.current_batch_start, count);
             self.scissor_batches.push(ScissorBatch {
                 scissor: self.immediate_clip,
                 rect_start: self.current_batch_start,
@@ -1045,20 +1059,78 @@ impl UIRenderer {
     fn begin_scissor_tracking(&mut self) {
         self.flush_immediate_run();
         self.clip_stack.clear();
+        self.in_tree_pass = true;
+    }
+
+    /// End scissor batch tracking: flush the trailing tree batch and return
+    /// to immediate-mode flushing for rects enqueued after the traversal.
+    fn end_scissor_tracking(&mut self) {
+        self.flush_scissor_batch();
+        self.in_tree_pass = false;
+    }
+
+    /// Flush the pending rect run under the clip that actually governs it:
+    /// the tree clip stack during a tree traversal, the immediate clip
+    /// otherwise. Depth/transform boundaries must cut a batch (commands on
+    /// either side carry different state), but cutting it as an immediate run
+    /// mid-traversal silently replaced the tree scissor with
+    /// `immediate_clip` (usually `None`) on rects that were already enqueued
+    /// — BUG-060's escaped card chrome.
+    fn flush_pending_run(&mut self) {
+        if self.in_tree_pass {
+            self.flush_scissor_batch();
+        } else {
+            self.flush_immediate_run();
+        }
     }
 
     /// Flush the current scissor batch (if it has any rects).
     fn flush_scissor_batch(&mut self) {
         let count = self.rect_commands.len() - self.current_batch_start;
         if count > 0 {
+            let scissor = self.clip_stack.last().copied();
+            self.bug060_log_batch("tree", scissor, self.current_batch_start, count);
             self.scissor_batches.push(ScissorBatch {
-                scissor: self.clip_stack.last().copied(),
+                scissor,
                 rect_start: self.current_batch_start,
                 rect_count: count,
                 depth: self.current_depth(),
             });
         }
         self.current_batch_start = self.rect_commands.len();
+    }
+
+    /// BUG-060 trace: with `MANIFOLD_BUG060_TRACE=x0,y0,x1,y1` (logical px) set,
+    /// log every rect in the closing batch that intersects that band, with the
+    /// batch's effective scissor, origin (tree vs immediate) and the panel slot
+    /// set by the cache manager. Attributes escaped pixels found in the surface
+    /// dumps to the exact draw that produced them. One `Option` check when
+    /// disarmed. Remove with BUG-060.
+    fn bug060_log_batch(&self, origin: &str, scissor: Option<Rect>, start: usize, count: usize) {
+        let Some(band) = bug060_trace_band() else {
+            return;
+        };
+        for rc in &self.rect_commands[start..start + count] {
+            let intersects = rc.x < band[2]
+                && rc.x + rc.w > band[0]
+                && rc.y < band[3]
+                && rc.y + rc.h > band[1];
+            if intersects {
+                eprintln!(
+                    "[BUG060-TRACE] {origin} pass={} rect=({:.1},{:.1} {:.1}x{:.1}) color=({:.3},{:.3},{:.3},{:.3}) scissor={:?}",
+                    self.bug060_pass,
+                    rc.x,
+                    rc.y,
+                    rc.w,
+                    rc.h,
+                    rc.color[0],
+                    rc.color[1],
+                    rc.color[2],
+                    rc.color[3],
+                    scissor,
+                );
+            }
+        }
     }
 
     /// Handle a PushClip event: flush current batch, push clip, start new batch.
@@ -1099,7 +1171,7 @@ impl UIRenderer {
             TraversalEvent::PopClip => self.handle_pop_clip(),
         });
 
-        self.flush_scissor_batch();
+        self.end_scissor_tracking();
     }
 
     /// Render tree nodes in range [start_node, end_node) on the current
@@ -1116,7 +1188,7 @@ impl UIRenderer {
             TraversalEvent::PopClip => self.handle_pop_clip(),
         });
 
-        self.flush_scissor_batch();
+        self.end_scissor_tracking();
     }
 
     /// Render a sub-region using flat sequential traversal.
@@ -1135,7 +1207,7 @@ impl UIRenderer {
             TraversalEvent::PopClip => self.handle_pop_clip(),
         });
 
-        self.flush_scissor_batch();
+        self.end_scissor_tracking();
     }
 
     /// Draw a single UI node — resolves effective colors and emits commands.
@@ -1963,6 +2035,18 @@ impl UIRenderer {
     }
 }
 
+/// BUG-060 trace band: parsed once from `MANIFOLD_BUG060_TRACE=x0,y0,x1,y1`
+/// (logical px). `None` when unset — the trace is fully disarmed. Remove with
+/// BUG-060.
+fn bug060_trace_band() -> Option<[f32; 4]> {
+    static BAND: std::sync::OnceLock<Option<[f32; 4]>> = std::sync::OnceLock::new();
+    *BAND.get_or_init(|| {
+        let v = std::env::var("MANIFOLD_BUG060_TRACE").ok()?;
+        let p: Vec<f32> = v.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+        (p.len() == 4).then(|| [p[0], p[1], p[2], p[3]])
+    })
+}
+
 /// Implement TextMeasure for UIRenderer so panels can compute layout.
 impl TextMeasure for UIRenderer {
     fn measure_text(&self, text: &str, font_size: u16, font_weight: FontWeight) -> Vec2 {
@@ -2102,5 +2186,95 @@ mod tests {
         let other_handle = manifold_ui::node::texture_handle_for_key("/fake/path/Glitch.png");
         assert!(!ui.has_image(other_handle));
         assert!(ui.register_image(&device, other_handle, 4, 4, &rgba));
+    }
+
+    /// BUG-060 regression: a transform boundary inside a tree traversal must
+    /// not strip the tree scissor from rects already enqueued in the pending
+    /// batch. Before the fix, `push_transform`/`pop_transform` (and the depth
+    /// pushes) cut the pending run via `flush_immediate_run`, which batched
+    /// the prior TREE rects under `immediate_clip` (`None`) — on the rig,
+    /// every effect-card ON pill drawn before the card's rotated chevron
+    /// escaped the inspector's column clip, depositing stale copies at the
+    /// scroll-viewport edges on every scroll step.
+    #[test]
+    #[ignore = "needs a real GPU device; run with --ignored"]
+    fn transform_boundary_keeps_tree_scissor_on_pending_batch() {
+        let device = crate::test_device();
+        let mut ui = UIRenderer::new(&device, GpuTextureFormat::Bgra8Unorm);
+
+        let mut tree = UITree::new();
+        let region = tree.begin_region(
+            Rect::new(0.0, 0.0, 400.0, 300.0),
+            manifold_ui::ZTier::Base,
+            "bug060-test",
+            UIFlags::empty(),
+        );
+        let content_start = tree.count();
+        let clip = Rect::new(10.0, 20.0, 200.0, 100.0);
+        let container = tree.add_node(
+            None,
+            clip,
+            UINodeType::Panel,
+            UIStyle {
+                bg_color: Color32::new(20, 20, 20, 255),
+                ..UIStyle::default()
+            },
+            None,
+            UIFlags::CLIPS_CHILDREN,
+        );
+        // A filled rect (the "pill")…
+        tree.add_node(
+            Some(container),
+            Rect::new(15.0, 25.0, 30.0, 10.0),
+            UINodeType::Panel,
+            UIStyle {
+                bg_color: Color32::new(80, 120, 255, 255),
+                ..UIStyle::default()
+            },
+            None,
+            UIFlags::empty(),
+        );
+        // …followed by a TRANSFORMED sibling (the "chevron").
+        tree.add_node(
+            Some(container),
+            Rect::new(60.0, 25.0, 10.0, 10.0),
+            UINodeType::Panel,
+            UIStyle {
+                bg_color: Color32::new(200, 200, 200, 255),
+                transform: Some(Affine2::rotate(1.0)),
+                ..UIStyle::default()
+            },
+            None,
+            UIFlags::empty(),
+        );
+
+        tree.end_region(region, content_start);
+        ui.render_sub_region(&tree, content_start, tree.count(), false);
+
+        // The pill (x=15) and the chevron (x=60) are children of the clip
+        // container: whichever batches hold their rects must be scissored to
+        // the container's bounds — never `None`.
+        let mut pill_checked = false;
+        let mut chevron_checked = false;
+        for batch in &ui.scissor_batches {
+            for rc in &ui.rect_commands[batch.rect_start..batch.rect_start + batch.rect_count] {
+                if rc.x == 15.0 || rc.x == 60.0 {
+                    assert_eq!(
+                        batch.scissor,
+                        Some(clip),
+                        "child rect at x={} lost the tree scissor (batch scissor {:?})",
+                        rc.x,
+                        batch.scissor,
+                    );
+                    if rc.x == 15.0 {
+                        pill_checked = true;
+                    } else {
+                        chevron_checked = true;
+                    }
+                }
+            }
+        }
+        assert!(pill_checked, "sanity: pill rect must appear in a batch");
+        assert!(chevron_checked, "sanity: transformed rect must appear in a batch");
     }
 }

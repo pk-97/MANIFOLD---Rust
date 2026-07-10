@@ -203,6 +203,10 @@ impl UICacheManager {
                 continue;
             }
 
+            // BUG-060 trace: name the pass in batch logs. Plain store, free
+            // when the trace is disarmed. Remove with BUG-060.
+            ui_renderer.bug060_pass = idx;
+
             // ── Sub-region incremental path (doesn't count against budget) ──
             // Sound only while every sub-region keeps the extent it had when last
             // rendered (see `last_sub_regions`) AND no dirt sits outside the
