@@ -127,19 +127,22 @@ The five atoms in §3 are genuinely new; the sort is genuinely new infrastructur
   reconfigure for zero authoring win; a wire does it.
 - **D10 — Placement is renderer params, camera is a port.** TRS params
   (`pos_x/y/z, rot_x/y/z, scale`) on `render_splats`, port-shadowed — the same
-  per-node TRS-params shape `render_mesh`/`render_copies` use (re-anchored,
-  coherence audit F4a, 2026-07-10: NOT the `render_scene` per-object-group
-  convention this doc originally cited — `SCENE_BUILD_AND_GROUP_PARAMS` D3
-  deletes that convention in favor of `node.transform_3d` + a `Transform`
-  port), so a scan's placement is beat-addressable like everything else.
-  **Open question, not resolved here (audit F4b):** whether `render_splats`
-  should follow suit with a `transform: Transform` port instead of param-TRS —
-  without it, placement is invisible to REALTIME_3D P6's viewport gizmos,
-  which only grab `node.transform_3d` outputs (SCENE_BUILD §8). Decide before
-  P3 ships if P6 gizmos are expected to reach splats. Plus the two knobs every
-  splat tool has, also port-shadowed: `global_opacity` and `splat_scale`
-  (multiplier on all footprints) — a performable dissolve and a performable
-  "particle-ize" (scale → 0 turns a photoreal scan into a dust of points) for free.
+  single-object TRS convention `node.render_mesh` / `node.render_copies` carry, so a
+  scan's placement is beat-addressable like everything else.
+  **[AMENDED 2026-07-10 (F4, confirmed): re-anchor + Transform-port call.]** The original
+  "same convention as `render_scene` object groups" precedent is dead — SCENE_BUILD D3
+  deleted render_scene's per-object TRS *params* (per-object transforms are now graph
+  structure fed through `transform_n: Transform` ports). Splat placement stays as
+  port-shadowed node params (a splat scan is one object, like `render_mesh`'s own TRS,
+  which SCENE_BUILD §9 explicitly leaves alone) — **but** an optional `transform: Transform`
+  override input rides the **same SCENE_BUILD §9 trigger** that adds the Transform port to
+  `render_mesh` / `render_copies`: unwired, the port-shadowed params place the scan
+  (unchanged); wired, a `node.transform_3d` drives it, which is what makes splat placement
+  visible to REALTIME_3D P6 gizmos. Deferred to that shared trigger — not built in splats
+  P3, and not special-cased ahead of meshes. Plus the two knobs every splat tool has,
+  also port-shadowed: `global_opacity` and `splat_scale` (multiplier on all
+  footprints) — a performable dissolve and a performable "particle-ize" (scale → 0
+  turns a photoreal scan into a dust of points) for free.
 - **D11 — Mask consumption v1: `mask_weight` on `node.displace_splats`,
   `mask_emission` on `node.render_splats` (0 = off).** Everything richer (mask-gated
   scatter, per-mask color grade) is `wgsl_compute` territory — the open family stays

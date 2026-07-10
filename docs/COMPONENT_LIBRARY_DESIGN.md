@@ -59,6 +59,8 @@ Components are **kind-agnostic**: a component is a subgraph, not an effect or a 
 
 `GroupParamDef` exists but is phase-1 thin: single inner target, no display metadata, and it is a **load-time override**, not a live control. Components need real macros — the rack-knob experience. All changes are additive.
 
+> **F14 reconciliation (2026-07-10):** `SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` says "Phase D / `GroupParamDef` stays dropped" — that kills a **live group-param runtime**, not this type. Component macros are `GroupParamDef` **declarations** that lower onto ordinary card `BindingDef`s at expose (§4b), so no live group-param runtime is introduced; the two designs compose. Note the orthogonality: SCENE_BUILD's card **sections** (`ParamSpecDef.section`, which bundle a card's rows) are a separate axis from component **macros** (which fan one knob out to inner targets) — a component's exposed macros land as card bindings that sections can then group, but neither mechanism is the other.
+
 ### 4a. Schema extensions (`manifold-core`)
 
 ```rust

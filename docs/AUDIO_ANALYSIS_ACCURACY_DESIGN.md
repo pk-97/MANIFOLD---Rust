@@ -33,7 +33,13 @@ The governing insight, two halves:
 Companion docs: `AUDIO_CLIP_DETECTION_DESIGN.md` (the per-clip ownership model this
 feeds — its engine, orchestrator, parser, planner are reused untouched);
 `AUDIO_OBJECT_TRACKING_DESIGN.md` (stem fixtures context); `docs/CHANNEL_TYPE_SYSTEM.md`
-(named-channel vocabulary the realtime side shares).
+(named-channel vocabulary the realtime side shares); `AUDIO_OBJECT_INGEST_DESIGN.md`
+(**consumes this doc's `eval/` harness** — F10: one harness, not two. Its per-instrument
+Basic-Pitch replacement is sequenced *after* this doc's P3 baseline + P4 precision pass and
+must beat the post-P4 Basic Pitch F₁ in `eval/`; and if it drops Basic Pitch from the
+synth/pad stem, §4.3's chord clustering — which consumes Basic Pitch notes on that stem —
+must re-point to its segmenter output or coexist as a separate emitter. See OBJECT_INGEST
+D4/D5).
 
 ---
 
@@ -244,6 +250,9 @@ bundles to git — no: fetch scripts + checksums + scoreboards only.
 - **4.3 Chord/pad events**: cluster basic_pitch notes on the synth/pad stem — onsets
   within 50 ms and pitch overlap → one chord; span = union of member notes; split when
   the sounding pitch-set changes; emit `Chord` with duration + mean confidence.
+  *(F10 seam: this consumes basic_pitch notes on the synth/pad stem. If OBJECT_INGEST D4
+  later replaces basic_pitch on that stem, this clustering must re-point to its segmenter
+  output or coexist as a separate emitter — that doc's P3 brief owns the reconciliation.)*
 - **4.4 Vocal phrases**: hysteresis gate on the vocal-stem envelope (on/off thresholds
   relative to track-normalized energy, min-on 0.5 beat, min-off 1 beat); each gated
   region = one `VocalPhrase` with duration; onsets within a region remain available as

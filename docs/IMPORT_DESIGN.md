@@ -1,6 +1,7 @@
 # Import — Blender/glTF Scenes, Baked Caches, Texture Sets, TD & Resolume Funnels
 
-**Status: APPROVED design, not built · 2026-07-03 · Fable · baseline-reviewed 2026-07-05.** Reality note: the glTF wave (2026-07-04 @ `47c878d7`) shipped **`node.gltf_mesh_source`** — a single-mesh source primitive in manifold-renderer (`node_graph::gltf_load`, `gltf` crate v1). That is a mesh-level door, NOT this doc's P1 (scene importer → object groups + report + one undo transaction). **P1's read-back must reconcile with it**: same parser crate, so extend/reuse `gltf_load` per extend-don't-redesign — placement (shared module vs manifold-io importer) is the P1 executor's first stated call, escalate only if it forces a crate-boundary change. Known in-app bugs against the shipped node are VD-003 in `docs/VERIFICATION_DEBT.md`; its held-out fixtures are the CC0 photoscans already sitting untracked in `tests/fixtures/gltf/` (apricot, azalea, lowe — the §8 Stewartia was never downloaded; these replace it).
+**Status: APPROVED design, P1 PARTIALLY SHIPPED — re-cut below · 2026-07-03 · Fable · baseline-reviewed 2026-07-05 · reality note refreshed 2026-07-10 (F2 coherence audit).**
+**Reality note (refreshed 2026-07-10 — the 2026-07-05 version undersold what shipped):** the glTF wave landed *most of P1*, not a mesh-level door. Two stages ship in manifold-renderer: stage 1 `node_graph::gltf_load` (CPU-only `.glb` parse → `GltfImportSummary`) and stage 2 `node_graph::gltf_import::assemble_import_graph` (verified in-tree), a pure assembler that turns the summary into a full `node.render_scene` generator graph — **one object per distinct material** (material-filtered geometry via `node.gltf_mesh_source`, base-colour texture via `node.gltf_texture_source`, a `node.pbr_material` carrying the glTF PBR factors), a synthesized framing camera (`node.orbit_camera`), a sun (`node.light`), an IBL envmap (`node.bake_environment`), named+tinted node **groups** per object, an over-cap drop (smallest-by-vertex first), and an `ImportReport`. The production caller `Application::import_model_file` installs the result as one undo transaction via `manifold_editing::commands::layer::ImportModelLayerCommand`. **Placement question resolved by what shipped:** the importer lives in manifold-renderer because it emits renderer node types (`EffectGraphDef`), *not* manifold-io — D1/§3's manifold-io placement is superseded; do not move it. **P1 is therefore a re-cut of what remains (§5 P1), not a rebuild** — an executor who follows the original P1 brief will re-author the shipped assembler. Known in-app bugs against the shipped nodes are VD-003 in `docs/VERIFICATION_DEBT.md`; held-out fixtures are the CC0 photoscans already sitting untracked in `tests/fixtures/gltf/` (apricot, azalea, lowe — the §8 Stewartia was never downloaded; these replace it).
 **Prerequisites (per phase): P1–P2 need REALTIME_3D P1 + MATERIAL M1–M5 **and M6**
 (albedo/metallic maps + alpha cutout — MATERIAL §11; without M6 a textured glTF
 imports colourless and foliage renders as opaque cards; see §8 addendum). P3 pairs with
@@ -48,13 +49,10 @@ re-verify against as-built code.
   mesh nodes → `render_scene` object groups (flat v1, hierarchy transforms
   pre-composed until parenting lands); **Principled BSDF → `node.pbr_material`** +
   texture wiring; glTF cameras → `node.free_camera` params; glTF lights →
-  `node.light` params. Over-cap scenes import with a visible warning and
-  merged-by-material fallback, never a silent drop. (Coherence audit F6,
-  2026-07-10: this doc originally cited ">8 objects" mirroring `render_scene`'s
-  then-cap — that cap is now `OBJECT_SLIDER_MAX` = 64 on both the renderer and
-  the importer's own `MAX_RENDER_SCENE_OBJECTS` mirror per SCENE_BUILD D9;
-  the threshold is 64, not 8. Full P1 scope re-cut against the shipped
-  importer is a separate, larger item — audit F5.)
+  `node.light` params. Over-cap scenes (more than `OBJECT_SLIDER_MAX = 64` objects; the
+  shipped assembler's `MAX_RENDER_SCENE_OBJECTS = 8` is a stale mirror to be lifted to 64
+  per SCENE_BUILD D9 — F6) import with a visible warning and merged-by-material fallback,
+  never a silent drop.
 - **D2 — Animation tiers, smallest first:** rigid TRS (v1, P2) → vertex caches
   (P3) → skeletal/skinned (**deferred** — the cathedral; morph targets ride along
   when it lands).
@@ -135,11 +133,32 @@ shipping/linking any third-party tool's binaries (D7) · fully-resident vertex
 caches (D4) · import writing to the model outside one `EditingService` transaction ·
 FBX/USD scope creep.
 
-- **P1 — glTF static scenes.** `gltf`-crate reader → scene object groups, Principled
-  → pbr_material, texture + camera + light mapping, over-cap warning path, import
-  report. Fixtures: Khronos glTF sample models. Gate: known .glb renders
-  PNG-comparable to reference within tolerance; import round-trips undo as one
-  transaction; report lists every node of a deliberately over-featured .glb.
+- **P1 — glTF static scenes.** **[RE-CUT 2026-07-10 (F2 audit) — the assembler
+  (`gltf_import::assemble_import_graph`), per-material object groups, Principled →
+  pbr_material, base-colour texture wiring, synthesized camera + sun + IBL, over-cap drop,
+  `ImportReport` struct, and the single-undo-transaction install
+  (`ImportModelLayerCommand`) already SHIP. Do not re-author them.]** What remains for P1:
+  1. **glTF light mapping** — glTF punctual lights → `node.light` params (today: one
+     synthesized sun regardless of the file's lights).
+  2. **glTF camera consumption** — embedded cameras → `node.free_camera` (today: always a
+     synthesized `orbit_camera`; `ImportReport::camera_synthesized` already exists to
+     report `false` when this lands).
+  3. **Import report surfaced to the user** — the `ImportReport` struct + logs exist;
+     needs a user-visible surface (over-cap drop + skipped-feature warnings on import).
+  4. **`alphaMode` / tangent-space-normal / `doubleSided` report lines** per §8 (audit
+     which of these already emit; each un-mapped feature is a report line, D9).
+  5. **Hierarchy transform pre-compose** — verify/ensure parent-matrix pre-composition for
+     the flat-v1 claim (D1).
+  6. **Object cap 8→64 (F6)** — the assembler's `MAX_RENDER_SCENE_OBJECTS = 8`
+     (`gltf_import.rs:49`) is a stale mirror of the retired `render_scene` `MAX_OBJECTS`;
+     the renderer is now `OBJECT_SLIDER_MAX = 64`. Track it (SCENE_BUILD D9 makes the
+     importer threshold `OBJECT_SLIDER_MAX`).
+  7. **Khronos conformance fixtures + gate**, plus the §8 Stewartia/photoscan visual gate.
+
+  Fixtures: Khronos glTF sample models + the `tests/fixtures/gltf/` photoscans. Gate: a
+  known .glb with lights + an embedded camera imports with both mapped (not synthesized);
+  the report lists every un-mapped node/feature of a deliberately over-featured .glb;
+  existing assembler tests stay green.
 - **P2 — Rigid animation + beat playhead.** TRS keyframe sampling; playhead as
   beat-addressable param (D3); freeze/loop/reverse semantics. Gate: a beat_ramp
   scrubs a known animation to exact keyframe values (unit test on sampled TRS);
