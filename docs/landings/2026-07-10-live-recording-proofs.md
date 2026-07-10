@@ -199,9 +199,49 @@ BUG-086's unknown-until-now magnitude. Accepted. No hidden stubs.
 > disambiguated it as unpaced-stress-only via a `--realtime` run giving full audio). P3 (in-app
 > record smoke, L3) pending. ...
 
-## P3 — In-app record smoke (L3)
+## P3 — In-app record smoke (L3) — ⏸ DEFERRED 2026-07-10 (Peter), not built
 
-_Pending._
+**Outcome: dropped from this wave before any worker was spawned.** The orchestrator ran P3's
+mandatory entry-state pre-flight (design §6 P3) and found check (a) fails: the design assumed
+`cargo xtask ui-snap` scenes run the real content thread + compositor frame, so a scripted
+"click record" flow would drive the whole button→command→capture-block path. It does not.
+
+Evidence (read-only, orchestrator, main context):
+- `crates/manifold-app/src/ui_snapshot/mod.rs` builds a `UIRoot` + a fixture `Project`/`ContentState`
+  and renders the UI *tree* to a PNG. No `ContentThread`, `ContentPipeline`, `PlaybackEngine`, or
+  compositor frame is constructed; the `graph`/`editor` scenes' own comments state "no content
+  thread or running chain is needed."
+- `crates/manifold-app/src/ui_snapshot/script.rs:19,152-155` holds a `content_tx` whose receiver
+  "it holds and never drains — `ContentCommand::send` only logs." So a scripted record click emits
+  `ContentCommand::StartLiveRecording` into a channel nobody reads: nothing records, and the
+  capture block at `content_pipeline.rs:2547` never executes.
+
+Per P3's own instruction ("if ui-snap renders UI panels without a live compositor, this phase's
+vehicle doesn't exist: escalate to Peter"), the orchestrator escalated rather than improvise a
+new harness mid-wave. **Peter chose to defer** (drop from the 2026-07-10 wave). The correct
+vehicle — a headless content-thread + compositor smoke that drives the real record command and
+probes the file — is a new integration harness (BUG-054-adjacent), not the "one scripted flow"
+the phase assumed; it is now recorded in the design's §8 Deferred with a revival trigger.
+
+**Residual coverage gap → VD-023.** The recorder itself is fully fenced by P1+P2; the only
+untested piece is the in-app button-to-recorder glue, verified today at **L4 by Peter pressing
+record live at every show**. No code shipped for P3. No bug (this was a design mis-scope of the
+vehicle, not a defect) — nothing added to BUG_BACKLOG for it.
+
+---
+
+## Session summary (2026-07-10, Opus orchestration)
+
+**Shipped to main:** P1 (`ef12c14b`) and P2 (`091290e3`), each built by a Sonnet worker in an
+isolated worktree, each gate re-judged by the orchestrator (tests re-run, negative gates re-run,
+soak run, `.mov` frames opened) before a `--no-ff` landing. Final `origin/main` after the P2
+landing docs: `6a1eb42c`; this P3-drop doc update lands on top.
+
+**Deferred:** P3 (design §8, VD-023). **Bugs found + logged this wave:** BUG-085 (video
+`frames_recorded` overstates async-append drops), BUG-086 (unpaced-soak audio shortfall,
+disambiguated as an unpaced-stress-mode artifact via a `--realtime` run giving full audio — show
+severity LOW). **Verification debts carried:** VD-022 (full-scale 20-min soak = Peter's ritual;
+BUG-086 fix), VD-023 (P3 record-glue L4-by-use). **Design status:** SHIPPED (P1+P2), P3 deferred.
 
 ## Peter checklist (accumulated across phases)
 
