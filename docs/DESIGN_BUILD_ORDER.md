@@ -203,14 +203,20 @@ Grouped in waves; within a wave, items are independent and order is free.
     (BUG-069, a commercialization blocker — must land before item 19), and the
     detection-accuracy phases (P4–P5) serve the release-content push (import
     front door). P7 (unattended tuning loop) is post-release; Peter re-ranks.
-13h. **2026-07-09 approvals (added by the 2026-07-10 audit; all zero-hard-edge,
-    re-rankable arbitrarily early — Peter ranks):** AUDIO_SETUP_DOCK P1–P4 (calibration
-    loop + trigger unification; serves set-prep directly) · UI_HARNESS_UNIFICATION
-    P0–P3 (P0 = the BUG-060 red bracket; dev infra whose value compounds like
-    UI_AUTOMATION's) · PERF_BUDGET_GATE P1–P2 (small; standing frame-budget fence) ·
-    LIVE_RECORDING_PROOFS P1–P3 (**release-gating** — must land inside v1.0) ·
-    VIDEO_IO P1–P4 (join-existing-rigs interop; highly demoable) · BOX3D_PHYSICS
-    P1–P4 (differentiator, not release-gating).
+13h. **2026-07-09 approvals (added by the 2026-07-10 audit; all zero-hard-edge —
+    RANKED by Peter 2026-07-10):**
+    1. UI_HARNESS_UNIFICATION P0–P3 (first — build starting 2026-07-10; P0 = the
+       BUG-060 red bracket; dev infra whose value compounds like UI_AUTOMATION's).
+    2. LIVE_RECORDING_PROOFS P1–P3 (**release-gating** — must land inside v1.0;
+       no dependency on the harness — different crates — so it may run in
+       parallel with it in a separate worktree).
+    3. AUDIO_SETUP_DOCK P1–P4 (calibration loop + trigger unification; serves
+       set-prep directly).
+    4. BOX3D_PHYSICS P1–P4 (differentiator, not release-gating; Peter: opens new
+       visuals).
+    Parked at the back (Peter 2026-07-10): VIDEO_IO P1–P4 (join-existing-rigs
+    interop; highly demoable, but waits) · PERF_BUDGET_GATE P1–P2 (small standing
+    frame-budget fence; Peter: "more of an optimisation task").
 14. COMPONENT_LIBRARY → 15. MCP_INTERFACE (in that order — MCP consumes components).
 16. AUTOMATION_LANES.
 17. ML_NODES Vision/CoreML tier.
