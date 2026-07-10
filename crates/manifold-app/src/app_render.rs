@@ -2456,7 +2456,6 @@ impl Application {
                             &mut self.audio_action_snapshot,
                             &mut self.audio_crossover_snapshot,
                             &mut self.audio_send_gain_drag_snapshot,
-                            &mut self.audio_send_sensitivity_drag_snapshot,
                             &mut self.user_prefs,
                             &mut self.active_inspector_drag,
                             self.watched_graph_target.as_ref(),

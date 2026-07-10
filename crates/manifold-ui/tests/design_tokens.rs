@@ -40,8 +40,12 @@ use std::path::{Path, PathBuf};
 // added an 8th port-pin-colour const (`PORT_TRANSFORM_COLOR`) in graph_canvas,
 // matching the seven grandfathered pin-colour consts beside it (Texture2D/3D,
 // Scalar, Array, Camera, Light, Material) — same defined-once-const pattern, folded
-// into the same pin-colour debt the §15 ramp will tokenise together.)
-const COLOR_BASELINE: usize = 201;
+// into the same pin-colour debt the §15 ramp will tokenise together. 201→187,
+// 2026-07-10: the AUDIO_SETUP_DOCK P3a landing deleted the Audio Setup Triggers
+// matrix + its drawer, removing ~14 raw `Color32::new(` literals; ratcheting the
+// baseline down to the new count (net of SCENE_BUILD P4's group-face row styling)
+// per the ratchet's own "count dropped → lower the baseline" rule.)
+const COLOR_BASELINE: usize = 187;
 const RADIUS_BASELINE: usize = 0;
 
 #[test]
