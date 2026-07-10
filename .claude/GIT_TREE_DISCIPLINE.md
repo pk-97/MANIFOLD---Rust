@@ -131,7 +131,9 @@ origin main` (allow + reminder present); `merge <branch>` while on main
   `.claude/worktrees/<branch>`, created off a verified tip (the playbook's
   step-0 base-verification guard) with gitignored fixtures copied in. It
   persists across sessions until the branch merges; per-session worktrees pay
-  the cargo cold-build tax and are not the pattern.
+  the cargo cold-build tax and are not the pattern. Acquire through
+  `scripts/agent-worktree.py` (§2c) — it REUSES an idle warm worktree before
+  it ever creates a cold one.
 - The main checkout is the only place merges to main happen. Sessions in
   worktrees never run bare git/cargo (always `-C` / `--manifest-path`,
   absolute, quoted — the repo path contains a space).
@@ -141,6 +143,32 @@ origin main` (allow + reminder present); `merge <branch>` while on main
   work** — it bases the worktree off the default branch, not your tip.
   Manual `git worktree add` off the verified tip only, with the step-0
   base-verification guard in the brief.
+
+## §2c. Build-speed rules (added 2026-07-10 — orchestration wall-clock pass)
+
+Measured basis: ~80% of a phase's wall-clock is cargo compile/test (playbook,
+2026-07-03); by 2026-07-10 ten live worktrees carried 5–41 GB of cold-built
+`target/` each. Three rules:
+
+1. **Reuse warm worktrees.** `python3 scripts/agent-worktree.py acquire
+   <name> <branch> [--tip REF] [--owner TEXT]` re-points the warmest idle
+   worktree with `checkout -B` and only creates a fresh (cold) one when the
+   pool is empty. Idle = clean status + HEAD is-ancestor of origin/main +
+   lease absent or stale (8 h). The script writes a lease, copies missing
+   `tests/fixtures` files from the main checkout (the gitignored-fixture
+   hazard), and prints the step-0 base-verification line — the caller still
+   confirms the tip. `list` shows the pool; `release <name>` drops the lease
+   at session end. A WORKTREE_HANDOFF.md or any dirt marks a worktree busy.
+2. **sccache wraps rustc globally** (`.cargo/config.toml`). External deps are
+   compiled non-incrementally by cargo, so they cache across worktrees and
+   survive wiped targets; workspace crates stay incremental and pass through.
+   If sccache misbehaves, comment out the `rustc-wrapper` line — plain rustc
+   is the unchanged fallback.
+3. **Batch landings.** Commits stay per-phase on the branch (durability
+   unchanged); the fetch → merge origin/main → gate → merge --no-ff → push
+   loop runs once per 2–3 phases per design, not per phase. Each landing
+   skipped saves a gate rerun here and a push-rejection retry for every other
+   concurrent session.
 
 ## §2b. Pending cleanup (2026-07-04 twin-commit remediation)
 

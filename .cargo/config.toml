@@ -7,6 +7,16 @@
 [target.aarch64-apple-darwin]
 rustflags = ["-C", "link-arg=-fuse-ld=/opt/homebrew/opt/lld/bin/ld64.lld"]
 
+# Shared compile cache across worktrees (brew install sccache). Cargo compiles
+# external deps non-incrementally, so sccache serves them from cache on every
+# cold worktree build; workspace crates stay incremental (sccache passes those
+# through uncached — worktree-pool warmth covers them, see
+# .claude/GIT_TREE_DISCIPLINE.md §2c). Verified 2026-07-10: incremental builds
+# pass through without error; dep crates cache-hit across a wiped target dir.
+# If sccache misbehaves, comment this block out — plain rustc is the fallback.
+[build]
+rustc-wrapper = "/opt/homebrew/bin/sccache"
+
 # `cargo xtask ui-snap <scene> [--dump]` → the headless UI snapshot harness
 # (feature-gated subcommand of manifold-app). See docs/HEADLESS_UI_HARNESS.md.
 [alias]
