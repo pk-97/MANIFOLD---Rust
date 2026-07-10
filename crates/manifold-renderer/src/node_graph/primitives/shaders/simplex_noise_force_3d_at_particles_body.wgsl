@@ -69,6 +69,7 @@ fn body(
     samp: sampler,
     turbulence: f32,
     anti_clump: f32,
+    turb_scale: f32,
     active_count: i32,
     time2: f32,
 ) -> Element {
@@ -82,7 +83,10 @@ fn body(
     let adaptive_amp = turbulence * (1.0 + capped_density * anti_clump);
 
     let noise_time = time2 * 0.1;
-    let noise_pos = pos * 2.0;
+    // turb_scale = noise lattice cells across the unit volume. At the legacy
+    // constant 2.0 the pattern is screen-scale architecture (one cell reads
+    // as a quadrant of the sim — BUG-066); higher values read as texture.
+    let noise_pos = pos * turb_scale;
     let nx = (snf3_simplex_noise_2d(noise_pos.yz + vec2<f32>(noise_time)) - 0.5) * 2.0;
     let ny = (snf3_simplex_noise_2d(noise_pos.xz + vec2<f32>(noise_time + 100.0)) - 0.5) * 2.0;
     let nz = (snf3_simplex_noise_2d(noise_pos.xy + vec2<f32>(noise_time + 200.0)) - 0.5) * 2.0;
