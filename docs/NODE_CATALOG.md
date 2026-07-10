@@ -363,7 +363,7 @@ _Generated from the node registry. Do not hand-edit. 217 nodes registered, group
 | `EdgeDetect` | Edge Detect | effect | Diagnostic | 3 |
 | `EdgeStretch` | Edge Stretch | effect | Spatial | 3 |
 | `FluidSim2D` | Fluid Sim 2D | generator | Sim | 13 |
-| `FluidSim3D` | Fluid Sim 3D | generator | Sim | 21 |
+| `FluidSim3D` | Fluid Sim 3D | generator | Sim | 22 |
 | `Glitch` | Glitch | effect | Filmic | 5 |
 | `HighlightBoost` | Highlight Boost | effect | Filmic | 4 |
 | `Infrared` | Infrared | effect | Color | 3 |

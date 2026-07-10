@@ -12750,9 +12750,19 @@
           ],
           "tooltip": "Depth of the volume in cells. This must match the particle scatter that filled the buffer.",
           "type": "int"
+        },
+        {
+          "default": "4096",
+          "label": "Fixed Point Scale",
+          "name": "fixed_point_scale",
+          "range": [
+            "256",
+            "1048576"
+          ],
+          "type": "float"
         }
       ],
-      "purpose": "Read a u32 fixed-point 3D accumulator buffer (produced by node.draw_particles_3d), divide by 4096 (FluidSim3D's FIXED_POINT_MULTIPLIER), and write the result as a density Texture3D. Self-clears the accumulator to zero atomically as part of the same dispatch so the next frame starts fresh.",
+      "purpose": "Read a u32 fixed-point 3D accumulator buffer (produced by node.draw_particles_3d), divide by fixed_point_scale (default 4096, FluidSim3D's legacy FIXED_POINT_MULTIPLIER), and write the result as a density Texture3D. Self-clears the accumulator to zero atomically as part of the same dispatch so the next frame starts fresh.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Reads back the 3D buffer that a 3D particle scatter wrote into and turns it into a volume you can sample.",
@@ -19067,6 +19077,13 @@
           "max": "1",
           "min": "0",
           "name": "Flatten"
+        },
+        {
+          "default": "1",
+          "id": "pressure",
+          "max": "4",
+          "min": "0.25",
+          "name": "Pressure"
         }
       ]
     },
