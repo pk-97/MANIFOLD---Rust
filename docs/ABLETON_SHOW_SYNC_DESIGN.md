@@ -58,7 +58,7 @@ and the merge.
 | D13 | **Import and re-sync are each one undo entry** through `EditingService` (single command wrapping all mutations). |
 | D14 | **Parsing:** `flate2` gunzip + `quick-xml` streaming, on a background thread; the parsed `NormalizedSet` is applied on the content thread via one command. Pin to Peter's Live major version (12); unknown schema → loud, user-visible error, never a panic, never a partial import. |
 | D15 | **Rack macro inventory pre-seeds the OSC mapping picker** — parsed device racks (name, `device_class_name`, macro names) populate `AbletonSetContext` so mapping targets are offered before the bridge ever connects. |
-| D16 | **Out of scope v1:** automation-envelope import (lands as a natural extension once `docs/AUTOMATION_LANES_DESIGN.md` is built — envelopes → lanes), session-view scenes (session mode not built), time signatures beyond the project's beats-per-bar if trivially mappable, writing `.als`, video/return/master track content. |
+| D16 | **Out of scope v1:** automation-envelope import (lands as a natural extension once `docs/AUTOMATION_LANES_DESIGN.md` is built — envelopes → lanes), session-view scenes (session mode not built), time signatures beyond the project's beats-per-bar if trivially mappable, writing `.als`, video/return/master track content. **Both deferral triggers have FIRED (coherence audit F9, 2026-07-10): AUTOMATION_LANES shipped P1–P4 (2026-07-04) and SESSION_MODE shipped P1–P3 (2026-07-03). Neither fold-in is designed here** — the executing session decides fold-in vs keep-deferred for envelope import, and SESSION_MODE §5's `SessionLaunchScene` id-mapping still explicitly punts scene import to "the Ableton-sync project" (i.e. here) with no design written on either side. Brief-time work, not a doc contradiction. |
 
 ---
 
@@ -327,8 +327,10 @@ the load-bearing test surface. Full workspace sweep only at P2/P3 completion
 
 ## §9 Deferred / non-goals
 
-- Automation envelopes → automation lanes (after AUTOMATION_LANES ships).
-- Session-view scenes → session mode (after SESSION_MODE ships).
+- Automation envelopes → automation lanes (after AUTOMATION_LANES ships — **shipped
+  2026-07-04**; fold-in vs keep-deferred is a brief-time decision, D16).
+- Session-view scenes → session mode (after SESSION_MODE ships — **shipped P1–P3
+  2026-07-03**; SESSION_MODE §5's scene id-mapping still punts here, D16).
 - Piecewise per-marker warp fidelity inside one region.
 - Live-OSC structural population (OSC stays values/transport; structure comes
   from the file).

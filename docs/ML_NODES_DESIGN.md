@@ -62,7 +62,9 @@ ONNX Runtime (`ort` crate) behind a cargo feature, one impl per task trait, open
 
 - **`node.camera`** — new source atom. AVCaptureSession → CVPixelBuffer → IOSurface → Metal texture, zero-copy. Device-selection param; Continuity Camera (iPhone as camera) comes free with AVFoundation. Camera permission handled at app level (Info.plist).
 - ML nodes consume **any** `Texture2D`. Camera is just one source — running depth estimation on your own generative output is legitimate and encouraged.
-- Deferred sources, same slot later: NDI in, Syphon in, ScreenCaptureKit (capture any app/display — the video analog of the audio output-tap).
+- Deferred sources, same slot later: NDI in, Syphon in (ownership moved to
+  `VIDEO_IO_DESIGN.md`, approved 2026-07-09 — audit F15, 2026-07-10), ScreenCaptureKit
+  (capture any app/display — the video analog of the audio output-tap).
 
 ## 5. Node roster and model picks
 
@@ -179,7 +181,9 @@ Full workspace sweep gates P1 (runtime infrastructure). P2–P5 are per-node sco
 
 - **Real-time diffusion img2img** — approved direction, needs its own design pass (model management, prompt-as-param, seed/latent interpolation, thermal budget). Separate doc; the async contract here is its foundation.
 - MetalFX upscaling — separate perf item (§10).
-- NDI / Syphon / ScreenCaptureKit sources — same source-node slot, later.
+- NDI / Syphon / ScreenCaptureKit sources — same source-node slot, later. NDI/Syphon
+  ownership moved to `VIDEO_IO_DESIGN.md` (approved 2026-07-09 — audit F15, 2026-07-10);
+  ScreenCaptureKit is still this doc's.
 - Same-input inference dedup — deferred optimization (§10).
 - Per-instance mask outputs on `node.segment_anything` — v1 is single mask.
 - Generic ONNX loader node — **rejected**, not deferred.

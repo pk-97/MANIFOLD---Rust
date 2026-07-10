@@ -363,14 +363,20 @@ not grow); any rung that needs human input mid-set (D3).
 - **P3 — The understudy.** New `manifold-understudy` crate + socket protocol +
   heartbeat from content tick + cover/relaunch/handback + ladder governor +
   fallback-asset setting + perform-mode arming (spawn/disarm, Cmd+Q hold
-  guard — visible indicators are perform-surface widgets, §7). Read-back: §4
-  whole, §7, PERFORM_SURFACE_DESIGN §4. Forbidden: ANY manifold-* dependency
+  guard — visible indicators are perform-surface widgets, §7). **Named line item
+  (coherence audit F19, 2026-07-10): the panic/understudy path must call LED
+  `blackout()` (`LED_STRIPS_DESIGN.md` D8) so dead render never freezes strips at
+  full white — LED_STRIPS D8 names this doc as the owner but the cross-reference was
+  never added here until now; wire it into the cover/relaunch path this phase, not a
+  follow-on.** Read-back: §4
+  whole, §7, PERFORM_SURFACE_DESIGN §4, `LED_STRIPS_DESIGN.md` D8. Forbidden: ANY manifold-* dependency
   in the understudy (negative gate: `cargo tree -p manifold-understudy` shows
   AppKit/AVFoundation bindings only — the independence rule is the design);
   heartbeat from the UI thread (it must be the content tick, §4.1). Gate =
   the drills, scripted in `scripts/gig_drill.sh`: `kill -9` mid-show →
-  fallback pixels <100 ms + full show back autonomously; `SIGSTOP` → same via
-  hang detection; 3-crash script → cover stays, no relaunch spam. Ladder
+  fallback pixels <100 ms + full show back autonomously (LED strips included —
+  a drill run with LED patched must show blackout, not frozen white); `SIGSTOP` →
+  same via hang detection; 3-crash script → cover stays, no relaunch spam. Ladder
   table §4.2 is the test surface.
 - **P4 — Peripherals + polish.** MIDI hotplug, audio rebuild/device-follow,
   GPU CB status wiring, thermal glyph, quarantine heuristic (§5.3),
@@ -392,6 +398,14 @@ transitions from its log. The ladder table in §4.2 is the load-bearing test
 surface.
 
 ## 10. Ops checklist (no code — the laptop is part of the instrument)
+
+**This is the single named pre-gig checklist (coherence audit F17, 2026-07-10) —
+three other docs each add a pre-show ritual with no shared home; this section is now
+where they're named so nobody re-derives a fourth list:** the `kill -9` drill below
+(this doc, §9 P3) · **the perf soak** (`PERF_BUDGET_GATE_DESIGN.md` P2 — frame-budget
+regression check before a show) · **the recorder soak** (`LIVE_RECORDING_PROOFS_DESIGN.md`
+Tier 2 — manual pre-gig recording rehearsal). Run all three at soundcheck, not just this
+list's items.
 
 Pre-show, every show: black desktop wallpaper on all displays · Dock +
 menu bar auto-hide · Do Not Disturb / Focus on · notifications off ·

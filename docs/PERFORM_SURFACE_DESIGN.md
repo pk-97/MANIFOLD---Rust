@@ -36,8 +36,13 @@ workflow setups"** (the workspaces layer, §8).
 
 - **D1 — Two perform modes, entry follows context.** Timeline perform (today's HUD content:
   sync, cues, macros) and session perform (the session grid at stage scale + the same strip).
-  One Perform button: performing an arrangement → timeline perform; in session view → session
-  perform. No setting. (Peter: "will likely have a perform mode for timeline shows … and a
+  **Amended (coherence audit F7, 2026-07-10): entry is a menu-only item, not a chrome
+  button.** APP_SHELL D4 (Peter, verbatim, 2026-07-06) forbids a header/transport Perform
+  button — accidental mode switches mid-set are a show-killer, so entry must be a
+  deliberate, low-affordance act (APP_SHELL R5). The surviving content of this decision:
+  entry follows context — performing an arrangement → timeline perform; in session view →
+  session perform — now routed through the single View ▸ Perform Mode menu item instead of
+  a button. No setting. (Peter: "will likely have a perform mode for timeline shows … and a
   perform mode for the session mode.")
 - **D2 — Perform mode becomes chrome-hosted.** A real UI tree via `ChromeHost` in the main
   window, input through the existing `window_input.rs` path. The hand-drawn path is deleted in
@@ -156,15 +161,16 @@ audited 2026-07-03).
   = 0 (the hand-painted functions are gone, not bypassed); focused `manifold-ui` tests.
   This is UI-infrastructure: full workspace sweep before merge.
 - **P2 — Session perform.** Ships with the session-mode build: SessionGrid widget (launch
-  gestures → `ContentCommand`), `session-perform-default` def, Perform-button context routing
-  (D1). Gate: launch quantization behavior matches session-mode spec; grid readable at stage
-  distance.
+  gestures → `ContentCommand`), `session-perform-default` def, Perform-menu-item context
+  routing (D1, amended per F7 — menu item, not a chrome button). Gate: launch quantization
+  behavior matches session-mode spec; grid readable at stage distance.
 - **P3 — Builder v1** (deferred item 1 above) — only after P2 has been performed with.
 - **P4 — Editor workspaces** — separate design doc first (§7.5).
 
 ## 9. Decided — do not reopen
 
-1. Two perform modes; entry follows context; one Perform button.
+1. Two perform modes; entry follows context; one menu-only entry point, no chrome
+   button, no accelerator (amended per APP_SHELL D4 — audit F7, 2026-07-10).
 2. Perform mode is chrome-hosted; the hand-drawn path is deleted in P1, not kept beside.
 3. Widgets = chrome panels fed by view-models; painter escape hatch for custom visuals;
    foundation-boundary rules apply (`ui_translate.rs` is the only converter).

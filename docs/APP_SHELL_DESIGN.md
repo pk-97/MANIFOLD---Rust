@@ -23,7 +23,7 @@ Evidence: full reads of the files below plus headless renders (`cargo xtask ui-s
 |---|---|---|
 | Native menu bar (muda; macOS NSMenu) | `crates/manifold-app/src/menu.rs` | SHIPPED. MANIFOLD/File/Edit/View. One dispatch path: `MenuAction` → same `PanelAction` queue as chrome (`app_render.rs:915-919`). Dynamic Open Recent + Revert to Snapshot submenus. Edit = Undo/Redo only, **no accelerators** — menu.rs:11-17 names the constraint: macOS routes menu key-equivalents app-wide before winit, so context keys were deliberately left with winit "as a follow-up". |
 | Settings popup (⌘,) | `crates/manifold-ui/src/panels/settings_popup.rs` | SHIPPED. One "RENDER" section, 340px modal: Resolution (opens picker), Render Scale 1×/75%/50%, Tonemap ×4, HDR Export. Chrome-API views + imperative rows. |
-| Audio Setup modal (⌘⇧A) | `crates/manifold-ui/src/panels/audio_setup_panel.rs` (2090 lines) | SHIPPED. Device row, send rows (channel/gain/delete-with-confirm showing driven-param count), add-send, spectrogram scope with draggable band dividers, live-trigger band rows. Modal **by decision** (AUDIO_INFRASTRUCTURE §7: "stays modal … settings, configured deliberately"). Its UX roadmap is AUDIO_SENDS_UX_DESIGN — not this doc's to touch. |
+| Audio Setup modal (⌘⇧A) | `crates/manifold-ui/src/panels/audio_setup_panel.rs` (2090 lines) | SHIPPED. Device row, send rows (channel/gain/delete-with-confirm showing driven-param count), add-send, spectrogram scope with draggable band dividers, live-trigger band rows. Modal **by decision** (AUDIO_INFRASTRUCTURE §7: "stays modal … settings, configured deliberately"). Its UX roadmap is AUDIO_SENDS_UX_DESIGN — not this doc's to touch. **Superseded again (coherence audit F12, 2026-07-10): `AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` (approved 2026-07-09) amends this row's T2 classification to T1 — the panel becomes a `ScreenLayout` workspace column, not a modal overlay. This row and Decided-#9 below are stale until that design's P1 lands.** |
 | Overlay driver | `crates/manifold-app/src/ui_root.rs` (`OverlayId`: PerfHud/Dropdown/AudioSetup/Settings/BrowserPopup/AbletonPicker/Toast) | SHIPPED (OVERLAY_SYSTEM_DESIGN). Build/draw/input from one enum; adding an overlay = a variant. The substrate for both settings windows. |
 | Perf HUD (backtick) | `crates/manifold-ui/src/panels/perf_hud.rs` | SHIPPED. FPS/frame-graph/sync/MIDI/clip metrics, modeless, never consumes input. |
 | Transport bar | `crates/manifold-ui/src/panels/transport.rs` | SHIPPED on Chrome API. Left: clock authority, Link, MIDI clock (CLK + device), SYNC out. Center: PLAY/STOP/REC, BPM field + R + CLR. Right: automation LANES/BACK/ARM. |
@@ -176,6 +176,10 @@ Five tiers plus windows. Every existing surface classified; every future surface
 | **T4 — transients** | opened-from-something, dismiss-on-outside-click | dropdowns, pickers, browser popup | overlay driver / popup_shell |
 | **Windows** | OS windows | Workspace + Output(s) — exactly two roles | `WindowRegistry` |
 
+Audio Setup's T2 row is superseded going forward: `AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
+(approved 2026-07-09) reclassifies it T1 (a `ScreenLayout` workspace column) per this
+doc's own R3 — coherence audit F12, 2026-07-10.
+
 Placement rules (R-numbered; these are what future waves inherit):
 
 - **R1 — Live controls live on the performance surface.** Anything a performer touches mid-set (BPM, quantize, sync arming, LED master, sends' gains) is on a T0 bar, the inspector, or a perform widget — never inside a T2 window. `feedback_param_values_is_performance_surface` and `feedback_audio_stays_on_perform_surface` are the governing memories.
@@ -250,6 +254,8 @@ Future-wave slots (§8) are not phases of this doc — each lands inside its own
 7. Workspace state (widths, scroll, collapse) stays in the project file.
 8. `AppPrefs` replaces `UserPrefs`; the string KV is deleted, not wrapped.
 9. Audio Setup stays a modal (AUDIO_INFRASTRUCTURE §7's decision, honored here).
+   **Superseded 2026-07-09 by `AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
+   (T1 workspace column, not T2 modal) — audit F12, 2026-07-10.**
 10. Monitor lives in the Window menu; exactly two `WindowRole`s remain.
 11. Settings windows are in-app T2 overlays on the overlay driver, not OS windows.
 12. Sidebar page order (Project Settings): Video · Playback · Sync · Displays & Stage · LED · Media.
