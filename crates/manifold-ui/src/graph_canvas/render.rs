@@ -135,16 +135,17 @@ impl GraphCanvas {
         // A faded control wire stored after a data wire used to paint *on top*
         // of it and muddy the path; ordering the draws fixes that for free —
         // same wires, same geometry, draw-order only.
-        for wire in &self.wires {
-            if !self.wire_touches_focus(wire) && self.wire_is_control(wire) {
-                self.draw_wire(ui, viewport, wire);
-            }
-        }
-        for wire in &self.wires {
-            if !self.wire_touches_focus(wire) && !self.wire_is_control(wire) {
-                self.draw_wire(ui, viewport, wire);
-            }
-        }
+        //
+        // D8 same-pair ribbons (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md`
+        // §2): tiers 1/2 collapse ≥2 wires sharing a (from_node, to_node)
+        // pair into one ribbon + an "×N" badge. Tier 3 (focused) is the
+        // "expanded" state by construction — a pair with either endpoint
+        // hovered/selected has ALL its members filtered into this tier by
+        // `wire_touches_focus`, so it never reaches tiers 1/2 and always
+        // draws per-wire — satisfying "hover / endpoint-selected expands to
+        // individuals" with no extra state.
+        self.draw_wire_tier(ui, viewport, |w| !self.wire_touches_focus(w) && self.wire_is_control(w));
+        self.draw_wire_tier(ui, viewport, |w| !self.wire_touches_focus(w) && !self.wire_is_control(w));
         for wire in &self.wires {
             if self.wire_touches_focus(wire) {
                 self.draw_wire(ui, viewport, wire);
@@ -958,6 +959,37 @@ impl GraphCanvas {
                             ui.draw_text(slider_x, text_y, &label, text_size, TEXT_SECONDARY);
                         }
                     }
+                    NodeRow::Action(kind) => {
+                        // The "+ Object" / "+ Light" one-click gestures
+                        // (D7/D7a) — same rounded-pill chrome + hover state as
+                        // the "Edit Code…" footer below, so a gesture button
+                        // reads as a button anywhere on the node face.
+                        let label = match kind {
+                            NodeActionKind::AddSceneObject => "+ Object",
+                            NodeActionKind::AddSceneLight => "+ Light",
+                        };
+                        let inset = 4.0 * self.zoom;
+                        let bx = sx + inset;
+                        let bw = (sw - 2.0 * inset).max(0.0);
+                        let by = row_y + inset * 0.25;
+                        let bh = (row_h - inset * 0.5).max(0.0);
+                        let (cx, cy) = self.cursor;
+                        let hovered = cx >= bx && cx <= bx + bw && cy >= by && cy <= by + bh;
+                        let bg = if hovered {
+                            WGSL_FOOTER_HOVER_BG
+                        } else {
+                            WGSL_FOOTER_BG
+                        };
+                        ui.draw_rounded_rect(bx, by, bw, bh, bg, 3.0 * self.zoom);
+                        let lw = text_width(label, text_size);
+                        ui.draw_text(
+                            bx + (bw - lw) * 0.5,
+                            row_y + (row_h - text_size) * 0.5,
+                            label,
+                            text_size,
+                            TEXT_PRIMARY,
+                        );
+                    }
                 }
             }
             // "Edit Code…" footer for a `wgsl_compute` node — the click target
@@ -1241,6 +1273,109 @@ impl GraphCanvas {
         self.find_node(wire.from_node)
             .and_then(|f| f.outputs.iter().find(|p| p.name == wire.from_port))
             .is_some_and(|p| p.is_control)
+    }
+
+    /// Draw every wire in `self.wires` matching `filter`, collapsing ≥2 wires
+    /// that share a (from_node, to_node) pair into one ribbon (D8). `filter`
+    /// picks the tier (control-fan vs. data) the same way the two unribboned
+    /// `for wire in &self.wires` loops used to — this just adds the grouping
+    /// pass in front of the per-wire draw.
+    fn draw_wire_tier(&self, ui: &mut dyn Painter, viewport: Rect, filter: impl Fn(&WireView) -> bool) {
+        let filtered: Vec<&WireView> = self.wires.iter().filter(|w| filter(w)).collect();
+        for (_, members) in group_wires_by_pair(filtered.into_iter()) {
+            if members.len() >= 2 {
+                self.draw_wire_ribbon(ui, viewport, &members);
+            } else {
+                self.draw_wire(ui, viewport, members[0]);
+            }
+        }
+    }
+
+    /// D8: draw ≥2 same-(from_node, to_node) wires as ONE ribbon with an
+    /// "×N" badge. Anchored at each node's vertical CENTRE rather than any
+    /// one member's specific port row — decluttering the wall is the point,
+    /// so the ribbon deliberately isn't tied to a single port's geometry.
+    /// Same bezier-arc shape as `draw_wire`'s forward branch. A pair ending
+    /// on a feedback (`breaks_dependency_cycle`) node falls back to drawing
+    /// each member individually — the return-arc/dashed styling on that rare
+    /// multi-wire loop matters more than decluttering it.
+    fn draw_wire_ribbon(&self, ui: &mut dyn Painter, viewport: Rect, members: &[&WireView]) {
+        let first = members[0];
+        let (Some(from), Some(to)) =
+            (self.find_node(first.from_node), self.find_node(first.to_node))
+        else {
+            return;
+        };
+        if to.breaks_dependency_cycle {
+            for w in members {
+                self.draw_wire(ui, viewport, w);
+            }
+            return;
+        }
+
+        let (gx0, gy0) = (from.pos_graph.0 + NODE_WIDTH, from.pos_graph.1 + from.height() * 0.5);
+        let (gx1, gy1) = (to.pos_graph.0, to.pos_graph.1 + to.height() * 0.5);
+        let (sx0, sy0) = self.to_screen(viewport, gx0, gy0);
+        let (sx1, sy1) = self.to_screen(viewport, gx1, gy1);
+        let span_x = (sx1 - sx0).abs();
+        let span_y = (sy1 - sy0).abs();
+        let dx = (span_x.max(40.0) * 0.5 + span_y * 0.35).min(span_x.max(160.0));
+        let (cx0, cy0, cx1, cy1) = (sx0 + dx, sy0, sx1 - dx, sy1);
+
+        let approx_len =
+            (span_x + span_y + (cx0 - sx0).abs() + (sx1 - cx1).abs()).max(40.0);
+        let steps = (approx_len / 12.0).clamp(16.0, 80.0) as i32;
+        // Bundle colour: the first member's port colour — a ribbon reads as
+        // "more than one," not as a new colour identity, so no new palette
+        // entry (`feedback_prefer_high_saturation_identity_colors` is about
+        // PORT identity; this is still N ordinary wires, just drawn once).
+        let port_color = from
+            .outputs
+            .iter()
+            .find(|p| p.name == first.from_port)
+            .map(|p| p.color)
+            .unwrap_or(color::TEXT_DIMMED_C32);
+        let thickness = (2.2 * self.zoom).clamp(1.6, 3.2);
+        let wire_color = port_color.with_alpha(200);
+
+        let mut prev = cubic_bezier(0.0, sx0, sy0, cx0, cy0, cx1, cy1, sx1, sy1);
+        let mut mid = prev;
+        let mid_step = steps / 2;
+        for i in 1..=steps {
+            let t = i as f32 / steps as f32;
+            let curr = cubic_bezier(t, sx0, sy0, cx0, cy0, cx1, cy1, sx1, sy1);
+            ui.draw_line(prev.0, prev.1, curr.0, curr.1, thickness, wire_color);
+            if i == mid_step {
+                mid = curr;
+            }
+            prev = curr;
+        }
+
+        // "×N" badge at the curve's midpoint — same chip chrome as the
+        // feedback return tag, so it reads as "meta information about a
+        // wire," not a new UI element family.
+        let label = format!("×{}", members.len());
+        let font = 9.0 * self.zoom;
+        let pad_x = 4.0 * self.zoom;
+        let pad_y = 2.0 * self.zoom;
+        let text_w = text_width(&label, font);
+        let chip_w = text_w + pad_x * 2.0;
+        let chip_h = font + pad_y * 2.0;
+        ui.draw_rounded_rect(
+            mid.0 - chip_w * 0.5,
+            mid.1 - chip_h * 0.5,
+            chip_w,
+            chip_h,
+            RETURN_TAG_BG,
+            chip_h * 0.3,
+        );
+        ui.draw_text(
+            mid.0 - chip_w * 0.5 + pad_x,
+            mid.1 - chip_h * 0.5 + pad_y,
+            &label,
+            font,
+            RETURN_TAG_TEXT,
+        );
     }
 
     fn draw_wire(&self, ui: &mut dyn Painter, viewport: Rect, wire: &WireView) {
