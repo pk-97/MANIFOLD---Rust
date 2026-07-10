@@ -723,7 +723,9 @@ serialized — D3); shader changes for island support (§6.1's whole point is ze
 - **P6 — later.** LED strips *and DMX fixtures* become placements (manifold-led
   samples atlas regions / stage positions via the same model; add sACN alongside
   Art-Net — detail now in `docs/LED_STRIPS_DESIGN.md`), MVR/GDTF rig import,
-  NDI/Syphon outputs, per-island export stems, rehearsal view.
+  NDI/Syphon outputs (ownership moved to `VIDEO_IO_DESIGN.md`, approved 2026-07-09 —
+  audit F15, 2026-07-10; this row is stale, do not re-build here), per-island export
+  stems, rehearsal view.
 
 Venue-profile export/import lands in P1 (it's serialization); test patterns +
 Identify land in P3 (output windows exist there).
