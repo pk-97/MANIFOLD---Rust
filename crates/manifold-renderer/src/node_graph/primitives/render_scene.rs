@@ -22,8 +22,13 @@
 //! resolves out to the single-sample `color` output with alpha-to-coverage
 //! antialiasing the cutout edges.
 //!
-//! Per docs/REALTIME_3D_DESIGN.md §2 D2/D3 and §5 P1: no shadows (P2),
-//! no atmosphere/fog (P3). Per
+//! Per docs/REALTIME_3D_DESIGN.md §5 P2 (shipped): shadow maps for the
+//! first `MAX_SHADOW_CASTING_LIGHTS` lights whose `cast_shadows` is set (in
+//! slot order) — one depth-only pre-pass per caster into a private
+//! `Depth32Float` map, consumed by PCF (`textureSampleCompareLevel`) in the
+//! lit fragment shaders; lights past the caster cap still illuminate. No
+//! atmosphere/fog yet (P3). Lights ride a ring-buffered `@binding(8)`
+//! storage buffer (no 4KB `setBytes` cap). Per
 //! docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D3 (P2 of that design,
 //! amending REALTIME_3D D3): each object's per-object TRS is no longer a
 //! plain param — `rebuild` emits an optional `transform_n: PortType::Transform`
@@ -86,6 +91,34 @@ const LIGHT_SLIDER_MAX: u32 = 64;
 const DEFAULT_OBJECTS: u32 = 2;
 const DEFAULT_LIGHTS: u32 = 1;
 
+/// Shadow-caster cap (REALTIME_3D_DESIGN D4, F2 amendment). Shadow maps are
+/// honoured for the first `K` lights *in slot order* whose
+/// `cast_shadows == true`; lights beyond the first `K` casters still
+/// illuminate the scene, they just cast no shadow. This is a SEPARATE,
+/// tighter budget than the (uncapped) object/light sliders: it bounds the
+/// worst case at `objects × K` shadow-depth draws (64 × 4 = 256), not
+/// `objects × lights`. Bumpable like any cap — the shader's caster table
+/// (`@binding(9)`) and shadow-map bindings (`@binding(10..)`) size to it.
+pub(crate) const MAX_SHADOW_CASTING_LIGHTS: usize = 4;
+
+/// Ring depth for the per-frame light storage buffer. The content thread is
+/// triple-buffered and its tick loop waits on the surface from ~2 frames ago
+/// (`content_thread.rs`), so up to ~2 frames of GPU work read a given
+/// frame's light buffer while the CPU wants to write the next. Rotating
+/// through `FRAMES_IN_FLIGHT` buffers guarantees the CPU never overwrites a
+/// buffer the GPU is still reading — the correctness the single shared
+/// `create_buffer_shared` buffer (mesh_pipeline/line_pipeline) leaves to
+/// frame-pacing luck.
+const FRAMES_IN_FLIGHT: usize = 3;
+
+/// Per-caster shadow metadata, packed as 5 `vec4<f32>` into the
+/// `@binding(9)` caster table (`MAX_SHADOW_CASTING_LIGHTS` slots, always
+/// bound). Columns 0–3 are the light's `shadow_view_proj`; the 5th vec4 is
+/// `(bias, kernel_half_width, texel_size, 0)`. Kept as a plain vec4 stride
+/// (not a struct with a mat4 member) so the storage layout is unambiguous
+/// through SPIRV-Cross → MSL — same discipline as the light buffer.
+const CASTER_VEC4_STRIDE: usize = 5;
+
 // Per-object AND per-light port names are generated on demand
 // (`mesh_{i}`, `transform_{i}`, `light_{i}`, …) now that `NodePort.name` is
 // `Cow<'static, str>` — no static name tables, no object cap, no light cap.
@@ -132,6 +165,17 @@ struct RenderSceneUniforms {
 // the old fixed `lights: [[f32;4]; 8]` array (128 B) baked in.
 const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 272);
 
+/// Per-(caster, object) uniform for the shadow depth pass
+/// (`shaders/shadow_depth.wgsl`). The vertex shader composes
+/// `light_view_proj · model · position` and writes only depth. 128 bytes.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ShadowUniforms {
+    light_view_proj: [[f32; 4]; 4],
+    model: [[f32; 4]; 4],
+}
+const _: () = assert!(std::mem::size_of::<ShadowUniforms>() == 128);
+
 pub struct RenderScene {
     inputs: Vec<NodeInput>,
     params: Vec<ParamDef>,
@@ -148,6 +192,25 @@ pub struct RenderScene {
     depth_height: u32,
     dummy_texture: Option<manifold_gpu::GpuTexture>,
     sampler: Option<manifold_gpu::GpuSampler>,
+    /// Ring of per-frame light storage buffers (see [`FRAMES_IN_FLIGHT`]).
+    /// Grown on demand; rotated each `evaluate` so a frame's write never
+    /// lands on a buffer an in-flight frame is still reading.
+    light_buffers: Vec<manifold_gpu::GpuBuffer>,
+    light_frame: usize,
+    light_capacity: u64,
+    /// Depth-only pipeline + depth-stencil state for the shadow passes.
+    shadow_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
+    shadow_depth_stencil: Option<manifold_gpu::GpuDepthStencilState>,
+    /// Per-caster private shadow maps, cached `(resolution, texture)`;
+    /// recreated when a caster's `shadow_resolution` changes. Created
+    /// `RENDER_TARGET | SHADER_READ` (AGX 0x78 guard).
+    shadow_maps: [Option<(u32, manifold_gpu::GpuTexture)>; MAX_SHADOW_CASTING_LIGHTS],
+    /// PCF comparison sampler (`compare = Less`).
+    shadow_sampler: Option<manifold_gpu::GpuSampler>,
+    /// 1×1 `Depth32Float` (`SHADER_READ`) bound to unused/non-caster
+    /// shadow-map slots so every `@binding(10..)` is always a valid depth
+    /// texture even in a scene with no casters.
+    dummy_depth: Option<manifold_gpu::GpuTexture>,
 }
 
 impl RenderScene {
@@ -165,6 +228,14 @@ impl RenderScene {
             depth_height: 0,
             dummy_texture: None,
             sampler: None,
+            light_buffers: Vec::new(),
+            light_frame: 0,
+            light_capacity: 0,
+            shadow_pipeline: None,
+            shadow_depth_stencil: None,
+            shadow_maps: std::array::from_fn(|_| None),
+            shadow_sampler: None,
+            dummy_depth: None,
         };
         s.rebuild(DEFAULT_OBJECTS, DEFAULT_LIGHTS);
         s
@@ -315,6 +386,96 @@ impl RenderScene {
         }
     }
 
+    /// Ensure the shader-ABI binding stubs the main pass ALWAYS needs: the
+    /// PCF comparison sampler (`@binding(14)`) and the 1×1 dummy depth
+    /// texture bound to non-caster shadow-map slots. Cheap; called every
+    /// frame regardless of whether any light casts. The depth-only shadow
+    /// *pipeline* and per-caster maps are NOT created here — that is real
+    /// shadow work, gated on there actually being a caster
+    /// ([`Self::ensure_shadow_pass`]), so an unwired scene pays nothing.
+    fn ensure_shadow_binding_stubs(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.shadow_sampler.is_none() {
+            // Comparison sampler: linear filtering gives hardware 2×2 PCF per
+            // tap, clamp addressing so off-map samples read the border depth.
+            self.shadow_sampler = Some(device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                mag_filter: manifold_gpu::GpuFilterMode::Linear,
+                min_filter: manifold_gpu::GpuFilterMode::Linear,
+                mip_filter: manifold_gpu::GpuFilterMode::Linear,
+                address_mode_u: manifold_gpu::GpuAddressMode::ClampToEdge,
+                address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
+                address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
+                compare: Some(manifold_gpu::GpuCompareFunction::Less),
+            }));
+        }
+        if self.dummy_depth.is_none() {
+            // Bound to unused/non-caster shadow-map slots. Never sampled (the
+            // shader returns "lit" before sampling a non-caster slot), but
+            // Metal requires every declared binding to be a valid texture.
+            // RENDER_TARGET | SHADER_READ, like the real maps, so no depth
+            // format needs a render-target-only exception (AGX 0x78 guard).
+            self.dummy_depth = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+                width: 1,
+                height: 1,
+                depth: 1,
+                format: manifold_gpu::GpuTextureFormat::Depth32Float,
+                dimension: manifold_gpu::GpuTextureDimension::D2,
+                usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
+                    | manifold_gpu::GpuTextureUsage::SHADER_READ,
+                label: "node.render_scene dummy shadow",
+                mip_levels: 1,
+            }));
+        }
+    }
+
+    /// Ensure the depth-only shadow pipeline + its depth-stencil state exist.
+    /// Called ONLY when at least one caster is present — compiling the shadow
+    /// shader is real work an unwired scene must not pay.
+    fn ensure_shadow_pass(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.shadow_pipeline.is_none() {
+            self.shadow_pipeline = Some(device.create_render_pipeline_depth_only(
+                include_str!("shaders/shadow_depth.wgsl"),
+                "vs_main",
+                "fs_shadow",
+                manifold_gpu::GpuTextureFormat::Depth32Float,
+                "node.render_scene shadow depth",
+            ));
+        }
+        if self.shadow_depth_stencil.is_none() {
+            self.shadow_depth_stencil = Some(device.create_depth_stencil_state(
+                &manifold_gpu::GpuDepthStencilDesc {
+                    compare: manifold_gpu::GpuCompareFunction::Less,
+                    write_enabled: true,
+                },
+            ));
+        }
+    }
+
+    /// Ensure shadow map `slot` is a private `Depth32Float` of `resolution`²,
+    /// recreating it if the caster's requested resolution changed.
+    /// `RENDER_TARGET | SHADER_READ`: rendered as a depth target, then sampled
+    /// as a shadow map — both usages at creation (AGX 0x78 guard).
+    fn ensure_shadow_map(&mut self, device: &manifold_gpu::GpuDevice, slot: usize, resolution: u32) {
+        let res = resolution.clamp(256, 4096);
+        let needs = match &self.shadow_maps[slot] {
+            Some((cached, _)) => *cached != res,
+            None => true,
+        };
+        if needs {
+            let tex = device.create_texture(&manifold_gpu::GpuTextureDesc {
+                width: res,
+                height: res,
+                depth: 1,
+                format: manifold_gpu::GpuTextureFormat::Depth32Float,
+                dimension: manifold_gpu::GpuTextureDimension::D2,
+                usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
+                    | manifold_gpu::GpuTextureUsage::SHADER_READ,
+                label: "node.render_scene shadow map",
+                mip_levels: 1,
+            });
+            self.shadow_maps[slot] = Some((res, tex));
+        }
+    }
+
     fn pipeline_for(
         &mut self,
         device: &manifold_gpu::GpuDevice,
@@ -345,7 +506,7 @@ impl RenderScene {
     pub fn description() -> PrimitiveDescription {
         PrimitiveDescription {
             type_id: RENDER_SCENE_TYPE_ID,
-            purpose: "Multi-object 3D scene renderer: draws `objects` separate Array<MeshVertex> meshes (one draw call each, no fixed cap on object count) into ONE shared depth buffer, so nearer objects correctly occlude farther ones — the gap node.render_mesh / node.render_copies can't close (each of those renders into its own private depth buffer). Each object carries its own material_n: Material, an optional base_color_map_n: Texture2D albedo/alpha map, and an optional transform_n: Transform (from node.transform_3d; unwired = identity) composed CPU-side into a model matrix. When base_color_map_n is wired, the sampled texel modulates material_n's base_color (rgb × rgb) and its alpha drives that material's alpha-cutout discard when alpha_mode is Mask — same resolve_albedo path as node.render_mesh. Normal/roughness/metallic maps remain unwired per object (dummy-bound) — a documented additive follow-up. `lights` shared Light inputs light_0..light_{lights-1} (no fixed cap — lights ride a runtime-sized storage buffer) accumulate in the Phong/PBR/Cel shading — each light's direct term is summed, ambient + emission are added once. ONE shared envmap input lights every PBR object in the scene (an environment map is scene-wide, not per-object). No shadows (P2), no atmosphere/fog (P3).",
+            purpose: "Multi-object 3D scene renderer: draws `objects` separate Array<MeshVertex> meshes (one draw call each, no fixed cap on object count) into ONE shared depth buffer, so nearer objects correctly occlude farther ones — the gap node.render_mesh / node.render_copies can't close (each of those renders into its own private depth buffer). Each object carries its own material_n: Material, an optional base_color_map_n: Texture2D albedo/alpha map, and an optional transform_n: Transform (from node.transform_3d; unwired = identity) composed CPU-side into a model matrix. When base_color_map_n is wired, the sampled texel modulates material_n's base_color (rgb × rgb) and its alpha drives that material's alpha-cutout discard when alpha_mode is Mask — same resolve_albedo path as node.render_mesh. Normal/roughness/metallic maps remain unwired per object (dummy-bound) — a documented additive follow-up. `lights` shared Light inputs light_0..light_{lights-1} (no fixed cap — lights ride a runtime-sized storage buffer) accumulate in the Phong/PBR/Cel shading — each light's direct term is summed, ambient + emission are added once. ONE shared envmap input lights every PBR object in the scene (an environment map is scene-wide, not per-object). Shadows: the first 4 lights (in slot order) whose cast_shadows is set drop real shadow maps onto the scene (PCF-softened per the light's shadow_softness); lights past that cap still illuminate but cast no shadow. No atmosphere/fog yet (P3).",
             composition_notes: "objects and lights are reconfigure params: changing either rebuilds the port list (mesh_n/material_n/base_color_map_n/transform_n quadruples, light_0..N); the render node itself carries only `objects`/`lights` as params now, same dynamic-port pattern as node.switch_texture's num_inputs. Wire a node.transform_3d into transform_n to place/animate that object — each of its nine scalar ports (pos/rot/scale) is independently port-shadowed, so an LFO into rot_y spins it live; leaving transform_n unwired renders the object at the origin, unrotated, unit scale. base_color_map_n is optional — leaving it unwired renders that object with material_n's flat base_color, exactly as before this port existed. A missing mesh_n or material_n, or a PBR material_n with envmap left unwired, is a structured error (ctx.error + magenta clear on `color`), matching render_mesh's no-silent-fallbacks contract. Object 0 clears the shared color+depth target; objects 1..N load onto it — the shared depth buffer resolves occlusion regardless of which object happens to be object 0.",
             examples: &[],
             inputs: &[],
@@ -510,19 +671,30 @@ impl EffectNode for RenderScene {
         let envmap_wired = ctx.inputs.texture_2d("envmap");
 
         // Build the shared lights buffer from whichever light_N ports are
-        // actually wired (unwired slots simply don't contribute — 0
-        // lights is a valid scene state, matched by ambient + emission
-        // only). Two vec4s per light, packing byte-identical to the old
-        // fixed uniform array; count flows through the uniform, so the
-        // buffer holds exactly `light_count` lights. Sun-style
-        // negated-direction convention, matching render_3d_mesh's existing
-        // (non-per-pixel-Point) derivation.
+        // actually wired (unwired slots simply don't contribute — 0 lights
+        // is a valid scene state, matched by ambient + emission only). Two
+        // vec4s per light. As lights are collected, the first
+        // `MAX_SHADOW_CASTING_LIGHTS` of them whose `cast_shadows` is set
+        // (in slot order — D4/F2) are recorded as shadow casters; each
+        // caster's light-space matrix + PCF params go into the caster table
+        // below, and its slot index rides the previously-unused `.w` of the
+        // light's colour vec4 (−1.0 = not a caster). Lights beyond the cap
+        // still illuminate; they simply carry slot −1 and cast no shadow.
         let mut light_data: Vec<[f32; 4]> = Vec::with_capacity(lights_n * 2);
         let mut light_count: u32 = 0;
+        let mut casters: Vec<crate::node_graph::light::Light> =
+            Vec::with_capacity(MAX_SHADOW_CASTING_LIGHTS);
         for i in 0..lights_n {
             if let Some(l) = ctx.inputs.light(&format!("light_{i}")) {
+                let slot: f32 = if l.cast_shadows && casters.len() < MAX_SHADOW_CASTING_LIGHTS {
+                    let s = casters.len() as f32;
+                    casters.push(l);
+                    s
+                } else {
+                    -1.0
+                };
                 light_data.push([-l.dir[0], -l.dir[1], -l.dir[2], 1.0]);
-                light_data.push([l.color[0], l.color[1], l.color[2], 0.0]);
+                light_data.push([l.color[0], l.color[1], l.color[2], slot]);
                 light_count += 1;
             }
         }
@@ -532,6 +704,25 @@ impl EffectNode for RenderScene {
         // the binding on empty is the forbidden silent-fallback shape.
         if light_data.is_empty() {
             light_data.extend([[0.0f32; 4]; 2]);
+        }
+
+        // Caster table (`@binding(9)`): `MAX_SHADOW_CASTING_LIGHTS` slots ×
+        // `CASTER_VEC4_STRIDE` vec4, zeroed then filled per active caster.
+        // Columns 0–3 = shadow_view_proj; vec4 4 = (bias, kernel_half_width,
+        // texel_size, 0). Always fully sized so `@binding(9)` is a fixed
+        // bind regardless of caster count (Bytes, copy-at-encode, hazard-free).
+        let mut caster_table: Vec<[f32; 4]> =
+            vec![[0.0; 4]; MAX_SHADOW_CASTING_LIGHTS * CASTER_VEC4_STRIDE];
+        for (slot, l) in casters.iter().enumerate() {
+            let vp = l.shadow_view_proj();
+            let base = slot * CASTER_VEC4_STRIDE;
+            caster_table[base] = vp[0];
+            caster_table[base + 1] = vp[1];
+            caster_table[base + 2] = vp[2];
+            caster_table[base + 3] = vp[3];
+            let khw = l.shadow_softness.kernel_half_width() as f32;
+            let texel = 1.0 / l.shadow_resolution.clamp(256, 4096) as f32;
+            caster_table[base + 4] = [l.shadow_bias, khw, texel, 0.0];
         }
 
         let Some(dims_tex) = ctx.outputs.texture_2d("color") else {
@@ -636,6 +827,7 @@ impl EffectNode for RenderScene {
         }
 
         // ---- Ensure cached GPU resources (mutable phase). ----
+        let has_casters = !casters.is_empty();
         {
             let gpu = ctx.gpu_encoder();
             if self.depth_stencil.is_none() {
@@ -649,6 +841,97 @@ impl EffectNode for RenderScene {
             self.ensure_msaa_targets(gpu.device, width, height);
             self.ensure_sampler(gpu.device);
             self.ensure_dummy_texture(gpu.device);
+            // Shadow ABI stubs (comparison sampler + 1×1 dummy depth) are
+            // always needed — the main shader declares @binding(10..14) even
+            // in a scene with no casters. The shadow *pipeline* + per-caster
+            // maps are created only when a caster exists (unwired = zero cost).
+            self.ensure_shadow_binding_stubs(gpu.device);
+            if has_casters {
+                self.ensure_shadow_pass(gpu.device);
+                for (slot, l) in casters.iter().enumerate() {
+                    self.ensure_shadow_map(gpu.device, slot, l.shadow_resolution);
+                }
+            }
+            // Rotate + (re)size the light ring buffer, then write this
+            // frame's light data into the current ring slot. Rotating across
+            // FRAMES_IN_FLIGHT buffers guarantees the CPU never overwrites a
+            // buffer an in-flight frame is still reading (kills the 4KB
+            // setBytes cap that bounded the old Bytes binding to 127 lights).
+            let needed = (light_data.len() * std::mem::size_of::<[f32; 4]>()) as u64;
+            if self.light_buffers.len() < FRAMES_IN_FLIGHT || self.light_capacity < needed {
+                let cap = needed.max(self.light_capacity).max(64).next_power_of_two();
+                self.light_buffers = (0..FRAMES_IN_FLIGHT)
+                    .map(|_| gpu.device.create_buffer_shared(cap))
+                    .collect();
+                self.light_capacity = cap;
+            }
+            self.light_frame = (self.light_frame + 1) % FRAMES_IN_FLIGHT;
+            unsafe {
+                self.light_buffers[self.light_frame]
+                    .write(0, bytemuck::cast_slice(&light_data));
+            }
+        }
+
+        // ---- Shadow depth pre-passes. One depth-only pass per caster
+        // (cleared once), every object drawn through that light's
+        // view-projection into its private Depth32Float map. Runs before the
+        // main lit pass so the maps are ready to sample; skipped entirely
+        // when no light casts (has_casters == false → zero passes). ----
+        let vsize = std::mem::size_of::<MeshVertex>() as u64;
+        let vcount = |buf: &manifold_gpu::GpuBuffer| ((buf.size / vsize) as u32 / 3) * 3;
+        if has_casters {
+            let shadow_pipeline = self.shadow_pipeline.as_ref().expect("ensured").clone();
+            let shadow_ds = self.shadow_depth_stencil.as_ref().expect("ensured");
+            for (slot, l) in casters.iter().enumerate() {
+                let Some((_, shadow_map)) = self.shadow_maps[slot].as_ref() else {
+                    continue;
+                };
+                let vp = l.shadow_view_proj();
+                let shadow_uniforms: Vec<ShadowUniforms> = draws
+                    .iter()
+                    .map(|d| ShadowUniforms {
+                        light_view_proj: vp,
+                        model: d.uniforms.model,
+                    })
+                    .collect();
+                let shadow_bindings: Vec<[GpuBinding; 2]> = draws
+                    .iter()
+                    .zip(&shadow_uniforms)
+                    .map(|(d, su)| {
+                        [
+                            GpuBinding::Bytes {
+                                binding: 0,
+                                data: bytemuck::bytes_of(su),
+                            },
+                            GpuBinding::Buffer {
+                                binding: 1,
+                                buffer: d.vertices,
+                                offset: 0,
+                            },
+                        ]
+                    })
+                    .collect();
+                let shadow_draws: Vec<manifold_gpu::DepthMsaaDraw> = draws
+                    .iter()
+                    .zip(&shadow_bindings)
+                    .map(|(d, b)| {
+                        manifold_gpu::GpuEncoder::depth_msaa_draw(
+                            &shadow_pipeline,
+                            b,
+                            vcount(d.vertices),
+                            1,
+                        )
+                    })
+                    .collect();
+                ctx.gpu_encoder()
+                    .native_enc
+                    .draw_instanced_depth_only_batch(
+                        shadow_map,
+                        shadow_ds,
+                        &shadow_draws,
+                        "node.render_scene shadow",
+                    );
+            }
         }
 
         // ---- Pass 2 (immutable phase): draw. Every object composites into
@@ -663,7 +946,28 @@ impl EffectNode for RenderScene {
         let msaa_color = self.msaa_color.as_ref().expect("just inserted");
         let sampler = self.sampler.as_ref().expect("just inserted");
         let dummy = self.dummy_texture.as_ref().expect("just inserted");
+        let shadow_sampler = self.shadow_sampler.as_ref().expect("stubs ensured");
+        let dummy_depth = self.dummy_depth.as_ref().expect("stubs ensured");
         let envmap_texture = envmap_wired.unwrap_or(dummy);
+        // Shadow map per slot → the real map if that slot has a caster, else
+        // the 1×1 dummy depth. The shader never samples a −1 (non-caster)
+        // slot, but every declared @binding(10..13) must be a valid depth
+        // texture. Hand-unrolled for K=4 (WGSL has no dynamic texture-binding
+        // indexing); the assert trips if K changes and this list doesn't.
+        const _: () = assert!(
+            MAX_SHADOW_CASTING_LIGHTS == 4,
+            "shadow-map bindings @10..13 + shader switch are hand-unrolled for K=4"
+        );
+        let shadow_tex = |slot: usize| -> &manifold_gpu::GpuTexture {
+            self.shadow_maps[slot]
+                .as_ref()
+                .map(|(_, t)| t)
+                .unwrap_or(dummy_depth)
+        };
+        let shadow_0 = shadow_tex(0);
+        let shadow_1 = shadow_tex(1);
+        let shadow_2 = shadow_tex(2);
+        let shadow_3 = shadow_tex(3);
 
         let vertex_size = std::mem::size_of::<MeshVertex>() as u64;
         let vertex_count = |draw: &ObjectDraw| ((draw.vertices.size / vertex_size) as u32 / 3) * 3;
@@ -677,11 +981,12 @@ impl EffectNode for RenderScene {
         }
 
         // Binding arrays must outlive the batch call, so build them all
-        // first, then reference each from a `DepthMsaaDraw`. `light_data`
-        // is scene-wide (same buffer for every object) and outlives this
-        // loop, so every set's `@binding(8)` borrows the one `Vec`.
-        let light_bytes: &[u8] = bytemuck::cast_slice(&light_data);
-        let binding_sets: Vec<[GpuBinding; 9]> = draws
+        // first, then reference each from a `DepthMsaaDraw`. The light buffer
+        // (this frame's ring slot) and caster table are scene-wide — every
+        // object's set borrows the same ones.
+        let light_buffer = &self.light_buffers[self.light_frame];
+        let caster_bytes: &[u8] = bytemuck::cast_slice(&caster_table);
+        let binding_sets: Vec<[GpuBinding; 15]> = draws
             .iter()
             .map(|draw| {
                 [
@@ -718,12 +1023,39 @@ impl EffectNode for RenderScene {
                         binding: 7,
                         texture: dummy,
                     },
-                    // D4: always bound — `light_data` holds one zeroed
-                    // entry when no light is wired; the shader gates reads
-                    // on `light_count`, never on the buffer length.
-                    GpuBinding::Bytes {
+                    // Lights: ring-buffered storage buffer (was a 4KB-capped
+                    // Bytes bind). Holds one zeroed entry when no light is
+                    // wired; the shader gates reads on `light_count` (D4).
+                    GpuBinding::Buffer {
                         binding: 8,
-                        data: light_bytes,
+                        buffer: light_buffer,
+                        offset: 0,
+                    },
+                    // Caster table (fixed K×5 vec4, zeroed for empty slots) —
+                    // always bound, same D4 discipline as the light buffer.
+                    GpuBinding::Bytes {
+                        binding: 9,
+                        data: caster_bytes,
+                    },
+                    GpuBinding::Texture {
+                        binding: 10,
+                        texture: shadow_0,
+                    },
+                    GpuBinding::Texture {
+                        binding: 11,
+                        texture: shadow_1,
+                    },
+                    GpuBinding::Texture {
+                        binding: 12,
+                        texture: shadow_2,
+                    },
+                    GpuBinding::Texture {
+                        binding: 13,
+                        texture: shadow_3,
+                    },
+                    GpuBinding::Sampler {
+                        binding: 14,
+                        sampler: shadow_sampler,
                     },
                 ]
             })

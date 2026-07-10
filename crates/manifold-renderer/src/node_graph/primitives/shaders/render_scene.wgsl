@@ -20,7 +20,8 @@
 //      emission are added exactly once (after the light loop), not
 //      blended per light.
 //
-// No shadows (P2), no atmosphere/fog (P3). No per-object surface
+// Shadows (P2) via the caster table + PCF below; no atmosphere/fog yet
+// (P3). No per-object surface
 // textures in P1 — `texture_flags` is always zero (render_scene has no
 // normal_map / roughness_map / base_color_map / metallic_map inputs);
 // the resolve_* helpers below are kept identical to render_3d_mesh.wgsl
@@ -100,6 +101,82 @@ struct Uniforms {
 //   lights[i*2]   = (dir.xyz: from-surface-toward-light, w: intensity)
 //   lights[i*2+1] = (color.rgb PREMULTIPLIED with intensity, w: unused)
 @group(0) @binding(8) var<storage, read> lights: array<vec4<f32>>;
+
+// Shadow-caster table: MAX_SHADOW_CASTING_LIGHTS (=4) slots × 5 vec4.
+// Per slot: [0..3] = the caster's light-space view_proj columns,
+// [4] = (bias, kernel_half_width, texel_size, 0). Filled only for active
+// casters (zeroed otherwise); a light's caster slot rides lights[i*2+1].w
+// (−1.0 = this light casts no shadow). The four shadow maps are separate
+// bindings because WGSL has no dynamic texture-binding indexing — the K=4
+// switch in sample_shadow() picks the right one.
+@group(0) @binding(9) var<storage, read> casters: array<vec4<f32>>;
+@group(0) @binding(10) var shadow_map_0: texture_depth_2d;
+@group(0) @binding(11) var shadow_map_1: texture_depth_2d;
+@group(0) @binding(12) var shadow_map_2: texture_depth_2d;
+@group(0) @binding(13) var shadow_map_3: texture_depth_2d;
+@group(0) @binding(14) var shadow_sampler: sampler_comparison;
+
+const CASTER_STRIDE: u32 = 5u;
+
+// Pick shadow map `slot` (0..3) and do one hardware comparison sample.
+// `textureSampleCompareLevel` (level 0, no derivatives) is legal in the
+// data-dependent control flow the per-light loop creates — plain
+// `textureSampleCompare` would not be.
+fn sample_shadow(slot: i32, suv: vec2<f32>, ref_depth: f32) -> f32 {
+    switch slot {
+        case 0: { return textureSampleCompareLevel(shadow_map_0, shadow_sampler, suv, ref_depth); }
+        case 1: { return textureSampleCompareLevel(shadow_map_1, shadow_sampler, suv, ref_depth); }
+        case 2: { return textureSampleCompareLevel(shadow_map_2, shadow_sampler, suv, ref_depth); }
+        default: { return textureSampleCompareLevel(shadow_map_3, shadow_sampler, suv, ref_depth); }
+    }
+}
+
+// Light visibility in [0,1]: 1 = fully lit, 0 = fully shadowed. `slot_f` is
+// lights[i*2+1].w — negative means this light casts no shadow, so the point
+// is always lit. Reconstructs the fragment's light-space position, does a
+// PCF depth compare with a (2·khw+1)² kernel. Points outside the caster's
+// frustum read as lit (no shadow data there) rather than clamped-dark.
+fn shadow_factor(world_pos: vec3<f32>, slot_f: f32) -> f32 {
+    if slot_f < 0.0 {
+        return 1.0;
+    }
+    let slot = i32(slot_f + 0.5);
+    let base = u32(slot) * CASTER_STRIDE;
+    let vp = mat4x4<f32>(
+        casters[base],
+        casters[base + 1u],
+        casters[base + 2u],
+        casters[base + 3u],
+    );
+    let params = casters[base + 4u];
+    let bias = params.x;
+    let khw = i32(params.y);
+    let texel = params.z;
+
+    let clip = vp * vec4<f32>(world_pos, 1.0);
+    if clip.w <= 0.0 {
+        return 1.0;
+    }
+    let ndc = clip.xyz / clip.w;
+    // NDC xy [-1,1] → uv [0,1], y flipped (Metal texture origin is top-left,
+    // NDC y points up). Metal clip depth is already [0,1] in z.
+    let suv = vec2<f32>(ndc.x * 0.5 + 0.5, ndc.y * -0.5 + 0.5);
+    if suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0 || ndc.z > 1.0 || ndc.z < 0.0 {
+        return 1.0;
+    }
+    let ref_depth = ndc.z - bias;
+
+    var sum = 0.0;
+    var count = 0.0;
+    for (var dy = -khw; dy <= khw; dy = dy + 1) {
+        for (var dx = -khw; dx <= khw; dx = dx + 1) {
+            let off = vec2<f32>(f32(dx), f32(dy)) * texel;
+            sum = sum + sample_shadow(slot, suv + off, ref_depth);
+            count = count + 1.0;
+        }
+    }
+    return sum / count;
+}
 
 struct VsOut {
     @builtin(position) clip_pos: vec4<f32>,
@@ -195,7 +272,8 @@ fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
         let n_dot_h = max(dot(N, H), 0.0);
         let diffuse = albedo.rgb * n_dot_l;
         let spec = u.specular.rgb * pow(n_dot_h, max(u.specular.w, 1.0)) * n_dot_l;
-        lit = lit + (diffuse + spec) * l_col.rgb * l_dir.w;
+        let vis = shadow_factor(in.world_pos, l_col.w);
+        lit = lit + (diffuse + spec) * l_col.rgb * l_dir.w * vis;
     }
     let ambient = albedo.rgb * u.scene_params.y;
     return vec4<f32>(lit + ambient + u.emission.rgb, albedo.a);
@@ -252,7 +330,8 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         let kd = (1.0 - F) * (1.0 - metallic);
         let diffuse = kd * albedo.rgb / PI;
 
-        direct = direct + (diffuse + specular) * l_col.rgb * n_dot_l * l_dir.w;
+        let vis = shadow_factor(in.world_pos, l_col.w);
+        direct = direct + (diffuse + specular) * l_col.rgb * n_dot_l * l_dir.w * vis;
     }
 
     let R = reflect(-V, N);
@@ -295,7 +374,8 @@ fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
         let n_dot_l = max(dot(N, L), 0.0);
         let snapped = floor(n_dot_l * bands) / (bands - 1.0);
         let level = mix(band_low, band_high, clamp(snapped, 0.0, 1.0));
-        lit = lit + albedo.rgb * level * l_col.rgb * l_dir.w;
+        let vis = shadow_factor(in.world_pos, l_col.w);
+        lit = lit + albedo.rgb * level * l_col.rgb * l_dir.w * vis;
     }
     let ambient = albedo.rgb * u.scene_params.y;
     return vec4<f32>(lit + ambient + u.emission.rgb, albedo.a);
