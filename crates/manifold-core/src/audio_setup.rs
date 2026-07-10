@@ -139,10 +139,17 @@ pub struct AudioSend {
     /// Which extractors run for this send.
     #[serde(default)]
     pub analysis: SendAnalysisConfig,
-    /// Live audio → visual trigger routes: this send's transients firing
-    /// one-shot clips on layers. Empty (the default) means the send only feeds
-    /// modulation. See `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// **Legacy, deserialize-only** (P2): a pre-unification project's
+    /// send-owned trigger routes. `Project::migrate_legacy_clip_triggers`
+    /// (run from `Project::on_after_deserialize`, since resolving a route to
+    /// its target layer is cross-struct) drains this into
+    /// `Layer::clip_triggers` on load and empties it — `skip_serializing`
+    /// means a re-saved project never writes it back, so there is no
+    /// "both homes work" window. Kept as a real field (not a shadow struct)
+    /// only so the P3-doomed matrix UI (`inspector.rs`, `audio_setup_panel.rs`)
+    /// keeps compiling against it until it's deleted in P3. See
+    /// `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §3.1/§3.2/D2.
+    #[serde(default, skip_serializing)]
     pub triggers: Vec<TriggerRoute>,
     /// Where the send's signal comes from — the set of inputs (capture device
     /// and/or audio layers) summed and analyzed as one. Skipped on serialize when

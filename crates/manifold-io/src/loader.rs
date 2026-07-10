@@ -399,4 +399,140 @@ impl std::fmt::Display for LoadError {
     }
 }
 
+#[cfg(test)]
+mod legacy_clip_trigger_migration_tests {
+    //! Round-trip gate for the P2 clip-trigger migration
+    //! (`docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §3.2), run
+    //! through the REAL loader pipeline + REAL serde — not
+    //! `Project::migrate_legacy_clip_triggers` called directly (that's
+    //! manifold-core's own unit-level proof). Create-path green is half a
+    //! gate (`docs/DESIGN_DOC_STANDARD.md` §5, BUG-036): this proves
+    //! save -> reload survives too.
+    //!
+    //! `AudioSend.triggers` is `#[serde(skip_serializing)]`, so current code
+    //! can never itself PRODUCE legacy JSON with a populated `triggers`
+    //! array — these tests splice one onto a freshly-serialized project's raw
+    //! JSON `Value`, reproducing exactly what a pre-P2 `.manifold` file on
+    //! disk looks like.
+
+    use super::*;
+    use manifold_core::audio_mod::AudioBand;
+    use manifold_core::audio_setup::AudioSend;
+    use manifold_core::layer::Layer;
+    use manifold_core::types::LayerType;
+    use manifold_core::units::Beats;
+    use serde_json::json;
+
+    /// A project with one send (`send_label`) and one layer (`layer_name`),
+    /// neither carrying any trigger data yet, serialized to JSON with a
+    /// hand-spliced legacy `triggers` array on the send — `target_layer:
+    /// None` when `explicit_target` is false (exercising the by-name
+    /// auto-route), `Some(layer_id)` when true.
+    fn legacy_json_with_route(
+        send_label: &str,
+        layer_name: &str,
+        band: AudioBand,
+        sensitivity: f32,
+        one_shot_beats: f64,
+        explicit_target: bool,
+    ) -> (String, manifold_core::id::LayerId) {
+        let mut project = Project::default();
+        project.audio_setup.sends.push(AudioSend::new(send_label));
+        let layer = Layer::new(layer_name.to_string(), LayerType::Video, 0);
+        let layer_id = layer.layer_id.clone();
+        project.timeline.layers.push(layer);
+
+        let json_str = serde_json::to_string(&project).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        let band_str = serde_json::to_value(band).unwrap();
+        let mut route = json!({
+            "enabled": true,
+            "source": band_str,
+            "sensitivity": sensitivity,
+            "oneShotBeats": one_shot_beats,
+        });
+        if explicit_target {
+            route["targetLayer"] = serde_json::Value::String(layer_id.to_string());
+        }
+        value["audioSetup"]["sends"][0]["triggers"] = json!([route]);
+
+        (serde_json::to_string(&value).unwrap(), layer_id)
+    }
+
+    #[test]
+    fn legacy_route_migrates_and_the_round_trip_survives_save_and_reload() {
+        let (legacy_json, layer_id) =
+            legacy_json_with_route("Kick", "Strobe", AudioBand::Low, 0.8, 2.0, true);
+
+        // ── Load: migration runs inside `on_after_deserialize`. ──
+        let loaded = load_project_from_json(&legacy_json).expect("legacy project loads");
+        assert!(
+            loaded.audio_setup.sends[0].triggers.is_empty(),
+            "legacy storage drained on load"
+        );
+        let (_, layer) = loaded.timeline.find_layer_by_id(&layer_id).unwrap();
+        assert_eq!(layer.clip_triggers.len(), 1, "migration produced exactly one config");
+        let cfg = layer.clip_triggers[0].clone();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.source.send_id, loaded.audio_setup.sends[0].id);
+        assert_eq!(
+            cfg.source.feature,
+            manifold_core::audio_mod::AudioFeature::new(
+                manifold_core::audio_mod::AudioFeatureKind::Transients,
+                AudioBand::Low
+            )
+        );
+        assert_eq!(cfg.shape.sensitivity, 0.8, "U5-verbatim sensitivity-to-Amount mapping");
+        assert_eq!(cfg.one_shot_beats, Beats(2.0));
+
+        // ── Save: `skip_serializing` proof — the legacy field never comes
+        //    back, even though the in-memory `Vec` is a real (empty) field. ──
+        let resaved = serde_json::to_string(&loaded).unwrap();
+        let resaved_value: serde_json::Value = serde_json::from_str(&resaved).unwrap();
+        assert!(
+            resaved_value["audioSetup"]["sends"][0].get("triggers").is_none(),
+            "triggers key must be entirely ABSENT from the saved JSON, not merely an empty array"
+        );
+
+        // ── Reload: the round trip. Create-path green is half a gate. ──
+        let reloaded = load_project_from_json(&resaved).expect("re-saved project reloads");
+        let (_, layer2) = reloaded.timeline.find_layer_by_id(&layer_id).unwrap();
+        assert_eq!(layer2.clip_triggers.len(), 1, "clip trigger survives save -> reload");
+        assert_eq!(
+            layer2.clip_triggers[0], cfg,
+            "the config is byte-identical after a full save/reload cycle — nothing about \
+             serialization can prevent this trigger from firing exactly as it did before"
+        );
+    }
+
+    #[test]
+    fn legacy_route_auto_routes_by_send_label_when_no_explicit_target() {
+        let (legacy_json, layer_id) =
+            legacy_json_with_route("Kick", "Kick", AudioBand::Full, 0.5, 1.0, false);
+
+        let loaded = load_project_from_json(&legacy_json).expect("legacy project loads");
+        let (_, layer) = loaded.timeline.find_layer_by_id(&layer_id).unwrap();
+        assert_eq!(layer.clip_triggers.len(), 1, "resolved by case-insensitive name match");
+        assert!(loaded.audio_setup.sends[0].triggers.is_empty());
+    }
+
+    #[test]
+    fn legacy_route_with_no_resolvable_target_is_dropped_but_still_drains() {
+        // Label "Ghost" has no name-matching layer and no explicit target.
+        let (legacy_json, _unrelated_layer_id) =
+            legacy_json_with_route("Ghost", "Some Other Layer", AudioBand::Full, 0.5, 1.0, false);
+
+        let loaded = load_project_from_json(&legacy_json).expect("legacy project still loads");
+        assert!(
+            loaded.audio_setup.sends[0].triggers.is_empty(),
+            "drained even though the route was unresolvable — never silently kept"
+        );
+        assert!(
+            loaded.timeline.layers.iter().all(|l| l.clip_triggers.is_empty()),
+            "no layer received a config it wasn't targeted for"
+        );
+    }
+}
+
 impl std::error::Error for LoadError {}

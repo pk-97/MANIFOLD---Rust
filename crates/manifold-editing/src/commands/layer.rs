@@ -1,6 +1,7 @@
 use crate::command::Command;
 use manifold_core::PresetTypeId;
 use manifold_core::LayerId;
+use manifold_core::LayerClipTrigger;
 use manifold_core::layer::Layer;
 use manifold_core::project::{EmbeddedPreset, Project};
 use manifold_core::session::SessionSlot;
@@ -629,6 +630,213 @@ impl Command for SetLayerAnalysisOnlyCommand {
 
     fn description(&self) -> &str {
         "Set Audio Layer Analysis-Only"
+    }
+}
+
+// ─── LayerClipTrigger (P2) ─────────────────────────────────────────────
+//
+// The one authorable clip-trigger shape (`docs/AUDIO_SETUP_DOCK_AND_TRIGGER_
+// UNIFICATION_DESIGN.md` §3.1/D2) lives on `Layer.clip_triggers: Vec<LayerClipTrigger>`.
+// No `DriverTarget` here — that enum addresses effect/generator-param drivers,
+// not a layer's own field — so these commands address by `LayerId` directly,
+// exactly like `SetLayerAudioGainCommand`/`SetLayerAnalysisOnlyCommand` above.
+// Add/remove mirror `AddAudioModCommand`/`RemoveAudioModCommand`
+// (`commands/audio_mod.rs`) — the audio-mod command family's `Vec<T>`-mutation
+// shape; `SetLayerClipTriggerCommand` mirrors `SetAudioModTriggerModeCommand`'s
+// whole-field old/new capture, generalized to the whole config so every P3
+// drawer row (Source/Feature/Band/Shape fields/Length) can share one command
+// rather than growing one setter per field.
+
+/// Append a new [`LayerClipTrigger`] to a layer's `clip_triggers`.
+#[derive(Debug)]
+pub struct AddLayerClipTriggerCommand {
+    layer_id: LayerId,
+    trigger: LayerClipTrigger,
+    /// Length of `clip_triggers` before this command's push — undo truncates
+    /// back to it (the `AddAudioModCommand` shape doesn't need this because
+    /// audio mods dedupe by `param_id`; clip triggers have no such key).
+    len_before: usize,
+}
+
+impl AddLayerClipTriggerCommand {
+    pub fn new(layer_id: LayerId, trigger: LayerClipTrigger) -> Self {
+        Self { layer_id, trigger, len_before: 0 }
+    }
+}
+
+impl Command for AddLayerClipTriggerCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
+            self.len_before = layer.clip_triggers.len();
+            layer.clip_triggers.push(self.trigger.clone());
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
+            layer.clip_triggers.truncate(self.len_before);
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Add Clip Trigger"
+    }
+}
+
+/// Remove the [`LayerClipTrigger`] at `index` from a layer's `clip_triggers`.
+/// Captures the removed config for undo (the `RemoveAudioModCommand` shape).
+#[derive(Debug)]
+pub struct RemoveLayerClipTriggerCommand {
+    layer_id: LayerId,
+    index: usize,
+    removed: Option<LayerClipTrigger>,
+}
+
+impl RemoveLayerClipTriggerCommand {
+    pub fn new(layer_id: LayerId, index: usize) -> Self {
+        Self { layer_id, index, removed: None }
+    }
+}
+
+impl Command for RemoveLayerClipTriggerCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id)
+            && self.index < layer.clip_triggers.len()
+        {
+            self.removed = Some(layer.clip_triggers.remove(self.index));
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some(trigger) = self.removed.take()
+            && let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id)
+        {
+            let at = self.index.min(layer.clip_triggers.len());
+            layer.clip_triggers.insert(at, trigger);
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Remove Clip Trigger"
+    }
+}
+
+/// Replace the [`LayerClipTrigger`] at `index` wholesale — the P3 drawer's one
+/// command for every field edit (enabled/source/shape/one_shot_beats), whole-
+/// value old/new capture like [`crate::commands::audio_mod::SetAudioModTriggerModeCommand`].
+#[derive(Debug)]
+pub struct SetLayerClipTriggerCommand {
+    layer_id: LayerId,
+    index: usize,
+    old: LayerClipTrigger,
+    new: LayerClipTrigger,
+}
+
+impl SetLayerClipTriggerCommand {
+    pub fn new(layer_id: LayerId, index: usize, old: LayerClipTrigger, new: LayerClipTrigger) -> Self {
+        Self { layer_id, index, old, new }
+    }
+}
+
+impl Command for SetLayerClipTriggerCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id)
+            && let Some(slot) = layer.clip_triggers.get_mut(self.index)
+        {
+            *slot = self.new.clone();
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id)
+            && let Some(slot) = layer.clip_triggers.get_mut(self.index)
+        {
+            *slot = self.old.clone();
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Edit Clip Trigger"
+    }
+}
+
+#[cfg(test)]
+mod clip_trigger_command_tests {
+    use super::*;
+    use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, AudioModSource};
+    use manifold_core::id::AudioSendId;
+
+    fn project_with_one_layer() -> (Project, LayerId) {
+        let mut project = Project::default();
+        let layer = Layer::new("L".to_string(), LayerType::Video, 0);
+        let layer_id = layer.layer_id.clone();
+        project.timeline.layers.push(layer);
+        (project, layer_id)
+    }
+
+    fn trigger(sensitivity: f32) -> LayerClipTrigger {
+        let mut cfg = LayerClipTrigger::new(AudioModSource {
+            send_id: AudioSendId::new("send-a"),
+            feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Low),
+        });
+        cfg.enabled = true;
+        cfg.shape.sensitivity = sensitivity;
+        cfg
+    }
+
+    #[test]
+    fn add_pushes_and_undo_truncates() {
+        let (mut project, layer_id) = project_with_one_layer();
+        let mut cmd = AddLayerClipTriggerCommand::new(layer_id.clone(), trigger(0.5));
+        cmd.execute(&mut project);
+        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+        assert_eq!(layer.clip_triggers.len(), 1);
+
+        cmd.undo(&mut project);
+        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+        assert!(layer.clip_triggers.is_empty());
+    }
+
+    #[test]
+    fn remove_captures_and_undo_reinserts_at_the_same_index() {
+        let (mut project, layer_id) = project_with_one_layer();
+        {
+            let (_, layer) = project.timeline.find_layer_by_id_mut(&layer_id).unwrap();
+            layer.clip_triggers.push(trigger(0.1));
+            layer.clip_triggers.push(trigger(0.9));
+        }
+
+        let mut cmd = RemoveLayerClipTriggerCommand::new(layer_id.clone(), 0);
+        cmd.execute(&mut project);
+        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+        assert_eq!(layer.clip_triggers.len(), 1);
+        assert_eq!(layer.clip_triggers[0].shape.sensitivity, 0.9);
+
+        cmd.undo(&mut project);
+        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+        assert_eq!(layer.clip_triggers.len(), 2);
+        assert_eq!(layer.clip_triggers[0].shape.sensitivity, 0.1);
+        assert_eq!(layer.clip_triggers[1].shape.sensitivity, 0.9);
+    }
+
+    #[test]
+    fn set_replaces_wholesale_and_undo_restores_the_old_value() {
+        let (mut project, layer_id) = project_with_one_layer();
+        {
+            let (_, layer) = project.timeline.find_layer_by_id_mut(&layer_id).unwrap();
+            layer.clip_triggers.push(trigger(0.2));
+        }
+        let old = trigger(0.2);
+        let new = trigger(0.8);
+
+        let mut cmd = SetLayerClipTriggerCommand::new(layer_id.clone(), 0, old, new);
+        cmd.execute(&mut project);
+        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+        assert_eq!(layer.clip_triggers[0].shape.sensitivity, 0.8);
+
+        cmd.undo(&mut project);
+        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+        assert_eq!(layer.clip_triggers[0].shape.sensitivity, 0.2);
     }
 }
 
