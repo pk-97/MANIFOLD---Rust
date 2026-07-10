@@ -14,12 +14,27 @@
 //! OSC addresses are configurable to match LiveMTC Bridge configuration.
 //! Note: BPM sync uses Ableton Link, not OSC (LiveMTC does not send BPM).
 
+use parking_lot::Mutex;
+use std::sync::Arc;
+
 use manifold_core::Seconds;
 use manifold_core::types::{ClockAuthority, PlaybackState};
 
 use crate::osc_receiver::OscReceiver;
 use crate::sync::{SyncArbiter, SyncArbiterTarget, SyncTarget};
 use crate::sync_source::SyncSource;
+
+/// Latest OSC timecode message captured by the subscription callback
+/// (which runs on the content thread inside `OscReceiver::update()`'s
+/// dispatch loop, but cannot hold `&mut OscSyncController` — see
+/// `enable_osc`). Fixed-size buffer: SMPTE timecode is at most 4 floats
+/// (H M S F), so no heap allocation on write (callback) or drain
+/// (`drain_pending_osc_timecode`, called every content-thread frame).
+#[derive(Clone, Copy)]
+struct PendingOscTimecode {
+    values: [f32; 4],
+    len: u8,
+}
 
 /// OSC timecode sync controller.
 /// Port of Unity OscSyncController.cs.
@@ -84,14 +99,32 @@ pub struct OscSyncController {
     // Port of `pendingTimecodeSeconds`, `hasNewTimecode`.
     pending_timecode_seconds: Seconds,
     has_new_timecode: bool,
+
+    /// Shared slot the OSC subscription callback writes into (see
+    /// `enable_osc`). Drained once per frame by `drain_pending_osc_timecode`,
+    /// BEFORE `update()`, to feed `on_timecode_received`. This is the
+    /// approved shared-state bridge for the receiver→controller boundary
+    /// (mirrors `OscParamRouter`'s pending-write slot) — its footprint stays
+    /// local to this one address.
+    pending_osc_message: Arc<Mutex<Option<PendingOscTimecode>>>,
 }
 
 impl OscSyncController {
     /// Construct with Unity's default field values.
-    /// Port of Unity serialised field defaults.
+    /// Port of Unity serialised field defaults, with one deliberate
+    /// deviation: Unity's default was the bare string `"time"` (no leading
+    /// `/`), which Unity's OSC library apparently accepted unvalidated. The
+    /// Rust port's receiver decodes via `rosc`, which enforces OSC's actual
+    /// address syntax (leading `/`) and rejects the WHOLE packet — not just
+    /// this address — if it's missing. A bare `"time"` default would make
+    /// this receive path silently unfixable by any wiring: no real UDP
+    /// packet using valid OSC syntax could ever decode to it. `"/time"` is
+    /// the OSC-valid form of the same address; this field isn't project-
+    /// persisted (constructed fresh in app.rs each boot), so correcting the
+    /// default has no serialization/back-compat surface.
     pub fn new() -> Self {
         Self {
-            timecode_address: "time".to_string(),
+            timecode_address: "/time".to_string(),
             timecode_frame_rate: 29.97,
             drop_frame: true,
             seek_threshold: 0.05,
@@ -115,6 +148,8 @@ impl OscSyncController {
 
             pending_timecode_seconds: Seconds(-1.0),
             has_new_timecode: false,
+
+            pending_osc_message: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -137,14 +172,34 @@ impl OscSyncController {
         }
 
         if !self.timecode_address.is_empty() {
-            // Subscribe the timecode address.
-            // NOTE: OscSyncController.OnTimecodeReceived runs on the main thread in Unity
-            // (OscReceiver marshals to main thread via Update()). In the Rust port the host
-            // calls osc_sync.on_timecode_received() after draining the OscReceiver's queue —
-            // exact same semantics. The actual subscription key is stored so Disable can remove it.
+            // Subscribe the timecode address. OscSyncController.OnTimecodeReceived
+            // runs on the main thread in Unity (OscReceiver marshals to main thread
+            // via Update()). In the Rust port the callback below runs on the content
+            // thread too (inside OscReceiver::update()'s dispatch loop), but it
+            // cannot hold `&mut OscSyncController` — OscCallback is `Fn + Send +
+            // Sync`, and the receiver only ever hands out `&self`. So the callback
+            // writes into `pending_osc_message` instead; the host drains it via
+            // `drain_pending_osc_timecode()` once per frame, BEFORE calling
+            // `update()`, which is what actually calls on_timecode_received().
             //
-            // TODO: when native OSC is live, subscribe via:
-            //   receiver.subscribe_keyed(&self.timecode_address, Box::new(move |addr, values| { ... }));
+            // Plain `subscribe` (not `subscribe_keyed`) is used deliberately:
+            // subscribe_keyed's `unsubscribe_keyed` uses swap_remove, which
+            // invalidates other callbacks' keys for the same address (a known bug,
+            // out of scope here). `unsubscribe_all` in disable_osc is exact for our
+            // single-subscriber use of this address.
+            let slot = Arc::clone(&self.pending_osc_message);
+            receiver.subscribe(
+                &self.timecode_address,
+                Box::new(move |_addr, values| {
+                    let len = values.len().min(4);
+                    let mut buf = [0f32; 4];
+                    buf[..len].copy_from_slice(&values[..len]);
+                    *slot.lock() = Some(PendingOscTimecode {
+                        values: buf,
+                        len: len as u8,
+                    });
+                }),
+            );
             log::info!(
                 "[OscSync] Enabled — TC: {}, FollowTransport: {} (port {})",
                 self.timecode_address,
@@ -177,6 +232,7 @@ impl OscSyncController {
         self.was_receiving = false;
         self.current_timecode_display = "--:--:--:--".to_string();
         self.has_new_timecode = false;
+        *self.pending_osc_message.lock() = None;
 
         // syncArbiter?.ClearExternalTimeSync() — caller must forward this.
         log::info!("[OscSync] Disabled");
@@ -193,6 +249,29 @@ impl OscSyncController {
     // =================================================================
     // OSC Callback — port of Unity OnTimecodeReceived()
     // =================================================================
+
+    /// Drain the latest OSC timecode message captured by the subscription
+    /// callback installed in `enable_osc` (if any arrived since the last
+    /// drain) and feed it into `on_timecode_received`.
+    ///
+    /// Call once per frame from the host update loop, AFTER
+    /// `OscReceiver::update()` has dispatched this frame's UDP messages to
+    /// subscribers, and BEFORE calling `update()` below — `update()` reads
+    /// `has_new_timecode`/`last_timecode_received_time`, which this sets.
+    ///
+    /// Zero-allocation: the slot holds a fixed-size buffer, and `take()`
+    /// moves it out of the `Option` without cloning. A no-op when no new
+    /// message arrived this frame (the common case at 60Hz vs. the OSC
+    /// bridge's own send rate).
+    pub fn drain_pending_osc_timecode(&mut self, now: Seconds) {
+        let msg = self.pending_osc_message.lock().take();
+        if let Some(m) = msg {
+            // Address is unused by on_timecode_received (values alone
+            // determine the parse path) — "" is fine, avoids a clone of
+            // timecode_address just to satisfy the parameter.
+            self.on_timecode_received("", &m.values[..m.len as usize], now);
+        }
+    }
 
     /// Process an incoming OSC timecode message.
     /// In Unity this fires on the main thread (marshalled by OscReceiver.Update()).

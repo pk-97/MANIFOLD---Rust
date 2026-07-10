@@ -44,6 +44,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-087 | **osc-timecode-receiving-flag-false-positive-at-startup** | `OscSyncController`'s `is_receiving_timecode` reads `(now - last_timecode_received_time) < transport_timeout`, and `last_timecode_received_time` defaults to `Seconds::ZERO`. If OSC M4L sync is enabled while the content thread's `time_since_start` is still within `transport_timeout` (0.5s) of boot — i.e., early in the session — the check passes on the very first `update()` tick with zero real timecode ever received, and (`follow_transport`) can fire a spurious PLAY. Found 2026-07-10 while building the F1 receive-path wiring test (`crates/manifold-playback/tests/osc_timecode.rs`); the test worked around it by offsetting its own `now` baseline, but the app itself has no such offset. LOW-MED (narrow boot-time window; only bites if OSC M4L mode is already selected at app start, which needs a project default + hardware present). |
 | BUG-086 | **recording-audio-track-under-covers-duration-on-longer-takes** | Repeated 2-minute 1920x1080 unpaced `recording-soak` self-checks measured `audio_duration_s` 1.3%-3.3% short of the intended duration (116.0s/118.4s/118.5s of 120.0s across three runs — variable, not a fixed percentage), while two independent 1-minute runs (1280x720 and 1920x1080) both measured exactly 60.0s — duration-dependent, not resolution-dependent, and not a "still queued at `stop()`" race (a 500ms settle delay before `stop()` changed the result by <0.1s). The native audio input silently drops on backpressure with no counter at all (`LiveRecordingPlugin.m:546-547`: `if (!state->audioInput.isReadyForMoreMediaData) return LR_OK; // drop samples rather than block` — unlike video's BUG-085, this path doesn't even log). Found 2026-07-10 building LIVE_RECORDING_PROOFS P2's soak self-check; root cause unknown (suspects: sustained real-time backpressure only manifesting past ~60-90s of continuous writing — disk I/O contention as the file grows, fragment-flush cadence, or AAC internal encoder buffering not fully flushed). MED — silent and uncounted, variable magnitude; unknown whether it scales worse over a full 20-minute take. |
 | BUG-085 | **recording-frames-recorded-overstates-async-append-drops** | `LiveRecorder_EncodeVideoFrame` returns success (and Rust's `frames_recorded` counts it) as soon as the synchronous GPU blit into the CVPixelBuffer completes — but the actual `appendPixelBuffer:` call happens later, async, on `state->appendQueue`, and silently drops the frame (`"[LiveRecorder] VideoToolbox backpressure — dropped frame"`, no counter incremented) if `videoIn.isReadyForMoreMediaData` is false at that moment. Under heavy backpressure `frames_recorded` can overstate the file's real packet count by the async-drop count. Found 2026-07-10 building LIVE_RECORDING_PROOFS P1 (`pool_accounting_consistent`'s bounded-retry-recovery variant hit it once: 107 counted vs 106 actual packets). MED (accounting-only — the file itself stays valid, PTS stays monotonic; but a post-set frame count could read wrong). LOW in practice — the async drop needs genuinely sustained backpressure a real 60fps show submission rate is unlikely to hit. |
 | BUG-083 | **video-export-has-no-progress-display** | Exporting video shows nothing until the finish toast — the content thread's per-10-frame progress snapshots never had a UI consumer (found 2026-07-09 by the A1 orphan lint; fields deleted, restore WITH a display from the P0 purge commit's parent). A multi-minute export looks like a hang. MED |
@@ -182,6 +183,28 @@ resolutions). No `#[ignore]`-able regression test yet — `pool_accounting_consi
 gate (`frames_recorded + frames_dropped == frames_submitted_total`, tracked entirely
 Rust-side) is internally consistent and doesn't touch this gap; a future test would need to
 assert `probe(file).pts.len() <= frames_recorded` under intentional backpressure instead.
+
+### BUG-087 (osc-timecode-receiving-flag-false-positive-at-startup) — `is_receiving_timecode` can read true before any real OSC message ever arrives — LOW-MED (narrow boot-time window)
+**Status:** OPEN
+
+Found 2026-07-10 while wiring F1 (OSC/SMPTE timecode receive path, CORE_ENGINE_MAP §13.1) —
+[`osc_sync.rs`](../crates/manifold-playback/src/osc_sync.rs)'s `update()` computes `receiving =
+(now - last_timecode_received_time) < transport_timeout`, and `OscSyncController::new()`
+defaults `last_timecode_received_time` to `Seconds::ZERO` rather than a sentinel far in the
+past. `now` is the content thread's `time_since_start`, which also starts at zero at app boot.
+So if OSC M4L sync becomes enabled while `time_since_start` is still within `transport_timeout`
+(default 0.5s) of boot, the very first `update()` tick computes `receiving = true` with zero
+real timecode ever having arrived — a false positive. Combined with `follow_transport` (default
+on), this can fire a spurious PLAY at the very start of a session with OSC M4L mode already
+selected. The F1 receive-path test (`crates/manifold-playback/tests/osc_timecode.rs`) hit this
+directly: its `wait_for_receiving` loop's first iteration reported "receiving" before the test's
+synthetic UDP packet had actually been processed, until the test was changed to offset its own
+`now` baseline well past `transport_timeout` — a test-side workaround, not a production fix.
+**Fix shape:** give `last_timecode_received_time` a sentinel default (e.g. a large negative
+`Seconds`, matching the existing `pending_timecode_seconds: Seconds(-1.0)` sentinel pattern one
+field up) so the timeout check can never pass before a real message sets it. One-line change;
+left open because it's outside F1's scoped wiring fix and the exact boot-time semantics
+("ported from Unity") deserved a dedicated look rather than a same-session drive-by.
 
 ### BUG-083 (video-export-has-no-progress-display) — exporting video gives zero on-screen feedback until the finish toast — MED (export is a release pillar; long exports look like a hang)
 **Status:** OPEN
