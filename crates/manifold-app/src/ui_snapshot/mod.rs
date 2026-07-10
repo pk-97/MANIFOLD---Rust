@@ -551,29 +551,26 @@ mod footer_leak_probe {
 
 #[cfg(test)]
 mod cache_path_full_render {
-    //! P0 (`docs/UI_HARNESS_UNIFICATION_DESIGN.md` — read the "Reframe
-    //! 2026-07-10" block before this comment; it governs P0 now) — a
-    //! faithful FULL-APP headless render of the main window. Unlike
-    //! `footer_leak_probe` (CPU bounds walk, zero pixels) and the sibling
-    //! `render` module's whole-tree-fresh-every-frame harness (structurally
-    //! blind to a stale-atlas-pixel bug — see that module's own doc
-    //! comment), this test builds a REAL `UICacheManager` + `UIRenderer` +
-    //! atlas texture and renders through `render_dirty_panels` exactly as
-    //! `present_all_windows` does — the mirrored call order
-    //! (`panel_cache_info` -> `set_scale_factor` -> `ensure_atlas` ->
-    //! `render_dirty_panels` -> `atlas_texture()`, app_render.rs:3890-3904/
-    //! 4017) — then reads back the WHOLE atlas and saves it as a PNG, plus a
-    //! filmstrip contact sheet of the inspector-drawer tween (D9a).
-    //!
-    //! The atlas readback IS the composited main window: `present_all_
-    //! windows`'s "Atlas Blit" pass (app_render.rs:4013-4040) is a fullscreen
-    //! draw of the atlas onto the offscreen at 1:1 (same dimensions, scale
-    //! 1.0), so a bare atlas readback equals that offscreen minus the
-    //! compositor-video blit — which the harness has no compositor texture
-    //! for anyway (D8 gap #2: `video: None`, UI chrome is 1:1).
+    //! P0+P1 (`docs/UI_HARNESS_UNIFICATION_DESIGN.md` — read the "Reframe
+    //! 2026-07-10" block before this comment) — a faithful FULL-APP headless
+    //! render of the main window. Unlike `footer_leak_probe` (CPU bounds
+    //! walk, zero pixels) and the sibling `render` module's
+    //! whole-tree-fresh-every-frame harness (structurally blind to a
+    //! stale-atlas-pixel bug — see that module's own doc comment), this test
+    //! builds a REAL `UICacheManager` + `UIRenderer` + atlas texture and
+    //! composites through `crate::ui_frame::composite_main_ui_frame` (P1,
+    //! D3) — the IDENTICAL function `present_all_windows` calls — into a
+    //! real offscreen texture, then reads that back and saves it as a PNG,
+    //! plus a filmstrip contact sheet of the inspector-drawer tween (D9a).
+    //! The invalidation decision is likewise `crate::ui_frame::apply_ui_
+    //! frame_invalidations` (P1, D3), not a hand transcription: the app and
+    //! this harness now run the same code for both halves of the seam. This
+    //! driver never drags, so the drag-guard branches inside that function
+    //! never fire here — correctly inert, not omitted.
     //!
     //! D8: scale factor one at the fixture's logical size — layout is
     //! pixel-exact, and the raster is far cheaper than a Retina pass.
+    //! `video: None` always (D8 gap #2 — no compositor output here).
     //!
     //! The BUG-060 differential/red-bracket model this module used to run is
     //! RETIRED (Reframe 2026-07-10, D2/D4a) — BUG-060 was root-caused and
@@ -581,18 +578,11 @@ mod cache_path_full_render {
     //! byte-equality assertion, and no red/green bracket here. The only
     //! automated check is a smoke test (drew something, not blank); the real
     //! verification is a human/agent reading the saved PNGs.
-    //!
-    //! P0 is the beachhead (D6): the invalidation decision below is
-    //! TRANSCRIBED from `app_render.rs:955-965` (scroll-in-place) and
-    //! `2819-2852` (rebuild/structural), not yet the shared
-    //! `apply_ui_frame_invalidations` seam (P1, D3) — this driver never
-    //! drags, so the drag-guard branches app_render.rs has are correctly
-    //! omitted here, not silently dropped.
 
     use std::time::Duration;
 
     use manifold_core::LayerId;
-    use manifold_gpu::{GpuDevice, GpuTextureFormat};
+    use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
     use manifold_renderer::ui_cache_manager::UICacheManager;
     use manifold_renderer::ui_renderer::UIRenderer;
     use manifold_ui::automation::{self, AutomationTarget, SelectorQuery};
@@ -601,63 +591,145 @@ mod cache_path_full_render {
 
     use super::*;
     use crate::content_state::ContentState;
+    use crate::ui_frame::{apply_ui_frame_invalidations, composite_main_ui_frame, UiFrameSignals};
     use crate::user_prefs::UserPrefs;
 
-    /// The per-frame decision flags `apply_ui_frame_invalidations` will own
-    /// at P1 (D3) — carried by hand here, exactly transcribing
-    /// app_render.rs's persistence (a flag set THIS frame's tween-poll is
-    /// consumed by NEXT frame's decision block, never immediately — see
-    /// `app_render.rs:2942` vs `:2821`).
-    #[derive(Default)]
-    struct Signals {
-        needs_rebuild: bool,
-        needs_structural_sync: bool,
+    /// P1 (D3): the invalidation decision and the atlas/offscreen composite
+    /// now live in `crate::ui_frame` — the app and this harness call the
+    /// IDENTICAL functions (`apply_ui_frame_invalidations`,
+    /// `composite_main_ui_frame`), which is the structural faithfulness
+    /// proof the design's Reframe (2026-07-10) replaces the red-bracket
+    /// model with. `Signals`/`apply_decision`/`composite_frame` (P0's own
+    /// transcriptions of app_render.rs) are gone — see the P1 phase report.
+    ///
+    /// `scroll_dirty` is always `ScrollDirty::default()` here: this driver
+    /// scrolls via `try_inspector_scroll` + `scrolled_in_place`, never the
+    /// live app's `scroll_dirty` bitflag path, exactly as P0's `apply_
+    /// decision` never called `rebuild_scroll_panels` either — omitting it
+    /// changes nothing observable.
+    fn apply_decision(ui: &mut UIRoot, cache: &mut UICacheManager, signals: &mut UiFrameSignals) {
+        apply_ui_frame_invalidations(ui, Some(cache), signals);
     }
 
-    /// Mirrors app_render.rs:2819-2845 minus the inspector/layer drag guards
-    /// (this driver never drags — the guards would never fire, so omitting
-    /// them changes nothing observable).
-    fn apply_decision(ui: &mut UIRoot, cache: &mut UICacheManager, signals: &mut Signals) {
-        if signals.needs_rebuild || signals.needs_structural_sync {
-            signals.needs_rebuild = false;
-            signals.needs_structural_sync = false;
-            ui.build();
-            ui.inspector.apply_selection_visuals(&mut ui.tree);
-            cache.invalidate_all();
+    /// The one-time GPU resources `composite_main_ui_frame` needs and the
+    /// live app builds once at GPU init (`Application::resumed`,
+    /// app.rs:1840-1922) — copied verbatim (not synthesized) so the harness
+    /// draws through the identical blit/atlas pipelines the show does.
+    struct CompositeResources {
+        offscreen: GpuTexture,
+        atlas_pipeline: manifold_gpu::GpuRenderPipeline,
+        atlas_sampler: manifold_gpu::GpuSampler,
+        blit_pipeline: manifold_gpu::GpuRenderPipeline,
+        blit_sampler: manifold_gpu::GpuSampler,
+    }
+
+    impl CompositeResources {
+        fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
+            // Fullscreen triangle from vertex_index — verbatim from
+            // app.rs:1844-1864 (blit) and :1880-1900 (atlas; same shader,
+            // separate pipeline object for its distinct blend state).
+            let blit_shader = r#"
+@group(0) @binding(0) var t_source: texture_2d<f32>;
+@group(0) @binding(1) var s_source: sampler;
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
+    var out: VertexOutput;
+    let x = f32(i32(idx) / 2) * 4.0 - 1.0;
+    let y = f32(i32(idx) % 2) * 4.0 - 1.0;
+    out.position = vec4<f32>(x, y, 0.0, 1.0);
+    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    return out;
+}
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return textureSample(t_source, s_source, in.uv);
+}
+"#;
+            let blit_pipeline = device.create_render_pipeline(
+                blit_shader,
+                "vs_main",
+                "fs_main",
+                GpuTextureFormat::Bgra8Unorm,
+                None,
+                "Blit Pipeline",
+            );
+            let blit_sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                min_filter: manifold_gpu::GpuFilterMode::Linear,
+                mag_filter: manifold_gpu::GpuFilterMode::Linear,
+                ..Default::default()
+            });
+
+            let premultiplied_blend = manifold_gpu::GpuBlendState {
+                src_factor: manifold_gpu::GpuBlendFactor::One,
+                dst_factor: manifold_gpu::GpuBlendFactor::OneMinusSrcAlpha,
+                operation: manifold_gpu::GpuBlendOp::Add,
+                src_alpha_factor: manifold_gpu::GpuBlendFactor::One,
+                dst_alpha_factor: manifold_gpu::GpuBlendFactor::OneMinusSrcAlpha,
+                alpha_operation: manifold_gpu::GpuBlendOp::Add,
+            };
+            let atlas_pipeline = device.create_render_pipeline(
+                blit_shader,
+                "vs_main",
+                "fs_main",
+                GpuTextureFormat::Bgra8Unorm,
+                Some(premultiplied_blend),
+                "Atlas Blit Pipeline",
+            );
+            let atlas_sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                min_filter: manifold_gpu::GpuFilterMode::Nearest,
+                mag_filter: manifold_gpu::GpuFilterMode::Nearest,
+                ..Default::default()
+            });
+
+            // Mirrors `Application::resize_ui_offscreen` (app.rs:2905-2920).
+            let offscreen = device.create_texture(&manifold_gpu::GpuTextureDesc {
+                width,
+                height,
+                depth: 1,
+                format: GpuTextureFormat::Bgra8Unorm,
+                dimension: manifold_gpu::GpuTextureDimension::D2,
+                usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+                label: "UI Offscreen (harness)",
+                mip_levels: 1,
+            });
+
+            Self { offscreen, atlas_pipeline, atlas_sampler, blit_pipeline, blit_sampler }
         }
     }
 
-    /// Mirrors app_render.rs:3890-3904 — up to, and not past, reading
-    /// `atlas_texture()` (the offscreen clear/blit/video-band steps at
-    /// 4011-4064 are winit-presentation-only; see the module doc comment for
-    /// why a bare atlas readback already equals that composite here).
-    /// Returns the FULL panel ranges rendered this frame so dirty-flag
-    /// clearing matches the live contract across steps.
+    /// Calls the shared seam (`composite_main_ui_frame`) with `video: None`
+    /// (D8 gap #2 — no compositor output in the harness).
     fn composite_frame(
         device: &GpuDevice,
         ui_renderer: &mut UIRenderer,
         cache: &mut UICacheManager,
         ui: &mut UIRoot,
+        res: &CompositeResources,
     ) {
-        let panel_infos = ui.panel_cache_info();
-        let (_, rendered_ranges) =
-            cache.render_dirty_panels(device, ui_renderer, &ui.tree, &panel_infos);
-        for (start, end) in &rendered_ranges {
-            ui.tree.clear_dirty_range(*start, *end);
-        }
+        composite_main_ui_frame(
+            device,
+            ui_renderer,
+            cache,
+            ui,
+            &res.offscreen,
+            &res.atlas_pipeline,
+            &res.atlas_sampler,
+            &res.blit_pipeline,
+            &res.blit_sampler,
+            1.0,
+            None,
+            (0.0, 0.0),
+        );
     }
 
-    /// Read back the WHOLE atlas — the composited main window (see module
-    /// doc comment for why this equals `present_all_windows`'s offscreen
-    /// here, D8 gap #2: no compositor video band).
-    fn full_atlas_bytes(
-        device: &GpuDevice,
-        cache: &UICacheManager,
-        atlas_w: u32,
-        atlas_h: u32,
-    ) -> Vec<u8> {
-        let atlas = cache.atlas_texture().expect("atlas texture must exist by frame 0");
-        super::render::readback(device, atlas, atlas_w, atlas_h)
+    /// Read back the composited offscreen — the real main-window frame,
+    /// through the identical function `present_all_windows` calls (P1, D3).
+    fn full_frame_bytes(device: &GpuDevice, res: &CompositeResources, w: u32, h: u32) -> Vec<u8> {
+        super::render::readback(device, &res.offscreen, w, h)
     }
 
     /// Save a BGRA8 byte buffer as an RGBA8 PNG (`image::save_buffer` has no
@@ -806,14 +878,15 @@ mod cache_path_full_render {
         let atlas_h = LOGICAL_H as u32;
         cache.ensure_atlas(&device, atlas_w, atlas_h);
         cache.invalidate_all();
+        let res = CompositeResources::new(&device, atlas_w, atlas_h);
 
         let out_dir = std::path::PathBuf::from("target/ui-snapshots/bug060heavy/full_render");
         std::fs::create_dir_all(&out_dir).expect("create full_render output dir");
 
-        let mut signals = Signals::default();
+        let mut signals = UiFrameSignals::default();
 
         // Frame 0: initial full, self-clearing composite.
-        composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui);
+        composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui, &res);
 
         let (content_tx, _content_rx) =
             crossbeam_channel::bounded::<crate::content_command::ContentCommand>(64);
@@ -834,11 +907,9 @@ mod cache_path_full_render {
             ui.try_inspector_scroll(1_000_000.0, cursor_x),
             "sanity: inspector must report a live scroll container"
         );
-        if ui.inspector.take_scrolled_in_place() {
-            cache.invalidate_inspector();
-        }
+        signals.scrolled_in_place = ui.inspector.take_scrolled_in_place();
         apply_decision(&mut ui, &mut cache, &mut signals);
-        composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui);
+        composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui, &res);
 
         // ── expand/collapse every armed drawer at once (the compact toggle
         // "cog") — a real click, real dispatch, real structural result; the
@@ -851,8 +922,8 @@ mod cache_path_full_render {
             signals.needs_structural_sync = true;
         }
         apply_decision(&mut ui, &mut cache, &mut signals);
-        composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui);
-        filmstrip.push(full_atlas_bytes(&device, &cache, atlas_w, atlas_h));
+        composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui, &res);
+        filmstrip.push(full_frame_bytes(&device, &res, atlas_w, atlas_h));
 
         // ── poll the drawer tween to settlement, capturing a filmstrip tile
         // after every stepped frame (D9a). `InspectorCompositePanel::update`'s
@@ -870,8 +941,8 @@ mod cache_path_full_render {
                 signals.needs_rebuild = true;
             }
             apply_decision(&mut ui, &mut cache, &mut signals);
-            composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui);
-            filmstrip.push(full_atlas_bytes(&device, &cache, atlas_w, atlas_h));
+            composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui, &res);
+            filmstrip.push(full_frame_bytes(&device, &res, atlas_w, atlas_h));
             if !still_active && i > 0 {
                 break;
             }
@@ -882,11 +953,9 @@ mod cache_path_full_render {
             ui.try_inspector_scroll(1_000_000.0, cursor_x),
             "sanity: second scroll must still hit the live container"
         );
-        if ui.inspector.take_scrolled_in_place() {
-            cache.invalidate_inspector();
-        }
+        signals.scrolled_in_place = ui.inspector.take_scrolled_in_place();
         apply_decision(&mut ui, &mut cache, &mut signals);
-        composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui);
+        composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui, &res);
 
         // ── swap tab Layer -> Master -> Layer. Selector-first (orchestrator's
         // decided fork): resolve the tab strip's own "Master"/"Layer" button
@@ -915,7 +984,7 @@ mod cache_path_full_render {
                 }
             }
             apply_decision(&mut ui, &mut cache, &mut signals);
-            composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui);
+            composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui, &res);
         }
 
         // ── final scroll — the last step of the sequence ──
@@ -923,15 +992,14 @@ mod cache_path_full_render {
             ui.try_inspector_scroll(1_000_000.0, cursor_x),
             "sanity: final scroll must still hit the live container"
         );
-        if ui.inspector.take_scrolled_in_place() {
-            cache.invalidate_inspector();
-        }
+        signals.scrolled_in_place = ui.inspector.take_scrolled_in_place();
         apply_decision(&mut ui, &mut cache, &mut signals);
-        composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui);
+        composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui, &res);
 
-        // ── save the full-app PNG (the composited main window's atlas — no
-        // compositor video, D8 gap #2) ──
-        let final_bytes = full_atlas_bytes(&device, &cache, atlas_w, atlas_h);
+        // ── save the full-app PNG (the composited main window frame —
+        // through `composite_main_ui_frame`, the same function
+        // `present_all_windows` calls; P1, D3) ──
+        let final_bytes = full_frame_bytes(&device, &res, atlas_w, atlas_h);
         assert_not_blank(&final_bytes, "full-app render");
         let frame_png = out_dir.join("frame.png");
         save_bgra_png(&final_bytes, atlas_w, atlas_h, &frame_png);

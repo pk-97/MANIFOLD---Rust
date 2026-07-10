@@ -956,12 +956,12 @@ impl Application {
         // drag handled inside process_events) offset the content nodes without a
         // rebuild — re-render just the inspector's atlas slot. A full rebuild
         // later this frame (needs_rebuild → invalidate_all) supersedes it
-        // harmlessly. One drain point for both scroll inputs.
-        if self.ws.ui_root.inspector.take_scrolled_in_place()
-            && let Some(cm) = &mut self.ui_cache_manager
-        {
-            cm.invalidate_inspector();
-        }
+        // harmlessly. One drain point for both scroll inputs. The actual
+        // `invalidate_inspector()` call now lives in
+        // `ui_frame::apply_ui_frame_invalidations` (P1, D3) — captured here as
+        // a signal so it fires in the same relative order as before (ahead of
+        // the rebuild/structural decision later this frame).
+        let scrolled_in_place = self.ws.ui_root.inspector.take_scrolled_in_place();
         // Graph-editor edits (canvas + sidebar) accumulate here and dispatch
         // through their own command vocabulary (`GraphEditCommand`), separately
         // from the `PanelAction` loop — Phase 4.3.
@@ -2816,40 +2816,25 @@ impl Application {
         //
         // GUARD: If the inspector has an active drag (slider being dragged), defer
         // the rebuild to prevent node destruction mid-drag which causes snap-back.
-        let inspector_dragging = self.ws.ui_root.inspector.is_dragging();
-        let layer_dragging = self.ws.ui_root.layer_headers.is_dragging();
-        if self.needs_rebuild || needs_structural_sync {
-            if inspector_dragging {
-                // Defer — keep needs_rebuild set so it fires after drag ends
-                // But still rebuild scroll panels if needed (they're separate from inspector)
-                if scroll_dirty.any() {
-                    self.ws.ui_root.rebuild_scroll_panels(scroll_dirty);
-                    if let Some(cm) = &mut self.ui_cache_manager {
-                        cm.invalidate_scroll_panels();
-                    }
-                }
-            } else if layer_dragging {
-                // Defer — rebuilding scroll panels while a layer drag is active would
-                // destroy the node IDs that handle_drag / handle_drag_end depend on.
-            } else {
-                self.needs_rebuild = false;
-                self.ws.ui_root.build();
-                // Re-apply effect card selection visuals after rebuild —
-                // structural changes recreate cards with is_selected=false.
-                self.ws
-                    .ui_root
-                    .inspector
-                    .apply_selection_visuals(&mut self.ws.ui_root.tree);
-                if let Some(cm) = &mut self.ui_cache_manager {
-                    cm.invalidate_all();
-                }
-            }
-        } else if scroll_dirty.any() && !layer_dragging {
-            self.ws.ui_root.rebuild_scroll_panels(scroll_dirty);
-            if let Some(cm) = &mut self.ui_cache_manager {
-                cm.invalidate_scroll_panels();
-            }
-        }
+        //
+        // The decision block itself now lives in
+        // `ui_frame::apply_ui_frame_invalidations` (P1, D3) — the app and the
+        // headless harness call the identical function. `signals` carries the
+        // scroll-in-place flag captured earlier this tick (:960) alongside the
+        // rebuild flags; the residual `needs_rebuild` (kept set when a drag
+        // defers the rebuild) is copied back after the call.
+        let mut signals = crate::ui_frame::UiFrameSignals {
+            needs_rebuild: self.needs_rebuild,
+            needs_structural_sync,
+            scroll_dirty,
+            scrolled_in_place,
+        };
+        crate::ui_frame::apply_ui_frame_invalidations(
+            &mut self.ws.ui_root,
+            self.ui_cache_manager.as_mut(),
+            &mut signals,
+        );
+        self.needs_rebuild = signals.needs_rebuild;
 
         #[cfg(target_os = "macos")]
         self.sync_workspace_preview_size();
@@ -3885,10 +3870,17 @@ impl Application {
         // UI frame profiler cursor (no-op unless MANIFOLD_UI_FRAME_PROFILE=1).
         let mut pseg = std::time::Instant::now();
 
-        // ── Panel cache update ──
+        // ── Panel cache update: ensure the atlas is sized for the current
+        // surface. `render_dirty_panels` itself now runs inside
+        // `ui_frame::composite_main_ui_frame` (P1, D3), called below from the
+        // non-fast-path branch. That's behavior-preserving, not just
+        // convenient: `self.ws.offscreen_dirty` is set true whenever any
+        // panel node is dirty (`has_dirty_in_range(0, panel_end)`, this
+        // function's caller), so `render_dirty_panels` is already a no-op on
+        // every frame the fast path below takes — deferring its call site
+        // changes no pixel it produces.
         let scale = self.scale_factor;
-        let panel_infos = self.ws.ui_root.panel_cache_info();
-        if let (Some(cm), Some(ui)) = (&mut self.ui_cache_manager, &mut self.ui_renderer) {
+        if let (Some(cm), Some(_ui)) = (&mut self.ui_cache_manager, &self.ui_renderer) {
             // Compute logical surface dimensions
             let (surface_w, surface_h) = self
                 .primary_window_id
@@ -3900,18 +3892,6 @@ impl Application {
             let logical_h = (surface_h as f64 / scale) as u32;
             cm.set_scale_factor(scale);
             cm.ensure_atlas(&gpu.device, logical_w, logical_h);
-            let (_, rendered_ranges) =
-                cm.render_dirty_panels(&gpu.device, ui, &self.ws.ui_root.tree, &panel_infos);
-            // Clear dirty flags for the panel ranges the cache manager rendered.
-            // These are FULL panel ranges (the incremental path returns the whole
-            // panel too, since it only fires when there's no dirt outside its
-            // sub-regions), so this owns all panel-range dirty-flag clearing — the
-            // end-of-frame clear below is narrowed to the overlay region and no
-            // longer erases out-of-sub-region panel dirt before the cache's
-            // fallback-to-full-render can fire (BUG-015).
-            for (start, end) in &rendered_ranges {
-                self.ws.ui_root.tree.clear_dirty_range(*start, *end);
-            }
         }
         self.ui_profile.add("present.panel_cache", pseg.elapsed());
         pseg = std::time::Instant::now();
@@ -4003,94 +3983,64 @@ impl Application {
             ui.begin_frame();
         }
 
-        // ── Build the frame ──
-        let mut encoder = gpu.device.create_encoder("Frame");
+        // ── Build the frame: dirty-panel atlas render + clear-to-black +
+        // full-atlas blit + optional video-band blit — the composite seam
+        // shared with the headless harness (`ui_frame::composite_main_ui_
+        // frame`, P1, D3). Pass 4/5 below (timeline tracks, overlays) and
+        // the drawable tail stay here unchanged, on their own encoder
+        // created after this call returns — composite_main_ui_frame owns
+        // and commits its own encoder internally (see its module doc
+        // deviation #3 for why it takes the pipeline/sampler/scale params
+        // it does).
         pseg = std::time::Instant::now();
-
-        // Pass 1: Clear to black
-        encoder.clear_texture(offscreen, 0.0, 0.0, 0.0, 1.0);
-
-        // Pass 2: Atlas blit fullscreen (UI panels onto black)
-        let atlas_opt = self
-            .ui_cache_manager
+        #[cfg(target_os = "macos")]
+        let compositor_tex = self.ui_preview_textures[front_index].as_ref();
+        #[cfg(not(target_os = "macos"))]
+        let compositor_tex: Option<&manifold_gpu::GpuTexture> = None;
+        let video_source_dims = self
+            .content_pipeline_output
             .as_ref()
-            .and_then(|cm| cm.atlas_texture());
-        if let (Some(atlas_pipeline), Some(atlas_sampler), Some(atlas)) = (
+            .map(|p| {
+                let (w, h) = p.get_dimensions();
+                (w as f32, h as f32)
+            })
+            .unwrap_or((1920.0, 1080.0));
+        if let (
+            Some(cm),
+            Some(ui),
+            Some(atlas_pipeline),
+            Some(atlas_sampler),
+            Some(blit_pipeline),
+            Some(blit_sampler),
+        ) = (
+            &mut self.ui_cache_manager,
+            &mut self.ui_renderer,
             &self.atlas_pipeline,
             &self.atlas_sampler,
-            atlas_opt.as_ref(),
-        ) {
-            encoder.draw_fullscreen(
-                atlas_pipeline,
-                offscreen,
-                &[
-                    manifold_gpu::GpuBinding::Texture {
-                        binding: 0,
-                        texture: atlas,
-                    },
-                    manifold_gpu::GpuBinding::Sampler {
-                        binding: 1,
-                        sampler: atlas_sampler,
-                    },
-                ],
-                false,
-                true,
-                "Atlas Blit",
-            );
-        }
-
-        // Pass 3: Blit compositor output ON TOP of atlas in video area (aspect-fit)
-        // Compositor replaces whatever is in the video rect (opaque, no blend).
-        #[cfg(target_os = "macos")]
-        if let (Some(compositor_tex), Some(blit_pipeline), Some(blit_sampler)) = (
-            self.ui_preview_textures[front_index].as_ref(),
             &self.blit_pipeline,
             &self.blit_sampler,
         ) {
-            let (comp_w, comp_h) = self
-                .content_pipeline_output
-                .as_ref()
-                .map(|p| p.get_dimensions())
-                .unwrap_or((1920, 1080));
-            let source_aspect = comp_w as f32 / comp_h as f32;
-            let video_rect = self.ws.ui_root.layout.video_area();
-            let rect_x = video_rect.x * sf;
-            let rect_y = video_rect.y * sf;
-            let rect_w = video_rect.width * sf;
-            let rect_h = video_rect.height * sf;
-
-            if rect_w > 0.0 && rect_h > 0.0 && source_aspect > 0.0 {
-                let rect_aspect = rect_w / rect_h;
-                let (fit_w, fit_h) = if source_aspect > rect_aspect {
-                    (rect_w, rect_w / source_aspect)
-                } else {
-                    (rect_h * source_aspect, rect_h)
-                };
-                let fit_x = rect_x + (rect_w - fit_w) * 0.5;
-                let fit_y = rect_y + (rect_h - fit_h) * 0.5;
-
-                encoder.draw_fullscreen_viewport(
-                    blit_pipeline,
-                    offscreen,
-                    &[
-                        manifold_gpu::GpuBinding::Texture {
-                            binding: 0,
-                            texture: compositor_tex,
-                        },
-                        manifold_gpu::GpuBinding::Sampler {
-                            binding: 1,
-                            sampler: blit_sampler,
-                        },
-                    ],
-                    (fit_x, fit_y, fit_w, fit_h),
-                    manifold_gpu::GpuLoadAction::Load,
-                    "Blit Compositor",
-                );
-            }
+            crate::ui_frame::composite_main_ui_frame(
+                &gpu.device,
+                ui,
+                cm,
+                &mut self.ws.ui_root,
+                offscreen,
+                atlas_pipeline,
+                atlas_sampler,
+                blit_pipeline,
+                blit_sampler,
+                scale,
+                compositor_tex,
+                video_source_dims,
+            );
         }
-
         self.ui_profile.add("present.clear_atlas_compositor", pseg.elapsed());
         pseg = std::time::Instant::now();
+
+        // ── Pass 4/5's own encoder — the composite above already committed
+        // its own command buffer for the atlas/clear/video passes.
+        let mut encoder = gpu.device.create_encoder("Frame");
 
         // ── Pass 4: timeline tracks, in z-ordered sub-passes (§24 5b) ──
         //   4a  grid bitmaps (per layer)              — under the clips
