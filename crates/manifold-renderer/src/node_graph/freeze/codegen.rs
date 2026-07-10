@@ -4675,12 +4675,11 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
 
     /// 3D CoincidentTexel parity (dual-packed): node.swirl_force_3d reads its
     /// gradient volume at the OWN voxel (integer textureLoad, no sampler) and
-    /// combines curl + slope. ref_axis is CPU-normalized in run() and the body
-    /// tilts it per-voxel by a smooth spatial wobble (curl-noise) derived from the
-    /// normalized voxel centre `uv` — the oracle reconstructs the identical `uv`
-    /// from vol_res/vol_depth, so the two stay bit-for-bit. The hand uniform pads
-    /// vol_res/vol_depth to 16 (48 bytes); the generated Params are contiguous (32
-    /// bytes) — pack each from the same logical values.
+    /// combines curl + slope around the single CPU-normalized ref_axis (the
+    /// legacy fused-pass force law; the corner-degenerate per-voxel wobble was
+    /// removed 2026-07-10). The hand uniform pads vol_res/vol_depth to 16 (48
+    /// bytes); the generated Params are contiguous (32 bytes) — pack each from
+    /// the same logical values.
     #[test]
     fn generated_curl_slope_force_3d_matches_original() {
         let device = crate::test_device();

@@ -3,19 +3,17 @@
 // swirl (tangential orbit around density peaks) and add the gradient
 // scaled by slope (radial push/pull). Writes a vec3 force Texture3D.
 //
-//   axis       = normalize(ref_axis + smooth_spatial_wobble(uv))
-//   curl_force = cross(gradient, axis)
+//   curl_force = cross(gradient, ref_axis)
 //   force      = curl_force * curl_strength + gradient * slope_strength
 //
 // Parity oracle for the generated standalone kernel (the body lives in
 // curl_slope_force_3d_body.wgsl; the gradient half is the separate
 // node.gradient_central_diff_3d atom upstream). `ref_axis` is normalized
-// CPU-side and supplies the base orientation; the per-voxel wobble tilts
-// it smoothly across space so the swirl has no single global dead
-// direction. This DIVERGES from the legacy fused fluid_gradient_curl_3d
-// pass, which used one fixed axis and so pooled curl energy in one octant
-// (the swirl magnitude vanished where gradient ∥ ref_axis); see the body
-// for the full rationale.
+// CPU-side and applies to the whole volume — one global axis, matching
+// the legacy fused fluid_gradient_curl_3d pass bit-for-bit. A per-voxel
+// spatial wobble briefly lived here; it degenerated at the volume corners
+// into one frozen diagonal axis (the "top-right cube" bug, 2026-07-10) —
+// see the body's History note before reintroducing anything like it.
 
 struct U {
     vol_res:        u32,
@@ -47,23 +45,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let c = vec3<i32>(i32(id.x), i32(id.y), i32(id.z));
     let gradient = textureLoad(gradient_in, c, 0).xyz;
 
-    let ref_axis = vec3<f32>(params.ref_axis_x, params.ref_axis_y, params.ref_axis_z);
-
-    // Curl-noise axis: tilt ref_axis by a smooth low-frequency spatial wobble so
-    // the swirl has no single global dead direction (cross magnitude is
-    // |gradient|·sin(angle to axis), which would otherwise carve a quiet pole +
-    // hot belt). `uv` is the normalized voxel centre — matches the generated
-    // kernel's (vec3<f32>(id) + 0.5) / vec3<f32>(textureDimensions(dst)).
-    let uv = (vec3<f32>(id) + vec3<f32>(0.5)) / vec3<f32>(f32(vr), f32(vr), f32(depth));
-    let tau = 6.2831853;
-    let wob = vec3<f32>(
-        sin(uv.y * tau * 2.0) + cos(uv.z * tau),
-        sin(uv.z * tau * 2.0) + cos(uv.x * tau),
-        sin(uv.x * tau * 2.0) + cos(uv.y * tau),
-    );
-    let axis_raw = ref_axis + wob * 0.9;
-    let axis_len = length(axis_raw);
-    let axis = select(ref_axis, axis_raw / axis_len, axis_len > 1e-4);
+    let axis = vec3<f32>(params.ref_axis_x, params.ref_axis_y, params.ref_axis_z);
 
     // Curl: cross(gradient, axis) — tangential flow around density peaks.
     let curl_force = cross(gradient, axis);

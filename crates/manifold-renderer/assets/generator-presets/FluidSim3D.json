@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Fluid Sim 3D",
-  "description": "Volumetric 3D particle fluid simulation, fully atom-decomposed and organized into named node groups for legibility. The groups are a presentation layer that flattens away byte-identical at load; card bindings address inner nodes by stable nodeId, so grouping does not touch the performance surface or behavior.\n\nThe top level shows the feedback loop and primary data flow: Inputs deliver canvas dimensions and time; Camera Control orients the view; Particle State (array_feedback) holds last frame's simulation state. Spawn Particles and Seed Pattern allocate the buffer and generate patterns on reset. Move Particles (the per-particle integrator chain) cycles last frame's particles through force sampling, turbulence, diffusion, container repulsion, Euler integration, boundary containment, camera-plane flattening, and injection. Render Volume splats particles into a 3D density texture. Force Field converts density to force via central-difference gradient and curl/slope operations, then blurs the field. Display renders particles to screen via camera projection, tone-maps, and scales to output.\n\nClip Triggers is the performance engine: a clip trigger fires a decay envelope; the Trigger Mode dial routes that envelope to exactly one of five nested behaviors — Turbulence Burst (amplify noise), Curl Rotation (rotate force field), Flow Inversion (flip gradient), Pattern Reset (reseed buffer), Inject Burst (add particles at zone) — which is why those five live as sub-groups sharing one envelope and mode selector.\n\nResolution Scaling derives canvas-dependent numbers: particle count, density scatter energy, blur radii, display intensity and zoom.\n\nContainer Control manages the three shape constraints (Cube, Sphere, Torus) that bound particles during seeding, force repulsion, and hard boundary enforcement.\n\nKnown deltas vs. the legacy fused build are documented in the preset description above the graph. The decomposition unlocks per-stage reuse: every integrator atom (sample, noise, diffuse, repel, euler, bounds, flatten, inject) is available for any 3D particle sim; seed patterns are JSON-editable WGSL; the force-field assembly is reusable for any volumetric flow. The groups flatten to byte-identical behavior.",
+  "description": "Volumetric 3D particle fluid simulation, fully atom-decomposed and organized into named node groups for legibility. The groups are a presentation layer that flattens away byte-identical at load; card bindings address inner nodes by stable nodeId, so grouping does not touch the performance surface or behavior.\n\nThe top level shows the feedback loop and primary data flow: Inputs deliver canvas dimensions and time; Camera Control orients the view; Particle State (array_feedback) holds last frame's simulation state. Spawn Particles and Seed Pattern allocate the buffer and generate patterns on reset. Move Particles (the per-particle integrator chain) cycles last frame's particles through force sampling, turbulence, diffusion, container repulsion, Euler integration, boundary containment, camera-plane flattening, and injection. Render Volume splats particles into a 3D density texture. Force Field converts density to force via central-difference gradient and curl/slope operations, then blurs the field. Display renders particles to screen via camera projection, tone-maps, and scales to output.\n\nClip Triggers is the performance engine: a clip trigger fires a decay envelope; the Trigger Mode dial routes that envelope to exactly one of five nested behaviors \u2014 Turbulence Burst (amplify noise), Curl Rotation (rotate force field), Flow Inversion (flip gradient), Pattern Reset (reseed buffer), Inject Burst (add particles at zone) \u2014 which is why those five live as sub-groups sharing one envelope and mode selector.\n\nResolution Scaling derives canvas-dependent numbers: particle count, density scatter energy, blur radii, display intensity and zoom.\n\nContainer Control manages the three shape constraints (Cube, Sphere, Torus) that bound particles during seeding, force repulsion, and hard boundary enforcement.\n\nKnown deltas vs. the legacy fused build are documented in the preset description above the graph. The decomposition unlocks per-stage reuse: every integrator atom (sample, noise, diffuse, repel, euler, bounds, flatten, inject) is available for any 3D particle sim; seed patterns are JSON-editable WGSL; the force-field assembly is reusable for any volumetric flow. The groups flatten to byte-identical behavior.",
   "presetMetadata": {
     "id": "FluidSim3D",
     "displayName": "Fluid Sim 3D",
@@ -1023,7 +1023,7 @@
               },
               "offset": {
                 "type": "Float",
-                "value": 0.5
+                "value": 0.0
               },
               "scale": {
                 "type": "Float",
@@ -1065,7 +1065,7 @@
               },
               "offset": {
                 "type": "Float",
-                "value": 1.0
+                "value": 0.5
               },
               "scale": {
                 "type": "Float",
@@ -1102,6 +1102,48 @@
           {
             "id": 116,
             "typeId": "system.group_output"
+          },
+          {
+            "id": 130,
+            "nodeId": "blur_radius_round",
+            "typeId": "node.math",
+            "handle": "blur_radius_round",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 10
+              }
+            },
+            "title": "Round (floor of +0.5)"
+          },
+          {
+            "id": 131,
+            "nodeId": "blur_radius_min1",
+            "typeId": "node.math",
+            "handle": "blur_radius_min1",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 5
+              }
+            },
+            "title": "Min radius 1"
           }
         ],
         "wires": [
@@ -1160,16 +1202,28 @@
             "toPort": "out_5"
           },
           {
-            "fromNode": 28,
-            "fromPort": "out",
-            "toNode": 116,
-            "toPort": "out_6"
-          },
-          {
             "fromNode": 74,
             "fromPort": "out",
             "toNode": 116,
             "toPort": "out_7"
+          },
+          {
+            "fromNode": 28,
+            "fromPort": "out",
+            "toNode": 130,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 130,
+            "fromPort": "out",
+            "toNode": 131,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 131,
+            "fromPort": "out",
+            "toNode": 116,
+            "toPort": "out_6"
           }
         ],
         "tint": [
@@ -1269,7 +1323,7 @@
                 "value": 42.0
               }
             },
-            "wgslSource": "// @reset_gated\n// FluidSim3D seed pattern — open family (8 patterns, JSON-editable).\n// Writes initial 3D particle positions for one of 8 patterns into an\n// aliased Array<Particle> (allocated by node.spawn_particles upstream).\n// Add a 9th pattern by appending a `case` to the switch.\n//\n// Patterns: 0 center cluster, 1 H planes, 2 V planes, 3 shells,\n// 4 diagonal cross, 5 helix, 6 surface sphere, 7+ random fill.\n// Container-aware: positions outside the SDF are pulled back inside.\n// (Camera flatten is applied per-frame by node.flatten_to_camera_plane,\n// so the seed itself does not flatten.)\n\nstruct U {\n    active_count: u32,\n    pattern: u32,\n    trigger_count: u32,\n    container: u32,\n    ctr_scale: f32,\n    _pad0: f32,\n    _pad1: f32,\n    _pad2: f32,\n};\n\nstruct Particle {\n    position: vec3<f32>,\n    velocity: vec3<f32>,\n    life: f32,\n    age: f32,\n    color: vec4<f32>,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var<storage, read_write> particles: array<Particle>;\n\nfn wang_hash(seed_in: u32) -> u32 {\n    var seed = seed_in;\n    seed = (seed ^ 61u) ^ (seed >> 16u);\n    seed = seed * 9u;\n    seed = seed ^ (seed >> 4u);\n    seed = seed * 0x27d4eb2du;\n    seed = seed ^ (seed >> 15u);\n    return seed;\n}\n\nfn hash_float(seed: u32) -> f32 {\n    return f32(wang_hash(seed)) / 4294967296.0;\n}\n\n// Independent lanes (seed XOR distinct constants) — the chained form\n// (h1 = hash(h0), h2 = hash(h1)) correlated x/y/z at 0.5-0.75, smearing\n// every 'random' pattern along the main diagonal (BUG-066: the seed\n// cluster was a corner-to-corner cigar, not a sphere).\nfn hash_float3(seed: u32) -> vec3<f32> {\n    return vec3<f32>(\n        f32(wang_hash(seed)) / 4294967296.0,\n        f32(wang_hash(seed ^ 0x68bc21ebu)) / 4294967296.0,\n        f32(wang_hash(seed ^ 0x02e5be93u)) / 4294967296.0,\n    );\n}\n\nfn sd_box(p: vec3<f32>, half_size: vec3<f32>) -> f32 {\n    let d = abs(p) - half_size;\n    return length(max(d, vec3<f32>(0.0))) + min(max(d.x, max(d.y, d.z)), 0.0);\n}\n\nfn sd_sphere(p: vec3<f32>, r: f32) -> f32 {\n    return length(p) - r;\n}\n\nfn sd_torus(p: vec3<f32>, big_r: f32, small_r: f32) -> f32 {\n    let q = vec2<f32>(length(p.xz) - big_r, p.y);\n    return length(q) - small_r;\n}\n\nfn container_sdf(p: vec3<f32>, ctype: u32, scale: f32) -> f32 {\n    let centered = p - 0.5;\n    switch ctype {\n        case 1u: { return sd_box(centered, vec3<f32>(scale * 0.5)); }\n        case 2u: { return sd_sphere(centered, scale * 0.5); }\n        case 3u: { return sd_torus(centered, scale * 0.3, scale * 0.12); }\n        default: { return -1.0; }\n    }\n}\n\nfn container_gradient(p: vec3<f32>, ctype: u32, scale: f32) -> vec3<f32> {\n    let eps: f32 = 0.002;\n    return normalize(vec3<f32>(\n        container_sdf(p + vec3<f32>(eps, 0.0, 0.0), ctype, scale) - container_sdf(p - vec3<f32>(eps, 0.0, 0.0), ctype, scale),\n        container_sdf(p + vec3<f32>(0.0, eps, 0.0), ctype, scale) - container_sdf(p - vec3<f32>(0.0, eps, 0.0), ctype, scale),\n        container_sdf(p + vec3<f32>(0.0, 0.0, eps), ctype, scale) - container_sdf(p - vec3<f32>(0.0, 0.0, eps), ctype, scale),\n    ));\n}\n\n@compute @workgroup_size(256, 1, 1)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let i = id.x;\n    if i >= u.active_count {\n        return;\n    }\n\n    let pattern_seed = u.trigger_count * 7919u;\n    let seed = i * 1664525u + pattern_seed * 747796405u;\n    var pos: vec3<f32>;\n\n    switch u.pattern {\n        case 0u: {\n            var sum = vec3<f32>(0.0);\n            var s = seed;\n            for (var j: i32 = 0; j < 4; j++) {\n                sum += hash_float3(s);\n                s = wang_hash(s);\n            }\n            pos = 0.5 + (sum - 2.0) * 0.052;\n        }\n        case 1u: {\n            let slab_idx = i % 6u;\n            let xz = hash_float3(seed).xy;\n            pos = vec3<f32>(xz.x, (f32(slab_idx) + 0.5) / 6.0, xz.y);\n        }\n        case 2u: {\n            let slab_idx = i % 6u;\n            let yz = hash_float3(seed).xy;\n            pos = vec3<f32>((f32(slab_idx) + 0.5) / 6.0, yz.x, yz.y);\n        }\n        case 3u: {\n            let shell_idx = i % 3u;\n            let h = hash_float3(seed).xy;\n            let theta = h.x * 6.28318530718;\n            let phi = acos(1.0 - 2.0 * h.y);\n            let radius = 0.1 + f32(shell_idx) * 0.1;\n            pos = vec3<f32>(\n                0.5 + sin(phi) * cos(theta) * radius,\n                0.5 + sin(phi) * sin(theta) * radius,\n                0.5 + cos(phi) * radius,\n            );\n        }\n        case 4u: {\n            let t = hash_float(seed);\n            let spread = hash_float(seed + 1u) * 0.03;\n            let axis = i % 3u;\n            if axis == 0u {\n                pos = vec3<f32>(t, t + spread, 0.5 + spread);\n            } else if axis == 1u {\n                pos = vec3<f32>(t, 0.5 + spread, t + spread);\n            } else {\n                pos = vec3<f32>(0.5 + spread, t, t + spread);\n            }\n        }\n        case 5u: {\n            let norm = f32(i) / f32(u.active_count);\n            let angle = norm * 6.0 * 6.28318530718;\n            let y = norm;\n            let radius: f32 = 0.15;\n            let spread = hash_float(seed) * 0.015;\n            let helix_side = select(0.0, 3.14159, (i & 1u) != 0u);\n            pos = vec3<f32>(\n                0.5 + cos(angle + helix_side) * (radius + spread),\n                y,\n                0.5 + sin(angle + helix_side) * (radius + spread),\n            );\n        }\n        case 6u: {\n            let h = hash_float3(seed).xy;\n            let theta = h.x * 6.28318530718;\n            let phi = acos(1.0 - 2.0 * h.y);\n            let spread = (hash_float(seed + 1u) - 0.5) * 0.03;\n            let radius = 0.45 + spread;\n            pos = vec3<f32>(\n                0.5 + sin(phi) * cos(theta) * radius,\n                0.5 + sin(phi) * sin(theta) * radius,\n                0.5 + cos(phi) * radius,\n            );\n        }\n        default: {\n            pos = hash_float3(seed);\n        }\n    }\n\n    pos = clamp(pos, vec3<f32>(0.001), vec3<f32>(0.999));\n\n    if u.container > 0u {\n        if container_sdf(pos, u.container, u.ctr_scale) > 0.0 {\n            let n = container_gradient(pos, u.container, u.ctr_scale);\n            let d = container_sdf(pos, u.container, u.ctr_scale);\n            pos -= n * (d + 0.01);\n            pos = clamp(pos, vec3<f32>(0.001), vec3<f32>(0.999));\n        }\n    }\n\n    var out_p: Particle;\n    out_p.position = pos;\n    out_p.velocity = vec3<f32>(0.0);\n    out_p.life = 1.0;\n    out_p.age = -1.0;\n    out_p.color = vec4<f32>(0.005, 0.005, 0.005, 1.0);\n    particles[i] = out_p;\n}\n",
+            "wgslSource": "// @reset_gated\n// FluidSim3D seed pattern \u2014 open family (8 patterns, JSON-editable).\n// Writes initial 3D particle positions for one of 8 patterns into an\n// aliased Array<Particle> (allocated by node.spawn_particles upstream).\n// Add a 9th pattern by appending a `case` to the switch.\n//\n// Patterns: 0 center cluster, 1 H planes, 2 V planes, 3 shells,\n// 4 diagonal cross, 5 helix, 6 surface sphere, 7+ random fill.\n// Container-aware: positions outside the SDF are pulled back inside.\n// (Camera flatten is applied per-frame by node.flatten_to_camera_plane,\n// so the seed itself does not flatten.)\n\nstruct U {\n    active_count: u32,\n    pattern: u32,\n    trigger_count: u32,\n    container: u32,\n    ctr_scale: f32,\n    _pad0: f32,\n    _pad1: f32,\n    _pad2: f32,\n};\n\nstruct Particle {\n    position: vec3<f32>,\n    velocity: vec3<f32>,\n    life: f32,\n    age: f32,\n    color: vec4<f32>,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var<storage, read_write> particles: array<Particle>;\n\nfn wang_hash(seed_in: u32) -> u32 {\n    var seed = seed_in;\n    seed = (seed ^ 61u) ^ (seed >> 16u);\n    seed = seed * 9u;\n    seed = seed ^ (seed >> 4u);\n    seed = seed * 0x27d4eb2du;\n    seed = seed ^ (seed >> 15u);\n    return seed;\n}\n\nfn hash_float(seed: u32) -> f32 {\n    return f32(wang_hash(seed)) / 4294967296.0;\n}\n\n// Independent lanes (seed XOR distinct constants) \u2014 the chained form\n// (h1 = hash(h0), h2 = hash(h1)) correlated x/y/z at 0.5-0.75, smearing\n// every 'random' pattern along the main diagonal (BUG-066: the seed\n// cluster was a corner-to-corner cigar, not a sphere).\nfn hash_float3(seed: u32) -> vec3<f32> {\n    return vec3<f32>(\n        f32(wang_hash(seed)) / 4294967296.0,\n        f32(wang_hash(seed ^ 0x68bc21ebu)) / 4294967296.0,\n        f32(wang_hash(seed ^ 0x02e5be93u)) / 4294967296.0,\n    );\n}\n\nfn sd_box(p: vec3<f32>, half_size: vec3<f32>) -> f32 {\n    let d = abs(p) - half_size;\n    return length(max(d, vec3<f32>(0.0))) + min(max(d.x, max(d.y, d.z)), 0.0);\n}\n\nfn sd_sphere(p: vec3<f32>, r: f32) -> f32 {\n    return length(p) - r;\n}\n\nfn sd_torus(p: vec3<f32>, big_r: f32, small_r: f32) -> f32 {\n    let q = vec2<f32>(length(p.xz) - big_r, p.y);\n    return length(q) - small_r;\n}\n\nfn container_sdf(p: vec3<f32>, ctype: u32, scale: f32) -> f32 {\n    let centered = p - 0.5;\n    switch ctype {\n        case 1u: { return sd_box(centered, vec3<f32>(scale * 0.5)); }\n        case 2u: { return sd_sphere(centered, scale * 0.5); }\n        case 3u: { return sd_torus(centered, scale * 0.3, scale * 0.12); }\n        default: { return -1.0; }\n    }\n}\n\nfn container_gradient(p: vec3<f32>, ctype: u32, scale: f32) -> vec3<f32> {\n    let eps: f32 = 0.002;\n    return normalize(vec3<f32>(\n        container_sdf(p + vec3<f32>(eps, 0.0, 0.0), ctype, scale) - container_sdf(p - vec3<f32>(eps, 0.0, 0.0), ctype, scale),\n        container_sdf(p + vec3<f32>(0.0, eps, 0.0), ctype, scale) - container_sdf(p - vec3<f32>(0.0, eps, 0.0), ctype, scale),\n        container_sdf(p + vec3<f32>(0.0, 0.0, eps), ctype, scale) - container_sdf(p - vec3<f32>(0.0, 0.0, eps), ctype, scale),\n    ));\n}\n\n@compute @workgroup_size(256, 1, 1)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let i = id.x;\n    if i >= u.active_count {\n        return;\n    }\n\n    let pattern_seed = u.trigger_count * 7919u;\n    let seed = i * 1664525u + pattern_seed * 747796405u;\n    var pos: vec3<f32>;\n\n    switch u.pattern {\n        case 0u: {\n            var sum = vec3<f32>(0.0);\n            var s = seed;\n            for (var j: i32 = 0; j < 4; j++) {\n                sum += hash_float3(s);\n                s = wang_hash(s);\n            }\n            pos = 0.5 + (sum - 2.0) * 0.052;\n        }\n        case 1u: {\n            let slab_idx = i % 6u;\n            let xz = hash_float3(seed).xy;\n            pos = vec3<f32>(xz.x, (f32(slab_idx) + 0.5) / 6.0, xz.y);\n        }\n        case 2u: {\n            let slab_idx = i % 6u;\n            let yz = hash_float3(seed).xy;\n            pos = vec3<f32>((f32(slab_idx) + 0.5) / 6.0, yz.x, yz.y);\n        }\n        case 3u: {\n            let shell_idx = i % 3u;\n            let h = hash_float3(seed).xy;\n            let theta = h.x * 6.28318530718;\n            let phi = acos(1.0 - 2.0 * h.y);\n            let radius = 0.1 + f32(shell_idx) * 0.1;\n            pos = vec3<f32>(\n                0.5 + sin(phi) * cos(theta) * radius,\n                0.5 + sin(phi) * sin(theta) * radius,\n                0.5 + cos(phi) * radius,\n            );\n        }\n        case 4u: {\n            let t = hash_float(seed);\n            let spread = hash_float(seed + 1u) * 0.03;\n            let axis = i % 3u;\n            if axis == 0u {\n                pos = vec3<f32>(t, t + spread, 0.5 + spread);\n            } else if axis == 1u {\n                pos = vec3<f32>(t, 0.5 + spread, t + spread);\n            } else {\n                pos = vec3<f32>(0.5 + spread, t, t + spread);\n            }\n        }\n        case 5u: {\n            let norm = f32(i) / f32(u.active_count);\n            let angle = norm * 6.0 * 6.28318530718;\n            let y = norm;\n            let radius: f32 = 0.15;\n            let spread = hash_float(seed) * 0.015;\n            let helix_side = select(0.0, 3.14159, (i & 1u) != 0u);\n            pos = vec3<f32>(\n                0.5 + cos(angle + helix_side) * (radius + spread),\n                y,\n                0.5 + sin(angle + helix_side) * (radius + spread),\n            );\n        }\n        case 6u: {\n            let h = hash_float3(seed).xy;\n            let theta = h.x * 6.28318530718;\n            let phi = acos(1.0 - 2.0 * h.y);\n            let spread = (hash_float(seed + 1u) - 0.5) * 0.03;\n            let radius = 0.45 + spread;\n            pos = vec3<f32>(\n                0.5 + sin(phi) * cos(theta) * radius,\n                0.5 + sin(phi) * sin(theta) * radius,\n                0.5 + cos(phi) * radius,\n            );\n        }\n        default: {\n            pos = hash_float3(seed);\n        }\n    }\n\n    pos = clamp(pos, vec3<f32>(0.001), vec3<f32>(0.999));\n\n    if u.container > 0u {\n        if container_sdf(pos, u.container, u.ctr_scale) > 0.0 {\n            let n = container_gradient(pos, u.container, u.ctr_scale);\n            let d = container_sdf(pos, u.container, u.ctr_scale);\n            pos -= n * (d + 0.01);\n            pos = clamp(pos, vec3<f32>(0.001), vec3<f32>(0.999));\n        }\n    }\n\n    var out_p: Particle;\n    out_p.position = pos;\n    out_p.velocity = vec3<f32>(0.0);\n    out_p.life = 1.0;\n    out_p.age = -1.0;\n    out_p.color = vec4<f32>(0.005, 0.005, 0.005, 1.0);\n    particles[i] = out_p;\n}\n",
             "title": "Seed Pattern 3D"
           },
           {
@@ -1504,7 +1558,7 @@
                 "value": 2
               }
             },
-            "title": "Envelope × 9"
+            "title": "Envelope \u00d7 9"
           },
           {
             "id": 37,
@@ -1580,7 +1634,7 @@
                 "value": 2
               }
             },
-            "title": "Envelope × π"
+            "title": "Envelope \u00d7 \u03c0"
           },
           {
             "id": 41,
@@ -1656,7 +1710,7 @@
                 "value": 2
               }
             },
-            "title": "Envelope × -2"
+            "title": "Envelope \u00d7 -2"
           },
           {
             "id": 45,
@@ -2670,7 +2724,7 @@
                 "value": 2
               }
             },
-            "title": "Time × 0.3"
+            "title": "Time \u00d7 0.3"
           },
           {
             "id": 81,
@@ -2691,7 +2745,7 @@
                 "value": 2
               }
             },
-            "title": "Time × 0.7"
+            "title": "Time \u00d7 0.7"
           },
           {
             "id": 82,
@@ -2712,7 +2766,7 @@
                 "value": 2
               }
             },
-            "title": "Time × 0.5"
+            "title": "Time \u00d7 0.5"
           },
           {
             "id": 83,

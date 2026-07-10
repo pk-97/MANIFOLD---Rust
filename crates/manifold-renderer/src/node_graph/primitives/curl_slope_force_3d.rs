@@ -9,20 +9,20 @@
 //! push/pull):
 //!
 //! ```text
-//! axis       = normalize(ref_axis + smooth_spatial_wobble(uv))
-//! curl_force = cross(gradient, axis)
+//! curl_force = cross(gradient, ref_axis)
 //! force      = curl_force * curl_strength + gradient * slope_strength
 //! ```
 //!
 //! The second half of the decomposed `node.fluid_gradient_curl_3d`. The
-//! `ref_axis` is normalized CPU-side and gives the base orientation; a
-//! smooth low-frequency spatial wobble tilts it per-voxel so the swirl
-//! has no single global dead direction. A fixed axis would make the cross
-//! product's magnitude vanish wherever the gradient aligns with it,
-//! pooling curl energy in one octant of the volume (the 2D sim sidesteps
-//! this with a length-preserving rotation; 3D needs the per-voxel axis to
-//! get the same even, smoke-like eddies). The wobbled axis stays
-//! unit-length, so swirl magnitude still tracks `curl_strength`.
+//! `ref_axis` is normalized CPU-side and applies to the whole volume —
+//! one global axis, matching the legacy fused pass bit-for-bit (upstream
+//! graphs rotate it over time, so the cross product's quiet pole wanders
+//! instead of parking). A per-voxel spatial wobble briefly tilted the
+//! axis here; it was position-frozen and degenerated at the volume
+//! corners into one fixed diagonal axis, parking a permanent swirl
+//! anomaly in one corner octant (the "top-right cube" bug, 2026-07-10).
+//! See the History note in `curl_slope_force_3d_body.wgsl` before
+//! reintroducing anything like it.
 
 use std::borrow::Cow;
 
@@ -52,7 +52,7 @@ struct CurlSlope3DUniforms {
 crate::primitive! {
     name: CurlSlopeForce3D,
     type_id: "node.swirl_force_3d",
-    purpose: "Combine a vec3 gradient Texture3D into a force field: cross the gradient with a curl-noise reference axis for swirl (tangential orbit around density peaks) and add the gradient scaled by slope (radial push/pull). axis = normalize(ref_axis + smooth spatial wobble of the voxel position); force = cross(gradient, axis) * curl_strength + gradient * slope_strength. Writes a vec3 force Texture3D. The per-voxel axis wobble keeps the swirl even across the volume instead of pooling in one octant. The curl+slope half of the decomposed node.fluid_gradient_curl_3d; pair downstream of node.edge_slope_3d.",
+    purpose: "Combine a vec3 gradient Texture3D into a force field: cross the gradient with a rotating reference axis for swirl (tangential orbit around density peaks) and add the gradient scaled by slope (radial push/pull). force = cross(gradient, ref_axis) * curl_strength + gradient * slope_strength; ref_axis is normalized CPU-side and applies to the whole volume (rotate it over time upstream so the swirl's quiet pole wanders). Writes a vec3 force Texture3D. The curl+slope half of the decomposed node.fluid_gradient_curl_3d; pair downstream of node.edge_slope_3d.",
     inputs: {
         gradient: Texture3D required,
         curl_strength: ScalarF32 optional,

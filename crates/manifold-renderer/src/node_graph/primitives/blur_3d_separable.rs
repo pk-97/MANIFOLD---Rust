@@ -12,7 +12,7 @@
 
 use std::borrow::Cow;
 
-use manifold_gpu::{GpuBinding, GpuSamplerDesc};
+use manifold_gpu::{GpuAddressMode, GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -127,9 +127,20 @@ impl Primitive for Blur3DSeparable {
                 "node.blur_3d",
             )
         });
-        let sampler = self
-            .sampler
-            .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
+        // Repeat, not clamp: the sim volume is toroidal, and every other volume
+        // stage wraps (particle containment, the 3D splat, the central-diff
+        // gradient). The legacy generator built this exact Repeat sampler; a
+        // clamp sampler here piles density against the six faces while the
+        // wrapping gradient reads the pile as a huge seam gradient — wrong
+        // forces along every face of the containerless (toroidal) mode.
+        let sampler = self.sampler.get_or_insert_with(|| {
+            gpu.device.create_sampler(&GpuSamplerDesc {
+                address_mode_u: GpuAddressMode::Repeat,
+                address_mode_v: GpuAddressMode::Repeat,
+                address_mode_w: GpuAddressMode::Repeat,
+                ..Default::default()
+            })
+        });
 
         let uniforms = Blur3DUniforms {
             mode,
