@@ -28,8 +28,10 @@ cargo xtask ui-snap timeline --crop "0,0,200,140"         # crop the just-writte
 cargo xtask ui-snap crop timeline.png --crop "0,0,200,140" # standalone: crop an existing PNG
 ```
 `--probe`/`--crop` alongside a scene render apply to that scene's BASE PNG only (never a
-`--interact` `.after` render, never one of `all`'s five PNGs — use the standalone `probe`/`crop`
-form on a specific file for those). `--probe`/`--crop` coordinates are PNG pixel space, which today
+`--interact` `.after` render). On a run that can't honor them — `all`, `graph`, `editor`,
+`transform`, or a `--script` run — they are an error (exit 2, pointing at the standalone form),
+never silently ignored; use standalone `probe`/`crop` on a specific file for those.
+`--probe`/`--crop` coordinates are PNG pixel space, which today
 is 1:1 with the tree dump's `rect` values (`SCALE = 1.0` in `ui_snapshot/mod.rs` — the harness
 renders at the fixture's logical size, not Retina/2x; §6 below is stale on this point). If `SCALE`
 is ever raised for a Retina capture, `rect` values and PNG pixels would diverge and this note (and

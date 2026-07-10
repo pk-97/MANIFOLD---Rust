@@ -19,33 +19,9 @@ use serde_json::Value;
 /// layout jitter that isn't a real change.
 const RECT_EPS: f64 = 0.01;
 
-/// Node fields compared by [`diff_node_fields`]. Deliberately excludes `id`
-/// (the match key) but includes everything else `dump::dump_tree_ex` emits,
-/// including `gen` — a bumped generation on the same `id` slot means a
-/// different node entirely, which is itself a real change worth reporting.
-const DIFF_FIELDS: &[&str] = &[
-    "gen",
-    "parent",
-    "type",
-    "rect",
-    "text",
-    "bg",
-    "text_color",
-    "border",
-    "radius",
-    "border_width",
-    "font_size",
-    "font_weight",
-    "align",
-    "flags",
-    "draw_order",
-    "widget",
-    "name",
-];
-
 /// One changed field on a node present in both dumps.
 struct FieldChange {
-    field: &'static str,
+    field: String,
     from: String,
     to: String,
 }
@@ -90,26 +66,56 @@ fn rects_equal(a: &Value, b: &Value) -> bool {
     }
 }
 
-/// Every [`DIFF_FIELDS`] entry that differs between two same-`id` nodes.
+/// Every field that differs between two same-`id` nodes. Compares the UNION
+/// of keys present in either node (excluding only `id`, the match key), not a
+/// hardcoded field list — so a field added to `dump::dump_tree_ex` later is
+/// diffed automatically instead of silently excluded (a v1 hazard: diff would
+/// have exited 0 while the dumps differed). `BTreeSet` keeps the report's
+/// field order deterministic.
 fn diff_node_fields(a: &Value, b: &Value) -> Vec<FieldChange> {
-    DIFF_FIELDS
-        .iter()
-        .filter_map(|&field| {
+    let mut fields: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    for n in [a, b] {
+        if let Some(obj) = n.as_object() {
+            fields.extend(obj.keys().map(String::as_str));
+        }
+    }
+    fields.remove("id");
+    fields
+        .into_iter()
+        .filter_map(|field| {
             let av = a.get(field).unwrap_or(&Value::Null);
             let bv = b.get(field).unwrap_or(&Value::Null);
             let equal = if field == "rect" { rects_equal(av, bv) } else { av == bv };
             if equal {
                 None
             } else {
-                Some(FieldChange { field, from: value_repr(av), to: value_repr(bv) })
+                Some(FieldChange {
+                    field: field.to_string(),
+                    from: value_repr(av),
+                    to: value_repr(bv),
+                })
             }
         })
         .collect()
 }
 
+/// Total hit-target count across every surface in a `custom_surfaces` array.
+fn surface_target_count(surfaces: &Value) -> usize {
+    surfaces
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|s| s.get("targets").and_then(Value::as_array).map_or(0, Vec::len))
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
 /// Node-level diff between two tree dumps (schema: `dump::dump_tree_ex` —
 /// top-level `{node_count, nodes: [...], custom_surfaces: [...]}`). Matches
-/// nodes by `id`. Returns the report as printable lines (one per
+/// nodes by `id`; `custom_surfaces` is compared for raw equality (a one-line
+/// report, no per-target detail — enough to keep a hit-target change from
+/// passing as "identical"). Returns the report as printable lines (one per
 /// added/removed/changed node, a summary line last) plus whether anything
 /// differed.
 fn diff_trees(a: &Value, b: &Value) -> (Vec<String>, bool) {
@@ -159,8 +165,25 @@ fn diff_trees(a: &Value, b: &Value) -> (Vec<String>, bool) {
         }
     }
 
+    // Custom surfaces (graph canvas / timeline clips / automation lanes):
+    // raw equality on the whole top-level value — a differing hit-target set
+    // must count as a difference, or diff lies by omission on exactly the
+    // surfaces `UITree::hit_test` can't see.
+    let a_surf = a.get("custom_surfaces").unwrap_or(&Value::Null);
+    let b_surf = b.get("custom_surfaces").unwrap_or(&Value::Null);
+    let surfaces_differ = a_surf != b_surf;
+    if surfaces_differ {
+        lines.push(format!(
+            "custom_surfaces differ ({} -> {} targets across {} -> {} surfaces)",
+            surface_target_count(a_surf),
+            surface_target_count(b_surf),
+            a_surf.as_array().map_or(0, Vec::len),
+            b_surf.as_array().map_or(0, Vec::len),
+        ));
+    }
+
     lines.push(format!("{added} added, {removed} removed, {changed} changed, {unchanged} unchanged"));
-    (lines, added + removed + changed > 0)
+    (lines, added + removed + changed > 0 || surfaces_differ)
 }
 
 /// `cargo xtask ui-snap diff <a.json> <b.json>` — load two tree-dump JSON
@@ -326,5 +349,33 @@ mod tests {
         assert!(lines.iter().any(|l| l == "node 1 [-]: removed"));
         assert!(lines.iter().any(|l| l == "node 2 [-]: added"));
         assert_eq!(lines.last().unwrap(), "1 added, 1 removed, 0 changed, 0 unchanged");
+    }
+
+    #[test]
+    fn field_present_only_in_one_dump_is_reported() {
+        // Union-of-keys guarantee: a field `dump_tree_ex` starts emitting
+        // later (here only dump B has it) is diffed, never silently excluded.
+        let a = dump(json!([{ "id": 7, "rect": [0.0, 0.0, 10.0, 10.0] }]));
+        let b = dump(json!([{ "id": 7, "rect": [0.0, 0.0, 10.0, 10.0], "opacity": 0.5 }]));
+        let (lines, differs) = diff_trees(&a, &b);
+        assert!(differs);
+        assert!(lines[0].contains("opacity null -> 0.5"), "unexpected line: {}", lines[0]);
+        assert_eq!(lines.last().unwrap(), "0 added, 0 removed, 1 changed, 0 unchanged");
+    }
+
+    #[test]
+    fn custom_surfaces_change_is_reported() {
+        let nodes = json!([{ "id": 1, "rect": [0.0, 0.0, 10.0, 10.0] }]);
+        let a = dump(nodes.clone());
+        let mut b = dump(nodes);
+        b["custom_surfaces"] = json!([{ "surface_id": "timeline_clips",
+            "targets": [{ "kind": "clip", "label": "kick", "rect": [1.0, 2.0, 3.0, 4.0] }] }]);
+        let (lines, differs) = diff_trees(&a, &b);
+        assert!(differs);
+        assert!(
+            lines.iter().any(|l| l == "custom_surfaces differ (0 -> 1 targets across 0 -> 1 surfaces)"),
+            "lines: {lines:?}"
+        );
+        assert_eq!(lines.last().unwrap(), "0 added, 0 removed, 0 changed, 1 unchanged");
     }
 }

@@ -90,9 +90,26 @@ pub fn run(args: &[String]) {
     // `--probe x,y[;x,y...]` / `--crop x,y,w,h` (`readback.rs`): applied to
     // the scene's BASE PNG only, right after it's written — see
     // `render_ui_scene`'s own comment on why (an `--interact` "after" render
-    // or the `all` sweep make "which PNG" ambiguous).
+    // or the `all` sweep make "which PNG" ambiguous). Only the UITree-scene
+    // path below honors them; every other dispatch (`--script`, `all`,
+    // `graph`, `editor`, `transform`) rejects them LOUDLY here rather than
+    // silently swallowing a flag the user passed — point at the standalone
+    // form instead.
     let probe_spec = arg_value(args, "--probe");
     let crop_spec = arg_value(args, "--crop");
+    if probe_spec.is_some() || crop_spec.is_some() {
+        let unsupported = script_path.is_some()
+            || matches!(scene, "all" | "graph" | "editor" | "transform");
+        if unsupported {
+            let target = if script_path.is_some() { "--script runs" } else { scene };
+            eprintln!(
+                "ui-snap: --probe/--crop don't apply to {target}; use the standalone form on a \
+                 specific file: cargo xtask ui-snap probe <file.png> --probe x,y[;x,y...]  |  \
+                 cargo xtask ui-snap crop <file.png> --crop x,y,w,h"
+            );
+            std::process::exit(2);
+        }
+    }
 
     // `--script <file.json>` (UI_AUTOMATION_DESIGN.md §6, P2): a JSON array of
     // `AutomationAction`s executed in order. Fully owns its own build + gate
@@ -106,10 +123,8 @@ pub fn run(args: &[String]) {
     // change. Skips the per-scene-only flags (mockup, interact); pass those to a
     // single scene when you need them.
     if scene == "all" {
-        // `--probe`/`--crop` are not applied here — which of the five PNGs
-        // this sweep writes would "the" target be is ambiguous by design; use
-        // the standalone `ui-snap probe`/`ui-snap crop` form on a specific
-        // file instead.
+        // `--probe`/`--crop` were rejected above (exit 2) — which of the five
+        // PNGs this sweep writes would "the" target be is ambiguous by design.
         for s in ["timeline", "states", "inspector"] {
             render_ui_scene(s, want_dump, false, want_thumbs, None, None, None, None);
         }
