@@ -44,6 +44,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-094 | **ui-snap-render-overlay-pass-uses-wrong-traversal** | `render_ui_to_png`/`Runner::write_png`'s overlay pass calls `render_tree_range`; the live app uses `render_sub_region` for the same job, and the live app's own comment says the former can render nothing for an overlay range that excludes its own region root. Not confirmed against an actual failing overlay — found by reading the two code paths side by side (P2's VERIFY-AT-IMPL diff), not a repro. Fix shape: swap to `render_sub_region`, matching `app_render.rs:4617`. LOW. |
 | BUG-092 | **gltf-import-caps-render-scene-objects-at-8-stale-mirror** | `gltf_import.rs`'s `MAX_RENDER_SCENE_OBJECTS = 8` truncates an imported glTF to its 8 largest-by-vertex materials (`materials.truncate(...)`, `assemble_render_scene_graph`), dropping the rest with a warning — but this constant is a stale mirror of `node.render_scene`'s OLD object cap. render_scene generalized object count to a soft `OBJECT_SLIDER_MAX = 64` (2026-07-05) and the comment at gltf_import.rs:60 still cites a non-existent render_scene `MAX_OBJECTS`. Effect: importing a model with >8 distinct materials silently loses objects that render_scene could now draw. Fix shape: raise/retire `MAX_RENDER_SCENE_OBJECTS` to track `OBJECT_SLIDER_MAX` (or import unbounded and let the slider clamp), and refresh the comment. Found 2026-07-10 while landing RENDER_SCENE_UNBOUNDED_LIGHTS (unrelated axis — that change uncapped *lights*; this is *objects*). LOW (import-time truncation with a user-visible warning, not a crash; only bites multi-material glTF imports). |
 | BUG-090 | **audio-mixdown-analysis-only-test-flakes-under-parallel-run** | `audio_mixdown::tests::render_export_audio_analysis_only_layer_taps_but_never_hits_master` (an exact `assert_eq!` on two separately-rendered `f32` audio buffers) failed once during F2's full `cargo test -p manifold-playback` gate run, then passed both standalone and in an immediate full-suite rerun — a parallel-execution flake, not a deterministic failure; root cause unknown (suspects: shared `TestDir` temp-path collision across threads, or thread-scheduling-sensitive float summation order in the mixdown path). Found 2026-07-10 running F2's gate; file untouched by F2 (confirmed via `git diff` against F2's base commit). LOW (test-only, intermittent — but an exact-equality float assertion under parallel test execution is a fragile pattern worth a look). |
 | BUG-089 | **live-clip-pending-tick-queue-dead-on-all-live-paths** | `LiveClipManager`'s tick-based pending-launch queue (`pending_by_tick`/`pending_by_layer`/`pending_by_clip_id`, `PendingLiveLaunch.target_tick`, `queue_pending`, `activate_due_pending_launches[_at_tick]`, `has_pending_activations`) can only ever be written when `event_absolute_tick >= 0`, but midir events always set `absolute_tick = -1` (`midi_input.rs`) and it is the sole producer of `MidiNoteEvent` in the whole workspace; `fire_layer_oneshot` also always passes `tick = -1`. `activate_due_pending_launches_at_tick` is the only live caller (`engine.rs:803`, fed `self.last_frame_count`, a frame counter, not a real clock tick) and drains a map that can never be non-empty in production — confirmed by exhaustive grep, not inference. Found 2026-07-10 while scoping F2's tick-queue deletion call; left OPEN rather than deleted because the dead footprint is the whole subsystem (7 items across 2 files plus a dead cancellation branch in `commit_live_clip`), wider than the single function F2 was scoped to evaluate — a clean full removal deserves its own dedicated pass. LOW (dead code, zero runtime cost beyond an empty-map check per tick; risk is only in a future session doing a partial removal). |
@@ -96,6 +97,37 @@ or human can read it, and it needs no external tool.
 | BUG-070 | **stepper-and-nonstandard-slider-reset** | ~~decay drawer slider~~ + Clip Trigger drawer sliders now covered by the intrinsic-reset follow-through (@ 3a88f728, reset = required build input); **still open:** Audio Setup gain `[−]value[＋]` steppers + overlay-drag send-fader (not `BitmapSlider` tracks) (LOW) |
 
 ## Open
+
+### BUG-094 (ui-snap-render-overlay-pass-uses-wrong-traversal) — `render_ui_to_png`'s overlay pass calls `render_tree_range` where the live app uses `render_sub_region`, and the live app's own comment says the former can render nothing for some overlay ranges — LOW (found 2026-07-10 during UI_HARNESS_UNIFICATION P2's VERIFY-AT-IMPL diff)
+**Status:** OPEN
+
+**Symptom (potential, unconfirmed against a real repro):** `render.rs`'s Pass 5
+(`ui_snap`'s `render_ui_to_png`, and `script.rs`'s `Runner::write_png` via the
+shared `draw_immediate_passes`) draws each `overlay_draw` range with
+`renderer.render_tree_range(&ui.tree, start, end)`
+([`render.rs`](../crates/manifold-app/src/ui_snapshot/render.rs), Pass 5). The
+live app's equivalent pass
+([`app_render.rs:4617`](../crates/manifold-app/src/app_render.rs#L4617)) uses
+`render_sub_region` instead, with an explicit comment: an overlay's
+`(start, end)` deliberately EXCLUDES its own
+`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` region root, and `render_tree_range` is a
+root-scan (`UITree::traverse_range`) that finds no roots in such a range and
+renders NOTHING — whereas `render_sub_region`'s flat, ancestor-aware scan
+(`traverse_flat_range`) picks the children up regardless. The live app also
+wraps each range in `push_depth`/`draw_shadow`/`pop_depth`, none of which the
+headless pass does. **Not confirmed against an actual failing overlay** — no
+scene exercised by the current test suite or the two shipped `ui-flows`
+happens to open an overlay whose range excludes its own root, so this may be
+latent rather than currently biting; it was found by reading the two code
+paths side by side (the P2 phase brief's mandatory VERIFY-AT-IMPL diff), not
+by a failing render. **Fix shape:** swap `render_tree_range` for
+`render_sub_region` in `draw_immediate_passes`' overlay loop, matching the
+live app; add the shadow/depth wrapping too if a future scene needs a modal
+proven visually. Left unfixed this session (escalation, not a silent keep —
+the P2 phase brief's Forbidden-moves list names this exact move) because
+confirming which overlay ranges, if any, actually exclude their root wasn't
+scoped to P2 and a same-session fix risked changing rendered output nobody
+asked this phase to verify.
 
 ### BUG-086 (recording-audio-track-under-covers-duration-on-longer-takes) — the recorded audio track can silently fall short of the intended duration on longer takes, no counter, root cause unknown — MED
 **Status:** OPEN
@@ -683,7 +715,26 @@ intra-module or cross-module contention, then apply the standard fix
 (dedicated resource per test, or `#[serial]`-style gating).
 
 ### BUG-073 (ui-snap-script-drawer-tween-never-ticks) — the headless `--script` driver has no per-frame animation tick, so a mod armed mid-script renders an unclickable, zero-height drawer — LOW (found 2026-07-08 during PARAM_STEP_ACTIONS P3)
-**Status:** OPEN
+**Status:** PARTIAL
+
+**2026-07-10 (UI_HARNESS_UNIFICATION P2):** the root symptom — "nothing calls
+`tick_drawers`/`Panel::update` with real elapsed time" — is no longer true.
+`script.rs`'s `Runner` was repointed at the shared render seam
+(`crate::ui_frame::apply_ui_frame_invalidations` +
+`composite_main_ui_frame`), and its `AutomationAction::Step` handler now
+does a REAL `std::thread::sleep(DT)` + `ui.update()` per stepped frame
+(mirroring `cache_path_full_render`'s P0 drawer-tween loop), so a script
+that inserts `{"Step": {"frames": N}}` after arming a drawer now genuinely
+ticks it toward settlement — confirmed working: `scripts/ui-flows/
+inspector-drawer-filmstrip.json` (a fresh 12-frame `Step` after a compact-
+toggle click) settles and its filmstrip shows the drawer visibly changing
+across tiles. This is fix-shape (a)'s mechanism, just opt-in per script
+rather than automatic on every dispatch — **not fully closed**: an EXISTING
+flow (e.g. `param-step-action.json`) that doesn't add a `Step` after arming
+still hits the original symptom, and this session didn't retrofit it or
+build the unconditional auto-settle option (b) (`skip_to_settled()`/
+`finish_all()` on `ParamCardPanel`). Revive to CLOSED by either auditing
+existing flows for the missing `Step` or building (b).
 
 **Symptom:** in a `cargo xtask ui-snap <scene> --script <flow>.json` run, a
 click that newly arms a param's audio mod (or otherwise grows an EXISTING
