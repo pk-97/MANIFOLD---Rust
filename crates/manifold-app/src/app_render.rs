@@ -4,7 +4,7 @@
 //! overlay rendering helper. All methods are `impl Application` blocks that
 //! operate on the struct defined in app.rs.
 
-use manifold_renderer::ui_renderer::{Depth, UIRenderer};
+use manifold_renderer::ui_renderer::UIRenderer;
 
 use manifold_ui::node::FontWeight;
 use manifold_ui::panels::PanelAction;
@@ -3917,45 +3917,47 @@ impl Application {
         self.ui_profile.add("present.clear_atlas_compositor", pseg.elapsed());
         pseg = std::time::Instant::now();
 
-        // ── Pass 4/5's own encoder — the composite above already committed
-        // its own command buffer for the atlas/clear/video passes.
-        let mut encoder = gpu.device.create_encoder("Frame");
-
-        // ── Pass 4: timeline tracks, in z-ordered sub-passes (§24 5b) ──
-        //   4a  grid bitmaps (per layer)              — under the clips
-        //   4b  GPU clip bodies (rounded, gradient, lift)
-        //   4b' GPU per-clip waveform textures        — inside the audio bodies
-        //   4c  lane / stem / overview / group bitmaps — separate regions
-        //   5   GPU overlays (region / cursor / markers) + clip names
-        let layer_rects = self.ws.ui_root.viewport.layer_bitmap_rects();
-
-        // Pass 4a: Per-layer grid bitmaps (grid + top separator), under the clip
-        // bodies — opaque bodies occlude the grid, it shows through the gaps.
-        if let Some(bg_gpu) = self.layer_bitmap_gpu.as_mut()
-            && !layer_rects.is_empty()
-        {
-            bg_gpu.render_layers(
-                &gpu.device,
-                &mut encoder,
-                offscreen,
-                logical_w,
-                logical_h,
-                &layer_rects,
-            );
-        }
-
-        self.ui_profile.add("present.pass4a_grid", pseg.elapsed());
-        pseg = std::time::Instant::now();
+        // ── Passes 4a→5 + VQT + overlay dirty-clear — the shared seam
+        // (`ui_frame::render_main_ui_passes`, `HARNESS_FIDELITY_INVARIANT_
+        // PROPOSAL.md` §4 step 2), also called by the headless harness
+        // (`ui_snapshot/render.rs::render_ui_to_png`, `script.rs`'s
+        // `Runner`). It owns its own encoder (created and committed
+        // internally, mirroring `composite_main_ui_frame`) and pass order —
+        // everything from here through the seam call below is INPUT
+        // RESOLUTION: drag-adjusted clip bodies, thumbnail atlas + quads,
+        // timeline overlays, automation lanes, scope cursor — kept here
+        // because it's live-only/caller-side state (§3's caller test); the
+        // seam itself decides pass order and per-pass render-call choice
+        // and is never re-sequenced or re-implemented by any caller.
 
         // Pass 4b: GPU clip bodies — rounded gradient tiles with a lift-on-select
         // shadow, in their own UIRenderer prepare/render cycle (reusing the shared
         // SDF rect pipeline). Emitted from the viewport's visible-clip list, so
         // only on-screen clips cost anything.
-        if let Some(ui) = self.ui_renderer.as_mut() {
+        // Resolved only when the seam call below will actually run
+        // (module doc deviation #9, `ui_frame.rs`): `self.ui_renderer`,
+        // `self.blit_pipeline`/`self.blit_sampler`, and the GPU renderers
+        // below are all `Some`/`None` together (set together at GPU init,
+        // `app.rs` :1865-1993; cleared together at teardown, :2888-2893),
+        // so this single bool gate reproduces the exact old per-pass gating.
+        if self.ui_renderer.is_some() {
             self.ws
                 .ui_root
                 .viewport
                 .visible_clip_rects(&mut self.clip_rect_scratch);
+            // Cleared HERE, unconditionally, not only inside the has-clips
+            // branch below: the seam now reads `clip_body_scratch`
+            // unconditionally every frame (it's `MainUiPassInputs::
+            // clip_bodies`, resolved caller-side once per frame, no longer
+            // gated by the same `if` that populates it) — pre-extraction the
+            // clear lived inside that `if`, which was safe only because
+            // emission was co-located with it (a false condition skipped
+            // both). Un-clearing on a no-clips frame would leave the LAST
+            // frame's bodies in the buffer for the seam to render as ghost
+            // clips over an empty view — moving the clear up here keeps that
+            // failure mode impossible regardless of how the gate below
+            // evaluates.
+            self.clip_body_scratch.clear();
             // BUG-028 P2: while an audio file is being dragged in from
             // Finder, show a full-length ghost clip at the lane/beat it
             // would land on — the same targeting the DroppedFile arm in
@@ -4007,7 +4009,7 @@ impl Application {
                 let region_selects_clips =
                     region.is_some() && self.selection.selection_count() == 0;
                 let hovered = self.ws.ui_root.viewport.hovered_clip_id();
-                self.clip_body_scratch.clear();
+                // (already cleared above, unconditionally, before this gate)
                 // P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D15/D17): grab
                 // lift + grid settle + error shake are pure X/Y offsets
                 // applied to the SAME `ClipScreenRect` used below for
@@ -4053,46 +4055,13 @@ impl Application {
                 if let Some(ghost) = ghost_body {
                     self.clip_body_scratch.push(ghost);
                 }
-
-                let tracks = self.ws.ui_root.viewport.get_tracks_rect();
-                {
-                    // D7 lane-content choke point — see
-                    // `docs/TIMELINE_INTERACTION_P1_SPEC.md` and
-                    // `UIRenderer::lane_content_scissor`'s doc comment.
-                    let mut scissor = ui.lane_content_scissor(tracks);
-                    manifold_renderer::clip_draw::emit_clips(&mut scissor, &self.clip_body_scratch);
-                }
-                if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
-                    ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
-                }
             }
         }
-        self.ui_profile
-            .count("present.pass4b_clip_bodies", self.clip_rect_scratch.len() as u64);
-        self.ui_profile.add("present.pass4b_clip_bodies", pseg.elapsed());
-        pseg = std::time::Instant::now();
 
-        // Pass 4b': Per-clip waveform textures, painted INSIDE the audio-clip
-        // bodies (§24 5b). Reuses the visible-clip list resolved in 4b; only audio
-        // clips with a decoded waveform cost anything, and a still timeline
-        // re-uploads nothing (textures are cached per clip).
-        if let Some(content_gpu) = self.clip_content_gpu.as_mut()
-            && !self.clip_rect_scratch.is_empty()
-        {
-            let tracks = self.ws.ui_root.viewport.get_tracks_rect();
-            content_gpu.render(
-                &gpu.device,
-                &mut encoder,
-                offscreen,
-                logical_w,
-                logical_h,
-                scale as f32,
-                tracks,
-                &self.clip_rect_scratch,
-            );
-        }
-        self.ui_profile.add("present.pass4b_waveforms", pseg.elapsed());
-        pseg = std::time::Instant::now();
+        // Pass 4b/4b' EMISSION (GPU clip bodies + per-clip waveforms) moved
+        // into the seam (`render_main_ui_passes`) below — this block used to
+        // continue with `ui.lane_content_scissor`/`emit_clips`/`ui.prepare`/
+        // `ui.render` (4b) and `content_gpu.render` (4b') here.
 
         // Tell the content thread which clips want a thumbnail (non-audio,
         // wide enough), deduped so a stable view sends nothing. The content thread
@@ -4113,10 +4082,49 @@ impl Application {
             }
         }
 
-        // Pass 4b″: Clip thumbnails (§24 5c) — blit each visible generator/video
-        // clip's atlas cell (published by the content thread) into its body, after
-        // the waveform pass (audio clips draw waveforms, others draw thumbnails),
-        // centre-cropped to the body aspect and masked to the rounded shape.
+        // VQT waterfall input: the six `Application` fields the pass
+        // mutates, bundled behind `crate::ui_frame::VqtPassState`, plus the
+        // content-thread-published scalars it reads and the caller-resolved
+        // scope-cursor position (`Application::scope_hover_uv()` is
+        // live-only). Mac-only (module doc deviation #8, `ui_frame.rs`) —
+        // constructed unconditionally on macOS whenever GPU state exists;
+        // the seam itself gates on `audio_setup_panel.is_open()` etc.
+        // Resolved BEFORE the thumbnail block below: `scope_hover_uv()`
+        // takes `&self` (whole struct) and cannot run once `thumb_pass`
+        // below is holding a `&mut self.clip_thumb_gpu` borrow alive through
+        // to the seam call.
+        #[cfg(target_os = "macos")]
+        let mut vqt_state = {
+            let scope_cursor_y = self.scope_hover_uv().map_or(-1.0, |(_, uy, _)| uy);
+            Some(crate::ui_frame::VqtPassState {
+                spectrogram: &mut self.spectrogram,
+                spectrogram_pane: &mut self.spectrogram_pane,
+                spectrogram_num_bins: &mut self.spectrogram_num_bins,
+                spectrogram_tex_dims: &mut self.spectrogram_tex_dims,
+                pending_spectrogram_columns: &mut self.pending_spectrogram_columns,
+                pending_spectrogram_scalars: &mut self.pending_spectrogram_scalars,
+                content_num_bins: self.content_state.spectrogram_num_bins,
+                content_fmin: self.content_state.spectrogram_fmin,
+                content_fmax: self.content_state.spectrogram_fmax,
+                content_low_hz: self.content_state.spectrogram_low_hz,
+                content_mid_hz: self.content_state.spectrogram_mid_hz,
+                scope_cursor_y,
+            })
+        };
+        #[cfg(not(target_os = "macos"))]
+        let mut vqt_state: Option<crate::ui_frame::VqtPassState> = None;
+
+        // Pass 4b″ input: Clip thumbnails (§24 5c) — resolve each visible
+        // generator/video clip's atlas cell (published by the content
+        // thread) into a `ThumbQuad`, centre-cropped to the body aspect.
+        // The actual blit (`ClipThumbGpu::render`) moved into the seam
+        // below as `MainUiPassInputs::thumb` — this block only builds the
+        // input; `thumb_pass` stays `None` (skips the pass, §3) whenever the
+        // atlas/bridge isn't resolved, quads end up empty, or off-macOS.
+        #[cfg(target_os = "macos")]
+        let mut thumb_pass: Option<crate::ui_frame::ThumbPass> = None;
+        #[cfg(not(target_os = "macos"))]
+        let thumb_pass: Option<crate::ui_frame::ThumbPass> = None;
         #[cfg(target_os = "macos")]
         if !self.clip_rect_scratch.is_empty()
             && !self.content_state.clip_atlas_layout.is_empty()
@@ -4233,65 +4241,29 @@ impl Application {
                         );
                     }
                 }
-                let tracks = self.ws.ui_root.viewport.get_tracks_rect();
                 if !self.clip_thumb_quad_scratch.is_empty()
                     && let Some(thumb) = self.clip_thumb_gpu.as_mut()
                 {
-                    thumb.render(
-                        &gpu.device,
-                        &mut encoder,
-                        offscreen,
-                        logical_w,
-                        logical_h,
-                        scale as f32,
-                        tracks,
+                    thumb_pass = Some(crate::ui_frame::ThumbPass {
+                        gpu: thumb,
                         atlas,
-                        &self.clip_thumb_quad_scratch,
-                    );
+                        quads: &self.clip_thumb_quad_scratch,
+                    });
                 }
             }
         }
-        self.ui_profile
-            .count("present.pass4b_thumbnails", self.clip_thumb_quad_scratch.len() as u64);
-        self.ui_profile.add("present.pass4b_thumbnails", pseg.elapsed());
-        pseg = std::time::Instant::now();
 
-        // Pass 4c: The lane / stem / overview / collapsed-group panel bitmaps.
-        // These are separate regions (below / beside the tracks, or collapsed group
-        // rows that carry no clips), so their z-order vs the clips is moot — they
-        // ride the same single layer-bitmap instance as the grid, indices 1000+.
-        if let Some(bitmap_gpu) = self.layer_bitmap_gpu.as_mut() {
-            let mut rects: Vec<(usize, manifold_ui::node::Rect)> = Vec::new();
-
-            let ov_rect = self.ws.ui_root.viewport.overview_rect();
-            if ov_rect.width > 0.0 && ov_rect.height > 0.0 {
-                rects.push((1002, ov_rect));
-            }
-
-            // Collapsed group bitmaps
-            rects.extend(self.ws.ui_root.viewport.collapsed_group_rects());
-
-            if !rects.is_empty() {
-                bitmap_gpu.render_layers(
-                    &gpu.device,
-                    &mut encoder,
-                    offscreen,
-                    logical_w,
-                    logical_h,
-                    &rects,
-                );
-            }
-        }
-
-        self.ui_profile.add("present.pass4c_panels", pseg.elapsed());
-        pseg = std::time::Instant::now();
+        // Pass 4c (lane / stem / overview / collapsed-group panel bitmaps)
+        // moved entirely into the seam below — it reads
+        // `ui_root.viewport.overview_rect()`/`collapsed_group_rects()` and
+        // `inputs.layer_bitmap_gpu` directly, no caller-side resolution
+        // needed (module doc, `ui_frame.rs`).
 
         // Timeline overlays (region highlight / insert cursor / beat markers) as
         // GPU rects (§24 5b — no longer baked into a per-layer bitmap). Resolved
-        // here while `self` is free, then drawn inside the Pass 5 UIRenderer cycle
-        // under the clip names. The insert cursor's layer comes from the app's
-        // selection (it owns the resolved layer id).
-        let overlay_tracks = self.ws.ui_root.viewport.get_tracks_rect();
+        // here while `self` is free; drawn inside the seam below (region/cursor/
+        // markers under the clip names). The insert cursor's layer comes from
+        // the app's selection (it owns the resolved layer id).
         let insert_layer = self
             .selection
             .insert_cursor_layer_id
@@ -4303,396 +4275,56 @@ impl Application {
             &mut self.timeline_marker_scratch,
         );
 
-        // Pass 5: Overlay UI (playhead, HUD, dropdowns, text). Its own cycle —
-        // begin_frame here resets the text pool that the Pass 4b clip cycle did
-        // not touch, isolating the two prepare/render cycles cleanly.
-        if let Some(ui) = &mut self.ui_renderer {
-            ui.begin_frame();
+        // Pass 5 input: automation lanes + landing flash, resolved
+        // caller-side like `timeline_overlays` above (module doc,
+        // `ui_frame.rs`) — the actual draw calls moved into the seam.
+        let automation_lanes = self
+            .ws
+            .ui_root
+            .viewport
+            .automation_lane_screens(&self.content_state.automation_latched_params);
+        let landing_flash = self.overlay.landing_flash();
 
-            // Region / cursor / markers, scissored to the tracks rect, UNDER the
-            // clip names (bottom→top: region, cursor, markers — matches the old
-            // bitmap paint order). All sit on top of the clip bodies + waveforms.
-            // D7 lane-content choke point — see
-            // `docs/TIMELINE_INTERACTION_P1_SPEC.md` and
-            // `UIRenderer::lane_content_scissor`'s doc comment.
-            {
-                let mut scissor = ui.lane_content_scissor(overlay_tracks);
-                if let Some((r, c)) = timeline_overlays.region {
-                    scissor.draw_rect(r.x, r.y, r.width, r.height, c);
-                }
-                if let Some((r, c)) = timeline_overlays.cursor {
-                    scissor.draw_rect(r.x, r.y, r.width, r.height, c);
-                }
-                for (x, c) in &self.timeline_marker_scratch {
-                    scissor.draw_rect(*x, overlay_tracks.y, 1.0, overlay_tracks.height, *c);
-                }
-                // D15 "landing-line flash" — a brief vertical line at the beat a
-                // move-drag settled to, spanning the dragged selection's layer
-                // range; drawn through the D7 lane-content scissor. Re-hooked
-                // 2026-07-07: `InteractionOverlay::on_end_drag` fires it on a
-                // Move commit that actually landed (P1.4's continuous snap had
-                // deleted the old `finalize_move_snap` trigger and left this
-                // drawer dormant). Feel sign-off owed to Peter
-                // (`docs/UI_CRAFT_AND_MOTION_PLAN.md` D15 gate).
-                if let Some((progress, beat, min_layer, max_layer)) = self.overlay.landing_flash() {
-                    let x = self.ws.ui_root.viewport.beat_to_pixel(beat);
-                    let y0 = self.ws.ui_root.viewport.track_y(min_layer);
-                    let y1 = self.ws.ui_root.viewport.track_y(max_layer)
-                        + self.ws.ui_root.viewport.track_height(max_layer);
-                    if y1 > y0 {
-                        let alpha = ((1.0 - progress) * 230.0).round().clamp(0.0, 255.0) as u8;
-                        let c = manifold_ui::color::with_alpha(manifold_ui::color::INSERT_CURSOR_BLUE, alpha);
-                        scissor.draw_rect(x - 1.0, y0, 2.0, y1 - y0, c);
-                    }
-                }
-            }
-
-            // Clip name labels (§24 5b) — on top of the bodies + waveforms, at
-            // BASE depth (under the dropdown/modal overlays). Reuses the visible
-            // clip list resolved for the Pass 4b body emission this frame.
-            manifold_renderer::clip_draw::emit_clip_names(
-                ui,
-                &self.clip_rect_scratch,
-                overlay_tracks,
-            );
-
-            // Automation lane strips (P4, `docs/AUTOMATION_LANES_DESIGN.md` §7) —
-            // on top of the clip names, same overlay pass. Empty whenever
-            // automation mode is off (the viewport never populated any lanes
-            // this frame), so this is a no-op cost in the common case.
-            let automation_lanes = self
-                .ws
-                .ui_root
-                .viewport
-                .automation_lane_screens(&self.content_state.automation_latched_params);
-            manifold_renderer::automation_lane_draw::emit_automation_lanes(
-                ui,
-                &automation_lanes,
-                overlay_tracks,
-            );
-
-            // Playhead — a red line spanning ruler + tracks, capped by a downward
-            // triangle head at the top of the ruler (§24 5e). The head is the
-            // single dominant "now" marker so it never competes with the blue
-            // insert cursor for "where am I".
-            if let Some(px) = self.ws.ui_root.viewport.playhead_pixel() {
-                let ruler = self.ws.ui_root.viewport.ruler_rect();
-                let tr = self.ws.ui_root.viewport.get_tracks_rect();
-                let top = ruler.y;
-                let height = (tr.y + tr.height) - top;
-                ui.draw_rect(
-                    px - 1.0,
-                    top,
-                    manifold_ui::color::PLAYHEAD_WIDTH,
-                    height,
-                    manifold_ui::color::PLAYHEAD_RED,
-                );
-                let s = manifold_ui::color::PLAYHEAD_HEAD_SIZE;
-                ui.draw_icon(
-                    manifold_ui::icons::Icon::Playhead.id(),
-                    px - s * 0.5,
-                    top,
-                    s,
-                    s,
-                    manifold_ui::color::PLAYHEAD_RED,
-                    None,
-                );
-            }
-
-            // Horizontal scrollbar (§24 5e): a slim track + draggable thumb in the
-            // reserved strip below the tracks. Geometry comes from the viewport —
-            // the same source the drag hit-test uses — so the drawn thumb and the
-            // grabbable region can't drift. Drawn here as GPU rects, like the
-            // playhead. Hidden (None) when the whole timeline fits.
-            if let Some((track, thumb)) = self.ws.ui_root.viewport.scrollbar_h_layout() {
-                ui.draw_rect(
-                    track.x,
-                    track.y,
-                    track.width,
-                    track.height,
-                    manifold_ui::color::SCROLLBAR_TRACK_C32,
-                );
-                let active = self.ws.ui_root.viewport.scrollbar_h_dragging()
-                    || thumb.contains(self.cursor_pos);
-                let thumb_color = if active {
-                    manifold_ui::color::SCROLLBAR_THUMB_HOVER_C32
-                } else {
-                    manifold_ui::color::SCROLLBAR_THUMB_C32
-                };
-                let radius = (thumb.height * 0.5).min(thumb.width * 0.5);
-                ui.draw_rounded_rect(
-                    thumb.x,
-                    thumb.y,
-                    thumb.width,
-                    thumb.height,
-                    thumb_color,
-                    radius,
-                );
-            }
-
-            // Browser popup thumbnails (PRESET_LIBRARY_DESIGN P6, D7):
-            // decode + register every open item's PNG ONCE per distinct path
-            // (checked via `has_image`, so a re-open in the same process is
-            // free too) — never per frame, never a render. `self.gpu` (the
-            // device the registry uploads through) and `self.ws` (the popup's
-            // current items) are disjoint fields from `self.ui_renderer`
-            // (`ui`, already borrowed above), so all three borrow together.
-            if let Some(gpu) = self.gpu.as_ref() {
-                for path in self.ws.ui_root.browser_popup.thumbnail_paths() {
-                    let handle = manifold_ui::node::texture_handle_for_key(path);
-                    if ui.has_image(handle) {
-                        continue;
-                    }
-                    match manifold_renderer::preset_thumbnail::decode_png_rgba8(std::path::Path::new(path)) {
-                        Ok((w, h, rgba)) => {
-                            ui.register_image(&gpu.device, handle, w, h, &rgba);
-                        }
-                        Err(e) => log::error!("[preset-thumb] decode failed for {path}: {e}"),
-                    }
-                }
-            }
-
-            // Top-level overlays (perf HUD, dropdown, modals) — built by the
-            // overlay driver at the tail of the tree, drawn here in z-order.
-            // One source (overlay_draw, recorded at build) for build and draw,
-            // so they cannot drift. overlay_draw is in Z_ORDER (bottom→top), so
-            // each overlay's depth is OVERLAY + its stack index: a later-opened
-            // overlay (e.g. a dropdown over the Audio Setup modal) paints over
-            // an earlier one, text included. Each range gets its own push/pop
-            // for scissor isolation.
-            for (i, &(start, end)) in self.ws.ui_root.overlay_draw.iter().enumerate() {
-                ui.push_depth(Depth::OVERLAY.above(i as i32));
-                // Soft drop-shadow under the floating panel (§17). Drawn first
-                // so it sits under the panel's own fill at this depth. Skip a
-                // leading full-screen scrim (dim-modal backdrop) so the shadow
-                // lifts the panel, not the whole screen.
-                if start < end {
-                    let tree = &self.ws.ui_root.tree;
-                    let mut r = tree.get_bounds(tree.id_at(start));
-                    if r.width >= logical_w as f32 - 1.0
-                        && r.height >= logical_h as f32 - 1.0
-                        && start + 1 < end
-                    {
-                        r = tree.get_bounds(tree.id_at(start + 1));
-                    }
-                    ui.draw_shadow(
-                        r.x,
-                        r.y + manifold_ui::color::SHADOW_OFFSET_Y,
-                        r.width,
-                        r.height,
-                        manifold_ui::color::POPUP_RADIUS,
-                        manifold_ui::color::SHADOW_BLUR,
-                        manifold_ui::color::SHADOW,
-                    );
-                }
-                // `render_sub_region`, not `render_tree_range`: each overlay's
-                // `(start, end)` deliberately excludes its own
-                // `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` region root (see
-                // `UIRoot::build_overlays`'s doc comment — keeping `start` at
-                // the first REAL node is what the shadow-peek above depends
-                // on), so a root-scan would never find that region and would
-                // render nothing. `render_sub_region`'s ancestor-aware flat
-                // scan picks up the region's `CLIPS_CHILDREN` regardless.
-                ui.render_sub_region(&self.ws.ui_root.tree, start, end, false);
-                ui.pop_depth();
-            }
-
-            // Effect card drag ghost + text input — TOOLTIP depth, above every
-            // overlay.
-            ui.push_depth(Depth::TOOLTIP);
-            if let Some(start) = self.ws.ui_root.inspector.card_drag_first_node() {
-                ui.render_tree_range(&self.ws.ui_root.tree, start, usize::MAX);
-            }
-            // Text input overlay — last, so it tops everything.
-            if self.text_input.active {
-                render_text_input_overlay(&self.text_input, &self.frame_timer, ui);
-            }
-            ui.pop_depth();
-
-            // Flush all overlay commands
-            if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
-                ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
-            }
-        }
-
-        // Audio Setup spectrogram waterfall. Drawn AFTER the overlay flush so it
-        // lands on top of the modal's scope-area background (the modal is an
-        // overlay, drawn into `offscreen` just above). Render the live VQT
-        // columns into a UI-device texture, then blit it into the panel's
-        // reserved scope rect via the unified TexturePane path.
-        //
-        // Suppressed while a dropdown is open: dropdowns (device / channel) are
-        // overlays that expand down over the scope, and this blit lands on top of
-        // them — so painting the waterfall would hide the open list. The scope
-        // briefly shows its dark background instead, and returns when it closes.
-        #[cfg(target_os = "macos")]
-        if self.ws.ui_root.audio_setup_panel.is_open()
-            && !self.ws.ui_root.dropdown.is_open()
-            && self.content_state.spectrogram_num_bins > 0
-            && let Some(rect) = self.ws.ui_root.audio_setup_panel.scope_rect()
-            && let (Some(blit_pipeline), Some(blit_sampler)) =
-                (&self.blit_pipeline, &self.blit_sampler)
+        // ── The seam call: Passes 4a→5 + VQT + overlay dirty-clear, all in
+        // one shared function also called by the headless harness. Gated on
+        // `(ui_renderer, blit_pipeline, blit_sampler)` all `Some` — see
+        // module doc deviation #9 (`ui_frame.rs`) for why this reproduces
+        // the old per-pass gating on every reachable frame.
+        if let (Some(ui), Some(blit_pipeline), Some(blit_sampler)) =
+            (self.ui_renderer.as_mut(), &self.blit_pipeline, &self.blit_sampler)
         {
-            use manifold_spectral::{Spectrogram, SpectrogramConfig};
-            let num_bins = self.content_state.spectrogram_num_bins;
-            let cfg = SpectrogramConfig::default();
-
-            // Render the waterfall at the scope's physical-pixel size so it stays
-            // crisp at any (resizable) modal size — the shader supersamples the
-            // column ring directly to display resolution. Clamped to bound VRAM.
-            let tex_w = ((rect.width * sf).round() as u32).clamp(256, 4096);
-            let tex_h = ((rect.height * sf).round() as u32).clamp(128, 4096);
-
-            // (Re)create the renderer if the bin count or the on-screen width
-            // changed. The ring is sized to the texture's pixel width so each
-            // column owns one pixel (crisp 1:1 sweep, no resampling).
-            let cur_cols = self.spectrogram.as_ref().map(|s| s.num_cols());
-            if cur_cols != Some(tex_w as usize) || self.spectrogram_num_bins != num_bins {
-                // Drop buffered columns — chunking them at the new `num_bins`
-                // would misalign, and a width change resets the sweep anyway.
-                // The overlay records must drop WITH them: they pair 1:1 by
-                // position, so clearing one side leaves stale records pairing
-                // with fresh columns and the overlay slides out of time
-                // against the waterfall until the backlog flushes.
-                self.pending_spectrogram_columns.clear();
-                self.pending_spectrogram_scalars.clear();
-                self.spectrogram = Some(Spectrogram::new(
-                    &gpu.device,
-                    num_bins,
-                    tex_w as usize,
-                    manifold_gpu::GpuTextureFormat::Rgba8Unorm,
-                    cfg.db_min,
-                    cfg.db_max,
-                    cfg.tilt_slope,
-                ));
-                self.spectrogram_num_bins = num_bins;
-            }
-            // (Re)create the target pane when the scope's pixel size changes
-            // (modal resize) or it doesn't exist yet.
-            if self.spectrogram_pane.is_none() || self.spectrogram_tex_dims != (tex_w, tex_h) {
-                let tex = gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
-                    width: tex_w,
-                    height: tex_h,
-                    depth: 1,
-                    format: manifold_gpu::GpuTextureFormat::Rgba8Unorm,
-                    dimension: manifold_gpu::GpuTextureDimension::D2,
-                    usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
-                    label: "Audio Scope",
-                    mip_levels: 1,
-                });
-                self.spectrogram_pane = Some(crate::texture_pane::TexturePane::local(tex));
-                self.spectrogram_tex_dims = (tex_w, tex_h);
-            }
-
-            // Cursor frequency-line position (uv.y), computed before the mutable
-            // spectrogram borrow below. Negative = not hovering.
-            let scope_cursor_y = self.scope_hover_uv().map_or(-1.0, |(_, uy, _)| uy);
-            if let (Some(spectrogram), Some(pane)) =
-                (self.spectrogram.as_mut(), self.spectrogram_pane.as_mut())
-                && let Some(target) = pane.local_target().cloned()
-            {
-                // Feed new columns (post-gain magnitudes from the worker), each
-                // exactly once, then clear — see `pending_spectrogram_columns`.
-                // The overlay records ride in lockstep (one ScopeColumn per
-                // column); a column with no matching record (shouldn't happen)
-                // gets the hide sentinel.
-                let mut scalars = self.pending_spectrogram_scalars.iter();
-                for col in self.pending_spectrogram_columns.chunks_exact(num_bins) {
-                    let record =
-                        scalars.next().copied().unwrap_or(manifold_spectral::ScopeColumn::EMPTY);
-                    spectrogram.push_column(col, record);
-                }
-                self.pending_spectrogram_columns.clear();
-                self.pending_spectrogram_scalars.clear();
-                // Band dividers at the editable low/mid + mid/high crossovers (the
-                // modulation's Low/Mid/High splits), as normalised y on the log
-                // axis. Drag-retuned live via the Audio Setup scope.
-                let (fmin, fmax) =
-                    (self.content_state.spectrogram_fmin, self.content_state.spectrogram_fmax);
-                let y_of = |f: f32| {
-                    if fmin > 0.0 && fmax > fmin {
-                        (f / fmin).log2() / (fmax / fmin).log2()
-                    } else {
-                        -1.0
-                    }
-                };
-                // Octave span of the displayed range — drives the pink tilt
-                // (centred on the geometric-mean freq). 0 disables it.
-                let freq_log_ratio =
-                    if fmin > 0.0 && fmax > fmin { (fmax / fmin).log2() } else { 0.0 };
-                let lo_yfb = y_of(self.content_state.spectrogram_low_hz);
-                let hi_yfb = y_of(self.content_state.spectrogram_mid_hz);
-                // Which divider the cursor is over, for the grip-handle hover
-                // glow. Use the panel's OWN hit-test (same px tolerance the grab
-                // uses) so the glow and the grab zone match exactly — converting
-                // the cursor's uv.y back to a screen y. Off-scope cursor (< 0)
-                // maps far away → no hover.
-                let cursor_screen_y = if scope_cursor_y < 0.0 {
-                    -1.0e9
-                } else {
-                    rect.y + scope_cursor_y * rect.height
-                };
-                let hovered_divider = self
-                    .ws
-                    .ui_root
-                    .audio_setup_panel
-                    .divider_hover_index(cursor_screen_y);
-                spectrogram.render(
-                    &mut encoder,
-                    &target,
-                    [lo_yfb, hi_yfb],
-                    freq_log_ratio,
-                    scope_cursor_y,
-                    hovered_divider,
-                );
-
-                // Blit through the unified TexturePane path (logical rect + scale).
-                crate::texture_pane::blit_texture_pane(
-                    pane,
-                    &gpu.device,
-                    &mut encoder,
+            crate::ui_frame::render_main_ui_passes(
+                &gpu.device,
+                ui,
+                &mut self.ws.ui_root,
+                offscreen,
+                logical_w,
+                logical_h,
+                scale,
+                crate::ui_frame::MainUiPassInputs {
+                    layer_bitmap_gpu: self.layer_bitmap_gpu.as_mut(),
+                    clip_bodies: &self.clip_body_scratch,
+                    clip_rects: &self.clip_rect_scratch,
+                    clip_content_gpu: self.clip_content_gpu.as_mut(),
+                    thumb: thumb_pass,
+                    timeline_overlays,
+                    markers: &self.timeline_marker_scratch,
+                    landing_flash,
+                    automation_lanes: &automation_lanes,
+                    cursor_pos: self.cursor_pos,
+                    text_input: &self.text_input,
+                    frame_timer: &self.frame_timer,
+                    vqt: vqt_state.as_mut(),
                     blit_pipeline,
                     blit_sampler,
-                    offscreen,
-                    (rect.x, rect.y, rect.width, rect.height),
-                    sf,
-                    "Audio Scope Blit",
-                );
-            }
+                    // The seam owns + commits the offscreen "Frame" encoder, so
+                    // the async GPU-time handler moves inside it (fed this sink).
+                    gpu_sink: self.ui_profile.gpu_sink(),
+                },
+            );
         }
-
-        self.ui_profile.add("present.pass5_overlay", pseg.elapsed());
+        self.ui_profile.add("present.main_ui_passes", pseg.elapsed());
         pseg = std::time::Instant::now();
-
-        // ── Commit offscreen render ──
-        // Capture the offscreen buffer's TRUE GPU execution time async — tells
-        // us whether next_drawable's block is our own GPU work (heavy offscreen)
-        // or external starvation (content thread hogging the shared GPU).
-        if let Some((sink_us, sink_n)) = self.ui_profile.gpu_sink() {
-            encoder.add_gpu_time_handler(move |secs| {
-                sink_us.fetch_add((secs * 1_000_000.0) as u64, std::sync::atomic::Ordering::Relaxed);
-                sink_n.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            });
-        }
-        encoder.commit();
-        self.ui_profile.add("present.commit", pseg.elapsed());
-        pseg = std::time::Instant::now();
-
-        // Clear the overlay region's dirty flags. Panel ranges are already
-        // cleared per rendered range above (owned by the cache manager); the
-        // 7 panels contiguously tile [0, overlay_region_start), so this and that
-        // together clear every non-overlay node. Overlay nodes (HUD, playhead,
-        // popups) live at [overlay_region_start, count), are never in
-        // panel_infos, and would otherwise keep has_dirty permanently true and
-        // defeat the idle fast path. This is narrowed from a blanket clear_dirty()
-        // so out-of-sub-region panel dirt is no longer silently erased before the
-        // cache's fallback-to-full-render can fire (BUG-015).
-        let overlay_start = self.ws.ui_root.overlay_region_start;
-        let node_count = self.ws.ui_root.tree.count();
-        self.ws
-            .ui_root
-            .tree
-            .clear_dirty_range(overlay_start, node_count);
 
         // ── Late drawable acquisition ──
         // Acquire the drawable as late as possible to minimize time blocking on

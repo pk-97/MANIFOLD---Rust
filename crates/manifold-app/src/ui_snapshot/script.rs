@@ -864,24 +864,62 @@ impl Runner {
     /// P2 (D3): reads back the offscreen `advance_frame`/the `Step` loop
     /// already composited through the shared seam — no fresh device/cache is
     /// built here (that was `render_ui_to_png`'s old, always-full-clear
-    /// shape; see `render.rs`'s module doc). Draws the same genuinely-
-    /// separate immediate-mode passes (`render::draw_immediate_passes`) on
-    /// top, then stamps D9b's pointer crosshair(s) CPU-side on the readback
-    /// COPY — never into the atlas/offscreen, which would poison it for any
-    /// later frame or the P0 differential shelf tool.
-    fn write_png(&mut self, ui: &UIRoot, data: &SceneData, render: &mut RenderState, path: &std::path::Path) {
+    /// shape; see `render.rs`'s module doc). Draws the SAME
+    /// `crate::ui_frame::render_main_ui_passes` the live app and
+    /// `render_ui_to_png` call (P2, `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md`
+    /// §4 step 2 — no more parallel `draw_immediate_passes`) on top, then
+    /// stamps D9b's pointer crosshair(s) CPU-side on the readback COPY —
+    /// never into the atlas/offscreen, which would poison it for any later
+    /// frame or the P0 differential shelf tool. No thumbnails here (this
+    /// driver never opted into `--thumbs`, matching the old call's `false`).
+    fn write_png(&mut self, ui: &mut UIRoot, data: &SceneData, render: &mut RenderState, path: &std::path::Path) {
         let (tex_w, tex_h) = (render.tex_w, render.tex_h);
-        super::render::draw_immediate_passes(
+        let mut clip_rects = Vec::new();
+        ui.viewport.visible_clip_rects(&mut clip_rects);
+        let hovered_clip = ui.viewport.hovered_clip_id();
+        let clip_bodies: Vec<manifold_renderer::clip_draw::ClipBody> = clip_rects
+            .iter()
+            .map(|cr| manifold_renderer::clip_draw::ClipBody {
+                rect: cr.rect,
+                base_color: cr.base_color,
+                selected: data.selection.is_selected(&cr.clip_id),
+                hovered: hovered_clip == Some(cr.clip_id.as_str()),
+                muted: cr.is_muted,
+                locked: cr.is_locked,
+                generator: cr.is_generator,
+                alpha: 1.0,
+            })
+            .collect();
+        let automation_lanes =
+            ui.viewport.automation_lane_screens(&data.content.automation_latched_params);
+        let text_input = crate::text_input::TextInputState::new();
+        let frame_timer = crate::frame_timer::FrameTimer::new(60.0);
+        crate::ui_frame::render_main_ui_passes(
             &render.device,
             &mut render.ui_renderer,
             ui,
-            &data.selection,
-            &data.content.automation_latched_params,
             &render.composite.offscreen,
             tex_w,
             tex_h,
-            super::SCALE,
-            false,
+            f64::from(super::SCALE),
+            crate::ui_frame::MainUiPassInputs {
+                layer_bitmap_gpu: None,
+                clip_bodies: &clip_bodies,
+                clip_rects: &clip_rects,
+                clip_content_gpu: None,
+                thumb: None,
+                timeline_overlays: manifold_ui::panels::viewport::TimelineOverlays::default(),
+                markers: &[],
+                landing_flash: None,
+                automation_lanes: &automation_lanes,
+                cursor_pos: manifold_ui::node::Vec2::ZERO,
+                text_input: &text_input,
+                frame_timer: &frame_timer,
+                vqt: None,
+                blit_pipeline: &render.composite.blit_pipeline,
+                blit_sampler: &render.composite.blit_sampler,
+                gpu_sink: None,
+            },
         );
         let mut bgra = render.readback_bgra();
         for pt in self.last_gesture_points.drain(..) {
