@@ -5719,6 +5719,7 @@ mod tests {
             &panel.param_info[0],
             &panel.state.mod_state,
             0,
+            false,
         );
         // Drawer height includes the post-drawer break (DRAWER_BOTTOM_GAP).
         assert!((expanded_h - base_h - audio_h - DRAWER_BOTTOM_GAP).abs() < 0.1);
