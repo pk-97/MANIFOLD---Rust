@@ -28,11 +28,18 @@ grades and changes nothing is a valid pass; bias toward silence.
 2. **Grade each injection.** Read the transcript around it (the window before,
    ~40 events after). Two labels, human-judgment level, mechanical score is
    input not verdict: `correct` — did the named drift actually exist? Canonical
-   values ONLY: `true`, `false`, or `"miss"` (step 3) — never free-text like
-   `"TP"`/`"FP"`/`"y"`/`"n"`. `effective` — did behavior change in the direction
-   the payload asks? Canonical values ONLY: `true`, `false`, or `"unclear"`.
-   Enforce mechanically: `python3 eval/check_grades.py` before grading
-   (baseline) and after (gate — a grading session may not add violations).
+   values ONLY: `true`, `false`, `"miss"` (step 3), or `"unclear"` — never
+   free-text like `"TP"`/`"FP"`/`"y"`/`"n"`. Use `"unclear"` for `correct` only
+   when the drift's *existence* is genuinely undeterminable from the evidence
+   (a worker fire whose move_id/window is lost to mailbox overwrite or colliding
+   attribution); it is excluded from precision denominators, so never reach for
+   it to dodge a call you can make. `effective` — did behavior change in the
+   direction the payload asks? Canonical values ONLY: `true`, `false`,
+   `"unclear"`, or `"n/a"` — where `"n/a"` is used ONLY on a `correct:"miss"`
+   record (a false negative delivered no payload, so effectiveness is undefined,
+   not merely unknown). Enforce mechanically: `python3 eval/check_grades.py`
+   before grading (baseline) and after (gate — a grading session may not add
+   violations).
    Append to `eval/live_grades.jsonl`:
    `{ts, session_id, seq, move_id, correct, effective, ordinal, notes}` —
    plus `agent_id` when the fire was a worker nudge: (session_id, seq) alone
