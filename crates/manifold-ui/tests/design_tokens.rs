@@ -59,7 +59,12 @@ use std::path::{Path, PathBuf};
 // own existing (232,168,92,255) warning-amber literal — already repeated
 // elsewhere in this file pre-P4, not tokenized here either; that cleanup is
 // the §15 ramp's job, not this phase's). 193 (inherited) + 5 (P4) = 198.
-const COLOR_BASELINE: usize = 198;
+// 198→199, 2026-07-11: REALTIME_3D P3 added a 9th port-pin-colour const
+// (`PORT_ATMOSPHERE_COLOR`) in graph_canvas for the new `PortType::Atmosphere`
+// wire — same grandfathered defined-once-const pattern as the eight pin
+// colours beside it (Texture2D/3D, Scalar, Array, Camera, Light, Material,
+// Transform), folded into the same pin-colour debt the §15 ramp tokenises.
+const COLOR_BASELINE: usize = 199;
 const RADIUS_BASELINE: usize = 0;
 
 #[test]
