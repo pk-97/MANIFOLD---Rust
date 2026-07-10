@@ -44,10 +44,15 @@ sys.path.insert(0, DAEMON_DIR)
 
 BOUNCE_DIR = os.path.join(DAEMON_DIR, "verdicts", "ask_question_bounced")
 
-# 10s not 5: `claude -p` spawn overhead alone is seconds; against a question
-# that pauses the human for minutes this is still free, and a timeout fails
-# open. Dial for a later pass if telemetry shows it starving.
-ASK_GATE_TIMEOUT_S = 10
+# 30s not 10 (raised 2026-07-10): telemetry 07-05..07-09 showed 13/14
+# semantic calls timing out — `claude -p` spawn overhead alone is seconds, so
+# the 10s budget sat just under the healthy mode (spawn + ~3s call) and the
+# tier effectively didn't exist. Against a question that pauses the human for
+# minutes, 30s is still free. The saturated mode (minutes, fleet throttling)
+# is not solved by any budget — common.classifier_throttled() skips the call
+# outright when the last classifier call ran slow, instead of burning a dead
+# wait. A timeout still fails open, and still refreshes the throttle stamp.
+ASK_GATE_TIMEOUT_S = 30
 
 ASK_GATE_RUBRIC = """You judge ONE question that an AI coding agent is about to ask its human
 operator. Decide whether the question should reach the human at all. You are
@@ -151,19 +156,25 @@ def main():
             # Synchronous because a question is rare and already blocking;
             # any error/timeout/low-confidence verdict falls open.
             tier = "semantic"
-            verdict = common.call_classifier(
-                ASK_GATE_RUBRIC,
-                json.dumps(questions, indent=1, default=str),
-                timeout=ASK_GATE_TIMEOUT_S,
-            )
-            g = verdict.get("gate") if isinstance(verdict, dict) else None
-            confidence = verdict.get("confidence") if isinstance(verdict, dict) else None
-            error = verdict.get("error") if isinstance(verdict, dict) else "no-verdict"
-            gate = g if isinstance(g, str) else None
-            if g in ASK_GATE_REASONS and isinstance(confidence, (int, float)) and confidence >= 0.8:
-                evidence = verdict.get("evidence")
-                quoted = f'\n\n(Flagged text: "{evidence}")' if evidence else ""
-                reason = ASK_GATE_REASONS[g] + quoted
+            if common.classifier_throttled():
+                # The last classifier call (any caller) timed out or crawled —
+                # the account is saturated, a synchronous wait would be dead.
+                # Skip instantly, fail open, leave the skip in telemetry.
+                error = "skipped-throttled"
+            else:
+                verdict = common.call_classifier(
+                    ASK_GATE_RUBRIC,
+                    json.dumps(questions, indent=1, default=str),
+                    timeout=ASK_GATE_TIMEOUT_S,
+                )
+                g = verdict.get("gate") if isinstance(verdict, dict) else None
+                confidence = verdict.get("confidence") if isinstance(verdict, dict) else None
+                error = verdict.get("error") if isinstance(verdict, dict) else "no-verdict"
+                gate = g if isinstance(g, str) else None
+                if g in ASK_GATE_REASONS and isinstance(confidence, (int, float)) and confidence >= 0.8:
+                    evidence = verdict.get("evidence")
+                    quoted = f'\n\n(Flagged text: "{evidence}")' if evidence else ""
+                    reason = ASK_GATE_REASONS[g] + quoted
 
         try:
             import valve

@@ -409,6 +409,41 @@ def _stable_transcript_size(transcript_path):
     return max(second, third)
 
 
+# DESIGN.md §2 Stop-wait CONVERT fix (sleep pass 2, PASS2_AGENDA item 1).
+# The catch-up wait as first built waited passively for the observer's
+# `.offset` heartbeat to reach the transcript size at Stop. The 2026-07-07
+# durationMs forensics found it CONVERTED nothing: of 114 post-fix Stop
+# invocations the wait either returned <0.1s (a verdict already on disk at Stop
+# entry — the step-1 fast path) or ran the full ~10.5s cap; ZERO landed in
+# between, i.e. no wait ever delivered a turn-final verdict it didn't already
+# have. Root cause: the observer classifies the turn-final window on its own
+# 1s poll cadence, often behind a backlog of earlier windows in the same
+# synchronous drain, and only publishes its offset (all-or-nothing) after that
+# whole drain finishes — so within the cap the wait sees neither the offset
+# advance nor a verdict. The poke below asks the observer to classify the
+# turn-final window FIRST (see observer.py _drain priority path) and to remove
+# this file once it has classified through `target`; the wait then delivers any
+# verdict (mailbox checked first) or, on a no-drift turn, breaks the instant the
+# poke clears instead of burning the cap. Best-effort on both sides; a
+# dead/stalled observer never clears it and the wait still caps out, fail-open.
+def _write_poke(poke_path, target):
+    try:
+        os.makedirs(os.path.dirname(poke_path), exist_ok=True)
+        tmp = f"{poke_path}.tmp.{os.getpid()}"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(str(target))
+        os.replace(tmp, poke_path)
+    except OSError:
+        pass
+
+
+def _clear_poke(poke_path):
+    try:
+        os.remove(poke_path)
+    except OSError:
+        pass
+
+
 # ---- mechanical/unverified-done-claim (DESIGN.md §2h.6(c)) ----
 #
 # The zero-latency tier for the anchor/verify-claim family: the 2026-07-07
@@ -839,6 +874,11 @@ def main():
             if os.path.exists(offset_path) and valve.observer_alive(session_id):
                 target = _stable_transcript_size(transcript_path)
             if target is not None:
+                # CONVERT the wait: poke the observer to classify the turn-final
+                # window now (and first), instead of waiting for it to get there
+                # on its own poll cadence. See _write_poke's block comment above.
+                poke_path = os.path.join(valve.VERDICTS_DIR, f"{session_id}.classify-now")
+                _write_poke(poke_path, target)
                 deadline = time.time() + STOP_WAIT_CAP_S
                 while True:
                     # Verdicts land inside the drain, before the heartbeat
@@ -846,9 +886,17 @@ def main():
                     # the moment it exists, not a poll later.
                     block, seq, move_id = valve.pending_injection(mailbox_key, agent_id=agent_id)
                     if block:
+                        _clear_poke(poke_path)
                         valve.write_consumed(mailbox_key, seq)
                         _block(block, {"seq": seq, "move_id": move_id, "stop_wait": True})
                         return
+                    # The observer removes the poke once it has classified
+                    # through `target`. Poke gone with no verdict above ⇒ the
+                    # turn-final text was judged and carried no drift; stop
+                    # waiting rather than burning the cap (converts the no-fire
+                    # majority — the §2h.6 latency tax).
+                    if not os.path.exists(poke_path):
+                        break
                     try:
                         with open(offset_path, encoding="utf-8") as f:
                             drained = int(f.read().strip() or "0")
@@ -859,6 +907,7 @@ def main():
                     time.sleep(0.25)
                 # Caught up (or capped): one final mailbox read for a verdict
                 # written by the drain that closed the gap.
+                _clear_poke(poke_path)
                 block, seq, move_id = valve.pending_injection(mailbox_key, agent_id=agent_id)
                 if block:
                     valve.write_consumed(mailbox_key, seq)

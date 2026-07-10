@@ -6,6 +6,62 @@ starts from one file. Procedure: RUNBOOK.md. Authoring/editing moves:
 MOVE_AUTHORING.md first. This agenda is ordered; items 1–3 are the pass's
 reason to exist.
 
+## Pre-pass update (Fable, 2026-07-10) — read before starting
+
+Context that changed after this agenda was compiled. Three days of heavy
+automated sessions begin ~2026-07-10; Peter's call is to run this pass BEFORE
+that window if possible (the structural fixes below raise whisper quality on
+the daemon's highest-traffic days and stop known FP classes polluting that
+corpus), freeze daemon config through the window, then run a short grading
+addendum on the heavy-window corpus afterwards.
+
+1. **Item 5's ask-gate numbers are stale.** Telemetry 07-05..07-09: 14
+   semantic-tier calls, 13 timeouts (fail-open), 1 verdict — the tier
+   effectively didn't exist; only the regex tier did real work (2 denies).
+   Root cause: 10s budget vs multi-second `claude -p` spawn overhead plus
+   bimodal API latency. FIXED 2026-07-10 (lane/ask-gate-throttle): budget
+   30s + `common.classifier_throttled()` stamp-skip — `call_classifier` now
+   stamps every call's latency to `verdicts/classifier_latency.json`; the
+   gate skips the semantic tier instantly (telemetry `error:
+   "skipped-throttled"`) when the last call timed out or ran >= 20s within
+   the last 10 min. The pass should sanity-check the thresholds against
+   whatever telemetry exists by then; real validation is the heavy window.
+2. **New item — classifier model choice (from the Sonnet note, 2026-07-09,
+   amended by Fable 2026-07-10).** Decide Haiku vs Sonnet for the per-window
+   classifier ONLY by replay.py A/B on identical windows — and only AFTER
+   the verify-claim windowing fix lands, because no-claim-in-view FPs drag
+   both models equally and dilute the judgment comparison. Do NOT put Sonnet
+   on the ask-gate: with 13/14 timeouts the binding constraint there is
+   latency under throttling, which Sonnet worsens; revisit only with
+   post-fix telemetry showing the semantic tier alive and misjudging.
+3. **First-Opus-grading QC protocol (Peter, 2026-07-10: "proper reviews and
+   checks of what it produces").** This pass is the first time Opus grades;
+   its output gets reviewed by Fable. Produce, as pass artifacts: (a) the
+   per-family precision table in the night-half format above; (b) a list of
+   every override of a session self-grade with a one-line rationale each;
+   (c) every "miss" line separately. Run `eval/check_grades.py` BEFORE
+   grading (baseline) and AFTER (gate: you may not add violations).
+   Fable then reviews: all overrides, all misses, ~5 random grades, and any
+   structural-fix diffs — so write rationales assuming a skeptical reader
+   with the transcript one click away.
+4. **Corpus hygiene found by the new lint (2026-07-10).** `check_grades.py`
+   on the current corpora: 230 violations / 376 records. The TP/FP/y/n-era
+   records are harmless at read time (`slice_fires.load_grades` normalizes
+   them) but 17 records carry `correct: "unclear"` and 7 carry `effective:
+   "n/a"` — outside both the RUNBOOK vocabulary AND the normalizer; decide
+   per record (regrade, or extend the canonical vocabulary in RUNBOOK step 2
+   and the lint together). Also 21 session records with `correct: null`.
+5. **Heavy-window instrumentation — what the 3 days must answer.** (a)
+   ask-gate under load: count verdicts vs `skipped-throttled` vs timeouts at
+   the new budget; (b) worker shadow corpus: enough `worker_shadow_fire`
+   grades to decide live worker whispers (target: every shadow fire graded
+   in the addendum); (c) observer survival under fleet throttling (spawn
+   counts vs silent deaths); (d) a fresh specimen for the windowing fix:
+   2026-07-10 ungrounded-chat-claim FP on the Fable session (facts grounded
+   by earlier same-session tool output, invisible to the fire's window) —
+   graded in live_grades.session.jsonl, same evidence-outside-window family
+   as verify-claim's top FP class.
+
 ## Night-half results (Fable grading session, 2026-07-07 late — item 12's answer)
 
 The planned final-night grading session RAN. Every corrective fire since
@@ -172,10 +228,10 @@ is a code edit for this pass, one concern, small blast radius.
    hand-grade against transcripts (slice_fires.py recipe), flip delivery
    per-rule at ≥60% shadow precision; tune the placeholders (span 40 /
    flips 3).
-5. **Gate telemetry reads:** ask_gate (now tier-tagged; watch the 10s Haiku
-   budget under fleet throttling — n=2 real invocations, 1 timeout, as of
-   07-05) and workflow_gate (zero real launches as of 07-05 — still
-   unvalidated, not broken).
+5. **Gate telemetry reads:** ask_gate — numbers below are STALE, see
+   pre-pass update item 1 (13/14 timeouts by 07-09; budget+stamp fix landed
+   2026-07-10) — and workflow_gate (no longer zero: 4 real launches by
+   07-09, all parse_ok, announce-deny → pass pairs; validated, boring).
 6. **Advice tier, pass-level only:** reasoning-primer / design-primer /
    unread-edit graded from downstream behavior; `effective: unclear` is the
    expected common case; exclude advice from precision denominators or report

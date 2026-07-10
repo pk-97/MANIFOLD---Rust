@@ -119,6 +119,55 @@ def test_real_branch_delete_still_fires():
     check("real branch -D still fires (T1 acceptance)", hits == ["branch-delete"], hits)
 
 
+# ---- is-ancestor guard exemption (PASS2 fold-in, 2026-07-10 observation:
+# a compliant branch-delete &&-gated on `git merge-base --is-ancestor` in the
+# same compound command must NOT fire — GIT_TREE_DISCIPLINE §2's required
+# check) ----
+
+
+def test_branch_delete_gated_by_is_ancestor_is_exempt():
+    cmd = "git merge-base --is-ancestor lane/x origin/main && echo ANCESTOR-OK && git branch -D lane/x"
+    hits = common.detect_git_landing_signal("Bash", {"command": cmd})
+    check("guarded branch-delete does not fire", hits == [], hits)
+
+
+def test_branch_delete_gated_by_is_ancestor_this_sessions_specimen():
+    # The exact FP shape this session logged (d173aed1 seq 2): worktree teardown
+    # after an in-chain is-ancestor check.
+    cmd = ("git merge-base --is-ancestor lane/ask-gate-throttle origin/main && echo ANCESTOR-OK "
+           "&& git worktree remove .claude/worktrees/x && git branch -D lane/ask-gate-throttle")
+    hits = common.detect_git_landing_signal("Bash", {"command": cmd})
+    check("session specimen (worktree teardown) does not fire", hits == [], hits)
+
+
+def test_is_ancestor_guard_only_exempts_branch_delete_not_cherry_pick():
+    # cherry-pick is the OTHER twin-killer, unrelated to ancestry — never exempt.
+    cmd = "git merge-base --is-ancestor lane/x origin/main && git cherry-pick abc123 && git branch -D lane/x"
+    hits = common.detect_git_landing_signal("Bash", {"command": cmd})
+    check("cherry-pick still fires despite is-ancestor guard", hits == ["cherry-pick"], hits)
+
+
+def test_branch_delete_without_guard_still_fires():
+    # No is-ancestor anywhere → the protocol wasn't followed → fire as before.
+    cmd = "git worktree remove .claude/worktrees/x && git branch -D lane/x"
+    hits = common.detect_git_landing_signal("Bash", {"command": cmd})
+    check("unguarded branch-delete still fires", hits == ["branch-delete"], hits)
+
+
+def test_is_ancestor_mention_in_search_does_not_exempt_unrelated_delete():
+    # An `rg` search whose text contains "merge-base --is-ancestor" is not a git
+    # invocation (command-position anchoring), so it must NOT count as a guard.
+    cmd = "rg 'merge-base --is-ancestor' && git branch -D lane/x"
+    hits = common.detect_git_landing_signal("Bash", {"command": cmd})
+    check("searched-for is-ancestor text is not a real guard", hits == ["branch-delete"], hits)
+
+
+def test_remote_branch_delete_gated_by_is_ancestor_is_exempt():
+    cmd = "git merge-base --is-ancestor lane/x origin/main && git push origin --delete lane/x"
+    hits = common.detect_git_landing_signal("Bash", {"command": cmd})
+    check("guarded remote branch-delete does not fire", hits == [], hits)
+
+
 # ---- observer.py: deterministic mechanical fire ----
 
 
@@ -201,6 +250,12 @@ def main():
     test_both_categories_can_fire_together()
     test_search_for_command_text_does_not_fire()
     test_real_branch_delete_still_fires()
+    test_branch_delete_gated_by_is_ancestor_is_exempt()
+    test_branch_delete_gated_by_is_ancestor_this_sessions_specimen()
+    test_is_ancestor_guard_only_exempts_branch_delete_not_cherry_pick()
+    test_branch_delete_without_guard_still_fires()
+    test_is_ancestor_mention_in_search_does_not_exempt_unrelated_delete()
+    test_remote_branch_delete_gated_by_is_ancestor_is_exempt()
     test_check_git_landing_fires_flag_for_cherry_pick()
     test_check_git_landing_fires_flag_for_branch_delete()
     test_check_git_landing_no_hit_writes_nothing()

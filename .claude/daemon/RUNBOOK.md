@@ -31,6 +31,8 @@ grades and changes nothing is a valid pass; bias toward silence.
    values ONLY: `true`, `false`, or `"miss"` (step 3) — never free-text like
    `"TP"`/`"FP"`/`"y"`/`"n"`. `effective` — did behavior change in the direction
    the payload asks? Canonical values ONLY: `true`, `false`, or `"unclear"`.
+   Enforce mechanically: `python3 eval/check_grades.py` before grading
+   (baseline) and after (gate — a grading session may not add violations).
    Append to `eval/live_grades.jsonl`:
    `{ts, session_id, seq, move_id, correct, effective, ordinal, notes}` —
    plus `agent_id` when the fire was a worker nudge: (session_id, seq) alone
