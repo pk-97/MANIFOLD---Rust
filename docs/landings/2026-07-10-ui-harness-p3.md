@@ -33,5 +33,5 @@ Every render the harness touches — main window (P0/P1) and editor window (P3) 
 
 ## Open / deferred
 
-- **BUG-094** (from P2) remains: `render_ui_to_png`'s overlay pass traversal divergence — latent, tracked. (Note: P3's editor overlays go through the extracted seam now, so they are faithful; BUG-094 is the *main-window* `render_ui_to_png` overlay pass, a separate immediate-mode path.)
+- **BUG-097** (from P2, renumbered from BUG-094 to resolve a concurrent-session collision with fluidsim3d) remains: `render_ui_to_png`'s overlay pass traversal divergence — latent, tracked. (Note: P3's editor overlays go through the extracted seam now, so they are faithful; BUG-097 is the *main-window* `render_ui_to_png` overlay pass, a separate immediate-mode path.)
 - Deferred (design §Deferred, unchanged): monitor/output windows, CI wiring, Retina 2x, perform-mode surfaces, playback-stepped capture.
