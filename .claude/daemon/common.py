@@ -367,11 +367,15 @@ def detect_git_landing_signal(name, input_):
     position via the shared segment splitter (TICKETS.md T1 — the prior
     regex scanned the raw string anywhere, so `rg 'git branch -D'` — a
     SEARCH for that text, no git invocation at all — falsely fired).
-    Never raises. Returns a sorted list of category names (possibly empty)."""
+    A branch-delete gated by a `git merge-base --is-ancestor` segment in the
+    same compound command is exempt (the protocol-compliant delete — see the
+    ancestor_guard note below). Never raises. Returns a sorted list of category
+    names (possibly empty)."""
     if name != "Bash" or not isinstance(input_, dict):
         return []
     cmd = input_.get("command") or ""
     hits = set()
+    ancestor_guard = False
     try:
         for toks in _landing_shlex_segments(cmd):
             toks = _landing_strip_leading_keywords(toks)
@@ -384,8 +388,22 @@ def detect_git_landing_signal(name, input_):
                 hits.add("branch-delete")
             elif sub == "push" and any(t == "--delete" or t.startswith("--delete=") for t in rest):
                 hits.add("branch-delete")
+            elif sub == "merge-base" and "--is-ancestor" in rest:
+                ancestor_guard = True
     except Exception:
         return []
+    # eval/observations.session.jsonl (2026-07-10) + 8 graded FPs across the
+    # graded week: a branch-delete &&-gated on `git merge-base --is-ancestor`
+    # in the SAME compound command is exactly the protocol
+    # GIT_TREE_DISCIPLINE.md §2 requires ("never delete a branch until
+    # merge-base --is-ancestor confirms its commits are on main"). Firing on a
+    # compliant, guarded delete trains alert-blindness on git-landing's
+    # highest-frequency form (26 fires/week). Deterministic, regex-tier: a
+    # merge-base --is-ancestor segment anywhere in the same command string
+    # exempts the branch-delete. cherry-pick — the other twin-killer, unrelated
+    # to ancestry — is never exempted.
+    if ancestor_guard:
+        hits.discard("branch-delete")
     return sorted(hits)
 
 
@@ -718,6 +736,48 @@ def format_session_facts(state, current_event_count):
     return "; ".join(parts)
 
 
+# DESIGN.md §2 / PASS2_AGENDA item 3 (sleep pass 2): anchor/verify-claim's
+# biggest and cleanest FP class (night-half taxonomy class (a), ~11/50 graded
+# fires) is windows with NO stated claim in view — recon reads, task-start
+# UserPromptSubmit windows, waiting-on-TaskOutput — where the classifier fired
+# on tool-heavy cadence rather than an actual assertion (#32 cadence-fire,
+# CONFIRMED). This is a deterministic claim-PRESENCE gate over the window's
+# RECENT assistant text: verify-claim may only fire when the assistant actually
+# stated a completion / success / verification claim (the kind of statement
+# verify-claim exists to check). Suppression-ONLY — the observer applies it as
+# a post-filter that can only REMOVE a verify-claim fire, never add one, so it
+# cannot re-introduce any prior noise class; its only risk is over-suppression
+# (recall), which the vocabulary is kept deliberately BROAD to bound (a
+# too-broad match errs toward KEEPING the classifier's fire, never toward
+# suppressing a real TP). Recon narration ("let me read X", "checking Y",
+# questions, "waiting for the agent") carries none of these markers.
+CLAIM_MARKERS_RE = re.compile(
+    r"\b(?:"
+    r"done|fix(?:ed|es)?|works?|working|land(?:ed|s)?|shipp(?:ed|ing)|pushed|"
+    r"implement(?:ed|s)?|completed?|complete|resolv(?:ed|es)?|ready|"
+    r"passes|passing|passed|verif(?:ied|ies)|confirm(?:ed|s)?|correct(?:ly)?|"
+    r"succeed(?:s|ed)?|solved?|functional|"
+    r"wired\s+up|in\s+place|good\s+to\s+go|"
+    r"should\s+(?:now\s+)?(?:work|be|fix|resolve|handle|pass)|"
+    r"now\s+(?:works?|renders?|handles?|passes|correct)|"
+    r"is\s+(?:now\s+)?(?:correct|working|fixed|resolved|done|right)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def contains_claim(texts):
+    """Deterministic claim-presence gate for anchor/verify-claim (PASS2 item 3,
+    class (a) FP fix). `texts` is the window's RECENT assistant texts. Returns
+    True if any reads as a completion / success / verification assertion. Kept
+    broad on purpose: erring toward True keeps the classifier's judgment (safe),
+    erring toward False would suppress a real fire (recall loss). Never raises."""
+    for t in texts or ():
+        if isinstance(t, str) and CLAIM_MARKERS_RE.search(t):
+            return True
+    return False
+
+
 def parse_ts(ts_raw):
     if not ts_raw:
         return None
@@ -794,6 +854,10 @@ class WindowState:
         closed = {
             "end_event_count": self.total_tool_event_count,
             "end_ts": ts,
+            # PASS2 item 3: deterministic claim-presence over RECENT, computed
+            # here (single windowing source) so observer.py and replay.py apply
+            # the identical verify-claim class-(a) gate without drifting.
+            "has_claim": contains_claim(self.recent_texts),
             "text": format_window(
                 self.current_task,
                 self.ledger_buffer,
