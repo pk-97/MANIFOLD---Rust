@@ -1,9 +1,55 @@
 //! Windowless render of a built `UIRoot` to a PNG. Mirrors the proven headless
-//! pattern in `manifold-renderer/tests/...` (`GpuDevice::new()` has no window),
-//! plus the clip passes from `app_render`: clip bodies, optional injected
-//! thumbnails, and clip names are immediate-mode passes (NOT `UITree` nodes),
-//! drawn on top of the tree in order (bodies → thumbs → names) with `Load`.
-//! See `docs/HEADLESS_UI_HARNESS.md`.
+//! pattern in `manifold-renderer/tests/...` (`GpuDevice::new()` has no window).
+//!
+//! P2 (`docs/UI_HARNESS_UNIFICATION_DESIGN.md`, D1/D3): Pass 1 (the panel
+//! chrome — headers, ruler, lane backgrounds) used to be a fresh
+//! `renderer.render_tree(&ui.tree, None)` every call — the exact "whole-tree
+//! fresh every frame" lookalike the design's audit named as structurally
+//! blind to a stale-atlas-pixel bug (no `UICacheManager` in the loop at all).
+//! It now goes through the real cache: build a `UICacheManager`, `ensure_atlas`,
+//! `invalidate_all` (this function is always a fresh device/cache/renderer per
+//! call — no state persists across calls — so `invalidate_all`'s full-clear
+//! path is the correct behavior, not a lesser substitute for the incremental
+//! Load path, which no single-shot render can exercise anyway), then call
+//! `crate::ui_frame::composite_main_ui_frame` — the SAME function
+//! `present_all_windows` and `cache_path_full_render` call. The genuinely
+//! separate immediate-mode passes below (clip bodies, optional injected
+//! thumbnails, clip names, automation lanes, top-level overlays — NOT `UITree`
+//! nodes) are unchanged in mechanism, drawn `Load` on top of the composited
+//! offscreen. See `docs/HEADLESS_UI_HARNESS.md`.
+//!
+//! ⚠ P2 VERIFY-AT-IMPL result (reported to the orchestrator per the phase
+//! brief, NOT silently absorbed as a match — see the P2 phase report for the
+//! full writeup): diffing these immediate passes against the live app's
+//! (`app_render.rs` Pass 4b/4b'/4b''/4c/5) found:
+//! - **Clips (Pass 2)** — matches: same `emit_clips`/`ClipBody` fields the
+//!   live app resolves in a non-drag frame (drag lift/ghost/marquee fields
+//!   are live-only transitional-drag state, correctly absent here).
+//! - **Automation lanes (Pass 4b)** — matches: identical
+//!   `emit_automation_lanes` call over the same `automation_lane_screens`.
+//! - **Thumbnails (Pass 3, `--thumbs` only)** — draws through the REAL
+//!   `ClipThumbGpu::render`, but the live app's atlas-cell UV windows (from
+//!   `content_state.clip_atlas_layout`, published by the content thread) are
+//!   replaced with `thumbs::make_test_atlas`/`build_quads` — a synthetic
+//!   fixture, since no content thread exists headless. Same draw primitive,
+//!   different (and already-labeled, `with_thumbs` opt-in) source geometry —
+//!   not a silent divergence, a pre-existing documented substitution.
+//! - **Overlays (Pass 5)** — a REAL divergence, found here for the first
+//!   time: this pass calls `renderer.render_tree_range(&ui.tree, start, end)`
+//!   for each `overlay_draw` range. The live app (`app_render.rs:4617`) calls
+//!   `render_sub_region` instead, with a comment explaining why:
+//!   `overlay_draw`'s `(start, end)` deliberately EXCLUDES the region's own
+//!   root node (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md`), and `render_tree_range`
+//!   is a root-scan (`UITree::traverse_range`) that would find no roots in
+//!   such a range and render NOTHING — whereas `render_sub_region`'s flat,
+//!   ancestor-aware scan (`traverse_flat_range`) picks the children up
+//!   regardless. The live app also wraps each range in `push_depth`/
+//!   `draw_shadow`/`pop_depth`, none of which this pass does. Left unchanged
+//!   here (escalation, not a silent fix — see the phase report and
+//!   `docs/BUG_BACKLOG.md`): whether an overlay range in practice ever
+//!   excludes its own root for any scene this harness currently exercises is
+//!   unverified, so a same-session fix risked changing behavior nobody asked
+//!   this phase to verify.
 
 use std::ffi::c_void;
 use std::slice;
@@ -13,18 +59,28 @@ use manifold_renderer::automation_lane_draw::emit_automation_lanes;
 use manifold_renderer::clip_draw::{emit_clip_names, emit_clips, ClipBody};
 use manifold_renderer::clip_thumb_gpu::ClipThumbGpu;
 use manifold_renderer::render_target::RenderTarget;
+use manifold_renderer::ui_cache_manager::UICacheManager;
 use manifold_renderer::ui_renderer::UIRenderer;
 
+use super::composite_resources::{composite_frame, CompositeResources};
 use super::thumbs;
 use crate::ui_root::UIRoot;
 
 const FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba8Unorm;
+/// The seam's offscreen/atlas format (`crate::ui_frame::composite_main_ui_frame`
+/// and `CompositeResources` are both hard-wired to this, matching the live app).
+const ATLAS_FORMAT: GpuTextureFormat = GpuTextureFormat::Bgra8Unorm;
 
 /// Render the whole UI (`ui.tree` + clip bodies + optional injected thumbnails +
 /// clip names) into a `tex_w`×`tex_h` texture and save as PNG. `tex_w` must be a
 /// multiple of 64 so the readback stride (`tex_w * 4`) is 256-byte aligned.
+/// `ui` is `&mut` (was `&UIRoot`): `composite_main_ui_frame`'s panel-cache pass
+/// (Pass 1, below) clears the dirty ranges it just painted via
+/// `ui_root.tree.clear_dirty_range` — see `ui_frame.rs`'s module doc deviation
+/// #2. Harmless to callers: every caller already held `ui` behind a `mut`
+/// binding (it was built via `sync_build(&mut ui, ...)` moments earlier).
 pub fn render_ui_to_png(
-    ui: &UIRoot,
+    ui: &mut UIRoot,
     selection: &manifold_ui::UIState,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
     tex_w: u32,
@@ -36,20 +92,66 @@ pub fn render_ui_to_png(
     assert_eq!(tex_w % 64, 0, "tex_w must be a multiple of 64 for aligned readback");
 
     let device = GpuDevice::new();
-    let mut renderer = UIRenderer::new(&device, FORMAT);
-    let target = RenderTarget::new(&device, tex_w, tex_h, FORMAT, "ui-snap");
+    let mut renderer = UIRenderer::new(&device, ATLAS_FORMAT);
     let dpi = f64::from(scale);
 
-    // Pass 1: the UITree — headers, ruler, lane backgrounds, playhead, markers.
-    renderer.begin_frame();
-    renderer.render_tree(&ui.tree, None);
-    let drew = renderer.prepare(&device, tex_w, tex_h, dpi);
-    {
-        let mut enc = device.create_encoder("ui-snap-tree");
-        renderer.render(&mut enc, &target.texture, GpuLoadAction::Clear);
-        enc.commit_and_wait_completed();
+    // Pass 1 (P2, D1/D3): the real cache path, not a full-repaint lookalike —
+    // see the module doc above.
+    let mut cache = UICacheManager::new(ATLAS_FORMAT, dpi);
+    cache.set_scale_factor(dpi);
+    cache.ensure_atlas(&device, tex_w, tex_h);
+    cache.invalidate_all();
+    let res = CompositeResources::new(&device, tex_w, tex_h);
+    composite_frame(&device, &mut renderer, &mut cache, ui, &res, dpi);
+    let target_tex = &res.offscreen;
+
+    draw_immediate_passes(
+        &device,
+        &mut renderer,
+        ui,
+        selection,
+        automation_latched,
+        target_tex,
+        tex_w,
+        tex_h,
+        scale,
+        with_thumbs,
+    );
+
+    // `target_tex` is BGRA (the seam's atlas/offscreen format, matching the
+    // live app) — swap B/R per pixel for the RGBA PNG (display-only swizzle,
+    // applied only at save time, same pattern as `cache_path_full_render`'s
+    // `save_bgra_png`).
+    let mut bytes = readback(&device, target_tex, tex_w, tex_h);
+    for px in bytes.chunks_exact_mut(4) {
+        px.swap(0, 2);
     }
-    assert!(drew, "prepare() reported no UI content to draw");
+    image::save_buffer(path, &bytes, tex_w, tex_h, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {path}: {e}"));
+}
+
+/// The genuinely-separate immediate-mode passes (clip bodies, optional
+/// injected thumbnails, clip names, automation lanes, top-level overlays —
+/// NOT `UITree` nodes) drawn `Load` on top of an already-composited
+/// `target_tex`. Factored out of [`render_ui_to_png`] (P2) so `script.rs`'s
+/// `Runner` can draw the identical passes on top of its OWN persistent
+/// composited offscreen (built once per script run, not per snapshot) —
+/// see that module's `write_png`. See the module doc above for the P2
+/// VERIFY-AT-IMPL diff against the live app's own Pass 4b/4b'/4b''/4c/5.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_immediate_passes(
+    device: &GpuDevice,
+    renderer: &mut UIRenderer,
+    ui: &UIRoot,
+    selection: &manifold_ui::UIState,
+    automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
+    target_tex: &GpuTexture,
+    tex_w: u32,
+    tex_h: u32,
+    scale: f32,
+    with_thumbs: bool,
+) {
+    let dpi = f64::from(scale);
 
     // Clips are immediate-mode passes, not tree nodes (same emit path as
     // app_render 4b/5). Resolve the visible clips once, reused across passes.
@@ -78,25 +180,25 @@ pub fn render_ui_to_png(
             .collect();
         renderer.begin_frame();
         renderer.push_immediate_clip(tracks.x, tracks.y, tracks.width, tracks.height);
-        emit_clips(&mut renderer, &bodies);
+        emit_clips(renderer, &bodies);
         renderer.pop_immediate_clip();
-        if renderer.prepare(&device, tex_w, tex_h, dpi) {
+        if renderer.prepare(device, tex_w, tex_h, dpi) {
             let mut enc = device.create_encoder("ui-snap-clips");
-            renderer.render(&mut enc, &target.texture, GpuLoadAction::Load);
+            renderer.render(&mut enc, target_tex, GpuLoadAction::Load);
             enc.commit_and_wait_completed();
         }
 
         // Pass 3: injected test thumbnails (Load), through the real ClipThumbGpu.
         if with_thumbs {
-            let atlas = thumbs::make_test_atlas(&device);
+            let atlas = thumbs::make_test_atlas(device);
             let quads = thumbs::build_quads(&clip_rects);
             if !quads.is_empty() {
-                let mut thumb = ClipThumbGpu::new(&device, FORMAT);
+                let mut thumb = ClipThumbGpu::new(device, ATLAS_FORMAT);
                 let mut enc = device.create_encoder("ui-snap-thumbs");
                 thumb.render(
-                    &device,
+                    device,
                     &mut enc,
-                    &target.texture,
+                    target_tex,
                     tex_w,
                     tex_h,
                     scale,
@@ -110,10 +212,10 @@ pub fn render_ui_to_png(
 
         // Pass 4: clip names on top (Load).
         renderer.begin_frame();
-        emit_clip_names(&mut renderer, &clip_rects, tracks);
-        if renderer.prepare(&device, tex_w, tex_h, dpi) {
+        emit_clip_names(renderer, &clip_rects, tracks);
+        if renderer.prepare(device, tex_w, tex_h, dpi) {
             let mut enc = device.create_encoder("ui-snap-names");
-            renderer.render(&mut enc, &target.texture, GpuLoadAction::Load);
+            renderer.render(&mut enc, target_tex, GpuLoadAction::Load);
             enc.commit_and_wait_completed();
         }
     }
@@ -126,10 +228,10 @@ pub fn render_ui_to_png(
     if !automation_lanes.is_empty() {
         let tracks = ui.viewport.get_tracks_rect();
         renderer.begin_frame();
-        emit_automation_lanes(&mut renderer, &automation_lanes, tracks);
-        if renderer.prepare(&device, tex_w, tex_h, dpi) {
+        emit_automation_lanes(renderer, &automation_lanes, tracks);
+        if renderer.prepare(device, tex_w, tex_h, dpi) {
             let mut enc = device.create_encoder("ui-snap-automation-lanes");
-            renderer.render(&mut enc, &target.texture, GpuLoadAction::Load);
+            renderer.render(&mut enc, target_tex, GpuLoadAction::Load);
             enc.commit_and_wait_completed();
         }
     }
@@ -144,16 +246,12 @@ pub fn render_ui_to_png(
         for &(start, end) in &ui.overlay_draw {
             renderer.render_tree_range(&ui.tree, start, end);
         }
-        if renderer.prepare(&device, tex_w, tex_h, dpi) {
+        if renderer.prepare(device, tex_w, tex_h, dpi) {
             let mut enc = device.create_encoder("ui-snap-overlays");
-            renderer.render(&mut enc, &target.texture, GpuLoadAction::Load);
+            renderer.render(&mut enc, target_tex, GpuLoadAction::Load);
             enc.commit_and_wait_completed();
         }
     }
-
-    let bytes = readback(&device, &target.texture, tex_w, tex_h);
-    image::save_buffer(path, &bytes, tex_w, tex_h, image::ExtendedColorType::Rgba8)
-        .unwrap_or_else(|e| panic!("save {path}: {e}"));
 }
 
 /// Render a graph-editor canvas — nodes, ports, wires, and **real per-node
@@ -829,4 +927,49 @@ pub(super) fn readback(device: &GpuDevice, texture: &GpuTexture, w: u32, h: u32)
     let bytes: &[u8] =
         unsafe { slice::from_raw_parts(ptr.cast::<c_void>().cast::<u8>(), total as usize) };
     bytes.to_vec()
+}
+
+/// Save BGRA8 readback bytes as an RGBA8 PNG — swap B/R per pixel (a
+/// display-only swizzle; the seam's atlas/offscreen format is BGRA8,
+/// matching the live app — `CompositeResources`/`crate::ui_frame`). `pub(super)`
+/// for the same reason as [`readback`]: shared by `render_ui_to_png`,
+/// `script.rs`'s `Runner` (P2), and `mod.rs`'s `cache_path_full_render`.
+pub(super) fn save_bgra_png(bgra: &[u8], w: u32, h: u32, path: &std::path::Path) {
+    let mut rgba = bgra.to_vec();
+    for px in rgba.chunks_exact_mut(4) {
+        px.swap(0, 2);
+    }
+    image::save_buffer(path, &rgba, w, h, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {}: {e}", path.display()));
+}
+
+/// Assemble filmstrip tiles (each `tile_w`x`tile_h`, raw BGRA8 bytes) into
+/// ONE contact-sheet PNG, `cols` tiles per row (D9a; trailing cells on an
+/// incomplete last row stay black). `pub(super)`, same sharing rationale as
+/// [`save_bgra_png`].
+pub(super) fn save_filmstrip_png(
+    tiles: &[Vec<u8>],
+    tile_w: u32,
+    tile_h: u32,
+    cols: u32,
+    path: &std::path::Path,
+) {
+    assert!(!tiles.is_empty(), "filmstrip must have at least one tile");
+    let n = tiles.len() as u32;
+    let rows = n.div_ceil(cols);
+    let sheet_w = tile_w * cols;
+    let sheet_h = tile_h * rows;
+    let mut sheet = vec![0u8; (sheet_w * sheet_h * 4) as usize];
+    let row_bytes = (tile_w * 4) as usize;
+    for (i, tile) in tiles.iter().enumerate() {
+        let i = i as u32;
+        let (col, row) = (i % cols, i / cols);
+        let (ox, oy) = (col * tile_w, row * tile_h);
+        for y in 0..tile_h {
+            let src_off = y as usize * row_bytes;
+            let dst_off = (((oy + y) * sheet_w + ox) as usize) * 4;
+            sheet[dst_off..dst_off + row_bytes].copy_from_slice(&tile[src_off..src_off + row_bytes]);
+        }
+    }
+    save_bgra_png(&sheet, sheet_w, sheet_h, path);
 }

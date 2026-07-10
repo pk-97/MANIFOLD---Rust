@@ -348,7 +348,7 @@ _Generated from the node registry. Do not hand-edit. 217 nodes registered, group
 |---|---|---|---|---|
 | `AutoGain` | Auto Gain | effect | Stylize | 4 |
 | `BasicShapes` | Basic Shapes | generator | Pattern | 4 |
-| `BlackHole` | Black Hole | generator | Sim | 15 |
+| `BlackHole` | Black Hole | generator | Sim | 14 |
 | `BlobTracking` | Blob Track | effect | Diagnostic | 5 |
 | `Bloom` | Bloom | effect | Filmic | 1 |
 | `ChromaticAberration` | Chromatic Aberration | effect | Filmic | 5 |

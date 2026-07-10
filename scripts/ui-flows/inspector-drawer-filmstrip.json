@@ -1,0 +1,23 @@
+[
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "\ue005",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 12
+    }
+  },
+  "Snapshot"
+]

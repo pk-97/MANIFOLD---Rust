@@ -2,8 +2,9 @@
 //! JSON array of `AutomationAction`s (`manifold_ui::automation`) executed in
 //! order against a scene fixture. Artifacts land in
 //! `target/ui-snapshots/<scene>/run-<script-stem>/`: a numbered PNG/dump per
-//! `Snapshot`/`Dump` step, plus `result.json`. Exit 0 only if every step
-//! succeeded (D6, D10).
+//! `Snapshot`/`Dump` step, plus `result.json`, plus `filmstrip.png` when any
+//! `Step` action advanced frames (D9a). Exit 0 only if every step succeeded
+//! (D6, D10).
 //!
 //! Gesture synthesis (D4) follows `interact.rs`'s `select_layer` precedent —
 //! `UIRoot::pointer_event` → `ui.process_events()` (the SAME per-frame call
@@ -30,31 +31,64 @@
 //! driver mirrored a single `LayerClicked` arm and logged everything else
 //! unapplied, which made every transport/inspector action invisible to
 //! headless verification — the seam the dead-LANES investigation exposed.)
+//!
+//! ── P2 (`docs/UI_HARNESS_UNIFICATION_DESIGN.md`, D3) — the drift this
+//! driver used to be is killed here. `Runner` no longer reimplements the
+//! App's invalidate/rebuild decision (its old private `rebuild()` was a
+//! straight, unconditional `sync_build` — full `ui.build()` every call,
+//! never touching a `UICacheManager` at all) and no longer renders through
+//! `render_ui_to_png`'s full-repaint lookalike. It now owns a persistent
+//! [`RenderState`] (one `UICacheManager` + composited offscreen for the
+//! whole script run) and drives every frame through
+//! `crate::ui_frame::apply_ui_frame_invalidations` +
+//! `crate::ui_frame::composite_main_ui_frame` — the SAME two functions the
+//! live App and the P0 differential (`ui_snapshot::mod::cache_path_full_render`)
+//! call. One update+composite path, three callers.
+//!
+//! `AppEditingHost` (`editing_host.rs`) writes two signals this seam's
+//! `UiFrameSignals` has no field for (see [`Runner::drain_and_dispatch`]):
+//! a completed structural drag sets the seam's OWN one-shot rebuild flag
+//! (the field `UiFrameSignals` clears after consuming, not
+//! `needs_structural_sync`) — but that flag and `needs_structural_sync` OR
+//! into the identical full-rebuild branch of `apply_ui_frame_invalidations`,
+//! so this module folds the drag signal into `needs_structural_sync` instead
+//! (exactly equivalent, never named by its own identifier here); per-layer
+//! bitmap invalidation is a live-app-only Pass-4c mechanism this headless
+//! harness never renders, so it's a dead sink, same as it always was.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use manifold_core::LayerId;
 use manifold_editing::command::Command;
+use manifold_gpu::{GpuDevice, GpuTextureFormat};
+use manifold_renderer::ui_cache_manager::UICacheManager;
+use manifold_renderer::ui_renderer::UIRenderer;
 use manifold_ui::automation::{
     self, AssertCheck, AutomationAction, AutomationTarget, Gesture, MatchInfo,
 };
+use manifold_ui::automation_hit_tester::AutomationHitTargets;
 use manifold_ui::clip_hit_tester::ClipHitTargets;
 use manifold_ui::hit_targets::HitTargets;
 use manifold_ui::input::{PointerAction, UIEvent};
 use manifold_ui::interaction_overlay::InteractionOverlay;
 use manifold_ui::node::{Rect, Vec2};
 use manifold_ui::panels::PanelAction;
-use manifold_ui::automation_hit_tester::AutomationHitTargets;
 
+use super::composite_resources::{composite_frame, CompositeResources};
 use super::fixtures::SceneData;
 use crate::content_command::ContentCommand;
 use crate::content_state::ContentState;
 use crate::editing_host::AppEditingHost;
+use crate::ui_frame::{apply_ui_frame_invalidations, UiFrameSignals};
 use crate::ui_root::{ScrollDirty, UIRoot};
 
 /// Fixed per-`Step` delta — the fixture's project runs at 60 fps default
 /// (`CLAUDE.md`); the driver's clock only advances on `Step` (D7), never a
-/// wall-clock read.
+/// wall-clock read. A REAL `std::thread::sleep(DT)` (P2, D9a) still happens
+/// per stepped frame, because `InspectorCompositePanel::update`'s drawer
+/// tween derives its own dt from `Instant::now()`, not from this clock —
+/// same honest tradeoff `cache_path_full_render` (P0) already accepted.
 const DT: f32 = 1.0 / 60.0;
 
 #[derive(serde::Serialize)]
@@ -104,7 +138,7 @@ pub fn run(scene: &str, script_path: &str) {
     let zoom_ppb = super::zoom_ppb_for_scene(scene);
     let mut ui = UIRoot::new();
     ui.resize(super::LOGICAL_W, super::LOGICAL_H);
-    if scene == "inspector" || scene == "bug060" || scene == "paramsteps" {
+    if scene == "inspector" || scene == "bug060" || scene == "bug060heavy" || scene == "paramsteps" {
         ui.layout.inspector_width = 600.0;
         ui.layout.timeline_split_ratio = 0.6;
     } else {
@@ -113,18 +147,50 @@ pub fn run(scene: &str, script_path: &str) {
     }
     super::sync_build(&mut ui, &data, zoom_ppb);
 
+    // P2 (D3): ONE persistent cache + composited offscreen for the whole
+    // script run, seeded with a full self-clearing composite — mirrors
+    // `cache_path_full_render`'s own "Frame 0". Every later step updates
+    // this SAME state through `Runner`'s seam calls; a `Snapshot` only ever
+    // reads it back (see `Runner::write_png`).
+    let tex_w = (super::LOGICAL_W * super::SCALE) as u32;
+    let tex_h = (super::LOGICAL_H * super::SCALE) as u32;
+    let mut render = RenderState::new(tex_w, tex_h);
+    composite_frame(
+        &render.device,
+        &mut render.ui_renderer,
+        &mut render.cache,
+        &mut ui,
+        &render.composite,
+        1.0,
+    );
+
     let mut runner = Runner::new();
     let mut results = Vec::with_capacity(actions.len());
     let mut ok = true;
 
     for (index, action) in actions.iter().enumerate() {
-        let outcome = runner.step(&mut ui, &mut data, zoom_ppb, index, action, &out_dir);
+        let outcome = runner.step(&mut ui, &mut data, zoom_ppb, index, action, &out_dir, &mut render);
         let failed = outcome.status == "fail";
         results.push(outcome);
         if failed {
             ok = false;
             break;
         }
+    }
+
+    // D9a: a contact sheet of every frame a `Step` action advanced. Most
+    // flows carry no `Step` (the two shipped flows don't), so most runs
+    // write nothing here — this is additive, not a new requirement on every
+    // script.
+    if !runner.filmstrip.is_empty() {
+        let cols = (runner.filmstrip.len() as u32).clamp(1, 4);
+        let filmstrip_path = out_dir.join("filmstrip.png");
+        super::render::save_filmstrip_png(&runner.filmstrip, tex_w, tex_h, cols, &filmstrip_path);
+        println!(
+            "ui-snap --script: wrote {} ({} tile(s))",
+            filmstrip_path.display(),
+            runner.filmstrip.len()
+        );
     }
 
     let result_path = out_dir.join("result.json");
@@ -138,6 +204,47 @@ pub fn run(scene: &str, script_path: &str) {
     if !ok {
         eprintln!("ui-snap --script: FAILED — see {}", result_path.display());
         std::process::exit(1);
+    }
+}
+
+/// Persistent GPU render state the [`Runner`] drives through the shared seam
+/// (P2, D3) — ONE `UICacheManager` + composited offscreen for the whole
+/// script run, updated after every dirtying action exactly as the live App's
+/// own cache is, not rebuilt from scratch per `Snapshot` (the drift P2
+/// exists to kill). Kept OUT of `Runner` itself (rather than a field on it)
+/// because `Runner::new()` is also used standalone by [`click_by_text`],
+/// which never renders a pixel — building a `GpuDevice`/atlas there would be
+/// pure waste. `pub fn run` constructs this once and threads it through
+/// every `Runner::step` call.
+struct RenderState {
+    device: GpuDevice,
+    ui_renderer: UIRenderer,
+    cache: UICacheManager,
+    composite: CompositeResources,
+    tex_w: u32,
+    tex_h: u32,
+}
+
+impl RenderState {
+    /// D8: scale factor 1.0 always, at the fixture's logical size (matches
+    /// every other headless caller of the seam).
+    fn new(tex_w: u32, tex_h: u32) -> Self {
+        let device = GpuDevice::new();
+        let ui_renderer = UIRenderer::new(&device, GpuTextureFormat::Bgra8Unorm);
+        let mut cache = UICacheManager::new(GpuTextureFormat::Bgra8Unorm, 1.0);
+        cache.set_scale_factor(1.0);
+        cache.ensure_atlas(&device, tex_w, tex_h);
+        cache.invalidate_all();
+        let composite = CompositeResources::new(&device, tex_w, tex_h);
+        Self { device, ui_renderer, cache, composite, tex_w, tex_h }
+    }
+
+    /// Read back the CURRENTLY composited offscreen — raw BGRA8 bytes (the
+    /// seam's own format). Does not re-composite; callers drive that
+    /// separately (`composite_frame`, called from `Runner::advance_frame` /
+    /// the `Step` loop).
+    fn readback_bgra(&self) -> Vec<u8> {
+        super::render::readback(&self.device, &self.composite.offscreen, self.tex_w, self.tex_h)
     }
 }
 
@@ -156,10 +263,14 @@ struct Runner {
     content_state: ContentState,
     cursor_manager: manifold_ui::cursors::CursorManager,
     active_layer: Option<LayerId>,
-    needs_rebuild: bool,
+    // P2: the Runner's persistent halves of `UiFrameSignals` (D3) — folded
+    // into a fresh `UiFrameSignals` at each seam call (`advance_frame` /
+    // the `Step` loop) and written back afterward. No standalone one-shot
+    // rebuild field here (see the module doc): a completed structural drag
+    // folds into `needs_structural_sync` instead, which the seam treats
+    // identically.
     needs_structural_sync: bool,
     scroll_dirty: ScrollDirty,
-    invalidate_layers: Vec<usize>,
     pre_drag_commands: Vec<Box<dyn Command>>,
     clock: f32,
     modifiers: manifold_ui::input::Modifiers,
@@ -178,6 +289,14 @@ struct Runner {
     audio_send_gain_drag_snapshot: Option<f32>,
     audio_send_sensitivity_drag_snapshot: Option<Vec<manifold_core::audio_trigger::TriggerRoute>>,
     active_inspector_drag: Option<crate::app::ActiveInspectorDrag>,
+    // D9a: every composited frame a `Step` action advanced, in order —
+    // assembled into one contact-sheet PNG at the end of `run` when
+    // non-empty. D9b: the most recent `Pointer` gesture's synthesized
+    // point(s) (center, interpolated drag path, drag end) — consumed
+    // (drained) by the next `Snapshot`, which stamps a crosshair at each
+    // one on the readback COPY only.
+    filmstrip: Vec<Vec<u8>>,
+    last_gesture_points: Vec<Vec2>,
 }
 
 impl Runner {
@@ -190,10 +309,8 @@ impl Runner {
             content_state: ContentState::default(),
             cursor_manager: manifold_ui::cursors::CursorManager::default(),
             active_layer: None,
-            needs_rebuild: false,
             needs_structural_sync: false,
             scroll_dirty: ScrollDirty::default(),
-            invalidate_layers: Vec::new(),
             pre_drag_commands: Vec::new(),
             clock: 0.0,
             modifiers: manifold_ui::input::Modifiers::NONE,
@@ -208,9 +325,12 @@ impl Runner {
             audio_send_gain_drag_snapshot: None,
             audio_send_sensitivity_drag_snapshot: None,
             active_inspector_drag: None,
+            filmstrip: Vec::new(),
+            last_gesture_points: Vec::new(),
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn step(
         &mut self,
         ui: &mut UIRoot,
@@ -219,16 +339,47 @@ impl Runner {
         index: usize,
         action: &AutomationAction,
         out_dir: &std::path::Path,
+        render: &mut RenderState,
     ) -> StepResult {
         let action_desc = format!("{action:?}");
         match action {
             AutomationAction::Step { frames } => {
-                self.clock += *frames as f32 * DT;
+                // P2 (D3, D9a): each stepped frame drives the REAL seam —
+                // `ui.update()` (advances any wall-clock-driven tween, e.g.
+                // the inspector drawer) → the rebuild/cache-invalidate
+                // decision → composite — then captures a filmstrip tile.
+                // Mirrors `cache_path_full_render`'s own drawer-tween loop
+                // (P0), generalized to any script's `Step` action.
+                for _ in 0..*frames {
+                    self.clock += DT;
+                    std::thread::sleep(Duration::from_secs_f32(DT));
+                    ui.update();
+                    if ui.inspector.drawer_anim_active() {
+                        self.needs_structural_sync = true;
+                    }
+                    let mut signals = UiFrameSignals {
+                        needs_structural_sync: self.needs_structural_sync,
+                        scroll_dirty: self.scroll_dirty,
+                        ..Default::default()
+                    };
+                    apply_ui_frame_invalidations(ui, Some(&mut render.cache), &mut signals);
+                    self.needs_structural_sync = signals.needs_structural_sync;
+                    self.scroll_dirty = signals.scroll_dirty;
+                    composite_frame(
+                        &render.device,
+                        &mut render.ui_renderer,
+                        &mut render.cache,
+                        ui,
+                        &render.composite,
+                        1.0,
+                    );
+                    self.filmstrip.push(render.readback_bgra());
+                }
                 StepResult {
                     index,
                     action: action_desc,
                     status: "ok",
-                    detail: format!("clock -> {:.3}s", self.clock),
+                    detail: format!("clock -> {:.3}s ({frames} filmstrip tile(s))", self.clock),
                     artifact: None,
                 }
             }
@@ -245,7 +396,7 @@ impl Runner {
             }
             AutomationAction::Snapshot => {
                 let path = out_dir.join(format!("{index:02}.png"));
-                self.write_png(ui, data, &path);
+                self.write_png(ui, data, render, &path);
                 StepResult {
                     index,
                     action: action_desc,
@@ -262,7 +413,7 @@ impl Runner {
                 // actions were resolved and then dropped on the floor (the
                 // same dormant seam as the pre-2026-07-07 apply_panel_actions).
                 self.drain_and_dispatch(ui, data);
-                self.rebuild(ui, data, zoom_ppb);
+                self.advance_frame(ui, data, zoom_ppb, render, false);
                 StepResult {
                     index,
                     action: action_desc,
@@ -281,7 +432,7 @@ impl Runner {
                 self.fail(index, action_desc, ui, data, out_dir, "no headless seam for AutomationAction::Text (Application::text_input only; see UI_AUTOMATION_DESIGN.md §7)".into())
             }
             AutomationAction::Pointer { target, gesture } => {
-                self.pointer(ui, data, zoom_ppb, index, action_desc, target, gesture, out_dir)
+                self.pointer(ui, data, zoom_ppb, index, action_desc, target, gesture, out_dir, render)
             }
             AutomationAction::Assert { selector, check } => {
                 self.assert(ui, data, index, action_desc, selector, check, out_dir)
@@ -335,6 +486,7 @@ impl Runner {
         target: &AutomationTarget,
         gesture: &Gesture,
         out_dir: &std::path::Path,
+        render: &mut RenderState,
     ) -> StepResult {
         let rect = match self.resolve(ui, data, target) {
             Ok(r) => r,
@@ -342,16 +494,23 @@ impl Runner {
         };
         let center = Vec2::new(rect.x + rect.width * 0.5, rect.y + rect.height * 0.5);
 
+        // D9b: this gesture's point(s) replace whatever the last one left —
+        // consumed (drained) by the next Snapshot only.
+        self.last_gesture_points.clear();
+        let mut scrolled_in_place = false;
+
         match gesture {
             Gesture::Click { modifiers } => {
                 self.modifiers = *modifiers;
                 ui.input.set_modifiers(*modifiers);
+                self.last_gesture_points.push(center);
                 ui.pointer_event(center, PointerAction::Down, self.clock);
                 ui.pointer_event(center, PointerAction::Up, self.clock);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::DoubleClick => {
                 ui.input.set_modifiers(self.modifiers);
+                self.last_gesture_points.push(center);
                 ui.pointer_event(center, PointerAction::Down, self.clock);
                 ui.pointer_event(center, PointerAction::Up, self.clock);
                 ui.pointer_event(center, PointerAction::Down, self.clock);
@@ -359,6 +518,7 @@ impl Runner {
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::Hover => {
+                self.last_gesture_points.push(center);
                 ui.pointer_event(center, PointerAction::Move, self.clock);
                 self.drain_and_dispatch(ui, data);
             }
@@ -374,9 +534,13 @@ impl Runner {
                 // BUG-060 gate scene: repeated `Gesture::Scroll`s at the
                 // inspector moved content a few px, clamped, and never
                 // reached it). Falls back to `handle_scroll_at` exactly as
-                // the real handler does when nothing is built yet.
+                // the real handler does when nothing is built yet. No pointer
+                // points stashed here (D9b names only `pointer_event`
+                // gestures; a scroll never calls it).
                 if ui.layout.inspector().contains(center) {
-                    if !ui.try_inspector_scroll(delta.y, center.x) {
+                    if ui.try_inspector_scroll(delta.y, center.x) {
+                        scrolled_in_place = ui.inspector.take_scrolled_in_place();
+                    } else {
                         ui.inspector.handle_scroll_at(delta.y, center.x);
                     }
                 } else {
@@ -391,16 +555,19 @@ impl Runner {
                 };
                 let to_center = Vec2::new(to_rect.x + to_rect.width * 0.5, to_rect.y + to_rect.height * 0.5);
                 ui.input.set_modifiers(self.modifiers);
+                self.last_gesture_points.push(center);
                 ui.pointer_event(center, PointerAction::Down, self.clock);
                 for pt in automation::interpolate_drag(center, to_center, *steps) {
+                    self.last_gesture_points.push(pt);
                     ui.pointer_event(pt, PointerAction::Move, self.clock);
                 }
+                self.last_gesture_points.push(to_center);
                 ui.pointer_event(to_center, PointerAction::Up, self.clock);
                 self.drain_and_dispatch(ui, data);
             }
         }
 
-        self.rebuild(ui, data, zoom_ppb);
+        self.advance_frame(ui, data, zoom_ppb, render, scrolled_in_place);
         StepResult {
             index,
             action: action_desc,
@@ -425,16 +592,25 @@ impl Runner {
             return;
         }
         self.overlay.set_modifiers(self.modifiers);
+        // Local, call-scoped sinks for the two `AppEditingHost` outputs the
+        // P2 seam doesn't consume by name (see the module doc): a completed
+        // structural drag folds into `needs_structural_sync` below (the seam
+        // ORs the two identically); per-layer bitmap invalidation is a
+        // live-app-only Pass-4c mechanism this harness never renders, so
+        // it's a dead sink here exactly as it always was (previously a
+        // Runner field nothing ever read).
+        let mut rebuild_flag = false;
+        let mut layer_bitmap_scratch: Vec<usize> = Vec::new();
         let mut host = AppEditingHost::new(
             &mut data.project,
             &self.content_tx,
             &self.content_state,
             &mut self.cursor_manager,
             &mut self.active_layer,
-            &mut self.needs_rebuild,
+            &mut rebuild_flag,
             &mut self.needs_structural_sync,
             &mut self.scroll_dirty,
-            &mut self.invalidate_layers,
+            &mut layer_bitmap_scratch,
             &mut self.pre_drag_commands,
         );
         for event in &viewport_events {
@@ -488,6 +664,9 @@ impl Runner {
             }
         }
         let _ = host.pending_actions; // context-menu actions: no proving script needs these yet
+        if rebuild_flag {
+            self.needs_structural_sync = true;
+        }
     }
 
     /// Route every `PanelAction` through the REAL `ui_bridge::dispatch` —
@@ -539,8 +718,45 @@ impl Runner {
         }
     }
 
-    fn rebuild(&mut self, ui: &mut UIRoot, data: &SceneData, zoom_ppb: f32) {
-        super::sync_build(ui, data, zoom_ppb);
+    /// Drives one frame through the shared seam (P2, D3): re-sync `ui` from
+    /// `data` (the Runner's own responsibility headless — no
+    /// continuously-running content thread to do it every tick), gate the
+    /// rebuild/cache-invalidation decision through
+    /// `apply_ui_frame_invalidations` using the REAL structural/scroll
+    /// signals `drain_and_dispatch`/`AppEditingHost` already collected,
+    /// reconcile display state, THEN composite — matching `sync_build`'s own
+    /// order (`ui.build()` before `push_state`/`ui.update()`) and the live
+    /// tick's order (the invalidation decision before `present_all_windows`,
+    /// which is the actual atlas paint). Replaces the old private
+    /// `rebuild()`, which was a straight, unconditional `sync_build` that
+    /// never touched a `UICacheManager` at all.
+    fn advance_frame(
+        &mut self,
+        ui: &mut UIRoot,
+        data: &SceneData,
+        zoom_ppb: f32,
+        render: &mut RenderState,
+        scrolled_in_place: bool,
+    ) {
+        super::sync_data(ui, data, zoom_ppb);
+        let mut signals = UiFrameSignals {
+            needs_structural_sync: self.needs_structural_sync,
+            scroll_dirty: self.scroll_dirty,
+            scrolled_in_place,
+            ..Default::default()
+        };
+        apply_ui_frame_invalidations(ui, Some(&mut render.cache), &mut signals);
+        self.needs_structural_sync = signals.needs_structural_sync;
+        self.scroll_dirty = signals.scroll_dirty;
+        super::reconcile_state(ui, data);
+        composite_frame(
+            &render.device,
+            &mut render.ui_renderer,
+            &mut render.cache,
+            ui,
+            &render.composite,
+            1.0,
+        );
     }
 
     fn assert(
@@ -645,19 +861,54 @@ impl Runner {
             .expect("write dump json");
     }
 
-    fn write_png(&self, ui: &UIRoot, data: &SceneData, path: &std::path::Path) {
-        let tex_w = (super::LOGICAL_W * super::SCALE) as u32;
-        let tex_h = (super::LOGICAL_H * super::SCALE) as u32;
-        super::render::render_ui_to_png(
+    /// P2 (D3): reads back the offscreen `advance_frame`/the `Step` loop
+    /// already composited through the shared seam — no fresh device/cache is
+    /// built here (that was `render_ui_to_png`'s old, always-full-clear
+    /// shape; see `render.rs`'s module doc). Draws the same genuinely-
+    /// separate immediate-mode passes (`render::draw_immediate_passes`) on
+    /// top, then stamps D9b's pointer crosshair(s) CPU-side on the readback
+    /// COPY — never into the atlas/offscreen, which would poison it for any
+    /// later frame or the P0 differential shelf tool.
+    fn write_png(&mut self, ui: &UIRoot, data: &SceneData, render: &mut RenderState, path: &std::path::Path) {
+        let (tex_w, tex_h) = (render.tex_w, render.tex_h);
+        super::render::draw_immediate_passes(
+            &render.device,
+            &mut render.ui_renderer,
             ui,
             &data.selection,
             &data.content.automation_latched_params,
+            &render.composite.offscreen,
             tex_w,
             tex_h,
             super::SCALE,
             false,
-            path.to_str().expect("utf-8 path"),
         );
+        let mut bgra = render.readback_bgra();
+        for pt in self.last_gesture_points.drain(..) {
+            stamp_crosshair(&mut bgra, tex_w, tex_h, pt);
+        }
+        super::render::save_bgra_png(&bgra, tex_w, tex_h, path);
+    }
+}
+
+/// D9b: draw a small crosshair (~11px, opaque red) centered at `pt` (logical
+/// == texel here — the harness is always scale factor 1.0, D8) directly into
+/// BGRA8 bytes of stride `tex_w * 4`. CPU-side only; never called on a
+/// texture, only on a readback `Vec<u8>` already destined for a PNG.
+fn stamp_crosshair(bgra: &mut [u8], tex_w: u32, tex_h: u32, pt: Vec2) {
+    const RADIUS: i32 = 5;
+    const COLOR: [u8; 4] = [0, 0, 255, 255]; // BGRA8: opaque red
+    let (cx, cy) = (pt.x.round() as i32, pt.y.round() as i32);
+    let mut plot = |x: i32, y: i32| {
+        if x < 0 || y < 0 || x as u32 >= tex_w || y as u32 >= tex_h {
+            return;
+        }
+        let off = ((y as u32 * tex_w + x as u32) * 4) as usize;
+        bgra[off..off + 4].copy_from_slice(&COLOR);
+    };
+    for d in -RADIUS..=RADIUS {
+        plot(cx + d, cy);
+        plot(cx, cy + d);
     }
 }
 
@@ -667,7 +918,8 @@ impl Runner {
 /// `Click` through the exact same core the `--script` runner uses
 /// (`Runner::resolve` + `drain_and_dispatch`) — no bespoke reimplementation.
 /// `Err` on a miss (D6): the caller surfaces it loudly instead of guessing at
-/// a fallback index; no fallback path exists here.
+/// a fallback index; no fallback path exists here. Deliberately RenderState-
+/// free (see that struct's doc) — this never renders a pixel.
 pub(super) fn click_by_text(ui: &mut UIRoot, data: &mut SceneData, text: &str) -> Result<(), String> {
     let mut runner = Runner::new();
     let target = AutomationTarget::Query(automation::SelectorQuery {
