@@ -1116,9 +1116,6 @@ mod cache_path_full_render {
         let mut audio_action_snapshot: Option<manifold_core::audio_mod::TriggerAction> = None;
         let mut audio_crossover_snapshot: Option<(f32, f32)> = None;
         let mut audio_send_gain_drag_snapshot: Option<f32> = None;
-        let mut audio_send_sensitivity_drag_snapshot: Option<
-            Vec<manifold_core::audio_trigger::TriggerRoute>,
-        > = None;
         let mut active_inspector_drag: Option<crate::app::ActiveInspectorDrag> = None;
         for action in &actions {
             let result = crate::ui_bridge::dispatch(
@@ -1137,8 +1134,7 @@ mod cache_path_full_render {
                 &mut audio_action_snapshot,
                 &mut audio_crossover_snapshot,
                 &mut audio_send_gain_drag_snapshot,
-                &mut audio_send_sensitivity_drag_snapshot,
-                user_prefs,
+                &mut user_prefs,
                 &mut active_inspector_drag,
                 None,
             );

@@ -10,7 +10,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::audio_mod::AudioBand;
 use crate::audio_trigger::TriggerRoute;
 use crate::id::{AudioSendId, LayerId};
 use crate::math::short_id;
@@ -174,36 +173,12 @@ impl AudioSend {
         }
     }
 
-    /// Whether this send has any enabled trigger route — drives the `⚡`
-    /// indicator on the send row and the per-tick evaluator's skip check.
-    pub fn has_active_triggers(&self) -> bool {
-        self.triggers.iter().any(|t| t.enabled)
-    }
-
-    /// The route reading `band`, if one exists.
-    pub fn trigger_for(&self, band: AudioBand) -> Option<&TriggerRoute> {
-        self.triggers.iter().find(|t| t.source == band)
-    }
-
-    /// A copy of this send's routes with the route for `band` modified by `f`,
-    /// creating a default route for the band if none exists yet. The single
-    /// find-or-create path the inspector uses to build a
-    /// `SetAudioSendTriggersCommand` without duplicating the upsert per edit.
-    pub fn triggers_with_route<F: FnOnce(&mut TriggerRoute)>(
-        &self,
-        band: AudioBand,
-        f: F,
-    ) -> Vec<TriggerRoute> {
-        let mut routes = self.triggers.clone();
-        if let Some(route) = routes.iter_mut().find(|r| r.source == band) {
-            f(route);
-        } else {
-            let mut route = TriggerRoute::new(band);
-            f(&mut route);
-            routes.push(route);
-        }
-        routes
-    }
+    // `has_active_triggers`, `trigger_for`, and `triggers_with_route` (the
+    // send-owned Triggers matrix's read/mutate helpers on the legacy
+    // `triggers` field) are deleted (P3, D2). `triggers` is deserialize-only
+    // now (P2) — nothing should read OR write it outside the load migration;
+    // `Project::has_active_clip_triggers` (`project.rs`) is the current gate,
+    // and `Project::clip_trigger_consumers` the current display walk.
 
     /// The audio layers feeding this send (possibly empty).
     pub fn layers(&self) -> &[LayerId] {
