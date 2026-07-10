@@ -390,8 +390,8 @@
         "defaultValue": 2.0,
         "target": {
           "kind": "node",
-          "nodeId": "size_per_pm",
-          "param": "b"
+          "nodeId": "count_sqrt",
+          "param": "a"
         },
         "convert": {
           "type": "Float"
@@ -1103,7 +1103,7 @@
               },
               "scale": {
                 "type": "Float",
-                "value": 6.826667
+                "value": 4.8271383
               }
             },
             "title": "Display Energy"
@@ -1384,6 +1384,27 @@
               }
             },
             "title": "Min 1 fixed-point unit"
+          },
+          {
+            "id": 160,
+            "nodeId": "count_sqrt",
+            "typeId": "node.math",
+            "handle": "count_sqrt",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 2.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 14
+              }
+            },
+            "title": "sqrt(count): display light grows with particle count"
           }
         ],
         "wires": [
@@ -1524,6 +1545,12 @@
             "fromPort": "out",
             "toNode": 116,
             "toPort": "out_7"
+          },
+          {
+            "fromNode": 160,
+            "fromPort": "out",
+            "toNode": 25,
+            "toPort": "b"
           }
         ],
         "tint": [

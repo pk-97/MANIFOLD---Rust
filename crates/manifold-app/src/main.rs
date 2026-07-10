@@ -24,6 +24,7 @@ mod display_link;
 mod drag_hover;
 mod drag_interpose;
 mod editing_host;
+mod editor_frame;
 mod edr_surface;
 mod frame_timer;
 // The graph canvas + its mapping popover moved into `manifold-ui` (Phase 8 of

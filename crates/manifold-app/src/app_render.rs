@@ -3446,120 +3446,23 @@ impl Application {
         // node pane. Added to the editor tree so they composite into the
         // offscreen; the monitor images blit onto the drawable below each title
         // in the present pass.
-        {
-            use manifold_ui::node::{TextAlign, UIStyle};
-            let title_style = UIStyle {
-                text_color: manifold_ui::color::TEXT_WHITE_C32,
-                font_size: 14,
-                text_align: TextAlign::Left,
-                ..UIStyle::default()
-            };
-            let title_x = preview_x;
-            // Protective wrap only — NOT the editor window's P2 region
-            // migration (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` scopes that
-            // separately; dock.rs and the editor's own panel structure are
-            // untouched). Without this, the four `None`-parented nodes below
-            // are exactly the un-migrated per-window root-parenting D4's
-            // debug assertion exists to catch — they would panic the first
-            // time this window renders in a debug build, not just fail a
-            // future gate. `Base` tier: canvas-adjacent preview content,
-            // matching the tier the design's P2 section already names for
-            // canvas-region content.
-            let preview_region = ws.ui_root.tree.begin_region(
-                manifold_ui::Rect::new(0.0, 0.0, preview_width, canvas_height),
-                manifold_ui::ZTier::Base,
-                "editor_preview_column",
-                manifold_ui::UIFlags::empty(),
-            );
-            let preview_region_start = ws.ui_root.tree.count();
-            // Backing panel for the whole left column so the two centred monitors
-            // sit on a clean, uniform surface rather than a black void. Stops at
-            // the column height so it doesn't paint over the bottom strip.
-            ws.ui_root.tree.add_panel(
-                None,
-                0.0,
-                0.0,
-                preview_width,
-                canvas_height,
-                UIStyle {
-                    bg_color: manifold_ui::color::EFFECT_CARD_INNER_BG_C32,
-                    ..UIStyle::default()
-                },
-            );
-            // Node-output pane. A non-image node fills the pane with its value
-            // inspector (its own title heads the pane, in place of the image);
-            // otherwise the generic "Node Output" title sits above the image,
-            // and a hint fills the body when nothing is selected.
-            let node_region = manifold_ui::Rect::new(
-                title_x,
-                node_title_y,
-                preview_w,
-                preview_title_h + preview_h,
-            );
-            let inspector_drawn = self
-                .graph_editor_panel
-                .render_node_inspector(&mut ws.ui_root.tree, node_region);
-            // The "Smart preview" auto-gain toggle relocated here from the deleted
-            // param sidebar: it belongs beside the node-output monitor it controls.
-            // Only meaningful when a node-output IMAGE is on screen (a value-
-            // inspector node has no gain to normalize), so draw it in the title row
-            // alongside "Node Output". Capture its id so the input pass can hang the
-            // SetNodePreviewNormalize intent on it.
-            self.editor_smart_preview_toggle_id = None;
-            if !inspector_drawn {
-                ws.ui_root.tree.add_label(
-                    None,
-                    title_x,
-                    node_title_y,
-                    preview_w,
-                    preview_title_h,
-                    "Node Output",
-                    title_style,
-                );
-                if show_image {
-                    // Right-aligned toggle in the title row: "[✓] Smart preview".
-                    let toggle_region = manifold_ui::Rect::new(
-                        title_x + preview_w * 0.42,
-                        node_title_y,
-                        preview_w * 0.58,
-                        preview_title_h,
-                    );
-                    let id = self
-                        .graph_editor_panel
-                        .render_smart_preview_toggle(&mut ws.ui_root.tree, toggle_region);
-                    self.editor_smart_preview_toggle_id = Some(id);
-                }
-                if !show_image {
-                    // Nothing selected — the image body stays empty; hint it.
-                    ws.ui_root.tree.add_label(
-                        None,
-                        title_x,
-                        node_img_y + preview_h * 0.5 - 8.0,
-                        preview_w,
-                        16.0,
-                        "Select a node",
-                        UIStyle {
-                            text_color: manifold_ui::color::TEXT_DIMMED_C32,
-                            font_size: 12,
-                            text_align: TextAlign::Center,
-                            ..UIStyle::default()
-                        },
-                    );
-                }
-            }
-            ws.ui_root.tree.add_label(
-                None,
-                title_x,
-                master_title_y,
-                preview_w,
-                preview_title_h,
-                "Master Out",
-                title_style,
-            );
-            ws.ui_root
-                .tree
-                .end_region(preview_region, preview_region_start);
-        }
+        // Shared with the headless editor harness (`editor_frame.rs`,
+        // `UI_HARNESS_UNIFICATION_DESIGN.md` P3) — see that module's doc for
+        // why threading the already-configured `graph_editor_panel` (not the
+        // raw content-state fields feeding it) is the non-entangled cut.
+        self.editor_smart_preview_toggle_id = crate::editor_frame::build_editor_preview_column(
+            &mut ws.ui_root.tree,
+            &self.graph_editor_panel,
+            preview_width,
+            canvas_height,
+            preview_x,
+            preview_w,
+            preview_h,
+            node_title_y,
+            node_img_y,
+            master_title_y,
+            show_image,
+        );
 
         // Node picker overlays the whole editor window when open. Keep its
         // screen size in lockstep with the editor logical size (drives the
@@ -3692,62 +3595,38 @@ impl Application {
         }
 
         // ── Build frame: clear, then draw the canvas + sidebar ──
-        let mut encoder = gpu.device.create_encoder("Graph Editor Frame");
-        encoder.clear_texture(offscreen, 0.10, 0.10, 0.12, 1.0);
-
-        if let (Some(ui), Some(canvas)) = (&mut self.ui_renderer, self.graph_canvas.as_ref()) {
-            ui.begin_frame();
-            canvas.render(
-                ui,
-                crate::graph_canvas::Rect::new(canvas_x, 0.0, canvas_width, canvas_height),
-            );
-            // Layer the sidebar UITree on top of the canvas's immediate-mode
-            // draws (the flush protocol covers them with their own batches).
-            ui.render_tree_range(&ws.ui_root.tree, 0, usize::MAX);
-            // Column dividers: a thin seam always, a highlight band on
-            // hover/drag. Drawn after the panels so the seam reads on top of
-            // both the canvas and the sidebar backgrounds.
-            ws.dock.draw(editor_area, ui);
-            // Bottom mini-timeline: scrub strip + clip minimap in the dock's
-            // bottom band. Authoring-only — scrub to preview the graph at a
-            // point, play to watch motion. Same `dock.bottom` the input pass
-            // hit-tests for scrub/play.
-            if ws.dock.show_bottom {
-                manifold_ui::MiniTimeline::draw(
-                    dock.bottom,
-                    mini_total_beats,
-                    mini_beats_per_bar,
-                    mini_current_beat,
-                    mini_rows,
-                    &mini_clips,
-                    &mini_layer_labels,
-                    &mini_readout,
-                    mini_is_playing,
-                    ui,
-                );
-            }
-            // The mapping drawer floats over the composited canvas + sidebar:
-            // it draws inline at POPOVER depth (above the CONTENT-depth nodes),
-            // unclipped.
-            if self.editor_mapping_popover.is_open() {
-                ui.push_depth(Depth::POPOVER);
-                self.editor_mapping_popover.set_live_value(popover_live_value);
-                self.editor_mapping_popover.render(ui);
-                ui.pop_depth();
-            }
-            // Graph text-input overlay (group rename / String param / wgsl /
-            // node search) — tops everything at TOOLTIP depth.
-            if self.text_input.active && self.text_input.field.is_graph_field() {
-                ui.push_depth(Depth::TOOLTIP);
-                render_text_input_overlay(&self.text_input, &self.frame_timer, ui);
-                ui.pop_depth();
-            }
-            if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
-                ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
-            }
-        }
-
-        encoder.commit();
+        // Shared with the headless editor harness — see `editor_frame.rs`
+        // module doc (P3). `composite_editor_frame` owns the encoder
+        // create+commit internally, mirroring `ui_frame::composite_main_ui_frame`.
+        crate::editor_frame::composite_editor_frame(
+            &gpu.device,
+            self.ui_renderer.as_mut(),
+            &ws.ui_root,
+            &ws.dock,
+            editor_area,
+            self.graph_canvas.as_ref(),
+            crate::graph_canvas::Rect::new(canvas_x, 0.0, canvas_width, canvas_height),
+            crate::editor_frame::EditorMiniTimelineInputs {
+                bottom_rect: dock.bottom,
+                show_bottom: ws.dock.show_bottom,
+                total_beats: mini_total_beats,
+                beats_per_bar: mini_beats_per_bar,
+                current_beat: mini_current_beat,
+                row_count: mini_rows,
+                clips: &mini_clips,
+                layer_labels: &mini_layer_labels,
+                readout: &mini_readout,
+                is_playing: mini_is_playing,
+            },
+            &mut self.editor_mapping_popover,
+            popover_live_value,
+            &self.text_input,
+            &self.frame_timer,
+            offscreen,
+            logical_w,
+            logical_h,
+            scale,
+        );
         ws.offscreen_dirty = false;
 
         // Skip drawable acquisition on the resize frame — drawable pool
@@ -5062,7 +4941,7 @@ fn format_scope_readout(freq: f32, db: f32) -> String {
 // ── Text input overlay rendering (free function to avoid borrow conflicts) ──
 
 /// Render the text input overlay using immediate-mode draw calls.
-fn render_text_input_overlay(
+pub(crate) fn render_text_input_overlay(
     ti: &crate::text_input::TextInputState,
     timer: &crate::frame_timer::FrameTimer,
     ui: &mut UIRenderer,
