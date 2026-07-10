@@ -51,3 +51,53 @@ Primitives use compute dispatches via the `Primitive` trait (each primitive's `r
 All generators render at full output resolution. The per-generator `internal_resolution_scale()` trait method and the `UpscaleMode` enum were removed (the infrastructure was wired but the default `Native` mode disabled it, so it was dead code in practice). If a specific generator needs internal downscaling for performance, it allocates its own reduced-resolution intermediate inside `render()` and stretches to the output — same pattern Bloom uses for its mip chain.
 
 The pipeline-wide `render_scale` setting (FSR / MetalFX full-frame upscaling) is separate and still active.
+
+## Recorder soundcheck
+
+The day before a gig, on the rig, run the pre-gig soak — the instrument check for the live
+show recorder:
+
+```
+cargo run --release -p manifold-recording --features recording-proofs --bin recording-soak
+```
+
+With no flags this drives the actual show configuration through the real
+`LiveRecordingSession` API into the real native AVAssetWriter encoder: 4K60 SDR ProRes, 20
+media-minutes (72,000 frames, ~17.5 GB), synthetic 48kHz stereo audio, encoding as fast as the
+hardware allows (100% encoder duty — the video pool is never throttled to wall clock). At the
+end it prints exactly one line:
+
+```
+SOAK PASS: 72000 frames, 0 dropped, PTS monotonic, gap-free indices, 17.4 GB, audio 1200.0s
+```
+
+or, if something's wrong:
+
+```
+SOAK FAIL: <first failed check, with numbers>
+```
+
+**A PASS means the recorder survives a full take on this machine, this OS build, this disk** —
+not "the code compiles," not "stop() returned Ok" (two of the three worst live-recording
+failures this system has actually produced returned `Ok` from `stop()` while the file was
+unusable). macOS updates have already changed hardware encoder behavior once without any
+MANIFOLD change being involved — this is the check that catches the next one before it costs a
+show, the same way you'd line-check the LEDs before a set.
+
+Useful flags:
+
+- `--width`/`--height`/`--fps`/`--minutes` — override the take size (a shorter run at a lower
+  resolution is a fast sanity check, not a substitute for the full-scale run before a real gig).
+- `--no-audio` — video only.
+- `--realtime` — paces submissions to wall clock instead of running flat-out; a true dress
+  rehearsal, but gates on file validity only (drops are reported, not failed on — keep-up under
+  a loaded rig is a separate concern from "did the file come out valid").
+- `--keep` — keep the output file even on PASS (default: PASS deletes it, FAIL always keeps it
+  and prints its path — the failed file is the evidence).
+- `--output <path>` — write somewhere other than a temp path.
+- `--hdr` — refuses immediately; HDR live recording is BUG-053 (structurally broken today).
+
+See `docs/LIVE_RECORDING_PROOFS_DESIGN.md` §5 for the full design and gate semantics, and
+`docs/BUG_BACKLOG.md` BUG-085/BUG-086 for two accounting caveats found building this suite
+(Rust's own frame/sample counters can be optimistic under real backpressure — the soak's PASS
+decision is anchored to what ffprobe actually decodes out of the file, not to those counters).
