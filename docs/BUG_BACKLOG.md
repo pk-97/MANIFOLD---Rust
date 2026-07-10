@@ -137,6 +137,19 @@ scales worse over a full 20-minute take** — Peter's first full-scale soak run 
 item, per design §6 P2) will be the first real data point at show scale; if the shortfall grows
 materially at that scale, this bug's severity should be revisited upward.
 
+**Orchestrator disambiguation 2026-07-10 (Opus, at P2 landing):** ran the soak in `--realtime`
+mode (submissions paced to wall clock — the true show proxy) for 2 minutes at 1920×1080 on an
+idle machine: `audio 120.0s` exactly, full coverage, versus `audio 118.6s` on the same-size
+unpaced run moments earlier. This is strong evidence the shortfall is an **unpaced-stress-mode
+artifact**, not a show-path defect: unpaced video encodes at 100% duty and the synthetic-audio
+catch-up floods the native audio input's real-time gate, which cannot happen in a real 60fps
+show where audio arrives wall-clock-paced from CoreAudio (exactly what `--realtime` replicates).
+Severity for the SHOW path is therefore LOW; the bug is real but lives in the soak's unpaced
+audio-feed pacing under encoder saturation. **Still worth the silent-drop fix** (the `LR_OK`-on-drop
+path with no counter/log is the actual defect worth removing, per BUG-085's sibling shape).
+Peter's first full-scale 20-minute run remains the confirming data point, but the show-relevance
+concern is now much reduced.
+
 ### BUG-085 (recording-frames-recorded-overstates-async-append-drops) — `frames_recorded` can overstate the file's real packet count under sustained backpressure — MED accounting / LOW practical likelihood
 **Status:** OPEN
 
