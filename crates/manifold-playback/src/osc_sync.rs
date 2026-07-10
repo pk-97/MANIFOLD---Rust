@@ -505,3 +505,289 @@ impl Default for OscSyncController {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifold_core::project::Project;
+
+    // ── Drop-frame timecode vectors ──────────────────────────────────────
+    //
+    // GUARD: `timecode_to_seconds`'s drop-frame branch divides by the
+    // *literal* constant 29.97, not the true NTSC drop-frame rate
+    // 30000/1001 (≈29.970029970...). Asserting an absolute expected-seconds
+    // value computed from the true standard would FAIL against the code —
+    // that mismatch is real and is logged below (VERIFY-WITH-PETER / bug
+    // backlog), not pinned by a passing test. What IS safe to pin from the
+    // SMPTE 12M standard is the *frame-drop pattern* itself (which display
+    // numbers get skipped, and which minute is exempt) — tested here as a
+    // self-consistent frame-duration delta so the disputed absolute divisor
+    // cancels out of the comparison.
+
+    #[test]
+    fn drop_frame_skips_two_frame_numbers_at_non_tenth_minute_boundary() {
+        let ctrl = OscSyncController::new(); // drop_frame: true by default
+        let one_frame =
+            ctrl.timecode_to_seconds(0, 0, 0, 1) - ctrl.timecode_to_seconds(0, 0, 0, 0);
+
+        // SMPTE 12M: 00:00:59:29 is immediately followed by 00:01:00:02 —
+        // display numbers 00:01:00:00 and 00:01:00:01 do not exist.
+        let before = ctrl.timecode_to_seconds(0, 0, 59, 29);
+        let after = ctrl.timecode_to_seconds(0, 1, 0, 2);
+        assert!(
+            (after - before - one_frame).abs() < 1e-4,
+            "the raw frame count must advance by exactly one frame across the \
+             skip boundary (00:00:59:29 -> 00:01:00:02): before={before}, after={after}, \
+             one_frame={one_frame}"
+        );
+    }
+
+    #[test]
+    fn drop_frame_does_not_skip_at_ten_minute_boundary() {
+        let ctrl = OscSyncController::new();
+        let one_frame =
+            ctrl.timecode_to_seconds(0, 0, 0, 1) - ctrl.timecode_to_seconds(0, 0, 0, 0);
+
+        // SMPTE 12M: every 10th minute is exempt from the 2-frame skip, so
+        // 00:09:59:29 -> 00:10:00:00 is an ordinary single-frame advance
+        // (unlike the minute-1 boundary above).
+        let before = ctrl.timecode_to_seconds(0, 9, 59, 29);
+        let after = ctrl.timecode_to_seconds(0, 10, 0, 0);
+        assert!(
+            (after - before - one_frame).abs() < 1e-4,
+            "the tenth-minute boundary must NOT skip (00:09:59:29 -> 00:10:00:00 \
+             is a plain +1 frame): before={before}, after={after}, one_frame={one_frame}"
+        );
+    }
+
+    /// The non-drop-frame branch is exact, unambiguous arithmetic
+    /// (`h*3600 + m*60 + s + f/rate`) using the controller's own
+    /// `timecode_frame_rate` field directly — no external-standard
+    /// approximation involved, safe to assert absolutely.
+    #[test]
+    fn non_drop_frame_timecode_is_linear() {
+        let mut ctrl = OscSyncController::new();
+        ctrl.drop_frame = false;
+        ctrl.timecode_frame_rate = 25.0;
+        let secs = ctrl.timecode_to_seconds(1, 2, 3, 10);
+        let expected = 1.0 * 3600.0 + 2.0 * 60.0 + 3.0 + 10.0 / 25.0;
+        assert!((secs - expected).abs() < 1e-4);
+    }
+
+    // ── Nudge-vs-seek + transport-follow ─────────────────────────────────
+
+    struct FakeSyncTarget {
+        state: PlaybackState,
+        time: Seconds,
+        project: Option<Project>,
+    }
+
+    impl SyncTarget for FakeSyncTarget {
+        fn current_state(&self) -> PlaybackState {
+            self.state
+        }
+        fn current_time(&self) -> Seconds {
+            self.time
+        }
+        fn is_playing(&self) -> bool {
+            self.state == PlaybackState::Playing
+        }
+        fn timeline_beat_to_time(&self, beat: manifold_core::Beats) -> Seconds {
+            Seconds(beat.as_f32() as f64 * 0.5)
+        }
+        fn current_project(&self) -> Option<&Project> {
+            self.project.as_ref()
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeArbTarget {
+        external_time_sync: bool,
+        played: bool,
+        paused: bool,
+        nudge_count: u32,
+        seek_count: u32,
+    }
+
+    impl SyncArbiterTarget for FakeArbTarget {
+        fn current_project(&self) -> Option<&Project> {
+            None
+        }
+        fn external_time_sync(&self) -> bool {
+            self.external_time_sync
+        }
+        fn set_external_time_sync(&mut self, value: bool) {
+            self.external_time_sync = value;
+        }
+        fn play(&mut self) {
+            self.played = true;
+        }
+        fn pause(&mut self, _clear_recording: bool) {
+            self.paused = true;
+        }
+        fn nudge_time(&mut self, _time: Seconds) {
+            self.nudge_count += 1;
+        }
+        fn seek(&mut self, _time: Seconds) {
+            self.seek_count += 1;
+        }
+    }
+
+    /// §11 OSC nudge/seek split = 0.5s: while playing, a small position
+    /// error nudges every message rather than hard-seeking.
+    #[test]
+    fn osc_sync_nudges_when_playing_delta_under_threshold() {
+        let ctrl = OscSyncController {
+            current_timecode_seconds: Seconds(5.2),
+            ..OscSyncController::new()
+        };
+        let sync_target = FakeSyncTarget {
+            state: PlaybackState::Playing,
+            time: Seconds(5.0),
+            project: Some(Project::default()),
+        };
+        let mut arb_target = FakeArbTarget::default();
+        let mut arbiter = SyncArbiter::new();
+
+        ctrl.sync_timecode_to_playback(&sync_target, &mut arbiter, &mut arb_target, ClockAuthority::Osc);
+
+        assert_eq!(arb_target.nudge_count, 1);
+        assert_eq!(arb_target.seek_count, 0);
+    }
+
+    #[test]
+    fn osc_sync_hard_seeks_when_playing_delta_over_threshold() {
+        let ctrl = OscSyncController {
+            current_timecode_seconds: Seconds(6.0),
+            ..OscSyncController::new()
+        };
+        let sync_target = FakeSyncTarget {
+            state: PlaybackState::Playing,
+            time: Seconds(5.0), // delta 1.0s >= 0.5s
+            project: Some(Project::default()),
+        };
+        let mut arb_target = FakeArbTarget::default();
+        let mut arbiter = SyncArbiter::new();
+
+        ctrl.sync_timecode_to_playback(&sync_target, &mut arbiter, &mut arb_target, ClockAuthority::Osc);
+
+        assert_eq!(arb_target.seek_count, 1);
+        assert_eq!(arb_target.nudge_count, 0);
+    }
+
+    #[test]
+    fn osc_sync_playing_identical_time_is_noop() {
+        let ctrl = OscSyncController {
+            current_timecode_seconds: Seconds(5.0),
+            ..OscSyncController::new()
+        };
+        let sync_target = FakeSyncTarget {
+            state: PlaybackState::Playing,
+            time: Seconds(5.0),
+            project: Some(Project::default()),
+        };
+        let mut arb_target = FakeArbTarget::default();
+        let mut arbiter = SyncArbiter::new();
+
+        ctrl.sync_timecode_to_playback(&sync_target, &mut arbiter, &mut arb_target, ClockAuthority::Osc);
+
+        assert_eq!(arb_target.nudge_count, 0);
+        assert_eq!(arb_target.seek_count, 0);
+    }
+
+    /// §11 OSC stopped `seek_threshold` = 0.05s: while stopped, only seek
+    /// when drift exceeds the threshold (avoid churn while paused).
+    #[test]
+    fn osc_sync_stopped_seeks_beyond_threshold() {
+        let ctrl = OscSyncController {
+            current_timecode_seconds: Seconds(5.06),
+            ..OscSyncController::new()
+        };
+        let sync_target = FakeSyncTarget {
+            state: PlaybackState::Stopped,
+            time: Seconds(5.0), // delta 0.06s > 0.05s threshold
+            project: Some(Project::default()),
+        };
+        let mut arb_target = FakeArbTarget::default();
+        let mut arbiter = SyncArbiter::new();
+
+        ctrl.sync_timecode_to_playback(&sync_target, &mut arbiter, &mut arb_target, ClockAuthority::Osc);
+
+        assert_eq!(arb_target.seek_count, 1);
+    }
+
+    #[test]
+    fn osc_sync_stopped_ignores_small_drift() {
+        let ctrl = OscSyncController {
+            current_timecode_seconds: Seconds(5.02),
+            ..OscSyncController::new()
+        };
+        let sync_target = FakeSyncTarget {
+            state: PlaybackState::Stopped,
+            time: Seconds(5.0), // delta 0.02s < 0.05s threshold
+            project: Some(Project::default()),
+        };
+        let mut arb_target = FakeArbTarget::default();
+        let mut arbiter = SyncArbiter::new();
+
+        ctrl.sync_timecode_to_playback(&sync_target, &mut arbiter, &mut arb_target, ClockAuthority::Osc);
+
+        assert_eq!(arb_target.seek_count, 0);
+        assert_eq!(arb_target.nudge_count, 0);
+    }
+
+    /// §7: "timecode arriving = play, 0.5s silence = pause."
+    #[test]
+    fn osc_update_plays_when_timecode_starts_arriving() {
+        let mut ctrl = OscSyncController::new();
+        ctrl.is_osc_enabled = true;
+        ctrl.was_receiving = false;
+        ctrl.last_timecode_received_time = Seconds(0.0);
+        let sync_target = FakeSyncTarget {
+            state: PlaybackState::Stopped,
+            time: Seconds(0.0),
+            project: Some(Project::default()),
+        };
+        let mut arb_target = FakeArbTarget::default();
+        let mut arbiter = SyncArbiter::new();
+
+        ctrl.update(
+            Seconds(0.1),
+            &sync_target,
+            &mut arbiter,
+            &mut arb_target,
+            ClockAuthority::Osc,
+        );
+
+        assert!(arb_target.played, "timecode arriving while stopped must play");
+    }
+
+    #[test]
+    fn osc_update_pauses_when_timecode_stops_arriving() {
+        let mut ctrl = OscSyncController::new();
+        ctrl.is_osc_enabled = true;
+        ctrl.was_receiving = true;
+        ctrl.last_timecode_received_time = Seconds(0.0);
+        let sync_target = FakeSyncTarget {
+            state: PlaybackState::Playing,
+            time: Seconds(1.0),
+            project: Some(Project::default()),
+        };
+        let mut arb_target = FakeArbTarget::default();
+        let mut arbiter = SyncArbiter::new();
+
+        // 1.0s of silence exceeds the 0.5s transport_timeout.
+        ctrl.update(
+            Seconds(1.0),
+            &sync_target,
+            &mut arbiter,
+            &mut arb_target,
+            ClockAuthority::Osc,
+        );
+
+        assert!(
+            arb_target.paused,
+            "timecode silence beyond transport_timeout while playing must pause"
+        );
+    }
+}

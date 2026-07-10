@@ -843,3 +843,351 @@ impl Default for MidiClockSyncController {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifold_core::project::Project;
+    use manifold_core::types::PlaybackState;
+
+    // ── MidiClockState pack/unpack round trip ───────────────────────────
+
+    /// Bits 0..31 hold `position_sixteenths` as a raw i32 bit pattern — the
+    /// cast chain (`as u32 as u64` / `as u32 as i32`) is bit-preserving, so
+    /// every i32 value round-trips exactly.
+    #[test]
+    fn midi_clock_state_position_roundtrips_full_i32_range() {
+        for &pos in &[
+            i32::MIN,
+            i32::MIN + 1,
+            -1_000_000,
+            -1,
+            0,
+            1,
+            42,
+            1_000_000,
+            i32::MAX - 1,
+            i32::MAX,
+        ] {
+            let state = MidiClockState {
+                position_sixteenths: pos,
+                clock_tick: 0,
+                is_playing: false,
+                has_received_clock: false,
+            };
+            let round = MidiClockState::unpack(state.pack());
+            assert_eq!(round.position_sixteenths, pos);
+        }
+    }
+
+    /// `clock_tick` only ever carries 0..=5 in production (6 MIDI-clock
+    /// ticks per sixteenth note) — exhaustive over that domain crossed with
+    /// the is_playing/has_received_clock flag combinations.
+    #[test]
+    fn midi_clock_state_tick_and_flags_roundtrip() {
+        for tick in 0..=5 {
+            for &playing in &[true, false] {
+                for &received in &[true, false] {
+                    let state = MidiClockState {
+                        position_sixteenths: 42,
+                        clock_tick: tick,
+                        is_playing: playing,
+                        has_received_clock: received,
+                    };
+                    let round = MidiClockState::unpack(state.pack());
+                    assert_eq!(round.position_sixteenths, 42);
+                    assert_eq!(round.clock_tick, tick);
+                    assert_eq!(round.is_playing, playing);
+                    assert_eq!(round.has_received_clock, received);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn atomic_clock_state_load_update_roundtrip() {
+        let atomic = AtomicClockState::new();
+        atomic.update(|_| MidiClockState {
+            position_sixteenths: 777,
+            clock_tick: 3,
+            is_playing: true,
+            has_received_clock: true,
+        });
+        let loaded = atomic.load();
+        assert_eq!(loaded.position_sixteenths, 777);
+        assert_eq!(loaded.clock_tick, 3);
+        assert!(loaded.is_playing);
+        assert!(loaded.has_received_clock);
+    }
+
+    // ── BPM estimator ────────────────────────────────────────────────────
+
+    /// §11: BPM estimated over ≥96 ticks (24 PPQN ⇒ 4 beats), EMA α=0.30.
+    /// The raw-BPM formula (`ticks*60 / (24*seconds)`) is the standard
+    /// MIDI-clock tempo derivation (24 clocks per quarter note) — an
+    /// external standard, not something derived here, so convergence to the
+    /// injected rate is safe to pin.
+    #[test]
+    fn bpm_estimator_converges_toward_injected_tempo() {
+        let target_bpm = 150.0_f32; // deliberately non-120
+        let seconds_per_tick = 60.0 / (target_bpm * 24.0);
+        let mut ctrl = MidiClockSyncController::new();
+
+        let mut now = 0.0_f32;
+        // First call only anchors the estimator (guarded by last_tempo_sample_time < 0).
+        ctrl.update_bpm_from_clock(now, 0, 0, true, true);
+
+        for t in 1..=3000_i64 {
+            now += seconds_per_tick;
+            let pos = (t / 6) as i32;
+            let tick = (t % 6) as i32;
+            ctrl.update_bpm_from_clock(now, pos, tick, true, true);
+        }
+
+        assert!(
+            (ctrl.current_clock_bpm() - target_bpm).abs() < 0.5,
+            "expected convergence to {target_bpm} BPM, got {}",
+            ctrl.current_clock_bpm()
+        );
+    }
+
+    /// A backward tick jump (SPP rewind / MIDI Start resetting position to
+    /// 0) must not corrupt the running estimate — `update_bpm_from_clock`
+    /// returns before touching `current_clock_bpm` on a negative delta
+    /// ("Song-position jump or source reset; restart estimator window").
+    #[test]
+    fn bpm_estimator_survives_backward_tick_jump() {
+        let target_bpm = 140.0_f32;
+        let seconds_per_tick = 60.0 / (target_bpm * 24.0);
+        let mut ctrl = MidiClockSyncController::new();
+        let mut now = 0.0_f32;
+        ctrl.update_bpm_from_clock(now, 0, 0, true, true);
+        for t in 1..=200_i64 {
+            now += seconds_per_tick;
+            ctrl.update_bpm_from_clock(now, (t / 6) as i32, (t % 6) as i32, true, true);
+        }
+        let bpm_before = ctrl.current_clock_bpm();
+
+        // Backward jump: position resets to 0 (e.g. MIDI Start).
+        now += seconds_per_tick;
+        ctrl.update_bpm_from_clock(now, 0, 0, true, true);
+
+        assert_eq!(
+            ctrl.current_clock_bpm(),
+            bpm_before,
+            "a backward tick delta must not perturb the estimate mid-window"
+        );
+    }
+
+    // ── Nudge-vs-seek position sync ─────────────────────────────────────
+
+    struct FakeSyncTarget {
+        state: PlaybackState,
+        time: Seconds,
+        bpm: f32,
+        project: Option<Project>,
+    }
+
+    impl SyncTarget for FakeSyncTarget {
+        fn current_state(&self) -> PlaybackState {
+            self.state
+        }
+        fn current_time(&self) -> Seconds {
+            self.time
+        }
+        fn is_playing(&self) -> bool {
+            self.state == PlaybackState::Playing
+        }
+        fn timeline_beat_to_time(&self, beat: Beats) -> Seconds {
+            Seconds(beat.as_f32() as f64 * 60.0 / self.bpm as f64)
+        }
+        fn current_project(&self) -> Option<&Project> {
+            self.project.as_ref()
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeArbTarget {
+        external_time_sync: bool,
+        nudge_count: u32,
+        seek_count: u32,
+    }
+
+    impl SyncArbiterTarget for FakeArbTarget {
+        fn current_project(&self) -> Option<&Project> {
+            None
+        }
+        fn external_time_sync(&self) -> bool {
+            self.external_time_sync
+        }
+        fn set_external_time_sync(&mut self, value: bool) {
+            self.external_time_sync = value;
+        }
+        fn play(&mut self) {}
+        fn pause(&mut self, _clear_recording: bool) {}
+        fn nudge_time(&mut self, _time: Seconds) {
+            self.nudge_count += 1;
+        }
+        fn seek(&mut self, _time: Seconds) {
+            self.seek_count += 1;
+        }
+    }
+
+    /// §11 CLK nudge/seek split = 2.0s: while playing, a small position
+    /// error nudges rather than hard-seeking.
+    #[test]
+    fn clk_position_sync_nudges_when_playing_within_threshold() {
+        let bpm = 150.0;
+        // beat 25 @ 150 BPM = 10.0s exactly -> matches current_time -> delta 0.
+        let sync_target = FakeSyncTarget {
+            state: PlaybackState::Playing,
+            time: Seconds(10.0),
+            bpm,
+            project: Some(Project::default()),
+        };
+        let mut arb_target = FakeArbTarget::default();
+        let mut arbiter = SyncArbiter::new();
+        let mut ctrl = MidiClockSyncController::new();
+
+        ctrl.sync_position_to_playback(
+            100,
+            0,
+            &mut arbiter,
+            &mut arb_target,
+            &sync_target,
+            ClockAuthority::MidiClock,
+        );
+
+        assert_eq!(arb_target.nudge_count, 1);
+        assert_eq!(arb_target.seek_count, 0);
+    }
+
+    /// Delta >= 2.0s forces a full seek instead of a nudge.
+    #[test]
+    fn clk_position_sync_hard_seeks_when_playing_beyond_threshold() {
+        let bpm = 150.0;
+        let sync_target = FakeSyncTarget {
+            state: PlaybackState::Playing,
+            time: Seconds(0.0),
+            bpm,
+            project: Some(Project::default()),
+        };
+        let mut arb_target = FakeArbTarget::default();
+        let mut arbiter = SyncArbiter::new();
+        let mut ctrl = MidiClockSyncController::new();
+
+        // beat 25 @ 150 BPM = 10.0s away from current_time(0.0) -> delta > 2.0s.
+        ctrl.sync_position_to_playback(
+            100,
+            0,
+            &mut arbiter,
+            &mut arb_target,
+            &sync_target,
+            ClockAuthority::MidiClock,
+        );
+
+        assert_eq!(arb_target.seek_count, 1);
+        assert_eq!(arb_target.nudge_count, 0);
+    }
+
+    /// §11 CLK tick-delta sanity = 0..=384: a transport restart (position
+    /// snaps back to 0, e.g. MIDI Start) is a large *negative* tick delta —
+    /// outside the sane range — and must force a hard seek even when the
+    /// resulting time delta alone would look nudge-sized.
+    #[test]
+    fn clk_position_sync_transport_restart_forces_seek_despite_small_delta() {
+        let bpm = 150.0;
+        let mut arb_target = FakeArbTarget::default();
+        let mut arbiter = SyncArbiter::new();
+        let mut ctrl = MidiClockSyncController::new();
+
+        // Anchor at beat 25 (absolute_tick 600), matching current_time exactly.
+        let sync_target_anchor = FakeSyncTarget {
+            state: PlaybackState::Playing,
+            time: Seconds(10.0),
+            bpm,
+            project: Some(Project::default()),
+        };
+        ctrl.sync_position_to_playback(
+            100,
+            0,
+            &mut arbiter,
+            &mut arb_target,
+            &sync_target_anchor,
+            ClockAuthority::MidiClock,
+        );
+        assert_eq!(arb_target.nudge_count, 1);
+        assert_eq!(
+            arb_target.seek_count, 0,
+            "anchor call should nudge, not seek"
+        );
+
+        // Restart: position resets to 0 (absolute_tick 0, delta -600 —
+        // outside 0..=384). MANIFOLD's own current_time is still near the
+        // pre-restart value (0.02s): a small time delta, but the tick-jump
+        // guard must win over the 2.0s nudge threshold.
+        let sync_target_restart = FakeSyncTarget {
+            state: PlaybackState::Playing,
+            time: Seconds(0.02),
+            bpm,
+            project: Some(Project::default()),
+        };
+        ctrl.sync_position_to_playback(
+            0,
+            0,
+            &mut arbiter,
+            &mut arb_target,
+            &sync_target_restart,
+            ClockAuthority::MidiClock,
+        );
+
+        assert_eq!(
+            arb_target.seek_count, 1,
+            "transport restart must hard-seek even though |Δtime| < 2.0s"
+        );
+        assert_eq!(
+            arb_target.nudge_count, 1,
+            "nudge count must not have grown on the restart call"
+        );
+    }
+
+    /// While stopped, position sync only seeks on an actual sixteenth
+    /// change (avoids re-seek churn every poll while paused).
+    #[test]
+    fn clk_position_sync_stopped_seeks_only_on_position_change() {
+        let bpm = 150.0;
+        let sync_target = FakeSyncTarget {
+            state: PlaybackState::Stopped,
+            time: Seconds(0.0),
+            bpm,
+            project: Some(Project::default()),
+        };
+        let mut arb_target = FakeArbTarget::default();
+        let mut arbiter = SyncArbiter::new();
+        let mut ctrl = MidiClockSyncController::new();
+
+        ctrl.sync_position_to_playback(
+            5,
+            0,
+            &mut arbiter,
+            &mut arb_target,
+            &sync_target,
+            ClockAuthority::MidiClock,
+        );
+        assert_eq!(arb_target.seek_count, 1, "first observed position must seek");
+
+        // Same sixteenths again -> no new seek.
+        ctrl.sync_position_to_playback(
+            5,
+            0,
+            &mut arbiter,
+            &mut arb_target,
+            &sync_target,
+            ClockAuthority::MidiClock,
+        );
+        assert_eq!(
+            arb_target.seek_count, 1,
+            "an unchanged sixteenth position must not re-trigger a seek"
+        );
+    }
+}

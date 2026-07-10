@@ -44,6 +44,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-091 | **osc-drop-frame-timecode-uses-approximate-divisor** | `OscSyncController::timecode_to_seconds`'s drop-frame branch divides the computed `total_frames` by the literal constant `29.97`, not the true SMPTE/NTSC drop-frame rate `30000/1001` (≈29.970029970...) — and ignores the configurable `timecode_frame_rate` field entirely in this branch (only the non-drop-frame `else` arm reads it). The frame-*drop pattern* itself (which display numbers get skipped, ten-minute exemption) is correct per SMPTE 12M; only the absolute seconds-per-frame divisor is off. Drift is tiny (~60µs per elapsed minute, ~3.6ms per hour) and self-correcting on every incoming OSC message (the controller nudges/seeks to the newly-received timecode every frame while playing), so it is invisible on any realistic set length — found by F3 while building drop-frame test vectors against the true standard (`docs/CORE_ENGINE_MAP.md` doesn't rule on the exact divisor; only the SMPTE drop-count *pattern* was safe to pin as a test). LOW (self-correcting, sub-frame magnitude, no observed practical impact). |
 | BUG-090 | **audio-mixdown-analysis-only-test-flakes-under-parallel-run** | `audio_mixdown::tests::render_export_audio_analysis_only_layer_taps_but_never_hits_master` (an exact `assert_eq!` on two separately-rendered `f32` audio buffers) failed once during F2's full `cargo test -p manifold-playback` gate run, then passed both standalone and in an immediate full-suite rerun — a parallel-execution flake, not a deterministic failure; root cause unknown (suspects: shared `TestDir` temp-path collision across threads, or thread-scheduling-sensitive float summation order in the mixdown path). Found 2026-07-10 running F2's gate; file untouched by F2 (confirmed via `git diff` against F2's base commit). LOW (test-only, intermittent — but an exact-equality float assertion under parallel test execution is a fragile pattern worth a look). |
 | BUG-089 | **live-clip-pending-tick-queue-dead-on-all-live-paths** | `LiveClipManager`'s tick-based pending-launch queue (`pending_by_tick`/`pending_by_layer`/`pending_by_clip_id`, `PendingLiveLaunch.target_tick`, `queue_pending`, `activate_due_pending_launches[_at_tick]`, `has_pending_activations`) can only ever be written when `event_absolute_tick >= 0`, but midir events always set `absolute_tick = -1` (`midi_input.rs`) and it is the sole producer of `MidiNoteEvent` in the whole workspace; `fire_layer_oneshot` also always passes `tick = -1`. `activate_due_pending_launches_at_tick` is the only live caller (`engine.rs:803`, fed `self.last_frame_count`, a frame counter, not a real clock tick) and drains a map that can never be non-empty in production — confirmed by exhaustive grep, not inference. Found 2026-07-10 while scoping F2's tick-queue deletion call; left OPEN rather than deleted because the dead footprint is the whole subsystem (7 items across 2 files plus a dead cancellation branch in `commit_live_clip`), wider than the single function F2 was scoped to evaluate — a clean full removal deserves its own dedicated pass. LOW (dead code, zero runtime cost beyond an empty-map check per tick; risk is only in a future session doing a partial removal). |
 | BUG-088 | **pre-existing-clippy-tests-gate-dirty-since-f1-landing** | `cargo clippy -p manifold-playback --tests -- -D warnings` fails on the base commit `cf1f3dc6` (F1's own landing) — `doc_lazy_continuation` in `tests/osc_timecode.rs:172` and three `cloned_ref_to_slice_refs`/`needless_range_loop` hits in `src/audio_mixdown.rs` (589/623/643) — none of which F2 touched (confirmed byte-identical via `git diff cf1f3dc6`). The plain `cargo clippy -p manifold-playback -- -D warnings` (no `--tests`) and a target-scoped `--test live_clip` both pass clean, so F2's own diff is clippy-clean; the full `--tests` sweep just wasn't clean at the commit F2 started from. Found 2026-07-10 running F2's gate. LOW (cosmetic/lint-only, not a correctness bug; blocks a fully-green `--tests` gate for whoever lands next until a small cleanup pass fixes the 2 files). |
@@ -208,6 +209,40 @@ synthetic UDP packet had actually been processed, until the test was changed to 
 field up) so the timeout check can never pass before a real message sets it. One-line change;
 left open because it's outside F1's scoped wiring fix and the exact boot-time semantics
 ("ported from Unity") deserved a dedicated look rather than a same-session drive-by.
+
+### BUG-091 (osc-drop-frame-timecode-uses-approximate-divisor) — SMPTE drop-frame seconds conversion divides by literal `29.97` instead of the true `30000/1001` rate — LOW (self-correcting, sub-frame magnitude)
+**Status:** OPEN
+
+Found 2026-07-10 building F3's drop-frame timecode test vectors
+(`crates/manifold-playback/src/osc_sync.rs::tests`). `timecode_to_seconds`'s drop-frame branch:
+
+```rust
+let total_frames = 108000 * hours + 1800 * minutes + 30 * seconds + frames - dropped_frames;
+total_frames as f32 / 29.97
+```
+
+The frame-*drop pattern* (skip display numbers `:00`/`:01` at the start of every minute except
+every tenth) is exactly SMPTE 12M and was safe to pin with a test (`drop_frame_skips_two_frame_numbers_at_non_tenth_minute_boundary`,
+`drop_frame_does_not_skip_at_ten_minute_boundary` — both phrased as self-consistent one-frame
+deltas so the divisor question doesn't leak into them). The *divisor* is where it diverges from
+the standard: real 29.97 drop-frame timecode runs at exactly `30000/1001 ≈ 29.970029970...`
+fps, not the flat decimal `29.97`. At TC `00:01:00:02` (`total_frames = 1800`), the code's
+`1800/29.97 = 60.060060...s` vs the standard's `1800/(30000/1001) = 60.06s` exactly — a ~60µs
+gap that scales linearly with elapsed frame count (~3.6ms/hour). `timecode_frame_rate` (the
+serialized, user-facing field) is also silently ignored in this branch — only the non-drop-frame
+`else` arm reads it, so setting it to anything while `drop_frame == true` has no effect.
+
+**Why this is LOW despite being a real divergence from the standard:** `sync_timecode_to_playback`
+nudges (or seeks) to the freshly-received OSC timecode on every incoming message while playing
+(§7/§11: "no threshold — apply every OSC frame so drift never accumulates"), so any error this
+small is overwritten before it could ever be perceived, let alone reach the 0.05s stopped-seek
+threshold. Root cause is a one-line arithmetic constant, not a design issue.
+
+**Fix shape:** replace the literal `29.97` with `30000.0 / 1001.0`, and read `self.timecode_frame_rate`
+in the drop-frame branch too (or document why it's deliberately fixed at the NTSC rate there).
+Left open rather than fixed in F3 because F3's scope is test coverage, not sync-code changes —
+this is exactly the class of finding F4/F6 (the correctness-fix phases this net exists for)
+should pick up.
 
 ### BUG-090 (audio-mixdown-analysis-only-test-flakes-under-parallel-run) — an exact-float-equality mixdown test failed once under parallel `cargo test`, passed on rerun — LOW (test-only, intermittent, root cause unknown)
 **Status:** OPEN
