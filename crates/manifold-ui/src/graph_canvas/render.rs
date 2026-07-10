@@ -851,7 +851,10 @@ impl GraphCanvas {
                         // on the card, filled cyan + tick = exposed. Click toggles.
                         // Wire-driven params can't be exposed (the wire owns them),
                         // so the box draws disabled to match the dead click.
-                        if kind_is_exposable(p.kind) {
+                        // A group-face row (D6) never draws one at all — it's
+                        // already the live mirror of an exposed card param, not
+                        // an authoring picker of its own.
+                        if !node.is_group && kind_is_exposable(p.kind) {
                             self.draw_expose_checkbox(
                                 ui, sx, row_y, row_h, p.exposed, !p.wire_driven,
                             );

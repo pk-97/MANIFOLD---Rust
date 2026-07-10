@@ -2413,6 +2413,59 @@ impl Application {
                     }
                     continue;
                 }
+                manifold_ui::GraphEditCommand::SetOuterParam {
+                    outer_param_id,
+                    new_value,
+                } => {
+                    // D6 parity invariant (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md`
+                    // §2): a group-face row mirrors an already-exposed card
+                    // param, so it re-dispatches through the IDENTICAL
+                    // `PanelAction::ParamChanged` handler the card's own
+                    // slider uses (`ui_bridge/inspector.rs`) — never a
+                    // second write path. `idx` in `GraphParamTarget::Effect`
+                    // is a don't-care here: passing the editor's own
+                    // `watched_graph_target` explicitly as `editor_target`
+                    // makes `resolve_effect_id` resolve by stable id before
+                    // it ever consults `idx` (its early-return branch).
+                    if let Some(target) = self.watched_graph_target.as_ref() {
+                        let gpt = match target {
+                            manifold_core::GraphTarget::Effect(_) => {
+                                manifold_ui::panels::GraphParamTarget::Effect(0)
+                            }
+                            manifold_core::GraphTarget::Generator(_) => {
+                                manifold_ui::panels::GraphParamTarget::Generator
+                            }
+                        };
+                        let action = PanelAction::ParamChanged(
+                            gpt,
+                            manifold_core::effects::ParamId::from(outer_param_id.clone()),
+                            *new_value,
+                        );
+                        let content_tx = self.content_tx.as_ref().unwrap();
+                        let _ = crate::ui_bridge::dispatch(
+                            &action,
+                            &mut self.local_project,
+                            content_tx,
+                            &self.content_state,
+                            &mut self.ws.ui_root,
+                            &mut self.selection,
+                            &mut self.active_layer_id,
+                            &mut self.slider_snapshot,
+                            &mut self.trim_snapshot,
+                            &mut self.target_snapshot,
+                            &mut self.decay_snapshot,
+                            &mut self.audio_shape_snapshot,
+                            &mut self.audio_action_snapshot,
+                            &mut self.audio_crossover_snapshot,
+                            &mut self.audio_send_gain_drag_snapshot,
+                            &mut self.audio_send_sensitivity_drag_snapshot,
+                            &mut self.user_prefs,
+                            &mut self.active_inspector_drag,
+                            self.watched_graph_target.as_ref(),
+                        );
+                    }
+                    continue;
+                }
                 manifold_ui::GraphEditCommand::BrowseGraphNodePath { node_id, param_name } => {
                     // Blocking native folder picker — fine for authoring (same as
                     // preset import/export). On a pick, set the param to the path

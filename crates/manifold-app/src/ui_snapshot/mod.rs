@@ -150,6 +150,48 @@ pub fn run(args: &[String]) {
         return;
     }
 
+    // The `gltfeditor` scene (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md P4's demo
+    // vehicle): the FULL graph-editor window over the REAL glTF-imported
+    // generator (`fixtures::gltf_scene`, P3's own fixture) — proves the
+    // importer's per-object group boxes carry their D6 param-mirror rows on
+    // the real production import path, not a synthesized stand-in. Unlike
+    // `editor` (gated to `fixtures::generator_editor_fixture`'s bundled-preset
+    // allowlist — a glTF import's dynamically-generated `PresetTypeId` isn't
+    // in it), this reads the preset id straight off the imported layer and
+    // resolves it through the SAME `loaded_preset_view_by_id` call, which
+    // finds it because `gltf_scene()` already installed the project's
+    // embedded-preset overlay (`crate::project_io::install_embedded_presets`)
+    // before building the layer — see `CORE_ENGINE_MAP`-adjacent
+    // `preset_loader::set_project_presets`.
+    if scene == "gltfeditor" {
+        run_gltf_editor(want_dump);
+        return;
+    }
+
+    // The `groupdemo` scene: a controlled group-with-exposed-param fixture,
+    // rendered through the SAME real `render_graph_editor_to_png` seam
+    // `gltfeditor`/`editor` use. Exists because of a FINDING surfaced while
+    // building `gltfeditor` (see that scene's module doc + BUG-095): for a
+    // PRISTINE glTF-imported generator instance, `ContentThread::graph_
+    // snapshot`'s pristine branch (`snapshot_for_view` → `outer_routings_
+    // from_view`) only ever surfaces the canonical def's compile-time-static
+    // bindings (camera/sun/environment) — never the per-object Metallic/
+    // Roughness bindings the CARD shows (those live on the per-instance
+    // manifest, not `preset_metadata.bindings`), and none of the 9 static
+    // ones target a node inside either per-object group. So THIS specific
+    // fixture's groups never receive a D6 mirror row through the real
+    // content-thread path — a pre-existing plumbing gap, not a D6 defect
+    // (proven separately by the manifold-ui unit suite, which exercises D6
+    // directly). `groupdemo` proves the same D6 mechanism (rows, collapse
+    // chip, scrub) through the identical render seam, with a fixture whose
+    // `OuterParamRouting` genuinely targets a node inside a group — every
+    // other real ingredient (GraphCanvas, EDITOR window layout, GPU render,
+    // readback) is the production path; only the graph SHAPE is synthetic.
+    if scene == "groupdemo" {
+        run_group_demo(want_dump);
+        return;
+    }
+
     // The `transform` scene is the UI transform-stack capability's visual
     // proof (`docs/UI_TRANSFORM_STACK_DESIGN.md`) — a bespoke `UITree` with no
     // `Project`/fixture behind it, so it doesn't go through `fixtures::build`.
@@ -416,8 +458,262 @@ fn run_editor_preset(preset: &str, want_dump: bool) {
         SCALE,
         png.to_str().expect("utf-8 path"),
         want_dump.then(|| dir.join("editor.tree.json")).as_deref(),
+        &[],
     );
     println!("ui-snap: wrote {} ({preset})", png.display());
+}
+
+/// Render the FULL graph-editor window over the real glTF-import fixture
+/// (D6 demo vehicle — see the `gltfeditor` dispatch arm's doc comment for
+/// why this can't reuse `run_editor_preset`/`generator_editor_fixture`).
+fn run_gltf_editor(want_dump: bool) {
+    let data = fixtures::gltf_scene();
+    let layer = data.project.timeline.layers.first().expect("gltf_scene inserts one layer");
+    let target = manifold_core::GraphTarget::Generator(layer.layer_id.clone());
+    let pid = layer.generator_type().clone();
+
+    let Some(view) = manifold_renderer::node_graph::loaded_preset_view_by_id(&pid) else {
+        eprintln!(
+            "ui-snap gltfeditor: no graph view for the imported preset id '{pid:?}' — \
+             the embedded-overlay install in fixtures::gltf_scene() didn't take"
+        );
+        std::process::exit(2);
+    };
+    let Some(rg_snap) = manifold_renderer::node_graph::snapshot_for_view(view) else {
+        eprintln!("ui-snap gltfeditor: snapshot_for_view failed for the imported def");
+        std::process::exit(2);
+    };
+    let gv_snap = crate::ui_translate::graph_snapshot_to_ui(&rg_snap);
+
+    if std::env::var_os("GLTFEDITOR_DEBUG").is_some() {
+        eprintln!("outer_routings: {:#?}", gv_snap.outer_routings);
+        fn dump(n: &manifold_ui::graph_view::NodeSnapshot, depth: usize) {
+            let pad = "  ".repeat(depth);
+            eprintln!(
+                "{pad}id={} handle={:?} type={} is_group={} params={:?}",
+                n.id,
+                n.node_handle,
+                n.type_id,
+                n.group.is_some(),
+                n.parameters.iter().map(|p| p.name.clone()).collect::<Vec<_>>()
+            );
+            if let Some(g) = n.group.as_deref() {
+                for c in &g.nodes {
+                    dump(c, depth + 1);
+                }
+            }
+        }
+        for n in &gv_snap.nodes {
+            dump(n, 0);
+        }
+    }
+
+    let dir = out_dir("gltfeditor");
+    std::fs::create_dir_all(&dir).expect("create ui-snapshots dir");
+    let tex_w = (LOGICAL_W * SCALE) as u32;
+    let tex_h = (LOGICAL_H * SCALE) as u32;
+    let png = dir.join("gltfeditor.png");
+    render::render_graph_editor_to_png(
+        &data.project,
+        &target,
+        &data.selection,
+        &gv_snap,
+        view.canonical_def,
+        tex_w,
+        tex_h,
+        SCALE,
+        png.to_str().expect("utf-8 path"),
+        want_dump.then(|| dir.join("gltfeditor.tree.json")).as_deref(),
+        &[],
+    );
+    println!("ui-snap: wrote {}", png.display());
+}
+
+/// Build the D6 proof fixture: a group ("Leaf", handle `leaf_group`)
+/// containing `node.phong_material` (handle `leaf_mat`) with Metallic/
+/// Roughness params, both exposed on the card. Mirrors
+/// `manifold-ui/src/graph_canvas/tests.rs`'s `grouped_snapshot_with_exposed_
+/// param` shape one level up (two params, named after the demo's actual
+/// ask — "Metallic/Roughness for that object").
+fn group_demo_snapshot() -> manifold_ui::graph_view::GraphSnapshot {
+    use manifold_ui::graph_view::{
+        Category, GraphSnapshot, GroupSnapshot, NodeSnapshot, OuterParamRouting, OuterParamSource,
+        ParamSnapshot, ParamSnapshotKind, PortKindSnapshot, PortSnapshot, WireSnapshot,
+    };
+    fn port(name: &str) -> PortSnapshot {
+        PortSnapshot { name: name.to_string(), kind: PortKindSnapshot::Texture2D }
+    }
+    fn param(name: &str, label: &str, current: f32) -> ParamSnapshot {
+        ParamSnapshot {
+            name: name.to_string(),
+            label: label.to_string(),
+            kind: ParamSnapshotKind::Float,
+            default_value: 0.0,
+            current_value: current,
+            range: Some((0.0, 1.0)),
+            enum_labels: None,
+            exposed: true,
+            summary: None,
+            vec_value: None,
+            string_value: None,
+            table_value: None,
+            tooltip: None,
+        }
+    }
+    let mat = NodeSnapshot {
+        id: 1,
+        node_id: manifold_core::NodeId::new("leaf_mat"),
+        node_handle: Some("leaf_mat".to_string()),
+        type_id: "node.phong_material".to_string(),
+        title: "Phong Material".to_string(),
+        inputs: vec![],
+        outputs: vec![port("out")],
+        parameters: vec![
+            param("metallic", "Metallic", 0.2),
+            param("roughness", "Roughness", 0.65),
+        ],
+        editor_pos: None,
+        breaks_dependency_cycle: false,
+        group: None,
+        wgsl_source: None,
+        category: Category::Uncategorized,
+        tooltip: None,
+    };
+    let body = GroupSnapshot {
+        nodes: vec![
+            NodeSnapshot {
+                id: 0,
+                node_id: Default::default(),
+                node_handle: None,
+                type_id: "system.group_input".to_string(),
+                title: "in".to_string(),
+                inputs: vec![],
+                outputs: vec![port("src")],
+                parameters: vec![],
+                editor_pos: None,
+                breaks_dependency_cycle: false,
+                group: None,
+                wgsl_source: None,
+                category: Category::Uncategorized,
+                tooltip: None,
+            },
+            mat,
+            NodeSnapshot {
+                id: 2,
+                node_id: Default::default(),
+                node_handle: None,
+                type_id: "system.group_output".to_string(),
+                title: "out".to_string(),
+                inputs: vec![port("out")],
+                outputs: vec![],
+                parameters: vec![],
+                editor_pos: None,
+                breaks_dependency_cycle: false,
+                group: None,
+                wgsl_source: None,
+                category: Category::Uncategorized,
+                tooltip: None,
+            },
+        ],
+        wires: vec![WireSnapshot {
+            from_node: 1,
+            from_port: "out".to_string(),
+            to_node: 2,
+            to_port: "out".to_string(),
+        }],
+        tint: Some([0.6, 0.2, 0.2, 1.0]),
+    };
+    let group = NodeSnapshot {
+        id: 10,
+        node_id: manifold_core::NodeId::new("leaf_group"),
+        node_handle: Some("Leaf".to_string()),
+        type_id: manifold_ui::graph_view::GROUP_TYPE_ID.to_string(),
+        title: "Leaf".to_string(),
+        inputs: vec![],
+        outputs: vec![port("out")],
+        parameters: vec![],
+        editor_pos: None,
+        breaks_dependency_cycle: false,
+        group: Some(Box::new(body)),
+        wgsl_source: None,
+        category: Category::Uncategorized,
+        tooltip: None,
+    };
+
+    GraphSnapshot {
+        nodes: vec![group],
+        wires: Vec::new(),
+        outer_routings: vec![
+            OuterParamRouting {
+                outer_label: "Metallic".to_string(),
+                outer_param_id: "leaf_metallic".to_string(),
+                node_handle: "leaf_mat".to_string(),
+                inner_param: "metallic".to_string(),
+                source: OuterParamSource::User,
+            },
+            OuterParamRouting {
+                outer_label: "Roughness".to_string(),
+                outer_param_id: "leaf_roughness".to_string(),
+                node_handle: "leaf_mat".to_string(),
+                inner_param: "roughness".to_string(),
+                source: OuterParamSource::User,
+            },
+        ],
+    }
+}
+
+fn run_group_demo(want_dump: bool) {
+    let Some((project, target, selection)) = fixtures::generator_editor_fixture("FluidSim2D") else {
+        eprintln!("ui-snap groupdemo: 'FluidSim2D' isn't registered as a generator preset");
+        std::process::exit(2);
+    };
+    // `def` only feeds per-node thumbnails (skipped for generators in this
+    // harness anyway, per the "rendering structure only" log line) — any
+    // loaded view supplies a well-formed `EffectGraphDef` for the type slot.
+    let placeholder_pid = manifold_core::PresetTypeId::from_string("FluidSim2D".to_string());
+    let view = manifold_renderer::node_graph::loaded_preset_view_by_id(&placeholder_pid)
+        .expect("FluidSim2D preset view");
+    let gv_snap = group_demo_snapshot();
+
+    let dir = out_dir("groupdemo");
+    std::fs::create_dir_all(&dir).expect("create ui-snapshots dir");
+    let tex_w = (LOGICAL_W * SCALE) as u32;
+    let tex_h = (LOGICAL_H * SCALE) as u32;
+
+    let expanded_png = dir.join("groupdemo-expanded.png");
+    render::render_graph_editor_to_png(
+        &project,
+        &target,
+        &selection,
+        &gv_snap,
+        view.canonical_def,
+        tex_w,
+        tex_h,
+        SCALE,
+        expanded_png.to_str().expect("utf-8 path"),
+        want_dump.then(|| dir.join("groupdemo-expanded.tree.json")).as_deref(),
+        &[],
+    );
+    println!("ui-snap: wrote {}", expanded_png.display());
+
+    // Collapsed pair (D6: "no size threshold, collapse state is the only
+    // switch") — same fixture, group id 10 forced collapsed: the "2 params"
+    // chip in place of the two rows above.
+    let collapsed_png = dir.join("groupdemo-collapsed.png");
+    render::render_graph_editor_to_png(
+        &project,
+        &target,
+        &selection,
+        &gv_snap,
+        view.canonical_def,
+        tex_w,
+        tex_h,
+        SCALE,
+        collapsed_png.to_str().expect("utf-8 path"),
+        want_dump.then(|| dir.join("groupdemo-collapsed.tree.json")).as_deref(),
+        &[10],
+    );
+    println!("ui-snap: wrote {}", collapsed_png.display());
 }
 
 /// The data-sync half of `sync_build` (P2 split, `UI_HARNESS_UNIFICATION_

@@ -310,6 +310,12 @@ pub fn render_graph_editor_to_png(
     // `HitTargets` enumeration as a `custom_surfaces` entry. `None` skips the
     // dump entirely (unchanged PNG-only behavior).
     dump_path: Option<&std::path::Path>,
+    // D6 verification (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2):
+    // force these node ids collapsed regardless of the harness's usual
+    // "expand everything" default, so a group-face "N params" chip can be
+    // captured next to (or instead of) its expanded rows. Empty for every
+    // caller that doesn't care (byte-identical to the pre-D6 behavior).
+    force_collapsed: &[u32],
 ) {
     use manifold_ui::graph_canvas::GraphCanvas;
     use manifold_ui::panels::graph_editor::{EDITOR_CARD_LANE_WIDTH, GraphEditorPanel, SIDEBAR_WIDTH};
@@ -407,6 +413,9 @@ pub fn render_graph_editor_to_png(
     // verification surface, so expand them.
     canvas.set_default_expanded(true);
     canvas.set_snapshot(snapshot);
+    for &id in force_collapsed {
+        canvas.set_collapsed(id, true);
+    }
     canvas.apply_pending_fit(viewport);
     let node_textures = render_graph_node_textures(&device, def);
 
