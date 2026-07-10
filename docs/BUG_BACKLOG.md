@@ -187,28 +187,6 @@ gate (`frames_recorded + frames_dropped == frames_submitted_total`, tracked enti
 Rust-side) is internally consistent and doesn't touch this gap; a future test would need to
 assert `probe(file).pts.len() <= frames_recorded` under intentional backpressure instead.
 
-### BUG-087 (osc-timecode-receiving-flag-false-positive-at-startup) — `is_receiving_timecode` can read true before any real OSC message ever arrives — LOW-MED (narrow boot-time window)
-**Status:** FIXED 2026-07-10 — `last_timecode_received_time` now defaults to `Seconds(f64::NEG_INFINITY)` (osc_sync.rs), so the timeout check can never pass before a real message sets it. Regression test `osc_update_no_false_receive_at_startup_before_any_timecode`.
-
-Found 2026-07-10 while wiring F1 (OSC/SMPTE timecode receive path, CORE_ENGINE_MAP §13.1) —
-[`osc_sync.rs`](../crates/manifold-playback/src/osc_sync.rs)'s `update()` computes `receiving =
-(now - last_timecode_received_time) < transport_timeout`, and `OscSyncController::new()`
-defaults `last_timecode_received_time` to `Seconds::ZERO` rather than a sentinel far in the
-past. `now` is the content thread's `time_since_start`, which also starts at zero at app boot.
-So if OSC M4L sync becomes enabled while `time_since_start` is still within `transport_timeout`
-(default 0.5s) of boot, the very first `update()` tick computes `receiving = true` with zero
-real timecode ever having arrived — a false positive. Combined with `follow_transport` (default
-on), this can fire a spurious PLAY at the very start of a session with OSC M4L mode already
-selected. The F1 receive-path test (`crates/manifold-playback/tests/osc_timecode.rs`) hit this
-directly: its `wait_for_receiving` loop's first iteration reported "receiving" before the test's
-synthetic UDP packet had actually been processed, until the test was changed to offset its own
-`now` baseline well past `transport_timeout` — a test-side workaround, not a production fix.
-**Fix shape:** give `last_timecode_received_time` a sentinel default (e.g. a large negative
-`Seconds`, matching the existing `pending_timecode_seconds: Seconds(-1.0)` sentinel pattern one
-field up) so the timeout check can never pass before a real message sets it. One-line change;
-left open because it's outside F1's scoped wiring fix and the exact boot-time semantics
-("ported from Unity") deserved a dedicated look rather than a same-session drive-by.
-
 ### BUG-092 (gltf-import-caps-render-scene-objects-at-8-stale-mirror) — glTF import truncates to 8 objects mirroring render_scene's REMOVED object cap — LOW (import-time truncation with a user warning, multi-material models only)
 **Status:** OPEN
 
@@ -238,40 +216,6 @@ import-side cap entirely and let render_scene's `objects` slider clamp — impor
 clamping at the editor is the cleaner match to the "soft editor bound, no structural cap" model.
 Refresh the gltf_import.rs:60 comment either way. Left open rather than fixed while landing the
 lights change because it's a different axis (objects, not lights) and out of that phase's scope.
-
-### BUG-091 (osc-drop-frame-timecode-uses-approximate-divisor) — SMPTE drop-frame seconds conversion divides by literal `29.97` instead of the true `30000/1001` rate — LOW (self-correcting, sub-frame magnitude)
-**Status:** FIXED 2026-07-10 — drop-frame branch now computes `(total_frames as f64 * 1001.0 / 30000.0) as f32` (osc_sync.rs); 00:01:00:02 DF is now exactly 60.06s. Exact-value test `drop_frame_absolute_seconds_are_standards_exact`.
-
-Found 2026-07-10 building F3's drop-frame timecode test vectors
-(`crates/manifold-playback/src/osc_sync.rs::tests`). `timecode_to_seconds`'s drop-frame branch:
-
-```rust
-let total_frames = 108000 * hours + 1800 * minutes + 30 * seconds + frames - dropped_frames;
-total_frames as f32 / 29.97
-```
-
-The frame-*drop pattern* (skip display numbers `:00`/`:01` at the start of every minute except
-every tenth) is exactly SMPTE 12M and was safe to pin with a test (`drop_frame_skips_two_frame_numbers_at_non_tenth_minute_boundary`,
-`drop_frame_does_not_skip_at_ten_minute_boundary` — both phrased as self-consistent one-frame
-deltas so the divisor question doesn't leak into them). The *divisor* is where it diverges from
-the standard: real 29.97 drop-frame timecode runs at exactly `30000/1001 ≈ 29.970029970...`
-fps, not the flat decimal `29.97`. At TC `00:01:00:02` (`total_frames = 1800`), the code's
-`1800/29.97 = 60.060060...s` vs the standard's `1800/(30000/1001) = 60.06s` exactly — a ~60µs
-gap that scales linearly with elapsed frame count (~3.6ms/hour). `timecode_frame_rate` (the
-serialized, user-facing field) is also silently ignored in this branch — only the non-drop-frame
-`else` arm reads it, so setting it to anything while `drop_frame == true` has no effect.
-
-**Why this is LOW despite being a real divergence from the standard:** `sync_timecode_to_playback`
-nudges (or seeks) to the freshly-received OSC timecode on every incoming message while playing
-(§7/§11: "no threshold — apply every OSC frame so drift never accumulates"), so any error this
-small is overwritten before it could ever be perceived, let alone reach the 0.05s stopped-seek
-threshold. Root cause is a one-line arithmetic constant, not a design issue.
-
-**Fix shape:** replace the literal `29.97` with `30000.0 / 1001.0`, and read `self.timecode_frame_rate`
-in the drop-frame branch too (or document why it's deliberately fixed at the NTSC rate there).
-Left open rather than fixed in F3 because F3's scope is test coverage, not sync-code changes —
-this is exactly the class of finding F4/F6 (the correctness-fix phases this net exists for)
-should pick up.
 
 ### BUG-090 (audio-mixdown-analysis-only-test-flakes-under-parallel-run) — an exact-float-equality mixdown test failed once under parallel `cargo test`, passed on rerun — LOW (test-only, intermittent, root cause unknown)
 **Status:** OPEN
@@ -1985,6 +1929,62 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-087 (osc-timecode-receiving-flag-false-positive-at-startup) — `is_receiving_timecode` can read true before any real OSC message ever arrives — LOW-MED (narrow boot-time window)
+**Status:** FIXED 2026-07-10 — `last_timecode_received_time` now defaults to `Seconds(f64::NEG_INFINITY)` (osc_sync.rs), so the timeout check can never pass before a real message sets it. Regression test `osc_update_no_false_receive_at_startup_before_any_timecode`.
+
+Found 2026-07-10 while wiring F1 (OSC/SMPTE timecode receive path, CORE_ENGINE_MAP §13.1) —
+[`osc_sync.rs`](../crates/manifold-playback/src/osc_sync.rs)'s `update()` computes `receiving =
+(now - last_timecode_received_time) < transport_timeout`, and `OscSyncController::new()`
+defaults `last_timecode_received_time` to `Seconds::ZERO` rather than a sentinel far in the
+past. `now` is the content thread's `time_since_start`, which also starts at zero at app boot.
+So if OSC M4L sync becomes enabled while `time_since_start` is still within `transport_timeout`
+(default 0.5s) of boot, the very first `update()` tick computes `receiving = true` with zero
+real timecode ever having arrived — a false positive. Combined with `follow_transport` (default
+on), this can fire a spurious PLAY at the very start of a session with OSC M4L mode already
+selected. The F1 receive-path test (`crates/manifold-playback/tests/osc_timecode.rs`) hit this
+directly: its `wait_for_receiving` loop's first iteration reported "receiving" before the test's
+synthetic UDP packet had actually been processed, until the test was changed to offset its own
+`now` baseline well past `transport_timeout` — a test-side workaround, not a production fix.
+**Fix shape:** give `last_timecode_received_time` a sentinel default (e.g. a large negative
+`Seconds`, matching the existing `pending_timecode_seconds: Seconds(-1.0)` sentinel pattern one
+field up) so the timeout check can never pass before a real message sets it. One-line change;
+left open because it's outside F1's scoped wiring fix and the exact boot-time semantics
+("ported from Unity") deserved a dedicated look rather than a same-session drive-by.
+
+### BUG-091 (osc-drop-frame-timecode-uses-approximate-divisor) — SMPTE drop-frame seconds conversion divides by literal `29.97` instead of the true `30000/1001` rate — LOW (self-correcting, sub-frame magnitude)
+**Status:** FIXED 2026-07-10 — drop-frame branch now computes `(total_frames as f64 * 1001.0 / 30000.0) as f32` (osc_sync.rs); 00:01:00:02 DF is now exactly 60.06s. Exact-value test `drop_frame_absolute_seconds_are_standards_exact`.
+
+Found 2026-07-10 building F3's drop-frame timecode test vectors
+(`crates/manifold-playback/src/osc_sync.rs::tests`). `timecode_to_seconds`'s drop-frame branch:
+
+```rust
+let total_frames = 108000 * hours + 1800 * minutes + 30 * seconds + frames - dropped_frames;
+total_frames as f32 / 29.97
+```
+
+The frame-*drop pattern* (skip display numbers `:00`/`:01` at the start of every minute except
+every tenth) is exactly SMPTE 12M and was safe to pin with a test (`drop_frame_skips_two_frame_numbers_at_non_tenth_minute_boundary`,
+`drop_frame_does_not_skip_at_ten_minute_boundary` — both phrased as self-consistent one-frame
+deltas so the divisor question doesn't leak into them). The *divisor* is where it diverges from
+the standard: real 29.97 drop-frame timecode runs at exactly `30000/1001 ≈ 29.970029970...`
+fps, not the flat decimal `29.97`. At TC `00:01:00:02` (`total_frames = 1800`), the code's
+`1800/29.97 = 60.060060...s` vs the standard's `1800/(30000/1001) = 60.06s` exactly — a ~60µs
+gap that scales linearly with elapsed frame count (~3.6ms/hour). `timecode_frame_rate` (the
+serialized, user-facing field) is also silently ignored in this branch — only the non-drop-frame
+`else` arm reads it, so setting it to anything while `drop_frame == true` has no effect.
+
+**Why this is LOW despite being a real divergence from the standard:** `sync_timecode_to_playback`
+nudges (or seeks) to the freshly-received OSC timecode on every incoming message while playing
+(§7/§11: "no threshold — apply every OSC frame so drift never accumulates"), so any error this
+small is overwritten before it could ever be perceived, let alone reach the 0.05s stopped-seek
+threshold. Root cause is a one-line arithmetic constant, not a design issue.
+
+**Fix shape:** replace the literal `29.97` with `30000.0 / 1001.0`, and read `self.timecode_frame_rate`
+in the drop-frame branch too (or document why it's deliberately fixed at the NTSC rate there).
+Left open rather than fixed in F3 because F3's scope is test coverage, not sync-code changes —
+this is exactly the class of finding F4/F6 (the correctness-fix phases this net exists for)
+should pick up.
 
 ### BUG-062 (no-forward-version-guard) — an older build opening a newer .manifold silently strips unknown fields/effects and saves the loss back — HIGH (latent; becomes live the day two builds coexist)
 **Status:** FIXED @ 1e349bf5
