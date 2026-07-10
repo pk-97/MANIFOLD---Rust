@@ -839,9 +839,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 /// `pub(super)` (not just `fn`): `ui_harness_p0`'s
-/// `cache_path_footer_differential` (a sibling module of `render`, both
-/// children of `ui_snapshot`) reuses this exact readback helper to pull real
-/// pixels off the live `UICacheManager`'s atlas — `pub(super)` is visible to
+/// `cache_path_full_render` (a sibling module of `render`, both children of
+/// `ui_snapshot`) reuses this exact readback helper to pull real pixels off
+/// the live `UICacheManager`'s atlas — `pub(super)` is visible to
 /// `ui_snapshot` and all its descendants, which covers the sibling test
 /// module without making this a public crate API.
 pub(super) fn readback(device: &GpuDevice, texture: &GpuTexture, w: u32, h: u32) -> Vec<u8> {
