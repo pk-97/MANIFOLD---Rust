@@ -18,7 +18,7 @@
 //! ~201-432):
 //! - **Which sends are analyzed** — `Project::analysis_consumed_sends()`
 //!   (audio_mod_runtime.rs:240-241), not `sends.len()`. A send with an enabled
-//!   audio mod OR an enabled trigger route qualifies.
+//!   audio mod OR a layer with an enabled clip trigger sourcing it qualifies.
 //! - **Per-send analyzer config** — `set_crossovers`/`set_scope`/
 //!   `set_pitch_tracking`/`set_floor_db` (audio_mod_runtime.rs:342-346), same
 //!   values (`Project::sends_with_pitch_mods()` for the pitch gate). D5: scope
@@ -156,7 +156,7 @@ impl<'a> OfflineAudioModDriver<'a> {
         let consumed = project.analysis_consumed_sends();
         if consumed.is_empty() {
             log::info!(
-                "[OfflineAudioMod] no send has an enabled audio mod or trigger route — \
+                "[OfflineAudioMod] no send has an enabled audio mod or clip trigger — \
                  offline audio-mod is inactive for this export"
             );
             return None;
@@ -297,20 +297,39 @@ fn build_analyzed_send(
 mod tests {
     use super::*;
     use ahash::AHashMap;
-    use manifold_core::audio_mod::AudioBand;
-    use manifold_core::{AudioSend, TriggerRoute};
+    use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, AudioModSource};
+    use manifold_core::audio_trigger::LayerClipTrigger;
+    use manifold_core::layer::Layer;
+    use manifold_core::types::LayerType;
+    use manifold_core::AudioSend;
 
-    /// A send that qualifies for `analysis_consumed_sends()` via an enabled
-    /// trigger route — the simplest construction that makes the send
-    /// "consumed" without needing a `PresetInstance`/audio-mod fixture (per
-    /// the P2 brief: "a send with an active trigger route also qualifies if
-    /// that's easier to construct").
-    fn consumed_send(label: &str) -> AudioSend {
-        let mut send = AudioSend::new(label);
-        let mut route = TriggerRoute::new(AudioBand::Low);
-        route.enabled = true;
-        send.triggers.push(route);
-        send
+    /// Push a send named `label` onto `project`, plus a layer carrying one
+    /// enabled `LayerClipTrigger` sourcing it — the simplest way to make a
+    /// send qualify for `analysis_consumed_sends()` without a
+    /// `PresetInstance`/audio-mod fixture (P2: consumption is layer-owned
+    /// now — `AudioSend::triggers` is drained legacy storage and is never
+    /// read by `analysis_consumed_sends()` again). Returns a mutable
+    /// reference to the pushed send so callers can still set `channels`/
+    /// `source` before running the driver.
+    fn consumed_send<'p>(project: &'p mut Project, label: &str) -> &'p mut AudioSend {
+        let send = AudioSend::new(label);
+        let send_id = send.id.clone();
+        project.audio_setup.sends.push(send);
+
+        let mut layer = Layer::new(
+            format!("{label} consumer"),
+            LayerType::Video,
+            project.timeline.layers.len() as i32,
+        );
+        let mut cfg = LayerClipTrigger::new(AudioModSource {
+            send_id,
+            feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Low),
+        });
+        cfg.enabled = true;
+        layer.clip_triggers.push(cfg);
+        project.timeline.layers.push(layer);
+
+        project.audio_setup.sends.last_mut().unwrap()
     }
 
     fn empty_export_audio(sample_rate: u32, master_mono: Vec<f32>, pre_roll_samples: usize) -> ExportAudio {
@@ -391,13 +410,11 @@ mod tests {
 
         let audio = empty_export_audio(rate, master, pre_roll);
         let mut project = Project::default();
-        let mut send = consumed_send("Kick");
-        send.channels = vec![0, 1]; // capture-fed -> Master source
-        project.audio_setup.sends.push(send);
+        consumed_send(&mut project, "Kick").channels = vec![0, 1]; // capture-fed -> Master source
 
         let fps = 60.0;
         let mut driver = OfflineAudioModDriver::new(&project, &audio, fps)
-            .expect("a send with an enabled trigger route must be consumed");
+            .expect("a send with an enabled clip trigger must be consumed");
         let mut engine = PlaybackEngine::new(Vec::new());
 
         // Frame 0 == range start == still inside the silent second.
@@ -428,7 +445,7 @@ mod tests {
         let audio = empty_export_audio(rate, master, pre_roll);
 
         let mut project = Project::default();
-        project.audio_setup.sends.push(consumed_send("Kick"));
+        consumed_send(&mut project, "Kick");
         let fps = 30.0;
 
         let run = || {
@@ -459,9 +476,7 @@ mod tests {
         let audio = empty_export_audio(rate, master, 0);
 
         let mut project = Project::default();
-        let mut send = consumed_send("Master tap");
-        send.channels = vec![0, 1]; // has_capture() == true, no layers
-        project.audio_setup.sends.push(send);
+        consumed_send(&mut project, "Master tap").channels = vec![0, 1]; // has_capture() == true, no layers
 
         let mut driver = OfflineAudioModDriver::new(&project, &audio, 60.0).unwrap();
         let mut engine = PlaybackEngine::new(Vec::new());
@@ -486,10 +501,9 @@ mod tests {
         audio.per_layer_mono = per_layer;
 
         let mut project = Project::default();
-        let mut send = consumed_send("Both A");
+        let send = consumed_send(&mut project, "Both A");
         send.channels = vec![0, 1];
         send.source.layers.push(layer_id);
-        project.audio_setup.sends.push(send);
 
         let mut driver = OfflineAudioModDriver::new(&project, &audio, 60.0).unwrap();
         let mut engine = PlaybackEngine::new(Vec::new());
@@ -510,10 +524,9 @@ mod tests {
         audio2.per_layer_mono = per_layer2;
 
         let mut project2 = Project::default();
-        let mut send2 = consumed_send("Both B");
+        let send2 = consumed_send(&mut project2, "Both B");
         send2.channels = vec![0, 1];
         send2.source.layers.push(layer_id2);
-        project2.audio_setup.sends.push(send2);
 
         let mut driver2 = OfflineAudioModDriver::new(&project2, &audio2, 60.0).unwrap();
         let mut engine2 = PlaybackEngine::new(Vec::new());
@@ -526,14 +539,15 @@ mod tests {
 
     #[test]
     fn unrouted_consumed_send_stays_at_default_features() {
-        // Consumed (via trigger route) but neither capture nor layers are
-        // wired — honest silence (D2), and the send is simply not analyzed.
+        // Consumed (via a layer's clip trigger) but neither capture nor
+        // layers are wired — honest silence (D2), and the send is simply not
+        // analyzed.
         let rate = 48_000u32;
         let master = sine_master_mono(rate, 0, 0.0, 2.0);
         let audio = empty_export_audio(rate, master, 0);
 
         let mut project = Project::default();
-        project.audio_setup.sends.push(consumed_send("Unrouted"));
+        consumed_send(&mut project, "Unrouted");
 
         let mut driver = OfflineAudioModDriver::new(&project, &audio, 60.0)
             .expect("driver still builds - the send IS consumed, it just has no source");

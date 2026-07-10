@@ -825,7 +825,7 @@ impl PlaybackEngine {
         //     and expire elapsed ones, before the sync below picks up the new
         //     slots (same-frame, matching the MIDI activation above). Uses the
         //     audio snapshot set by the content thread before this tick.
-        if self.tick_audio_triggers(ctx.realtime_now.0) {
+        if self.tick_audio_triggers(ctx.realtime_now.0, ctx.dt_seconds) {
             self.mark_compositor_dirty(ctx.realtime_now);
         }
 
@@ -1696,16 +1696,23 @@ impl PlaybackEngine {
     /// Called from `tick_playing` after modulation, so it reads the same fresh
     /// snapshot. Stopped-transport triggering is intentionally not handled here
     /// (one-shot expiry is beat-based and the clock is frozen when stopped).
-    fn tick_audio_triggers(&mut self, realtime_now: f64) -> bool {
+    fn tick_audio_triggers(&mut self, realtime_now: f64, dt: Seconds) -> bool {
         if self.project.is_none() || self.live_clip_manager.is_none() {
             return false;
         }
 
-        // 1. Pure decision — which routes fired this tick (immutable reads).
+        // 1. Pure decision — which configs fired this tick (immutable reads).
+        //    P2: clip triggers are layer-owned now; `has_active_clip_triggers`
+        //    replaces the old `setup.sends[].has_active_triggers()` gate.
         let fires = {
-            let setup = &self.project.as_ref().unwrap().audio_setup;
-            if setup.sends.iter().any(|s| s.has_active_triggers()) {
-                self.live_trigger_state.evaluate(&self.audio_snapshot, setup)
+            let project = self.project.as_ref().unwrap();
+            if project.has_active_clip_triggers() {
+                self.live_trigger_state.evaluate(
+                    &self.audio_snapshot,
+                    &project.audio_setup,
+                    &project.timeline.layers,
+                    dt,
+                )
             } else {
                 Vec::new()
             }
@@ -1737,8 +1744,10 @@ impl PlaybackEngine {
         let project_ref = unsafe { &mut *project };
         let lcm_ref = unsafe { &mut *lcm };
         for req in &fires {
-            // An unresolved request (no target layer set, no like-named layer to
-            // auto-route to) simply fires nothing — there is nowhere to send it.
+            // The target IS the owning layer (P2 — no more send-label
+            // auto-routing); an unresolved request (the layer was deleted
+            // since this tick's snapshot of `project.timeline.layers` was
+            // read) simply fires nothing.
             if let Some(layer_index) = resolve_trigger_layer(project_ref, req) {
                 lcm_ref.fire_layer_oneshot(
                     project_ref,
@@ -2567,25 +2576,18 @@ impl PlaybackEngine {
 }
 
 /// Resolve a live audio [`FireRequest`](crate::live_trigger::FireRequest) to a
-/// layer index: the explicit `target_layer` when set, else auto-route by the
-/// send's label (a "Kick" send finds a case-insensitively matching layer name).
-/// Returns `None` when nothing matches — the fire is then skipped.
+/// layer index. P2: the target IS the owning layer (send-label auto-routing
+/// died with the send-owned matrix); `None` only when the layer was deleted
+/// between the snapshot this tick's fires were decided against and this
+/// resolve — the fire is then skipped, not force-routed elsewhere.
 fn resolve_trigger_layer(
     project: &manifold_core::project::Project,
     req: &crate::live_trigger::FireRequest,
 ) -> Option<i32> {
-    if let Some(layer_id) = &req.target_layer {
-        return project
-            .timeline
-            .layer_index_for_id(layer_id)
-            .map(|i| i as i32);
-    }
     project
         .timeline
-        .layers
-        .iter()
-        .find(|l| l.name.eq_ignore_ascii_case(&req.send_label))
-        .map(|l| l.index)
+        .layer_index_for_id(&req.target_layer)
+        .map(|i| i as i32)
 }
 
 // ─── LiveClipHost impl for PlaybackEngine ───────────────────────────────────

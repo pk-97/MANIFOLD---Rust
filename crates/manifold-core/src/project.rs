@@ -187,6 +187,16 @@ impl Project {
         // `docs/AUDIO_INFRASTRUCTURE.md` §5.
         self.audio_setup.migrate_legacy_device();
 
+        // P2: drain each send's legacy `TriggerRoute`s (pre-unification
+        // trigger matrix) into `LayerClipTrigger`s on the resolved target
+        // layer. Cross-struct (send -> layer), so — unlike the U5
+        // `LegacyAudioTriggerMod` migration, which runs inline inside a
+        // single struct's `Deserialize` impl — this can't be a per-struct
+        // drain. This Project-level pass, which runs after the whole
+        // `Project` (sends AND layers) has deserialized, is the seam. See
+        // `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §3.2.
+        self.migrate_legacy_clip_triggers();
+
         // Validate tempo map data
         self.tempo_map.ensure_valid();
         self.tempo_map
@@ -239,6 +249,92 @@ impl Project {
         // Normalize layer order into tree pre-order (group children contiguous
         // immediately after parent). Also reindexes.
         self.timeline.enforce_tree_order();
+    }
+
+    /// P2 load migration: for each send, for each legacy `TriggerRoute`,
+    /// resolve the target layer — `target_layer` id if set, else auto-route
+    /// by send label (the same case-insensitive name match
+    /// `manifold-playback::engine::resolve_trigger_layer` used at fire time,
+    /// now run once at load) — and push a `LayerClipTrigger` onto that layer:
+    /// `source` = (send id, Transients, route band); `shape.sensitivity` =
+    /// the route's `sensitivity` verbatim (the exact U5 mapping — rough
+    /// approximation, exact-feel fidelity NOT owed); `one_shot_beats` +
+    /// `enabled` preserved. Then every send's `triggers` is drained to empty
+    /// (never re-populated — the field is `skip_serializing` so it can't come
+    /// back). Idempotent: a project with no legacy routes (already migrated,
+    /// or never had any) is a no-op. Unresolvable routes (no such layer) are
+    /// dropped — counted and named on stderr, never silent. See
+    /// `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §3.2.
+    fn migrate_legacy_clip_triggers(&mut self) {
+        let mut dropped = 0usize;
+        for send_idx in 0..self.audio_setup.sends.len() {
+            let routes = std::mem::take(&mut self.audio_setup.sends[send_idx].triggers);
+            if routes.is_empty() {
+                continue;
+            }
+            let send_id = self.audio_setup.sends[send_idx].id.clone();
+            let send_label = self.audio_setup.sends[send_idx].label.clone();
+            for route in routes {
+                let target_id = route.target_layer.clone().or_else(|| {
+                    self.timeline
+                        .layers
+                        .iter()
+                        .find(|l| l.name.eq_ignore_ascii_case(&send_label))
+                        .map(|l| l.layer_id.clone())
+                });
+                let Some(target_id) = target_id else {
+                    dropped += 1;
+                    eprintln!(
+                        "[Migration] legacy trigger route on send \"{send_label}\" \
+                         (band {:?}) resolved to no layer — no target_layer set and no \
+                         layer named \"{send_label}\"; dropping.",
+                        route.source
+                    );
+                    continue;
+                };
+                let Some((_, layer)) = self.timeline.find_layer_by_id_mut(&target_id) else {
+                    dropped += 1;
+                    eprintln!(
+                        "[Migration] legacy trigger route on send \"{send_label}\" \
+                         (band {:?}) targeted a layer id that no longer exists; dropping.",
+                        route.source
+                    );
+                    continue;
+                };
+                let shape = crate::audio_mod::AudioModShape {
+                    sensitivity: route.sensitivity,
+                    ..crate::audio_mod::AudioModShape::default()
+                };
+                layer.clip_triggers.push(crate::audio_trigger::LayerClipTrigger {
+                    enabled: route.enabled,
+                    source: crate::audio_mod::AudioModSource {
+                        send_id: send_id.clone(),
+                        feature: crate::audio_mod::AudioFeature::new(
+                            crate::audio_mod::AudioFeatureKind::Transients,
+                            route.source,
+                        ),
+                    },
+                    shape,
+                    one_shot_beats: route.one_shot_beats,
+                });
+            }
+        }
+        if dropped > 0 {
+            log::warn!(
+                "[Migration] dropped {dropped} unresolvable legacy trigger route(s) during \
+                 clip-trigger migration (see stderr for per-route detail)"
+            );
+        }
+    }
+
+    /// Whether any layer has an enabled [`crate::audio_trigger::LayerClipTrigger`]
+    /// — the P2 replacement for `AudioSend::has_active_triggers()`, which now
+    /// only ever reads drained (always-empty) legacy storage.
+    pub fn has_active_clip_triggers(&self) -> bool {
+        self.timeline
+            .layers
+            .iter()
+            .any(|l| l.clip_triggers.iter().any(|c| c.enabled))
     }
 
     /// Stamp `node_id == handle` on every graph-override node whose id is
@@ -1188,15 +1284,25 @@ impl Project {
 
     /// Send ids the analysis runtime should actually spend cycles on: every
     /// send with at least one ENABLED audio mod reading it, plus every send
-    /// with at least one enabled trigger route. Walks the same instance set
-    /// [`Self::has_active_audio_mods`] does (master effects, layer effects,
-    /// layer generator params — NOT clip effects, mirroring that function).
+    /// with at least one enabled `LayerClipTrigger` sourcing it. Walks the
+    /// same instance set [`Self::has_active_audio_mods`] does (master
+    /// effects, layer effects, layer generator params — NOT clip effects,
+    /// mirroring that function), plus every layer's `clip_triggers` (P2 —
+    /// the §3.4 walker arm; a send-owned `AudioSend::triggers` is drained
+    /// legacy storage now and is never read here again).
     /// `AudioModRuntime` recomputes this only on a data-version change and
     /// skips every send outside the set (unless it's the scope-tapped send) —
-    /// see `docs/AUDIO_SENDS_UX_DESIGN.md` D4/§3.2.
+    /// see `docs/AUDIO_SENDS_UX_DESIGN.md` D4/§3.2,
+    /// `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §3.4.
     pub fn analysis_consumed_sends(&self) -> ahash::AHashSet<crate::AudioSendId> {
-        let mut out = ahash::AHashSet::new();
-        let mut collect = |fx: &crate::effects::PresetInstance| {
+        // A plain fn (not a closure capturing `out`) so it can be called
+        // alongside the direct `out.insert` the clip-trigger arm below needs —
+        // a closure borrowing `out` mutably would keep it borrowed for the
+        // whole loop and conflict with that direct access.
+        fn collect(
+            out: &mut ahash::AHashSet<crate::AudioSendId>,
+            fx: &crate::effects::PresetInstance,
+        ) {
             // §9 U4: a fire-mode mod is just an enabled `audio_mods` entry,
             // already covered below — no separate arm needed.
             if let Some(mods) = fx.audio_mods.as_ref() {
@@ -1204,23 +1310,22 @@ impl Project {
                     out.insert(m.source.send_id.clone());
                 }
             }
-        };
+        }
+        let mut out = ahash::AHashSet::new();
         for fx in &self.settings.master_effects {
-            collect(fx);
+            collect(&mut out, fx);
         }
         for layer in &self.timeline.layers {
             if let Some(effects) = layer.effects.as_ref() {
                 for fx in effects {
-                    collect(fx);
+                    collect(&mut out, fx);
                 }
             }
             if let Some(gp) = layer.gen_params() {
-                collect(gp);
+                collect(&mut out, gp);
             }
-        }
-        for send in &self.audio_setup.sends {
-            if send.has_active_triggers() {
-                out.insert(send.id.clone());
+            for ct in layer.clip_triggers.iter().filter(|c| c.enabled) {
+                out.insert(ct.source.send_id.clone());
             }
         }
         out
@@ -2255,14 +2360,36 @@ mod tests {
         assert!(p.analysis_consumed_sends().is_empty());
     }
 
+    /// A layer with one clip-trigger config sourcing `send_id`, `enabled` as
+    /// given. Test helper for the P2 layer-owned trigger tests below.
+    fn layer_with_clip_trigger(
+        send_id: crate::AudioSendId,
+        band: crate::audio_mod::AudioBand,
+        enabled: bool,
+    ) -> crate::layer::Layer {
+        let mut layer = crate::layer::Layer::new("L".to_string(), crate::types::LayerType::Video, 0);
+        let mut cfg = crate::audio_trigger::LayerClipTrigger::new(crate::audio_mod::AudioModSource {
+            send_id,
+            feature: crate::audio_mod::AudioFeature::new(
+                crate::audio_mod::AudioFeatureKind::Transients,
+                band,
+            ),
+        });
+        cfg.enabled = enabled;
+        layer.clip_triggers.push(cfg);
+        layer
+    }
+
     #[test]
-    fn analysis_consumed_sends_includes_send_with_enabled_trigger_route_and_no_mod() {
+    fn analysis_consumed_sends_includes_send_with_enabled_layer_clip_trigger_and_no_mod() {
         let mut p = Project::default();
-        let mut send_a = send_with_id("A", "send-a");
-        let mut route = crate::audio_trigger::TriggerRoute::new(crate::audio_mod::AudioBand::Low);
-        route.enabled = true;
-        send_a.triggers.push(route);
+        let send_a = send_with_id("A", "send-a");
         p.audio_setup.sends.push(send_a.clone());
+        p.timeline.layers.push(layer_with_clip_trigger(
+            send_a.id.clone(),
+            crate::audio_mod::AudioBand::Low,
+            true,
+        ));
 
         let consumed = p.analysis_consumed_sends();
         assert_eq!(consumed.len(), 1);
@@ -2270,14 +2397,136 @@ mod tests {
     }
 
     #[test]
-    fn analysis_consumed_sends_excludes_send_with_disabled_trigger_route() {
+    fn analysis_consumed_sends_excludes_send_with_disabled_layer_clip_trigger() {
+        let mut p = Project::default();
+        let send_a = send_with_id("A", "send-a");
+        p.audio_setup.sends.push(send_a.clone());
+        // `enabled: false` — layer_with_clip_trigger's third arg.
+        p.timeline.layers.push(layer_with_clip_trigger(
+            send_a.id.clone(),
+            crate::audio_mod::AudioBand::Low,
+            false,
+        ));
+
+        assert!(p.analysis_consumed_sends().is_empty());
+    }
+
+    #[test]
+    fn analysis_consumed_sends_ignores_drained_legacy_send_triggers() {
+        // §3.4: `send.triggers` is deserialize-only legacy storage now —
+        // even if something hand-populates it (bypassing the load
+        // migration), `analysis_consumed_sends` must never read it again.
         let mut p = Project::default();
         let mut send_a = send_with_id("A", "send-a");
-        // TriggerRoute::new is disabled by default.
-        send_a.triggers.push(crate::audio_trigger::TriggerRoute::new(crate::audio_mod::AudioBand::Low));
+        let mut route = crate::audio_trigger::TriggerRoute::new(crate::audio_mod::AudioBand::Low);
+        route.enabled = true;
+        send_a.triggers.push(route);
         p.audio_setup.sends.push(send_a);
 
         assert!(p.analysis_consumed_sends().is_empty());
+    }
+
+    #[test]
+    fn has_active_clip_triggers_true_only_when_some_layer_has_an_enabled_config() {
+        let mut p = Project::default();
+        assert!(!p.has_active_clip_triggers());
+
+        p.timeline.layers.push(layer_with_clip_trigger(
+            crate::AudioSendId::new("send-a"),
+            crate::audio_mod::AudioBand::Low,
+            false,
+        ));
+        assert!(!p.has_active_clip_triggers(), "disabled config doesn't count");
+
+        p.timeline.layers[0].clip_triggers[0].enabled = true;
+        assert!(p.has_active_clip_triggers());
+    }
+
+    // ─── migrate_legacy_clip_triggers (P2) ───
+
+    #[test]
+    fn migrate_legacy_clip_triggers_resolves_explicit_target_and_drains_send() {
+        let mut p = Project::default();
+        let send_a = send_with_id("Kick", "send-a");
+        let send_id = send_a.id.clone();
+        p.audio_setup.sends.push(send_a);
+
+        let target =
+            crate::layer::Layer::new("Strobe".to_string(), crate::types::LayerType::Video, 0);
+        let target_id = target.layer_id.clone();
+        p.timeline.layers.push(target);
+
+        let mut route = crate::audio_trigger::TriggerRoute::new(crate::audio_mod::AudioBand::Low);
+        route.enabled = true;
+        route.sensitivity = 0.8;
+        route.target_layer = Some(target_id.clone());
+        p.audio_setup.sends[0].triggers.push(route);
+
+        p.migrate_legacy_clip_triggers();
+
+        assert!(p.audio_setup.sends[0].triggers.is_empty(), "legacy storage drained");
+        let (_, layer) = p.timeline.find_layer_by_id(&target_id).unwrap();
+        assert_eq!(layer.clip_triggers.len(), 1);
+        let cfg = &layer.clip_triggers[0];
+        assert!(cfg.enabled);
+        assert_eq!(cfg.source.send_id, send_id);
+        assert_eq!(cfg.shape.sensitivity, 0.8, "U5-verbatim sensitivity-to-Amount mapping");
+    }
+
+    #[test]
+    fn migrate_legacy_clip_triggers_auto_routes_by_send_label_when_no_target_layer() {
+        let mut p = Project::default();
+        let send_a = send_with_id("Kick", "send-a"); // label "Kick"
+        let send_id = send_a.id.clone();
+        p.audio_setup.sends.push(send_a);
+
+        // Name-matches the send label — the fire-time auto-route rule, run
+        // once at load.
+        let layer = crate::layer::Layer::new("Kick".to_string(), crate::types::LayerType::Video, 0);
+        let target_id = layer.layer_id.clone();
+        p.timeline.layers.push(layer);
+
+        let mut route = crate::audio_trigger::TriggerRoute::new(crate::audio_mod::AudioBand::Full);
+        route.enabled = true;
+        // No target_layer set.
+        p.audio_setup.sends[0].triggers.push(route);
+
+        p.migrate_legacy_clip_triggers();
+
+        let (_, layer) = p.timeline.find_layer_by_id(&target_id).unwrap();
+        assert_eq!(layer.clip_triggers.len(), 1);
+        assert_eq!(layer.clip_triggers[0].source.send_id, send_id);
+    }
+
+    #[test]
+    fn migrate_legacy_clip_triggers_drops_unresolvable_route_and_still_drains() {
+        let mut p = Project::default();
+        // Label "Ghost" — no layer named "Ghost", no explicit target_layer.
+        let send_a = send_with_id("Ghost", "send-a");
+        p.audio_setup.sends.push(send_a);
+
+        let mut route = crate::audio_trigger::TriggerRoute::new(crate::audio_mod::AudioBand::Full);
+        route.enabled = true;
+        p.audio_setup.sends[0].triggers.push(route);
+
+        p.migrate_legacy_clip_triggers();
+
+        assert!(p.audio_setup.sends[0].triggers.is_empty(), "drained even when unresolvable");
+        assert!(p.timeline.layers.is_empty());
+    }
+
+    #[test]
+    fn migrate_legacy_clip_triggers_is_idempotent_on_a_project_with_no_legacy_routes() {
+        let mut p = Project::default();
+        p.audio_setup.sends.push(send_with_id("A", "send-a"));
+        p.timeline.layers.push(crate::layer::Layer::new(
+            "L".to_string(),
+            crate::types::LayerType::Video,
+            0,
+        ));
+        p.migrate_legacy_clip_triggers();
+        assert!(p.timeline.layers[0].clip_triggers.is_empty());
+        assert!(p.audio_setup.sends[0].triggers.is_empty());
     }
 
     /// A `clip_trigger`-shaped bundled param, `is_trigger_gate` set — the
