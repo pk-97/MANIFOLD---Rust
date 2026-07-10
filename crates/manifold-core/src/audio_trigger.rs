@@ -15,7 +15,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::audio_features::SendFeatures;
-use crate::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, AudioModSource};
+use crate::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, AudioModShape, AudioModSource};
 use crate::id::LayerId;
 use crate::units::Beats;
 
@@ -196,6 +196,49 @@ impl TriggerRoute {
     }
 }
 
+/// P2: the one authorable clip-trigger config — sits on `Layer` beside the
+/// MIDI clip-launch fields (`layer.rs`), speaking the exact same audio-mod
+/// vocabulary (`AudioModSource` + `AudioModShape`) param triggers use.
+/// `TriggerRoute` (above) becomes deserialize-only legacy; this is its
+/// replacement as the only authorable shape. See
+/// `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §3.1/D2/D3.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayerClipTrigger {
+    /// Whether this config fires. A disabled config keeps its tuning (it's a
+    /// row you can toggle), it just never triggers.
+    pub enabled: bool,
+    /// Send + feature + band — the SAME source type every audio mod uses.
+    pub source: AudioModSource,
+    /// Sensitivity/attack/release/curve/invert/rate-of-change — the SAME
+    /// shape. `sensitivity` ("Amount") tunes the shaped signal against the
+    /// fixed 0.5 fire edge, exactly like a trigger-gate param mod (U2).
+    pub shape: AudioModShape,
+    /// How long the fired one-shot holds. A transient has no note-off, so the
+    /// fire length is fixed here rather than by a release event.
+    pub one_shot_beats: Beats,
+    // Runtime edge/follower state (TransientEdge, smoothed, prev_raw) lives in
+    // the evaluator (`manifold-playback::live_trigger`) keyed by
+    // (LayerId, index) — NOT serialized, matching `LiveTriggerState::armed`.
+    // Layer is a pure data model; `ParameterAudioMod` carries its edge inline
+    // only because that mod struct already held follower state — do not copy
+    // that pattern here.
+}
+
+impl LayerClipTrigger {
+    /// A new config reading `source`, disabled by default (the user enables a
+    /// row once they've tuned it), default shape, one-beat one-shot length —
+    /// the same default `TriggerRoute::new` used.
+    pub fn new(source: AudioModSource) -> Self {
+        Self {
+            enabled: false,
+            source,
+            shape: AudioModShape::default(),
+            one_shot_beats: Beats(DEFAULT_ONE_SHOT_BEATS),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,6 +322,33 @@ mod tests {
     // (`clip_edge_enabled_matrix`), and the threshold mapping is still
     // exercised by `TriggerRoute`'s own tests above (same shared
     // `sensitivity_to_threshold`).
+
+    #[test]
+    fn layer_clip_trigger_new_is_disabled_default_shape_one_beat() {
+        let source = AudioModSource {
+            send_id: crate::id::AudioSendId::new("send-1"),
+            feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+        };
+        let cfg = LayerClipTrigger::new(source.clone());
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.source, source);
+        assert_eq!(cfg.shape, AudioModShape::default());
+        assert_eq!(cfg.one_shot_beats, Beats(DEFAULT_ONE_SHOT_BEATS));
+    }
+
+    #[test]
+    fn layer_clip_trigger_round_trips_through_json() {
+        let mut cfg = LayerClipTrigger::new(AudioModSource {
+            send_id: crate::id::AudioSendId::new("send-2"),
+            feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Low),
+        });
+        cfg.enabled = true;
+        cfg.shape.sensitivity = 0.75;
+        cfg.one_shot_beats = Beats(2.0);
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: LayerClipTrigger = serde_json::from_str(&json).unwrap();
+        assert_eq!(cfg, back);
+    }
 
     #[test]
     fn legacy_audio_trigger_mod_deserializes_the_pre_unification_wire_shape() {

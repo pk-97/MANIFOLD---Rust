@@ -775,3 +775,52 @@ fn pitch_presence_mods_survive_roundtrip_and_drive() {
     let hi = m.shape.apply(m.source.feature.extract(&feed(0.8)), 10.0, &mut s2, &mut p2);
     assert!(hi > lo, "a reloaded Pitch mod must still drive: {lo} vs {hi}");
 }
+
+// ── P2 clip-trigger migration: canonical-fixture round trip ──
+//
+// AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md §3.2/P2 gate: the
+// hand-crafted migration proofs live in `manifold-io/src/loader.rs`'s own
+// `legacy_clip_trigger_migration_tests` module; this is the no-regression
+// proof on Peter's real load-bearing fixture (`canonical-fixture-liveschool`
+// memory) — it may carry zero legacy trigger routes (the feature is weeks
+// old), which is fine: the point is that loading, migrating (a no-op here),
+// saving, and reloading is lossless and doesn't panic on real data.
+#[test]
+fn liveschool_v6_leds_clip_trigger_migration_round_trips_cleanly() {
+    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    assert!(path.exists(), "Test fixture not found: {}", path.display());
+
+    let project = loader::load_project(&path).expect("canonical fixture loads clean");
+
+    // Legacy send-owned storage is drained (present-but-empty is fine; the
+    // struct field is real, `skip_serializing` just means it won't reappear
+    // in the JSON, per §3.1).
+    for send in &project.audio_setup.sends {
+        assert!(
+            send.triggers.is_empty(),
+            "send \"{}\" still carries un-migrated legacy trigger routes",
+            send.label
+        );
+    }
+
+    let clip_trigger_count_before: usize =
+        project.timeline.layers.iter().map(|l| l.clip_triggers.len()).sum();
+
+    // Save -> reload: the round trip. `skip_serializing` proof + no data loss
+    // on a real project, not just the hand-crafted fixtures above.
+    let json = serde_json::to_string(&project).expect("serialize");
+    assert!(
+        !json.contains("\"triggers\":["),
+        "no send may re-serialize a populated legacy triggers array"
+    );
+    let reloaded = loader::load_project_from_json(&json).expect("re-saved fixture reloads clean");
+
+    let clip_trigger_count_after: usize =
+        reloaded.timeline.layers.iter().map(|l| l.clip_triggers.len()).sum();
+    assert_eq!(
+        clip_trigger_count_before, clip_trigger_count_after,
+        "clip-trigger count must survive save -> reload unchanged"
+    );
+    assert_eq!(reloaded.timeline.layers.len(), project.timeline.layers.len());
+    assert_eq!(reloaded.timeline.total_clip_count(), project.timeline.total_clip_count());
+}

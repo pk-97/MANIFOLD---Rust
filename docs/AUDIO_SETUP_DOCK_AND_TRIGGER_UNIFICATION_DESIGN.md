@@ -1,6 +1,6 @@
 # Audio Setup Dock & Trigger Unification — the panel becomes a workspace column; clip triggers become layer-owned audio mods
 
-**Status:** IN PROGRESS · P1 SHIPPED 2026-07-10 (dock column + overlay-path deletion + scroll, `feat/audio-dock-p1` @ `36a96791`; closes BUG-047; L3 flow + full-app PNG — see `docs/landings/2026-07-10-audio-dock-p1.md`); P2–P4 remain · design 2026-07-09 · Fable
+**Status:** IN PROGRESS · P1 SHIPPED 2026-07-10 (dock column + overlay-path deletion + scroll, `36a96791`; closes BUG-047) · P2 SHIPPED 2026-07-10 (`LayerClipTrigger` model + load migration + evaluator + analysis-gating arm, `feat/audio-dock-p2` @ `e4aa01bf`; round-trip + real-fixture gated; L1 model phase — see `docs/landings/2026-07-10-audio-dock-p2.md`) · P3–P4 remain · design 2026-07-09 · Fable
 **Prerequisites:** none (runs against shipped AUDIO_SENDS_UX P1–P4 and LIVE_AUDIO_TRIGGERS §9 U-P1/U-P2 code)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -102,6 +102,14 @@ drags are untouched except where a phase names them.
   making the config literally a `ParameterAudioMod` (its `param_id`/`action`/
   `trigger_mode`/base-tracking fields are meaningless here — sharing the INNER types
   and evaluator is the unification; junk fields are not).
+  - **AS-BUILT correction (P2, 2026-07-10):** the prose above says `shape.apply()` →
+    `advance(out_norm, 0.5)`, but the actual param-trigger path
+    (`modulation.rs`) edge-detects on `shape.condition()` (the pre-range-map signal),
+    NOT `apply()`/`out_norm` — edge-detecting the range-mapped value reintroduces the
+    documented range-trim firing bug ("range_min ≥ 0.5 fired once and never re-armed").
+    P2's evaluator therefore fires on `trigger_edge.advance(shape.condition(...), 0.5)`,
+    which IS byte-identical to param triggers (the property D3 actually asserts). The
+    `apply()` wording was imprecise; `condition()` is the mechanism.
 - **D4 — No Mode row on clip triggers.** `TriggerFireMode` (Clip/Audio/Both) exists to
   arbitrate between clip-edge and audio events on a *gate param*; a clip trigger IS the
   clip launcher — there is nothing to arbitrate. The drawer is Source/Feature/Band/
@@ -288,7 +296,7 @@ carry over unchanged.
 - **Test scope:** `cargo test -p manifold-ui --lib` + the flow; no workspace sweep.
 - **Demo:** the PNG + flow above — L3.
 
-### Phase 2 — LayerClipTrigger model + migration + evaluation (core/playback/io/app-runtime)
+### Phase 2 — LayerClipTrigger model + migration + evaluation (core/playback/io/app-runtime) — SHIPPED 2026-07-10 (`e4aa01bf`)
 - **Entry state:** §3.4's `rg` sweep run fresh, count matches the brief's baked list
   (else stop and list); `audio_trigger.rs:152/:194`, `live_trigger.rs:56`,
   `layer.rs:140` re-verified.

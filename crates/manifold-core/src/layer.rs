@@ -157,6 +157,14 @@ pub struct Layer {
     pub duration_mode: Option<ClipDurationMode>,
     #[serde(default)]
     pub source_clip_ids: Vec<String>,
+    /// Audio → clip-launch configs owned by this layer (P2): the layer-side
+    /// home for "what launches clips here", beside the MIDI fields above.
+    /// Empty (the default) means no audio trigger fires clips on this layer.
+    /// The only authorable clip-trigger shape — see
+    /// `crate::audio_trigger::LayerClipTrigger` and
+    /// `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §3.1/D2.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clip_triggers: Vec<crate::audio_trigger::LayerClipTrigger>,
 
     // ── Legacy flat generator fields (V1.0.0 format) ──
     #[serde(
@@ -1006,6 +1014,7 @@ impl Default for Layer {
             midi_trigger_mode: MidiTriggerMode::SingleNote,
             duration_mode: None,
             source_clip_ids: Vec::new(),
+            clip_triggers: Vec::new(),
             legacy_generator_type: None,
             legacy_gen_param_values: None,
             legacy_gen_drivers: None,

@@ -263,7 +263,7 @@ impl AudioModRuntime {
         let (active, send_count) = engine.project().map_or((false, 0), |p| {
             let needs = p.has_active_audio_mods()
                 || self.spec_send.is_some()
-                || p.audio_setup.sends.iter().any(|s| s.has_active_triggers());
+                || p.has_active_clip_triggers();
             (needs, p.audio_setup.sends.len())
         });
 
@@ -561,7 +561,7 @@ impl AudioModRuntime {
         let any_capture = project.audio_setup.sends.iter().any(|s| s.has_capture());
         let needs_analysis = project.has_active_audio_mods()
             || self.spec_send.is_some()
-            || project.audio_setup.sends.iter().any(|s| s.has_active_triggers());
+            || project.has_active_clip_triggers();
         let gate = any_capture && needs_analysis && !project.audio_setup.sends.is_empty();
         if !gate {
             if self.capture.is_some() {
