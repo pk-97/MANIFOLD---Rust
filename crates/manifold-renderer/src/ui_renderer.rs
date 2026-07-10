@@ -1294,16 +1294,33 @@ impl UIRenderer {
             });
         }
 
+        // Every glyph a node draws is clipped to the node's own rect,
+        // intersected with the tree clip (scroll containers etc.). Bound here
+        // at enqueue, like `RectCommand::clip` — a label longer than its
+        // widget cuts at the edge instead of painting over the neighbour
+        // (same doctrine as BUG-060: containment is structural, not a per-
+        // call-site courtesy). Layout sizes label nodes to their measured
+        // text, so a well-fitted label is untouched; only genuine overrun
+        // clips. `draw_node` already skips zero-area nodes above, so this
+        // never turns a real label into an empty clip.
+        #[cfg(target_os = "macos")]
+        let node_clip: [f32; 4] = match self.clip_stack.last() {
+            Some(c) => [
+                c.x.max(bounds.x),
+                c.y.max(bounds.y),
+                c.x_max().min(bounds.x_max()),
+                c.y_max().min(bounds.y_max()),
+            ],
+            None => [bounds.x, bounds.y, bounds.x_max(), bounds.y_max()],
+        };
+
         // Text (or icon if the first char is an atlas-icon codepoint — see
         // `manifold_ui::icons::Icon`).
         #[cfg(target_os = "macos")]
         if let Some(text) = &node.text
             && !text.is_empty()
         {
-            let clip_bounds = self
-                .clip_stack
-                .last()
-                .map(|c| [c.x, c.y, c.x_max(), c.y_max()]);
+            let clip_bounds = Some(node_clip);
             let text_color = if disabled {
                 [
                     style.text_color.r,
@@ -1411,10 +1428,7 @@ impl UIRenderer {
         #[cfg(target_os = "macos")]
         if style.dropdown_caret {
             const CARET: &str = "\u{25BC}";
-            let clip_bounds = self
-                .clip_stack
-                .last()
-                .map(|c| [c.x, c.y, c.x_max(), c.y_max()]);
+            let clip_bounds = Some(node_clip);
             let caret_color = manifold_ui::color::CHIP_CARET;
             let caret_color = [caret_color.r, caret_color.g, caret_color.b, caret_color.a];
             let caret_font = manifold_ui::color::CHIP_CARET_FONT;
