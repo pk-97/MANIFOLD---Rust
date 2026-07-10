@@ -119,8 +119,11 @@ impl SessionRuntime {
     // ─── Quantize math (pure) ───
 
     /// Next quantize boundary at/after `beat`. `quantize <= 0` means launch
-    /// now (§5 "Quantize 0 = launch immediately").
-    fn ceil_to_boundary(beat: f64, quantize: f64) -> f64 {
+    /// now (§5 "Quantize 0 = launch immediately"). `pub(crate)`: also the
+    /// shared ceil for `LiveClipManager::compute_trigger_snap_beat`'s MIDI
+    /// launch-quantize fallback (F2) — one ceil function, not two that can
+    /// drift.
+    pub(crate) fn ceil_to_boundary(beat: f64, quantize: f64) -> f64 {
         if quantize <= 0.0 {
             beat
         } else {

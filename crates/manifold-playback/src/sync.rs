@@ -233,3 +233,177 @@ impl Default for SyncArbiter {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Records every call so the gate tests can assert exactly what passed
+    /// through. Mirrors the shape of `PlaybackEngine`'s `SyncArbiterTarget`
+    /// impl without any of the playback machinery.
+    #[derive(Default)]
+    struct FakeArbTarget {
+        played: bool,
+        paused: bool,
+        nudged: Option<Seconds>,
+        sought: Option<Seconds>,
+        external_time_sync: bool,
+    }
+
+    impl SyncArbiterTarget for FakeArbTarget {
+        fn current_project(&self) -> Option<&Project> {
+            None
+        }
+        fn external_time_sync(&self) -> bool {
+            self.external_time_sync
+        }
+        fn set_external_time_sync(&mut self, value: bool) {
+            self.external_time_sync = value;
+        }
+        fn play(&mut self) {
+            self.played = true;
+        }
+        fn pause(&mut self, _clear_recording: bool) {
+            self.paused = true;
+        }
+        fn nudge_time(&mut self, time: Seconds) {
+            self.nudged = Some(time);
+        }
+        fn seek(&mut self, time: Seconds) {
+            self.sought = Some(time);
+        }
+    }
+
+    const ALL_AUTHORITIES: [ClockAuthority; 4] = [
+        ClockAuthority::Internal,
+        ClockAuthority::Link,
+        ClockAuthority::MidiClock,
+        ClockAuthority::Osc,
+    ];
+
+    // ── §7 gate matrix: "every sync controller passes (source, authority)
+    // and the call is dropped unless they match." Exhaustive over the 4×4
+    // grid for each of the five gated operations. ──────────────────────────
+
+    #[test]
+    fn arbiter_gate_matrix_play() {
+        for &source in &ALL_AUTHORITIES {
+            for &authority in &ALL_AUTHORITIES {
+                let mut arbiter = SyncArbiter::new();
+                let mut target = FakeArbTarget::default();
+                let passed = arbiter.play(source, authority, &mut target);
+                let should_pass = source == authority;
+                assert_eq!(passed, should_pass, "play({source:?}, {authority:?})");
+                assert_eq!(target.played, should_pass);
+                assert_eq!(arbiter.suppress_next_transport, should_pass);
+            }
+        }
+    }
+
+    #[test]
+    fn arbiter_gate_matrix_pause() {
+        for &source in &ALL_AUTHORITIES {
+            for &authority in &ALL_AUTHORITIES {
+                let mut arbiter = SyncArbiter::new();
+                let mut target = FakeArbTarget::default();
+                let passed = arbiter.pause(source, authority, &mut target, false);
+                let should_pass = source == authority;
+                assert_eq!(passed, should_pass, "pause({source:?}, {authority:?})");
+                assert_eq!(target.paused, should_pass);
+            }
+        }
+    }
+
+    #[test]
+    fn arbiter_gate_matrix_nudge_time() {
+        for &source in &ALL_AUTHORITIES {
+            for &authority in &ALL_AUTHORITIES {
+                let arbiter = SyncArbiter::new();
+                let mut target = FakeArbTarget::default();
+                let passed = arbiter.nudge_time(source, authority, &mut target, Seconds(5.0));
+                let should_pass = source == authority;
+                assert_eq!(passed, should_pass, "nudge_time({source:?}, {authority:?})");
+                assert_eq!(target.nudged, should_pass.then_some(Seconds(5.0)));
+            }
+        }
+    }
+
+    #[test]
+    fn arbiter_gate_matrix_seek() {
+        for &source in &ALL_AUTHORITIES {
+            for &authority in &ALL_AUTHORITIES {
+                let mut arbiter = SyncArbiter::new();
+                let mut target = FakeArbTarget::default();
+                let passed = arbiter.seek(source, authority, &mut target, Seconds(7.0));
+                let should_pass = source == authority;
+                assert_eq!(passed, should_pass, "seek({source:?}, {authority:?})");
+                assert_eq!(target.sought, should_pass.then_some(Seconds(7.0)));
+            }
+        }
+    }
+
+    #[test]
+    fn arbiter_gate_matrix_set_external_time_sync() {
+        for &source in &ALL_AUTHORITIES {
+            for &authority in &ALL_AUTHORITIES {
+                let arbiter = SyncArbiter::new();
+                let mut target = FakeArbTarget::default();
+                let passed = arbiter.set_external_time_sync(source, authority, &mut target, true);
+                let should_pass = source == authority;
+                assert_eq!(
+                    passed, should_pass,
+                    "set_external_time_sync({source:?}, {authority:?})"
+                );
+                assert_eq!(target.external_time_sync, should_pass);
+            }
+        }
+    }
+
+    // ── §11 thresholds ──────────────────────────────────────────────────
+
+    /// `OWNERSHIP_GRACE_PERIOD` = 0.5s: `manifold_owns_playback` cannot be
+    /// cleared before the grace period elapses, even if asked — covers the
+    /// OSC→DAW→MIDI round trip.
+    #[test]
+    fn ownership_grace_period_blocks_clear_before_elapsed() {
+        let mut arbiter = SyncArbiter::new();
+        arbiter.set_manifold_owns_at(Seconds(10.0));
+        arbiter.clear_ownership_if_expired(Seconds(10.0 + 0.5 - 0.001));
+        assert!(
+            arbiter.manifold_owns_playback,
+            "ownership must survive up to (but not including) the 0.5s grace period"
+        );
+    }
+
+    #[test]
+    fn ownership_grace_period_allows_clear_at_boundary() {
+        let mut arbiter = SyncArbiter::new();
+        arbiter.set_manifold_owns_at(Seconds(10.0));
+        arbiter.clear_ownership_if_expired(Seconds(10.5));
+        assert!(
+            !arbiter.manifold_owns_playback,
+            "ownership must clear at exactly the 0.5s grace period (>= semantics)"
+        );
+    }
+
+    /// `SEEK_COOLDOWN` = 0.3s: CLK position sync is suppressed for 0.3s
+    /// after a user-initiated seek (ruler scrub, click-seek).
+    #[test]
+    fn seek_cooldown_active_before_threshold() {
+        let mut arbiter = SyncArbiter::new();
+        arbiter.set_user_seek_time(Seconds(5.0));
+        assert!(arbiter.is_seek_cooldown_active(Seconds(5.0 + 0.3 - 0.001)));
+    }
+
+    #[test]
+    fn seek_cooldown_inactive_at_threshold() {
+        let mut arbiter = SyncArbiter::new();
+        arbiter.set_user_seek_time(Seconds(5.0));
+        // 0.3 isn't exactly representable in f64, so `5.0 + 0.3` computed via
+        // a decimal literal (5.3) can round a hair under the true sum,
+        // flipping the strict `<` comparison. A small margin past the
+        // threshold avoids that rounding trap while still proving the same
+        // "expired" edge as `5.0 + SEEK_COOLDOWN` intends.
+        assert!(!arbiter.is_seek_cooldown_active(Seconds(5.0 + 0.3 + 0.001)));
+    }
+}

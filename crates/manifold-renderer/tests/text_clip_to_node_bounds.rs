@@ -137,6 +137,120 @@ fn overlong_label_stays_inside_button() {
     );
 }
 
+/// Regression proof for the 2026-07-10 pad regression: the comfort pad
+/// (`TEXT_CLIP_PAD_X`) must only fire on a side the text actually overruns.
+/// Layout sizes label nodes to their measured text, so a well-fitted label
+/// legitimately sits flush at the node edge — left-aligned menu rows lost
+/// their first glyph ("mport MIDI File"), right-aligned param labels their
+/// last, when the pad was applied unconditionally.
+#[test]
+fn flush_fit_label_keeps_edge_glyphs() {
+    let device = GpuDevice::new();
+    let mut ui = UIRenderer::new(&device, FORMAT);
+
+    let base = UIStyle {
+        text_color: Color32::new(255, 255, 255, 255),
+        font_size: 13,
+        text_inset_x: 0.0,
+        ..UIStyle::default()
+    };
+
+    // Node width = measured text width exactly: flush at both edges, the
+    // shape layout produces for every sized-to-text label.
+    const LEFT_TEXT: &str = "MIDI"; // 'M': full-height ink at the left edge
+    const RIGHT_TEXT: &str = "CHANNEL"; // 'L': ink to the right edge
+    let left_w = ui.measure_text_cached(LEFT_TEXT, 13, base.font_weight).x;
+    let right_w = ui.measure_text_cached(RIGHT_TEXT, 13, base.font_weight).x;
+
+    let (lx, ly, lh) = (40.0, 20.0, 20.0);
+    let (rx, ry, rh) = (40.0, 70.0, 20.0);
+
+    let mut tree = UITree::new();
+    let region = tree.begin_region(
+        Rect::new(0.0, 0.0, W as f32, H as f32),
+        ZTier::Chrome,
+        "flush-fit-proof",
+        UIFlags::empty(),
+    );
+    let start = tree.count();
+    tree.add_button(
+        None,
+        lx,
+        ly,
+        left_w,
+        lh,
+        UIStyle {
+            text_align: TextAlign::Left,
+            ..base
+        },
+        LEFT_TEXT,
+    );
+    tree.add_button(
+        None,
+        rx,
+        ry,
+        right_w,
+        rh,
+        UIStyle {
+            text_align: TextAlign::Right,
+            ..base
+        },
+        RIGHT_TEXT,
+    );
+    tree.end_region(region, start);
+
+    ui.begin_frame();
+    ui.draw_rect(0.0, 0.0, W as f32, H as f32, BG);
+    ui.render_tree(&tree, None);
+    let drew = ui.prepare(&device, W, H, 1.0);
+    assert!(drew, "fixture produced no draw commands");
+
+    let target = RenderTarget::new(&device, W, H, FORMAT, "flush-fit-proof");
+    {
+        let mut enc = device.create_encoder("flush-fit-render");
+        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        enc.commit_and_wait_completed();
+    }
+    let bytes = readback(&device, &target.texture);
+
+    let out_dir = std::env::var("SWATCH_OUT")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let png = format!("{out_dir}/text_clip_flush_fit.png");
+    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    eprintln!("flush fit proof → {png}");
+
+    let bg = [bytes[0], bytes[1], bytes[2]];
+    let ink_in_band = |x0: u32, x1: u32, y0: u32, y1: u32| -> u32 {
+        let mut n = 0;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let i = ((y * W + x) * 4) as usize;
+                if bytes[i] != bg[0] || bytes[i + 1] != bg[1] || bytes[i + 2] != bg[2] {
+                    n += 1;
+                }
+            }
+        }
+        n
+    };
+
+    // The first 3px of the left-aligned label ('M's left stem) and the last
+    // 3px of the right-aligned label ('L's foot) must carry ink — the
+    // unconditional pad clipped exactly these bands.
+    const PAD_X: u32 = 3; // mirror of ui_renderer's TEXT_CLIP_PAD_X
+    let left_band = ink_in_band(lx as u32, lx as u32 + PAD_X, ly as u32, (ly + lh) as u32);
+    assert!(
+        left_band > 0,
+        "left-aligned flush label lost its first glyph edge — see {png}"
+    );
+    let r_max = (rx + right_w) as u32;
+    let right_band = ink_in_band(r_max - PAD_X, r_max + 1, ry as u32, (ry + rh) as u32);
+    assert!(
+        right_band > 0,
+        "right-aligned flush label lost its last glyph edge — see {png}"
+    );
+}
+
 fn readback(device: &GpuDevice, texture: &GpuTexture) -> Vec<u8> {
     let bytes_per_row = W * 4;
     let total = u64::from(H * bytes_per_row);
