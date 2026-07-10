@@ -24,6 +24,19 @@ Rules (normative home: `DESIGN_DOC_STANDARD.md` §10):
 
 ## Open
 
+### VD-023 — LIVE_RECORDING_PROOFS P3: in-app record-button glue — L4-by-live-use only, no automated test
+Deferred 2026-07-10 (Peter's call; `docs/landings/2026-07-10-live-recording-proofs.md`). P1+P2
+prove the recorder itself (the `LiveRecordingSession` API into the real AVAssetWriter, adversarial
+timing, independent file verification). The remaining **unexercised glue** — the record
+button emitting `ContentCommand::StartLiveRecording`, and the capture block inside the live
+compositor frame (`content_pipeline.rs:2547`) — has **no automated test**: P3's intended vehicle
+(`ui-snap`) turned out to render the UI tree with no live compositor, so it can't drive this path
+(see the design's P3 note). Today this glue is verified only at **L4 by Peter pressing record
+live at every show**. Residual risk: a future code change that unhooks the button-to-recorder
+wiring would not be caught by a test — only at the next soundcheck/show. Close by building the
+headless integration harness described in the design's §8 Deferred P3 entry (a real content
+thread + compositor smoke), or accept L4-by-use as sufficient and mark this consciously carried.
+
 ### VD-022 — LIVE_RECORDING_PROOFS P2: full-scale pre-gig soak + BUG-086 — L2 reached / L4 carried
 Landed 2026-07-10 (`docs/landings/2026-07-10-live-recording-proofs.md`, P2 @ `091290e3`). The
 `recording-soak` bin and its decoded-index PASS gate are verified at L2 via a short 1080p/2-minute
