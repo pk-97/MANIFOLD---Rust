@@ -82,6 +82,14 @@ fn apply_one(ui: &mut UIRoot, data: &mut SceneData, spec: &str) -> InteractOutco
             // shrinks to make room — the same two-halves toggle the app does.
             ui.audio_setup_panel.open();
             ui.layout.audio_setup_width = manifold_ui::color::DEFAULT_AUDIO_SETUP_WIDTH;
+            // Seed the scope's crossovers + analysed range the same way the
+            // real app pushes them every frame (`update_audio_scope_bands`),
+            // so a headless snapshot shows the D7 band-label chips positioned
+            // on real divider lines instead of hidden (scope_fmin defaults to
+            // 0.0 — "dark", per `AudioSetupPanel`'s doc comment). Values match
+            // `AudioSetup::default()` (250/2000 Hz) and the scope's analysed
+            // range (10 Hz-22 kHz, matching the frequency-axis ticks).
+            ui.audio_setup_panel.set_scope_bands(250.0, 2000.0, 10.0, 22_000.0);
             hit("open -> audio setup dock".to_string())
         }
         Some(("automation_add", rest)) => res(automation_add_point(data, rest)),

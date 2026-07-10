@@ -49,8 +49,17 @@ use std::path::{Path, PathBuf};
 // section (`audio_trigger_section.rs`), adding 3 raw `Color32::new(` literals; its
 // scoped gate did not run this test, so it landed on main red — folded up here.
 // (Its 2 raw `corner_radius` literals were tokenized to `color::SMALL_RADIUS`
-// instead, keeping the radius guard absolute at 0.))
-const COLOR_BASELINE: usize = 190;
+// instead, keeping the radius guard absolute at 0.)) 190→198, 2026-07-10:
+// AUDIO_SETUP_DOCK P4 landed on top of an already-red base (P3c's merge tip,
+// `95a9939e`, measured 193 — 3 over 190 — before P4 touched anything; same
+// scoped-gate gap as P3b, never folded in). P4 itself added 5 for D7/D8
+// readability chips: the divider-line onset-lane chip (bg + border,
+// `audio_setup_panel.rs`), the selected-send-row highlight (bg + border), and
+// the "(missing layer)" repair copy's amber text colour (reusing the file's
+// own existing (232,168,92,255) warning-amber literal — already repeated
+// elsewhere in this file pre-P4, not tokenized here either; that cleanup is
+// the §15 ramp's job, not this phase's). 193 (inherited) + 5 (P4) = 198.
+const COLOR_BASELINE: usize = 198;
 const RADIUS_BASELINE: usize = 0;
 
 #[test]

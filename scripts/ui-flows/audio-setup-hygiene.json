@@ -1,0 +1,58 @@
+[
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "audio_setup.gain_plus", "nth": 0 } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "name": "audio_setup.gain_plus", "nth": 0 } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "name": "audio_setup.gain_plus", "nth": 0 } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "name": "audio_setup.gain_plus", "nth": 0 } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "+3 dB" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "0 dB" } },
+      "check": { "Count": 1 }
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "name": "audio_setup.gain_plus", "nth": 0 } },
+      "gesture": "RightClick"
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "+3 dB" } },
+      "check": { "Count": 0 }
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "0 dB" } },
+      "check": { "Count": 2 }
+    }
+  }
+]

@@ -151,6 +151,20 @@ pub fn run(scene: &str, script_path: &str) {
         ui.layout.inspector_width = 0.0;
         ui.layout.timeline_split_ratio = 0.93;
     }
+    // `audiosends` is the Audio Setup dock's flow-testing scene (P4/D8 gain-
+    // reset hygiene flow): the panel isn't reachable from a flow's `Click`
+    // gesture (the header opens it through the perform-entry menu, which
+    // renders outside the `UITree` selector surface) — so, script-mode only,
+    // pre-open it the same way `interact.rs`'s `open:audio_setup` verb does,
+    // and seed real crossovers/range so the scope isn't "dark". Mirrors the
+    // `paramsteps`/`gltfscene` pre-armed-state pattern above (BUG-073: a
+    // script harness has no per-frame tick to drive a reveal tween, so state
+    // that needs to already be settled is constructed, not clicked into).
+    if scene == "audiosends" {
+        ui.audio_setup_panel.open();
+        ui.layout.audio_setup_width = manifold_ui::color::DEFAULT_AUDIO_SETUP_WIDTH;
+        ui.audio_setup_panel.set_scope_bands(250.0, 2000.0, 10.0, 22_000.0);
+    }
     super::sync_build(&mut ui, &data, zoom_ppb);
 
     // P2 (D3): ONE persistent cache + composited offscreen for the whole
@@ -519,6 +533,11 @@ impl Runner {
                 ui.pointer_event(center, PointerAction::Up, self.clock);
                 ui.pointer_event(center, PointerAction::Down, self.clock);
                 ui.pointer_event(center, PointerAction::Up, self.clock);
+                self.drain_and_dispatch(ui, data);
+            }
+            Gesture::RightClick => {
+                self.last_gesture_points.push(center);
+                ui.input.process_right_click(&ui.tree, center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::Hover => {
