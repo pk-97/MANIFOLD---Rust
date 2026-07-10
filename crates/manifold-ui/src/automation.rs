@@ -81,6 +81,15 @@ pub enum AutomationTarget {
 pub enum Gesture {
     Click { modifiers: Modifiers },
     DoubleClick,
+    /// The other house intrinsic-reset gesture (BUG-070/BUG-105's "every
+    /// card/panel slider in the app" convention) — a right-click at the
+    /// target's centre. Mirrors `Click`'s single down/up, routed through
+    /// `UIInputSystem::process_right_click` (the same call
+    /// `window_input.rs`'s real right-button handler makes) instead of a
+    /// plain pointer down/up, so it always emits `UIEvent::RightClick` —
+    /// including a miss, which still carries `pos` for position-based
+    /// consumers.
+    RightClick,
     Hover,
     /// Down at target, interpolated Move steps (real drag thresholds must
     /// fire), Up at `to`. `steps` ≥ 2.
