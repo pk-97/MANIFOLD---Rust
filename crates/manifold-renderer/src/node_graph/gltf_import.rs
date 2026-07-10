@@ -4,11 +4,12 @@
 //! faithfully: one `node.render_scene` object PER DISTINCT MATERIAL, each
 //! fed its material-filtered geometry (`node.gltf_mesh_source`), that
 //! material's base-color texture (`node.gltf_texture_source`, when present),
-//! and a `node.pbr_material` atom carrying the glTF's PBR factors — plus a
-//! shared synthesized framing camera (`node.orbit_camera`), a sun light
-//! (`node.light`), and an IBL envmap (`node.bake_environment`).
+//! a `node.pbr_material` atom carrying the glTF's PBR factors, and a
+//! `node.transform_3d` atom (seeded to recenter the object at the origin) —
+//! plus a shared synthesized framing camera (`node.orbit_camera`), a sun
+//! light (`node.light`), and an IBL envmap (`node.bake_environment`).
 //!
-//! Each object's three producers are wrapped in one named, tinted node **group**
+//! Each object's producers are wrapped in one named, tinted node **group**
 //! so a multi-mesh import reads as a few labelled boxes in the graph editor
 //! rather than a wall of loose nodes; the group flattens away at load to the
 //! exact same flat graph, so nothing the runtime sees changes (see
@@ -42,11 +43,7 @@ use super::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID};
 use super::gltf_load;
 use super::gltf_load::GltfImportSummary;
 
-/// Hard cap mirrored from `node.render_scene`'s own `MAX_OBJECTS` — the
-/// assembler cannot emit more objects than the renderer can host. Materials
-/// beyond this are dropped (smallest by vertex count first), not silently
-/// merged — see [`ImportReport::dropped_over_cap`].
-const MAX_RENDER_SCENE_OBJECTS: usize = 8;
+use crate::node_graph::primitives::render_scene::OBJECT_SLIDER_MAX;
 
 /// Stable identity for the one outer-card text config every imported
 /// preset carries: the source `.glb`/`.gltf` path.
@@ -57,14 +54,15 @@ const MODEL_FILE_PARAM_ID: &str = "model_file";
 #[derive(Debug, Clone)]
 pub struct ImportReport {
     /// Distinct materials with geometry, as parsed (before the
-    /// [`MAX_RENDER_SCENE_OBJECTS`] cap).
+    /// [`OBJECT_SLIDER_MAX`] truncation threshold).
     pub material_count: usize,
-    /// Objects actually wired into `node.render_scene` — `min(material_count, 8)`.
+    /// Objects actually wired into `node.render_scene` — `min(material_count, OBJECT_SLIDER_MAX)`.
     pub object_count: usize,
     /// How many objects got a `node.gltf_texture_source` → `base_color_map_N` wire.
     pub textures_wired: usize,
-    /// Materials dropped because the glb has more than 8 (the smallest by
-    /// vertex count, so the most visually significant objects survive).
+    /// Materials dropped because the glb has more than `OBJECT_SLIDER_MAX`
+    /// (the smallest by vertex count, so the most visually significant
+    /// objects survive).
     pub dropped_over_cap: usize,
     /// Triangle-list vertices belonging to glTF's unassigned default
     /// material — v1 does not import these (mirrors
@@ -130,8 +128,19 @@ const DEG2RAD: f32 = std::f32::consts::PI / 180.0;
 /// imported model (camera framing, light, material) — see
 /// [`assemble_import_graph`]'s metadata block. `default_value` must match
 /// the wired node param's value (through `scale`) so the card reproduces the
-/// assembler's look on first frame with no drift.
-fn card_param(id: &str, name: &str, min: f32, max: f32, default: f32, is_angle: bool) -> ParamSpecDef {
+/// assembler's look on first frame with no drift. `section` bundles this
+/// knob under a collapsible card header (D5/D9,
+/// SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2): per-object knobs get the
+/// object's group name, shared knobs get `"Camera"`/`"Sun"`/`"Environment"`.
+fn card_param(
+    id: &str,
+    name: &str,
+    min: f32,
+    max: f32,
+    default: f32,
+    is_angle: bool,
+    section: &str,
+) -> ParamSpecDef {
     ParamSpecDef {
         id: id.to_string(),
         name: name.to_string(),
@@ -148,6 +157,7 @@ fn card_param(id: &str, name: &str, min: f32, max: f32, default: f32, is_angle: 
         invert: false,
         is_angle,
         is_trigger_gate: false,
+        section: Some(section.to_string()),
     }
 }
 
@@ -244,7 +254,7 @@ fn group_tint(index: usize) -> [f32; 4] {
 
 /// Parse `path` and assemble a generator [`EffectGraphDef`] that renders it
 /// faithfully: one `node.render_scene` object per distinct material
-/// (capped at [`MAX_RENDER_SCENE_OBJECTS`], largest-by-vertex-count first),
+/// (capped at [`OBJECT_SLIDER_MAX`], largest-by-vertex-count first),
 /// each fed its material-filtered geometry + base-color texture (if any) +
 /// a PBR material, framed by a synthesized orbit camera sized to the glb's
 /// bounding box, lit by one sun light, under a baked IBL envmap (required —
@@ -264,14 +274,15 @@ pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportRepor
 /// a synthetic summary with no `.glb` fixture on disk.
 ///
 /// Each distinct material becomes one node **group** (`GROUP_TYPE_ID`) named for
-/// the material: its `node.gltf_mesh_source` + `node.pbr_material` (+ optional
-/// `node.gltf_texture_source`) live inside, exposed through a `system.group_output`
-/// as `vertices` / `material` / `baseColor`, and the group's outputs wire to the
+/// the material: its `node.gltf_mesh_source` + `node.pbr_material` +
+/// `node.transform_3d` (+ optional `node.gltf_texture_source`) live inside,
+/// exposed through a `system.group_output` as `vertices` / `material` /
+/// `transform` / `baseColor`, and the group's outputs wire to the
 /// shared `node.render_scene`. Grouping is a pure presentation layer: it flattens
 /// away at load (`manifold_core::flatten::flatten_groups`, run inside
 /// `instantiate_def`) to the exact same flat graph, and every inner node keeps its
 /// stable `node_id`, so the card/string bindings that target `mesh_k`/`mat_k`/
-/// `tex_k` by id resolve unchanged (see `docs/GROUPING_GRAPHS.md` §2).
+/// `tex_k`/`transform_k` by id resolve unchanged (see `docs/GROUPING_GRAPHS.md` §2).
 fn build_import_graph(
     summary: &GltfImportSummary,
     path: &Path,
@@ -283,17 +294,19 @@ fn build_import_graph(
         ));
     }
 
-    // Largest-by-vertex-count first, so a >8-material glb keeps its most
-    // visually significant objects when capped, not an arbitrary prefix.
+    // Largest-by-vertex-count first, so a >OBJECT_SLIDER_MAX-material glb
+    // keeps its most visually significant objects when capped, not an
+    // arbitrary prefix.
+    let object_cap = OBJECT_SLIDER_MAX as usize;
     let mut materials = summary.materials.clone();
     materials.sort_by(|a, b| b.vertex_count.cmp(&a.vertex_count));
-    let dropped_over_cap = materials.len().saturating_sub(MAX_RENDER_SCENE_OBJECTS);
-    materials.truncate(MAX_RENDER_SCENE_OBJECTS);
+    let dropped_over_cap = materials.len().saturating_sub(object_cap);
+    materials.truncate(object_cap);
     let n = materials.len();
     if dropped_over_cap > 0 {
         log::warn!(
             "gltf_import::assemble_import_graph({}): {} materials with geometry, \
-             node.render_scene caps at {MAX_RENDER_SCENE_OBJECTS} objects — dropping the \
+             node.render_scene caps at {object_cap} objects — dropping the \
              {dropped_over_cap} smallest by vertex count",
             path.display(),
             summary.materials.len(),
@@ -392,7 +405,6 @@ fn build_import_graph(
     let mut card_params: Vec<ParamSpecDef> = Vec::new();
     let mut card_bindings: Vec<BindingDef> = Vec::new();
     let mut textures_wired = 0usize;
-    let multi = n > 1;
 
     // Group names, deduped so two identically-named glTF materials don't collide
     // in the flattened handle map (the flattener prefixes every inner handle with
@@ -402,6 +414,11 @@ fn build_import_graph(
     for (k, m) in materials.iter().enumerate() {
         let mesh_node_id = format!("mesh_{k}");
         let mat_node_id = format!("mat_{k}");
+        // Computed up front (not just before the group box below) so the
+        // per-object card knobs pushed further down can stamp it as their
+        // `section` (D5/D9) — the section now carries the per-object
+        // identity the old " 2"-style label suffix used to.
+        let group_name = unique_group_name(m.name.as_deref(), k, &mut used_group_names);
 
         // This object's producer nodes live INSIDE its group; only the group box
         // and the shared render / camera / lights / boundaries sit at the top
@@ -471,52 +488,60 @@ fn build_import_graph(
         group_nodes.push(mat_node);
 
         // Per-object material knobs on the card: metallic + roughness, the
-        // two live PBR controls. Suffixed with the object number only when
-        // there's more than one, so a single-material model reads
-        // "Metallic" / "Roughness" not "Metallic 1". Defaults mirror the
+        // two live PBR controls. No more " 2"-style numeric suffix on the
+        // label — the `section` (the object's own group name) now carries
+        // that identity, so every object reads "Metallic" / "Roughness"
+        // under its own collapsible header (D5/D9). Defaults mirror the
         // node params set just above, so the card reproduces the glTF's own
         // material on first frame. These still target the material node by its
         // stable `node_id`, which grouping preserves.
-        let suffix = if multi { format!(" {}", k + 1) } else { String::new() };
         let metal_default = m.metallic;
         let rough_default = m.roughness.max(0.01);
         let metal_id = format!("metal_{k}");
         let rough_id = format!("rough_{k}");
-        let metal_name = format!("Metallic{suffix}");
-        let rough_name = format!("Roughness{suffix}");
-        card_params.push(card_param(&metal_id, &metal_name, 0.0, 1.0, metal_default, false));
+        card_params.push(card_param(&metal_id, "Metallic", 0.0, 1.0, metal_default, false, &group_name));
         card_bindings.push(card_binding(
-            &metal_id, &metal_name, metal_default, &mat_node_id, "metallic", 1.0,
+            &metal_id, "Metallic", metal_default, &mat_node_id, "metallic", 1.0,
         ));
-        card_params.push(card_param(&rough_id, &rough_name, 0.01, 1.0, rough_default, false));
+        card_params.push(card_param(&rough_id, "Roughness", 0.01, 1.0, rough_default, false, &group_name));
         card_bindings.push(card_binding(
-            &rough_id, &rough_name, rough_default, &mat_node_id, "roughness", 1.0,
+            &rough_id, "Roughness", rough_default, &mat_node_id, "roughness", 1.0,
         ));
 
-        // The group's outward interface: the mesh geometry, the material, and
-        // (when present) the base-color texture, each exposed through the
-        // `system.group_output` and wired out to the shared render node.
+        // The group's outward interface: the mesh geometry, the material,
+        // this object's transform, and (when present) the base-color
+        // texture, each exposed through the `system.group_output` and wired
+        // out to the shared render node.
         let out_id = fresh_id();
         let mut outputs = vec![
             InterfacePortDef { name: "vertices".to_string(), port_type: "Array(Vertex)".to_string() },
             InterfacePortDef { name: "material".to_string(), port_type: "Material".to_string() },
+            InterfacePortDef { name: "transform".to_string(), port_type: "Transform".to_string() },
         ];
         group_wires.push(wire(mesh_id, "vertices", out_id, "vertices"));
         group_wires.push(wire(mat_id, "out", out_id, "material"));
 
         // Recenter this object at the origin so the fixed-target orbit
-        // camera frames the (not-recentered) gltf_mesh_source output —
-        // same convention `gltf_mesh_source_renders_azalea_to_png` proves.
-        // (Transform params live on the shared render node, at the top level.)
-        render_node
-            .params
-            .insert(format!("pos_x_{k}"), float(-center[0]));
-        render_node
-            .params
-            .insert(format!("pos_y_{k}"), float(-center[1]));
-        render_node
-            .params
-            .insert(format!("pos_z_{k}"), float(-center[2]));
+        // camera frames the (not-recentered) gltf_mesh_source output — same
+        // convention `gltf_mesh_source_renders_azalea_to_png` proves. Lives
+        // on this object's OWN `node.transform_3d` now (D9 — the recenter
+        // moved off the shared render node onto the per-object atom), no
+        // transform sliders on the card by default: transforms are
+        // performed via expose-what-you-need, gizmos (P6), or the group
+        // face (D6), not a scene-editor slider wall.
+        let transform_node_id = format!("transform_{k}");
+        let transform_id = fresh_id();
+        let mut transform_node = plain_node(
+            transform_id,
+            &transform_node_id,
+            "node.transform_3d",
+            &transform_node_id,
+        );
+        transform_node.params.insert("pos_x".to_string(), float(-center[0]));
+        transform_node.params.insert("pos_y".to_string(), float(-center[1]));
+        transform_node.params.insert("pos_z".to_string(), float(-center[2]));
+        group_nodes.push(transform_node);
+        group_wires.push(wire(transform_id, "transform", out_id, "transform"));
 
         string_bindings.push(StringBindingDef {
             id: MODEL_FILE_PARAM_ID.to_string(),
@@ -579,7 +604,6 @@ fn build_import_graph(
         // The group box itself, named for the material so the top level reads as
         // labeled boxes a performer can navigate. Folded away at load; only its
         // outputs cross to the top level.
-        let group_name = unique_group_name(m.name.as_deref(), k, &mut used_group_names);
         let group_id = fresh_id();
         let mut group_node =
             plain_node(group_id, &format!("object_{k}"), GROUP_TYPE_ID, &group_name);
@@ -598,6 +622,7 @@ fn build_import_graph(
         // (etc.) wires the ungrouped assembler produced.
         wires.push(wire(group_id, "vertices", render_id, &format!("mesh_{k}")));
         wires.push(wire(group_id, "material", render_id, &format!("material_{k}")));
+        wires.push(wire(group_id, "transform", render_id, &format!("transform_{k}")));
         if has_tex {
             wires.push(wire(group_id, "baseColor", render_id, &format!("base_color_map_{k}")));
         }
@@ -623,13 +648,13 @@ fn build_import_graph(
     // `camera`/`sun`/`envmap` node params set above so the card is a faithful
     // mirror of the assembled look.
     card_params.push(card_param(
-        "cam_orbit", "Camera Orbit", -180.0 * DEG2RAD, 180.0 * DEG2RAD, 0.7, true,
+        "cam_orbit", "Camera Orbit", -180.0 * DEG2RAD, 180.0 * DEG2RAD, 0.7, true, "Camera",
     )); // angle (radians)
     card_bindings.push(card_binding(
         "cam_orbit", "Camera Orbit", 0.7, "camera", "orbit", 1.0,
     ));
     card_params.push(card_param(
-        "cam_tilt", "Camera Tilt", -89.0 * DEG2RAD, 89.0 * DEG2RAD, 0.3, true,
+        "cam_tilt", "Camera Tilt", -89.0 * DEG2RAD, 89.0 * DEG2RAD, 0.3, true, "Camera",
     )); // angle (radians)
     card_bindings.push(card_binding(
         "cam_tilt", "Camera Tilt", 0.3, "camera", "tilt", 1.0,
@@ -641,30 +666,31 @@ fn build_import_graph(
         (distance * 4.0).max(1.0),
         distance,
         false,
+        "Camera",
     ));
     card_bindings.push(card_binding(
         "cam_dist", "Camera Distance", distance, "camera", "distance", 1.0,
     ));
     card_params.push(card_param(
-        "cam_fov", "Camera FOV", 20.0 * DEG2RAD, 120.0 * DEG2RAD, 0.9, true,
+        "cam_fov", "Camera FOV", 20.0 * DEG2RAD, 120.0 * DEG2RAD, 0.9, true, "Camera",
     )); // angle (radians)
     card_bindings.push(card_binding(
         "cam_fov", "Camera FOV", 0.9, "camera", "fov_y", 1.0,
     ));
 
-    card_params.push(card_param("sun_int", "Sun Intensity", 0.0, 10.0, 3.5, false));
+    card_params.push(card_param("sun_int", "Sun Intensity", 0.0, 10.0, 3.5, false, "Sun"));
     card_bindings.push(card_binding("sun_int", "Sun Intensity", 3.5, "sun", "intensity", 1.0));
-    card_params.push(card_param("sun_x", "Sun X", -15.0, 15.0, 5.0, false));
+    card_params.push(card_param("sun_x", "Sun X", -15.0, 15.0, 5.0, false, "Sun"));
     card_bindings.push(card_binding("sun_x", "Sun X", 5.0, "sun", "pos_x", 1.0));
-    card_params.push(card_param("sun_y", "Sun Y", -15.0, 15.0, 2.0, false));
+    card_params.push(card_param("sun_y", "Sun Y", -15.0, 15.0, 2.0, false, "Sun"));
     card_bindings.push(card_binding("sun_y", "Sun Y", 2.0, "sun", "pos_y", 1.0));
-    card_params.push(card_param("sun_z", "Sun Z", -15.0, 15.0, 3.0, false));
+    card_params.push(card_param("sun_z", "Sun Z", -15.0, 15.0, 3.0, false, "Sun"));
     card_bindings.push(card_binding("sun_z", "Sun Z", 3.0, "sun", "pos_z", 1.0));
 
     // `node.bake_environment`'s `horizon_strength` is its brightness knob
     // (default 1.0, range 0..4) — the closest thing to "envmap intensity"
     // and what drives IBL reflection strength on the PBR materials.
-    card_params.push(card_param("env_bright", "Reflections", 0.0, 4.0, 1.0, false));
+    card_params.push(card_param("env_bright", "Reflections", 0.0, 4.0, 1.0, false, "Environment"));
     card_bindings.push(card_binding(
         "env_bright", "Reflections", 1.0, "envmap", "horizon_strength", 1.0,
     ));
@@ -808,16 +834,33 @@ mod tests {
             );
         }
         // Spot-check the shared framing knobs and the per-object material
-        // knobs (suffixed because azalea has >1 object).
+        // knobs. No more numeric label suffix — the `section` (D5/D9) now
+        // carries the per-object identity instead.
         for id in ["cam_orbit", "cam_dist", "sun_int", "env_bright", "metal_0", "rough_1"] {
             assert!(meta.params.iter().any(|p| p.id == id), "missing card param `{id}`");
         }
+        let metal0 = meta.params.iter().find(|p| p.id == "metal_0").unwrap();
+        assert_eq!(metal0.name, "Metallic", "no ' 1'-style suffix — section carries the identity now");
+        assert!(metal0.section.is_some(), "per-object knob carries a section");
+        let rough1 = meta.params.iter().find(|p| p.id == "rough_1").unwrap();
+        assert_eq!(rough1.name, "Roughness");
+        assert_ne!(
+            metal0.section, rough1.section,
+            "the two azalea objects get distinct sections (their own group names)"
+        );
+        // Shared framing/light/environment knobs carry the fixed section names.
+        let cam_orbit = meta.params.iter().find(|p| p.id == "cam_orbit").unwrap();
+        assert_eq!(cam_orbit.section.as_deref(), Some("Camera"));
+        let sun_int = meta.params.iter().find(|p| p.id == "sun_int").unwrap();
+        assert_eq!(sun_int.section.as_deref(), Some("Sun"));
+        let env_bright = meta.params.iter().find(|p| p.id == "env_bright").unwrap();
+        assert_eq!(env_bright.section.as_deref(), Some("Environment"));
+
         // Camera angle sliders store radians (app-wide `is_angle` convention),
         // so the binding is a pass-through — no unit fold at the write boundary.
-        let orbit_param = meta.params.iter().find(|p| p.id == "cam_orbit").unwrap();
-        assert!(orbit_param.is_angle, "camera orbit slider is an angle param");
+        assert!(cam_orbit.is_angle, "camera orbit slider is an angle param");
         assert!(
-            (orbit_param.default_value - 0.7).abs() < 1e-6,
+            (cam_orbit.default_value - 0.7).abs() < 1e-6,
             "camera orbit default is stored in radians"
         );
         let orbit = meta.bindings.iter().find(|b| b.id == "cam_orbit").unwrap();
@@ -889,10 +932,23 @@ mod tests {
         let groups: Vec<_> = def.nodes.iter().filter(|n| n.type_id == GROUP_TYPE_ID).collect();
         assert_eq!(groups.len(), 2, "one group per object");
         assert!(groups.iter().all(|g| g.group.is_some()));
-        for bare in ["node.gltf_mesh_source", "node.pbr_material", "node.gltf_texture_source"] {
+        for bare in [
+            "node.gltf_mesh_source",
+            "node.pbr_material",
+            "node.gltf_texture_source",
+            "node.transform_3d",
+        ] {
             assert!(
                 !def.nodes.iter().any(|n| n.type_id == bare),
                 "producer `{bare}` must live inside a group, not at the top level"
+            );
+        }
+        // Every group's interface declares a `transform` output (D9).
+        for g in &groups {
+            let outputs = &g.group.as_ref().unwrap().interface.outputs;
+            assert!(
+                outputs.iter().any(|o| o.name == "transform" && o.port_type == "Transform"),
+                "every object group exposes a transform output"
             );
         }
         // Distinct tints per group (legibility).
@@ -922,6 +978,8 @@ mod tests {
             ("tex_0", "out", "base_color_map_0"),
             ("mesh_1", "vertices", "mesh_1"),
             ("mat_1", "out", "material_1"),
+            ("transform_0", "transform", "transform_0"),
+            ("transform_1", "transform", "transform_1"),
         ] {
             assert!(
                 conn.contains(&(
@@ -996,61 +1054,58 @@ mod tests {
     }
 
     /// Regression for the glTF-import "unknown parameter 'pos_x_N'" load
-    /// failure (Peter, 2026-07-05): a model with >2 distinct materials
-    /// assembles a `node.render_scene` with `objects >= 3`, whose per-object
-    /// transform params (`pos_x_2`, `pos_y_2`, …) only exist after the node
-    /// reconfigures to that object count. The loader used to snapshot the
-    /// param surface at the default 2-object count and reject `pos_x_2` as
-    /// unknown, so the whole generator failed to load and rendered black. The
-    /// azalea fixture has exactly 2 objects, so it never exercised this — the
-    /// coverage gap that let it ship. This synthetic 3-object def reproduces
-    /// it with no large fixture and must load clean.
+    /// failure (Peter, 2026-07-05), REWRITTEN for
+    /// SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D3/P2 — the original
+    /// subject (a per-object param that only existed once `render_scene`
+    /// reconfigured to a higher object count) no longer exists: per-object
+    /// TRS is a `transform_n: Transform` PORT now, not a param. The
+    /// analogous regression is a PORT that only exists once `render_scene`
+    /// reconfigures — `transform_2`, which a naive loader could reject as
+    /// "unknown port" if it validated wires against the default 2-object
+    /// port surface instead of the reconfigured one. A model with >2
+    /// distinct materials (`objects >= 3`) is exactly the shape that used to
+    /// trip this; the azalea fixture has only 2 objects, so it never
+    /// exercised it — the coverage gap that let the original bug ship. This
+    /// synthetic 3-object def reproduces the shape with no large fixture and
+    /// must load + wire clean, proving reconfigure runs before wire/port
+    /// validation for the new port-based surface too.
     #[test]
-    fn render_scene_with_three_objects_loads_per_object_transform_params() {
-        use crate::node_graph::parameters::ParamValue;
+    fn render_scene_with_three_objects_loads_transform_nodes() {
         use crate::node_graph::persistence::EffectGraphDefExt;
-        use manifold_core::effect_graph_def::EffectGraphNode;
 
-        let mut params = std::collections::BTreeMap::new();
-        params.insert("objects".to_string(), ParamValue::Float(3.0).into());
-        params.insert("lights".to_string(), ParamValue::Float(1.0).into());
-        // The param that was rejected before the fix: object index 2's X/Y pos,
-        // which only exists once render_scene reconfigures to objects >= 3.
-        params.insert("pos_x_2".to_string(), ParamValue::Float(-1.5).into());
-        params.insert("pos_y_2".to_string(), ParamValue::Float(0.25).into());
+        let mut render = plain_node(0, "render", "node.render_scene", "render");
+        render.params.insert("objects".to_string(), int(3));
+        render.params.insert("lights".to_string(), int(1));
 
-        let render = EffectGraphNode {
-            id: 0,
-            node_id: manifold_core::NodeId::new("render"),
-            type_id: "node.render_scene".to_string(),
-            handle: Some("render".to_string()),
-            params,
-            exposed_params: Default::default(),
-            editor_pos: None,
-            wgsl_source: None,
-            title: None,
-            output_formats: Default::default(),
-            output_canvas_scales: Default::default(),
-            group: None,
-        };
+        // The port that was unresolvable before the fix: object index 2's
+        // transform, which only exists once render_scene reconfigures to
+        // objects >= 3.
+        let mut transform_2 = plain_node(1, "transform_2", "node.transform_3d", "transform_2");
+        transform_2.params.insert("pos_x".to_string(), float(-1.5));
+        transform_2.params.insert("pos_y".to_string(), float(0.25));
+
         let def = EffectGraphDef {
             version: 1,
             name: None,
             description: None,
             preset_metadata: None,
-            nodes: vec![render],
-            wires: Vec::new(),
+            nodes: vec![render, transform_2],
+            wires: vec![wire(1, "transform", 0, "transform_2")],
         };
 
         // Validate at the `into_graph` layer — the exact place the
-        // "unknown parameter 'pos_x_2'" error was raised. (A full
-        // `from_def` additionally enforces generator-boundary wiring, which
-        // this minimal single-node def deliberately omits — out of scope for
-        // the param-surface regression.)
+        // "unknown parameter 'pos_x_2'" error was raised for the old shape.
+        // (A full `from_def` additionally enforces generator-boundary
+        // wiring, which this minimal two-node def deliberately omits — out
+        // of scope for the port-surface regression.)
         let registry = PrimitiveRegistry::with_builtin();
-        def.into_graph(&registry).expect(
-            "render_scene with objects=3 must accept per-object param pos_x_2 at load \
-             (reconfigure runs before param validation)",
+        let graph = def.into_graph(&registry).expect(
+            "render_scene with objects=3 must accept a transform_2 wire at load \
+             (reconfigure runs before port validation)",
+        );
+        assert!(
+            graph.wires().iter().any(|w| w.to.1 == "transform_2"),
+            "the transform_2 wire survives into the built graph"
         );
     }
 
@@ -1129,7 +1184,13 @@ mod tests {
         use crate::render_target::RenderTarget;
         use manifold_gpu::GpuTextureFormat;
 
-        let path = azalea_fixture_path();
+        // MESH_SNAP_GLB overrides the fixture — the P2 held-out-input gate
+        // (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §5 P2) points this at a
+        // >1-object model NOT the azalea the transform-port swap was
+        // developed against, to prove the group-placement wiring generalizes.
+        let path = std::env::var("MESH_SNAP_GLB")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| azalea_fixture_path());
         if !path.exists() {
             eprintln!(
                 "imported_azalea_renders_faithfully_to_png: fixture not found at {}, skipping",
@@ -1138,8 +1199,8 @@ mod tests {
             return;
         }
 
-        let (def, report) = assemble_import_graph(&path).expect("assemble azalea");
-        println!("imported azalea report: {report:?}");
+        let (def, report) = assemble_import_graph(&path).expect("assemble import graph");
+        println!("imported model report: {report:?}");
 
         let (w, h) = (768u32, 768u32);
         let device = crate::test_device();

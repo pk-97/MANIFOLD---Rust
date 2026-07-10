@@ -1283,16 +1283,18 @@ impl Application {
                     continue;
                 }
                 PanelAction::OpenAudioSetup => {
-                    // Toggle the modal and flag a one-shot structural sync. The
-                    // panel's device + send list lives behind sync_inspector_data
-                    // (gated on this flag), so the sync populates it this frame,
-                    // then build() rebuilds the overlay with data. While the panel
-                    // stays open nothing re-fires — the overlay nodes persist and
-                    // the draw pass redraws them from overlay_draw — so opening it
-                    // costs one rebuild, not a per-frame one. Subsequent send /
-                    // device edits each return DispatchResult::structural(), which
-                    // re-runs this same path to refresh the panel.
-                    self.ws.ui_root.audio_setup_panel.toggle();
+                    // Toggle the docked Audio Setup column (D1). The panel's
+                    // `open` flag and the layout's `audio_setup_width` are the
+                    // two halves of "docked": `open` gates build/update/draw,
+                    // the width is the geometry `content_area()` subtracts. Keep
+                    // them in lockstep — set the width from the NEW open state so
+                    // this is a true toggle regardless of entry state. A
+                    // structural sync then rebuilds the whole tree at the new
+                    // geometry (preview + timeline shrink) and populates the
+                    // panel's device/send list via sync_inspector_data. The
+                    // toggle itself lives on UIRoot so the headless script
+                    // harness reaches the same one via ui_bridge::dispatch.
+                    self.ws.ui_root.toggle_audio_dock();
                     needs_structural_sync = true;
                     continue;
                 }

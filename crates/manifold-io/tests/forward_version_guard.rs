@@ -52,8 +52,8 @@ fn refuses_a_file_newer_than_this_build() {
                 "file_version should name 1.99, got {file_version}"
             );
             assert!(
-                this_version.contains("1.11"),
-                "this_version should name 1.11, got {this_version}"
+                this_version.contains(CURRENT_PROJECT_VERSION),
+                "this_version should name {CURRENT_PROJECT_VERSION}, got {this_version}"
             );
         }
         other => panic!("expected LoadError::TooNew, got {other:?}"),
@@ -61,7 +61,7 @@ fn refuses_a_file_newer_than_this_build() {
 
     let message = err.to_string();
     assert!(message.contains("1.99"), "message: {message}");
-    assert!(message.contains("1.11"), "message: {message}");
+    assert!(message.contains(CURRENT_PROJECT_VERSION), "message: {message}");
     assert!(
         message.contains("Update MANIFOLD to open it"),
         "message: {message}"

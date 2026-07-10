@@ -1,0 +1,40 @@
+[
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Amount" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "Amount" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  {
+    "Key": { "key": "A", "modifiers": { "command": true, "shift": true } }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Amount" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "Amount" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  {
+    "Key": { "key": "Escape", "modifiers": {} }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Amount" } },
+      "check": "Exists"
+    }
+  }
+]

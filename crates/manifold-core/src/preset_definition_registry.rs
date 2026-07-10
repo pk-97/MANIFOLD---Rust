@@ -829,6 +829,7 @@ mod tests {
                 invert: false,
                 is_angle: false,
                 is_trigger_gate: false,
+                section: None,
             }],
             bindings: vec![BindingDef {
                 id: "amount".to_string(),
@@ -921,6 +922,7 @@ mod tests {
                 invert: false,
                 is_angle: false,
                 is_trigger_gate: false,
+                section: None,
             }],
             bindings: Vec::new(),
             skip_mode: SkipModeDef::default(),

@@ -22,7 +22,7 @@ use manifold_foundation::{AudioSendId, LayerId};
 
 use crate::chrome::{ChromeHost, Pad, Sizing, View};
 use crate::color;
-use crate::input::{Key, Modifiers, UIEvent};
+use crate::input::{Modifiers, UIEvent};
 use crate::node::*;
 use crate::tree::UITree;
 
@@ -100,24 +100,14 @@ const KEY_INPUTS_REMOVE_BASE: u64 = 73_000;
 /// Consumers section: one row button per consumer of the selected send,
 /// indexed by position in that send's `consumers`.
 const KEY_CONSUMER_ROW_BASE: u64 = 74_000;
-use super::overlay::{
-    Anchor, Corner, Modality, Overlay, OverlayPlacement, OverlayResponse, SizePolicy,
-    compute_overlay_rect,
-};
+use crate::scroll_container::{SCROLLBAR_W, ScrollContainer, ScrollbarStyle};
 
 // ── Layout ──
-/// Minimum panel width (small screens / compact fallback). The overlay targets
-/// a fraction of the viewport (see [`Overlay::size_policy`] and
-/// [`AudioSetupPanel::build_at`], which resizes the scope to fill it) but
-/// never shrinks below this.
+/// Minimum panel width. The dock (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN`
+/// D1) supplies the width from `ScreenLayout::audio_setup()`; the panel builds
+/// its rows into whatever it's given, floored here so the send row's columns
+/// stay legible.
 const PANEL_W_MIN: f32 = 460.0;
-/// Fraction of the viewport width the right-anchored panel fills (D6 — a
-/// calibration surface docked beside the live output, not a centered modal
-/// that dims the show).
-const PANEL_W_FRAC: f32 = 0.38;
-/// Fraction of the viewport height the panel fills — full height, so the
-/// scope + trigger rows have room without the panel floating mid-screen.
-const PANEL_H_FRAC: f32 = 1.0;
 const TITLE_H: f32 = 26.0;
 const ROW_H: f32 = 24.0;
 const ROW_GAP: f32 = 4.0;
@@ -449,16 +439,24 @@ pub struct AudioSetupPanel {
     /// Screen-space rect of the waterfall image (logical units), set by `build`.
     /// The present pass blits the spectrogram texture here. `None` when closed.
     scope_rect: Option<Rect>,
-    /// Resolved panel width and waterfall height for the current viewport, set by
-    /// [`AudioSetupPanel::build_at`]. The overlay targets
-    /// [`PANEL_W_FRAC`]×[`PANEL_H_FRAC`] of the screen, right-anchored (D6); the
-    /// control rows are fixed-height, so the scope absorbs the extra vertical
-    /// space.
+    /// Resolved panel width and waterfall height, set by
+    /// [`AudioSetupPanel::build_docked`] from the dock rect (D1). The width is
+    /// the dock column; the scope takes a fixed fraction of the height so the
+    /// control rows above/below can overflow and scroll.
     panel_w: f32,
     scope_h: f32,
     /// Host for the declarative modal chrome (background + title strip). The
     /// device / send / scope rows are still built imperatively into `bg_id`.
     host: ChromeHost,
+    /// D8 (BUG-047): the panel body is a `ScrollContainer` so the control rows
+    /// (device / sends / inputs / scope / triggers / consumers) clip to the
+    /// dock's height via GPU scissor and scroll instead of overflowing past the
+    /// bottom edge. Built each `build_docked`.
+    scroll: ScrollContainer,
+    /// Parent node every body row is built under — the scroll clip region when
+    /// the body scrolls (set in `build_nodes`). Distinct from `bg_id` (the
+    /// panel background/chrome) so the chrome stays fixed while the body clips.
+    content_parent: NodeId,
     // Node ids (set by `build`).
     bg_id: NodeId,
     close_id: NodeId,
@@ -535,6 +533,8 @@ impl Default for AudioSetupPanel {
             panel_w: 0.0,
             scope_h: 0.0,
             host: ChromeHost::new(),
+            scroll: ScrollContainer::new(),
+            content_parent: NodeId::PLACEHOLDER,
             // Set by `build`; `NodeId::PLACEHOLDER` is a pre-build placeholder,
             // never a hit target before the panel is built (matches `slider.rs`).
             bg_id: NodeId::PLACEHOLDER,
@@ -627,17 +627,9 @@ impl AudioSetupPanel {
 
     /// Default the scope selection to the first send when it is unset or no
     /// longer refers to a configured send. Runs in [`configure`] — the only
-    /// place the send list changes — so every later reader sees the same
-    /// effective selection: [`chrome_height`]'s inputs/consumers row
-    /// accounting (consulted by `size_policy` and `build_at` to size the
-    /// scope) and `build_nodes` itself. This used to happen inside
-    /// `build_nodes`, AFTER `build_at` had already sized the scope from
-    /// `chrome_height()` — so the first build after a configure saw no
-    /// selection, under-counted the inputs/consumers rows, and let the scope
-    /// swallow their space, clipping the panel's bottom sections.
+    /// place the send list changes — so `build_nodes` sees a settled selection.
     ///
     /// [`configure`]: Self::configure
-    /// [`chrome_height`]: Self::chrome_height
     fn normalize_selection(&mut self) {
         if !self.sends.iter().any(|s| Some(&s.id) == self.selected_send.as_ref()) {
             self.selected_send = self.sends.first().map(|s| s.id.clone());
@@ -668,82 +660,28 @@ impl AudioSetupPanel {
         self.status_warning.clone()
     }
 
-    /// Body height of everything except the waterfall image: title, device row,
-    /// notice, send rows, add-send button, scope title, and padding. The scope's
-    /// waterfall (`self.scope_h`) is added on top by [`body_height`].
-    fn chrome_height(&self) -> f32 {
-        let rows = self.sends.len();
-        let warning = if self.active_notice().is_some() { ROW_H + ROW_GAP } else { 0.0 };
-        let scope_chrome = if self.sends.is_empty() { 0.0 } else { ROW_GAP + SCOPE_TITLE_H };
-        TITLE_H
-            + ROW_H // device row
-            + ROW_GAP
-            + warning
-            + (ROW_H + ROW_GAP) * rows as f32
-            + ROW_H // add-send button
-            + self.inputs_section_height()
-            + scope_chrome
-            + self.trigger_section_height()
-            + self.consumers_section_height()
-            + PAD * 2.0
-    }
-
-    /// The selected send's row data, if any — the shared lookup the Inputs
-    /// and Consumers sections (and their height accounting) read from.
-    fn selected_send_row(&self) -> Option<&AudioSendRow> {
-        self.selected_send.as_ref().and_then(|id| self.sends.iter().find(|s| &s.id == id))
-    }
-
-    /// Height of the Inputs section (title + one row per feeding layer of the
-    /// selected send + the "+ layer" add row). Zero when there are no sends
-    /// (nothing selected, so nothing to route).
-    fn inputs_section_height(&self) -> f32 {
-        if self.sends.is_empty() {
-            return 0.0;
-        }
-        let n = self.selected_send_row().map_or(0, |s| s.feeding_layers.len());
-        ROW_GAP + TRIG_TITLE_H + (ROW_H + ROW_GAP) * (n as f32 + 1.0) // +1 = "+ layer" row
-    }
-
-    /// Height of the Consumers section (title + one row per consumer of the
-    /// selected send, or a single "no consumers" row when it has none). Zero
-    /// when there are no sends.
-    fn consumers_section_height(&self) -> f32 {
-        if self.sends.is_empty() {
-            return 0.0;
-        }
-        let n = self.selected_send_row().map_or(0, |s| s.consumers.len()).max(1);
-        ROW_GAP + TRIG_TITLE_H + (ROW_H + ROW_GAP) * n as f32
-    }
-
-    /// Height of the trigger section (title + four band rows) under the scope.
-    /// Zero when there are no sends (nothing is selected, so nothing to route).
-    /// Fixed for a given send count, so the scope absorbs the rest deterministically.
-    fn trigger_section_height(&self) -> f32 {
-        if self.sends.is_empty() {
-            0.0
-        } else {
-            ROW_GAP + TRIG_TITLE_H + (TRIG_ROW_H + ROW_GAP) * TRIG_BANDS.len() as f32
-        }
-    }
-
-    /// Total body height for the configured send count.
-    fn body_height(&self) -> f32 {
-        let scope = if self.sends.is_empty() { 0.0 } else { self.scope_h };
-        self.chrome_height() + scope
-    }
-
-    /// Build the modal's nodes, centered in a `(width, height)` viewport. Routes
-    /// through the same size-policy + centering path the overlay driver uses, so
-    /// the standalone path and the driven path lay out identically.
-    pub fn build(&mut self, tree: &mut UITree, viewport_w: f32, viewport_h: f32) {
+    /// Build the panel as a docked column into `rect`
+    /// (`ScreenLayout::audio_setup()`, D1). The width is the panel; the scope
+    /// takes a fixed fraction of the height so the control rows above/below it
+    /// can overflow and SCROLL (D8/BUG-047) rather than the scope absorbing all
+    /// slack and the tail sections clipping past the bottom. No-op when closed.
+    pub fn build_docked(&mut self, tree: &mut UITree, rect: Rect) {
         if !self.open {
             return;
         }
-        let screen = Vec2::new(viewport_w, viewport_h);
-        let size = self.size_policy().resolve(screen, self.desired_size());
-        let rect = compute_overlay_rect(&self.anchor(), size, screen, None);
-        self.build_at(tree, OverlayPlacement { rect, screen });
+        self.panel_w = rect.width.max(PANEL_W_MIN);
+        // Fixed-fraction scope: big enough to read the waterfall, small enough
+        // that the surrounding rows drive the scroll when there are many.
+        self.scope_h = (rect.height * 0.38).max(SCOPE_H_MIN);
+        self.build_nodes(tree, rect.x, rect.y, rect.height);
+    }
+
+    /// Mouse-wheel scroll for the docked body. Returns true if the offset moved
+    /// (caller schedules a rebuild so the offset is re-applied). Positive
+    /// `delta` scrolls DOWN (reveals later content) — same sign convention as
+    /// the inspector's wheel handler.
+    pub fn handle_scroll(&mut self, delta: f32) -> bool {
+        self.scroll.apply_scroll_delta(-delta)
     }
 
     /// The modal chrome as a host `View`: the hit-testable background (it must
@@ -787,36 +725,48 @@ impl AudioSetupPanel {
             )
     }
 
-    /// Build the modal's nodes with the panel's top-left at `(x, y)`.
-    fn build_nodes(&mut self, tree: &mut UITree, x: f32, y: f32) {
+    /// Build the docked panel's nodes with its top-left at `(x, y)`, filling
+    /// `panel_h`. The chrome (background + title strip) fills the whole dock;
+    /// the body (every control row) is built into a `ScrollContainer` clip so it
+    /// scrolls within the fixed dock height instead of overflowing (D8/BUG-047).
+    fn build_nodes(&mut self, tree: &mut UITree, x: f32, y: f32, panel_h: f32) {
         let rows = self.sends.len();
-        let body_h = self.body_height();
 
-        // ── Modal chrome (background + title strip) on the host. The background
-        // is interactive so a press anywhere on it emits a PointerDown and the
-        // modal swallows stray clicks (without it, pressing the spectrogram only
-        // armed the band drag when an interactive node behind the modal happened
-        // to sit under the cursor). The device / send / scope rows below are
-        // built imperatively into `bg_id`.
+        // ── Chrome (background + title strip) on the host. The background is
+        // interactive so a press anywhere on it emits a PointerDown and the
+        // panel swallows stray clicks. It fills the full dock height; the body
+        // rows below are built into the scroll clip.
         let chrome = self.chrome_view();
-        self.host.build(tree, &chrome, Rect::new(x, y, self.panel_w, body_h));
+        self.host.build(tree, &chrome, Rect::new(x, y, self.panel_w, panel_h));
         self.bg_id = self.host.node_id_for_key(KEY_BG).unwrap_or(NodeId::PLACEHOLDER);
         self.close_id = self
             .host
             .node_id_for_key(KEY_CLOSE)
             .unwrap_or(NodeId::PLACEHOLDER);
-        // Ownership rect for `claims_drag`/`point_in_panel` — BUG-059,
-        // `docs/DRAG_CAPTURE_DESIGN.md` P2.
-        self.panel_rect = Rect::new(x, y, self.panel_w, body_h);
+        // Ownership rect for `claims_drag`/`point_in_panel` — the whole dock.
+        self.panel_rect = Rect::new(x, y, self.panel_w, panel_h);
 
         let inner_x = x + PAD;
         let inner_w = self.panel_w - PAD * 2.0;
-        let mut cy = y + PAD + TITLE_H;
+        // The body content top; the scroll viewport spans from here to the
+        // panel's bottom padding. Content is built at absolute coords starting
+        // at `content_top` and reparented under the clip at the end.
+        let content_top = y + PAD + TITLE_H;
+        let body_viewport = Rect::new(
+            x,
+            content_top,
+            self.panel_w,
+            (y + panel_h - PAD - content_top).max(0.0),
+        );
+        let clip_id = self.scroll.begin(tree, body_viewport);
+        self.content_parent = clip_id;
+        let content_start = tree.count();
+        let mut cy = content_top;
 
         // Device row: [Device]  [ current device            ▼ ]
-        tree.add_label(Some(self.bg_id), inner_x, cy, 70.0, ROW_H, "Device", label_style());
+        tree.add_label(Some(self.content_parent), inner_x, cy, 70.0, ROW_H, "Device", label_style());
         self.device_dropdown_id = tree.add_button_keyed(
-            Some(self.bg_id),
+            Some(self.content_parent),
             inner_x + 74.0,
             cy,
             inner_w - 74.0,
@@ -830,7 +780,7 @@ impl AudioSetupPanel {
         // Notice line: delete-confirm prompt or reliability warning, if any.
         if let Some(warning) = &self.active_notice() {
             tree.add_label(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 inner_x,
                 cy,
                 inner_w,
@@ -866,7 +816,7 @@ impl AudioSetupPanel {
                 (12.0, cy + (ROW_H - 12.0) * 0.5)
             };
             self.send_ids[i].swatch = tree.add_button_keyed(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 inner_x,
                 swatch_y,
                 SWATCH_W,
@@ -891,7 +841,7 @@ impl AudioSetupPanel {
                 lbl_style.text_color = Color32::new(240, 196, 110, 255); // amber
             }
             self.send_ids[i].label = tree.add_button_keyed(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 label_x,
                 cy,
                 LABEL_W,
@@ -912,7 +862,7 @@ impl AudioSetupPanel {
                 del_style.text_color = Color32::new(232, 168, 92, 255); // amber
             }
             self.send_ids[i].delete = tree.add_button_keyed(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 inner_x + inner_w - STEP_W,
                 cy,
                 STEP_W,
@@ -926,7 +876,7 @@ impl AudioSetupPanel {
             const STEREO_W: f32 = 30.0;
             let stereo_x = inner_x + inner_w - STEP_W - 4.0 - STEREO_W;
             self.send_ids[i].stereo = tree.add_button_keyed(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 stereo_x,
                 cy,
                 STEREO_W,
@@ -940,7 +890,7 @@ impl AudioSetupPanel {
             // 1 dB steps; the value is read-only display (0 dB = unity).
             let gain_x = stereo_x - 4.0 - GAIN_W;
             self.send_ids[i].gain_minus = tree.add_button_keyed(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 gain_x,
                 cy,
                 GAIN_BTN_W,
@@ -952,7 +902,7 @@ impl AudioSetupPanel {
             // Value label doubles as a D7 horizontal drag zone — pointer-down
             // arms `gain_drag_target`, matching the crossover-drag pattern.
             self.send_ids[i].gain_value = tree.add_label(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 gain_x + GAIN_BTN_W,
                 cy,
                 GAIN_VAL_W,
@@ -966,7 +916,7 @@ impl AudioSetupPanel {
                 },
             );
             self.send_ids[i].gain_plus = tree.add_button_keyed(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 gain_x + GAIN_BTN_W + GAIN_VAL_W,
                 cy,
                 GAIN_BTN_W,
@@ -983,7 +933,7 @@ impl AudioSetupPanel {
             const SRC_W: f32 = 48.0;
             let src_x = label_x + LABEL_W + 4.0;
             self.send_ids[i].source = tree.add_button_keyed(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 src_x,
                 cy,
                 SRC_W,
@@ -997,7 +947,7 @@ impl AudioSetupPanel {
             let ch_x = src_x + SRC_W + 4.0;
             let ch_w = (gain_x - 4.0 - ch_x).max(40.0);
             self.send_ids[i].ch_dropdown = tree.add_button_keyed(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 ch_x,
                 cy,
                 ch_w,
@@ -1014,7 +964,7 @@ impl AudioSetupPanel {
             let meter_y = cy + ROW_H - meter_h;
             let meter_w = ch_w;
             tree.add_panel(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 meter_x,
                 meter_y,
                 meter_w,
@@ -1022,7 +972,7 @@ impl AudioSetupPanel {
                 UIStyle { bg_color: Color32::new(40, 40, 46, 255), ..UIStyle::default() },
             );
             let fill = tree.add_panel(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 meter_x,
                 meter_y,
                 0.0, // width set per frame by update_meters
@@ -1040,7 +990,7 @@ impl AudioSetupPanel {
 
         // Add-send button.
         self.add_send_id = tree.add_button_keyed(
-            Some(self.bg_id),
+            Some(self.content_parent),
             inner_x,
             cy,
             inner_w,
@@ -1065,7 +1015,7 @@ impl AudioSetupPanel {
                 .map(|s| s.label.as_str())
                 .unwrap_or("—");
             tree.add_label(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 inner_x,
                 cy,
                 inner_w,
@@ -1100,7 +1050,7 @@ impl AudioSetupPanel {
             let fl_val = 52.0;
             let mut fx = inner_x + inner_w * 0.40;
             tree.add_label(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 fx,
                 cy,
                 fl_label_w,
@@ -1115,7 +1065,7 @@ impl AudioSetupPanel {
             );
             fx += fl_label_w;
             self.floor_minus_id = Some(tree.add_button_keyed(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 fx,
                 cy,
                 fl_btn,
@@ -1125,7 +1075,7 @@ impl AudioSetupPanel {
                 KEY_FLOOR_MINUS,
             ));
             tree.add_label(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 fx + fl_btn,
                 cy,
                 fl_val,
@@ -1139,7 +1089,7 @@ impl AudioSetupPanel {
                 },
             );
             self.floor_plus_id = Some(tree.add_button_keyed(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 fx + fl_btn + fl_val,
                 cy,
                 fl_btn,
@@ -1153,7 +1103,7 @@ impl AudioSetupPanel {
             // title row — outside the waterfall rect, so the present pass's blit
             // doesn't cover it. Empty until the app feeds a value on hover.
             self.scope_readout_label = Some(tree.add_label(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 inner_x + inner_w * 0.62,
                 cy,
                 inner_w * 0.38,
@@ -1170,7 +1120,7 @@ impl AudioSetupPanel {
 
             // Backing panel behind the whole scope (axis margin + waterfall).
             tree.add_panel(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 inner_x,
                 cy,
                 inner_w,
@@ -1210,7 +1160,7 @@ impl AudioSetupPanel {
                 let yn = (hz / fmin).log2() / (fmax / fmin).log2();
                 let ly = wf_y + wf_h * (1.0 - yn) - 6.0;
                 tree.add_label(
-                    Some(self.bg_id),
+                    Some(self.content_parent),
                     inner_x + 2.0,
                     ly,
                     SCOPE_AXIS_W - 4.0,
@@ -1249,7 +1199,7 @@ impl AudioSetupPanel {
             self.scope_lane_label_ids.clear();
             for (name, color) in &self.scope_lane_legend {
                 let id = tree.add_label(
-                    Some(self.bg_id),
+                    Some(self.content_parent),
                     0.0,
                     0.0,
                     0.0,
@@ -1267,7 +1217,7 @@ impl AudioSetupPanel {
 
             for (band, slot) in self.band_meter_ids.iter_mut().enumerate() {
                 let label = tree.add_label(
-                    Some(self.bg_id),
+                    Some(self.content_parent),
                     0.0,
                     0.0,
                     0.0,
@@ -1281,7 +1231,7 @@ impl AudioSetupPanel {
                     },
                 );
                 let track = tree.add_panel(
-                    Some(self.bg_id),
+                    Some(self.content_parent),
                     0.0,
                     0.0,
                     0.0,
@@ -1295,7 +1245,7 @@ impl AudioSetupPanel {
                     },
                 );
                 let fill = tree.add_panel(
-                    Some(self.bg_id),
+                    Some(self.content_parent),
                     0.0,
                     0.0,
                     0.0,
@@ -1315,8 +1265,25 @@ impl AudioSetupPanel {
             cy = self.build_trigger_section(tree, inner_x, inner_w, cy);
 
             // ── Consumers (selected send) — below the trigger matrix ──
-            self.build_consumers_section(tree, inner_x, inner_w, cy);
+            cy = self.build_consumers_section(tree, inner_x, inner_w, cy);
         }
+
+        // ── Close the scroll body (D8/BUG-047) ──
+        // Content was built at absolute coords from `content_top`; the total
+        // content height is the distance from there to the last row's bottom
+        // (plus a trailing pad so the final row isn't flush to the clip edge).
+        let content_height = (cy - content_top + PAD).max(0.0);
+        self.scroll.set_content_height(content_height);
+        self.scroll.reparent_content(tree, content_start);
+        // Apply the current scroll offset by shifting the reparented content up.
+        let offset = self.scroll.scroll_offset();
+        if offset != 0.0 {
+            self.scroll.offset_content(tree, -offset);
+        }
+        // Scrollbar in the panel's right padding gutter, only visible when the
+        // body overflows (the container hides it otherwise).
+        let sb_x = x + self.panel_w - SCROLLBAR_W - 2.0;
+        self.scroll.build_scrollbar(tree, sb_x, &scrollbar_style());
     }
 
     /// Build the four-band trigger matrix for the selected send. Each row:
@@ -1340,7 +1307,7 @@ impl AudioSetupPanel {
             .map(|s| s.label.as_str())
             .unwrap_or("—");
         tree.add_label(
-            Some(self.bg_id),
+            Some(self.content_parent),
             inner_x,
             cy,
             inner_w,
@@ -1371,7 +1338,7 @@ impl AudioSetupPanel {
 
             // Enable swatch — band-coloured (Whole = neutral), dim when disabled.
             ids.enable = tree.add_button_keyed(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 x,
                 cy,
                 TRIG_ENABLE_W,
@@ -1384,7 +1351,7 @@ impl AudioSetupPanel {
 
             // Band label — brighter when the route is active.
             tree.add_label(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 x,
                 cy,
                 TRIG_LABEL_W,
@@ -1406,7 +1373,7 @@ impl AudioSetupPanel {
             // Sensitivity stepper [−] value [＋] (percent), matching the gain
             // stepper's glyphs and discrete-step behaviour.
             ids.sens_minus = tree.add_button_keyed(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 x,
                 cy,
                 TRIG_SENS_BTN_W,
@@ -1419,7 +1386,7 @@ impl AudioSetupPanel {
             // arms `sensitivity_drag_target`, matching the crossover-drag
             // pattern.
             ids.sens_value = tree.add_label(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 x + TRIG_SENS_BTN_W,
                 cy,
                 TRIG_SENS_VAL_W,
@@ -1433,7 +1400,7 @@ impl AudioSetupPanel {
                 },
             );
             ids.sens_plus = tree.add_button_keyed(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 x + TRIG_SENS_BTN_W + TRIG_SENS_VAL_W,
                 cy,
                 TRIG_SENS_BTN_W,
@@ -1447,7 +1414,7 @@ impl AudioSetupPanel {
             // One-shot length stepper [−] Nb [＋] — how long a fired clip holds.
             // Multiplicative steps (halve/double) keep it on musical divisions.
             ids.len_minus = tree.add_button_keyed(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 x,
                 cy,
                 TRIG_SENS_BTN_W,
@@ -1457,7 +1424,7 @@ impl AudioSetupPanel {
                 config_row_key(i, CFG_OFF_LEN_MINUS),
             );
             tree.add_label(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 x + TRIG_SENS_BTN_W,
                 cy,
                 TRIG_LEN_VAL_W,
@@ -1471,7 +1438,7 @@ impl AudioSetupPanel {
                 },
             );
             ids.len_plus = tree.add_button_keyed(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 x + TRIG_SENS_BTN_W + TRIG_LEN_VAL_W,
                 cy,
                 TRIG_SENS_BTN_W,
@@ -1486,7 +1453,7 @@ impl AudioSetupPanel {
             let layer_w = (inner_x + inner_w - x).max(40.0);
             let layer_left = x;
             ids.layer = tree.add_button_keyed(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 x,
                 cy,
                 layer_w,
@@ -1507,7 +1474,7 @@ impl AudioSetupPanel {
             let meter_y = cy + TRIG_ROW_H - meter_h;
             let bandc = trigger_band_color(i);
             ids.meter_track = tree.add_panel(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 meter_x,
                 meter_y,
                 meter_w,
@@ -1515,7 +1482,7 @@ impl AudioSetupPanel {
                 UIStyle { bg_color: Color32::new(40, 40, 46, 255), ..UIStyle::default() },
             );
             ids.meter_fill = tree.add_panel(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 meter_x,
                 meter_y,
                 0.0, // width set per frame
@@ -1524,7 +1491,7 @@ impl AudioSetupPanel {
             );
             let tick_x = meter_x + row.threshold.clamp(0.0, 1.0) * meter_w;
             ids.thresh_tick = tree.add_panel(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 tick_x,
                 meter_y - 2.0,
                 1.5,
@@ -1544,7 +1511,7 @@ impl AudioSetupPanel {
             // rule in the row gap signals that without reflowing the layout.
             if i == 0 {
                 tree.add_panel(
-                    Some(self.bg_id),
+                    Some(self.content_parent),
                     inner_x,
                     cy + TRIG_ROW_H + (ROW_GAP * 0.5),
                     inner_w,
@@ -1582,7 +1549,7 @@ impl AudioSetupPanel {
             .map(|s| s.label.as_str())
             .unwrap_or("—");
         tree.add_label(
-            Some(self.bg_id),
+            Some(self.content_parent),
             inner_x,
             cy,
             inner_w,
@@ -1599,7 +1566,7 @@ impl AudioSetupPanel {
 
         for (i, (_layer_id, name)) in feeding.iter().enumerate() {
             tree.add_label(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 inner_x,
                 cy,
                 inner_w - STEP_W,
@@ -1608,7 +1575,7 @@ impl AudioSetupPanel {
                 label_style(),
             );
             let remove_id = tree.add_button_keyed(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 inner_x + inner_w - STEP_W,
                 cy,
                 STEP_W,
@@ -1622,7 +1589,7 @@ impl AudioSetupPanel {
         }
 
         self.add_layer_id = tree.add_button_keyed(
-            Some(self.bg_id),
+            Some(self.content_parent),
             inner_x,
             cy,
             inner_w,
@@ -1656,7 +1623,7 @@ impl AudioSetupPanel {
             .map(|s| s.label.as_str())
             .unwrap_or("—");
         tree.add_label(
-            Some(self.bg_id),
+            Some(self.content_parent),
             inner_x,
             cy,
             inner_w,
@@ -1673,7 +1640,7 @@ impl AudioSetupPanel {
 
         if consumers.is_empty() {
             tree.add_label(
-                Some(self.bg_id),
+                Some(self.content_parent),
                 inner_x,
                 cy,
                 inner_w,
@@ -1690,7 +1657,7 @@ impl AudioSetupPanel {
         } else {
             for (i, c) in consumers.iter().enumerate() {
                 let id = tree.add_button_keyed(
-                    Some(self.bg_id),
+                    Some(self.content_parent),
                     inner_x,
                     cy,
                     inner_w,
@@ -1705,7 +1672,7 @@ impl AudioSetupPanel {
                 // A plain label drawn over the button — non-interactive, so
                 // the button under it stays the hit target.
                 tree.add_label(
-                    Some(self.bg_id),
+                    Some(self.content_parent),
                     inner_x + inner_w - STEP_W,
                     cy,
                     STEP_W,
@@ -2306,74 +2273,30 @@ fn format_gain_db(db: f32) -> String {
     }
 }
 
-impl Overlay for AudioSetupPanel {
-    fn is_open(&self) -> bool {
-        self.open
-    }
-
-    fn modality(&self) -> Modality {
-        // D6: a calibration surface used while performing, not a dialog — no
-        // dim, and it never self-closes on an outside click (see the `Click`
-        // arm below). Escape and the header Audio button are the close paths.
-        Modality::Modeless
-    }
-
-    fn anchor(&self) -> Anchor {
-        // D6: docked to the right edge, full height, so the show stays visible
-        // to its left instead of being centered over it.
-        Anchor::Corner { corner: Corner::TopRight, margin: 0.0 }
-    }
-
-    fn size_policy(&self) -> SizePolicy {
-        // 38% width × full height (D6), never below the compact minimums. The
-        // min height is the fixed control chrome plus the smallest useful
-        // waterfall.
-        SizePolicy::Fraction {
-            frac: Vec2::new(PANEL_W_FRAC, PANEL_H_FRAC),
-            min: Vec2::new(PANEL_W_MIN, self.chrome_height() + SCOPE_H_MIN),
-        }
-    }
-
-    fn desired_size(&self) -> Vec2 {
-        Vec2::new(self.panel_w, self.body_height())
-    }
-
-    fn build_at(&mut self, tree: &mut UITree, placement: OverlayPlacement) {
-        if !self.open {
-            return;
-        }
-        // The driver has already sized + centered the rect per `size_policy`.
-        // Fill it: the width is the panel, and the waterfall absorbs whatever
-        // height is left after the fixed-height control rows.
-        self.panel_w = placement.rect.width;
-        self.scope_h = (placement.rect.height - self.chrome_height()).max(SCOPE_H_MIN);
-        self.build_nodes(tree, placement.rect.x, placement.rect.y);
-    }
-
-    fn on_event(&mut self, event: &UIEvent, _tree: &mut UITree) -> OverlayResponse {
+impl AudioSetupPanel {
+    /// Route one event to the docked panel. Returns `(consumed, actions)` —
+    /// `consumed` means the caller stops routing this event to lower panels.
+    /// Called from `UIRoot::process_events` at the docked-panel site (the panel
+    /// is no longer an `Overlay`; D1/§3.5). Escape is NOT handled here — it
+    /// moved to the app's single key-dispatch site so there is ONE close path,
+    /// not two. The close (×) button and the header Audio button both toggle
+    /// the dock via `PanelAction::OpenAudioSetup`.
+    pub fn handle_event(&mut self, event: &UIEvent) -> (bool, Vec<PanelAction>) {
         match event {
-            UIEvent::KeyDown { key: Key::Escape, .. } => {
-                self.open = false;
-                OverlayResponse::Consumed(Vec::new())
-            }
             UIEvent::Click { node_id, pos, .. } => {
                 let id = *node_id;
                 if id == self.close_id {
-                    self.open = false;
-                    OverlayResponse::Consumed(Vec::new())
+                    // One toggle path: the app closes the dock (width → 0 +
+                    // panel.close()) on this action, same as Escape / header.
+                    (true, vec![PanelAction::OpenAudioSetup])
                 } else if let Some(action) = self.handle_click_inner(id) {
-                    OverlayResponse::Consumed(vec![action])
+                    (true, vec![action])
                 } else if self.owns_node(id) || self.point_in_scope(*pos) {
-                    // Panel background, a non-action control, or the waterfall
-                    // (a tap on the scope must not close the modal) — swallow.
-                    OverlayResponse::Consumed(Vec::new())
+                    // A panel-owned control or the waterfall — swallow so the
+                    // click doesn't fall through to a panel below the dock.
+                    (true, Vec::new())
                 } else {
-                    // Modeless (D6): a click outside the panel passes through to
-                    // the UI beneath instead of dismissing — this is a
-                    // calibration surface used while performing, and accidental
-                    // dismissal is the failure mode. Escape and the header Audio
-                    // button remain the close paths.
-                    OverlayResponse::Ignored
+                    (false, Vec::new())
                 }
             }
             // ── Band-divider drag (Low/Mid/High crossovers) + D7 calibration
@@ -2385,14 +2308,14 @@ impl Overlay for AudioSetupPanel {
             UIEvent::PointerDown { node_id, pos, .. } => {
                 if let Some(band) = self.divider_at(*pos) {
                     self.dragging_band = Some(band);
-                    OverlayResponse::Consumed(vec![PanelAction::AudioCrossoverDragBegin])
+                    (true, vec![PanelAction::AudioCrossoverDragBegin])
                 } else if let Some((send, start_db)) = self.gain_drag_target(*node_id) {
                     self.calibration_drag = Some(CalibrationDrag::Gain {
                         send: send.clone(),
                         start_x: pos.x,
                         start_db,
                     });
-                    OverlayResponse::Consumed(vec![PanelAction::AudioSendGainDragBegin(send)])
+                    (true, vec![PanelAction::AudioSendGainDragBegin(send)])
                 } else if let Some((send, band, start_frac)) =
                     self.sensitivity_drag_target(*node_id)
                 {
@@ -2402,43 +2325,25 @@ impl Overlay for AudioSetupPanel {
                         start_x: pos.x,
                         start_frac,
                     });
-                    OverlayResponse::Consumed(vec![PanelAction::AudioSendSensitivityDragBegin(
-                        send, band,
-                    )])
+                    (true, vec![PanelAction::AudioSendSensitivityDragBegin(send, band)])
                 } else if self.owns_node(*node_id) || self.point_in_scope(*pos) {
-                    // BUG-059: a press inside the panel that arms nothing must
-                    // not fall through to whatever sits beneath the modal —
-                    // same ownership rule as the `Click` arm above.
-                    OverlayResponse::Consumed(Vec::new())
+                    (true, Vec::new())
                 } else {
-                    OverlayResponse::Ignored
+                    (false, Vec::new())
                 }
             }
-            // P2 (`docs/DRAG_CAPTURE_DESIGN.md`): the BUG-059 missed-grab leak
-            // (a drag that starts inside the panel but grabs nothing,
-            // silently moving clips / region-selecting on the timeline
-            // underneath) is now prevented at the OWNERSHIP layer, not here —
-            // `claims_drag` (below) reports this origin as belonging to the
-            // panel, `UIRoot::resolve_drag_owner` records
-            // `DragOwner::Overlay(AudioSetup)`, and `should_stash_for_tracks`
-            // refuses to stash for the timeline because ownership, not this
-            // arm's Consumed/Ignored return, is what it reads. So this arm
-            // only needs to handle drags that actually armed a divider or
-            // calibration grab; a miss simply falls through unconsumed.
             UIEvent::DragBegin { .. } => {
                 if self.dragging_band.is_some() || self.calibration_drag.is_some() {
-                    OverlayResponse::Consumed(Vec::new())
+                    (true, Vec::new())
                 } else {
-                    OverlayResponse::Ignored
+                    (false, Vec::new())
                 }
             }
             UIEvent::Drag { pos, .. } => {
                 if let Some(band) = self.dragging_band {
                     match self.scope_y_to_hz(pos.y) {
-                        Some(hz) => OverlayResponse::Consumed(vec![
-                            PanelAction::AudioCrossoverChanged(band, hz),
-                        ]),
-                        None => OverlayResponse::Consumed(Vec::new()),
+                        Some(hz) => (true, vec![PanelAction::AudioCrossoverChanged(band, hz)]),
+                        None => (true, Vec::new()),
                     }
                 } else if let Some(drag) = self.calibration_drag.clone() {
                     // 1 px = 0.1 dB / 0.5% (D7, `docs/AUDIO_SENDS_UX_DESIGN.md`
@@ -2446,70 +2351,62 @@ impl Overlay for AudioSetupPanel {
                     match drag {
                         CalibrationDrag::Gain { send, start_x, start_db } => {
                             let new_db = start_db + (pos.x - start_x) * 0.1;
-                            OverlayResponse::Consumed(vec![PanelAction::AudioSendGainDragChanged(
-                                send, new_db,
-                            )])
+                            (true, vec![PanelAction::AudioSendGainDragChanged(send, new_db)])
                         }
                         CalibrationDrag::Sensitivity { send, band, start_x, start_frac } => {
                             let new_frac = start_frac + (pos.x - start_x) * 0.005;
-                            OverlayResponse::Consumed(vec![
-                                PanelAction::AudioSendSensitivityDragChanged(send, band, new_frac),
-                            ])
+                            (true, vec![PanelAction::AudioSendSensitivityDragChanged(send, band, new_frac)])
                         }
                     }
                 } else {
-                    OverlayResponse::Ignored
+                    (false, Vec::new())
                 }
             }
             UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
                 if self.dragging_band.take().is_some() {
-                    OverlayResponse::Consumed(vec![PanelAction::AudioCrossoverCommit])
+                    (true, vec![PanelAction::AudioCrossoverCommit])
                 } else if let Some(drag) = self.calibration_drag.take() {
-                    OverlayResponse::Consumed(vec![match drag {
-                        CalibrationDrag::Gain { send, .. } => {
-                            PanelAction::AudioSendGainDragCommit(send)
-                        }
+                    (true, vec![match drag {
+                        CalibrationDrag::Gain { send, .. } => PanelAction::AudioSendGainDragCommit(send),
                         CalibrationDrag::Sensitivity { send, band, .. } => {
                             PanelAction::AudioSendSensitivityDragCommit(send, band)
                         }
                     }])
                 } else {
-                    OverlayResponse::Ignored
+                    (false, Vec::new())
                 }
             }
-            _ => OverlayResponse::Ignored,
+            _ => (false, Vec::new()),
         }
     }
 
-    /// P2 (`docs/DRAG_CAPTURE_DESIGN.md` §3.2): the panel claims a drag
-    /// gesture — read once, at that gesture's first `DragBegin`, by
-    /// `UIRoot::resolve_drag_owner` — iff it already armed a band/calibration
-    /// grab at `PointerDown`, OR the gesture's origin lands inside the panel
-    /// rect even though it grabbed nothing (the BUG-059 missed-grab case;
-    /// this replaces the old origin-rect drag-swallow stopgap at the
-    /// ownership layer). Origin-keyed, never re-evaluated against the drag's
-    /// current position — same guarantee `point_in_panel`'s doc names.
-    fn claims_drag(&self, origin: Vec2) -> bool {
+    /// Does a drag ORIGINATING at `origin` belong to the dock — an armed
+    /// band/calibration grab, or the origin lands inside the dock rect. Read by
+    /// `UIRoot::resolve_drag_owner` once, at the gesture's first `DragBegin`.
+    pub fn claims_drag(&self, origin: Vec2) -> bool {
         self.dragging_band.is_some() || self.calibration_drag.is_some() || self.point_in_panel(origin)
     }
 
-    /// Idempotent end-of-gesture clear, called on every OPEN overlay by
-    /// `UIRoot::broadcast_gesture_end` regardless of who owned the gesture.
-    /// Replaces the old per-arm drag-swallow resets that were scattered
-    /// across the `on_event` arms above.
-    fn gesture_ended(&mut self) {
+    /// Idempotent end-of-gesture clear (band + calibration drags).
+    pub fn gesture_ended(&mut self) {
         self.dragging_band = None;
         self.calibration_drag = None;
     }
 
-    /// D6 (`docs/DRAG_CAPTURE_DESIGN.md` §3.4): true iff the `PointerDown` arm
-    /// above just armed a divider grab — `dragging_band` is only ever set
-    /// there and cleared by `DragEnd`/`PointerUp`/`gesture_ended`, so this
-    /// reflects THIS press, never a stale one. Band dividers have no click
-    /// behavior, so the click-forfeiture consequence of arming immediate
-    /// drag costs nothing here.
-    fn wants_immediate_drag(&self) -> bool {
+    /// True iff the last `PointerDown` just armed a band-divider grab — the
+    /// caller requests zero-threshold drag so a 1px move starts the drag.
+    pub fn wants_immediate_drag(&self) -> bool {
         self.dragging_band.is_some()
+    }
+}
+
+/// Scrollbar chrome for the docked body (D8) — the shared inspector palette.
+fn scrollbar_style() -> ScrollbarStyle {
+    ScrollbarStyle {
+        track_color: color::SCROLLBAR_TRACK_C32,
+        thumb_color: color::SCROLLBAR_THUMB_C32,
+        thumb_hover_color: color::SCROLLBAR_THUMB_HOVER_C32,
+        corner_radius: color::SMALL_RADIUS,
     }
 }
 
@@ -2578,6 +2475,15 @@ fn dropdown_trigger_style() -> UIStyle {
 mod tests {
     use super::*;
 
+    /// The docked column rect for a 1280×720 screen with the default inspector
+    /// (500) + dock (460): x = 1280 - 500 - 460 = 320, full content height
+    /// 720 - 36 transport - 36 footer = 648, from y = 36. The panel builds its
+    /// rows into this via `build_docked` (D1) — the old overlay `build(w,h)`
+    /// path is gone.
+    fn test_dock_rect() -> Rect {
+        Rect::new(320.0, 36.0, 460.0, 648.0)
+    }
+
     fn panel_with_two_sends() -> AudioSetupPanel {
         let mut p = AudioSetupPanel::new();
         p.toggle(); // open
@@ -2624,7 +2530,7 @@ mod tests {
     fn clicks_resolve_to_actions() {
         let mut p = panel_with_two_sends();
         let mut tree = UITree::new();
-        p.build(&mut tree, 1280.0, 720.0);
+        p.build_docked(&mut tree, test_dock_rect());
 
         // Add send.
         assert!(matches!(p.handle_click(p.add_send_id), Some(PanelAction::AudioAddSend)));
@@ -2646,9 +2552,15 @@ mod tests {
         let del = p.send_ids[0].delete;
         assert!(matches!(p.handle_click(del), Some(PanelAction::AudioRemoveSend(_))));
 
-        // Close button toggles closed and yields no action.
-        assert!(p.handle_click(p.close_id).is_none());
-        assert!(!p.is_open());
+        // Close (×) routes through handle_event and emits the toggle action
+        // (the app closes the dock — one path with Escape / header button).
+        let (consumed, acts) = p.handle_event(&UIEvent::Click {
+            node_id: p.close_id,
+            pos: Vec2::ZERO,
+            modifiers: Modifiers::default(),
+        });
+        assert!(consumed);
+        assert!(matches!(acts.as_slice(), [PanelAction::OpenAudioSetup]));
     }
 
     #[test]
@@ -2657,7 +2569,7 @@ mod tests {
         // Selected send (s1) gets four band rows so the section renders.
         p.sends[0].triggers = vec![TriggerRouteRow::default(); 4];
         let mut tree = UITree::new();
-        p.build(&mut tree, 1280.0, 720.0);
+        p.build_docked(&mut tree, test_dock_rect());
         assert_eq!(p.trigger_row_ids.len(), 4);
 
         // Whole (row 0) enable → toggle on the selected send + Full band.
@@ -2689,7 +2601,7 @@ mod tests {
     fn swatch_click_selects_send_and_scope_rect_present() {
         let mut p = panel_with_two_sends();
         let mut tree = UITree::new();
-        p.build(&mut tree, 1280.0, 720.0);
+        p.build_docked(&mut tree, test_dock_rect());
 
         // Defaults to the first send; the scope rect exists while open.
         assert_eq!(p.selected_send().map(|s| s.as_str()), Some("s1"));
@@ -2704,79 +2616,59 @@ mod tests {
         assert!(p.scope_rect().is_none());
     }
 
-    /// BUG-059 / P2: a drag starting inside the panel that grabs nothing
-    /// (missed a divider by >12px) must still be CLAIMED — this is the same
-    /// scenario the old on_event-level swallow test proved, but the assertion
-    /// moves to the new seam: `claims_drag`, which is what
-    /// `UIRoot::resolve_drag_owner` reads to keep the gesture from leaking to
-    /// the timeline underneath (`docs/DRAG_CAPTURE_DESIGN.md` §3.2). The
-    /// routed `on_event` cascade no longer needs to consume this case itself
-    /// — ownership handles it one level up — so `DragBegin` for an unarmed
-    /// grab now correctly returns `Ignored` from `on_event`.
+    /// BUG-059 / P2: a drag starting inside the dock that grabs nothing (missed
+    /// a divider) is still CLAIMED by ownership (`claims_drag`), which
+    /// `UIRoot::resolve_drag_owner` reads so the gesture doesn't leak to the
+    /// timeline. A `PointerDown` on an owned node is consumed; a `DragBegin`
+    /// that armed nothing is not (ownership handles it one level up).
     #[test]
     fn missed_grab_origin_inside_panel_is_claimed_by_ownership() {
         let mut p = panel_with_two_sends();
         let mut tree = UITree::new();
-        p.build(&mut tree, 1280.0, 720.0);
+        p.build_docked(&mut tree, test_dock_rect());
 
         // Top-left chrome corner: inside the panel, far from any divider/label.
         let inside = Vec2::new(p.panel_rect.x + 6.0, p.panel_rect.y + 6.0);
         let modifiers = Modifiers::default();
 
-        assert!(matches!(
-            p.on_event(
-                &UIEvent::PointerDown { node_id: p.bg_id, pos: inside, modifiers },
-                &mut tree
-            ),
-            OverlayResponse::Consumed(_)
-        ));
+        let (consumed, _) = p.handle_event(&UIEvent::PointerDown {
+            node_id: p.bg_id,
+            pos: inside,
+            modifiers,
+        });
+        assert!(consumed, "a press on an owned node is swallowed");
         assert!(
             p.claims_drag(inside),
             "a drag originating inside the panel is claimed even though it grabs nothing"
         );
-        assert!(
-            matches!(
-                p.on_event(
-                    &UIEvent::DragBegin {
-                        node_id: Some(p.bg_id),
-                        pos: inside,
-                        origin: inside,
-                        modifiers
-                    },
-                    &mut tree
-                ),
-                OverlayResponse::Ignored
-            ),
-            "on_event no longer needs to consume the missed-grab case — ownership does"
-        );
+        let (drag_consumed, _) = p.handle_event(&UIEvent::DragBegin {
+            node_id: Some(p.bg_id),
+            pos: inside,
+            origin: inside,
+            modifiers,
+        });
+        assert!(!drag_consumed, "handle_event needn't consume the missed-grab case — ownership does");
     }
 
-    /// BUG-059 guard-rail, P2 seam: a timeline drag whose origin is outside
-    /// the panel is never claimed, even with nothing armed — the same
-    /// assertion the old swallow test made, now against `claims_drag`
-    /// directly instead of a stateful flag.
+    /// BUG-059 guard-rail: a timeline drag whose origin is outside the dock is
+    /// never claimed, even with nothing armed.
     #[test]
     fn claims_drag_false_for_origin_outside_panel_with_nothing_armed() {
         let mut p = panel_with_two_sends();
         let mut tree = UITree::new();
-        p.build(&mut tree, 1280.0, 720.0);
+        p.build_docked(&mut tree, test_dock_rect());
 
         let outside = Vec2::new(p.panel_rect.x - 40.0, p.panel_rect.y - 40.0);
         let modifiers = Modifiers::default();
 
         assert!(!p.claims_drag(outside));
-        assert!(matches!(
-            p.on_event(
-                &UIEvent::DragBegin {
-                    node_id: Some(p.bg_id),
-                    pos: outside,
-                    origin: outside,
-                    modifiers
-                },
-                &mut tree
-            ),
-            OverlayResponse::Ignored
-        ));
+        let (consumed, _) = p.handle_event(&UIEvent::DragBegin {
+            node_id: Some(p.bg_id),
+            pos: outside,
+            origin: outside,
+            modifiers,
+        });
+        assert!(!consumed);
     }
 
     /// P2: `gesture_ended` is the idempotent end-of-gesture clear
@@ -2809,7 +2701,7 @@ mod tests {
     fn source_chip_opens_routings_and_is_owned() {
         let mut p = panel_with_two_sends();
         let mut tree = UITree::new();
-        p.build(&mut tree, 1280.0, 720.0);
+        p.build_docked(&mut tree, test_dock_rect());
 
         let src = p.send_ids[0].source;
         assert!(p.owns_node(src), "source chip is a panel-owned node");
@@ -2825,7 +2717,7 @@ mod tests {
     fn gain_buttons_emit_signed_steps() {
         let mut p = panel_with_two_sends();
         let mut tree = UITree::new();
-        p.build(&mut tree, 1280.0, 720.0);
+        p.build_docked(&mut tree, test_dock_rect());
 
         match p.handle_click(p.send_ids[0].gain_plus) {
             Some(PanelAction::AudioSendGainStep(id, d)) => {
@@ -2856,7 +2748,7 @@ mod tests {
         // Mark send 1 as driving two params.
         p.sends[0].driven_count = 2;
         let mut tree = UITree::new();
-        p.build(&mut tree, 1280.0, 720.0);
+        p.build_docked(&mut tree, test_dock_rect());
 
         let del = p.send_ids[0].delete;
         // First click arms — no action, and the confirm notice appears.
@@ -2872,7 +2764,7 @@ mod tests {
         let mut p = panel_with_two_sends();
         p.sends[0].driven_count = 1;
         let mut tree = UITree::new();
-        p.build(&mut tree, 1280.0, 720.0);
+        p.build_docked(&mut tree, test_dock_rect());
 
         assert!(p.handle_click(p.send_ids[0].delete).is_none()); // arm
         // Clicking the stereo toggle clears the arm instead of deleting.
@@ -2883,100 +2775,69 @@ mod tests {
         assert!(p.active_notice().is_none());
     }
 
-    #[test]
-    fn overlay_escape_self_closes() {
-        let mut p = panel_with_two_sends();
-        let mut tree = UITree::new();
-        let resp = p.on_event(
-            &UIEvent::KeyDown {
-                node_id: NodeId::PLACEHOLDER,
-                key: Key::Escape,
-                modifiers: crate::input::Modifiers::default(),
-            },
-            &mut tree,
-        );
-        assert!(matches!(resp, OverlayResponse::Consumed(_)));
-        assert!(!p.is_open(), "Escape should self-close the modal");
-    }
-
-    // ─── D6/D7: non-dim right-anchored panel + calibration drags ───
+    // ─── Docked panel + calibration drags ───
 
     #[test]
-    fn outside_click_passes_through_instead_of_closing() {
-        // Modeless (D6): a click outside the panel's owned nodes and the scope
-        // must fall through to the UI beneath, not dismiss the panel.
+    fn unowned_click_is_not_consumed() {
+        // A click outside the dock's owned nodes and the scope is not consumed
+        // — the caller routes it to lower panels. The dock never self-closes on
+        // an outside click (close is the × / Escape / header toggle only).
         let mut p = panel_with_two_sends();
         let mut tree = UITree::new();
-        p.build(&mut tree, 1280.0, 720.0);
+        p.build_docked(&mut tree, test_dock_rect());
         assert!(p.is_open());
 
-        let resp = p.on_event(
-            &UIEvent::Click {
-                node_id: NodeId::PLACEHOLDER,
-                pos: Vec2::new(1.0, 1.0),
-                modifiers: crate::input::Modifiers::default(),
-            },
-            &mut tree,
-        );
-        assert!(matches!(resp, OverlayResponse::Ignored), "outside click must pass through");
-        assert!(p.is_open(), "panel must not self-close on outside click (D6)");
+        let (consumed, acts) = p.handle_event(&UIEvent::Click {
+            node_id: NodeId::PLACEHOLDER,
+            pos: Vec2::new(1.0, 1.0),
+            modifiers: Modifiers::default(),
+        });
+        assert!(!consumed, "outside click must not be consumed");
+        assert!(acts.is_empty());
+        assert!(p.is_open(), "panel must not self-close on outside click");
     }
 
     #[test]
     fn gain_drag_begin_changed_commit_sequence() {
         let mut p = panel_with_two_sends();
         let mut tree = UITree::new();
-        p.build(&mut tree, 1280.0, 720.0);
+        p.build_docked(&mut tree, test_dock_rect());
         let gain_value = p.send_ids[0].gain_value;
-        let modifiers = crate::input::Modifiers::default();
+        let modifiers = Modifiers::default();
 
-        match p.on_event(
-            &UIEvent::PointerDown { node_id: gain_value, pos: Vec2::new(100.0, 50.0), modifiers },
-            &mut tree,
-        ) {
-            OverlayResponse::Consumed(actions) => {
-                assert_eq!(actions.len(), 1);
-                assert!(matches!(
-                    &actions[0],
-                    PanelAction::AudioSendGainDragBegin(id) if id.as_str() == "s1"
-                ));
-            }
-            other => panic!("expected Consumed(Begin), got {}", as_debug(&other)),
-        }
+        let (consumed, actions) = p.handle_event(&UIEvent::PointerDown {
+            node_id: gain_value,
+            pos: Vec2::new(100.0, 50.0),
+            modifiers,
+        });
+        assert!(consumed);
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::AudioSendGainDragBegin(id)] if id.as_str() == "s1"
+        ));
 
         // 20 px right at 0.1 dB/px, starting from send 1's 0 dB.
-        match p.on_event(
-            &UIEvent::Drag {
-                node_id: Some(gain_value),
-                pos: Vec2::new(120.0, 50.0),
-                delta: Vec2::new(20.0, 0.0)
-            },
-            &mut tree,
-        ) {
-            OverlayResponse::Consumed(actions) => {
-                assert_eq!(actions.len(), 1);
-                match &actions[0] {
-                    PanelAction::AudioSendGainDragChanged(id, db) => {
-                        assert_eq!(id.as_str(), "s1");
-                        assert!((db - 2.0).abs() < 1e-4, "expected +2.0 dB, got {db}");
-                    }
-                    other => panic!("expected AudioSendGainDragChanged, got {other:?}"),
-                }
+        let (_, actions) = p.handle_event(&UIEvent::Drag {
+            node_id: Some(gain_value),
+            pos: Vec2::new(120.0, 50.0),
+            delta: Vec2::new(20.0, 0.0),
+        });
+        match actions.as_slice() {
+            [PanelAction::AudioSendGainDragChanged(id, db)] => {
+                assert_eq!(id.as_str(), "s1");
+                assert!((db - 2.0).abs() < 1e-4, "expected +2.0 dB, got {db}");
             }
-            other => panic!("expected Consumed(Changed), got {}", as_debug(&other)),
+            other => panic!("expected AudioSendGainDragChanged, got {other:?}"),
         }
 
-        match p.on_event(&UIEvent::PointerUp { node_id: Some(gain_value), pos: Vec2::new(120.0, 50.0) }, &mut tree)
-        {
-            OverlayResponse::Consumed(actions) => {
-                assert_eq!(actions.len(), 1);
-                assert!(matches!(
-                    &actions[0],
-                    PanelAction::AudioSendGainDragCommit(id) if id.as_str() == "s1"
-                ));
-            }
-            other => panic!("expected Consumed(Commit), got {}", as_debug(&other)),
-        }
+        let (_, actions) = p.handle_event(&UIEvent::PointerUp {
+            node_id: Some(gain_value),
+            pos: Vec2::new(120.0, 50.0),
+        });
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::AudioSendGainDragCommit(id)] if id.as_str() == "s1"
+        ));
         assert!(!p.is_dragging_band(), "gain drag must not arm the crossover drag flag");
     }
 
@@ -2985,84 +2846,65 @@ mod tests {
         let mut p = panel_with_two_sends();
         p.sends[0].triggers = vec![TriggerRouteRow::default(); 4]; // all 0% sensitivity
         let mut tree = UITree::new();
-        p.build(&mut tree, 1280.0, 720.0);
+        p.build_docked(&mut tree, test_dock_rect());
         // TRIG_BANDS order is [Full, Low, Mid, High] — row 1 is Low.
         let sens_value = p.trigger_row_ids[1].sens_value;
-        let modifiers = crate::input::Modifiers::default();
+        let modifiers = Modifiers::default();
 
-        match p.on_event(
-            &UIEvent::PointerDown { node_id: sens_value, pos: Vec2::new(200.0, 60.0), modifiers },
-            &mut tree,
-        ) {
-            OverlayResponse::Consumed(actions) => {
-                assert_eq!(actions.len(), 1);
-                assert!(matches!(
-                    &actions[0],
-                    PanelAction::AudioSendSensitivityDragBegin(id, band)
-                        if id.as_str() == "s1" && *band == AudioBand::Low
-                ));
-            }
-            other => panic!("expected Consumed(Begin), got {}", as_debug(&other)),
-        }
+        let (consumed, actions) = p.handle_event(&UIEvent::PointerDown {
+            node_id: sens_value,
+            pos: Vec2::new(200.0, 60.0),
+            modifiers,
+        });
+        assert!(consumed);
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::AudioSendSensitivityDragBegin(id, band)]
+                if id.as_str() == "s1" && *band == AudioBand::Low
+        ));
 
         // 40 px right at 0.5%/px (0.005/px), starting from 0.0.
-        match p.on_event(
-            &UIEvent::Drag {
-                node_id: Some(sens_value),
-                pos: Vec2::new(240.0, 60.0),
-                delta: Vec2::new(40.0, 0.0)
-            },
-            &mut tree,
-        ) {
-            OverlayResponse::Consumed(actions) => {
-                assert_eq!(actions.len(), 1);
-                match &actions[0] {
-                    PanelAction::AudioSendSensitivityDragChanged(id, band, frac) => {
-                        assert_eq!(id.as_str(), "s1");
-                        assert_eq!(*band, AudioBand::Low);
-                        assert!((frac - 0.2).abs() < 1e-4, "expected 0.2, got {frac}");
-                    }
-                    other => panic!("expected AudioSendSensitivityDragChanged, got {other:?}"),
-                }
+        let (_, actions) = p.handle_event(&UIEvent::Drag {
+            node_id: Some(sens_value),
+            pos: Vec2::new(240.0, 60.0),
+            delta: Vec2::new(40.0, 0.0),
+        });
+        match actions.as_slice() {
+            [PanelAction::AudioSendSensitivityDragChanged(id, band, frac)] => {
+                assert_eq!(id.as_str(), "s1");
+                assert_eq!(*band, AudioBand::Low);
+                assert!((frac - 0.2).abs() < 1e-4, "expected 0.2, got {frac}");
             }
-            other => panic!("expected Consumed(Changed), got {}", as_debug(&other)),
+            other => panic!("expected AudioSendSensitivityDragChanged, got {other:?}"),
         }
 
-        match p.on_event(
-            &UIEvent::PointerUp { node_id: Some(sens_value), pos: Vec2::new(240.0, 60.0) },
-            &mut tree,
-        ) {
-            OverlayResponse::Consumed(actions) => {
-                assert_eq!(actions.len(), 1);
-                assert!(matches!(
-                    &actions[0],
-                    PanelAction::AudioSendSensitivityDragCommit(id, band)
-                        if id.as_str() == "s1" && *band == AudioBand::Low
-                ));
-            }
-            other => panic!("expected Consumed(Commit), got {}", as_debug(&other)),
-        }
-    }
-
-    /// `OverlayResponse` has no `Debug` — this renders just enough for a panic
-    /// message.
-    fn as_debug(resp: &OverlayResponse) -> &'static str {
-        match resp {
-            OverlayResponse::Ignored => "Ignored",
-            OverlayResponse::Consumed(_) => "Consumed(_)",
-        }
+        let (_, actions) = p.handle_event(&UIEvent::PointerUp {
+            node_id: Some(sens_value),
+            pos: Vec2::new(240.0, 60.0),
+        });
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::AudioSendSensitivityDragCommit(id, band)]
+                if id.as_str() == "s1" && *band == AudioBand::Low
+        ));
     }
 
     #[test]
-    fn consumers_fit_within_panel_on_first_build_after_configure() {
-        // Regression: `chrome_height()` (which sizes the scope in `build_at`)
-        // must see the SAME selected send as `build_nodes`. Before the fix the
-        // selection was only defaulted inside `build_nodes` — after the scope
-        // was already sized — so the first build after `configure` counted
-        // zero feeding-layer rows and one consumer row, oversizing the scope
-        // and pushing the Consumers section past the panel's bottom edge.
+    fn tall_source_body_scrolls_and_scope_present() {
+        // D8/BUG-047: with many input + consumer rows the body content exceeds
+        // the dock viewport, so the ScrollContainer reports it can scroll (the
+        // sections clip via GPU scissor instead of overflowing past the bottom).
         let mut p = AudioSetupPanel::new();
         p.toggle(); // open
+        let consumers: Vec<SendConsumerRow> = (0..12)
+            .map(|i| SendConsumerRow {
+                label: format!("LAYER {i} \u{2022} Effect \u{2022} Param"),
+                layer_id: Some(LayerId::new(&format!("layer{i}"))),
+            })
+            .collect();
+        let feeding: Vec<(LayerId, String)> = (0..6)
+            .map(|i| (LayerId::new(&format!("src{i}")), format!("SRC {i}")))
+            .collect();
         p.configure(
             None,
             vec![AudioSendRow {
@@ -3077,36 +2919,20 @@ mod tests {
                 layer_fed: true,
                 routings: vec!["Capture: Channel 1".into()],
                 triggers: vec![TriggerRouteRow::default(); 4],
-                feeding_layers: vec![(LayerId::new("kick"), "KICK".to_string())],
-                consumers: vec![
-                    SendConsumerRow {
-                        label: "BLOOM LAYER \u{2022} Bloom \u{2022} Amount".into(),
-                        layer_id: Some(LayerId::new("bloom")),
-                    },
-                    SendConsumerRow {
-                        label: "Low \u{2192} STROBE LAYER".into(),
-                        layer_id: Some(LayerId::new("strobe")),
-                    },
-                ],
+                feeding_layers: feeding,
+                consumers,
             }],
-            Some("Microphone access blocked".into()),
+            None,
         );
-
-        let (vw, vh) = (1280.0, 720.0);
         let mut tree = UITree::new();
-        p.build(&mut tree, vw, vh);
+        p.build_docked(&mut tree, test_dock_rect());
 
-        assert_eq!(p.consumer_row_ids.len(), 2);
-        let last = *p.consumer_row_ids.last().unwrap();
-        let b = tree.get_bounds(last);
+        assert_eq!(p.consumer_row_ids.len(), 12);
         assert!(
-            b.y + b.height <= vh + 0.5,
-            "last consumer row must fit inside the panel: bottom {} > viewport {vh}",
-            b.y + b.height,
+            p.scroll.can_scroll(),
+            "a tall source's body must overflow the dock height and be scrollable (BUG-047)"
         );
-        // And the scope still got its floor.
-        let scope = p.scope_rect().expect("scope present while open");
-        assert!(scope.height >= SCOPE_H_MIN - SCOPE_PAD_Y * 2.0 - 0.5);
+        assert!(p.scope_rect().is_some(), "scope present while open");
     }
 
     // ─── Inputs / Consumers sections (AUDIO_SENDS_UX_DESIGN Phase 2) ───
@@ -3115,7 +2941,7 @@ mod tests {
     fn add_layer_row_opens_add_layer_dropdown_for_selected_send() {
         let mut p = panel_with_two_sends();
         let mut tree = UITree::new();
-        p.build(&mut tree, 1280.0, 720.0);
+        p.build_docked(&mut tree, test_dock_rect());
 
         match p.handle_click(p.add_layer_id) {
             Some(PanelAction::AudioSendAddLayerClicked(id)) => assert_eq!(id.as_str(), "s1"),
@@ -3128,7 +2954,7 @@ mod tests {
         let mut p = panel_with_two_sends();
         p.sends[0].feeding_layers = vec![(LayerId::new("kick"), "KICK".to_string())];
         let mut tree = UITree::new();
-        p.build(&mut tree, 1280.0, 720.0);
+        p.build_docked(&mut tree, test_dock_rect());
         assert_eq!(p.inputs_remove_ids.len(), 1, "one remove button per feeding layer");
 
         match p.handle_click(p.inputs_remove_ids[0]) {
@@ -3147,7 +2973,7 @@ mod tests {
             layer_id: Some(LayerId::new("bloom-layer")),
         }];
         let mut tree = UITree::new();
-        p.build(&mut tree, 1280.0, 720.0);
+        p.build_docked(&mut tree, test_dock_rect());
         assert_eq!(p.consumer_row_ids.len(), 1);
 
         match p.handle_click(p.consumer_row_ids[0]) {
@@ -3199,7 +3025,7 @@ mod tests {
         // notice line on the next build) instead of deleting immediately.
         p.sends[0].driven_count = 3;
         let mut tree = UITree::new();
-        p.build(&mut tree, 1280.0, 720.0);
+        p.build_docked(&mut tree, test_dock_rect());
         assert!(p.active_notice().is_none(), "no notice line yet — nothing armed");
         let floor_minus_1 = p.floor_minus_id.expect("floor stepper built with sends present");
         let w1 = tree.widget_of(floor_minus_1);
@@ -3211,7 +3037,7 @@ mod tests {
         // consumed. This is the layout-shifting rebuild.
         assert!(p.handle_click(p.send_ids[0].delete).is_none(), "first click arms, no action yet");
         tree.clear();
-        p.build(&mut tree, 1280.0, 720.0);
+        p.build_docked(&mut tree, test_dock_rect());
         assert!(p.active_notice().is_some(), "delete-confirm notice line now present");
         let floor_minus_2 = p.floor_minus_id.expect("floor stepper rebuilt");
         let w2 = tree.widget_of(floor_minus_2);
@@ -3232,7 +3058,7 @@ mod tests {
         let mut p = panel_with_two_sends();
         p.sends[0].driven_count = 3;
         let mut tree = UITree::new();
-        p.build(&mut tree, 1280.0, 720.0);
+        p.build_docked(&mut tree, test_dock_rect());
 
         let row0_delete_1 = tree.widget_of(p.send_ids[0].delete);
         let row1_delete_1 = tree.widget_of(p.send_ids[1].delete);
@@ -3248,7 +3074,7 @@ mod tests {
         // sibling if unkeyed.
         assert!(p.handle_click(p.send_ids[0].delete).is_none());
         tree.clear();
-        p.build(&mut tree, 1280.0, 720.0);
+        p.build_docked(&mut tree, test_dock_rect());
         assert!(p.active_notice().is_some());
 
         let row0_delete_2 = tree.widget_of(p.send_ids[0].delete);

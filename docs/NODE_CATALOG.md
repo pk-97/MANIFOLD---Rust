@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 217 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 218 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -146,7 +146,7 @@ _Generated from the node registry. Do not hand-edit. 217 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (29)
+### 3D Geometry (30)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -179,6 +179,7 @@ _Generated from the node registry. Do not hand-edit. 217 nodes registered, group
 | Rotate 3D | `node.rotate_3d` | Filter | Spins a 3D mesh around the X, Y, and Z axes. Wire an LFO or a beat into the angles to keep it turning. |
 | Rotate 4D | `node.rotate_4d` | Filter | Spins 4D geometry through its rotation planes, the move that makes a tesseract appear to turn inside out. |
 | Torus Wrap Field | `node.torus_wrap_field` | Map | Wraps a flat grid of points around a torus, a donut shape, placing copies on its surface. |
+| Transform 3D | `node.transform_3d` | Source | Position, rotation, and scale for one scene object. Wire it into a render_scene transform slot, or drive an axis from an LFO or MIDI to animate it live. |
 
 ### Materials & Lighting (11)
 
@@ -342,13 +343,13 @@ _Generated from the node registry. Do not hand-edit. 217 nodes registered, group
 | UV Displace by Flow | `node.uv_displace_by_flow` | Filter | Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field. |
 | UV Field | `node.uv_field` | Source | Outputs the position of each pixel as a coordinate, red for left-to-right and green for top-to-bottom. The starting grid for most warps and patterns. |
 
-### Effect & generator presets (45)
+### Effect & generator presets (46)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
 | `AutoGain` | Auto Gain | effect | Stylize | 4 |
 | `BasicShapes` | Basic Shapes | generator | Pattern | 4 |
-| `BlackHole` | Black Hole | generator | Sim | 14 |
+| `BlackHole` | Black Hole | generator | Sim | 18 |
 | `BlobTracking` | Blob Track | effect | Diagnostic | 5 |
 | `Bloom` | Bloom | effect | Filmic | 1 |
 | `ChromaticAberration` | Chromatic Aberration | effect | Filmic | 5 |
@@ -362,6 +363,7 @@ _Generated from the node registry. Do not hand-edit. 217 nodes registered, group
 | `Duocylinder` | Duocylinder | generator | Geometry | 11 |
 | `EdgeDetect` | Edge Detect | effect | Diagnostic | 3 |
 | `EdgeStretch` | Edge Stretch | effect | Spatial | 3 |
+| `FilmGrain` | Film Grain | effect | Stylize | 2 |
 | `FluidSim2D` | Fluid Sim 2D | generator | Sim | 13 |
 | `FluidSim3D` | Fluid Sim 3D | generator | Sim | 22 |
 | `Glitch` | Glitch | effect | Filmic | 5 |

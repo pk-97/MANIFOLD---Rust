@@ -18,6 +18,12 @@ pub struct ScreenLayout {
     pub footer_height: f32,
     pub inspector_width: f32,
     pub effect_browser_width: f32,
+    /// Audio Setup dock width (D1). 0.0 = closed. A fold-out column pinned to
+    /// the inspector's LEFT edge that expands leftward when opened, shrinking
+    /// the content area (preview + timeline) — never the inspector, which stays
+    /// right-anchored. One rule at every width: content shrinks, no overlay
+    /// fallback (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` D1).
+    pub audio_setup_width: f32,
     /// Timeline height as fraction of content area. 0.30 = bottom 30%.
     /// Clamped to [0.15, 0.70] by resize handle.
     pub timeline_split_ratio: f32,
@@ -38,6 +44,11 @@ pub struct ScreenLayout {
     /// the ease *is* the whole reset.
     inspector_width_anim: AnimF32,
     timeline_split_anim: AnimF32,
+    /// D1 snap-back mirror for the Audio Setup dock width — same mirror-field
+    /// pattern as `inspector_width_anim` above: `tick_splits` eases the reset
+    /// straight back into `audio_setup_width` every animating frame, so every
+    /// layout consumer sees the settling position with no call-site change.
+    audio_setup_width_anim: AnimF32,
 }
 
 impl ScreenLayout {
@@ -50,10 +61,13 @@ impl ScreenLayout {
             footer_height: color::FOOTER_HEIGHT,
             inspector_width: color::DEFAULT_INSPECTOR_WIDTH,
             effect_browser_width: 0.0,
+            audio_setup_width: 0.0,
             timeline_split_ratio: color::DEFAULT_TIMELINE_SPLIT_RATIO,
             inspector_width_anim: AnimF32::new(color::DEFAULT_INSPECTOR_WIDTH, color::MOTION_MED_MS)
                 .with_curve(crate::anim::Curve::Snap),
             timeline_split_anim: AnimF32::new(color::DEFAULT_TIMELINE_SPLIT_RATIO, color::MOTION_MED_MS)
+                .with_curve(crate::anim::Curve::Snap),
+            audio_setup_width_anim: AnimF32::new(color::DEFAULT_AUDIO_SETUP_WIDTH, color::MOTION_MED_MS)
                 .with_curve(crate::anim::Curve::Snap),
         }
     }
@@ -88,7 +102,12 @@ impl ScreenLayout {
     pub fn content_area(&self) -> Rect {
         let top = self.transport_bar_height;
         let left = self.effect_browser_width;
-        let w = (self.screen_width - left - self.inspector_width).max(0.0);
+        // Both the inspector (right column) AND the Audio Setup dock (the
+        // fold-out column just left of the inspector) bound the content on the
+        // right — subtract both. This is the whole reason preview + timeline
+        // shrink when the dock opens (D1); `top_region`/`timeline_area`/
+        // `video_area` all read `content_area()`, so they inherit it.
+        let w = (self.screen_width - left - self.inspector_width - self.audio_setup_width).max(0.0);
         let h = (self.screen_height - top - self.footer_height).max(0.0);
         Rect::new(left, top, w, h)
     }
@@ -157,6 +176,22 @@ impl ScreenLayout {
         let x = self.screen_width - self.inspector_width;
         let h = (self.screen_height - top - self.footer_height).max(0.0);
         Rect::new(x, top, self.inspector_width, h)
+    }
+
+    /// Audio Setup dock: a FULL-HEIGHT column pinned to the inspector's LEFT
+    /// edge (D1). Same vertical extent as the inspector; its right edge is the
+    /// inspector's left edge, and it expands leftward as `audio_setup_width`
+    /// grows, pushing the content area. `Rect::ZERO` when closed
+    /// (`audio_setup_width <= 0`), mirroring `inspector()`'s zero-guard so a
+    /// closed dock is byte-identical to today's layout.
+    pub fn audio_setup(&self) -> Rect {
+        if self.audio_setup_width <= 0.0 {
+            return Rect::ZERO;
+        }
+        let top = self.transport_bar_height;
+        let x = self.screen_width - self.inspector_width - self.audio_setup_width;
+        let h = (self.screen_height - top - self.footer_height).max(0.0);
+        Rect::new(x, top, self.audio_setup_width, h)
     }
 
     /// Effect browser: leftmost sidebar.
@@ -290,10 +325,28 @@ impl ScreenLayout {
         self.inspector_width_anim.set_target(target);
     }
 
-    /// Whether either split-reset tween is still in flight — for tests /
+    /// Same as [`Self::reset_inspector_width`], for the Audio Setup dock width.
+    /// Only reachable via a double-click on the dock's resize handle, which
+    /// only exists while the dock is open — so this never resurrects a closed
+    /// dock (D1: `audio_setup_width > 0` ⟺ open, and only the toggle drops it
+    /// to 0; resize/snap-back move it only between non-zero widths).
+    pub fn reset_audio_setup_width(&mut self) {
+        let from = self.audio_setup_width;
+        let target = color::DEFAULT_AUDIO_SETUP_WIDTH;
+        if from == target {
+            return;
+        }
+        self.audio_setup_width = target;
+        self.audio_setup_width_anim.snap(from);
+        self.audio_setup_width_anim.set_target(target);
+    }
+
+    /// Whether any split-reset tween is still in flight — for tests /
     /// automation harnesses driving the gesture headlessly.
     pub fn is_split_reset_animating(&self) -> bool {
-        self.inspector_width_anim.is_animating() || self.timeline_split_anim.is_animating()
+        self.inspector_width_anim.is_animating()
+            || self.timeline_split_anim.is_animating()
+            || self.audio_setup_width_anim.is_animating()
     }
 
     /// Advance both split-reset tweens by `dt_ms`; call once per frame
@@ -317,7 +370,12 @@ impl ScreenLayout {
         if timeline_was_animating {
             self.timeline_split_ratio = self.timeline_split_anim.value();
         }
-        inspector_still_animating || timeline_still_animating
+        let audio_setup_was_animating = self.audio_setup_width_anim.is_animating();
+        let audio_setup_still_animating = self.audio_setup_width_anim.tick(dt_ms);
+        if audio_setup_was_animating {
+            self.audio_setup_width = self.audio_setup_width_anim.value();
+        }
+        inspector_still_animating || timeline_still_animating || audio_setup_still_animating
     }
 }
 
@@ -436,6 +494,85 @@ mod tests {
         // Tracks begin immediately to the right of the controls, no gap/overlap.
         assert!((tracks.x - (controls.x + controls.width)).abs() < 0.1);
         assert!((tracks.x + tracks.width - (body.x + body.width)).abs() < 0.1);
+    }
+
+    // ── Audio Setup dock column (D1) ─────────────────────────────────
+
+    #[test]
+    fn audio_setup_zero_when_closed() {
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        // Default layout: dock closed.
+        assert_eq!(layout.audio_setup_width, 0.0);
+        assert_eq!(layout.audio_setup(), Rect::ZERO);
+    }
+
+    #[test]
+    fn audio_setup_zero_width_is_todays_layout_byte_identical() {
+        // The zero-width-is-today's-layout invariant: with the dock closed,
+        // content_area() and inspector() must be exactly what they were before
+        // the dock existed (the values the pre-existing tests assert).
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        assert_eq!(layout.audio_setup_width, 0.0);
+        let content = layout.content_area();
+        assert_eq!(content.x, 0.0);
+        assert_eq!(content.y, 36.0);
+        assert_eq!(content.width, 1420.0); // 1920 - 500 inspector, dock adds nothing
+        assert_eq!(content.height, 1008.0);
+        let insp = layout.inspector();
+        assert_eq!(insp.x, 1420.0);
+        assert_eq!(insp.width, 500.0);
+    }
+
+    #[test]
+    fn audio_setup_shrinks_both_preview_and_timeline() {
+        let mut layout = ScreenLayout::new(1920.0, 1080.0);
+        let preview_before = layout.video_area().width;
+        let timeline_before = layout.timeline_area().width;
+        let inspector_before = layout.inspector();
+        // Open the dock: preview + timeline both narrow together, inspector
+        // stays exactly where it was (right-anchored, never collapses — D1).
+        layout.audio_setup_width = color::DEFAULT_AUDIO_SETUP_WIDTH;
+        assert!(layout.video_area().width < preview_before);
+        assert!(layout.timeline_area().width < timeline_before);
+        assert_eq!(layout.inspector(), inspector_before);
+    }
+
+    #[test]
+    fn audio_setup_sits_exactly_between_content_and_inspector() {
+        let mut layout = ScreenLayout::new(1920.0, 1080.0);
+        layout.audio_setup_width = color::DEFAULT_AUDIO_SETUP_WIDTH;
+        let dock = layout.audio_setup();
+        let content = layout.content_area();
+        let insp = layout.inspector();
+        // Dock's left edge == content's right edge (no gap, no overlap).
+        assert!((content.x + content.width - dock.x).abs() < 0.01);
+        // Dock's right edge == inspector's left edge.
+        assert!((dock.x + dock.width - insp.x).abs() < 0.01);
+        // Full height, same as the inspector.
+        assert_eq!(dock.y, insp.y);
+        assert_eq!(dock.height, insp.height);
+        assert_eq!(dock.width, color::DEFAULT_AUDIO_SETUP_WIDTH);
+    }
+
+    #[test]
+    fn reset_audio_setup_width_snaps_data_and_starts_the_visual_ease() {
+        let mut layout = ScreenLayout::new(1920.0, 1080.0);
+        layout.audio_setup_width = 640.0;
+
+        layout.reset_audio_setup_width();
+        // Data snaps instantly.
+        assert_eq!(layout.audio_setup_width, color::DEFAULT_AUDIO_SETUP_WIDTH);
+        assert!(layout.is_split_reset_animating(), "reset starts the visual ease");
+
+        layout.tick_splits(color::MOTION_MED_MS * 0.5);
+        assert_ne!(layout.audio_setup_width, 640.0, "width must have moved off the pre-reset value");
+        assert!(layout.is_split_reset_animating(), "still mid-flight, not yet settled");
+
+        for _ in 0..30 {
+            layout.tick_splits(color::MOTION_MED_MS / 20.0);
+        }
+        assert!(!layout.is_split_reset_animating(), "tween settles");
+        assert_eq!(layout.audio_setup_width, color::DEFAULT_AUDIO_SETUP_WIDTH);
     }
 
     // ── P2 "panel-split snap-back" (D15) ─────────────────────────────

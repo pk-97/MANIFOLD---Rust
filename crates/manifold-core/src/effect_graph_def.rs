@@ -497,6 +497,20 @@ pub struct ParamSpecDef {
     /// serialize when false so every existing preset stays byte-identical.
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_trigger_gate: bool,
+    /// Card-bundling group name (D5,
+    /// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2): contiguous runs of
+    /// specs sharing the same `section` render under one collapsible header
+    /// on the card. `None` renders exactly as today (a flat slider). Seeded
+    /// two ways — at expose, from the innermost enclosing group's display
+    /// name; by the glTF importer, per-object knobs get the object's group
+    /// name and shared knobs get `"Camera"`/`"Sun"`/`"Environment"` — never
+    /// derived from graph structure at display time (the manifest is the
+    /// single source, matching `PARAM_STORAGE_BOUNDARIES_DESIGN` D4).
+    /// `serde(default)` keeps every existing preset loading; skipped on
+    /// serialize when absent so a no-section preset stays byte-identical
+    /// (the `is_angle` precedent above).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
 }
 
 /// JSON-wire shape mirroring `manifold_renderer::node_graph::ParamBinding`.
@@ -701,6 +715,7 @@ mod tests {
             invert: false,
             is_angle: false,
             is_trigger_gate: false,
+            section: None,
         }
     }
 
@@ -1017,6 +1032,7 @@ mod tests {
                 invert: false,
                 is_angle: false,
                 is_trigger_gate: false,
+                section: None,
             }],
             bindings: vec![BindingDef {
                 id: "amount".to_string(),

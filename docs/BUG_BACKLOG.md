@@ -44,6 +44,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-100 | **gltf-fresh-import-renders-near-black-for-non-azalea-geometry** | `assemble_import_graph`'s fixed default sun (`pos 5,2,3` / `intensity 3.5`) + material `ambient 0.18` were tuned specifically for the azalea fixture's geometry/orientation; a FRESH import of `cc0__japanese_apricot_prunus_mume.glb` or `lowe.glb` (both held-out fixtures) renders visibly near-black (silhouette only, no legible surface) despite passing the >2% non-black structural threshold. Confirmed pre-existing and unrelated to SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md P2's render_scene param->port swap (`git diff` against P2's base commit shows zero changes to any sun/ambient/intensity/distance default). Found 2026-07-10 visually inspecting P2's held-out-input demo PNGs (a `git diff` audit alone wouldn't have caught this — the render had to actually be looked at, not just structurally validated). Fix shape: scale sun position/intensity to the model's own bbox radius (like camera distance already does) instead of fixed world-space numbers, or lift ambient for fresh imports. LOW (cosmetic default-tuning gap on first import; a performer would immediately notice and just raise Sun Intensity/Reflections on the card — the sliders exist and work). |
 | BUG-098 | **film-grain-drifts-and-reads-as-blocky-pixels** | FilmGrain.json's grain slides toward a corner instead of re-rolling (the time jitter is a smooth linear offset, `time x 39.7/61.3`, which TRANSLATES the hash field - a moving offset is a pan, not a re-roll), and the grain itself reads as hard blocky pixels at 4K (unfiltered square hash cells at noise scale ~1000). Peter 2026-07-10: "drifts to the top left corner and it just looks like blocky pixels not real film grain." Fix shape: derive the offset from frame parity/hash so every frame jumps >= 1 cell (decorrelate, no slide), and soften the grain (finer cells + slight blur, or a Value-noise blend / luma-weighted response) so it reads as emulsion rather than pixel snow. MED (shipped effect looks wrong at its one job; Peter deferred to a dedicated session). |
 | ~~BUG-097~~ FIXED | **ui-snap-render-overlay-pass-uses-wrong-traversal** | FIXED 2026-07-10 by construction (HARNESS_FIDELITY_INVARIANT §4 step 2): the harness's parallel overlay pass was DELETED along with `draw_immediate_passes`, and the overlay assembly now has one owner — `ui_frame::render_main_ui_passes` — which uses `render_sub_region` @ `Depth::OVERLAY`. Not point-fixed. Confirmed reproducible after all: `build_overlays` ALWAYS records `start` after the region root, so EVERY open overlay excluded its root (the "may be latent" caveat was wrong). Permanent proof: `overlay_fidelity_proof::bug097_...` (mod.rs) shows `render_tree_range` leaves the range byte-identical (blank) while `render_sub_region` + the seam draw it. See detail below. |
 | BUG-092 | **gltf-import-caps-render-scene-objects-at-8-stale-mirror** | `gltf_import.rs`'s `MAX_RENDER_SCENE_OBJECTS = 8` truncates an imported glTF to its 8 largest-by-vertex materials (`materials.truncate(...)`, `assemble_render_scene_graph`), dropping the rest with a warning — but this constant is a stale mirror of `node.render_scene`'s OLD object cap. render_scene generalized object count to a soft `OBJECT_SLIDER_MAX = 64` (2026-07-05) and the comment at gltf_import.rs:60 still cites a non-existent render_scene `MAX_OBJECTS`. Effect: importing a model with >8 distinct materials silently loses objects that render_scene could now draw. Fix shape: raise/retire `MAX_RENDER_SCENE_OBJECTS` to track `OBJECT_SLIDER_MAX` (or import unbounded and let the slider clamp), and refresh the comment. Found 2026-07-10 while landing RENDER_SCENE_UNBOUNDED_LIGHTS (unrelated axis — that change uncapped *lights*; this is *objects*). LOW (import-time truncation with a user-visible warning, not a crash; only bites multi-material glTF imports). |
@@ -62,7 +63,7 @@ or human can read it, and it needs no external tool.
 | BUG-073 | **ui-snap-script-drawer-tween-never-ticks** | `--script` harness has no per-frame tick, so a mod armed mid-script renders its drawer at a permanently zero-height clip region (unclickable rows) until the fixture pre-arms the state instead (LOW) |
 | BUG-072 | **audio-mixdown-all-targets-clippy-debt** | Pre-existing `--all-targets` clippy failures in audio_mixdown.rs, unrelated to PARAM_STEP_ACTIONS, two one-line fixes (LOW) |
 | BUG-046 | **low-band-kick-deafness-on-mixes** | Low=kick binding near-deaf on bass-heavy full mixes; HPSS measured DEAD 2026-07-06, successor = ridge-motion sweep event; partial (OR'd floored-novelty) on the shelf (HIGH) |
-| BUG-047 | **setup-panel-overflow** | Audio Setup sections clip past bottom when a source has many input/consumer rows (LOW) |
+| BUG-101 | **setup-spectrogram-scroll-offset** | Docked Audio Setup spectrogram blit doesn't follow the body scroll offset — waterfall draws at pre-scroll position when scrolled (LOW) |
 | BUG-039 | **saw-rotation-wrap** | angle params clamp instead of wrapping; saw LFO can't spin a full rotation (MED, mechanism pinned) |
 | BUG-045 | **gap-ring-down-chase** | tracker follows kernel ring-down down ~2-4 bins in note gaps; notes gate 87.6 vs 90 (LOW) |
 | BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
@@ -98,6 +99,17 @@ or human can read it, and it needs no external tool.
 | BUG-070 | **stepper-and-nonstandard-slider-reset** | ~~decay drawer slider~~ + Clip Trigger drawer sliders now covered by the intrinsic-reset follow-through (@ 3a88f728, reset = required build input); **still open:** Audio Setup gain `[−]value[＋]` steppers + overlay-drag send-fader (not `BitmapSlider` tracks) (LOW) |
 
 ## Open
+
+### BUG-100 (gltf-fresh-import-renders-near-black-for-non-azalea-geometry) — a fresh glTF import of a non-azalea model renders near-black — LOW
+**Status:** OPEN — found 2026-07-10 while capturing SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md P2's held-out-input demo PNGs; looked at (not just structurally checked) `imported_azalea_renders_faithfully_to_png` run with `MESH_SNAP_GLB` pointed at each of the two non-azalea fixtures.
+
+**Symptom:** `cc0__japanese_apricot_prunus_mume.glb` and `lowe.glb`, freshly imported via `assemble_import_graph` (no saved project tuning), both render as a legible silhouette with almost no lit surface detail — the model is there, but effectively black. The SAME `cc0_japanese_apricot_prunus_mume#2` model, loaded from a real saved project (`meshImportTests.manifold`, sun/camera already tuned by whoever imported it there), renders beautifully lit — so the geometry/material path is fine; it's specifically the *fresh-import defaults* that don't suit these two models.
+
+**Root cause:** `assemble_import_graph`'s synthesized sun (`pos_x/y/z = 5, 2, 3`, `intensity = 3.5`) and material `ambient = 0.18` are fixed world-space numbers tuned against the azalea fixture's own scale/orientation (the code comment even says so: "so an imported model is legible under the default rig"). Camera `distance` already scales with the model's own bbox radius (`2.2 * radius`); the sun position/intensity do not, so a model with a different scale or orientation than azalea can end up with the sun aimed almost edge-on or too dim relative to the model's actual size.
+
+**Confirmed unrelated to P2:** `git diff` against P2's base commit (`ab215ab8`) touches zero sun/ambient/intensity/distance default values in `gltf_import.rs` — the render_scene param->port swap only changed *how* the per-object recenter value is stored (a `node.transform_3d` node instead of a `render_scene` param), never *what* value it carries or how lighting is computed.
+
+**Fix shape:** scale the sun's position (and/or intensity) by the model's own `radius`/`distance`, the same way camera framing already does, instead of fixed literals; or raise the default ambient for fresh imports. LOW severity — the Sun Intensity / Reflections card sliders already exist and work, so a performer hitting this notices immediately and can fix it in seconds; it just means the FIRST look at a freshly imported non-azalea model is worse than it needs to be.
 
 ### BUG-098 (film-grain-drifts-and-reads-as-blocky-pixels) — FilmGrain's time jitter pans the hash field instead of re-rolling it, and the grain cells read as blocky pixels
 **Status:** OPEN — found by Peter on the rig 2026-07-10, minutes after the effect landed (`8ac2e211`).
@@ -226,36 +238,6 @@ resolutions). No `#[ignore]`-able regression test yet — `pool_accounting_consi
 gate (`frames_recorded + frames_dropped == frames_submitted_total`, tracked entirely
 Rust-side) is internally consistent and doesn't touch this gap; a future test would need to
 assert `probe(file).pts.len() <= frames_recorded` under intentional backpressure instead.
-
-### BUG-092 (gltf-import-caps-render-scene-objects-at-8-stale-mirror) — glTF import truncates to 8 objects mirroring render_scene's REMOVED object cap — LOW (import-time truncation with a user warning, multi-material models only)
-**Status:** OPEN
-
-Found 2026-07-10 while landing RENDER_SCENE_UNBOUNDED_LIGHTS (an unrelated axis — that change
-uncapped *lights*; this is *objects*). `crates/manifold-renderer/src/node_graph/gltf_import.rs`:
-
-```rust
-const MAX_RENDER_SCENE_OBJECTS: usize = 8;
-// ...
-let dropped_over_cap = materials.len().saturating_sub(MAX_RENDER_SCENE_OBJECTS);
-materials.truncate(MAX_RENDER_SCENE_OBJECTS);
-```
-
-The comment at gltf_import.rs:60 says the cap is "mirrored from `node.render_scene`'s own
-`MAX_OBJECTS`" — but that constant no longer exists. render_scene generalized object count to a
-soft `OBJECT_SLIDER_MAX = 64` on 2026-07-05 (per-object `mesh_n/material_n` ports are generated
-by `format!`, one draw call each, no structural cap). So the import path drops objects that
-render_scene is now perfectly able to draw: a glTF with, say, 12 distinct materials imports as 8
-objects and silently loses 4, with a warning.
-
-**Why LOW:** it's import-time truncation with a user-visible warning, not a crash or a wrong
-render; and it only bites models with more than 8 distinct materials. But it's a real capability
-regression against the generalized renderer, and the stale comment actively misleads.
-
-**Fix shape:** raise `MAX_RENDER_SCENE_OBJECTS` to track `OBJECT_SLIDER_MAX` (64), or drop the
-import-side cap entirely and let render_scene's `objects` slider clamp — importing unbounded and
-clamping at the editor is the cleaner match to the "soft editor bound, no structural cap" model.
-Refresh the gltf_import.rs:60 comment either way. Left open rather than fixed while landing the
-lights change because it's a different axis (objects, not lights) and out of that phase's scope.
 
 ### BUG-090 (audio-mixdown-analysis-only-test-flakes-under-parallel-run) — an exact-float-equality mixdown test failed once under parallel `cargo test`, passed on rerun — LOW (test-only, intermittent, root cause unknown)
 **Status:** OPEN
@@ -955,7 +937,7 @@ see `docs/TIMELINE_UX_AUDIT_2026-07-07.md` item 2.5. **Oracle:** the
 with the fix.
 
 ### BUG-047 (setup-panel-overflow) — Audio Setup panel content clips past the bottom edge when chrome exceeds viewport − SCOPE_H_MIN — LOW (needs ~18 combined input/consumer rows on one source at full height; ~5 extra rows at a 720px window)
-**Status:** OPEN
+**Status:** FIXED 2026-07-10 (AUDIO_SETUP_DOCK P1, `36a96791`) — the docked panel body is now a `ScrollContainer` (GPU scissor), and `scope_h` is a fixed fraction of the panel rect rather than "absorb remaining space", so control rows overflow into the scroll region instead of clamping the spectrogram at `SCOPE_H_MIN` and running sections past the bottom. See `docs/landings/2026-07-10-audio-dock-p1.md`. (Follow-on BUG-101 tracks the spectrogram blit not yet following the scroll offset.)
 
 **Found 2026-07-06 during AUDIO_SENDS_UX P3 review** (orchestrated wave, found by the
 worker's own analysis after an orchestrator-caught clipping defect was root-caused —
@@ -971,6 +953,21 @@ summary row, or wrap the sections in the existing ScrollContainer (see
 don't improvise it inside an unrelated wave. **Oracle:** `audio_setup_panel.rs`
 test `consumers_fit_within_panel_on_first_build_after_configure` guards the fixed
 ordering bug; no executable test for this clamp overflow yet.
+
+### BUG-101 (setup-spectrogram-scroll-offset) — Docked Audio Setup spectrogram blit doesn't follow the body scroll offset — LOW
+**Status:** OPEN
+
+**Found 2026-07-10 during AUDIO_SETUP_DOCK P1** (worker shortcut #3, orchestrator-logged
+at landing). The spectrogram waterfall is a GPU blit positioned by a CPU-side `scope_rect`
+computed at build time in `audio_setup_panel.rs`, and that rect does not add the
+`ScrollContainer` scroll offset. At `scroll_offset == 0` (the default, and everything the
+P1 gate exercises) it's correct; once the docked body is scrolled, the waterfall draws at
+its pre-scroll position while the rows around it move. **Symptom:** spectrogram visually
+detaches from its section header when the panel body is scrolled. **Fix shape:** offset
+`scope_rect` by the scroll delta (or parent the blit rect to the scroll content like the
+rows), and clip it to the scroll viewport. **Oracle:** not reproducible headless (the blit
+doesn't run in the snapshot harness) — needs the live app or a harness that runs the scope
+blit; a scrolled-body render test would guard it.
 
 ### BUG-046 (low-band-kick-deafness-on-mixes) — The canonical Low=kick binding is near-deaf on full mixes with active basslines — HIGH for the streaming/live-trigger use case
 **Status:** OPEN
@@ -1954,11 +1951,53 @@ Same bug class as the migration killed for the primary controls.
 
 ## Fixed
 
+### BUG-099 (design-tokens-raw-color-literal-count-drifted-past-baseline) — `manifold-ui`'s `no_new_raw_color_literals` ratchet test failed (baseline 200, live 201) — FIXED
+**Status:** FIXED @ 54a80448 (SCENE_BUILD P2 landing, orchestrator). Found running P2's full workspace sweep gate; the P2 worker confirmed it pre-existed on the P2 base `ab215ab8` and logged it as unknown-root-cause drift (correctly, from the worker's render/migration scope). The orchestrator, owning the whole SCENE_BUILD wave, identified the actual cause: it was P1's own addition, masked because P1's landing sweep short-circuited on an inherited docs-index failure and wasn't re-run after that fix.
+**Symptom:** `cargo test -p manifold-ui --test design_tokens` failed: `Raw Color32::new( count rose to 201 (baseline 200)`.
+**Root cause:** SCENE_BUILD P1 added `PORT_TRANSFORM_COLOR: Color32 = Color32::new(255, 128, 199, 255)` at `graph_canvas/mod.rs:298` — an 8th port-pin-colour const, in exactly the same defined-once-const style as the seven grandfathered pin-colour consts beside it (Texture2D/3D, Scalar, Array, Camera, Light, Material). One new raw literal → count 201.
+**Fix:** bumped `COLOR_BASELINE` 200→201 in `crates/manifold-ui/tests/design_tokens.rs` with a comment folding the new pin colour into the same pin-colour debt the §15 colour ramp will tokenise together (consistent with how the 2026-07-03 graph-editor pass re-baselined its own additions). Tokenizing one pin colour while its seven siblings stay raw would be inconsistent; all eight are §15-ramp debt.
+
+### BUG-092 (gltf-import-caps-render-scene-objects-at-8-stale-mirror) — glTF import truncates to 8 objects mirroring render_scene's REMOVED object cap — LOW (import-time truncation with a user warning, multi-material models only) — ✅ FIXED (scene-build-p2 session)
+**Status:** FIXED @ scene-build-p2
+
+**Fixed:** landed as a drive-by in SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md P2 (the importer
+session already touching this exact truncation line for D9's cap-fix requirement). Deleted the
+local `MAX_RENDER_SCENE_OBJECTS` constant/duplication entirely; `gltf_import.rs` now imports and
+truncates against `crate::node_graph::primitives::render_scene::OBJECT_SLIDER_MAX` directly (made
+`pub(crate)`), so the two can never drift again. `rg -n "MAX_RENDER_SCENE_OBJECTS" crates/` → 0
+hits.
+
+Found 2026-07-10 while landing RENDER_SCENE_UNBOUNDED_LIGHTS (an unrelated axis — that change
+uncapped *lights*; this is *objects*). `crates/manifold-renderer/src/node_graph/gltf_import.rs`:
+
+```rust
+const MAX_RENDER_SCENE_OBJECTS: usize = 8;
+// ...
+let dropped_over_cap = materials.len().saturating_sub(MAX_RENDER_SCENE_OBJECTS);
+materials.truncate(MAX_RENDER_SCENE_OBJECTS);
+```
+
+The comment at gltf_import.rs:60 says the cap is "mirrored from `node.render_scene`'s own
+`MAX_OBJECTS`" — but that constant no longer exists. render_scene generalized object count to a
+soft `OBJECT_SLIDER_MAX = 64` on 2026-07-05 (per-object `mesh_n/material_n` ports are generated
+by `format!`, one draw call each, no structural cap). So the import path drops objects that
+render_scene is now perfectly able to draw: a glTF with, say, 12 distinct materials imports as 8
+objects and silently loses 4, with a warning.
+
+**Why LOW:** it's import-time truncation with a user-visible warning, not a crash or a wrong
+render; and it only bites models with more than 8 distinct materials. But it's a real capability
+regression against the generalized renderer, and the stale comment actively misleads.
+
+**Fix shape:** raise `MAX_RENDER_SCENE_OBJECTS` to track `OBJECT_SLIDER_MAX` (64), or drop the
+import-side cap entirely and let render_scene's `objects` slider clamp — importing unbounded and
+clamping at the editor is the cleaner match to the "soft editor bound, no structural cap" model.
+Refresh the gltf_import.rs:60 comment either way. Left open rather than fixed while landing the
+lights change because it's a different axis (objects, not lights) and out of that phase's scope.
+
 ### BUG-093 (ui-snapshot-fixtures-unnecessary-cast-clippy-debt) — two redundant `as i32` casts fail feature-clippy — LOW
 **Status:** FIXED @ a56f641a
 
 **Fixed 2026-07-10 (UI_HARNESS_UNIFICATION P0 landing).** Dropped the two `i as i32` / `20 + i as i32` casts in `ui_snapshot/fixtures.rs` (the loop var `i` from `0..20` is already `i32`). Pre-existing debt on the same `cargo clippy -p manifold-app --features ui-snapshot -- -D warnings` gate as BUG-057/067; all three cleared together.
-
 
 ### BUG-071 (ui-snap-dump-stale-parent) — `ui_snapshot::dump.rs` serializes the mint-time parent, not the live reparented one — LOW (dev-tooling only)
 **Status:** FIXED 2026-07-10 (`UI_HARNESS_UNIFICATION_DESIGN.md` P0, D9c) — `dump_tree_ex`

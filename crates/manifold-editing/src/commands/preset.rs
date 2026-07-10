@@ -443,6 +443,7 @@ mod tests {
             invert: false,
             is_angle: false,
             is_trigger_gate: false,
+            section: None,
         });
         p.value = value;
         p.base = value;
@@ -479,6 +480,7 @@ mod tests {
                     invert: false,
                     is_angle: false,
                     is_trigger_gate: false,
+                    section: None,
                 }],
                 bindings: Vec::new(),
                 skip_mode: Default::default(),

@@ -78,6 +78,7 @@ fn add_whole_number_param(inst: &mut PresetInstance, id: &str, max: f32) {
         invert: false,
         is_angle: false,
         is_trigger_gate: false,
+        section: None,
     }));
 }
 

@@ -192,6 +192,13 @@ impl Application {
                 self.needs_rebuild = true;
             }
             self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
+        }
+        // Audio Setup dock resize drag (D1)
+        else if self.ws.ui_root.audio_setup_resize_dragging {
+            if self.ws.ui_root.update_audio_setup_resize(self.cursor_pos.x) {
+                self.needs_rebuild = true;
+            }
+            self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
         } else {
             self.ws.ui_root.pointer_event(
                 self.cursor_pos,
@@ -327,6 +334,21 @@ impl Application {
                                         );
                                     }
                                 }
+                            } else if self.ws.ui_root.is_near_audio_setup_edge(self.cursor_pos)
+                                && !self.ws.ui_root.overlay_contains_point(self.cursor_pos)
+                            {
+                                // Audio Setup dock resize handle (D1) — its LEFT
+                                // edge. Double-click snaps the width back to the
+                                // default; a single press begins the drag.
+                                if self.is_double_click(self.audio_setup_handle_last_click) {
+                                    self.audio_setup_handle_last_click = None;
+                                    self.ws.ui_root.layout.reset_audio_setup_width();
+                                    self.needs_rebuild = true;
+                                } else {
+                                    self.audio_setup_handle_last_click = Some(std::time::Instant::now());
+                                    self.ws.ui_root.begin_audio_setup_resize(self.cursor_pos.x);
+                                    self.ws.ui_root.set_audio_setup_handle_drag();
+                                }
                             } else if self.ws.ui_root.is_near_inspector_edge(self.cursor_pos)
                                 && !self.ws.ui_root.overlay_contains_point(self.cursor_pos)
                             {
@@ -383,6 +405,10 @@ impl Application {
                                 // content snapshot clone of local_project.
                             } else if self.ws.ui_root.inspector_resize_dragging {
                                 self.ws.ui_root.end_inspector_resize();
+                            } else if self.ws.ui_root.audio_setup_resize_dragging {
+                                self.ws.ui_root.end_audio_setup_resize();
+                                self.cursor_manager.set_default();
+                                self.ws.ui_root.set_audio_setup_handle_idle();
                             } else {
                                 self.ws.ui_root.pointer_event(
                                     self.cursor_pos,

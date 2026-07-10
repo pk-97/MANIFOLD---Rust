@@ -4791,6 +4791,7 @@ mod generator_runtime_tests {
             invert: false,
             is_angle: false,
             is_trigger_gate: false,
+            section: None,
         });
         p.value = value;
         p.base = value;

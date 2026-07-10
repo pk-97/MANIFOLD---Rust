@@ -11,6 +11,7 @@ mod composite_resources;
 mod dump;
 mod fixtures;
 mod interact;
+mod readback;
 mod render;
 mod script;
 mod thumbs;
@@ -44,6 +45,35 @@ fn sanitize_scene_name(scene: &str) -> String {
 /// argument slice starting at `"ui-snap"`.
 pub fn run(args: &[String]) {
     let scene = args.get(1).map(String::as_str).unwrap_or("timeline");
+
+    // Standalone read-verb subcommands (`readback.rs`) — no GPU, no scene
+    // render, just reading an already-written PNG or tree-dump JSON. Dispatch
+    // before any of the scene-render machinery below.
+    if scene == "diff" {
+        let (Some(a), Some(b)) = (args.get(2), args.get(3)) else {
+            eprintln!("ui-snap diff: usage: cargo xtask ui-snap diff <a.json> <b.json>");
+            std::process::exit(2);
+        };
+        readback::cmd_diff(a, b);
+        return;
+    }
+    if scene == "probe" {
+        let (Some(png), Some(coords)) = (args.get(2), arg_value(args, "--probe")) else {
+            eprintln!("ui-snap probe: usage: cargo xtask ui-snap probe <file.png> --probe x,y[;x,y...]");
+            std::process::exit(2);
+        };
+        readback::cmd_probe(png, &coords);
+        return;
+    }
+    if scene == "crop" {
+        let (Some(png), Some(rect)) = (args.get(2), arg_value(args, "--crop")) else {
+            eprintln!("ui-snap crop: usage: cargo xtask ui-snap crop <file.png> --crop x,y,w,h");
+            std::process::exit(2);
+        };
+        readback::cmd_crop(png, &rect);
+        return;
+    }
+
     let want_dump = args.iter().any(|a| a == "--dump");
     let want_vs_mockup = args.iter().any(|a| a == "--vs-mockup");
     let want_thumbs = args.iter().any(|a| a == "--thumbs");
@@ -57,6 +87,29 @@ pub fn run(args: &[String]) {
     // seeds state that predates the interaction being tested, not an action
     // being tested itself.
     let scroll_seed: Option<f32> = arg_value(args, "--scroll").and_then(|s| s.parse().ok());
+    // `--probe x,y[;x,y...]` / `--crop x,y,w,h` (`readback.rs`): applied to
+    // the scene's BASE PNG only, right after it's written — see
+    // `render_ui_scene`'s own comment on why (an `--interact` "after" render
+    // or the `all` sweep make "which PNG" ambiguous). Only the UITree-scene
+    // path below honors them; every other dispatch (`--script`, `all`,
+    // `graph`, `editor`, `transform`) rejects them LOUDLY here rather than
+    // silently swallowing a flag the user passed — point at the standalone
+    // form instead.
+    let probe_spec = arg_value(args, "--probe");
+    let crop_spec = arg_value(args, "--crop");
+    if probe_spec.is_some() || crop_spec.is_some() {
+        let unsupported = script_path.is_some()
+            || matches!(scene, "all" | "graph" | "editor" | "transform");
+        if unsupported {
+            let target = if script_path.is_some() { "--script runs" } else { scene };
+            eprintln!(
+                "ui-snap: --probe/--crop don't apply to {target}; use the standalone form on a \
+                 specific file: cargo xtask ui-snap probe <file.png> --probe x,y[;x,y...]  |  \
+                 cargo xtask ui-snap crop <file.png> --crop x,y,w,h"
+            );
+            std::process::exit(2);
+        }
+    }
 
     // `--script <file.json>` (UI_AUTOMATION_DESIGN.md §6, P2): a JSON array of
     // `AutomationAction`s executed in order. Fully owns its own build + gate
@@ -70,8 +123,10 @@ pub fn run(args: &[String]) {
     // change. Skips the per-scene-only flags (mockup, interact); pass those to a
     // single scene when you need them.
     if scene == "all" {
+        // `--probe`/`--crop` were rejected above (exit 2) — which of the five
+        // PNGs this sweep writes would "the" target be is ambiguous by design.
         for s in ["timeline", "states", "inspector"] {
-            render_ui_scene(s, want_dump, false, want_thumbs, None, None);
+            render_ui_scene(s, want_dump, false, want_thumbs, None, None, None, None);
         }
         run_graph_preset("Mirror");
         run_editor_preset("FluidSim2D", want_dump);
@@ -107,7 +162,16 @@ pub fn run(args: &[String]) {
         return;
     }
 
-    render_ui_scene(scene, want_dump, want_vs_mockup, want_thumbs, interact, scroll_seed);
+    render_ui_scene(
+        scene,
+        want_dump,
+        want_vs_mockup,
+        want_thumbs,
+        interact,
+        scroll_seed,
+        probe_spec.as_deref(),
+        crop_spec.as_deref(),
+    );
 }
 
 /// P0.3 (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): `hairlineclips` needs genuine far
@@ -123,6 +187,7 @@ fn zoom_ppb_for_scene(scene: &str) -> f32 {
 /// Build + render one UITree scene (`timeline` / `states` / `inspector`) through
 /// the real core→UI translation path, plus an optional `--interact` "after" pass
 /// and mockup composite. Unknown scene name exits 2.
+#[allow(clippy::too_many_arguments)]
 fn render_ui_scene(
     scene: &str,
     want_dump: bool,
@@ -130,6 +195,8 @@ fn render_ui_scene(
     want_thumbs: bool,
     interact: Option<String>,
     scroll_seed: Option<f32>,
+    probe_spec: Option<&str>,
+    crop_spec: Option<&str>,
 ) {
     let Some(mut data) = fixtures::build(scene) else {
         eprintln!(
@@ -153,12 +220,15 @@ fn render_ui_scene(
     // Build the UI through the REAL core→UI translation path, render the base.
     let mut ui = UIRoot::new();
     ui.resize(LOGICAL_W, LOGICAL_H);
-    if scene == "inspector" || scene == "bug060" || scene == "paramsteps" {
+    if scene == "inspector" || scene == "bug060" || scene == "paramsteps" || scene == "bug047" {
         // The inspector IS the subject: keep it at a generous width and give the
         // timeline a normal split so the selected layer's cards have room.
         // `bug060` (UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md P1 gate scene) and
         // `paramsteps` (PARAM_STEP_ACTIONS P3) get the same treatment — both are
-        // scrolled/inspector-subject scenes, not timeline ones.
+        // scrolled/inspector-subject scenes, not timeline ones. `bug047` is the
+        // AUDIO_SETUP_DOCK D1 gate: the inspector must stay visible on the right
+        // so the docked column (built LEFT of it) reads as pushing content, not
+        // replacing the inspector.
         ui.layout.inspector_width = 600.0;
         ui.layout.timeline_split_ratio = 0.6;
     } else {
@@ -203,6 +273,21 @@ fn render_ui_scene(
         want_dump,
         want_thumbs,
     );
+
+    // `--probe`/`--crop` (`readback.rs`): applied to the BASE PNG only, right
+    // after it's written — an `--interact` "after" render below would make
+    // "which PNG" ambiguous, so this is the one well-defined attachment
+    // point. Standalone `ui-snap probe`/`ui-snap crop` cover any other PNG
+    // (including a `.after` one).
+    if probe_spec.is_some() || crop_spec.is_some() {
+        let base_png = dir.join(format!("{scene}.png"));
+        if let Some(spec) = probe_spec {
+            readback::probe_png(&base_png, spec);
+        }
+        if let Some(spec) = crop_spec {
+            readback::crop_png(&base_png, spec);
+        }
+    }
 
     // Optional: render the HTML mockup and composite app | mockup side by side.
     if want_vs_mockup {
@@ -1212,16 +1297,18 @@ mod overlay_fidelity_proof {
 
         let mut ui = UIRoot::new();
         ui.resize(super::LOGICAL_W, super::LOGICAL_H);
-        // Open the Audio Setup panel (an `OverlayId::AudioSetup`, Modeless —
-        // no full-screen scrim, so its range is pure panel content: the sharp
-        // BUG-097 case) BEFORE the build, so `build_overlays` records its
-        // root-excluding range this frame.
-        ui.audio_setup_panel.open();
+        // Open the Perf HUD (an `OverlayId::PerfHud`, still in the overlay
+        // `Z_ORDER`) BEFORE the build, so `build_overlays` records its
+        // root-excluding range this frame. (Audio Setup was the original
+        // specimen but became a docked column, not an overlay, in
+        // AUDIO_SETUP_DOCK P1 — any Z_ORDER overlay proves the same mechanism,
+        // since build_overlays excludes the region root for ALL of them.)
+        ui.perf_hud.toggle();
         sync_build(&mut ui, &data, 24.0);
 
         assert!(
             !ui.overlay_draw.is_empty(),
-            "opening Audio Setup must record an overlay range (build_overlays)"
+            "opening the Perf HUD must record an overlay range (build_overlays)"
         );
         let (start, end) = ui.overlay_draw[0];
         assert!(end > start, "overlay range must be non-empty ({start}..{end})");
