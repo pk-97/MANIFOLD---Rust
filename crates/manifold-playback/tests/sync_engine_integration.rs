@@ -229,3 +229,84 @@ fn custom_loop_boundary_restarts_clip_at_loop_in() {
         "the loop restart seeks exactly to in_point (0.0 for this clip)"
     );
 }
+
+/// F4: `sync_clips_to_time`'s `start_clip` call must stamp every downstream
+/// clip-start timing gate (`recently_started_times`, and — via the same
+/// `realtime_now` parameter — the pending-pause deadline and
+/// `mark_compositor_dirty`) with the real engine clock (`last_realtime_now`),
+/// never a zero epoch. A zero epoch is silently "already expired" the moment
+/// the engine has been running longer than the gate window, which defeats
+/// the compositor-exclusion gate exactly when it matters: a clip launched
+/// well into a set, not one launched at t=0.
+///
+/// Drives the real `PlaybackEngine` through `tick()` and `play()` — never a
+/// fork of `sync_clips_to_time`'s logic.
+#[test]
+fn clip_start_anchors_recently_started_gate_on_real_clock_not_zero_epoch() {
+    let project = single_video_clip_project(120.0);
+    // Capture the id now — TimelineClip::default() auto-generates it, and
+    // this is the exact clip the engine will start.
+    let clip_id = project.timeline.layers[0].clips[0].id.clone();
+
+    let mut engine = create_engine();
+    engine.initialize(project);
+
+    let dt = 1.0 / 60.0;
+    let mut realtime = 0.0_f64;
+    let mut frame = 0_u64;
+
+    // Advance the engine's wall clock well past the 0.1s gate window
+    // (§11 RECENTLY_STARTED_TIME) while STOPPED. `tick()` stamps
+    // `last_realtime_now` unconditionally at its top regardless of playback
+    // state (engine.rs `last_realtime_now = ctx.realtime_now.0`), so by the
+    // time `play()` is called below, the clock already reads ~2s — this is
+    // the "engine has been running a while before this clip launches" case
+    // the zero-epoch bug breaks. No clip is active yet (stopped, and this
+    // clip's layer has no other clips), so this loop is inert apart from
+    // advancing the clock.
+    for _ in 0..120 {
+        tick(&mut engine, &mut realtime, &mut frame, dt);
+    }
+    assert!(
+        realtime > 1.9,
+        "test setup: the engine wall clock must be well past the 0.1s gate \
+         window before the clip starts, or this test can't distinguish the \
+         fix from the bug"
+    );
+
+    // `play()` calls `sync_clips_to_time()` directly, not through `tick()` —
+    // this is exactly the call path the bug lived on. (Engine starts
+    // Stopped from `initialize()`; `play()` itself transitions state — don't
+    // pre-set it, or `play()`'s own re-entrancy guard would no-op it.)
+    let clock_at_play = engine.last_realtime_now();
+    engine.play();
+
+    let stamped = engine
+        .recently_started_time(&clip_id)
+        .expect("start_clip must stamp recently_started_times when the clip starts");
+    assert_eq!(
+        stamped, clock_at_play,
+        "recently_started_times must be stamped with the real engine clock \
+         (last_realtime_now), not a zero epoch"
+    );
+    assert!(
+        stamped > 1.0,
+        "sanity: the engine clock must actually be non-zero here — a test \
+         that let this drift to 0.0 would pass even under the old bug"
+    );
+
+    // The compositor-exclusion gate must actually engage on this same tick:
+    // filter_ready_clips must exclude the just-started clip for its first
+    // 0.1s settle window. This is the assertion that WOULD HAVE FAILED under
+    // the old `Seconds::ZERO` epoch: `recently_started_times` would read
+    // 0.0, so `last_realtime_now (~2s) - 0.0 = ~2s`, which is nowhere near
+    // `< 0.1` — the clip would not have been excluded, a flash on its first
+    // frame.
+    let ready = engine.filter_ready_clips(Seconds(dt));
+    assert!(
+        !ready.iter().any(|r| r.clip_id == clip_id),
+        "the just-started clip must be excluded from filter_ready_clips \
+         during its first-frame settle window — this is the gate a zero \
+         epoch silently defeats"
+    );
+}
