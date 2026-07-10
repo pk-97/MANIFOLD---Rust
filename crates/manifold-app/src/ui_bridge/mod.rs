@@ -168,7 +168,6 @@ pub fn dispatch(
     audio_action_snapshot: &mut Option<manifold_core::audio_mod::TriggerAction>,
     audio_crossover_snapshot: &mut Option<(f32, f32)>,
     audio_send_gain_drag_snapshot: &mut Option<f32>,
-    audio_send_sensitivity_drag_snapshot: &mut Option<Vec<manifold_core::audio_trigger::TriggerRoute>>,
     user_prefs: &mut UserPrefs,
     active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
     // `Some(GraphTarget)` when the graph editor dispatches one of its left-lane
@@ -204,7 +203,6 @@ pub fn dispatch(
                 audio_action_snapshot,
                 audio_crossover_snapshot,
                 audio_send_gain_drag_snapshot,
-                audio_send_sensitivity_drag_snapshot,
                 user_prefs,
                 active_inspector_drag,
                 editor_target,
@@ -225,7 +223,6 @@ pub fn dispatch(
                 audio_action_snapshot,
                 audio_crossover_snapshot,
                 audio_send_gain_drag_snapshot,
-                audio_send_sensitivity_drag_snapshot,
                 user_prefs,
                 active_inspector_drag,
                 editor_target,
@@ -246,7 +243,6 @@ pub fn dispatch(
                 audio_action_snapshot,
                 audio_crossover_snapshot,
                 audio_send_gain_drag_snapshot,
-                audio_send_sensitivity_drag_snapshot,
                 user_prefs,
                 active_inspector_drag,
                 editor_target,
@@ -409,14 +405,6 @@ pub fn dispatch(
         | PanelAction::AudioSendRoutingsClicked(..)
         | PanelAction::AudioSetupDeviceClicked
         | PanelAction::AudioSendChannelClicked(..)
-        | PanelAction::AudioTriggerToggled(..)
-        | PanelAction::AudioTriggerSensitivityStep(..)
-        | PanelAction::AudioSendSensitivityDragBegin(..)
-        | PanelAction::AudioSendSensitivityDragChanged(..)
-        | PanelAction::AudioSendSensitivityDragCommit(..)
-        | PanelAction::AudioTriggerLengthStep(..)
-        | PanelAction::AudioTriggerLayerClicked(..)
-        | PanelAction::AudioTriggerSetLayer(..)
         | PanelAction::TrimChanged(..)
         | PanelAction::TargetChanged(..)
         | PanelAction::TrimSnapshot(..)
@@ -493,7 +481,6 @@ pub fn dispatch(
             audio_action_snapshot,
             audio_crossover_snapshot,
             audio_send_gain_drag_snapshot,
-            audio_send_sensitivity_drag_snapshot,
             active_inspector_drag,
             editor_target,
         ),

@@ -30,7 +30,7 @@ use crate::layout::ScreenLayout;
 use crate::node::{Color32, Rect};
 use crate::tree::UITree;
 use crate::types::{
-    AbletonMacroAddress, AudioBand, AudioDeviceRef, AudioFeature, MacroCurve, MidiTriggerMode,
+    AbletonMacroAddress, AudioDeviceRef, AudioFeature, MacroCurve, MidiTriggerMode,
     PresetTypeId, TonemapCurve,
 };
 use manifold_foundation::{AudioSendId, Beats, ClipId, LayerId, ParamId};
@@ -521,37 +521,13 @@ pub enum PanelAction {
     AudioCrossoverChanged(BandDivider, f32),
     /// Commit the band-divider drag as one undo step.
     AudioCrossoverCommit,
-    /// Live audio triggers (Audio Setup modal): a send's transient on a band
-    /// fires one-shot clips on a layer. The band identifies the route within the
-    /// selected send.
-    /// Toggle a band's trigger route on/off (creates it if absent).
-    AudioTriggerToggled(AudioSendId, AudioBand),
-    /// Step a band route's sensitivity by a delta (the row's −/＋ buttons). The
-    /// host reads the current value, applies + clamps, and commits.
-    AudioTriggerSensitivityStep(AudioSendId, AudioBand, f32),
-    /// Begin dragging a band route's sensitivity value label (D7) — snapshot
-    /// the selected send's pre-drag trigger routes so the commit records one
-    /// undo step. Same pattern as `AudioCrossoverDragBegin`, per-send-and-band.
-    AudioSendSensitivityDragBegin(AudioSendId, AudioBand),
-    /// Live sensitivity change while dragging the value label: the absolute
-    /// candidate fraction (1 px = 0.5%, computed by the panel from pointer
-    /// movement; the host clamps to 0..1). Applied immediately via
-    /// `MutateProjectLive` — no per-frame undo.
-    AudioSendSensitivityDragChanged(AudioSendId, AudioBand, f32),
-    /// Commit the sensitivity drag as one undo step
-    /// (`SetAudioSendTriggersCommand`).
-    AudioSendSensitivityDragCommit(AudioSendId, AudioBand),
-    /// Scale a band route's one-shot length by a factor (the row's −/＋ buttons,
-    /// musical halve/double). The host reads the current length, applies + clamps.
-    AudioTriggerLengthStep(AudioSendId, AudioBand, f32),
-    /// Open a band route's target-layer dropdown (anchored to the clicked trigger).
-    AudioTriggerLayerClicked(AudioSendId, AudioBand),
-    /// Set a band route's target layer (`None` = auto-route by send name).
-    AudioTriggerSetLayer(
-        AudioSendId,
-        AudioBand,
-        Option<LayerId>,
-    ),
+    // The Audio Setup Triggers matrix (send-owned band routes) is gone (P3,
+    // AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN D2): `AudioTriggerToggled`,
+    // `AudioTriggerSensitivityStep`, `AudioSendSensitivityDragBegin/Changed/Commit`,
+    // `AudioTriggerLengthStep`, `AudioTriggerLayerClicked`, `AudioTriggerSetLayer`
+    // all deleted. Clip triggers are authored on the layer only
+    // (`LayerClipTrigger`, P2); the Consumers rows below are the panel's sole
+    // remaining (navigational) trigger display.
     /// A modulator output sub-range handle moved during a drag. `TrimKind`
     /// selects which modulator (driver / Ableton / audio) — the three formerly
     /// parallel `*TrimChanged` variants are one path now.

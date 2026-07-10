@@ -20,7 +20,7 @@ use manifold_editing::commands::audio_mod::{
 use manifold_editing::commands::audio_setup::{
     AddAudioSendCommand, RemoveAudioSendCommand, RenameAudioSendCommand, SetAudioCrossoversCommand,
     SetAudioInputDeviceCommand, SetAudioSendChannelsCommand, SetAudioSendFloorCommand,
-    SetAudioSendGainCommand, SetAudioSendTriggersCommand,
+    SetAudioSendGainCommand,
 };
 use manifold_editing::commands::effect_target::{DriverTarget, EffectTarget};
 use manifold_editing::commands::effects::{
@@ -379,7 +379,6 @@ pub(super) fn dispatch_inspector(
     audio_action_snapshot: &mut Option<manifold_core::audio_mod::TriggerAction>,
     audio_crossover_snapshot: &mut Option<(f32, f32)>,
     audio_send_gain_drag_snapshot: &mut Option<f32>,
-    audio_send_sensitivity_drag_snapshot: &mut Option<Vec<manifold_core::audio_trigger::TriggerRoute>>,
     active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
     editor_target: Option<&manifold_core::GraphTarget>,
 ) -> DispatchResult {
@@ -1730,116 +1729,11 @@ pub(super) fn dispatch_inspector(
                 Box::new(SetAudioSendFloorCommand::new(id.clone(), old, new)),
             )
         }
-        PanelAction::AudioTriggerToggled(id, band) => {
-            let Some(send) = project.audio_setup.find_send(id) else {
-                return DispatchResult::structural();
-            };
-            let old = send.triggers.clone();
-            let new = send.triggers_with_route(crate::ui_translate::audio_band_to_core(*band), |r| r.enabled = !r.enabled);
-            audio_setup_command(
-                project,
-                content_tx,
-                Box::new(SetAudioSendTriggersCommand::new(id.clone(), old, new)),
-            )
-        }
-        PanelAction::AudioTriggerSensitivityStep(id, band, delta) => {
-            let Some(send) = project.audio_setup.find_send(id) else {
-                return DispatchResult::structural();
-            };
-            let old = send.triggers.clone();
-            let new = send
-                .triggers_with_route(crate::ui_translate::audio_band_to_core(*band), |r| r.sensitivity = (r.sensitivity + *delta).clamp(0.0, 1.0));
-            audio_setup_command(
-                project,
-                content_tx,
-                Box::new(SetAudioSendTriggersCommand::new(id.clone(), old, new)),
-            )
-        }
-        PanelAction::AudioSendSensitivityDragBegin(id, _band) => {
-            // Snapshot the selected send's pre-drag trigger routes (whole
-            // vec — `SetAudioSendTriggersCommand`'s unit) so the commit
-            // records one undo step (D7).
-            *audio_send_sensitivity_drag_snapshot =
-                project.audio_setup.find_send(id).map(|s| s.triggers.clone());
-            DispatchResult::handled()
-        }
-        PanelAction::AudioSendSensitivityDragChanged(id, band, frac) => {
-            // Live edit (no per-frame undo): clamp 0..1, upsert the dragged
-            // band's route, apply to the local project and the content thread
-            // — the trigger evaluator reads sensitivity live, no capture
-            // restart.
-            let Some(send) = project.audio_setup.find_send(id) else {
-                return DispatchResult::handled();
-            };
-            let clamped = frac.clamp(0.0, 1.0);
-            let new = send.triggers_with_route(crate::ui_translate::audio_band_to_core(*band), |r| {
-                r.sensitivity = clamped;
-            });
-            if let Some(s) = project.audio_setup.find_send_mut(id) {
-                s.triggers = new.clone();
-            }
-            let id = id.clone();
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::MutateProjectLive(Box::new(move |p| {
-                    if let Some(s) = p.audio_setup.find_send_mut(&id) {
-                        s.triggers = new.clone();
-                    }
-                })),
-            );
-            DispatchResult::handled()
-        }
-        PanelAction::AudioSendSensitivityDragCommit(id, _band) => {
-            // One undo step: snapshot (old routes) → current routes (new).
-            if let Some(old) = audio_send_sensitivity_drag_snapshot.take() {
-                let new = project
-                    .audio_setup
-                    .find_send(id)
-                    .map(|s| s.triggers.clone())
-                    .unwrap_or_else(|| old.clone());
-                if new != old {
-                    return audio_setup_command(
-                        project,
-                        content_tx,
-                        Box::new(SetAudioSendTriggersCommand::new(id.clone(), old, new)),
-                    );
-                }
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::AudioTriggerLengthStep(id, band, factor) => {
-            let Some(send) = project.audio_setup.find_send(id) else {
-                return DispatchResult::structural();
-            };
-            let old = send.triggers.clone();
-            // Multiplicative (halve/double), clamped to a musical 1/4..16 beat range.
-            let new = send.triggers_with_route(crate::ui_translate::audio_band_to_core(*band), |r| {
-                let beats = (r.one_shot_beats.as_f32() * *factor).clamp(0.25, 16.0);
-                r.one_shot_beats = manifold_core::units::Beats::from_f32(beats);
-            });
-            audio_setup_command(
-                project,
-                content_tx,
-                Box::new(SetAudioSendTriggersCommand::new(id.clone(), old, new)),
-            )
-        }
-        PanelAction::AudioTriggerSetLayer(id, band, layer) => {
-            let Some(send) = project.audio_setup.find_send(id) else {
-                return DispatchResult::structural();
-            };
-            let old = send.triggers.clone();
-            let new = send.triggers_with_route(crate::ui_translate::audio_band_to_core(*band), |r| r.target_layer = layer.clone());
-            audio_setup_command(
-                project,
-                content_tx,
-                Box::new(SetAudioSendTriggersCommand::new(id.clone(), old, new)),
-            )
-        }
-        PanelAction::AudioTriggerLayerClicked(_, _) => {
-            // The layer dropdown is opened by UIRoot::try_open_dropdown before
-            // dispatch; reaching here (e.g. no candidate layers) is a no-op.
-            DispatchResult::structural()
-        }
+        // The Audio Setup Triggers matrix's dispatch arms (AudioTriggerToggled,
+        // AudioTriggerSensitivityStep, AudioSendSensitivityDragBegin/Changed/
+        // Commit, AudioTriggerLengthStep, AudioTriggerSetLayer,
+        // AudioTriggerLayerClicked) are deleted with the matrix (P3, D2). Clip
+        // triggers are authored on the layer only (`LayerClipTrigger`, P2).
         PanelAction::AudioSendAddLayerClicked(_) => {
             // The "+ Layer" dropdown is opened by UIRoot::try_open_dropdown
             // before dispatch; reaching here (e.g. no candidate layers) is a

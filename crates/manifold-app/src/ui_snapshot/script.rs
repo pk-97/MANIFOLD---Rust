@@ -293,7 +293,6 @@ struct Runner {
     audio_action_snapshot: Option<manifold_core::audio_mod::TriggerAction>,
     audio_crossover_snapshot: Option<(f32, f32)>,
     audio_send_gain_drag_snapshot: Option<f32>,
-    audio_send_sensitivity_drag_snapshot: Option<Vec<manifold_core::audio_trigger::TriggerRoute>>,
     active_inspector_drag: Option<crate::app::ActiveInspectorDrag>,
     // D9a: every composited frame a `Step` action advanced, in order —
     // assembled into one contact-sheet PNG at the end of `run` when
@@ -329,7 +328,6 @@ impl Runner {
             audio_action_snapshot: None,
             audio_crossover_snapshot: None,
             audio_send_gain_drag_snapshot: None,
-            audio_send_sensitivity_drag_snapshot: None,
             active_inspector_drag: None,
             filmstrip: Vec::new(),
             last_gesture_points: Vec::new(),
@@ -703,7 +701,6 @@ impl Runner {
                 &mut self.audio_action_snapshot,
                 &mut self.audio_crossover_snapshot,
                 &mut self.audio_send_gain_drag_snapshot,
-                &mut self.audio_send_sensitivity_drag_snapshot,
                 &mut self.user_prefs,
                 &mut self.active_inspector_drag,
                 None,

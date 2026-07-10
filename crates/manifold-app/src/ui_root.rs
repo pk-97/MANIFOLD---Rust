@@ -282,10 +282,8 @@ pub struct UIRoot {
     /// target-layer dropdowns. Refreshed by `state_sync` when an audio clip is
     /// selected; read when an instrument's layer dropdown opens.
     clip_detect_layers: Vec<(manifold_core::LayerId, String)>,
-    /// Candidate routing layers (id + name) for the Audio Setup modal's live
-    /// trigger layer dropdowns. Refreshed by `state_sync` while the modal is
-    /// open; read when a trigger row's layer dropdown opens.
-    audio_trigger_layers: Vec<(manifold_core::LayerId, String)>,
+    // `audio_trigger_layers` (the matrix's target-layer dropdown cache) is
+    // deleted with the matrix (P3, D2).
     /// Every `LayerType::Audio` layer (id + name), for the Audio Setup modal's
     /// Inputs section "+ Layer" dropdown — candidates are these minus
     /// whichever already feed the clicked send. Refreshed by `state_sync`
@@ -481,7 +479,6 @@ impl UIRoot {
             audio_setup_devices: Vec::new(),
             audio_setup_apps: Vec::new(),
             clip_detect_layers: Vec::new(),
-            audio_trigger_layers: Vec::new(),
             audio_layers: Vec::new(),
             inspector_resize_dragging: false,
             inspector_drag_start_x: 0.0,
@@ -1516,14 +1513,8 @@ impl UIRoot {
         self.clip_detect_layers = layers;
     }
 
-    /// Cache the candidate target layers for the Audio Setup modal's live
-    /// trigger layer dropdowns. Set by `state_sync` while the modal is open.
-    pub fn set_audio_trigger_layers(
-        &mut self,
-        layers: Vec<(manifold_core::LayerId, String)>,
-    ) {
-        self.audio_trigger_layers = layers;
-    }
+    // `set_audio_trigger_layers` (the matrix's target-layer dropdown cache
+    // setter) is deleted with the matrix (P3, D2).
 
     /// Cache every `LayerType::Audio` layer for the Audio Setup modal's Inputs
     /// section "+ Layer" dropdown. Set by `state_sync` while the modal is open.
@@ -2028,21 +2019,9 @@ impl UIRoot {
                 self.open_dropdown_typed(items, trigger);
                 true
             }
-            PanelAction::AudioTriggerLayerClicked(send_id, band) => {
-                // "Auto" (route by send name) first, then every candidate layer
-                // cached by state_sync — each carries its target layer.
-                let mut items = Vec::with_capacity(self.audio_trigger_layers.len() + 1);
-                items.push(DropdownItem::new("Auto").with_action(
-                    PanelAction::AudioTriggerSetLayer(send_id.clone(), *band, None),
-                ));
-                for (id, name) in &self.audio_trigger_layers {
-                    items.push(DropdownItem::new(name).with_action(
-                        PanelAction::AudioTriggerSetLayer(send_id.clone(), *band, Some(id.clone())),
-                    ));
-                }
-                self.open_dropdown_typed(items, trigger);
-                true
-            }
+            // The Audio Setup Triggers matrix's target-layer dropdown
+            // (`AudioTriggerLayerClicked` → `AudioTriggerSetLayer`) is deleted
+            // with the matrix (P3, D2).
             PanelAction::AudioSendClicked(idx) => {
                 // "No source" first, then every named send from Audio Setup so the
                 // layer dropdown and the setup panel can never disagree — each
@@ -3063,16 +3042,10 @@ impl UIRoot {
         self.audio_setup_panel.update_scope_lane_labels(&mut self.tree);
     }
 
-    /// Drive the per-row trigger meters + firing flash from the selected send's
-    /// live per-band transient levels `[whole, low, mid, high]` (0..1), or rest
-    /// them when `None`. In place, every frame — see `update_audio_band_meters`.
-    pub fn update_audio_trigger_levels(&mut self, levels: Option<[f32; 4]>) {
-        if !self.audio_setup_panel.is_open() {
-            return;
-        }
-        self.audio_setup_panel
-            .update_trigger_levels(&mut self.tree, levels);
-    }
+    // `update_audio_trigger_levels` (the matrix's per-row trigger meter
+    // driver) is deleted with the matrix (P3, D2). The D6 fire meter that
+    // replaces it lives in the audio-mod drawer — deferred to a follow-up
+    // phase (see this phase's landing notes).
 }
 
 /// The `AudioSetSendChannels` action a channel row fires (2b.11): a stereo send
