@@ -1,6 +1,6 @@
 # Audio Setup Dock & Trigger Unification — the panel becomes a workspace column; clip triggers become layer-owned audio mods
 
-**Status:** IN PROGRESS · P1 SHIPPED 2026-07-10 (dock column + overlay-path deletion + scroll, `36a96791`; closes BUG-047) · P2 SHIPPED 2026-07-10 (`LayerClipTrigger` model + load migration + evaluator + analysis-gating arm, `feat/audio-dock-p2` @ `e4aa01bf`; round-trip + real-fixture gated; L1 model phase — see `docs/landings/2026-07-10-audio-dock-p2.md`) · P3 SPLIT: P3a SHIPPED 2026-07-10 (Triggers-matrix deleted + shared-drawer Length-row capability, `47f2a112`; Consumers re-pointed to layers — see `docs/landings/2026-07-10-audio-dock-p3a.md`) · P3b SHIPPED 2026-07-10 (inspector AUDIO TRIGGERS authoring section — top of layer inspector, default-collapsed; one-builder drawer w/ Length row, no Mode row; `feat/audio-dock-p3b` @ `5c4fbcca`; L3 add-trigger flow — see `docs/landings/2026-07-10-audio-dock-p3b.md`) · P3c SHIPPED 2026-07-10 (fire meter/D6 on every fire-mode drawer — content→UI `FireMeterCapture`, reads `condition()`; BUG-082 FIXED; `feat/audio-dock-p3c` @ `12fbc37d`; L2 render + isolated perf measure, live render-trace owed as VD-025 — see `docs/landings/2026-07-10-audio-dock-p3c.md`) · **P4 remains** (readability/hygiene D7/D8 + wave-close sweep) · design 2026-07-09 · Fable
+**Status:** ✅ **WAVE COMPLETE 2026-07-10** — P1–P4 all shipped on `main`. P1 dock column + overlay deletion (`36a96791`, closes BUG-047) · P2 `LayerClipTrigger` model + migration + evaluator (`e4aa01bf`) · P3a Triggers-matrix deletion (`47f2a112`) · P3b inspector AUDIO TRIGGERS authoring section, default-collapsed (`5c4fbcca`) · P3c fire meter/D6, BUG-082 FIXED (`12fbc37d`) · P4 readability + hygiene, BUG-070 FIXED (`a649f62a`). Per-phase detail in `docs/landings/2026-07-10-audio-dock-p{1,2,3a,3b,3c,4}.md`. Owns closed: BUG-047, BUG-070, BUG-082. Open debt: VD-024 (P3b section unit tests), VD-025 (live render-trace). **Owed to Peter (L4 feel-pass):** narrow-width dock, dock-width persistence, live fire-meter crossing, trigger-row wording, gain reset-gesture confirmation (shipped as right-click). **Deferred:** Cap+N/St/Mo chip tooltips (needs a retained-mode tooltip primitive — likely `UI_WIDGET_UNIFICATION_DESIGN`), level-crossing detector, bulk trigger-tune view. · design 2026-07-09 · Fable
 **Prerequisites:** none (runs against shipped AUDIO_SENDS_UX P1–P4 and LIVE_AUDIO_TRIGGERS §9 U-P1/U-P2 code)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -438,3 +438,8 @@ Every §2/§3 commitment appears above or in Deferred.
 - **In-app load-notice surface for dropped/unresolvable migrated routes** — owned by
   BUG-079's fix, not this design.
 - **Panel visual redesign beyond D7/D8** — UI_SOTA_UPGRADE_PLAN's territory.
+- **Cap+N/St/Mo chip hover tooltips** (D8, escalated in P4): `manifold-ui` has no retained-mode
+  tooltip primitive (only an immediate-mode one bespoke to `graph_canvas`), and building one
+  crosses this design's own "no new widget kinds" audit + needs per-frame cursor plumbing.
+  Revive when a shared tooltip primitive exists — `UI_WIDGET_UNIFICATION_DESIGN` (landed
+  2026-07-10) is the likely home; this is a consumer, not the builder.
