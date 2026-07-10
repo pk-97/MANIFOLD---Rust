@@ -167,9 +167,9 @@ fn wait_for_receiving(
 
 /// The core F1 proof: a synthetic SMPTE timecode packet sent over a real UDP
 /// socket to a bound, listening `OscReceiver` reaches `on_timecode_received`
-/// and drives the controller — is_receiving_timecode flips true, and (paused
-/// + drift beyond seek_threshold) the arbiter target receives a seek to the
-/// decoded timecode.
+/// and drives the controller — is_receiving_timecode flips true, and when
+/// paused with drift beyond seek_threshold the arbiter target receives a
+/// seek to the decoded timecode.
 #[test]
 fn osc_timecode_packet_drives_seek_when_paused() {
     let mut receiver = OscReceiver::new();
