@@ -486,6 +486,15 @@ fn run_gltf_editor(want_dump: bool) {
     let gv_snap = crate::ui_translate::graph_snapshot_to_ui(&rg_snap);
 
     if std::env::var_os("GLTFEDITOR_DEBUG").is_some() {
+        eprintln!(
+            "canonical def bindings: {}  |  resolved outer_routings: {}",
+            view.canonical_def
+                .preset_metadata
+                .as_ref()
+                .map(|m| m.bindings.len())
+                .unwrap_or(0),
+            gv_snap.outer_routings.len()
+        );
         eprintln!("outer_routings: {:#?}", gv_snap.outer_routings);
         fn dump(n: &manifold_ui::graph_view::NodeSnapshot, depth: usize) {
             let pad = "  ".repeat(depth);

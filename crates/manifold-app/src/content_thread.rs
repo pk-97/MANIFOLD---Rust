@@ -1373,11 +1373,19 @@ impl ContentThread {
                     if let Some(meta) = d.preset_metadata.as_ref() {
                         use manifold_core::effect_graph_def::BindingTarget;
                         use manifold_renderer::node_graph::{OuterParamRouting, OuterParamSource};
-                        let handle_by_id: std::collections::HashMap<&str, &str> = d
-                            .nodes
-                            .iter()
-                            .filter_map(|n| n.handle.as_deref().map(|h| (n.node_id.as_str(), h)))
-                            .collect();
+                        // Recurse into group bodies (BUG-103): a binding whose
+                        // target lives inside a group — the glTF importer's
+                        // per-object knobs on `mat_k` nodes inside each object's
+                        // box — is dropped by a top-level-only handle map, so a
+                        // diverged imported scene loses its group-face rows the
+                        // same way the pristine path did. Shared helper so both
+                        // arms resolve handles identically.
+                        let mut handle_by_id: std::collections::HashMap<&str, &str> =
+                            std::collections::HashMap::new();
+                        manifold_renderer::node_graph::collect_node_handles(
+                            &d.nodes,
+                            &mut handle_by_id,
+                        );
                         snap.outer_routings = meta
                             .bindings
                             .iter()
