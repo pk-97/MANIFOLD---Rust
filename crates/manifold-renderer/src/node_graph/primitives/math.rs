@@ -27,12 +27,13 @@ pub const MATH_OPS: &[&str] = &[
     "Ceil",       // 11 — unary, b ignored
     "Modulo",     // 12 — a % b, 0-clamp on |b| < 1e-9
     "Exp2",       // 13 — unary, b ignored; 2^a (EV stops / octaves → linear)
+    "Sqrt",       // 14 — unary, b ignored; sqrt(max(a, 0))
 ];
 
 crate::primitive! {
     name: Math,
     type_id: "node.math",
-    purpose: "Scalar arithmetic. Combines two control signals into one with the selected op (add / subtract / multiply / divide / min / max / atan2 / sin / cos / reciprocal / floor / ceil / modulo). Composition glue for control wires. `b` is unused for unary ops (sin, cos, reciprocal, floor, ceil). Both `a` and `b` are port-shadows-param: when an input wire isn't connected the inline param value is used, so constants can be set on the node without dragging a Value node in.",
+    purpose: "Scalar arithmetic. Combines two control signals into one with the selected op (add / subtract / multiply / divide / min / max / atan2 / sin / cos / reciprocal / floor / ceil / modulo / exp2 / sqrt). Composition glue for control wires. `b` is unused for unary ops (sin, cos, reciprocal, floor, ceil, exp2, sqrt). Both `a` and `b` are port-shadows-param: when an input wire isn't connected the inline param value is used, so constants can be set on the node without dragging a Value node in.",
     inputs: {
         a: ScalarF32 required,
         b: ScalarF32 optional,
@@ -114,6 +115,12 @@ impl Primitive for Math {
         if op == 13 {
             // 2^a — EV stops / octaves → linear gain. Unary; b ignored.
             ctx.outputs.set_scalar("out", ParamValue::Float(a.exp2()));
+            return;
+        }
+        if op == 14 {
+            // sqrt(max(a, 0)) — perceptual slopes (FluidSim3D count→brightness).
+            // Unary; b ignored. Negative input clamps to 0, never NaN.
+            ctx.outputs.set_scalar("out", ParamValue::Float(a.max(0.0).sqrt()));
             return;
         }
 
