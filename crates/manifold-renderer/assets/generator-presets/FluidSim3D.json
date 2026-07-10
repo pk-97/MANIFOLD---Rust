@@ -759,10 +759,10 @@
               },
               "scale": {
                 "type": "Float",
-                "value": 3.1415927
+                "value": -3.1415927
               }
             },
-            "title": "Tilt to Radians"
+            "title": "Tilt (legacy sign: -rot_x*pi)"
           },
           {
             "id": 4,
@@ -776,14 +776,14 @@
               },
               "offset": {
                 "type": "Float",
-                "value": 0.0
+                "value": 1.5707964
               },
               "scale": {
                 "type": "Float",
-                "value": 3.1415927
+                "value": -3.1415927
               }
             },
-            "title": "Orbit to Radians"
+            "title": "Orbit (legacy phase: pi/2 - rot_y*pi)"
           },
           {
             "id": 5,
@@ -1346,6 +1346,44 @@
           {
             "id": 117,
             "typeId": "system.group_output"
+          },
+          {
+            "id": 140,
+            "nodeId": "boot_gate",
+            "typeId": "node.math",
+            "handle": "boot_gate",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 4
+              }
+            },
+            "title": "First-trigger gate (min(count,1))"
+          },
+          {
+            "id": 141,
+            "nodeId": "boot_pattern_mux",
+            "typeId": "node.switch_value",
+            "handle": "boot_pattern_mux",
+            "params": {
+              "selector": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "in_0": {
+                "type": "Float",
+                "value": 7.0
+              }
+            },
+            "title": "Boot: random fill, then cycle"
           }
         ],
         "wires": [
@@ -1354,12 +1392,6 @@
             "fromPort": "particles",
             "toNode": 101,
             "toPort": "particles"
-          },
-          {
-            "fromNode": 53,
-            "fromPort": "out",
-            "toNode": 101,
-            "toPort": "pattern"
           },
           {
             "fromNode": 116,
@@ -1396,6 +1428,30 @@
             "fromPort": "particles",
             "toNode": 117,
             "toPort": "particles"
+          },
+          {
+            "fromNode": 116,
+            "fromPort": "trigger_count",
+            "toNode": 140,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 140,
+            "fromPort": "out",
+            "toNode": 141,
+            "toPort": "selector"
+          },
+          {
+            "fromNode": 53,
+            "fromPort": "out",
+            "toNode": 141,
+            "toPort": "in_1"
+          },
+          {
+            "fromNode": 141,
+            "fromPort": "out",
+            "toNode": 101,
+            "toPort": "pattern"
           }
         ],
         "tint": [
@@ -1961,12 +2017,6 @@
             "toPort": "selector"
           },
           {
-            "fromNode": 34,
-            "fromPort": "out",
-            "toNode": 35,
-            "toPort": "in_0"
-          },
-          {
             "fromNode": 31,
             "fromPort": "out",
             "toNode": 36,
@@ -1974,12 +2024,6 @@
           },
           {
             "fromNode": 35,
-            "fromPort": "out",
-            "toNode": 37,
-            "toPort": "b"
-          },
-          {
-            "fromNode": 36,
             "fromPort": "out",
             "toNode": 37,
             "toPort": "b"
@@ -2169,6 +2213,12 @@
             "fromPort": "out",
             "toNode": 118,
             "toPort": "out_6"
+          },
+          {
+            "fromNode": 36,
+            "fromPort": "out",
+            "toNode": 35,
+            "toPort": "in_0"
           }
         ],
         "tint": [
