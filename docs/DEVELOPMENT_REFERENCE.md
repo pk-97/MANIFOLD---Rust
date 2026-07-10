@@ -25,6 +25,8 @@
 
 A draw command's clip (and depth) is **bound at enqueue, never inferred at flush**. All four command types carry it per command: rect `RectCommand::clip`, line `LineCommand::clip`, image `ImageCommand::clip`, text `clip_bounds`. Batches are DERIVED in `prepare()` by run-scanning consecutive equal `(clip, depth)` commands — there is no "pending run" whose scissor gets decided later. History: BUG-060 (hardest bug in repo history) existed because rect scissors were stamped per batch at flush time, and a transform/depth boundary mid-traversal flushed pending tree rects under the immediate clip (`None`); depth had the same class of bug earlier (`22c5d528`). If you add a new command type, give it `clip` + `depth` fields captured at the push site.
 
+Corollary (2026-07-10, sibling of BUG-060): a tree node's **text/icon clip is the tree clip intersected with the node's own rect**, bound in `draw_node` at enqueue — a label longer than its widget cuts at the edge instead of overrunning the neighbour. Containment is structural, not a per-call-site elide. Proof: `manifold-renderer/tests/text_clip_to_node_bounds.rs` (pixel-asserted both ways).
+
 ## Key Module Splits
 
 - `manifold-app/src/ui_bridge/` — 8 modules: mod, transport, editing, inspector, layer, project, state_sync, marker
