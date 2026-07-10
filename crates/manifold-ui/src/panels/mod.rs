@@ -326,6 +326,12 @@ pub enum PanelAction {
     /// rebuild so the drawer repaints with the newly-selected config; carries no
     /// payload and mutates no model.
     ModConfigTabChanged,
+    /// A card section header was clicked (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md
+    /// §2 D5) — the card already flipped its own UI-only `section_folded`
+    /// entry in `handle_click`. Routes to a structural rebuild so the folded/
+    /// unfolded rows repaint; carries no payload and mutates no model (fold
+    /// state is workspace-local, never serialized).
+    SectionFoldToggled,
     /// §6b — the global "hide mod settings" (compact) toggle was clicked. The
     /// inspector already flipped its own UI-only flag; this routes to a
     /// structural rebuild so every card's drawers hide/show. No model mutation.
@@ -613,6 +619,13 @@ pub enum PanelAction {
     EffectMappingLabel {
         binding_id: String,
         label: String,
+    },
+    /// Set the binding's card section (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md
+    /// §2 D5). One-shot edit; `None` clears the row back to unsectioned.
+    /// Manifest-only per BOUNDARIES D4 — see `BindingMappingEdit::section`.
+    EffectMappingSection {
+        binding_id: String,
+        section: Option<String>,
     },
     /// Set the binding's card-slider invert flag. One-shot edit.
     EffectMappingInvert {

@@ -1097,6 +1097,7 @@ mod tests {
             scale: 1.0,
             offset: 0.0,
             value_labels: Vec::new(),
+            section: None,
         };
         let rb = ResolvedBinding::from_user(&core, &g, &node_map_for(feedback))
             .expect("user binding hydrates");
@@ -1130,6 +1131,7 @@ mod tests {
             scale: 1.0,
             offset: 0.0,
             value_labels: Vec::new(),
+            section: None,
         };
         let node_map: Vec<(NodeId, NodeInstanceId)> = vec![];
         assert!(ResolvedBinding::from_user(&core, &g, &node_map).is_none());
@@ -1155,6 +1157,7 @@ mod tests {
             scale: 1.0,
             offset: 0.0,
             value_labels: Vec::new(),
+            section: None,
         };
         assert!(ResolvedBinding::from_user(&core, &g, &node_map_for(feedback)).is_none());
     }
@@ -1383,6 +1386,7 @@ mod tests {
             scale: 1.0,
             offset: 0.0,
             value_labels: Vec::new(),
+            section: None,
         };
         let user_rb = ResolvedBinding::from_user(&core_ub, &g, &node_map_for(feedback)).unwrap();
         let bindings = vec![static_rb, user_rb];
@@ -1424,6 +1428,7 @@ mod tests {
             scale: 1.0,
             offset: 0.0,
             value_labels: Vec::new(),
+            section: None,
         };
         let user_rb = ResolvedBinding::from_user(&core_ub, &g, &node_map_for(feedback)).unwrap();
         let bindings = vec![static_rb, user_rb];
@@ -1462,6 +1467,7 @@ mod tests {
             scale: 1.0,
             offset: 0.0,
             value_labels: Vec::new(),
+            section: None,
         };
         let user_rb = ResolvedBinding::from_user(&core_ub, &g, &node_map_for(feedback)).unwrap();
         let bindings = vec![static_rb, user_rb];
