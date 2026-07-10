@@ -102,6 +102,19 @@ or human can read it, and it needs no external tool.
 
 ## Open
 
+### BUG-107 (text-rasterizer-draws-fallback-glyph-ids-with-base-font) — any character the UI font lacks renders as a wrong real glyph (mangled "ủ"-style symbols) — MED
+**Status:** OPEN — reported by Peter 2026-07-10 (screenshots of mangled prefix glyphs on row labels; likely the graph canvas's D6 "↳ <outer label>" mirror rows from the gltfeditor scene).
+
+**Symptom:** UI strings containing a character outside the base font's coverage draw a real-but-wrong glyph — e.g. an "ủ"-like glyph where "↳" was intended. This is a class, not one string: agents keep writing raw Unicode symbols into UI text, and the current non-ASCII inventory in `manifold-ui` string literals includes ↳ → ← › − — … (find them with `rg '[^\x00-\x7F]'` over string literals).
+
+**Root cause (confirmed by code reading, not yet isolated in a repro):** `TextRasterizer::shape_line` (`crates/manifold-renderer/src/text_rasterizer.rs:464`) flattens ALL of the CTLine's runs into one glyph-id list, discarding each run's font attribute. When the base font (embedded Inter or the selected family) lacks a character, CoreText's fallback splits the line into runs whose glyph ids index the FALLBACK font's glyph table — and `rasterize` then draws every id with the single base CTFont (`text_rasterizer.rs:307`, `ct_font.draw_glyphs`), so a fallback-font glyph id lands on an arbitrary glyph in the base font. Deterministic for every uncovered character.
+
+**Fix shape (two layers, both wanted — Peter 2026-07-10: "design a glyph or icon set… or figure out a way to prevent these issues"):**
+1. Renderer correctness: honor per-run fonts — read each run's `kCTFontAttributeName` in `shape_line` and draw that run's glyphs with its own CTFont (or draw via `CTLineDraw`, which handles runs natively; the manual glyph path exists for the stroke pass, and the context's text drawing mode applies either way). Fallback then renders correctly instead of as garbage.
+2. Policy/prevention: intentional UI symbols shouldn't depend on OS font fallback at all. The PUA icon-atlas vocabulary already exists (`crates/manifold-ui/src/icons.rs` — 11 icons, injected by `native_text::generate_atlas_icons`, built precisely because "the UI font has no ⚙") — extend it with the symbols currently hard-coded as raw Unicode (↳, chevrons, arrows), and add a guard for the rest: a debug assert in the rasterizer when a line produces a fallback run, and/or a check-time lint over `manifold-ui` string literals against a declared coverage set, so an agent writing an unsupported glyph fails the gate instead of shipping mojibake.
+
+**Instrument impact:** authoring-surface legibility today (graph canvas rows), but the class is unbounded — any agent-authored text can ship garbage glyphs on any surface, including perform. The prevention layer is what stops recurrence.
+
 ### BUG-106 (audio-mixdown-analysis-only-test-order-flaky) — a playback mixdown test fails intermittently inside the full workspace sweep but passes deterministically alone — LOW
 **Status:** OPEN — found 2026-07-10 during SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md P5's wave-closing `cargo test --workspace` sweep.
 **Symptom:** `audio_mixdown::tests::render_export_audio_analysis_only_layer_taps_but_never_hits_master` panicked at `crates/manifold-playback/src/audio_mixdown.rs:678` once inside `--workspace`; re-running `-p manifold-playback` (228 ok) and the test in isolation both pass. Non-deterministic across sweep runs.
