@@ -10,6 +10,7 @@ use super::layout::LayeredLayout;
 use crate::graph_view::{
     GraphSnapshot, GroupSnapshot, NodeSnapshot, PortKindSnapshot, PortSnapshot, WireSnapshot,
 };
+use crate::panels::GraphParamTarget;
 
 fn port(name: &str) -> PortSnapshot {
     PortSnapshot {
@@ -412,6 +413,7 @@ fn apply_live_values_skips_the_actively_scrubbed_param() {
         start_value: 0.25,
         is_int: false,
         press_origin_x: 0.0,
+        outer_param_id: None,
     };
     let live = vec![(manifold_foundation::NodeId::new("gain"), vec![("amount", 0.8_f32)])];
     canvas.apply_live_values(&live);
@@ -2074,4 +2076,254 @@ fn graph_canvas_targets_enumerates_nodes_ports_and_wires_with_payload_ids() {
     let wires: Vec<_> = out.iter().filter(|e| e.kind == "wire").collect();
     assert_eq!(wires.len(), 1);
     assert_eq!(wires[0].payload, "scope=/from=0:out/to=2:in");
+}
+
+// ─── D6: group-face param rows (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN §2) ─────
+//
+// A group box mirrors, as live rows, every already-exposed card param whose
+// binding target resolves to a node inside it (transitively through nested
+// groups). Fixtures below reuse `grouped_snapshot`'s id scheme (group id 10,
+// handle "tweak"; body: group_input(0) → inner(1, handle "inner") →
+// group_output(2)) — only difference is `inner` now carries a param and the
+// root snapshot carries the `OuterParamRouting` that exposes it.
+
+/// One `OuterParamRouting` entry: an outer card slider (`outer_param_id`,
+/// `outer_label`) routed into `node_handle`'s `inner_param`.
+fn outer_routing(
+    outer_param_id: &str,
+    outer_label: &str,
+    node_handle: &str,
+    inner_param: &str,
+) -> crate::graph_view::OuterParamRouting {
+    crate::graph_view::OuterParamRouting {
+        outer_label: outer_label.to_string(),
+        outer_param_id: outer_param_id.to_string(),
+        node_handle: node_handle.to_string(),
+        inner_param: inner_param.to_string(),
+        source: crate::graph_view::OuterParamSource::User,
+    }
+}
+
+/// `grouped_snapshot`'s shape, but `inner` (inside group "tweak") carries a
+/// Float param "amount" at `current`, exposed on the card as "card_amount"
+/// ("Amount"). One group, one level.
+fn grouped_snapshot_with_exposed_param(current: f32) -> GraphSnapshot {
+    let mut snap = grouped_snapshot();
+    let group = snap.nodes.iter_mut().find(|n| n.type_id == GROUP_TYPE_ID).unwrap();
+    let body = group.group.as_mut().unwrap();
+    let inner = body.nodes.iter_mut().find(|n| n.node_handle.as_deref() == Some("inner")).unwrap();
+    inner.parameters = vec![float_param("amount", current)];
+    snap.outer_routings = vec![outer_routing("card_amount", "Amount", "inner", "amount")];
+    snap
+}
+
+/// Two nested groups: root → "outer" (handle) → body contains "inner_group"
+/// (handle) → its body contains `leaf` (handle "leaf") carrying the exposed
+/// Float param "amount". Card exposes it as "card_amount". Tests the
+/// currently-viewed-level rule: at root, "outer"'s box carries the row; enter
+/// "outer" and "inner_group"'s box carries it instead — never both at once.
+fn nested_group_snapshot_with_exposed_param(current: f32) -> GraphSnapshot {
+    let mut leaf = node(1, "node.blur", Some("leaf"));
+    leaf.parameters = vec![float_param("amount", current)];
+    let inner_body = GroupSnapshot {
+        nodes: vec![node(0, "system.group_input", None), leaf, node(2, "system.group_output", None)],
+        wires: vec![wire(0, "src", 1, "in"), wire(1, "out", 2, "out")],
+        tint: None,
+    };
+    let mut inner_group = node(20, GROUP_TYPE_ID, Some("inner_group"));
+    inner_group.inputs = vec![port("src")];
+    inner_group.outputs = vec![port("out")];
+    inner_group.group = Some(Box::new(inner_body));
+
+    let outer_body = GroupSnapshot {
+        nodes: vec![node(0, "system.group_input", None), inner_group, node(2, "system.group_output", None)],
+        wires: vec![wire(0, "src", 20, "src"), wire(20, "out", 2, "out")],
+        tint: None,
+    };
+    let mut outer_group = node(10, GROUP_TYPE_ID, Some("outer"));
+    outer_group.inputs = vec![port("src")];
+    outer_group.outputs = vec![port("out")];
+    outer_group.group = Some(Box::new(outer_body));
+
+    GraphSnapshot {
+        nodes: vec![
+            node(0, "system.source", Some("source")),
+            outer_group,
+            node(2, "system.final_output", Some("final")),
+        ],
+        wires: vec![wire(0, "out", 10, "src"), wire(10, "out", 2, "in")],
+        outer_routings: vec![outer_routing("card_amount", "Amount", "leaf", "amount")],
+    }
+}
+
+#[test]
+fn group_face_row_appears_for_inner_targeted_card_param() {
+    let mut canvas = GraphCanvas::new();
+    canvas.collapsed.insert(10, false); // expand the group before the full rebuild
+    canvas.set_snapshot(&grouped_snapshot_with_exposed_param(0.25));
+
+    let group = canvas.find_node(10).expect("group node");
+    assert_eq!(group.params.len(), 1, "one mirrored row for the exposed inner param");
+    let row = &group.params[0];
+    assert_eq!(row.label, "Amount", "row label is the OUTER card label, not the inner param name");
+    assert_eq!(row.value, "0.25");
+    assert_eq!(
+        row.outer_param_id.as_deref(),
+        Some("card_amount"),
+        "row carries the routing's own ParamId for scrub dispatch"
+    );
+    // A param with no exposing routing draws no row: build_group_param_rows is
+    // exposed-only, never the deleted authoring picker.
+    assert!(group.rows.iter().any(|r| matches!(r, NodeRow::Param { .. })));
+}
+
+#[test]
+fn group_face_row_absent_when_no_outer_routing_targets_the_group() {
+    let mut snap = grouped_snapshot();
+    // Give `inner` a param but expose NOTHING — no `OuterParamRouting` at all.
+    let group = snap.nodes.iter_mut().find(|n| n.type_id == GROUP_TYPE_ID).unwrap();
+    let body = group.group.as_mut().unwrap();
+    let inner = body.nodes.iter_mut().find(|n| n.node_handle.as_deref() == Some("inner")).unwrap();
+    inner.parameters = vec![float_param("amount", 0.25)];
+    let mut canvas = GraphCanvas::new();
+    canvas.collapsed.insert(10, false);
+    canvas.set_snapshot(&snap);
+    assert!(
+        canvas.find_node(10).unwrap().params.is_empty(),
+        "an un-exposed inner param mirrors nothing on the group face"
+    );
+}
+
+#[test]
+fn collapsed_group_with_rows_shows_a_compact_params_chip() {
+    let mut canvas = GraphCanvas::new();
+    // Force collapsed regardless of `default_collapsed` (canvas-wide default,
+    // not this test's concern) — D6's collapse switch is per-node.
+    canvas.collapsed.insert(10, true);
+    canvas.set_snapshot(&grouped_snapshot_with_exposed_param(0.25));
+    let group = canvas.find_node(10).expect("group node");
+    assert!(group.collapsed, "sanity: this group is collapsed");
+    assert_eq!(
+        group.summary.as_deref(),
+        Some("1 params"),
+        "collapsed group carries a compact count chip, not a size threshold"
+    );
+}
+
+/// Scrub the group-face row and assert it emits `GraphEditCommand::SetOuterParam`
+/// carrying the routing's own `ParamId` string and the scrubbed value — the
+/// SAME `(ParamId, value)` pair a card slider scrubbing this exact exposed
+/// param would carry into its own `PanelAction::ParamChanged(GraphParamTarget,
+/// ParamId, f32)` (`param_card.rs`'s `ParamChanged` construction). The
+/// enum-wrapping into `PanelAction` itself is app-side glue
+/// (`manifold-app/src/app_render.rs`'s `SetOuterParam` arm, documented there);
+/// this crate boundary is where the invariant is actually decidable, so the
+/// mirrored `PanelAction::ParamChanged` is reconstructed here from the same
+/// two values and compared field-by-field against what the card path would
+/// build for that id/value (PanelAction has no `PartialEq`, hence the
+/// destructure instead of `assert_eq!` on the whole action).
+#[test]
+fn group_face_scrub_emits_set_outer_param_matching_card_value() {
+    let mut canvas = GraphCanvas::new();
+    canvas.collapsed.insert(10, false);
+    canvas.set_snapshot(&grouped_snapshot_with_exposed_param(0.25));
+
+    let row = canvas.param_row_rect(Rect::new(0.0, 0.0, 1200.0, 800.0), 10, 0).expect("row rect");
+    let vp = Rect::new(0.0, 0.0, 1200.0, 800.0);
+    let px = row.x + row.w * 0.7;
+    canvas.on_left_button_down(vp, px, row.y + row.h * 0.5, 0.0, false);
+    assert!(
+        matches!(canvas.drag_mode, DragMode::ParamScrub { outer_param_id: Some(_), .. }),
+        "the row's DragMode carries the outer_param_id marker"
+    );
+    // +120px on a (0,1)-range Float, same PARAM_SCRUB_FULL_RANGE_PX math the
+    // inner node's own row scrub uses: 0.25 → 0.75.
+    canvas.on_pointer_move(vp, px + 120.0, row.y + row.h * 0.5);
+
+    let (outer_param_id, new_value) = canvas
+        .drain_edits()
+        .into_iter()
+        .find_map(|a| match a {
+            GraphEditCommand::SetOuterParam { outer_param_id, new_value } => {
+                Some((outer_param_id, new_value))
+            }
+            _ => None,
+        })
+        .expect("scrub emits SetOuterParam, not SetGraphNodeParam");
+    assert_eq!(outer_param_id, "card_amount", "same ParamId string the card's own binding carries");
+    assert!((new_value - 0.75).abs() < 1e-3, "same scrub math as an ordinary node-face row");
+
+    // The card-path equivalent: what `param_card.rs`'s own ParamChanged arm
+    // would build for this exact (id, value) pair.
+    let target = GraphParamTarget::Effect(0);
+    let mirrored = PanelAction::ParamChanged(
+        target,
+        manifold_foundation::ParamId::from(outer_param_id.clone()),
+        new_value,
+    );
+    let card_would_emit = PanelAction::ParamChanged(
+        GraphParamTarget::Effect(0),
+        manifold_foundation::ParamId::from("card_amount".to_string()),
+        0.75,
+    );
+    match (mirrored, card_would_emit) {
+        (
+            PanelAction::ParamChanged(mt, mid, mv),
+            PanelAction::ParamChanged(ct, cid, cv),
+        ) => {
+            assert_eq!(mt, ct, "same GraphParamTarget");
+            assert_eq!(mid, cid, "same ParamId");
+            assert!((mv - cv).abs() < 1e-3, "same value");
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn group_face_row_wire_driven_when_inner_param_is_wire_fed() {
+    let mut snap = grouped_snapshot_with_exposed_param(0.25);
+    // Feed `inner`'s `amount` port from a same-level wire (port-shadows-param) —
+    // add a source node inside the body wired to `inner`'s (implicit) `amount`
+    // input port. `node()` gives every node an `in`/`out` port pair named
+    // plainly, so wire the body's `group_input` "src" straight into an
+    // `amount`-named port by naming it via a synthetic wire (the row's
+    // wire-driven check only cares about `to_port == "amount"`, not that a
+    // declared port exists — mirrors the ordinary-node check).
+    let group = snap.nodes.iter_mut().find(|n| n.type_id == GROUP_TYPE_ID).unwrap();
+    let body = group.group.as_mut().unwrap();
+    body.wires.push(wire(0, "src", 1, "amount"));
+
+    let mut canvas = GraphCanvas::new();
+    canvas.collapsed.insert(10, false);
+    canvas.set_snapshot(&snap);
+    let row = &canvas.find_node(10).unwrap().params[0];
+    assert!(row.wire_driven, "a wire feeding the target inner param locks the mirrored row too");
+}
+
+#[test]
+fn nested_group_row_lives_on_the_currently_viewed_level_only() {
+    let snap = nested_group_snapshot_with_exposed_param(0.25);
+    let mut canvas = GraphCanvas::new();
+    canvas.collapsed.insert(10, false); // expand "outer" at root
+    canvas.set_snapshot(&snap);
+
+    // At root: "outer" (id 10) carries the mirrored row (leaf is transitively
+    // inside it); there is no OTHER box at this level that could also carry it.
+    assert_eq!(canvas.nodes.len(), 3, "source, outer, final — one level");
+    let outer = canvas.find_node(10).expect("outer group at root");
+    assert_eq!(outer.params.len(), 1, "outer carries the row while viewed from root");
+
+    // Descend into "outer": the level swaps to its body — "inner_group" (id
+    // 20) is now the visible group box, and it, not "outer" (no longer even
+    // present as a NodeView at this level), carries the row.
+    canvas.enter_group(10);
+    canvas.collapsed.insert(20, false);
+    canvas.set_snapshot(&snap);
+    assert!(
+        canvas.find_node(10).is_none(),
+        "outer's own box isn't rendered once you're inside it — never two boxes at once"
+    );
+    let inner_group = canvas.find_node(20).expect("inner_group visible one level down");
+    assert_eq!(inner_group.params.len(), 1, "the row re-homed one level down with the group that now visibly contains leaf");
+    assert_eq!(inner_group.params[0].label, "Amount");
 }

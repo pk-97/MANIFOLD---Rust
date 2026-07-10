@@ -1,6 +1,9 @@
 target/
 *.manifold
 **/.DS_Store
+# Worktree-pool lease (scripts/agent-worktree.py) — session-local claim marker,
+# lives at each worktree's root; mtime is the staleness clock.
+.worktree-lease.json
 # Runtime diagnostic logs from MANIFOLD_LOG_CHAIN_STATS etc.
 chain-stats.log
 *.log

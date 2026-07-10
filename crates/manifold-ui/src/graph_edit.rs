@@ -100,6 +100,23 @@ pub enum GraphEditCommand {
         param_name: String,
         new_value: crate::types::SerializedParamValue,
     },
+    /// Set an **outer performance-card param** to a new value. Emitted by a
+    /// scrub/click on a group box's face row (D6,
+    /// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2): that row is a live
+    /// mirror of an already-exposed card param, not an inner node's own row,
+    /// so it's addressed the same way the card's own slider is — by the
+    /// outer binding's stable `ParamId` string — rather than by
+    /// `(node_id, param_name)`. Deliberately a *different* command from
+    /// `SetGraphNodeParam`, staying context-free like every other
+    /// `GraphEditCommand`: the app resolves the watched effect/generator
+    /// target and re-dispatches this through the identical
+    /// `PanelAction::ParamChanged` handler the card's own slider uses (the
+    /// parity invariant — one value, three surfaces: card, group face, inner
+    /// node face), rather than inventing a second write path.
+    SetOuterParam {
+        outer_param_id: String,
+        new_value: f32,
+    },
     /// Open a native folder picker for a path-like String param and set it to
     /// the chosen path. Emitted by the inspector's Browse button.
     BrowseGraphNodePath { node_id: u32, param_name: String },

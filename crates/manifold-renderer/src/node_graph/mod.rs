@@ -81,7 +81,8 @@ pub use graph_loader::{
     WireSide as BuildWireSide, instantiate_def, log_build_error, pre_allocate_resources,
 };
 pub use loaded_preset_view::{
-    LoadedPresetView, loaded_preset_view_by_id, outer_routings_from_view, snapshot_for_view,
+    LoadedPresetView, collect_node_handles, loaded_preset_view_by_id, outer_routings_from_view,
+    snapshot_for_view,
 };
 pub use metal_backend::MetalBackend;
 pub use palette::{catalog_graph_def_for, palette_atoms, PaletteAtom};
