@@ -1316,27 +1316,13 @@ impl UIRenderer {
 
         // Text (or icon if the first char is an atlas-icon codepoint — see
         // `manifold_ui::icons::Icon`).
-        // Overrunning text cuts TEXT_CLIP_PAD_X inside the node edge, not
-        // flush against it — a hard cut touching the border reads as broken;
-        // a small gap reads as deliberate truncation. Applied to the text
-        // clip only (icons are already inset, the caret is pinned inside),
-        // horizontal only (glyphs never legitimately hug a side edge, but
-        // ascenders/descenders can sit close to top/bottom on short chips).
-        // Well-fitted labels never touch the clip, so they're unaffected.
-        // The pad is halved-out on nodes too narrow to afford it rather
-        // than letting the clip invert and blank the label.
+        // Comfort inset for genuinely overrunning text — see the clip
+        // computation in the non-icon branch below.
         const TEXT_CLIP_PAD_X: f32 = 3.0;
         #[cfg(target_os = "macos")]
         if let Some(text) = &node.text
             && !text.is_empty()
         {
-            let pad = TEXT_CLIP_PAD_X.min((node_clip[2] - node_clip[0]) * 0.25);
-            let clip_bounds = Some([
-                node_clip[0] + pad,
-                node_clip[1],
-                node_clip[2] - pad,
-                node_clip[3],
-            ]);
             let text_color = if disabled {
                 [
                     style.text_color.r,
@@ -1410,6 +1396,41 @@ impl UIRenderer {
                     TextAlign::Right => bounds.x + bounds.width - block_w - inset,
                     TextAlign::Left => bounds.x + inset,
                 };
+
+                // Overrunning text cuts TEXT_CLIP_PAD_X inside the node edge,
+                // not flush against it — a hard cut touching the border reads
+                // as broken; a small gap reads as deliberate truncation. The
+                // pad applies per side, and ONLY on a side the text actually
+                // overruns (vs the node's own rect): layout sizes label nodes
+                // to their measured text, so well-fitted text legitimately
+                // sits flush at the edge (left-aligned menu rows, right-
+                // aligned param labels) and an unconditional pad shaves real
+                // glyphs off it — the 2026-07-10 regression. A node cut by
+                // the tree clip (scroll container) keeps the hard cut like
+                // every other element; the pad band lives at the node's own
+                // edge only. Horizontal only (ascenders/descenders sit close
+                // to top/bottom on short chips), text only (icons are already
+                // inset + square-fit, the caret is pinned inside). The pad
+                // shrinks on nodes too narrow to afford it rather than
+                // inverting the clip. Half-pixel slack: flush placement
+                // reaches the edge via float arithmetic; a sub-pixel
+                // "overrun" doesn't warrant the gap.
+                let text_end = start_x + block_w;
+                let pad = TEXT_CLIP_PAD_X.min(bounds.width * 0.25);
+                let clip_x0 = if start_x < bounds.x - 0.5 {
+                    node_clip[0].max(bounds.x + pad)
+                } else {
+                    node_clip[0]
+                };
+                // `.max(clip_x0)`: a scrolled-out sliver intersected with the
+                // pad band can invert; an empty clip beats a flipped quad.
+                let clip_x1 = if text_end > bounds.x_max() + 0.5 {
+                    node_clip[2].min(bounds.x_max() - pad)
+                } else {
+                    node_clip[2]
+                }
+                .max(clip_x0);
+                let clip_bounds = Some([clip_x0, node_clip[1], clip_x1, node_clip[3]]);
 
                 if let Some(p) = prefix {
                     let pc = style.prefix_color;
