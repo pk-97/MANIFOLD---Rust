@@ -1,6 +1,6 @@
 # Audio Setup Dock & Trigger Unification — the panel becomes a workspace column; clip triggers become layer-owned audio mods
 
-**Status:** IN PROGRESS · P1 SHIPPED 2026-07-10 (dock column + overlay-path deletion + scroll, `36a96791`; closes BUG-047) · P2 SHIPPED 2026-07-10 (`LayerClipTrigger` model + load migration + evaluator + analysis-gating arm, `feat/audio-dock-p2` @ `e4aa01bf`; round-trip + real-fixture gated; L1 model phase — see `docs/landings/2026-07-10-audio-dock-p2.md`) · P3–P4 remain · design 2026-07-09 · Fable
+**Status:** IN PROGRESS · P1 SHIPPED 2026-07-10 (dock column + overlay-path deletion + scroll, `36a96791`; closes BUG-047) · P2 SHIPPED 2026-07-10 (`LayerClipTrigger` model + load migration + evaluator + analysis-gating arm, `feat/audio-dock-p2` @ `e4aa01bf`; round-trip + real-fixture gated; L1 model phase — see `docs/landings/2026-07-10-audio-dock-p2.md`) · P3 SPLIT: P3a SHIPPED 2026-07-10 (Triggers-matrix deleted + shared-drawer Length-row capability, `47f2a112`; Consumers re-pointed to layers — see `docs/landings/2026-07-10-audio-dock-p3a.md`) · **P3b BLOCKED on a placement decision** (layer-side authoring UI + fire meter/BUG-082; see Phase 3 note) · P4 remains · design 2026-07-09 · Fable
 **Prerequisites:** none (runs against shipped AUDIO_SENDS_UX P1–P4 and LIVE_AUDIO_TRIGGERS §9 U-P1/U-P2 code)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -324,6 +324,21 @@ carry over unchanged.
 - **Test scope:** focused crates above; the wave's final phase runs the workspace sweep.
 
 ### Phase 3 — Layer-side authoring UI + drawer unification + fire meter (D5/D6)
+
+> **SPLIT 2026-07-10 during execution.** **P3a SHIPPED (`47f2a112`):** the Triggers-matrix
+> deletion (§ deliverable "matrix deleted") + the shared drawer's Length-row capability
+> (D5) — both independent of the placement question below. Consumers rows re-pointed to
+> `Project::clip_trigger_consumers` (the panel-side display of layer-owned triggers).
+> **P3b BLOCKED — needs a placement decision.** The design says the authoring section sits
+> "beside the layer's MIDI clip-launch block", but that block renders in the timeline track
+> header (`layer_header.rs`), whose row height is the fixed `TRACK_HEIGHT` constant with a
+> test forbidding per-type exceptions. A **variable-length** list of clip-trigger drawers
+> cannot fit a fixed-height row without breaking the `single-source-y-layout` /
+> `track-header-invariant` invariants. **Resolution (Peter, 2026-07-10):** _[to be filled by
+> the placement AskUserQuestion — inspector "AUDIO TRIGGERS" section is the orchestrator's
+> recommendation: the inspector already hosts the identical `build_audio_mod_drawer`
+> machinery per effect card and is variable-height/scrollable]_. P3b (authoring UI + fire
+> meter/D6 + BUG-082 + state_sync rows) resumes once decided.
 - **Entry state:** P2 landed; `param_slider_shared.rs:1518` drawer builder re-anchored;
   U-P2's Mode-row parameterization read.
 - **Read-back:** D4/D5/D6; `build_audio_mod_drawer` + the U-P2 landing notes in
