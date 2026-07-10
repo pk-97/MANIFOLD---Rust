@@ -62,7 +62,7 @@ or human can read it, and it needs no external tool.
 | BUG-073 | **ui-snap-script-drawer-tween-never-ticks** | `--script` harness has no per-frame tick, so a mod armed mid-script renders its drawer at a permanently zero-height clip region (unclickable rows) until the fixture pre-arms the state instead (LOW) |
 | BUG-072 | **audio-mixdown-all-targets-clippy-debt** | Pre-existing `--all-targets` clippy failures in audio_mixdown.rs, unrelated to PARAM_STEP_ACTIONS, two one-line fixes (LOW) |
 | BUG-046 | **low-band-kick-deafness-on-mixes** | Low=kick binding near-deaf on bass-heavy full mixes; HPSS measured DEAD 2026-07-06, successor = ridge-motion sweep event; partial (OR'd floored-novelty) on the shelf (HIGH) |
-| BUG-047 | **setup-panel-overflow** | Audio Setup sections clip past bottom when a source has many input/consumer rows (LOW) |
+| BUG-101 | **setup-spectrogram-scroll-offset** | Docked Audio Setup spectrogram blit doesn't follow the body scroll offset — waterfall draws at pre-scroll position when scrolled (LOW) |
 | BUG-039 | **saw-rotation-wrap** | angle params clamp instead of wrapping; saw LFO can't spin a full rotation (MED, mechanism pinned) |
 | BUG-045 | **gap-ring-down-chase** | tracker follows kernel ring-down down ~2-4 bins in note gaps; notes gate 87.6 vs 90 (LOW) |
 | BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
@@ -933,7 +933,7 @@ see `docs/TIMELINE_UX_AUDIT_2026-07-07.md` item 2.5. **Oracle:** the
 with the fix.
 
 ### BUG-047 (setup-panel-overflow) — Audio Setup panel content clips past the bottom edge when chrome exceeds viewport − SCOPE_H_MIN — LOW (needs ~18 combined input/consumer rows on one source at full height; ~5 extra rows at a 720px window)
-**Status:** OPEN
+**Status:** FIXED 2026-07-10 (AUDIO_SETUP_DOCK P1, `36a96791`) — the docked panel body is now a `ScrollContainer` (GPU scissor), and `scope_h` is a fixed fraction of the panel rect rather than "absorb remaining space", so control rows overflow into the scroll region instead of clamping the spectrogram at `SCOPE_H_MIN` and running sections past the bottom. See `docs/landings/2026-07-10-audio-dock-p1.md`. (Follow-on BUG-101 tracks the spectrogram blit not yet following the scroll offset.)
 
 **Found 2026-07-06 during AUDIO_SENDS_UX P3 review** (orchestrated wave, found by the
 worker's own analysis after an orchestrator-caught clipping defect was root-caused —
@@ -949,6 +949,21 @@ summary row, or wrap the sections in the existing ScrollContainer (see
 don't improvise it inside an unrelated wave. **Oracle:** `audio_setup_panel.rs`
 test `consumers_fit_within_panel_on_first_build_after_configure` guards the fixed
 ordering bug; no executable test for this clamp overflow yet.
+
+### BUG-101 (setup-spectrogram-scroll-offset) — Docked Audio Setup spectrogram blit doesn't follow the body scroll offset — LOW
+**Status:** OPEN
+
+**Found 2026-07-10 during AUDIO_SETUP_DOCK P1** (worker shortcut #3, orchestrator-logged
+at landing). The spectrogram waterfall is a GPU blit positioned by a CPU-side `scope_rect`
+computed at build time in `audio_setup_panel.rs`, and that rect does not add the
+`ScrollContainer` scroll offset. At `scroll_offset == 0` (the default, and everything the
+P1 gate exercises) it's correct; once the docked body is scrolled, the waterfall draws at
+its pre-scroll position while the rows around it move. **Symptom:** spectrogram visually
+detaches from its section header when the panel body is scrolled. **Fix shape:** offset
+`scope_rect` by the scroll delta (or parent the blit rect to the scroll content like the
+rows), and clip it to the scroll viewport. **Oracle:** not reproducible headless (the blit
+doesn't run in the snapshot harness) — needs the live app or a harness that runs the scope
+blit; a scrolled-body render test would guard it.
 
 ### BUG-046 (low-band-kick-deafness-on-mixes) — The canonical Low=kick binding is near-deaf on full mixes with active basslines — HIGH for the streaming/live-trigger use case
 **Status:** OPEN
