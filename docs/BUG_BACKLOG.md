@@ -44,7 +44,6 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
-| BUG-093 | **ui-snapshot-fixtures-unnecessary-cast-clippy-debt** | ✅ FIXED 2026-07-10 (UI_HARNESS_UNIFICATION P0 landing — the two `as i32` casts dropped). Was: `cargo clippy -p manifold-app --features ui-snapshot -- -D warnings` failing pre-existing on two `clippy::unnecessary_cast` hits in `ui_snapshot/fixtures.rs` (`i as i32` / `20 + i as i32` at lines 774/779, where `i` from `0..20` is already `i32`) — confirmed present at base commit `7e0f6f96` (before any P0 edits), so a clippy-version drift on top of the already-tracked BUG-057/067 dead-`make_blit_pipeline` failure, not new debt from this session. Same gate, same feature flag, out of UI_HARNESS_UNIFICATION P0's file list (fixtures.rs untouched by P0). Fix shape: drop the two redundant `as i32` casts. LOW (cosmetic, blocks a fully-clean `--features ui-snapshot` clippy run alongside BUG-057/067). |
 | BUG-092 | **gltf-import-caps-render-scene-objects-at-8-stale-mirror** | `gltf_import.rs`'s `MAX_RENDER_SCENE_OBJECTS = 8` truncates an imported glTF to its 8 largest-by-vertex materials (`materials.truncate(...)`, `assemble_render_scene_graph`), dropping the rest with a warning — but this constant is a stale mirror of `node.render_scene`'s OLD object cap. render_scene generalized object count to a soft `OBJECT_SLIDER_MAX = 64` (2026-07-05) and the comment at gltf_import.rs:60 still cites a non-existent render_scene `MAX_OBJECTS`. Effect: importing a model with >8 distinct materials silently loses objects that render_scene could now draw. Fix shape: raise/retire `MAX_RENDER_SCENE_OBJECTS` to track `OBJECT_SLIDER_MAX` (or import unbounded and let the slider clamp), and refresh the comment. Found 2026-07-10 while landing RENDER_SCENE_UNBOUNDED_LIGHTS (unrelated axis — that change uncapped *lights*; this is *objects*). LOW (import-time truncation with a user-visible warning, not a crash; only bites multi-material glTF imports). |
 | BUG-090 | **audio-mixdown-analysis-only-test-flakes-under-parallel-run** | `audio_mixdown::tests::render_export_audio_analysis_only_layer_taps_but_never_hits_master` (an exact `assert_eq!` on two separately-rendered `f32` audio buffers) failed once during F2's full `cargo test -p manifold-playback` gate run, then passed both standalone and in an immediate full-suite rerun — a parallel-execution flake, not a deterministic failure; root cause unknown (suspects: shared `TestDir` temp-path collision across threads, or thread-scheduling-sensitive float summation order in the mixdown path). Found 2026-07-10 running F2's gate; file untouched by F2 (confirmed via `git diff` against F2's base commit). LOW (test-only, intermittent — but an exact-equality float assertion under parallel test execution is a fragile pattern worth a look). |
 | BUG-089 | **live-clip-pending-tick-queue-dead-on-all-live-paths** | `LiveClipManager`'s tick-based pending-launch queue (`pending_by_tick`/`pending_by_layer`/`pending_by_clip_id`, `PendingLiveLaunch.target_tick`, `queue_pending`, `activate_due_pending_launches[_at_tick]`, `has_pending_activations`) can only ever be written when `event_absolute_tick >= 0`, but midir events always set `absolute_tick = -1` (`midi_input.rs`) and it is the sole producer of `MidiNoteEvent` in the whole workspace; `fire_layer_oneshot` also always passes `tick = -1`. `activate_due_pending_launches_at_tick` is the only live caller (`engine.rs:803`, fed `self.last_frame_count`, a frame counter, not a real clock tick) and drains a map that can never be non-empty in production — confirmed by exhaustive grep, not inference. Found 2026-07-10 while scoping F2's tick-queue deletion call; left OPEN rather than deleted because the dead footprint is the whole subsystem (7 items across 2 files plus a dead cancellation branch in `commit_live_clip`), wider than the single function F2 was scoped to evaluate — a clean full removal deserves its own dedicated pass. LOW (dead code, zero runtime cost beyond an empty-map check per tick; risk is only in a future session doing a partial removal). |
@@ -90,14 +89,11 @@ or human can read it, and it needs no external tool.
 | BUG-014 / 030 | parked | NaN content-key hash · color-ratchet red |
 | BUG-019 / 020 / 021 | deferred | group-fold gap · gen-card collapse · snap-back gap |
 | BUG-056 | **audio-mixdown-clippy-debt** | `manifold-playback` clippy gate (`-D warnings`) fails pre-existing on `audio_mixdown.rs` — `cloned_ref_to_slice_refs` + `needless_range_loop` (LOW, blocks the crate's clippy gate, not correctness) |
-| BUG-057 | **ui-snapshot-dead-blit-pipeline** | ✅ FIXED 2026-07-10 (P0 landing — `make_blit_pipeline` deleted). Was: `cargo clippy -p manifold-app --features ui-snapshot` failing on an unused fn (LOW). |
 | BUG-063 | **silent-load-repairs** | PARTIAL — load-repairs now surface as a non-blocking "opened with repairs" toast (P3, no longer silent); the heavier rescue path (blocking ack dialog + journal the pre-repair project.json to history/) is deferred (MED-HIGH) |
 | BUG-066 | **fluid3d-corner-drift** | PARTIAL — the dominant defect (screen-scale quadrant anatomy + wandering tide from the noise lattice at 2 cells/volume) FIXED 2026-07-10 via `turb_scale` on `node.turbulence_3d` + "Turb Detail" card param (default 8); the smaller slope-force diagonal tide (~0.5% of peak, measured by the harness force meter) remains open — precision + executor + mean-projection hypotheses all refuted with evidence (MED → LOW-MED after the fix, needs Peter look-pass) |
-| BUG-067 | **ui-snapshot-dead-blit-pipeline** | ✅ FIXED 2026-07-10 (P0 landing — duplicate of BUG-057, `make_blit_pipeline` deleted). Was: `make_blit_pipeline` (`crates/manifold-app/src/ui_snapshot/render.rs:760`) is never used; `cargo clippy --features manifold-app/ui-snapshot -- -D warnings` fails on it, so any clippy run that chains the ui-snapshot feature (needed for `cargo xtask ui-snap` L3 flows) trips. Pre-existing at `b9304330`, found during DRAG_CAPTURE P1 (LOW) |
 | BUG-068 | **inspector-scene-cliphit-overlap** | the `inspector` ui-snap scene fixture has a clip-vs-panel hit-test overlap at its narrower zoom — a clip can't be both uniquely-labeled and safely positioned over the inspector column, which forced DRAG_CAPTURE P1's L3 flow onto the `timeline` scene. Fixture-only, no runtime impact. Pre-existing at `b9304330` (LOW) |
 | BUG-069 | **shipping-license-audit** | four license problems in shipped components: madmom models + ADTOF (both CC BY-NC-SA), rusty_link crate (GPL-2.0, viral, in manifold-playback), staged ffmpeg copied from the dev machine (likely GPL build); full sweep 2026-07-08, everything else clean (HIGH for commercialization, zero runtime impact) |
 | BUG-070 | **stepper-and-nonstandard-slider-reset** | ~~decay drawer slider~~ + Clip Trigger drawer sliders now covered by the intrinsic-reset follow-through (@ 3a88f728, reset = required build input); **still open:** Audio Setup gain `[−]value[＋]` steppers + overlay-drag send-fader (not `BitmapSlider` tracks) (LOW) |
-| BUG-071 | **ui-snap-dump-stale-parent** | FIXED 2026-07-10 (UI_HARNESS_UNIFICATION P0, D9c) — `dump.rs` now serializes `tree.parent_of(n.id)`, not `n.parent_id`; committed on `feat/ui-harness-p0` |
 
 ## Open
 
@@ -331,18 +327,6 @@ The param manifest (an instance's live knob list) is built at deserialize AND re
 
 Loading a project that references an unresolvable preset def (deleted, unregistered, or missing on this machine) degrades *safely but silently*: saved params are kept on a placeholder (keep-don't-drop, `effects.rs:940`) and the effect falls back to **source passthrough** (`preset_runtime.rs:808`) — but the ONLY signal is a console `eprintln`; nothing shows on screen. A performer sees the layer render without its effect (a missing *generator* layer likely renders empty — inferred, unconfirmed) with no visible reason. **Fix shape:** surface unresolvable presets in-app (a card/badge or a load-time notice).
 
-### BUG-071 (ui-snap-dump-stale-parent) — `ui_snapshot::dump.rs` serializes the mint-time parent, not the live reparented one — LOW (dev-tooling only)
-**Status:** FIXED 2026-07-10 (`UI_HARNESS_UNIFICATION_DESIGN.md` P0, D9c) — `dump_tree_ex`
-(`dump.rs:38`) and `terse` (`dump.rs:92`, now ~95/~99 after the comment) both serialize
-`tree.parent_of(n.id)` (the live, already-`pub`, `parent_index`-backed accessor) instead of
-`n.parent_id`. The rejected alternative (mutating `nodes[i].parent_id` inside
-`reparent_root_nodes`) was NOT taken — it would touch live UI code, which P0's zero-live-code
-rule forbids; the dump-only fix was already the design's stated preference. Committed on
-`feat/ui-harness-p0` (not yet landed to main at time of writing — see that branch's history for
-the exact SHA once merged).
-
-`ui_snapshot::dump.rs` serializes `UINode.parent_id` (the mint-time struct field) instead of `UITree.parent_index` (the live array `reparent_root_nodes` actually mutates) — any node reparented via `ScrollContainer::reparent_content` (or the like) shows `parent: null`/its original parent in `--dump` JSON even though it's correctly clipped/nested for real rendering. Found 2026-07-08 verifying BUG-060: the dump made a correctly-fixed tree look unclipped, costing real debugging time before the PNG (the actual render) proved it was fine. **Fix shape:** either serialize `tree.parent_index[i]` in `dump.rs:38`/`:92`, or have `reparent_root_nodes` also update `self.nodes[i].parent_id` so the two stay in sync.
-
 ### BUG-069 (shipping-license-audit) — four license problems in shipped components — HIGH at commercialization, latent until then
 **Status:** OPEN
 
@@ -388,17 +372,6 @@ demucs htdemucs weight file license (⚠ verify at commercialization review). Da
 are NOT affected — eval-only, never bundled.
 
 COMMERCIALIZATION_DESIGN's license review must consume this entry wholesale.
-
-### BUG-067 (ui-snapshot-dead-blit-pipeline) — dead `make_blit_pipeline` fails clippy under the ui-snapshot feature — LOW
-**Status:** FIXED 2026-07-10 (UI_HARNESS_UNIFICATION P0 landing) — `make_blit_pipeline` had zero callers (abandoned thumbnail-blit path); deleted from `render.rs`. Duplicate of BUG-057, closed together.
-
-**Found 2026-07-08 during DRAG_CAPTURE P1 gating; confirmed pre-existing** (present at base
-`b9304330`, reproduced in a throwaway worktree; `git diff --stat b9304330 -- .../render.rs`
-empty). Symptom: `fn make_blit_pipeline` at `crates/manifold-app/src/ui_snapshot/render.rs:760`
-is never called; under `-D warnings` with the `manifold-app/ui-snapshot` feature the dead-code
-lint denies the build. The no-feature clippy gate is clean, so it only bites a combined
-`clippy --features ui-snapshot` invocation. Root cause: leftover helper. Fix shape: delete it,
-or wire it if the blit path is meant to be used. Not blocking; outside DRAG_CAPTURE's file list.
 
 ### BUG-068 (inspector-scene-cliphit-overlap) — `inspector` ui-snap fixture clip/panel hit overlap — LOW
 **Status:** OPEN
@@ -824,25 +797,6 @@ last gated `manifold-playback`, now firing on unrelated code:
 change. `cargo test -p manifold-playback --lib` is unaffected (tests still build and pass;
 only `--tests -- -D warnings` fails). Not fixed here — out of scope for the audio-trigger
 unification and touching `audio_mixdown.rs` wasn't part of this phase's brief.
-
-### BUG-057 (ui-snapshot-dead-blit-pipeline) — `manifold-app --features ui-snapshot` fails `cargo clippy -D warnings` pre-existing on an unused fn — LOW (blocks that feature's clippy gate, not correctness)
-**Status:** FIXED 2026-07-10 (UI_HARNESS_UNIFICATION P0 landing) — deleted the unused `make_blit_pipeline` from `ui_snapshot/render.rs`; feature clippy now clean. (BUG-067 is a duplicate, closed together; BUG-093 was the same gate's cast debt, also fixed.)
-
-**Found 2026-07-07** while gating U-P2 of `LIVE_AUDIO_TRIGGERS_DESIGN.md` §9 (the trigger-gate
-UI unification). Not this wave's fault — `crates/manifold-app/src/ui_snapshot/render.rs`
-wasn't touched this session; `git log -S "fn make_blit_pipeline"` shows it landed in an
-earlier, unrelated commit (`fea20ade`, "real per-node output thumbnails in the graph scene").
-`fn make_blit_pipeline(device: &GpuDevice) -> manifold_gpu::GpuRenderPipeline` at
-`ui_snapshot/render.rs:760` has zero call sites under any feature combination — plain
-`dead_code`, not a lint-version regression like BUG-056.
-
-**Fix shape:** either delete the function or wire it to its intended call site (unclear which
-without reading the surrounding thumbnail-render code, out of scope for this phase). `cargo
-build -p manifold-app --features ui-snapshot` and `cargo test -p manifold-app --lib` are both
-unaffected (only `clippy --features ui-snapshot -- -D warnings` fails); plain `cargo clippy
---workspace -- -D warnings` (which doesn't enable the feature) stays clean. Not fixed here —
-out of scope for the audio-trigger unification and touching `render.rs` wasn't part of this
-phase's brief.
 
 ### BUG-054 (renderer-device-ptr-dangles) — renderers cache a raw `*const GpuDevice` that only `ContentThread::run()` repoints — MED (latent; every new headless/embedded consumer of ContentThread hits it)
 **Status:** OPEN
@@ -1937,6 +1891,54 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-093 (ui-snapshot-fixtures-unnecessary-cast-clippy-debt) — two redundant `as i32` casts fail feature-clippy — LOW
+**Status:** FIXED @ a56f641a
+
+**Fixed 2026-07-10 (UI_HARNESS_UNIFICATION P0 landing).** Dropped the two `i as i32` / `20 + i as i32` casts in `ui_snapshot/fixtures.rs` (the loop var `i` from `0..20` is already `i32`). Pre-existing debt on the same `cargo clippy -p manifold-app --features ui-snapshot -- -D warnings` gate as BUG-057/067; all three cleared together.
+
+
+### BUG-071 (ui-snap-dump-stale-parent) — `ui_snapshot::dump.rs` serializes the mint-time parent, not the live reparented one — LOW (dev-tooling only)
+**Status:** FIXED 2026-07-10 (`UI_HARNESS_UNIFICATION_DESIGN.md` P0, D9c) — `dump_tree_ex`
+(`dump.rs:38`) and `terse` (`dump.rs:92`, now ~95/~99 after the comment) both serialize
+`tree.parent_of(n.id)` (the live, already-`pub`, `parent_index`-backed accessor) instead of
+`n.parent_id`. The rejected alternative (mutating `nodes[i].parent_id` inside
+`reparent_root_nodes`) was NOT taken — it would touch live UI code, which P0's zero-live-code
+rule forbids; the dump-only fix was already the design's stated preference. Committed on
+`feat/ui-harness-p0` (not yet landed to main at time of writing — see that branch's history for
+the exact SHA once merged).
+
+`ui_snapshot::dump.rs` serializes `UINode.parent_id` (the mint-time struct field) instead of `UITree.parent_index` (the live array `reparent_root_nodes` actually mutates) — any node reparented via `ScrollContainer::reparent_content` (or the like) shows `parent: null`/its original parent in `--dump` JSON even though it's correctly clipped/nested for real rendering. Found 2026-07-08 verifying BUG-060: the dump made a correctly-fixed tree look unclipped, costing real debugging time before the PNG (the actual render) proved it was fine. **Fix shape:** either serialize `tree.parent_index[i]` in `dump.rs:38`/`:92`, or have `reparent_root_nodes` also update `self.nodes[i].parent_id` so the two stay in sync.
+
+### BUG-067 (ui-snapshot-dead-blit-pipeline) — dead `make_blit_pipeline` fails clippy under the ui-snapshot feature — LOW
+**Status:** FIXED 2026-07-10 (UI_HARNESS_UNIFICATION P0 landing) — `make_blit_pipeline` had zero callers (abandoned thumbnail-blit path); deleted from `render.rs`. Duplicate of BUG-057, closed together.
+
+**Found 2026-07-08 during DRAG_CAPTURE P1 gating; confirmed pre-existing** (present at base
+`b9304330`, reproduced in a throwaway worktree; `git diff --stat b9304330 -- .../render.rs`
+empty). Symptom: `fn make_blit_pipeline` at `crates/manifold-app/src/ui_snapshot/render.rs:760`
+is never called; under `-D warnings` with the `manifold-app/ui-snapshot` feature the dead-code
+lint denies the build. The no-feature clippy gate is clean, so it only bites a combined
+`clippy --features ui-snapshot` invocation. Root cause: leftover helper. Fix shape: delete it,
+or wire it if the blit path is meant to be used. Not blocking; outside DRAG_CAPTURE's file list.
+
+### BUG-057 (ui-snapshot-dead-blit-pipeline) — `manifold-app --features ui-snapshot` fails `cargo clippy -D warnings` pre-existing on an unused fn — LOW (blocks that feature's clippy gate, not correctness)
+**Status:** FIXED 2026-07-10 (UI_HARNESS_UNIFICATION P0 landing) — deleted the unused `make_blit_pipeline` from `ui_snapshot/render.rs`; feature clippy now clean. (BUG-067 is a duplicate, closed together; BUG-093 was the same gate's cast debt, also fixed.)
+
+**Found 2026-07-07** while gating U-P2 of `LIVE_AUDIO_TRIGGERS_DESIGN.md` §9 (the trigger-gate
+UI unification). Not this wave's fault — `crates/manifold-app/src/ui_snapshot/render.rs`
+wasn't touched this session; `git log -S "fn make_blit_pipeline"` shows it landed in an
+earlier, unrelated commit (`fea20ade`, "real per-node output thumbnails in the graph scene").
+`fn make_blit_pipeline(device: &GpuDevice) -> manifold_gpu::GpuRenderPipeline` at
+`ui_snapshot/render.rs:760` has zero call sites under any feature combination — plain
+`dead_code`, not a lint-version regression like BUG-056.
+
+**Fix shape:** either delete the function or wire it to its intended call site (unclear which
+without reading the surrounding thumbnail-render code, out of scope for this phase). `cargo
+build -p manifold-app --features ui-snapshot` and `cargo test -p manifold-app --lib` are both
+unaffected (only `clippy --features ui-snapshot -- -D warnings` fails); plain `cargo clippy
+--workspace -- -D warnings` (which doesn't enable the feature) stays clean. Not fixed here —
+out of scope for the audio-trigger unification and touching `render.rs` wasn't part of this
+phase's brief.
 
 ### BUG-087 (osc-timecode-receiving-flag-false-positive-at-startup) — `is_receiving_timecode` can read true before any real OSC message ever arrives — LOW-MED (narrow boot-time window)
 **Status:** FIXED 2026-07-10 — `last_timecode_received_time` now defaults to `Seconds(f64::NEG_INFINITY)` (osc_sync.rs), so the timeout check can never pass before a real message sets it. Regression test `osc_update_no_false_receive_at_startup_before_any_timecode`.
