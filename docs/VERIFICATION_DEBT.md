@@ -24,6 +24,15 @@ Rules (normative home: `DESIGN_DOC_STANDARD.md` §10):
 
 ## Open
 
+### VD-024 — AUDIO_SETUP_DOCK P3b: AudioTriggerSection has no unit-test module
+Landed 2026-07-10 (`5c4fbcca`; `docs/landings/2026-07-10-audio-dock-p3b.md`). The new
+`crates/manifold-ui/src/panels/audio_trigger_section.rs` lacks the `#[cfg(test)]` collapse/click
+module that its siblings `macros_panel.rs` and `layer_chrome.rs` carry. Covered for now by
+compile + the 658-test `manifold-ui` suite (no regressions) + the L3 add-trigger flow
+(`scripts/ui-flows/audio-clip-trigger-add.json`, 14/14 `ok`). **Burn down:** add a test module
+mirroring `macros_panel.rs`'s (default-collapsed, toggle, add/remove row, row-expand) — fold into
+P3c or P4, both of which touch adjacent code.
+
 ### VD-023 — LIVE_RECORDING_PROOFS P3: in-app record-button glue — L4-by-live-use only, no automated test
 Deferred 2026-07-10 (Peter's call; `docs/landings/2026-07-10-live-recording-proofs.md`). P1+P2
 prove the recorder itself (the `LiveRecordingSession` API into the real AVAssetWriter, adversarial
