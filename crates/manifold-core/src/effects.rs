@@ -141,6 +141,10 @@ impl ParamDef {
             // onto the spec in `append_user_binding`.
             is_angle: false,
             is_trigger_gate: self.is_trigger_gate,
+            // Bundled/registry `ParamDef` has no section concept — sections
+            // are seeded at expose time or by the glTF importer, never on
+            // the base registry template (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D5).
+            section: None,
         }
     }
 }
@@ -765,6 +769,7 @@ fn spec_from_binding(
         // starts false. A later expose/edit reseeds it with the real value.
         is_angle: false,
         is_trigger_gate: false,
+        section: None,
     }
 }
 
@@ -792,6 +797,7 @@ fn placeholder_spec(
         invert: false,
         is_angle: false,
         is_trigger_gate: false,
+        section: None,
     }
 }
 
@@ -1848,6 +1854,10 @@ impl PresetInstance {
             // A user-exposed inner-graph param is never the trigger-gate card
             // (that's the preset-authored `clip_trigger` outer card only).
             is_trigger_gate: false,
+            // Section seeding from the innermost enclosing group's display
+            // name is P3's deliverable (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md
+            // §2 D5) — this P2 session only lands the field itself.
+            section: None,
         };
 
         // The per-instance graph is the single binding-storage list.
@@ -2029,6 +2039,7 @@ impl PresetInstance {
             // angle flag off the captured binding, same as `append_user_binding`.
             is_angle: binding.is_angle,
             is_trigger_gate: false,
+            section: None,
         });
 
         // Re-insert the manifest entry at its original display position among
@@ -4069,6 +4080,7 @@ mod tests {
             invert: false,
             is_angle: false,
             is_trigger_gate: false,
+            section: None,
         };
         let mut p = crate::params::Param::bundled(spec);
         p.value = value;
@@ -4275,6 +4287,7 @@ mod tests {
                     invert: false,
                     is_angle: false,
                     is_trigger_gate: false,
+                    section: None,
                 }],
                 bindings: vec![BindingDef {
                     id: "amount".to_string(),

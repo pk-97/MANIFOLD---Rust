@@ -243,7 +243,45 @@ use crate::node_graph::effect_node::{
 use crate::node_graph::parameters::ParamDef;
 use crate::node_graph::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::Source;
-use super::{PhongMaterial, RenderScene, UnlitMaterial};
+use super::{PhongMaterial, RenderScene, Transform3D, UnlitMaterial};
+
+/// `Graph::connect` needs a `&'static str` port name; these helpers only
+/// ever address the first handful of scene objects, so a small literal
+/// table avoids leaking a formatted `String` just to satisfy the lifetime.
+fn transform_port_name(index: usize) -> &'static str {
+    match index {
+        0 => "transform_0",
+        1 => "transform_1",
+        2 => "transform_2",
+        3 => "transform_3",
+        4 => "transform_4",
+        _ => panic!("mesh_snapshot test helper: add a transform_{{index}} literal for index {index}"),
+    }
+}
+
+/// Add a `node.transform_3d` node, set its `pos_x` param, and wire its
+/// `transform` output into `render`'s `transform_{index}` port. Test helper
+/// replacing the retired `render_scene` per-object `pos_x_{index}` param
+/// (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D3 — the render node no longer
+/// carries per-object TRS params at all, only the `transform_n` port).
+fn wire_pos_x(g: &mut Graph, render: NodeInstanceId, index: usize, pos_x: f32) {
+    let t = g.add_node(Box::new(Transform3D::new()));
+    g.set_param(t, "pos_x", ParamValue::Float(pos_x)).unwrap();
+    g.connect((t, "transform"), (render, transform_port_name(index)))
+        .unwrap();
+}
+
+/// Same as [`wire_pos_x`] but for a full `(pos_x, pos_y, pos_z)` triple —
+/// replaces three retired `pos_x_{index}`/`pos_y_{index}`/`pos_z_{index}`
+/// param sets with one `node.transform_3d` node.
+fn wire_pos(g: &mut Graph, render: NodeInstanceId, index: usize, pos: [f32; 3]) {
+    let t = g.add_node(Box::new(Transform3D::new()));
+    g.set_param(t, "pos_x", ParamValue::Float(pos[0])).unwrap();
+    g.set_param(t, "pos_y", ParamValue::Float(pos[1])).unwrap();
+    g.set_param(t, "pos_z", ParamValue::Float(pos[2])).unwrap();
+    g.connect((t, "transform"), (render, transform_port_name(index)))
+        .unwrap();
+}
 
 /// Test-only no-op source for `Array<MeshVertex>`. The caller pre-binds a
 /// shared buffer to this node's `out` resource and CPU-writes the mesh
@@ -720,7 +758,7 @@ fn render_scene_occlusion_frame(w: u32, h: u32, offset: f32) -> Vec<[f32; 4]> {
     let render = g.add_node(Box::new(RenderScene::new()));
     g.set_param(render, "objects", ParamValue::Float(2.0)).unwrap();
     g.set_param(render, "lights", ParamValue::Float(0.0)).unwrap();
-    g.set_param(render, "pos_x_1", ParamValue::Float(-offset)).unwrap();
+    wire_pos_x(&mut g, render, 1, -offset);
 
     let sink = g.add_node(Box::new(FinalOutput::new()));
 
@@ -948,10 +986,8 @@ fn render_scene_two_cubes_png(w: u32, h: u32) -> Vec<u8> {
     // a modest same-side X offset, so its (larger, nearer) silhouette
     // partially overlaps object 0's — the occlusion render_scene exists
     // for, made visible.
-    g.set_param(render, "pos_x_0", ParamValue::Float(-1.5)).unwrap();
-    g.set_param(render, "pos_x_1", ParamValue::Float(0.8)).unwrap();
-    g.set_param(render, "pos_y_1", ParamValue::Float(0.3)).unwrap();
-    g.set_param(render, "pos_z_1", ParamValue::Float(1.2)).unwrap();
+    wire_pos_x(&mut g, render, 0, -1.5);
+    wire_pos(&mut g, render, 1, [0.8, 0.3, 1.2]);
 
     // Angled key light in the camera's OWN octant. The M6-D4 flip is
     // view-based (`if dot(N, V) < 0.0 { N = -N; }`), so a convex cube's
@@ -1703,9 +1739,7 @@ fn gltf_mesh_source_renders_azalea_to_png() {
     g.set_param(render, "lights", ParamValue::Float(1.0)).unwrap();
     // Recenter the (not-recentered) primitive output at the origin so
     // CameraOrbit's fixed target frames it.
-    g.set_param(render, "pos_x_0", ParamValue::Float(-center[0])).unwrap();
-    g.set_param(render, "pos_y_0", ParamValue::Float(-center[1])).unwrap();
-    g.set_param(render, "pos_z_0", ParamValue::Float(-center[2])).unwrap();
+    wire_pos(&mut g, render, 0, [-center[0], -center[1], -center[2]]);
 
     let sink = g.add_node(Box::new(FinalOutput::new()));
 
@@ -1931,9 +1965,7 @@ fn gltf_textured_azalea_renders_through_render_scene_to_png() {
     let render = g.add_node(Box::new(RenderScene::new()));
     g.set_param(render, "objects", ParamValue::Float(1.0)).unwrap();
     g.set_param(render, "lights", ParamValue::Float(1.0)).unwrap();
-    g.set_param(render, "pos_x_0", ParamValue::Float(-center[0])).unwrap();
-    g.set_param(render, "pos_y_0", ParamValue::Float(-center[1])).unwrap();
-    g.set_param(render, "pos_z_0", ParamValue::Float(-center[2])).unwrap();
+    wire_pos(&mut g, render, 0, [-center[0], -center[1], -center[2]]);
 
     let sink = g.add_node(Box::new(FinalOutput::new()));
 
