@@ -12,6 +12,7 @@ Run: python3 .claude/hooks/test_ask_question_guard.py
 import importlib.util
 import io
 import json
+import os
 import sys
 import tempfile
 from contextlib import redirect_stdout
@@ -57,6 +58,14 @@ def _default_classifier(system_prompt, window_text, *a, **kw):
 
 
 common.call_classifier = _default_classifier
+
+# The hook consults the real latency stamp (common.classifier_throttled) —
+# a live repo may legitimately hold a fresh timeout/slow stamp, which would
+# make every semantic-tier test below order-dependent on real daemon state.
+# Pin it healthy; the throttle tests patch it (or exercise the real function
+# against a temp stamp) explicitly.
+_REAL_THROTTLED = common.classifier_throttled
+common.classifier_throttled = lambda *a, **kw: False
 
 PASS, FAIL = [], []
 
@@ -361,6 +370,66 @@ def test_semantic_clear_records_telemetry_undenied():
     with_bounce_dir(run)
 
 
+def test_classifier_throttled_stamp_logic():
+    orig_stamp, orig_dir = common.CLASSIFIER_STAMP, common.VERDICTS_DIR
+    with tempfile.TemporaryDirectory() as td:
+        common.VERDICTS_DIR = td
+        common.CLASSIFIER_STAMP = os.path.join(td, "classifier_latency.json")
+        try:
+            check("no stamp reads healthy", _REAL_THROTTLED() is False)
+            common._write_classifier_stamp(3.1, False)
+            check("fresh fast call reads healthy", _REAL_THROTTLED() is False)
+            common._write_classifier_stamp(30.0, True)
+            check("fresh timeout reads throttled", _REAL_THROTTLED() is True)
+            common._write_classifier_stamp(45.0, False)
+            check("fresh slow completion reads throttled", _REAL_THROTTLED() is True)
+            check("stale stamp reads healthy", _REAL_THROTTLED(fresh_s=-1) is False)
+            with open(common.CLASSIFIER_STAMP, "w", encoding="utf-8") as f:
+                f.write("{corrupt")
+            check("corrupt stamp reads healthy", _REAL_THROTTLED() is False)
+        finally:
+            common.CLASSIFIER_STAMP, common.VERDICTS_DIR = orig_stamp, orig_dir
+
+
+def test_semantic_skips_when_throttled():
+    def run(_td):
+        del TELEMETRY[:]
+        calls_before = len(CLASSIFIER_CALLS)
+        common.classifier_throttled = lambda *a, **kw: True
+        try:
+            out = run_hook({"session_id": "s9", "transcript_path": "/tmp/none.jsonl", "tool_input": {"questions": TASTE_CALL_QUESTIONS}})
+        finally:
+            common.classifier_throttled = lambda *a, **kw: False
+        check("throttled skip does not deny", out == "", out)
+        check("throttled skip makes zero classifier calls", len(CLASSIFIER_CALLS) == calls_before, CLASSIFIER_CALLS[calls_before:])
+        recs = [r for r in TELEMETRY if r.get("event") == "ask_gate"]
+        check("throttled skip writes exactly one ask_gate record", len(recs) == 1, recs)
+        if recs:
+            r = recs[0]
+            check("skip record tier is 'semantic'", r.get("tier") == "semantic", r)
+            check("skip record error is 'skipped-throttled'", r.get("error") == "skipped-throttled", r)
+            check("skip record denied is false", r.get("denied") is False, r)
+            check("skip record gate is null", r.get("gate") is None, r)
+
+    with_bounce_dir(run)
+
+
+def test_regex_tier_unaffected_by_throttle():
+    def run(_td):
+        common.classifier_throttled = lambda *a, **kw: True
+        try:
+            out = run_hook({"session_id": "s10", "transcript_path": "/tmp/none.jsonl", "tool_input": {"questions": INCIDENT_QUESTIONS}})
+        finally:
+            common.classifier_throttled = lambda *a, **kw: False
+        check(
+            "regex tier still denies while throttled",
+            out != "" and json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "deny",
+            out,
+        )
+
+    with_bounce_dir(run)
+
+
 def main():
     tests = [
         test_incident_shape_fires,
@@ -381,6 +450,9 @@ def main():
         test_regex_denial_records_unified_telemetry,
         test_semantic_decidable_denies_and_records_telemetry,
         test_semantic_clear_records_telemetry_undenied,
+        test_classifier_throttled_stamp_logic,
+        test_semantic_skips_when_throttled,
+        test_regex_tier_unaffected_by_throttle,
     ]
     for t in tests:
         t()
