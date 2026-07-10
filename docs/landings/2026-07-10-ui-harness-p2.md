@@ -24,10 +24,10 @@ The drift the whole design exists to kill is gone: the script Runner no longer k
 
 ## Honest gaps / escalations
 
-- **BUG-094 (logged, not fixed):** `render_ui_to_png`'s overlay pass (Pass 5) uses `render_tree_range` where the live app uses `render_sub_region`, so an overlay range excluding its own region root can render nothing. **Pre-existing** (surfaced by P2's mandated VERIFY-AT-IMPL audit, not introduced here), **latent** (not reproduced against a failing scene; the two shipped flows and the drag demo all render overlays correctly), and outside P2's scope. Fixing needs a repro scene that doesn't exist yet — left tracked rather than fixed-by-guess.
+- **BUG-097 (logged, not fixed; renumbered from BUG-094 — concurrent-session ID collision with fluidsim3d):** `render_ui_to_png`'s overlay pass (Pass 5) uses `render_tree_range` where the live app uses `render_sub_region`, so an overlay range excluding its own region root can render nothing. **Pre-existing** (surfaced by P2's mandated VERIFY-AT-IMPL audit, not introduced here), **latent** (not reproduced against a failing scene; the two shipped flows and the drag demo all render overlays correctly), and outside P2's scope. Fixing needs a repro scene that doesn't exist yet — left tracked rather than fixed-by-guess.
 - **BUG-073 → PARTIAL:** the per-frame tick mechanism now exists but is opt-in per script; existing flows weren't retrofitted.
 - `Step`'s per-frame `thread::sleep(DT)` is real wall-clock (needed so clock-driven tweens advance); harmless to the two shipped gates, uncapped for future large-`Step` scripts — same tradeoff P0 accepted.
 
 ## What's owed
 
-P3 — generalize the scaffolding to the cacheless graph-editor window with its own invariant (no atlas cache). BUG-094 as a follow-up if an overlay render bug is ever reported.
+P3 — generalize the scaffolding to the cacheless graph-editor window with its own invariant (no atlas cache). BUG-097 (ex-094) as a follow-up if an overlay render bug is ever reported.

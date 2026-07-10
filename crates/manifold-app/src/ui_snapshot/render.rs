@@ -365,6 +365,17 @@ pub fn render_graph_to_png(
 /// can't render headless — left as the same "Select a node" hint the live
 /// editor shows before a click, not faked. No node is pre-selected, so the
 /// inner-node list shows its own empty state — the editor's state on open.
+///
+/// P3 (`docs/UI_HARNESS_UNIFICATION_DESIGN.md`): this used to build the
+/// sidebar into a throwaway scratch `UITree` and the inspector into a
+/// *second* throwaway `UIRoot`'s tree, then paint them with two separate
+/// `render_tree` calls plus a third for the canvas — the exact lookalike
+/// topology the design's audit named (three render passes where the live
+/// window issues one). It now builds ONE `UIRoot` (sidebar + inspector
+/// merged, same as `present_graph_editor_window`'s `ws.ui_root`) and paints
+/// it through `crate::editor_frame::composite_editor_frame` — the identical
+/// function the live window calls. See `editor_frame.rs`'s module doc for
+/// the full argument.
 #[allow(clippy::too_many_arguments)]
 pub fn render_graph_editor_to_png(
     project: &manifold_core::project::Project,
@@ -378,16 +389,14 @@ pub fn render_graph_editor_to_png(
     path: &str,
     // UI_AUTOMATION_DESIGN.md P1: when `Some`, write the extended tree dump
     // (`super::dump::dump_tree_ex`) here — the real card-lane/inspector tree
-    // (`editor_ui.tree`, widget/name-bearing) plus the graph canvas'
+    // (`ui_root.tree`, widget/name-bearing) plus the graph canvas'
     // `HitTargets` enumeration as a `custom_surfaces` entry. `None` skips the
     // dump entirely (unchanged PNG-only behavior).
     dump_path: Option<&std::path::Path>,
 ) {
-    use manifold_ui::draw::Painter;
-    use manifold_ui::graph_canvas::{GraphCanvas, Rect as CanvasRect};
-    use manifold_ui::node::{TextAlign, UIStyle};
-    use manifold_ui::panels::graph_editor::{EDITOR_CARD_LANE_WIDTH, SIDEBAR_WIDTH};
-    use manifold_ui::{Rect as UiRect, UITree};
+    use manifold_ui::graph_canvas::GraphCanvas;
+    use manifold_ui::panels::graph_editor::{EDITOR_CARD_LANE_WIDTH, GraphEditorPanel, SIDEBAR_WIDTH};
+    use manifold_ui::Rect as UiRect;
 
     assert_eq!(tex_w % 64, 0, "tex_w must be a multiple of 64 for aligned readback");
     let logical_w = tex_w as f32 / scale;
@@ -406,108 +415,75 @@ pub fn render_graph_editor_to_png(
     let target_tex = RenderTarget::new(&device, tex_w, tex_h, FORMAT, "ui-snap-editor");
     let dpi = f64::from(scale);
 
-    let mut tree = UITree::new();
-
-    // Right lane: the WHOLE inspector column, driven exactly like the live editor
-    // (`present_graph_editor_window`) — a throwaway `UIRoot` synced from the
-    // fixture project, its inspector built into the lane rect and rendered from
-    // its own tree alongside the sidebar `tree` below. Matches the live editor's
-    // full-inspector column (master/layer tabs, cards, chrome, macros).
-    let mut editor_ui = crate::ui_root::UIRoot::new();
+    // ONE `UIRoot` for the whole editor window — sidebar preview column AND
+    // the right inspector lane merged into `ui_root.tree`, exactly as the
+    // live `present_graph_editor_window` builds `ws.ui_root.tree`. This is
+    // the topology fix: no more scratch `tree` + throwaway `editor_ui.tree`.
+    let mut ui_root = crate::ui_root::UIRoot::new();
     let active_idx = match target {
         manifold_core::GraphTarget::Generator(lid) => {
             project.timeline.layers.iter().position(|l| &l.layer_id == lid)
         }
         manifold_core::GraphTarget::Effect(_) => None,
     };
-    crate::ui_bridge::sync_project_data(&mut editor_ui, project, active_idx, selection);
+    crate::ui_bridge::sync_project_data(&mut ui_root, project, active_idx, selection);
     // No `ContentState` exists on this path (a bare fixture `Project`, no
     // playback engine) — the graph-editor lane render never has latch data,
     // so it can only ever show the red "automated" dot, never the gray
     // overridden state. Honest empty slice, not a stopgap.
-    crate::ui_bridge::sync_inspector_data(&mut editor_ui, project, active_idx, selection, &[]);
-    editor_ui.build_inspector_in_rect(UiRect::new(
+    crate::ui_bridge::sync_inspector_data(&mut ui_root, project, active_idx, selection, &[]);
+    ui_root.build_inspector_in_rect(UiRect::new(
         card_x,
         0.0,
         EDITOR_CARD_LANE_WIDTH,
         canvas_height,
     ));
 
-    // Left sidebar: backing panel + the two monitor titles + an empty-state
-    // hint, laid out with the same math `present_graph_editor_window` uses (16:9
-    // monitor_aspect default — no content pipeline headless to read the real
-    // project aspect from).
-    {
-        let preview_pad = 8.0_f32;
-        let preview_title_h = 18.0_f32;
-        let monitor_aspect = 16.0_f32 / 9.0;
-        let avail_w = (SIDEBAR_WIDTH - 2.0 * preview_pad).max(1.0);
-        let max_body_h = ((canvas_height - 3.0 * preview_pad - 2.0 * preview_title_h) * 0.5).max(1.0);
-        let width_bound_h = avail_w / monitor_aspect;
-        let (preview_w, preview_h) = if width_bound_h <= max_body_h {
-            (avail_w, width_bound_h)
-        } else {
-            (max_body_h * monitor_aspect, max_body_h)
-        };
-        let preview_x = (SIDEBAR_WIDTH - preview_w) * 0.5;
-        let pane_block_h = 2.0 * (preview_title_h + preview_h) + preview_pad;
-        let mut pane_y = ((canvas_height - pane_block_h) * 0.5).max(preview_pad);
-        let node_title_y = pane_y;
-        let node_img_y = node_title_y + preview_title_h;
-        pane_y = node_img_y + preview_h + preview_pad;
-        let master_title_y = pane_y;
+    // Left sidebar preview column: backing panel + the two monitor titles +
+    // an empty-state hint, laid out with the same math
+    // `present_graph_editor_window` uses (16:9 `monitor_aspect` default — no
+    // content pipeline headless to read the real project aspect from). A
+    // fresh, unconfigured `GraphEditorPanel` reproduces the live window's
+    // own pre-selection empty state ("Node Output" / "Select a node")
+    // through the SAME `render_node_inspector` call live uses — see
+    // `editor_frame.rs` module doc deviation 1.
+    let preview_pad = 8.0_f32;
+    let preview_title_h = 18.0_f32;
+    let monitor_aspect = 16.0_f32 / 9.0;
+    let avail_w = (SIDEBAR_WIDTH - 2.0 * preview_pad).max(1.0);
+    let max_body_h = ((canvas_height - 3.0 * preview_pad - 2.0 * preview_title_h) * 0.5).max(1.0);
+    let width_bound_h = avail_w / monitor_aspect;
+    let (preview_w, preview_h) = if width_bound_h <= max_body_h {
+        (avail_w, width_bound_h)
+    } else {
+        (max_body_h * monitor_aspect, max_body_h)
+    };
+    let preview_x = (SIDEBAR_WIDTH - preview_w) * 0.5;
+    let pane_block_h = 2.0 * (preview_title_h + preview_h) + preview_pad;
+    let mut pane_y = ((canvas_height - pane_block_h) * 0.5).max(preview_pad);
+    let node_title_y = pane_y;
+    let node_img_y = node_title_y + preview_title_h;
+    pane_y = node_img_y + preview_h + preview_pad;
+    let master_title_y = pane_y;
 
-        let title_style = UIStyle {
-            text_color: manifold_ui::color::TEXT_WHITE_C32,
-            font_size: 14,
-            text_align: TextAlign::Left,
-            ..UIStyle::default()
-        };
-        // `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D4: `tree` is a standalone
-        // scratch tree local to this snapshot function (not part of any
-        // `UIRoot`), but it's still a real `UITree` and `mint`'s D4 debug
-        // assertion doesn't know that — a bare `None`-rooted node here
-        // panics identically to one in the live app (confirmed: `cargo
-        // xtask ui-snap editor` panicked before this wrap). One region for
-        // the whole sidebar; this function never had per-panel tiers to
-        // begin with.
-        let sidebar_region = tree.begin_region(
-            manifold_ui::Rect::new(0.0, 0.0, SIDEBAR_WIDTH, canvas_height),
-            manifold_ui::ZTier::Base,
-            "editor_snapshot_sidebar",
-            manifold_ui::UIFlags::empty(),
-        );
-        let sidebar_start = tree.count();
-        tree.add_panel(
-            None,
-            0.0,
-            0.0,
-            SIDEBAR_WIDTH,
-            canvas_height,
-            UIStyle { bg_color: manifold_ui::color::EFFECT_CARD_INNER_BG_C32, ..UIStyle::default() },
-        );
-        tree.add_label(None, preview_x, node_title_y, preview_w, preview_title_h, "Node Output", title_style);
-        tree.add_label(
-            None,
-            preview_x,
-            node_img_y + preview_h * 0.5 - 8.0,
-            preview_w,
-            16.0,
-            "Select a node",
-            UIStyle {
-                text_color: manifold_ui::color::TEXT_DIMMED_C32,
-                font_size: 12,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            },
-        );
-        tree.add_label(None, preview_x, master_title_y, preview_w, preview_title_h, "Master Out", title_style);
-        tree.end_region(sidebar_region, sidebar_start);
-    }
+    let editor_panel = GraphEditorPanel::new();
+    crate::editor_frame::build_editor_preview_column(
+        &mut ui_root.tree,
+        &editor_panel,
+        SIDEBAR_WIDTH,
+        canvas_height,
+        preview_x,
+        preview_w,
+        preview_h,
+        node_title_y,
+        node_img_y,
+        master_title_y,
+        /* show_image */ false,
+    );
 
     // Center canvas, offset into its lane between the two side columns — the
     // same per-node-dump machinery as `render_graph_to_png`.
-    let viewport = CanvasRect::new(canvas_x, 0.0, canvas_width, canvas_height);
+    let viewport = manifold_ui::graph_canvas::Rect::new(canvas_x, 0.0, canvas_width, canvas_height);
     let mut canvas = GraphCanvas::new();
     // Show the on-node param rows (the Blender-style layout) in the PNG — a live
     // canvas starts nodes collapsed for legibility, but the snapshot is a
@@ -521,7 +497,7 @@ pub fn render_graph_editor_to_png(
         use manifold_ui::graph_canvas::GraphCanvasTargets;
         let canvas_targets = GraphCanvasTargets { canvas: &canvas, viewport };
         let surfaces: [&dyn manifold_ui::hit_targets::HitTargets; 1] = [&canvas_targets];
-        let json = super::dump::dump_tree_ex(&editor_ui.tree, &surfaces);
+        let json = super::dump::dump_tree_ex(&ui_root.tree, &surfaces);
         std::fs::write(dump_path, serde_json::to_string_pretty(&json).expect("serialize dump"))
             .expect("write editor tree json");
         println!("ui-snap: wrote {}", dump_path.display());
@@ -549,46 +525,47 @@ pub fn render_graph_editor_to_png(
         canvas.set_node_preview_src(src);
     }
 
-    {
-        let mut enc = device.create_encoder("ui-snap-editor-clear");
-        enc.clear_texture(&target_tex.texture, 0.10, 0.10, 0.12, 1.0);
-        enc.commit_and_wait_completed();
-    }
-
-    // Same paint order as `present_graph_editor_window`: canvas immediate-mode
-    // draws first, then the lane/sidebar UITree layered on top in the same batch.
-    renderer.begin_frame();
-    canvas.render(&mut renderer as &mut dyn Painter, viewport);
-    renderer.render_tree(&tree, None);
-    // The inspector column lives in its own tree (built via a throwaway UIRoot).
-    renderer.render_tree(&editor_ui.tree, None);
-    // Column dividers, same as the runtime present pass — default widths (this
-    // headless path has no interactive drag state).
+    // Same paint order as `present_graph_editor_window` because it's the
+    // SAME function: clear + canvas immediate-mode draws + the merged
+    // sidebar/inspector `UITree` (ONE `render_tree_range` call) + dock +
+    // mini-timeline + (closed) popover/text-input overlays + prepare/render.
     let editor_area = UiRect::new(0.0, 0.0, logical_w, logical_h);
-    dock.draw(editor_area, &mut renderer as &mut dyn Painter);
-    // Bottom mini-timeline, built from the fixture project (playhead at beat 0),
-    // same view-model the live present pass draws.
     let (mini_clips, mini_layer_labels, mini_rows, mini_total, mini_bpb, mini_readout) =
         crate::app_render::mini_timeline_data(project, 0.0);
-    manifold_ui::MiniTimeline::draw(
-        dock_rects.bottom,
-        mini_total,
-        mini_bpb,
-        0.0,
-        mini_rows,
-        &mini_clips,
-        &mini_layer_labels,
-        &mini_readout,
-        false,
-        &mut renderer as &mut dyn Painter,
+    // Closed/inactive by construction — the guarded branches inside
+    // `composite_editor_frame` never fire (see that module's doc deviation 3).
+    let mut popover = manifold_ui::graph_canvas::mapping_popover::MappingPopover::new();
+    let text_input = crate::text_input::TextInputState::new();
+    let frame_timer = crate::frame_timer::FrameTimer::new(60.0);
+    crate::editor_frame::composite_editor_frame(
+        &device,
+        Some(&mut renderer),
+        &ui_root,
+        &dock,
+        editor_area,
+        Some(&canvas),
+        viewport,
+        crate::editor_frame::EditorMiniTimelineInputs {
+            bottom_rect: dock_rects.bottom,
+            show_bottom: dock.show_bottom,
+            total_beats: mini_total,
+            beats_per_bar: mini_bpb,
+            current_beat: 0.0,
+            row_count: mini_rows,
+            clips: &mini_clips,
+            layer_labels: &mini_layer_labels,
+            readout: &mini_readout,
+            is_playing: false,
+        },
+        &mut popover,
+        None,
+        &text_input,
+        &frame_timer,
+        &target_tex.texture,
+        tex_w,
+        tex_h,
+        dpi,
     );
-    let drew = renderer.prepare(&device, tex_w, tex_h, dpi);
-    {
-        let mut enc = device.create_encoder("ui-snap-editor");
-        renderer.render(&mut enc, &target_tex.texture, GpuLoadAction::Load);
-        enc.commit_and_wait_completed();
-    }
-    assert!(drew, "graph editor window produced no draws (empty snapshot?)");
 
     // Node previews were painted INLINE by `canvas.render` above (each at its
     // node's depth band, via `set_node_preview_src`) — the old flat post-chrome
