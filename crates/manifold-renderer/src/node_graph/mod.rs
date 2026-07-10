@@ -10,6 +10,7 @@
 pub mod atomic;
 mod backend;
 mod bindings;
+pub mod atmosphere;
 pub mod camera;
 pub mod light;
 pub mod material;

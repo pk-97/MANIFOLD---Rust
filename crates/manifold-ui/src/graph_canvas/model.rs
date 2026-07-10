@@ -34,6 +34,7 @@ impl PortView {
             PortKindSnapshot::Light => PORT_LIGHT_COLOR,
             PortKindSnapshot::Material => PORT_MATERIAL_COLOR,
             PortKindSnapshot::Transform => PORT_TRANSFORM_COLOR,
+            PortKindSnapshot::Atmosphere => PORT_ATMOSPHERE_COLOR,
         };
         let is_control = matches!(kind, PortKindSnapshot::Scalar);
         Self {

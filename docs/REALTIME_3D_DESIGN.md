@@ -1,6 +1,6 @@
 # Realtime 3D — Scenes, Lighting, Viewport
 
-**Status: IN PROGRESS (status corrected + baseline-reviewed 2026-07-05; D3/D8 AMENDED 2026-07-06 by `SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` — read its §8 before P6; D3/D4/§3/§6/§7.3 AMENDED 2026-07-10 (F2 coherence audit) — shadow-caster cap `MAX_SHADOW_CASTING_LIGHTS = 4` replaces the dead "8 objects, 4 lights" budget, read D4 before P2).** Shipped: P0 (MATERIAL M1–M6, all verified in-tree), P1 `node.render_scene` @ `8daa89fc`, P4 camera atoms (both `node.free_camera` + `node.look_at_camera` in-tree), §9 `node.spawn_from_mesh`. **The P1 "transforms not port-shadowed" deviation is retired by amendment, not by shadows: per-object transforms move to `node.transform_3d` atoms feeding `transform_n: Transform` ports** (SCENE_BUILD P2). Remaining: P2 shadows, P3 atmosphere, P5 viewport navigate, P6 gizmos, P7 scene starter preset. · designed 2026-07-03 · Fable
+**Status: IN PROGRESS (status corrected + baseline-reviewed 2026-07-05; D3/D8 AMENDED 2026-07-06 by `SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` — read its §8 before P6; D3/D4/§3/§6/§7.3 AMENDED 2026-07-10 (F2 coherence audit) — shadow-caster cap `MAX_SHADOW_CASTING_LIGHTS = 4` replaces the dead "8 objects, 4 lights" budget, read D4 before P2).** Shipped: P0 (MATERIAL M1–M6, all verified in-tree), P1 `node.render_scene` @ `8daa89fc`, P4 camera atoms (both `node.free_camera` + `node.look_at_camera` in-tree), §9 `node.spawn_from_mesh`, **P2 shadow maps + P3 atmosphere/fog @ `feat/realtime3d-p2p3` 2026-07-11** (gpu-proofs `render_scene_shadows` + `render_scene_fog`, PNG-verified; lights also moved to a ring-buffered storage buffer). **The P1 "transforms not port-shadowed" deviation is retired by amendment, not by shadows: per-object transforms move to `node.transform_3d` atoms feeding `transform_n: Transform` ports** (SCENE_BUILD P2). Remaining: P5 viewport navigate, P6 gizmos, P7 scene starter preset. · designed 2026-07-03 · Fable
 **Prerequisites: MATERIAL_SYSTEM_DESIGN M1–M5 (un-held by this doc — its contract is
 unchanged; this design consumes its extension points). Vocab-audit apply should land
 first (this doc uses post-rename ids: `node.render_mesh`, `node.render_copies`).**
@@ -173,7 +173,16 @@ feature is unwired (unwired = zero cost, checked, not assumed).
   (value-level depth check); two-light accumulation matches single-light × 2 within
   tolerance; existing preset PNG parity untouched (negative gate: zero diffs on
   bundled 3D presets).
-- **P2 — Shadow maps.** Depth pass per casting light (first `K = MAX_SHADOW_CASTING_LIGHTS`
+- **P2 — Shadow maps.** ✅ **SHIPPED 2026-07-11** (`feat/realtime3d-p2p3`). Depth-only
+  pre-pass per caster (new `manifold-gpu` colourless-PSO `draw_instanced_depth_only_batch`)
+  into private `Depth32Float` maps (`RENDER_TARGET | SHADER_READ`, AGX 0x78 guard), PCF via
+  `textureSampleCompareLevel`. Caster matrices ride a fixed K-slot `@binding(9)` table; each
+  light's caster slot rides the spare `.w` of its colour vec4 (split layout — shadows cost no
+  light-budget). Lights also moved to a ring-buffered (`FRAMES_IN_FLIGHT=3`) `@binding(8)`
+  storage buffer (killed the 4KB `setBytes` cap). Proof: `gpu_proofs::render_scene_shadows`
+  (occluder darkens ground 3.5%, PNG-confirmed soft shadow; >K casters render finite+lit).
+  Original plan:
+  Depth pass per casting light (first `K = MAX_SHADOW_CASTING_LIGHTS`
   casters, D4) + PCF consumption per the Light struct. Read-back: `light.rs` whole (the
   math is already documented there), `feedback_effect_chain_state_caches`, **D4's caster-cap
   policy (do not price this against object/light slider counts — the cap is `K`).** Gate:
@@ -182,7 +191,14 @@ feature is unwired (unwired = zero cost, checked, not assumed).
   skips the pass (frame capture shows no depth pass); **a scene with more than `K`
   `cast_shadows` lights produces exactly `K` shadow maps and the extra casters still light
   the scene (assert both: shadow-map count == K, and pixels lit by caster K+1).**
-- **P3 — Atmosphere.** Port type + `node.atmosphere` + fog in `render_scene` resolve.
+- **P3 — Atmosphere.** ✅ **SHIPPED 2026-07-11** (`feat/realtime3d-p2p3`). New
+  `PortType::Atmosphere` (CPU-struct wire, mirrors `Transform` across the plumbing) +
+  `node.atmosphere` + per-fragment exp depth fog in all four `render_scene` material entry
+  points. Fog lerps STRAIGHT (non-premultiplied) rgb toward `fog_color`, alpha untouched —
+  composits OVER the alpha contract. Uniform 272→320B. Proof:
+  `gpu_proofs::render_scene_fog` — density-0 is byte-identical to no-atmosphere (pixel-exact);
+  blue fog turns a white-lit receding plane blue-dominant with a real near→far depth gradient
+  (PNG-confirmed). Original plan: Port type + `node.atmosphere` + fog in `render_scene` resolve.
   Pattern-copy MATERIAL M1 plumbing. Gate: gpu_test — fog density curve at known
   depths; density 0 = byte-identical to no-atmosphere.
 - **P4 — Camera atoms.** `node.free_camera`, `node.look_at_camera`, full descriptors,

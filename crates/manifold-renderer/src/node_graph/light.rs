@@ -33,7 +33,7 @@
 //! `shadow_resolution`) are always present on the struct; `cast_shadows ==
 //! false` means renderers skip the depth pass entirely.
 
-use crate::generators::mesh_pipeline::look_at_rh;
+use crate::generators::mesh_pipeline::{look_at_rh, mat4_mul, ortho_rh, perspective_rh};
 
 /// Discriminator for the light's geometric kind. Both modes share the same
 /// `pos` / `aim` / `colour` / `range` / shadow fields on [`Light`] — only
@@ -262,10 +262,63 @@ impl Light {
         let up = pick_up(self.dir);
         look_at_rh(self.pos, self.aim, up)
     }
+
+    /// Light-space projection matrix for the shadow pass (right-handed,
+    /// Metal depth [0,1]). The frustum is fitted to `range`, NOT a
+    /// hard-coded near/far — inheriting a fixed span (e.g. DigitalPlants'
+    /// `0.1..200`) either clips a large scene or wastes depth precision on
+    /// a small one.
+    ///
+    /// - **Sun** → orthographic cube of half-extent `range` centred on
+    ///   `aim`, viewed down the light axis from `pos`. Depth spans
+    ///   `[d - range, d + range]` where `d = |pos - aim|`; X/Y span
+    ///   `±range`. This is the tight fit for a `range`-sized scene sitting
+    ///   around `aim`.
+    /// - **Point** → single-face 90° perspective from `pos` toward `aim`
+    ///   (the v1 approximation; full cubemap shadows are v2). `far` must
+    ///   comfortably exceed `range` because attenuation is only 50% at
+    ///   `d = range` — lit geometry extends well past it, so `far = 4·range`
+    ///   (≈6% attenuation) keeps casters inside the frustum.
+    pub fn shadow_proj(&self) -> [[f32; 4]; 4] {
+        match self.mode {
+            LightMode::Sun => {
+                let d = dist3(self.pos, self.aim);
+                let near = (d - self.range).max(0.05);
+                let far = d + self.range;
+                ortho_rh(
+                    -self.range,
+                    self.range,
+                    -self.range,
+                    self.range,
+                    near,
+                    far,
+                )
+            }
+            LightMode::Point => {
+                let near = (self.range * 0.05).max(0.1);
+                let far = self.range * 4.0;
+                perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, near, far)
+            }
+        }
+    }
+
+    /// Composed light-space view-projection (`proj · view`) — the single
+    /// matrix a shadow depth pass renders geometry through, and the one the
+    /// main pass reconstructs a fragment's light-space position with for the
+    /// PCF depth compare. `mat4_mul(proj, view)` produces `P · V` in the
+    /// column-major `m[col][row]` convention the shaders use.
+    pub fn shadow_view_proj(&self) -> [[f32; 4]; 4] {
+        mat4_mul(self.shadow_proj(), self.shadow_view())
+    }
 }
 
 fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn dist3(a: [f32; 3], b: [f32; 3]) -> f32 {
+    let d = sub3(a, b);
+    (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
 }
 
 fn normalize3(v: [f32; 3]) -> [f32; 3] {
@@ -465,6 +518,86 @@ mod tests {
             let mag_sq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
             assert!((mag_sq - 1.0).abs() < 1e-4, "row {i} not unit: {mag_sq}");
         }
+    }
+
+    /// Transform a world point through a column-major (`m[col][row]`)
+    /// 4×4, returning clip-space `[x, y, z, w]`.
+    fn transform_point(m: [[f32; 4]; 4], p: [f32; 3]) -> [f32; 4] {
+        let v = [p[0], p[1], p[2], 1.0];
+        let mut out = [0.0f32; 4];
+        for row in 0..4 {
+            for col in 0..4 {
+                out[row] += m[col][row] * v[col];
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn sun_shadow_proj_is_orthographic() {
+        // Ortho preserves w=1 (no perspective divide): m[3][3] == 1,
+        // m[2][3] == 0. This is the discriminator vs. a perspective proj.
+        let l = Light::default_sun();
+        let p = l.shadow_proj();
+        assert!((p[3][3] - 1.0).abs() < 1e-6, "ortho m[3][3] should be 1");
+        assert!(p[2][3].abs() < 1e-6, "ortho m[2][3] should be 0");
+    }
+
+    #[test]
+    fn point_shadow_proj_is_perspective() {
+        // Perspective writes -1 into m[2][3] so clip.w = -view.z. The
+        // single-face point-shadow frustum must be perspective.
+        let l = Light::point(
+            [0.0, 5.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [1.0, 1.0, 1.0],
+            1.0,
+            10.0,
+            true,
+            ShadowSoftness::Soft,
+            0.003,
+            2048,
+        );
+        let p = l.shadow_proj();
+        assert!((p[2][3] + 1.0).abs() < 1e-6, "perspective m[2][3] should be -1");
+    }
+
+    #[test]
+    fn sun_shadow_view_proj_centers_the_aim_point() {
+        // `aim` sits on the light's view axis, so it must land at the
+        // centre of the shadow map (clip x/y ≈ 0). Proves view and proj
+        // compose in the right order and orientation.
+        let l = Light::sun(
+            [10.0, 20.0, 30.0],
+            [1.0, 2.0, 3.0],
+            [1.0, 1.0, 1.0],
+            1.0,
+            25.0,
+            true,
+            ShadowSoftness::Soft,
+            0.003,
+            2048,
+        );
+        let clip = transform_point(l.shadow_view_proj(), l.aim);
+        assert!((clip[3] - 1.0).abs() < 1e-4, "ortho w should be 1, got {}", clip[3]);
+        assert!((clip[0] / clip[3]).abs() < 1e-3, "aim not centred in x: {}", clip[0]);
+        assert!((clip[1] / clip[3]).abs() < 1e-3, "aim not centred in y: {}", clip[1]);
+    }
+
+    #[test]
+    fn sun_shadow_depth_increases_away_from_the_light() {
+        // A caster nearer the sun must record a smaller shadow-map depth
+        // than one farther, or occlusion resolves backwards. Sun at
+        // (0,30,0) looking down: y=25 is nearer than y=5.
+        let l = Light::default_sun();
+        let near_pt = transform_point(l.shadow_view_proj(), [0.0, 25.0, 0.0]);
+        let far_pt = transform_point(l.shadow_view_proj(), [0.0, 5.0, 0.0]);
+        let near_depth = near_pt[2] / near_pt[3];
+        let far_depth = far_pt[2] / far_pt[3];
+        assert!(
+            near_depth < far_depth,
+            "nearer point should have smaller depth: near {near_depth} vs far {far_depth}"
+        );
     }
 
     #[test]

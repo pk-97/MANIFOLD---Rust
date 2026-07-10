@@ -8,6 +8,7 @@
 
 mod abs_texture;
 mod affine_transform;
+mod atmosphere;
 mod anti_clump_particles;
 mod apply_radial_burst_to_particles;
 mod array_connect_nearest;
@@ -222,6 +223,7 @@ mod wet_dry_mix;
 
 pub use abs_texture::AbsTexture;
 pub use affine_transform::AffineTransform;
+pub use atmosphere::AtmosphereNode;
 pub use anti_clump_particles::AntiClumpParticles;
 pub use apply_radial_burst_to_particles::ApplyRadialBurstToParticles;
 pub use array_connect_nearest::ArrayConnectNearest;

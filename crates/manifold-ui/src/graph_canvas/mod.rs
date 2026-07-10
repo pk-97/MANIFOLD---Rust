@@ -296,6 +296,10 @@ const PORT_MATERIAL_COLOR: Color32 = Color32::new(242, 166, 102, 255);
 /// hue ~326°, distinct from every other port colour (nearest neighbours are
 /// Camera's salmon at ~0° and Texture3D's purple at ~273°, both >45° away).
 const PORT_TRANSFORM_COLOR: Color32 = Color32::new(255, 128, 199, 255);
+/// `PortType::Atmosphere` (scene fog/sky wire, `node.atmosphere`). Hazy
+/// blue-grey — reads as "atmosphere", hue ~210°, clear of Transform's magenta
+/// (~326°) and Camera's salmon (~0°).
+const PORT_ATMOSPHERE_COLOR: Color32 = Color32::new(150, 185, 215, 255);
 /// Ghost-wire tint while dragging over a compatible / incompatible input port —
 /// a live green/red "this will / won't connect" hint, so a mis-wire is caught
 /// before the drop, not after. The actual connect still validates server-side.

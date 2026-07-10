@@ -59,6 +59,13 @@ pub enum PortType {
     /// resource on the wire, matrices are composed by consumers, never
     /// carried on the wire itself.
     Transform,
+    /// CPU-only struct wire carrying an
+    /// [`Atmosphere`](crate::node_graph::atmosphere::Atmosphere) — scene-wide
+    /// exponential depth fog + ambient/sky tint. Produced by `node.atmosphere`,
+    /// consumed by `render_scene`'s optional `atmosphere` input (REALTIME_3D §5
+    /// P3). Same CPU-struct lifetime model as `Camera` / `Light` / `Material` /
+    /// `Transform`; unwired = fog off = byte-identical to no atmosphere.
+    Atmosphere,
 }
 
 impl PortType {

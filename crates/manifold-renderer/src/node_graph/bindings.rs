@@ -19,6 +19,7 @@ use crate::node_graph::camera::Camera;
 use crate::node_graph::light::Light;
 use crate::node_graph::material::Material;
 use crate::node_graph::parameters::ParamValue;
+use crate::node_graph::atmosphere::Atmosphere;
 use crate::node_graph::transform::Transform;
 
 /// Opaque physical-buffer index handed out by the runtime's resource pool.
@@ -121,6 +122,15 @@ impl<'a> NodeInputs<'a> {
         self.backend.transform(self.slot(port)?)
     }
 
+    /// [`Atmosphere`] bound to the named [`PortType::Atmosphere`] input port.
+    /// `None` if unwired — `render_scene` treats `None` as
+    /// [`Atmosphere::default`] (fog off), so an unwired atmosphere is
+    /// byte-identical to no atmosphere. Same CPU-struct drain shape as
+    /// `Transform`.
+    pub fn atmosphere(&self, port: &str) -> Option<Atmosphere> {
+        self.backend.atmosphere(self.slot(port)?)
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&'static str, Slot)> + '_ {
         self.bindings.iter().copied()
     }
@@ -161,6 +171,8 @@ pub struct NodeOutputs<'a> {
     pending_material_writes: &'a mut Vec<(Slot, Material)>,
     /// Sibling scratch for `Transform` writes — same shape as materials.
     pending_transform_writes: &'a mut Vec<(Slot, Transform)>,
+    /// Sibling scratch for `Atmosphere` writes — same shape as transforms.
+    pending_atmosphere_writes: &'a mut Vec<(Slot, Atmosphere)>,
 }
 
 impl<'a> NodeOutputs<'a> {
@@ -173,6 +185,7 @@ impl<'a> NodeOutputs<'a> {
         pending_light_writes: &'a mut Vec<(Slot, Light)>,
         pending_material_writes: &'a mut Vec<(Slot, Material)>,
         pending_transform_writes: &'a mut Vec<(Slot, Transform)>,
+        pending_atmosphere_writes: &'a mut Vec<(Slot, Atmosphere)>,
     ) -> Self {
         Self {
             bindings,
@@ -182,6 +195,7 @@ impl<'a> NodeOutputs<'a> {
             pending_light_writes,
             pending_material_writes,
             pending_transform_writes,
+            pending_atmosphere_writes,
         }
     }
 
@@ -269,6 +283,15 @@ impl<'a> NodeOutputs<'a> {
         }
     }
 
+    /// Queue an [`Atmosphere`] write to the named output port. Drained by the
+    /// executor into the backend after `evaluate` returns; same semantics as
+    /// `set_transform`.
+    pub fn set_atmosphere(&mut self, port: &str, value: Atmosphere) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_atmosphere_writes.push((slot, value));
+        }
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&'static str, Slot)> + '_ {
         self.bindings.iter().copied()
     }
@@ -325,6 +348,7 @@ mod array_accessor_tests {
         let mut light_scratch = Vec::new();
         let mut material_scratch = Vec::new();
         let mut transform_scratch = Vec::new();
+        let mut atmosphere_scratch = Vec::new();
         let outputs = NodeOutputs::new(
             bindings,
             &backend,
@@ -333,6 +357,7 @@ mod array_accessor_tests {
             &mut light_scratch,
             &mut material_scratch,
             &mut transform_scratch,
+            &mut atmosphere_scratch,
         );
 
         let got = outputs.array("particles_out").expect("should resolve");

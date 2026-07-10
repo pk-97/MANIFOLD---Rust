@@ -1294,6 +1294,158 @@ impl GpuDevice {
         pipeline
     }
 
+    /// Create a **depth-only** render pipeline — no colour attachment. For the
+    /// shadow-map depth pass: geometry is rasterised only to fill a depth
+    /// buffer, so the WGSL's `fs_entry` must be a void `@fragment` (writes no
+    /// colour) and no colour attachment pixel format is set. Single-sample
+    /// (shadow maps are never MSAA). Pair with
+    /// [`GpuEncoder::draw_instanced_depth_only`].
+    pub fn create_render_pipeline_depth_only(
+        &self,
+        wgsl_source: &str,
+        vs_entry: &str,
+        fs_entry: &str,
+        depth_format: GpuTextureFormat,
+        label: &str,
+    ) -> GpuRenderPipeline {
+        let base_hash = archive::render_pipeline_hash(wgsl_source, vs_entry, fs_entry);
+        let hash = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            base_hash.hash(&mut h);
+            depth_format.hash(&mut h);
+            "depth_only".hash(&mut h);
+            h.finish()
+        };
+        if let Some(cached) = self.render_cache.lock().unwrap().get(&hash) {
+            return cached.clone();
+        }
+
+        let (slot_map, vs_msl, fs_msl) = {
+            let mut msl_guard = self.msl_cache.lock().unwrap();
+            if let Some(ref mut cache) = *msl_guard
+                && let Some(entry) = cache.get_render(base_hash)
+            {
+                (entry.slot_map, entry.vs_msl, entry.fs_msl)
+            } else {
+                if let Some(ref mut cache) = *msl_guard {
+                    cache.record_miss();
+                }
+                drop(msl_guard);
+                let result = compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, label);
+                if let Some(ref cache) = *self.msl_cache.lock().unwrap() {
+                    cache.put_render(base_hash, &result.0, &result.1, &result.2);
+                }
+                result
+            }
+        };
+
+        let compile_opts = unsafe {
+            use objc2::AnyThread;
+            MTLCompileOptions::init(MTLCompileOptions::alloc())
+        };
+        unsafe {
+            compile_opts.setLanguageVersion(MTLLanguageVersion::Version2_4);
+            compile_opts.setMathMode(objc2_metal::MTLMathMode::Fast);
+        }
+
+        let vs_ns = NSString::from_str(&vs_msl);
+        let vs_library = unsafe {
+            self.device
+                .newLibraryWithSource_options_error(&vs_ns, Some(&compile_opts))
+        }
+        .unwrap_or_else(|e| {
+            panic!(
+                "{label}: MTL vertex library compile error: {}\nMSL:\n{vs_msl}",
+                e.localizedDescription()
+            )
+        });
+        let fs_ns = NSString::from_str(&fs_msl);
+        let fs_library = unsafe {
+            self.device
+                .newLibraryWithSource_options_error(&fs_ns, Some(&compile_opts))
+        }
+        .unwrap_or_else(|e| {
+            panic!(
+                "{label}: MTL fragment library compile error: {}\nMSL:\n{fs_msl}",
+                e.localizedDescription()
+            )
+        });
+
+        let vs_available: Vec<String> = unsafe { vs_library.functionNames() }
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let fs_available: Vec<String> = unsafe { fs_library.functionNames() }
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let vs_func = find_entry_function(&vs_library, vs_entry, &vs_available, label, "vertex");
+        let fs_func = find_entry_function(&fs_library, fs_entry, &fs_available, label, "fragment");
+
+        let desc = unsafe {
+            use objc2::AnyThread;
+            MTLRenderPipelineDescriptor::init(MTLRenderPipelineDescriptor::alloc())
+        };
+        unsafe {
+            desc.setVertexFunction(Some(&vs_func));
+            desc.setFragmentFunction(Some(&fs_func));
+            desc.setDepthAttachmentPixelFormat(to_mtl_pixel_format(depth_format));
+            // Intentionally NO colour attachment pixel format — depth only.
+        }
+
+        let mut archive_guard = self.archive.lock().unwrap();
+        let state = if let Some(ref mut arch) = *archive_guard {
+            unsafe {
+                let archives =
+                    objc2_foundation::NSArray::from_retained_slice(&[arch.raw_archive().clone()]);
+                desc.setBinaryArchives(Some(&archives));
+            }
+            let state = unsafe {
+                self.device
+                    .newRenderPipelineStateWithDescriptor_error(&desc)
+            }
+            .unwrap_or_else(|e| {
+                panic!("{label}: MTL depth-only PSO error: {}", e.localizedDescription())
+            });
+            if !arch.was_added(hash) {
+                match unsafe {
+                    arch.raw_archive()
+                        .addRenderPipelineFunctionsWithDescriptor_error(&desc)
+                } {
+                    Ok(()) => arch.mark_added(hash),
+                    Err(e) => log::warn!(
+                        "{label}: failed to add depth-only PSO to binary archive: {}",
+                        e.localizedDescription()
+                    ),
+                }
+            }
+            state
+        } else {
+            unsafe {
+                self.device
+                    .newRenderPipelineStateWithDescriptor_error(&desc)
+            }
+            .unwrap_or_else(|e| {
+                panic!("{label}: MTL depth-only PSO error: {}", e.localizedDescription())
+            })
+        };
+        drop(archive_guard);
+
+        let needs_sizes_buffer = slot_map.get(SIZES_BUFFER_BINDING).is_some();
+        let pipeline = GpuRenderPipeline {
+            state,
+            slot_map,
+            label: label.to_string(),
+            needs_sizes_buffer,
+        };
+        self.render_cache
+            .lock()
+            .unwrap()
+            .insert(hash, pipeline.clone());
+        pipeline
+    }
+
     /// Create a shared event for CPU↔GPU synchronization.
     pub fn create_event(&self) -> GpuEvent {
         let raw = self.device.newSharedEvent().expect("newSharedEvent failed");

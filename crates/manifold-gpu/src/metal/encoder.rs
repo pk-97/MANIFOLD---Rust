@@ -961,6 +961,81 @@ impl GpuEncoder {
         }
     }
 
+    /// Draw a batch of meshes into ONE **depth-only** render pass — no colour
+    /// attachment at all. The shadow-map primitive: every object's geometry
+    /// is rasterised into a single caster's depth map (cleared once at pass
+    /// start), and the fragment stage writes no colour (the pipeline is built
+    /// with [`GpuDevice::create_render_pipeline_depth_only`], whose WGSL has a
+    /// void `@fragment`). Depth `StoreAction::Store` — unlike the MSAA colour
+    /// batch, the depth result IS the output: it is sampled as a shadow map
+    /// (`texture_depth_2d`) in the later lit pass.
+    ///
+    /// One pass per caster with all objects batched inside keeps the shadow
+    /// bill at K passes, not K×objects — the difference between a few passes
+    /// and hundreds. `depth_target` must be created
+    /// `RENDER_TARGET | SHADER_READ` so it can be sampled afterwards without
+    /// tripping the AGX render-target-only bind crash (0x78).
+    pub fn draw_instanced_depth_only_batch(
+        &mut self,
+        depth_target: &GpuTexture,
+        depth_stencil_state: &GpuDepthStencilState,
+        draws: &[DepthMsaaDraw],
+        label: &str,
+    ) {
+        self.end_current();
+
+        let desc = new_render_pass_descriptor();
+
+        // No colour attachment — depth only. Set render-target dimensions
+        // explicitly so a colourless pass is never ambiguous to Metal.
+        let depth = unsafe { desc.depthAttachment() };
+        unsafe {
+            depth.setTexture(Some(&depth_target.raw));
+            depth.setLoadAction(MTLLoadAction::Clear);
+            depth.setStoreAction(MTLStoreAction::Store);
+            depth.setClearDepth(1.0);
+            desc.setRenderTargetWidth(depth_target.width as usize);
+            desc.setRenderTargetHeight(depth_target.height as usize);
+        }
+
+        let enc = self.make_render_encoder(&desc, label);
+        unsafe {
+            enc.pushDebugGroup(&NSString::from_str(label));
+            enc.setDepthStencilState(Some(&depth_stencil_state.raw));
+            enc.setViewport(MTLViewport {
+                originX: 0.0,
+                originY: 0.0,
+                width: depth_target.width as f64,
+                height: depth_target.height as f64,
+                znear: 0.0,
+                zfar: 1.0,
+            });
+        }
+
+        for draw in draws {
+            if draw.vertex_count == 0 || draw.instance_count == 0 {
+                continue;
+            }
+            unsafe {
+                enc.setRenderPipelineState(&draw.pipeline.state);
+            }
+            apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
+            unsafe {
+                enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
+                    MTLPrimitiveType::Triangle,
+                    0,
+                    draw.vertex_count as usize,
+                    draw.instance_count as usize,
+                );
+            }
+        }
+
+        unsafe {
+            enc.popDebugGroup();
+            enc.endEncoding();
+        }
+    }
+
     /// Draw indexed geometry with a render pipeline and vertex/index buffers.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_indexed(
