@@ -1,6 +1,10 @@
 # Audio Object Tracking — the dominant voice of a send, as a modulation source
 
-**Status:** APPROVED design, not built · 2026-07-06 · Fable
+**Status:** IN PROGRESS — P1/P2/P3/P4 SHIPPED 2026-07-06 (all gates green; P4 landed
+`586d2bac` + fix `00e9fd19`). **Remaining: P5 (scope overlay — anchors stale, see F13
+note at P5 below) + BUG-045; P6 dead, superseded by KICK_SWEEP_EVENT.** Header
+truth-fixed 2026-07-10 (coherence audit F11) — was previously stated "APPROVED design,
+not built," which under-reported a mostly-shipped design and made the status board wrong.
 **Prerequisites:** none (the mod_harness eval loop shipped 2026-07-06 @ `ca9eb490`)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -564,7 +568,12 @@ L2 floor with a VERIFICATION_DEBT line.
 *Performer gesture:* bind Bass→Pitch to a visible param, play a slide — the param
 follows without steps.
 
-**P5 — Scope overlay.** Stride 7→11 through the whole path (analyzer buffers, runtime
+**P5 — Scope overlay.** ⚠ Stale-anchor note (coherence audit F13, 2026-07-10): this
+phase's anchors (`SCOPE_SCALAR_STRIDE`, the shader-overlay shape) predate the
+ScopeColumn typed-overlay refactor KICK_SWEEP_EVENT landed on `analysis.rs` (2026-07-07,
+`b6aed008`) — re-derive `SCOPE_SCALAR_STRIDE` and the overlay shape at brief time before
+trusting the 7→11 plan below; the stride bump itself is still load-bearing. Stride 7→11
+through the whole path (analyzer buffers, runtime
 drain, `ContentState`, shader storage buffer, `pitch_line` in `spectrogram.wgsl`),
 naga parse/validate test updated (precedent: the centroid-overlay WGSL guard,
 AUDIO_MODULATION §10.0.3).

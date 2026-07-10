@@ -48,8 +48,13 @@ re-verify against as-built code.
   mesh nodes → `render_scene` object groups (flat v1, hierarchy transforms
   pre-composed until parenting lands); **Principled BSDF → `node.pbr_material`** +
   texture wiring; glTF cameras → `node.free_camera` params; glTF lights →
-  `node.light` params. Over-cap scenes (>8 objects) import with a visible warning
-  and merged-by-material fallback, never a silent drop.
+  `node.light` params. Over-cap scenes import with a visible warning and
+  merged-by-material fallback, never a silent drop. (Coherence audit F6,
+  2026-07-10: this doc originally cited ">8 objects" mirroring `render_scene`'s
+  then-cap — that cap is now `OBJECT_SLIDER_MAX` = 64 on both the renderer and
+  the importer's own `MAX_RENDER_SCENE_OBJECTS` mirror per SCENE_BUILD D9;
+  the threshold is 64, not 8. Full P1 scope re-cut against the shipped
+  importer is a separate, larger item — audit F5.)
 - **D2 — Animation tiers, smallest first:** rigid TRS (v1, P2) → vertex caches
   (P3) → skeletal/skinned (**deferred** — the cathedral; morph targets ride along
   when it lands).

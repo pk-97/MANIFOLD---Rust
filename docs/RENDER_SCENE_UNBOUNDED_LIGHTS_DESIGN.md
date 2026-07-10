@@ -1,7 +1,12 @@
 # render_scene Unbounded Lights — lights move from a fixed uniform array to a storage buffer
 
 **Status:** APPROVED design, not built · 2026-07-06 · Fable 5
-**Prerequisites:** none (sibling of the shipped unbounded-objects work; independent of everything else in flight)
+**Prerequisites:** none hard, but same-file co-claimants (coherence audit F3, 2026-07-10):
+SCENE_BUILD_AND_GROUP_PARAMS P2 and GAUSSIAN_SPLATS P4 also edit `render_scene.rs`'s
+`rebuild`/`evaluate`. Independent of everything in flight in the sense that no other
+design's *output* gates this one — but the three must be **sequenced, never concurrent**
+(`docs/DESIGN_BUILD_ORDER.md` §2 recommends this phase first, smallest). Whichever of the
+three lands later re-derives this doc's `render_scene.rs`/`.wgsl` line anchors before editing.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting the phase.
 
 `render_scene`'s object count is already uncapped (the old cap was a naming artifact);

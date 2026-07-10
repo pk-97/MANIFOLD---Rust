@@ -468,7 +468,9 @@ stop).
   glTF hierarchy import lands or totemed set pieces demand parenting. Compose
   parent × local; no type changes (REALTIME_3D D1's promise, kept).
 - **Transform port on `render_mesh` / `render_copies`** — additive; revive on first
-  real ask.
+  real ask. (Coherence audit F4c, 2026-07-10: `render_splats` — GAUSSIAN_SPLATS D10 —
+  is the first real ask; its placement is currently param-TRS and invisible to
+  REALTIME_3D P6 gizmos without this port. Decide there, not here.)
 - **Card section fold persistence** — revive if Peter asks for folds surviving
   restart during set prep; home would be workspace serialization, never the spec.
 - **Virtual auto-grow sockets** (wire into a ghost port → objects bumps) — revive if

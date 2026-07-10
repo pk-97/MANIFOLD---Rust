@@ -356,5 +356,7 @@ Entry state, every phase: re-verify the §1 anchors (`decoder_ffi.rs:12`,
 8. DXV encode only via FFmpeg if it ships one; otherwise HAP export + Alley. No
    reverse-engineering beyond FFmpeg's implementation.
 
-Deferred: objc2 rewrite of the VT plugin, NDI/Syphon (multi-display §10 P6 owns
-those), audio file decode, Hap7/HapH (BC7) until clips actually arrive in it.
+Deferred: objc2 rewrite of the VT plugin, NDI/Syphon (ownership moved to
+`VIDEO_IO_DESIGN.md`, approved 2026-07-09 — audit F15, 2026-07-10; MULTI_DISPLAY §10
+P6 no longer owns these), audio file decode, Hap7/HapH (BC7) until clips actually
+arrive in it.
