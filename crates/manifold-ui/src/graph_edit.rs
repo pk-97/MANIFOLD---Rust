@@ -197,4 +197,30 @@ pub enum GraphEditCommand {
     /// Routed to `ContentCommand::SetNodePreviewNormalize`. Node preview only —
     /// no undo, no model mutation.
     SetNodePreviewNormalize(bool),
+    /// The "+ Object" one-click gesture (D7,
+    /// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2): build a placeholder
+    /// cube+material+transform group and wire it into `render_scene`'s next
+    /// object slot. Emitted by the `NodeRow::Action(AddSceneObject)` button on
+    /// the `render_scene` node face. Routed to `AddSceneObjectCommand`.
+    /// `next_index` is the live `objects` count read straight off the node
+    /// face at click time (the render_scene primitive's own defaults are
+    /// private to `manifold-renderer`, unreachable from the command crate —
+    /// see the command's doc comment).
+    AddSceneObject {
+        scope_path: Vec<u32>,
+        render_scene_node_id: u32,
+        next_index: u32,
+        centroid: (f32, f32),
+    },
+    /// The "+ Light" one-click gesture (D7a): spawn a bare `node.light` with
+    /// the D7a defaults (Sun, white, intensity 1.0, ~45° elevation,
+    /// `cast_shadows` ON) and wire it into `render_scene`'s next light slot.
+    /// Emitted by the `NodeRow::Action(AddSceneLight)` button. Routed to
+    /// `AddSceneLightCommand`.
+    AddSceneLight {
+        scope_path: Vec<u32>,
+        render_scene_node_id: u32,
+        next_index: u32,
+        pos: (f32, f32),
+    },
 }

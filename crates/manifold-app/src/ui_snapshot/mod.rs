@@ -168,6 +168,23 @@ pub fn run(args: &[String]) {
         return;
     }
 
+    // P5 demo (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2 D7/D7a): the
+    // SAME real azalea import as `gltfeditor`, before/after one real
+    // `AddSceneObjectCommand`/`AddSceneLightCommand` execution against the
+    // fixture's actual `Project` (the same mutation the canvas button's
+    // click emits — `GraphEditCommand::AddSceneObject`/`AddSceneLight` →
+    // `app_render.rs` → this exact command). Proves the gesture's structural
+    // result (new group/light + rewired ports) through the production
+    // render seam, not a synthesized stand-in.
+    if scene == "gltfeditor-addobject" {
+        run_gltf_editor_add_scene_gesture(want_dump, true);
+        return;
+    }
+    if scene == "gltfeditor-addlight" {
+        run_gltf_editor_add_scene_gesture(want_dump, false);
+        return;
+    }
+
     // The `groupdemo` scene: a controlled group-with-exposed-param fixture,
     // rendered through the SAME real `render_graph_editor_to_png` seam
     // `gltfeditor`/`editor` use. Exists because of a FINDING surfaced while
@@ -536,6 +553,147 @@ fn run_gltf_editor(want_dump: bool) {
         &[],
     );
     println!("ui-snap: wrote {}", png.display());
+}
+
+/// P5 demo: render the real azalea import's editor canvas, execute ONE real
+/// `AddSceneObjectCommand` (`add_object == true`) or `AddSceneLightCommand`
+/// (`false`) against the fixture's actual `Project`, then re-render. The
+/// azalea import's `node.render_scene` is a stable fixture fact (verified via
+/// `GLTFEDITOR_DEBUG=1`): runtime id `4`, `objects == 2` (two group boxes),
+/// `lights == 1` (the "sun" node) — see `gltf_import.rs`'s `render_node.params`
+/// seeding. `next_index` therefore is `2` for the object gesture (the third
+/// object slot) and `1` for the light gesture (the second light slot).
+fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
+    use manifold_editing::command::Command;
+    use manifold_editing::commands::graph::{AddSceneLightCommand, AddSceneObjectCommand};
+
+    let data = fixtures::gltf_scene();
+    let layer = data.project.timeline.layers.first().expect("gltf_scene inserts one layer");
+    let target = manifold_core::GraphTarget::Generator(layer.layer_id.clone());
+    let pid = layer.generator_type().clone();
+    const RENDER_SCENE_NODE_ID: u32 = 4;
+    const OBJECTS_BEFORE: u32 = 2;
+    const LIGHTS_BEFORE: u32 = 1;
+
+    let Some(view) = manifold_renderer::node_graph::loaded_preset_view_by_id(&pid) else {
+        eprintln!("ui-snap gltfeditor-add*: no graph view for the imported preset id '{pid:?}'");
+        std::process::exit(2);
+    };
+
+    let scene_name = if add_object { "gltfeditor-addobject" } else { "gltfeditor-addlight" };
+    let dir = out_dir(scene_name);
+    std::fs::create_dir_all(&dir).expect("create ui-snapshots dir");
+    let tex_w = (LOGICAL_W * SCALE) as u32;
+    let tex_h = (LOGICAL_H * SCALE) as u32;
+
+    // ── BEFORE: identical to plain `gltfeditor` (pristine import, no
+    // per-instance override yet — the canonical def IS the effective graph).
+    let Some(rg_snap_before) = manifold_renderer::node_graph::snapshot_for_view(view) else {
+        eprintln!("ui-snap gltfeditor-add*: snapshot_for_view failed (before)");
+        std::process::exit(2);
+    };
+    let gv_snap_before = crate::ui_translate::graph_snapshot_to_ui(&rg_snap_before);
+    let before_png = dir.join(format!("{scene_name}.before.png"));
+    render::render_graph_editor_to_png(
+        &data.project,
+        &target,
+        &data.selection,
+        &gv_snap_before,
+        view.canonical_def,
+        tex_w,
+        tex_h,
+        SCALE,
+        before_png.to_str().expect("utf-8 path"),
+        want_dump.then(|| dir.join(format!("{scene_name}.before.tree.json"))).as_deref(),
+        &[],
+    );
+    println!("ui-snap: wrote {}", before_png.display());
+
+    // ── Execute the real command against the real Project — the identical
+    // mutation the "+ Object" / "+ Light" canvas button emits.
+    let mut project = data.project.clone();
+    if add_object {
+        let mut cmd = AddSceneObjectCommand::new(
+            target.clone(),
+            Vec::new(),
+            RENDER_SCENE_NODE_ID,
+            OBJECTS_BEFORE,
+            (900.0, 200.0),
+            view.canonical_def.clone(),
+        );
+        cmd.execute(&mut project);
+    } else {
+        let mut cmd = AddSceneLightCommand::new(
+            target.clone(),
+            Vec::new(),
+            RENDER_SCENE_NODE_ID,
+            LIGHTS_BEFORE,
+            (-260.0, 50.0),
+            view.canonical_def.clone(),
+        );
+        cmd.execute(&mut project);
+    }
+
+    // ── AFTER: the mutation lives on the LAYER's own per-instance override
+    // now (`layer.generator_graph()` went `None` → `Some`), so the display
+    // snapshot must be built from THAT override, not re-resolved from the
+    // untouched canonical/registry def — same recipe `ContentThread::
+    // graph_snapshot`'s diverged `GraphTarget::Generator` arm uses
+    // (`content_thread.rs`), reproduced here since that method needs a live
+    // `ContentThread` (caches, embedded-preset fingerprint) this harness
+    // doesn't have.
+    let (_, layer_after) = project
+        .timeline
+        .find_layer_by_id(&layer.layer_id)
+        .expect("layer still present after the command");
+    let override_def = layer_after
+        .generator_graph()
+        .expect("AddSceneObjectCommand/AddSceneLightCommand lifts the graph on first edit");
+    let mut d = override_def.clone();
+    manifold_renderer::generators::registry::graft_preset_metadata_from_bundle(&mut d, &pid);
+    let rg_snap_after = manifold_renderer::node_graph::GraphSnapshot::from_def(&d)
+        .expect("post-command def snapshots");
+    let mut rg_snap_after = rg_snap_after;
+    if let Some(meta) = d.preset_metadata.as_ref() {
+        use manifold_core::effect_graph_def::BindingTarget;
+        use manifold_renderer::node_graph::{OuterParamRouting, OuterParamSource};
+        let mut handle_by_id: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+        manifold_renderer::node_graph::collect_node_handles(&d.nodes, &mut handle_by_id);
+        rg_snap_after.outer_routings = meta
+            .bindings
+            .iter()
+            .filter_map(|b| match &b.target {
+                BindingTarget::Node { node_id, param } => {
+                    let handle = handle_by_id.get(node_id.as_str())?;
+                    Some(OuterParamRouting {
+                        outer_label: b.label.clone(),
+                        outer_param_id: b.id.clone(),
+                        node_handle: handle.to_string(),
+                        inner_param: param.clone(),
+                        source: OuterParamSource::Static,
+                    })
+                }
+                BindingTarget::Composite { .. } => None,
+            })
+            .collect();
+    }
+    let gv_snap_after = crate::ui_translate::graph_snapshot_to_ui(&rg_snap_after);
+
+    let after_png = dir.join(format!("{scene_name}.after.png"));
+    render::render_graph_editor_to_png(
+        &project,
+        &target,
+        &data.selection,
+        &gv_snap_after,
+        &d,
+        tex_w,
+        tex_h,
+        SCALE,
+        after_png.to_str().expect("utf-8 path"),
+        want_dump.then(|| dir.join(format!("{scene_name}.after.tree.json"))).as_deref(),
+        &[],
+    );
+    println!("ui-snap: wrote {}", after_png.display());
 }
 
 /// Build the D6 proof fixture: a group ("Leaf", handle `leaf_group`)

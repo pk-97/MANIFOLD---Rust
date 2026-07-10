@@ -44,8 +44,13 @@ use std::path::{Path, PathBuf};
 // 2026-07-10: the AUDIO_SETUP_DOCK P3a landing deleted the Audio Setup Triggers
 // matrix + its drawer, removing ~14 raw `Color32::new(` literals; ratcheting the
 // baseline down to the new count (net of SCENE_BUILD P4's group-face row styling)
-// per the ratchet's own "count dropped → lower the baseline" rule.)
-const COLOR_BASELINE: usize = 187;
+// per the ratchet's own "count dropped → lower the baseline" rule. 187→190,
+// 2026-07-10: AUDIO_SETUP_DOCK P3b added the inspector AUDIO TRIGGERS authoring
+// section (`audio_trigger_section.rs`), adding 3 raw `Color32::new(` literals; its
+// scoped gate did not run this test, so it landed on main red — folded up here.
+// (Its 2 raw `corner_radius` literals were tokenized to `color::SMALL_RADIUS`
+// instead, keeping the radius guard absolute at 0.))
+const COLOR_BASELINE: usize = 190;
 const RADIUS_BASELINE: usize = 0;
 
 #[test]

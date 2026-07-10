@@ -23,7 +23,8 @@ use std::collections::BTreeMap;
 use manifold_core::GraphTarget;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
-    EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
+    EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID,
+    GroupDef, GroupInterface, InterfacePortDef, SerializedParamValue,
 };
 use manifold_core::project::Project;
 
@@ -2002,6 +2003,332 @@ impl Command for SetGroupTintCommand {
 
     fn description(&self) -> &str {
         "Set Group Tint"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Add Scene Object / Add Scene Light
+// (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D7/D7a, P5)
+// ---------------------------------------------------------------------------
+
+/// Build a plain (non-group, non-boundary) node for the scene-build gestures
+/// below — same 12-field shape `AddGraphNodeCommand`/`group_edit::group_selection`
+/// use, factored out so the two commands below don't repeat the struct literal
+/// four times.
+fn scene_build_node(id: u32, type_id: &str, handle: Option<String>, params: BTreeMap<String, SerializedParamValue>) -> EffectGraphNode {
+    EffectGraphNode {
+        id,
+        node_id: NodeId::new(manifold_core::short_id()),
+        type_id: type_id.to_string(),
+        handle,
+        params,
+        exposed_params: Default::default(),
+        editor_pos: None,
+        wgsl_source: None,
+        title: None,
+        output_formats: BTreeMap::new(),
+        output_canvas_scales: BTreeMap::new(),
+        group: None,
+    }
+}
+
+fn scene_build_wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectGraphWire {
+    EffectGraphWire {
+        from_node,
+        from_port: from_port.to_string(),
+        to_node,
+        to_port: to_port.to_string(),
+    }
+}
+
+/// The add-object gesture (D7): one undoable composite edit that (1) bumps
+/// `render_scene`'s `objects` count by one, (2) builds a new group named
+/// "Object N" containing a placeholder `node.cube_mesh` + a tinted
+/// `node.phong_material` + a `node.transform_3d`, wired to a
+/// `system.group_output` boundary exposing `vertices`/`material`/`transform`,
+/// (3) wires the group's three outputs to the new `mesh_k`/`material_k`/
+/// `transform_k` ports on `render_scene`. Mirrors `GroupNodesCommand`'s
+/// whole-level snapshot/restore shape — this is a structural composite edit
+/// exactly like a group-creation, so undo restores the pre-edit `(nodes,
+/// wires)` verbatim rather than reversing each sub-step by hand.
+///
+/// `next_index` (the new object's 0-based slot, `k` in `mesh_k`/`material_k`/
+/// `transform_k`) is resolved by the caller from the LIVE `objects` param
+/// value shown on the node face at click time — not re-derived here. This
+/// command can't fall back on `render_scene`'s own `DEFAULT_OBJECTS`/
+/// `OBJECT_SLIDER_MAX` (they're private to `manifold-renderer`, which
+/// `manifold-editing` does not depend on), so the UI's already-resolved count
+/// is the one source of truth; `execute()` is a deterministic function of it.
+#[derive(Debug)]
+pub struct AddSceneObjectCommand {
+    target: GraphTarget,
+    scope_path: Vec<u32>,
+    render_scene_node_id: u32,
+    next_index: u32,
+    centroid: (f32, f32),
+    catalog_default: EffectGraphDef,
+    /// The level's `(nodes, wires)` before this edit. Set on execute.
+    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
+}
+
+impl AddSceneObjectCommand {
+    pub fn new(
+        target: GraphTarget,
+        scope_path: Vec<u32>,
+        render_scene_node_id: u32,
+        next_index: u32,
+        centroid: (f32, f32),
+        catalog_default: EffectGraphDef,
+    ) -> Self {
+        Self {
+            target,
+            scope_path,
+            render_scene_node_id,
+            next_index,
+            centroid,
+            catalog_default,
+            prev: None,
+        }
+    }
+}
+
+/// A distinct RGBA tint for object slot `k`, spread around the hue wheel by
+/// the golden ratio at high saturation — the SAME formula
+/// `gltf_import.rs::group_tint` uses for imported objects (that fn is private
+/// to `manifold-renderer`, unreachable from here, so this is a same-formula
+/// re-derivation, not a shared call — keep the two in sync if either changes).
+/// So an added cube reads as one more colour-coded box beside imported ones,
+/// never a jarring one-off.
+fn scene_object_tint(k: u32) -> manifold_core::Color {
+    let hue = (k as f32 * 0.618_034) % 1.0;
+    manifold_core::Color::hsv_to_rgb(hue, 0.7, 0.85)
+}
+
+impl Command for AddSceneObjectCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let scope = self.scope_path.clone();
+        let render_id = self.render_scene_node_id;
+        let k = self.next_index;
+        let centroid = self.centroid;
+        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+            let prev = (nodes.clone(), wires.clone());
+
+            nodes
+                .iter_mut()
+                .find(|n| n.id == render_id)?
+                .params
+                .insert(
+                    "objects".to_string(),
+                    SerializedParamValue::Float {
+                        value: (k + 1) as f32,
+                    },
+                );
+
+            let mut next_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
+            let mut fresh = move || {
+                let v = next_id;
+                next_id += 1;
+                v
+            };
+            let mesh_id = fresh();
+            let mat_id = fresh();
+            let transform_id = fresh();
+            let out_id = fresh();
+            let group_id = fresh();
+
+            let tint = scene_object_tint(k);
+            let mut mat_params = BTreeMap::new();
+            mat_params.insert("color_r".to_string(), SerializedParamValue::Float { value: tint.r });
+            mat_params.insert("color_g".to_string(), SerializedParamValue::Float { value: tint.g });
+            mat_params.insert("color_b".to_string(), SerializedParamValue::Float { value: tint.b });
+
+            let mesh_node = scene_build_node(mesh_id, "node.cube_mesh", Some(format!("mesh_{k}")), BTreeMap::new());
+            let mat_node = scene_build_node(mat_id, "node.phong_material", Some(format!("mat_{k}")), mat_params);
+            let transform_node = scene_build_node(
+                transform_id,
+                "node.transform_3d",
+                Some(format!("transform_{k}")),
+                BTreeMap::new(),
+            );
+            let out_node = scene_build_node(out_id, GROUP_OUTPUT_TYPE_ID, None, BTreeMap::new());
+
+            let group_wires = vec![
+                scene_build_wire(mesh_id, "vertices", out_id, "vertices"),
+                scene_build_wire(mat_id, "out", out_id, "material"),
+                scene_build_wire(transform_id, "transform", out_id, "transform"),
+            ];
+
+            let mut group_node = scene_build_node(
+                group_id,
+                GROUP_TYPE_ID,
+                Some(format!("Object {}", k + 1)),
+                BTreeMap::new(),
+            );
+            group_node.editor_pos = Some(centroid);
+            group_node.group = Some(Box::new(GroupDef {
+                interface: GroupInterface {
+                    inputs: Vec::new(),
+                    outputs: vec![
+                        InterfacePortDef {
+                            name: "vertices".to_string(),
+                            port_type: "Array(Vertex)".to_string(),
+                        },
+                        InterfacePortDef {
+                            name: "material".to_string(),
+                            port_type: "Material".to_string(),
+                        },
+                        InterfacePortDef {
+                            name: "transform".to_string(),
+                            port_type: "Transform".to_string(),
+                        },
+                    ],
+                    params: Vec::new(),
+                },
+                nodes: vec![mesh_node, mat_node, transform_node, out_node],
+                wires: group_wires,
+                tint: Some([tint.r, tint.g, tint.b, 1.0]),
+            }));
+
+            nodes.push(group_node);
+            wires.push(scene_build_wire(group_id, "vertices", render_id, &format!("mesh_{k}")));
+            wires.push(scene_build_wire(group_id, "material", render_id, &format!("material_{k}")));
+            wires.push(scene_build_wire(group_id, "transform", render_id, &format!("transform_{k}")));
+
+            Some(prev)
+        });
+        self.prev = result.flatten();
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some((pn, pw)) = self.prev.clone() else {
+            return;
+        };
+        let scope = self.scope_path.clone();
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
+                *nodes = pn;
+                *wires = pw;
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Add Object"
+    }
+}
+
+/// The add-light gesture (D7a): one undoable composite edit that (1) bumps
+/// `render_scene`'s `lights` count by one, (2) spawns a BARE `node.light`
+/// (no group — a one-node group taxes every future edit for zero legibility,
+/// D7a's explicit ruling) named "Light N", (3) auto-wires its `out` into the
+/// new `light_k` port. Defaults transcribed from D7a: Sun, white, intensity
+/// 1.0, ~45° elevation, `cast_shadows` ON. Same whole-level snapshot/restore
+/// shape as `AddSceneObjectCommand` / `GroupNodesCommand`.
+#[derive(Debug)]
+pub struct AddSceneLightCommand {
+    target: GraphTarget,
+    scope_path: Vec<u32>,
+    render_scene_node_id: u32,
+    next_index: u32,
+    pos: (f32, f32),
+    catalog_default: EffectGraphDef,
+    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
+}
+
+impl AddSceneLightCommand {
+    pub fn new(
+        target: GraphTarget,
+        scope_path: Vec<u32>,
+        render_scene_node_id: u32,
+        next_index: u32,
+        pos: (f32, f32),
+        catalog_default: EffectGraphDef,
+    ) -> Self {
+        Self {
+            target,
+            scope_path,
+            render_scene_node_id,
+            next_index,
+            pos,
+            catalog_default,
+            prev: None,
+        }
+    }
+}
+
+impl Command for AddSceneLightCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let scope = self.scope_path.clone();
+        let render_id = self.render_scene_node_id;
+        let k = self.next_index;
+        let pos = self.pos;
+        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+            let prev = (nodes.clone(), wires.clone());
+
+            nodes
+                .iter_mut()
+                .find(|n| n.id == render_id)?
+                .params
+                .insert(
+                    "lights".to_string(),
+                    SerializedParamValue::Float {
+                        value: (k + 1) as f32,
+                    },
+                );
+
+            let light_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
+            // D7a defaults, transcribed from `node.light`'s own param defs
+            // (`crates/manifold-renderer/src/node_graph/primitives/light.rs`):
+            // mode=Sun / color white / intensity 1.0 / cast_shadows ON already
+            // match the primitive's own defaults — set explicitly anyway so
+            // the gesture's contract doesn't silently drift if those defaults
+            // ever change. pos is overridden for ~45° elevation (the
+            // primitive's own default is pos_y=30 with pos_x=pos_z=0, i.e.
+            // straight overhead, which flattens the scene); aim stays at the
+            // primitive's (0,0,0) default.
+            let mut params = BTreeMap::new();
+            params.insert("mode".to_string(), SerializedParamValue::Enum { value: 0 }); // Sun
+            params.insert("pos_x".to_string(), SerializedParamValue::Float { value: 0.0 });
+            params.insert("pos_y".to_string(), SerializedParamValue::Float { value: 7.0 });
+            params.insert("pos_z".to_string(), SerializedParamValue::Float { value: 7.0 });
+            params.insert("color_r".to_string(), SerializedParamValue::Float { value: 1.0 });
+            params.insert("color_g".to_string(), SerializedParamValue::Float { value: 1.0 });
+            params.insert("color_b".to_string(), SerializedParamValue::Float { value: 1.0 });
+            params.insert("intensity".to_string(), SerializedParamValue::Float { value: 1.0 });
+            params.insert("cast_shadows".to_string(), SerializedParamValue::Float { value: 1.0 });
+
+            let mut light_node = scene_build_node(
+                light_id,
+                "node.light",
+                Some(format!("light_{k}")),
+                params,
+            );
+            light_node.editor_pos = Some(pos);
+            nodes.push(light_node);
+            wires.push(scene_build_wire(light_id, "out", render_id, &format!("light_{k}")));
+
+            Some(prev)
+        });
+        self.prev = result.flatten();
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some((pn, pw)) = self.prev.clone() else {
+            return;
+        };
+        let scope = self.scope_path.clone();
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
+                *nodes = pn;
+                *wires = pw;
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Add Light"
     }
 }
 
@@ -4888,5 +5215,149 @@ mod tests {
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);
         assert_eq!(def.wires.len(), wires_before, "pasted wire removed on undo");
+    }
+
+    // ── scene build P5: add-object / add-light gestures ──
+
+    /// A single `node.render_scene` node (id 0) with `objects`/`lights` set to
+    /// the given counts — the fixture `AddSceneObjectCommand`/
+    /// `AddSceneLightCommand` operate against.
+    fn render_scene_graph(objects: u32, lights: u32) -> EffectGraphDef {
+        let mut render = EffectGraphNode {
+            id: 0,
+            node_id: manifold_core::NodeId::new("render"),
+            type_id: "node.render_scene".to_string(),
+            handle: Some("render".to_string()),
+            params: BTreeMap::new(),
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: None,
+        };
+        render
+            .params
+            .insert("objects".to_string(), SerializedParamValue::Float { value: objects as f32 });
+        render
+            .params
+            .insert("lights".to_string(), SerializedParamValue::Float { value: lights as f32 });
+        EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![render],
+            wires: vec![],
+        }
+    }
+
+    #[test]
+    fn add_scene_object_command_bumps_count_builds_group_and_undo_restores() {
+        let (mut project, fx) = project_with_graph(render_scene_graph(2, 1));
+        let before = graph_of(&project, &fx).clone();
+
+        let mut cmd = AddSceneObjectCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            2, // next_index — matches the fixture's current `objects` (2)
+            (100.0, 200.0),
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let def = graph_of(&project, &fx);
+        let render = def.nodes.iter().find(|n| n.id == 0).unwrap();
+        assert_eq!(
+            render.params.get("objects"),
+            Some(&SerializedParamValue::Float { value: 3.0 }),
+            "objects bumped by one"
+        );
+
+        let group = def
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("Object 3"))
+            .expect("named group created");
+        assert_eq!(group.editor_pos, Some((100.0, 200.0)));
+        let body = group.group.as_deref().expect("is a group node");
+        assert_eq!(body.nodes.len(), 4, "cube + material + transform + group_output boundary");
+        assert!(body.nodes.iter().any(|n| n.type_id == "node.cube_mesh"));
+        assert!(body.nodes.iter().any(|n| n.type_id == "node.phong_material"));
+        assert!(body.nodes.iter().any(|n| n.type_id == "node.transform_3d"));
+        assert_eq!(body.wires.len(), 3, "mesh/material/transform each wired to the group_output");
+        assert_eq!(body.interface.outputs.len(), 3);
+
+        // The group's three outputs wired to the new object-2 slot's ports.
+        assert!(def.wires.iter().any(|w| w.from_node == group.id
+            && w.from_port == "vertices"
+            && w.to_node == 0
+            && w.to_port == "mesh_2"));
+        assert!(def.wires.iter().any(|w| w.from_node == group.id
+            && w.from_port == "material"
+            && w.to_node == 0
+            && w.to_port == "material_2"));
+        assert!(def.wires.iter().any(|w| w.from_node == group.id
+            && w.from_port == "transform"
+            && w.to_node == 0
+            && w.to_port == "transform_2"));
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert_eq!(def, &before, "undo restores the pre-add graph exactly (inverse-pair)");
+    }
+
+    #[test]
+    fn add_scene_light_command_bumps_count_wires_bare_light_and_undo_restores() {
+        let (mut project, fx) = project_with_graph(render_scene_graph(2, 1));
+        let before = graph_of(&project, &fx).clone();
+
+        let mut cmd = AddSceneLightCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            1, // next_index — matches the fixture's current `lights` (1)
+            (-260.0, 50.0),
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let def = graph_of(&project, &fx);
+        let render = def.nodes.iter().find(|n| n.id == 0).unwrap();
+        assert_eq!(
+            render.params.get("lights"),
+            Some(&SerializedParamValue::Float { value: 2.0 }),
+            "lights bumped by one"
+        );
+
+        let light = def
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("light_1"))
+            .expect("bare light node created");
+        assert!(light.group.is_none(), "D7a: no group around the light");
+        assert_eq!(light.type_id, "node.light");
+        assert_eq!(light.editor_pos, Some((-260.0, 50.0)));
+
+        // D7a defaults, transcribed.
+        assert_eq!(light.params.get("mode"), Some(&SerializedParamValue::Enum { value: 0 }));
+        assert_eq!(light.params.get("color_r"), Some(&SerializedParamValue::Float { value: 1.0 }));
+        assert_eq!(light.params.get("color_g"), Some(&SerializedParamValue::Float { value: 1.0 }));
+        assert_eq!(light.params.get("color_b"), Some(&SerializedParamValue::Float { value: 1.0 }));
+        assert_eq!(light.params.get("intensity"), Some(&SerializedParamValue::Float { value: 1.0 }));
+        assert_eq!(light.params.get("cast_shadows"), Some(&SerializedParamValue::Float { value: 1.0 }));
+
+        // Auto-wired into the new light_1 slot — "add means added," never a
+        // bumped count with a dead port.
+        assert!(def
+            .wires
+            .iter()
+            .any(|w| w.from_node == light.id && w.from_port == "out" && w.to_node == 0 && w.to_port == "light_1"));
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert_eq!(def, &before, "undo restores the pre-add graph exactly (inverse-pair)");
     }
 }

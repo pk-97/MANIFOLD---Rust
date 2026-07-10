@@ -105,6 +105,38 @@ impl GraphCanvas {
         None
     }
 
+    /// Hit-test which on-node `NodeRow::Action` gesture row (if any) is under
+    /// the cursor — the "+ Object" / "+ Light" buttons on `render_scene`'s
+    /// face (D7/D7a). Same screen-space geometry as [`Self::param_row_under`]
+    /// (one row pitch, walked topmost-first), filtered to `Action` rows so a
+    /// click landing on an ordinary param row falls through to the normal
+    /// scrub path instead.
+    pub(crate) fn action_row_under(
+        &self,
+        viewport: Rect,
+        sx: f32,
+        sy: f32,
+    ) -> Option<(u32, crate::graph_canvas::NodeActionKind)> {
+        let header_h = NODE_HEADER_HEIGHT * self.zoom;
+        let row_h = PARAM_ROW_H * self.zoom;
+        let sw = NODE_WIDTH * self.zoom;
+        for node in self.nodes.iter().rev() {
+            if node.collapsed || node.rows.is_empty() {
+                continue;
+            }
+            let (nx, ny) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
+            let block_top = ny + header_h + node.preview_h() * self.zoom;
+            let block_bottom = block_top + node.rows.len() as f32 * row_h;
+            if sx >= nx && sx <= nx + sw && sy >= block_top && sy < block_bottom {
+                let idx = ((sy - block_top) / row_h) as usize;
+                if let Some(crate::graph_canvas::NodeRow::Action(kind)) = node.rows.get(idx) {
+                    return Some((node.id, *kind));
+                }
+            }
+        }
+        None
+    }
+
     /// Hit-test the expose glyph at a param row's left edge, returning
     /// `(node_id, param_index)` when the cursor is over the dot of an
     /// *exposable* param. Built on `param_row_under` + `param_row_rect` +

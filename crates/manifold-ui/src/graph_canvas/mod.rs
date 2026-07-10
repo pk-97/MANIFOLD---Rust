@@ -84,9 +84,9 @@ pub use mapping_popover::MappingPopover;
 pub use model::{node_preview_target, resolve_card_param_node_id, resolve_level};
 pub(crate) use crate::draw::{elide_to_width, text_width};
 pub(crate) use model::{
-    NodeRow, NodeView, PortHit, WireView, expose_glyph_bounds, find_node_scope,
-    fmt_table_cell, format_color_hex, kind_is_exposable, param_convert_for_kind,
-    spark_has_variation, vec_channel_labels, wrap_text,
+    NodeActionKind, NodeRow, NodeView, PortHit, WireView, expose_glyph_bounds, find_node_scope,
+    fmt_table_cell, format_color_hex, group_wires_by_pair, kind_is_exposable,
+    param_convert_for_kind, spark_has_variation, vec_channel_labels, wrap_text,
 };
 
 const HEADER_HEIGHT: f32 = 28.0;

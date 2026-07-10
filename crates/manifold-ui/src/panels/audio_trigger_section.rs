@@ -264,7 +264,7 @@ impl AudioTriggerSection {
             text_color: color::TEXT_PRIMARY_C32,
             font_size: FONT_SIZE,
             text_align: TextAlign::Left,
-            corner_radius: 2.0,
+            corner_radius: color::SMALL_RADIUS,
             ..UIStyle::default()
         }
     }
@@ -359,7 +359,7 @@ impl AudioTriggerSection {
                 text_color: color::TEXT_PRIMARY_C32,
                 font_size: FONT_SIZE,
                 text_align: TextAlign::Center,
-                corner_radius: 2.0,
+                corner_radius: color::SMALL_RADIUS,
                 ..UIStyle::default()
             };
             col = col.child(
