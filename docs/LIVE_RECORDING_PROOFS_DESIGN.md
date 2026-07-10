@@ -1,6 +1,6 @@
 # Live Recording Proofs — headless end-to-end tests for the show recorder
 
-**Status:** APPROVED 2026-07-09 (Peter) — design ready, awaiting build (Sonnet, P1–P3); release-gating per STRUCTURAL_AUDIT_VERDICTS (owns BUG-053) · design 2026-07-07 · Fable
+**Status:** IN PROGRESS 2026-07-10 — P1 SHIPPED @ `ef12c14b` (clock/audio injection seams `submit_frame_at`/`AudioFeed`; Tier-1 proof harness: tests 1–4,6, ffprobe oracle, 26-block pattern shader; found+logged BUG-085). P2 (kill test + soak bin + runbook) and P3 (in-app record smoke, L3) pending. Release-gating per STRUCTURAL_AUDIT_VERDICTS (owns BUG-053) · design 2026-07-07 · Fable · approved 2026-07-09 Peter
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -343,7 +343,7 @@ this is the instrument-check that catches the next one before it costs a show.
 
 ## 6. Phasing
 
-### P1 — Seams + oracle + proof suite (one session)
+### P1 — Seams + oracle + proof suite (one session) — ✅ SHIPPED 2026-07-10 @ `ef12c14b`
 
 - **Entry state:** clean main; `cargo test -p manifold-recording` passes (trivially —
   zero tests); ffprobe present (`which ffprobe`). Re-verify anchors:
