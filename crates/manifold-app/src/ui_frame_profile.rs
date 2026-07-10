@@ -1,7 +1,7 @@
 //! Per-frame UI profiler for the main timeline window.
 //!
 //! Gated behind `MANIFOLD_UI_FRAME_PROFILE=1` — near-zero cost when unset:
-//! every `add`/`count`/`frame_end` short-circuits on the `enabled` flag. The
+//! every `add`/`frame_end` short-circuits on the `enabled` flag. The
 //! `Instant::now()` pairs at the call sites are unconditional (~20ns each) but
 //! the recording, formatting, and printing only happen when enabled.
 //!
@@ -13,6 +13,19 @@
 //! named passes and, crucially, reports `dt − measured_cpu` so a CPU-bound
 //! frame (gap ≈ 0) is distinguishable from a present/vsync-bound one (gap
 //! large). See `present_all_windows` / `tick_and_render` for the call sites.
+//!
+//! Since the immediate-pass assembly moved into the shared harness/live seam
+//! (`render_main_ui_passes`, `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` §4 step
+//! 2), the seven per-pass CPU timers (grid/clips/waveforms/thumbnails/lane/
+//! overlay/commit) coalesce into one `present.main_ui_passes` label and the
+//! per-frame integer counts (clips/thumbnails drawn) are gone — those were fed
+//! only from inside that block, and the CPU-side enqueue cost of each pass is
+//! sub-microsecond noise next to the number that actually matters: the **async
+//! GPU-time sink**, which IS preserved. `gpu_sink` still attributes the true
+//! GPU execution time of the offscreen "Frame" buffer (fed by a command-buffer
+//! completion handler inside the seam), so the "our GPU work vs. content-thread
+//! starvation" question the frame-pacing investigations turn on is unchanged.
+//! See `ui_frame.rs` module doc deviation #6.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -32,13 +45,12 @@ const ORDER: &[&str] = &[
     "update_repaint_upload",
     "present.panel_cache",
     "present.clear_atlas_compositor",
-    "present.pass4a_grid",
-    "present.pass4b_clip_bodies",
-    "present.pass4b_waveforms",
-    "present.pass4b_thumbnails",
-    "present.pass4c_panels",
-    "present.pass5_overlay",
-    "present.commit",
+    // `render_main_ui_passes` (the shared harness/live seam,
+    // `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` §4 step 2) coalesces the old
+    // per-pass labels below into one timer — the seam doesn't thread
+    // `Application`-only `UiFrameProfile` state through a function the
+    // harness also calls. See `ui_frame.rs` module doc deviation #6.
+    "present.main_ui_passes",
     "present.next_drawable",
     "present.blit_present",
     "present.fast_next_drawable",
@@ -50,8 +62,6 @@ pub(crate) struct UiFrameProfile {
     enabled: bool,
     sum: AHashMap<&'static str, Duration>,
     max: AHashMap<&'static str, Duration>,
-    /// Per-frame integer counters (e.g. clips drawn) — summed, reported as avg.
-    counts: AHashMap<&'static str, u64>,
     frame_total_sum: Duration,
     frame_total_max: Duration,
     /// Sum of inter-frame `dt` (the perf-HUD frame time) over the window.
@@ -62,7 +72,9 @@ pub(crate) struct UiFrameProfile {
     frames: u64,
     /// True GPU execution time of the UI offscreen "Frame" buffer, fed async by
     /// a command-buffer completion handler (micros accumulated) + sample count.
-    /// Shared with the handler thread, hence atomics behind `Arc`.
+    /// Shared with the handler thread, hence atomics behind `Arc`. The handler
+    /// is now attached inside `ui_frame::render_main_ui_passes` (which owns and
+    /// commits the "Frame" encoder), fed the sink via `gpu_sink()`.
     gpu_us: Arc<AtomicU64>,
     gpu_samples: Arc<AtomicU64>,
 }
@@ -83,7 +95,6 @@ impl UiFrameProfile {
             enabled,
             sum: AHashMap::new(),
             max: AHashMap::new(),
-            counts: AHashMap::new(),
             frame_total_sum: Duration::ZERO,
             frame_total_max: Duration::ZERO,
             frame_dt_sum: Duration::ZERO,
@@ -98,6 +109,9 @@ impl UiFrameProfile {
     /// Clones of the GPU-time accumulators to feed into a command-buffer
     /// completion handler (see `GpuEncoder::add_gpu_time_handler`). Returns
     /// `None` when disabled, so the caller skips the handler entirely.
+    /// Threaded into `ui_frame::render_main_ui_passes` as
+    /// `MainUiPassInputs::gpu_sink` (the live app passes `Some`; the harness,
+    /// which has no perf HUD, passes `None` — §3 input presence).
     pub fn gpu_sink(&self) -> Option<(Arc<AtomicU64>, Arc<AtomicU64>)> {
         if self.enabled {
             Some((Arc::clone(&self.gpu_us), Arc::clone(&self.gpu_samples)))
@@ -117,15 +131,6 @@ impl UiFrameProfile {
         if d > *m {
             *m = d;
         }
-    }
-
-    /// Record a per-frame integer count under `label` (e.g. clips drawn).
-    #[inline]
-    pub fn count(&mut self, label: &'static str, n: u64) {
-        if !self.enabled {
-            return;
-        }
-        *self.counts.entry(label).or_default() += n;
     }
 
     /// Close out a frame. `total` is the measured wall time of the frame body;
@@ -176,11 +181,7 @@ impl UiFrameProfile {
         // True GPU execution time of the UI offscreen "Frame" buffer (async).
         let g_us = self.gpu_us.load(Ordering::Relaxed);
         let g_n = self.gpu_samples.load(Ordering::Relaxed);
-        let gpu_avg = if g_n > 0 {
-            g_us as f64 / 1000.0 / g_n as f64
-        } else {
-            0.0
-        };
+        let gpu_avg = if g_n > 0 { g_us as f64 / 1000.0 / g_n as f64 } else { 0.0 };
 
         eprintln!(
             "\n[ui-profile] {} frames | display link {:.1}Hz | dt {:.2}ms ({:.0} fps, max {:.2}) | cpu {:.2}ms (max {:.2}) | UI offscreen GPU {:.2}ms ({} samples) | vsync/idle wait {:.2}ms | budget 8.33ms@120 / 16.67ms@60",
@@ -208,15 +209,7 @@ impl UiFrameProfile {
             let a = avg(d);
             let mx = self.max.get(label).copied().unwrap_or_default();
             let pct = if cpu_avg > 0.0 { a / cpu_avg * 100.0 } else { 0.0 };
-            let cnt = self
-                .counts
-                .get(label)
-                .map(|c| format!("  (avg {:.0}/frame)", *c as f64 / n))
-                .unwrap_or_default();
-            eprintln!(
-                "  {label:<34} {a:>7.3}ms  {pct:>4.0}%   max {:>6.3}ms{cnt}",
-                ms(mx),
-            );
+            eprintln!("  {label:<34} {a:>7.3}ms  {pct:>4.0}%   max {:>6.3}ms", ms(mx));
         }
         eprintln!(
             "  {:<34} {:>7.3}ms  {:>4.0}%   (sum of passes; gap vs cpu = unmeasured)",
@@ -229,7 +222,6 @@ impl UiFrameProfile {
     fn reset(&mut self) {
         self.sum.clear();
         self.max.clear();
-        self.counts.clear();
         self.frame_total_sum = Duration::ZERO;
         self.frame_total_max = Duration::ZERO;
         self.frame_dt_sum = Duration::ZERO;

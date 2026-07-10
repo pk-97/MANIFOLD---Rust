@@ -12,51 +12,29 @@
 //! path is the correct behavior, not a lesser substitute for the incremental
 //! Load path, which no single-shot render can exercise anyway), then call
 //! `crate::ui_frame::composite_main_ui_frame` — the SAME function
-//! `present_all_windows` and `cache_path_full_render` call. The genuinely
-//! separate immediate-mode passes below (clip bodies, optional injected
-//! thumbnails, clip names, automation lanes, top-level overlays — NOT `UITree`
-//! nodes) are unchanged in mechanism, drawn `Load` on top of the composited
-//! offscreen. See `docs/HEADLESS_UI_HARNESS.md`.
+//! `present_all_windows` and `cache_path_full_render` call.
 //!
-//! ⚠ P2 VERIFY-AT-IMPL result (reported to the orchestrator per the phase
-//! brief, NOT silently absorbed as a match — see the P2 phase report for the
-//! full writeup): diffing these immediate passes against the live app's
-//! (`app_render.rs` Pass 4b/4b'/4b''/4c/5) found:
-//! - **Clips (Pass 2)** — matches: same `emit_clips`/`ClipBody` fields the
-//!   live app resolves in a non-drag frame (drag lift/ghost/marquee fields
-//!   are live-only transitional-drag state, correctly absent here).
-//! - **Automation lanes (Pass 4b)** — matches: identical
-//!   `emit_automation_lanes` call over the same `automation_lane_screens`.
-//! - **Thumbnails (Pass 3, `--thumbs` only)** — draws through the REAL
-//!   `ClipThumbGpu::render`, but the live app's atlas-cell UV windows (from
-//!   `content_state.clip_atlas_layout`, published by the content thread) are
-//!   replaced with `thumbs::make_test_atlas`/`build_quads` — a synthetic
-//!   fixture, since no content thread exists headless. Same draw primitive,
-//!   different (and already-labeled, `with_thumbs` opt-in) source geometry —
-//!   not a silent divergence, a pre-existing documented substitution.
-//! - **Overlays (Pass 5)** — a REAL divergence, found here for the first
-//!   time: this pass calls `renderer.render_tree_range(&ui.tree, start, end)`
-//!   for each `overlay_draw` range. The live app (`app_render.rs:4617`) calls
-//!   `render_sub_region` instead, with a comment explaining why:
-//!   `overlay_draw`'s `(start, end)` deliberately EXCLUDES the region's own
-//!   root node (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md`), and `render_tree_range`
-//!   is a root-scan (`UITree::traverse_range`) that would find no roots in
-//!   such a range and render NOTHING — whereas `render_sub_region`'s flat,
-//!   ancestor-aware scan (`traverse_flat_range`) picks the children up
-//!   regardless. The live app also wraps each range in `push_depth`/
-//!   `draw_shadow`/`pop_depth`, none of which this pass does. Left unchanged
-//!   here (escalation, not a silent fix — see the phase report and
-//!   `docs/BUG_BACKLOG.md`): whether an overlay range in practice ever
-//!   excludes its own root for any scene this harness currently exercises is
-//!   unverified, so a same-session fix risked changing behavior nobody asked
-//!   this phase to verify.
+//! P2 (`HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` §4 step 2): the immediate-mode
+//! passes that used to continue here as this module's own `draw_immediate_
+//! passes` (clip bodies, optional injected thumbnails, clip names,
+//! automation lanes, top-level overlays) are now `crate::ui_frame::
+//! render_main_ui_passes` — the SAME function `present_all_windows` calls,
+//! not a parallel re-implementation. This closes BUG-097 (this module's old
+//! overlay pass called the root-scan tree-range renderer, which renders
+//! NOTHING over an `overlay_draw` range that deliberately excludes its own
+//! region root; the live app's `render_sub_region` does not have that blind
+//! spot) by construction — there is no longer a second copy that could pick
+//! the wrong call. What's genuinely different here vs. the live app is INPUT, resolved
+//! below and handed to the shared seam: clip bodies come from `selection`
+//! (no live drag state exists headless), thumbnail atlas+quads come from
+//! `thumbs::make_test_atlas`/`build_quads` (`--thumbs`-gated) instead of the
+//! content-thread atlas, and `layer_bitmap_gpu`/`clip_content_gpu`/`vqt` are
+//! `None` (no such renderers exist headless). See `docs/HEADLESS_UI_HARNESS.md`.
 
 use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
-use manifold_renderer::automation_lane_draw::emit_automation_lanes;
-use manifold_renderer::clip_draw::{emit_clip_names, emit_clips, ClipBody};
 use manifold_renderer::clip_thumb_gpu::ClipThumbGpu;
 use manifold_renderer::render_target::RenderTarget;
 use manifold_renderer::ui_cache_manager::UICacheManager;
@@ -105,17 +83,80 @@ pub fn render_ui_to_png(
     composite_frame(&device, &mut renderer, &mut cache, ui, &res, dpi);
     let target_tex = &res.offscreen;
 
-    draw_immediate_passes(
+    // Passes 4a→5 + VQT + overlay dirty-clear: the SAME
+    // `crate::ui_frame::render_main_ui_passes` `present_all_windows` calls —
+    // see the module doc above (closes BUG-097 by construction). Resolve the
+    // simple headless inputs this caller can (clip rects/bodies from
+    // `selection`, thumbnail atlas+quads from `thumbs`, automation lanes),
+    // `None`/empty for everything with no headless equivalent
+    // (`layer_bitmap_gpu`, `clip_content_gpu`, `vqt` — no such renderers
+    // exist without a content thread or live drag state).
+    let mut clip_rects = Vec::new();
+    ui.viewport.visible_clip_rects(&mut clip_rects);
+    let hovered_clip = ui.viewport.hovered_clip_id();
+    let clip_bodies: Vec<manifold_renderer::clip_draw::ClipBody> = clip_rects
+        .iter()
+        .map(|cr| manifold_renderer::clip_draw::ClipBody {
+            rect: cr.rect,
+            base_color: cr.base_color,
+            selected: selection.is_selected(&cr.clip_id),
+            hovered: hovered_clip == Some(cr.clip_id.as_str()),
+            muted: cr.is_muted,
+            locked: cr.is_locked,
+            generator: cr.is_generator,
+            alpha: 1.0,
+        })
+        .collect();
+
+    // Thumbnail atlas + quads (`--thumbs` only) — a labeled test fixture
+    // standing in for the content-thread atlas (§3's caller test: the render
+    // code (`ClipThumbGpu::render`, inside the seam) is the real, shared
+    // code; only the input is synthetic). `atlas`/`thumb_gpu` must outlive
+    // the seam call, so they're bound here even when unused (`with_thumbs ==
+    // false` or no non-audio clips) — cheap, and keeps the `Option` borrow
+    // shape simple.
+    let quads = if with_thumbs { thumbs::build_quads(&clip_rects) } else { Vec::new() };
+    let atlas = if with_thumbs { Some(thumbs::make_test_atlas(&device)) } else { None };
+    let mut thumb_gpu = if with_thumbs { Some(ClipThumbGpu::new(&device, ATLAS_FORMAT)) } else { None };
+    let thumb = match (thumb_gpu.as_mut(), atlas.as_ref()) {
+        (Some(gpu), Some(atlas)) if !quads.is_empty() => {
+            Some(crate::ui_frame::ThumbPass { gpu, atlas, quads: &quads })
+        }
+        _ => None,
+    };
+
+    let automation_lanes = ui.viewport.automation_lane_screens(automation_latched);
+    let text_input = crate::text_input::TextInputState::new();
+    let frame_timer = crate::frame_timer::FrameTimer::new(60.0);
+    let blit_pipeline = &res.blit_pipeline;
+    let blit_sampler = &res.blit_sampler;
+
+    crate::ui_frame::render_main_ui_passes(
         &device,
         &mut renderer,
         ui,
-        selection,
-        automation_latched,
         target_tex,
         tex_w,
         tex_h,
-        scale,
-        with_thumbs,
+        dpi,
+        crate::ui_frame::MainUiPassInputs {
+            layer_bitmap_gpu: None,
+            clip_bodies: &clip_bodies,
+            clip_rects: &clip_rects,
+            clip_content_gpu: None,
+            thumb,
+            timeline_overlays: manifold_ui::panels::viewport::TimelineOverlays::default(),
+            markers: &[],
+            landing_flash: None,
+            automation_lanes: &automation_lanes,
+            cursor_pos: manifold_ui::node::Vec2::ZERO,
+            text_input: &text_input,
+            frame_timer: &frame_timer,
+            vqt: None,
+            blit_pipeline,
+            blit_sampler,
+            gpu_sink: None,
+        },
     );
 
     // `target_tex` is BGRA (the seam's atlas/offscreen format, matching the
@@ -128,130 +169,6 @@ pub fn render_ui_to_png(
     }
     image::save_buffer(path, &bytes, tex_w, tex_h, image::ExtendedColorType::Rgba8)
         .unwrap_or_else(|e| panic!("save {path}: {e}"));
-}
-
-/// The genuinely-separate immediate-mode passes (clip bodies, optional
-/// injected thumbnails, clip names, automation lanes, top-level overlays —
-/// NOT `UITree` nodes) drawn `Load` on top of an already-composited
-/// `target_tex`. Factored out of [`render_ui_to_png`] (P2) so `script.rs`'s
-/// `Runner` can draw the identical passes on top of its OWN persistent
-/// composited offscreen (built once per script run, not per snapshot) —
-/// see that module's `write_png`. See the module doc above for the P2
-/// VERIFY-AT-IMPL diff against the live app's own Pass 4b/4b'/4b''/4c/5.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn draw_immediate_passes(
-    device: &GpuDevice,
-    renderer: &mut UIRenderer,
-    ui: &UIRoot,
-    selection: &manifold_ui::UIState,
-    automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
-    target_tex: &GpuTexture,
-    tex_w: u32,
-    tex_h: u32,
-    scale: f32,
-    with_thumbs: bool,
-) {
-    let dpi = f64::from(scale);
-
-    // Clips are immediate-mode passes, not tree nodes (same emit path as
-    // app_render 4b/5). Resolve the visible clips once, reused across passes.
-    let mut clip_rects = Vec::new();
-    ui.viewport.visible_clip_rects(&mut clip_rects);
-    if !clip_rects.is_empty() {
-        let tracks = ui.viewport.get_tracks_rect();
-
-        // Pass 2: GPU clip bodies (Load).
-        // Resolve per-clip selected/hovered from real state, exactly as
-        // app_render does — never pin them false (a hardcode would misrepresent
-        // clip selection once a `select:clip` scene exists).
-        let hovered_clip = ui.viewport.hovered_clip_id();
-        let bodies: Vec<ClipBody> = clip_rects
-            .iter()
-            .map(|cr| ClipBody {
-                rect: cr.rect,
-                base_color: cr.base_color,
-                selected: selection.is_selected(&cr.clip_id),
-                hovered: hovered_clip == Some(cr.clip_id.as_str()),
-                muted: cr.is_muted,
-                locked: cr.is_locked,
-                generator: cr.is_generator,
-                alpha: 1.0,
-            })
-            .collect();
-        renderer.begin_frame();
-        renderer.push_immediate_clip(tracks.x, tracks.y, tracks.width, tracks.height);
-        emit_clips(renderer, &bodies);
-        renderer.pop_immediate_clip();
-        if renderer.prepare(device, tex_w, tex_h, dpi) {
-            let mut enc = device.create_encoder("ui-snap-clips");
-            renderer.render(&mut enc, target_tex, GpuLoadAction::Load);
-            enc.commit_and_wait_completed();
-        }
-
-        // Pass 3: injected test thumbnails (Load), through the real ClipThumbGpu.
-        if with_thumbs {
-            let atlas = thumbs::make_test_atlas(device);
-            let quads = thumbs::build_quads(&clip_rects);
-            if !quads.is_empty() {
-                let mut thumb = ClipThumbGpu::new(device, ATLAS_FORMAT);
-                let mut enc = device.create_encoder("ui-snap-thumbs");
-                thumb.render(
-                    device,
-                    &mut enc,
-                    target_tex,
-                    tex_w,
-                    tex_h,
-                    scale,
-                    tracks,
-                    &atlas,
-                    &quads,
-                );
-                enc.commit_and_wait_completed();
-            }
-        }
-
-        // Pass 4: clip names on top (Load).
-        renderer.begin_frame();
-        emit_clip_names(renderer, &clip_rects, tracks);
-        if renderer.prepare(device, tex_w, tex_h, dpi) {
-            let mut enc = device.create_encoder("ui-snap-names");
-            renderer.render(&mut enc, target_tex, GpuLoadAction::Load);
-            enc.commit_and_wait_completed();
-        }
-    }
-
-    // Pass 4b: automation lane strips (P4, `docs/AUTOMATION_LANES_DESIGN.md`
-    // §7) — outside the clip-rects guard since a scene can carry lanes
-    // without any clips currently visible. No-op when automation mode is
-    // off (the viewport never populated any lanes this frame).
-    let automation_lanes = ui.viewport.automation_lane_screens(automation_latched);
-    if !automation_lanes.is_empty() {
-        let tracks = ui.viewport.get_tracks_rect();
-        renderer.begin_frame();
-        emit_automation_lanes(renderer, &automation_lanes, tracks);
-        if renderer.prepare(device, tex_w, tex_h, dpi) {
-            let mut enc = device.create_encoder("ui-snap-automation-lanes");
-            renderer.render(&mut enc, target_tex, GpuLoadAction::Load);
-            enc.commit_and_wait_completed();
-        }
-    }
-
-    // Pass 5: top-level overlays (modals, dropdowns, perf HUD) on top of
-    // everything — mirrors the live app drawing the overlay region at
-    // `Depth::OVERLAY`. The headless passes are painter's-order, so a final Load
-    // pass over the overlay node ranges lifts them above the immediate-mode clip
-    // passes; without it an open modal would be occluded by the clips.
-    if !ui.overlay_draw.is_empty() {
-        renderer.begin_frame();
-        for &(start, end) in &ui.overlay_draw {
-            renderer.render_tree_range(&ui.tree, start, end);
-        }
-        if renderer.prepare(device, tex_w, tex_h, dpi) {
-            let mut enc = device.create_encoder("ui-snap-overlays");
-            renderer.render(&mut enc, target_tex, GpuLoadAction::Load);
-            enc.commit_and_wait_completed();
-        }
-    }
 }
 
 /// Render a graph-editor canvas — nodes, ports, wires, and **real per-node
@@ -527,7 +444,7 @@ pub fn render_graph_editor_to_png(
 
     // Same paint order as `present_graph_editor_window` because it's the
     // SAME function: clear + canvas immediate-mode draws + the merged
-    // sidebar/inspector `UITree` (ONE `render_tree_range` call) + dock +
+    // sidebar/inspector `UITree` (ONE tree-range render call) + dock +
     // mini-timeline + (closed) popover/text-input overlays + prepare/render.
     let editor_area = UiRect::new(0.0, 0.0, logical_w, logical_h);
     let (mini_clips, mini_layer_labels, mini_rows, mini_total, mini_bpb, mini_readout) =

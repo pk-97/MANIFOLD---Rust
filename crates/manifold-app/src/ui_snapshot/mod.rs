@@ -11,6 +11,7 @@ mod composite_resources;
 mod dump;
 mod fixtures;
 mod interact;
+mod readback;
 mod render;
 mod script;
 mod thumbs;
@@ -44,6 +45,35 @@ fn sanitize_scene_name(scene: &str) -> String {
 /// argument slice starting at `"ui-snap"`.
 pub fn run(args: &[String]) {
     let scene = args.get(1).map(String::as_str).unwrap_or("timeline");
+
+    // Standalone read-verb subcommands (`readback.rs`) — no GPU, no scene
+    // render, just reading an already-written PNG or tree-dump JSON. Dispatch
+    // before any of the scene-render machinery below.
+    if scene == "diff" {
+        let (Some(a), Some(b)) = (args.get(2), args.get(3)) else {
+            eprintln!("ui-snap diff: usage: cargo xtask ui-snap diff <a.json> <b.json>");
+            std::process::exit(2);
+        };
+        readback::cmd_diff(a, b);
+        return;
+    }
+    if scene == "probe" {
+        let (Some(png), Some(coords)) = (args.get(2), arg_value(args, "--probe")) else {
+            eprintln!("ui-snap probe: usage: cargo xtask ui-snap probe <file.png> --probe x,y[;x,y...]");
+            std::process::exit(2);
+        };
+        readback::cmd_probe(png, &coords);
+        return;
+    }
+    if scene == "crop" {
+        let (Some(png), Some(rect)) = (args.get(2), arg_value(args, "--crop")) else {
+            eprintln!("ui-snap crop: usage: cargo xtask ui-snap crop <file.png> --crop x,y,w,h");
+            std::process::exit(2);
+        };
+        readback::cmd_crop(png, &rect);
+        return;
+    }
+
     let want_dump = args.iter().any(|a| a == "--dump");
     let want_vs_mockup = args.iter().any(|a| a == "--vs-mockup");
     let want_thumbs = args.iter().any(|a| a == "--thumbs");
@@ -57,6 +87,29 @@ pub fn run(args: &[String]) {
     // seeds state that predates the interaction being tested, not an action
     // being tested itself.
     let scroll_seed: Option<f32> = arg_value(args, "--scroll").and_then(|s| s.parse().ok());
+    // `--probe x,y[;x,y...]` / `--crop x,y,w,h` (`readback.rs`): applied to
+    // the scene's BASE PNG only, right after it's written — see
+    // `render_ui_scene`'s own comment on why (an `--interact` "after" render
+    // or the `all` sweep make "which PNG" ambiguous). Only the UITree-scene
+    // path below honors them; every other dispatch (`--script`, `all`,
+    // `graph`, `editor`, `transform`) rejects them LOUDLY here rather than
+    // silently swallowing a flag the user passed — point at the standalone
+    // form instead.
+    let probe_spec = arg_value(args, "--probe");
+    let crop_spec = arg_value(args, "--crop");
+    if probe_spec.is_some() || crop_spec.is_some() {
+        let unsupported = script_path.is_some()
+            || matches!(scene, "all" | "graph" | "editor" | "transform");
+        if unsupported {
+            let target = if script_path.is_some() { "--script runs" } else { scene };
+            eprintln!(
+                "ui-snap: --probe/--crop don't apply to {target}; use the standalone form on a \
+                 specific file: cargo xtask ui-snap probe <file.png> --probe x,y[;x,y...]  |  \
+                 cargo xtask ui-snap crop <file.png> --crop x,y,w,h"
+            );
+            std::process::exit(2);
+        }
+    }
 
     // `--script <file.json>` (UI_AUTOMATION_DESIGN.md §6, P2): a JSON array of
     // `AutomationAction`s executed in order. Fully owns its own build + gate
@@ -70,8 +123,10 @@ pub fn run(args: &[String]) {
     // change. Skips the per-scene-only flags (mockup, interact); pass those to a
     // single scene when you need them.
     if scene == "all" {
+        // `--probe`/`--crop` were rejected above (exit 2) — which of the five
+        // PNGs this sweep writes would "the" target be is ambiguous by design.
         for s in ["timeline", "states", "inspector"] {
-            render_ui_scene(s, want_dump, false, want_thumbs, None, None);
+            render_ui_scene(s, want_dump, false, want_thumbs, None, None, None, None);
         }
         run_graph_preset("Mirror");
         run_editor_preset("FluidSim2D", want_dump);
@@ -107,7 +162,16 @@ pub fn run(args: &[String]) {
         return;
     }
 
-    render_ui_scene(scene, want_dump, want_vs_mockup, want_thumbs, interact, scroll_seed);
+    render_ui_scene(
+        scene,
+        want_dump,
+        want_vs_mockup,
+        want_thumbs,
+        interact,
+        scroll_seed,
+        probe_spec.as_deref(),
+        crop_spec.as_deref(),
+    );
 }
 
 /// P0.3 (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): `hairlineclips` needs genuine far
@@ -123,6 +187,7 @@ fn zoom_ppb_for_scene(scene: &str) -> f32 {
 /// Build + render one UITree scene (`timeline` / `states` / `inspector`) through
 /// the real core→UI translation path, plus an optional `--interact` "after" pass
 /// and mockup composite. Unknown scene name exits 2.
+#[allow(clippy::too_many_arguments)]
 fn render_ui_scene(
     scene: &str,
     want_dump: bool,
@@ -130,6 +195,8 @@ fn render_ui_scene(
     want_thumbs: bool,
     interact: Option<String>,
     scroll_seed: Option<f32>,
+    probe_spec: Option<&str>,
+    crop_spec: Option<&str>,
 ) {
     let Some(mut data) = fixtures::build(scene) else {
         eprintln!(
@@ -153,14 +220,22 @@ fn render_ui_scene(
     // Build the UI through the REAL core→UI translation path, render the base.
     let mut ui = UIRoot::new();
     ui.resize(LOGICAL_W, LOGICAL_H);
-    if scene == "inspector" || scene == "bug060" || scene == "paramsteps" || scene == "gltfscene" {
+    if scene == "inspector"
+        || scene == "bug060"
+        || scene == "paramsteps"
+        || scene == "gltfscene"
+        || scene == "bug047"
+    {
         // The inspector IS the subject: keep it at a generous width and give the
         // timeline a normal split so the selected layer's cards have room.
         // `bug060` (UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md P1 gate scene) and
         // `paramsteps` (PARAM_STEP_ACTIONS P3) get the same treatment — both are
         // scrolled/inspector-subject scenes, not timeline ones. `gltfscene`
         // (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md P3 demo) is the same shape:
-        // the imported generator's sectioned card is the subject.
+        // the imported generator's sectioned card is the subject. `bug047` is the
+        // AUDIO_SETUP_DOCK D1 gate: the inspector must stay visible on the right
+        // so the docked column (built LEFT of it) reads as pushing content, not
+        // replacing the inspector.
         ui.layout.inspector_width = 600.0;
         ui.layout.timeline_split_ratio = 0.6;
     } else {
@@ -205,6 +280,21 @@ fn render_ui_scene(
         want_dump,
         want_thumbs,
     );
+
+    // `--probe`/`--crop` (`readback.rs`): applied to the BASE PNG only, right
+    // after it's written — an `--interact` "after" render below would make
+    // "which PNG" ambiguous, so this is the one well-defined attachment
+    // point. Standalone `ui-snap probe`/`ui-snap crop` cover any other PNG
+    // (including a `.after` one).
+    if probe_spec.is_some() || crop_spec.is_some() {
+        let base_png = dir.join(format!("{scene}.png"));
+        if let Some(spec) = probe_spec {
+            readback::probe_png(&base_png, spec);
+        }
+        if let Some(spec) = crop_spec {
+            readback::crop_png(&base_png, spec);
+        }
+    }
 
     // Optional: render the HTML mockup and composite app | mockup side by side.
     if want_vs_mockup {
@@ -1132,6 +1222,188 @@ mod editor_window_harness {
              the node did not paint where the canvas says it is",
             node_entry.label,
             distinct.len(),
+        );
+    }
+}
+
+#[cfg(test)]
+mod overlay_fidelity_proof {
+    //! BUG-097 — the permanent RED→GREEN regression proof for the overlay
+    //! pass, closed by construction in
+    //! `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` §4 step 2.
+    //!
+    //! `UIRoot::build_overlays` mints each open overlay as its own region and
+    //! records `(start, end)` with `start = tree.count()` taken AFTER
+    //! `begin_region` — so the region's own root sits at `start - 1`,
+    //! deliberately OUTSIDE the recorded range (the shadow-peek heuristic in
+    //! the overlay pass depends on `start` being the first REAL node). That
+    //! makes the render-call choice load-bearing:
+    //!
+    //! - `render_tree_range(start, end)` is a ROOT scan (`traverse_range`): it
+    //!   finds no region root inside `[start, end)` and renders NOTHING — the
+    //!   old harness's bug (BUG-097). Every open overlay — dropdown, modal,
+    //!   perf HUD — would render blank in a harness PNG.
+    //! - `render_sub_region(start, end, false)` is an ancestor-aware FLAT scan
+    //!   (`traverse_flat_range`): it walks the parent chain from `start` and
+    //!   picks up the region's `CLIPS_CHILDREN` regardless — it DRAWS the
+    //!   overlay. This is the call `render_main_ui_passes` (the shared seam)
+    //!   makes; there is no longer a second, divergent copy to pick the wrong
+    //!   one.
+    //!
+    //! The test proves both halves on the SAME real overlay range, comparing
+    //! one offscreen before/after each render call (never two separate
+    //! composites — that sidesteps the ~172px of font/GPU nondeterminism a
+    //! fresh composite carries). Keep the GREEN assertion: reverting the seam
+    //! to `render_tree_range` makes `sub_region_drew` false and this fails.
+
+    use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTextureFormat};
+    use manifold_renderer::ui_cache_manager::UICacheManager;
+    use manifold_renderer::ui_renderer::UIRenderer;
+
+    use super::composite_resources::{composite_frame, CompositeResources};
+    use super::render::readback;
+    use super::{fixtures, sync_build};
+    use crate::ui_frame::{render_main_ui_passes, MainUiPassInputs};
+    use crate::ui_root::UIRoot;
+
+    /// The minimal `MainUiPassInputs` a headless overlay-only frame needs —
+    /// every timeline/clip/VQT input absent (`None`/empty), exactly as
+    /// `render_ui_to_png` fills them (§3: input presence, not caller
+    /// identity). Only the overlay pass, which reads off `ui_root`, produces
+    /// pixels here.
+    fn overlay_only_inputs<'a>(
+        res: &'a CompositeResources,
+        text_input: &'a crate::text_input::TextInputState,
+        frame_timer: &'a crate::frame_timer::FrameTimer,
+    ) -> MainUiPassInputs<'a> {
+        MainUiPassInputs {
+            layer_bitmap_gpu: None,
+            clip_bodies: &[],
+            clip_rects: &[],
+            clip_content_gpu: None,
+            thumb: None,
+            timeline_overlays: manifold_ui::panels::viewport::TimelineOverlays::default(),
+            markers: &[],
+            landing_flash: None,
+            automation_lanes: &[],
+            cursor_pos: manifold_ui::node::Vec2::ZERO,
+            text_input,
+            frame_timer,
+            vqt: None,
+            blit_pipeline: &res.blit_pipeline,
+            blit_sampler: &res.blit_sampler,
+            gpu_sink: None,
+        }
+    }
+
+    #[test]
+    fn bug097_render_sub_region_draws_root_excluding_overlay_that_render_tree_range_blanks() {
+        let w = super::LOGICAL_W as u32;
+        let h = super::LOGICAL_H as u32;
+        let data = fixtures::build("bug060heavy").expect("bug060heavy scene");
+
+        let mut ui = UIRoot::new();
+        ui.resize(super::LOGICAL_W, super::LOGICAL_H);
+        // Open the Perf HUD (an `OverlayId::PerfHud`, still in the overlay
+        // `Z_ORDER`) BEFORE the build, so `build_overlays` records its
+        // root-excluding range this frame. (Audio Setup was the original
+        // specimen but became a docked column, not an overlay, in
+        // AUDIO_SETUP_DOCK P1 — any Z_ORDER overlay proves the same mechanism,
+        // since build_overlays excludes the region root for ALL of them.)
+        ui.perf_hud.toggle();
+        sync_build(&mut ui, &data, 24.0);
+
+        assert!(
+            !ui.overlay_draw.is_empty(),
+            "opening the Perf HUD must record an overlay range (build_overlays)"
+        );
+        let (start, end) = ui.overlay_draw[0];
+        assert!(end > start, "overlay range must be non-empty ({start}..{end})");
+        // The mechanism under test: the region root is at `start - 1`, outside
+        // the recorded range. If this ever stops holding, the whole premise of
+        // BUG-097 is gone and this test should be revisited, not silently pass.
+        assert!(start >= 1, "overlay range must exclude its region root at start-1");
+
+        let device = GpuDevice::new();
+        let mut renderer = UIRenderer::new(&device, GpuTextureFormat::Bgra8Unorm);
+        let mut cache = UICacheManager::new(GpuTextureFormat::Bgra8Unorm, 1.0);
+        cache.set_scale_factor(1.0);
+        cache.ensure_atlas(&device, w, h);
+        let res = CompositeResources::new(&device, w, h);
+
+        // Helper: paint just the overlay range through `f` onto a FRESH
+        // composite of the same panels, and return (base_before, after).
+        // Comparing before/after the SAME offscreen keeps the assertion immune
+        // to the font/GPU nondeterminism a second composite would introduce.
+        let mut paint_range = |renderer: &mut UIRenderer,
+                               cache: &mut UICacheManager,
+                               ui: &mut UIRoot,
+                               sub_region: bool|
+         -> (Vec<u8>, Vec<u8>) {
+            cache.invalidate_all();
+            composite_frame(&device, renderer, cache, ui, &res, 1.0);
+            let before = readback(&device, &res.offscreen, w, h);
+            renderer.begin_frame();
+            if sub_region {
+                renderer.render_sub_region(&ui.tree, start, end, false);
+            } else {
+                renderer.render_tree_range(&ui.tree, start, end);
+            }
+            if renderer.prepare(&device, w, h, 1.0) {
+                let mut enc = device.create_encoder("bug097-overlay-range");
+                renderer.render(&mut enc, &res.offscreen, GpuLoadAction::Load);
+                enc.commit_and_wait_completed();
+            }
+            let after = readback(&device, &res.offscreen, w, h);
+            (before, after)
+        };
+
+        // RED — the old harness call: render_tree_range renders NOTHING for a
+        // root-excluding overlay range. The offscreen is byte-identical
+        // before/after: the overlay is blank.
+        let (red_before, red_after) = paint_range(&mut renderer, &mut cache, &mut ui, false);
+        assert_eq!(
+            red_before, red_after,
+            "render_tree_range drew pixels for a root-excluding overlay range — \
+             the BUG-097 premise no longer holds; revisit this test"
+        );
+
+        // GREEN — the seam's call: render_sub_region DRAWS the overlay. The
+        // offscreen changes.
+        let (green_before, green_after) = paint_range(&mut renderer, &mut cache, &mut ui, true);
+        let sub_region_drew = green_before != green_after;
+        assert!(
+            sub_region_drew,
+            "render_sub_region drew nothing for the open overlay — the seam's \
+             overlay pass is broken (BUG-097 regressed)"
+        );
+
+        // Tie to the production path: `render_main_ui_passes` (the seam the
+        // live app + harness both call) makes the render_sub_region choice
+        // above internally. Run it end-to-end with the overlay open and
+        // confirm it draws (changes the composited base) without panicking —
+        // a smoke check that the real seam executes the overlay pass, not a
+        // hand-rolled render_sub_region.
+        cache.invalidate_all();
+        composite_frame(&device, &mut renderer, &mut cache, &mut ui, &res, 1.0);
+        let seam_before = readback(&device, &res.offscreen, w, h);
+        let text_input = crate::text_input::TextInputState::new();
+        let frame_timer = crate::frame_timer::FrameTimer::new(60.0);
+        render_main_ui_passes(
+            &device,
+            &mut renderer,
+            &mut ui,
+            &res.offscreen,
+            w,
+            h,
+            1.0,
+            overlay_only_inputs(&res, &text_input, &frame_timer),
+        );
+        let seam_after = readback(&device, &res.offscreen, w, h);
+        assert_ne!(
+            seam_before, seam_after,
+            "render_main_ui_passes drew nothing with an overlay open — the \
+             production seam is not executing the overlay pass"
         );
     }
 }

@@ -21,13 +21,37 @@ cargo xtask ui-snap timeline --interact "collapse:kick"  # toggle is_collapsed o
 cargo xtask ui-snap timeline --interact "delete:flowers" # remove a layer (+ children); base + .after
 cargo xtask ui-snap scrollshrink --scroll 5000 --interact "collapse:stack-2"  # scroll + shrink content
 cargo xtask ui-snap hairlineclips --dump                 # far zoom (1px/beat), 200 sub-pixel trigger clips
+cargo xtask ui-snap diff a.tree.json b.tree.json          # node-level diff of two tree dumps; exit 1 if any differ
+cargo xtask ui-snap states --probe "100,50;200,80"        # sample pixel colors on the just-written base PNG
+cargo xtask ui-snap probe states.png --probe "100,50"     # standalone: sample an existing PNG
+cargo xtask ui-snap timeline --crop "0,0,200,140"         # crop the just-written base PNG -> timeline.crop.png
+cargo xtask ui-snap crop timeline.png --crop "0,0,200,140" # standalone: crop an existing PNG
 ```
+`--probe`/`--crop` alongside a scene render apply to that scene's BASE PNG only (never a
+`--interact` `.after` render). On a run that can't honor them — `all`, `graph`, `editor`,
+`transform`, or a `--script` run — they are an error (exit 2, pointing at the standalone form),
+never silently ignored; use standalone `probe`/`crop` on a specific file for those.
+`--probe`/`--crop` coordinates are PNG pixel space, which today
+is 1:1 with the tree dump's `rect` values (`SCALE = 1.0` in `ui_snapshot/mod.rs` — the harness
+renders at the fixture's logical size, not Retina/2x; §6 below is stale on this point). If `SCALE`
+is ever raised for a Retina capture, `rect` values and PNG pixels would diverge and this note (and
+`probe`/`crop`, which do no rescaling) would need to change with it.
+
 Output goes to `target/ui-snapshots/<scene>/`. Verified end-to-end: real `UIRoot`/`state_sync`
 path, the tree dump with real node values, a real-input-host `select:` that flips the selection-
 ring node in the dump and the PNG, the 6-state matrix, the mockup composite, and atlas injection
 through the real `ClipThumbGpu`. **Next step:** the §F aspect-locked multi-window tiling layers
 onto the same `ThumbQuad`/atlas inputs (`clip_filmstrip::aspect_windows`); the `--thumbs` cut
 currently injects one full-body window per clip. Golden-image diffing remains deferred by design.
+
+**Reading results:** don't write an ad-hoc script for this — the harness answers all four common
+questions directly. Read the PNG (agents read images natively) for "does it look right." Read the
+`.tree.json` dump for an exact-value question ("what's this node's rect/bg/font_size"). Run
+`ui-snap diff` on two dumps to answer "what changed" across an edit — node-level, field-level,
+exits non-zero on any difference so it can gate a check. Run `ui-snap probe`/`ui-snap crop` for a
+pixel question the tree dump can't answer (composited/blended color, a specific sub-region to look
+at closely) — standalone on any PNG, or as `--probe`/`--crop` flags on the render that just wrote
+one.
 
 ## Scenes
 

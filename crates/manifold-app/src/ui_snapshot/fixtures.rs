@@ -836,6 +836,12 @@ fn bug047_scene() -> SceneData {
             Beats(48.0),
             Seconds::ZERO,
         ));
+        // The first target layer carries an effect so the inspector shows real
+        // param rows — the AUDIO_SETUP_DOCK D1 gate proves the inspector stays
+        // usable (a param row is still clickable) while the dock is open.
+        if i == 0 {
+            target_layer.effects = Some(vec![effect("Bloom")]);
+        }
         layers.push(target_layer);
 
         let mut send = AudioSend::new(format!("Send {i}"));
@@ -850,7 +856,9 @@ fn bug047_scene() -> SceneData {
     project.timeline.layers = layers;
 
     let content = ContentState { current_beat: Beats(0.0), is_playing: false, ..Default::default() };
-    SceneData { project, content, active: None, selection: UIState::default() }
+    // Active = the first target layer (index 1: layers are [SRC0, TGT0, …]) so
+    // the inspector renders TGT 0's Bloom params.
+    SceneData { project, content, active: Some(1), selection: UIState::default() }
 }
 
 /// PARAM_STEP_ACTIONS P3 evidence scene: the drawer's D8 Action/Amount/Wrap

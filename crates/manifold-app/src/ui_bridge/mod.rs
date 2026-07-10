@@ -595,11 +595,20 @@ pub fn dispatch(
         | PanelAction::EffectMappingAffineChanged { .. }
         | PanelAction::EffectMappingAffineCommit { .. }
         | PanelAction::EffectMappingGotoNode { .. }
-        | PanelAction::OpenAudioSetup
         // Consumed in app_render (opens the inline rename editor); no-op here.
         | PanelAction::AudioSendLabelClicked(_)
         // Consumed in ui_root::try_open_dropdown (opens the send picker); no-op here.
         | PanelAction::AudioSendClicked(_) => DispatchResult::handled(),
+
+        // Audio Setup dock toggle (D1). The live app handles this in
+        // app_render (with its own structural-sync flag); the headless script
+        // harness routes every action through here, so the toggle lives on
+        // UIRoot and both call it. Structural: it changes `audio_setup_width`,
+        // so the tree must rebuild at the new geometry.
+        PanelAction::OpenAudioSetup => {
+            ui.toggle_audio_dock();
+            DispatchResult::structural()
+        }
     }
 }
 

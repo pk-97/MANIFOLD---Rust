@@ -1,6 +1,6 @@
 # Audio Setup Dock & Trigger Unification — the panel becomes a workspace column; clip triggers become layer-owned audio mods
 
-**Status:** APPROVED 2026-07-09 (Peter) — design ready, awaiting build (Sonnet, P1–P4) · design 2026-07-09 · Fable
+**Status:** IN PROGRESS · P1 SHIPPED 2026-07-10 (dock column + overlay-path deletion + scroll, `feat/audio-dock-p1` @ `36a96791`; closes BUG-047; L3 flow + full-app PNG — see `docs/landings/2026-07-10-audio-dock-p1.md`); P2–P4 remain · design 2026-07-09 · Fable
 **Prerequisites:** none (runs against shipped AUDIO_SENDS_UX P1–P4 and LIVE_AUDIO_TRIGGERS §9 U-P1/U-P2 code)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -262,7 +262,7 @@ carry over unchanged.
 
 ## 4. Phasing
 
-### Phase 1 — The dock (layout column + overlay-path deletion + scroll)
+### Phase 1 — The dock (layout column + overlay-path deletion + scroll) — SHIPPED 2026-07-10 (`36a96791`)
 - **Entry state:** `rg -n "audio_setup_width" crates/manifold-ui/src/layout.rs` → zero
   hits; `rg -n "OverlayId::AudioSetup" crates/manifold-app/src/ui_root.rs` hits `:27`
   region; anchors `layout.rs:88/:152`, `audio_setup_panel.rs:745/:2314` re-verified.

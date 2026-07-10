@@ -947,6 +947,16 @@ pub const DEFAULT_INSPECTOR_WIDTH: f32 = 500.0;
 pub const INSPECTOR_RESIZE_HANDLE_WIDTH: f32 = 6.0;
 pub const INSPECTOR_GAP: f32 = 4.0;
 
+// ── Audio Setup dock (AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN D1) ──
+// The Audio Setup panel is a fold-out column pinned to the inspector's LEFT
+// edge; it expands leftward when opened, shrinking preview + timeline (never
+// the inspector). 0.0 = closed. Default-open width sized for the panel's
+// control rows (device / send / gain / stereo / scope) to read without
+// crushing — the min floor keeps the send row's columns intact.
+pub const DEFAULT_AUDIO_SETUP_WIDTH: f32 = 460.0;
+pub const MIN_AUDIO_SETUP_WIDTH: f32 = 340.0;
+pub const MAX_AUDIO_SETUP_WIDTH: f32 = 720.0;
+
 // ── Group layout ────────────────────────────────────────────────────
 pub const GROUP_CHILD_INDENT_PX: f32 = 20.0;
 /// A group row is a structural container header (no clip bodies of its own), so
