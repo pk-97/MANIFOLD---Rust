@@ -20,7 +20,7 @@
       { "id": "rot_speed", "name": "Rotation Speed", "min": 0.0, "max": 3.0, "defaultValue": 0.3, "wholeNumbers": false, "isToggle": false, "formatString": "rotSpeed" },
       { "id": "box_scale", "name": "Box Scale", "min": 0.005, "max": 0.08, "defaultValue": 0.025, "wholeNumbers": false, "isToggle": false, "formatString": "boxScale" },
       { "id": "cam_dist", "name": "Camera Distance", "min": 0.5, "max": 10.0, "defaultValue": 3.5, "wholeNumbers": false, "isToggle": false, "formatString": "camDist" },
-      { "id": "cam_orbit", "name": "Camera Orbit", "min": -180.0, "max": 180.0, "defaultValue": 0.0, "wholeNumbers": false, "isToggle": false, "formatString": "camOrbit" },
+      { "id": "cam_orbit", "name": "Camera Orbit", "min": -180.0, "max": 180.0, "defaultValue": 0.0, "wholeNumbers": false, "isToggle": false, "wraps": true, "formatString": "camOrbit" },
       { "id": "cam_tilt", "name": "Camera Tilt", "min": -90.0, "max": 90.0, "defaultValue": 15.0, "wholeNumbers": false, "isToggle": false, "formatString": "camTilt" },
       { "id": "cam_fov", "name": "Camera FOV", "min": 20.0, "max": 120.0, "defaultValue": 50.0, "wholeNumbers": false, "isToggle": false, "formatString": "camFov" }
     ],

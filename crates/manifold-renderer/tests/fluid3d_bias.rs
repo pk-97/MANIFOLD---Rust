@@ -49,6 +49,7 @@ fn slot(id: &str, value: f32) -> Param {
         invert: false,
         is_angle: false,
         is_trigger_gate: false,
+        wraps: false,
         section: None,
     });
     p.value = value;

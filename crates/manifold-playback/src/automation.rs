@@ -225,8 +225,19 @@ fn evaluate_instance_automation(
             if latches.contains_key(&key) {
                 continue; // still overridden
             }
+            // BUG-039: a periodic param (e.g. a rotation the performer
+            // authored a multi-turn ramp on, points climbing past `max`)
+            // wraps back into range on read instead of clamping and
+            // plateauing at the rail — the stored `points` are untouched,
+            // only this per-frame interpretation changes.
             let raw = lane.value_at(current_beat);
-            to_write.push((lane.param_id.clone(), raw.clamp(p.spec.min, p.spec.max)));
+            let value = manifold_core::params::constrain_to_range(
+                raw,
+                p.spec.min,
+                p.spec.max,
+                p.spec.wraps,
+            );
+            to_write.push((lane.param_id.clone(), value));
         }
     }
 
@@ -843,5 +854,72 @@ mod tests {
             evaluate_all_automation(&mut project, Beats(1.5), &mut latches, true, &mut gestures);
         assert!(commits.is_empty(), "under the ~2 beat threshold, the gesture stays open");
         assert_eq!(gestures.len(), 1);
+    }
+
+    // ── BUG-039: automation ramp wrap ───────────────────────────────────
+
+    /// A ramp with a point authored past the param's own `max` (a
+    /// multi-turn rotation ramp, e.g. drawn from 0 to 720 on a 0..360
+    /// param) reads back wrapped into range instead of plateauing at the
+    /// rail once the interpolated value crosses `max`.
+    #[test]
+    fn ramp_past_max_wraps_when_param_is_periodic() {
+        let mut layer = layer_with_one_effect();
+        let fx = &mut layer.effects.as_mut().unwrap()[0];
+        fx.params.get_mut("amount").unwrap().spec.min = 0.0;
+        fx.params.get_mut("amount").unwrap().spec.max = 360.0;
+        fx.params.get_mut("amount").unwrap().spec.wraps = true;
+        fx.automation_lanes = Some(vec![AutomationLane {
+            param_id: "amount".into(),
+            enabled: true,
+            points: vec![
+                AutomationPoint { beat: Beats(0.0), value: 0.0, shape: SegmentShape::Linear },
+                // A continuous multi-turn ramp: 720 = two full rotations.
+                AutomationPoint { beat: Beats(4.0), value: 720.0, shape: SegmentShape::Linear },
+            ],
+        }]);
+        let mut project = project_with(layer);
+        let mut latches = AutomationLatches::default();
+
+        // 3/4 of the way through -> raw interpolated 540, wrapped into
+        // [0,360): 540 - 360 = 180.
+        eval_unarmed(&mut project, Beats(3.0), &mut latches);
+        let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+        let value = fx.params.get("amount").unwrap().base;
+        assert!(
+            (value - 180.0).abs() < 1e-4,
+            "a ramp past max must wrap continuously, got {value}"
+        );
+    }
+
+    /// The same overshoot on a non-periodic param (`wraps` stays false, the
+    /// pre-fix behavior) still clamps at the rail and plateaus — proving the
+    /// wrap is opt-in, not a silent behavior change for every ramp.
+    #[test]
+    fn ramp_past_max_clamps_when_param_is_not_periodic() {
+        let mut layer = layer_with_one_effect();
+        let fx = &mut layer.effects.as_mut().unwrap()[0];
+        fx.params.get_mut("amount").unwrap().spec.min = 0.0;
+        fx.params.get_mut("amount").unwrap().spec.max = 360.0;
+        // wraps stays false (default).
+        fx.automation_lanes = Some(vec![AutomationLane {
+            param_id: "amount".into(),
+            enabled: true,
+            points: vec![
+                AutomationPoint { beat: Beats(0.0), value: 0.0, shape: SegmentShape::Linear },
+                AutomationPoint { beat: Beats(4.0), value: 720.0, shape: SegmentShape::Linear },
+            ],
+        }]);
+        let mut project = project_with(layer);
+        let mut latches = AutomationLatches::default();
+
+        // 3/4 through -> raw interpolated 540, clamped to max 360.
+        eval_unarmed(&mut project, Beats(3.0), &mut latches);
+        let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+        let value = fx.params.get("amount").unwrap().base;
+        assert!(
+            (value - 360.0).abs() < 1e-4,
+            "a non-wrapping param must clamp (plateau) at max, got {value}"
+        );
     }
 }

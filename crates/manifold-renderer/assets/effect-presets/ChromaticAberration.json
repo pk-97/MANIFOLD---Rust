@@ -58,6 +58,7 @@
         "wholeNumbers": false,
         "isToggle": false,
         "isTrigger": false,
+        "wraps": true,
         "formatString": "F2",
         "oscSuffix": "Angle"
       },
