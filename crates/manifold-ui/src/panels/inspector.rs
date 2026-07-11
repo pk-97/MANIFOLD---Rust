@@ -2794,6 +2794,70 @@ mod tests {
         );
     }
 
+    /// BUG-108 class-kill (I3, docs/UI_LAYOUT_INVARIANT_LINTS_PROPOSAL.md): the
+    /// "+ Add Effect" button must never overlap a sectioned layer effect card's
+    /// last row. This is the exact defect Peter hit on the rig — a glTF-scene
+    /// effect card's SCENE_BUILD P3 section headers (QS1694/Material.001/
+    /// Camera/Sun/Environment) inflated the card's real drawn height beyond
+    /// what `compute_height()` (pre-fix) reported, so the button — anchored at
+    /// `layer_column_height()`, which sums each card's `compute_height()` —
+    /// landed mid-card, over the Sun Y/Sun Z rows. Reads REAL painted bounds
+    /// from the tree (`param_row_rect`/button bounds), not the height formula
+    /// itself, so a future drift between the formula and the draw loop fails
+    /// this test even if `compute_height()` alone still agrees with itself.
+    #[test]
+    fn add_effect_button_does_not_overlap_sectioned_card_last_row() {
+        use super::super::param_card::ParamCardKind;
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = {
+            let mut l = ScreenLayout::new(1920.0, 1080.0);
+            l.inspector_width = 500.0;
+            l
+        };
+
+        // A layer effect card whose LAST two rows are grouped under a "Sun"
+        // section header — the reported card's exact shape (a section run
+        // covering the card's tail, header stacked above its own rows).
+        let mut config = mk_config(ParamCardKind::Effect, "SceneFX", 4);
+        config.params[2].section = Some("Sun".to_string());
+        config.params[3].section = Some("Sun".to_string());
+        let last_param_id = config.params[3].param_id.to_string();
+        panel.configure_layer_effects(&[config], None);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
+
+        tree.clear();
+        panel.build(&mut tree, &layout);
+
+        let btn_id = panel
+            .add_layer_effect_btn
+            .expect("layer add-effect button must build below the sectioned card");
+        let btn_bounds = tree.get_bounds(btn_id);
+
+        let card = panel
+            .layer_effects
+            .last()
+            .expect("the sectioned layer effect card must have built");
+        assert!(
+            !card.section_header_ids().is_empty(),
+            "sanity: the Sun run must draw its section header, or this test proves nothing"
+        );
+        let last_row = card
+            .param_row_rect(&tree, &last_param_id)
+            .expect("the sectioned card's last param row must build (unfolded by default)");
+
+        assert!(
+            btn_bounds.y + 0.5 >= last_row.y + last_row.height,
+            "+ Add Effect (y={}) must sit at or below the sectioned card's last \
+             painted row (bottom={}), not overlap it — BUG-108",
+            btn_bounds.y,
+            last_row.y + last_row.height,
+        );
+    }
+
     /// The full-panel render path (`render_tree_range` → `traverse_range`) walks
     /// only roots in range and descends. After the layer column's content is
     /// reparented under the scroll clip, EVERY visible inspector node must still

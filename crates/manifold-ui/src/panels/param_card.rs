@@ -1342,6 +1342,38 @@ impl ParamCardPanel {
             .map(|id| tree.get_bounds(id))
     }
 
+    /// Screen-space rect of param row `param_id`'s own label (slider row, or
+    /// toggle/trigger row) — same `slider_ids`/`toggle_ids` lookup
+    /// `label_hit` uses. `None` when the param isn't built (hidden param, a
+    /// folded D5 section, or an unknown id). Named addressing (not index),
+    /// matching `mapping_chevron_rect`'s convention — for a bounds-overlap
+    /// assertion over the REAL painted row, e.g. BUG-108's "+ Add Effect
+    /// never overlaps the last card row" class-kill.
+    pub fn param_row_rect(&self, tree: &UITree, param_id: &str) -> Option<Rect> {
+        let i = self.param_info.iter().position(|p| p.param_id == param_id)?;
+        let label_id = self
+            .slider_ids
+            .get(i)
+            .and_then(|s| s.as_ref())
+            .and_then(|ids| ids.label)
+            .or_else(|| {
+                self.toggle_ids
+                    .get(i)
+                    .and_then(|t| t.as_ref())
+                    .and_then(|ids| ids.label_id)
+            })?;
+        Some(tree.get_bounds(label_id))
+    }
+
+    /// The D5 section headers built this frame, as `(node_id, section_name)`
+    /// — same data `handle_click` resolves a header click against. Read-only
+    /// accessor for cross-module bounds-overlap assertions (e.g. BUG-108's
+    /// class-kill in `panels::inspector`'s tests, which can't reach the
+    /// private `section_header_ids` field directly).
+    pub fn section_header_ids(&self) -> &[(NodeId, String)] {
+        &self.section_header_ids
+    }
+
     // ── compute_height ────────────────────────────────────────────
 
     pub fn compute_height(&self) -> f32 {
@@ -1360,46 +1392,79 @@ impl ParamCardPanel {
     /// including each row's own P1 drawer contribution. `compute_height_effect`
     /// scales this by `collapse_frac()`; `build_effect` sizes the animated
     /// clip-reveal region to it while `collapse_anim` is mid-flight.
+    ///
+    /// BUG-108: walks `section_runs()` — mirroring `build_effect`'s own draw
+    /// loop exactly — instead of summing `param_info` linearly. A linear sum
+    /// is blind to the D5 section-header bar every section run draws
+    /// (`build_section_header`, `ROW_HEIGHT + ROW_SPACING`) and to a folded
+    /// section's rows drawing nothing at all; either one made this height
+    /// shorter than what `build_effect` actually painted, so the "+ Add
+    /// Effect" button anchored below it (`layer_column_height`) landed
+    /// mid-card instead of below the last drawn row.
     fn effect_body_natural_height(&self) -> f32 {
         if self.param_info.is_empty() {
             return 0.0;
         }
         let mut h = HEADER_BODY_GAP;
-        for i in 0..self.param_info.len() {
-            // Hidden params consume zero vertical space.
-            if !self.param_info[i].exposed {
-                continue;
+        for (start, len, section) in self.section_runs() {
+            if let Some(name) = &section {
+                // Section header bar — drawn even when every row in the run
+                // is folded away.
+                h += ROW_HEIGHT + ROW_SPACING;
+                let folded = self.section_folded.get(name).copied().unwrap_or(false);
+                if folded {
+                    continue;
+                }
             }
-            h += ROW_HEIGHT + ROW_SPACING;
-            // A plain toggle never gets a drawer (nothing to modulate) — zero
-            // lane, zero height, unconditionally. `is_trigger` and ordinary
-            // sliders both go through the general `active_mod_tabs`-driven
-            // height (`animated_drawer_height` already handles "no active
-            // config → 0" on its own; is_trigger only ever has Audio active,
-            // per D5b). `is_trigger_gate` is ALSO an `is_toggle` row (D6) but
-            // reaches its own `AudioTrigger` tab through the same path.
-            if !self.param_info[i].is_toggle || self.param_info[i].is_trigger_gate {
-                h += self.animated_drawer_height(i);
+            for i in start..start + len {
+                // Hidden params consume zero vertical space.
+                if !self.param_info[i].exposed {
+                    continue;
+                }
+                h += ROW_HEIGHT + ROW_SPACING;
+                // A plain toggle never gets a drawer (nothing to modulate) — zero
+                // lane, zero height, unconditionally. `is_trigger` and ordinary
+                // sliders both go through the general `active_mod_tabs`-driven
+                // height (`animated_drawer_height` already handles "no active
+                // config → 0" on its own; is_trigger only ever has Audio active,
+                // per D5b). `is_trigger_gate` is ALSO an `is_toggle` row (D6) but
+                // reaches its own `AudioTrigger` tab through the same path.
+                if !self.param_info[i].is_toggle || self.param_info[i].is_trigger_gate {
+                    h += self.animated_drawer_height(i);
+                }
             }
         }
         h
     }
 
+    /// BUG-108: same section-run walk as `effect_body_natural_height` — see
+    /// its doc comment. `build_generator` draws section headers identically
+    /// to `build_effect` (same `build_section_header` call, same fold-skip),
+    /// so this needs the same fix.
     fn compute_height_generator(&self) -> f32 {
         let mut h = BORDER_W * 2.0 + HEADER_HEIGHT;
         if !self.is_collapsed {
             if !self.param_info.is_empty() || !self.string_param_info.is_empty() {
                 h += HEADER_BODY_GAP;
             }
-            for (i, info) in self.param_info.iter().enumerate() {
-                h += ROW_HEIGHT + ROW_SPACING;
-                // Same rule as `effect_body_natural_height`: only a plain
-                // toggle forces zero drawer height. `is_trigger` reaches the
-                // audio-mod drawer (D5b), `is_trigger_gate` reaches the
-                // audio-TRIGGER-mod drawer (D6) — both via the same general
-                // height path every slider row uses.
-                if !info.is_toggle || info.is_trigger_gate {
-                    h += self.animated_drawer_height(i);
+            for (start, len, section) in self.section_runs() {
+                if let Some(name) = &section {
+                    h += ROW_HEIGHT + ROW_SPACING;
+                    let folded = self.section_folded.get(name).copied().unwrap_or(false);
+                    if folded {
+                        continue;
+                    }
+                }
+                for i in start..start + len {
+                    h += ROW_HEIGHT + ROW_SPACING;
+                    // Same rule as `effect_body_natural_height`: only a plain
+                    // toggle forces zero drawer height. `is_trigger` reaches the
+                    // audio-mod drawer (D5b), `is_trigger_gate` reaches the
+                    // audio-TRIGGER-mod drawer (D6) — both via the same general
+                    // height path every slider row uses.
+                    if !self.param_info[i].is_toggle || self.param_info[i].is_trigger_gate {
+                        h += self.animated_drawer_height(i);
+                    }
                 }
             }
             // String param rows (text fields)
