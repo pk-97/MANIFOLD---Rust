@@ -39,7 +39,11 @@ struct ScatterOnMeshUniforms {
     scale_min: f32,
     scale_max: f32,
     align_to_normal: u32,
-    _pad0: u32,
+    // Mirrors shaders/scatter_on_mesh.wgsl's Params — place_main runs over
+    // all `capacity` slots and parks [count, capacity) at zero scale, so a
+    // lowered count fader removes instances instead of leaving a stale
+    // drawn tail (render_scene draws buffer_size/32 unconditionally).
+    capacity: u32,
 }
 
 crate::primitive! {
@@ -225,7 +229,7 @@ impl Primitive for ScatterOnMesh {
             scale_min,
             scale_max,
             align_to_normal: u32::from(align_to_normal),
-            _pad0: 0,
+            capacity,
         };
 
         let bindings = [
@@ -275,7 +279,7 @@ impl Primitive for ScatterOnMesh {
         gpu.native_enc.dispatch_compute(
             place_pipeline,
             &bindings,
-            [count.div_ceil(256), 1, 1],
+            [capacity.div_ceil(256), 1, 1],
             "node.scatter_on_mesh.place",
         );
     }
@@ -421,7 +425,7 @@ mod gpu_tests {
             scale_min,
             scale_max,
             align_to_normal: u32::from(align_to_normal),
-            _pad0: 0,
+            capacity,
         };
 
         let bindings = [
@@ -441,7 +445,7 @@ mod gpu_tests {
             enc.compute_memory_barrier_buffers();
         }
         let place = device.create_compute_pipeline(wgsl, "place_main", "scatter-place-test");
-        enc.dispatch_compute(&place, &bindings, [count.div_ceil(256), 1, 1], "place");
+        enc.dispatch_compute(&place, &bindings, [capacity.div_ceil(256), 1, 1], "place");
         enc.commit_and_wait_completed();
 
         let ptr = ibuf.mapped_ptr().expect("shared instance buffer");
@@ -572,6 +576,35 @@ mod gpu_tests {
                 assert!(
                     (mapped_up[k] - n[k]).abs() < 1e-3,
                     "instance {i} axis {k}: decomposed rotation's up vector {mapped_up:?} != triangle normal {n:?}"
+                );
+            }
+        }
+    }
+
+    /// BUG found by the Scene 2 look-dev (2026-07-11): lowering `count`
+    /// below a previously-written value left the tail slots holding stale
+    /// placements, and render_scene draws every buffer slot — the density
+    /// fader appeared dead. place_main must park [count, capacity).
+    #[test]
+    fn slots_beyond_count_park_at_zero_scale() {
+        let device = crate::test_device();
+        let wgsl = include_str!("shaders/scatter_on_mesh.wgsl");
+        let vertices = quad_mesh();
+        let capacity = 64u32;
+
+        // First fill every slot at full count, then re-run with count=10 —
+        // the tail must be parked, not left stale.
+        let _full = dispatch_scatter(&device, wgsl, &vertices, capacity, capacity, 5, 1.0, 1.0, false);
+        let low = dispatch_scatter(&device, wgsl, &vertices, 10, capacity, 5, 1.0, 1.0, false);
+
+        for (i, inst) in low.iter().enumerate() {
+            if i < 10 {
+                assert!(inst.pos_scale[3] > 0.0, "instance {i} below count should be live");
+            } else {
+                assert_eq!(
+                    inst.pos_scale[3], 0.0,
+                    "slot {i} at/beyond count must park at zero scale, got {:?}",
+                    inst.pos_scale
                 );
             }
         }

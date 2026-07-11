@@ -33,7 +33,12 @@ struct Params {
     scale_min: f32,
     scale_max: f32,
     align_to_normal: u32,
-    _pad0: u32,
+    // Total instance slots in the output buffer. place_main runs over ALL
+    // of them and parks slots >= count at zero scale — render_scene draws
+    // buffer_size/32 instances unconditionally, so a stale tail (slots the
+    // previous, higher count wrote) would otherwise stay on screen and the
+    // count fader would appear dead (Scene 2 BlossomField, 2026-07-11).
+    capacity: u32,
 };
 
 struct MeshVertex {
@@ -120,7 +125,13 @@ fn euler_from_basis(col0: vec3<f32>, col1: vec3<f32>, col2: vec3<f32>) -> vec3<f
 @compute @workgroup_size(256, 1, 1)
 fn place_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let i = id.x;
+    if i >= params.capacity {
+        return;
+    }
+    // Slots beyond the live count park at zero scale so a lowered count
+    // fader actually removes instances (see Params.capacity).
     if i >= params.count {
+        park_zero(i);
         return;
     }
     if params.triangle_count == 0u {
