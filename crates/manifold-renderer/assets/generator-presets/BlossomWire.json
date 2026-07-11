@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "BlossomWire",
-  "description": "Scene 3 probe - the scanned apricot blossom cluster as a true line wireframe. A hard-decimated cut of the scan (blossom_wire.glb, 3070 tris / 9210 flat verts, Blender quadric collapse from the 80k LOD) feeds the Wireframe-preset pipeline with meshes instead of polytopes: gltf_mesh_source -> rotate_3d (slow time spin) -> flatten_3d perspective -> draw_lines points, while node.mesh_edges (NEW atom, this branch: per-triangle edge topology from the flat triangle list, index arithmetic only) supplies draw_lines edges. gltf max_capacity is sized EXACTLY to the asset (9210) - mesh_edges derives edge count from buffer capacity, so a zero-filled tail would draw dot edges at vertex 0 (documented v1 limitation).",
+  "description": "Scene 3 probe - the scanned apricot blossom cluster as a true line wireframe, via the Wireframe-preset pipeline with meshes instead of polytopes: gltf_mesh_source -> rotate_3d (slow time spin) -> flatten_3d perspective -> draw_lines points, while node.mesh_edges (NEW atom, this branch: per-triangle edge topology from the flat triangle list, index arithmetic only) supplies draw_lines edges. TWO assets share the modelPath file-picker card, two distinct stage looks: blossom_wire_welded.glb (default; raw material-3 cluster welded at 1e-5 BEFORE decimation with UVs stripped pre-export - both required or the glTF exporter re-splits chart borders and quadric collapse floors at the ~13k island count, measured 2026-07-11 - then 321k->3126 tris, 9378 flat verts; reads as ONE connected polygonal net) and blossom_wire.glb (unwelded confetti cut, 3070 tris / 9210 flat verts; the scan's UV-chart islands drift apart under decimation into disconnected triangle sparkle - Peter's pick from the first render). gltf max_capacity is sized EXACTLY to the loaded asset (9378 covers both; the smaller asset under-fills the buffer and the zero tail draws dot edges at vertex 0 - swap max_capacity to 9210 if the confetti asset ever becomes the default; proper active-count plumbing is the tracked v1 limitation on node.mesh_edges).",
   "presetMetadata": {
     "id": "BlossomWire",
     "displayName": "Blossom Wire",
@@ -16,7 +16,7 @@
       {
         "id": "modelPath",
         "name": "Model File",
-        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/footer-leak/tests/fixtures/gltf/blossom_wire.glb",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/footer-leak/tests/fixtures/gltf/blossom_wire_welded.glb",
         "isFilePicker": true,
         "useDropdown": false
       }
@@ -25,7 +25,7 @@
       {
         "id": "modelPath",
         "label": "Model File",
-        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/footer-leak/tests/fixtures/gltf/blossom_wire.glb",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/footer-leak/tests/fixtures/gltf/blossom_wire_welded.glb",
         "target": { "kind": "node", "nodeId": "sprig", "param": "path" }
       }
     ]
@@ -42,7 +42,7 @@
         "mesh_index": { "type": "Int", "value": -1 },
         "primitive_index": { "type": "Int", "value": -1 },
         "material_index": { "type": "Int", "value": -1 },
-        "max_capacity": { "type": "Int", "value": 9210 },
+        "max_capacity": { "type": "Int", "value": 9378 },
         "fit": { "type": "Enum", "value": 1 },
         "recenter": { "type": "Bool", "value": true }
       }
