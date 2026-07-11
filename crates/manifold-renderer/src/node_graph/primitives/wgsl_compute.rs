@@ -27,8 +27,12 @@
 //!   port (atomic accumulator).
 //!
 //! Unsupported shapes (vec/mat uniform members, Texture3D, non-u32
-//! atomics, multiple entry points, group != 0) fail validation with a
-//! warning and leave the pipeline empty.
+//! atomics, group != 0) fail validation with a warning and leave the
+//! pipeline empty. The entry point that runs is chosen by
+//! [`select_compute_entry`]: a single `@compute` entry (any name), else
+//! the one named `cs_main`; two-plus `@compute` entries with no `cs_main`
+//! are ambiguous and fail (BUG-010 — a stray leftover `@compute fn` in a
+//! fragment node used to silently run in place of the real kernel).
 
 #![allow(private_interfaces)]
 
@@ -613,16 +617,44 @@ const RESET_TRIGGER_PORT: &str = "reset_trigger";
 const FRAGMENT_DST: &str = "dst";
 const FRAGMENT_OUT: &str = "out";
 
+/// Pick the compute entry point that `introspect` AND every
+/// `create_compute_pipeline` call must agree on. A synthesized or built-in kernel
+/// has exactly one compute entry; a fragment-form node can accidentally embed a
+/// stray `@compute fn` (a debug leftover, a copy-paste) BEFORE the generated
+/// `cs_main`, and naga's `entry_points[0]` would then be that leftover — it would
+/// be introspected AND dispatched instead of the real kernel, silently rendering
+/// stale/blank output (BUG-010). The three call sites picked `entry_points[0]`
+/// independently, so they even agreed on the WRONG one.
+///
+/// Rule: a single `@compute` entry wins regardless of name (back-compat with
+/// hand-authored kernels not named `cs_main`); with more than one, only the entry
+/// named `cs_main` (the synthesis convention) is unambiguous — otherwise fail
+/// validation, exactly as the module doc promises.
+fn select_compute_entry(module: &naga::Module) -> Result<&naga::EntryPoint, String> {
+    let mut computes = module
+        .entry_points
+        .iter()
+        .filter(|e| e.stage == naga::ShaderStage::Compute);
+    let first = computes.next().ok_or("no @compute entry point")?;
+    // Single compute entry — the overwhelming case, byte-identical to the old
+    // `entry_points[0]` pick for every well-formed kernel.
+    if computes.next().is_none() {
+        return Ok(first);
+    }
+    module
+        .entry_points
+        .iter()
+        .find(|e| e.stage == naga::ShaderStage::Compute && e.name == "cs_main")
+        .ok_or_else(|| {
+            "multiple @compute entry points and none named `cs_main` — ambiguous, refusing"
+                .to_string()
+        })
+}
+
 fn introspect(source: &str) -> Result<ParsedShader, String> {
     let module = naga::front::wgsl::parse_str(source).map_err(|e| e.emit_to_string(source))?;
 
-    if module.entry_points.is_empty() {
-        return Err("no entry points".into());
-    }
-    let ep = &module.entry_points[0];
-    if ep.stage != naga::ShaderStage::Compute {
-        return Err(format!("entry point '{}' is not @compute", ep.name));
-    }
+    let ep = select_compute_entry(&module)?;
     let workgroup_size = ep.workgroup_size;
 
     // Extract `// @channel_skip` markers from the source. Naga preserves
@@ -1884,13 +1916,13 @@ impl EffectNode for WgslCompute {
         let source_hash = hash_str(&self.source);
         if self.pipeline.is_none() || self.compiled_hash != Some(source_hash) {
             let gpu = ctx.gpu_encoder();
-            // Naga has already validated this source in `reparse` — a
-            // successful introspect implies a valid module. We pick
-            // the first entry-point name (`introspect` requires
-            // exactly one Compute entry).
+            // Naga has already validated this source in `reparse` — a successful
+            // introspect implies a valid module. Pick the SAME entry `introspect`
+            // chose (`select_compute_entry`), never `entry_points[0]`, so a stray
+            // leading `@compute fn` can't dispatch in place of `cs_main` (BUG-010).
             let entry = match naga::front::wgsl::parse_str(&self.source)
                 .ok()
-                .and_then(|m| m.entry_points.into_iter().next().map(|e| e.name))
+                .and_then(|m| select_compute_entry(&m).ok().map(|e| e.name.clone()))
             {
                 Some(name) => name,
                 None => return,
@@ -2229,7 +2261,7 @@ impl WgslCompute {
         // generic instead of hitting create_compute_pipeline's panic-on-error.
         let spec_src = self.specialize_source(&statics)?;
         let entry = match naga::front::wgsl::parse_str(&spec_src) {
-            Ok(m) => m.entry_points.into_iter().next().map(|e| e.name)?,
+            Ok(m) => select_compute_entry(&m).ok().map(|e| e.name.clone())?,
             Err(e) => {
                 log::warn!(
                     "[node.wgsl_compute] specialized kernel failed to parse, using generic: {e:?}"
@@ -2432,6 +2464,59 @@ mod tests {
         assert_eq!(node.params[0].range, Some((0.0, 2.0)));
         // wgsl_source() round-trips the AUTHORED fragment, not the kernel.
         assert_eq!(node.wgsl_source(), Some(FRAGMENT_SRC));
+    }
+
+    /// BUG-010: a stray leftover `@compute fn` BEFORE the synthesized `cs_main`
+    /// used to become `entry_points[0]` and be introspected AND dispatched in
+    /// place of the real kernel — silently. `select_compute_entry` must pick
+    /// `cs_main` by name; the workgroup size that lands proves which entry won.
+    #[test]
+    fn multi_entry_kernel_picks_cs_main_not_leading_entry() {
+        let src = r#"
+struct U { k: f32, };
+@group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var out_tex: texture_storage_2d<rgba16float, write>;
+@compute @workgroup_size(8, 8)
+fn debug_pass(@builtin(global_invocation_id) id: vec3<u32>) {
+}
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    _ = u.k;
+    textureStore(out_tex, vec2<i32>(id.xy), vec4<f32>(1.0));
+}
+"#;
+        let mut node = WgslCompute::new();
+        node.set_wgsl_source(src);
+        assert!(!node.compile_failed, "a multi-entry kernel with cs_main must introspect");
+        assert_eq!(
+            node.workgroup_size,
+            [16, 16, 1],
+            "cs_main's workgroup must win over the leading debug_pass entry (BUG-010)",
+        );
+    }
+
+    /// BUG-010: two `@compute` entries with none named `cs_main` is ambiguous —
+    /// the old code silently ran `entry_points[0]`; introspection must now fail,
+    /// exactly as the module doc promises.
+    #[test]
+    fn multi_entry_kernel_without_cs_main_fails_validation() {
+        let src = r#"
+@group(0) @binding(0) var out_tex: texture_storage_2d<rgba16float, write>;
+@compute @workgroup_size(8, 8)
+fn pass_a(@builtin(global_invocation_id) id: vec3<u32>) {
+    textureStore(out_tex, vec2<i32>(id.xy), vec4<f32>(0.0));
+}
+@compute @workgroup_size(16, 16)
+fn pass_b(@builtin(global_invocation_id) id: vec3<u32>) {
+    textureStore(out_tex, vec2<i32>(id.xy), vec4<f32>(1.0));
+}
+"#;
+        let mut node = WgslCompute::new();
+        node.set_wgsl_source(src);
+        assert!(
+            node.compile_failed,
+            "two @compute entries and no cs_main is ambiguous — must fail validation (BUG-010)",
+        );
     }
 
     #[test]

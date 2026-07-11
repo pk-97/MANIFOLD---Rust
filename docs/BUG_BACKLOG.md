@@ -74,7 +74,6 @@ or human can read it, and it needs no external tool.
 | BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
 | BUG-037 | **glp-first-render-stall** | ~37ms warm-up on a glTF clip's first rendered frame (MED) |
 | BUG-038 | **ableton-log-spam** | bridge warns every 1.5s forever when Live absent (LOW) |
-| BUG-010 | **wgsl-first-entry** | multi-entry wgsl_compute silently dispatches the first (MED) |
 | BUG-011 | **fused-output-oversize** | fused output buffer sized to max of all inputs (MED) |
 | BUG-110 | **fused-segment-inner-override-noop** | in-place inner-param edits on a fused SEGMENT card never reach the live kernel — segment node_map is `c{i}.`-prefixed, per-card def isn't, so both surviving and fused-away nodes miss (MED) |
 | BUG-015 | **inspector-overlap** | stale-chrome class FIXED 2026-07-08 — incremental cache path now falls back to full render on out-of-sub-region dirt (`has_dirty_outside_ranges` + `incremental_path_safe`); blanket `clear_dirty` narrowed to the overlay region so the fallback isn't erased. (2026-07-04 "sections interleaved" sighting = separate open thread if it recurs) |
@@ -1015,25 +1014,6 @@ a signal that a recent UI landing skipped the full workspace test.
 rather than bumping the baseline, which would silently bless the drift the ratchet exists to catch.
 Unrelated to param storage.
 
-### BUG-010 — `wgsl_compute` silently dispatches the first of multiple entry points — MED
-**Status:** OPEN
-
-**Root cause** — [wgsl_compute.rs:615-624](../crates/manifold-renderer/src/node_graph/primitives/wgsl_compute.rs#L615-L624):
-`introspect()` takes `module.entry_points[0]` with no `len() == 1` check (the module doc at
-lines 29-31 claims multiple entry points fail validation — they don't). The pipeline compile
-independently picks the same first entry. A fragment-form node embeds the author's raw text
-BEFORE the synthesized `cs_main`, so any leftover `@compute fn` in the fragment becomes
-entry 0 and is what actually runs. Verified empirically by a skeptic (scratch test:
-`compile_failed=false`, `debug_pass` dispatched, real kernel never runs).
-
-**Symptom** — a user kernel/fragment with a stray second `@compute` function (debug leftover,
-copy-paste) renders stale/blank output with no warning; downstream wires read it as if it
-worked. Authoring-time surface, so MED — but it's the exact silent-wrong-output class.
-
-**Fix shape** — in `introspect()`: if the module has >1 compute entry point, prefer `cs_main`
-by name; if absent, fail validation with the warning the doc already promises. Keep the
-dispatch-side pick in lockstep.
-
 ### BUG-011 — Fused `@fused_output` buffer sized to max of ALL array inputs, not the member's own rule — MED
 **Status:** OPEN
 
@@ -1599,6 +1579,32 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-010 — `wgsl_compute` silently dispatches the first of multiple entry points — MED
+**Status:** FIXED (bug/wave1-lane-a-freeze) — a new `select_compute_entry(&naga::Module)` helper is
+the single authority all three sites now share (introspect for workgroup size, the dispatch-side
+`create_compute_pipeline`, and the specialization-variant pipeline — each previously picked
+`entry_points[0]` independently). Rule: a single `@compute` entry wins by any name (back-compat);
+with more than one, only the entry named `cs_main` is unambiguous, else validation fails with the
+warning the module doc always promised. Refreshed the stale module doc (lines 29-31). Two repro
+tests: a stray leading `@compute fn debug_pass` no longer steals introspection (cs_main's workgroup
+[16,16,1] lands, not debug_pass's [8,8,1]); two entries with no cs_main now set `compile_failed`.
+
+**Root cause** — [wgsl_compute.rs:615-624](../crates/manifold-renderer/src/node_graph/primitives/wgsl_compute.rs#L615-L624):
+`introspect()` takes `module.entry_points[0]` with no `len() == 1` check (the module doc at
+lines 29-31 claims multiple entry points fail validation — they don't). The pipeline compile
+independently picks the same first entry. A fragment-form node embeds the author's raw text
+BEFORE the synthesized `cs_main`, so any leftover `@compute fn` in the fragment becomes
+entry 0 and is what actually runs. Verified empirically by a skeptic (scratch test:
+`compile_failed=false`, `debug_pass` dispatched, real kernel never runs).
+
+**Symptom** — a user kernel/fragment with a stray second `@compute` function (debug leftover,
+copy-paste) renders stale/blank output with no warning; downstream wires read it as if it
+worked. Authoring-time surface, so MED — but it's the exact silent-wrong-output class.
+
+**Fix shape** — in `introspect()`: if the module has >1 compute entry point, prefer `cs_main`
+by name; if absent, fail validation with the warning the doc already promises. Keep the
+dispatch-side pick in lockstep.
 
 ### BUG-009 — Segment "stateless" gate misses StateStore-held scalar state; harvest skip resets it — HIGH
 **Status:** FIXED (bug/wave1-lane-a-freeze) — root fix, the truthful signal already existed. The
