@@ -44,6 +44,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-113 | **param-manifest-get-bench-flakes-under-parallel-load** | `manifold-core::params::tests::bench_resolve` asserts a hard `<= 271.5 ns/op` wall-clock ceiling on `ParamManifest::get`; under `cargo nextest run --workspace`'s parallel thread pool (esp. right after a heavy build or another CPU-saturating process), measured ns/op climbs past the ceiling (333.25, then 398.98 ns/op observed 2026-07-11) and the test fails, while an isolated re-run consistently passes (215.02 ns/op) and a clean full-workspace re-run passes too (3052/3052). Found landing wave2 lane C (BUG-083/084) — confirmed unrelated (file untouched by that change). Fix shape: either give the ceiling real margin for parallel/loaded runs, retry-on-first-failure before asserting, or move this out of the default nextest sweep (e.g. behind a feature, like the GPU-proofs convention) since a wall-clock ceiling assertion is inherently contention-sensitive and doesn't belong in a "safe to run freely" default suite. LOW (flaky-gate annoyance, not a functional regression — the underlying code is fine). |
 | BUG-112 | **manifold-ui-all-targets-clippy-debt-audio-setup-panel-graph-canvas-tests** | `cargo clippy -p manifold-ui --all-targets -- -D warnings` fails on two pre-existing, unrelated lints: `needless_borrows_for_generic_args` (`audio_setup_panel.rs:2494,2498`, `LayerId::new(&format!(...))`) and `useless_vec` (`graph_canvas/tests.rs:2391`, a `vec![...]` that could be an array). Both files byte-identical to HEAD, last touched by unrelated commit `f1a35270`. Found 2026-07-11 isolating wave2 lane C's (BUG-083/084) scoped clippy gate — same "pre-existing test-target debt surfaces under `--all-targets`" pattern as BUG-110. Fix shape: drop the `&` before each `format!(...)` arg; replace the `vec![...]` literal with an array. LOW (lint-only, `--tests`/`--all-targets` scope; the plain-lib clippy gate this session actually ran is clean). |
 | BUG-110 | **osc-receiver-test-type-complexity-clippy-debt** | `manifold-playback`'s `--tests`/`--all-targets` clippy gate fails on two `clippy::type_complexity` hits in `osc_receiver.rs:366,368` (`Arc<Mutex<Vec<(String, Vec<f32>)>>>`), unrelated to and pre-dating `bug-wave1-lane-d-test-hygiene` (byte-identical to base commit `dd31cde4`; last touched by an unrelated "F3" session). Found 2026-07-11 isolating BUG-088/072's gate. Fix shape: factor the type into a local `type` alias at both sites. LOW (lint-only). |
 | BUG-108 | **effect-card-add-effect-button-floats-over-sectioned-rows** | On a glTF-imported scene's effect card (SCENE_BUILD P3 sections + the P3b AUDIO TRIGGERS section stacked above it), the "+ Add Effect" bar renders MID-CARD, overlapping the Sun Y/Sun Z rows, instead of sitting at the bottom below all rows; the card reads as visually broken (Peter, rig screenshot 2026-07-10). NOT investigated (Peter: log, don't fix now). Suspects: (a) the "+ Add Effect" button's y-anchor is computed from a card content-height that doesn't count the new P3 section-header rows (would be a SCENE_BUILD P3 regression); (b) the P3b `AUDIO TRIGGERS` inspector section landing at the same time shifted the composite-panel layout the button positions against; (c) a sticky/overlay button pinned while the sectioned content scrolled under it. First seen — and MISSED — in this session's own P3/P4 verification PNGs (the orchestrator saw the floating button and wrote it off as fixture noise). SEPARATE from BUG-107 (the mangled "ừ" section-marker glyphs = font-coverage bug, triggered by P3's section markers). MED (card is the live performance surface; a broken authoring card mid-set is a real hazard). Fix shape: re-derive the button anchor from the true rendered card height incl. section headers, or verify the composite-panel layout accounts for the AUDIO TRIGGERS section; add a tree-dump bounds-overlap assertion to the harness so this class fails a gate instead of shipping. |
@@ -148,6 +149,31 @@ last touching commit is `e4f51459` ("F3: external-sync test net"), an unrelated 
 `type` alias (e.g. `type RecordedOsc = Arc<Mutex<Vec<(String, Vec<f32>)>>>;`) at both sites.
 Mechanical, no behavior change. Left open per the same file-ownership convention BUG-088 used —
 belongs to whoever owns `osc_receiver.rs`'s next change.
+
+### BUG-113 (param-manifest-get-bench-flakes-under-parallel-load) — `bench_resolve`'s hard ns/op ceiling fails under nextest's parallel thread pool — LOW (flaky-gate)
+**Status:** OPEN — found 2026-07-11 landing wave2 lane C (BUG-083/084/086 export+recording sweep).
+
+**Symptom:** `crates/manifold-core/src/params.rs`'s `params::tests::bench_resolve` times
+`ParamManifest::get`'s worst case (40 params, id last) and asserts `best_ns_per_op <= 271.5`
+(a 2x ceiling over an old baseline). Under `cargo nextest run --workspace`'s default sweep,
+run right after a heavy build and (in this session's case) a real 2-minute recording-soak
+process that had just finished, it measured 333.25 ns/op then 398.98 ns/op on consecutive runs
+and failed both times; an isolated `cargo test -p manifold-core --lib
+params::tests::bench_resolve` immediately after measured 215.02 ns/op and passed, and a
+subsequent clean full-workspace nextest run passed 3052/3052 including this test.
+
+**Root cause:** the test is a wall-clock micro-benchmark with a hard-coded nanosecond ceiling,
+run inside the normal correctness-test sweep — inherently sensitive to CPU contention from
+nextest's shared thread pool and any other load on the machine (the failing runs in this
+session followed heavy sequential cargo builds and a real recording capture). Confirmed
+unrelated to the change being landed: `crates/manifold-core/src/params.rs` was not touched.
+
+**Fix shape:** give the ceiling real margin for a loaded/parallel run, retry once before
+asserting (take the best of N *sequential process* runs, not just N in-process rounds — the
+in-process `ROUNDS` loop already exists but can't out-run sustained *external* contention), or
+move this out of the default nextest sweep entirely (behind a feature or a dedicated bin, same
+convention as `gpu-proofs`) since a wall-clock ceiling assertion doesn't belong in a "safe to
+run freely, always green" default suite per CLAUDE.md's own testing-scope description.
 
 ### BUG-112 (manifold-ui-all-targets-clippy-debt-audio-setup-panel-graph-canvas-tests) — `manifold-ui`'s `--all-targets` clippy gate fails on two pre-existing, unrelated lints — LOW (lint-only)
 **Status:** OPEN — found 2026-07-11 during wave2 lane C (BUG-083/084/086 export+recording sweep).
