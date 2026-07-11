@@ -74,7 +74,6 @@ or human can read it, and it needs no external tool.
 | BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
 | BUG-037 | **glp-first-render-stall** | ~37ms warm-up on a glTF clip's first rendered frame (MED) |
 | BUG-038 | **ableton-log-spam** | bridge warns every 1.5s forever when Live absent (LOW) |
-| BUG-011 | **fused-output-oversize** | fused output buffer sized to max of all inputs (MED) |
 | BUG-110 | **fused-segment-inner-override-noop** | in-place inner-param edits on a fused SEGMENT card never reach the live kernel — segment node_map is `c{i}.`-prefixed, per-card def isn't, so both surviving and fused-away nodes miss (MED) |
 | BUG-015 | **inspector-overlap** | stale-chrome class FIXED 2026-07-08 — incremental cache path now falls back to full render on out-of-sub-region dirt (`has_dirty_outside_ranges` + `incremental_path_safe`); blanket `clear_dirty` narrowed to the overlay region so the fallback isn't erased. (2026-07-04 "sections interleaved" sighting = separate open thread if it recurs) |
 | BUG-060 | **inspector-footer-overpaint** | REOPENED 2026-07-08. Opus 2nd pass: tree-geometry cause **ELIMINATED on the live cache path** (new `footer_leak_probe` test proves the inspector clips at footer_top through `traverse_flat_range`; footer's own render is correct) — the "inspector escapes into the footer" framing is wrong. Cause localized BELOW the tree, to the cache/dirty layer (tab-swap clears it = full recomposite). Artifact is **stale UI content** (UI colours / button fragments left behind), NOT clear/dark — the prior "footer goes dark, RGB 9-16" atlas dump was a HARNESS failure, not the symptom. Stale-pixel / dirty-clear bug, BUG-015 class. Needs live atlas+offscreen pixel dump. Cause still OPEN. **2026-07-10 (Fable + Peter):** Rig screenshots relocate the artifact — fragments accumulate at the scroll viewport's CLIP EDGES (bottom sliver above footer_top on both tabs, top sliver under the tab strip on Master), i.e. INSIDE the inspector panel rows, and build up per scroll step until tab-swap wipes them. Both existing probes are structurally blind there: `footer_leak_probe` checks geometry below footer_top, the P0 differential asserts rows [footer_top, footer_top+h) — the artifact rows were never asserted, so the harness "0 diff" results don't contradict the rig (stop extending the harness; observe the rig instead). Live dump tool BUILT + VALIDATED on branch `debug/bug-060-surface-dump` (worktree `bug060-dump`, e81696b4): `MANIFOLD_BUG060_DUMP=<N>` overwrites `/tmp/bug060_atlas.png` + `/tmp/bug060_offscreen.png` every N dirty-present frames (default 30) and logs sf + footer/inspector rects; readback verified against a live launch (real UI, sf=2 Retina confirmed, playhead-only atlas/offscreen delta proves the surfaces are independent). Next: Peter reproduces with the flag set, then one look at the atlas PNG splits cache-layer vs composite/present. **2026-07-10 VERDICT (live dump, Peter's audioTesting2 repro): the dirt is IN THE ATLAS — and it is not a stale copy, it is a LIVE UNCLIPPED DRAW.** Pixel measurement on the dump: the blue pill in the top sliver spans rows 170–197 physical, the pixel-exact position EdgeStretch's own ON pill would occupy if unclipped (Glitch reference: pill top = title top − 3), while the header bg + title around it are correctly scissored at the viewport line (~188). So the card-header toggle's bg fill draws WITHOUT the column clip; every scroll leaves the previous unclipped copy in territory the (clipped) self-clearing panel render can never repaint — that is the accumulation, and only `invalidate_all` (tab swap) wipes it. Bottom-edge fragments (slider fills) are the same class: once the clip is lost mid-card, later fill quads in the range draw unclipped too. The `traverse_flat_range` suspect was CLEARED by a clip-topology test (`bug060_every_card_node_renders_under_the_column_clip`, green — fresh-build clip chains are sound). **ROOT CAUSE FOUND + FIXED 2026-07-10 @ `39836352`** via a batch-flush band trace (`MANIFOLD_BUG060_TRACE=x0,y0,x1,y1`) on Peter's live repro: card-shaped rects logged as `immediate ... scissor=None` during the inspector pass. `push/pop_transform` and `push/pop_depth` cut the pending rect run via `flush_immediate_run` even mid-traversal, batching already-enqueued TREE rects under `immediate_clip` (`None`) — every card ON pill drawn before its card's **rotated chevron** (`UIStyle.transform`) lost its scissor. This is also why the 2026-07-08 trace swore all 858 draws were clipped: it observed the clip stack at `draw_node` time, upstream of the flush-time theft. Fix: context-aware `flush_pending_run` (tree clip stack while `in_tree_pass`, immediate clip otherwise); regression test `transform_boundary_keeps_tree_scissor_on_pending_batch` proven red-under-old-flush/green-now. Gates green (workspace, gpu-proofs 1248, clippy). **RIG-VERIFIED by Peter + LANDED on main @ `cc4eeb37` 2026-07-10** (dump/trace tooling landed env-gated with it). **CLASS-KILL follow-up (same day): clip bound per command at enqueue** — `RectCommand` now carries `(clip, depth)` captured at the push site (like `LineCommand`/`ImageCommand`/text `clip_bounds`/per-command depth `22c5d528` already did); batches derive in `prepare()` by run-scanning consecutive equal `(clip, depth)`; ALL flush-time scissor inference (`flush_immediate_run`/`flush_scissor_batch`/`flush_pending_run`/`in_tree_pass`) deleted, so the wrong-flush mistake is unrepresentable. Invariant recorded in `docs/DEVELOPMENT_REFERENCE.md` ("UI Renderer Invariant"). CLOSED. |
@@ -1014,24 +1013,6 @@ a signal that a recent UI landing skipped the full workspace test.
 rather than bumping the baseline, which would silently bless the drift the ratchet exists to catch.
 Unrelated to param storage.
 
-### BUG-011 — Fused `@fused_output` buffer sized to max of ALL array inputs, not the member's own rule — MED
-**Status:** OPEN
-
-**Root cause** — [wgsl_compute.rs:1828-1829](../crates/manifold-renderer/src/node_graph/primitives/wgsl_compute.rs#L1828-L1829):
-the fresh-output branch of `array_output_capacity` returns
-`input_capacities.max()` generically, overriding the fused output member's own semantic
-capacity rule (e.g. `LerpInstanceFields` follows only input `a`). Downstream consumers
-(`render_instanced_3d_mesh` computes capacity from physical buffer size) can then draw ghost
-instances from the never-written tail.
-
-**Symptom** — with mismatched input lengths (same shape as BUG-008), the fused output buffer
-is larger than the unfused chain's, and its tail is uninitialized pooled VRAM — potential
-stale-data ghosting across preset/frame boundaries.
-
-**Fix shape** — falls out of BUG-008's decision: if multi-external buffer regions are
-refused, this is unreachable; if guarded instead, size `dst` from the anchor external and
-zero-fill or guard the tail.
-
 ### BUG-012 — Fragment `tex_` port-rename corrupts scalar params named `tex_*` — LOW
 **Status:** OPEN
 
@@ -1579,6 +1560,34 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-011 — Fused `@fused_output` buffer sized to max of ALL array inputs, not the member's own rule — MED
+**Status:** FIXED (bug/wave1-lane-a-freeze) — paired with BUG-008's guard decision. The
+fused-output branch of `array_output_capacity` (wgsl_compute.rs) now returns
+`input_capacities.min()`, not `.max()`. This is the exact complement of BUG-008's count guard:
+the kernel writes only `[0, min(arrayLength of every array external))`, so sizing `dst` to the
+SMALLEST input means there is NO never-written tail — the ghost-instance source is removed at the
+allocation, not patched with a zero-fill. (`min` also dominates the "follow input a" member rule
+the entry named: with the min-count guard, a is written only up to `min(a, b)`, so `min` is the
+tail-free size regardless of which input the member nominally follows.) Equal-length regions
+(every shipped buffer preset — DigitalPlants proof re-run green) are unaffected: `min` of equal
+lengths is that length. Reproduced by `fused_output_capacity_is_min_of_inputs_not_max`
+(mismatched `[10, 4]` inputs → capacity 4, not 10).
+
+**Root cause** — [wgsl_compute.rs:1828-1829](../crates/manifold-renderer/src/node_graph/primitives/wgsl_compute.rs#L1828-L1829):
+the fresh-output branch of `array_output_capacity` returns
+`input_capacities.max()` generically, overriding the fused output member's own semantic
+capacity rule (e.g. `LerpInstanceFields` follows only input `a`). Downstream consumers
+(`render_instanced_3d_mesh` computes capacity from physical buffer size) can then draw ghost
+instances from the never-written tail.
+
+**Symptom** — with mismatched input lengths (same shape as BUG-008), the fused output buffer
+is larger than the unfused chain's, and its tail is uninitialized pooled VRAM — potential
+stale-data ghosting across preset/frame boundaries.
+
+**Fix shape** — falls out of BUG-008's decision: if multi-external buffer regions are
+refused, this is unreachable; if guarded instead, size `dst` from the anchor external and
+zero-fill or guard the tail.
 
 ### BUG-010 — `wgsl_compute` silently dispatches the first of multiple entry points — MED
 **Status:** FIXED (bug/wave1-lane-a-freeze) — a new `select_compute_entry(&naga::Module)` helper is

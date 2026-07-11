@@ -1852,14 +1852,20 @@ impl EffectNode for WgslCompute {
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         // A `@fused_output` (write-only) array is coincident with the region's
-        // inputs — one element per input element — so size it to the largest
-        // input array's element count. (All inputs in a coincident buffer region
-        // share a count; `max` is robust if they ever differ.)
+        // inputs — one element per input element. The fused kernel writes exactly
+        // `[0, min(arrayLength of every array external))` (the BUG-008 count guard,
+        // matching the unfused atoms' `min(a, b, …)` clamp), so sizing `dst` to the
+        // SMALLEST input leaves no never-written tail. `max` over-sized the buffer
+        // when inputs differed and downstream (`render_instanced_3d_mesh` derives
+        // its instance count from the physical buffer size) drew ghost instances
+        // from the uninitialized VRAM tail (BUG-011). Equal-length regions (every
+        // shipped buffer preset) are unaffected: `min` of equal lengths is that
+        // length.
         let is_fused_out = self.bindings.iter().any(|b| {
             matches!(&b.kind, BindingKind::StorageArrayWriteOut { port, .. } if port == port_name)
         });
         if is_fused_out {
-            return input_capacities.iter().map(|(_, c)| *c).max();
+            return input_capacities.iter().map(|(_, c)| *c).min();
         }
         // Otherwise fall back to the trait default (explicit `max_capacity` param).
         let is_array_output = self
@@ -2516,6 +2522,50 @@ fn pass_b(@builtin(global_invocation_id) id: vec3<u32>) {
         assert!(
             node.compile_failed,
             "two @compute entries and no cs_main is ambiguous — must fail validation (BUG-010)",
+        );
+    }
+
+    /// BUG-011: a fused buffer kernel's `@fused_output` `dst` must be sized to the
+    /// SMALLEST array input, not the largest. The kernel only writes
+    /// `[0, min(arrayLength))` (the BUG-008 count guard), so `max` left an
+    /// uninitialized tail that downstream instance renderers drew as ghosts.
+    #[test]
+    fn fused_output_capacity_is_min_of_inputs_not_max() {
+        let src = r#"
+struct P { a: vec4<f32>, b: vec4<f32>, };
+struct Params { t: f32, };
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> src_0: array<P>;
+@group(0) @binding(2) var<storage, read> src_1: array<P>;
+// @fused_output
+@group(0) @binding(3) var<storage, read_write> dst: array<P>;
+@compute @workgroup_size(256)
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= min(arrayLength(&src_0), arrayLength(&src_1)) { return; }
+    _ = params.t;
+    dst[idx] = src_0[idx];
+}
+"#;
+        let mut node = WgslCompute::new();
+        node.set_wgsl_source(src);
+        assert!(!node.compile_failed, "fused-output kernel must introspect:\n{src}");
+        let out_port = node
+            .outputs
+            .iter()
+            .find(|o| matches!(o.ty, PortType::Array(_)))
+            .expect("the @fused_output storage array is an Array output port")
+            .name
+            .clone();
+        let cap = node.array_output_capacity(
+            &out_port,
+            &Default::default(),
+            &[("src_0", 10), ("src_1", 4)],
+        );
+        assert_eq!(
+            cap,
+            Some(4),
+            "dst sized to the smallest input (no never-written tail), not max (BUG-011)",
         );
     }
 
