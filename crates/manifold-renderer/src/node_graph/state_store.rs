@@ -128,6 +128,28 @@ impl StateStore {
         }
     }
 
+    /// Drop every bucket belonging to one of `node_ids`, across all owners.
+    /// BUG-104: the narrow counterpart to [`Self::cleanup_all`] — used by
+    /// `PresetRuntime::clear_trigger_state` to release exactly the
+    /// trigger-edge latch nodes (`EffectNode::is_trigger_latch`) flagged by
+    /// the caller, without touching any other primitive's persistent state
+    /// (feedback textures, particle buffers, mip pyramids) sharing the same
+    /// store. `node_ids` is typically small (a handful of latch nodes per
+    /// graph) so a linear scan per bucket is fine — this isn't a hot path.
+    pub fn cleanup_nodes(&mut self, node_ids: &[NodeInstanceId]) {
+        if node_ids.is_empty() {
+            return;
+        }
+        self.buckets.retain(|(id, _), state| {
+            if node_ids.contains(id) {
+                state.cleanup();
+                false
+            } else {
+                true
+            }
+        });
+    }
+
     /// Drop all state for a specific owner. Called when a clip / layer is
     /// destroyed or stops playback — mirrors the legacy
     /// `cleanup_owner_state(owner_key)` hook.
@@ -266,6 +288,65 @@ mod tests {
         assert_eq!(store.get::<CounterState>(node(2), 42).unwrap().value, 2);
         assert_eq!(store.get::<CounterState>(node(1), 43).unwrap().value, 3);
         assert_eq!(store.len(), 3);
+    }
+
+    #[test]
+    fn cleanup_nodes_drops_only_matching_node_ids_across_all_owners() {
+        let mut store = StateStore::new();
+        let c = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        // node(1) has buckets under two different owners; node(2) is
+        // untouched — cleanup_nodes(&[node(1)]) must drop both node(1)
+        // buckets and leave node(2) alone, mirroring how a trigger-latch
+        // node's state can exist per-clip (multiple owner_keys) inside one
+        // generator graph.
+        store.insert(
+            node(1),
+            42,
+            CounterState {
+                value: 1,
+                cleanup_calls: c.clone(),
+            },
+        );
+        store.insert(
+            node(1),
+            43,
+            CounterState {
+                value: 2,
+                cleanup_calls: c.clone(),
+            },
+        );
+        store.insert(
+            node(2),
+            42,
+            CounterState {
+                value: 3,
+                cleanup_calls: c.clone(),
+            },
+        );
+
+        store.cleanup_nodes(&[node(1)]);
+
+        assert_eq!(c.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert!(store.get::<CounterState>(node(1), 42).is_none());
+        assert!(store.get::<CounterState>(node(1), 43).is_none());
+        assert_eq!(store.get::<CounterState>(node(2), 42).unwrap().value, 3);
+    }
+
+    #[test]
+    fn cleanup_nodes_empty_list_is_a_no_op() {
+        let mut store = StateStore::new();
+        let c = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        store.insert(
+            node(1),
+            42,
+            CounterState {
+                value: 1,
+                cleanup_calls: c.clone(),
+            },
+        );
+        store.cleanup_nodes(&[]);
+        assert_eq!(c.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(store.get::<CounterState>(node(1), 42).unwrap().value, 1);
     }
 
     #[test]

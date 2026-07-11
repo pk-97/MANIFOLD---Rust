@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Lissajous",
-  "description": "Lissajous curve generator — a smooth morphing closed curve traced by the Lissajous parametric equations. The generator decomposes into an oscillator bank that smoothly modulates frequency, a frequency-selection mux that routes two of the three oscillators to the X and Y axes via a harmonic-ratio table, parallel curve builders on each axis that interpolate between integer-frequency Lissajous forms to eliminate scribbles, and finally a line renderer with optional vertex markers and animation.\n\nThe oscillator bank produces three continuously varying frequencies: two (lfo_x and lfo_y) oscillate smoothly from 0.5 to 3.5 and 1.0 to 5.0 Hz respectively to morph the curve shape, and a phase LFO ramps the phase accumulation parameter linearly from 0 to 2π. The clip_trigger card control routes the frequencies either through the smooth oscillators or through a curated 10-row harmonic-ratio table (ratio node) that jumps on retrigger.\n\nEach axis follows the same construction: the selected frequency is bracketed (floor and ceiling) by two math nodes, then subtracted to give the interpolation factor (a_lerp / b_lerp). A parameter array (t) ranges from 0 to 2π. Two parallel branches apply scale-and-offset to t using the floor and ceiling frequencies, then apply sine. The two sine outputs are blended by the interpolation factor to produce the final smooth mixed coordinate. This blending avoids closed-curve scribbles at non-integer frequencies by morphing smoothly between the clean integer cases.\n\nThe two axes are zipped into an Array<CurvePoint> by pack (which includes the legacy screen-fit scale factor), then render_lines carries the animation, vertex dots, and beat-flash rendering. The groups flatten to byte-identical behavior at load.",
+  "description": "Lissajous curve generator — a smooth morphing closed curve traced by the Lissajous parametric equations. The generator decomposes into an oscillator bank that smoothly modulates frequency, a frequency-selection stage that composes a curated harmonic-ratio table onto the X/Y oscillators, parallel curve builders on each axis that interpolate between integer-frequency Lissajous forms to eliminate scribbles, and finally a line renderer with optional vertex markers and animation.\n\nThe oscillator bank produces three continuously varying frequencies: two (lfo_x and lfo_y) oscillate smoothly from 0.5 to 3.5 and 1.0 to 5.0 Hz respectively to morph the curve shape, and a phase LFO ramps the phase accumulation parameter linearly from 0 to 2π. The Frequency Selection group composes the trigger onto the oscillators rather than replacing them (BUG-104 fix, 2026-07-11): mux_x/mux_y (the `trigger_modulate` idiom — see docs/DECOMPOSING_GENERATORS.md §4.1) hold identity (1.0) while `clip_trigger` is idle, or emit the trigger-cycled harmonic-ratio row (ratio node, 10-row table, jumps on retrigger) while firing; freq_x_scale/freq_y_scale then MULTIPLY that onto lfo_x/lfo_y's continuous output. Riding Freq X/Y Rate still audibly changes the curve while a trigger is active — it no longer goes dead, and it no longer stays dead after Clip Trigger is switched back off (nothing latches: the mux is stateless, and the ratio node's own trigger-edge cache releases via `EffectNode::is_trigger_latch` on transport stop / project load).\n\nEach axis follows the same construction: the selected frequency is bracketed (floor and ceiling) by two math nodes, then subtracted to give the interpolation factor (a_lerp / b_lerp). A parameter array (t) ranges from 0 to 2π. Two parallel branches apply scale-and-offset to t using the floor and ceiling frequencies, then apply sine. The two sine outputs are blended by the interpolation factor to produce the final smooth mixed coordinate. This blending avoids closed-curve scribbles at non-integer frequencies by morphing smoothly between the clean integer cases — the same tolerance that makes composing a non-integer product (continuous rate × integer ratio) safe instead of a regression back to a scribble.\n\nThe two axes are zipped into an Array<CurvePoint> by pack (which includes the legacy screen-fit scale factor), then render_lines carries the animation, vertex dots, and beat-flash rendering. The groups flatten to byte-identical behavior at load.",
   "presetMetadata": {
     "id": "Lissajous",
     "displayName": "Lissajous",
@@ -547,9 +547,13 @@
               "selector": {
                 "type": "Float",
                 "value": 0.0
+              },
+              "in_0": {
+                "type": "Float",
+                "value": 1.0
               }
             },
-            "title": "Frequency X Selector"
+            "title": "X Ratio Multiplier (BUG-104 trigger_modulate: identity when idle)"
           },
           {
             "id": 6,
@@ -560,9 +564,39 @@
               "selector": {
                 "type": "Float",
                 "value": 0.0
+              },
+              "in_0": {
+                "type": "Float",
+                "value": 1.0
               }
             },
-            "title": "Frequency Y Selector"
+            "title": "Y Ratio Multiplier (BUG-104 trigger_modulate: identity when idle)"
+          },
+          {
+            "id": 40,
+            "nodeId": "freq_x_scale",
+            "typeId": "node.math",
+            "handle": "freq_x_scale",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "X Frequency × Ratio Multiplier"
+          },
+          {
+            "id": 41,
+            "nodeId": "freq_y_scale",
+            "typeId": "node.math",
+            "handle": "freq_y_scale",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "Y Frequency × Ratio Multiplier"
           },
           {
             "id": 29,
@@ -595,23 +629,35 @@
           {
             "fromNode": 29,
             "fromPort": "in_0",
-            "toNode": 5,
-            "toPort": "in_0"
+            "toNode": 40,
+            "toPort": "a"
           },
           {
             "fromNode": 29,
             "fromPort": "in_0_2",
-            "toNode": 6,
-            "toPort": "in_0"
+            "toNode": 41,
+            "toPort": "a"
           },
           {
             "fromNode": 5,
+            "fromPort": "out",
+            "toNode": 40,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "out",
+            "toNode": 41,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 40,
             "fromPort": "out",
             "toNode": 30,
             "toPort": "freqXSelected"
           },
           {
-            "fromNode": 6,
+            "fromNode": 41,
             "fromPort": "out",
             "toNode": 30,
             "toPort": "freqYSelected"
