@@ -91,10 +91,10 @@ fn hot_snapshot() -> manifold_core::audio_features::AudioFeatureSnapshot {
 #[test]
 fn playing_tick_leaves_the_clip_trigger_level_in_fire_meters() {
     let project = project_with_clip_trigger(1.0);
-    let key = manifold_core::audio_trigger::fire_meter_key(&[
-        project.timeline.layers[0].layer_id.as_str().as_bytes(),
-        &0u64.to_le_bytes(),
-    ]);
+    let key = manifold_core::audio_trigger::fire_meter_key_for_clip_trigger(
+        project.timeline.layers[0].layer_id.as_str(),
+        0u64,
+    );
 
     let mut engine = create_engine();
     engine.initialize(project);
@@ -127,10 +127,10 @@ fn playing_tick_leaves_the_clip_trigger_level_in_fire_meters() {
 #[test]
 fn stopped_tick_pushes_the_level_and_fires_no_clip() {
     let project = project_with_clip_trigger(1.0);
-    let key = manifold_core::audio_trigger::fire_meter_key(&[
-        project.timeline.layers[0].layer_id.as_str().as_bytes(),
-        &0u64.to_le_bytes(),
-    ]);
+    let key = manifold_core::audio_trigger::fire_meter_key_for_clip_trigger(
+        project.timeline.layers[0].layer_id.as_str(),
+        0u64,
+    );
 
     let mut engine = create_engine();
     engine.initialize(project);

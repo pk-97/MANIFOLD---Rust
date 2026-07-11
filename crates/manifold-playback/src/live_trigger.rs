@@ -30,7 +30,7 @@ use ahash::AHashMap;
 
 use manifold_core::audio_features::AudioFeatureSnapshot;
 use manifold_core::audio_setup::AudioSetup;
-use manifold_core::audio_trigger::{FireMeterCapture, TransientEdge, fire_meter_key};
+use manifold_core::audio_trigger::{FireMeterCapture, TransientEdge, fire_meter_key_for_clip_trigger};
 use manifold_core::id::LayerId;
 use manifold_core::layer::Layer;
 use manifold_core::units::{Beats, Seconds};
@@ -158,7 +158,7 @@ impl LiveTriggerState {
                 // on a fire — and, since BUG-109, whether or not `fire_enabled`
                 // is set, so the meter breathes with the music while stopped.
                 fire_meters.push(
-                    fire_meter_key(&[layer.layer_id.as_str().as_bytes(), &(idx as u64).to_le_bytes()]),
+                    fire_meter_key_for_clip_trigger(layer.layer_id.as_str(), idx as u64),
                     conditioned,
                 );
                 if fire_enabled && follower.edge.advance(conditioned, 0.5) {
@@ -307,10 +307,7 @@ mod tests {
 
         let mut meters = FireMeterCapture::default();
         state.evaluate_meter_only(&hot, &setup, &layers, DT, &mut meters);
-        let key = fire_meter_key(&[
-            layers[0].layer_id.as_str().as_bytes(),
-            &0u64.to_le_bytes(),
-        ]);
+        let key = fire_meter_key_for_clip_trigger(layers[0].layer_id.as_str(), 0u64);
         assert!(
             meters.get(key).unwrap() >= 0.5,
             "meter-only walk must push the conditioned level even though nothing fires"
