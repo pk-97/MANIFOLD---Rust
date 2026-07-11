@@ -88,6 +88,7 @@ mod gaussian_blur_variable_width;
 mod edges_from_grid_uv;
 mod edges_from_hypercube;
 mod ellipse_mask;
+mod facet_normals;
 mod generate_cube_mesh;
 mod generate_grid_mesh;
 mod generate_grid_uv;
@@ -130,6 +131,8 @@ mod phong_material;
 mod pbr_material;
 mod cel_material;
 mod multi_blend;
+mod mesh_ramp;
+mod push_along_normals;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod mesh_snapshot;
 mod mux_array;
