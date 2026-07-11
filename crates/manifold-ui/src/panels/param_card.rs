@@ -3249,12 +3249,6 @@ impl ParamCardPanel {
                 RowClick::AudioToggleInvert(pi) => {
                     vec![PanelAction::AudioModSetInvert(GraphParamTarget::Effect(ei), self.pid_at(pi))]
                 }
-                RowClick::AudioToggleRate(pi) => {
-                    vec![PanelAction::AudioModSetRateOfChange(
-                        GraphParamTarget::Effect(ei),
-                        self.pid_at(pi),
-                    )]
-                }
                 RowClick::AudioSelectTriggerMode(pi, m) => {
                     self.audio_set_trigger_mode_action(GraphParamTarget::Effect(ei), pi, m)
                 }
@@ -3424,12 +3418,6 @@ impl ParamCardPanel {
                 }
                 RowClick::AudioToggleInvert(pi) => {
                     vec![PanelAction::AudioModSetInvert(GraphParamTarget::Generator, self.pid_at(pi))]
-                }
-                RowClick::AudioToggleRate(pi) => {
-                    vec![PanelAction::AudioModSetRateOfChange(
-                        GraphParamTarget::Generator,
-                        self.pid_at(pi),
-                    )]
                 }
                 RowClick::AudioSelectTriggerMode(pi, m) => {
                     self.audio_set_trigger_mode_action(GraphParamTarget::Generator, pi, m)
@@ -4485,9 +4473,9 @@ mod tests {
         }
 
         // The Mode row's last button ("Both") — flat index = send_count(1) +
-        // kind_count(8) + band_count(4) + 2 (Inv/Delta) + 2 (Both is the
-        // Mode row's 3rd button, index 2).
-        let mode_both_btn = button_ids[1 + AUDIO_KIND_COUNT + 4 + 2 + 2];
+        // kind_count(8) + band_count(4) + 1 (Invert — Delta removed §7.2
+        // item 2) + 2 (Both is the Mode row's 3rd button, index 2).
+        let mode_both_btn = button_ids[1 + AUDIO_KIND_COUNT + 4 + 1 + 2];
         let actions = panel.handle_click(mode_both_btn);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
