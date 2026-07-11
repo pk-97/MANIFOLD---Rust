@@ -53,10 +53,12 @@ What's **fine** when it's the right granularity:
 
 That's it. The macro generates the `EffectNode` impl, type-id constants, `PrimitiveSpec` metadata, the AI-surface `PrimitiveDescription`, and the `inventory::submit!` registration for the auto-populated palette.
 
-## The codegen path is mandatory (single-dispatch GPU primitives)
+## The codegen path is mandatory (per-element GPU atoms)
 
-**Every single-dispatch GPU primitive MUST ship on the freeze/graph-compiler codegen
-path — never plain hand-WGSL that opts out of fusion.** Peter's standing rule
+**Every barrier-free per-element GPU atom MUST ship on the freeze/graph-compiler codegen
+path — never plain hand-WGSL that opts out of fusion.** (The scope test below defines
+"barrier-free per-element" precisely — it replaces the earlier "single-dispatch" phrasing,
+which wrongly admitted workgroup-barrier reductions like `peak`.) Peter's standing rule
 (2026-07-11): all nodes, new and existing, must work perfectly with the graph compiler
 in full. A plain-WGSL atom (one that builds its pipeline from
 `create_compute_pipeline(include_str!("shaders/foo.wgsl"), …)`) is a hard **fusion
@@ -92,20 +94,45 @@ buffer gather):
    same fixture, assert element-wise equality (see `displace_mesh.rs`'s
    `generated_displace_matches_hand_kernel_with_inactive_passthrough`). **This
    generated-vs-hand parity test is the machine check that proves the atom is genuinely
-   on the fusable path** — a single-dispatch GPU primitive is not done without it.
+   on the fusable path** — a per-element GPU atom is not done without it.
 
-**Scope boundary — what this does NOT force.** The mandate governs *single-dispatch
-per-element* GPU atoms. Genuinely *multi-pass* primitives — a prefix-scan / reduce /
-area-weighted sampler that needs a barrier between passes (`spawn_from_mesh`,
-`scatter_on_mesh`'s area→scan→place) — stay hand-authored multi-dispatch. That is
-correct decomposition; forcing such a primitive into one `standalone_for_spec` kernel
-would instead violate the no-fused-monolith rule. So: single-dispatch atoms MUST be on
-the codegen path; multi-pass primitives legitimately are not. Non-GPU primitives
-(control-rate `value`/`math`/`lfo`, DNN/FFI/CPU atoms) are outside the rule entirely.
+**Scope — the in/out test (2026-07-11).** An atom is IN the mandate iff its kernel is a
+**barrier-free pure per-element function**: one thread computes one output element,
+expressible as a `fn body(idx/uv, e_in, <inputs at their declared access kinds>,
+<params>) -> Element` fragment — no `var<workgroup>` shared memory, no
+`workgroupBarrier`, no atomics, no cross-frame state, and the element data originates
+on the GPU. An atom that fails the test falls into exactly one of these exclusions —
+name which one when you claim an exemption:
+
+1. **Barriered reduction / multi-pass scan** — exempt. `peak` and `luminance`
+   (workgroup-shared reductions), `spawn_from_mesh` / `scatter_on_mesh`
+   (area→scan→place). A single dispatch that needs workgroup memory + barriers is
+   structurally multi-pass — which is why "single-dispatch" was the wrong axis.
+   Forcing these into one `standalone_for_spec` kernel would violate the
+   no-fused-monolith rule.
+2. **Cross-frame state** — exempt. `temporal` (`node.feedback`): the state texture must
+   materialize in VRAM to survive the frame, so there is no round-trip to fuse away.
+   The freeze compiler already fuses *around* it — state-capture wires are excluded
+   from the forward graph.
+3. **IO endpoints and CPU bridges** — exempt. Uploads (`image_folder`,
+   `gltf_texture_source`): the data is not a function of anything on the GPU.
+   Readback bridges (`color_sample`, and `peak`/`luminance` again): the consumer is
+   the CPU. Either way the texture/scalar must materialize regardless.
+4. **Draw-call rasterization** — exempt. The `render_*` family are render passes, not
+   compute.
+5. **BLOCKED is not exempt.** An atom that PASSES the test but has an input the codegen
+   cannot yet express is *blocked on a tracked codegen gap* — the mandate still
+   applies, and the debt lives in the compiler, not the atom. Today's case: the
+   `draw_*` family (per-pixel bodies that index a marks `Array` — texture-domain
+   codegen has no storage-array read-path; `freeze/classify.rs` names the planned
+   `BufferIndex` kind). Tracked as BUG-114 in `docs/BUG_BACKLOG.md`.
+
+Non-GPU primitives (control-rate `value`/`math`/`lfo`, DNN/FFI/CPU atoms) are outside
+the rule entirely.
 
 ## Skeleton
 
-The skeleton below is a single-dispatch texture atom, so it is on the codegen path per
+The skeleton below is a per-element texture atom, so it is on the codegen path per
 the rule above — note `fusion_kind`/`wgsl_body` in the macro and `standalone_for_spec`
 in `run()`. (`summary`/`category`/`role`/`aliases` are the current metadata fields;
 `category`/`role` use the semantic enums in `primitive.rs`, distinct from the
@@ -171,7 +198,7 @@ impl Primitive for Invert {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
-            // Codegen path (mandatory for single-dispatch GPU atoms): the kernel is
+            // Codegen path (mandatory for per-element GPU atoms): the kernel is
             // generated from `wgsl_body` so the atom fuses. `shaders/invert.wgsl` is
             // retained only as the gpu_tests parity oracle.
             let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
@@ -234,7 +261,7 @@ primitive! {
     category: <ColorAndTone|Geometry3D|…>,      // semantic category enum (primitive.rs)
     role: <Filter|Source|Sink|…>,               // semantic role enum (primitive.rs)
     aliases: ["<search alias>", ...],           // palette search synonyms
-    fusion_kind: <Pointwise|Source|MultiInputCoincident|Boundary>,  // REQUIRED for single-dispatch GPU atoms (freeze/classify.rs)
+    fusion_kind: <Pointwise|Source|MultiInputCoincident|Boundary>,  // REQUIRED for per-element GPU atoms (freeze/classify.rs)
     wgsl_body: include_str!("shaders/<name>_body.wgsl"),            // the fusable body fragment — REQUIRED with fusion_kind
     input_access: [<Coincident|CoincidentTexel|BufferGather|...>],  // per-input; omit = Coincident. BufferGather when the body reads other indices
     extra_fields: {
@@ -245,7 +272,7 @@ primitive! {
 ```
 
 - **`fusion_kind` + `wgsl_body` (+ `input_access`) are mandatory for every
-  single-dispatch GPU primitive** — see "The codegen path is mandatory" above. Omitting
+  per-element GPU atom** — see "The codegen path is mandatory" above. Omitting
   them ships a plain-WGSL fusion-boundary atom, which is not permitted. Multi-pass
   primitives (barrier-separated passes) and non-GPU primitives don't carry them.
 
@@ -305,13 +332,13 @@ fn invert_decomposes_pixel_exactly_across_all_fixtures() {
 ## What NOT to do
 
 - **Don't write `impl EffectNode for <Name>` by hand.** The blanket impl in `node_graph::primitive` covers it. Hand-written `EffectNode` impls in `primitives/*.rs` predate the macro and will be migrated in place.
-- **Don't hand-roll the runtime kernel for a single-dispatch GPU atom.** Author a
+- **Don't hand-roll the runtime kernel for a per-element GPU atom.** Author a
   `wgsl_body` fragment and let `standalone_for_spec::<Self>()` generate the fusable
   kernel (see "The codegen path is mandatory"). You still write WGSL by hand — the body
   fragment, and the full-kernel parity oracle — you just don't bind a hand `include_str!`
   kernel as the *runtime* pipeline. `cargo test` runs `tests/wgsl_validation.rs` which
   validates every shader (bodies and oracles) via naga.
-- **Don't ship a single-dispatch GPU atom as plain WGSL that opts out of fusion.** No
+- **Don't ship a per-element GPU atom as plain WGSL that opts out of fusion.** No
   `create_compute_pipeline(include_str!("shaders/<name>.wgsl"), …)` as the runtime path —
   that's a fusion boundary. Codegen path only; the generated-vs-hand parity test proves it.
 - **Don't skip the parity test when replacing an existing effect.** Strict bit-equality is the gate.
