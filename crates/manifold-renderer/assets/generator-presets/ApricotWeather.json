@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "ApricotWeather",
-  "description": "Scene 1 \u2014 a Japanese apricot (prunus mume) flowering-branch photogrammetry scan (cc0__japanese_apricot_prunus_mume.glb, ~1.4M tris across a sparse cluster of blossom sprigs, NOT a full standing tree) rendered inside node.render_scene alongside a ground plane, one shadow-casting sun, and depth fog. The glb ships 4 materials; material_index 0 is a 24-vertex reference/calibration cube sitting well outside the blossom cluster and is deliberately excluded \u2014 only materials 1/2/3 (the actual scan content) ship. Each surviving material becomes its own render_scene object (node.gltf_mesh_source material_index-filtered -> node.push_along_normals(sway) as mesh, node.gltf_texture_source as its base-color map, node.phong_material) sharing ONE node.transform_3d offset (the three materials' combined world-space bbox center) so they stay spatially coherent \u2014 the same per-material-object shape node_graph::gltf_import's assemble_import_graph builds for any multi-material glTF import, not a merged single-texture mesh (mesh_index=-1 WholeScene would sample all 3 UV atlases through one texture and visibly mismatch). sway_amount, sun_angle (orbited via cos/sin from a Value hub), fog_density and the camera's orbit/tilt/distance are the exposed performance surface; no LFOs or beat curves are wired into the graph.",
+  "description": "Scene 1 \u2014 a Japanese apricot (prunus mume) flowering-branch photogrammetry scan (cc0__japanese_apricot_prunus_mume.glb, ~1.4M tris across a sparse cluster of blossom sprigs, NOT a full standing tree) rendered inside node.render_scene alongside a ground plane, one shadow-casting sun, and depth fog. The glb ships 4 materials; material_index 0 is a 24-vertex reference/calibration cube sitting well outside the blossom cluster and is deliberately excluded \u2014 only materials 1/2/3 (the actual scan content) ship. Each surviving material becomes its own render_scene object (node.gltf_mesh_source material_index-filtered -> node.push_along_normals(sway) as mesh, node.gltf_texture_source as its base-color map, node.phong_material) sharing ONE node.transform_3d offset (the three materials' combined world-space bbox center) so they stay spatially coherent \u2014 the same per-material-object shape node_graph::gltf_import's assemble_import_graph builds for any multi-material glTF import, not a merged single-texture mesh (mesh_index=-1 WholeScene would sample all 3 UV atlases through one texture and visibly mismatch). Wind lives in the Wind group: a shared 1-bar sine body plus PER-CLUSTER phased surge (1/2) and flutter (1/8) sines sum into an independent gust per cluster (each sprig moves on its own timing; the chunks were measured fully vertex-disjoint so independence cannot tear seams), multiplied by the swayAmount fader (bound to the wind_amount Value hub - the fader is amount only, motion character lives in the graph). A second perpendicular gust family (its own 1-bar body + per-cluster 1/2 surges) drives a second bend inside the same conjugation: rotate_3d(-phi-90) -> bend(gust_x) -> rotate_3d(+90) -> bend(gust_z) -> rotate_3d(+phi), so blossom tips trace 3D ellipses whose plane drifts with the free-running wander LFO (~42s) without visually spinning the sprig (the rotations cancel exactly where both bend angles are zero). Anchoring: each cluster bends about ITS OWN base (per-material min-y centers: -2.656/-2.495/-1.032) and its node.mesh_ramp weight field is a per-cluster Y ramp zeroed exactly at the lowest verts (bounds -0.6..1.1x the cluster's y-span so weight runs ~0.32 at the base to ~0.99 at the tips - lower stems keep gentle motion (Peter: full-zero base read as anchored too high), the exact base stays pinned by the bend pivot itself, and the field stays flat across any single flower (within-flower weight variation shears rigid blossoms)). sun_angle (orbited via cos/sin from a Value hub), fog_density and the camera's orbit/tilt/distance round out the exposed performance surface.",
   "presetMetadata": {
     "id": "ApricotWeather",
     "displayName": "Apricot Weather",
@@ -80,28 +80,8 @@
         "defaultValue": 0.0,
         "target": {
           "kind": "node",
-          "nodeId": "sway_1",
-          "param": "angle"
-        }
-      },
-      {
-        "id": "swayAmount",
-        "label": "Sway Amount",
-        "defaultValue": 0.0,
-        "target": {
-          "kind": "node",
-          "nodeId": "sway_2",
-          "param": "angle"
-        }
-      },
-      {
-        "id": "swayAmount",
-        "label": "Sway Amount",
-        "defaultValue": 0.0,
-        "target": {
-          "kind": "node",
-          "nodeId": "sway_3",
-          "param": "angle"
+          "nodeId": "wind_amount",
+          "param": "value"
         }
       },
       {
@@ -295,6 +275,923 @@
           "type": "Float",
           "value": 0.92
         }
+      }
+    },
+    {
+      "id": 37,
+      "typeId": "group",
+      "nodeId": "wind_group",
+      "handle": "Wind",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "gust_z_1",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "gust_x_1",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "gust_z_2",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "gust_x_2",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "gust_z_3",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "gust_x_3",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "wander",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "wander_in",
+              "portType": "Scalar(F32)"
+            }
+          ],
+          "params": []
+        },
+        "nodes": [
+          {
+            "id": 38,
+            "typeId": "node.lfo",
+            "nodeId": "gust_slow",
+            "handle": "gust_slow",
+            "title": "Gust Body Z (1 bar)",
+            "params": {
+              "rate_mode": {
+                "type": "Enum",
+                "value": 0
+              },
+              "shape": {
+                "type": "Enum",
+                "value": 0
+              },
+              "phase": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "min": {
+                "type": "Float",
+                "value": -0.05
+              },
+              "max": {
+                "type": "Float",
+                "value": 0.21
+              },
+              "rate": {
+                "type": "Enum",
+                "value": 0
+              }
+            }
+          },
+          {
+            "id": 64,
+            "typeId": "node.lfo",
+            "nodeId": "gust_slow_x",
+            "handle": "gust_slow_x",
+            "title": "Gust Body X (1 bar)",
+            "params": {
+              "rate_mode": {
+                "type": "Enum",
+                "value": 0
+              },
+              "shape": {
+                "type": "Enum",
+                "value": 0
+              },
+              "phase": {
+                "type": "Float",
+                "value": 0.25
+              },
+              "min": {
+                "type": "Float",
+                "value": -0.03
+              },
+              "max": {
+                "type": "Float",
+                "value": 0.13
+              },
+              "rate": {
+                "type": "Enum",
+                "value": 0
+              }
+            }
+          },
+          {
+            "id": 39,
+            "typeId": "node.lfo",
+            "nodeId": "surge_z1",
+            "handle": "surge_z1",
+            "title": "Surge Z 1 (1/2)",
+            "params": {
+              "rate_mode": {
+                "type": "Enum",
+                "value": 0
+              },
+              "shape": {
+                "type": "Enum",
+                "value": 0
+              },
+              "phase": {
+                "type": "Float",
+                "value": 0.37
+              },
+              "min": {
+                "type": "Float",
+                "value": -0.065
+              },
+              "max": {
+                "type": "Float",
+                "value": 0.095
+              },
+              "rate": {
+                "type": "Enum",
+                "value": 1
+              }
+            }
+          },
+          {
+            "id": 40,
+            "typeId": "node.lfo",
+            "nodeId": "flutter_z1",
+            "handle": "flutter_z1",
+            "title": "Flutter Z 1 (1/8)",
+            "params": {
+              "rate_mode": {
+                "type": "Enum",
+                "value": 0
+              },
+              "shape": {
+                "type": "Enum",
+                "value": 0
+              },
+              "phase": {
+                "type": "Float",
+                "value": 0.13
+              },
+              "min": {
+                "type": "Float",
+                "value": -0.033
+              },
+              "max": {
+                "type": "Float",
+                "value": 0.033
+              },
+              "rate": {
+                "type": "Enum",
+                "value": 4
+              }
+            }
+          },
+          {
+            "id": 65,
+            "typeId": "node.lfo",
+            "nodeId": "surge_x1",
+            "handle": "surge_x1",
+            "title": "Surge X 1 (1/2)",
+            "params": {
+              "rate_mode": {
+                "type": "Enum",
+                "value": 0
+              },
+              "shape": {
+                "type": "Enum",
+                "value": 0
+              },
+              "phase": {
+                "type": "Float",
+                "value": 0.85
+              },
+              "min": {
+                "type": "Float",
+                "value": -0.05
+              },
+              "max": {
+                "type": "Float",
+                "value": 0.07
+              },
+              "rate": {
+                "type": "Enum",
+                "value": 1
+              }
+            }
+          },
+          {
+            "id": 41,
+            "typeId": "node.math",
+            "nodeId": "sum_a1",
+            "handle": "sum_a1",
+            "title": "z1: body+surge",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 0
+              }
+            }
+          },
+          {
+            "id": 42,
+            "typeId": "node.math",
+            "nodeId": "sum_b1",
+            "handle": "sum_b1",
+            "title": "z1: +flutter",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 0
+              }
+            }
+          },
+          {
+            "id": 44,
+            "typeId": "node.math",
+            "nodeId": "gust_z1",
+            "handle": "gust_z1",
+            "title": "gust z1 x amount",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 74,
+            "typeId": "node.math",
+            "nodeId": "sum_x1",
+            "handle": "sum_x1",
+            "title": "x1: body+surge",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 0
+              }
+            }
+          },
+          {
+            "id": 75,
+            "typeId": "node.math",
+            "nodeId": "gust_x1",
+            "handle": "gust_x1",
+            "title": "gust x1 x amount",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 60,
+            "typeId": "node.lfo",
+            "nodeId": "surge_z2",
+            "handle": "surge_z2",
+            "title": "Surge Z 2 (1/2)",
+            "params": {
+              "rate_mode": {
+                "type": "Enum",
+                "value": 0
+              },
+              "shape": {
+                "type": "Enum",
+                "value": 0
+              },
+              "phase": {
+                "type": "Float",
+                "value": 0.62
+              },
+              "min": {
+                "type": "Float",
+                "value": -0.065
+              },
+              "max": {
+                "type": "Float",
+                "value": 0.095
+              },
+              "rate": {
+                "type": "Enum",
+                "value": 1
+              }
+            }
+          },
+          {
+            "id": 61,
+            "typeId": "node.lfo",
+            "nodeId": "flutter_z2",
+            "handle": "flutter_z2",
+            "title": "Flutter Z 2 (1/8)",
+            "params": {
+              "rate_mode": {
+                "type": "Enum",
+                "value": 0
+              },
+              "shape": {
+                "type": "Enum",
+                "value": 0
+              },
+              "phase": {
+                "type": "Float",
+                "value": 0.47
+              },
+              "min": {
+                "type": "Float",
+                "value": -0.033
+              },
+              "max": {
+                "type": "Float",
+                "value": 0.033
+              },
+              "rate": {
+                "type": "Enum",
+                "value": 4
+              }
+            }
+          },
+          {
+            "id": 66,
+            "typeId": "node.lfo",
+            "nodeId": "surge_x2",
+            "handle": "surge_x2",
+            "title": "Surge X 2 (1/2)",
+            "params": {
+              "rate_mode": {
+                "type": "Enum",
+                "value": 0
+              },
+              "shape": {
+                "type": "Enum",
+                "value": 0
+              },
+              "phase": {
+                "type": "Float",
+                "value": 0.29
+              },
+              "min": {
+                "type": "Float",
+                "value": -0.05
+              },
+              "max": {
+                "type": "Float",
+                "value": 0.07
+              },
+              "rate": {
+                "type": "Enum",
+                "value": 1
+              }
+            }
+          },
+          {
+            "id": 68,
+            "typeId": "node.math",
+            "nodeId": "sum_a2",
+            "handle": "sum_a2",
+            "title": "z2: body+surge",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 0
+              }
+            }
+          },
+          {
+            "id": 69,
+            "typeId": "node.math",
+            "nodeId": "sum_b2",
+            "handle": "sum_b2",
+            "title": "z2: +flutter",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 0
+              }
+            }
+          },
+          {
+            "id": 70,
+            "typeId": "node.math",
+            "nodeId": "gust_z2",
+            "handle": "gust_z2",
+            "title": "gust z2 x amount",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 76,
+            "typeId": "node.math",
+            "nodeId": "sum_x2",
+            "handle": "sum_x2",
+            "title": "x2: body+surge",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 0
+              }
+            }
+          },
+          {
+            "id": 77,
+            "typeId": "node.math",
+            "nodeId": "gust_x2",
+            "handle": "gust_x2",
+            "title": "gust x2 x amount",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 62,
+            "typeId": "node.lfo",
+            "nodeId": "surge_z3",
+            "handle": "surge_z3",
+            "title": "Surge Z 3 (1/2)",
+            "params": {
+              "rate_mode": {
+                "type": "Enum",
+                "value": 0
+              },
+              "shape": {
+                "type": "Enum",
+                "value": 0
+              },
+              "phase": {
+                "type": "Float",
+                "value": 0.11
+              },
+              "min": {
+                "type": "Float",
+                "value": -0.065
+              },
+              "max": {
+                "type": "Float",
+                "value": 0.095
+              },
+              "rate": {
+                "type": "Enum",
+                "value": 1
+              }
+            }
+          },
+          {
+            "id": 63,
+            "typeId": "node.lfo",
+            "nodeId": "flutter_z3",
+            "handle": "flutter_z3",
+            "title": "Flutter Z 3 (1/8)",
+            "params": {
+              "rate_mode": {
+                "type": "Enum",
+                "value": 0
+              },
+              "shape": {
+                "type": "Enum",
+                "value": 0
+              },
+              "phase": {
+                "type": "Float",
+                "value": 0.79
+              },
+              "min": {
+                "type": "Float",
+                "value": -0.033
+              },
+              "max": {
+                "type": "Float",
+                "value": 0.033
+              },
+              "rate": {
+                "type": "Enum",
+                "value": 4
+              }
+            }
+          },
+          {
+            "id": 67,
+            "typeId": "node.lfo",
+            "nodeId": "surge_x3",
+            "handle": "surge_x3",
+            "title": "Surge X 3 (1/2)",
+            "params": {
+              "rate_mode": {
+                "type": "Enum",
+                "value": 0
+              },
+              "shape": {
+                "type": "Enum",
+                "value": 0
+              },
+              "phase": {
+                "type": "Float",
+                "value": 0.55
+              },
+              "min": {
+                "type": "Float",
+                "value": -0.05
+              },
+              "max": {
+                "type": "Float",
+                "value": 0.07
+              },
+              "rate": {
+                "type": "Enum",
+                "value": 1
+              }
+            }
+          },
+          {
+            "id": 71,
+            "typeId": "node.math",
+            "nodeId": "sum_a3",
+            "handle": "sum_a3",
+            "title": "z3: body+surge",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 0
+              }
+            }
+          },
+          {
+            "id": 72,
+            "typeId": "node.math",
+            "nodeId": "sum_b3",
+            "handle": "sum_b3",
+            "title": "z3: +flutter",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 0
+              }
+            }
+          },
+          {
+            "id": 73,
+            "typeId": "node.math",
+            "nodeId": "gust_z3",
+            "handle": "gust_z3",
+            "title": "gust z3 x amount",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 78,
+            "typeId": "node.math",
+            "nodeId": "sum_x3",
+            "handle": "sum_x3",
+            "title": "x3: body+surge",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 0
+              }
+            }
+          },
+          {
+            "id": 79,
+            "typeId": "node.math",
+            "nodeId": "gust_x3",
+            "handle": "gust_x3",
+            "title": "gust x3 x amount",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 43,
+            "typeId": "node.value",
+            "nodeId": "wind_amount",
+            "handle": "wind_amount",
+            "title": "Sway Amount",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 45,
+            "typeId": "node.lfo",
+            "nodeId": "wind_wander",
+            "handle": "wind_wander",
+            "title": "Direction Wander (~42s)",
+            "params": {
+              "rate_mode": {
+                "type": "Enum",
+                "value": 1
+              },
+              "shape": {
+                "type": "Enum",
+                "value": 0
+              },
+              "phase": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "min": {
+                "type": "Float",
+                "value": -0.9
+              },
+              "max": {
+                "type": "Float",
+                "value": 0.9
+              },
+              "angular_rate": {
+                "type": "Float",
+                "value": 0.15
+              }
+            }
+          },
+          {
+            "id": 46,
+            "typeId": "node.scale_offset_value",
+            "nodeId": "wander_in",
+            "handle": "wander_in",
+            "title": "-wander - 90deg",
+            "params": {
+              "scale": {
+                "type": "Float",
+                "value": -1.0
+              },
+              "offset": {
+                "type": "Float",
+                "value": -1.5707963
+              }
+            }
+          },
+          {
+            "id": 47,
+            "typeId": "system.group_output",
+            "nodeId": "wind_group_out",
+            "handle": "output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 38,
+            "fromPort": "out",
+            "toNode": 41,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 39,
+            "fromPort": "out",
+            "toNode": 41,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 41,
+            "fromPort": "out",
+            "toNode": 42,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 40,
+            "fromPort": "out",
+            "toNode": 42,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 42,
+            "fromPort": "out",
+            "toNode": 44,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 43,
+            "fromPort": "out",
+            "toNode": 44,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 64,
+            "fromPort": "out",
+            "toNode": 74,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 65,
+            "fromPort": "out",
+            "toNode": 74,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 74,
+            "fromPort": "out",
+            "toNode": 75,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 43,
+            "fromPort": "out",
+            "toNode": 75,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 44,
+            "fromPort": "out",
+            "toNode": 47,
+            "toPort": "gust_z_1"
+          },
+          {
+            "fromNode": 75,
+            "fromPort": "out",
+            "toNode": 47,
+            "toPort": "gust_x_1"
+          },
+          {
+            "fromNode": 38,
+            "fromPort": "out",
+            "toNode": 68,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 60,
+            "fromPort": "out",
+            "toNode": 68,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 68,
+            "fromPort": "out",
+            "toNode": 69,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 61,
+            "fromPort": "out",
+            "toNode": 69,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 69,
+            "fromPort": "out",
+            "toNode": 70,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 43,
+            "fromPort": "out",
+            "toNode": 70,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 64,
+            "fromPort": "out",
+            "toNode": 76,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 66,
+            "fromPort": "out",
+            "toNode": 76,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 76,
+            "fromPort": "out",
+            "toNode": 77,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 43,
+            "fromPort": "out",
+            "toNode": 77,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 70,
+            "fromPort": "out",
+            "toNode": 47,
+            "toPort": "gust_z_2"
+          },
+          {
+            "fromNode": 77,
+            "fromPort": "out",
+            "toNode": 47,
+            "toPort": "gust_x_2"
+          },
+          {
+            "fromNode": 38,
+            "fromPort": "out",
+            "toNode": 71,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 62,
+            "fromPort": "out",
+            "toNode": 71,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 71,
+            "fromPort": "out",
+            "toNode": 72,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 63,
+            "fromPort": "out",
+            "toNode": 72,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 72,
+            "fromPort": "out",
+            "toNode": 73,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 43,
+            "fromPort": "out",
+            "toNode": 73,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 64,
+            "fromPort": "out",
+            "toNode": 78,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 67,
+            "fromPort": "out",
+            "toNode": 78,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 78,
+            "fromPort": "out",
+            "toNode": 79,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 43,
+            "fromPort": "out",
+            "toNode": 79,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 73,
+            "fromPort": "out",
+            "toNode": 47,
+            "toPort": "gust_z_3"
+          },
+          {
+            "fromNode": 79,
+            "fromPort": "out",
+            "toNode": 47,
+            "toPort": "gust_x_3"
+          },
+          {
+            "fromNode": 45,
+            "fromPort": "out",
+            "toNode": 46,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 45,
+            "fromPort": "out",
+            "toNode": 47,
+            "toPort": "wander"
+          },
+          {
+            "fromNode": 46,
+            "fromPort": "out",
+            "toNode": 47,
+            "toPort": "wander_in"
+          }
+        ],
+        "tint": [
+          0.55,
+          0.8,
+          0.95,
+          1.0
+        ]
       }
     },
     {
@@ -506,7 +1403,24 @@
       "handle": "Blossom Cluster A",
       "group": {
         "interface": {
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "gust_z",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "gust_x",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "wander",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "wander_in",
+              "portType": "Scalar(F32)"
+            }
+          ],
           "outputs": [
             {
               "name": "vertices",
@@ -566,7 +1480,92 @@
               },
               "center": {
                 "type": "Float",
-                "value": -2.66
+                "value": -2.6559
+              }
+            }
+          },
+          {
+            "id": 48,
+            "typeId": "system.group_input",
+            "nodeId": "object_1_in",
+            "handle": "input"
+          },
+          {
+            "id": 49,
+            "typeId": "node.rotate_3d",
+            "nodeId": "wind_in_1",
+            "handle": "wind_in_1",
+            "title": "Wind Frame In (-phi-90)",
+            "params": {
+              "angle_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "angle_z": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 50,
+            "typeId": "node.mesh_ramp",
+            "nodeId": "flex_1",
+            "handle": "flex_1",
+            "title": "Flex Weights",
+            "params": {
+              "axis": {
+                "type": "Enum",
+                "value": 1
+              },
+              "origin_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "origin_y": {
+                "type": "Float",
+                "value": -2.6559
+              },
+              "origin_z": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "phase": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "feather": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "bound_min": {
+                "type": "Float",
+                "value": -2.79
+              },
+              "bound_max": {
+                "type": "Float",
+                "value": 5.115
+              },
+              "invert": {
+                "type": "Bool",
+                "value": true
+              }
+            }
+          },
+          {
+            "id": 51,
+            "typeId": "node.rotate_3d",
+            "nodeId": "wind_out_1",
+            "handle": "wind_out_1",
+            "title": "Wind Frame Out",
+            "params": {
+              "angle_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "angle_z": {
+                "type": "Float",
+                "value": 0.0
               }
             }
           },
@@ -634,17 +1633,121 @@
             "typeId": "system.group_output",
             "nodeId": "object_1_out",
             "handle": "output"
+          },
+          {
+            "id": 80,
+            "typeId": "node.bend_mesh",
+            "nodeId": "sway_x_1",
+            "handle": "sway_x_1",
+            "title": "Sway X",
+            "params": {
+              "angle": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "center": {
+                "type": "Float",
+                "value": -2.6559
+              }
+            }
+          },
+          {
+            "id": 81,
+            "typeId": "node.rotate_3d",
+            "nodeId": "wind_mid_1",
+            "handle": "wind_mid_1",
+            "title": "Frame +90deg",
+            "params": {
+              "angle_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "angle_y": {
+                "type": "Float",
+                "value": 1.5707963
+              },
+              "angle_z": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
           }
         ],
         "wires": [
           {
             "fromNode": 14,
             "fromPort": "vertices",
+            "toNode": 49,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 48,
+            "fromPort": "wander_in",
+            "toNode": 49,
+            "toPort": "angle_y"
+          },
+          {
+            "fromNode": 49,
+            "fromPort": "out",
+            "toNode": 80,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 48,
+            "fromPort": "gust_x",
+            "toNode": 80,
+            "toPort": "angle"
+          },
+          {
+            "fromNode": 50,
+            "fromPort": "weights",
+            "toNode": 80,
+            "toPort": "weights"
+          },
+          {
+            "fromNode": 80,
+            "fromPort": "out",
+            "toNode": 81,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 81,
+            "fromPort": "out",
             "toNode": 15,
             "toPort": "in"
           },
           {
+            "fromNode": 48,
+            "fromPort": "gust_z",
+            "toNode": 15,
+            "toPort": "angle"
+          },
+          {
+            "fromNode": 50,
+            "fromPort": "weights",
+            "toNode": 15,
+            "toPort": "weights"
+          },
+          {
+            "fromNode": 14,
+            "fromPort": "vertices",
+            "toNode": 50,
+            "toPort": "in"
+          },
+          {
             "fromNode": 15,
+            "fromPort": "out",
+            "toNode": 51,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 48,
+            "fromPort": "wander",
+            "toNode": 51,
+            "toPort": "angle_y"
+          },
+          {
+            "fromNode": 51,
             "fromPort": "out",
             "toNode": 19,
             "toPort": "vertices"
@@ -683,7 +1786,24 @@
       "handle": "Blossom Cluster B",
       "group": {
         "interface": {
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "gust_z",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "gust_x",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "wander",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "wander_in",
+              "portType": "Scalar(F32)"
+            }
+          ],
           "outputs": [
             {
               "name": "vertices",
@@ -743,7 +1863,92 @@
               },
               "center": {
                 "type": "Float",
-                "value": -2.66
+                "value": -2.4948
+              }
+            }
+          },
+          {
+            "id": 52,
+            "typeId": "system.group_input",
+            "nodeId": "object_2_in",
+            "handle": "input"
+          },
+          {
+            "id": 53,
+            "typeId": "node.rotate_3d",
+            "nodeId": "wind_in_2",
+            "handle": "wind_in_2",
+            "title": "Wind Frame In (-phi-90)",
+            "params": {
+              "angle_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "angle_z": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 54,
+            "typeId": "node.mesh_ramp",
+            "nodeId": "flex_2",
+            "handle": "flex_2",
+            "title": "Flex Weights",
+            "params": {
+              "axis": {
+                "type": "Enum",
+                "value": 1
+              },
+              "origin_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "origin_y": {
+                "type": "Float",
+                "value": -2.4948
+              },
+              "origin_z": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "phase": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "feather": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "bound_min": {
+                "type": "Float",
+                "value": -3.431
+              },
+              "bound_max": {
+                "type": "Float",
+                "value": 6.29
+              },
+              "invert": {
+                "type": "Bool",
+                "value": true
+              }
+            }
+          },
+          {
+            "id": 55,
+            "typeId": "node.rotate_3d",
+            "nodeId": "wind_out_2",
+            "handle": "wind_out_2",
+            "title": "Wind Frame Out",
+            "params": {
+              "angle_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "angle_z": {
+                "type": "Float",
+                "value": 0.0
               }
             }
           },
@@ -811,17 +2016,121 @@
             "typeId": "system.group_output",
             "nodeId": "object_2_out",
             "handle": "output"
+          },
+          {
+            "id": 82,
+            "typeId": "node.bend_mesh",
+            "nodeId": "sway_x_2",
+            "handle": "sway_x_2",
+            "title": "Sway X",
+            "params": {
+              "angle": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "center": {
+                "type": "Float",
+                "value": -2.4948
+              }
+            }
+          },
+          {
+            "id": 83,
+            "typeId": "node.rotate_3d",
+            "nodeId": "wind_mid_2",
+            "handle": "wind_mid_2",
+            "title": "Frame +90deg",
+            "params": {
+              "angle_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "angle_y": {
+                "type": "Float",
+                "value": 1.5707963
+              },
+              "angle_z": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
           }
         ],
         "wires": [
           {
             "fromNode": 21,
             "fromPort": "vertices",
+            "toNode": 53,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 52,
+            "fromPort": "wander_in",
+            "toNode": 53,
+            "toPort": "angle_y"
+          },
+          {
+            "fromNode": 53,
+            "fromPort": "out",
+            "toNode": 82,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 52,
+            "fromPort": "gust_x",
+            "toNode": 82,
+            "toPort": "angle"
+          },
+          {
+            "fromNode": 54,
+            "fromPort": "weights",
+            "toNode": 82,
+            "toPort": "weights"
+          },
+          {
+            "fromNode": 82,
+            "fromPort": "out",
+            "toNode": 83,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 83,
+            "fromPort": "out",
             "toNode": 22,
             "toPort": "in"
           },
           {
+            "fromNode": 52,
+            "fromPort": "gust_z",
+            "toNode": 22,
+            "toPort": "angle"
+          },
+          {
+            "fromNode": 54,
+            "fromPort": "weights",
+            "toNode": 22,
+            "toPort": "weights"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "vertices",
+            "toNode": 54,
+            "toPort": "in"
+          },
+          {
             "fromNode": 22,
+            "fromPort": "out",
+            "toNode": 55,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 52,
+            "fromPort": "wander",
+            "toNode": 55,
+            "toPort": "angle_y"
+          },
+          {
+            "fromNode": 55,
             "fromPort": "out",
             "toNode": 26,
             "toPort": "vertices"
@@ -860,7 +2169,24 @@
       "handle": "Blossom Cluster C",
       "group": {
         "interface": {
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "gust_z",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "gust_x",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "wander",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "wander_in",
+              "portType": "Scalar(F32)"
+            }
+          ],
           "outputs": [
             {
               "name": "vertices",
@@ -920,7 +2246,92 @@
               },
               "center": {
                 "type": "Float",
-                "value": -2.66
+                "value": -1.0324
+              }
+            }
+          },
+          {
+            "id": 56,
+            "typeId": "system.group_input",
+            "nodeId": "object_3_in",
+            "handle": "input"
+          },
+          {
+            "id": 57,
+            "typeId": "node.rotate_3d",
+            "nodeId": "wind_in_3",
+            "handle": "wind_in_3",
+            "title": "Wind Frame In (-phi-90)",
+            "params": {
+              "angle_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "angle_z": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 58,
+            "typeId": "node.mesh_ramp",
+            "nodeId": "flex_3",
+            "handle": "flex_3",
+            "title": "Flex Weights",
+            "params": {
+              "axis": {
+                "type": "Enum",
+                "value": 1
+              },
+              "origin_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "origin_y": {
+                "type": "Float",
+                "value": -1.0324
+              },
+              "origin_z": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "phase": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "feather": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "bound_min": {
+                "type": "Float",
+                "value": -1.526
+              },
+              "bound_max": {
+                "type": "Float",
+                "value": 2.797
+              },
+              "invert": {
+                "type": "Bool",
+                "value": true
+              }
+            }
+          },
+          {
+            "id": 59,
+            "typeId": "node.rotate_3d",
+            "nodeId": "wind_out_3",
+            "handle": "wind_out_3",
+            "title": "Wind Frame Out",
+            "params": {
+              "angle_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "angle_z": {
+                "type": "Float",
+                "value": 0.0
               }
             }
           },
@@ -988,17 +2399,121 @@
             "typeId": "system.group_output",
             "nodeId": "object_3_out",
             "handle": "output"
+          },
+          {
+            "id": 84,
+            "typeId": "node.bend_mesh",
+            "nodeId": "sway_x_3",
+            "handle": "sway_x_3",
+            "title": "Sway X",
+            "params": {
+              "angle": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "center": {
+                "type": "Float",
+                "value": -1.0324
+              }
+            }
+          },
+          {
+            "id": 85,
+            "typeId": "node.rotate_3d",
+            "nodeId": "wind_mid_3",
+            "handle": "wind_mid_3",
+            "title": "Frame +90deg",
+            "params": {
+              "angle_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "angle_y": {
+                "type": "Float",
+                "value": 1.5707963
+              },
+              "angle_z": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
           }
         ],
         "wires": [
           {
             "fromNode": 28,
             "fromPort": "vertices",
+            "toNode": 57,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 56,
+            "fromPort": "wander_in",
+            "toNode": 57,
+            "toPort": "angle_y"
+          },
+          {
+            "fromNode": 57,
+            "fromPort": "out",
+            "toNode": 84,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 56,
+            "fromPort": "gust_x",
+            "toNode": 84,
+            "toPort": "angle"
+          },
+          {
+            "fromNode": 58,
+            "fromPort": "weights",
+            "toNode": 84,
+            "toPort": "weights"
+          },
+          {
+            "fromNode": 84,
+            "fromPort": "out",
+            "toNode": 85,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 85,
+            "fromPort": "out",
             "toNode": 29,
             "toPort": "in"
           },
           {
+            "fromNode": 56,
+            "fromPort": "gust_z",
+            "toNode": 29,
+            "toPort": "angle"
+          },
+          {
+            "fromNode": 58,
+            "fromPort": "weights",
+            "toNode": 29,
+            "toPort": "weights"
+          },
+          {
+            "fromNode": 28,
+            "fromPort": "vertices",
+            "toNode": 58,
+            "toPort": "in"
+          },
+          {
             "fromNode": 29,
+            "fromPort": "out",
+            "toNode": 59,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 56,
+            "fromPort": "wander",
+            "toNode": 59,
+            "toPort": "angle_y"
+          },
+          {
+            "fromNode": 59,
             "fromPort": "out",
             "toNode": 33,
             "toPort": "vertices"
@@ -1150,6 +2665,78 @@
       "fromPort": "color",
       "toNode": 36,
       "toPort": "in"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "gust_z_1",
+      "toNode": 20,
+      "toPort": "gust_z"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "gust_x_1",
+      "toNode": 20,
+      "toPort": "gust_x"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "wander",
+      "toNode": 20,
+      "toPort": "wander"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "wander_in",
+      "toNode": 20,
+      "toPort": "wander_in"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "gust_z_2",
+      "toNode": 27,
+      "toPort": "gust_z"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "gust_x_2",
+      "toNode": 27,
+      "toPort": "gust_x"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "wander",
+      "toNode": 27,
+      "toPort": "wander"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "wander_in",
+      "toNode": 27,
+      "toPort": "wander_in"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "gust_z_3",
+      "toNode": 34,
+      "toPort": "gust_z"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "gust_x_3",
+      "toNode": 34,
+      "toPort": "gust_x"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "wander",
+      "toNode": 34,
+      "toPort": "wander"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "wander_in",
+      "toNode": 34,
+      "toPort": "wander_in"
     }
   ]
 }

@@ -1,0 +1,623 @@
+{
+  "version": 2,
+  "name": "BlossomField",
+  "description": "Scene 2 - the instanced-density scene (scene ladder rung 2, REALTIME_3D P8 instancing at performable scale). A soft rolling terrain (node.grid_mesh 64x64 over 14x14 units -> node.push_mesh displaced by low-frequency node.simplex_field_2d -> node.make_triangles) is object 0 of one node.render_scene. node.scatter_on_mesh samples that same terrain area-weighted and emits Array<InstanceTransform> placements (align_to_normal with vertex-normal-oriented faces, per-instance random scale 0.55..1.35) wired into object 1's instances_1. The instance mesh is REAL SCAN CONTENT: apricot_blossom_cluster_lod.glb - the scan's material-3 cluster decimated offline 321k->80k tris (Blender quadric collapse, one-time; ~240k flat verts, 4x lighter than the raw cluster - the scan's chunks are 65k-vertex budget slices interleaved through the full cluster volume, so any single chunk renders as confetti; the material cluster is the smallest coherent unit, measured 2026-07-11), normalized via gltf_mesh_source fit=unit_box + recenter and textured by its atlas page (gltf_texture_source 3 -> base_color_map_1). Density is therefore SPRIG-count (ceiling 48 ~= 46M verts), not flower-count - thousands-scale density needs a purpose-built low-poly blossom asset (offline mesh surgery, Peter's call), drawn once per placement in the SAME shared-depth pass as the terrain, shadowed by the one warm low sun (the shadow pass instances too, D11). density is THE lead performance card - the static count 1500 is the compile-time buffer ceiling, the card sweeps 0..1500 live and place_main parks unused slots at zero scale so lowering the fader really empties the meadow. flowerScale and camera orbit/tilt/distance round out the surface; modelPath is a file-picker card. Wind on the host terrain (Scene 1's gust machinery driving the surface so rigid instances ride it) is the planned next rung; recenter half-nestles each cluster into the ground - judged acceptable-or-not from renders, no base-anchor fit mode exists yet.",
+  "presetMetadata": {
+    "id": "BlossomField",
+    "displayName": "Blossom Field",
+    "category": "Geometry",
+    "oscPrefix": "blossomfield",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "density",
+        "name": "Density",
+        "min": 0.0,
+        "max": 48.0,
+        "defaultValue": 18.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0"
+      },
+      {
+        "id": "flowerScale",
+        "name": "Flower Scale",
+        "min": 0.5,
+        "max": 6.0,
+        "defaultValue": 2.4,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "camOrbit",
+        "name": "Camera Orbit",
+        "min": -3.14159265,
+        "max": 3.14159265,
+        "defaultValue": 0.55,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Camera"
+      },
+      {
+        "id": "camTilt",
+        "name": "Camera Tilt",
+        "min": 0.05,
+        "max": 1.5,
+        "defaultValue": 0.24,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Camera"
+      },
+      {
+        "id": "camDistance",
+        "name": "Camera Distance",
+        "min": 3.0,
+        "max": 40.0,
+        "defaultValue": 9.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F1",
+        "section": "Camera"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "density",
+        "label": "Density",
+        "defaultValue": 18.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "scatter",
+          "param": "count"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "flowerScale",
+        "label": "Flower Scale",
+        "defaultValue": 2.4,
+        "target": {
+          "kind": "node",
+          "nodeId": "scatter",
+          "param": "scale_max"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "camOrbit",
+        "label": "Camera Orbit",
+        "defaultValue": 0.55,
+        "target": {
+          "kind": "node",
+          "nodeId": "cam",
+          "param": "orbit"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "camTilt",
+        "label": "Camera Tilt",
+        "defaultValue": 0.24,
+        "target": {
+          "kind": "node",
+          "nodeId": "cam",
+          "param": "tilt"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "camDistance",
+        "label": "Camera Distance",
+        "defaultValue": 9.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "cam",
+          "param": "distance"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "never"
+    },
+    "stringParams": [
+      {
+        "id": "modelPath",
+        "name": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/apricot_blossom_cluster_lod.glb",
+        "isFilePicker": true,
+        "useDropdown": false
+      }
+    ],
+    "stringBindings": [
+      {
+        "id": "modelPath",
+        "label": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/apricot_blossom_cluster_lod.glb",
+        "target": {
+          "kind": "node",
+          "nodeId": "blossom_mesh",
+          "param": "path"
+        }
+      },
+      {
+        "id": "modelPath",
+        "label": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/apricot_blossom_cluster_lod.glb",
+        "target": {
+          "kind": "node",
+          "nodeId": "blossom_tex",
+          "param": "path"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.generator_input",
+      "nodeId": "input",
+      "handle": "input"
+    },
+    {
+      "id": 1,
+      "typeId": "node.grid_mesh",
+      "nodeId": "terrain_grid",
+      "handle": "terrain_grid",
+      "title": "Terrain Grid",
+      "params": {
+        "max_capacity": {
+          "type": "Int",
+          "value": 4096
+        },
+        "resolution_x": {
+          "type": "Int",
+          "value": 64
+        },
+        "resolution_y": {
+          "type": "Int",
+          "value": 64
+        },
+        "size_x": {
+          "type": "Float",
+          "value": 14.0
+        },
+        "size_y": {
+          "type": "Float",
+          "value": 14.0
+        }
+      }
+    },
+    {
+      "id": 5,
+      "typeId": "node.gltf_mesh_source",
+      "nodeId": "blossom_mesh",
+      "handle": "blossom_mesh",
+      "title": "Blossom Cluster (LOD)",
+      "params": {
+        "mesh_index": {
+          "type": "Int",
+          "value": -1
+        },
+        "primitive_index": {
+          "type": "Int",
+          "value": -1
+        },
+        "material_index": {
+          "type": "Int",
+          "value": -1
+        },
+        "max_capacity": {
+          "type": "Int",
+          "value": 240000
+        },
+        "fit": {
+          "type": "Enum",
+          "value": 1
+        },
+        "recenter": {
+          "type": "Bool",
+          "value": true
+        }
+      }
+    },
+    {
+      "id": 6,
+      "typeId": "node.gltf_texture_source",
+      "nodeId": "blossom_tex",
+      "handle": "blossom_tex",
+      "title": "Blossom Atlas",
+      "params": {
+        "texture_index": {
+          "type": "Int",
+          "value": 0
+        },
+        "color_space": {
+          "type": "Enum",
+          "value": 0
+        },
+        "width": {
+          "type": "Int",
+          "value": 1024
+        },
+        "height": {
+          "type": "Int",
+          "value": 1024
+        }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "node.simplex_field_2d",
+      "nodeId": "terrain_noise",
+      "handle": "terrain_noise",
+      "title": "Terrain Noise",
+      "params": {
+        "scale_x": {
+          "type": "Float",
+          "value": 1.6
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 1.6
+        },
+        "offset_x": {
+          "type": "Float",
+          "value": 3.7
+        },
+        "offset_y": {
+          "type": "Float",
+          "value": -1.2
+        },
+        "z": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 3,
+      "typeId": "node.push_mesh",
+      "nodeId": "terrain_push",
+      "handle": "terrain_push",
+      "title": "Terrain Relief",
+      "params": {
+        "cols": {
+          "type": "Int",
+          "value": 64
+        },
+        "rows": {
+          "type": "Int",
+          "value": 64
+        },
+        "displacement": {
+          "type": "Float",
+          "value": 0.55
+        },
+        "height_bias": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 4,
+      "typeId": "node.make_triangles",
+      "nodeId": "terrain_tris",
+      "handle": "terrain_tris",
+      "title": "Terrain Triangles",
+      "params": {
+        "src_cols": {
+          "type": "Int",
+          "value": 64
+        },
+        "src_rows": {
+          "type": "Int",
+          "value": 64
+        }
+      }
+    },
+    {
+      "id": 12,
+      "typeId": "node.scatter_on_mesh",
+      "nodeId": "scatter",
+      "handle": "scatter",
+      "title": "Scatter",
+      "params": {
+        "count": {
+          "type": "Int",
+          "value": 48
+        },
+        "seed": {
+          "type": "Float",
+          "value": 11.0
+        },
+        "scale_min": {
+          "type": "Float",
+          "value": 1.2
+        },
+        "scale_max": {
+          "type": "Float",
+          "value": 3.6
+        },
+        "align_to_normal": {
+          "type": "Bool",
+          "value": true
+        },
+        "max_capacity": {
+          "type": "Int",
+          "value": 64
+        }
+      }
+    },
+    {
+      "id": 13,
+      "typeId": "node.orbit_camera",
+      "nodeId": "cam",
+      "handle": "cam",
+      "title": "Camera",
+      "params": {
+        "orbit": {
+          "type": "Float",
+          "value": 0.55
+        },
+        "tilt": {
+          "type": "Float",
+          "value": 0.24
+        },
+        "distance": {
+          "type": "Float",
+          "value": 9.5
+        },
+        "fov_y": {
+          "type": "Float",
+          "value": 0.8
+        },
+        "look_y": {
+          "type": "Float",
+          "value": 0.3
+        }
+      }
+    },
+    {
+      "id": 14,
+      "typeId": "node.phong_material",
+      "nodeId": "terrain_mat",
+      "handle": "terrain_mat",
+      "title": "Soil",
+      "params": {
+        "color_r": {
+          "type": "Float",
+          "value": 0.1
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.115
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.07
+        },
+        "ambient": {
+          "type": "Float",
+          "value": 0.1
+        }
+      }
+    },
+    {
+      "id": 15,
+      "typeId": "node.phong_material",
+      "nodeId": "flower_mat",
+      "handle": "flower_mat",
+      "title": "Blossom Material",
+      "params": {
+        "ambient": {
+          "type": "Float",
+          "value": 0.18
+        }
+      }
+    },
+    {
+      "id": 16,
+      "typeId": "node.light",
+      "nodeId": "sun",
+      "handle": "sun",
+      "title": "Low Sun",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "pos_x": {
+          "type": "Float",
+          "value": 7.0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 4.5
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 5.0
+        },
+        "aim_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.82
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.62
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 2.8
+        },
+        "cast_shadows": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "shadow_bias": {
+          "type": "Float",
+          "value": 0.002
+        }
+      }
+    },
+    {
+      "id": 17,
+      "typeId": "node.render_scene",
+      "nodeId": "scene",
+      "handle": "scene",
+      "title": "Render Scene",
+      "params": {
+        "objects": {
+          "type": "Int",
+          "value": 2
+        },
+        "lights": {
+          "type": "Int",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 99,
+      "typeId": "system.final_output",
+      "nodeId": "out",
+      "handle": "out"
+    },
+    {
+      "id": 18,
+      "typeId": "node.transform_3d",
+      "nodeId": "blossom_lift",
+      "handle": "blossom_lift",
+      "title": "Nestle Lift",
+      "params": {
+        "pos_y": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 1,
+      "fromPort": "vertices",
+      "toNode": 3,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "height"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 12,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "out",
+      "toNode": 17,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 17,
+      "toPort": "mesh_0"
+    },
+    {
+      "fromNode": 14,
+      "fromPort": "out",
+      "toNode": 17,
+      "toPort": "material_0"
+    },
+    {
+      "fromNode": 15,
+      "fromPort": "out",
+      "toNode": 17,
+      "toPort": "material_1"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "instances",
+      "toNode": 17,
+      "toPort": "instances_1"
+    },
+    {
+      "fromNode": 16,
+      "fromPort": "out",
+      "toNode": 17,
+      "toPort": "light_0"
+    },
+    {
+      "fromNode": 17,
+      "fromPort": "color",
+      "toNode": 99,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "vertices",
+      "toNode": 17,
+      "toPort": "mesh_1"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 17,
+      "toPort": "base_color_map_1"
+    },
+    {
+      "fromNode": 18,
+      "fromPort": "transform",
+      "toNode": 17,
+      "toPort": "transform_1"
+    }
+  ]
+}

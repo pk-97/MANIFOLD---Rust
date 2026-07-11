@@ -355,7 +355,7 @@ _Generated from the node registry. Do not hand-edit. 230 nodes registered, group
 | UV Displace by Flow | `node.uv_displace_by_flow` | Filter | Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field. |
 | UV Field | `node.uv_field` | Source | Outputs the position of each pixel as a coordinate, red for left-to-right and green for top-to-bottom. The starting grid for most warps and patterns. |
 
-### Effect & generator presets (52)
+### Effect & generator presets (53)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -365,6 +365,7 @@ _Generated from the node registry. Do not hand-edit. 230 nodes registered, group
 | `BlackHole` | Black Hole | generator | Sim | 18 |
 | `BlobTracking` | Blob Track | effect | Diagnostic | 5 |
 | `Bloom` | Bloom | effect | Filmic | 1 |
+| `BlossomField` | Blossom Field | generator | Geometry | 5 |
 | `Breathe` | Breathe | generator | Geometry | 3 |
 | `ChromaticAberration` | Chromatic Aberration | effect | Filmic | 5 |
 | `ColorCompass` | Color Compass | effect | Spatial | 2 |

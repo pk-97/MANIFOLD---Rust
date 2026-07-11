@@ -7157,7 +7157,8 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "ApricotWeather"
+        "ApricotWeather",
+        "BlossomField"
       ],
       "inputs": [],
       "label": "glTF Mesh",
@@ -7251,7 +7252,8 @@
       ],
       "category": "Generate",
       "examples": [
-        "ApricotWeather"
+        "ApricotWeather",
+        "BlossomField"
       ],
       "inputs": [],
       "label": "glTF Texture",
@@ -7470,6 +7472,7 @@
       ],
       "category": "3D Geometry",
       "examples": [
+        "BlossomField",
         "Breathe",
         "Garden",
         "MetallicGlass",
@@ -8558,6 +8561,7 @@
       ],
       "category": "Control",
       "examples": [
+        "ApricotWeather",
         "Breathe",
         "Lissajous",
         "TwistColumn"
@@ -8687,6 +8691,7 @@
       "category": "Materials & Lighting",
       "examples": [
         "ApricotWeather",
+        "BlossomField",
         "Breathe",
         "Garden",
         "Lathe",
@@ -9256,6 +9261,7 @@
       ],
       "category": "3D Geometry",
       "examples": [
+        "BlossomField",
         "Breathe",
         "Garden",
         "Lathe",
@@ -9544,6 +9550,7 @@
       ],
       "category": "3D Geometry",
       "examples": [
+        "ApricotWeather",
         "Breathe",
         "TwistColumn"
       ],
@@ -10566,6 +10573,7 @@
       "category": "3D Geometry",
       "examples": [
         "ApricotWeather",
+        "BlossomField",
         "Breathe",
         "DigitalPlants",
         "FluidSim3D",
@@ -11271,6 +11279,7 @@
       "category": "Materials & Lighting",
       "examples": [
         "ApricotWeather",
+        "BlossomField",
         "Breathe",
         "Garden",
         "Lathe",
@@ -12054,6 +12063,7 @@
       ],
       "category": "3D Geometry",
       "examples": [
+        "BlossomField",
         "Garden",
         "MetallicGlass"
       ],
@@ -12809,6 +12819,7 @@
       "category": "3D Geometry",
       "examples": [
         "ApricotWeather",
+        "BlossomField",
         "Breathe",
         "Garden",
         "Lathe",
@@ -13531,6 +13542,7 @@
       ],
       "category": "3D Geometry",
       "examples": [
+        "ApricotWeather",
         "Wireframe"
       ],
       "inputs": [
@@ -14314,6 +14326,7 @@
       ],
       "category": "3D Geometry",
       "examples": [
+        "BlossomField",
         "Garden"
       ],
       "inputs": [
@@ -14360,6 +14373,16 @@
           "default": "256",
           "label": "Count",
           "name": "count",
+          "range": [
+            "0",
+            "1000000"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Max Capacity",
+          "name": "max_capacity",
           "range": [
             "0",
             "1000000"
@@ -14623,6 +14646,7 @@
       ],
       "category": "Noise",
       "examples": [
+        "BlossomField",
         "Garden",
         "MetallicGlass",
         "OilyFluid"
@@ -17185,7 +17209,8 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "ApricotWeather"
+        "ApricotWeather",
+        "BlossomField"
       ],
       "inputs": [
         {
@@ -18895,6 +18920,7 @@
         "BlackHole",
         "BlobTracking",
         "Bloom",
+        "BlossomField",
         "Breathe",
         "ChromaticAberration",
         "ColorCompass",
@@ -18970,6 +18996,7 @@
         "ApricotWeather",
         "BasicShapes",
         "BlackHole",
+        "BlossomField",
         "Breathe",
         "ConcentricTunnel",
         "DigitalDrift",
@@ -19139,7 +19166,7 @@
       "type_id": "system.source"
     }
   ],
-  "preset_count": 52,
+  "preset_count": 53,
   "presets": [
     {
       "category": "Geometry",
@@ -19451,6 +19478,50 @@
           "max": "5",
           "min": "0",
           "name": "Amount"
+        }
+      ]
+    },
+    {
+      "category": "Geometry",
+      "id": "BlossomField",
+      "is_line_based": false,
+      "kind": "generator",
+      "name": "Blossom Field",
+      "params": [
+        {
+          "default": "18",
+          "id": "density",
+          "max": "48",
+          "min": "0",
+          "name": "Density"
+        },
+        {
+          "default": "2.4",
+          "id": "flowerScale",
+          "max": "6",
+          "min": "0.5",
+          "name": "Flower Scale"
+        },
+        {
+          "default": "0.55",
+          "id": "camOrbit",
+          "max": "3.1415927",
+          "min": "-3.1415927",
+          "name": "Camera Orbit"
+        },
+        {
+          "default": "0.24",
+          "id": "camTilt",
+          "max": "1.5",
+          "min": "0.05",
+          "name": "Camera Tilt"
+        },
+        {
+          "default": "9.5",
+          "id": "camDistance",
+          "max": "40",
+          "min": "3",
+          "name": "Camera Distance"
         }
       ]
     },

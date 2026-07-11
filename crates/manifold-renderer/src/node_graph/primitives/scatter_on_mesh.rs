@@ -10,12 +10,14 @@
 //! §7's shared-buffer rule) — it feeds `place_main` directly, same as the
 //! precedent.
 //!
-//! `count` doubles as both the port-shadowed runtime instance count AND
-//! the allocation-capacity source (`array_output_capacity`), matching how
-//! `node.triangulate_grid` derives capacity from its own params rather
-//! than a separate `max_capacity` ceiling — simpler than
-//! `spawn_from_mesh`'s two-param split since scatter has no analogous
-//! "vertices mode" needing an independent ceiling.
+//! `max_capacity` is the allocation ceiling (`array_output_capacity`);
+//! `count` is the live, port-shadowed instance count sweeping under it.
+//! This is `spawn_from_mesh`'s two-param split — scatter originally
+//! collapsed the two into `count` "for simplicity", which meant the
+//! buffer was sized from whatever the count card happened to read at
+//! graph-build time, silently capping the fader's live range (Scene 2,
+//! 2026-07-11: slider to 48, 18 drawn). Presets without `max_capacity`
+//! fall back to sizing from `count` (back-compat, Garden.json).
 //!
 //! Deterministic for a fixed `(seed, mesh)`: every random draw in the
 //! shader is a `wang_hash` chain seeded from `(instance index, seed)`, no
@@ -39,7 +41,11 @@ struct ScatterOnMeshUniforms {
     scale_min: f32,
     scale_max: f32,
     align_to_normal: u32,
-    _pad0: u32,
+    // Mirrors shaders/scatter_on_mesh.wgsl's Params — place_main runs over
+    // all `capacity` slots and parks [count, capacity) at zero scale, so a
+    // lowered count fader removes instances instead of leaving a stale
+    // drawn tail (render_scene draws buffer_size/32 unconditionally).
+    capacity: u32,
 }
 
 crate::primitive! {
@@ -67,6 +73,14 @@ crate::primitive! {
             label: "Count",
             ty: ParamType::Int,
             default: ParamValue::Float(256.0),
+            range: Some((0.0, 1_000_000.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("max_capacity"),
+            label: "Max Capacity",
+            ty: ParamType::Int,
+            default: ParamValue::Float(0.0), // 0 = size from count (back-compat)
             range: Some((0.0, 1_000_000.0)),
             enum_values: &[],
         },
@@ -103,7 +117,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "count/seed/scale_min/scale_max are port-shadows-param — wire an LFO or envelope into count to sweep flower density live, or into seed to re-roll the placement (a re-roll is a hard cut, not an animatable morph — the whole field re-samples). align_to_normal is NOT port-shadowed (a structural on/off choice, not a performance scalar): off gives every instance a random upright yaw (local +Y stays world-up); on additionally tilts +Y onto the sampled triangle's flat face normal, so instances lie flush against sloped or curved surfaces. `count` also declares the output's allocation capacity (array_output_capacity) — raising it live still clamps to whatever capacity the graph allocated at compile time, same clamp-to-allocated-capacity pattern as node.spawn_from_mesh's active_count vs max_capacity, but with a single param doing both jobs here. Triangles are read as flat [v0,v1,v2] triples (standard triangle-list layout); a trailing partial triangle (vertex_count % 3 != 0) is ignored.",
+    composition_notes: "count/seed/scale_min/scale_max are port-shadows-param — wire an LFO or envelope into count to sweep flower density live, or into seed to re-roll the placement (a re-roll is a hard cut, not an animatable morph — the whole field re-samples). align_to_normal is NOT port-shadowed (a structural on/off choice, not a performance scalar): off gives every instance a random upright yaw (local +Y stays world-up); on additionally tilts +Y onto the sampled triangle's flat face normal, so instances lie flush against sloped or curved surfaces. `max_capacity` (static, never bind it to a card) declares the output's allocation ceiling; `count` sweeps live beneath it and slots beyond count park at zero scale. Set max_capacity to the count card's max so the fader's whole range is real; when max_capacity is 0/absent the buffer sizes from count at build time (legacy single-param behavior). Triangles are read as flat [v0,v1,v2] triples (standard triangle-list layout); a trailing partial triangle (vertex_count % 3 != 0) is ignored.",
     examples: ["Garden"],
     picker: { label: "Scatter On Mesh", category: Atom },
     summary: "Scatters copies of an object across a mesh's surface — a field of instances placed and sized randomly but deterministically, area-weighted so they don't clump on small triangles.",
@@ -133,6 +147,13 @@ impl Primitive for ScatterOnMesh {
     ) -> Option<u32> {
         if port_name != "instances" {
             return None;
+        }
+        // Ceiling from max_capacity when set (> 0); otherwise size from
+        // count — the original single-param behavior, kept so presets
+        // without max_capacity load identically.
+        match params.get("max_capacity") {
+            Some(ParamValue::Float(n)) if *n >= 1.0 => return Some(n.round() as u32),
+            _ => {}
         }
         match params.get("count") {
             Some(ParamValue::Float(n)) => Some(n.round().max(0.0) as u32),
@@ -225,7 +246,7 @@ impl Primitive for ScatterOnMesh {
             scale_min,
             scale_max,
             align_to_normal: u32::from(align_to_normal),
-            _pad0: 0,
+            capacity,
         };
 
         let bindings = [
@@ -275,7 +296,7 @@ impl Primitive for ScatterOnMesh {
         gpu.native_enc.dispatch_compute(
             place_pipeline,
             &bindings,
-            [count.div_ceil(256), 1, 1],
+            [capacity.div_ceil(256), 1, 1],
             "node.scatter_on_mesh.place",
         );
     }
@@ -327,7 +348,7 @@ mod tests {
         let names: Vec<&str> = ScatterOnMesh::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
-            vec!["count", "seed", "scale_min", "scale_max", "align_to_normal"]
+            vec!["count", "max_capacity", "seed", "scale_min", "scale_max", "align_to_normal"]
         );
         let align = ScatterOnMesh::PARAMS
             .iter()
@@ -354,6 +375,27 @@ mod tests {
         assert!(
             !rt.required,
             "reset_trigger is optional (unwired ⇒ recompute every frame)"
+        );
+    }
+
+    /// Scene 2 bug (2026-07-11): capacity sized from `count` at build time
+    /// silently capped the density fader at whatever the card read when the
+    /// graph was built (slider 48, 18 drawn). `max_capacity` > 0 must win;
+    /// 0/absent falls back to count (Garden.json back-compat).
+    #[test]
+    fn max_capacity_overrides_count_as_ceiling() {
+        use crate::node_graph::effect_node::ParamValues;
+        let prim = ScatterOnMesh::new();
+        let node: &dyn EffectNode = &prim;
+        let mut params: ParamValues = ParamValues::default();
+        params.insert(Cow::Borrowed("count"), ParamValue::Float(18.0));
+        params.insert(Cow::Borrowed("max_capacity"), ParamValue::Float(64.0));
+        assert_eq!(node.array_output_capacity("instances", &params, &[]), Some(64));
+        params.insert(Cow::Borrowed("max_capacity"), ParamValue::Float(0.0));
+        assert_eq!(
+            node.array_output_capacity("instances", &params, &[]),
+            Some(18),
+            "max_capacity 0 must fall back to count sizing"
         );
     }
 
@@ -421,7 +463,7 @@ mod gpu_tests {
             scale_min,
             scale_max,
             align_to_normal: u32::from(align_to_normal),
-            _pad0: 0,
+            capacity,
         };
 
         let bindings = [
@@ -441,7 +483,7 @@ mod gpu_tests {
             enc.compute_memory_barrier_buffers();
         }
         let place = device.create_compute_pipeline(wgsl, "place_main", "scatter-place-test");
-        enc.dispatch_compute(&place, &bindings, [count.div_ceil(256), 1, 1], "place");
+        enc.dispatch_compute(&place, &bindings, [capacity.div_ceil(256), 1, 1], "place");
         enc.commit_and_wait_completed();
 
         let ptr = ibuf.mapped_ptr().expect("shared instance buffer");
@@ -542,7 +584,14 @@ mod gpu_tests {
             e1[0] * e2[1] - e1[1] * e2[0],
         ];
         let len = (raw[0] * raw[0] + raw[1] * raw[1] + raw[2] * raw[2]).sqrt();
-        let n = [raw[0] / len, raw[1] / len, raw[2] / len];
+        let mut n = [raw[0] / len, raw[1] / len, raw[2] / len];
+        // The shader orients the face normal to the hemisphere of the
+        // triangle's vertex normals (mk_vertex hardcodes +Y) — winding is
+        // not authoritative. This triangle winds downward, so the aligned
+        // side is the flipped one. Apply the same rule to the reference.
+        if n[1] < 0.0 {
+            n = [-n[0], -n[1], -n[2]];
+        }
 
         // Reconstruct R = Rz(rz)*Ry(ry)*Rx(rx) and check R*(0,1,0) ≈ n for
         // every instance — the decomposed Euler triple must actually
@@ -567,6 +616,70 @@ mod gpu_tests {
                     "instance {i} axis {k}: decomposed rotation's up vector {mapped_up:?} != triangle normal {n:?}"
                 );
             }
+        }
+    }
+
+    /// BUG found by the Scene 2 look-dev (2026-07-11): lowering `count`
+    /// below a previously-written value left the tail slots holding stale
+    /// placements, and render_scene draws every buffer slot — the density
+    /// fader appeared dead. place_main must park [count, capacity).
+    #[test]
+    fn slots_beyond_count_park_at_zero_scale() {
+        let device = crate::test_device();
+        let wgsl = include_str!("shaders/scatter_on_mesh.wgsl");
+        let vertices = quad_mesh();
+        let capacity = 64u32;
+
+        // First fill every slot at full count, then re-run with count=10 —
+        // the tail must be parked, not left stale.
+        let _full = dispatch_scatter(&device, wgsl, &vertices, capacity, capacity, 5, 1.0, 1.0, false);
+        let low = dispatch_scatter(&device, wgsl, &vertices, 10, capacity, 5, 1.0, 1.0, false);
+
+        for (i, inst) in low.iter().enumerate() {
+            if i < 10 {
+                assert!(inst.pos_scale[3] > 0.0, "instance {i} below count should be live");
+            } else {
+                assert_eq!(
+                    inst.pos_scale[3], 0.0,
+                    "slot {i} at/beyond count must park at zero scale, got {:?}",
+                    inst.pos_scale
+                );
+            }
+        }
+    }
+
+    /// BUG found by the Scene 2 look-dev (2026-07-11): on NEAR-FLAT faces —
+    /// the common terrain case — align_to_normal produced rotations that
+    /// made ~98% of instances vanish from the render (BlossomField showed
+    /// ~25 of 420 flowers; disabling align carpeted the field). Flat ground
+    /// with align ON must behave like align OFF: every instance finite and
+    /// upright (R·(0,1,0) ≈ (0,1,0)) for EVERY yaw the hash produces.
+    #[test]
+    fn align_on_flat_ground_keeps_instances_upright_and_finite() {
+        let device = crate::test_device();
+        let wgsl = include_str!("shaders/scatter_on_mesh.wgsl");
+        let vertices = quad_mesh();
+        let capacity = 256u32;
+
+        let instances = dispatch_scatter(&device, wgsl, &vertices, capacity, capacity, 11, 1.0, 1.0, true);
+
+        for (i, inst) in instances.iter().enumerate() {
+            for (k, v) in inst.pos_scale.iter().chain(inst.rot_pad.iter()).enumerate() {
+                assert!(v.is_finite(), "instance {i} field {k} is not finite: {v}");
+            }
+            let [rx, ry, rz, _] = inst.rot_pad;
+            let (cx, sx) = (rx.cos(), rx.sin());
+            let (cy, sy) = (ry.cos(), ry.sin());
+            let (cz, sz) = (rz.cos(), rz.sin());
+            let mapped_up = [
+                -cz * sy * sx - sz * cx,
+                -sz * sy * sx + cz * cx,
+                cy * sx,
+            ];
+            assert!(
+                (mapped_up[0].abs() < 1e-3) && ((mapped_up[1] - 1.0).abs() < 1e-3) && (mapped_up[2].abs() < 1e-3),
+                "instance {i}: flat ground must keep instances upright, got up={mapped_up:?} from euler=({rx}, {ry}, {rz})"
+            );
         }
     }
 }
