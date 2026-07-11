@@ -1,0 +1,1262 @@
+{
+  "version": 2,
+  "name": "ApricotWeather",
+  "description": "Scene 1 \u2014 a Japanese apricot (prunus mume) flowering-branch photogrammetry scan (cc0__japanese_apricot_prunus_mume.glb, ~1.4M tris across a sparse cluster of blossom sprigs, NOT a full standing tree) rendered inside node.render_scene alongside a ground plane, one shadow-casting sun, and depth fog. The glb ships 4 materials; material_index 0 is a 24-vertex reference/calibration cube sitting well outside the blossom cluster and is deliberately excluded \u2014 only materials 1/2/3 (the actual scan content) ship. Each surviving material becomes its own render_scene object (node.gltf_mesh_source material_index-filtered -> node.push_along_normals(sway) as mesh, node.gltf_texture_source as its base-color map, node.phong_material) sharing ONE node.transform_3d offset (the three materials' combined world-space bbox center) so they stay spatially coherent \u2014 the same per-material-object shape node_graph::gltf_import's assemble_import_graph builds for any multi-material glTF import, not a merged single-texture mesh (mesh_index=-1 WholeScene would sample all 3 UV atlases through one texture and visibly mismatch). sway_amount, sun_angle (orbited via cos/sin from a Value hub), fog_density and the camera's orbit/tilt/distance are the exposed performance surface; no LFOs or beat curves are wired into the graph.",
+  "presetMetadata": {
+    "id": "ApricotWeather",
+    "displayName": "Apricot Weather",
+    "category": "Geometry",
+    "oscPrefix": "apricotweather",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "swayAmount",
+        "name": "Sway Amount",
+        "min": 0.0,
+        "max": 0.6,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "sunAngle",
+        "name": "Sun Angle",
+        "min": -3.14159265,
+        "max": 3.14159265,
+        "defaultValue": 0.9,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "isAngle": true,
+        "section": "Sun"
+      },
+      {
+        "id": "fogDensity",
+        "name": "Fog Density",
+        "min": 0.0,
+        "max": 0.3,
+        "defaultValue": 0.04,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Atmosphere"
+      },
+      {
+        "id": "camOrbit",
+        "name": "Camera Orbit",
+        "min": -3.14159265,
+        "max": 3.14159265,
+        "defaultValue": 0.6,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "isAngle": true,
+        "section": "Camera"
+      },
+      {
+        "id": "camTilt",
+        "name": "Camera Tilt",
+        "min": -1.5,
+        "max": 1.5,
+        "defaultValue": 0.32,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "isAngle": true,
+        "section": "Camera"
+      },
+      {
+        "id": "camDistance",
+        "name": "Camera Distance",
+        "min": 5.0,
+        "max": 100.0,
+        "defaultValue": 26.205,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F1",
+        "section": "Camera"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "swayAmount",
+        "label": "Sway Amount",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "sway_1",
+          "param": "amount"
+        }
+      },
+      {
+        "id": "swayAmount",
+        "label": "Sway Amount",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "sway_2",
+          "param": "amount"
+        }
+      },
+      {
+        "id": "swayAmount",
+        "label": "Sway Amount",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "sway_3",
+          "param": "amount"
+        }
+      },
+      {
+        "id": "sunAngle",
+        "label": "Sun Angle",
+        "defaultValue": 0.9,
+        "target": {
+          "kind": "node",
+          "nodeId": "sun_angle",
+          "param": "value"
+        }
+      },
+      {
+        "id": "fogDensity",
+        "label": "Fog Density",
+        "defaultValue": 0.04,
+        "target": {
+          "kind": "node",
+          "nodeId": "atmosphere",
+          "param": "fog_density"
+        }
+      },
+      {
+        "id": "camOrbit",
+        "label": "Camera Orbit",
+        "defaultValue": 0.6,
+        "target": {
+          "kind": "node",
+          "nodeId": "cam",
+          "param": "orbit"
+        }
+      },
+      {
+        "id": "camTilt",
+        "label": "Camera Tilt",
+        "defaultValue": 0.32,
+        "target": {
+          "kind": "node",
+          "nodeId": "cam",
+          "param": "tilt"
+        }
+      },
+      {
+        "id": "camDistance",
+        "label": "Camera Distance",
+        "defaultValue": 26.205,
+        "target": {
+          "kind": "node",
+          "nodeId": "cam",
+          "param": "distance"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "never"
+    },
+    "stringParams": [
+      {
+        "id": "modelPath",
+        "name": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/cc0__japanese_apricot_prunus_mume.glb",
+        "isFilePicker": true,
+        "useDropdown": false
+      }
+    ],
+    "stringBindings": [
+      {
+        "id": "modelPath",
+        "label": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/cc0__japanese_apricot_prunus_mume.glb",
+        "target": {
+          "kind": "node",
+          "nodeId": "mesh_1",
+          "param": "path"
+        }
+      },
+      {
+        "id": "modelPath",
+        "label": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/cc0__japanese_apricot_prunus_mume.glb",
+        "target": {
+          "kind": "node",
+          "nodeId": "tex_1",
+          "param": "path"
+        }
+      },
+      {
+        "id": "modelPath",
+        "label": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/cc0__japanese_apricot_prunus_mume.glb",
+        "target": {
+          "kind": "node",
+          "nodeId": "mesh_2",
+          "param": "path"
+        }
+      },
+      {
+        "id": "modelPath",
+        "label": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/cc0__japanese_apricot_prunus_mume.glb",
+        "target": {
+          "kind": "node",
+          "nodeId": "tex_2",
+          "param": "path"
+        }
+      },
+      {
+        "id": "modelPath",
+        "label": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/cc0__japanese_apricot_prunus_mume.glb",
+        "target": {
+          "kind": "node",
+          "nodeId": "mesh_3",
+          "param": "path"
+        }
+      },
+      {
+        "id": "modelPath",
+        "label": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/cc0__japanese_apricot_prunus_mume.glb",
+        "target": {
+          "kind": "node",
+          "nodeId": "tex_3",
+          "param": "path"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.generator_input",
+      "nodeId": "input",
+      "handle": "input"
+    },
+    {
+      "id": 1,
+      "typeId": "node.orbit_camera",
+      "nodeId": "cam",
+      "handle": "cam",
+      "title": "Camera",
+      "params": {
+        "orbit": {
+          "type": "Float",
+          "value": 0.6
+        },
+        "tilt": {
+          "type": "Float",
+          "value": 0.32
+        },
+        "distance": {
+          "type": "Float",
+          "value": 26.205
+        },
+        "fov_y": {
+          "type": "Float",
+          "value": 0.8
+        },
+        "look_y": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "node.atmosphere",
+      "nodeId": "atmosphere",
+      "handle": "atmosphere",
+      "title": "Atmosphere",
+      "params": {
+        "fog_color_r": {
+          "type": "Float",
+          "value": 0.95
+        },
+        "fog_color_g": {
+          "type": "Float",
+          "value": 0.75
+        },
+        "fog_color_b": {
+          "type": "Float",
+          "value": 0.58
+        },
+        "fog_density": {
+          "type": "Float",
+          "value": 0.04
+        },
+        "height_falloff": {
+          "type": "Float",
+          "value": 0.3
+        },
+        "ambient_tint_r": {
+          "type": "Float",
+          "value": 1.05
+        },
+        "ambient_tint_g": {
+          "type": "Float",
+          "value": 0.98
+        },
+        "ambient_tint_b": {
+          "type": "Float",
+          "value": 0.92
+        }
+      }
+    },
+    {
+      "id": 3,
+      "typeId": "node.grid_mesh",
+      "nodeId": "ground_grid",
+      "handle": "ground_grid",
+      "title": "Ground Grid",
+      "params": {
+        "resolution_x": {
+          "type": "Int",
+          "value": 32
+        },
+        "resolution_y": {
+          "type": "Int",
+          "value": 32
+        },
+        "size_x": {
+          "type": "Float",
+          "value": 40.0
+        },
+        "size_y": {
+          "type": "Float",
+          "value": 40.0
+        }
+      }
+    },
+    {
+      "id": 4,
+      "typeId": "node.make_triangles",
+      "nodeId": "ground_tris",
+      "handle": "ground_tris",
+      "title": "Ground Triangulate",
+      "params": {
+        "src_cols": {
+          "type": "Int",
+          "value": 32
+        },
+        "src_rows": {
+          "type": "Int",
+          "value": 32
+        }
+      }
+    },
+    {
+      "id": 5,
+      "typeId": "node.phong_material",
+      "nodeId": "ground_mat",
+      "handle": "ground_mat",
+      "title": "Ground Material",
+      "params": {
+        "color_r": {
+          "type": "Float",
+          "value": 0.22
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.26
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.15
+        },
+        "ambient": {
+          "type": "Float",
+          "value": 0.15
+        }
+      }
+    },
+    {
+      "id": 13,
+      "typeId": "group",
+      "nodeId": "sun_group",
+      "handle": "Sun",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "light",
+              "portType": "Light"
+            }
+          ],
+          "params": []
+        },
+        "nodes": [
+          {
+            "id": 6,
+            "typeId": "node.value",
+            "nodeId": "sun_angle",
+            "handle": "sun_angle",
+            "title": "Sun Angle",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 0.9
+              }
+            }
+          },
+          {
+            "id": 7,
+            "typeId": "node.math",
+            "nodeId": "sun_angle_cos",
+            "handle": "sun_angle_cos",
+            "title": "cos(angle)",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 8
+              }
+            }
+          },
+          {
+            "id": 8,
+            "typeId": "node.math",
+            "nodeId": "sun_angle_sin",
+            "handle": "sun_angle_sin",
+            "title": "sin(angle)",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 7
+              }
+            }
+          },
+          {
+            "id": 9,
+            "typeId": "node.scale_offset_value",
+            "nodeId": "sun_pos_x",
+            "handle": "sun_pos_x",
+            "title": "Sun Pos X",
+            "params": {
+              "scale": {
+                "type": "Float",
+                "value": 19.058
+              },
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 10,
+            "typeId": "node.scale_offset_value",
+            "nodeId": "sun_pos_z",
+            "handle": "sun_pos_z",
+            "title": "Sun Pos Z",
+            "params": {
+              "scale": {
+                "type": "Float",
+                "value": 19.058
+              },
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 11,
+            "typeId": "node.light",
+            "nodeId": "sun_light",
+            "handle": "sun_light",
+            "title": "Sun",
+            "params": {
+              "mode": {
+                "type": "Enum",
+                "value": 0
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": 15.485
+              },
+              "aim_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "aim_y": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "aim_z": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "color_r": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "color_g": {
+                "type": "Float",
+                "value": 0.96
+              },
+              "color_b": {
+                "type": "Float",
+                "value": 0.88
+              },
+              "intensity": {
+                "type": "Float",
+                "value": 3.2
+              },
+              "cast_shadows": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "shadow_bias": {
+                "type": "Float",
+                "value": 0.002
+              }
+            }
+          },
+          {
+            "id": 12,
+            "typeId": "system.group_output",
+            "nodeId": "sun_group_out",
+            "handle": "output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 6,
+            "fromPort": "out",
+            "toNode": 7,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "out",
+            "toNode": 8,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "out",
+            "toNode": 9,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "out",
+            "toNode": 10,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "out",
+            "toNode": 11,
+            "toPort": "pos_x"
+          },
+          {
+            "fromNode": 10,
+            "fromPort": "out",
+            "toNode": 11,
+            "toPort": "pos_z"
+          },
+          {
+            "fromNode": 11,
+            "fromPort": "out",
+            "toNode": 12,
+            "toPort": "light"
+          }
+        ],
+        "tint": [
+          0.95,
+          0.75,
+          0.35,
+          1.0
+        ]
+      }
+    },
+    {
+      "id": 20,
+      "typeId": "group",
+      "nodeId": "object_1",
+      "handle": "Blossom Cluster A",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "vertices",
+              "portType": "Array(MeshVertex)"
+            },
+            {
+              "name": "material",
+              "portType": "Material"
+            },
+            {
+              "name": "baseColor",
+              "portType": "Texture2D"
+            },
+            {
+              "name": "transform",
+              "portType": "Transform"
+            }
+          ],
+          "params": []
+        },
+        "nodes": [
+          {
+            "id": 14,
+            "typeId": "node.gltf_mesh_source",
+            "nodeId": "mesh_1",
+            "handle": "mesh_1",
+            "title": "Blossom Cluster A Mesh",
+            "params": {
+              "mesh_index": {
+                "type": "Int",
+                "value": -1
+              },
+              "primitive_index": {
+                "type": "Int",
+                "value": -1
+              },
+              "material_index": {
+                "type": "Int",
+                "value": 1
+              },
+              "max_capacity": {
+                "type": "Int",
+                "value": 1554474
+              }
+            }
+          },
+          {
+            "id": 15,
+            "typeId": "node.push_along_normals",
+            "nodeId": "sway_1",
+            "handle": "sway_1",
+            "title": "Sway",
+            "params": {
+              "amount": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "field_bias": {
+                "type": "Float",
+                "value": 0.5
+              }
+            }
+          },
+          {
+            "id": 16,
+            "typeId": "node.gltf_texture_source",
+            "nodeId": "tex_1",
+            "handle": "tex_1",
+            "title": "Blossom Cluster A Texture",
+            "params": {
+              "texture_index": {
+                "type": "Int",
+                "value": 1
+              },
+              "color_space": {
+                "type": "Enum",
+                "value": 0
+              },
+              "width": {
+                "type": "Int",
+                "value": 1024
+              },
+              "height": {
+                "type": "Int",
+                "value": 1024
+              }
+            }
+          },
+          {
+            "id": 17,
+            "typeId": "node.phong_material",
+            "nodeId": "mat_1",
+            "handle": "mat_1",
+            "title": "Blossom Cluster A Material",
+            "params": {
+              "ambient": {
+                "type": "Float",
+                "value": 0.22
+              }
+            }
+          },
+          {
+            "id": 18,
+            "typeId": "node.transform_3d",
+            "nodeId": "xform_1",
+            "handle": "xform_1",
+            "title": "Position",
+            "params": {
+              "pos_x": {
+                "type": "Float",
+                "value": -1.23151278
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": 0.13849193
+              },
+              "pos_z": {
+                "type": "Float",
+                "value": 3.14419309
+              }
+            }
+          },
+          {
+            "id": 19,
+            "typeId": "system.group_output",
+            "nodeId": "object_1_out",
+            "handle": "output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 14,
+            "fromPort": "vertices",
+            "toNode": 15,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 15,
+            "fromPort": "out",
+            "toNode": 19,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 17,
+            "fromPort": "out",
+            "toNode": 19,
+            "toPort": "material"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "out",
+            "toNode": 19,
+            "toPort": "baseColor"
+          },
+          {
+            "fromNode": 18,
+            "fromPort": "transform",
+            "toNode": 19,
+            "toPort": "transform"
+          }
+        ],
+        "tint": [
+          0.65,
+          0.5,
+          0.9,
+          1.0
+        ]
+      }
+    },
+    {
+      "id": 27,
+      "typeId": "group",
+      "nodeId": "object_2",
+      "handle": "Blossom Cluster B",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "vertices",
+              "portType": "Array(MeshVertex)"
+            },
+            {
+              "name": "material",
+              "portType": "Material"
+            },
+            {
+              "name": "baseColor",
+              "portType": "Texture2D"
+            },
+            {
+              "name": "transform",
+              "portType": "Transform"
+            }
+          ],
+          "params": []
+        },
+        "nodes": [
+          {
+            "id": 21,
+            "typeId": "node.gltf_mesh_source",
+            "nodeId": "mesh_2",
+            "handle": "mesh_2",
+            "title": "Blossom Cluster B Mesh",
+            "params": {
+              "mesh_index": {
+                "type": "Int",
+                "value": -1
+              },
+              "primitive_index": {
+                "type": "Int",
+                "value": -1
+              },
+              "material_index": {
+                "type": "Int",
+                "value": 2
+              },
+              "max_capacity": {
+                "type": "Int",
+                "value": 1783320
+              }
+            }
+          },
+          {
+            "id": 22,
+            "typeId": "node.push_along_normals",
+            "nodeId": "sway_2",
+            "handle": "sway_2",
+            "title": "Sway",
+            "params": {
+              "amount": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "field_bias": {
+                "type": "Float",
+                "value": 0.5
+              }
+            }
+          },
+          {
+            "id": 23,
+            "typeId": "node.gltf_texture_source",
+            "nodeId": "tex_2",
+            "handle": "tex_2",
+            "title": "Blossom Cluster B Texture",
+            "params": {
+              "texture_index": {
+                "type": "Int",
+                "value": 2
+              },
+              "color_space": {
+                "type": "Enum",
+                "value": 0
+              },
+              "width": {
+                "type": "Int",
+                "value": 1024
+              },
+              "height": {
+                "type": "Int",
+                "value": 1024
+              }
+            }
+          },
+          {
+            "id": 24,
+            "typeId": "node.phong_material",
+            "nodeId": "mat_2",
+            "handle": "mat_2",
+            "title": "Blossom Cluster B Material",
+            "params": {
+              "ambient": {
+                "type": "Float",
+                "value": 0.22
+              }
+            }
+          },
+          {
+            "id": 25,
+            "typeId": "node.transform_3d",
+            "nodeId": "xform_2",
+            "handle": "xform_2",
+            "title": "Position",
+            "params": {
+              "pos_x": {
+                "type": "Float",
+                "value": -1.23151278
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": 0.13849193
+              },
+              "pos_z": {
+                "type": "Float",
+                "value": 3.14419309
+              }
+            }
+          },
+          {
+            "id": 26,
+            "typeId": "system.group_output",
+            "nodeId": "object_2_out",
+            "handle": "output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 21,
+            "fromPort": "vertices",
+            "toNode": 22,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 22,
+            "fromPort": "out",
+            "toNode": 26,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 24,
+            "fromPort": "out",
+            "toNode": 26,
+            "toPort": "material"
+          },
+          {
+            "fromNode": 23,
+            "fromPort": "out",
+            "toNode": 26,
+            "toPort": "baseColor"
+          },
+          {
+            "fromNode": 25,
+            "fromPort": "transform",
+            "toNode": 26,
+            "toPort": "transform"
+          }
+        ],
+        "tint": [
+          0.45,
+          0.6,
+          0.85,
+          1.0
+        ]
+      }
+    },
+    {
+      "id": 34,
+      "typeId": "group",
+      "nodeId": "object_3",
+      "handle": "Blossom Cluster C",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "vertices",
+              "portType": "Array(MeshVertex)"
+            },
+            {
+              "name": "material",
+              "portType": "Material"
+            },
+            {
+              "name": "baseColor",
+              "portType": "Texture2D"
+            },
+            {
+              "name": "transform",
+              "portType": "Transform"
+            }
+          ],
+          "params": []
+        },
+        "nodes": [
+          {
+            "id": 28,
+            "typeId": "node.gltf_mesh_source",
+            "nodeId": "mesh_3",
+            "handle": "mesh_3",
+            "title": "Blossom Cluster C Mesh",
+            "params": {
+              "mesh_index": {
+                "type": "Int",
+                "value": -1
+              },
+              "primitive_index": {
+                "type": "Int",
+                "value": -1
+              },
+              "material_index": {
+                "type": "Int",
+                "value": 3
+              },
+              "max_capacity": {
+                "type": "Int",
+                "value": 963726
+              }
+            }
+          },
+          {
+            "id": 29,
+            "typeId": "node.push_along_normals",
+            "nodeId": "sway_3",
+            "handle": "sway_3",
+            "title": "Sway",
+            "params": {
+              "amount": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "field_bias": {
+                "type": "Float",
+                "value": 0.5
+              }
+            }
+          },
+          {
+            "id": 30,
+            "typeId": "node.gltf_texture_source",
+            "nodeId": "tex_3",
+            "handle": "tex_3",
+            "title": "Blossom Cluster C Texture",
+            "params": {
+              "texture_index": {
+                "type": "Int",
+                "value": 3
+              },
+              "color_space": {
+                "type": "Enum",
+                "value": 0
+              },
+              "width": {
+                "type": "Int",
+                "value": 1024
+              },
+              "height": {
+                "type": "Int",
+                "value": 1024
+              }
+            }
+          },
+          {
+            "id": 31,
+            "typeId": "node.phong_material",
+            "nodeId": "mat_3",
+            "handle": "mat_3",
+            "title": "Blossom Cluster C Material",
+            "params": {
+              "ambient": {
+                "type": "Float",
+                "value": 0.22
+              }
+            }
+          },
+          {
+            "id": 32,
+            "typeId": "node.transform_3d",
+            "nodeId": "xform_3",
+            "handle": "xform_3",
+            "title": "Position",
+            "params": {
+              "pos_x": {
+                "type": "Float",
+                "value": -1.23151278
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": 0.13849193
+              },
+              "pos_z": {
+                "type": "Float",
+                "value": 3.14419309
+              }
+            }
+          },
+          {
+            "id": 33,
+            "typeId": "system.group_output",
+            "nodeId": "object_3_out",
+            "handle": "output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 28,
+            "fromPort": "vertices",
+            "toNode": 29,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 29,
+            "fromPort": "out",
+            "toNode": 33,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 31,
+            "fromPort": "out",
+            "toNode": 33,
+            "toPort": "material"
+          },
+          {
+            "fromNode": 30,
+            "fromPort": "out",
+            "toNode": 33,
+            "toPort": "baseColor"
+          },
+          {
+            "fromNode": 32,
+            "fromPort": "transform",
+            "toNode": 33,
+            "toPort": "transform"
+          }
+        ],
+        "tint": [
+          0.9,
+          0.55,
+          0.6,
+          1.0
+        ]
+      }
+    },
+    {
+      "id": 35,
+      "typeId": "node.render_scene",
+      "nodeId": "scene",
+      "handle": "scene",
+      "title": "Render Scene",
+      "params": {
+        "objects": {
+          "type": "Int",
+          "value": 4
+        },
+        "lights": {
+          "type": "Int",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 36,
+      "typeId": "system.final_output",
+      "nodeId": "out",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 3,
+      "fromPort": "vertices",
+      "toNode": 4,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 35,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "atmosphere",
+      "toNode": 35,
+      "toPort": "atmosphere"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "light",
+      "toNode": 35,
+      "toPort": "light_0"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 35,
+      "toPort": "mesh_0"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 35,
+      "toPort": "material_0"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "vertices",
+      "toNode": 35,
+      "toPort": "mesh_1"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "material",
+      "toNode": 35,
+      "toPort": "material_1"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "baseColor",
+      "toNode": 35,
+      "toPort": "base_color_map_1"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "transform",
+      "toNode": 35,
+      "toPort": "transform_1"
+    },
+    {
+      "fromNode": 27,
+      "fromPort": "vertices",
+      "toNode": 35,
+      "toPort": "mesh_2"
+    },
+    {
+      "fromNode": 27,
+      "fromPort": "material",
+      "toNode": 35,
+      "toPort": "material_2"
+    },
+    {
+      "fromNode": 27,
+      "fromPort": "baseColor",
+      "toNode": 35,
+      "toPort": "base_color_map_2"
+    },
+    {
+      "fromNode": 27,
+      "fromPort": "transform",
+      "toNode": 35,
+      "toPort": "transform_2"
+    },
+    {
+      "fromNode": 34,
+      "fromPort": "vertices",
+      "toNode": 35,
+      "toPort": "mesh_3"
+    },
+    {
+      "fromNode": 34,
+      "fromPort": "material",
+      "toNode": 35,
+      "toPort": "material_3"
+    },
+    {
+      "fromNode": 34,
+      "fromPort": "baseColor",
+      "toNode": 35,
+      "toPort": "base_color_map_3"
+    },
+    {
+      "fromNode": 34,
+      "fromPort": "transform",
+      "toNode": 35,
+      "toPort": "transform_3"
+    },
+    {
+      "fromNode": 35,
+      "fromPort": "color",
+      "toNode": 36,
+      "toPort": "in"
+    }
+  ]
+}
