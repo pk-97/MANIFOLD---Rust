@@ -36,6 +36,8 @@
 //! (`docs/PRESET_UNIFICATION_PLAN.md` Phases 1b/4-struct) progresses. This is the
 //! first shared seam: the per-frame apply + override-and-clear.
 
+use ahash::AHashMap;
+
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::ParamManifest;
@@ -59,6 +61,17 @@ pub struct BoundGraph {
     /// default at construction so a freshly-built graph only writes the slots that
     /// already diverge from their default.
     pub cache: LastAppliedCache,
+    /// The fused view's retarget map: `(original node_id, param)` →
+    /// `(fused node_id, n{i}_field)`. Empty on an unfused graph (the live editor
+    /// path). When a card renders FUSED, an inner-node param edit / undo targets a
+    /// node that was collapsed into the fused kernel and so no longer appears in the
+    /// `node_map` [`apply_inner_param_overrides`] resolves against — the override
+    /// silently no-ops and the stale baked value keeps rendering until an unrelated
+    /// rebuild (BUG-006). [`apply_inner_overrides`](Self::apply_inner_overrides)
+    /// consults this on a `node_map` miss to route the value onto the fused field,
+    /// the same repoint the card + user bindings already go through. Populated by
+    /// the chain builder from `view.fused_retarget` right after construction.
+    pub fused_retarget: AHashMap<(String, String), (NodeId, String)>,
 }
 
 impl BoundGraph {
@@ -70,7 +83,11 @@ impl BoundGraph {
         let mut cache = LastAppliedCache::new();
         cache.seed_from_bindings(&bindings);
         apply_binding_defaults(&bindings, graph, None);
-        Self { bindings, cache }
+        Self {
+            bindings,
+            cache,
+            fused_retarget: AHashMap::default(),
+        }
     }
 
     /// Push the host's outer-card values through the bindings, skipping slots whose
@@ -96,7 +113,7 @@ impl BoundGraph {
         node_map: &[(NodeId, NodeInstanceId)],
         def: Option<&EffectGraphDef>,
     ) {
-        apply_inner_param_overrides(def, node_map, graph);
+        apply_inner_param_overrides(def, node_map, graph, &self.fused_retarget);
         self.cache.clear();
     }
 }
@@ -111,23 +128,50 @@ impl BoundGraph {
 /// whole graph; both feed the same routine. Callers that also drive bindings
 /// should use [`BoundGraph::apply_inner_overrides`] so the cache clear comes for
 /// free.
+///
+/// `fused_retarget` maps `(original node_id, param)` → `(fused node_id, field)`
+/// for a card that renders fused. A def node that was collapsed into a fused
+/// kernel no longer appears in `node_map`; without the retarget the loop would
+/// silently `continue` past it, so the edited value never reaches the live kernel
+/// (BUG-006 — the def reverts on undo but the fused kernel keeps rendering the old
+/// baked value until an unrelated rebuild). On a `node_map` miss each of the
+/// node's params is routed through the retarget onto the fused kernel's uniform
+/// field — the same repoint the card + user bindings already take. Empty on an
+/// unfused graph, so the fast path is a plain per-node `node_map` hit.
 pub fn apply_inner_param_overrides(
     def: Option<&EffectGraphDef>,
     node_map: &[(NodeId, NodeInstanceId)],
     graph: &mut Graph,
+    fused_retarget: &AHashMap<(String, String), (NodeId, String)>,
 ) {
     let Some(def) = def else { return };
     let Ok(flat) = manifold_core::flatten::flatten_groups(def) else {
         return;
     };
     for node in &flat.nodes {
-        let Some((_, inst)) = node_map.iter().find(|(nid, _)| *nid == node.node_id) else {
-            continue;
-        };
-        for (name, value) in &node.params {
-            // `set_param` (not unchecked) so a dynamic-port param re-runs the
-            // node's `reconfigure` hook, matching a live slider write.
-            let _ = graph.set_param(*inst, name, value.clone().into());
+        if let Some((_, inst)) = node_map.iter().find(|(nid, _)| *nid == node.node_id) {
+            for (name, value) in &node.params {
+                // `set_param` (not unchecked) so a dynamic-port param re-runs the
+                // node's `reconfigure` hook, matching a live slider write.
+                let _ = graph.set_param(*inst, name, value.clone().into());
+            }
+        } else if !fused_retarget.is_empty() {
+            // Node was fused away: its stable id is gone from the live graph.
+            // Route each param onto the fused kernel's uniform field so an inner
+            // value edit / undo lands on the running kernel instead of no-op'ing
+            // until an unrelated rebuild (BUG-006).
+            let src = node.node_id.as_str();
+            for (name, value) in &node.params {
+                let Some((fused_id, field)) =
+                    fused_retarget.get(&(src.to_string(), name.clone()))
+                else {
+                    continue;
+                };
+                let Some((_, inst)) = node_map.iter().find(|(nid, _)| nid == fused_id) else {
+                    continue;
+                };
+                let _ = graph.set_param(*inst, field, value.clone().into());
+            }
         }
     }
 }
@@ -267,6 +311,66 @@ mod tests {
             ParamValue::Float(0.3),
             "bound card value must re-assert over the def override after the \
              cache clear (the structural OilyFluid Speed fix)",
+        );
+    }
+
+    /// A def node with `node_id` carrying a single `scale` param — stands in for
+    /// the unfused editing surface the override reads.
+    fn def_scale_named(node_id: &str, value: f32) -> EffectGraphDef {
+        let mut d = def_with_scale(value);
+        d.nodes[0].node_id = NodeId::new(node_id);
+        d.nodes[0].handle = Some(node_id.to_string());
+        d
+    }
+
+    /// BUG-006: when a card renders fused, its inner nodes are collapsed into one
+    /// kernel and drop out of `node_map`. An in-place inner-param override (a value
+    /// edit or an undo that bumps `graph_version` without a rebuild) must still
+    /// reach the live kernel by routing through the fused view's retarget map —
+    /// otherwise the edited def value silently never renders until an unrelated
+    /// rebuild bakes it in.
+    #[test]
+    fn inner_override_routes_fused_away_node_through_retarget() {
+        let mut graph = Graph::new();
+        // The single fused kernel that replaced the card's atoms. Its uniform
+        // field for the collapsed `gain` node's `scale` param is modelled here as
+        // the AffineTransform `scale` param (a real fused field is `n{i}_scale`).
+        let fused = graph.add_node_named("fused", Box::new(AffineTransform::new()));
+        graph.set_node_id(fused, NodeId::new("fused_region_0"));
+        // node_map holds ONLY surviving/fused nodes — the collapsed `gain` node is
+        // absent, exactly as after `fuse_view_for`.
+        let node_map = vec![(NodeId::new("fused_region_0"), fused)];
+
+        // Seed the fused field to a known pre-edit value.
+        graph
+            .set_param(fused, "scale", ParamValue::Float(0.1))
+            .unwrap();
+
+        let def = def_scale_named("gain", 0.9);
+
+        // Without a retarget (the pre-fix / unfused behaviour) the override can't
+        // find `gain` in node_map and no-ops — the reproduction of the bug.
+        let mut unfused = BoundGraph::new(vec![], &mut graph);
+        unfused.apply_inner_overrides(&mut graph, &node_map, Some(&def));
+        assert_eq!(
+            scale_of(&graph, fused),
+            ParamValue::Float(0.1),
+            "sanity: with no retarget the fused-away override cannot land (the bug)",
+        );
+
+        // With the retarget populated (the fused chain path) the override routes
+        // `gain.scale` onto the fused kernel's field and the edit lands.
+        let mut bound = BoundGraph::new(vec![], &mut graph);
+        bound.fused_retarget.insert(
+            ("gain".to_string(), "scale".to_string()),
+            (NodeId::new("fused_region_0"), "scale".to_string()),
+        );
+        bound.apply_inner_overrides(&mut graph, &node_map, Some(&def));
+        assert_eq!(
+            scale_of(&graph, fused),
+            ParamValue::Float(0.9),
+            "fused-away inner-param override must reach the live kernel via the \
+             retarget map (BUG-006)",
         );
     }
 }

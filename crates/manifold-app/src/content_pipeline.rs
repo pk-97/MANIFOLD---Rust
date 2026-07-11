@@ -2294,24 +2294,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             if self.clip_thumb_cache.is_some() {
                 const CLIP_ATLAS_SAVE_DEBOUNCE: u64 = 300; // ~5 s at 60 fps
                 if self.clip_atlas_readback.is_pending() {
-                    if let Some(bytes) = self.clip_atlas_readback.try_read()
+                    // try_read_packed() is a plain memcpy off the shared buffer
+                    // (no per-pixel work) — the f16→u8 convert + per-cell slice
+                    // that try_read() used to do inline here now runs on the
+                    // clip-thumb disk worker thread via store_atlas(), off the
+                    // content thread (BUG-035: that scalar conversion over the
+                    // full 8192×1152 Rgba16Float atlas cost ~58ms/cycle here).
+                    if let Some(bytes) = self.clip_atlas_readback.try_read_packed()
                         && let Some((layout_snap, hashes_snap)) =
                             self.clip_atlas_persist_pending.take()
+                        && let Some(cache_disk) = self.clip_thumb_cache.as_ref()
                     {
-                        let strips = crate::clip_thumb_cache::slice_atlas_for_store(
-                            &bytes,
+                        cache_disk.store_atlas(
+                            bytes,
                             CLIP_ATLAS_W,
-                            &layout_snap,
-                            &hashes_snap,
+                            layout_snap,
+                            hashes_snap,
                             CLIP_ATLAS_COLS,
-                            CLIP_ATLAS_CELL_W,
-                            CLIP_ATLAS_CELL_H,
                         );
-                        if let Some(cache_disk) = self.clip_thumb_cache.as_ref() {
-                            for (hash, cells) in strips {
-                                cache_disk.store(hash, cells);
-                            }
-                        }
                     }
                 } else {
                     if (published || restored) && self.clip_atlas_persist_due == 0 {

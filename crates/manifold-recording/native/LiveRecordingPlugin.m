@@ -73,6 +73,13 @@ typedef struct
     int                                     fpsNum;
     int                                     videoFrameCount;      // submitted (may overcount)
     atomic_int                              videoFramesAppended;  // actually appended by encoder
+    // BUG-084/BUG-086 instrument: sample-frames dropped by the
+    // isReadyForMoreMediaData backpressure gate below, invisible before this
+    // (the caller returned LR_OK on drop, same as success). Atomic — safe
+    // to poll live from the Rust side via LiveRecorder_GetAudioFramesDropped
+    // while recording is in progress (the handle is freed at Finalize, so
+    // callers must stop polling once they call LiveRecorder_Finalize).
+    atomic_int                              audioFramesDropped;
     int                                     audioSampleRate;
     int                                     audioChannels;
     BOOL                                    isHDR;
@@ -104,6 +111,7 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
         state->device = device;
         state->commandQueue = [device newCommandQueue];
         atomic_init(&state->videoFramesAppended, 0);
+        atomic_init(&state->audioFramesDropped, 0);
         state->lastVideoPTSValue = -1;
         state->ptsClampCount = 0;
         state->appendQueue = dispatch_queue_create("com.manifold.recording.append",
@@ -544,7 +552,18 @@ int LiveRecorder_WriteAudioSamples(void* handle, const float* samples,
         }
 
         if (!state->audioInput.isReadyForMoreMediaData)
+        {
+            // BUG-084/BUG-086: this used to return LR_OK (success) with zero
+            // visibility — the video path at least logs
+            // (`videoFramesAppended` above); this drop had neither a log nor
+            // a counter until now. Count sample-frames (not raw samples) so
+            // the unit matches `videoFramesAppended`/`WriteAudioSamples`'s
+            // own `frameCount` below.
+            atomic_fetch_add(&state->audioFramesDropped, sampleCount / state->audioChannels);
+            NSLog(@"[LiveRecorder] Audio backpressure — dropped %d sample-frames at %.3fs",
+                  sampleCount / state->audioChannels, elapsedSeconds);
             return LR_OK; // drop samples rather than block
+        }
 
         int frameCount = sampleCount / state->audioChannels;
         size_t dataSize = (size_t)(sampleCount * sizeof(float));
@@ -648,6 +667,20 @@ int LiveRecorder_WriteAudioSamples(void* handle, const float* samples,
 
         return LR_OK;
     }
+}
+
+// -- GetAudioFramesDropped ------------------------------------------------------
+
+// BUG-084/BUG-086 instrument: live poll of the backpressure-drop counter
+// above. Atomic read — safe from any thread while the handle is valid.
+// Callers must stop polling once LiveRecorder_Finalize has been called on
+// this handle (it frees the state).
+int LiveRecorder_GetAudioFramesDropped(void* handle)
+{
+    if (handle == NULL)
+        return 0;
+    LiveRecorderState* state = (LiveRecorderState*)handle;
+    return atomic_load(&state->audioFramesDropped);
 }
 
 // -- Finalize -----------------------------------------------------------------

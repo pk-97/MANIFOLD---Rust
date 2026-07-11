@@ -35,6 +35,14 @@ pub struct LiveRecordingSession {
     start_time: Instant,
     frames_submitted: u32,
     frames_dropped: u32,
+    /// Send-safe copy of the native encoder handle (also moved into the
+    /// recording thread's closure). Lets `audio_frames_dropped()` poll the
+    /// native atomic counter live, from the content thread, while the
+    /// recording thread owns the "real" handle for encode calls — both are
+    /// just integers naming the same `LiveRecorderState*`, and the counter
+    /// read is atomic. Invalid once `stop()` finalizes (frees native state);
+    /// only read this before calling `shutdown()`.
+    encoder_ptr: usize,
     output_path: String,
     _audio_capture: Option<manifold_audio::capture::AudioCaptureDevice>,
 }
@@ -198,6 +206,7 @@ impl LiveRecordingSession {
             start_time,
             frames_submitted: 0,
             frames_dropped: 0,
+            encoder_ptr,
             output_path,
             _audio_capture: audio_capture,
         })
@@ -300,6 +309,20 @@ impl LiveRecordingSession {
         self.frames_dropped
     }
 
+    /// Number of audio sample-frames dropped so far by the native encoder's
+    /// backpressure gate (distinct from `frames_dropped()`, which is video
+    /// pool exhaustion). BUG-084's counter; also an instrument for BUG-086's
+    /// unexplained audio-duration shortfall — a non-zero reading during a
+    /// take that falls short says the backpressure gate is (at least part
+    /// of) the cause, a zero reading rules it out for that take. Polls a
+    /// native atomic counter live — safe to call at any point while the
+    /// session is active; do not call after `stop()` has returned.
+    pub fn audio_frames_dropped(&self) -> u32 {
+        let handle = self.encoder_ptr as *mut c_void;
+        let n = unsafe { ffi::LiveRecorder_GetAudioFramesDropped(handle) };
+        n.max(0) as u32
+    }
+
     /// Whether the session is active.
     pub fn is_active(&self) -> bool {
         !self.stop.load(Ordering::Relaxed)
@@ -307,6 +330,9 @@ impl LiveRecordingSession {
 
     /// Stop recording, drain remaining frames, finalize the MP4.
     pub fn stop(mut self) -> RecordingResult {
+        // Read the native audio-drop counter BEFORE shutdown() — finalize
+        // frees the native state, and the handle is invalid after that.
+        let audio_frames_dropped = self.audio_frames_dropped();
         let (frames_encoded, frames_failed) = self.shutdown();
 
         let duration = self.start_time.elapsed().as_secs_f64();
@@ -314,7 +340,7 @@ impl LiveRecordingSession {
 
         log::info!(
             "[LiveRecording] Stopped: {frames_encoded} encoded, {} dropped, \
-             {duration:.1}s -> {}",
+             {audio_frames_dropped} audio frames dropped, {duration:.1}s -> {}",
             self.frames_dropped,
             self.output_path,
         );
@@ -323,6 +349,7 @@ impl LiveRecordingSession {
             output_path: self.output_path.clone(),
             frames_recorded: frames_encoded,
             frames_dropped: self.frames_dropped,
+            audio_frames_dropped,
             duration_seconds: duration,
         }
     }

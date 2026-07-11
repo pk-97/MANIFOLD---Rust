@@ -1,6 +1,6 @@
 # Mesh Deform & Curve Geometry — organic motion for imported and procedural meshes
 
-**Status:** IN PROGRESS — P1 (growth core) + P2 (shape deformers) SHIPPED 2026-07-11 (`feat/mesh-deform`); all atoms on the freeze codegen path per decided #10. P3 (curve→mesh) + P4 (scatter + glTF fit) remain. · 2026-07-10 · Fable (with Peter in the room)
+**Status:** SHIPPED 2026-07-11 (`feat/mesh-deform`) — all four phases landed. P1 growth core (`mesh_ramp`, `push_along_normals`, `facet_normals`) + P2 shape deformers (`bend/twist/taper/morph_mesh`) on the freeze codegen path (decided #10); P3 curve→mesh builders (`revolve/extrude/tube`) + P4 `scatter_on_mesh` (multi-pass, hand-authored per the #10 scope boundary) + `gltf_mesh_source` fit/recenter extension. Demos Breathe/TwistColumn/Vine/Lathe/Garden all L2. · 2026-07-10 · Fable (with Peter in the room)
 **Prerequisites:** none hard — `node.render_scene` (REALTIME_3D P1) and SCENE_BUILD P1–P3 are shipped; every anchor below re-verifies at phase entry.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -257,7 +257,7 @@ at the END of P4 only. Demo renders use the `render-generator-preset` harness
   fuses the four kernels into one dispatch with a mode switch (D3 forbids the enum
   even disguised as an implementation detail); touching P1 atoms except the
   weight-read helper if extracted.
-- **P3 — Curve→mesh: `revolve_curve` + `extrude_curve` + `tube_from_path`.**
+- **P3 — Curve→mesh: `revolve_curve` + `extrude_curve` + `tube_from_path`. ✅ SHIPPED 2026-07-11 (`41553f15`, codegen path, BufferGather like triangulate_grid).**
   *Entry:* P1–P2 landed; anchors `mesh_common.rs:136` (CurvePoint convention),
   `triangulate_grid.rs` re-verified. *Read-back:* §2 D5/D6, the Duocylinder preset
   end-to-end (the grid-family precedent), `pack_curve_xy.rs`. *Deliverables:* three
@@ -272,7 +272,7 @@ at the END of P4 only. Demo renders use the `render-generator-preset` harness
   → vine grows over 4 bars. *Forbidden:* emitting triangle lists directly from
   builders (D5); parallel-transport frames (Deferred #4 — v1 is Y-reference,
   documented); end caps (Deferred #3).
-- **P4 — Placement + import polish: `scatter_on_mesh` + `gltf_mesh_source` fit.**
+- **P4 — Placement + import polish: `scatter_on_mesh` + `gltf_mesh_source` fit. ✅ SHIPPED 2026-07-11 (`4615e75c`; scatter multi-pass hand-authored per #10 scope boundary; fit/recenter parse-time).**
   *Entry:* P1–P3 landed; `spawn_from_mesh.rs` 3-pass shape + `gltf_mesh_source.rs`
   param block re-verified. *Read-back:* §2 D7/D8, spawn_from_mesh's scan/place
   kernels, DESIGN_DOC_STANDARD §5 round-trip gate. *Deliverables:* `scatter_on_mesh`
@@ -343,3 +343,12 @@ flowers) is exercised by a phase demo except "dissolve" (ships today via
 5. **Non-ramp weights producers** (texture-sampled weights, per-region audio bands).
    The `weights` port is already the seam. *Trigger:* first ask for "only the petals
    react".
+6. **Depth-correct multi-pass 3D compositing** (a `render_scene` per-object instancing
+   port, or a shared-depth alpha-over compositor for multiple render passes). Surfaced
+   by P4's Garden demo: terrain (`render_scene`) and scattered flowers
+   (`render_instanced_3d_mesh`) are two separate passes composited with `node.mix`
+   Max-blend, so there is no shared depth buffer — a flower fully behind a hill crest
+   would still draw. Reads correct in the demo (flowers on the visible surface, brighter
+   than terrain) but isn't depth-correct by construction. *Trigger:* a preset needs
+   scattered instances and scene geometry to occlude each other correctly on camera, or
+   Peter reports a flower drawing through terrain at the rig.

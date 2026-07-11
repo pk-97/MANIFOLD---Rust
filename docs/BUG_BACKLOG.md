@@ -44,6 +44,8 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-113 | **param-manifest-get-bench-flakes-under-parallel-load** | `manifold-core::params::tests::bench_resolve` asserts a hard `<= 271.5 ns/op` wall-clock ceiling on `ParamManifest::get`; under `cargo nextest run --workspace`'s parallel thread pool (esp. right after a heavy build or another CPU-saturating process), measured ns/op climbs past the ceiling (333.25, then 398.98 ns/op observed 2026-07-11) and the test fails, while an isolated re-run consistently passes (215.02 ns/op) and a clean full-workspace re-run passes too (3052/3052). Found landing wave2 lane C (BUG-083/084) — confirmed unrelated (file untouched by that change). Fix shape: either give the ceiling real margin for parallel/loaded runs, retry-on-first-failure before asserting, or move this out of the default nextest sweep (e.g. behind a feature, like the GPU-proofs convention) since a wall-clock ceiling assertion is inherently contention-sensitive and doesn't belong in a "safe to run freely" default suite. LOW (flaky-gate annoyance, not a functional regression — the underlying code is fine). |
+| BUG-112 | **manifold-ui-all-targets-clippy-debt-audio-setup-panel-graph-canvas-tests** | `cargo clippy -p manifold-ui --all-targets -- -D warnings` fails on two pre-existing, unrelated lints: `needless_borrows_for_generic_args` (`audio_setup_panel.rs:2494,2498`, `LayerId::new(&format!(...))`) and `useless_vec` (`graph_canvas/tests.rs:2391`, a `vec![...]` that could be an array). Both files byte-identical to HEAD, last touched by unrelated commit `f1a35270`. Found 2026-07-11 isolating wave2 lane C's (BUG-083/084) scoped clippy gate — same "pre-existing test-target debt surfaces under `--all-targets`" pattern as BUG-110. Fix shape: drop the `&` before each `format!(...)` arg; replace the `vec![...]` literal with an array. LOW (lint-only, `--tests`/`--all-targets` scope; the plain-lib clippy gate this session actually ran is clean). |
 | BUG-110 | **osc-receiver-test-type-complexity-clippy-debt** | `manifold-playback`'s `--tests`/`--all-targets` clippy gate fails on two `clippy::type_complexity` hits in `osc_receiver.rs:366,368` (`Arc<Mutex<Vec<(String, Vec<f32>)>>>`), unrelated to and pre-dating `bug-wave1-lane-d-test-hygiene` (byte-identical to base commit `dd31cde4`; last touched by an unrelated "F3" session). Found 2026-07-11 isolating BUG-088/072's gate. Fix shape: factor the type into a local `type` alias at both sites. LOW (lint-only). |
 | BUG-108 | **effect-card-add-effect-button-floats-over-sectioned-rows** | On a glTF-imported scene's effect card (SCENE_BUILD P3 sections + the P3b AUDIO TRIGGERS section stacked above it), the "+ Add Effect" bar renders MID-CARD, overlapping the Sun Y/Sun Z rows, instead of sitting at the bottom below all rows; the card reads as visually broken (Peter, rig screenshot 2026-07-10). NOT investigated (Peter: log, don't fix now). Suspects: (a) the "+ Add Effect" button's y-anchor is computed from a card content-height that doesn't count the new P3 section-header rows (would be a SCENE_BUILD P3 regression); (b) the P3b `AUDIO TRIGGERS` inspector section landing at the same time shifted the composite-panel layout the button positions against; (c) a sticky/overlay button pinned while the sectioned content scrolled under it. First seen — and MISSED — in this session's own P3/P4 verification PNGs (the orchestrator saw the floating button and wrote it off as fixture noise). SEPARATE from BUG-107 (the mangled "ừ" section-marker glyphs = font-coverage bug, triggered by P3's section markers). MED (card is the live performance surface; a broken authoring card mid-set is a real hazard). Fix shape: re-derive the button anchor from the true rendered card height incl. section headers, or verify the composite-panel layout accounts for the AUDIO TRIGGERS section; add a tree-dump bounds-overlap assertion to the harness so this class fails a gate instead of shipping. |
 | BUG-107 | **text-rasterizer-draws-fallback-glyph-ids-with-base-font** | Any UI-text character outside the base font's coverage renders as a real-but-wrong glyph (Peter's "ủ"-style mangled symbols, e.g. where "↳" was intended): `TextRasterizer::shape_line` flattens all CTLine runs into one glyph-id list, discarding each run's font, then `rasterize` draws every id with the single base CTFont — so CoreText-fallback glyph ids land on arbitrary base-font glyphs. Fix shape: (1) honor per-run fonts (or `CTLineDraw`) so fallback renders correctly; (2) prevention — extend the existing PUA icon atlas (`icons.rs`) with the intentional symbols now hard-coded as raw Unicode (↳ › arrows), plus a fallback-run debug assert or a literal-coverage lint so unsupported glyphs fail the gate instead of shipping mojibake. MED (class is unbounded; any agent-authored text on any surface). |
@@ -52,15 +54,12 @@ or human can read it, and it needs no external tool.
 | BUG-104 | **audio-trigger-takes-over-shared-param-mod-goes-dead** | With a Trigger enabled, audio modulation on a card param that the graph's trigger-parameter option also drives stops responding — and stays dead after the Trigger is disabled (state that outlives the trigger, not a live-only diversion). Repro pending (which generator/param pair; does the card value still move). Suspects: trigger mux/envelope replacing instead of composing with the exposed binding (BUG-094 family); the `is_trigger` mod-arm hijack (`modulation.rs:550`); AUDIO TRIGGERS ↔ param-card shared drawer state misroute (`audio_trigger_section.rs:189`). MED — unrecoverable-live breakage on the perform surface. |
 | BUG-102 | **mapping-popover-has-no-text-input-surface** | The graph-editor's `MappingPopover` (the calibration drawer) has never had a working free-text field for ANY string param — `label` editing was deliberately deferred in the popover's own doc comment ("a real text field on the immediate-mode canvas would need caret/selection/IME handling that doesn't exist on this surface yet"), and `EditField::Label` sits unused groundwork. Found 2026-07-10 building SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md P3's `section` mapping-editor deliverable: the command-side write (`BindingMappingEdit::section` + `EditParamMappingCommand` + `PanelAction::EffectMappingSection`) is real and tested, but the popover can't yet render an editable text box for it — same pre-existing gap as `label`, not introduced by P3. Fix shape: build the caret/selection/IME text-input primitive for `MappingPopover` once (shared by label + section, and any future string field), then wire both. LOW (the write path is real and reachable via `PanelAction` for any future caller — e.g. a future non-popover surface — just not from this popover today). **DEFERRED to the widget-unification track (Peter 2026-07-11):** UI_WIDGET_UNIFICATION_DESIGN.md D3 dead-stops canvas text entry and its Deferred section revives on exactly this primitive — build it there. |
 | BUG-100 | **gltf-fresh-import-renders-near-black-for-non-azalea-geometry** | `assemble_import_graph`'s fixed default sun (`pos 5,2,3` / `intensity 3.5`) + material `ambient 0.18` were tuned specifically for the azalea fixture's geometry/orientation; a FRESH import of `cc0__japanese_apricot_prunus_mume.glb` or `lowe.glb` (both held-out fixtures) renders visibly near-black (silhouette only, no legible surface) despite passing the >2% non-black structural threshold. Confirmed pre-existing and unrelated to SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md P2's render_scene param->port swap (`git diff` against P2's base commit shows zero changes to any sun/ambient/intensity/distance default). Found 2026-07-10 visually inspecting P2's held-out-input demo PNGs (a `git diff` audit alone wouldn't have caught this — the render had to actually be looked at, not just structurally validated). Fix shape: scale sun position/intensity to the model's own bbox radius (like camera distance already does) instead of fixed world-space numbers, or lift ambient for fresh imports. LOW (cosmetic default-tuning gap on first import; a performer would immediately notice and just raise Sun Intensity/Reflections on the card — the sliders exist and work). |
-| BUG-098 | **film-grain-drifts-and-reads-as-blocky-pixels** | FilmGrain.json's grain slides toward a corner instead of re-rolling (the time jitter is a smooth linear offset, `time x 39.7/61.3`, which TRANSLATES the hash field - a moving offset is a pan, not a re-roll), and the grain itself reads as hard blocky pixels at 4K (unfiltered square hash cells at noise scale ~1000). Peter 2026-07-10: "drifts to the top left corner and it just looks like blocky pixels not real film grain." Fix shape: derive the offset from frame parity/hash so every frame jumps >= 1 cell (decorrelate, no slide), and soften the grain (finer cells + slight blur, or a Value-noise blend / luma-weighted response) so it reads as emulsion rather than pixel snow. MED (shipped effect looks wrong at its one job; Peter deferred to a dedicated session). |
 | ~~BUG-097~~ FIXED | **ui-snap-render-overlay-pass-uses-wrong-traversal** | FIXED 2026-07-10 by construction (HARNESS_FIDELITY_INVARIANT §4 step 2): the harness's parallel overlay pass was DELETED along with `draw_immediate_passes`, and the overlay assembly now has one owner — `ui_frame::render_main_ui_passes` — which uses `render_sub_region` @ `Depth::OVERLAY`. Not point-fixed. Confirmed reproducible after all: `build_overlays` ALWAYS records `start` after the region root, so EVERY open overlay excluded its root (the "may be latent" caveat was wrong). Permanent proof: `overlay_fidelity_proof::bug097_...` (mod.rs) shows `render_tree_range` leaves the range byte-identical (blank) while `render_sub_region` + the seam draw it. See detail below. |
 | ~~BUG-090~~ FIXED | **audio-mixdown-analysis-only-test-flakes-under-parallel-run** | FIXED @ `78e97d4a` — the named `TestDir`/temp-path-collision suspect was confirmed correct, not float summation-order non-determinism: `SystemTime::now()`'s nanosecond value isn't actually nanosecond-resolution here (~96% collision rate measured over 200k tight-loop calls), so tests sharing the `TestDir` prefix collided on the same directory under parallel execution and raced on the shared `tone.wav` fixture. Fixed with a per-process atomic sequence number in the path; 10/10 consecutive parallel runs green. |
 | BUG-089 | **live-clip-pending-tick-queue-dead-on-all-live-paths** | `LiveClipManager`'s tick-based pending-launch queue (`pending_by_tick`/`pending_by_layer`/`pending_by_clip_id`, `PendingLiveLaunch.target_tick`, `queue_pending`, `activate_due_pending_launches[_at_tick]`, `has_pending_activations`) can only ever be written when `event_absolute_tick >= 0`, but midir events always set `absolute_tick = -1` (`midi_input.rs`) and it is the sole producer of `MidiNoteEvent` in the whole workspace; `fire_layer_oneshot` also always passes `tick = -1`. `activate_due_pending_launches_at_tick` is the only live caller (`engine.rs:803`, fed `self.last_frame_count`, a frame counter, not a real clock tick) and drains a map that can never be non-empty in production — confirmed by exhaustive grep, not inference. Found 2026-07-10 while scoping F2's tick-queue deletion call; left OPEN rather than deleted because the dead footprint is the whole subsystem (7 items across 2 files plus a dead cancellation branch in `commit_live_clip`), wider than the single function F2 was scoped to evaluate — a clean full removal deserves its own dedicated pass. LOW (dead code, zero runtime cost beyond an empty-map check per tick; risk is only in a future session doing a partial removal). |
 | ~~BUG-088~~ FIXED | **pre-existing-clippy-tests-gate-dirty-since-f1-landing** | FIXED @ `78e97d4a` — the 3 `audio_mixdown.rs` lints (`cloned_ref_to_slice_refs` x2, `needless_range_loop`) rewritten with `std::slice::from_ref` / `.iter().zip().enumerate()`. `osc_timecode.rs:172`'s `doc_lazy_continuation` no longer reproduces under the current toolchain (file unchanged) — nothing to fix. Surfaced a separate, unrelated pre-existing `osc_receiver.rs` lint while isolating the gate — logged as BUG-110. |
 | BUG-086 | **recording-audio-track-under-covers-duration-on-longer-takes** | Repeated 2-minute 1920x1080 unpaced `recording-soak` self-checks measured `audio_duration_s` 1.3%-3.3% short of the intended duration (116.0s/118.4s/118.5s of 120.0s across three runs — variable, not a fixed percentage), while two independent 1-minute runs (1280x720 and 1920x1080) both measured exactly 60.0s — duration-dependent, not resolution-dependent, and not a "still queued at `stop()`" race (a 500ms settle delay before `stop()` changed the result by <0.1s). The native audio input silently drops on backpressure with no counter at all (`LiveRecordingPlugin.m:546-547`: `if (!state->audioInput.isReadyForMoreMediaData) return LR_OK; // drop samples rather than block` — unlike video's BUG-085, this path doesn't even log). Found 2026-07-10 building LIVE_RECORDING_PROOFS P2's soak self-check; root cause unknown (suspects: sustained real-time backpressure only manifesting past ~60-90s of continuous writing — disk I/O contention as the file grows, fragment-flush cadence, or AAC internal encoder buffering not fully flushed). MED — silent and uncounted, variable magnitude; unknown whether it scales worse over a full 20-minute take. |
 | BUG-085 | **recording-frames-recorded-overstates-async-append-drops** | `LiveRecorder_EncodeVideoFrame` returns success (and Rust's `frames_recorded` counts it) as soon as the synchronous GPU blit into the CVPixelBuffer completes — but the actual `appendPixelBuffer:` call happens later, async, on `state->appendQueue`, and silently drops the frame (`"[LiveRecorder] VideoToolbox backpressure — dropped frame"`, no counter incremented) if `videoIn.isReadyForMoreMediaData` is false at that moment. Under heavy backpressure `frames_recorded` can overstate the file's real packet count by the async-drop count. Found 2026-07-10 building LIVE_RECORDING_PROOFS P1 (`pool_accounting_consistent`'s bounded-retry-recovery variant hit it once: 107 counted vs 106 actual packets). MED (accounting-only — the file itself stays valid, PTS stays monotonic; but a post-set frame count could read wrong). LOW in practice — the async drop needs genuinely sustained backpressure a real 60fps show submission rate is unlikely to hit. |
-| BUG-083 | **video-export-has-no-progress-display** | Exporting video shows nothing until the finish toast — the content thread's per-10-frame progress snapshots never had a UI consumer (found 2026-07-09 by the A1 orphan lint; fields deleted, restore WITH a display from the P0 purge commit's parent). A multi-minute export looks like a hang. MED |
-| BUG-084 | **recording-drop-counter-never-surfaced** | `recording_dropped_frames` (pool-exhaustion drops during live recording) was emitted every tick, read nowhere — a set-recording silently dropping frames is invisible to the performer. Surface on the recording indicator when non-zero; same restore path as BUG-083. LOW |
 | BUG-080 | **param-manifest-construction-not-a-unified-safe-gate** | The param manifest (an instance's live knob list) is built at deserialize AND rebuilt by a later `reconcile_param_manifests` pass, because deserialize can't see project-embedded presets yet. Consumers that read `.params` *between* the two — a direct `serde_json::from_str::<PresetInstance>`, the keep-don't-drop backstop, the legacy audio-trigger migration, ~18 tests — depend on the deserialize-time build being correct. It works today only because the double-build papers over the timing; it's a latent hazard, not SOTA: a future load path added without a reconcile silently inherits an empty/partial manifest (the BUG-036 class). Root cause: manifest construction has no single safe gate — "partially built" is an observable, readable state. Fix shape (design pass, NOT a patch): make a half-built manifest un-observable — one construction gate every load/paste/bare-read passes through, OR a type-state where params can't be read until reconciled, OR deserialize carries enough context to build complete in one shot. The naive "build once in reconcile" was tried this session and is unsafe for exactly the reasons above (design doc §2 D1 priced + rejected it; see the 2026-07-09 double-build escalation). MEDIUM (design-quality / latent-robustness). **Fix path settled (Peter 2026-07-11): dedicated Opus design session + its own implementation session; not a bug-wave item.** |
 | BUG-079 | **missing-preset-fails-silently-no-onscreen-signal** | Loading a project that references an unresolvable preset def (deleted, unregistered, or missing on this machine) degrades *safely but silently*: saved params are kept on a placeholder (keep-don't-drop, [`effects.rs:940`](../crates/manifold-core/src/effects.rs#L940)) and the effect falls back to **source passthrough** ([`preset_runtime.rs:808`](../crates/manifold-renderer/src/preset_runtime.rs#L808)) — but the ONLY signal is a console `eprintln`; nothing shows on screen. A performer sees the layer render without its effect (a missing *generator* layer likely renders empty — inferred, unconfirmed) with no visible reason. Fix shape: surface unresolvable presets in-app (a card/badge or a load-time notice). LOW |
 | BUG-076 | **inspector-scroll-underestimates-content-height** | `layer_scroll`/`master_scroll`'s `max_scroll()` clamps to ~13-20px on a 9-card stack that's visibly ~1200px too tall for its viewport — the built content overflows but the scroll estimator doesn't agree (LOW, suspected root cause: `compute_height()` reads a mid-tween drawer-animation value instead of the settled/armed-at-build height) |
@@ -71,15 +70,10 @@ or human can read it, and it needs no external tool.
 | BUG-101 | **setup-spectrogram-scroll-offset** | Docked Audio Setup spectrogram blit doesn't follow the body scroll offset — waterfall draws at pre-scroll position when scrolled (LOW) |
 | BUG-039 | **saw-rotation-wrap** | angle params clamp instead of wrapping; saw LFO can't spin a full rotation (MED, mechanism pinned) |
 | BUG-045 | **gap-ring-down-chase** | tracker follows kernel ring-down down ~2-4 bins in note gaps; notes gate 87.6 vs 90 (LOW) |
-| BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
+| ~~BUG-035~~ FIXED | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread — FIXED @ `55faec0f` (moved to clip-thumb disk worker via `try_read_packed()` + `store_atlas()`), rig confirmation owed |
 | BUG-037 | **glp-first-render-stall** | ~37ms warm-up on a glTF clip's first rendered frame (MED) |
 | BUG-038 | **ableton-log-spam** | bridge warns every 1.5s forever when Live absent (LOW) |
-| BUG-006 | **fused-param-noop** | param edits/undo on fused-away nodes silently no-op (HIGH) |
-| BUG-007 | **fusion-exclusion-blind** | particle-loop exclusion misses configured wgsl_compute shapes (HIGH) |
-| BUG-008 | **fused-buffer-oob** | mismatched array lengths read out of bounds in fused region (HIGH) |
-| BUG-009 | **stateless-gate-miss** | harvest skip resets StateStore-held scalar state (HIGH) |
-| BUG-010 | **wgsl-first-entry** | multi-entry wgsl_compute silently dispatches the first (MED) |
-| BUG-011 | **fused-output-oversize** | fused output buffer sized to max of all inputs (MED) |
+| BUG-111 | **fused-segment-inner-override-noop** | in-place inner-param edits on a fused SEGMENT card never reach the live kernel — segment node_map is `c{i}.`-prefixed, per-card def isn't, so both surviving and fused-away nodes miss (MED) |
 | BUG-015 | **inspector-overlap** | stale-chrome class FIXED 2026-07-08 — incremental cache path now falls back to full render on out-of-sub-region dirt (`has_dirty_outside_ranges` + `incremental_path_safe`); blanket `clear_dirty` narrowed to the overlay region so the fallback isn't erased. (2026-07-04 "sections interleaved" sighting = separate open thread if it recurs) |
 | BUG-060 | **inspector-footer-overpaint** | REOPENED 2026-07-08. Opus 2nd pass: tree-geometry cause **ELIMINATED on the live cache path** (new `footer_leak_probe` test proves the inspector clips at footer_top through `traverse_flat_range`; footer's own render is correct) — the "inspector escapes into the footer" framing is wrong. Cause localized BELOW the tree, to the cache/dirty layer (tab-swap clears it = full recomposite). Artifact is **stale UI content** (UI colours / button fragments left behind), NOT clear/dark — the prior "footer goes dark, RGB 9-16" atlas dump was a HARNESS failure, not the symptom. Stale-pixel / dirty-clear bug, BUG-015 class. Needs live atlas+offscreen pixel dump. Cause still OPEN. **2026-07-10 (Fable + Peter):** Rig screenshots relocate the artifact — fragments accumulate at the scroll viewport's CLIP EDGES (bottom sliver above footer_top on both tabs, top sliver under the tab strip on Master), i.e. INSIDE the inspector panel rows, and build up per scroll step until tab-swap wipes them. Both existing probes are structurally blind there: `footer_leak_probe` checks geometry below footer_top, the P0 differential asserts rows [footer_top, footer_top+h) — the artifact rows were never asserted, so the harness "0 diff" results don't contradict the rig (stop extending the harness; observe the rig instead). Live dump tool BUILT + VALIDATED on branch `debug/bug-060-surface-dump` (worktree `bug060-dump`, e81696b4): `MANIFOLD_BUG060_DUMP=<N>` overwrites `/tmp/bug060_atlas.png` + `/tmp/bug060_offscreen.png` every N dirty-present frames (default 30) and logs sf + footer/inspector rects; readback verified against a live launch (real UI, sf=2 Retina confirmed, playhead-only atlas/offscreen delta proves the surfaces are independent). Next: Peter reproduces with the flag set, then one look at the atlas PNG splits cache-layer vs composite/present. **2026-07-10 VERDICT (live dump, Peter's audioTesting2 repro): the dirt is IN THE ATLAS — and it is not a stale copy, it is a LIVE UNCLIPPED DRAW.** Pixel measurement on the dump: the blue pill in the top sliver spans rows 170–197 physical, the pixel-exact position EdgeStretch's own ON pill would occupy if unclipped (Glitch reference: pill top = title top − 3), while the header bg + title around it are correctly scissored at the viewport line (~188). So the card-header toggle's bg fill draws WITHOUT the column clip; every scroll leaves the previous unclipped copy in territory the (clipped) self-clearing panel render can never repaint — that is the accumulation, and only `invalidate_all` (tab swap) wipes it. Bottom-edge fragments (slider fills) are the same class: once the clip is lost mid-card, later fill quads in the range draw unclipped too. The `traverse_flat_range` suspect was CLEARED by a clip-topology test (`bug060_every_card_node_renders_under_the_column_clip`, green — fresh-build clip chains are sound). **ROOT CAUSE FOUND + FIXED 2026-07-10 @ `39836352`** via a batch-flush band trace (`MANIFOLD_BUG060_TRACE=x0,y0,x1,y1`) on Peter's live repro: card-shaped rects logged as `immediate ... scissor=None` during the inspector pass. `push/pop_transform` and `push/pop_depth` cut the pending rect run via `flush_immediate_run` even mid-traversal, batching already-enqueued TREE rects under `immediate_clip` (`None`) — every card ON pill drawn before its card's **rotated chevron** (`UIStyle.transform`) lost its scissor. This is also why the 2026-07-08 trace swore all 858 draws were clipped: it observed the clip stack at `draw_node` time, upstream of the flush-time theft. Fix: context-aware `flush_pending_run` (tree clip stack while `in_tree_pass`, immediate clip otherwise); regression test `transform_boundary_keeps_tree_scissor_on_pending_batch` proven red-under-old-flush/green-now. Gates green (workspace, gpu-proofs 1248, clippy). **RIG-VERIFIED by Peter + LANDED on main @ `cc4eeb37` 2026-07-10** (dump/trace tooling landed env-gated with it). **CLASS-KILL follow-up (same day): clip bound per command at enqueue** — `RectCommand` now carries `(clip, depth)` captured at the push site (like `LineCommand`/`ImageCommand`/text `clip_bounds`/per-command depth `22c5d528` already did); batches derive in `prepare()` by run-scanning consecutive equal `(clip, depth)`; ALL flush-time scissor inference (`flush_immediate_run`/`flush_scissor_batch`/`flush_pending_run`/`in_tree_pass`) deleted, so the wrong-flush mistake is unrepresentable. Invariant recorded in `docs/DEVELOPMENT_REFERENCE.md` ("UI Renderer Invariant"). CLOSED. |
 | BUG-025 | **timeline-scissor-bleed** | clip content bleeds across row bounds (MED, repro needed — scrolled headless render 07-07 clean) |
@@ -103,7 +97,39 @@ or human can read it, and it needs no external tool.
 | BUG-069 | **shipping-license-audit** | four license problems in shipped components: madmom models + ADTOF (both CC BY-NC-SA), rusty_link crate (GPL-2.0, viral, in manifold-playback), staged ffmpeg copied from the dev machine (likely GPL build); full sweep 2026-07-08, everything else clean (HIGH for commercialization, zero runtime impact) |
 | ~~BUG-070~~ FIXED | **stepper-and-nonstandard-slider-reset** | ~~decay drawer slider~~ + Clip Trigger drawer sliders covered by the intrinsic-reset follow-through (@ 3a88f728). Remainder FIXED (AUDIO_SETUP_DOCK P4): Audio Setup gain `[−]value[＋]` steppers + the D7 overlay-drag value-label gain zone (not `BitmapSlider` tracks, so no `SliderReset` registration existed) now right-click-reset to unity via `PanelAction::slider_reset` replaying the existing `AudioSendGainDrag{Begin,Changed,Commit}` trio at 0.0 dB — the SAME gesture BUG-105 names as "every card/panel slider in the app." `feat/audio-dock-p4`. |
 
+**Freeze-compiler adversarial bug hunt, 2026-07-03** — BUG-006–014 (some now Fixed) come from a
+40-agent Sonnet workflow (`wf_73bb4ddf-885`; 10 finder lenses → every finding attacked by 2
+independent skeptics). BUG-006–012 were **confirmed by both skeptics** with line-level evidence;
+BUG-013/014 got split verdicts (judgment recorded per entry). Full verifier transcripts: the
+workflow journal at
+`~/.claude/projects/-Users-peterkiemann-MANIFOLD---Rust/18511d71-15ae-4119-81cc-894a3f83d247/subagents/workflows/wf_73bb4ddf-885/journal.jsonl`.
+System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
+
 ## Open
+
+### BUG-111 — In-place inner-param edits on a fused SEGMENT card never reach the live kernel — MED
+**Status:** OPEN — found 2026-07-11 while fixing BUG-006 (freeze bug-wave lane A).
+
+**Root cause** — the fused-segment build path (preset_runtime.rs ~977–1064) builds one `node_map`
+from the concatenated segment def, whose node ids carry the `c{i}.` per-card prefix
+(`freeze::segment::card_prefix`). The per-frame in-place override (`run` → `apply_inner_overrides`,
+preset_runtime.rs ~1863) passes each card's OWN def (`fx.graph`), whose node ids are UNPREFIXED.
+So `apply_inner_param_overrides` misses every node: a surviving node `foo` is `c{i}.foo` in the
+map, and a fused-away node isn't there at all. The BUG-006 retarget fix doesn't help — the
+segment's `EffectSlot.bound.fused_retarget` is left empty (the segment retarget map is prefix-keyed
+too), and even a prefixed retarget wouldn't cover the surviving-node miss.
+
+**Symptom** — a value/position edit to a card that is part of a fused segment (multi-card fusion)
+never lands in place; the old value keeps rendering until an unrelated rebuild. Same silent-stale
+class as BUG-006 but scoped to segments. Narrower than BUG-006 (needs a multi-card segment that
+fused), hence MED. Stateless-only cards today (segment eligibility), so no state-loss compounding.
+
+**Fix shape** — populate the segment slot's `bound.fused_retarget` from the segment view's
+prefix-keyed retarget with the `c{i}.` prefix normalized to the per-card def's key space, AND
+translate surviving-node overrides by prefixing the def node id before the `node_map` lookup (or
+apply overrides against a per-card-prefixed view of the def). Pair the two so both surviving and
+fused-away nodes resolve. A focused test mirroring `inner_override_routes_fused_away_node_through_retarget`
+but over a 2-card segment would pin it.
 
 ### BUG-110 (osc-receiver-test-type-complexity-clippy-debt) — `manifold-playback`'s `--tests` clippy gate fails on `osc_receiver.rs`, unrelated to any of this session's changes — LOW (lint-only)
 **Status:** OPEN — found 2026-07-11 during `bug-wave1-lane-d-test-hygiene` (BUG-088/072 re-verification).
@@ -122,6 +148,58 @@ last touching commit is `e4f51459` ("F3: external-sync test net"), an unrelated 
 `type` alias (e.g. `type RecordedOsc = Arc<Mutex<Vec<(String, Vec<f32>)>>>;`) at both sites.
 Mechanical, no behavior change. Left open per the same file-ownership convention BUG-088 used —
 belongs to whoever owns `osc_receiver.rs`'s next change.
+
+### BUG-113 (param-manifest-get-bench-flakes-under-parallel-load) — `bench_resolve`'s hard ns/op ceiling fails under nextest's parallel thread pool — LOW (flaky-gate)
+**Status:** OPEN — found 2026-07-11 landing wave2 lane C (BUG-083/084/086 export+recording sweep).
+
+**Symptom:** `crates/manifold-core/src/params.rs`'s `params::tests::bench_resolve` times
+`ParamManifest::get`'s worst case (40 params, id last) and asserts `best_ns_per_op <= 271.5`
+(a 2x ceiling over an old baseline). Under `cargo nextest run --workspace`'s default sweep,
+run right after a heavy build and (in this session's case) a real 2-minute recording-soak
+process that had just finished, it measured 333.25 ns/op then 398.98 ns/op on consecutive runs
+and failed both times; an isolated `cargo test -p manifold-core --lib
+params::tests::bench_resolve` immediately after measured 215.02 ns/op and passed, and a
+subsequent clean full-workspace nextest run passed 3052/3052 including this test.
+
+**Root cause:** the test is a wall-clock micro-benchmark with a hard-coded nanosecond ceiling,
+run inside the normal correctness-test sweep — inherently sensitive to CPU contention from
+nextest's shared thread pool and any other load on the machine (the failing runs in this
+session followed heavy sequential cargo builds and a real recording capture). Confirmed
+unrelated to the change being landed: `crates/manifold-core/src/params.rs` was not touched.
+
+**Fix shape:** give the ceiling real margin for a loaded/parallel run, retry once before
+asserting (take the best of N *sequential process* runs, not just N in-process rounds — the
+in-process `ROUNDS` loop already exists but can't out-run sustained *external* contention), or
+move this out of the default nextest sweep entirely (behind a feature or a dedicated bin, same
+convention as `gpu-proofs`) since a wall-clock ceiling assertion doesn't belong in a "safe to
+run freely, always green" default suite per CLAUDE.md's own testing-scope description.
+
+### BUG-112 (manifold-ui-all-targets-clippy-debt-audio-setup-panel-graph-canvas-tests) — `manifold-ui`'s `--all-targets` clippy gate fails on two pre-existing, unrelated lints — LOW (lint-only)
+**Status:** OPEN — found 2026-07-11 during wave2 lane C (BUG-083/084/086 export+recording sweep).
+
+**Symptom:** `cargo clippy -p manifold-ui --all-targets -- -D warnings` fails on two lints that
+have nothing to do with this session's changes:
+1. `clippy::needless_borrows_for_generic_args` twice in
+   [`src/panels/audio_setup_panel.rs`](../crates/manifold-ui/src/panels/audio_setup_panel.rs) —
+   lines 2494 and 2498, both `LayerId::new(&format!(...))` where the borrow is unneeded
+   (`LayerId::new` already accepts an owned `String` generically).
+2. `clippy::useless_vec` once in
+   [`src/graph_canvas/tests.rs`](../crates/manifold-ui/src/graph_canvas/tests.rs) — line 2391, a
+   `vec![WireView { .. }, ...]` fixture that clippy wants as a plain array.
+
+**Root cause:** unknown/not investigated (test-target lint debt, out of scope for this session).
+Confirmed pre-existing and unrelated: `git diff HEAD -- crates/manifold-ui/src/panels/audio_setup_panel.rs
+crates/manifold-ui/src/graph_canvas/tests.rs` is empty; both files' last-touching commit is
+`f1a35270` ("feat(audio-dock-p4): D7 readability + D8 hygiene (P4)"), an unrelated session. The
+scoped, non-`--all-targets` gate this session actually ran (`cargo clippy -p manifold-app -p
+manifold-ui -p manifold-recording -- -D warnings`, per CLAUDE.md's worktree convention) is clean
+— this only surfaces when test/bench targets are included, same pattern as BUG-110.
+
+**Fix shape:** trivial and mechanical, no behavior change — drop the `&` before each
+`format!(...)` argument at the two `audio_setup_panel.rs` sites; replace the `vec![...]` literal
+in `graph_canvas/tests.rs` with a plain array literal (`[WireView { .. }, ...]`). Left open per
+the same file-ownership convention BUG-110 used — belongs to whoever owns these files' next
+change.
 
 ### BUG-108 (effect-card-add-effect-button-floats-over-sectioned-rows) — "+ Add Effect" renders mid-card over the Sun rows instead of at the bottom, on a sectioned glTF-scene card — MED
 **Status:** OPEN — reported by Peter on the rig 2026-07-10 (screenshot). NOT investigated per his instruction (log, don't fix now).
@@ -171,6 +249,31 @@ belongs to whoever owns `osc_receiver.rs`'s next change.
 
 **Instrument impact:** a fader Peter is riding stops being his mid-set and does not come back when he backs the trigger out — unrecoverable-live breakage on the perform surface, which is why this stays MED despite the pending repro.
 
+**Investigation 2026-07-11 (Lane C, wave1 — INVESTIGATE-ONLY, no fix landed).** Could not reproduce on the rig (no live rig here); repro built by static graph analysis of every trigger-option preset + a focused engine harness test (`modulation::tests::bug104_continuous_card_mod_is_decoupled_from_trigger_reset`, passing). Verdicts:
+
+- **Suspect 2 (`is_trigger` mod-arm hijack) — FALSIFIED (comprehensive, computable).** `param.spec.is_trigger` is derived ONLY from `binding.convert == ParamConvert::Trigger` at instance-build time (`effects.rs:792/1875/2064`) and is static — nothing flips it when a trigger is enabled at runtime. A scan of all shipped generator+effect presets found **zero** bindings with `convert: Trigger` and **zero** params declaring `isTrigger: true`. So there is no card-modulatable param whose spec is `is_trigger`; the `is_trigger` arm (now `modulation.rs:571`) can never intercept a card mod on any shipped preset. The sibling `is_trigger_gate` arm (`:544`) never writes `p.value` (it only pushes pulses), and no arm couples to trigger enable/disable state. The engine harness confirms a Continuous card mod on a Float param tracks its signal every tick and survives `clear_all_trigger_edges` untouched (`m.enabled` and `p.value` are never cleared by it).
+
+- **Suspect 1 (trigger mux replaces instead of composes) — SURVIVES as a mechanism, but the NAMED candidate is FALSIFIED.** FluidSim3D's noise path is `noise_final = turbulence(a) × noise_factor`, `noise_factor = 1.0 + mux_noise_out` (math ops verified: 0=Add, 2=Multiply). At envelope rest the mux output is 0, so `noise_final = turbulence × (1 + 0) = turbulence` — a genuine multiply-compose with a +1 identity offset; the turbulence card mod ALWAYS reaches the kernel (×1 minimum), the trigger boosts on top. It does NOT shadow or zero the fader. The real replace-shapes are elsewhere: `switch_value` muxes whose selector is trigger-driven and one input is a user binding — **ConcentricTunnel `mux_final_n_sides`** (selector `shapeActive`; in_0 = user 'Shape', in_1 = trigger shape-cycle), **MriVolume `axis_mux`** (in_0 = user 'Folder' axis, in_1 = trigger axis-cycle), **Wireframe `shape_mux`** (selector = 'Clip Trigger'). Every one of these shadows a **discrete SELECTOR** (shape/axis/pattern index), NOT a continuous fader. No preset was found where a trigger mux replaces a continuous fader — which is in tension with Peter's "a fader I'm riding goes dead" wording.
+
+- **Suspect 3 (synthetic `clip_trigger_{i}` ParamId collision) — structurally WEAK.** `audio_trigger_section.rs:190` fabricates `clip_trigger_{i}` ids but owns a **separate** `ParamModState` instance (`:232`, `ParamModState::allocate(n)`) from `ParamCardPanel`; no shipped preset param is named `clip_trigger_<number>` (scanned, zero hits), so the ids can't alias a real generator param. It is also aimed at LAYER-level clip triggers, not the generator's own graph trigger the report describes. Its prediction ("drawer state looks wrong") is a running-UI observation not reachable from a headless harness — left UNTESTED at the visual level, but the id/index-collision mechanism is falsified.
+
+- **Persistence lens — real cross-crate reset gap identified.** `clear_all_trigger_edges` (`modulation.rs:731`, called on transport stop, `engine.rs:593`) walks ONLY the playback-side `ParameterAudioMod.trigger_edge`/step shadows. It cannot touch the RENDERER's graph-side StateStore, where `clip_trigger_cycle`/`clip_trigger_index`/`sample_and_hold` latch their last value. For the selector-mux replace-shapes, that latch is exactly what would keep the mux pinned to the trigger-cycle input after the trigger stops firing — a persistence path that no playback-side reset can reach. Not proven at runtime (needs a renderer graph run across enable→disable), but it is the structurally correct home for "stays dead after disable" IF the takeover is graph-side.
+
+**Sharpest open question for a rig repro (the one datum that forks the diagnosis):** with the trigger enabled and the visual dead, **does the card/fader value still animate in the UI, or does it freeze too?** — AND which generator + which param (a continuous fader, or a shape/axis/pattern SELECTOR)? If the card value still moves and the param is a selector → confirmed graph-side replace + StateStore-latch persistence (fix = compose-not-replace rewire on the specific mux + a graph-state reset on trigger disable). If the card value ALSO freezes on a continuous fader → it is NOT the engine Continuous path (proven decoupled) and NOT any replace-shape found (they only hit selectors), so the hunt moves to a UI-side disable/mispoint of the mod itself. Scratch harness + this analysis on branch `bug/wave1-lane-c-trigger-hunt`.
+
+**Review 2026-07-11 (Fable).** Every citation, mechanism, and falsification above re-verified against the code (harness test re-run in the lane worktree: passes) — EXCEPT the negative claim, which is **FALSE**: "no preset where a trigger mux replaces a continuous fader" came from a scan that only checked direct param→mux bindings and missed transitive wires across node-group boundaries. **Lissajous is the counterexample:** in its "Frequency Selection" group, `mux_x`/`mux_y` take the user's 'Clip Trigger' as selector, the trigger-cycled `frequency_ratio` on `in_1`, and the Oscillator Bank's LFO outputs on `in_0` — the LFOs whose rates are the continuous **'Freq X Rate' / 'Freq Y Rate'** faders. Trigger on → both continuous faders dead, exactly the reported symptom, so the "tension with Peter's wording" above doesn't exist and the open-question fork is miscalibrated on one branch: a dead continuous fader does NOT imply UI-side. The enumeration was also incomplete: Plasma `pattern_mux` (shadows user 'Pattern'), StrangeAttractor `type_mux` ('Attractor Type'), and BasicShapes' gated muxes ('Fill') have the identical trigger-selected replace shape (all discrete).
+
+**Root fix (Fable 2026-07-11 — three parts, sized for a Sonnet fix session):**
+1. **Lissajous: compose, don't replace.** Rewire `mux_x`/`mux_y` so the trigger ratio composes with the LFO frequency path instead of switching it out. **Composition point matters (Peter 2026-07-11): preserve the snap.** Today's replace gives crisp on-beat jumps between figure families; a naive additive boost (`1 + trigger_term`) would smear that. Compose by MULTIPLYING the user-driven frequency by the cycled ratio (`freq = user_path × ratio`, ratio held at identity 1 when the trigger is idle/disabled) — the trigger still snaps figure families on the beat, the faders still sweep underneath. FluidSim3D's noise path remains the template for the *identity* idea, not the exact formula. Acceptance: with Clip Trigger enabled, riding Freq X/Y Rate still visibly changes the curve AND triggered figure changes stay crisp. Then walk the discrete replace-muxes (Wireframe `shape_mux`, MriVolume `axis_mux`, ConcentricTunnel `mux_final_n_sides`, Plasma `pattern_mux`, StrangeAttractor `type_mux`, BasicShapes gated muxes) and decide per-preset whether replace is the intended semantics for shape/pattern/axis cycling — either is fine, but record the decision in the preset description; no silent takeover.
+2. **Graph-side trigger-state reset.** Close the cross-crate gap the persistence lens identified: disabling the trigger option (and transport stop) must return the graph to the user path. The renderer StateStore latches (`sample_and_hold` `last_trigger`/`held`, `clip_trigger_cycle`) survive both, and playback's `clear_all_trigger_edges` structurally cannot reach them. Fix at the mechanism level — either wiring that gates every hold by the trigger-enable so disable decays to the user input, or a scoped StateStore reset for trigger-derived nodes on disable. Read `docs/EFFECT_CHAIN_LIFECYCLE.md` (state-cache eviction) and `docs/FREEZE_COMPILER_MAP.md` first; whatever ships must hold on the freeze/fusion path too.
+3. **Class-guard test.** Encode the review's scan as a workspace test so the class can't come back: no `switch_value` whose selector derives from a trigger source may — transitively, tracing wires across `group_input`/`group_output` boundaries — shadow a user binding on a continuous param (discrete/toggle/whole-number targets allowlisted per the part-1 decisions). The direct-binding version of this scan is exactly what produced the false negative above; the transitive version found Lissajous in seconds.
+
+**Amendment (Peter + Fable, 2026-07-11 — makes the fix hold for user- and MCP-authored graphs, not just shipped presets):**
+- **Safe vocabulary, audit-first.** The compose pattern must be a named, discoverable thing authors reach for, not a three-node idiom (mux + const-one + multiply) they have to know. Run the §2.5 audit BEFORE deciding its shape: if the semantics are genuinely new, add the primitive (contract: user value passes at identity while the trigger is idle, trigger composes on top while firing, fully releases on disable — no surviving StateStore latch); if the audit finds it one wire away from existing atoms, name and document the idiom instead of adding a redundant atom. **Naming (Peter 2026-07-11): NOT "blend"** — vetoed, reads as crossfade and collides with compositing blend modes. Working candidate `trigger_modulate` (matches the card-mod vocabulary: a mod composes, never replaces); final name is Peter's call at fix time. Whatever ships MUST be on the freeze/codegen path (Peter 2026-07-11: every node fusable, no plain hand-WGSL).
+- **Validation at the mutation gateway, not the editor.** The part-3 transitive scan becomes a shared check with two runtime consumers plus CI: (a) the workspace test over shipped presets (hard fail); (b) graph-mutation validation in the graph-command layer (`EditingService` path), so EVERY authoring surface — editor UI, MCP clients, agents — gets the same warning when a wiring makes a trigger-driven selector shadow a continuous user binding, with the safe node suggested. Editor-only linting would miss exactly the MCP/agent case.
+- **Part 2 is the stage-safety floor and is authoring-independent:** once trigger disable reliably releases graph-side trigger state, even a takeover wiring no scan ever saw recovers when the performer backs the trigger out — worst case becomes "overridden while enabled" (a performance choice), never "unrecoverable live."
+- The deepest version — takeover composing at the param-binding layer where card mods already compose, so graphs never mux user bindings at all — is deliberately NOT in this fix; it's logged to the binding-unification design track.
+
 ### BUG-102 (mapping-popover-has-no-text-input-surface) — the calibration popover can't render an editable text field for `label` or the new `section` — LOW
 **Status:** DEFERRED — owned by the widget-unification track (Peter 2026-07-11). `UI_WIDGET_UNIFICATION_DESIGN.md` D3 keeps canvas text entry an explicit dead stop (`EditValue` → none on the canvas), and its Deferred section names BUG-102's caret/selection/IME primitive as the revive trigger — build it there, not as a standalone bug fix. Found 2026-07-10 building SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md P3's "section in the param mapping editor" deliverable.
 
@@ -192,13 +295,6 @@ belongs to whoever owns `osc_receiver.rs`'s next change.
 **Confirmed unrelated to P2:** `git diff` against P2's base commit (`ab215ab8`) touches zero sun/ambient/intensity/distance default values in `gltf_import.rs` — the render_scene param->port swap only changed *how* the per-object recenter value is stored (a `node.transform_3d` node instead of a `render_scene` param), never *what* value it carries or how lighting is computed.
 
 **Fix shape:** scale the sun's position (and/or intensity) by the model's own `radius`/`distance`, the same way camera framing already does, instead of fixed literals; or raise the default ambient for fresh imports. LOW severity — the Sun Intensity / Reflections card sliders already exist and work, so a performer hitting this notices immediately and can fix it in seconds; it just means the FIRST look at a freshly imported non-azalea model is worse than it needs to be.
-
-### BUG-098 (film-grain-drifts-and-reads-as-blocky-pixels) — FilmGrain's time jitter pans the hash field instead of re-rolling it, and the grain cells read as blocky pixels
-**Status:** OPEN — found by Peter on the rig 2026-07-10, minutes after the effect landed (`8ac2e211`).
-**Symptom:** grain pattern visibly drifts toward the top-left corner; individual grains are hard square blocks, "not real film grain" (worst at 4K).
-**Root cause (known):** two authoring mistakes in `FilmGrain.json`. (1) The animation wires `time x 39.7 -> noise.offset_x` / `time x 61.3 -> offset_y` — a CONTINUOUS offset translates the hash lattice, so the pattern pans (the drift direction is just the sign of the multipliers); real grain must decorrelate every frame, not slide. (2) `node.noise` type Random emits unfiltered square hash cells; at scale ~1000 on a 4K canvas each cell spans several pixels — crisp squares, not emulsion.
-**Fix shape:** re-roll instead of pan — quantize the offset per frame (e.g. `floor(time * fps) * large_prime`, or hash the frame index) so consecutive frames jump whole cells; then make the grain read soft: finer cells (~2x canvas density) plus a half-pixel blur, or blend a Value-noise octave, and consider a luma-weighted response so grain sits in midtones (the Overlay blend already helps). All JSON-level; no new primitives expected.
-**Where:** `crates/manifold-renderer/assets/effect-presets/FilmGrain.json` (nodes `grain_jitter_x/y`, `grain_noise`).
 
 ### BUG-086 (recording-audio-track-under-covers-duration-on-longer-takes) — the recorded audio track can silently fall short of the intended duration on longer takes, no counter, root cause unknown — MED
 **Status:** OPEN
@@ -253,6 +349,25 @@ audio-feed pacing under encoder saturation. **Still worth the silent-drop fix** 
 path with no counter/log is the actual defect worth removing, per BUG-085's sibling shape).
 Peter's first full-scale 20-minute run remains the confirming data point, but the show-relevance
 concern is now much reduced.
+
+**Observation 2026-07-11 (Lane C, wave2 export/recording sweep):** the silent-drop fix named
+above landed as an instrument — `LiveRecordingPlugin.m`'s `WriteAudioSamples` now counts and
+NSLogs every sample-frame it drops on the `isReadyForMoreMediaData` backpressure gate (an atomic
+`audioFramesDropped`, read live via `LiveRecorder_GetAudioFramesDropped` /
+`LiveRecordingSession::audio_frames_dropped()`, surfaced end-to-end through `ContentState`
+(`recording_dropped_audio_frames`) onto the layer-header Record button, and printed by
+`recording_soak` next to its existing audio-coverage check). Ran a real unpaced 2-minute
+1920×1080 soak (`recording-soak --width 1920 --height 1080 --fps 60 --minutes 2`, the same shape
+as the original repro): `audio_frames_dropped = 0` while `audio_duration_s` still measured
+118.8s against the intended 120.0s (1.2s / ~1.0% short — inside this run's own non-gating 2%
+warning threshold, so no WARNING printed, but still the same class of shortfall this bug tracks).
+**This is a real data point, not a fix**: the native backpressure gate reported zero drops on a
+run that still fell short, so for THIS run the gate is ruled out as the cause — the shortfall is
+happening somewhere the counter can't see (consistent with the standing suspects: AAC encoder
+internal buffering, fragment-flush cadence, or disk I/O contention, none of which the backpressure
+gate would catch). Only one run was captured this session (time-boxed); the counter is now in
+place for whoever runs the confirming full-scale 20-minute soak to check whether it ever fires
+at show scale.
 
 ### BUG-085 (recording-frames-recorded-overstates-async-append-drops) — `frames_recorded` can overstate the file's real packet count under sustained backpressure — MED accounting / LOW practical likelihood
 **Status:** OPEN
@@ -319,30 +434,6 @@ scoped to evaluate for deletion, and removing it correctly (without leaving `que
 write side orphaned, or silently changing `commit_live_clip`'s NoteOff behavior for some future
 native-clock caller) deserves a dedicated pass with its own review, not a rider on a launch-
 quantize fix. F2 left this code untouched and unexercised by its own changes.
-
-### BUG-083 (video-export-has-no-progress-display) — exporting video gives zero on-screen feedback until the finish toast — MED (export is a release pillar; long exports look like a hang)
-**Status:** OPEN
-
-Found 2026-07-09 (A1 orphan purge: the un-suppressed dead-code lint flagged `is_exporting` /
-`export_progress` / `export_status` as never read; `git log -S` confirmed **no consumer ever
-existed** — only the intro commit `d754eb08` and a lint sweep ever touched them). The content
-thread's export loop faithfully sent progress snapshots every 10 frames into a void; the only
-user-visible export feedback is the D17 finish toast (`export_finished`, which IS wired). From
-the performer's view a multi-minute export is indistinguishable from a hang. **Fix shape:**
-build the display (transport-bar strip or toast-with-progress), reading from re-added
-`ContentState` fields — restore the emit side from the parent of the P0 purge commit
-(`send_export_progress` in `content_export.rs` still runs as a keep-alive; its comment points
-here). Per UI_PROJECTION_LAYER_DESIGN I1, the fields land WITH the consumer or not at all.
-
-### BUG-084 (recording-drop-counter-never-surfaced) — live-recording dropped frames counted but never shown — LOW (gig-resilience visibility gap)
-**Status:** OPEN
-
-Same discovery path as BUG-083: `recording_dropped_frames` (fed by
-`recording_session.frames_dropped()`, pool-exhaustion drops) was emitted every tick and read
-nowhere. A recording silently dropping frames during a set is exactly the failure the performer
-needs to see. **Fix shape:** surface it on the recording indicator (count or warning tint) when
-non-zero; re-add the field with its consumer, emit side restorable from the P0 purge commit's
-parent. Owner context: LIVE_RECORDING_PROOFS / gig-resilience territory.
 
 ### BUG-080 (param-manifest-construction-not-a-unified-safe-gate) — manifest construction has no single safe gate; "partially built" is an observable state — MED (design-quality / latent-robustness; wants an Opus design pass)
 **Status:** OPEN — fix path settled with Peter 2026-07-11: a dedicated design session (Opus) followed by its own implementation session. Not a bug-wave item; do not patch it inside a fix sweep.
@@ -745,113 +836,6 @@ WARN level every ~1.5s indefinitely (see any 2026-07-06 trace-run log).
 succeeds (state flip logs "reconnected" at info). Optionally back off the poll while
 refused. `manifold-playback/src/ableton_bridge.rs`, small.
 
-### BUG-035 (authoring-hitch) — 3D scenes hitch when a camera/light param is animated — MED — re-encode hypothesis MEASURED AND REFUTED 2026-07-06; cause is app-side, still open
-**Status:** OPEN
-
-**Measurement (2026-07-06, Fable)** — `freeze-profile scene <glb> [param] [frames]` (new bench
-arm): drives the production import door (`assemble_import_graph`) + production
-`PresetRuntime::render` on the azalea fixture, static params vs `cam_orbit` swept per frame
-(the LFO shape), with a convergence gate (async texture decode means the first ~120 frames
-render black — un-gated numbers are void) and a sweep-sanity readback (min→mid must change
-pixels; min→max on an angle param is a full circle, a no-op).
-
-Results (600 frames/arm, converged, sweep verified live):
-- **CPU encode of the whole chain: ~70µs p50, 0.35ms max, zero >1ms frames in 2400** —
-  static or animated, 1080p or 4K. The "full-chain re-encode grazes the 16ms deadline"
-  hypothesis is off by three orders of magnitude. Incremental command encoding would
-  recover ~0.07ms/frame — **do not build it for this bug.**
-- **No static-vs-animated delta**: CPU 0.067 vs 0.065ms p50 (1080p); GPU 2.23 vs 2.18ms.
-  The graph runtime prices an LFO'd scene identically to a static one.
-- Also refuted along the way: there is NO held-when-static gate at the compositor/layer
-  level (the occlusion skip is blend-only — content_pipeline.rs "Everything still
-  RENDERS"); the static-scene smoothness the original diagnosis leaned on comes from the
-  executor's pure-step memo, and render_scene/gltf_mesh_source re-run every frame anyway.
-- The mesh re-blit + per-object rebind "smaller shaves" live inside that 70µs envelope —
-  not worth building for this bug either.
-
-**Surviving suspects (all app-side, only run when a param animates):** the modulation/LFO
-evaluator on the content thread; UI redraw driven by visibly-changing values (inspector
-sliders, graph-editor canvas + thumbnail dump_set when the editor is watching); content↔UI
-GPU contention (see `ui-present-content-gpu-contention` memory); present/pacing path.
-
-**In-app profiler sessions (2026-07-06, Peter, `meshImportTests.manifold`)** — the hitch is
-now precisely characterized: baseline content frame ~0.09ms, with **isolated single frames
-of ~59ms (58.6/58.7/59.2), entirely inside `render_content_ms`**, cadence roughly one per
-5–6s, present in BOTH the static and the LFO run. LFO/animation is fully exonerated as a
-cause (the original framing was wrong — a static scene hitches identically; you just see it
-when something moves). The quantized ~59ms magnitude + slow cadence says periodic
-maintenance work or a blocking wait inside `render_content_native`, not render cost.
-Candidate: `pool.prune_stale(300)` every 300 frames (content_pipeline.rs:1584-1595) — frame
-indices of the spikes (900, 1233, 3630) are ≡ 0/33/30 mod 300, consistent if the pool's
-counter is offset from the profiler's frame index. Unproven.
-
-**CAUGHT (2026-07-06, MANIFOLD_RENDER_TRACE run)** — five of five spikes land in the
-`clip_atlas` section: `clip_atlas=57.9–61.6ms`, cadence ~360 frames, exactly the
-CLIP_ATLAS_SAVE_DEBOUNCE=300 cycle. The culprit line is
-[content_pipeline.rs:2225](../crates/manifold-app/src/content_pipeline.rs#L2225) —
-`clip_atlas_readback.try_read()` on the completed persist readback. `try_read`
-([gpu_readback.rs:99-115](../crates/manifold-renderer/src/gpu_readback.rs#L99)) converts
-f16→u8 **per pixel, per channel, scalar, on the content thread**, and the clip atlas is
-8192×1152 Rgba16Float (75MB, 9.4M pixels) — ~58ms of CPU once per debounce cycle. The
-section's "all disk IO is off-thread" claim is true; the CPU conversion before the
-hand-off is the stall. (The separate one-off `generators=37.1ms` spike on the first
-frame after load is glTF texture/pipeline warm — not this bug.)
-
-**Fix shape (root: no O(surface) CPU work on the content thread)** — switch the persist
-path to `try_read_packed()` (plain memcpy, gpu_readback.rs:148) and move the f16→u8
-conversion + `slice_atlas_for_store` into the existing clip-thumb disk worker: hand it
-(raw bytes, layout snapshot, hashes) and let it slice/convert/store on its own thread.
-No new threads, no format change on disk.
-
-**Symptom** — animating a 3D scene's camera or sun/light via LFO produces a slight, visible
-hitch — an uneven frame spike, not a clean framerate drop. Reported by Peter 2026-07-05 on
-glTF ("glp") scenes; suspected across all `render_scene` / 3D-mesh output. A static 3D scene
-is smooth, and the *same* LFO on a 2D effect param is smooth (Peter confirmed 2D is fine).
-
-**Root cause (hypothesis, reasoned from code — NOT yet measured)** — when a layer is dirty
-it re-executes its whole effect chain, re-encoding every node's GPU commands into a fresh
-command buffer each frame. There is no incremental "encode once, patch the changed uniform"
-path. A static scene is held/composited without re-running the chain (this held-when-static
-behavior is *inferred* from observed smoothness — the exact gate was not located in code and
-should be confirmed during design). An LFO makes the layer dirty every frame, so the full 3D
-chain re-runs 60×/s. That re-encode is the suspected fixed per-frame cost that grazes the
-16ms deadline on the heavier 3D path while staying invisible on cheap 2D chains.
-
-Confirmed by reading:
-- `render_scene` and `gltf_mesh_source` are both non-pure (`PURE` defaults false,
-  [primitive.rs:104](../crates/manifold-renderer/src/node_graph/primitive.rs#L104);
-  neither overrides it), so the executor's memo-skip
-  ([execution.rs:189](../crates/manifold-renderer/src/node_graph/execution.rs#L189)) never
-  spares them — they re-run every frame the chain runs. The still-scene savings are NOT at
-  the node-memo level.
-- Per animated frame `render_scene` recomposes each object's model matrix, rebuilds its
-  uniform struct, looks up the pipeline, and re-binds all 8 texture/buffer slots
-  ([render_scene.rs:605-680](../crates/manifold-renderer/src/node_graph/primitives/render_scene.rs#L605-L680)),
-  and `gltf_mesh_source` re-blits the whole mesh buffer
-  ([gltf_mesh_source.rs:213-222](../crates/manifold-renderer/src/node_graph/primitives/gltf_mesh_source.rs#L213-L222))
-  even though geometry never changed.
-- NOT the freeze compiler: render nodes are `Boundary` (non-fusable) and its recompile keys
-  on structural content, "never per frame" ([freeze/install.rs:195-205](../crates/manifold-renderer/src/node_graph/freeze/install.rs#L195-L205)).
-  Exposed-param modulation flows as runtime uniforms and never changes the content key.
-
-**Fix shape** — incremental command encoding for the graph runtime: cache a layer's command
-buffer and only re-record when the graph *structure* changes, patching camera/light (and
-other exposed) uniforms in place between frames. System-wide upgrade (every animated layer
-benefits; payoff concentrated on expensive chains — 3D scenes, long stacks, many bindings).
-Orthogonal to, and layers on top of, the existing memo system (skips pure nodes) and freeze
-compiler (fuses pointwise passes) — an *addition*, not a rewrite. It sits on the hot render
-path where a stale-uniform bug becomes the show, so this is HIGH-risk-to-touch. Smaller
-shaves that reduce (not eliminate) the re-encode cost: persistent mesh buffer to kill the
-per-frame re-blit; trim `render_scene`'s per-object rebind.
-
-**Before building** — confirm the CPU re-encode is actually where the ms go: add per-frame
-timing around the 3D chain execution and watch it under a running LFO. Steady ~X ms → render
-cost, optimize the render; sawtooth → scheduling/overhead, and incremental encoding is the
-fix. (Not run this session — the app isn't headless and Peter didn't want the round-trip.)
-
-**Design owner** — queued to Fable for a proper design doc (`docs/*_DESIGN.md`), per
-[[fable-priority-queue]]. Reasoned diagnosis only; verify the measurement first.
-
 ### BUG-081 — Audible blip when an audio clip's voice is built (play-then-pause leaks ~10ms of the file's start) — LOW
 **Status:** OPEN
 
@@ -909,139 +893,6 @@ a signal that a recent UI landing skipped the full workspace test.
 `// design-token-exempt: <reason>`); the ratchet then returns to green at 200. Left red on purpose
 rather than bumping the baseline, which would silently bless the drift the ratchet exists to catch.
 Unrelated to param storage.
-
-BUG-006–014 come from the **freeze-compiler adversarial bug hunt, 2026-07-03**
-(40-agent Sonnet workflow `wf_73bb4ddf-885`; 10 finder lenses → every finding attacked by 2
-independent skeptics). BUG-006–012 were **confirmed by both skeptics** with line-level
-evidence; BUG-013/014 got split verdicts (judgment recorded per entry). Full verifier
-transcripts: the workflow journal at
-`~/.claude/projects/-Users-peterkiemann-MANIFOLD---Rust/18511d71-15ae-4119-81cc-894a3f83d247/subagents/workflows/wf_73bb4ddf-885/journal.jsonl`.
-System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
-
-### BUG-006 — Param edits/undo on fused-away nodes silently no-op until an unrelated rebuild — HIGH
-**Status:** OPEN
-
-**Root cause** — [bound_graph.rs:114-133](../crates/manifold-renderer/src/node_graph/bound_graph.rs#L114-L133):
-`apply_inner_param_overrides` looks each node's `node_id` up in `slot.node_map` and silently
-`continue`s on a miss. For a fused card, `node_map` is built from the FUSED def
-([preset_runtime.rs:1285-1288](../crates/manifold-renderer/src/preset_runtime.rs#L1285-L1288)),
-so fused-away members (e.g. `gain`) aren't in it. The path never consults the fused view's
-`fused_retarget` map (which knows `gain.gain` → `fused_region_0.n0_gain`). Value-only edits
-bump only `graph_version`, which is deliberately not in `compute_topology_hash`, so no rebuild
-fires.
-
-**Symptom** — edit a param in the editor, close it (re-fuses, bakes the value), then Undo
-while viewing another effect: the def reverts but the fused kernel keeps rendering the OLD
-value indefinitely, until a resize/editor-open/unrelated edit forces a rebuild. Live control
-stranded, zero errors. `CHAIN_FUSION_DESIGN.md` §6 already flags this as an open item.
-
-**Fix shape** — thread the fused view's `fused_retarget` into `apply_inner_param_overrides`
-(or into `node_map` construction): on a `node_map` miss, translate `(node_id, param)` through
-the retarget map to `(fused node, n{i}_field)` and apply there. Test: fuse, value-edit,
-assert the fused node's param moved without a rebuild.
-
-### BUG-007 — Particle-loop fusion exclusion is blind to configured `node.wgsl_compute` shapes — HIGH
-**Status:** OPEN
-
-**Root cause** — [region.rs:834](../crates/manifold-renderer/src/node_graph/freeze/region.rs#L834):
-`cycle_contains_array` uses a bare `registry.construct(type_id)` — the ONE hold-out in the
-file; every other classification call site uses `configured_construct`, whose own doc comment
-states why the bare form is wrong. A full-kernel `node.wgsl_compute` with a
-`var<storage, read_write> array<Particle>` output (StrangeAttractor's "simulate" node is a
-shipped instance) introspects as the DEFAULT kernel (no Array output) under the bare
-construct, so the cycle scan can't see the particle stage.
-
-**Symptom** — a texture atom on a feedback loop whose only Array producer is such a node
-passes cut rule 12 and fuses tier-A f16 in-loop, where the bit-exact induction argument does
-not hold across a particle/scatter stage (FluidSim precedent: max_abs ~0.73 over ~31% of
-pixels). Fused render visibly diverges from the editor.
-
-**Fix shape** — one line: use `configured_construct(registry, node)` in
-`cycle_contains_array`. Sweep the file for any other bare-construct hold-outs
-(`node_is_buffer_atom` / `region_is_buffer` at
-[region.rs:1885-1905](../crates/manifold-renderer/src/node_graph/freeze/region.rs#L1885-L1905)
-have the same pattern — audit while there). Test: a loop through a configured wgsl_compute
-particle node must classify its texture atoms Boundary.
-
-### BUG-008 — Fused buffer region with mismatched array lengths reads out of bounds — HIGH
-**Status:** OPEN
-
-**Root cause** — [codegen.rs:1777-1813](../crates/manifold-renderer/src/node_graph/freeze/codegen.rs#L1777-L1813):
-`generate_fused_buffer` anchors the dispatch guard to the FIRST array external's
-`arrayLength`, then unconditionally pre-reads EVERY array external at that index. Nothing
-anywhere (classify, union, `build_region`, `fused_def_builds`) checks that a buffer region's
-array externals agree on length — the tier-6 uniformity gate is texture-only. The unfused
-atom (e.g. `LerpInstanceFields`) explicitly clamps to `min(a_cap, b_cap, out_cap)`.
-
-**Symptom** — two array inputs of different lengths fuse; for indices past the shorter
-buffer the kernel does an out-of-bounds Metal storage read and writes garbage
-instances/particles to the output — silent visual corruption. Shipped presets happen to share
-lengths today; user graphs are unprotected.
-
-**Fix shape** — either refuse at `build_region` when a buffer region has >1 array external
-(conservative, fail-closed, cheapest), or emit a per-external in-bounds guard
-(`idx < arrayLength(&src_e)` with a defined fallback element). Pair with BUG-011.
-
-### BUG-009 — Segment "stateless" gate misses StateStore-held scalar state; harvest skip resets it — HIGH
-**Status:** OPEN
-
-**Root cause** — [segment.rs:153-171](../crates/manifold-renderer/src/node_graph/freeze/segment.rs#L153-L171):
-`def_is_segment_stateless` checks only `state_capture_input_ports` + `aliased_array_io`.
-Primitives that hold real cross-frame state in the StateStore without declaring either —
-`sample_and_hold`, `envelope_decay`, `trigger_ease_to`, `compressor_envelope`,
-`envelope_follower_ar`, `inject_burst` — pass as stateless. Segment member slots get
-`def_content_key: 0` ([preset_runtime.rs:1105](../crates/manifold-renderer/src/preset_runtime.rs#L1105))
-and `harvest_state_from` skips them
-([preset_runtime.rs:1693](../crates/manifold-renderer/src/preset_runtime.rs#L1693)), so any
-chain rebuild drops their state.
-
-**Symptom** — AutoGain (shipped: `compressor_envelope` next to pointwise atoms) joins a
-segment; any rebuild while it's a member — editor open/close elsewhere, an unrelated card
-edit, or the fused-segment swap-in itself — resets the envelope: gain snaps to unity, a
-visible/audible pop mid-show. Violates the chain-fusion design's own "never resets state"
-invariant.
-
-**Fix shape** — the root fix is a truthful statefulness signal: a `NodeRequires`-style
-`uses_state_store` flag (or derive it from `ctx.state` usage) that `def_is_segment_stateless`
-also checks. Stop-gap is a hard-coded exclusion list, which is exactly the pattern the freeze
-module refuses everywhere else — prefer the flag.
-
-### BUG-010 — `wgsl_compute` silently dispatches the first of multiple entry points — MED
-**Status:** OPEN
-
-**Root cause** — [wgsl_compute.rs:615-624](../crates/manifold-renderer/src/node_graph/primitives/wgsl_compute.rs#L615-L624):
-`introspect()` takes `module.entry_points[0]` with no `len() == 1` check (the module doc at
-lines 29-31 claims multiple entry points fail validation — they don't). The pipeline compile
-independently picks the same first entry. A fragment-form node embeds the author's raw text
-BEFORE the synthesized `cs_main`, so any leftover `@compute fn` in the fragment becomes
-entry 0 and is what actually runs. Verified empirically by a skeptic (scratch test:
-`compile_failed=false`, `debug_pass` dispatched, real kernel never runs).
-
-**Symptom** — a user kernel/fragment with a stray second `@compute` function (debug leftover,
-copy-paste) renders stale/blank output with no warning; downstream wires read it as if it
-worked. Authoring-time surface, so MED — but it's the exact silent-wrong-output class.
-
-**Fix shape** — in `introspect()`: if the module has >1 compute entry point, prefer `cs_main`
-by name; if absent, fail validation with the warning the doc already promises. Keep the
-dispatch-side pick in lockstep.
-
-### BUG-011 — Fused `@fused_output` buffer sized to max of ALL array inputs, not the member's own rule — MED
-**Status:** OPEN
-
-**Root cause** — [wgsl_compute.rs:1828-1829](../crates/manifold-renderer/src/node_graph/primitives/wgsl_compute.rs#L1828-L1829):
-the fresh-output branch of `array_output_capacity` returns
-`input_capacities.max()` generically, overriding the fused output member's own semantic
-capacity rule (e.g. `LerpInstanceFields` follows only input `a`). Downstream consumers
-(`render_instanced_3d_mesh` computes capacity from physical buffer size) can then draw ghost
-instances from the never-written tail.
-
-**Symptom** — with mismatched input lengths (same shape as BUG-008), the fused output buffer
-is larger than the unfused chain's, and its tail is uninitialized pooled VRAM — potential
-stale-data ghosting across preset/frame boundaries.
-
-**Fix shape** — falls out of BUG-008's decision: if multi-external buffer regions are
-refused, this is unreachable; if guarded instead, size `dst` from the anchor external and
-zero-fill or guard the tail.
 
 ### BUG-012 — Fragment `tex_` port-rename corrupts scalar params named `tex_*` — LOW
 **Status:** OPEN
@@ -1590,6 +1441,400 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-098 (film-grain-drifts-and-reads-as-blocky-pixels) — FilmGrain's time jitter pans the hash field instead of re-rolling it, and the grain cells read as blocky pixels
+**Status:** FIXED (bug/wave2-lane-b-filmgrain) — JSON-only, no new primitives. **The final "does this read as real film grain" call is Peter's, on the rig — this session only verified the two measurable/visual claims below, not the subjective one.**
+**Symptom:** grain pattern visibly drifts toward the top-left corner; individual grains are hard square blocks, "not real film grain" (worst at 4K).
+**Root cause (confirmed, reproduced before fixing):** two authoring mistakes in `FilmGrain.json`, unchanged since `8ac2e211`/`4c9b146e`. (1) The animation wired `time x 39.7 -> noise.offset_x` / `time x 61.3 -> offset_y` — a CONTINUOUS offset translates the hash lattice, so the pattern pans; measured: holding `frame_count` fixed and stepping wall-clock time by one frame (1/60s) between renders gave grain-layer Pearson correlation 1.0000 at both 1080p and 4K (effectively frozen/panning, not re-rolling). (2) `node.noise` type Random emits unfiltered square hash cells; at scale 1000 (fixed, resolution-independent) on a 4K canvas each cell spans ~3.8px — crisp squares, not emulsion, and the SAME fixed scale means the bug gets categorically worse at higher canvas resolutions (cell-to-pixel ratio grows with width).
+**Fix (both root-caused, not patched):**
+  1. **Re-roll instead of pan:** `grain_jitter_x/y` (`node.math`, still `op=Multiply`) now take `a` from two new `node.math Modulo` nodes (`grain_frame_mod_x/y`) wired to `system.generator_input.frame_count` instead of `.time` — `offset = (frame_count % CYCLE) * PRIME`. `CYCLE_X=127`/`PRIME_X=7919`, `CYCLE_Y=113`/`PRIME_Y=6571` (all prime): the per-frame jump (`PRIME`) is comfortably larger than any realistic noise scale so every frame decorrelates instead of sliding, the modulo keeps the offset magnitude bounded (~1e6 max) so it never grows into f32-imprecision territory over a long show (naive unbounded `frame_count * prime`, taken literally from the original fix-shape note below, would have re-introduced blocky/frozen grain after ~35s once the offset exceeded f32's 2^24 exact-integer range — caught by design, not by re-testing), and the two axes' coprime cycle lengths push the full 2D repeat period out to `127*113=14351` frames (~4 min @ 60fps).
+  2. **Finer, resolution-relative cells:** `grain_size_to_scale` (`node.math`) now computes `px_per_cell = 1.2 * size` (was `1600/size`, a FIXED constant divorced from canvas resolution — the actual root cause of "worst at 4K"); a new `node.texture_size` node (`grain_canvas_size`, wired from `system.source`) reads the real canvas width, and a new `node.math Divide` (`grain_scale_from_width`) computes `scale = width / px_per_cell`. At the reference 1080p width (1920) this reproduces the exact old scale (1000, zero regression); at 4K (3840) it's now 2000 — 2x finer, matching the fix-shape's "~2x canvas density" — and it stays correctly-fine at ANY resolution instead of specifically-patched-for-4K.
+  3. **Soften the hard-edge read:** two new `node.gaussian_blur` nodes (`grain_soften_h/v`, 9-tap, `step=0.25` ⇒ effective σ≈0.5px) sit between `grain_noise` and `grain_mono`, softening the Random type's unfiltered nearest-neighbor cell edges into a continuous texture without smearing away the fine structure (a full-strength blur would; the "Value-noise blend" alternative from the fix-shape note was passed over as a different noise character, not obviously more emulsion-like).
+**Verification (this session, worktree only — see gate results in the landing commit):**
+  - `check-presets`: 49/49 ok — confirms the JSON is well-formed and loads, **not** that it looks right.
+  - New permanent regression test `crates/manifold-renderer/tests/gpu_proofs::film_grain_decorrelation::consecutive_frames_are_decorrelated_at_1080p_and_4k` (gated behind `gpu-proofs`): renders the `grain_mono` layer in isolation (not the full composite, which is dominated by the static source and would mask the grain's own correlation) at frame_count 500 vs 501, same wall-clock time held fixed so only frame identity differs. **Before fix:** correlation 1.0000 at both 1080p and 4K (reproduced by temporarily reverting the JSON in-worktree). **After fix:** 0.0016 (1080p) / -0.0004 (4K) — near-zero, decorrelated.
+  - 4K render looked at directly (not just computed): pre-fix grain reads as a hard, high-contrast, ~4px checkerboard-like block pattern; post-fix reads as fine, soft, mottled texture with no visible cell edges, closer to film emulsion. PNGs are not committed (regenerate via the test: `cargo test -p manifold-renderer --features gpu-proofs --test gpu_proofs film_grain -- --nocapture`, writes to `target/gpu_proofs_out/`).
+**Where:** `crates/manifold-renderer/assets/effect-presets/FilmGrain.json` (nodes `grain_jitter_x/y`, `grain_frame_mod_x/y` [new], `grain_size_to_scale`, `grain_canvas_size` [new], `grain_scale_from_width` [new], `grain_noise`, `grain_soften_h/v` [new]).
+**Original fix-shape note (superseded by the above):** re-roll instead of pan — quantize the offset per frame (e.g. `floor(time * fps) * large_prime`, or hash the frame index) so consecutive frames jump whole cells; then make the grain read soft: finer cells (~2x canvas density) plus a half-pixel blur, or blend a Value-noise octave, and consider a luma-weighted response so grain sits in midtones (the Overlay blend already helps). All JSON-level; no new primitives expected.
+
+### BUG-083 (video-export-has-no-progress-display) — exporting video gives zero on-screen feedback until the finish toast — MED (export is a release pillar; long exports look like a hang)
+**Status:** FIXED @ `<PENDING-LANDING-SHA>` (wave2 lane C, 2026-07-11)
+
+Found 2026-07-09 (A1 orphan purge: the un-suppressed dead-code lint flagged `is_exporting` /
+`export_progress` / `export_status` as never read; `git log -S` confirmed **no consumer ever
+existed** — only the intro commit `d754eb08` and a lint sweep ever touched them). The content
+thread's export loop faithfully sent progress snapshots every 10 frames into a void; the only
+user-visible export feedback is the D17 finish toast (`export_finished`, which IS wired). From
+the performer's view a multi-minute export is indistinguishable from a hang.
+
+**Fixed:** restored `is_exporting` / `export_progress` / `export_status` on `ContentState`
+(`content_state.rs`) with `send_export_progress` (`content_export.rs`) populating them again from
+the real `ExportSession`, and built the missing consumer this time — a header progress strip
+(`HeaderPanel::set_export_status`, `manifold-ui/src/panels/header.rs`, wired from
+`app_render.rs`'s per-frame content-state drain), mirroring the existing percussion-import
+status/progress bar's always-emit/toggle-visibility pattern (no tree rebuild on progress ticks).
+Verified against the REAL production export path (not a mock): the `journey-proof` harness
+(`crates/manifold-app/src/journey_proof.rs`, `--features journey-proofs`) drives the unmodified
+`ContentThread::run_export`, and a run of `audio_reactive_export_moves -- --nocapture` printed
+`is_exporting`/`export_progress`/`export_status` climbing 1.0% → 94.8% across ten real snapshots
+before the finish event — confirming the exact fields the header consumer reads actually progress
+during a real export. The header widget itself is unit-tested
+(`export_progress_toggle_is_in_place_and_text_updates`) for the same value/visibility contract.
+**Not verified this session:** watching the progress strip render live in the running app window
+on the rig — owed to Peter's eye on a real multi-minute export.
+
+### BUG-084 (recording-drop-counter-never-surfaced) — live-recording dropped frames counted but never shown — LOW (gig-resilience visibility gap)
+**Status:** FIXED @ `<PENDING-LANDING-SHA>` (wave2 lane C, 2026-07-11)
+
+Same discovery path as BUG-083: `recording_dropped_frames` (fed by
+`recording_session.frames_dropped()`, pool-exhaustion drops) was emitted every tick and read
+nowhere. A recording silently dropping frames during a set is exactly the failure the performer
+needs to see.
+
+**Fixed:** restored `recording_dropped_frames` on `ContentState`, added a sibling
+`recording_dropped_audio_frames` fed by a new native counter (see the audio-drop-counter
+observation appended to BUG-086 below — that native work was built as part of this fix's
+"surface the recording indicator" scope), and surfaced both on the layer-header Record button's
+label (`LayerHeaderPanel::set_recording_drops`, `manifold-ui/src/panels/layer_header.rs`): "Stop
+Recording" while clean, "Stop Recording ⚠ N dropped" once anything has dropped, cleared on stop
+so the next recording starts clean. Verified with a focused unit test exercising the real
+build/update path (`recording_drops_surface_on_record_button_label`) confirming the button's tree
+text actually changes; the layout/pulse-color golden tests were re-run and are unaffected. **Not
+verified this session:** a real drop actually firing on the video-pool-exhaustion path and being
+seen on the running app's Record button — the soak run in this session's audio-drop observation
+(see BUG-086) had 0 drops on both counters, so the wiring is proven correct at zero but not
+watched moving on the rig.
+
+### BUG-011 — Fused `@fused_output` buffer sized to max of ALL array inputs, not the member's own rule — MED
+**Status:** FIXED (bug/wave1-lane-a-freeze) — paired with BUG-008's guard decision. The
+fused-output branch of `array_output_capacity` (wgsl_compute.rs) now returns
+`input_capacities.min()`, not `.max()`. This is the exact complement of BUG-008's count guard:
+the kernel writes only `[0, min(arrayLength of every array external))`, so sizing `dst` to the
+SMALLEST input means there is NO never-written tail — the ghost-instance source is removed at the
+allocation, not patched with a zero-fill. (`min` also dominates the "follow input a" member rule
+the entry named: with the min-count guard, a is written only up to `min(a, b)`, so `min` is the
+tail-free size regardless of which input the member nominally follows.) Equal-length regions
+(every shipped buffer preset — DigitalPlants proof re-run green) are unaffected: `min` of equal
+lengths is that length. Reproduced by `fused_output_capacity_is_min_of_inputs_not_max`
+(mismatched `[10, 4]` inputs → capacity 4, not 10).
+
+**Root cause** — [wgsl_compute.rs:1828-1829](../crates/manifold-renderer/src/node_graph/primitives/wgsl_compute.rs#L1828-L1829):
+the fresh-output branch of `array_output_capacity` returns
+`input_capacities.max()` generically, overriding the fused output member's own semantic
+capacity rule (e.g. `LerpInstanceFields` follows only input `a`). Downstream consumers
+(`render_instanced_3d_mesh` computes capacity from physical buffer size) can then draw ghost
+instances from the never-written tail.
+
+**Symptom** — with mismatched input lengths (same shape as BUG-008), the fused output buffer
+is larger than the unfused chain's, and its tail is uninitialized pooled VRAM — potential
+stale-data ghosting across preset/frame boundaries.
+
+**Fix shape** — falls out of BUG-008's decision: if multi-external buffer regions are
+refused, this is unreachable; if guarded instead, size `dst` from the anchor external and
+zero-fill or guard the tail.
+
+### BUG-010 — `wgsl_compute` silently dispatches the first of multiple entry points — MED
+**Status:** FIXED (bug/wave1-lane-a-freeze) — a new `select_compute_entry(&naga::Module)` helper is
+the single authority all three sites now share (introspect for workgroup size, the dispatch-side
+`create_compute_pipeline`, and the specialization-variant pipeline — each previously picked
+`entry_points[0]` independently). Rule: a single `@compute` entry wins by any name (back-compat);
+with more than one, only the entry named `cs_main` is unambiguous, else validation fails with the
+warning the module doc always promised. Refreshed the stale module doc (lines 29-31). Two repro
+tests: a stray leading `@compute fn debug_pass` no longer steals introspection (cs_main's workgroup
+[16,16,1] lands, not debug_pass's [8,8,1]); two entries with no cs_main now set `compile_failed`.
+
+**Root cause** — [wgsl_compute.rs:615-624](../crates/manifold-renderer/src/node_graph/primitives/wgsl_compute.rs#L615-L624):
+`introspect()` takes `module.entry_points[0]` with no `len() == 1` check (the module doc at
+lines 29-31 claims multiple entry points fail validation — they don't). The pipeline compile
+independently picks the same first entry. A fragment-form node embeds the author's raw text
+BEFORE the synthesized `cs_main`, so any leftover `@compute fn` in the fragment becomes
+entry 0 and is what actually runs. Verified empirically by a skeptic (scratch test:
+`compile_failed=false`, `debug_pass` dispatched, real kernel never runs).
+
+**Symptom** — a user kernel/fragment with a stray second `@compute` function (debug leftover,
+copy-paste) renders stale/blank output with no warning; downstream wires read it as if it
+worked. Authoring-time surface, so MED — but it's the exact silent-wrong-output class.
+
+**Fix shape** — in `introspect()`: if the module has >1 compute entry point, prefer `cs_main`
+by name; if absent, fail validation with the warning the doc already promises. Keep the
+dispatch-side pick in lockstep.
+
+### BUG-009 — Segment "stateless" gate misses StateStore-held scalar state; harvest skip resets it — HIGH
+**Status:** FIXED (bug/wave1-lane-a-freeze) — root fix, the truthful signal already existed. The
+`NodeRequires`-style flag the fix shape asked for is `EffectNode::requires().state_store`, and it
+is already declared true by every one of the six named primitives (each calls
+`ctx.state.expect(...)` in `evaluate`, so the executor's provide/withhold contract runtime-enforces
+the declaration — a node that read the StateStore without declaring it would panic, never ship).
+`def_is_segment_stateless` (segment.rs) now checks `!node.requires().state_store` alongside the
+existing `state_capture_input_ports` + `aliased_array_io` gates. No hard-coded exclusion list.
+Reproduced by `state_store_scalar_card_is_not_segment_stateless` (a compressor_envelope card is now
+ineligible; a pure-pointwise card stays eligible). Also refreshed the stale `NodeRequires` doc
+comment ("today only Feedback"). Stricter gate = under-segmenting for stateful cards, which is the
+safe direction.
+
+**Root cause** — [segment.rs:153-171](../crates/manifold-renderer/src/node_graph/freeze/segment.rs#L153-L171):
+`def_is_segment_stateless` checks only `state_capture_input_ports` + `aliased_array_io`.
+Primitives that hold real cross-frame state in the StateStore without declaring either —
+`sample_and_hold`, `envelope_decay`, `trigger_ease_to`, `compressor_envelope`,
+`envelope_follower_ar`, `inject_burst` — pass as stateless. Segment member slots get
+`def_content_key: 0` ([preset_runtime.rs:1105](../crates/manifold-renderer/src/preset_runtime.rs#L1105))
+and `harvest_state_from` skips them
+([preset_runtime.rs:1693](../crates/manifold-renderer/src/preset_runtime.rs#L1693)), so any
+chain rebuild drops their state.
+
+**Symptom** — AutoGain (shipped: `compressor_envelope` next to pointwise atoms) joins a
+segment; any rebuild while it's a member — editor open/close elsewhere, an unrelated card
+edit, or the fused-segment swap-in itself — resets the envelope: gain snaps to unity, a
+visible/audible pop mid-show. Violates the chain-fusion design's own "never resets state"
+invariant.
+
+**Fix shape** — the root fix is a truthful statefulness signal: a `NodeRequires`-style
+`uses_state_store` flag (or derive it from `ctx.state` usage) that `def_is_segment_stateless`
+also checks. Stop-gap is a hard-coded exclusion list, which is exactly the pattern the freeze
+module refuses everywhere else — prefer the flag.
+
+### BUG-008 — Fused buffer region with mismatched array lengths reads out of bounds — HIGH
+**Status:** FIXED (bug/wave1-lane-a-freeze) — guard, not refuse. Option (a) "refuse >1 array
+external at build_region" was ruled out: the shipped DigitalPlants generator fuses a buffer
+region containing `lerp_instance_fields` (two required `Array<InstanceTransform>` inputs), so
+refusing would regress a real preset (`digitalplants_buffer_fusion_renders_like_unfused` would
+panic on the `.expect("...fuses")`). Instead `generate_fused_buffer` (codegen.rs) now bounds
+the 1D dispatch `count` by the SHORTEST array external — `min(arrayLength(&src_0),
+arrayLength(&src_1), …)` — since every array external is pre-read at `[idx]`. This matches the
+unfused atoms' own `min(a, b, …)` clamp and makes every coincident read in-bounds. Byte-identical
+for single-external regions (still `arrayLength(&src_0)`) so the pipeline-cache key of every
+existing buffer kernel is unchanged; multi-external regions with equal lengths (all shipped
+cases) render identically (`min` of equal lengths). Reproduced by a codegen-text test
+(`fused_buffer_region_two_array_externals_bounds_count_by_min`, LerpInstanceFields two-external
+region); DigitalPlants proof re-run green. Paired with BUG-011 (output-side tail).
+
+**Root cause** — [codegen.rs:1777-1813](../crates/manifold-renderer/src/node_graph/freeze/codegen.rs#L1777-L1813):
+`generate_fused_buffer` anchors the dispatch guard to the FIRST array external's
+`arrayLength`, then unconditionally pre-reads EVERY array external at that index. Nothing
+anywhere (classify, union, `build_region`, `fused_def_builds`) checks that a buffer region's
+array externals agree on length — the tier-6 uniformity gate is texture-only. The unfused
+atom (e.g. `LerpInstanceFields`) explicitly clamps to `min(a_cap, b_cap, out_cap)`.
+
+**Symptom** — two array inputs of different lengths fuse; for indices past the shorter
+buffer the kernel does an out-of-bounds Metal storage read and writes garbage
+instances/particles to the output — silent visual corruption. Shipped presets happen to share
+lengths today; user graphs are unprotected.
+
+**Fix shape** — either refuse at `build_region` when a buffer region has >1 array external
+(conservative, fail-closed, cheapest), or emit a per-external in-bounds guard
+(`idx < arrayLength(&src_e)` with a defined fallback element). Pair with BUG-011.
+
+### BUG-007 — Particle-loop fusion exclusion is blind to configured `node.wgsl_compute` shapes — HIGH
+**Status:** FIXED (bug/wave1-lane-a-freeze) — reproduced (`cycle_through_configured_particle_wgsl_compute_is_particle_loop`,
+region.rs, loads the real StrangeAttractor sim node) and fixed. `cycle_contains_array`
+(region.rs:834) now uses `configured_construct(registry, node)`. Swept the file: also converted
+the two sibling holdouts `node_is_buffer_atom` + `region_is_buffer` (~region.rs:1898/1914) and
+`input_port_access` (via `wire_coincident_consumed`) — all constructed bare, all the same
+blind-spot class (a configured full-kernel `node.wgsl_compute`'s Array output / gather access
+only appears after `wgsl_source` is parsed). The test pins the root cause directly: a bare
+construct of the sim node reports NO Array output; the configured construct does. Two remaining
+bare `registry.construct` sites in region.rs are the `#[ignore]`d audit-diagnostic prints
+(`domain_flags` ~2613, `explain_preset` ~2682) — not on the runtime classification path; left as
+census-only (they'd under-report configured shapes but only in a manual audit dump).
+
+**Root cause** — [region.rs:834](../crates/manifold-renderer/src/node_graph/freeze/region.rs#L834):
+`cycle_contains_array` uses a bare `registry.construct(type_id)` — the ONE hold-out in the
+file; every other classification call site uses `configured_construct`, whose own doc comment
+states why the bare form is wrong. A full-kernel `node.wgsl_compute` with a
+`var<storage, read_write> array<Particle>` output (StrangeAttractor's "simulate" node is a
+shipped instance) introspects as the DEFAULT kernel (no Array output) under the bare
+construct, so the cycle scan can't see the particle stage.
+
+**Symptom** — a texture atom on a feedback loop whose only Array producer is such a node
+passes cut rule 12 and fuses tier-A f16 in-loop, where the bit-exact induction argument does
+not hold across a particle/scatter stage (FluidSim precedent: max_abs ~0.73 over ~31% of
+pixels). Fused render visibly diverges from the editor.
+
+**Fix shape** — one line: use `configured_construct(registry, node)` in
+`cycle_contains_array`. Sweep the file for any other bare-construct hold-outs
+(`node_is_buffer_atom` / `region_is_buffer` at
+[region.rs:1885-1905](../crates/manifold-renderer/src/node_graph/freeze/region.rs#L1885-L1905)
+have the same pattern — audit while there). Test: a loop through a configured wgsl_compute
+particle node must classify its texture atoms Boundary.
+
+### BUG-006 — Param edits/undo on fused-away nodes silently no-op until an unrelated rebuild — HIGH
+**Status:** FIXED (bug/wave1-lane-a-freeze) — reproduced by a unit test on the current tip
+(`inner_override_routes_fused_away_node_through_retarget`, bound_graph.rs) and fixed at the
+shared home. `BoundGraph` now carries a `fused_retarget` map; the chain builder populates it
+from `view.fused_retarget` right after `BoundGraph::new` (preset_runtime.rs ~1398).
+`apply_inner_param_overrides` gained a `fused_retarget` param: on a `node_map` miss it routes
+each of the fused-away node's params through the retarget onto the live kernel's uniform field
+(`n{i}_field`), the same repoint the card + user bindings already take. Empty on an unfused
+view (live editor path) → the fast per-node `node_map` hit is unchanged. Verified for float
+fields (the pinned `gain.gain` case). **Residual, unfixed:** (a) the fused SEGMENT in-place
+override path is still no-op — the segment `node_map` is `c{i}.`-prefixed while the per-card
+def is unprefixed, so BOTH surviving and fused-away nodes miss (logged BUG-111); (b) an
+enum-typed fused field is written as `ParamValue::Enum(idx)` rather than the binding path's
+int-rounded float — harmless for the common float case, worth confirming if an enum param ever
+sits on a fused-away node.
+
+**Root cause** — [bound_graph.rs:114-133](../crates/manifold-renderer/src/node_graph/bound_graph.rs#L114-L133):
+`apply_inner_param_overrides` looks each node's `node_id` up in `slot.node_map` and silently
+`continue`s on a miss. For a fused card, `node_map` is built from the FUSED def
+([preset_runtime.rs:1285-1288](../crates/manifold-renderer/src/preset_runtime.rs#L1285-L1288)),
+so fused-away members (e.g. `gain`) aren't in it. The path never consults the fused view's
+`fused_retarget` map (which knows `gain.gain` → `fused_region_0.n0_gain`). Value-only edits
+bump only `graph_version`, which is deliberately not in `compute_topology_hash`, so no rebuild
+fires.
+
+**Symptom** — edit a param in the editor, close it (re-fuses, bakes the value), then Undo
+while viewing another effect: the def reverts but the fused kernel keeps rendering the OLD
+value indefinitely, until a resize/editor-open/unrelated edit forces a rebuild. Live control
+stranded, zero errors. `CHAIN_FUSION_DESIGN.md` §6 already flags this as an open item.
+
+**Fix shape** — thread the fused view's `fused_retarget` into `apply_inner_param_overrides`
+(or into `node_map` construction): on a `node_map` miss, translate `(node_id, param)` through
+the retarget map to `(fused node, n{i}_field)` and apply there. Test: fuse, value-edit,
+assert the fused node's param moved without a rebuild.
+
+### BUG-035 (authoring-hitch) — 3D scenes hitch when a camera/light param is animated — FIXED (clip-atlas persist f16 convert moved off the content thread)
+**Status:** FIXED @ `55faec0f` (bug-wave lane B, 2026-07-11) — headless before/after `MANIFOLD_RENDER_TRACE` confirms the spike is gone; rig confirmation still owed (not run this session).
+
+**Resolution (`55faec0f`):** the CAUGHT section below pinned the root cause to
+`content_pipeline.rs`'s clip-atlas disk-persist debounce calling
+`ReadbackRequest::try_read()` on the completed readback — a scalar,
+per-pixel, per-channel f16→u8 convert over the full 8192×1152 clip atlas
+(9.4M pixels), inline on the content thread, once per
+`CLIP_ATLAS_SAVE_DEBOUNCE` (~5s) cycle. Fix: switch to `try_read_packed()`
+(plain memcpy, no conversion) and move the f16→u8 convert + per-cell slice
+into the existing clip-thumb disk worker thread via a new
+`ClipThumbCache::store_atlas()` message — no new threads, no on-disk format
+change. The now-dead RGBA8-only persist path (`CacheMsg::Store`,
+`ClipThumbCache::store`, `slice_atlas_for_store`) was deleted rather than
+suppressed (no-bare-`#[allow(dead_code)]` rule). `gpu_readback::f16_to_f32`
+made `pub` for reuse by the worker-side convert.
+
+**Verified at the level that caught it:** a new headless harness
+(`crates/manifold-app/src/bug035_verify.rs`, `journey-proofs` feature)
+reuses `journey_proof.rs`'s headless `ContentThread` construction, wires a
+real clip-atlas IOSurface bridge (`SharedTextureBridge` — a kernel GPU-memory
+object, no display needed), and drives the real, unmodified
+`ContentPipeline::render_content` (`export_mode = false`, the exact call
+`ContentThread::tick_frame` makes every frame) for 900 frames — 3 debounce
+cycles — with `MANIFOLD_RENDER_TRACE=1`. BEFORE (`try_read()`, via `git
+stash` of the fix on the same harness): `frame=301 ... clip_atlas=690.7ms`,
+`frame=631 ... clip_atlas=691.5ms` (dev-profile `cargo test` inflates the
+~58ms live-app figure — no vectorization/inlining — but same debounce
+cadence, same call site, same root cause). AFTER (`try_read_packed()` +
+`store_atlas()`, production 20ms trace threshold): **no `clip_atlas` trace
+line at all** across the same 900 frames — the spike drops entirely below
+the threshold (a diagnostic run with the threshold lowered to 0.3ms measured
+the residual content-thread cost of the now-plain-memcpy at ~11ms, still a
+~63× reduction from the removed scalar-conversion cost, and expected to be
+far smaller in a release build). Gates: `manifold-app` workspace tests (163
+lib + 4 integration, all green), `manifold-renderer --lib` (1020 green, 3
+unrelated ignored), `cargo clippy -p manifold-app -p manifold-renderer -- -D
+warnings` clean, plus a clippy pass with `--features journey-proofs --tests`
+for the new harness module.
+
+**Measurement (2026-07-06, Fable)** — `freeze-profile scene <glb> [param] [frames]` (new bench
+arm): drives the production import door (`assemble_import_graph`) + production
+`PresetRuntime::render` on the azalea fixture, static params vs `cam_orbit` swept per frame
+(the LFO shape), with a convergence gate (async texture decode means the first ~120 frames
+render black — un-gated numbers are void) and a sweep-sanity readback (min→mid must change
+pixels; min→max on an angle param is a full circle, a no-op).
+
+Results (600 frames/arm, converged, sweep verified live):
+- **CPU encode of the whole chain: ~70µs p50, 0.35ms max, zero >1ms frames in 2400** —
+  static or animated, 1080p or 4K. The "full-chain re-encode grazes the 16ms deadline"
+  hypothesis is off by three orders of magnitude. Incremental command encoding would
+  recover ~0.07ms/frame — **do not build it for this bug.**
+- **No static-vs-animated delta**: CPU 0.067 vs 0.065ms p50 (1080p); GPU 2.23 vs 2.18ms.
+  The graph runtime prices an LFO'd scene identically to a static one.
+- Also refuted along the way: there is NO held-when-static gate at the compositor/layer
+  level (the occlusion skip is blend-only — content_pipeline.rs "Everything still
+  RENDERS"); the static-scene smoothness the original diagnosis leaned on comes from the
+  executor's pure-step memo, and render_scene/gltf_mesh_source re-run every frame anyway.
+- The mesh re-blit + per-object rebind "smaller shaves" live inside that 70µs envelope —
+  not worth building for this bug either.
+
+**Surviving suspects (all app-side, only run when a param animates):** the modulation/LFO
+evaluator on the content thread; UI redraw driven by visibly-changing values (inspector
+sliders, graph-editor canvas + thumbnail dump_set when the editor is watching); content↔UI
+GPU contention (see `ui-present-content-gpu-contention` memory); present/pacing path.
+
+**In-app profiler sessions (2026-07-06, Peter, `meshImportTests.manifold`)** — the hitch is
+now precisely characterized: baseline content frame ~0.09ms, with **isolated single frames
+of ~59ms (58.6/58.7/59.2), entirely inside `render_content_ms`**, cadence roughly one per
+5–6s, present in BOTH the static and the LFO run. LFO/animation is fully exonerated as a
+cause (the original framing was wrong — a static scene hitches identically; you just see it
+when something moves). The quantized ~59ms magnitude + slow cadence says periodic
+maintenance work or a blocking wait inside `render_content_native`, not render cost.
+Candidate: `pool.prune_stale(300)` every 300 frames (content_pipeline.rs:1584-1595) — frame
+indices of the spikes (900, 1233, 3630) are ≡ 0/33/30 mod 300, consistent if the pool's
+counter is offset from the profiler's frame index. Unproven.
+
+**CAUGHT (2026-07-06, MANIFOLD_RENDER_TRACE run)** — five of five spikes land in the
+`clip_atlas` section: `clip_atlas=57.9–61.6ms`, cadence ~360 frames, exactly the
+CLIP_ATLAS_SAVE_DEBOUNCE=300 cycle. The culprit line is
+[content_pipeline.rs:2225](../crates/manifold-app/src/content_pipeline.rs#L2225) —
+`clip_atlas_readback.try_read()` on the completed persist readback. `try_read`
+([gpu_readback.rs:99-115](../crates/manifold-renderer/src/gpu_readback.rs#L99)) converts
+f16→u8 **per pixel, per channel, scalar, on the content thread**, and the clip atlas is
+8192×1152 Rgba16Float (75MB, 9.4M pixels) — ~58ms of CPU once per debounce cycle. The
+section's "all disk IO is off-thread" claim is true; the CPU conversion before the
+hand-off is the stall. (The separate one-off `generators=37.1ms` spike on the first
+frame after load is glTF texture/pipeline warm — not this bug.)
+
+**Fix shape (root: no O(surface) CPU work on the content thread)** — switch the persist
+path to `try_read_packed()` (plain memcpy, gpu_readback.rs:148) and move the f16→u8
+conversion + `slice_atlas_for_store` into the existing clip-thumb disk worker: hand it
+(raw bytes, layout snapshot, hashes) and let it slice/convert/store on its own thread.
+No new threads, no format change on disk.
+
+**Symptom** — animating a 3D scene's camera or sun/light via LFO produces a slight, visible
+hitch — an uneven frame spike, not a clean framerate drop. Reported by Peter 2026-07-05 on
+glTF ("glp") scenes; suspected across all `render_scene` / 3D-mesh output. A static 3D scene
+is smooth, and the *same* LFO on a 2D effect param is smooth (Peter confirmed 2D is fine).
+
+**Root cause (hypothesis, reasoned from code — NOT yet measured)** — when a layer is dirty
+it re-executes its whole effect chain, re-encoding every node's GPU commands into a fresh
+command buffer each frame. There is no incremental "encode once, patch the changed uniform"
+path. A static scene is held/composited without re-running the chain (this held-when-static
+behavior is *inferred* from observed smoothness — the exact gate was not located in code and
+should be confirmed during design). An LFO makes the layer dirty every frame, so the full 3D
+chain re-runs 60×/s. That re-encode is the suspected fixed per-frame cost that grazes the
+16ms deadline on the heavier 3D path while staying invisible on cheap 2D chains.
+
+Confirmed by reading:
+- `render_scene` and `gltf_mesh_source` are both non-pure (`PURE` defaults false,
+  [primitive.rs:104](../crates/manifold-renderer/src/node_graph/primitive.rs#L104);
+  neither overrides it), so the executor's memo-skip
+  ([execution.rs:189](../crates/manifold-renderer/src/node_graph/execution.rs#L189)) never
+  spares them — they re-run every frame the chain runs. The still-scene savings are NOT at
+  the node-memo level.
+- Per animated frame `render_scene` recomposes each object's model matrix, rebuilds its
+  uniform struct, looks up the pipeline, and re-binds all 8 texture/buffer slots
+  ([render_scene.rs:605-680](../crates/manifold-renderer/src/node_graph/primitives/render_scene.rs#L605-L680)),
+  and `gltf_mesh_source` re-blits the whole mesh buffer
+  ([gltf_mesh_source.rs:213-222](../crates/manifold-renderer/src/node_graph/primitives/gltf_mesh_source.rs#L213-L222))
+  even though geometry never changed.
+- NOT the freeze compiler: render nodes are `Boundary` (non-fusable) and its recompile keys
+  on structural content, "never per frame" ([freeze/install.rs:195-205](../crates/manifold-renderer/src/node_graph/freeze/install.rs#L195-L205)).
+  Exposed-param modulation flows as runtime uniforms and never changes the content key.
+
+**Fix shape** — incremental command encoding for the graph runtime: cache a layer's command
+buffer and only re-record when the graph *structure* changes, patching camera/light (and
+other exposed) uniforms in place between frames. System-wide upgrade (every animated layer
+benefits; payoff concentrated on expensive chains — 3D scenes, long stacks, many bindings).
+Orthogonal to, and layers on top of, the existing memo system (skips pure nodes) and freeze
+compiler (fuses pointwise passes) — an *addition*, not a rewrite. It sits on the hot render
+path where a stale-uniform bug becomes the show, so this is HIGH-risk-to-touch. Smaller
+shaves that reduce (not eliminate) the re-encode cost: persistent mesh buffer to kill the
+per-frame re-blit; trim `render_scene`'s per-object rebind.
+
+**Before building** — confirm the CPU re-encode is actually where the ms go: add per-frame
+timing around the 3D chain execution and watch it under a running LFO. Steady ~X ms → render
+cost, optimize the render; sawtooth → scheduling/overhead, and incremental encoding is the
+fix. (Not run this session — the app isn't headless and Peter didn't want the round-trip.)
+
+**Design owner** — queued to Fable for a proper design doc (`docs/*_DESIGN.md`), per
+[[fable-priority-queue]]. Reasoned diagnosis only; verify the measurement first.
 
 ### BUG-109 (fire-meter-dead-in-all-transport-states) — the D6 fire meter has never displayed a clip-trigger level: wiped every playing tick, never evaluated while stopped — MED-HIGH
 **Status:** FIXED 2026-07-11 — `AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7 P5, wave 2. **Plumbing proven by unit tests + a synthetic-level PNG; the live crossing on a real device is Peter's L4 feel-pass, not yet run — VD-025 stays open until he confirms it** (the exact overclaim this bug is about, not repeated here on purpose).

@@ -78,7 +78,7 @@ use crate::content_thread::ContentThread;
 /// by reading `content_export.rs`, which references `content_pipeline` and
 /// `engine` only). Every field is genuinely inert-defaultable; nothing here
 /// required a parallel mini-pipeline (the forbidden move this phase names).
-fn headless_content_thread(project: Project, w: u32, h: u32) -> ContentThread {
+pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> ContentThread {
     let native_device = manifold_gpu::GpuDevice::new();
     let gen_format = manifold_gpu::GpuTextureFormat::Rgba16Float;
 
@@ -186,7 +186,7 @@ fn headless_content_thread(project: Project, w: u32, h: u32) -> ContentThread {
 /// implementation: this is the one piece of `run()`'s startup the harness
 /// must replicate, because skipping — or mistiming — it leaves the real
 /// renderers pointed somewhere no real invocation of `run_export` ever sees.
-fn rebind_gpu_device_pointers(ct: &mut ContentThread) {
+pub(crate) fn rebind_gpu_device_pointers(ct: &mut ContentThread) {
     let native_device_ref = ct.content_pipeline.native_device().expect("native device was just set");
     for renderer in ct.engine.renderers_mut().iter_mut() {
         if let Some(gen_renderer) = renderer
@@ -236,7 +236,21 @@ fn run_headless_export(project: Project, cfg: ExportConfig) -> Result<PathBuf, S
         .name("journey-proof-drain".into())
         .spawn(move || {
             let mut finished = None;
+            // BUG-083 verification: log every progress snapshot the real
+            // export path sends, so a run of this proof
+            // (`--features journey-proofs -- --nocapture`) is a direct,
+            // observable oracle that `is_exporting`/`export_progress`/
+            // `export_status` climb during a real export — not just that the
+            // fields are non-zero somewhere, but that the exact snapshots
+            // the UI's header consumer reads actually progress.
             while let Ok(state) = state_rx.recv() {
+                if state.is_exporting {
+                    println!(
+                        "[journey-proof] export progress: {:.1}% — {}",
+                        state.export_progress * 100.0,
+                        state.export_status
+                    );
+                }
                 if let Some(ev) = state.export_finished {
                     finished = Some(ev);
                     break;
@@ -376,7 +390,7 @@ const CLICK_FPS: f32 = 24.0;
 /// binding, same as any performer would from the inspector.
 const DRIVEN_PARAM: &str = "brightness";
 
-fn star_field_generator_layer(index: i32) -> Layer {
+pub(crate) fn star_field_generator_layer(index: i32) -> Layer {
     let mut layer = Layer::new("Stars".to_string(), LayerType::Generator, index);
     let pid = PresetTypeId::from_string("StarField".to_string());
     layer.change_generator_type(pid);
