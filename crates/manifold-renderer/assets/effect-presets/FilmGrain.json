@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "FilmGrain",
-  "description": "Animated film grain, meant to sit last in a chain. Random per-pixel noise re-rolls every frame (the time input jitters the hash field's offset so grain never slides or freezes), gets splatted to monochrome by the Channel Mixer, and composites over the source in Overlay mode - grain rides the midtones and stays out of deep blacks and clipped whites, the way emulsion grain behaves.\n\nAmount is the wet control; at zero the source passes through untouched. Size scales the grain structure from fine (low values) to coarse (high values) by dividing the noise field's cell density.\n\nDoubles as a banding fix: slow smooth gradients that posterize on an 8-bit display dissolve under even a low Amount, because the grain dithers the final quantization step.",
+  "description": "Animated film grain, meant to sit last in a chain. Random per-pixel noise re-rolls every frame (offset_x/offset_y are hashed from the frame counter and jump by a whole field-width each frame, so consecutive frames are decorrelated instead of sliding), gets softened by a light sub-pixel blur so cells read as fine emulsion rather than hard squares, splatted to monochrome by the Channel Mixer, and composites over the source in Overlay mode - grain rides the midtones and stays out of deep blacks and clipped whites, the way emulsion grain behaves. Cell density tracks the canvas's own pixel width, so grain stays equally fine at 1080p and 4K instead of blocking up at higher resolutions.\n\nAmount is the wet control; at zero the source passes through untouched. Size scales the grain structure from fine (low values) to coarse (high values) - it sets the on-screen pixel size of one grain cell, independent of render resolution.\n\nDoubles as a banding fix: slow smooth gradients that posterize on an 8-bit display dissolve under even a low Amount, because the grain dithers the final quantization step.",
   "presetMetadata": {
     "id": "FilmGrain",
     "displayName": "Film Grain",
@@ -80,7 +80,7 @@
       "nodeId": "grain_jitter_x",
       "typeId": "node.math",
       "handle": "grain_jitter_x",
-      "title": "Grain Jitter X",
+      "title": "Grain Reroll X",
       "params": {
         "a": {
           "type": "Float",
@@ -88,7 +88,7 @@
         },
         "b": {
           "type": "Float",
-          "value": 39.7
+          "value": 7919.0
         },
         "op": {
           "type": "Enum",
@@ -101,7 +101,7 @@
       "nodeId": "grain_jitter_y",
       "typeId": "node.math",
       "handle": "grain_jitter_y",
-      "title": "Grain Jitter Y",
+      "title": "Grain Reroll Y",
       "params": {
         "a": {
           "type": "Float",
@@ -109,7 +109,7 @@
         },
         "b": {
           "type": "Float",
-          "value": 61.3
+          "value": 6571.0
         },
         "op": {
           "type": "Enum",
@@ -118,19 +118,89 @@
       }
     },
     {
+      "id": 9,
+      "nodeId": "grain_frame_mod_x",
+      "typeId": "node.math",
+      "handle": "grain_frame_mod_x",
+      "title": "Frame Cycle X",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 127.0
+        },
+        "op": {
+          "type": "Enum",
+          "value": 12
+        }
+      }
+    },
+    {
+      "id": 10,
+      "nodeId": "grain_frame_mod_y",
+      "typeId": "node.math",
+      "handle": "grain_frame_mod_y",
+      "title": "Frame Cycle Y",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 113.0
+        },
+        "op": {
+          "type": "Enum",
+          "value": 12
+        }
+      }
+    },
+    {
       "id": 4,
       "nodeId": "grain_size_to_scale",
       "typeId": "node.math",
       "handle": "grain_size_to_scale",
-      "title": "Size to Noise Scale",
+      "title": "Size to Cell Pixels",
       "params": {
         "a": {
           "type": "Float",
-          "value": 1600.0
+          "value": 1.2
         },
         "b": {
           "type": "Float",
           "value": 1.6
+        },
+        "op": {
+          "type": "Enum",
+          "value": 2
+        }
+      }
+    },
+    {
+      "id": 11,
+      "nodeId": "grain_canvas_size",
+      "typeId": "node.texture_size",
+      "handle": "grain_canvas_size",
+      "title": "Canvas Size"
+    },
+    {
+      "id": 12,
+      "nodeId": "grain_scale_from_width",
+      "typeId": "node.math",
+      "handle": "grain_scale_from_width",
+      "title": "Canvas-Relative Noise Scale",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.0
         },
         "op": {
           "type": "Enum",
@@ -156,6 +226,72 @@
         "octaves": {
           "type": "Int",
           "value": 1
+        }
+      }
+    },
+    {
+      "id": 13,
+      "nodeId": "grain_soften_h",
+      "typeId": "node.gaussian_blur",
+      "handle": "grain_soften_h",
+      "title": "Grain Soften H",
+      "params": {
+        "kernel_size": {
+          "type": "Enum",
+          "value": 0
+        },
+        "axis": {
+          "type": "Enum",
+          "value": 0
+        },
+        "step": {
+          "type": "Float",
+          "value": 0.25
+        },
+        "radius_mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "radius": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "address_mode": {
+          "type": "Enum",
+          "value": 0
+        }
+      }
+    },
+    {
+      "id": 14,
+      "nodeId": "grain_soften_v",
+      "typeId": "node.gaussian_blur",
+      "handle": "grain_soften_v",
+      "title": "Grain Soften V",
+      "params": {
+        "kernel_size": {
+          "type": "Enum",
+          "value": 0
+        },
+        "axis": {
+          "type": "Enum",
+          "value": 1
+        },
+        "step": {
+          "type": "Float",
+          "value": 0.25
+        },
+        "radius_mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "radius": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "address_mode": {
+          "type": "Enum",
+          "value": 0
         }
       }
     },
@@ -222,13 +358,25 @@
   "wires": [
     {
       "fromNode": 1,
-      "fromPort": "time",
-      "toNode": 2,
+      "fromPort": "frame_count",
+      "toNode": 9,
       "toPort": "a"
     },
     {
       "fromNode": 1,
-      "fromPort": "time",
+      "fromPort": "frame_count",
+      "toNode": 10,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "out",
       "toNode": 3,
       "toPort": "a"
     },
@@ -245,13 +393,43 @@
       "toPort": "offset_y"
     },
     {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "width",
+      "toNode": 12,
+      "toPort": "a"
+    },
+    {
       "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 12,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 12,
       "fromPort": "out",
       "toNode": 5,
       "toPort": "scale"
     },
     {
       "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 13,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "out",
+      "toNode": 14,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 14,
       "fromPort": "out",
       "toNode": 6,
       "toPort": "source"

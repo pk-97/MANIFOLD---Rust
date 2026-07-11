@@ -6954,6 +6954,7 @@
       "examples": [
         "BlackHole",
         "Bloom",
+        "FilmGrain",
         "FluidSim2D",
         "MetallicGlass",
         "OilyFluid",
@@ -16376,7 +16377,9 @@
         "aspect"
       ],
       "category": "Math & Convert",
-      "examples": [],
+      "examples": [
+        "FilmGrain"
+      ],
       "inputs": [
         {
           "name": "in",
