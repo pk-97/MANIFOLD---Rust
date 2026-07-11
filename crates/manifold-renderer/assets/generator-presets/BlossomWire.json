@@ -1,0 +1,528 @@
+{
+  "version": 2,
+  "name": "BlossomWire",
+  "description": "Scene 3 probe - the scanned apricot blossom cluster as a true line wireframe, via the Wireframe-preset pipeline with meshes instead of polytopes: gltf_mesh_source -> rotate_3d (slow time spin) -> flatten_3d perspective -> draw_lines points, while node.mesh_edges (NEW atom, this branch: per-triangle edge topology from the flat triangle list, index arithmetic only) supplies draw_lines edges. TWO assets share the modelPath file-picker card, two distinct stage looks: blossom_wire_welded.glb (default; raw material-3 cluster welded at 1e-5 BEFORE decimation with UVs stripped pre-export - both required or the glTF exporter re-splits chart borders and quadric collapse floors at the ~13k island count, measured 2026-07-11 - then 321k->3126 tris, 9378 flat verts; reads as ONE connected polygonal net) and blossom_wire.glb (unwelded confetti cut, 3070 tris / 9210 flat verts; the scan's UV-chart islands drift apart under decimation into disconnected triangle sparkle - Peter's pick from the first render). gltf max_capacity is sized EXACTLY to the loaded asset (9378 covers both; the smaller asset under-fills the buffer and the zero tail draws dot edges at vertex 0 - swap max_capacity to 9210 if the confetti asset ever becomes the default; proper active-count plumbing is the tracked v1 limitation on node.mesh_edges).",
+  "presetMetadata": {
+    "id": "BlossomWire",
+    "displayName": "Blossom Wire",
+    "category": "Geometry",
+    "oscPrefix": "blossomwire",
+    "available": true,
+    "isLineBased": true,
+    "params": [
+      {
+        "id": "edgeThickness",
+        "name": "Edge Thickness",
+        "min": 0.0,
+        "max": 0.01,
+        "defaultValue": 0.002,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F3",
+        "section": "Lines"
+      },
+      {
+        "id": "showVerts",
+        "name": "Show Vertices",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "isTrigger": false,
+        "formatString": "F0",
+        "section": "Lines"
+      },
+      {
+        "id": "vertSize",
+        "name": "Vertex Size",
+        "min": 0.1,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Lines"
+      },
+      {
+        "id": "animate",
+        "name": "Animate",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "isTrigger": false,
+        "formatString": "F0",
+        "section": "Lines"
+      },
+      {
+        "id": "speed",
+        "name": "Speed",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Lines"
+      },
+      {
+        "id": "window",
+        "name": "Window",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.1,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Lines"
+      },
+      {
+        "id": "beatFlash",
+        "name": "Beat Flash",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Lines"
+      },
+      {
+        "id": "colorR",
+        "name": "Color R",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Lines"
+      },
+      {
+        "id": "colorG",
+        "name": "Color G",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Lines"
+      },
+      {
+        "id": "colorB",
+        "name": "Color B",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Lines"
+      },
+      {
+        "id": "colorA",
+        "name": "Color A",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Lines"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "edgeThickness",
+        "label": "Edge Thickness",
+        "defaultValue": 0.002,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "edge_thickness"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "showVerts",
+        "label": "Show Vertices",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "show_verts"
+        },
+        "convert": {
+          "type": "BoolThreshold"
+        }
+      },
+      {
+        "id": "vertSize",
+        "label": "Vertex Size",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "vert_size"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "animate",
+        "label": "Animate",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "animate"
+        },
+        "convert": {
+          "type": "BoolThreshold"
+        }
+      },
+      {
+        "id": "speed",
+        "label": "Speed",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "speed"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "window",
+        "label": "Window",
+        "defaultValue": 0.1,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "window"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "beatFlash",
+        "label": "Beat Flash",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "beat_flash_amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "colorR",
+        "label": "Color R",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "color_r"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "colorG",
+        "label": "Color G",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "color_g"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "colorB",
+        "label": "Color B",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "color_b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "colorA",
+        "label": "Color A",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "color_a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "never"
+    },
+    "stringParams": [
+      {
+        "id": "modelPath",
+        "name": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/footer-leak/tests/fixtures/gltf/blossom_wire.glb",
+        "isFilePicker": true,
+        "useDropdown": false
+      }
+    ],
+    "stringBindings": [
+      {
+        "id": "modelPath",
+        "label": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/footer-leak/tests/fixtures/gltf/blossom_wire.glb",
+        "target": {
+          "kind": "node",
+          "nodeId": "sprig",
+          "param": "path"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.generator_input",
+      "nodeId": "input",
+      "handle": "input"
+    },
+    {
+      "id": 1,
+      "typeId": "node.gltf_mesh_source",
+      "nodeId": "sprig",
+      "handle": "sprig",
+      "title": "Blossom (decimated)",
+      "params": {
+        "mesh_index": {
+          "type": "Int",
+          "value": -1
+        },
+        "primitive_index": {
+          "type": "Int",
+          "value": -1
+        },
+        "material_index": {
+          "type": "Int",
+          "value": -1
+        },
+        "max_capacity": {
+          "type": "Int",
+          "value": 9210
+        },
+        "fit": {
+          "type": "Enum",
+          "value": 1
+        },
+        "recenter": {
+          "type": "Bool",
+          "value": true
+        }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "node.math",
+      "nodeId": "spin",
+      "handle": "spin",
+      "title": "Spin",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.25
+        },
+        "op": {
+          "type": "Enum",
+          "value": 2
+        }
+      }
+    },
+    {
+      "id": 3,
+      "typeId": "node.rotate_3d",
+      "nodeId": "rot",
+      "handle": "rot",
+      "title": "Rotate",
+      "params": {}
+    },
+    {
+      "id": 4,
+      "typeId": "node.flatten_3d",
+      "nodeId": "project",
+      "handle": "project",
+      "title": "Project",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "proj_dist": {
+          "type": "Float",
+          "value": 3.0
+        },
+        "proj_scale": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 5,
+      "typeId": "node.mesh_edges",
+      "nodeId": "topology",
+      "handle": "topology",
+      "title": "Mesh Edges",
+      "params": {}
+    },
+    {
+      "id": 6,
+      "typeId": "node.draw_lines",
+      "nodeId": "render",
+      "handle": "render",
+      "title": "Draw Lines",
+      "params": {
+        "edge_thickness": {
+          "type": "Float",
+          "value": 0.002
+        },
+        "closed_loop": {
+          "type": "Bool",
+          "value": false
+        },
+        "show_verts": {
+          "type": "Bool",
+          "value": false
+        },
+        "vert_size": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "animate": {
+          "type": "Bool",
+          "value": false
+        },
+        "beat_flash_amount": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "speed": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "window": {
+          "type": "Float",
+          "value": 0.1
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_a": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 99,
+      "typeId": "system.final_output",
+      "nodeId": "out",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 0,
+      "fromPort": "time",
+      "toNode": 2,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "vertices",
+      "toNode": 3,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "angle_y"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "vertices",
+      "toNode": 5,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "points"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "edges",
+      "toNode": 6,
+      "toPort": "edges"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "color",
+      "toNode": 99,
+      "toPort": "in"
+    }
+  ]
+}
