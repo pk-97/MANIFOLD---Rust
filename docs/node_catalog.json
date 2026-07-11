@@ -1375,7 +1375,9 @@
         "arc"
       ],
       "category": "3D Geometry",
-      "examples": [],
+      "examples": [
+        "ApricotWeather"
+      ],
       "inputs": [
         {
           "name": "in",
@@ -7468,7 +7470,6 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "ApricotWeather",
         "Breathe",
         "Garden",
         "MetallicGlass",
@@ -9255,7 +9256,6 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "ApricotWeather",
         "Breathe",
         "Garden",
         "Lathe",
@@ -11897,7 +11897,6 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "ApricotWeather",
         "Breathe"
       ],
       "inputs": [
@@ -19152,7 +19151,7 @@
         {
           "default": "0",
           "id": "swayAmount",
-          "max": "0.6",
+          "max": "0.15",
           "min": "0",
           "name": "Sway Amount"
         },
@@ -19162,13 +19161,6 @@
           "max": "3.1415927",
           "min": "-3.1415927",
           "name": "Sun Angle"
-        },
-        {
-          "default": "0.04",
-          "id": "fogDensity",
-          "max": "0.3",
-          "min": "0",
-          "name": "Fog Density"
         },
         {
           "default": "0.6",
@@ -19185,7 +19177,7 @@
           "name": "Camera Tilt"
         },
         {
-          "default": "26.205",
+          "default": "9",
           "id": "camDistance",
           "max": "100",
           "min": "5",
