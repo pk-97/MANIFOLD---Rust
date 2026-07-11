@@ -1,0 +1,354 @@
+{
+  "version": 2,
+  "name": "Garden",
+  "description": "MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN P4 demo — node.scatter_on_mesh + node.gltf_mesh_source's fit extension. A noise-pushed grid (node.grid_mesh -> node.push_mesh, height from node.simplex_field_2d -> node.make_triangles) is the terrain, rendered by node.render_scene. node.scatter_on_mesh samples that SAME triangulated terrain, area-weighted, and writes an Array<InstanceTransform> field of placements (align_to_normal tilts each instance flush to the local slope). A small lathed flower-form (node.range -> node.array_math MirrorRamp/ScaleOffset -> node.combine_xy profile -> node.revolve_curve -> node.make_triangles, a bundled procedural stand-in — the design does not bundle third-party scans) is drawn once per placement by node.render_copies. The two render passes (terrain, instanced flowers) composite via node.mix in Max mode: the flower pass clears to transparent, so Max keeps the terrain wherever no flower drew and shows the (typically brighter) flower colour where one did. Peter's real scanned-flowers .glb swaps in for the procedural flower chain via node.gltf_mesh_source's `path` + `fit=unit_box` (see the P4 worklog for the exact click-script) — everything downstream of the flower mesh (scatter, instancing, compositing) is unchanged.",
+  "presetMetadata": {
+    "id": "Garden",
+    "displayName": "Garden",
+    "category": "Geometry",
+    "oscPrefix": "garden",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "count",
+        "name": "Count",
+        "min": 0.0,
+        "max": 400.0,
+        "defaultValue": 140.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0"
+      },
+      {
+        "id": "scale",
+        "name": "Scale",
+        "min": 0.2,
+        "max": 2.0,
+        "defaultValue": 1.3,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "align",
+        "name": "Align To Normal",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "isTrigger": false,
+        "formatString": "F0"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "count",
+        "label": "Count",
+        "defaultValue": 140.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "scatter",
+          "param": "count"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "scale",
+        "label": "Scale",
+        "defaultValue": 1.3,
+        "target": {
+          "kind": "node",
+          "nodeId": "scatter",
+          "param": "scale_max"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "align",
+        "label": "Align To Normal",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "scatter",
+          "param": "align_to_normal"
+        },
+        "convert": {
+          "type": "BoolThreshold"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "never"
+    }
+  },
+  "nodes": [
+    { "id": 0, "typeId": "system.generator_input", "nodeId": "input", "handle": "input" },
+    {
+      "id": 1,
+      "typeId": "node.grid_mesh",
+      "nodeId": "terrain_grid",
+      "handle": "terrain_grid",
+      "title": "Terrain Grid",
+      "params": {
+        "max_capacity": { "type": "Int", "value": 2500 },
+        "resolution_x": { "type": "Int", "value": 48 },
+        "resolution_y": { "type": "Int", "value": 48 },
+        "size_x": { "type": "Float", "value": 6.0 },
+        "size_y": { "type": "Float", "value": 6.0 }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "node.simplex_field_2d",
+      "nodeId": "terrain_noise",
+      "handle": "terrain_noise",
+      "title": "Terrain Noise",
+      "params": {
+        "scale_x": { "type": "Float", "value": 2.5 },
+        "scale_y": { "type": "Float", "value": 2.5 },
+        "offset_x": { "type": "Float", "value": 0.0 },
+        "offset_y": { "type": "Float", "value": 0.0 },
+        "z": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 3,
+      "typeId": "node.push_mesh",
+      "nodeId": "terrain_push",
+      "handle": "terrain_push",
+      "title": "Terrain Push",
+      "params": {
+        "cols": { "type": "Int", "value": 48 },
+        "rows": { "type": "Int", "value": 48 },
+        "displacement": { "type": "Float", "value": 0.5 },
+        "height_bias": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 4,
+      "typeId": "node.make_triangles",
+      "nodeId": "terrain_tris",
+      "handle": "terrain_tris",
+      "title": "Terrain Triangulate",
+      "params": {
+        "src_cols": { "type": "Int", "value": 48 },
+        "src_rows": { "type": "Int", "value": 48 }
+      }
+    },
+    {
+      "id": 5,
+      "typeId": "node.range",
+      "nodeId": "flower_t",
+      "handle": "flower_t",
+      "title": "Flower T",
+      "params": {
+        "start": { "type": "Float", "value": 0.0 },
+        "end": { "type": "Float", "value": 1.0 },
+        "max_capacity": { "type": "Int", "value": 8 },
+        "end_inclusive": { "type": "Bool", "value": true }
+      }
+    },
+    {
+      "id": 6,
+      "typeId": "node.array_math",
+      "nodeId": "flower_bud",
+      "handle": "flower_bud",
+      "title": "Flower Bud Shape",
+      "params": { "op": { "type": "Enum", "value": 8 } }
+    },
+    {
+      "id": 7,
+      "typeId": "node.array_math",
+      "nodeId": "flower_radius",
+      "handle": "flower_radius",
+      "title": "Flower Radius",
+      "params": {
+        "op": { "type": "Enum", "value": 6 },
+        "scale": { "type": "Float", "value": 0.09 },
+        "offset": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 8,
+      "typeId": "node.array_math",
+      "nodeId": "flower_height",
+      "handle": "flower_height",
+      "title": "Flower Height",
+      "params": {
+        "op": { "type": "Enum", "value": 6 },
+        "scale": { "type": "Float", "value": 0.3 },
+        "offset": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 9,
+      "typeId": "node.combine_xy",
+      "nodeId": "flower_profile",
+      "handle": "flower_profile",
+      "title": "Flower Profile",
+      "params": { "scale": { "type": "Float", "value": 4.0 } }
+    },
+    {
+      "id": 10,
+      "typeId": "node.revolve_curve",
+      "nodeId": "flower_revolve",
+      "handle": "flower_revolve",
+      "title": "Flower Revolve",
+      "params": {
+        "segments": { "type": "Int", "value": 10 },
+        "sweep": { "type": "Float", "value": 6.2831855 }
+      }
+    },
+    {
+      "id": 11,
+      "typeId": "node.make_triangles",
+      "nodeId": "flower_tris",
+      "handle": "flower_tris",
+      "title": "Flower Triangulate",
+      "params": {
+        "src_cols": { "type": "Int", "value": 11 },
+        "src_rows": { "type": "Int", "value": 8 }
+      }
+    },
+    {
+      "id": 12,
+      "typeId": "node.scatter_on_mesh",
+      "nodeId": "scatter",
+      "handle": "scatter",
+      "title": "Scatter",
+      "params": {
+        "count": { "type": "Int", "value": 140 },
+        "seed": { "type": "Int", "value": 7 },
+        "scale_min": { "type": "Float", "value": 0.6 },
+        "scale_max": { "type": "Float", "value": 1.3 },
+        "align_to_normal": { "type": "Bool", "value": true }
+      }
+    },
+    {
+      "id": 13,
+      "typeId": "node.orbit_camera",
+      "nodeId": "cam",
+      "handle": "cam",
+      "title": "Camera",
+      "params": {
+        "orbit": { "type": "Float", "value": 0.55 },
+        "tilt": { "type": "Float", "value": 0.45 },
+        "distance": { "type": "Float", "value": 8.0 },
+        "fov_y": { "type": "Float", "value": 0.8 }
+      }
+    },
+    {
+      "id": 14,
+      "typeId": "node.phong_material",
+      "nodeId": "terrain_mat",
+      "handle": "terrain_mat",
+      "title": "Terrain Material",
+      "params": {
+        "color_r": { "type": "Float", "value": 0.25 },
+        "color_g": { "type": "Float", "value": 0.35 },
+        "color_b": { "type": "Float", "value": 0.15 },
+        "ambient": { "type": "Float", "value": 0.12 }
+      }
+    },
+    {
+      "id": 15,
+      "typeId": "node.phong_material",
+      "nodeId": "flower_mat",
+      "handle": "flower_mat",
+      "title": "Flower Material",
+      "params": {
+        "color_r": { "type": "Float", "value": 0.95 },
+        "color_g": { "type": "Float", "value": 0.35 },
+        "color_b": { "type": "Float", "value": 0.55 },
+        "ambient": { "type": "Float", "value": 0.15 }
+      }
+    },
+    {
+      "id": 16,
+      "typeId": "node.light",
+      "nodeId": "key_light",
+      "handle": "key_light",
+      "title": "Key Light",
+      "params": {
+        "mode": { "type": "Enum", "value": 0 },
+        "pos_x": { "type": "Float", "value": 3.0 },
+        "pos_y": { "type": "Float", "value": 5.0 },
+        "pos_z": { "type": "Float", "value": 3.0 },
+        "aim_x": { "type": "Float", "value": 0.0 },
+        "aim_y": { "type": "Float", "value": 0.0 },
+        "aim_z": { "type": "Float", "value": 0.0 },
+        "color_r": { "type": "Float", "value": 1.0 },
+        "color_g": { "type": "Float", "value": 1.0 },
+        "color_b": { "type": "Float", "value": 1.0 },
+        "intensity": { "type": "Float", "value": 1.0 },
+        "cast_shadows": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 17,
+      "typeId": "node.render_scene",
+      "nodeId": "scene",
+      "handle": "scene",
+      "title": "Render Terrain",
+      "params": {
+        "objects": { "type": "Int", "value": 1 },
+        "lights": { "type": "Int", "value": 1 }
+      }
+    },
+    {
+      "id": 18,
+      "typeId": "node.render_copies",
+      "nodeId": "flowers",
+      "handle": "flowers",
+      "title": "Render Flowers",
+      "params": {
+        "instance_count": { "type": "Int", "value": 140 }
+      }
+    },
+    {
+      "id": 19,
+      "typeId": "node.mix",
+      "nodeId": "composite",
+      "handle": "composite",
+      "title": "Composite",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "mode": { "type": "Enum", "value": 3 }
+      }
+    },
+    { "id": 99, "typeId": "system.final_output", "nodeId": "out", "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 1, "fromPort": "vertices", "toNode": 3, "toPort": "in" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "height" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "a" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "a" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 8, "toPort": "a" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 9, "toPort": "x" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 9, "toPort": "y" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "profile" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "in" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 12, "toPort": "vertices" },
+    { "fromNode": 13, "fromPort": "out", "toNode": 17, "toPort": "camera" },
+    { "fromNode": 14, "fromPort": "out", "toNode": 17, "toPort": "material_0" },
+    { "fromNode": 16, "fromPort": "out", "toNode": 17, "toPort": "light_0" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 17, "toPort": "mesh_0" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 18, "toPort": "vertices" },
+    { "fromNode": 12, "fromPort": "instances", "toNode": 18, "toPort": "instances" },
+    { "fromNode": 13, "fromPort": "out", "toNode": 18, "toPort": "camera" },
+    { "fromNode": 15, "fromPort": "out", "toNode": 18, "toPort": "material" },
+    { "fromNode": 16, "fromPort": "out", "toNode": 18, "toPort": "light" },
+    { "fromNode": 18, "fromPort": "color", "toNode": 19, "toPort": "a" },
+    { "fromNode": 17, "fromPort": "color", "toNode": 19, "toPort": "b" },
+    { "fromNode": 19, "fromPort": "out", "toNode": 99, "toPort": "in" }
+  ]
+}

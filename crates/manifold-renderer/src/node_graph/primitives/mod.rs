@@ -191,6 +191,7 @@ mod sharpen;
 mod simplex_field_2d;
 mod simplex_noise_force_at_particles;
 mod spawn_from_mesh;
+mod scatter_on_mesh;
 mod simplex_per_instance;
 mod affine_scalar;
 mod camera_orbit;

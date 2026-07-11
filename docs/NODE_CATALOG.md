@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 229 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 230 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -146,7 +146,7 @@ _Generated from the node registry. Do not hand-edit. 229 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (41)
+### 3D Geometry (42)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -186,6 +186,7 @@ _Generated from the node registry. Do not hand-edit. 229 nodes registered, group
 | Revolve Curve | `node.revolve_curve` | Source | Spins a 2D profile curve around a vertical axis to build a solid of revolution — a lathe. The classic way to build vases, columns, and bells from a cross-secti… |
 | Rotate 3D | `node.rotate_3d` | Filter | Spins a 3D mesh around the X, Y, and Z axes. Wire an LFO or a beat into the angles to keep it turning. |
 | Rotate 4D | `node.rotate_4d` | Filter | Spins 4D geometry through its rotation planes, the move that makes a tesseract appear to turn inside out. |
+| Scatter On Mesh | `node.scatter_on_mesh` | Source | Scatters copies of an object across a mesh's surface — a field of instances placed and sized randomly but deterministically, area-weighted so they don't clump … |
 | Taper Mesh | `node.taper_mesh` | Filter | Narrows a mesh toward a point along one axis, like sharpening a pencil or a candle flame. The lighting normals scale with it so the taper still shades correctl… |
 | Torus Wrap Field | `node.torus_wrap_field` | Map | Wraps a flat grid of points around a torus, a donut shape, placing copies on its surface. |
 | Transform 3D | `node.transform_3d` | Source | Position, rotation, and scale for one scene object. Wire it into a render_scene transform slot, or drive an axis from an LFO or MIDI to animate it live. |
@@ -354,7 +355,7 @@ _Generated from the node registry. Do not hand-edit. 229 nodes registered, group
 | UV Displace by Flow | `node.uv_displace_by_flow` | Filter | Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field. |
 | UV Field | `node.uv_field` | Source | Outputs the position of each pixel as a coordinate, red for left-to-right and green for top-to-bottom. The starting grid for most warps and patterns. |
 
-### Effect & generator presets (50)
+### Effect & generator presets (51)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -378,6 +379,7 @@ _Generated from the node registry. Do not hand-edit. 229 nodes registered, group
 | `FilmGrain` | Film Grain | effect | Stylize | 2 |
 | `FluidSim2D` | Fluid Sim 2D | generator | Sim | 13 |
 | `FluidSim3D` | Fluid Sim 3D | generator | Sim | 22 |
+| `Garden` | Garden | generator | Geometry | 3 |
 | `Glitch` | Glitch | effect | Filmic | 5 |
 | `HighlightBoost` | Highlight Boost | effect | Filmic | 4 |
 | `Infrared` | Infrared | effect | Color | 3 |
