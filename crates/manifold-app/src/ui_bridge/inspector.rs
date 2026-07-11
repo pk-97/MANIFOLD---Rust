@@ -1829,23 +1829,9 @@ pub(super) fn dispatch_inspector(
                 Box::new(SetAudioSendChannelsCommand::new(id.clone(), old, ch.clone())),
             )
         }
-        PanelAction::AudioSendStereoToggle(id) => {
-            // Mono ↔ stereo: stereo routes the primary channel and its pair
-            // partner; mono keeps just the primary. Out-of-range channels are
-            // ignored by the analysis downmix, so no device-bound clamp here.
-            let old = project
-                .audio_setup
-                .find_send(id)
-                .map(|s| s.channels.clone())
-                .unwrap_or_default();
-            let first = old.first().copied().unwrap_or(0);
-            let new = if old.len() >= 2 { vec![first] } else { vec![first, first + 1] };
-            audio_setup_command(
-                project,
-                content_tx,
-                Box::new(SetAudioSendChannelsCommand::new(id.clone(), old, new)),
-            )
-        }
+        // `AudioSendStereoToggle` is deleted (§7.2 item 6, P8, 2026-07-11) —
+        // the channel dropdown now carries any channel vec directly via
+        // `AudioSetSendChannels` above; mono falls out of picking one channel.
         PanelAction::AudioSendGainStep(id, delta_db) => {
             // The project is the source of truth: read current gain, apply the
             // delta, clamp to a sensible trim range, commit old→new. Capture
@@ -1942,12 +1928,8 @@ pub(super) fn dispatch_inspector(
         // Commit, AudioTriggerLengthStep, AudioTriggerSetLayer,
         // AudioTriggerLayerClicked) are deleted with the matrix (P3, D2). Clip
         // triggers are authored on the layer only (`LayerClipTrigger`, P2).
-        PanelAction::AudioSendAddLayerClicked(_) => {
-            // The "+ Layer" dropdown is opened by UIRoot::try_open_dropdown
-            // before dispatch; reaching here (e.g. no candidate layers) is a
-            // no-op.
-            DispatchResult::structural()
-        }
+        // `AudioSendAddLayerClicked` (Inputs section "+ Layer") is deleted
+        // with the section's authoring (§7.2 item 7, P8, 2026-07-11).
         PanelAction::AudioCrossoverDragBegin => {
             // Snapshot the pre-drag crossovers so the commit records one undo step.
             *audio_crossover_snapshot =
