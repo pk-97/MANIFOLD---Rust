@@ -9,8 +9,285 @@
     "oscPrefix": "blossomwire",
     "available": true,
     "isLineBased": true,
-    "params": [],
-    "bindings": [],
+    "params": [
+      {
+        "id": "edgeThickness",
+        "name": "Edge Thickness",
+        "min": 0.0,
+        "max": 0.01,
+        "defaultValue": 0.002,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F3",
+        "section": "Lines"
+      },
+      {
+        "id": "showVerts",
+        "name": "Show Vertices",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "isTrigger": false,
+        "formatString": "F0",
+        "section": "Lines"
+      },
+      {
+        "id": "vertSize",
+        "name": "Vertex Size",
+        "min": 0.1,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Lines"
+      },
+      {
+        "id": "animate",
+        "name": "Animate",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "isTrigger": false,
+        "formatString": "F0",
+        "section": "Lines"
+      },
+      {
+        "id": "speed",
+        "name": "Speed",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Lines"
+      },
+      {
+        "id": "window",
+        "name": "Window",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.1,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Lines"
+      },
+      {
+        "id": "beatFlash",
+        "name": "Beat Flash",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Lines"
+      },
+      {
+        "id": "colorR",
+        "name": "Color R",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Lines"
+      },
+      {
+        "id": "colorG",
+        "name": "Color G",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Lines"
+      },
+      {
+        "id": "colorB",
+        "name": "Color B",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Lines"
+      },
+      {
+        "id": "colorA",
+        "name": "Color A",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Lines"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "edgeThickness",
+        "label": "Edge Thickness",
+        "defaultValue": 0.002,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "edge_thickness"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "showVerts",
+        "label": "Show Vertices",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "show_verts"
+        },
+        "convert": {
+          "type": "BoolThreshold"
+        }
+      },
+      {
+        "id": "vertSize",
+        "label": "Vertex Size",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "vert_size"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "animate",
+        "label": "Animate",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "animate"
+        },
+        "convert": {
+          "type": "BoolThreshold"
+        }
+      },
+      {
+        "id": "speed",
+        "label": "Speed",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "speed"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "window",
+        "label": "Window",
+        "defaultValue": 0.1,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "window"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "beatFlash",
+        "label": "Beat Flash",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "beat_flash_amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "colorR",
+        "label": "Color R",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "color_r"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "colorG",
+        "label": "Color G",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "color_g"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "colorB",
+        "label": "Color B",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "color_b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "colorA",
+        "label": "Color A",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "color_a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
     "skipMode": {
       "kind": "never"
     },
