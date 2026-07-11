@@ -108,6 +108,14 @@ pub(crate) fn wgsl_safe_field(name: &str) -> std::borrow::Cow<'_, str> {
         // only when an atom actually collides — adding a word here changes the
         // generated WGSL of any atom with a param of that name.
         "layout",
+        // `length(v)` is a WGSL builtin function (vector magnitude).
+        // node.taper_mesh's committed param name (MESH_DEFORM_AND_CURVE_
+        // GEOMETRY_DESIGN.md §3) is literally `length` (the taper falloff
+        // span) — collides with the builtin identifier in the generated
+        // Params struct field / `params.length` access. Renamed to
+        // `p_length` in generated WGSL only; the outward ParamDef.name,
+        // JSON param id, and port-shadow port name stay `length`.
+        "length",
     ];
     if RESERVED.contains(&name) {
         std::borrow::Cow::Owned(format!("p_{name}"))
