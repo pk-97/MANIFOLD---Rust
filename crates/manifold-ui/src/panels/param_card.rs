@@ -934,8 +934,15 @@ impl ParamCardPanel {
     /// `manifold-ui` cannot depend on — `docs/UI_LAYERING_INVERSION.md`)
     /// resolves it. Amount is always the first `Slider` row
     /// `build_audio_mod_drawer` builds (`DrawerIds::meters[0]`), regardless
-    /// of which trailing rows follow.
-    pub fn update_fire_meters(&self, tree: &mut UITree, fire_level: &dyn Fn(u64) -> Option<f32>) {
+    /// of which trailing rows follow. `dt` (BUG-109 P5) is the UI frame delta
+    /// seconds, threaded down to [`crate::panels::drawer::MeterIds::update`]
+    /// for its peak-hold timing.
+    pub fn update_fire_meters(
+        &self,
+        tree: &mut UITree,
+        fire_level: &dyn Fn(u64) -> Option<f32>,
+        dt: f32,
+    ) {
         for (pi, cfg) in self.audio_configs.iter().enumerate() {
             let Some((dids, _)) = cfg else { continue };
             let Some(info) = self.param_info.get(pi) else { continue };
@@ -948,7 +955,7 @@ impl ParamCardPanel {
                 info.param_id.as_bytes(),
             ]);
             let level = fire_level(key).unwrap_or(0.0);
-            meter.update(tree, level, AUDIO_MOD_ACTIVE_C32);
+            meter.update(tree, level, AUDIO_MOD_ACTIVE_C32, dt);
         }
     }
     pub fn effect_name(&self) -> &str {

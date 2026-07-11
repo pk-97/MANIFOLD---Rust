@@ -607,7 +607,12 @@ impl AudioTriggerSection {
     /// `is_trigger_gate` gate needed here, unlike `ParamCardPanel`). Keyed
     /// on `(layer_id, row index)` hashed via `manifold_foundation::
     /// fire_meter_key` — the SAME hash the content-thread capture uses.
-    pub fn update_fire_meters(&self, tree: &mut UITree, fire_level: &dyn Fn(u64) -> Option<f32>) {
+    pub fn update_fire_meters(
+        &self,
+        tree: &mut UITree,
+        fire_level: &dyn Fn(u64) -> Option<f32>,
+        dt: f32,
+    ) {
         let Some(layer_id) = self.layer_id.as_ref() else { return };
         for (i, cfg) in self.audio_configs.iter().enumerate() {
             let Some((dids, _)) = cfg else { continue };
@@ -617,7 +622,7 @@ impl AudioTriggerSection {
                 &(i as u64).to_le_bytes(),
             ]);
             let level = fire_level(key).unwrap_or(0.0);
-            meter.update(tree, level, AUDIO_MOD_ACTIVE_C32);
+            meter.update(tree, level, AUDIO_MOD_ACTIVE_C32, dt);
         }
     }
 

@@ -3013,12 +3013,14 @@ impl UIRoot {
     /// drawers decide what's visible). `fire_meters` is
     /// `ContentState::fire_meters`; the closure adapts it to the plain
     /// `Fn(u64) -> Option<f32>` `manifold-ui` can call without depending on
-    /// `manifold-core` (`docs/UI_LAYERING_INVERSION.md`).
+    /// `manifold-core` (`docs/UI_LAYERING_INVERSION.md`). `dt` (BUG-109 P5)
+    /// is the UI frame delta seconds, for each meter's peak-hold timing.
     pub fn update_fire_meters(
         &mut self,
         fire_meters: &manifold_core::audio_trigger::FireMeterCapture,
+        dt: f32,
     ) {
-        self.inspector.update_fire_meters(&mut self.tree, &|key| fire_meters.get(key));
+        self.inspector.update_fire_meters(&mut self.tree, &|key| fire_meters.get(key), dt);
     }
 
     /// Update the audio scope's hover readout (freq + dB under the cursor), or
