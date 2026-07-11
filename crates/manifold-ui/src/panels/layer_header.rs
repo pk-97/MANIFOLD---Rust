@@ -816,6 +816,12 @@ pub struct LayerHeaderPanel {
     audio_device_label_id: Option<NodeId>,
     recording_active: bool,
     audio_device_name: String,
+    /// BUG-084/BUG-086 instrument: video (pool-exhaustion) + audio
+    /// (native-encoder-backpressure) frames dropped so far this recording,
+    /// summed. 0 whenever not recording (the content thread reports 0 once
+    /// the session is gone). Folded into the Record button's label so a
+    /// dropping recording is visible without a separate widget.
+    recording_dropped_total: u32,
 
     /// Host for the declarative top chrome (background + recording controls).
     /// The per-layer scroll rows are still built imperatively below it.
@@ -872,6 +878,7 @@ impl LayerHeaderPanel {
             audio_device_label_id: None,
             recording_active: false,
             audio_device_name: "No audio input".into(),
+            recording_dropped_total: 0,
             host: ChromeHost::new(),
             panel_origin: Vec2::ZERO,
             panel_width: 0.0,
@@ -937,14 +944,42 @@ impl LayerHeaderPanel {
         // over the button bg while recording; clearing it here lets the static
         // active/inactive style below stand once stopped.
         self.recording_since = active.then(Instant::now);
+        if !active {
+            // A stopped recording's drop count is stale the instant the
+            // session ends — the next recording starts clean.
+            self.recording_dropped_total = 0;
+        }
         if let Some(id) = self.record_btn_id {
             tree.set_style(id, self.record_btn_style());
-            let label = if active {
-                "Stop Recording"
-            } else {
-                "Record Live"
-            };
-            tree.set_text(id, label);
+            tree.set_text(id, &self.record_btn_label());
+        }
+    }
+
+    /// BUG-084/BUG-086 — surface the drop counters (video pool exhaustion +
+    /// audio encoder backpressure) on the Record button's label while
+    /// recording. Dirty-checked so a steady-state recording (the common
+    /// case: 0 dropped) costs nothing beyond the initial call.
+    pub fn set_recording_drops(&mut self, tree: &mut UITree, video_dropped: u32, audio_dropped: u32) {
+        let total = video_dropped + audio_dropped;
+        if self.recording_dropped_total == total {
+            return;
+        }
+        self.recording_dropped_total = total;
+        if let Some(id) = self.record_btn_id {
+            tree.set_text(id, &self.record_btn_label());
+        }
+    }
+
+    /// The Record button's current label: base verb plus a drop-count
+    /// warning suffix once anything has dropped this recording.
+    fn record_btn_label(&self) -> String {
+        if !self.recording_active {
+            return "Record Live".to_string();
+        }
+        if self.recording_dropped_total > 0 {
+            format!("Stop Recording \u{26A0} {} dropped", self.recording_dropped_total)
+        } else {
+            "Stop Recording".to_string()
         }
     }
 
@@ -1052,16 +1087,12 @@ impl LayerHeaderPanel {
                 View::column(4.0)
                     .fill_w()
                     .child(
-                        View::button(if self.recording_active {
-                            "Stop Recording"
-                        } else {
-                            "Record Live"
-                        })
-                        .fill_w()
-                        .h(Sizing::Fixed(REC_BTN_H))
-                        .style(self.record_btn_style())
-                        .inert()
-                        .key(KEY_RECORD),
+                        View::button(self.record_btn_label())
+                            .fill_w()
+                            .h(Sizing::Fixed(REC_BTN_H))
+                            .style(self.record_btn_style())
+                            .inert()
+                            .key(KEY_RECORD),
                     )
                     .child(
                         View::button(self.audio_device_name.as_str())
@@ -2603,6 +2634,37 @@ mod tests {
         assert_eq!(panel.rows[2].id(LayerControl::AddGenClip), None);
         // Insert indicator
         assert!(panel.insert_indicator_id.is_some());
+    }
+
+    /// BUG-084/BUG-086 — the Record button's label surfaces the drop count
+    /// while recording, and clears it on stop so a fresh recording starts
+    /// clean. This is the UI consumer BUG-084 was missing (the content
+    /// thread computed `recording_dropped_frames` every tick but nothing
+    /// ever read it).
+    #[test]
+    fn recording_drops_surface_on_record_button_label() {
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 2160.0);
+        let mut panel = LayerHeaderPanel::new();
+        panel.build(&mut tree, &layout, &mapper_for(&[]), 0.0);
+
+        let id = panel.record_btn_id.expect("record button built");
+        assert_eq!(tree.get_node(id).unwrap().text.as_deref(), Some("Record Live"));
+
+        panel.set_recording_active(&mut tree, true);
+        assert_eq!(tree.get_node(id).unwrap().text.as_deref(), Some("Stop Recording"));
+
+        // Video pool-exhaustion drops + native audio-backpressure drops sum
+        // into one label so a performer sees either kind.
+        panel.set_recording_drops(&mut tree, 3, 2);
+        assert_eq!(
+            tree.get_node(id).unwrap().text.as_deref(),
+            Some("Stop Recording \u{26A0} 5 dropped")
+        );
+
+        // Stopping clears the counter — a new recording starts clean.
+        panel.set_recording_active(&mut tree, false);
+        assert_eq!(tree.get_node(id).unwrap().text.as_deref(), Some("Record Live"));
     }
 
     /// BUG-025 regression: the in-place vertical-scroll fast-path must shift

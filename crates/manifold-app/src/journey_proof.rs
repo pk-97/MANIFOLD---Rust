@@ -236,7 +236,21 @@ fn run_headless_export(project: Project, cfg: ExportConfig) -> Result<PathBuf, S
         .name("journey-proof-drain".into())
         .spawn(move || {
             let mut finished = None;
+            // BUG-083 verification: log every progress snapshot the real
+            // export path sends, so a run of this proof
+            // (`--features journey-proofs -- --nocapture`) is a direct,
+            // observable oracle that `is_exporting`/`export_progress`/
+            // `export_status` climb during a real export — not just that the
+            // fields are non-zero somewhere, but that the exact snapshots
+            // the UI's header consumer reads actually progress.
             while let Ok(state) = state_rx.recv() {
+                if state.is_exporting {
+                    println!(
+                        "[journey-proof] export progress: {:.1}% — {}",
+                        state.export_progress * 100.0,
+                        state.export_status
+                    );
+                }
                 if let Some(ev) = state.export_finished {
                     finished = Some(ev);
                     break;
