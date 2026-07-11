@@ -18,6 +18,7 @@
 use ahash::{AHashMap, AHashSet};
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
+use manifold_renderer::gpu_readback::f16_to_f32;
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -65,8 +66,20 @@ pub fn clip_content_hash(clip: &TimelineClip, layer: &Layer) -> u64 {
 pub type StripCells = Vec<(u32, Vec<u8>)>;
 
 enum CacheMsg {
-    Store { hash: u64, cells: StripCells },
-    Load { hash: u64 },
+    /// A full clip-atlas persist readback, still packed as f16 (BUG-035): the
+    /// content thread hands over the raw bytes untouched (`try_read_packed()`
+    /// — a memcpy, no per-pixel work) and the worker does the f16→u8 convert
+    /// + per-cell slice + disk write, all off the content thread.
+    StoreAtlas {
+        atlas_f16: Vec<u8>,
+        atlas_w: u32,
+        layout: Vec<(manifold_core::ClipId, u32, u32)>,
+        hashes: AHashMap<String, u64>,
+        cols: u32,
+    },
+    Load {
+        hash: u64,
+    },
     Shutdown,
 }
 
@@ -77,7 +90,7 @@ pub struct LoadedStrip {
 }
 
 /// Worker-backed sidecar cache. Construct once; the content thread drives it with
-/// `request_load`, `store`, and `drain_loaded`. Cell geometry is fixed at
+/// `request_load`, `store_atlas`, and `drain_loaded`. Cell geometry is fixed at
 /// construction and validated on every load.
 pub struct ClipThumbCache {
     tx: Sender<CacheMsg>,
@@ -117,11 +130,26 @@ impl ClipThumbCache {
         }
     }
 
-    /// Persist a clip's captured cells (RGBA8). Fire-and-forget to the worker.
-    pub fn store(&self, hash: u64, cells: StripCells) {
-        if !cells.is_empty() {
-            let _ = self.tx.send(CacheMsg::Store { hash, cells });
-        }
+    /// Persist a clip-atlas persist readback. `atlas_f16` must be the tightly
+    /// packed Rgba16Float bytes from `ReadbackRequest::try_read_packed()`
+    /// (plain memcpy off the shared buffer — no conversion). Fire-and-forget:
+    /// the f16→u8 convert, per-cell slice, and disk write all happen on the
+    /// worker thread, so the caller pays only the channel send (BUG-035).
+    pub fn store_atlas(
+        &self,
+        atlas_f16: Vec<u8>,
+        atlas_w: u32,
+        layout: Vec<(manifold_core::ClipId, u32, u32)>,
+        hashes: AHashMap<String, u64>,
+        cols: u32,
+    ) {
+        let _ = self.tx.send(CacheMsg::StoreAtlas {
+            atlas_f16,
+            atlas_w,
+            layout,
+            hashes,
+            cols,
+        });
     }
 
     /// Drain any strips the worker has finished loading.
@@ -168,8 +196,19 @@ fn worker(
     while let Ok(msg) = rx.recv() {
         match msg {
             CacheMsg::Shutdown => break,
-            CacheMsg::Store { hash, cells } => {
-                let _ = write_strip(&dir, hash, cell_w, cell_h, &cells, cell_bytes);
+            CacheMsg::StoreAtlas {
+                atlas_f16,
+                atlas_w,
+                layout,
+                hashes,
+                cols,
+            } => {
+                let strips = slice_atlas_f16_for_store(
+                    &atlas_f16, atlas_w, &layout, &hashes, cols, cell_w, cell_h,
+                );
+                for (hash, cells) in strips {
+                    let _ = write_strip(&dir, hash, cell_w, cell_h, &cells, cell_bytes);
+                }
             }
             CacheMsg::Load { hash } => {
                 if let Some(cells) = read_strip(&dir, hash, cell_w, cell_h, cell_bytes) {
@@ -244,12 +283,19 @@ fn read_strip(
     Some(cells)
 }
 
-/// Slice each clip's cells out of a full RGBA8 atlas readback, grouped by content
-/// hash, ready to [`ClipThumbCache::store`]. `layout` is `(clip, cell idx, atlas
-/// cell)`; `hashes` maps clip id → content hash; `cols` is the atlas column count.
+/// Slice each clip's cells out of a full **Rgba16Float** atlas persist
+/// readback — tightly packed as `ReadbackRequest::try_read_packed()` returns
+/// it (`width * 8` bytes/row: 4 channels × f16, no row padding) — converting
+/// f16→u8 only for the pixels actually extracted into a cell, never the whole
+/// atlas. `layout` is `(clip, cell idx, atlas cell)`; `hashes` maps clip id →
+/// content hash; `cols` is the atlas column count. Runs on the
+/// clip-thumb disk worker thread so this O(surface) conversion never touches
+/// the content thread (BUG-035: the old path ran the full-atlas equivalent —
+/// `ReadbackRequest::try_read()` — inline in the content tick, ~58ms/cycle on
+/// the 8192×1152 clip atlas).
 #[allow(clippy::too_many_arguments)]
-pub fn slice_atlas_for_store(
-    atlas_rgba8: &[u8],
+pub fn slice_atlas_f16_for_store(
+    atlas_f16: &[u8],
     atlas_w: u32,
     layout: &[(manifold_core::ClipId, u32, u32)],
     hashes: &AHashMap<String, u64>,
@@ -258,7 +304,7 @@ pub fn slice_atlas_for_store(
     cell_h: u32,
 ) -> Vec<(u64, StripCells)> {
     let cell_bytes = (cell_w * cell_h * 4) as usize;
-    let atlas_stride = (atlas_w * 4) as usize;
+    let atlas_stride = (atlas_w * 8) as usize; // f16: 4 channels × 2 bytes, tightly packed
     let mut by_hash: AHashMap<u64, StripCells> = AHashMap::new();
     for (clip, cell_idx, atlas_cell) in layout {
         let Some(&hash) = hashes.get(clip.as_str()) else {
@@ -266,18 +312,26 @@ pub fn slice_atlas_for_store(
         };
         let gx = (atlas_cell % cols) * cell_w;
         let gy = (atlas_cell / cols) * cell_h;
-        // Extract the cell's rows from the atlas buffer.
         let mut bytes = vec![0u8; cell_bytes];
-        let row_len = (cell_w * 4) as usize;
         let mut ok = true;
-        for row in 0..cell_h {
-            let src = ((gy + row) as usize) * atlas_stride + (gx as usize) * 4;
-            let dst = (row as usize) * row_len;
-            if src + row_len > atlas_rgba8.len() {
-                ok = false;
-                break;
+        'rows: for row in 0..cell_h {
+            let src_row = ((gy + row) as usize) * atlas_stride + (gx as usize) * 8;
+            let dst_row = (row as usize) * (cell_w as usize) * 4;
+            for col in 0..cell_w as usize {
+                let src_px = src_row + col * 8;
+                if src_px + 8 > atlas_f16.len() {
+                    ok = false;
+                    break 'rows;
+                }
+                let dst_px = dst_row + col * 4;
+                for ch in 0..4 {
+                    let lo = atlas_f16[src_px + ch * 2];
+                    let hi = atlas_f16[src_px + ch * 2 + 1];
+                    let bits = u16::from_le_bytes([lo, hi]);
+                    let f = f16_to_f32(bits);
+                    bytes[dst_px + ch] = (f * 255.0).round().clamp(0.0, 255.0) as u8;
+                }
             }
-            bytes[dst..dst + row_len].copy_from_slice(&atlas_rgba8[src..src + row_len]);
         }
         if ok {
             by_hash.entry(hash).or_default().push((*cell_idx, bytes));
@@ -291,24 +345,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn slice_extracts_correct_cell_pixels() {
-        // 2×1 grid of 2×2 cells → atlas 4×2 RGBA8. Cell 0 = left, cell 1 = right.
+    fn slice_f16_extracts_and_converts_correct_cell_pixels() {
+        // Same 2×1 grid of 2×2 cells as the RGBA8 test, but the atlas is
+        // Rgba16Float, tightly packed (try_read_packed()'s layout: width * 8
+        // bytes/row, no padding). Cell 1 (right half) is filled with an f16
+        // marker (R = 1.0 → u8 255 after the (f*255).round() convert; A = 1.0).
         let (cols, cw, ch) = (2u32, 2u32, 2u32);
         let aw = cols * cw; // 4
         let ah = ch; // 2
-        let mut atlas = vec![0u8; (aw * ah * 4) as usize];
-        // Fill cell 1 (right half) with a marker (R=200).
+        let one_f16: u16 = 0x3C00; // IEEE754 half for 1.0
+        let mut atlas = vec![0u8; (aw * ah * 8) as usize];
         for y in 0..ah {
             for x in cw..aw {
-                let i = ((y * aw + x) * 4) as usize;
-                atlas[i] = 200;
-                atlas[i + 3] = 255;
+                let px = ((y * aw + x) * 8) as usize;
+                // R channel = 1.0, G/B = 0.0, A channel = 1.0.
+                atlas[px..px + 2].copy_from_slice(&one_f16.to_le_bytes());
+                atlas[px + 6..px + 8].copy_from_slice(&one_f16.to_le_bytes());
             }
         }
-        let layout = vec![(manifold_core::ClipId::new("clipA"), 0u32, 1u32)]; // clipA bar0 → atlas cell 1
+        let layout = vec![(manifold_core::ClipId::new("clipA"), 0u32, 1u32)];
         let mut hashes = AHashMap::new();
         hashes.insert("clipA".to_string(), 42u64);
-        let out = slice_atlas_for_store(&atlas, aw, &layout, &hashes, cols, cw, ch);
+        let out = slice_atlas_f16_for_store(&atlas, aw, &layout, &hashes, cols, cw, ch);
         assert_eq!(out.len(), 1);
         let (hash, cells) = &out[0];
         assert_eq!(*hash, 42);
@@ -316,8 +374,7 @@ mod tests {
         let (idx, bytes) = &cells[0];
         assert_eq!(*idx, 0);
         assert_eq!(bytes.len(), (cw * ch * 4) as usize);
-        // Every pixel of the extracted cell should be the R=200 marker.
-        assert!(bytes.chunks(4).all(|p| p[0] == 200 && p[3] == 255));
+        assert!(bytes.chunks(4).all(|p| p[0] == 255 && p[1] == 0 && p[2] == 0 && p[3] == 255));
     }
 
     #[test]

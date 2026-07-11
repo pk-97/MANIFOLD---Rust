@@ -180,7 +180,12 @@ fn align_to_256(n: u32) -> u32 {
 }
 
 /// Convert IEEE 754 half-precision (f16) bits to f32.
-fn f16_to_f32(bits: u16) -> f32 {
+///
+/// `pub`: also used by `manifold-app`'s clip-thumb disk worker to convert a
+/// `try_read_packed()` Rgba16Float atlas readback off the content thread
+/// (BUG-035 — the scalar per-pixel conversion this function drives is exactly
+/// the CPU work that must never run on the content thread's hot path).
+pub fn f16_to_f32(bits: u16) -> f32 {
     let sign = ((bits >> 15) & 1) as u32;
     let exp = ((bits >> 10) & 0x1f) as u32;
     let frac = (bits & 0x3ff) as u32;
