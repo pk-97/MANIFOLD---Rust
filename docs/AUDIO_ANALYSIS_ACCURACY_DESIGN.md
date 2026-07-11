@@ -278,8 +278,8 @@ only the Section length floor (1 bar) lands as a per-type clamp beside the exist
 Common to all phases: test scope = `tools/audio_analysis` has no cargo tests — Python
 phases gate on the harness's own pytest + CLI runs; Rust-touching phases (P5) run
 focused `-p manifold-core -p manifold-playback --lib` plus the workspace sweep at the
-end of P5 only. No GPU-proofs anywhere (nothing touches shaders). Git: Mode B worktree
-per phase, orchestrator lands.
+end of P5 only. No GPU-proofs anywhere (nothing touches shaders). Git: Mode B, ONE
+warm worktree for the workstream (`agent-worktree.py acquire`), orchestrator lands.
 
 - **P1 — Harness core + noise floor.** *Entry:* repo tip; `python3 -c "import manifold_audio"`
   succeeds in the staged runtime. *Read-back:* this doc §2–§4; DESIGN_DOC_STANDARD §5.
