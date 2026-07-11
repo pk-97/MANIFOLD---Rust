@@ -212,7 +212,12 @@ fn evaluate_instance_drivers(fx: &mut PresetInstance, current_beat: Beats) -> bo
         for driver in ds.iter().filter(|d| d.enabled && !d.is_paused_by_user) {
             if let Some(p) = fx.params.get_mut(driver.param_id.as_ref()) {
                 let (min, max) = (p.spec.min, p.spec.max);
-                p.value = driver_target_value(driver, current_beat, min, max);
+                let raw = driver_target_value(driver, current_beat, min, max);
+                // BUG-039: a saw (or any waveform, via a trim overshoot)
+                // bound to a periodic param wraps back into range instead
+                // of clamping, so a full-range sweep spins continuously
+                // instead of hitching at the rail.
+                p.value = manifold_core::params::constrain_to_range(raw, min, max, p.spec.wraps);
                 any_driven = true;
             }
         }
@@ -807,6 +812,7 @@ mod tests {
     use super::*;
     use manifold_core::effect_registration::EffectMetadata;
     use manifold_core::effects::{DEFAULT_ENVELOPE_DECAY_BEATS, ParamEnvelope};
+    use manifold_core::{BeatDivision, DriverWaveform};
     use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
     use manifold_core::layer::Layer;
     use manifold_core::preset_definition_registry::create_default;
@@ -1353,6 +1359,7 @@ mod tests {
             invert: false,
             is_angle: false,
             is_trigger_gate: true,
+            wraps: false,
             section: None,
         }));
     }
@@ -2186,5 +2193,123 @@ mod tests {
         let expect = [4.0, 5.0, 6.0, 3.0];
         let got = fire_n_times(&mut project, expect.len());
         assert_eq!(got, expect, "wrap cycles 4,5,6,3 within the snapped integer rails 3..6, got {got:?}");
+    }
+
+    // ── BUG-039: driver (LFO) wrap ──────────────────────────────────────
+
+    /// A Sawtooth driver whose trim overshoots the param's own range (a
+    /// performer dragging a trim handle past 100%, or a driver ported from a
+    /// wider-range project) must wrap a periodic param back into range
+    /// instead of leaving it dangling past `max`.
+    #[test]
+    fn driver_wraps_periodic_param_past_trim_overshoot() {
+        let layer = layer_with_one_effect();
+        let mut project = project_with(layer);
+        {
+            let fx = &mut project.timeline.layers[0].effects.as_mut().unwrap()[0];
+            override_stock_param_range(fx, "amount", 0.0, 1.0);
+            fx.params.get_mut("amount").unwrap().spec.wraps = true;
+            let mut driver = ParameterDriver::new("amount", BeatDivision::Whole, DriverWaveform::Sawtooth);
+            driver.free_period_beats = Some(1.0); // 1-beat period so phase == beat directly
+            driver.trim_min = 0.0;
+            driver.trim_max = 1.5; // 50% overshoot past the param's own max
+            fx.drivers = Some(vec![driver]);
+        }
+
+        // Sawtooth phase 0.8 at beat 0.8 of a 1-beat period -> raw target
+        // 1.5*0.8 = 1.2, past max 1.0. Wrapped: 0.0 + (1.2-0.0).rem_euclid(1.0) = 0.2.
+        evaluate_instance_drivers(
+            &mut project.timeline.layers[0].effects.as_mut().unwrap()[0],
+            Beats(0.8),
+        );
+        let value = project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .params
+            .get("amount")
+            .unwrap()
+            .value;
+        assert!(
+            (value - 0.2).abs() < 1e-5,
+            "overshooting trim must wrap back into [0,1], got {value}"
+        );
+        assert!((0.0..1.0).contains(&value), "wrapped value must stay in range, got {value}");
+    }
+
+    /// The same overshoot on a NON-periodic param (default `wraps: false`,
+    /// e.g. FOV) must still clamp at the rail — wrapping is opt-in per
+    /// param, never the default.
+    #[test]
+    fn driver_clamps_non_periodic_param_past_trim_overshoot() {
+        let layer = layer_with_one_effect();
+        let mut project = project_with(layer);
+        {
+            let fx = &mut project.timeline.layers[0].effects.as_mut().unwrap()[0];
+            override_stock_param_range(fx, "amount", 0.0, 1.0);
+            // wraps stays false (default) — the FOV-style case.
+            let mut driver = ParameterDriver::new("amount", BeatDivision::Whole, DriverWaveform::Sawtooth);
+            driver.free_period_beats = Some(1.0); // 1-beat period so phase == beat directly
+            driver.trim_min = 0.0;
+            driver.trim_max = 1.5;
+            fx.drivers = Some(vec![driver]);
+        }
+
+        evaluate_instance_drivers(
+            &mut project.timeline.layers[0].effects.as_mut().unwrap()[0],
+            Beats(0.8),
+        );
+        let value = project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .params
+            .get("amount")
+            .unwrap()
+            .value;
+        assert!(
+            (value - 1.0).abs() < 1e-6,
+            "non-wrapping param must clamp at max, got {value}"
+        );
+    }
+
+    /// The full-cycle regression gate: a saw LFO driving a `wraps: true`
+    /// param across many periods never plateaus at the rail (the pre-fix
+    /// symptom class) — every sampled value stays strictly inside
+    /// `[min, max)`, and the sequence is monotonic-with-resets (rises, then
+    /// drops back to ~0 at each period boundary) rather than climbing past
+    /// max and sticking there.
+    #[test]
+    fn driver_saw_sweep_never_plateaus_across_multiple_periods() {
+        let layer = layer_with_one_effect();
+        let mut project = project_with(layer);
+        {
+            let fx = &mut project.timeline.layers[0].effects.as_mut().unwrap()[0];
+            override_stock_param_range(fx, "amount", 0.0, 360.0);
+            fx.params.get_mut("amount").unwrap().spec.wraps = true;
+            let mut driver = ParameterDriver::new("amount", BeatDivision::Whole, DriverWaveform::Sawtooth);
+            driver.free_period_beats = Some(1.0); // 1-beat period so phase == beat directly
+            fx.drivers = Some(vec![driver]);
+        }
+
+        let mut samples = Vec::new();
+        for i in 0..400 {
+            let beat = Beats(i as f64 * 0.01); // 4 full periods at 100 samples/period
+            evaluate_instance_drivers(
+                &mut project.timeline.layers[0].effects.as_mut().unwrap()[0],
+                beat,
+            );
+            let value = project.timeline.layers[0].effects.as_ref().unwrap()[0]
+                .params
+                .get("amount")
+                .unwrap()
+                .value;
+            assert!(
+                (0.0..360.0).contains(&value),
+                "sample at beat {beat:?} out of [0,360): {value}"
+            );
+            samples.push(value);
+        }
+        // Never two consecutive frames sitting at (near-)max — a plateau is
+        // exactly the symptom BUG-039 fixed: the value getting stuck at the
+        // rail instead of resetting to ~0 at the wrap.
+        for w in samples.windows(2) {
+            let stuck_at_top = w[0] > 355.0 && w[1] > 355.0;
+            assert!(!stuck_at_top, "value plateaued near max instead of wrapping: {w:?}");
+        }
     }
 }

@@ -777,6 +777,26 @@ impl GeneratorRenderer {
         }
     }
 
+    /// BUG-104 — release trigger-EDGE latch state on every live generator,
+    /// leaving particle sims / feedback / accumulators untouched. The
+    /// narrow sibling of [`Self::reset_all_generator_state`]: a
+    /// `LayerGeneratorState`'s generator is deliberately long-lived across
+    /// clip changes on the same layer (temporal continuity), so a full
+    /// reset on every transport stop would be its own regression. Trigger
+    /// latches (`node.sample_and_hold`, `node.clip_trigger_cycle`,
+    /// `node.clip_trigger_index`, `node.frequency_ratio`,
+    /// `node.cycle_table_row`, `node.trigger_gate`, `node.trigger_ease_to`)
+    /// have no such continuity expectation — see
+    /// `PresetRuntime::clear_trigger_state` for the mechanism. Call from
+    /// the same "kill the trigger" moments
+    /// `manifold_playback::modulation::clear_all_trigger_edges` already
+    /// fires (transport stop, project load).
+    pub fn clear_all_trigger_state(&mut self) {
+        for layer_state in self.layer_generators.values_mut() {
+            layer_state.generator.clear_trigger_state();
+        }
+    }
+
     /// Update active clip types for a layer after generator type change.
     /// Port of C# GeneratorRenderer.UpdateActiveTypesForLayer().
     pub fn update_active_types_for_layer(&mut self, layer_id: &LayerId, new_type: PresetTypeId) {

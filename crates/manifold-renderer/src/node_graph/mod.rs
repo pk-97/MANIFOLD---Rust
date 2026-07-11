@@ -46,6 +46,7 @@ pub mod primitive;
 pub mod primitives;
 mod snapshot;
 mod state_store;
+pub mod trigger_shadow_lint;
 mod validation;
 
 /// Canonical channel-name registry for the Channel type system. The

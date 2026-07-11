@@ -422,6 +422,23 @@ pub enum ChainError {
     /// error log carries it too. The chain build returned `None`
     /// and the operator sees the layer as a black passthrough.
     PreAllocationFailed { reason: String },
+    /// BUG-104 Part 5(b): a `node.switch_value` whose `selector` derives
+    /// from a trigger source shadows a continuously-bound producer on one
+    /// of its `in_N` branches instead of composing onto it — the class of
+    /// bug that made Lissajous's Freq X/Y Rate faders go dead (and stay
+    /// dead) while a Clip Trigger was active. Detected by
+    /// [`crate::node_graph::trigger_shadow_lint`] on every generator
+    /// (re)build in [`PresetRuntime::from_def`] — the same warning reaches
+    /// the editor (via [`PresetRuntime::errors`]), an MCP-driven mutation,
+    /// or an agent-authored graph, since all three funnel through the same
+    /// build path. Not a build failure — the graph still runs; this is a
+    /// severity-warning entry surfaced through the existing structured
+    /// diagnostic channel rather than a new one.
+    TriggerShadowsContinuousBinding {
+        node_id: String,
+        port: String,
+        shadowed_source: String,
+    },
 }
 
 impl std::fmt::Display for ChainError {
@@ -474,6 +491,20 @@ impl std::fmt::Display for ChainError {
                 f,
                 "resource pre-allocation failed: {reason}. Chain build returned None; \
                  operator will see the affected layer go black"
+            ),
+            Self::TriggerShadowsContinuousBinding {
+                node_id,
+                port,
+                shadowed_source,
+            } => write!(
+                f,
+                "node `{node_id}`.{port}: trigger-driven switch_value shadows a continuous \
+                 binding at {shadowed_source} — a card fader feeding that binding will go dead \
+                 while the trigger is active (BUG-104). Compose instead of replace (see \
+                 docs/DECOMPOSING_GENERATORS.md §4.1's trigger_modulate idiom: switch_value with \
+                 an identity default on the idle branch + a downstream math node), or if this is a \
+                 genuine discrete selector, add it to trigger_shadow_lint::DISCRETE_REPLACE_ALLOWLIST \
+                 and record the decision in this preset's description."
             ),
         }
     }
@@ -2493,10 +2524,34 @@ impl PresetRuntime {
         // Group → producer map for the node-output preview, captured before
         // `into_graph` flattens the groups away.
         let group_preview_map = manifold_core::flatten::group_output_producer_map(&doc);
-        // Propagated per-node preview kind, from the flattened document.
-        let preview_kinds = manifold_core::flatten::flatten_groups(&doc)
-            .map(|flat| crate::node_graph::PreviewEncoding::propagate(&flat))
+        // Flattened once, shared by the node-output preview kind propagation
+        // AND the BUG-104 trigger-shadow class check below — both need the
+        // group-boundary-free view of the graph.
+        let flat_doc = manifold_core::flatten::flatten_groups(&doc).ok();
+        let preview_kinds = flat_doc
+            .as_ref()
+            .map(crate::node_graph::PreviewEncoding::propagate)
             .unwrap_or_default();
+        let mut chain_errors: Vec<ChainError> = Vec::new();
+        if let Some(flat) = flat_doc.as_ref() {
+            for finding in crate::node_graph::trigger_shadow_lint::find_trigger_shadow_findings(flat)
+            {
+                if crate::node_graph::trigger_shadow_lint::is_allowlisted(
+                    type_id.as_str(),
+                    &finding.node_id,
+                ) {
+                    continue;
+                }
+                record_chain_error(
+                    &mut chain_errors,
+                    ChainError::TriggerShadowsContinuousBinding {
+                        node_id: finding.node_id,
+                        port: finding.port,
+                        shadowed_source: finding.shadowed_source,
+                    },
+                );
+            }
+        }
 
         let mut graph = doc.into_graph(registry)?;
         let plan = compile(&graph)?;
@@ -2644,7 +2699,7 @@ impl PresetRuntime {
             pending_segments: false,
             built_segment_generation: 0,
             state_store: StateStore::new(),
-            errors: Vec::new(),
+            errors: chain_errors,
             preview_encoding: crate::node_graph::PreviewEncoding::default(),
             type_id: Some(type_id),
             target_format: None,
@@ -2941,6 +2996,39 @@ impl PresetRuntime {
             inst.node.clear_state();
         }
         self.state_store.cleanup_all();
+    }
+
+    /// BUG-104 — release trigger-EDGE latch state ONLY (`EffectNode::
+    /// is_trigger_latch` nodes: `sample_and_hold`, `clip_trigger_cycle`,
+    /// `clip_trigger_index`, `frequency_ratio`, `cycle_table_row`,
+    /// `trigger_gate`, `trigger_ease_to`), leaving every other primitive's
+    /// persistent state (feedback textures, particle buffers, mip
+    /// pyramids) untouched.
+    ///
+    /// The narrow sibling of [`Self::reset_state`]: generators are
+    /// deliberately long-lived per layer (`docs/DECOMPOSING_GENERATORS.md`
+    /// §9 — particle sims / feedback survive clip changes), so a full
+    /// `reset_state()` on every transport stop would be its own
+    /// regression (nuking sim state the performer expects to persist).
+    /// A trigger latch has no such expectation — it exists only to mirror
+    /// the "Trigger" card option's last edge, and once that option goes
+    /// back to idle (or the transport stops / a project loads), the latch
+    /// holding a stale captured value or cycle index with no way for the
+    /// performer to release it IS the bug (BUG-104: "goes dead, and stays
+    /// dead after Trigger is disabled"). Call from the same moments the
+    /// playback-side `manifold_playback::modulation::clear_all_trigger_edges`
+    /// already fires (transport stop, project load) — see
+    /// `ContentThread::handle_command`'s `ContentCommand::Stop` /
+    /// `ContentCommand::LoadProject` arms.
+    pub fn clear_trigger_state(&mut self) {
+        let mut latch_ids: Vec<NodeInstanceId> = Vec::new();
+        for inst in self.graph.nodes_mut() {
+            if inst.node.is_trigger_latch() {
+                inst.node.clear_state();
+                latch_ids.push(inst.id);
+            }
+        }
+        self.state_store.cleanup_nodes(&latch_ids);
     }
 
     /// Resize the generator's backend + re-pre-bind the final-output
@@ -4798,6 +4886,7 @@ mod generator_runtime_tests {
             invert: false,
             is_angle: false,
             is_trigger_gate: false,
+            wraps: false,
             section: None,
         });
         p.value = value;
@@ -4865,6 +4954,140 @@ mod generator_runtime_tests {
             "mux_y.selector should be 1.0 (fan-out from same `clip_trigger` outer \
              slider as mux_x), got {:?}",
             mux_y.params.get("selector"),
+        );
+    }
+
+    /// BUG-104 — `clear_trigger_state` on a REAL shipped preset (Lissajous)
+    /// walks the graph, finds exactly the nodes `is_trigger_latch` flags
+    /// (`ratio` — `node.frequency_ratio`), and purges ONLY their
+    /// `StateStore` buckets, leaving an ordinary node's (`render` —
+    /// `node.draw_lines`) bucket untouched. No GPU needed —
+    /// `clear_trigger_state` never touches the backend.
+    #[test]
+    fn clear_trigger_state_purges_only_flagged_nodes_state_store_buckets() {
+        use crate::node_graph::NodeState;
+
+        struct Probe;
+        impl NodeState for Probe {}
+
+        let json = include_str!("../assets/generator-presets/Lissajous.json");
+        let mut g = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
+            .expect("Lissajous preset must load");
+
+        let ratio_id = g
+            .graph
+            .instance_by_node_id(&manifold_core::NodeId::new("ratio"))
+            .expect("Lissajous declares a `ratio` (frequency_ratio) node");
+        let render_id = g
+            .graph
+            .instance_by_node_id(&manifold_core::NodeId::new("render"))
+            .expect("Lissajous declares a `render` (draw_lines) node");
+
+        assert!(
+            g.graph.get_node(ratio_id).unwrap().node.is_trigger_latch(),
+            "frequency_ratio must flag itself as a trigger latch"
+        );
+        assert!(
+            !g.graph.get_node(render_id).unwrap().node.is_trigger_latch(),
+            "draw_lines is not a trigger latch — clear_trigger_state must leave it alone"
+        );
+
+        // Seed a StateStore bucket under BOTH node ids (owner_key 0, the
+        // generator convention) — clear_trigger_state must purge only the
+        // one belonging to the flagged node.
+        g.state_store.insert(ratio_id, 0, Probe);
+        g.state_store.insert(render_id, 0, Probe);
+
+        g.clear_trigger_state();
+
+        assert!(
+            g.state_store.get::<Probe>(ratio_id, 0).is_none(),
+            "trigger-latch node's StateStore bucket must be purged"
+        );
+        assert!(
+            g.state_store.get::<Probe>(render_id, 0).is_some(),
+            "non-latch node's StateStore bucket must survive a trigger-only clear"
+        );
+    }
+
+    /// BUG-104 Part 5(b) — the live build-time counterpart to
+    /// `trigger_shadow_class_guard.rs`'s offline sweep: the REAL shipped
+    /// Lissajous.json (post BUG-104 Part 3 fix) must build with ZERO
+    /// `TriggerShadowsContinuousBinding` errors — proving the fix is
+    /// structurally clean, not just visually plausible.
+    #[test]
+    fn lissajous_builds_with_no_trigger_shadow_errors() {
+        let json = include_str!("../assets/generator-presets/Lissajous.json");
+        let g = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
+            .expect("Lissajous preset must load");
+        let shadow_errors: Vec<_> = g
+            .errors()
+            .iter()
+            .filter(|e| matches!(e, ChainError::TriggerShadowsContinuousBinding { .. }))
+            .collect();
+        assert!(
+            shadow_errors.is_empty(),
+            "Lissajous must build with no BUG-104 trigger-shadow errors, got {shadow_errors:?}"
+        );
+    }
+
+    /// BUG-104 Part 5(b) — same synthetic pre-fix shape as
+    /// `trigger_shadow_class_guard.rs`'s regression test, but exercised
+    /// through the REAL build path (`PresetRuntime::from_def` via
+    /// `from_json_str`) to prove the warning reaches `PresetRuntime::
+    /// errors()` — the channel editor UI / MCP-driven mutations / agent-
+    /// authored graphs all read, not just the offline sweep test.
+    #[test]
+    fn from_json_str_surfaces_trigger_shadow_as_a_chain_error() {
+        let json = r#"{
+            "version": 2,
+            "name": "SyntheticPreFixShape",
+            "nodes": [
+                { "id": 0, "nodeId": "input", "typeId": "system.generator_input" },
+                { "id": 1, "nodeId": "lfo_x", "typeId": "node.lfo",
+                  "params": { "angular_rate": { "type": "Float", "value": 0.13 } } },
+                { "id": 2, "nodeId": "mux_x", "typeId": "node.switch_value" },
+                { "id": 3, "nodeId": "uv", "typeId": "node.uv_field" },
+                { "id": 4, "nodeId": "final_output", "typeId": "system.final_output" }
+            ],
+            "wires": [
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in_0" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ],
+            "presetMetadata": {
+                "id": "SyntheticPreFixShape",
+                "displayName": "Synthetic",
+                "category": "Geometry",
+                "oscPrefix": "synthetic",
+                "params": [
+                    { "id": "freq_x_rate", "name": "Freq X Rate", "min": 0.0, "max": 1.0,
+                      "defaultValue": 0.13, "wholeNumbers": false, "isToggle": false, "isTrigger": false },
+                    { "id": "clip_trigger", "name": "Clip Trigger", "min": 0.0, "max": 1.0,
+                      "defaultValue": 0.0, "wholeNumbers": false, "isToggle": true, "isTriggerGate": true, "isTrigger": false }
+                ],
+                "bindings": [
+                    { "id": "freq_x_rate", "label": "Freq X Rate", "defaultValue": 0.13,
+                      "target": { "kind": "node", "nodeId": "lfo_x", "param": "angular_rate" },
+                      "convert": { "type": "Float" } },
+                    { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
+                      "target": { "kind": "node", "nodeId": "mux_x", "param": "selector" },
+                      "convert": { "type": "Float" } }
+                ]
+            }
+        }"#;
+        let g = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
+            .expect("synthetic pre-fix-shaped preset must still build (this is a warning, not a \
+                     hard failure — the graph runs, it just has a shadowed fader)");
+        let shadow_errors: Vec<_> = g
+            .errors()
+            .iter()
+            .filter(|e| matches!(e, ChainError::TriggerShadowsContinuousBinding { .. }))
+            .collect();
+        assert_eq!(
+            shadow_errors.len(),
+            1,
+            "from_json_str (-> from_def) must surface the trigger-shadow finding through \
+             PresetRuntime::errors(), got {shadow_errors:?}"
         );
     }
 

@@ -73,6 +73,17 @@ impl Primitive for ClipTriggerCycleNode {
         let index = self.cycle.step(trigger_count, modulus);
         ctx.outputs.set_scalar("out", ParamValue::Float(index as f32));
     }
+
+    /// BUG-104: release the cycle's idempotence tracking so a fresh
+    /// trigger after release re-arms cleanly instead of carrying a stale
+    /// `last_emitted` forward forever. See `EffectNode::is_trigger_latch`.
+    fn clear_state(&mut self) {
+        self.cycle = ClipTriggerCycle::new();
+    }
+
+    fn is_trigger_latch(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -121,5 +132,31 @@ mod tests {
         let mut prim = ClipTriggerCycleNode::new();
         assert_eq!(prim.cycle.step(5, 8), 5);
         assert_eq!(prim.cycle.step(13, 8), 6);
+    }
+
+    #[test]
+    fn is_trigger_latch_flag_is_set() {
+        let prim = ClipTriggerCycleNode::new();
+        let node: &dyn EffectNode = &prim;
+        assert!(node.is_trigger_latch());
+    }
+
+    /// BUG-104 — `clear_state()`, called through the same `EffectNode`
+    /// trait object `PresetRuntime::clear_trigger_state` uses, releases
+    /// the idempotence cache instead of leaving it latched on the last
+    /// trigger_count forever.
+    #[test]
+    fn clear_state_releases_the_cycle_idempotence_cache() {
+        let mut prim = ClipTriggerCycleNode::new();
+        assert_eq!(prim.cycle.step(0, 8), 0);
+        assert_eq!(prim.cycle.step(8, 8), 1); // would repeat 0 — advances
+        assert_eq!(prim.cycle.step(8, 8), 1); // idempotent on same input
+
+        {
+            let node: &mut dyn EffectNode = &mut prim;
+            node.clear_state();
+        }
+
+        assert_eq!(prim.cycle.step(8, 8), 0, "released cycle should re-arm to a fresh computation");
     }
 }

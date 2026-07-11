@@ -752,6 +752,35 @@ pub trait EffectNode: Send {
     /// and the symptom → cause table when feedback effects misbehave.
     fn clear_state(&mut self) {}
 
+    /// Marks a node as holding trigger-EDGE latch state — a captured value
+    /// or cycle index that only changes on a `trigger_count` edge and
+    /// otherwise holds forever (`node.sample_and_hold`'s `held`,
+    /// `node.clip_trigger_cycle` / `node.clip_trigger_index` /
+    /// `node.frequency_ratio` / `node.cycle_table_row`'s cycle position,
+    /// `node.trigger_gate`'s `output_count`, `node.trigger_ease_to`'s
+    /// captured tween endpoints). Default `false`.
+    ///
+    /// BUG-104: unlike `clear_state` (fired on layer-idle / seek / project
+    /// load for EFFECT chains), GENERATORS have no per-frame idle-reset
+    /// pass — a generator instance is deliberately long-lived per layer so
+    /// particle sims / feedback / accumulators survive clip changes
+    /// (`docs/DECOMPOSING_GENERATORS.md` §9). That means a trigger latch
+    /// inside a generator graph, once captured, silently outlives the
+    /// "Trigger" card option being switched back off — the param that
+    /// drove capture goes back to 0, but the captured value or cycle index
+    /// never releases. `PresetRuntime::clear_trigger_state` uses this flag
+    /// to release EXACTLY these nodes (both `clear_state`-owned instance
+    /// fields AND their `StateStore` buckets) on transport stop / project
+    /// load, without touching the broader persistent state (feedback,
+    /// mip pyramids, particle buffers) a full `clear_state()` would wipe.
+    /// Nodes that flag `true` should also override `clear_state()` if they
+    /// hold the latch as an instance field (`extra_fields`); nodes whose
+    /// latch lives only in the `StateStore` (e.g. `sample_and_hold`) don't
+    /// need to — the store-level sweep covers them.
+    fn is_trigger_latch(&self) -> bool {
+        false
+    }
+
     /// Rebuild any param-derived port lists after a parameter changes.
     ///
     /// Default no-op — almost every node has a fixed port shape declared

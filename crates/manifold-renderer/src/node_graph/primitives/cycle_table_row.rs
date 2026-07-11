@@ -121,6 +121,16 @@ impl Primitive for CycleTableRow {
         let write_count = capacity.min(row.len());
         unsafe { dst.write(0, bytemuck::cast_slice(&row[..write_count])) };
     }
+
+    /// BUG-104: release the cycle's idempotence tracking. See
+    /// `EffectNode::is_trigger_latch`.
+    fn clear_state(&mut self) {
+        self.clip_trigger_cycle = crate::generators::clip_trigger::ClipTriggerCycle::new();
+    }
+
+    fn is_trigger_latch(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -190,5 +200,35 @@ mod tests {
             .expect("cycle_table_row should be registered as a palette atom");
         assert_eq!(entry.label, "Cycle Table Row");
         assert!(matches!(entry.category, PaletteCategory::Driver));
+    }
+
+    #[test]
+    fn is_trigger_latch_flag_is_set() {
+        use crate::node_graph::EffectNode;
+        let prim = CycleTableRow::new();
+        let node: &dyn EffectNode = &prim;
+        assert!(node.is_trigger_latch());
+    }
+
+    /// BUG-104 — see `frequency_ratio`'s equivalent test for the full
+    /// rationale.
+    #[test]
+    fn clear_state_releases_the_cycle_idempotence_cache() {
+        use crate::node_graph::EffectNode;
+        let mut prim = CycleTableRow::new();
+        assert_eq!(prim.clip_trigger_cycle.step(0, 4), 0);
+        assert_eq!(prim.clip_trigger_cycle.step(4, 4), 1); // would repeat 0 — advances
+        assert_eq!(prim.clip_trigger_cycle.step(4, 4), 1); // idempotent on same input
+
+        {
+            let node: &mut dyn EffectNode = &mut prim;
+            node.clear_state();
+        }
+
+        assert_eq!(
+            prim.clip_trigger_cycle.step(4, 4),
+            0,
+            "released cycle should re-arm to a fresh computation"
+        );
     }
 }

@@ -92,6 +92,14 @@ impl Primitive for TriggerGate {
         self.last_input = None;
         self.output_count = 0;
     }
+
+    /// BUG-104: `output_count` only ever accumulates while `enable` is
+    /// true — flipping `enable` back off freezes it but never releases it,
+    /// so a downstream mux/consumer stays parked on the frozen count
+    /// forever. See `EffectNode::is_trigger_latch`.
+    fn is_trigger_latch(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -134,5 +142,13 @@ mod tests {
             .expect("trigger_gate should be registered as a palette atom");
         assert_eq!(entry.label, "Trigger Gate");
         assert!(matches!(entry.category, PaletteCategory::Driver));
+    }
+
+    #[test]
+    fn is_trigger_latch_flag_is_set() {
+        use crate::node_graph::EffectNode;
+        let prim = TriggerGate::new();
+        let node: &dyn EffectNode = &prim;
+        assert!(node.is_trigger_latch());
     }
 }

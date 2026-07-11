@@ -103,6 +103,19 @@ impl Primitive for FrequencyRatio {
         ctx.outputs.set_scalar("a", ParamValue::Float(a));
         ctx.outputs.set_scalar("b", ParamValue::Float(b));
     }
+
+    /// BUG-104: `clip_trigger_cycle` holds the last-emitted row index
+    /// forever (by design — never repeating consecutive rows) with no
+    /// self-driven way back to a fresh state. Reset it to `new()` so the
+    /// next trigger after release starts idempotence tracking over, the
+    /// same as a freshly-built graph.
+    fn clear_state(&mut self) {
+        self.clip_trigger_cycle = crate::generators::clip_trigger::ClipTriggerCycle::new();
+    }
+
+    fn is_trigger_latch(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -291,5 +304,42 @@ mod tests {
         let prim = FrequencyRatio::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.frequency_ratio");
+    }
+
+    #[test]
+    fn is_trigger_latch_flag_is_set() {
+        let prim = FrequencyRatio::new();
+        let node: &dyn EffectNode = &prim;
+        assert!(node.is_trigger_latch());
+    }
+
+    /// BUG-104 — proves `clear_state()` (what `PresetRuntime::
+    /// clear_trigger_state` calls on every `is_trigger_latch` node) actually
+    /// releases the cycle's idempotence cache, through the same
+    /// `EffectNode` trait object the runtime uses (not a direct field poke).
+    #[test]
+    fn clear_state_releases_the_cycle_idempotence_cache() {
+        let mut prim = FrequencyRatio::new();
+        assert_eq!(prim.clip_trigger_cycle.step(0, 10), 0);
+        // 10 % 10 == 0 would repeat the previous emission (0) — the
+        // anti-repeat guard advances to 1.
+        assert_eq!(prim.clip_trigger_cycle.step(10, 10), 1);
+        // Idempotent: the SAME trigger_count re-queried without an
+        // intervening advance returns the cached emission, not a fresh
+        // computation.
+        assert_eq!(prim.clip_trigger_cycle.step(10, 10), 1);
+
+        {
+            let node: &mut dyn EffectNode = &mut prim;
+            node.clear_state();
+        }
+
+        // Same raw trigger_count as the cached call above, but with the
+        // cycle released there is no "previous emission" to compare
+        // against — the anti-repeat guard doesn't fire (it only applies
+        // after a first observation), so this is a fresh 10 % 10 = 0,
+        // not the stale cached 1. This is exactly the "stays dead after
+        // Trigger is disabled" half of BUG-104 for a mux-selector cycle.
+        assert_eq!(prim.clip_trigger_cycle.step(10, 10), 0);
     }
 }

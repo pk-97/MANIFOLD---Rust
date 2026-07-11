@@ -221,6 +221,14 @@ impl EffectNode for TriggerEaseTo {
         store.insert(node_id, owner_key, next);
         ctx.outputs.set_scalar("out", ParamValue::Float(out));
     }
+
+    /// BUG-104: state lives entirely in the `StateStore` (`EaseState`),
+    /// nothing on `self` to clear — flag it so
+    /// `PresetRuntime::clear_trigger_state` purges the `StateStore` bucket
+    /// from the outside. See `EffectNode::is_trigger_latch`.
+    fn is_trigger_latch(&self) -> bool {
+        true
+    }
 }
 
 inventory::submit! {
@@ -258,6 +266,12 @@ mod tests {
     fn trigger_ease_to_type_id_is_node_prefixed() {
         let node = TriggerEaseTo::new();
         assert_eq!(node.type_id().as_str(), "node.trigger_ease_to");
+    }
+
+    #[test]
+    fn is_trigger_latch_flag_is_set() {
+        let node = TriggerEaseTo::new();
+        assert!(node.is_trigger_latch());
     }
 
     /// CPU-mirror parity — exercises the same snap-and-glide state

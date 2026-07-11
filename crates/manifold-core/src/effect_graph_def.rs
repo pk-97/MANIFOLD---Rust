@@ -497,6 +497,16 @@ pub struct ParamSpecDef {
     /// serialize when false so every existing preset stays byte-identical.
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_trigger_gate: bool,
+    /// BUG-039: true when this param is periodic, so a modulation source
+    /// (LFO driver, automation lane) sweeping past `max` (or below `min`)
+    /// wraps back into range — `min + (v - min).rem_euclid(max - min)` —
+    /// instead of clamping and hitching at the rail. An EXPLICIT tag, not
+    /// inferred from [`Self::is_angle`]: angle-typed does not imply periodic
+    /// (FOV is angle-typed but must stay clamped; a ±89° tilt or an arc
+    /// extent must too). `false` by default, skipped on serialize when
+    /// false so every existing preset/project stays byte-identical on disk.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub wraps: bool,
     /// Card-bundling group name (D5,
     /// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2): contiguous runs of
     /// specs sharing the same `section` render under one collapsible header
@@ -715,6 +725,7 @@ mod tests {
             invert: false,
             is_angle: false,
             is_trigger_gate: false,
+            wraps: false,
             section: None,
         }
     }
@@ -1054,6 +1065,7 @@ mod tests {
                 invert: false,
                 is_angle: false,
                 is_trigger_gate: false,
+                wraps: false,
                 section: None,
             }],
             bindings: vec![BindingDef {

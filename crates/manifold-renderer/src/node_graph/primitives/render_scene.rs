@@ -44,11 +44,24 @@
 //! — a documented additive follow-up. ONE shared `envmap` input lights
 //! every PBR object in the scene (an environment map is scene-wide by
 //! nature, not per-object).
+//!
+//! Per docs/REALTIME_3D_DESIGN.md §10 D11+P8 (shipped): each object also
+//! grows an optional `instances_n: Array(InstanceTransform)` port. Wired,
+//! that object draws `instance_count = buffer_size / 32` copies (main pass
+//! AND every caster's shadow pass), each instance's world transform
+//! composed as `model_n · T_instance` — instance TRS applies first, the
+//! object group's `transform_n` second, so wiring the SAME `node.transform_3d`
+//! into two object groups keeps their instances glued together under a
+//! group move. Unwired = a cached 1-entry identity stub, drawn with count 1
+//! — the same shared depth buffer that resolves inter-object occlusion now
+//! resolves occlusion between instances and every other object too, which
+//! `node.render_copies`' private-depth-buffer instancing cannot do inside a
+//! scene.
 
 use ahash::AHashMap;
 use manifold_gpu::GpuBinding;
 
-use crate::generators::mesh_common::MeshVertex;
+use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 use crate::node_graph::atmosphere::Atmosphere;
 use crate::node_graph::camera::Camera;
 use crate::node_graph::effect_node::{
@@ -220,6 +233,14 @@ pub struct RenderScene {
     /// shadow-map slots so every `@binding(10..)` is always a valid depth
     /// texture even in a scene with no casters.
     dummy_depth: Option<manifold_gpu::GpuTexture>,
+    /// Cached 1-entry `Array(InstanceTransform)` bound to `instances_n`
+    /// for any object that leaves it unwired: `pos_scale = [0,0,0,1]`,
+    /// `rot_pad = [0,0,0,0]` — the same always-bind ABI-stub pattern as
+    /// `dummy_depth` (D11). Drawn with `instance_count = 1`, so the
+    /// vertex shader's `model_n · T_instance` composition collapses to
+    /// exactly `model_n` — an unwired object costs one extra 32-byte L1
+    /// storage-buffer read, nothing observable in the output.
+    identity_instance_stub: Option<manifold_gpu::GpuBuffer>,
 }
 
 impl RenderScene {
@@ -245,6 +266,7 @@ impl RenderScene {
             shadow_maps: std::array::from_fn(|_| None),
             shadow_sampler: None,
             dummy_depth: None,
+            identity_instance_stub: None,
         };
         s.rebuild(DEFAULT_OBJECTS, DEFAULT_LIGHTS);
         s
@@ -258,7 +280,7 @@ impl RenderScene {
         let n_obj = objects as usize;
         let n_lights = lights as usize;
 
-        let mut inputs = Vec::with_capacity(2 + n_lights + n_obj * 3);
+        let mut inputs = Vec::with_capacity(3 + n_lights + n_obj * 5);
         inputs.push(NodePort {
             name: std::borrow::Cow::Borrowed("camera"),
             ty: PortType::Camera,
@@ -288,6 +310,7 @@ impl RenderScene {
             });
         }
         let mesh_ty = PortType::Array(ArrayType::of_known::<MeshVertex>());
+        let instance_ty = PortType::Array(ArrayType::of_known::<InstanceTransform>());
         for i in 0..n_obj {
             inputs.push(NodePort {
                 name: std::borrow::Cow::Owned(format!("mesh_{i}")),
@@ -310,6 +333,16 @@ impl RenderScene {
             inputs.push(NodePort {
                 name: std::borrow::Cow::Owned(format!("transform_{i}")),
                 ty: PortType::Transform,
+                kind: PortKind::Input,
+                required: false,
+            });
+            // D11: unwired = this object draws once with a cached 1-entry
+            // identity stub (see `ensure_identity_instance_stub`); wired =
+            // instance_count = buffer_size / 32, each instance transformed
+            // by `model_n · T_instance`.
+            inputs.push(NodePort {
+                name: std::borrow::Cow::Owned(format!("instances_{i}")),
+                ty: instance_ty,
                 kind: PortKind::Input,
                 required: false,
             });
@@ -493,6 +526,24 @@ impl RenderScene {
         }
     }
 
+    /// Ensure the cached 1-entry identity `InstanceTransform` stub bound to
+    /// any object's `instances_n` when that port is unwired (D11). Created
+    /// once; cheap, called every frame like the shadow ABI stubs.
+    fn ensure_identity_instance_stub(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.identity_instance_stub.is_none() {
+            let stub = InstanceTransform {
+                pos_scale: [0.0, 0.0, 0.0, 1.0],
+                rot_pad: [0.0, 0.0, 0.0, 0.0],
+            };
+            let buf =
+                device.create_buffer_shared(std::mem::size_of::<InstanceTransform>() as u64);
+            unsafe {
+                buf.write(0, bytemuck::bytes_of(&stub));
+            }
+            self.identity_instance_stub = Some(buf);
+        }
+    }
+
     fn pipeline_for(
         &mut self,
         device: &manifold_gpu::GpuDevice,
@@ -523,8 +574,8 @@ impl RenderScene {
     pub fn description() -> PrimitiveDescription {
         PrimitiveDescription {
             type_id: RENDER_SCENE_TYPE_ID,
-            purpose: "Multi-object 3D scene renderer: draws `objects` separate Array<MeshVertex> meshes (one draw call each, no fixed cap on object count) into ONE shared depth buffer, so nearer objects correctly occlude farther ones — the gap node.render_mesh / node.render_copies can't close (each of those renders into its own private depth buffer). Each object carries its own material_n: Material, an optional base_color_map_n: Texture2D albedo/alpha map, and an optional transform_n: Transform (from node.transform_3d; unwired = identity) composed CPU-side into a model matrix. When base_color_map_n is wired, the sampled texel modulates material_n's base_color (rgb × rgb) and its alpha drives that material's alpha-cutout discard when alpha_mode is Mask — same resolve_albedo path as node.render_mesh. Normal/roughness/metallic maps remain unwired per object (dummy-bound) — a documented additive follow-up. `lights` shared Light inputs light_0..light_{lights-1} (no fixed cap — lights ride a runtime-sized storage buffer) accumulate in the Phong/PBR/Cel shading — each light's direct term is summed, ambient + emission are added once. ONE shared envmap input lights every PBR object in the scene (an environment map is scene-wide, not per-object). Shadows: the first 4 lights (in slot order) whose cast_shadows is set drop real shadow maps onto the scene (PCF-softened per the light's shadow_softness); lights past that cap still illuminate but cast no shadow. No atmosphere/fog yet (P3).",
-            composition_notes: "objects and lights are reconfigure params: changing either rebuilds the port list (mesh_n/material_n/base_color_map_n/transform_n quadruples, light_0..N); the render node itself carries only `objects`/`lights` as params now, same dynamic-port pattern as node.switch_texture's num_inputs. Wire a node.transform_3d into transform_n to place/animate that object — each of its nine scalar ports (pos/rot/scale) is independently port-shadowed, so an LFO into rot_y spins it live; leaving transform_n unwired renders the object at the origin, unrotated, unit scale. base_color_map_n is optional — leaving it unwired renders that object with material_n's flat base_color, exactly as before this port existed. A missing mesh_n or material_n, or a PBR material_n with envmap left unwired, is a structured error (ctx.error + magenta clear on `color`), matching render_mesh's no-silent-fallbacks contract. Object 0 clears the shared color+depth target; objects 1..N load onto it — the shared depth buffer resolves occlusion regardless of which object happens to be object 0.",
+            purpose: "Multi-object 3D scene renderer: draws `objects` separate Array<MeshVertex> meshes (one draw call each, no fixed cap on object count) into ONE shared depth buffer, so nearer objects correctly occlude farther ones — the gap node.render_mesh / node.render_copies can't close (each of those renders into its own private depth buffer). Each object carries its own material_n: Material, an optional base_color_map_n: Texture2D albedo/alpha map, an optional transform_n: Transform (from node.transform_3d; unwired = identity) composed CPU-side into a model matrix, and an optional instances_n: Array(InstanceTransform) — wired, that object draws instance_count = buffer_size / 32 copies (main pass AND every caster's shadow pass), each instance's world transform composed as model_n · T_instance (instance TRS first, the object group's transform_n second, so scattered instances stay glued to their group under a group move); unwired draws once with an identity instance. Instances share the shared depth buffer too, so they correctly occlude and are occluded by every other object in the scene — the gap node.render_copies' private-depth-buffer instancing can't close. When base_color_map_n is wired, the sampled texel modulates material_n's base_color (rgb × rgb) and its alpha drives that material's alpha-cutout discard when alpha_mode is Mask — same resolve_albedo path as node.render_mesh. Normal/roughness/metallic maps remain unwired per object (dummy-bound) — a documented additive follow-up. `lights` shared Light inputs light_0..light_{lights-1} (no fixed cap — lights ride a runtime-sized storage buffer) accumulate in the Phong/PBR/Cel shading — each light's direct term is summed, ambient + emission are added once. ONE shared envmap input lights every PBR object in the scene (an environment map is scene-wide, not per-object). Shadows: the first 4 lights (in slot order) whose cast_shadows is set drop real shadow maps onto the scene (PCF-softened per the light's shadow_softness); lights past that cap still illuminate but cast no shadow. No atmosphere/fog yet (P3).",
+            composition_notes: "objects and lights are reconfigure params: changing either rebuilds the port list (mesh_n/material_n/base_color_map_n/transform_n/instances_n quintuples, light_0..N); the render node itself carries only `objects`/`lights` as params now, same dynamic-port pattern as node.switch_texture's num_inputs. Wire a node.transform_3d into transform_n to place/animate that object — each of its nine scalar ports (pos/rot/scale) is independently port-shadowed, so an LFO into rot_y spins it live; leaving transform_n unwired renders the object at the origin, unrotated, unit scale. base_color_map_n is optional — leaving it unwired renders that object with material_n's flat base_color, exactly as before this port existed. instances_n is optional and carries no per-object instance_count param — wire node.scatter_on_mesh (or any Array(InstanceTransform) producer) to draw that many copies; density control lives on the producer (e.g. scatter_on_mesh's port-shadowed count), not on render_scene. A missing mesh_n or material_n, or a PBR material_n with envmap left unwired, is a structured error (ctx.error + magenta clear on `color`), matching render_mesh's no-silent-fallbacks contract. Object 0 clears the shared color+depth target; objects 1..N load onto it — the shared depth buffer resolves occlusion regardless of which object happens to be object 0.",
             examples: &[],
             inputs: &[],
             outputs: &RENDER_SCENE_OUTPUTS,
@@ -771,7 +822,14 @@ impl EffectNode for RenderScene {
             uniforms: RenderSceneUniforms,
             pipeline: manifold_gpu::GpuRenderPipeline,
             base_color_map: Option<&'ctx manifold_gpu::GpuTexture>,
+            /// Wired `instances_n` buffer, or `None` (unwired — bind the
+            /// identity stub at draw time; see `identity_instance_stub`).
+            instances: Option<&'ctx manifold_gpu::GpuBuffer>,
+            /// `buffer_size / 32` when wired, else 1 (identity stub).
+            instance_count: u32,
         }
+
+        let instance_size = std::mem::size_of::<InstanceTransform>() as u64;
 
         let mut draws: Vec<ObjectDraw<'ctx>> = Vec::with_capacity(objects);
 
@@ -840,11 +898,23 @@ impl EffectNode for RenderScene {
                 self.pipeline_for(gpu.device, material.kind).clone()
             };
 
+            // D11: wired instances_n draws instance_count = buffer_size / 32
+            // copies (0 → that object's draw becomes a legal instance-count-0
+            // no-op); unwired draws once via the identity stub (bound at
+            // Pass 2 — this object carries no self-owned buffer reference).
+            let instances = ctx.inputs.array(&format!("instances_{n}"));
+            let instance_count = match instances {
+                Some(buf) => (buf.size / instance_size) as u32,
+                None => 1,
+            };
+
             draws.push(ObjectDraw {
                 vertices,
                 uniforms,
                 pipeline,
                 base_color_map,
+                instances,
+                instance_count,
             });
         }
 
@@ -867,6 +937,10 @@ impl EffectNode for RenderScene {
             self.ensure_msaa_targets(gpu.device, width, height);
             self.ensure_sampler(gpu.device);
             self.ensure_dummy_texture(gpu.device);
+            // Identity instance stub (D11) — bound to any object's
+            // instances_n when unwired, both in the main pass and every
+            // caster's shadow pass below.
+            self.ensure_identity_instance_stub(gpu.device);
             // Shadow ABI stubs (comparison sampler + 1×1 dummy depth) are
             // always needed — the main shader declares @binding(10..14) even
             // in a scene with no casters. The shadow *pipeline* + per-caster
@@ -905,6 +979,9 @@ impl EffectNode for RenderScene {
         // when no light casts (has_casters == false → zero passes). ----
         let vsize = std::mem::size_of::<MeshVertex>() as u64;
         let vcount = |buf: &manifold_gpu::GpuBuffer| ((buf.size / vsize) as u32 / 3) * 3;
+        // D11: the shadow pass instances too — bound once here, reused by
+        // Pass 2 below (both only ever take an immutable borrow of self).
+        let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
         if has_casters {
             let shadow_pipeline = self.shadow_pipeline.as_ref().expect("ensured").clone();
             let shadow_ds = self.shadow_depth_stencil.as_ref().expect("ensured");
@@ -920,7 +997,7 @@ impl EffectNode for RenderScene {
                         model: d.uniforms.model,
                     })
                     .collect();
-                let shadow_bindings: Vec<[GpuBinding; 2]> = draws
+                let shadow_bindings: Vec<[GpuBinding; 3]> = draws
                     .iter()
                     .zip(&shadow_uniforms)
                     .map(|(d, su)| {
@@ -934,6 +1011,11 @@ impl EffectNode for RenderScene {
                                 buffer: d.vertices,
                                 offset: 0,
                             },
+                            GpuBinding::Buffer {
+                                binding: 2,
+                                buffer: d.instances.unwrap_or(identity_stub),
+                                offset: 0,
+                            },
                         ]
                     })
                     .collect();
@@ -945,7 +1027,7 @@ impl EffectNode for RenderScene {
                             &shadow_pipeline,
                             b,
                             vcount(d.vertices),
-                            1,
+                            d.instance_count,
                         )
                     })
                     .collect();
@@ -1012,7 +1094,7 @@ impl EffectNode for RenderScene {
         // object's set borrows the same ones.
         let light_buffer = &self.light_buffers[self.light_frame];
         let caster_bytes: &[u8] = bytemuck::cast_slice(&caster_table);
-        let binding_sets: Vec<[GpuBinding; 15]> = draws
+        let binding_sets: Vec<[GpuBinding; 16]> = draws
             .iter()
             .map(|draw| {
                 [
@@ -1083,6 +1165,13 @@ impl EffectNode for RenderScene {
                         binding: 14,
                         sampler: shadow_sampler,
                     },
+                    // D11: per-object instances_n, or the identity stub when
+                    // that object leaves it unwired.
+                    GpuBinding::Buffer {
+                        binding: 15,
+                        buffer: draw.instances.unwrap_or(identity_stub),
+                        offset: 0,
+                    },
                 ]
             })
             .collect();
@@ -1094,7 +1183,7 @@ impl EffectNode for RenderScene {
                     &draw.pipeline,
                     bindings,
                     vertex_count(draw),
-                    1,
+                    draw.instance_count,
                 )
             })
             .collect();
@@ -1136,9 +1225,9 @@ mod tests {
     fn defaults_to_two_objects_one_light() {
         let s = RenderScene::new();
         // camera + envmap + atmosphere + light_0 +
-        // (mesh_0,material_0,base_color_map_0,transform_0) +
-        // (mesh_1,material_1,base_color_map_1,transform_1)
-        assert_eq!(s.inputs().len(), 3 + 1 + 8);
+        // (mesh_0,material_0,base_color_map_0,transform_0,instances_0) +
+        // (mesh_1,material_1,base_color_map_1,transform_1,instances_1)
+        assert_eq!(s.inputs().len(), 3 + 1 + 10);
         assert!(s.inputs().iter().any(|p| p.name == "atmosphere"));
         assert!(!s.inputs().iter().find(|p| p.name == "atmosphere").unwrap().required);
         assert_eq!(
@@ -1156,11 +1245,19 @@ mod tests {
         assert!(!by_name("transform_0").required);
         assert!(!by_name("transform_1").required);
         assert_eq!(by_name("transform_0").ty, PortType::Transform);
+        assert!(!by_name("instances_0").required);
+        assert!(!by_name("instances_1").required);
+        assert_eq!(
+            by_name("instances_0").ty,
+            PortType::Array(ArrayType::of_known::<InstanceTransform>())
+        );
         assert!(!s.inputs().iter().any(|p| p.name == "base_color_map_2"));
         assert!(!s.inputs().iter().any(|p| p.name == "transform_2"));
+        assert!(!s.inputs().iter().any(|p| p.name == "instances_2"));
         // Only `objects` + `lights` remain as params — per-object TRS moved
         // to the `transform_n` port (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md
-        // §2 D3).
+        // §2 D3); instances_n carries no per-object instance_count param
+        // either (REALTIME_3D_DESIGN.md §10 D11).
         assert_eq!(s.parameters().len(), 2);
         assert!(!s.parameters().iter().any(|p| p.name.contains("pos_x")));
     }
@@ -1174,8 +1271,10 @@ mod tests {
         assert!(node.inputs().iter().any(|p| p.name == "material_4"));
         assert!(node.inputs().iter().any(|p| p.name == "base_color_map_4"));
         assert!(node.inputs().iter().any(|p| p.name == "transform_4"));
+        assert!(node.inputs().iter().any(|p| p.name == "instances_4"));
         assert!(!node.inputs().iter().any(|p| p.name == "mesh_5"));
         assert!(!node.inputs().iter().any(|p| p.name == "transform_5"));
+        assert!(!node.inputs().iter().any(|p| p.name == "instances_5"));
         assert!(node.inputs().iter().any(|p| p.name == "light_2"));
         assert!(!node.inputs().iter().any(|p| p.name == "light_3"));
         assert_eq!(node.parameters().len(), 2, "object count never grows the param list anymore");
@@ -1184,9 +1283,11 @@ mod tests {
         assert!(!node.inputs().iter().any(|p| p.name == "mesh_1"));
         assert!(!node.inputs().iter().any(|p| p.name == "base_color_map_1"));
         assert!(!node.inputs().iter().any(|p| p.name == "transform_1"));
+        assert!(!node.inputs().iter().any(|p| p.name == "instances_1"));
         assert!(!node.inputs().iter().any(|p| p.name == "light_0"));
         assert!(node.inputs().iter().any(|p| p.name == "mesh_0"));
         assert!(node.inputs().iter().any(|p| p.name == "transform_0"));
+        assert!(node.inputs().iter().any(|p| p.name == "instances_0"));
     }
 
     #[test]
@@ -1209,6 +1310,10 @@ mod tests {
             .inputs()
             .iter()
             .any(|p| p.name == format!("transform_{last_obj}")));
+        assert!(node
+            .inputs()
+            .iter()
+            .any(|p| p.name == format!("instances_{last_obj}")));
         // Lights clamp to LIGHT_SLIDER_MAX — a soft UI bound now, NOT a
         // structural cap (lights ride a runtime-sized storage buffer).
         let last_light = LIGHT_SLIDER_MAX - 1;
@@ -1256,6 +1361,7 @@ mod tests {
         assert!(by_name("material_0").required);
         assert!(!by_name("base_color_map_0").required);
         assert!(!by_name("transform_0").required);
+        assert!(!by_name("instances_0").required);
     }
 
     #[test]

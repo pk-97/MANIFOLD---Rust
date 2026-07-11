@@ -157,6 +157,7 @@ fn card_param(
         invert: false,
         is_angle,
         is_trigger_gate: false,
+        wraps: false,
         section: Some(section.to_string()),
     }
 }
@@ -1228,9 +1229,32 @@ mod tests {
             trigger_count: 0,
         };
 
+        // BUG-100 (see docs/BUG_BACKLOG.md): `fraction > 0.02` alone is NOT
+        // a texture-decode-completion signal — the material's own `ambient`
+        // floor (`node.pbr_material`'s 0.18) lights the WHOLE silhouette
+        // from frame 1, regardless of whether `node.gltf_texture_source`'s
+        // background-thread decode has landed yet, so the old check broke
+        // out of this loop on the very first or second attempt for models
+        // whose base-color texture takes longer to decode than azalea's —
+        // capturing (and, before this fix, permanently asserting on) an
+        // under-textured, falsely-"near-black"-looking frame. Confirmed by
+        // rendering: forcing extra attempts on the exact same unmodified
+        // graph turns a near-black `cc0__japanese_apricot_prunus_mume.glb`/
+        // `lowe.glb` capture into a fully lit, richly textured one — the
+        // geometry/lighting/material rig was never the problem.
+        //
+        // Real completion signal: once the texture (and any other async
+        // parse) has actually landed, the render is a pure function of a
+        // static camera + static geometry + static light, so consecutive
+        // frames stop changing. Poll until the readback is byte-identical
+        // across `STABLE_STREAK` consecutive frames (not just non-black),
+        // so a still-loading frame's mid-decode churn can't look "done".
+        const STABLE_STREAK: u32 = 3;
         let max_attempts = 200;
         let mut rgba = Vec::new();
         let mut fraction = 0.0f64;
+        let mut prev_rgba: Option<Vec<u8>> = None;
+        let mut stable_count = 0u32;
         for attempt in 0..max_attempts {
             {
                 let mut enc = device.create_encoder("imported-azalea-render");
@@ -1274,10 +1298,18 @@ mod tests {
             }
             let total = (w * h) as usize;
             fraction = non_black as f64 / total as f64;
-            if fraction > 0.02 {
+
+            if fraction > 0.02 && prev_rgba.as_deref() == Some(rgba.as_slice()) {
+                stable_count += 1;
+            } else {
+                stable_count = 0;
+            }
+            prev_rgba = Some(rgba.clone());
+
+            if stable_count >= STABLE_STREAK {
                 println!(
                     "imported_azalea_renders_faithfully_to_png: converged on attempt {attempt} \
-                     (non-black fraction {fraction:.4})"
+                     (non-black fraction {fraction:.4}, stable for {STABLE_STREAK} frames)"
                 );
                 break;
             }
@@ -1384,9 +1416,17 @@ mod tests {
             trigger_count: 0,
         };
 
+        // BUG-100: same premature-convergence fix as
+        // `imported_azalea_renders_faithfully_to_png` — `fraction > 0.02`
+        // alone is satisfied by the material's ambient floor before the
+        // texture decode lands, so require the readback to be stable
+        // across `STABLE_STREAK` consecutive frames too.
+        const STABLE_STREAK: u32 = 3;
         let max_attempts = 200;
         let mut rgba = Vec::new();
         let mut fraction = 0.0f64;
+        let mut prev_rgba: Option<Vec<u8>> = None;
+        let mut stable_count = 0u32;
         for attempt in 0..max_attempts {
             {
                 let mut enc = device.create_encoder("imported-azalea-layer-render");
@@ -1429,9 +1469,17 @@ mod tests {
                 rgba.push((a * 255.0).round() as u8);
             }
             fraction = non_black as f64 / (w * h) as f64;
-            if fraction > 0.02 {
+
+            if fraction > 0.02 && prev_rgba.as_deref() == Some(rgba.as_slice()) {
+                stable_count += 1;
+            } else {
+                stable_count = 0;
+            }
+            prev_rgba = Some(rgba.clone());
+
+            if stable_count >= STABLE_STREAK {
                 println!(
-                    "create_with_override proof: converged on attempt {attempt} (non-black {fraction:.4})"
+                    "create_with_override proof: converged on attempt {attempt} (non-black {fraction:.4}, stable for {STABLE_STREAK} frames)"
                 );
                 break;
             }

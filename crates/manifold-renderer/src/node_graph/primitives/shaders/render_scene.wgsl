@@ -124,6 +124,48 @@ struct Uniforms {
 @group(0) @binding(13) var shadow_map_3: texture_depth_2d;
 @group(0) @binding(14) var shadow_sampler: sampler_comparison;
 
+// Per-object instancing (REALTIME_3D_DESIGN.md §10 D11+P8). One always-bound
+// storage buffer per object: wired instances_n binds the real buffer,
+// unwired binds a cached 1-entry identity stub (pos_scale [0,0,0,1],
+// rot_pad zeros) drawn with instance_count 1 — the same always-bind
+// ABI-stub pattern as the shadow bindings above. Layout matches
+// generators::mesh_common::InstanceTransform (32 bytes) and
+// render_instanced_3d_mesh.wgsl's `Instance` exactly.
+struct Instance {
+    pos_scale: vec4<f32>,
+    rot_pad: vec4<f32>,
+};
+@group(0) @binding(15) var<storage, read> instances: array<Instance>;
+
+// Build a 3×3 rotation matrix from XYZ Euler angles (XYZ order).
+// Bit-for-bit the same as render_instanced_3d_mesh.wgsl's euler_xyz —
+// forked, not shared, per this file's header convention.
+fn euler_xyz(angles: vec3<f32>) -> mat3x3<f32> {
+    let cx = cos(angles.x);
+    let sx = sin(angles.x);
+    let cy = cos(angles.y);
+    let sy = sin(angles.y);
+    let cz = cos(angles.z);
+    let sz = sin(angles.z);
+
+    let rx = mat3x3<f32>(
+        vec3<f32>(1.0, 0.0, 0.0),
+        vec3<f32>(0.0, cx, sx),
+        vec3<f32>(0.0, -sx, cx),
+    );
+    let ry = mat3x3<f32>(
+        vec3<f32>(cy, 0.0, -sy),
+        vec3<f32>(0.0, 1.0, 0.0),
+        vec3<f32>(sy, 0.0, cy),
+    );
+    let rz = mat3x3<f32>(
+        vec3<f32>(cz, sz, 0.0),
+        vec3<f32>(-sz, cz, 0.0),
+        vec3<f32>(0.0, 0.0, 1.0),
+    );
+    return rz * ry * rx;
+}
+
 const CASTER_STRIDE: u32 = 5u;
 
 // Pick shadow map `slot` (0..3) and do one hardware comparison sample.
@@ -193,14 +235,27 @@ struct VsOut {
     @location(2) uv: vec2<f32>,
 };
 
+// Instance TRS applies FIRST, the object group's `model` (transform_n)
+// SECOND — world = model_n · T_instance (D11). An identity instance
+// (unwired instances_n) collapses `rot` to the identity matrix and
+// `inst_pos`/`inst_normal` to `v.position`/`v.normal` unchanged, so this
+// is byte-identical to the pre-P8 vertex shader for every unwired object.
 @vertex
-fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
+fn vs_main(
+    @builtin(vertex_index) vid: u32,
+    @builtin(instance_index) iid: u32,
+) -> VsOut {
     let v = verts[vid];
+    let inst = instances[iid];
+    let rot = euler_xyz(inst.rot_pad.xyz);
+    let inst_pos = rot * (v.position * inst.pos_scale.w) + inst.pos_scale.xyz;
+    let inst_normal = rot * v.normal;
+
     var out: VsOut;
-    let world = u.model * vec4<f32>(v.position, 1.0);
+    let world = u.model * vec4<f32>(inst_pos, 1.0);
     out.world_pos = world.xyz;
     out.clip_pos = u.view_proj * world;
-    out.world_normal = normalize((u.model * vec4<f32>(v.normal, 0.0)).xyz);
+    out.world_normal = normalize((u.model * vec4<f32>(inst_normal, 0.0)).xyz);
     out.uv = v.uv;
     return out;
 }
