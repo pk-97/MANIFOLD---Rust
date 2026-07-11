@@ -1,6 +1,6 @@
 # Mesh Deform & Curve Geometry — organic motion for imported and procedural meshes
 
-**Status:** APPROVED design, not built · 2026-07-10 · Fable (with Peter in the room)
+**Status:** IN PROGRESS — P1 (growth core) + P2 (shape deformers) SHIPPED 2026-07-11 (`feat/mesh-deform`); all atoms on the freeze codegen path per decided #10. P3 (curve→mesh) + P4 (scatter + glTF fit) remain. · 2026-07-10 · Fable (with Peter in the room)
 **Prerequisites:** none hard — `node.render_scene` (REALTIME_3D P1) and SCENE_BUILD P1–P3 are shipped; every anchor below re-verifies at phase entry.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -227,7 +227,7 @@ at the END of P4 only. Demo renders use the `render-generator-preset` harness
 (the generator look-dev bin) and the orchestrator READS the PNGs. No phase touches
 `render_scene`, the graph runtime, or any existing primitive except where named.
 
-- **P1 — Growth core: `mesh_ramp` + `push_along_normals` + `facet_normals`.**
+- **P1 — Growth core: `mesh_ramp` + `push_along_normals` + `facet_normals`. ✅ SHIPPED 2026-07-11 (`baf1380a`→`1f55a3fb`, codegen path).**
   *Entry:* repo tip; anchors `mesh_common.rs:34`, `displace_mesh.rs`,
   `spawn_from_mesh.rs` re-verified. *Read-back:* this doc §2–§4, DECOMPOSING §6.2/§7,
   ADDING_PRIMITIVES whole. *Deliverables:* three atoms + `gpu_tests` per the §4
@@ -245,7 +245,7 @@ at the END of P4 only. Demo renders use the `render-generator-preset` harness
   loops; normals "recomputed" by copying triangulate_grid's grid kernel onto
   non-grid meshes (it's grid-only — that's why `facet_normals` exists); starting
   bend/twist early.
-- **P2 — Shape deformers: `bend_mesh` + `twist_mesh` + `taper_mesh` + `morph_mesh`.**
+- **P2 — Shape deformers: `bend_mesh` + `twist_mesh` + `taper_mesh` + `morph_mesh`. ✅ SHIPPED 2026-07-11 (`b0ad33f2`, codegen path).**
   *Entry:* P1 landed (weights-read pattern exists to copy). *Read-back:* §2 D3/D4,
   §3 table rows, P1's landed weight-read code. *Deliverables:* four atoms +
   `gpu_tests` incl. the exact-normals and unbounded-angle asserts; demo preset
