@@ -831,7 +831,15 @@ fn cycle_contains_array(start: u32, def: &EffectGraphDef, registry: &PrimitiveRe
         if !forward.contains(&node.id) {
             continue;
         }
-        let Some(n) = registry.construct(node.type_id.as_str()) else {
+        // CONFIGURED construct: a full-kernel `node.wgsl_compute` (e.g.
+        // StrangeAttractor's "simulate" node, which ships a
+        // `var<storage, read_write> array<Particle>` output) introspects its real
+        // port list only after its `wgsl_source` is applied. A bare construct sees
+        // the DEFAULT kernel (no Array output), so the particle stage would be
+        // invisible to the SCC scan and a texture atom on the loop would wrongly
+        // fuse tier-A f16 in-loop, where the bit-exact induction fails across a
+        // scatter (BUG-007).
+        let Some(n) = configured_construct(registry, node) else {
             continue;
         };
         if !n.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
@@ -1605,11 +1613,16 @@ fn topo_sort(
     (order.len() == nodes.len()).then_some(order)
 }
 
-/// The read-access of `type_id`'s texture input `port` (Coincident if the atom
+/// The read-access of `node`'s texture input `port` (Coincident if the atom
 /// is unknown or the port isn't one of its texture inputs). `input_access()` is
 /// aligned to the atom's TEXTURE inputs in `inputs()` order.
-fn input_port_access(registry: &PrimitiveRegistry, type_id: &str, port: &str) -> InputAccess {
-    let Some(node) = registry.construct(type_id) else {
+///
+/// CONFIGURED construct (BUG-007 sibling): a fragment-form `node.wgsl_compute`
+/// declares its input ports + their access modes only after `wgsl_source` is
+/// parsed — a bare construct sees the default kernel, so a gather input would read
+/// as coincident and wrongly union into a region.
+fn input_port_access(registry: &PrimitiveRegistry, node: &EffectGraphNode, port: &str) -> InputAccess {
+    let Some(node) = configured_construct(registry, node) else {
         return InputAccess::Coincident;
     };
     // `input_access` aligns to the SAME-domain inputs in declaration order:
@@ -1647,7 +1660,7 @@ fn wire_coincident_consumed(
     let Some(to) = def.nodes.iter().find(|n| n.id == w.to_node) else {
         return false;
     };
-    !input_port_access(registry, &to.type_id, &w.to_port).is_gather()
+    !input_port_access(registry, to, &w.to_port).is_gather()
 }
 
 /// Nodes with a directed path to a `final_output` node, over ALL wires (texture
@@ -1883,10 +1896,15 @@ fn param_is_binding_target(node: &EffectGraphNode, param: &str, def: &EffectGrap
 /// Drives the union guard: a texture wire into such an atom is a gathered
 /// external, never a register-threading union edge.
 fn node_is_buffer_atom(def: &EffectGraphDef, registry: &PrimitiveRegistry, id: u32) -> bool {
+    // CONFIGURED construct (BUG-007 sibling): a full-kernel `node.wgsl_compute`
+    // with a `var<storage, read_write> array<T>` output only reports that Array
+    // port after its `wgsl_source` is applied — a bare construct sees the default
+    // kernel and would miss the buffer domain, mis-driving the gather-vs-union
+    // guard.
     def.nodes
         .iter()
         .find(|n| n.id == id)
-        .and_then(|n| registry.construct(&n.type_id))
+        .and_then(|n| configured_construct(registry, n))
         .map(|c| c.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))))
         .unwrap_or(false)
 }
@@ -1895,10 +1913,14 @@ fn node_is_buffer_atom(def: &EffectGraphDef, registry: &PrimitiveRegistry, id: u
 /// `Array<T>`). Determined from any member's constructed output ports.
 fn region_is_buffer(nodes: &[u32], def: &EffectGraphDef, registry: &PrimitiveRegistry) -> bool {
     nodes.iter().any(|&id| {
+        // CONFIGURED construct (BUG-007 sibling) — see `node_is_buffer_atom`: a
+        // full-kernel `node.wgsl_compute` reports its Array output only after
+        // `wgsl_source` is applied, so a bare construct would pick the wrong
+        // (texture) codegen path for a buffer region.
         def.nodes
             .iter()
             .find(|n| n.id == id)
-            .and_then(|n| registry.construct(&n.type_id))
+            .and_then(|n| configured_construct(registry, n))
             .map(|c| c.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))))
             .unwrap_or(false)
     })
@@ -1956,6 +1978,86 @@ mod tests {
         ))
         .expect("read ColorGrade.json");
         serde_json::from_str(&json).expect("parse ColorGrade.json")
+    }
+
+    fn strange_attractor_def() -> EffectGraphDef {
+        let json = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/generator-presets/StrangeAttractor.json"
+        ))
+        .expect("read StrangeAttractor.json");
+        serde_json::from_str(&json).expect("parse StrangeAttractor.json")
+    }
+
+    /// BUG-007: `cycle_contains_array` must construct nodes CONFIGURED. A
+    /// full-kernel `node.wgsl_compute` particle node (StrangeAttractor's sim
+    /// stage) declares its `var<storage, read_write> array<Particle>` output only
+    /// after its `wgsl_source` is parsed. A bare construct sees the default kernel
+    /// with no Array output, so the particle stage is invisible to the SCC scan and
+    /// a texture atom on the same feedback loop wrongly passes cut rule 12 and
+    /// fuses tier-A f16 in-loop (where the bit-exact induction fails across a
+    /// scatter — FluidSim divergence class).
+    #[test]
+    fn cycle_through_configured_particle_wgsl_compute_is_particle_loop() {
+        let reg = registry();
+        let def =
+            manifold_core::flatten::flatten_groups(&strange_attractor_def()).expect("flatten");
+        let sim = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.wgsl_compute")
+            .expect("StrangeAttractor ships a full-kernel particle wgsl_compute node")
+            .clone();
+
+        // Root-cause pin: the Array output exists only on the CONFIGURED construct.
+        let bare = reg.construct(&sim.type_id).expect("construct node.wgsl_compute");
+        assert!(
+            !bare.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))),
+            "bare construct sees the default kernel — no Array output (the blind spot)",
+        );
+        let configured = configured_construct(&reg, &sim).expect("configured construct");
+        assert!(
+            configured
+                .outputs()
+                .iter()
+                .any(|o| matches!(o.ty, PortType::Array(_))),
+            "configured construct reports the particle Array output",
+        );
+
+        // Minimal feedback cycle: texture atom (id 101) ↔ particle node (id 100).
+        // Only wires + node type_ids matter to `cycle_contains_array`.
+        let mut sim = sim;
+        sim.id = 100;
+        let mut tex = sim.clone();
+        tex.id = 101;
+        tex.type_id = "node.channel_mixer".to_string();
+        tex.wgsl_source = None;
+        let def2 = EffectGraphDef {
+            version: def.version,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![tex, sim],
+            wires: vec![
+                EffectGraphWire {
+                    from_node: 101,
+                    from_port: "out".into(),
+                    to_node: 100,
+                    to_port: "in".into(),
+                },
+                EffectGraphWire {
+                    from_node: 100,
+                    from_port: "out".into(),
+                    to_node: 101,
+                    to_port: "in".into(),
+                },
+            ],
+        };
+        assert!(
+            cycle_contains_array(101, &def2, &reg),
+            "a loop through a configured particle wgsl_compute node is a particle \
+             loop — cut rule 12 must fire (BUG-007)",
+        );
     }
 
     /// The whole ColorGrade card is one region: all 7 atoms, one external (the

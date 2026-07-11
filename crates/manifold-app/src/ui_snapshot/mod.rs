@@ -329,6 +329,21 @@ fn render_ui_scene(
         sync_build(&mut ui, &data, zoom_ppb);
     }
 
+    // BUG-109 P5 gate: a synthetic-level PNG proving `MeterIds::update`'s
+    // rendering math (fill width, bright-over-0.5 accent) — NOT the
+    // content-thread capture wiring (that's the engine-level regression
+    // tests in `engine_tick.rs` / `live_trigger.rs`, which this harness
+    // can't reach headless). The `inspector` fixture already opens a
+    // fire-mode drawer on Strobe's `clip_trigger` row and on GLOW's own
+    // clip-trigger section (§7.1's overclaim was exactly the reverse of
+    // this — a PNG with the meter present but fed nothing; this one is
+    // fed an explicit hot level through the same public API the live app
+    // calls). `Some(0.9)` unconditionally so it lights up every open
+    // meter without needing to reproduce each row's `fire_meter_key`.
+    if scene == "inspector" {
+        ui.inspector.update_fire_meters(&mut ui.tree, &|_key| Some(0.9), 1.0 / 60.0);
+    }
+
     render_and_dump(
         &mut ui,
         &data.selection,

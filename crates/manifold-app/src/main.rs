@@ -45,6 +45,12 @@ mod offline_audio_mod;
 // constraint as `run_export` itself — native Metal, no wgpu).
 #[cfg(all(feature = "journey-proofs", target_os = "macos"))]
 mod journey_proof;
+// BUG-035 regression guard: headless before/after MANIFOLD_RENDER_TRACE proof
+// that the clip-atlas persist debounce cycle no longer spikes the content
+// thread. Shares `journey_proof`'s headless ContentThread infra (same feature
+// gate — no separate harness to maintain).
+#[cfg(all(feature = "journey-proofs", target_os = "macos"))]
+mod bug035_verify;
 mod perform_mode;
 mod project_io;
 #[cfg(target_os = "macos")]

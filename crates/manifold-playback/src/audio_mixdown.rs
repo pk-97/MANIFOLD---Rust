@@ -458,18 +458,39 @@ mod tests {
     /// Minimal self-cleaning temp-dir helper — no `tempfile` dependency.
     mod tempfile_dir {
         use std::path::{Path, PathBuf};
+        use std::sync::atomic::{AtomicU64, Ordering};
 
         pub struct TestDir(PathBuf);
 
         impl TestDir {
             pub fn new(prefix: &str) -> Self {
+                // `pid + nanosecond timestamp` alone is NOT a unique key: this
+                // process's wall clock does not actually resolve to
+                // nanoseconds (measured ~96% collision rate over 200k calls
+                // in a tight loop on this machine), and several tests in this
+                // module call `build_fixture_project()` — sharing this same
+                // prefix — from different threads at near-identical wall
+                // time when `cargo test` fans them out in parallel. A
+                // collision here means two tests' `TestDir`s resolve to the
+                // SAME directory: they race writing/reading the same
+                // `tone.wav`, and the first `TestDir` to drop deletes the
+                // directory out from under the other, corrupting or nuking
+                // the second test's fixture and producing intermittent exact
+                // float-equality failures unrelated to real mixdown behavior
+                // (BUG-106 / BUG-090 / BUG-074). Fix: add a per-process
+                // atomic sequence number so two calls can never collide
+                // regardless of clock resolution — same pattern already
+                // used by `percussion_backend.rs::build_temp_config_path`.
+                static SEQ: AtomicU64 = AtomicU64::new(0);
+                let seq = SEQ.fetch_add(1, Ordering::Relaxed);
                 let dir = std::env::temp_dir().join(format!(
-                    "{prefix}_{}_{}",
+                    "{prefix}_{}_{}_{}",
                     std::process::id(),
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_nanos())
-                        .unwrap_or(0)
+                        .unwrap_or(0),
+                    seq
                 ));
                 std::fs::create_dir_all(&dir).expect("create test fixture dir");
                 Self(dir)
@@ -586,7 +607,7 @@ mod tests {
             Beats(6.0),
             Bpm(120.0),
             &mut tempo_map,
-            &[normal_id.clone()],
+            std::slice::from_ref(&normal_id),
         )
         .expect("render_export_audio should succeed");
 
@@ -620,9 +641,11 @@ mod tests {
             .get(&normal_id)
             .expect("tapped layer entry present");
         assert_eq!(tapped.len(), solo_audio.master_mono.len());
-        for i in 0..tapped.len() {
+        for (i, (&tapped_sample, &solo_sample)) in
+            tapped.iter().zip(solo_audio.master_mono.iter()).enumerate()
+        {
             assert_eq!(
-                tapped[i], solo_audio.master_mono[i],
+                tapped_sample, solo_sample,
                 "tapped layer mono diverges from solo render at frame {i}"
             );
         }
@@ -640,7 +663,7 @@ mod tests {
             Beats(6.0),
             Bpm(120.0),
             &mut tempo_map,
-            &[analysis_id.clone()],
+            std::slice::from_ref(&analysis_id),
         )
         .expect("render_export_audio should succeed");
 

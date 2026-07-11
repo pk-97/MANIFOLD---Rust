@@ -114,14 +114,20 @@ timer.wait_for_deadline()                 (mach_wait_until + 2ms spin)
                                           (recording: append tempo points; else beat-0 point when Internal)
 3d. audio_mod_runtime.update              (fill engine.audio_snapshot)
 4. engine.tick(ctx)
+     — fire_meters reset (ONE per tick, BEFORE the branch — BUG-109 P5: a
+       prior per-branch reset ran after the playing branch's own
+       clip-trigger push and wiped it every tick; see §6)
      playing branch:
        consume sync-dirty → advance_time (unless external_time_sync) → sync_project_bpm
-       → activate due pending live launches → audio triggers (fire/expire one-shots)
+       → activate due pending live launches → audio triggers (fire/expire one-shots,
+         pushes fire_meters — §6)
        → sync_clips_to_time               (THE authority — see §5)
        → update_active_clip_playback_rates → check_custom_loop_boundaries
-       → evaluate_modulation → correct_video_drift (every 2s, not in export)
+       → evaluate_modulation (pushes fire_meters) → correct_video_drift (every 2s, not in export)
        → filter_ready_clips → compute_prewarm_candidates
-     non-playing branch: flush sync-dirty (sync + seek_active_clips), rates, modulation, filter
+     non-playing branch: flush sync-dirty (sync + seek_active_clips), rates,
+       audio triggers meter-only walk (pushes fire_meters, never fires — BUG-109 P5,
+       §6), modulation (pushes fire_meters), filter
 4b. transport out (AbletonBridge or OscPositionSender late_update — echo-suppressed)
 5. audio_layer_playback.update            (kira voices follow transport)
 6. percussion tick · video prewarm handoff
@@ -212,7 +218,19 @@ provenance finalization.
 audio-feature snapshot; fires beat-domain one-shots through the *same*
 `fire_layer_oneshot` → `trigger_live_clip` primitives (beat-stamped, tick −1 —
 real-time snap at the playhead), expiry by `end_beat` since transients have no
-NoteOff.
+NoteOff. Playing-branch evaluation (`tick_audio_triggers`, step 3b, BEFORE
+`sync_clips_to_time` — not after modulation) also pushes each enabled config's
+shaped `condition()` signal into `engine.fire_meters` (D6 fire meter), keyed
+`(LayerId, index)`. Non-playing ticks run a **meter-only** walk
+(`LiveTriggerState::evaluate_meter_only`) that pushes the identical signal
+without ever advancing the fire edge or emitting a `FireRequest` — a
+performer tuning a trigger at soundcheck (transport stopped, track through
+the tap) still sees the meter move, but nothing can fire while stopped
+(BUG-109, fixed by AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md §7 P5).
+`fire_meters` itself resets exactly ONCE per tick, at the top of
+`engine.tick`, before either branch's evaluators run — a prior per-branch
+reset placed after the playing branch's own step-3b push silently wiped it
+every playing tick, which is what BUG-109 actually was.
 
 **Session grid (P2):** `SessionRuntime` is runtime-only state (never
 serialized, never undo-wrapped). Launch/stop are *pending* entries targeting
