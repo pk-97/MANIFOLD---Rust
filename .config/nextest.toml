@@ -21,9 +21,9 @@ final-status-level = "slow"
 slow-timeout = "30s"
 
 [profile.default.junit]
-# Emit JUnit XML for future CI integration. Currently unused (CI is
-# `workflow_dispatch`-only per .github/workflows/ci.yml); when CI flips
-# to PR-triggered, dashboards can ingest this directly.
+# Emit JUnit XML for future CI integration. Currently unused — the dead
+# manual-only workflows were deleted 2026-07-11 (they ran cargo test and a
+# fmt gate that could never pass); if CI returns, dashboards ingest this.
 path = "junit.xml"
 
 # CI profile: stricter, retries flaky GPU tests once before failing.

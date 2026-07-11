@@ -113,9 +113,13 @@ origin main` (allow + reminder present); `merge <branch>` while on main
   "Last-known-good" is now a property of the gate (clippy + tests before any
   merge), not of linearity.
 - **To land a workstream:** fetch → merge current `origin/main` into your
-  branch → rerun the gate (clippy + focused tests; full workspace sweep when
-  blast radius says so) → `git merge --no-ff` into main → push → if the push
-  is rejected because someone landed first, repeat.
+  branch → rerun the gate (touched-crate clippy + focused tests; the full
+  workspace sweep — workspace clippy + `cargo nextest run --workspace` +
+  `cargo deny check bans` — at batched landings per §2c, or sooner when blast
+  radius says so) → `git merge --no-ff` into main → push → if the push is
+  rejected because someone landed first, repeat. New/renamed docs need
+  `python3 scripts/gen_docs_index.py` before the sweep — a freshness test
+  enforces it.
 - **Twin-killer 1:** never cherry-pick or re-commit content that already
   exists as commits on a live branch — merge the branch so SHAs stay shared.
   The one sanctioned exception: landing the final content of a branch that
@@ -182,7 +186,9 @@ Measured basis: ~80% of a phase's wall-clock is cargo compile/test (playbook,
    dep-cache eviction; the server picks it up at its next idle restart.
    (The dev profile is already build-speed-tuned — `debug =
    "line-tables-only"` + `split-debuginfo = "unpacked"`, root Cargo.toml —
-   don't re-add those.)
+   don't re-add those.) `cargo deny check bans` (<1s) is part of the landing
+   sweep as of 2026-07-11 — `deny.toml` is the actual enforcement of the
+   wgpu/metal dependency bans.
 
 ## §2b. Pending cleanup (2026-07-04 twin-commit remediation)
 
