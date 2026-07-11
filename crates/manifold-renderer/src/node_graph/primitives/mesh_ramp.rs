@@ -23,9 +23,11 @@ use crate::node_graph::primitive::Primitive;
 
 const RAMP_AXES: &[&str] = &["X", "Y", "Z", "Radial XZ", "Distance"];
 
-/// Uniform layout: `axis` enum, `origin` xyz, `phase`/`feather`/`bound_min`/
-/// `bound_max`, `invert` flag, `count` dispatch guard, padded to 16 bytes.
-/// 12 words = 48 bytes.
+/// Generated-codegen uniform layout: scalar params in PARAMS order (`axis`
+/// Enum→u32, `origin_x/y/z` f32, `phase`/`feather`/`bound_min`/`bound_max` f32,
+/// `invert` Bool→u32), then the codegen-injected `dispatch_count` element count,
+/// padded to a 16-byte multiple. 10 words + 2 pad = 48 bytes. Matches the
+/// `standalone_for_spec::<MeshRamp>()` Params struct field-for-field.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct MeshRampUniforms {
@@ -38,7 +40,7 @@ struct MeshRampUniforms {
     bound_min: f32,
     bound_max: f32,
     invert: u32,
-    count: u32,
+    dispatch_count: u32,
     _pad0: u32,
     _pad1: u32,
 }
@@ -141,6 +143,8 @@ crate::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["mesh ramp", "growth mask", "gradient weights", "reveal mask"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/mesh_ramp_body.wgsl"),
 }
 
 impl Primitive for MeshRamp {
@@ -189,9 +193,14 @@ impl Primitive for MeshRamp {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Codegen path (design D#10): the runtime kernel is generated from
+            // `wgsl_body` so this atom fuses in the graph compiler. mesh_ramp.wgsl
+            // is retained only as the gpu_tests parity oracle. Bindings match:
+            // uniform(0), buf_in(1, MeshVertex read), buf_weights(2, f32 write).
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/mesh_ramp.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.mesh_ramp standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.mesh_ramp",
             )
         });
@@ -206,7 +215,7 @@ impl Primitive for MeshRamp {
             bound_min,
             bound_max,
             invert: u32::from(invert),
-            count,
+            dispatch_count: count,
             _pad0: 0,
             _pad1: 0,
         };
@@ -297,10 +306,14 @@ mod tests {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
-    //! Real-GPU value-level tests, no legacy predecessor to diff against —
-    //! the "hand kernel" here is the committed formula computed in Rust
-    //! (f32, same math as the shader) and compared element-wise against
-    //! the GPU readback, per DECOMPOSING_GENERATORS.md §9's parity bar.
+    //! Real-GPU value-level tests. Behavioral tests dispatch the GENERATED
+    //! standalone kernel (the shipping runtime artifact, built by
+    //! `standalone_for_spec::<MeshRamp>()` from mesh_ramp_body.wgsl) and compare
+    //! against a hand-written Rust reference of the committed formula. The
+    //! `generated_matches_hand_kernel` parity test dispatches BOTH the generated
+    //! kernel and the hand mesh_ramp.wgsl oracle and asserts element-wise
+    //! equality — the invariant that proves this atom is genuinely on the
+    //! codegen/fusion path (design D#10), per DECOMPOSING_GENERATORS.md §9.
     use super::*;
 
     fn mk_vertex(y: f32) -> MeshVertex {
@@ -312,6 +325,12 @@ mod gpu_tests {
             uv: [0.0, 0.0],
             _pad2: [0.0, 0.0],
         }
+    }
+
+    /// The generated standalone kernel (the shipping runtime path).
+    fn generated_wgsl() -> String {
+        crate::node_graph::freeze::codegen::standalone_for_spec::<MeshRamp>()
+            .expect("mesh_ramp buffer codegen")
     }
 
     /// Hand-reference: identical formula to the WGSL kernel, f32 math.
@@ -329,6 +348,7 @@ mod gpu_tests {
     #[allow(clippy::too_many_arguments)]
     fn dispatch_ramp(
         device: &manifold_gpu::GpuDevice,
+        wgsl: &str,
         vertices: &[MeshVertex],
         axis: u32,
         origin: [f32; 3],
@@ -338,8 +358,11 @@ mod gpu_tests {
         bound_max: f32,
         invert: bool,
     ) -> Vec<f32> {
-        let wgsl = include_str!("shaders/mesh_ramp.wgsl");
-        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "mesh-ramp-test");
+        let pipeline = device.create_compute_pipeline(
+            wgsl,
+            crate::node_graph::freeze::codegen::ENTRY,
+            "mesh-ramp-test",
+        );
         let src = device.create_buffer_shared(std::mem::size_of_val(vertices) as u64);
         unsafe {
             src.write(0, bytemuck::cast_slice(vertices));
@@ -356,7 +379,7 @@ mod gpu_tests {
             bound_min,
             bound_max,
             invert: u32::from(invert),
-            count: vertices.len() as u32,
+            dispatch_count: vertices.len() as u32,
             _pad0: 0,
             _pad1: 0,
         };
@@ -380,14 +403,48 @@ mod gpu_tests {
     }
 
     #[test]
+    fn generated_matches_hand_kernel() {
+        let device = crate::test_device();
+        let ys = [0.0f32, 0.7, 1.3, 2.1, 2.8, 3.0];
+        let vertices: Vec<MeshVertex> = ys.iter().map(|&y| mk_vertex(y)).collect();
+        let gen_wgsl = generated_wgsl();
+        // Structural: the buffer codegen synthesized the element struct + storage
+        // bindings + 1D dispatch — i.e. this atom really is on the codegen path.
+        assert!(gen_wgsl.contains("struct Element"), "element struct synthesized");
+        assert!(gen_wgsl.contains("var<storage, read> buf_in"), "input bound as read storage");
+        assert!(gen_wgsl.contains("var<storage, read_write> buf_weights"), "weights output bound read_write");
+        assert!(gen_wgsl.contains("@workgroup_size(256)"), "1D buffer dispatch");
+
+        let hand = include_str!("shaders/mesh_ramp.wgsl");
+        let (phase, feather, bound_min, bound_max) = (0.2f32, 0.3f32, -1.0f32, 2.0f32);
+        for &(axis, invert) in &[(0u32, false), (1, false), (2, false), (3, false), (4, false), (1, true)] {
+            let from_gen_wgsl = dispatch_ramp(
+                &device, &gen_wgsl, &vertices, axis, [0.1, -0.2, 0.3], phase, feather, bound_min, bound_max, invert,
+            );
+            let from_hand = dispatch_ramp(
+                &device, hand, &vertices, axis, [0.1, -0.2, 0.3], phase, feather, bound_min, bound_max, invert,
+            );
+            for i in 0..vertices.len() {
+                assert!(
+                    (from_gen_wgsl[i] - from_hand[i]).abs() < 1e-6,
+                    "axis={axis} invert={invert} vertex {i}: gen={} hand={}",
+                    from_gen_wgsl[i],
+                    from_hand[i]
+                );
+            }
+        }
+    }
+
+    #[test]
     fn axis_y_ramp_matches_hand_formula_and_is_monotonic() {
         let device = crate::test_device();
+        let gen_wgsl = generated_wgsl();
         let ys = [0.0f32, 1.0, 2.0, 3.0];
         let vertices: Vec<MeshVertex> = ys.iter().map(|&y| mk_vertex(y)).collect();
 
         let (phase, feather, bound_min, bound_max) = (0.0f32, 0.5f32, 0.0f32, 3.0f32);
         let got = dispatch_ramp(
-            &device, &vertices, 1, [0.0, 0.0, 0.0], phase, feather, bound_min, bound_max, false,
+            &device, &gen_wgsl, &vertices, 1, [0.0, 0.0, 0.0], phase, feather, bound_min, bound_max, false,
         );
 
         let expected: Vec<f32> = ys
@@ -429,14 +486,15 @@ mod gpu_tests {
     #[test]
     fn invert_flips_the_mask() {
         let device = crate::test_device();
+        let gen_wgsl = generated_wgsl();
         let vertices: Vec<MeshVertex> = [0.0f32, 3.0].iter().map(|&y| mk_vertex(y)).collect();
         let (phase, feather, bound_min, bound_max) = (0.0f32, 0.5f32, 0.0f32, 3.0f32);
 
         let normal = dispatch_ramp(
-            &device, &vertices, 1, [0.0, 0.0, 0.0], phase, feather, bound_min, bound_max, false,
+            &device, &gen_wgsl, &vertices, 1, [0.0, 0.0, 0.0], phase, feather, bound_min, bound_max, false,
         );
         let inverted = dispatch_ramp(
-            &device, &vertices, 1, [0.0, 0.0, 0.0], phase, feather, bound_min, bound_max, true,
+            &device, &gen_wgsl, &vertices, 1, [0.0, 0.0, 0.0], phase, feather, bound_min, bound_max, true,
         );
 
         for i in 0..vertices.len() {

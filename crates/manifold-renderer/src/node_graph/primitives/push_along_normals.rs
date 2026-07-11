@@ -23,18 +23,20 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
-/// Uniform layout: dispatch `count`, `weights_len` (0 when unwired —
-/// collapses the "absent" and "short" degrade-to-1.0 cases into one
-/// bounds check), `has_field` flag, `amount`, `field_bias`, padded to 16
-/// bytes. 8 words = 32 bytes.
+/// Generated-codegen uniform layout: scalar params in PARAMS order (`amount`,
+/// `field_bias` f32), then the derived `weights_len` (u32 — 0 when unwired,
+/// collapsing the "absent" and "short" degrade-to-1.0 cases into one bounds
+/// check), then the injected optional-texture flag `use_field` (u32), then the
+/// codegen-injected `dispatch_count`, padded to a 16-byte multiple. 5 words +
+/// 3 pad = 32 bytes. Matches `standalone_for_spec::<PushAlongNormals>()`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct PushUniforms {
-    count: u32,
-    weights_len: u32,
-    has_field: u32,
     amount: f32,
     field_bias: f32,
+    weights_len: u32,
+    use_field: u32,
+    dispatch_count: u32,
     _pad0: u32,
     _pad1: u32,
     _pad2: u32,
@@ -79,6 +81,13 @@ crate::primitive! {
     category: Geometry3D,
     role: Filter,
     aliases: ["push along normals", "inflate", "breathe", "bulge"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/push_along_normals_body.wgsl"),
+    // `in` and `weights` are both COINCIDENT (default) — keeps the atom fully
+    // pointwise/fusable, so a breathe→twist→taper chain fuses to ~1 dispatch
+    // (design D#10). `weights_len` is a frame-derived uniform the body uses to
+    // bounds-check the coincident weight read (degrade to 1.0 past the buffer).
+    derived_uniforms: ["weights_len:u32"],
     extra_fields: {
         dummy_field: Option<GpuTexture> = None,
     },
@@ -127,9 +136,15 @@ impl Primitive for PushAlongNormals {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Codegen path (design D#10): the runtime kernel is generated from
+            // `wgsl_body` so this atom stays pointwise/fusable in the graph
+            // compiler. push_along_normals.wgsl is retained only as the gpu_tests
+            // parity oracle. Bindings match: uniform(0), buf_in(1), buf_weights(2),
+            // tex_field(3), samp(4), buf_out(5).
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/push_along_normals.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.push_along_normals standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.push_along_normals",
             )
         });
@@ -156,11 +171,11 @@ impl Primitive for PushAlongNormals {
         let field_tex = field_wired.unwrap_or(dummy);
 
         let uniforms = PushUniforms {
-            count,
-            weights_len,
-            has_field: u32::from(field_wired.is_some()),
             amount,
             field_bias,
+            weights_len,
+            use_field: u32::from(field_wired.is_some()),
+            dispatch_count: count,
             _pad0: 0,
             _pad1: 0,
             _pad2: 0,
@@ -313,33 +328,55 @@ mod gpu_tests {
         tex
     }
 
+    /// The generated standalone kernel (the shipping runtime path).
+    fn generated_wgsl() -> String {
+        crate::node_graph::freeze::codegen::standalone_for_spec::<PushAlongNormals>()
+            .expect("push_along_normals buffer codegen")
+    }
+
+    /// `weights_len` overrides the logical weights length independently of the
+    /// physical buffer, so the degrade-to-1.0 tail can be exercised WITHOUT an
+    /// out-of-bounds coincident pre-read: the weights buffer is always sized to
+    /// `src.len()` elements (the real graph always matches capacities), and
+    /// `weights_len < count` is the bounds the body honors. `None` weights →
+    /// weights_len 0 (unwired), the filler buffer is `src` (≥ count*4 bytes).
     #[allow(clippy::too_many_arguments)]
     fn dispatch_push(
         device: &manifold_gpu::GpuDevice,
+        wgsl: &str,
         src: &[MeshVertex],
         weights: Option<&[f32]>,
+        weights_len_override: Option<u32>,
         field: Option<&GpuTexture>,
         amount: f32,
         field_bias: f32,
     ) -> Vec<MeshVertex> {
-        let wgsl = include_str!("shaders/push_along_normals.wgsl");
-        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "push-normals-test");
+        let pipeline = device.create_compute_pipeline(
+            wgsl,
+            crate::node_graph::freeze::codegen::ENTRY,
+            "push-normals-test",
+        );
         let sbuf = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
         unsafe {
             sbuf.write(0, bytemuck::cast_slice(src));
         }
         let dbuf = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
 
-        let weights_len = weights.map(|w| w.len() as u32).unwrap_or(0);
-        let wbuf = match weights {
+        // Physical weights buffer is always `src.len()` elements so the
+        // coincident pre-read `buf_weights[idx]` is in-bounds for every thread;
+        // logical length comes from `weights_len_override` (or the slice length).
+        let (wbuf, weights_len) = match weights {
             Some(w) => {
-                let b = device.create_buffer_shared((w.len() * 4).max(4) as u64);
+                let mut padded = vec![0.0f32; src.len()];
+                padded[..w.len().min(src.len())].copy_from_slice(&w[..w.len().min(src.len())]);
+                let b = device.create_buffer_shared((padded.len() * 4).max(4) as u64);
                 unsafe {
-                    b.write(0, bytemuck::cast_slice(w));
+                    b.write(0, bytemuck::cast_slice(&padded));
                 }
-                b
+                (b, weights_len_override.unwrap_or(w.len() as u32))
             }
-            None => device.create_buffer_shared(std::mem::size_of_val(src) as u64),
+            // Unwired: bind `src` as the harmless filler (run()'s pattern), len 0.
+            None => (device.create_buffer_shared(std::mem::size_of_val(src) as u64), 0),
         };
 
         let sampler = device.create_sampler(&GpuSamplerDesc::default());
@@ -366,11 +403,11 @@ mod gpu_tests {
         };
 
         let uniforms = PushUniforms {
-            count: src.len() as u32,
-            weights_len,
-            has_field: u32::from(field.is_some()),
             amount,
             field_bias,
+            weights_len,
+            use_field: u32::from(field.is_some()),
+            dispatch_count: src.len() as u32,
             _pad0: 0,
             _pad1: 0,
             _pad2: 0,
@@ -398,14 +435,57 @@ mod gpu_tests {
     }
 
     #[test]
+    fn generated_matches_hand_kernel_all_modes() {
+        let device = crate::test_device();
+        let gen_wgsl = generated_wgsl();
+        assert!(gen_wgsl.contains("struct Element"), "element struct synthesized");
+        assert!(gen_wgsl.contains("var<storage, read> buf_in"), "in bound read storage");
+        assert!(gen_wgsl.contains("var<storage, read> buf_weights"), "weights bound read storage");
+        assert!(gen_wgsl.contains("tex_field"), "optional field texture bound");
+        assert!(gen_wgsl.contains("use_field: u32"), "optional-texture use flag injected");
+        assert!(gen_wgsl.contains("weights_len: u32"), "derived weights_len injected");
+        assert!(gen_wgsl.contains("var<storage, read_write> buf_out"), "out bound read_write");
+        let hand = include_str!("shaders/push_along_normals.wgsl");
+
+        let tex = uniform_field_tex(&device, 8, 8, 0.6);
+        let src = vec![
+            mk_vertex([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0]),
+            mk_vertex([1.0, 2.0, -1.0], [0.577, 0.577, 0.577], [0.5, 0.25]),
+            mk_vertex([-3.0, 1.0, 2.0], [0.0, 0.0, 1.0], [0.75, 0.9]),
+            mk_vertex([2.0, -1.0, 0.5], [1.0, 0.0, 0.0], [0.2, 0.8]),
+        ];
+        let weights = [0.3f32, 0.8, 1.0, 0.5];
+        // Sweep: (weights?, field?) across all four wire combinations.
+        for &(use_w, use_f) in &[(false, false), (true, false), (false, true), (true, true)] {
+            let w = if use_w { Some(&weights[..]) } else { None };
+            let f = if use_f { Some(&tex) } else { None };
+            let from_gen_wgsl = dispatch_push(&device, &gen_wgsl, &src, w, None, f, 0.6, 0.4);
+            let from_hand = dispatch_push(&device, hand, &src, w, None, f, 0.6, 0.4);
+            for i in 0..src.len() {
+                for c in 0..3 {
+                    assert!(
+                        (from_gen_wgsl[i].position[c] - from_hand[i].position[c]).abs() < 1e-6,
+                        "w={use_w} f={use_f} vertex {i} pos[{c}]: gen={} hand={}",
+                        from_gen_wgsl[i].position[c],
+                        from_hand[i].position[c]
+                    );
+                    assert!((from_gen_wgsl[i].normal[c] - from_hand[i].normal[c]).abs() < 1e-6);
+                }
+                assert_eq!(from_gen_wgsl[i].uv, from_hand[i].uv);
+            }
+        }
+    }
+
+    #[test]
     fn count_order_and_uv_are_preserved() {
         let device = crate::test_device();
+        let gen_wgsl = generated_wgsl();
         let src = vec![
             mk_vertex([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.1, 0.2]),
             mk_vertex([1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.3, 0.4]),
             mk_vertex([0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.5, 0.6]),
         ];
-        let out = dispatch_push(&device, &src, None, None, 0.5, 0.5);
+        let out = dispatch_push(&device, &gen_wgsl, &src, None, None, None, 0.5, 0.5);
         assert_eq!(out.len(), src.len());
         for i in 0..src.len() {
             assert_eq!(out[i].uv, src[i].uv, "uv must pass through unchanged at {i}");
@@ -416,15 +496,23 @@ mod gpu_tests {
     #[test]
     fn short_weights_degrade_to_one_for_the_tail() {
         let device = crate::test_device();
+        let gen_wgsl = generated_wgsl();
         // 12 identical vertices (position 0, normal +Y) so displacement
-        // magnitude along Y directly reads off the effective weight.
+        // magnitude along Y directly reads off the effective weight. The §4
+        // invariant guards the "silent zero" failure: even though the weight
+        // buffer's tail (verts 2..12) physically holds 0.0, a logical
+        // weights_len of 2 must make those verts degrade to w=1.0 (deform at
+        // full), never to 0. weights_len is forced short here independently of
+        // the physical buffer (which is full-size) so the coincident pre-read
+        // stays in-bounds — the graph always matches capacities, so a genuinely
+        // short physical wire never reaches this atom at runtime.
         let src: Vec<MeshVertex> = (0..12)
             .map(|_| mk_vertex([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0]))
             .collect();
-        let weights = [0.0f32, 0.0]; // length 2 against 12 verts
+        let weights = [0.0f32, 0.0]; // first 2 explicit-zero, rest padded 0.0
         let amount = 0.7f32;
 
-        let out = dispatch_push(&device, &src, Some(&weights), None, amount, 0.5);
+        let out = dispatch_push(&device, &gen_wgsl, &src, Some(&weights), Some(2), None, amount, 0.5);
 
         assert!(
             (out[0].position[1]).abs() < 1e-5,
@@ -439,7 +527,7 @@ mod gpu_tests {
         for i in 2..12 {
             assert!(
                 (out[i].position[1] - amount).abs() < 1e-5,
-                "vertex {i} past the short weights buffer should degrade to w=1.0 (full push {amount}), got y={}",
+                "vertex {i} past weights_len should degrade to w=1.0 (full push {amount}), got y={}",
                 out[i].position[1]
             );
         }
@@ -448,6 +536,7 @@ mod gpu_tests {
     #[test]
     fn matches_hand_formula_with_weights_only() {
         let device = crate::test_device();
+        let gen_wgsl = generated_wgsl();
         let src = vec![
             mk_vertex([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0]),
             mk_vertex([1.0, 2.0, -1.0], [1.0, 0.0, 0.0], [0.5, 0.25]),
@@ -456,7 +545,7 @@ mod gpu_tests {
         let weights = [0.3f32, 0.8, 1.0];
         let amount = 0.6f32;
 
-        let out = dispatch_push(&device, &src, Some(&weights), None, amount, 0.5);
+        let out = dispatch_push(&device, &gen_wgsl, &src, Some(&weights), None, None, amount, 0.5);
 
         for i in 0..src.len() {
             let v = &src[i];
@@ -483,6 +572,7 @@ mod gpu_tests {
     #[test]
     fn matches_hand_formula_with_uniform_field() {
         let device = crate::test_device();
+        let gen_wgsl = generated_wgsl();
         let tex = uniform_field_tex(&device, 8, 8, 0.75);
         let src = vec![
             mk_vertex([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0]),
@@ -492,7 +582,7 @@ mod gpu_tests {
         let amount = 0.4f32;
         let field_bias = 0.4f32; // f = 0.75 - 0.4 = 0.35 exactly, all weights default to 1.0
 
-        let out = dispatch_push(&device, &src, None, Some(&tex), amount, field_bias);
+        let out = dispatch_push(&device, &gen_wgsl, &src, None, None, Some(&tex), amount, field_bias);
 
         let f = 0.75f32 - field_bias;
         for i in 0..src.len() {

@@ -22,22 +22,23 @@ use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::primitive::Primitive;
 
-/// Uniform layout: `vertex_count` (total, for the trailing-partial bounds
-/// check), `full_triangles` (dispatch boundary between the full-triangle
-/// branch and the passthrough branch), padded to 16 bytes.
+/// Generated-codegen uniform layout: no params, so just the codegen-injected
+/// `dispatch_count` (= vertex count; one thread per vertex) padded to a 16-byte
+/// multiple. 1 word + 3 pad = 16 bytes. Matches the paramless buffer
+/// `standalone_for_spec::<FacetNormals>()` Params struct.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct FacetUniforms {
-    vertex_count: u32,
-    full_triangles: u32,
+    dispatch_count: u32,
     _pad0: u32,
     _pad1: u32,
+    _pad2: u32,
 }
 
 crate::primitive! {
     name: FacetNormals,
     type_id: "node.facet_normals",
-    purpose: "Recompute exact per-triangle flat normals for an Array<MeshVertex> flat triangle list: one thread per triangle t computes n = normalize(cross(v1.pos - v0.pos, v2.pos - v0.pos)) and writes it to verts [3t, 3t+3). Positions and uv pass through unchanged. A trailing partial triangle (vertex_count % 3 != 0) passes through with its existing normal unchanged. The v1 normal-policy reset (D4): wire downstream of a heavy push_along_normals or morph_mesh to trade their approximate/unchanged normals for an exact faceted look.",
+    purpose: "Recompute exact per-triangle flat normals for an Array<MeshVertex> flat triangle list. One thread PER VERTEX: thread idx reads its triangle's 3 verts (base = 3*(idx/3)) via a buffer gather, computes n = normalize(cross(v1.pos - v0.pos, v2.pos - v0.pos)), and writes vertex idx with that normal. Positions and uv pass through unchanged. A trailing partial triangle (base+2 >= vertex_count) passes through with its existing normal unchanged. The v1 normal-policy reset (D4): wire downstream of a heavy push_along_normals or morph_mesh to trade their approximate/unchanged normals for an exact faceted look.",
     inputs: {
         in: Array(MeshVertex) required,
     },
@@ -45,13 +46,16 @@ crate::primitive! {
         out: Array(MeshVertex),
     },
     params: [],
-    composition_notes: "Reach for this whenever a deformer's normal policy is left approximate (push_along_normals, morph_mesh) and the amount is large enough that the unchanged/lerped normals start reading wrong under lighting — the result is a faceted low-poly look, not smooth shading. Only correct on the flat triangle-list layout (no shared vertices, no index buffer); node.triangulate_grid's grid-topology output already carries correct finite-difference normals and doesn't need this.",
+    composition_notes: "Reach for this whenever a deformer's normal policy is left approximate (push_along_normals, morph_mesh) and the amount is large enough that the unchanged/lerped normals start reading wrong under lighting — the result is a faceted low-poly look, not smooth shading. Only correct on the flat triangle-list layout (no shared vertices, no index buffer); node.triangulate_grid's grid-topology output already carries correct finite-difference normals and doesn't need this. Buffer-gather form → a fusion boundary (like node.neighbor_smooth), so it stands alone in the graph compiler rather than fusing into an adjacent pointwise region.",
     examples: ["Breathe"],
     picker: { label: "Facet Normals", category: Atom },
     summary: "Recomputes a mesh's normals from its own triangle geometry, giving flat, faceted shading — the exact fix for a mesh whose normals went stale after a heavy deformation.",
     category: Geometry3D,
     role: Filter,
     aliases: ["facet normals", "flat normals", "recompute normals", "normal reset"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/facet_normals_body.wgsl"),
+    input_access: [BufferGather],
 }
 
 impl Primitive for FacetNormals {
@@ -84,24 +88,26 @@ impl Primitive for FacetNormals {
         if vertex_count == 0 {
             return;
         }
-        let full_triangles = vertex_count / 3;
-        let remainder = vertex_count % 3;
-        let dispatch_count = full_triangles + u32::from(remainder > 0);
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Codegen path (design D#10): the runtime kernel is generated from
+            // `wgsl_body` (buffer gather standalone). facet_normals.wgsl is
+            // retained only as the gpu_tests parity oracle. Bindings match:
+            // uniform(0), buf_in(1), buf_out(2). One thread PER VERTEX.
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/facet_normals.wgsl"),
-                "cs_main",
+                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                    .expect("node.facet_normals standalone codegen"),
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.facet_normals",
             )
         });
 
         let uniforms = FacetUniforms {
-            vertex_count,
-            full_triangles,
+            dispatch_count: vertex_count,
             _pad0: 0,
             _pad1: 0,
+            _pad2: 0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -122,7 +128,7 @@ impl Primitive for FacetNormals {
                     offset: 0,
                 },
             ],
-            [dispatch_count.div_ceil(256), 1, 1],
+            [vertex_count.div_ceil(256), 1, 1],
             "node.facet_normals",
         );
     }
@@ -173,10 +179,13 @@ mod tests {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
-    //! Real-GPU value-level tests. Analytic cross-product normal compared
-    //! element-wise against the GPU readback, per DECOMPOSING_GENERATORS.md
-    //! §9's parity bar (no legacy predecessor exists to diff against — the
-    //! "hand kernel" is the committed formula, computed in Rust).
+    //! Real-GPU value-level tests. Behavioral tests dispatch the GENERATED
+    //! standalone kernel (the shipping runtime artifact, built by
+    //! `standalone_for_spec::<FacetNormals>()` from facet_normals_body.wgsl);
+    //! `generated_matches_hand_kernel` dispatches BOTH it and the hand
+    //! facet_normals.wgsl oracle and asserts element-wise equality — proving
+    //! this atom is genuinely on the codegen path (design D#10). Per
+    //! DECOMPOSING_GENERATORS.md §9's parity bar.
     use super::*;
 
     fn mk_vertex(pos: [f32; 3], normal: [f32; 3], uv: [f32; 2]) -> MeshVertex {
@@ -190,25 +199,31 @@ mod gpu_tests {
         }
     }
 
-    fn dispatch_facet(device: &manifold_gpu::GpuDevice, src: &[MeshVertex]) -> Vec<MeshVertex> {
-        let wgsl = include_str!("shaders/facet_normals.wgsl");
-        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "facet-normals-test");
+    /// The generated standalone kernel (the shipping runtime path).
+    fn generated_wgsl() -> String {
+        crate::node_graph::freeze::codegen::standalone_for_spec::<FacetNormals>()
+            .expect("facet_normals buffer codegen")
+    }
+
+    fn dispatch_facet(device: &manifold_gpu::GpuDevice, wgsl: &str, src: &[MeshVertex]) -> Vec<MeshVertex> {
+        let pipeline = device.create_compute_pipeline(
+            wgsl,
+            crate::node_graph::freeze::codegen::ENTRY,
+            "facet-normals-test",
+        );
         let sbuf = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
         unsafe {
             sbuf.write(0, bytemuck::cast_slice(src));
         }
         let dbuf = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
 
-        let vertex_count = src.len() as u32;
-        let full_triangles = vertex_count / 3;
-        let remainder = vertex_count % 3;
-        let dispatch_count = full_triangles + u32::from(remainder > 0);
-
+        // One thread per VERTEX (dispatch_count = vertex count).
+        let dispatch_count = src.len() as u32;
         let uniforms = FacetUniforms {
-            vertex_count,
-            full_triangles,
+            dispatch_count,
             _pad0: 0,
             _pad1: 0,
+            _pad2: 0,
         };
         let bindings = [
             GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
@@ -224,8 +239,51 @@ mod gpu_tests {
     }
 
     #[test]
+    fn generated_matches_hand_kernel() {
+        let device = crate::test_device();
+        let gen_wgsl = generated_wgsl();
+        // Structural: buffer GATHER codegen — the input array global is bound
+        // (body indexes it) and NOT pre-read into an element arg.
+        assert!(gen_wgsl.contains("struct Element"), "element struct synthesized");
+        assert!(gen_wgsl.contains("var<storage, read> buf_in"), "input bound as read storage (gather)");
+        assert!(gen_wgsl.contains("var<storage, read_write> buf_out"), "output bound read_write");
+        assert!(!gen_wgsl.contains("let e_in = buf_in[idx]"), "gather input must NOT be pre-read");
+        let hand = include_str!("shaders/facet_normals.wgsl");
+
+        // 8 verts: two full triangles + a trailing partial pair (7,8th vertex).
+        let src = vec![
+            mk_vertex([0.0, 0.0, 0.0], [9.0, 9.0, 9.0], [0.0, 0.0]),
+            mk_vertex([4.0, 0.0, 0.0], [9.0, 9.0, 9.0], [1.0, 0.0]),
+            mk_vertex([0.0, 3.0, 0.0], [9.0, 9.0, 9.0], [0.0, 1.0]),
+            mk_vertex([1.0, 1.0, 1.0], [9.0, 9.0, 9.0], [0.2, 0.2]),
+            mk_vertex([2.0, 1.0, 1.0], [9.0, 9.0, 9.0], [0.4, 0.2]),
+            mk_vertex([1.0, 3.0, 1.0], [9.0, 9.0, 9.0], [0.2, 0.6]),
+            mk_vertex([5.0, 5.0, 5.0], [1.0, 2.0, 3.0], [0.9, 0.9]), // trailing partial
+            mk_vertex([6.0, 6.0, 6.0], [3.0, 2.0, 1.0], [0.8, 0.8]), // trailing partial
+        ];
+        let from_gen_wgsl = dispatch_facet(&device, &gen_wgsl, &src);
+        let from_hand = dispatch_facet(&device, hand, &src);
+        for i in 0..src.len() {
+            for c in 0..3 {
+                assert!(
+                    (from_gen_wgsl[i].position[c] - from_hand[i].position[c]).abs() < 1e-6,
+                    "vertex {i} pos[{c}]"
+                );
+                assert!(
+                    (from_gen_wgsl[i].normal[c] - from_hand[i].normal[c]).abs() < 1e-6,
+                    "vertex {i} normal[{c}]: gen={} hand={}",
+                    from_gen_wgsl[i].normal[c],
+                    from_hand[i].normal[c]
+                );
+            }
+            assert_eq!(from_gen_wgsl[i].uv, from_hand[i].uv, "vertex {i} uv");
+        }
+    }
+
+    #[test]
     fn analytic_normal_on_a_right_triangle() {
         let device = crate::test_device();
+        let gen_wgsl = generated_wgsl();
         // Same right-triangle fixture as spawn_from_mesh.rs's gpu_tests:
         // v0=(0,0,0), v1=(4,0,0), v2=(0,3,0) — analytic normal (0,0,1).
         let v0 = [0.0f32, 0.0, 0.0];
@@ -236,7 +294,7 @@ mod gpu_tests {
             mk_vertex(v1, [0.0, 0.0, 0.0], [1.0, 0.0]),
             mk_vertex(v2, [0.0, 0.0, 0.0], [0.0, 1.0]),
         ];
-        let out = dispatch_facet(&device, &src);
+        let out = dispatch_facet(&device, &gen_wgsl, &src);
 
         for i in 0..3 {
             assert!((out[i].normal[0]).abs() < 1e-5, "vertex {i} normal.x: {}", out[i].normal[0]);
@@ -259,7 +317,7 @@ mod gpu_tests {
             mk_vertex([0.0, 1.0, 0.0], [0.0, 0.0, 0.0], [0.0, 1.0]),
             mk_vertex([9.0, 9.0, 9.0], [1.0, 0.0, 0.0], [0.3, 0.3]), // trailing partial
         ];
-        let out = dispatch_facet(&device, &src);
+        let out = dispatch_facet(&device, &generated_wgsl(), &src);
 
         assert_eq!(out.len(), 4);
         // Full triangle (0,1,2): normal is +Z.
@@ -284,7 +342,7 @@ mod gpu_tests {
             mk_vertex([2.0, 0.0, 0.0], [0.0, 0.0, 0.0], [2.0, 0.0]),
             mk_vertex([2.0, 1.0, 0.0], [0.0, 0.0, 0.0], [2.0, 1.0]),
         ];
-        let out = dispatch_facet(&device, &src);
+        let out = dispatch_facet(&device, &generated_wgsl(), &src);
         assert_eq!(out.len(), src.len());
     }
 }
