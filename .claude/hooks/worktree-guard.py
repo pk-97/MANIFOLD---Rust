@@ -14,7 +14,10 @@ Denies when the target file resolves INSIDE the main checkout, EXCEPT:
   - files already in a worktree (.claude/worktrees/...) — that's the right place;
   - tooling/meta files under .claude/ (hooks, daemon, commands, settings) — these
     don't affect the app build, and gating them would make editing this very hook
-    require a worktree. Repo memory lives outside the project dir and never trips.
+    require a worktree. Repo memory lives outside the project dir and never trips;
+  - unmerged (conflicted) files while .git/MERGE_HEAD exists — landing-protocol
+    merges happen in the main checkout, so conflict resolution edits exactly
+    those files there. See merge_conflict_paths() for scope and failure story.
 
 The deny repeats on every attempt (no once-per-session sentinel): the only way to
 make the edit land is to actually move into a worktree, at which point the target
@@ -28,6 +31,7 @@ Receives `{"tool_name", "tool_input": {"file_path": ...}, "cwd": ...}` on stdin.
 Emits hookSpecificOutput.permissionDecision="deny" + reason, or nothing.
 """
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -64,6 +68,30 @@ def is_tooling(resolved):
     return resolved == _CLAUDE_DIR or _CLAUDE_DIR in resolved.parents
 
 
+def merge_conflict_paths():
+    """Resolved paths with unmerged index entries during an in-progress merge in
+    the MAIN checkout. Empty set when no merge is live or on ANY error — the
+    carve-out only opens on positive evidence; an error here restores the plain
+    deny, never widens the exemption. Cheap on the common path: one stat of
+    .git/MERGE_HEAD; the subprocess runs only mid-merge."""
+    if not (_PROJECT_DIR / ".git" / "MERGE_HEAD").exists():
+        return set()
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(_PROJECT_DIR), "diff", "--name-only", "--diff-filter=U"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode != 0:
+            return set()
+        return {
+            (_PROJECT_DIR / line).resolve()
+            for line in out.stdout.splitlines()
+            if line.strip()
+        }
+    except Exception:
+        return set()
+
+
 def deny_reason(resolved):
     try:
         rel = resolved.relative_to(_PROJECT_DIR)
@@ -78,7 +106,9 @@ def deny_reason(resolved):
         f"then edit under .claude/worktrees/<name>/ and land back with a --no-ff "
         f"merge. Verify the base is the intended tip first "
         f"(`git -C .claude/worktrees/<name> log --oneline -1`). Tooling files "
-        f"under .claude/ are exempt and may be edited in place."
+        f"under .claude/ are exempt and may be edited in place. During an "
+        f"in-progress merge in main, only files git lists as unmerged are "
+        f"editable (conflict resolution per GIT_TREE_DISCIPLINE §2)."
     )
 
 
@@ -98,6 +128,8 @@ def main():
     if not in_main_checkout(resolved):
         return 0
     if is_tooling(resolved):
+        return 0
+    if resolved in merge_conflict_paths():
         return 0
 
     print(json.dumps({

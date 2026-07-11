@@ -153,31 +153,46 @@ things. Compiles ≠ correct ≠ looks right in the show.
 | Docs-only | Anchors verified against current code (evidence goes stale in days — Prompt C's queue entries were 3 days old and the repo had moved). |
 | Anything feel-dependent | Not verifiable headless. LOG it for Peter's feel-pass with a one-line repro; never guess and never let a worker decide. |
 
-Always, before any commit: `cargo clippy --workspace -- -D warnings`. Focused tests
-per phase (`-p <crate> --lib`); the full workspace sweep gates the landing, not every
-step (`feedback_prefer_focused_tests`).
+Per phase: clippy on TOUCHED crates only (`cargo clippy -p <crate> -- -D warnings`)
+and focused tests via `cargo nextest run -p <crate> --lib` (parallel test binaries;
+GPU-proofs suites STAY on `cargo test` — the in-process `test_device` lock is the
+device serializer, and nextest's process-per-test model would defeat it); batch the
+phase's edits and verify ONCE at the end. The full workspace sweep (workspace clippy + `cargo nextest run --workspace`
++ `cargo deny check bans`) runs ONCE per workstream, at landing time, in the warm
+main checkout — never in a worktree, where it is a second cold build
+(`feedback_prefer_focused_tests`, `.claude/GIT_TREE_DISCIPLINE.md` §2c).
 
 ## 5. Git modes — reference, don't restate
 
 The spec is `.claude/GIT_TREE_DISCIPLINE.md` §2; the prompt names the mode and fills
 in the blanks rather than re-deriving the rules.
 
-- **Mode A — docs-only.** Main checkout. Commit ONLY with explicit pathspec
-  (`git commit -m '…' -- docs/…`); never bare `git add`/`git commit` (shared index).
-  A NEW file needs one targeted `git add <path>` first — the pathspec on the commit
-  still protects the rest of the index. Push via fetch → merge → push.
-- **Mode B — code.** Manual long-lived worktree off the verified tip:
-  `git worktree add -b <branch> ".claude/worktrees/<name>" <verified-tip>` — NEVER
-  the Agent tool's `isolation: "worktree"` (it bases off the default branch). Every
-  worker brief OPENS with the base check (`git -C "<worktree-abs>" log --oneline -1`
-  matches the tip). Workers use `-C`/`--manifest-path` with absolute QUOTED paths
-  (the repo path has a space) and NEVER land. The orchestrator integrates from the
-  main checkout: fetch → merge origin/main into the branch → gate → `merge --no-ff`
-  → push → repeat if rejected. No branch deletion until
-  `git merge-base --is-ancestor` confirms.
+- **Mode A — docs-only.** The worktree-guard hook (2026-07-08) denies agent edits
+  in the main checkout, docs included — docs edits go through a worktree too (any
+  idle one; no warm cargo target needed). Worktrees have a private index; in the
+  MAIN checkout commit ONLY with explicit pathspec (`git commit -m '…' -- docs/…`;
+  a NEW file gets one targeted `git add <path>` first). Land per §2: fetch → merge
+  → `merge --no-ff` → push.
+- **Mode B — code.** ONE warm worktree per workstream (never per phase), acquired
+  via `python3 scripts/agent-worktree.py acquire <name> <branch> [--tip REF]` — it
+  reuses the warmest idle pool dir, copies gitignored fixtures, and prints the
+  step-0 line (still confirm the tip; a reused dir keeps its old name). NEVER the
+  Agent tool's `isolation: "worktree"` (bases off the default branch); raw
+  `git worktree add -b <branch> ".claude/worktrees/<name>" <verified-tip>` only if
+  the script is unavailable. Every worker brief OPENS with the base check
+  (`git -C "<worktree-abs>" log --oneline -1` matches the tip). Workers use
+  `-C`/`--manifest-path` with absolute QUOTED paths (the repo path has a space) and
+  NEVER land. The orchestrator lands from the main checkout — fetch → merge
+  origin/main into the branch → gate → `merge --no-ff` → push → repeat if rejected
+  — BATCHED per 2–3 phases (commits stay per-phase). No branch deletion until
+  `git merge-base --is-ancestor` confirms; `agent-worktree.py release <name>` at
+  session end.
 
 ## 6. Banned moves — in every prompt's blood, named when relevant
 
+- Reading beyond the phase's read-back list. The design doc names what each phase
+  reads; a worker sweeping the wider corpus burns tokens and wall-clock. Same for
+  reports: raw data (anchors, hashes, verbatim gate output), never narrative.
 - Pinning an invariant the maps haven't ruled correct. Mark VERIFY-WITH-PETER.
 - Guessing at feel, motion timing, or taste. Log for the feel-pass.
 - Claiming a visual outcome from code reading or grep silence. Render and look.

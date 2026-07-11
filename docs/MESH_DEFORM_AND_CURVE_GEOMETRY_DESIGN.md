@@ -217,7 +217,9 @@ background parse before caching (D7). Old presets unaffected (`none` default).
 
 ## 5. Phasing
 
-Common: Git Mode B (worktree per phase, orchestrator lands); test scope per phase is
+Common: Git Mode B (ONE warm worktree for the whole workstream via
+`agent-worktree.py acquire`; orchestrator lands, batched per 2–3 phases —
+GIT_TREE_DISCIPLINE §2c); test scope per phase is
 focused — `cargo test -p manifold-renderer --lib <module>::gpu_tests --features
 gpu-proofs` for new kernels (deliberate GPU runs — these are shader atoms),
 `check-presets` after any JSON, crate-scoped clippy; the single workspace sweep runs
