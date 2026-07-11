@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "ApricotWeather",
-  "description": "Scene 1 \u2014 a Japanese apricot (prunus mume) flowering-branch photogrammetry scan (cc0__japanese_apricot_prunus_mume.glb, ~1.4M tris across a sparse cluster of blossom sprigs, NOT a full standing tree) rendered inside node.render_scene alongside a ground plane, one shadow-casting sun, and depth fog. The glb ships 4 materials; material_index 0 is a 24-vertex reference/calibration cube sitting well outside the blossom cluster and is deliberately excluded \u2014 only materials 1/2/3 (the actual scan content) ship. Each surviving material becomes its own render_scene object (node.gltf_mesh_source material_index-filtered -> node.push_along_normals(sway) as mesh, node.gltf_texture_source as its base-color map, node.phong_material) sharing ONE node.transform_3d offset (the three materials' combined world-space bbox center) so they stay spatially coherent \u2014 the same per-material-object shape node_graph::gltf_import's assemble_import_graph builds for any multi-material glTF import, not a merged single-texture mesh (mesh_index=-1 WholeScene would sample all 3 UV atlases through one texture and visibly mismatch). Wind lives in the Wind group: three beat-locked sine LFOs (1/1, 1/2, 1/8; summed range ~[-0.46, +1.02], deliberately biased positive so the sprig leans downwind and surges rather than metronome-swinging around upright) sum into a gust signal multiplied by the swayAmount fader (bound to the wind_amount Value hub - the fader is amount only, motion character lives in the graph), driving every cluster's bend_mesh angle port. Each cluster bends inside a rotate_3d(-phi) -> bend_mesh -> rotate_3d(+phi) conjugation whose phi comes from a slow free-running wander LFO (~42s period, +/-0.9 rad), so the wind DIRECTION drifts in the horizontal plane without visually spinning the sprig (the two rotations cancel exactly wherever the bend angle is zero). Differential sway: node.mesh_ramp (axis=Distance from the bend anchor (0,-2.656,0), bounds 0..7.9 = the scan's max extent from the anchor, full-range feather, inverted so weight GROWS with distance) feeds each bend's weights port - one continuous spatial field shared by all three material chunks (per-chunk phase offsets would tear the shared atlas seams at chunk boundaries), stiff at the trunk base, progressively floppier toward the blossom tips. sun_angle (orbited via cos/sin from a Value hub), fog_density and the camera's orbit/tilt/distance round out the exposed performance surface.",
+  "description": "Scene 1 \u2014 a Japanese apricot (prunus mume) flowering-branch photogrammetry scan (cc0__japanese_apricot_prunus_mume.glb, ~1.4M tris across a sparse cluster of blossom sprigs, NOT a full standing tree) rendered inside node.render_scene alongside a ground plane, one shadow-casting sun, and depth fog. The glb ships 4 materials; material_index 0 is a 24-vertex reference/calibration cube sitting well outside the blossom cluster and is deliberately excluded \u2014 only materials 1/2/3 (the actual scan content) ship. Each surviving material becomes its own render_scene object (node.gltf_mesh_source material_index-filtered -> node.push_along_normals(sway) as mesh, node.gltf_texture_source as its base-color map, node.phong_material) sharing ONE node.transform_3d offset (the three materials' combined world-space bbox center) so they stay spatially coherent \u2014 the same per-material-object shape node_graph::gltf_import's assemble_import_graph builds for any multi-material glTF import, not a merged single-texture mesh (mesh_index=-1 WholeScene would sample all 3 UV atlases through one texture and visibly mismatch). Wind lives in the Wind group: three beat-locked sine LFOs (1/1, 1/2, 1/8; summed range ~[-0.15, +0.34], deliberately biased positive so the sprig leans downwind and surges rather than metronome-swinging around upright) sum into a gust signal multiplied by the swayAmount fader (bound to the wind_amount Value hub - the fader is amount only, motion character lives in the graph), driving every cluster's bend_mesh angle port. Each cluster bends inside a rotate_3d(-phi) -> bend_mesh -> rotate_3d(+phi) conjugation whose phi comes from a slow free-running wander LFO (~42s period, +/-0.9 rad), so the wind DIRECTION drifts in the horizontal plane without visually spinning the sprig (the two rotations cancel exactly wherever the bend angle is zero). Differential sway: node.mesh_ramp (axis=Distance from the bend anchor (0,-2.656,0), bounds 0..12, deliberately wider than the scan's 7.9 max extent so the weight barely varies across any single flower (within-flower weight variation shears rigid blossoms), inverted so weight GROWS with distance) feeds each bend's weights port - one continuous spatial field shared by all three material chunks (per-chunk phase offsets would tear the shared atlas seams at chunk boundaries), stiff at the trunk base, progressively floppier toward the blossom tips. sun_angle (orbited via cos/sin from a Value hub), fog_density and the camera's orbit/tilt/distance round out the exposed performance surface.",
   "presetMetadata": {
     "id": "ApricotWeather",
     "displayName": "Apricot Weather",
@@ -313,8 +313,8 @@
               "rate": { "type": "Enum", "value": 0 },
               "shape": { "type": "Enum", "value": 0 },
               "phase": { "type": "Float", "value": 0.0 },
-              "min": { "type": "Float", "value": -0.16 },
-              "max": { "type": "Float", "value": 0.64 }
+              "min": { "type": "Float", "value": -0.05 },
+              "max": { "type": "Float", "value": 0.21 }
             }
           },
           {
@@ -328,8 +328,8 @@
               "rate": { "type": "Enum", "value": 1 },
               "shape": { "type": "Enum", "value": 0 },
               "phase": { "type": "Float", "value": 0.37 },
-              "min": { "type": "Float", "value": -0.2 },
-              "max": { "type": "Float", "value": 0.28 }
+              "min": { "type": "Float", "value": -0.065 },
+              "max": { "type": "Float", "value": 0.095 }
             }
           },
           {
@@ -343,8 +343,8 @@
               "rate": { "type": "Enum", "value": 4 },
               "shape": { "type": "Enum", "value": 0 },
               "phase": { "type": "Float", "value": 0.13 },
-              "min": { "type": "Float", "value": -0.1 },
-              "max": { "type": "Float", "value": 0.1 }
+              "min": { "type": "Float", "value": -0.033 },
+              "max": { "type": "Float", "value": 0.033 }
             }
           },
           {
@@ -807,7 +807,7 @@
               "phase": { "type": "Float", "value": 0.0 },
               "feather": { "type": "Float", "value": 1.0 },
               "bound_min": { "type": "Float", "value": 0.0 },
-              "bound_max": { "type": "Float", "value": 7.9 },
+              "bound_max": { "type": "Float", "value": 12.0 },
               "invert": { "type": "Bool", "value": true }
             }
           },
@@ -1085,7 +1085,7 @@
               "phase": { "type": "Float", "value": 0.0 },
               "feather": { "type": "Float", "value": 1.0 },
               "bound_min": { "type": "Float", "value": 0.0 },
-              "bound_max": { "type": "Float", "value": 7.9 },
+              "bound_max": { "type": "Float", "value": 12.0 },
               "invert": { "type": "Bool", "value": true }
             }
           },
@@ -1363,7 +1363,7 @@
               "phase": { "type": "Float", "value": 0.0 },
               "feather": { "type": "Float", "value": 1.0 },
               "bound_min": { "type": "Float", "value": 0.0 },
-              "bound_max": { "type": "Float", "value": 7.9 },
+              "bound_max": { "type": "Float", "value": 12.0 },
               "invert": { "type": "Bool", "value": true }
             }
           },
