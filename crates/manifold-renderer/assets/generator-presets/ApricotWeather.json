@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "ApricotWeather",
-  "description": "Scene 1 \u2014 a Japanese apricot (prunus mume) flowering-branch photogrammetry scan (cc0__japanese_apricot_prunus_mume.glb, ~1.4M tris across a sparse cluster of blossom sprigs, NOT a full standing tree) rendered inside node.render_scene alongside a ground plane, one shadow-casting sun, and depth fog. The glb ships 4 materials; material_index 0 is a 24-vertex reference/calibration cube sitting well outside the blossom cluster and is deliberately excluded \u2014 only materials 1/2/3 (the actual scan content) ship. Each surviving material becomes its own render_scene object (node.gltf_mesh_source material_index-filtered -> node.push_along_normals(sway) as mesh, node.gltf_texture_source as its base-color map, node.phong_material) sharing ONE node.transform_3d offset (the three materials' combined world-space bbox center) so they stay spatially coherent \u2014 the same per-material-object shape node_graph::gltf_import's assemble_import_graph builds for any multi-material glTF import, not a merged single-texture mesh (mesh_index=-1 WholeScene would sample all 3 UV atlases through one texture and visibly mismatch). sway_amount, sun_angle (orbited via cos/sin from a Value hub), fog_density and the camera's orbit/tilt/distance are the exposed performance surface; no LFOs or beat curves are wired into the graph.",
+  "description": "Scene 1 \u2014 a Japanese apricot (prunus mume) flowering-branch photogrammetry scan (cc0__japanese_apricot_prunus_mume.glb, ~1.4M tris across a sparse cluster of blossom sprigs, NOT a full standing tree) rendered inside node.render_scene alongside a ground plane, one shadow-casting sun, and depth fog. The glb ships 4 materials; material_index 0 is a 24-vertex reference/calibration cube sitting well outside the blossom cluster and is deliberately excluded \u2014 only materials 1/2/3 (the actual scan content) ship. Each surviving material becomes its own render_scene object (node.gltf_mesh_source material_index-filtered -> node.push_along_normals(sway) as mesh, node.gltf_texture_source as its base-color map, node.phong_material) sharing ONE node.transform_3d offset (the three materials' combined world-space bbox center) so they stay spatially coherent \u2014 the same per-material-object shape node_graph::gltf_import's assemble_import_graph builds for any multi-material glTF import, not a merged single-texture mesh (mesh_index=-1 WholeScene would sample all 3 UV atlases through one texture and visibly mismatch). Wind lives in the Wind group: three beat-locked sine LFOs (1/1, 1/2, 1/8; summed range ~[-0.46, +1.02], deliberately biased positive so the sprig leans downwind and surges rather than metronome-swinging around upright) sum into a gust signal multiplied by the swayAmount fader (bound to the wind_amount Value hub - the fader is amount only, motion character lives in the graph), driving every cluster's bend_mesh angle port. Each cluster bends inside a rotate_3d(-phi) -> bend_mesh -> rotate_3d(+phi) conjugation whose phi comes from a slow free-running wander LFO (~42s period, +/-0.9 rad), so the wind DIRECTION drifts in the horizontal plane without visually spinning the sprig (the two rotations cancel exactly wherever the bend angle is zero). Differential sway: node.mesh_ramp (axis=Distance from the bend anchor (0,-2.656,0), bounds 0..7.9 = the scan's max extent from the anchor, full-range feather, inverted so weight GROWS with distance) feeds each bend's weights port - one continuous spatial field shared by all three material chunks (per-chunk phase offsets would tear the shared atlas seams at chunk boundaries), stiff at the trunk base, progressively floppier toward the blossom tips. sun_angle (orbited via cos/sin from a Value hub), fog_density and the camera's orbit/tilt/distance round out the exposed performance surface.",
   "presetMetadata": {
     "id": "ApricotWeather",
     "displayName": "Apricot Weather",
@@ -80,28 +80,8 @@
         "defaultValue": 0.0,
         "target": {
           "kind": "node",
-          "nodeId": "sway_1",
-          "param": "angle"
-        }
-      },
-      {
-        "id": "swayAmount",
-        "label": "Sway Amount",
-        "defaultValue": 0.0,
-        "target": {
-          "kind": "node",
-          "nodeId": "sway_2",
-          "param": "angle"
-        }
-      },
-      {
-        "id": "swayAmount",
-        "label": "Sway Amount",
-        "defaultValue": 0.0,
-        "target": {
-          "kind": "node",
-          "nodeId": "sway_3",
-          "param": "angle"
+          "nodeId": "wind_amount",
+          "param": "value"
         }
       },
       {
@@ -295,6 +275,219 @@
           "type": "Float",
           "value": 0.92
         }
+      }
+    },
+    {
+      "id": 37,
+      "typeId": "group",
+      "nodeId": "wind_group",
+      "handle": "Wind",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "gust",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "wander",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "wander_neg",
+              "portType": "Scalar(F32)"
+            }
+          ],
+          "params": []
+        },
+        "nodes": [
+          {
+            "id": 38,
+            "typeId": "node.lfo",
+            "nodeId": "gust_slow",
+            "handle": "gust_slow",
+            "title": "Gust Body (1 bar)",
+            "params": {
+              "rate_mode": { "type": "Enum", "value": 0 },
+              "rate": { "type": "Enum", "value": 0 },
+              "shape": { "type": "Enum", "value": 0 },
+              "phase": { "type": "Float", "value": 0.0 },
+              "min": { "type": "Float", "value": -0.16 },
+              "max": { "type": "Float", "value": 0.64 }
+            }
+          },
+          {
+            "id": 39,
+            "typeId": "node.lfo",
+            "nodeId": "gust_mid",
+            "handle": "gust_mid",
+            "title": "Gust Surge (1/2)",
+            "params": {
+              "rate_mode": { "type": "Enum", "value": 0 },
+              "rate": { "type": "Enum", "value": 1 },
+              "shape": { "type": "Enum", "value": 0 },
+              "phase": { "type": "Float", "value": 0.37 },
+              "min": { "type": "Float", "value": -0.2 },
+              "max": { "type": "Float", "value": 0.28 }
+            }
+          },
+          {
+            "id": 40,
+            "typeId": "node.lfo",
+            "nodeId": "gust_flutter",
+            "handle": "gust_flutter",
+            "title": "Flutter (1/8)",
+            "params": {
+              "rate_mode": { "type": "Enum", "value": 0 },
+              "rate": { "type": "Enum", "value": 4 },
+              "shape": { "type": "Enum", "value": 0 },
+              "phase": { "type": "Float", "value": 0.13 },
+              "min": { "type": "Float", "value": -0.1 },
+              "max": { "type": "Float", "value": 0.1 }
+            }
+          },
+          {
+            "id": 41,
+            "typeId": "node.math",
+            "nodeId": "gust_sum_a",
+            "handle": "gust_sum_a",
+            "title": "body + surge",
+            "params": {
+              "op": { "type": "Enum", "value": 0 }
+            }
+          },
+          {
+            "id": 42,
+            "typeId": "node.math",
+            "nodeId": "gust_sum_b",
+            "handle": "gust_sum_b",
+            "title": "+ flutter",
+            "params": {
+              "op": { "type": "Enum", "value": 0 }
+            }
+          },
+          {
+            "id": 43,
+            "typeId": "node.value",
+            "nodeId": "wind_amount",
+            "handle": "wind_amount",
+            "title": "Sway Amount",
+            "params": {
+              "value": { "type": "Float", "value": 0.0 }
+            }
+          },
+          {
+            "id": 44,
+            "typeId": "node.math",
+            "nodeId": "gust_out",
+            "handle": "gust_out",
+            "title": "gust x amount",
+            "params": {
+              "op": { "type": "Enum", "value": 2 }
+            }
+          },
+          {
+            "id": 45,
+            "typeId": "node.lfo",
+            "nodeId": "wind_wander",
+            "handle": "wind_wander",
+            "title": "Direction Wander (~42s)",
+            "params": {
+              "rate_mode": { "type": "Enum", "value": 1 },
+              "angular_rate": { "type": "Float", "value": 0.15 },
+              "shape": { "type": "Enum", "value": 0 },
+              "phase": { "type": "Float", "value": 0.0 },
+              "min": { "type": "Float", "value": -0.9 },
+              "max": { "type": "Float", "value": 0.9 }
+            }
+          },
+          {
+            "id": 46,
+            "typeId": "node.scale_offset_value",
+            "nodeId": "wander_neg",
+            "handle": "wander_neg",
+            "title": "-wander",
+            "params": {
+              "scale": { "type": "Float", "value": -1.0 },
+              "offset": { "type": "Float", "value": 0.0 }
+            }
+          },
+          {
+            "id": 47,
+            "typeId": "system.group_output",
+            "nodeId": "wind_group_out",
+            "handle": "output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 38,
+            "fromPort": "out",
+            "toNode": 41,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 39,
+            "fromPort": "out",
+            "toNode": 41,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 41,
+            "fromPort": "out",
+            "toNode": 42,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 40,
+            "fromPort": "out",
+            "toNode": 42,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 42,
+            "fromPort": "out",
+            "toNode": 44,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 43,
+            "fromPort": "out",
+            "toNode": 44,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 44,
+            "fromPort": "out",
+            "toNode": 47,
+            "toPort": "gust"
+          },
+          {
+            "fromNode": 45,
+            "fromPort": "out",
+            "toNode": 47,
+            "toPort": "wander"
+          },
+          {
+            "fromNode": 45,
+            "fromPort": "out",
+            "toNode": 46,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 46,
+            "fromPort": "out",
+            "toNode": 47,
+            "toPort": "wander_neg"
+          }
+        ],
+        "tint": [
+          0.55,
+          0.8,
+          0.95,
+          1.0
+        ]
       }
     },
     {
@@ -506,7 +699,20 @@
       "handle": "Blossom Cluster A",
       "group": {
         "interface": {
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "gust",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "wander",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "wander_neg",
+              "portType": "Scalar(F32)"
+            }
+          ],
           "outputs": [
             {
               "name": "vertices",
@@ -568,6 +774,52 @@
                 "type": "Float",
                 "value": -2.66
               }
+            }
+          },
+          {
+            "id": 48,
+            "typeId": "system.group_input",
+            "nodeId": "object_1_in",
+            "handle": "input"
+          },
+          {
+            "id": 49,
+            "typeId": "node.rotate_3d",
+            "nodeId": "wind_in_1",
+            "handle": "wind_in_1",
+            "title": "Wind Frame In",
+            "params": {
+              "angle_x": { "type": "Float", "value": 0.0 },
+              "angle_z": { "type": "Float", "value": 0.0 }
+            }
+          },
+          {
+            "id": 50,
+            "typeId": "node.mesh_ramp",
+            "nodeId": "flex_1",
+            "handle": "flex_1",
+            "title": "Flex Weights",
+            "params": {
+              "axis": { "type": "Enum", "value": 4 },
+              "origin_x": { "type": "Float", "value": 0.0 },
+              "origin_y": { "type": "Float", "value": -2.656 },
+              "origin_z": { "type": "Float", "value": 0.0 },
+              "phase": { "type": "Float", "value": 0.0 },
+              "feather": { "type": "Float", "value": 1.0 },
+              "bound_min": { "type": "Float", "value": 0.0 },
+              "bound_max": { "type": "Float", "value": 7.9 },
+              "invert": { "type": "Bool", "value": true }
+            }
+          },
+          {
+            "id": 51,
+            "typeId": "node.rotate_3d",
+            "nodeId": "wind_out_1",
+            "handle": "wind_out_1",
+            "title": "Wind Frame Out",
+            "params": {
+              "angle_x": { "type": "Float", "value": 0.0 },
+              "angle_z": { "type": "Float", "value": 0.0 }
             }
           },
           {
@@ -640,11 +892,53 @@
           {
             "fromNode": 14,
             "fromPort": "vertices",
+            "toNode": 49,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 48,
+            "fromPort": "wander_neg",
+            "toNode": 49,
+            "toPort": "angle_y"
+          },
+          {
+            "fromNode": 49,
+            "fromPort": "out",
             "toNode": 15,
             "toPort": "in"
           },
           {
+            "fromNode": 14,
+            "fromPort": "vertices",
+            "toNode": 50,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 50,
+            "fromPort": "weights",
+            "toNode": 15,
+            "toPort": "weights"
+          },
+          {
+            "fromNode": 48,
+            "fromPort": "gust",
+            "toNode": 15,
+            "toPort": "angle"
+          },
+          {
             "fromNode": 15,
+            "fromPort": "out",
+            "toNode": 51,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 48,
+            "fromPort": "wander",
+            "toNode": 51,
+            "toPort": "angle_y"
+          },
+          {
+            "fromNode": 51,
             "fromPort": "out",
             "toNode": 19,
             "toPort": "vertices"
@@ -683,7 +977,20 @@
       "handle": "Blossom Cluster B",
       "group": {
         "interface": {
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "gust",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "wander",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "wander_neg",
+              "portType": "Scalar(F32)"
+            }
+          ],
           "outputs": [
             {
               "name": "vertices",
@@ -745,6 +1052,52 @@
                 "type": "Float",
                 "value": -2.66
               }
+            }
+          },
+          {
+            "id": 52,
+            "typeId": "system.group_input",
+            "nodeId": "object_2_in",
+            "handle": "input"
+          },
+          {
+            "id": 53,
+            "typeId": "node.rotate_3d",
+            "nodeId": "wind_in_2",
+            "handle": "wind_in_2",
+            "title": "Wind Frame In",
+            "params": {
+              "angle_x": { "type": "Float", "value": 0.0 },
+              "angle_z": { "type": "Float", "value": 0.0 }
+            }
+          },
+          {
+            "id": 54,
+            "typeId": "node.mesh_ramp",
+            "nodeId": "flex_2",
+            "handle": "flex_2",
+            "title": "Flex Weights",
+            "params": {
+              "axis": { "type": "Enum", "value": 4 },
+              "origin_x": { "type": "Float", "value": 0.0 },
+              "origin_y": { "type": "Float", "value": -2.656 },
+              "origin_z": { "type": "Float", "value": 0.0 },
+              "phase": { "type": "Float", "value": 0.0 },
+              "feather": { "type": "Float", "value": 1.0 },
+              "bound_min": { "type": "Float", "value": 0.0 },
+              "bound_max": { "type": "Float", "value": 7.9 },
+              "invert": { "type": "Bool", "value": true }
+            }
+          },
+          {
+            "id": 55,
+            "typeId": "node.rotate_3d",
+            "nodeId": "wind_out_2",
+            "handle": "wind_out_2",
+            "title": "Wind Frame Out",
+            "params": {
+              "angle_x": { "type": "Float", "value": 0.0 },
+              "angle_z": { "type": "Float", "value": 0.0 }
             }
           },
           {
@@ -817,11 +1170,53 @@
           {
             "fromNode": 21,
             "fromPort": "vertices",
+            "toNode": 53,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 52,
+            "fromPort": "wander_neg",
+            "toNode": 53,
+            "toPort": "angle_y"
+          },
+          {
+            "fromNode": 53,
+            "fromPort": "out",
             "toNode": 22,
             "toPort": "in"
           },
           {
+            "fromNode": 21,
+            "fromPort": "vertices",
+            "toNode": 54,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 54,
+            "fromPort": "weights",
+            "toNode": 22,
+            "toPort": "weights"
+          },
+          {
+            "fromNode": 52,
+            "fromPort": "gust",
+            "toNode": 22,
+            "toPort": "angle"
+          },
+          {
             "fromNode": 22,
+            "fromPort": "out",
+            "toNode": 55,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 52,
+            "fromPort": "wander",
+            "toNode": 55,
+            "toPort": "angle_y"
+          },
+          {
+            "fromNode": 55,
             "fromPort": "out",
             "toNode": 26,
             "toPort": "vertices"
@@ -860,7 +1255,20 @@
       "handle": "Blossom Cluster C",
       "group": {
         "interface": {
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "gust",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "wander",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "wander_neg",
+              "portType": "Scalar(F32)"
+            }
+          ],
           "outputs": [
             {
               "name": "vertices",
@@ -922,6 +1330,52 @@
                 "type": "Float",
                 "value": -2.66
               }
+            }
+          },
+          {
+            "id": 56,
+            "typeId": "system.group_input",
+            "nodeId": "object_3_in",
+            "handle": "input"
+          },
+          {
+            "id": 57,
+            "typeId": "node.rotate_3d",
+            "nodeId": "wind_in_3",
+            "handle": "wind_in_3",
+            "title": "Wind Frame In",
+            "params": {
+              "angle_x": { "type": "Float", "value": 0.0 },
+              "angle_z": { "type": "Float", "value": 0.0 }
+            }
+          },
+          {
+            "id": 58,
+            "typeId": "node.mesh_ramp",
+            "nodeId": "flex_3",
+            "handle": "flex_3",
+            "title": "Flex Weights",
+            "params": {
+              "axis": { "type": "Enum", "value": 4 },
+              "origin_x": { "type": "Float", "value": 0.0 },
+              "origin_y": { "type": "Float", "value": -2.656 },
+              "origin_z": { "type": "Float", "value": 0.0 },
+              "phase": { "type": "Float", "value": 0.0 },
+              "feather": { "type": "Float", "value": 1.0 },
+              "bound_min": { "type": "Float", "value": 0.0 },
+              "bound_max": { "type": "Float", "value": 7.9 },
+              "invert": { "type": "Bool", "value": true }
+            }
+          },
+          {
+            "id": 59,
+            "typeId": "node.rotate_3d",
+            "nodeId": "wind_out_3",
+            "handle": "wind_out_3",
+            "title": "Wind Frame Out",
+            "params": {
+              "angle_x": { "type": "Float", "value": 0.0 },
+              "angle_z": { "type": "Float", "value": 0.0 }
             }
           },
           {
@@ -994,11 +1448,53 @@
           {
             "fromNode": 28,
             "fromPort": "vertices",
+            "toNode": 57,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 56,
+            "fromPort": "wander_neg",
+            "toNode": 57,
+            "toPort": "angle_y"
+          },
+          {
+            "fromNode": 57,
+            "fromPort": "out",
             "toNode": 29,
             "toPort": "in"
           },
           {
+            "fromNode": 28,
+            "fromPort": "vertices",
+            "toNode": 58,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 58,
+            "fromPort": "weights",
+            "toNode": 29,
+            "toPort": "weights"
+          },
+          {
+            "fromNode": 56,
+            "fromPort": "gust",
+            "toNode": 29,
+            "toPort": "angle"
+          },
+          {
             "fromNode": 29,
+            "fromPort": "out",
+            "toNode": 59,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 56,
+            "fromPort": "wander",
+            "toNode": 59,
+            "toPort": "angle_y"
+          },
+          {
+            "fromNode": 59,
             "fromPort": "out",
             "toNode": 33,
             "toPort": "vertices"
@@ -1072,6 +1568,60 @@
       "fromPort": "light",
       "toNode": 35,
       "toPort": "light_0"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "gust",
+      "toNode": 20,
+      "toPort": "gust"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "wander",
+      "toNode": 20,
+      "toPort": "wander"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "wander_neg",
+      "toNode": 20,
+      "toPort": "wander_neg"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "gust",
+      "toNode": 27,
+      "toPort": "gust"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "wander",
+      "toNode": 27,
+      "toPort": "wander"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "wander_neg",
+      "toNode": 27,
+      "toPort": "wander_neg"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "gust",
+      "toNode": 34,
+      "toPort": "gust"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "wander",
+      "toNode": 34,
+      "toPort": "wander"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "wander_neg",
+      "toNode": 34,
+      "toPort": "wander_neg"
     },
     {
       "fromNode": 20,
