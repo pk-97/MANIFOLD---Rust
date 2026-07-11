@@ -1,6 +1,6 @@
 # Realtime 3D — Scenes, Lighting, Viewport
 
-**Status: IN PROGRESS (status corrected + baseline-reviewed 2026-07-05; D3/D8 AMENDED 2026-07-06 by `SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` — read its §8 before P6; D3/D4/§3/§6/§7.3 AMENDED 2026-07-10 (F2 coherence audit) — shadow-caster cap `MAX_SHADOW_CASTING_LIGHTS = 4` replaces the dead "8 objects, 4 lights" budget, read D4 before P2).** Shipped: P0 (MATERIAL M1–M6, all verified in-tree), P1 `node.render_scene` @ `8daa89fc`, P4 camera atoms (both `node.free_camera` + `node.look_at_camera` in-tree), §9 `node.spawn_from_mesh`, **P2 shadow maps + P3 atmosphere/fog @ `feat/realtime3d-p2p3` 2026-07-11** (gpu-proofs `render_scene_shadows` + `render_scene_fog`, PNG-verified; lights also moved to a ring-buffered storage buffer). **The P1 "transforms not port-shadowed" deviation is retired by amendment, not by shadows: per-object transforms move to `node.transform_3d` atoms feeding `transform_n: Transform` ports** (SCENE_BUILD P2). Remaining: P5 viewport navigate, P6 gizmos, P7 scene starter preset. · designed 2026-07-03 · Fable
+**Status: IN PROGRESS (status corrected + baseline-reviewed 2026-07-05; D3/D8 AMENDED 2026-07-06 by `SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` — read its §8 before P6; D3/D4/§3/§6/§7.3 AMENDED 2026-07-10 (F2 coherence audit) — shadow-caster cap `MAX_SHADOW_CASTING_LIGHTS = 4` replaces the dead "8 objects, 4 lights" budget, read D4 before P2).** Shipped: P0 (MATERIAL M1–M6, all verified in-tree), P1 `node.render_scene` @ `8daa89fc`, P4 camera atoms (both `node.free_camera` + `node.look_at_camera` in-tree), §9 `node.spawn_from_mesh`, **P2 shadow maps + P3 atmosphere/fog @ `feat/realtime3d-p2p3` 2026-07-11** (gpu-proofs `render_scene_shadows` + `render_scene_fog`, PNG-verified; lights also moved to a ring-buffered storage buffer). **The P1 "transforms not port-shadowed" deviation is retired by amendment, not by shadows: per-object transforms move to `node.transform_3d` atoms feeding `transform_n: Transform` ports** (SCENE_BUILD P2). Remaining: P5 viewport navigate, P6 gizmos, P7 scene starter preset, P8 scene instancing (§10, ADDED 2026-07-11 — promotes the §8 "instanced objects" deferral; D11). · designed 2026-07-03 · Fable
 **Prerequisites: MATERIAL_SYSTEM_DESIGN M1–M5 (un-held by this doc — its contract is
 unchanged; this design consumes its extension points). Vocab-audit apply should land
 first (this doc uses post-rename ids: `node.render_mesh`, `node.render_copies`).**
@@ -260,8 +260,9 @@ use focused tests per the scope rule.
   skeletal stays deferred there.
 - **Hierarchy/parenting** — when import lands or when totemed set pieces demand it;
   composes transforms, no type changes (D1).
-- **Instanced objects in scenes** (`instances_n` optional input per object group) —
-  the v2 huge-scenes lever, with instancing tricks + fog doing the "massive" look.
+- ~~**Instanced objects in scenes**~~ — **PROMOTED 2026-07-11 → §10 (D11, P8).** The
+  trigger fired: MESH_DEFORM P4's Garden demo needs scattered instances and scene
+  geometry to occlude each other (its Deferred #6), and Peter approved the design.
 - **Volumetric light shafts** — post-v1 atmosphere upgrade (real volumetrics, not
   depth fog).
 - **Spot lights / cubemap point shadows** — LightMode extension, v2.
@@ -301,3 +302,113 @@ before P1.
   (`-p manifold-renderer --lib`).
 - **Forbidden:** CPU-side per-frame reseeding (respect the recompute gate — seeding
   is per-trigger, not per-frame) · inventing a new particle struct.
+
+## 10. Addendum 2026-07-11 — D11 + P8: per-object instancing in `render_scene`
+
+Promotes the §8 "Instanced objects in scenes" deferral: MESH_DEFORM P4's Garden demo
+(its Deferred #6) fired the trigger. Garden today draws terrain (`render_scene`) and
+scattered flowers (`render_copies`) as two passes composited by a `node.mix` Max
+blend — no shared depth, so a flower fully behind a hill crest still draws. It reads
+correct only because the flowers sit on the near face and are brighter. Correct
+occlusion between scattered instances and scene geometry cannot be composited in
+after the fact; it has to happen in the scene pass. Peter approved 2026-07-11.
+
+**What it buys on stage:** scatter density (`scatter_on_mesh`'s port-shadowed
+`count`) rides a fader while the camera dollies, and occlusion stays correct at
+every value — instances vanish behind ridges, drop shadows on the terrain, sit in
+the fog. This is also the "huge scenes" lever: 64 objects × hundreds of instances
+each at a bounded draw-call count.
+
+### Audit (verified 2026-07-11 @ `8bdc4a70`)
+
+| Piece | Where | State |
+|---|---|---|
+| Main-pass draws are already instanced, count hardcoded 1 | `render_scene.rs:1089-1100` (`depth_msaa_draw(&pipeline, bindings, vertex_count, 1)`) | The `manifold-gpu` API needs zero changes |
+| Shadow-pass draws likewise | `render_scene.rs:940-951` | Same — pass the real count |
+| `InstanceTransform` | `generators/mesh_common.rs:93-98` — 32-byte `{pos_scale, rot_pad}`: pos.xyz + uniform scale in `.w`, Euler rot in `rot_pad.xyz`; std430 stride 32, stride-drift test exists | Reuse as-is; no new type |
+| Instance vertex math precedent | `shaders/render_instanced_3d_mesh.wgsl:109-152` — `@builtin(instance_index)` → `instances[iid]`, `euler_xyz(rot_pad.xyz)`, rotates normals too | `render_scene.wgsl:55` already documents sharing this Euler convention |
+| Producer | `scatter_on_mesh.rs:61-62` outputs `Array(InstanceTransform)`; `count` is port-shadowed (`:51`) | Density is a live control on the producer |
+| Port rebuild | `render_scene.rs:253-342` — object-group ports are name-generated | Adding one optional port per group is mechanical; old projects load it unwired (no migration) |
+| Always-bind ABI-stub pattern | `render_scene.rs:874` (`ensure_shadow_binding_stubs` — dummy depth + comparison sampler) | The identity-instance stub copies this |
+| Garden | `crates/manifold-renderer/assets/generator-presets/Garden.json` + `manifold-app/tests/garden_preset_round_trip.rs` | The two-pass composite this kills; the acceptance demo |
+
+### D11 — instancing is a port on the object group, in the scene pass
+
+- **Each object group grows `instances_n: Array(InstanceTransform) optional`.**
+  Wired → that object's draws (main pass AND every caster's shadow pass) run with
+  `instance_count = buffer_size / 32` (0 → skip the object's draws); each instance's
+  world transform is `model_n · T_instance` — **instance TRS applies first, the
+  group's `transform_n` second**, copied verbatim from
+  `render_instanced_3d_mesh.wgsl`'s TRS math. Instance transforms therefore live in
+  the object's local space: wire the SAME `node.transform_3d` into the terrain
+  object and the scattered object, and the instances stay glued to the terrain
+  under any group move. Uniform scale only (`pos_scale.w`), same as `render_copies`.
+- **One always-instanced pipeline per MaterialKind — no instanced/non-instanced
+  variant matrix.** `render_scene.wgsl`'s single `vs_main` and `shadow_depth.wgsl`
+  always declare the instance buffer + `@builtin(instance_index)`; an unwired object
+  binds a cached 1-entry identity stub (`pos_scale [0,0,0,1]`, `rot_pad` zeros) and
+  draws with count 1 — the same always-bind ABI-stub pattern this node already uses
+  for shadow bindings. *Consequences, stated honestly:* every non-instanced vertex
+  now reads 32 identity bytes from a storage buffer — the same read `render_copies`
+  does, L1-resident; the identity-parity gate below proves output identity. If it
+  ever measures, split vertex entry points are the escape hatch — do not start there.
+- **No per-object `instance_count` param** (amended D3: render_scene carries no
+  per-object params). Count = the wired array's capacity; density control belongs
+  to the producer. Per-instance material/color variation is NOT in scope —
+  instances share the group's `material_n`/`base_color_map_n` (Deferred, below).
+- **Rejected: a depth-aware two-pass compositor** (depth outputs + depth-tested
+  mix). The scene's depth buffer is memoryless MSAA tile memory
+  (`render_scene.rs:64-68,195-198`) — exposing it costs a stored resolve on every
+  scene render, needs a depth-port convention across all 3D renderers, and
+  composited passes still can't exchange shadows or fog. If splats or particles
+  ever need scene occlusion, that's a new design with its own trigger; it does not
+  reopen this one.
+- **Rejected: routing instanced objects through `render_instanced_3d_mesh`'s
+  pipeline inside the scene.** This is the plausible-wrong turn, named: reusing the
+  existing instanced shader puts a second lighting model in the same image —
+  instances would ignore scene lights, shadows, and fog. Extend `render_scene.wgsl`
+  so instances share the exact lit path.
+
+### P8 — phase brief (one session)
+
+- **Entry state:** P2+P3 in-tree (`gpu_proofs::render_scene_shadows` /
+  `render_scene_fog` pass); re-verify every anchor in the §10 audit table (rg/read;
+  a moved anchor is an escalation); Garden.json still composites two passes via a
+  Max-blend `node.mix`.
+- **Read-back:** this §10 whole; D3/D4; `render_scene.rs` rebuild + both draw
+  loops; `render_instanced_3d_mesh.wgsl` TRS + normal math; standard §5–§6.
+- **Deliverables:** `instances_n` port in `rebuild()` · identity-stub buffer ensure
+  fn · instance fetch in `render_scene.wgsl` `vs_main` + `shadow_depth.wgsl` ·
+  real instance counts in both draw loops · updated `description()` purpose +
+  composition_notes · gpu test module `render_scene_instances` · Garden.json
+  re-wired single-pass (flowers become an object group with `instances_n` wired;
+  the `node.mix` composite deleted) with `garden_preset_round_trip` still green.
+- **Gate (positive, gpu-proofs — deliberate `cargo test -p manifold-renderer
+  --features gpu-proofs render_scene`):** occlusion — an instance placed fully
+  behind an occluder object contributes no pixels (value-level, shape it like
+  `render_scene_shadows`); **identity parity — a wired 1-entry identity instance
+  buffer renders byte-identical to the same scene unwired** (this is the invariant
+  check: unwired objects cost nothing observable); shadow — an instance between a
+  sun caster and the ground darkens the ground (shadowed < lit); fog — a far
+  instance shifts toward `fog_color`. Bundled 3D preset PNGs unchanged except
+  Garden.
+- **Gate (negative):** `rg 'Arc<Mutex' ` on touched files → zero; Garden.json →
+  zero hits for the Max-blend composite node; existing `render_scene_*` proofs
+  untouched and green.
+- **Acceptance demo (L2):** headless PNG of Garden from a camera angle that puts
+  flowers behind the ridge — flowers hidden by terrain, shadows and fog consistent;
+  read by the landing session.
+- **Performer gesture:** sweep scatter `count` on a fader during a camera dolly —
+  occlusion correct at every density, nothing to babysit.
+- **Test scope:** focused `-p manifold-renderer --lib` for rebuild/port tests; the
+  gpu-proofs run above for the render path; full workspace sweep at landing per
+  protocol.
+- **Forbidden moves:** reusing `render_instanced_3d_mesh`'s shader/pipeline for
+  scene instances · exposing a depth output to composite instead · a per-object
+  `instance_count` param · a CPU loop issuing one draw per instance · adding
+  non-uniform instance scale "while in there" (scope fence).
+
+**Deferred (new, with triggers):** per-instance color/material variation — ride a
+`Channels` color lane when the first look needs it. Depth-aware compositing for
+non-mesh passes (splats/particles vs scene) — its own design when such a preset
+appears.

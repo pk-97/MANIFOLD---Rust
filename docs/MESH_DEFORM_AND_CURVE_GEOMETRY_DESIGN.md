@@ -343,12 +343,11 @@ flowers) is exercised by a phase demo except "dissolve" (ships today via
 5. **Non-ramp weights producers** (texture-sampled weights, per-region audio bands).
    The `weights` port is already the seam. *Trigger:* first ask for "only the petals
    react".
-6. **Depth-correct multi-pass 3D compositing** (a `render_scene` per-object instancing
-   port, or a shared-depth alpha-over compositor for multiple render passes). Surfaced
-   by P4's Garden demo: terrain (`render_scene`) and scattered flowers
-   (`render_instanced_3d_mesh`) are two separate passes composited with `node.mix`
-   Max-blend, so there is no shared depth buffer — a flower fully behind a hill crest
-   would still draw. Reads correct in the demo (flowers on the visible surface, brighter
-   than terrain) but isn't depth-correct by construction. *Trigger:* a preset needs
-   scattered instances and scene geometry to occlude each other correctly on camera, or
-   Peter reports a flower drawing through terrain at the rig.
+6. **Depth-correct multi-pass 3D compositing** — **DESIGNED 2026-07-11:
+   `REALTIME_3D_DESIGN.md` §10 (D11 + P8)** — the trigger fired and Peter approved.
+   The design takes the instancing-port shape (`instances_n` on `render_scene`
+   object groups, instances drawn inside the scene pass sharing depth, shadows, and
+   fog); the shared-depth compositor alternative is rejected there by name. P8
+   re-wires Garden single-pass as its acceptance demo. (Original context: terrain
+   and scattered flowers were two passes composited with `node.mix` Max-blend — a
+   flower fully behind a hill crest would still draw.)
