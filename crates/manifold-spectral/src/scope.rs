@@ -14,13 +14,19 @@
 /// **Field order is lane order, bottom-up**: the first field is the lowest
 /// lane. [`Self::LANE_COLORS`] and [`Self::lanes`] follow the same order —
 /// both are length-checked against the field count at compile time.
+///
+/// **Kick lane removed** (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
+/// §7.2 item 1, 2026-07-11, P8): this struct is the scope's own tick-lane
+/// display only — the underlying ridge-only kick detector
+/// (`crates/manifold-audio/src/analysis.rs`'s `kick_ridges`/`KickRidges`,
+/// `AudioFeatureKind::Kick`, the drawer's Kick feature button) is completely
+/// untouched; only the scope's visual lane for it is gone. Not conditional —
+/// deleted outright, per Peter's "never sometimes there and sometimes not."
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ScopeOnsets {
-    /// Kick fire (0/1 impulse) — the dedicated ridge-only sub-bass kick
-    /// detector, independent of the Low transient. Bottom lane.
-    pub kick: f32,
     /// Low-band transient fire (0/1 impulse; only the fired hop, not the tail).
+    /// Bottom lane.
     pub low: f32,
     /// Mid-band transient fire.
     pub mid: f32,
@@ -33,11 +39,9 @@ impl ScopeOnsets {
     /// fields (all-`f32` `repr(C)` — const-asserted below).
     pub const COUNT: usize = size_of::<Self>() / size_of::<f32>();
 
-    /// Lane colours (linear rgb), same bottom-up order as the fields. Hue
-    /// families deliberately absent from the scope's jet colourmap where
-    /// possible; Low/Mid/High match their centroid-trace colours.
+    /// Lane colours (linear rgb), same bottom-up order as the fields. Low/Mid/
+    /// High match their centroid-trace colours.
     pub const LANE_COLORS: [[f32; 3]; Self::COUNT] = [
-        [1.0, 0.0, 0.8],   // kick — magenta (the one hue the jet colourmap never paints)
         [1.0, 0.35, 0.30], // low — red
         [0.35, 1.0, 0.45], // mid — green
         [0.40, 0.62, 1.0], // high — blue
@@ -46,13 +50,13 @@ impl ScopeOnsets {
     /// Human-readable lane names, same bottom-up order as the fields — the
     /// Audio Setup scope's gutter legend and any other UI naming a lane.
     /// Length-checked against the field count at compile time.
-    pub const LANE_LABELS: [&'static str; Self::COUNT] = ["Kick", "Low", "Mid", "High"];
+    pub const LANE_LABELS: [&'static str; Self::COUNT] = ["Low", "Mid", "High"];
 
     /// The lanes as an array, bottom-up (for consumers that iterate lanes, e.g.
     /// the `mod_harness` CPU renderer). The return length is [`Self::COUNT`],
     /// so forgetting to list a new field here is a compile error.
     pub fn lanes(&self) -> [f32; Self::COUNT] {
-        [self.kick, self.low, self.mid, self.high]
+        [self.low, self.mid, self.high]
     }
 }
 
@@ -93,7 +97,7 @@ impl ScopeColumn {
     /// The "nothing recorded" column: hidden centroid traces, no onset ticks.
     pub const EMPTY: Self = Self {
         centroids: [-1.0; SCOPE_CENTROID_COUNT],
-        onsets: ScopeOnsets { kick: 0.0, low: 0.0, mid: 0.0, high: 0.0 },
+        onsets: ScopeOnsets { low: 0.0, mid: 0.0, high: 0.0 },
     };
 }
 
@@ -118,7 +122,7 @@ mod tests {
     fn lanes_match_memory_order() {
         let col = ScopeColumn {
             centroids: [0.1, 0.2, 0.3, 0.4],
-            onsets: ScopeOnsets { kick: 0.5, low: 1.0, mid: 2.0, high: 3.0 },
+            onsets: ScopeOnsets { low: 1.0, mid: 2.0, high: 3.0 },
         };
         // SAFETY: repr(C), all-f32, no padding (const-asserted above).
         let raw: [f32; ScopeColumn::STRIDE] = unsafe { std::mem::transmute(col) };

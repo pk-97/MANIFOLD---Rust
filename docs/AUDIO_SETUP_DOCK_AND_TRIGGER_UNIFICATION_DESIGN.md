@@ -1,6 +1,6 @@
 # Audio Setup Dock & Trigger Unification — the panel becomes a workspace column; clip triggers become layer-owned audio mods
 
-**Status:** **IN PROGRESS — WAVE 2 (P5+P6 SHIPPED 2026-07-11, P7–P8 not built)** — Peter's morning-after rig review of Wave 1 found the D6 fire meter dead in every transport state; root-caused same session (BUG-109: P3c's capture reset wipes the step-3b trigger levels while playing; stopped ticks never evaluate clip triggers at all — so **BUG-082's closure below was false**, reopened via BUG-109). Wave 2 = P5 meter resurrection + peak-hold · P6 Sensitivity rename + Delta UI removal · P7 scope↔drawer linkage · P8 panel de-clutter (kick lane out, Cap chip out, Inputs authoring out, St/Mo collapsed into the channel dropdown). Executor: Sonnet orchestration against §7; land in two batches (P5+P6, P7+P8). **P5 shipped 2026-07-11:** top-of-tick `FireMeterCapture` reset, stopped-tick meter-only conditioning walk (`LiveTriggerState::evaluate_meter_only`), UI-side peak-hold in `MeterIds::update` — closes BUG-109 at the plumbing level (L1 unit tests + a synthetic-level PNG); BUG-082 re-closed the same way. **VD-025 (live rig confirmation) stays open — not claimable by this executor**, see §7.3 Phase 5. **P6 shipped 2026-07-11:** "Amount" → "Sensitivity" display rename; Delta toggle removed from the drawer (both `AudioModDrawerTarget`s, one shared builder) — `RowClick::AudioToggleRate` deleted, flat button-index math renumbered in all three click-routing sites; `AudioModShape::rate_of_change` + its `condition()` arm stay compiled dormant; a load migration (`Project::clear_legacy_rate_on_flags`) clears any saved `rate_on: true` on both carriers, counted + logged, proven by a save-reload round-trip test. — Wave 1 record: ✅ P1–P4 shipped 2026-07-10. P1 dock column + overlay deletion (`36a96791`, closes BUG-047) · P2 `LayerClipTrigger` model + migration + evaluator (`e4aa01bf`) · P3a Triggers-matrix deletion (`47f2a112`) · P3b inspector AUDIO TRIGGERS authoring section, default-collapsed (`5c4fbcca`) · P3c fire meter/D6 (`12fbc37d`, see BUG-109) · P4 readability + hygiene, BUG-070 FIXED (`a649f62a`). Per-phase detail in `docs/landings/2026-07-10-audio-dock-p{1,2,3a,3b,3c,4}.md` and `docs/landings/2026-07-11-audio-dock-p5.md`. Owns closed: BUG-047, BUG-070, BUG-109. Owns open: BUG-082 (re-fixed, L4 confirmation pending). Open debt: VD-024 (P3b section unit tests), VD-025 (P5's live-crossing confirmation, Peter's rig). **Owed to Peter (L4 feel-pass):** narrow-width dock, dock-width persistence, live fire-meter crossing (P5 plumbing shipped, crossing itself unconfirmed), gain reset-gesture confirmation (shipped as right-click). **Deferred:** level-crossing detector, bulk trigger-tune view (chip tooltips: moot, chips deleted in P8). · design 2026-07-09 · wave 2 2026-07-11 · Fable
+**Status:** **SHIPPED — WAVE 2 COMPLETE 2026-07-11 (P5–P8 all landed)** — Peter's morning-after rig review of Wave 1 found the D6 fire meter dead in every transport state; root-caused same session (BUG-109: P3c's capture reset wipes the step-3b trigger levels while playing; stopped ticks never evaluate clip triggers at all — so **BUG-082's closure below was false**, reopened via BUG-109). Wave 2 = P5 meter resurrection + peak-hold · P6 Sensitivity rename + Delta UI removal · P7 scope↔drawer linkage · P8 panel de-clutter (kick lane out, Cap chip out, Inputs authoring out, St/Mo collapsed into the channel dropdown). Executor: Sonnet orchestration against §7; land in two batches (P5+P6, P7+P8). **P5 shipped 2026-07-11:** top-of-tick `FireMeterCapture` reset, stopped-tick meter-only conditioning walk (`LiveTriggerState::evaluate_meter_only`), UI-side peak-hold in `MeterIds::update` — closes BUG-109 at the plumbing level (L1 unit tests + a synthetic-level PNG); BUG-082 re-closed the same way. **VD-025 (live rig confirmation) stays open — not claimable by this executor**, see §7.3 Phase 5. **P6 shipped 2026-07-11:** "Amount" → "Sensitivity" display rename; Delta toggle removed from the drawer (both `AudioModDrawerTarget`s, one shared builder) — `RowClick::AudioToggleRate` deleted, flat button-index math renumbered in all three click-routing sites; `AudioModShape::rate_of_change` + its `condition()` arm stay compiled dormant; a load migration (`Project::clear_legacy_rate_on_flags`) clears any saved `rate_on: true` on both carriers, counted + logged, proven by a save-reload round-trip test. **P7 shipped 2026-07-11:** expanding a fire-mode drawer re-taps the scope to its send (`UIRoot::open_fire_mode_drawer_send`, `app_render.rs`'s tap-follow block); a non-Full selected band dims the spectrum outside it — implemented in `spectrogram.wgsl`'s fragment shader (not UI-tree quads; see the phase's as-built correction) and proven by a real GPU readback test. VD-026 carries the L3-flow + live-PNG gap (same live-audio-device limitation as VD-025). **P8 shipped 2026-07-11:** kick lane out of the scope (`ScopeOnsets` drops the field outright, detector untouched); Cap chip + its click-to-reveal routings popup deleted (content lives in the now-read-only Inputs section); Inputs section authoring ("+ Layer", per-layer ×) deleted, the layer header's Send dropdown is the one surviving path; St/Mo toggle deleted, the channel dropdown enumerates stereo pairs and singles directly; Consumers clip-trigger rows reworded to "Clip trigger · Layer · Band"; AUDIO_SENDS_UX D2/D3 as-built notes added. — Wave 1 record: ✅ P1–P4 shipped 2026-07-10. P1 dock column + overlay deletion (`36a96791`, closes BUG-047) · P2 `LayerClipTrigger` model + migration + evaluator (`e4aa01bf`) · P3a Triggers-matrix deletion (`47f2a112`) · P3b inspector AUDIO TRIGGERS authoring section, default-collapsed (`5c4fbcca`) · P3c fire meter/D6 (`12fbc37d`, see BUG-109) · P4 readability + hygiene, BUG-070 FIXED (`a649f62a`). Per-phase detail in `docs/landings/2026-07-10-audio-dock-p{1,2,3a,3b,3c,4}.md`, `docs/landings/2026-07-11-audio-dock-p5p6.md`, and `docs/landings/2026-07-11-audio-dock-p7p8.md`. Owns closed: BUG-047, BUG-070, BUG-109. Owns open: BUG-082 (re-fixed, L4 confirmation pending). Open debt: VD-024 (P3b/P7 section unit tests), VD-025 (P5's live-crossing confirmation, Peter's rig), VD-026 (P7's L3 flow + live-dim PNG, same rig session). **Owed to Peter (L4 feel-pass):** narrow-width dock, dock-width persistence, live fire-meter crossing (P5 plumbing shipped, crossing itself unconfirmed), gain reset-gesture confirmation (shipped as right-click). **Deferred:** level-crossing detector, bulk trigger-tune view (chip tooltips: moot, chips deleted in P8). · design 2026-07-09 · wave 2 2026-07-11 · Fable
 **Prerequisites:** none (runs against shipped AUDIO_SENDS_UX P1–P4 and LIVE_AUDIO_TRIGGERS §9 U-P1/U-P2 code)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -567,7 +567,7 @@ sandbox") and the wave still closed BUG-082 on a headless PNG. The PNG proved th
 - **Test scope:** `-p manifold-ui --lib` + `-p manifold-io --lib` (migration) focused;
   sweep at landing (P5+P6 batch).
 
-### Phase 7 — Scope follows the trigger drawer
+### Phase 7 — Scope follows the trigger drawer — SHIPPED 2026-07-11
 - **Entry state:** P5/P6 landed. The scope-tap mechanism exists (analysis gating's
   "scope-tapped send"); the Audio Setup panel owns tap selection today.
 - **Read-back:** §7.2 item 5; §5 item 6 (the boundary this phase must respect);
@@ -580,18 +580,45 @@ sandbox") and the wave still closed BUG-082 on a headless PNG. The PNG proved th
   existing divider positions — Full = no dim). The dimming shows *what the config
   listens to*; fire feedback stays in the drawer meter (§5 item 6 is not reopened).
   Tap-follow state is session-only, never persisted.
-- **Gate:** *Positive:* L3 ui-flow — expand a trigger drawer on send B while the panel
-  selects send A ⇒ tap command for B; collapse ⇒ tap restored to A; headless PNG of the
-  dimmed scope with a Low-band trigger open. *Negative:* expanding a plain continuous
-  mod's drawer does NOT re-tap; no new overlay kinds beyond the two quads.
+- **As-built correction:** the "two translucent overlay quads" are NOT UI-tree nodes.
+  Reading `ui_frame.rs`'s render order found the VQT waterfall blit is the LAST GPU
+  draw call every frame (`spectrogram.render()` → `blit_texture_pane`, after the panel
+  atlas AND the overlay flush) — a UI-tree quad positioned inside `scope_rect` would be
+  painted over by that blit on every live-data frame (the existing per-band meters are
+  deliberately kept OUTSIDE `scope_rect`, in the reserved margin, for exactly this
+  reason — `audio_setup_panel.rs`'s own comment: "the blit would otherwise cover
+  them"). The dim is instead computed IN the same shader pass that already draws the
+  band-divider lines (`spectrogram.wgsl`): `Params` gained `dim_lo_y`/`dim_hi_y` (the
+  KEPT y-range, same bottom-up 0..1 convention as `band_lo_y`/`band_hi_y`; `< 0`
+  disables), `Spectrogram::render` gained a `dim_range: Option<(f32, f32)>` parameter,
+  and the fragment shader darkens (`× 0.28`) the colour-mapped magnitude outside the
+  kept range, before drawing dividers/centroids/onsets/cursor so those stay
+  full-brightness. `VqtPassState` gained `band_dim`, resolved once per frame from
+  `UIRoot::open_fire_mode_drawer_band()`.
+- **Gate:** *Positive:* `open_fire_mode_drawer_send`/`_band` unit tests
+  (`param_card.rs` — armed trigger-gate row reads its send+band; disarmed → `None`)
+  proving the tap-follow/dim-selection LOGIC; a real GPU readback test
+  (`spectrogram::gpu_tests::dim_range_darkens_outside_the_kept_band_only`, `gpu-proofs`)
+  proving the SHADER — a uniform white fill darkens outside `dim_range` and stays full
+  brightness inside it, on the actual Metal pipeline, not a value-level stand-in.
+  *Negative:* `open_fire_mode_drawer_send_is_none_for_a_plain_continuous_mod` proves an
+  armed non-trigger-gate drawer never re-taps; no new UI widget kind was added (the dim
+  lives in the existing shader, not a new overlay primitive).
+- **Not claimable by this executor (mirrors P5's §7.1 lesson):** an L3 ui-flow driving
+  a real drawer-expand click, and a live full-pipeline PNG showing "open a trigger
+  drawer in the actual app → the spectrogram visibly dims" — both need either a new
+  harness interact verb (none exists for arming/expanding an audio-mod drawer) or a
+  live VQT column feed (`content_num_bins > 0`, which needs real audio, unavailable
+  headless — the exact gap P5's VD-025 already names for the waterfall itself). Carried
+  as verification debt, not claimed here.
 - **Performer gesture:** open a kick trigger and the spectrogram immediately shows the
   band it hears, dimming everything it doesn't — tune Sensitivity while watching both.
 - **Forbidden moves:** fire-level display on the spectrogram (§5 item 6); persisting the
   follow-tap; widening into multi-scope.
-- **Test scope:** `-p manifold-ui --lib` + `-p manifold-app --lib` focused; sweep at
-  landing (P7+P8 batch).
+- **Test scope:** `-p manifold-ui --lib` + `-p manifold-app --lib` + `-p manifold-spectral
+  --features gpu-proofs` (shader) focused; sweep at landing (P7+P8 batch).
 
-### Phase 8 — Panel de-clutter (the cuts)
+### Phase 8 — Panel de-clutter (the cuts) — SHIPPED 2026-07-11
 - **Entry state:** P5–P7 landed (the panel's remaining job is legibility).
 - **Read-back:** §7.2 items 1 + 7; AUDIO_SENDS_UX_DESIGN D1/D2 (the layer↔send binding
   this phase re-scopes to layer-side-only authoring); `state_sync.rs`'s AudioSendRow
@@ -628,6 +655,29 @@ sandbox") and the wave still closed BUG-082 on a headless PNG. The PNG proved th
 - **Test scope:** `-p manifold-ui --lib` + `-p manifold-app --lib` (state_sync) +
   `-p manifold-renderer --lib` if `ScopeOnsets` lives there; full workspace sweep +
   `cargo clippy --workspace -- -D warnings` at wave close.
+- **As-built correction:** `ScopeOnsets` lives in `manifold-spectral`, not
+  `manifold-renderer` — the brief's own entry-state anchor was imprecise; verified
+  at execution time (§5's re-verification rule) and the test-scope line above
+  followed the real crate. Removing the `kick: f32` field (not a flag) shrinks
+  `ScopeOnsets::COUNT` 4→3 and `ScopeColumn::STRIDE` 8→7 at compile time — every
+  consumer (`LANE_COLORS`/`LANE_LABELS`/`lanes()`, the WGSL uniform, the
+  `mod_harness` CPU port's lane loop) is generic over the count already, so the
+  removal cascaded with a one-line push-site edit
+  (`analysis.rs`'s `ScopeColumn` construction) and one obsolete end-to-end test
+  deletion (`streaming_analyzer_scope_reports_kick_fires`) — no shader change.
+- **As-built correction:** the "Cap" chip's click-to-reveal routings dropdown
+  (`AudioSendRoutingsClicked`, `send_routings()`, `DropdownContext::AudioSendRoutings`)
+  is deleted along with the chip, not kept as an alternate access path — its
+  entire content (device + feeding-layer lines) already lives in the Inputs
+  section post-(c), permanently visible, so the click-through became pure
+  redundancy. `feeding_layer_ids()` and the `audio_layers` cache (state_sync →
+  `UIRoot::set_audio_layers`) are deleted with it — both existed only to feed
+  the deleted "+ Layer" dropdown.
+- **As-built correction:** `AudioSendRow::feeding_layers` (id + name pairs) is
+  KEPT, not dropped alongside `source_label`/`layer_fed` — it's real project
+  data (not row-level chrome) and removing it would have meant touching every
+  fixture/test construction site for no behavioral gain; only its one caller
+  (`feeding_layer_ids`) is gone.
 
 **Phasing-completeness walk (wave 2):** meter reset order + stopped-tick walk +
 peak-hold + stale comment + map lines (P5) · Sensitivity + Delta-out + Invert +

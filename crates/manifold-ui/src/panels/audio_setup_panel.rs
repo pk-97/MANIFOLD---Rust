@@ -52,20 +52,21 @@ const KEY_DEVICE_DROPDOWN: u64 = 70_010;
 const KEY_ADD_SEND: u64 = 70_011;
 const KEY_FLOOR_MINUS: u64 = 70_012;
 const KEY_FLOOR_PLUS: u64 = 70_013;
-const KEY_ADD_LAYER: u64 = 70_014;
+// KEY_ADD_LAYER (Inputs section "+ Layer") deleted with the section's
+// authoring (§7.2 item 7, P8, 2026-07-11) — read-only now.
 
 /// Per-send row controls (dynamic list, indexed by the send's position in
-/// `self.sends`): swatch, label, delete, stereo, gain_minus, gain_plus,
-/// source, ch_dropdown — 8 controls, stride 20 leaves headroom.
+/// `self.sends`): swatch, label, delete, gain_minus, gain_plus, ch_dropdown.
+/// Stride 20 leaves headroom; offsets 3 and 6 (formerly stereo, source) are
+/// retired, not reused (§7.2 items 6/7, P8: St/Mo toggle and the Cap chip
+/// both deleted outright).
 const KEY_SEND_ROW_BASE: u64 = 71_000;
 const KEY_SEND_ROW_STRIDE: u64 = 20;
 const SEND_OFF_SWATCH: u64 = 0;
 const SEND_OFF_LABEL: u64 = 1;
 const SEND_OFF_DELETE: u64 = 2;
-const SEND_OFF_STEREO: u64 = 3;
 const SEND_OFF_GAIN_MINUS: u64 = 4;
 const SEND_OFF_GAIN_PLUS: u64 = 5;
-const SEND_OFF_SOURCE: u64 = 6;
 const SEND_OFF_CH_DROPDOWN: u64 = 7;
 
 /// Stable key for a per-send row control at index `i` with the given
@@ -78,9 +79,8 @@ const fn send_row_key(i: usize, offset: u64) -> u64 {
 // CFG_OFF_*, config_row_key) is deleted (P3, D2/D5): clip triggers are
 // authored on the layer only. See AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.
 
-/// Inputs section: one remove (×) button per feeding layer of the selected
-/// send, indexed by position in that send's `feeding_layers`.
-const KEY_INPUTS_REMOVE_BASE: u64 = 73_000;
+// KEY_INPUTS_REMOVE_BASE (Inputs section per-layer ×) deleted with the
+// section's authoring (§7.2 item 7, P8, 2026-07-11) — read-only now.
 
 /// Consumers section: one row button per consumer of the selected send,
 /// indexed by position in that send's `consumers`.
@@ -130,16 +130,11 @@ pub struct AudioSendRow {
     /// Number of parameters this send currently drives. Surfaced on the row and
     /// gates a confirm-before-delete so a bound send isn't silently severed.
     pub driven_count: usize,
-    /// Compact source indicator for the read-only source chip: "Cap" (device
-    /// only), "Cap+N" (device + N layers), a layer name, or "Off". Resolved by the
-    /// data layer.
-    pub source_label: String,
-    /// Whether the send is fed by an audio layer (controls the source chip's
-    /// accent so a mixed/layer send reads distinctly from a device-only send).
-    pub layer_fed: bool,
-    /// Human-readable routing lines for the read-only routings dropdown — the
+    /// Human-readable routing lines for the read-only Inputs section — the
     /// capture device (when channels are assigned) plus one line per feeding
-    /// layer. Built by `state_sync`.
+    /// layer. Built by `state_sync`. (Formerly also fed a row-level "Cap"
+    /// chip and its click-to-reveal routings dropdown; both deleted §7.2
+    /// item 7, P8, 2026-07-11 — this is the ONE place the detail lives now.)
     pub routings: Vec<String>,
     // The Audio Setup Triggers matrix field (`triggers: Vec<TriggerRouteRow>`)
     // is deleted (P3, D2): clip triggers are authored on the layer only
@@ -162,9 +157,9 @@ pub struct AudioSendRow {
 }
 
 /// One consumer row in the Audio Setup modal's Consumers section: a named
-/// audio mod ("LayerName · EffectName · ParamName") or an enabled trigger
-/// route ("Low → LayerName"), each clickable to jump to the owning layer.
-/// See `docs/AUDIO_SENDS_UX_DESIGN.md` §3.1.
+/// audio mod ("Layer • Effect • Param") or an enabled clip trigger ("Clip
+/// trigger • Layer • Band", §7.2 item 7, P8, 2026-07-11), each clickable to
+/// jump to the owning layer. See `docs/AUDIO_SENDS_UX_DESIGN.md` §3.1.
 #[derive(Clone, Debug)]
 pub struct SendConsumerRow {
     pub label: String,
@@ -248,15 +243,12 @@ struct SendRowIds {
     /// Identity-colour swatch — clicking it selects the send for the scope.
     swatch: NodeId,
     label: NodeId,
-    /// Signal-source cycle button: capture channels ↔ an audio layer.
-    source: NodeId,
     ch_dropdown: NodeId,
     gain_minus: NodeId,
     gain_plus: NodeId,
     /// The gain value label between the steppers — a D7 horizontal drag zone
     /// (`pointer-down` arms [`AudioSetupPanel::gain_drag_target`]).
     gain_value: NodeId,
-    stereo: NodeId,
     delete: NodeId,
     /// Level-meter fill node + its full-scale geometry, resized in place each
     /// frame by [`AudioSetupPanel::update_meters`] (no rebuild).
@@ -272,12 +264,10 @@ impl Default for SendRowIds {
         Self {
             swatch: NodeId::PLACEHOLDER,
             label: NodeId::PLACEHOLDER,
-            source: NodeId::PLACEHOLDER,
             ch_dropdown: NodeId::PLACEHOLDER,
             gain_minus: NodeId::PLACEHOLDER,
             gain_plus: NodeId::PLACEHOLDER,
             gain_value: NodeId::PLACEHOLDER,
-            stereo: NodeId::PLACEHOLDER,
             delete: NodeId::PLACEHOLDER,
             meter_fill: NodeId::PLACEHOLDER,
             meter_x: 0.0,
@@ -400,11 +390,8 @@ pub struct AudioSetupPanel {
     /// frame by [`AudioSetupPanel::update_band_meters`] so they track the moving
     /// crossovers. `None` when not built.
     band_meter_ids: [(Option<NodeId>, Option<NodeId>, Option<NodeId>); 3],
-    /// Inputs section (selected send): one remove (×) button per feeding
-    /// layer, index-aligned with that send's `feeding_layers`, plus the
-    /// "+ layer" add-row trigger. Rebuilt with the panel.
-    inputs_remove_ids: Vec<NodeId>,
-    add_layer_id: NodeId,
+    // `inputs_remove_ids`/`add_layer_id` deleted with the Inputs section's
+    // authoring (§7.2 item 7, P8, 2026-07-11) — the section is read-only now.
     /// Consumers section (selected send): one row button per consumer,
     /// index-aligned with that send's `consumers`. Rebuilt with the panel.
     consumer_row_ids: Vec<NodeId>,
@@ -447,8 +434,6 @@ impl Default for AudioSetupPanel {
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
             calibration_drag: None,
             band_meter_ids: [(None, None, None); 3],
-            inputs_remove_ids: Vec::new(),
-            add_layer_id: NodeId::PLACEHOLDER,
             consumer_row_ids: Vec::new(),
         }
     }
@@ -785,23 +770,12 @@ impl AudioSetupPanel {
                 send_row_key(i, SEND_OFF_DELETE),
             );
 
-            let stereo_on = send.channels.len() >= 2;
-            const STEREO_W: f32 = 30.0;
-            let stereo_x = inner_x + inner_w - STEP_W - 4.0 - STEREO_W;
-            self.send_ids[i].stereo = tree.add_button_keyed(
-                Some(self.content_parent),
-                stereo_x,
-                cy,
-                STEREO_W,
-                ROW_H,
-                btn_style(stereo_on),
-                if stereo_on { "St" } else { "Mo" },
-                send_row_key(i, SEND_OFF_STEREO),
-            );
-
-            // Gain stepper [−] value [＋], left of the stereo toggle. Discrete
+            // Gain stepper [−] value [＋], left of the delete button. Discrete
             // 1 dB steps; the value is read-only display (0 dB = unity).
-            let gain_x = stereo_x - 4.0 - GAIN_W;
+            // St/Mo toggle removed (§7.2 item 7, P8, 2026-07-11): the channel
+            // dropdown below enumerates stereo pairs AND single channels
+            // directly, so mono falls out of picking one.
+            let gain_x = inner_x + inner_w - STEP_W - 4.0 - GAIN_W;
             self.send_ids[i].gain_minus = tree.add_button_keyed(
                 Some(self.content_parent),
                 gain_x,
@@ -848,25 +822,11 @@ impl AudioSetupPanel {
             tree.set_name(self.send_ids[i].gain_plus, "audio_setup.gain_plus");
             tree.set_name(self.send_ids[i].gain_value, "audio_setup.gain_value");
 
-            // Source indicator (read-only): "Cap" for a capture send, or the
-            // feeding audio layer's name (accented). A send doesn't pick its
-            // source — an audio layer routes itself to a send from the layer
-            // header (design §3R). This is status, not a control.
-            const SRC_W: f32 = 48.0;
-            let src_x = label_x + LABEL_W + 4.0;
-            self.send_ids[i].source = tree.add_button_keyed(
-                Some(self.content_parent),
-                src_x,
-                cy,
-                SRC_W,
-                ROW_H,
-                btn_style(send.layer_fed),
-                &send.source_label,
-                send_row_key(i, SEND_OFF_SOURCE),
-            );
-
-            // Channel dropdown fills the gap, showing the resolved name(s).
-            let ch_x = src_x + SRC_W + 4.0;
+            // Channel dropdown fills the row (Cap chip removed, §7.2 item 7,
+            // P8, 2026-07-11 — device-vs-layer-fed detail lives in the
+            // read-only Inputs section now, not a row-level chip), showing
+            // the resolved channel name(s).
+            let ch_x = label_x + LABEL_W + 4.0;
             let ch_w = (gain_x - 4.0 - ch_x).max(40.0);
             self.send_ids[i].ch_dropdown = tree.add_button_keyed(
                 Some(self.content_parent),
@@ -1228,19 +1188,20 @@ impl AudioSetupPanel {
         self.scroll.build_scrollbar(tree, sb_x, &scrollbar_style());
     }
 
-    /// Build the Inputs section for the selected send: one row per feeding
-    /// layer (name + × remove, `SetLayerAudioSend(layer, None)`) plus a final
-    /// "+ Layer" row that opens a dropdown of audio layers not already
-    /// feeding this send (`AudioSendAddLayerClicked`, itemized with
-    /// `SetLayerAudioSend(layer, Some(send))` — the SAME command the layer
-    /// header's Send dropdown fires; D2). Returns the y past the section.
+    /// Build the Inputs section for the selected send: READ-ONLY routing
+    /// display — the device line (when capturing) plus one line per feeding
+    /// layer, straight from `AudioSendRow::routings` (§7.2 item 7, P8,
+    /// 2026-07-11). Authoring ("+ Layer", per-layer ×, `AudioSendAddLayerClicked`)
+    /// is gone: the panel's job is device in → sends → scope → who's
+    /// listening, not routing edits — the layer header's Send dropdown is
+    /// the one surviving authoring path (same `SetLayerAudioSend` command,
+    /// one owner). Returns the y past the section.
     fn build_inputs_section(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32) -> f32 {
-        self.inputs_remove_ids.clear();
-        let feeding: Vec<(LayerId, String)> = self
+        let routings: Vec<String> = self
             .selected_send
             .as_ref()
             .and_then(|id| self.sends.iter().find(|s| &s.id == id))
-            .map(|s| s.feeding_layers.clone())
+            .map(|s| s.routings.clone())
             .unwrap_or_default();
 
         // Per-send section header, matching "Spectrogram — X" / "Triggers — X".
@@ -1266,17 +1227,31 @@ impl AudioSetupPanel {
         );
         cy += TRIG_TITLE_H;
 
-        for (i, (_layer_id, name)) in feeding.iter().enumerate() {
+        if routings.is_empty() {
+            tree.add_label(
+                Some(self.content_parent),
+                inner_x,
+                cy,
+                inner_w,
+                ROW_H,
+                "Not routed",
+                label_style(),
+            );
+            cy += ROW_H + ROW_GAP;
+            return cy;
+        }
+
+        for line in &routings {
             // D8: a feeding layer that no longer exists (deleted since it was
-            // routed) reads as bare "(missing layer)" today — the sentinel
+            // routed) reads as bare "Layer • (missing layer)" — the sentinel
             // `state_sync.rs` returns when `layer_name` can't resolve the id.
-            // Say what happened and point at the repair instead of leaving it
-            // cryptic; the "+ Layer" row right below is that repair (add a
-            // replacement, then × this dangling entry) — no new picker
-            // needed, the affordance already exists, it just wasn't named.
-            let (row_text, row_style) = if name == MISSING_LAYER_LABEL {
+            // Say what happened and point at the ONE surviving repair path
+            // now that the Inputs section itself is read-only.
+            let (row_text, row_style) = if line.ends_with(MISSING_LAYER_LABEL) {
                 (
-                    "Input layer was deleted \u{2014} choose a replacement below".to_string(),
+                    "Input layer was deleted \u{2014} choose a replacement from the \
+                     layer header's Send dropdown"
+                        .to_string(),
                     UIStyle {
                         text_color: Color32::new(232, 168, 92, 255), // amber
                         font_size: color::FONT_LABEL,
@@ -1285,42 +1260,11 @@ impl AudioSetupPanel {
                     },
                 )
             } else {
-                (name.clone(), label_style())
+                (line.clone(), label_style())
             };
-            tree.add_label(
-                Some(self.content_parent),
-                inner_x,
-                cy,
-                inner_w - STEP_W,
-                ROW_H,
-                &row_text,
-                row_style,
-            );
-            let remove_id = tree.add_button_keyed(
-                Some(self.content_parent),
-                inner_x + inner_w - STEP_W,
-                cy,
-                STEP_W,
-                ROW_H,
-                btn_style(false),
-                "\u{00D7}", // ×
-                KEY_INPUTS_REMOVE_BASE + i as u64,
-            );
-            self.inputs_remove_ids.push(remove_id);
+            tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, &row_text, row_style);
             cy += ROW_H + ROW_GAP;
         }
-
-        self.add_layer_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            inner_w,
-            ROW_H,
-            btn_style(false),
-            "+ Layer",
-            KEY_ADD_LAYER,
-        );
-        cy += ROW_H + ROW_GAP;
         cy
     }
 
@@ -1419,26 +1363,11 @@ impl AudioSetupPanel {
         self.selected_send.as_ref()
     }
 
-    /// LayerIds currently feeding `send` — used by
-    /// [`PanelAction::AudioSendAddLayerClicked`]'s dropdown to exclude layers
-    /// already routed here. Empty if the send is unknown.
-    pub fn feeding_layer_ids(&self, send: &AudioSendId) -> Vec<LayerId> {
-        self.sends
-            .iter()
-            .find(|s| &s.id == send)
-            .map(|s| s.feeding_layers.iter().map(|(id, _)| id.clone()).collect())
-            .unwrap_or_default()
-    }
-
-    /// The routing lines for `send` (device + layers), for the read-only routings
-    /// dropdown. Empty slice if the send is unknown.
-    pub fn send_routings(&self, send: &AudioSendId) -> &[String] {
-        self.sends
-            .iter()
-            .find(|s| &s.id == send)
-            .map(|s| s.routings.as_slice())
-            .unwrap_or(&[])
-    }
+    // `feeding_layer_ids` and `send_routings` removed (§7.2 item 7, P8,
+    // 2026-07-11): both existed only for the deleted Inputs-section
+    // authoring ("+ Layer" dropdown) and the deleted Cap-chip
+    // click-to-reveal routings popup — `AudioSendRow::routings` is now read
+    // directly by the (read-only) Inputs section build, no accessor needed.
 
     /// Screen-space rect (logical units) the present pass blits the spectrogram
     /// texture into, or `None` when the panel is closed / has no sends.
@@ -1578,7 +1507,6 @@ impl AudioSetupPanel {
             || id == self.close_id
             || id == self.device_dropdown_id
             || id == self.add_send_id
-            || id == self.add_layer_id
             || self.floor_minus_id == Some(id)
             || self.floor_plus_id == Some(id)
         {
@@ -1587,17 +1515,15 @@ impl AudioSetupPanel {
         if self.send_ids.iter().any(|r| {
             id == r.swatch
                 || id == r.label
-                || id == r.source
                 || id == r.ch_dropdown
                 || id == r.gain_minus
                 || id == r.gain_plus
                 || id == r.gain_value
-                || id == r.stereo
                 || id == r.delete
         }) {
             return true;
         }
-        self.inputs_remove_ids.contains(&id) || self.consumer_row_ids.contains(&id)
+        self.consumer_row_ids.contains(&id)
     }
 
     /// Resize each send's meter fill from live levels (RMS 0..1). Called every
@@ -1753,14 +1679,6 @@ impl AudioSetupPanel {
         }
     }
 
-    /// Whether a send is currently routed as a stereo pair (≥2 channels).
-    pub fn is_send_stereo(&self, id: &AudioSendId) -> bool {
-        self.sends
-            .iter()
-            .find(|s| &s.id == id)
-            .is_some_and(|s| s.channels.len() >= 2)
-    }
-
     /// Screen rect of a send's label button (the inline-rename anchor), or
     /// `None` if the send isn't currently built.
     pub fn send_label_rect(&self, tree: &UITree, id: &AudioSendId) -> Option<Rect> {
@@ -1797,29 +1715,10 @@ impl AudioSetupPanel {
             let delta = if self.floor_plus_id == Some(id) { 6.0 } else { -6.0 };
             return Some(PanelAction::AudioSendFloorStep(send, delta));
         }
-        // Inputs section: "+ Layer" opens a dropdown of audio layers not
-        // already feeding the selected send (D2 — the host itemizes it with
-        // `SetLayerAudioSend(layer, Some(send))`, the same command the layer
-        // header's Send dropdown fires).
-        if self.add_layer_id == id {
-            self.delete_armed = None;
-            let send = self.selected_send.clone()?;
-            return Some(PanelAction::AudioSendAddLayerClicked(send));
-        }
-        // Inputs section: remove (×) a feeding layer — routes straight to
-        // `SetLayerAudioSend(layer, None)`, the same command, no new mutation
-        // path (D2).
-        if let Some(i) = self.inputs_remove_ids.iter().position(|&r| r == id) {
-            self.delete_armed = None;
-            let feeding = self
-                .selected_send
-                .as_ref()
-                .and_then(|sid| self.sends.iter().find(|s| &s.id == sid))
-                .map(|s| s.feeding_layers.clone())
-                .unwrap_or_default();
-            let layer_id = feeding.get(i)?.0.clone();
-            return Some(PanelAction::SetLayerAudioSend(layer_id, None));
-        }
+        // Inputs section authoring ("+ Layer" / per-layer ×) deleted (§7.2
+        // item 7, P8, 2026-07-11) — the section is read-only routing display
+        // now; the layer header's Send dropdown is the one surviving path to
+        // `SetLayerAudioSend`.
         // Consumers section: navigate to the owning layer — read-only, no
         // edit (D3).
         if let Some(i) = self.consumer_row_ids.iter().position(|&r| r == id) {
@@ -1840,16 +1739,12 @@ impl AudioSetupPanel {
                 Some((i, RowControl::Select))
             } else if id == ids.label {
                 Some((i, RowControl::Label))
-            } else if id == ids.source {
-                Some((i, RowControl::Source))
             } else if id == ids.ch_dropdown {
                 Some((i, RowControl::Channel))
             } else if id == ids.gain_minus {
                 Some((i, RowControl::GainDown))
             } else if id == ids.gain_plus {
                 Some((i, RowControl::GainUp))
-            } else if id == ids.stereo {
-                Some((i, RowControl::Stereo))
             } else if id == ids.delete {
                 Some((i, RowControl::Delete))
             } else {
@@ -1873,13 +1768,6 @@ impl AudioSetupPanel {
                 self.delete_armed = None;
                 Some(PanelAction::AudioSendLabelClicked(send_id))
             }
-            RowControl::Source => {
-                // Read-only: open a dropdown listing where this send is routed from
-                // (device + layers). Routing is edited elsewhere — layers from the
-                // layer header, channels from the channel control.
-                self.delete_armed = None;
-                Some(PanelAction::AudioSendRoutingsClicked(send_id))
-            }
             RowControl::Channel => {
                 self.delete_armed = None;
                 Some(PanelAction::AudioSendChannelClicked(send_id))
@@ -1891,10 +1779,6 @@ impl AudioSetupPanel {
             RowControl::GainUp => {
                 self.delete_armed = None;
                 Some(PanelAction::AudioSendGainStep(send_id, 1.0))
-            }
-            RowControl::Stereo => {
-                self.delete_armed = None;
-                Some(PanelAction::AudioSendStereoToggle(send_id))
             }
             RowControl::Delete => {
                 // Confirm before deleting a send that still drives params: the
@@ -1917,15 +1801,14 @@ impl AudioSetupPanel {
 // `TrigControl` (the matrix row's click-control enum) is deleted with the
 // Audio Setup Triggers matrix (P3, D2).
 
-/// Which interactive control of a send row was clicked.
+/// Which interactive control of a send row was clicked. `Source`/`Stereo`
+/// (the Cap chip and St/Mo toggle) removed §7.2 items 6/7, P8, 2026-07-11.
 enum RowControl {
     Select,
     Label,
-    Source,
     Channel,
     GainDown,
     GainUp,
-    Stereo,
     Delete,
 }
 
@@ -2166,8 +2049,6 @@ mod tests {
                     gain_db: 0.0,
                     floor_db: crate::types::FLOOR_DB_OFF,
                     driven_count: 0,
-                    source_label: "Cap".into(),
-                    layer_fed: false,
                     routings: vec!["Capture: Channel 1".into()],
                     has_clip_triggers: false,
                     feeding_layers: Vec::new(),
@@ -2181,8 +2062,6 @@ mod tests {
                     gain_db: 0.0,
                     floor_db: crate::types::FLOOR_DB_OFF,
                     driven_count: 0,
-                    source_label: "Cap".into(),
-                    layer_fed: false,
                     routings: vec!["Capture: Channel 1".into()],
                     has_clip_triggers: false,
                     feeding_layers: Vec::new(),
@@ -2334,21 +2213,9 @@ mod tests {
         assert!(p.calibration_drag.is_none());
     }
 
-    #[test]
-    fn source_chip_opens_routings_and_is_owned() {
-        let mut p = panel_with_two_sends();
-        let mut tree = UITree::new();
-        p.build_docked(&mut tree, test_dock_rect());
-
-        let src = p.send_ids[0].source;
-        assert!(p.owns_node(src), "source chip is a panel-owned node");
-        // The chip is read-only — clicking opens the routings dropdown, it doesn't
-        // edit anything.
-        match p.handle_click(src) {
-            Some(PanelAction::AudioSendRoutingsClicked(id)) => assert_eq!(id.as_str(), "s1"),
-            other => panic!("expected AudioSendRoutingsClicked, got {other:?}"),
-        }
-    }
+    // `source_chip_opens_routings_and_is_owned` removed (§7.2 item 7, P8,
+    // 2026-07-11): the Cap chip and its click-to-reveal routings dropdown are
+    // deleted outright — the row no longer has a `source` node at all.
 
     #[test]
     fn gain_buttons_emit_signed_steps() {
@@ -2404,10 +2271,10 @@ mod tests {
         p.build_docked(&mut tree, test_dock_rect());
 
         assert!(p.handle_click(p.send_ids[0].delete).is_none()); // arm
-        // Clicking the stereo toggle clears the arm instead of deleting.
+        // Clicking the channel dropdown clears the arm instead of deleting.
         assert!(matches!(
-            p.handle_click(p.send_ids[0].stereo),
-            Some(PanelAction::AudioSendStereoToggle(_))
+            p.handle_click(p.send_ids[0].ch_dropdown),
+            Some(PanelAction::AudioSendChannelClicked(_))
         ));
         assert!(p.active_notice().is_none());
     }
@@ -2507,8 +2374,6 @@ mod tests {
                 gain_db: 0.0,
                 floor_db: crate::types::FLOOR_DB_OFF,
                 driven_count: 0,
-                source_label: "Cap".into(),
-                layer_fed: true,
                 routings: vec!["Capture: Channel 1".into()],
                 has_clip_triggers: false,
                 feeding_layers: feeding,
@@ -2529,32 +2394,31 @@ mod tests {
 
     // ─── Inputs / Consumers sections (AUDIO_SENDS_UX_DESIGN Phase 2) ───
 
-    #[test]
-    fn add_layer_row_opens_add_layer_dropdown_for_selected_send() {
-        let mut p = panel_with_two_sends();
-        let mut tree = UITree::new();
-        p.build_docked(&mut tree, test_dock_rect());
-
-        match p.handle_click(p.add_layer_id) {
-            Some(PanelAction::AudioSendAddLayerClicked(id)) => assert_eq!(id.as_str(), "s1"),
-            other => panic!("expected AudioSendAddLayerClicked, got {other:?}"),
-        }
-    }
+    // `add_layer_row_opens_add_layer_dropdown_for_selected_send` and
+    // `remove_feeding_layer_emits_set_layer_audio_send_none` removed (§7.2
+    // item 7, P8, 2026-07-11): the Inputs section's authoring ("+ Layer",
+    // per-layer ×, `AudioSendAddLayerClicked`) is deleted outright — see
+    // `inputs_section_is_read_only_routing_display` below for its
+    // replacement, and `feeding_layer_ids_accessor_reflects_configured_send`
+    // below-below for the accessor's removal.
 
     #[test]
-    fn remove_feeding_layer_emits_set_layer_audio_send_none() {
+    fn inputs_section_is_read_only_routing_display() {
+        // §7.2 item 7: no buttons in the Inputs section anymore — the
+        // routing lines (device + feeding layers) are plain read-only text,
+        // straight from `AudioSendRow::routings` (`state_sync`'s single
+        // source now — no separate `feeding_layers` walk). Exercises the
+        // missing-layer line too (D8 repair copy, now pointing at the layer
+        // header instead of the deleted "+ Layer" row) without panicking.
         let mut p = panel_with_two_sends();
-        p.sends[0].feeding_layers = vec![(LayerId::new("kick"), "KICK".to_string())];
+        p.sends[0].routings = vec![
+            "Capture \u{2022} Channel 1".to_string(),
+            "Layer \u{2022} KICK".to_string(),
+            format!("Layer \u{2022} {MISSING_LAYER_LABEL}"),
+        ];
         let mut tree = UITree::new();
         p.build_docked(&mut tree, test_dock_rect());
-        assert_eq!(p.inputs_remove_ids.len(), 1, "one remove button per feeding layer");
-
-        match p.handle_click(p.inputs_remove_ids[0]) {
-            Some(PanelAction::SetLayerAudioSend(layer, None)) => {
-                assert_eq!(layer.as_str(), "kick");
-            }
-            other => panic!("expected SetLayerAudioSend(_, None), got {other:?}"),
-        }
+        assert!(p.owns_node(p.bg_id)); // sanity: panel still builds/owns nodes
     }
 
     #[test]
@@ -2577,14 +2441,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn feeding_layer_ids_accessor_reflects_configured_send() {
-        let mut p = panel_with_two_sends();
-        p.sends[0].feeding_layers = vec![(LayerId::new("kick"), "KICK".to_string())];
-        let ids = p.feeding_layer_ids(&AudioSendId::new("s1"));
-        assert_eq!(ids, vec![LayerId::new("kick")]);
-        assert!(p.feeding_layer_ids(&AudioSendId::new("s2")).is_empty());
-    }
+    // `feeding_layer_ids_accessor_reflects_configured_send` removed with
+    // `feeding_layer_ids` itself (§7.2 item 7, P8, 2026-07-11) — its sole
+    // caller was the deleted `AudioSendAddLayerClicked` dropdown builder.
 
     // ─── Stable WidgetId across rebuild (the double-click bug) ───
     //

@@ -1462,9 +1462,10 @@ impl Project {
     /// `PresetInstance` audio mods — the walk `audio_mod_consumers` above
     /// can't reach, since a clip trigger has no `param_id`/effect to name.
     /// Mirrors that method's shape: `(owning layer, display label)`, enabled
-    /// configs sourcing `send_id` only. Label style matches the deleted
-    /// Triggers matrix's rows ("Low → LayerName") for the common Transients
-    /// case; other features spell out the detector ("Centroid Full → Name").
+    /// configs sourcing `send_id` only. Label format is "Clip trigger •
+    /// Layer • Band" (§7.2 item 7, P8, 2026-07-11 — matches the mod rows'
+    /// "Layer • Effect • Param" bullet convention instead of the deleted
+    /// Triggers matrix's arrow style, "Low → LayerName").
     pub fn clip_trigger_consumers(
         &self,
         send_id: &crate::id::AudioSendId,
@@ -1485,7 +1486,7 @@ impl Project {
                 };
                 out.push((
                     Some(layer.layer_id.clone()),
-                    format!("{feature_label} \u{2192} {}", layer.name),
+                    format!("Clip trigger \u{2022} {} \u{2022} {feature_label}", layer.name),
                 ));
             }
         }
@@ -2847,7 +2848,11 @@ mod tests {
         let consumers = p.clip_trigger_consumers(&send_a.id);
         assert_eq!(consumers.len(), 1);
         assert_eq!(consumers[0].0, Some(crate::LayerId::new("strobe-layer")));
-        assert_eq!(consumers[0].1, "Low \u{2192} STROBE", "Transients formats as the bare band label");
+        assert_eq!(
+            consumers[0].1,
+            "Clip trigger \u{2022} STROBE \u{2022} Low",
+            "Transients formats as the bare band label"
+        );
     }
 
     #[test]
@@ -2882,6 +2887,10 @@ mod tests {
         assert!(p.clip_trigger_consumers(&send_a.id).is_empty(), "disabled config excluded");
         let b_consumers = p.clip_trigger_consumers(&send_b.id);
         assert_eq!(b_consumers.len(), 1);
-        assert_eq!(b_consumers[0].1, "Centroid Full \u{2192} L", "non-Transients spells out the detector");
+        assert_eq!(
+            b_consumers[0].1,
+            "Clip trigger \u{2022} L \u{2022} Centroid Full",
+            "non-Transients spells out the detector"
+        );
     }
 }

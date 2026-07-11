@@ -356,6 +356,11 @@ pub(crate) struct VqtPassState<'a> {
     pub content_low_hz: f32,
     pub content_mid_hz: f32,
     pub scope_cursor_y: f32,
+    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item 5):
+    /// the band a currently-open fire-mode drawer is reading, if any — `Some`
+    /// dims the spectrum outside it, `None` (no drawer open, or Full band)
+    /// dims nothing. Caller-resolved from `UIRoot::open_fire_mode_drawer_band`.
+    pub band_dim: Option<manifold_ui::types::AudioBand>,
 }
 
 /// Pass 4b″ clip-thumbnail render inputs: the persistent renderer, the
@@ -822,7 +827,25 @@ pub(crate) fn render_main_ui_passes(
             // maps far away → no hover.
             let cursor_screen_y = if scope_cursor_y < 0.0 { -1.0e9 } else { rect.y + scope_cursor_y * rect.height };
             let hovered_divider = ui_root.audio_setup_panel.divider_hover_index(cursor_screen_y);
-            spectrogram.render(&mut encoder, &target, [lo_yfb, hi_yfb], freq_log_ratio, scope_cursor_y, hovered_divider);
+            // P7 band dimming: the KEPT range in the same [lo_yfb, hi_yfb]
+            // normalised space the dividers already use — Low/Mid/High slice
+            // the same two crossovers differently; Full (or no drawer open)
+            // dims nothing.
+            let dim_range = match vqt.band_dim {
+                Some(manifold_ui::types::AudioBand::Low) => Some((0.0, lo_yfb)),
+                Some(manifold_ui::types::AudioBand::Mid) => Some((lo_yfb, hi_yfb)),
+                Some(manifold_ui::types::AudioBand::High) => Some((hi_yfb, 1.0)),
+                Some(manifold_ui::types::AudioBand::Full) | None => None,
+            };
+            spectrogram.render(
+                &mut encoder,
+                &target,
+                [lo_yfb, hi_yfb],
+                freq_log_ratio,
+                scope_cursor_y,
+                hovered_divider,
+                dim_range,
+            );
 
             // Blit through the unified TexturePane path (logical rect + scale).
             crate::texture_pane::blit_texture_pane(

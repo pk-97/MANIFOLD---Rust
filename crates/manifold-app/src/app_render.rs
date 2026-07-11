@@ -3154,9 +3154,19 @@ impl Application {
         // 6·audio·scope. Push the scope's selected send to the content thread
         // (drives the worker's VQT column producer). Only on change — closing the
         // panel sends `None`, stopping column production.
+        //
+        // P7 tap-follow (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
+        // §7.2 item 5): a currently-open fire-mode drawer (clip trigger or
+        // `is_trigger_gate` param card) wins over the panel's own selected
+        // send — collapsing it falls straight back to the panel's selection,
+        // since this is computed fresh every frame, never persisted (§7.3 P7
+        // "Tap-follow state is session-only").
         {
             let desired = if self.ws.ui_root.audio_setup_panel.is_open() {
-                self.ws.ui_root.audio_setup_panel.selected_send().cloned()
+                self.ws
+                    .ui_root
+                    .open_fire_mode_drawer_send()
+                    .or_else(|| self.ws.ui_root.audio_setup_panel.selected_send().cloned())
             } else {
                 None
             };
@@ -4243,6 +4253,7 @@ impl Application {
                 content_low_hz: self.content_state.spectrogram_low_hz,
                 content_mid_hz: self.content_state.spectrogram_mid_hz,
                 scope_cursor_y,
+                band_dim: self.ws.ui_root.open_fire_mode_drawer_band(),
             })
         };
         #[cfg(not(target_os = "macos"))]

@@ -958,6 +958,39 @@ impl ParamCardPanel {
             meter.update(tree, level, AUDIO_MOD_ACTIVE_C32, dt);
         }
     }
+
+    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item 5):
+    /// param index of the currently-OPEN fire-mode (`is_trigger_gate`, armed —
+    /// an armed `is_trigger_gate` mod's drawer is always visible, matching
+    /// `show_amount_meter`'s D6 gate) drawer, if any. A plain continuous
+    /// mod's open drawer never matches — only fire-mode configs re-tap the
+    /// scope. First match wins; a card with two armed trigger-gate rows is
+    /// not a case this app produces today.
+    fn open_fire_mode_drawer_row(&self) -> Option<usize> {
+        self.audio_configs.iter().enumerate().find_map(|(pi, cfg)| {
+            cfg.as_ref()?;
+            let info = self.param_info.get(pi)?;
+            info.is_trigger_gate.then_some(pi)
+        })
+    }
+
+    /// The send the currently-open fire-mode drawer is reading, if any.
+    pub fn open_fire_mode_drawer_send(&self) -> Option<manifold_foundation::AudioSendId> {
+        let pi = self.open_fire_mode_drawer_row()?;
+        let idx = self.state.mod_state.audio_send_idx.get(pi).copied().unwrap_or(-1);
+        if idx < 0 {
+            return None;
+        }
+        self.state.mod_state.audio_send_ids.get(idx as usize).cloned()
+    }
+
+    /// The band the currently-open fire-mode drawer is reading, if any.
+    pub fn open_fire_mode_drawer_band(&self) -> Option<crate::types::AudioBand> {
+        let pi = self.open_fire_mode_drawer_row()?;
+        let idx = self.state.mod_state.audio_band_idx.get(pi).copied().unwrap_or(0);
+        crate::types::AudioBand::ALL.get(idx as usize).copied()
+    }
+
     pub fn effect_name(&self) -> &str {
         &self.name
     }
@@ -4495,6 +4528,58 @@ mod tests {
         assert!(panel.audio_configs[gi].is_some());
         // The collapsed-row mode badge exists (mode = Both, index 2 > 0).
         assert!(panel.audio_trigger_mode_badge_ids[gi].is_some());
+    }
+
+    #[test]
+    fn open_fire_mode_drawer_send_and_band_read_the_armed_trigger_gate_row() {
+        // P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item
+        // 5): the fixture arms the clip_trigger row on send "send-kick",
+        // band index 1 (Low) — the accessors must report exactly that.
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config_with_trigger_gate());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+
+        assert_eq!(
+            panel.open_fire_mode_drawer_send(),
+            Some(manifold_foundation::AudioSendId::new("send-kick"))
+        );
+        assert_eq!(panel.open_fire_mode_drawer_band(), Some(crate::types::AudioBand::Low));
+    }
+
+    #[test]
+    fn open_fire_mode_drawer_send_is_none_when_disarmed() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        let mut cfg = effect_config_with_trigger_gate();
+        let gi = cfg.params.len() - 1;
+        cfg.audio.active[gi] = false; // disarmed — drawer never builds
+        panel.configure(&cfg);
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+
+        assert_eq!(panel.open_fire_mode_drawer_send(), None);
+        assert_eq!(panel.open_fire_mode_drawer_band(), None);
+    }
+
+    #[test]
+    fn open_fire_mode_drawer_send_is_none_for_a_plain_continuous_mod() {
+        // Negative gate (§7.3 P7): an armed but NON-trigger-gate audio mod's
+        // open drawer must never re-tap the scope — only fire-mode configs do.
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        let mut cfg = effect_config_with_trigger_gate();
+        let gi = cfg.params.len() - 1;
+        // Same armed row, reshaped into a plain continuous (non-toggle,
+        // non-trigger) param — a genuine `show_amount_meter`-excluded shape,
+        // not just a flag flip on the toggle-row fixture.
+        cfg.params[gi].is_trigger_gate = false;
+        cfg.params[gi].is_toggle = false;
+        panel.configure(&cfg);
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+
+        assert!(panel.audio_configs[gi].is_some(), "sanity: the drawer still builds");
+        assert_eq!(panel.open_fire_mode_drawer_send(), None);
+        assert_eq!(panel.open_fire_mode_drawer_band(), None);
     }
 
     #[test]

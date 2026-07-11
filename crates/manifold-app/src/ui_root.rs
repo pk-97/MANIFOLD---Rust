@@ -129,9 +129,10 @@ pub enum DropdownContext {
     // MidiDevice, Resolution, ClkDevice, ClipContext, TrackContext, AudioInputDevice,
     // LayerAudioSend, ClipDetectQuantize, ClipDetectLayer, AudioTriggerLayer,
     // AudioSetupDevice, MasterExitPath, CardContext, ParamContext, MacroSlotContext,
-    // GenStringParamDropdown.
+    // GenStringParamDropdown, AudioSendRoutings (§7.2 item 7, P8, 2026-07-11 —
+    // the Cap chip that opened it is gone, its content lives in the Inputs
+    // section's read-only routing display now).
     LayerContext(usize), // survives only for its color swatches (text items are typed)
-    AudioSendRoutings,   // Audio Setup: read-only list of a send's routings (device + layers)
 }
 
 /// Fine-grained tracking of what scroll-related state changed.
@@ -284,11 +285,8 @@ pub struct UIRoot {
     clip_detect_layers: Vec<(manifold_core::LayerId, String)>,
     // `audio_trigger_layers` (the matrix's target-layer dropdown cache) is
     // deleted with the matrix (P3, D2).
-    /// Every `LayerType::Audio` layer (id + name), for the Audio Setup modal's
-    /// Inputs section "+ Layer" dropdown — candidates are these minus
-    /// whichever already feed the clicked send. Refreshed by `state_sync`
-    /// while the modal is open.
-    audio_layers: Vec<(manifold_core::LayerId, String)>,
+    // `audio_layers` (Inputs section "+ Layer" dropdown candidates) deleted
+    // with the section's authoring (§7.2 item 7, P8, 2026-07-11).
 
     // Inspector resize state
     pub inspector_resize_dragging: bool,
@@ -479,7 +477,6 @@ impl UIRoot {
             audio_setup_devices: Vec::new(),
             audio_setup_apps: Vec::new(),
             clip_detect_layers: Vec::new(),
-            audio_layers: Vec::new(),
             inspector_resize_dragging: false,
             inspector_drag_start_x: 0.0,
             inspector_drag_start_width: 0.0,
@@ -1477,21 +1474,11 @@ impl UIRoot {
         self.input.process_key(&self.tree, key, modifiers);
     }
 
-    /// Open a dropdown anchored below a trigger rect.
-    pub(crate) fn open_dropdown_at(
-        &mut self,
-        context: DropdownContext,
-        items: Vec<DropdownItem>,
-        trigger: Rect,
-    ) {
-        self.dropdown_context = Some(context);
-        self.dropdown.open(items, trigger, 120.0, &mut self.tree);
-        // Force an overlay rebuild so the just-opened dropdown is recorded into
-        // `overlay_draw` and drawn this frame — essential when the trigger lives
-        // inside another overlay (e.g. the Audio Setup modal), where the click is
-        // consumed by the overlay driver and wouldn't otherwise dirty the tree.
-        self.overlay_dirty = true;
-    }
+    // `open_dropdown_at` (generic DropdownContext-carrying opener) deleted
+    // (§7.2 item 7, P8, 2026-07-11) — its only caller was
+    // `AudioSendRoutingsClicked`. The one surviving `DropdownContext`
+    // (`LayerContext`, the layer-color swatches) sets `dropdown_context`
+    // directly at its own call site instead.
 
     /// Open a dropdown whose items carry their own actions (2b.11). No
     /// `DropdownContext` is stored — each item returns
@@ -1514,13 +1501,9 @@ impl UIRoot {
     }
 
     // `set_audio_trigger_layers` (the matrix's target-layer dropdown cache
-    // setter) is deleted with the matrix (P3, D2).
-
-    /// Cache every `LayerType::Audio` layer for the Audio Setup modal's Inputs
-    /// section "+ Layer" dropdown. Set by `state_sync` while the modal is open.
-    pub fn set_audio_layers(&mut self, layers: Vec<(manifold_core::LayerId, String)>) {
-        self.audio_layers = layers;
-    }
+    // setter) is deleted with the matrix (P3, D2). `set_audio_layers`
+    // (Inputs section "+ Layer" candidates) is deleted with the section's
+    // authoring (§7.2 item 7, P8, 2026-07-11).
 
     /// Refresh the embedded-preset list surfaced into the Add pickers from the
     /// project snapshot. Change-gated by the embedded-preset fingerprint so the
@@ -2041,24 +2024,10 @@ impl UIRoot {
                 self.open_dropdown_typed(items, trigger);
                 true
             }
-            PanelAction::AudioSendAddLayerClicked(send_id) => {
-                // Inputs section "+ Layer" (AUDIO_SENDS_UX_DESIGN D2): every
-                // audio layer minus whichever already feed this send, each
-                // carrying the SAME `SetLayerAudioSend` command the layer
-                // header's Send dropdown fires.
-                let already = self.audio_setup_panel.feeding_layer_ids(send_id);
-                let mut items = Vec::with_capacity(self.audio_layers.len());
-                for (id, name) in &self.audio_layers {
-                    if already.contains(id) {
-                        continue;
-                    }
-                    items.push(DropdownItem::new(name).with_action(
-                        PanelAction::SetLayerAudioSend(id.clone(), Some(send_id.clone())),
-                    ));
-                }
-                self.open_dropdown_typed(items, trigger);
-                true
-            }
+            // `AudioSendAddLayerClicked` (Inputs section "+ Layer") is deleted
+            // with the section's authoring (§7.2 item 7, P8, 2026-07-11) — the
+            // layer header's own Send dropdown (`AudioSendClicked` above) is
+            // the one surviving path to `SetLayerAudioSend`.
             PanelAction::AddEffectClicked(tab) => {
                 use manifold_core::{preset_def::PresetKind, preset_type_registry};
                 use manifold_ui::panels::browser_popup::*;
@@ -2171,20 +2140,11 @@ impl UIRoot {
                 self.open_dropdown_typed(items, trigger);
                 true
             }
-            PanelAction::AudioSendRoutingsClicked(send_id) => {
-                // Read-only: list where this send is fed from (capture device +
-                // each feeding layer). Every row disabled, so nothing is
-                // selectable — routing is edited from the layer header / channel
-                // control, not here.
-                let routings = self.audio_setup_panel.send_routings(send_id);
-                let items: Vec<DropdownItem> = if routings.is_empty() {
-                    vec![DropdownItem::disabled("No routing")]
-                } else {
-                    routings.iter().map(|r| DropdownItem::disabled(r)).collect()
-                };
-                self.open_dropdown_at(DropdownContext::AudioSendRoutings, items, trigger);
-                true
-            }
+            // `AudioSendRoutingsClicked` (the Cap chip's click-to-reveal
+            // routings popup) is deleted (§7.2 item 7, P8, 2026-07-11) — its
+            // content (device + feeding layers) lives in the Inputs
+            // section's read-only routing display now, always visible, no
+            // click needed.
             PanelAction::AudioSetupDeviceClicked => {
                 // Enumerate input devices + tappable sources on demand for the
                 // Audio Setup modal. The list is three sections: the default, the
@@ -2259,14 +2219,14 @@ impl UIRoot {
                 // it has no hardware channel layout — present Left/Right. A device
                 // source builds its true layout, grouped by subdevice, with
                 // platform channel names. Each row carries its typed channel action
-                // (2b.11), preserving the send's mono/stereo pairing.
-                let stereo = self.audio_setup_panel.is_send_stereo(send_id);
+                // (2b.11) — the list itself enumerates stereo pairs AND single
+                // channels (§7.2 item 7, P8), so mono is just picking one.
                 let items = if self
                     .audio_setup_panel
                     .current_device()
                     .is_some_and(|d| d.is_tap())
                 {
-                    build_tap_channel_dropdown(send_id, stereo)
+                    build_tap_channel_dropdown(send_id)
                 } else {
                     let dir = manifold_audio::directory::system_directory();
                     let device = match self.audio_setup_panel.current_device() {
@@ -2274,7 +2234,7 @@ impl UIRoot {
                         // No explicit device → the system default input.
                         None => dir.list_input_devices().into_iter().find(|d| d.is_default),
                     };
-                    build_channel_dropdown(device.as_ref(), send_id, stereo)
+                    build_channel_dropdown(device.as_ref(), send_id)
                 };
                 self.open_dropdown_typed(items, trigger);
                 true
@@ -2688,9 +2648,9 @@ impl UIRoot {
 
     // dropdown_to_action removed (2b.11): every selectable dropdown item now
     // carries its own PanelAction via DropdownItem::with_action and fires
-    // DropdownAction::SelectedAction directly. The only surviving DropdownContexts
-    // are LayerContext (its color swatches, handled below) and AudioSendRoutings
-    // (read-only), neither of which maps a positional text Selected(index).
+    // DropdownAction::SelectedAction directly. The only surviving DropdownContext
+    // is LayerContext (its color swatches, handled below), which doesn't map a
+    // positional text Selected(index) either.
 
     /// Convert a color swatch selection into the appropriate PanelAction.
     fn dropdown_color_to_action(
@@ -2703,7 +2663,6 @@ impl UIRoot {
                 let color = manifold_ui::color::COLOR_GRID.get(color_idx)?;
                 Some(PanelAction::ContextSetLayerColor(layer_idx, *color))
             }
-            _ => None,
         }
     }
 
@@ -3023,6 +2982,23 @@ impl UIRoot {
         self.inspector.update_fire_meters(&mut self.tree, &|key| fire_meters.get(key), dt);
     }
 
+    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item 5):
+    /// the send whichever fire-mode drawer is currently open in the inspector
+    /// is reading, if any. `manifold_core::AudioSendId` is
+    /// `manifold_foundation::AudioSendId` re-exported at its historical path
+    /// (`docs/UI_LAYERING_INVERSION.md`), so this crosses the boundary for
+    /// free.
+    pub fn open_fire_mode_drawer_send(&self) -> Option<manifold_core::AudioSendId> {
+        self.inspector.open_fire_mode_drawer_send()
+    }
+
+    /// The band whichever fire-mode drawer is currently open in the
+    /// inspector is reading, if any — pairs with
+    /// [`Self::open_fire_mode_drawer_send`] (both read off the same open row).
+    pub fn open_fire_mode_drawer_band(&self) -> Option<manifold_ui::types::AudioBand> {
+        self.inspector.open_fire_mode_drawer_band()
+    }
+
     /// Update the audio scope's hover readout (freq + dB under the cursor), or
     /// hide it when not hovering. In place, every frame — see `update_meters`.
     pub fn update_audio_scope_readout(&mut self, text: Option<&str>) {
@@ -3066,41 +3042,76 @@ impl UIRoot {
     // phase (see this phase's landing notes).
 }
 
-/// The `AudioSetSendChannels` action a channel row fires (2b.11): a stereo send
-/// picks the chosen channel plus its pair partner, a mono send just the channel.
-fn send_channels_action(
-    send_id: &manifold_core::AudioSendId,
-    stereo: bool,
-    ch: u16,
-) -> PanelAction {
-    let channels = if stereo { vec![ch, ch + 1] } else { vec![ch] };
+/// The `AudioSetSendChannels` action for an explicit channel set (§7.2 item 7,
+/// P8, 2026-07-11: the channel dropdown carries stereo pairing directly now —
+/// no separate St/Mo toggle, mono falls out of picking a single channel).
+fn send_channels_action(send_id: &manifold_core::AudioSendId, channels: Vec<u16>) -> PanelAction {
     PanelAction::AudioSetSendChannels(send_id.clone(), channels)
 }
 
-/// Channel dropdown for a tap source. Output taps are a fixed stereo mixdown, so
-/// the choices are simply Left (0) and Right (1). Each row carries its typed
-/// channel action.
-fn build_tap_channel_dropdown(
+/// Push one channel run's rows: a "A + B" stereo-pair item for each adjacent
+/// pair, immediately followed by each channel's own single-channel item — so
+/// "Left + Right", "Left", "Right" (or "Ch 3+4", "Ch 3", "Ch 4" for unnamed
+/// channels) read as one group. An odd channel out at the end of the run gets
+/// only its single item (no pair to offer). Shared by the tap and device
+/// dropdown builders so the pairing convention can't drift between them.
+fn push_channel_pair_rows(
+    items: &mut Vec<DropdownItem>,
     send_id: &manifold_core::AudioSendId,
-    stereo: bool,
-) -> Vec<DropdownItem> {
-    vec![
-        DropdownItem::new("Left").with_action(send_channels_action(send_id, stereo, 0)),
-        DropdownItem::new("Right").with_action(send_channels_action(send_id, stereo, 1)),
-    ]
+    chans: &[manifold_audio::directory::ChannelInfo],
+) {
+    let mut i = 0;
+    while i < chans.len() {
+        if i + 1 < chans.len() {
+            let (a, b) = (&chans[i], &chans[i + 1]);
+            items.push(
+                DropdownItem::new(&format!("{} + {}", a.display_name(), b.display_name()))
+                    .with_action(send_channels_action(send_id, vec![a.index, b.index])),
+            );
+            items.push(
+                DropdownItem::new(&a.display_name())
+                    .with_action(send_channels_action(send_id, vec![a.index])),
+            );
+            items.push(
+                DropdownItem::new(&b.display_name())
+                    .with_action(send_channels_action(send_id, vec![b.index])),
+            );
+            i += 2;
+        } else {
+            let a = &chans[i];
+            items.push(
+                DropdownItem::new(&a.display_name())
+                    .with_action(send_channels_action(send_id, vec![a.index])),
+            );
+            i += 1;
+        }
+    }
+}
+
+/// Channel dropdown for a tap source. Output taps are a fixed stereo mixdown —
+/// "Left + Right", "Left", "Right".
+fn build_tap_channel_dropdown(send_id: &manifold_core::AudioSendId) -> Vec<DropdownItem> {
+    let chans = [
+        manifold_audio::directory::ChannelInfo { index: 0, name: Some("Left".into()) },
+        manifold_audio::directory::ChannelInfo { index: 1, name: Some("Right".into()) },
+    ];
+    let mut items = Vec::new();
+    push_channel_pair_rows(&mut items, send_id, &chans);
+    items
 }
 
 /// Build the send-channel dropdown for `device`, grouped by subdevice with
-/// platform channel names; each selectable row carries its typed channel action
-/// (subdevice headers stay non-selectable). Falls back to a single mono entry
-/// when no device metadata is available.
+/// platform channel names; each subdevice's channels get stereo-pair rows
+/// ("A + B") followed by their single-channel rows, non-selectable headers
+/// between groups. Falls back to a single mono entry when no device metadata
+/// is available.
 fn build_channel_dropdown(
     device: Option<&manifold_audio::directory::DeviceInfo>,
     send_id: &manifold_core::AudioSendId,
-    stereo: bool,
 ) -> Vec<DropdownItem> {
-    let fallback =
-        || vec![DropdownItem::new("Channel 1").with_action(send_channels_action(send_id, stereo, 0))];
+    let fallback = || {
+        vec![DropdownItem::new("Channel 1").with_action(send_channels_action(send_id, vec![0]))]
+    };
     let Some(device) = device else {
         return fallback();
     };
@@ -3109,22 +3120,15 @@ fn build_channel_dropdown(
     }
 
     let mut items = Vec::new();
-    let row = |ch: &manifold_audio::directory::ChannelInfo| {
-        DropdownItem::new(&ch.display_name()).with_action(send_channels_action(send_id, stereo, ch.index))
-    };
-
     if device.subdevices.is_empty() {
-        for ch in &device.channels {
-            items.push(row(ch));
-        }
+        push_channel_pair_rows(&mut items, send_id, &device.channels);
     } else {
         for group in &device.subdevices {
             items.push(DropdownItem::disabled(&group.name));
-            let end = group.channel_start.saturating_add(group.channel_count);
-            for idx in group.channel_start..end {
-                if let Some(ch) = device.channels.get(idx as usize) {
-                    items.push(row(ch));
-                }
+            let end = group.channel_start.saturating_add(group.channel_count) as usize;
+            let start = group.channel_start as usize;
+            if let Some(chans) = device.channels.get(start..end.min(device.channels.len())) {
+                push_channel_pair_rows(&mut items, send_id, chans);
             }
         }
     }
@@ -3359,8 +3363,6 @@ mod drag_capture_tests {
                 gain_db: 0.0,
                 floor_db: manifold_ui::types::FLOOR_DB_OFF,
                 driven_count: 0,
-                source_label: "Cap".into(),
-                layer_fed: false,
                 routings: vec!["Capture: Channel 1".into()],
                 has_clip_triggers: false,
                 feeding_layers: Vec::new(),
@@ -3456,8 +3458,6 @@ mod drag_capture_tests {
                 gain_db: 0.0,
                 floor_db: manifold_ui::types::FLOOR_DB_OFF,
                 driven_count: 0,
-                source_label: "Cap".into(),
-                layer_fed: false,
                 routings: vec!["Capture: Channel 1".into()],
                 has_clip_triggers: false,
                 feeding_layers: Vec::new(),
