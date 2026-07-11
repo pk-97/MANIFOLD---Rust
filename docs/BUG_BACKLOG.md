@@ -44,6 +44,8 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-113 | **param-manifest-get-bench-flakes-under-parallel-load** | `manifold-core::params::tests::bench_resolve` asserts a hard `<= 271.5 ns/op` wall-clock ceiling on `ParamManifest::get`; under `cargo nextest run --workspace`'s parallel thread pool (esp. right after a heavy build or another CPU-saturating process), measured ns/op climbs past the ceiling (333.25, then 398.98 ns/op observed 2026-07-11) and the test fails, while an isolated re-run consistently passes (215.02 ns/op) and a clean full-workspace re-run passes too (3052/3052). Found landing wave2 lane C (BUG-083/084) — confirmed unrelated (file untouched by that change). Fix shape: either give the ceiling real margin for parallel/loaded runs, retry-on-first-failure before asserting, or move this out of the default nextest sweep (e.g. behind a feature, like the GPU-proofs convention) since a wall-clock ceiling assertion is inherently contention-sensitive and doesn't belong in a "safe to run freely" default suite. LOW (flaky-gate annoyance, not a functional regression — the underlying code is fine). |
+| BUG-112 | **manifold-ui-all-targets-clippy-debt-audio-setup-panel-graph-canvas-tests** | `cargo clippy -p manifold-ui --all-targets -- -D warnings` fails on two pre-existing, unrelated lints: `needless_borrows_for_generic_args` (`audio_setup_panel.rs:2494,2498`, `LayerId::new(&format!(...))`) and `useless_vec` (`graph_canvas/tests.rs:2391`, a `vec![...]` that could be an array). Both files byte-identical to HEAD, last touched by unrelated commit `f1a35270`. Found 2026-07-11 isolating wave2 lane C's (BUG-083/084) scoped clippy gate — same "pre-existing test-target debt surfaces under `--all-targets`" pattern as BUG-110. Fix shape: drop the `&` before each `format!(...)` arg; replace the `vec![...]` literal with an array. LOW (lint-only, `--tests`/`--all-targets` scope; the plain-lib clippy gate this session actually ran is clean). |
 | BUG-110 | **osc-receiver-test-type-complexity-clippy-debt** | `manifold-playback`'s `--tests`/`--all-targets` clippy gate fails on two `clippy::type_complexity` hits in `osc_receiver.rs:366,368` (`Arc<Mutex<Vec<(String, Vec<f32>)>>>`), unrelated to and pre-dating `bug-wave1-lane-d-test-hygiene` (byte-identical to base commit `dd31cde4`; last touched by an unrelated "F3" session). Found 2026-07-11 isolating BUG-088/072's gate. Fix shape: factor the type into a local `type` alias at both sites. LOW (lint-only). |
 | BUG-108 | **effect-card-add-effect-button-floats-over-sectioned-rows** | On a glTF-imported scene's effect card (SCENE_BUILD P3 sections + the P3b AUDIO TRIGGERS section stacked above it), the "+ Add Effect" bar renders MID-CARD, overlapping the Sun Y/Sun Z rows, instead of sitting at the bottom below all rows; the card reads as visually broken (Peter, rig screenshot 2026-07-10). NOT investigated (Peter: log, don't fix now). Suspects: (a) the "+ Add Effect" button's y-anchor is computed from a card content-height that doesn't count the new P3 section-header rows (would be a SCENE_BUILD P3 regression); (b) the P3b `AUDIO TRIGGERS` inspector section landing at the same time shifted the composite-panel layout the button positions against; (c) a sticky/overlay button pinned while the sectioned content scrolled under it. First seen — and MISSED — in this session's own P3/P4 verification PNGs (the orchestrator saw the floating button and wrote it off as fixture noise). SEPARATE from BUG-107 (the mangled "ừ" section-marker glyphs = font-coverage bug, triggered by P3's section markers). MED (card is the live performance surface; a broken authoring card mid-set is a real hazard). Fix shape: re-derive the button anchor from the true rendered card height incl. section headers, or verify the composite-panel layout accounts for the AUDIO TRIGGERS section; add a tree-dump bounds-overlap assertion to the harness so this class fails a gate instead of shipping. |
 | BUG-107 | **text-rasterizer-draws-fallback-glyph-ids-with-base-font** | Any UI-text character outside the base font's coverage renders as a real-but-wrong glyph (Peter's "ủ"-style mangled symbols, e.g. where "↳" was intended): `TextRasterizer::shape_line` flattens all CTLine runs into one glyph-id list, discarding each run's font, then `rasterize` draws every id with the single base CTFont — so CoreText-fallback glyph ids land on arbitrary base-font glyphs. Fix shape: (1) honor per-run fonts (or `CTLineDraw`) so fallback renders correctly; (2) prevention — extend the existing PUA icon atlas (`icons.rs`) with the intentional symbols now hard-coded as raw Unicode (↳ › arrows), plus a fallback-run debug assert or a literal-coverage lint so unsupported glyphs fail the gate instead of shipping mojibake. MED (class is unbounded; any agent-authored text on any surface). |
@@ -58,8 +60,6 @@ or human can read it, and it needs no external tool.
 | ~~BUG-088~~ FIXED | **pre-existing-clippy-tests-gate-dirty-since-f1-landing** | FIXED @ `78e97d4a` — the 3 `audio_mixdown.rs` lints (`cloned_ref_to_slice_refs` x2, `needless_range_loop`) rewritten with `std::slice::from_ref` / `.iter().zip().enumerate()`. `osc_timecode.rs:172`'s `doc_lazy_continuation` no longer reproduces under the current toolchain (file unchanged) — nothing to fix. Surfaced a separate, unrelated pre-existing `osc_receiver.rs` lint while isolating the gate — logged as BUG-110. |
 | BUG-086 | **recording-audio-track-under-covers-duration-on-longer-takes** | Repeated 2-minute 1920x1080 unpaced `recording-soak` self-checks measured `audio_duration_s` 1.3%-3.3% short of the intended duration (116.0s/118.4s/118.5s of 120.0s across three runs — variable, not a fixed percentage), while two independent 1-minute runs (1280x720 and 1920x1080) both measured exactly 60.0s — duration-dependent, not resolution-dependent, and not a "still queued at `stop()`" race (a 500ms settle delay before `stop()` changed the result by <0.1s). The native audio input silently drops on backpressure with no counter at all (`LiveRecordingPlugin.m:546-547`: `if (!state->audioInput.isReadyForMoreMediaData) return LR_OK; // drop samples rather than block` — unlike video's BUG-085, this path doesn't even log). Found 2026-07-10 building LIVE_RECORDING_PROOFS P2's soak self-check; root cause unknown (suspects: sustained real-time backpressure only manifesting past ~60-90s of continuous writing — disk I/O contention as the file grows, fragment-flush cadence, or AAC internal encoder buffering not fully flushed). MED — silent and uncounted, variable magnitude; unknown whether it scales worse over a full 20-minute take. |
 | BUG-085 | **recording-frames-recorded-overstates-async-append-drops** | `LiveRecorder_EncodeVideoFrame` returns success (and Rust's `frames_recorded` counts it) as soon as the synchronous GPU blit into the CVPixelBuffer completes — but the actual `appendPixelBuffer:` call happens later, async, on `state->appendQueue`, and silently drops the frame (`"[LiveRecorder] VideoToolbox backpressure — dropped frame"`, no counter incremented) if `videoIn.isReadyForMoreMediaData` is false at that moment. Under heavy backpressure `frames_recorded` can overstate the file's real packet count by the async-drop count. Found 2026-07-10 building LIVE_RECORDING_PROOFS P1 (`pool_accounting_consistent`'s bounded-retry-recovery variant hit it once: 107 counted vs 106 actual packets). MED (accounting-only — the file itself stays valid, PTS stays monotonic; but a post-set frame count could read wrong). LOW in practice — the async drop needs genuinely sustained backpressure a real 60fps show submission rate is unlikely to hit. |
-| BUG-083 | **video-export-has-no-progress-display** | Exporting video shows nothing until the finish toast — the content thread's per-10-frame progress snapshots never had a UI consumer (found 2026-07-09 by the A1 orphan lint; fields deleted, restore WITH a display from the P0 purge commit's parent). A multi-minute export looks like a hang. MED |
-| BUG-084 | **recording-drop-counter-never-surfaced** | `recording_dropped_frames` (pool-exhaustion drops during live recording) was emitted every tick, read nowhere — a set-recording silently dropping frames is invisible to the performer. Surface on the recording indicator when non-zero; same restore path as BUG-083. LOW |
 | BUG-080 | **param-manifest-construction-not-a-unified-safe-gate** | The param manifest (an instance's live knob list) is built at deserialize AND rebuilt by a later `reconcile_param_manifests` pass, because deserialize can't see project-embedded presets yet. Consumers that read `.params` *between* the two — a direct `serde_json::from_str::<PresetInstance>`, the keep-don't-drop backstop, the legacy audio-trigger migration, ~18 tests — depend on the deserialize-time build being correct. It works today only because the double-build papers over the timing; it's a latent hazard, not SOTA: a future load path added without a reconcile silently inherits an empty/partial manifest (the BUG-036 class). Root cause: manifest construction has no single safe gate — "partially built" is an observable, readable state. Fix shape (design pass, NOT a patch): make a half-built manifest un-observable — one construction gate every load/paste/bare-read passes through, OR a type-state where params can't be read until reconciled, OR deserialize carries enough context to build complete in one shot. The naive "build once in reconcile" was tried this session and is unsafe for exactly the reasons above (design doc §2 D1 priced + rejected it; see the 2026-07-09 double-build escalation). MEDIUM (design-quality / latent-robustness). **Fix path settled (Peter 2026-07-11): dedicated Opus design session + its own implementation session; not a bug-wave item.** |
 | BUG-079 | **missing-preset-fails-silently-no-onscreen-signal** | Loading a project that references an unresolvable preset def (deleted, unregistered, or missing on this machine) degrades *safely but silently*: saved params are kept on a placeholder (keep-don't-drop, [`effects.rs:940`](../crates/manifold-core/src/effects.rs#L940)) and the effect falls back to **source passthrough** ([`preset_runtime.rs:808`](../crates/manifold-renderer/src/preset_runtime.rs#L808)) — but the ONLY signal is a console `eprintln`; nothing shows on screen. A performer sees the layer render without its effect (a missing *generator* layer likely renders empty — inferred, unconfirmed) with no visible reason. Fix shape: surface unresolvable presets in-app (a card/badge or a load-time notice). LOW |
 | BUG-076 | **inspector-scroll-underestimates-content-height** | `layer_scroll`/`master_scroll`'s `max_scroll()` clamps to ~13-20px on a 9-card stack that's visibly ~1200px too tall for its viewport — the built content overflows but the scroll estimator doesn't agree (LOW, suspected root cause: `compute_height()` reads a mid-tween drawer-animation value instead of the settled/armed-at-build height) |
@@ -148,6 +148,58 @@ last touching commit is `e4f51459` ("F3: external-sync test net"), an unrelated 
 `type` alias (e.g. `type RecordedOsc = Arc<Mutex<Vec<(String, Vec<f32>)>>>;`) at both sites.
 Mechanical, no behavior change. Left open per the same file-ownership convention BUG-088 used —
 belongs to whoever owns `osc_receiver.rs`'s next change.
+
+### BUG-113 (param-manifest-get-bench-flakes-under-parallel-load) — `bench_resolve`'s hard ns/op ceiling fails under nextest's parallel thread pool — LOW (flaky-gate)
+**Status:** OPEN — found 2026-07-11 landing wave2 lane C (BUG-083/084/086 export+recording sweep).
+
+**Symptom:** `crates/manifold-core/src/params.rs`'s `params::tests::bench_resolve` times
+`ParamManifest::get`'s worst case (40 params, id last) and asserts `best_ns_per_op <= 271.5`
+(a 2x ceiling over an old baseline). Under `cargo nextest run --workspace`'s default sweep,
+run right after a heavy build and (in this session's case) a real 2-minute recording-soak
+process that had just finished, it measured 333.25 ns/op then 398.98 ns/op on consecutive runs
+and failed both times; an isolated `cargo test -p manifold-core --lib
+params::tests::bench_resolve` immediately after measured 215.02 ns/op and passed, and a
+subsequent clean full-workspace nextest run passed 3052/3052 including this test.
+
+**Root cause:** the test is a wall-clock micro-benchmark with a hard-coded nanosecond ceiling,
+run inside the normal correctness-test sweep — inherently sensitive to CPU contention from
+nextest's shared thread pool and any other load on the machine (the failing runs in this
+session followed heavy sequential cargo builds and a real recording capture). Confirmed
+unrelated to the change being landed: `crates/manifold-core/src/params.rs` was not touched.
+
+**Fix shape:** give the ceiling real margin for a loaded/parallel run, retry once before
+asserting (take the best of N *sequential process* runs, not just N in-process rounds — the
+in-process `ROUNDS` loop already exists but can't out-run sustained *external* contention), or
+move this out of the default nextest sweep entirely (behind a feature or a dedicated bin, same
+convention as `gpu-proofs`) since a wall-clock ceiling assertion doesn't belong in a "safe to
+run freely, always green" default suite per CLAUDE.md's own testing-scope description.
+
+### BUG-112 (manifold-ui-all-targets-clippy-debt-audio-setup-panel-graph-canvas-tests) — `manifold-ui`'s `--all-targets` clippy gate fails on two pre-existing, unrelated lints — LOW (lint-only)
+**Status:** OPEN — found 2026-07-11 during wave2 lane C (BUG-083/084/086 export+recording sweep).
+
+**Symptom:** `cargo clippy -p manifold-ui --all-targets -- -D warnings` fails on two lints that
+have nothing to do with this session's changes:
+1. `clippy::needless_borrows_for_generic_args` twice in
+   [`src/panels/audio_setup_panel.rs`](../crates/manifold-ui/src/panels/audio_setup_panel.rs) —
+   lines 2494 and 2498, both `LayerId::new(&format!(...))` where the borrow is unneeded
+   (`LayerId::new` already accepts an owned `String` generically).
+2. `clippy::useless_vec` once in
+   [`src/graph_canvas/tests.rs`](../crates/manifold-ui/src/graph_canvas/tests.rs) — line 2391, a
+   `vec![WireView { .. }, ...]` fixture that clippy wants as a plain array.
+
+**Root cause:** unknown/not investigated (test-target lint debt, out of scope for this session).
+Confirmed pre-existing and unrelated: `git diff HEAD -- crates/manifold-ui/src/panels/audio_setup_panel.rs
+crates/manifold-ui/src/graph_canvas/tests.rs` is empty; both files' last-touching commit is
+`f1a35270` ("feat(audio-dock-p4): D7 readability + D8 hygiene (P4)"), an unrelated session. The
+scoped, non-`--all-targets` gate this session actually ran (`cargo clippy -p manifold-app -p
+manifold-ui -p manifold-recording -- -D warnings`, per CLAUDE.md's worktree convention) is clean
+— this only surfaces when test/bench targets are included, same pattern as BUG-110.
+
+**Fix shape:** trivial and mechanical, no behavior change — drop the `&` before each
+`format!(...)` argument at the two `audio_setup_panel.rs` sites; replace the `vec![...]` literal
+in `graph_canvas/tests.rs` with a plain array literal (`[WireView { .. }, ...]`). Left open per
+the same file-ownership convention BUG-110 used — belongs to whoever owns these files' next
+change.
 
 ### BUG-108 (effect-card-add-effect-button-floats-over-sectioned-rows) — "+ Add Effect" renders mid-card over the Sun rows instead of at the bottom, on a sectioned glTF-scene card — MED
 **Status:** OPEN — reported by Peter on the rig 2026-07-10 (screenshot). NOT investigated per his instruction (log, don't fix now).
@@ -298,6 +350,25 @@ path with no counter/log is the actual defect worth removing, per BUG-085's sibl
 Peter's first full-scale 20-minute run remains the confirming data point, but the show-relevance
 concern is now much reduced.
 
+**Observation 2026-07-11 (Lane C, wave2 export/recording sweep):** the silent-drop fix named
+above landed as an instrument — `LiveRecordingPlugin.m`'s `WriteAudioSamples` now counts and
+NSLogs every sample-frame it drops on the `isReadyForMoreMediaData` backpressure gate (an atomic
+`audioFramesDropped`, read live via `LiveRecorder_GetAudioFramesDropped` /
+`LiveRecordingSession::audio_frames_dropped()`, surfaced end-to-end through `ContentState`
+(`recording_dropped_audio_frames`) onto the layer-header Record button, and printed by
+`recording_soak` next to its existing audio-coverage check). Ran a real unpaced 2-minute
+1920×1080 soak (`recording-soak --width 1920 --height 1080 --fps 60 --minutes 2`, the same shape
+as the original repro): `audio_frames_dropped = 0` while `audio_duration_s` still measured
+118.8s against the intended 120.0s (1.2s / ~1.0% short — inside this run's own non-gating 2%
+warning threshold, so no WARNING printed, but still the same class of shortfall this bug tracks).
+**This is a real data point, not a fix**: the native backpressure gate reported zero drops on a
+run that still fell short, so for THIS run the gate is ruled out as the cause — the shortfall is
+happening somewhere the counter can't see (consistent with the standing suspects: AAC encoder
+internal buffering, fragment-flush cadence, or disk I/O contention, none of which the backpressure
+gate would catch). Only one run was captured this session (time-boxed); the counter is now in
+place for whoever runs the confirming full-scale 20-minute soak to check whether it ever fires
+at show scale.
+
 ### BUG-085 (recording-frames-recorded-overstates-async-append-drops) — `frames_recorded` can overstate the file's real packet count under sustained backpressure — MED accounting / LOW practical likelihood
 **Status:** OPEN
 
@@ -363,30 +434,6 @@ scoped to evaluate for deletion, and removing it correctly (without leaving `que
 write side orphaned, or silently changing `commit_live_clip`'s NoteOff behavior for some future
 native-clock caller) deserves a dedicated pass with its own review, not a rider on a launch-
 quantize fix. F2 left this code untouched and unexercised by its own changes.
-
-### BUG-083 (video-export-has-no-progress-display) — exporting video gives zero on-screen feedback until the finish toast — MED (export is a release pillar; long exports look like a hang)
-**Status:** OPEN
-
-Found 2026-07-09 (A1 orphan purge: the un-suppressed dead-code lint flagged `is_exporting` /
-`export_progress` / `export_status` as never read; `git log -S` confirmed **no consumer ever
-existed** — only the intro commit `d754eb08` and a lint sweep ever touched them). The content
-thread's export loop faithfully sent progress snapshots every 10 frames into a void; the only
-user-visible export feedback is the D17 finish toast (`export_finished`, which IS wired). From
-the performer's view a multi-minute export is indistinguishable from a hang. **Fix shape:**
-build the display (transport-bar strip or toast-with-progress), reading from re-added
-`ContentState` fields — restore the emit side from the parent of the P0 purge commit
-(`send_export_progress` in `content_export.rs` still runs as a keep-alive; its comment points
-here). Per UI_PROJECTION_LAYER_DESIGN I1, the fields land WITH the consumer or not at all.
-
-### BUG-084 (recording-drop-counter-never-surfaced) — live-recording dropped frames counted but never shown — LOW (gig-resilience visibility gap)
-**Status:** OPEN
-
-Same discovery path as BUG-083: `recording_dropped_frames` (fed by
-`recording_session.frames_dropped()`, pool-exhaustion drops) was emitted every tick and read
-nowhere. A recording silently dropping frames during a set is exactly the failure the performer
-needs to see. **Fix shape:** surface it on the recording indicator (count or warning tint) when
-non-zero; re-add the field with its consumer, emit side restorable from the P0 purge commit's
-parent. Owner context: LIVE_RECORDING_PROOFS / gig-resilience territory.
 
 ### BUG-080 (param-manifest-construction-not-a-unified-safe-gate) — manifest construction has no single safe gate; "partially built" is an observable state — MED (design-quality / latent-robustness; wants an Opus design pass)
 **Status:** OPEN — fix path settled with Peter 2026-07-11: a dedicated design session (Opus) followed by its own implementation session. Not a bug-wave item; do not patch it inside a fix sweep.
@@ -1409,6 +1456,54 @@ Same bug class as the migration killed for the primary controls.
   - 4K render looked at directly (not just computed): pre-fix grain reads as a hard, high-contrast, ~4px checkerboard-like block pattern; post-fix reads as fine, soft, mottled texture with no visible cell edges, closer to film emulsion. PNGs are not committed (regenerate via the test: `cargo test -p manifold-renderer --features gpu-proofs --test gpu_proofs film_grain -- --nocapture`, writes to `target/gpu_proofs_out/`).
 **Where:** `crates/manifold-renderer/assets/effect-presets/FilmGrain.json` (nodes `grain_jitter_x/y`, `grain_frame_mod_x/y` [new], `grain_size_to_scale`, `grain_canvas_size` [new], `grain_scale_from_width` [new], `grain_noise`, `grain_soften_h/v` [new]).
 **Original fix-shape note (superseded by the above):** re-roll instead of pan — quantize the offset per frame (e.g. `floor(time * fps) * large_prime`, or hash the frame index) so consecutive frames jump whole cells; then make the grain read soft: finer cells (~2x canvas density) plus a half-pixel blur, or blend a Value-noise octave, and consider a luma-weighted response so grain sits in midtones (the Overlay blend already helps). All JSON-level; no new primitives expected.
+
+### BUG-083 (video-export-has-no-progress-display) — exporting video gives zero on-screen feedback until the finish toast — MED (export is a release pillar; long exports look like a hang)
+**Status:** FIXED @ `<PENDING-LANDING-SHA>` (wave2 lane C, 2026-07-11)
+
+Found 2026-07-09 (A1 orphan purge: the un-suppressed dead-code lint flagged `is_exporting` /
+`export_progress` / `export_status` as never read; `git log -S` confirmed **no consumer ever
+existed** — only the intro commit `d754eb08` and a lint sweep ever touched them). The content
+thread's export loop faithfully sent progress snapshots every 10 frames into a void; the only
+user-visible export feedback is the D17 finish toast (`export_finished`, which IS wired). From
+the performer's view a multi-minute export is indistinguishable from a hang.
+
+**Fixed:** restored `is_exporting` / `export_progress` / `export_status` on `ContentState`
+(`content_state.rs`) with `send_export_progress` (`content_export.rs`) populating them again from
+the real `ExportSession`, and built the missing consumer this time — a header progress strip
+(`HeaderPanel::set_export_status`, `manifold-ui/src/panels/header.rs`, wired from
+`app_render.rs`'s per-frame content-state drain), mirroring the existing percussion-import
+status/progress bar's always-emit/toggle-visibility pattern (no tree rebuild on progress ticks).
+Verified against the REAL production export path (not a mock): the `journey-proof` harness
+(`crates/manifold-app/src/journey_proof.rs`, `--features journey-proofs`) drives the unmodified
+`ContentThread::run_export`, and a run of `audio_reactive_export_moves -- --nocapture` printed
+`is_exporting`/`export_progress`/`export_status` climbing 1.0% → 94.8% across ten real snapshots
+before the finish event — confirming the exact fields the header consumer reads actually progress
+during a real export. The header widget itself is unit-tested
+(`export_progress_toggle_is_in_place_and_text_updates`) for the same value/visibility contract.
+**Not verified this session:** watching the progress strip render live in the running app window
+on the rig — owed to Peter's eye on a real multi-minute export.
+
+### BUG-084 (recording-drop-counter-never-surfaced) — live-recording dropped frames counted but never shown — LOW (gig-resilience visibility gap)
+**Status:** FIXED @ `<PENDING-LANDING-SHA>` (wave2 lane C, 2026-07-11)
+
+Same discovery path as BUG-083: `recording_dropped_frames` (fed by
+`recording_session.frames_dropped()`, pool-exhaustion drops) was emitted every tick and read
+nowhere. A recording silently dropping frames during a set is exactly the failure the performer
+needs to see.
+
+**Fixed:** restored `recording_dropped_frames` on `ContentState`, added a sibling
+`recording_dropped_audio_frames` fed by a new native counter (see the audio-drop-counter
+observation appended to BUG-086 below — that native work was built as part of this fix's
+"surface the recording indicator" scope), and surfaced both on the layer-header Record button's
+label (`LayerHeaderPanel::set_recording_drops`, `manifold-ui/src/panels/layer_header.rs`): "Stop
+Recording" while clean, "Stop Recording ⚠ N dropped" once anything has dropped, cleared on stop
+so the next recording starts clean. Verified with a focused unit test exercising the real
+build/update path (`recording_drops_surface_on_record_button_label`) confirming the button's tree
+text actually changes; the layout/pulse-color golden tests were re-run and are unaffected. **Not
+verified this session:** a real drop actually firing on the video-pool-exhaustion path and being
+seen on the running app's Record button — the soak run in this session's audio-drop observation
+(see BUG-086) had 0 drops on both counters, so the wiring is proven correct at zero but not
+watched moving on the rig.
 
 ### BUG-011 — Fused `@fused_output` buffer sized to max of ALL array inputs, not the member's own rule — MED
 **Status:** FIXED (bug/wave1-lane-a-freeze) — paired with BUG-008's guard decision. The

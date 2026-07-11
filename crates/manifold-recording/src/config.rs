@@ -54,6 +54,10 @@ pub struct RecordingResult {
     pub frames_recorded: u32,
     /// Video frames dropped due to pool exhaustion.
     pub frames_dropped: u32,
+    /// Audio sample-frames dropped by the native encoder's backpressure
+    /// gate (BUG-084's counter; also a BUG-086 instrument — see
+    /// `LiveRecordingSession::audio_frames_dropped`).
+    pub audio_frames_dropped: u32,
     /// Total recording duration in seconds.
     pub duration_seconds: f64,
 }
