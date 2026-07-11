@@ -2702,6 +2702,7 @@ mod tests {
             invert: false,
             is_angle: false,
             is_trigger_gate: false,
+            wraps: false,
             section: None,
         });
         p.value = value;
@@ -3236,6 +3237,7 @@ mod tests {
                 invert: false,
                 is_angle: false,
                 is_trigger_gate: false,
+                wraps: false,
                 section: None,
             }],
             bindings: vec![BindingDef {
@@ -4040,6 +4042,7 @@ mod tests {
                         invert: false,
                         is_angle: false,
                         is_trigger_gate: false,
+                        wraps: false,
                         section: None,
                     },
                     ParamSpecDef {
@@ -4058,6 +4061,7 @@ mod tests {
                         is_angle: false,
                         invert: false,
                         is_trigger_gate: false,
+                        wraps: false,
                         section: None,
                     },
                 ],
@@ -4302,6 +4306,7 @@ mod tests {
                         invert: false,
                         is_angle: false,
                         is_trigger_gate: false,
+                        wraps: false,
                         section: None,
                     },
                     ParamSpecDef {
@@ -4320,6 +4325,7 @@ mod tests {
                         invert: false,
                         is_angle: false,
                         is_trigger_gate: false,
+                        wraps: false,
                         section: None,
                     },
                 ],
@@ -4749,6 +4755,7 @@ mod tests {
                     invert: false,
                     is_angle: false,
                     is_trigger_gate: false,
+                    wraps: false,
                     section: None,
                 }],
                 bindings: vec![BindingDef {

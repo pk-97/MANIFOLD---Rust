@@ -55,7 +55,8 @@ or human can read it, and it needs no external tool.
 | ~~BUG-105~~ FIXED | **graph-node-slider-no-right-click-reset** | FIXED @ `c41132dc` — confirmed exactly as pinned: `on_right_button_down` now splits by hit-zone like the card contract (label zone → mapping popover unchanged; track zone on a numeric ranged, non-wire-driven row → `SetGraphNodeParam`/`SetOuterParam` with `default_value`, matching the scrub's own write path). New `param_slider_track_x` hit-test helper mirrors `render.rs`'s slider geometry so the zone boundary can't drift. Same missing-intrinsic-reset class as BUG-070's remaining steppers/fader. |
 | BUG-104 | **audio-trigger-takes-over-shared-param-mod-goes-dead** | With a Trigger enabled, audio modulation on a card param that the graph's trigger-parameter option also drives stops responding — and stays dead after the Trigger is disabled (state that outlives the trigger, not a live-only diversion). Repro pending (which generator/param pair; does the card value still move). Suspects: trigger mux/envelope replacing instead of composing with the exposed binding (BUG-094 family); the `is_trigger` mod-arm hijack (`modulation.rs:550`); AUDIO TRIGGERS ↔ param-card shared drawer state misroute (`audio_trigger_section.rs:189`). MED — unrecoverable-live breakage on the perform surface. |
 | BUG-102 | **mapping-popover-has-no-text-input-surface** | The graph-editor's `MappingPopover` (the calibration drawer) has never had a working free-text field for ANY string param — `label` editing was deliberately deferred in the popover's own doc comment ("a real text field on the immediate-mode canvas would need caret/selection/IME handling that doesn't exist on this surface yet"), and `EditField::Label` sits unused groundwork. Found 2026-07-10 building SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md P3's `section` mapping-editor deliverable: the command-side write (`BindingMappingEdit::section` + `EditParamMappingCommand` + `PanelAction::EffectMappingSection`) is real and tested, but the popover can't yet render an editable text box for it — same pre-existing gap as `label`, not introduced by P3. Fix shape: build the caret/selection/IME text-input primitive for `MappingPopover` once (shared by label + section, and any future string field), then wire both. LOW (the write path is real and reachable via `PanelAction` for any future caller — e.g. a future non-popover surface — just not from this popover today). **DEFERRED to the widget-unification track (Peter 2026-07-11):** UI_WIDGET_UNIFICATION_DESIGN.md D3 dead-stops canvas text entry and its Deferred section revives on exactly this primitive — build it there. |
-| BUG-100 | **gltf-fresh-import-renders-near-black-for-non-azalea-geometry** | `assemble_import_graph`'s fixed default sun (`pos 5,2,3` / `intensity 3.5`) + material `ambient 0.18` were tuned specifically for the azalea fixture's geometry/orientation; a FRESH import of `cc0__japanese_apricot_prunus_mume.glb` or `lowe.glb` (both held-out fixtures) renders visibly near-black (silhouette only, no legible surface) despite passing the >2% non-black structural threshold. Confirmed pre-existing and unrelated to SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md P2's render_scene param->port swap (`git diff` against P2's base commit shows zero changes to any sun/ambient/intensity/distance default). Found 2026-07-10 visually inspecting P2's held-out-input demo PNGs (a `git diff` audit alone wouldn't have caught this — the render had to actually be looked at, not just structurally validated). Fix shape: scale sun position/intensity to the model's own bbox radius (like camera distance already does) instead of fixed world-space numbers, or lift ambient for fresh imports. LOW (cosmetic default-tuning gap on first import; a performer would immediately notice and just raise Sun Intensity/Reflections on the card — the sliders exist and work). |
+| ~~BUG-100~~ FIXED | **gltf-fresh-import-renders-near-black-for-non-azalea-geometry** | FIXED 2026-07-11 — root cause was NOT the sun/material tuning originally suspected (verified: scaling sun position/intensity/disabling shadows changed nothing). Real cause: the `imported_azalea_renders_faithfully_to_png` test's convergence check (`fraction > 0.02`) is satisfied by the material's `ambient` floor before the async base-color texture decode lands, so it captured (and asserted on) an under-textured frame for apricot/lowe's slower-decoding textures. Fixed the harness to require 3 consecutive byte-identical frames before calling it converged; `assemble_import_graph`'s lighting rig is untouched. Both fixtures now render fully lit and textured. |
+| ~~BUG-098~~ FIXED | **film-grain-drifts-and-reads-as-blocky-pixels** | FIXED (bug/wave2-lane-b-filmgrain) — re-roll via frame-count modulo instead of time-panned offset, resolution-relative cell scale, and a soft blur pass; see the Fixed-section entry for the full trail. |
 | ~~BUG-097~~ FIXED | **ui-snap-render-overlay-pass-uses-wrong-traversal** | FIXED 2026-07-10 by construction (HARNESS_FIDELITY_INVARIANT §4 step 2): the harness's parallel overlay pass was DELETED along with `draw_immediate_passes`, and the overlay assembly now has one owner — `ui_frame::render_main_ui_passes` — which uses `render_sub_region` @ `Depth::OVERLAY`. Not point-fixed. Confirmed reproducible after all: `build_overlays` ALWAYS records `start` after the region root, so EVERY open overlay excluded its root (the "may be latent" caveat was wrong). Permanent proof: `overlay_fidelity_proof::bug097_...` (mod.rs) shows `render_tree_range` leaves the range byte-identical (blank) while `render_sub_region` + the seam draw it. See detail below. |
 | ~~BUG-090~~ FIXED | **audio-mixdown-analysis-only-test-flakes-under-parallel-run** | FIXED @ `78e97d4a` — the named `TestDir`/temp-path-collision suspect was confirmed correct, not float summation-order non-determinism: `SystemTime::now()`'s nanosecond value isn't actually nanosecond-resolution here (~96% collision rate measured over 200k tight-loop calls), so tests sharing the `TestDir` prefix collided on the same directory under parallel execution and raced on the shared `tone.wav` fixture. Fixed with a per-process atomic sequence number in the path; 10/10 consecutive parallel runs green. |
 | BUG-089 | **live-clip-pending-tick-queue-dead-on-all-live-paths** | `LiveClipManager`'s tick-based pending-launch queue (`pending_by_tick`/`pending_by_layer`/`pending_by_clip_id`, `PendingLiveLaunch.target_tick`, `queue_pending`, `activate_due_pending_launches[_at_tick]`, `has_pending_activations`) can only ever be written when `event_absolute_tick >= 0`, but midir events always set `absolute_tick = -1` (`midi_input.rs`) and it is the sole producer of `MidiNoteEvent` in the whole workspace; `fire_layer_oneshot` also always passes `tick = -1`. `activate_due_pending_launches_at_tick` is the only live caller (`engine.rs:803`, fed `self.last_frame_count`, a frame counter, not a real clock tick) and drains a map that can never be non-empty in production — confirmed by exhaustive grep, not inference. Found 2026-07-10 while scoping F2's tick-queue deletion call; left OPEN rather than deleted because the dead footprint is the whole subsystem (7 items across 2 files plus a dead cancellation branch in `commit_live_clip`), wider than the single function F2 was scoped to evaluate — a clean full removal deserves its own dedicated pass. LOW (dead code, zero runtime cost beyond an empty-map check per tick; risk is only in a future session doing a partial removal). |
@@ -70,7 +71,7 @@ or human can read it, and it needs no external tool.
 | ~~BUG-072~~ FIXED | **audio-mixdown-all-targets-clippy-debt** | FIXED @ `78e97d4a` — same fix as BUG-088: `std::slice::from_ref` + `.iter().zip().enumerate()` rewrites in `audio_mixdown.rs`. |
 | ~~BUG-046~~ FIXED | **low-band-kick-deafness-on-mixes** | resolved by the dedicated ridge-only Kick channel (KICK_SWEEP_EVENT P1/P2/P4/P5, shipped 2026-07-07) — reads the kick's FM sweep, breaks the bad_guy deafness at equal bass-false-fire cost; kick-triggering binds Kick now, not Low; Peter confirmed 2026-07-11; live feel-pass = design P3 |
 | BUG-101 | **setup-spectrogram-scroll-offset** | Docked Audio Setup spectrogram blit doesn't follow the body scroll offset — waterfall draws at pre-scroll position when scrolled (LOW) |
-| BUG-039 | **saw-rotation-wrap** | angle params clamp instead of wrapping; saw LFO can't spin a full rotation (MED, mechanism pinned) |
+| ~~BUG-039~~ FIXED | **saw-rotation-wrap** | FIXED 2026-07-11 — `ParamSpecDef.wraps` (explicit tag) + `constrain_to_range` helper, wired into driver evaluation and automation-lane sampling; 10 preset card params tagged periodic after auditing all 49 presets. Rendered saw sweep across the wrap boundary confirms no hitch. |
 | BUG-045 | **gap-ring-down-chase** | tracker follows kernel ring-down down ~2-4 bins in note gaps; notes gate 87.6 vs 90 (LOW) |
 | ~~BUG-035~~ FIXED | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread — FIXED @ `55faec0f` (moved to clip-thumb disk worker via `try_read_packed()` + `store_atlas()`), rig confirmation owed |
 | BUG-037 | **glp-first-render-stall** | ~37ms warm-up on a glTF clip's first rendered frame (MED) |
@@ -312,17 +313,6 @@ change.
 **What P3 shipped anyway:** the write path is real and tested at the command layer — `BindingMappingEdit::section: Option<Option<String>>` (outer = touched, inner = new value/clear), `EditParamMappingCommand::execute`/`undo` apply/restore it on the manifest spec only (BOUNDARIES D4), and `PanelAction::EffectMappingSection { binding_id, section }` + its `app_render.rs` dispatch arm route it end-to-end. Any future caller (a different surface, or this popover once text input exists) can reach it today.
 
 **Fix shape:** build the caret/selection/IME text-input primitive once for `MappingPopover` (shared by `label` + `section` + any future string field), then wire both `EditField::Label` and a new `EditField::Section` through it. LOW severity — no live gesture is broken by its absence (section can still be seeded by expose + the rename-sweep; it just can't be hand-typed from this popover yet), but it's the second deliverable now blocked on the same missing primitive.
-
-### BUG-100 (gltf-fresh-import-renders-near-black-for-non-azalea-geometry) — a fresh glTF import of a non-azalea model renders near-black — LOW
-**Status:** OPEN — found 2026-07-10 while capturing SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md P2's held-out-input demo PNGs; looked at (not just structurally checked) `imported_azalea_renders_faithfully_to_png` run with `MESH_SNAP_GLB` pointed at each of the two non-azalea fixtures.
-
-**Symptom:** `cc0__japanese_apricot_prunus_mume.glb` and `lowe.glb`, freshly imported via `assemble_import_graph` (no saved project tuning), both render as a legible silhouette with almost no lit surface detail — the model is there, but effectively black. The SAME `cc0_japanese_apricot_prunus_mume#2` model, loaded from a real saved project (`meshImportTests.manifold`, sun/camera already tuned by whoever imported it there), renders beautifully lit — so the geometry/material path is fine; it's specifically the *fresh-import defaults* that don't suit these two models.
-
-**Root cause:** `assemble_import_graph`'s synthesized sun (`pos_x/y/z = 5, 2, 3`, `intensity = 3.5`) and material `ambient = 0.18` are fixed world-space numbers tuned against the azalea fixture's own scale/orientation (the code comment even says so: "so an imported model is legible under the default rig"). Camera `distance` already scales with the model's own bbox radius (`2.2 * radius`); the sun position/intensity do not, so a model with a different scale or orientation than azalea can end up with the sun aimed almost edge-on or too dim relative to the model's actual size.
-
-**Confirmed unrelated to P2:** `git diff` against P2's base commit (`ab215ab8`) touches zero sun/ambient/intensity/distance default values in `gltf_import.rs` — the render_scene param->port swap only changed *how* the per-object recenter value is stored (a `node.transform_3d` node instead of a `render_scene` param), never *what* value it carries or how lighting is computed.
-
-**Fix shape:** scale the sun's position (and/or intensity) by the model's own `radius`/`distance`, the same way camera framing already does, instead of fixed literals; or raise the default ambient for fresh imports. LOW severity — the Sun Intensity / Reflections card sliders already exist and work, so a performer hitting this notices immediately and can fix it in seconds; it just means the FIRST look at a freshly imported non-azalea model is worse than it needs to be.
 
 ### BUG-086 (recording-audio-track-under-covers-duration-on-longer-takes) — the recorded audio track can silently fall short of the intended duration on longer takes, no counter, root cause unknown — MED
 **Status:** OPEN
@@ -806,33 +796,6 @@ the wrong side of it. Declined this session as knife-edge; needs either a
 plateau-demonstrated sweep on real material or a smarter shape. Do NOT re-try:
 raising SETTLE_STREAK (swept 2/3/4 — 69.2/87.6/86.1, K=3 is the plateau), or
 re-clamping super-slew continuation (resurrects the 7-st gap-chase).
-
-### BUG-039 (saw-rotation-wrap) — Angle params clamp at range ends, so a saw LFO / automation can't drive a smooth full rotation — MED (enhancement, performer-facing)
-**Status:** OPEN
-
-**Symptom** (Peter, 2026-07-06) — binding a saw LFO or an automation ramp to a rotation
-param and sweeping 0→360° hitches at the wrap point: the effective value clamps at the
-range end instead of wrapping, so continuous rotation — the most common motion move in a
-VJ set — can't be played with a saw. Affects default card slider bindings across effects
-and generators.
-
-**Fix shape (mechanism pinned; Sonnet-executable, no design doc needed):**
-- Add `wraps: bool` (serde default false) to `ParamSpecDef` — explicit tag, not inferred
-  from `is_angle` (per `hidden-field-dependencies`; angle-typed ≠ periodic, e.g. FOV).
-  Every existing project/preset loads unchanged.
-- Apply wrap at the single point where modulation already post-processes effective values
-  (where `whole_numbers` rounding lives): for wrapping params,
-  `value = min + (v - min).rem_euclid(max - min)` instead of clamp. Base/undo semantics
-  untouched — wrap applies to the effective only. Slider wrap-drag UX = later, not this pass.
-- Mechanical sweep: every angle/degree-range param across primitive `ParamDef`s and the
-  ~45 preset JSON card params; tag `wraps: true` ONLY where truly periodic (rotation,
-  orbit, hue-angle, kaleidoscope angle). Clamped-for-a-reason params (FOV, ±89° tilt, arc
-  extents) stay unwrapped. List every tag decision in the PR body.
-- Gate: unit test on the wrap math (incl. negative saw), plus one preset smoke proving a
-  saw 0→360 on a tagged param renders identical frames at phase 0 and phase 1.
-
-**Sequencing** — AFTER the param-system post-refactor audit (Fable queue item 1): same
-code region; land the audit's verified ground first.
 
 ### BUG-037 (glp-first-render-stall) — First render of a glTF scene layer stalls the content thread ~37ms (warm-up on the frame, not at load) — MED
 **Status:** OPEN
@@ -1469,6 +1432,76 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-100 (gltf-fresh-import-renders-near-black-for-non-azalea-geometry) — a fresh glTF import of a non-azalea model renders near-black — FIXED 2026-07-11 (wave2 lane D)
+**Status:** FIXED — root cause was NOT the sun/material tuning this entry originally named; that diagnosis was wrong. Real cause + fix below.
+
+**Original symptom (2026-07-10):** `cc0__japanese_apricot_prunus_mume.glb` and `lowe.glb`, freshly imported via `assemble_import_graph`, both rendered as a legible silhouette with almost no lit surface detail when captured via `imported_azalea_renders_faithfully_to_png` (`MESH_SNAP_GLB` pointed at each). The originally filed root cause — "the synthesized sun's fixed `pos_x/y/z = 5,2,3`/`intensity = 3.5` were tuned against azalea's own scale, so a differently-scaled model gets the sun aimed edge-on or too dim" — read as plausible but was **never actually verified by rendering**; this session did that verification and it falsified the theory.
+
+**Actual root cause (confirmed by rendering, not assumed):** the TEST HARNESS's convergence check, not the lighting rig. `imported_azalea_renders_faithfully_to_png`'s polling loop broke out as soon as `non_black_fraction > 0.02` — but `node.pbr_material`'s `ambient = 0.18` floor lights the ENTIRE silhouette from frame 1 regardless of whether `node.gltf_texture_source`'s background-thread base-color decode has landed yet, so `fraction > 0.02` is satisfied almost immediately by an ambient-only, still-textureless frame. Azalea's small texture happened to decode fast enough that nobody noticed; apricot's/lowe's larger textures took longer, so the harness captured (and asserted on) a genuinely under-textured frame and called it "the render."
+**Proof this was the whole story:** with `assemble_import_graph`'s sun/material constants completely UNTOUCHED (verified via `git diff` = zero lines changed there), forcing the harness to poll longer turned both "near-black" captures into fully lit, richly textured renders — apricot's white blossom branches and lowe's stone lion statue, both correctly shaded. Scaling the sun's position (tried first, mirroring camera's `distance = 2.2 * radius`) changed NOTHING — `node.light` Sun mode is a pure directional light (`dir = normalize(aim - pos)`); `pos`'s magnitude only anchors the (here irrelevant) shadow ortho frustum. Disabling `cast_shadows` also changed nothing. Only forcing extra poll time — with zero lighting-code changes — fixed it.
+
+**Fix:** `crates/manifold-renderer/src/node_graph/gltf_import.rs`, both `imported_azalea_renders_faithfully_to_png` and `imported_azalea_renders_through_create_with_override_to_png` — replaced the `fraction > 0.02` one-shot check with a stability gate: poll until the RGBA readback is byte-identical across 3 consecutive frames (`STABLE_STREAK`) AND non-black, since once every async parse has landed the render is a pure function of a static camera/geometry/light and stops changing frame to frame. `assemble_import_graph`'s sun/camera/material code is byte-for-byte unchanged from before this session.
+**Commit:** (this branch, lane D wave 2) — see `crates/manifold-renderer/src/node_graph/gltf_import.rs` diff.
+**Oracle:** rendered azalea/apricot/lowe through the fixed harness — azalea byte-identical to its pre-fix reference render (max channel diff 0 across the full 768×768 canvas); apricot and lowe both converge in <1s (attempts 8–15) to fully lit, richly textured PNGs, reproducibly across repeated runs.
+**Open question, out of this session's scope:** whether the SAME async-decode-vs-first-paint race exists in the live app (a freshly dropped-in glTF generator layer showing a black/ambient-only frame for the first ~15 render calls before textures land) — this fix only touches the TEST harness's verification logic. If Peter sees a brief black flash on a real fresh glTF import before it pops in lit, that's the production side of this same mechanism and would need a genuinely new fix (e.g. blocking the first compositor frame on texture decode, or the BUG-037 pre-warm pattern) — worth a quick live-rig check, not filed as a new bug since it's unconfirmed.
+
+### BUG-039 (saw-rotation-wrap) — Angle params clamp at range ends, so a saw LFO / automation can't drive a smooth full rotation — FIXED 2026-07-11 (wave2 lane D)
+**Status:** FIXED
+
+**Symptom** (Peter, 2026-07-06) — binding a saw LFO or an automation ramp to a rotation
+param and sweeping 0→360° hitches at the wrap point: the effective value clamps at the
+range end instead of wrapping, so continuous rotation — the most common motion move in a
+VJ set — can't be played with a saw. Affects default card slider bindings across effects
+and generators.
+
+**Root cause:** two independent clamp sites, both `.clamp(min, max)`, neither wrap-aware —
+`ParameterDriver` (the LFO) evaluates its own periodic phase safely, but nothing prevented
+a trim-overshoot (`trim_max > 1.0`) from producing an out-of-range value that a downstream
+clamp would then plateau at the rail; and `AutomationLane::value_at` samples correctly
+between authored points but a multi-turn ramp (points drawn past the param's `max`, e.g.
+0→720° for two full rotations) got clamped to `max` and held there.
+
+**Fix:**
+- `crates/manifold-core/src/effect_graph_def.rs` — added `wraps: bool` (serde default
+  `false`) to `ParamSpecDef`. Explicit tag, not inferred from `is_angle` (FOV is
+  angle-typed but must stay clamped).
+- `crates/manifold-core/src/params.rs` — added `Param::wraps()` accessor (mirrors
+  `whole_numbers()`) and the shared `constrain_to_range(value, min, max, wraps)` helper:
+  `wraps` params use `min + (value - min).rem_euclid(max - min)`; everyone else keeps
+  `.clamp(min, max)`. `rem_euclid` (not `%`) so a downward-sweeping saw lands on the
+  correct in-range value instead of a negative one.
+- `crates/manifold-playback/src/modulation.rs` (`evaluate_instance_drivers`) and
+  `crates/manifold-playback/src/automation.rs` (line ~229, the lane sample write) both now
+  route their computed value through `constrain_to_range` instead of a bare `.clamp`.
+  Base/undo semantics untouched — the wrap applies to the read-back effective/sampled value
+  only, never to the stored automation points or the undo-relevant base.
+- Mechanical sweep — ~28 Rust `ParamSpecDef` struct literals got `wraps: false` (compiler-
+  forced, no `Default` impl on the struct); 10 preset JSON card params tagged
+  `"wraps": true` after auditing every angle/degree-range param across all 49 preset files
+  (see full audit + per-param reasoning in the session that landed this): `ChromaticAberration.angle`,
+  `ColorGrade.hue`, `ColorGrade.tint_hue`, `DepthOfField.angle`, `Transform.rotation`,
+  `BlackHole.rotate`, `BlackHole.roll`, `DigitalPlants.cam_orbit`, `MetallicGlass.cam_orbit`,
+  `OilyFluid.hue`. Left unwrapped (clamped-for-a-reason, or a rate/speed dial not a
+  position): `BlackHole.tilt`/`DigitalPlants.cam_tilt`/`MetallicGlass.cam_tilt` (±89°-style
+  tilt), `DigitalPlants.cam_fov`/`MetallicGlass.cam_fov` (FOV), `StrangeAttractor.tilt`,
+  `StylizedFeedback.rotate`, `BlackHole.spin`, `Duocylinder`/`Tesseract`/`Wireframe`'s
+  `rotate_*_speed` params, `DigitalPlants.rot_speed`, `FluidSim3D.rotate_x/y/z`,
+  `Lissajous.phase_rate`, `Breathe.phase` (a `node.mesh_ramp` spatial reveal threshold, not
+  a periodic angle — verified by reading the primitive, not guessed).
+- Gate: `constrain_to_range` unit tests (positive/negative saw, offset range, degenerate
+  range, no-op in-range) in `manifold-core::params`; driver-wrap + full-cycle-no-plateau
+  integration tests in `manifold-playback::modulation`; automation-ramp-wrap tests in
+  `manifold-playback::automation`; a `#[cfg(feature = "gpu-proofs")]` render smoke test
+  (`crates/manifold-renderer/tests/param_wrap_smoke.rs`) proving `DigitalPlants.cam_orbit`
+  and `MetallicGlass.cam_orbit` render identically at their `min`/`max` rails (the
+  precondition that makes the wrap seamless on screen).
+**Oracle:** rendered a 6-frame saw sweep on `DigitalPlants.cam_orbit` across the wrap
+boundary (160°→170°→179°→[wrap]→-175°→-170°→-160°) via `render-generator-preset` — no
+visible hitch or snap at the wrap point, the orbit continues smoothly in the same direction.
+
+**Sequencing** — the param-system post-refactor audit this was blocked on (BUG-040) shipped
+2026-07-09; this landed unblocked.
 
 ### BUG-108 (effect-card-add-effect-button-floats-over-sectioned-rows) — "+ Add Effect" renders mid-card over the Sun rows instead of at the bottom, on a sectioned glTF-scene card — MED
 **Status:** FIXED 2026-07-11 (`bug/wave2-lane-a-cardui` 33fc99b8, class-kill test in the same commit) — reported by Peter on the rig 2026-07-10 (screenshot).
