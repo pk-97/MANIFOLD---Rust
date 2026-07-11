@@ -141,6 +141,15 @@ impl EffectNode for SampleAndHold {
 
         ctx.outputs.set_scalar("out", ParamValue::Float(held));
     }
+
+    /// BUG-104: `held`/`last_trigger` live entirely in the `StateStore`
+    /// (this primitive has no `extra_fields`), so there is nothing to
+    /// reset on `self` — `clear_state()` stays the default no-op. Flagging
+    /// `is_trigger_latch` is what lets `PresetRuntime::clear_trigger_state`
+    /// purge this node's `StateStore` bucket from the outside.
+    fn is_trigger_latch(&self) -> bool {
+        true
+    }
 }
 
 inventory::submit! {
@@ -220,5 +229,134 @@ mod tests {
         assert_eq!(m.tick(0.0, 1), 5.0);
         // Next edge → recapture.
         assert_eq!(m.tick(1.0, 2), 1.0);
+    }
+
+    #[test]
+    fn is_trigger_latch_flag_is_set() {
+        let node = SampleAndHold::new();
+        let en: &dyn crate::node_graph::EffectNode = &node;
+        assert!(en.is_trigger_latch());
+    }
+}
+
+/// BUG-104 — proves the exact mechanism `PresetRuntime::clear_trigger_state`
+/// relies on for StateStore-backed trigger latches: since `held` lives only
+/// in the `StateStore` (never on `self`), a plain `clear_state()` call does
+/// nothing — release requires `StateStore::cleanup_nodes` from the outside,
+/// keyed by the node id `is_trigger_latch` flagged. Needs a real GpuEncoder
+/// (`execute_frame_with_state`'s signature, even for this CPU-only
+/// primitive) — gated behind `gpu-proofs` like `smoothing.rs`'s equivalent
+/// StateStore harness; run via `cargo test -p manifold-renderer --features
+/// gpu-proofs sample_and_hold::`, never nextest.
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod trigger_latch_release_tests {
+    use super::*;
+    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use crate::node_graph::effect_node::FrameTime;
+    use crate::node_graph::execution_plan::compile;
+    use crate::node_graph::graph::Graph;
+    use crate::node_graph::primitives::Value;
+    use crate::node_graph::state_store::StateStore;
+    use crate::node_graph::Executor;
+    use manifold_core::{Beats, Seconds};
+    use std::sync::{Arc, Mutex};
+
+    fn frame_time() -> FrameTime {
+        FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        }
+    }
+
+    struct Capture {
+        type_id: EffectNodeType,
+        seen: Arc<Mutex<Option<f32>>>,
+    }
+    impl EffectNode for Capture {
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            static INPUTS: [NodeInput; 1] = [NodePort {
+                name: Cow::Borrowed("in"),
+                ty: PortType::Scalar(ScalarType::F32),
+                kind: PortKind::Input,
+                required: true,
+            }];
+            &INPUTS
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &[]
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            if let Some(ParamValue::Float(v)) = ctx.inputs.scalar("in") {
+                *self.seen.lock().unwrap() = Some(v);
+            }
+        }
+    }
+
+    #[test]
+    fn cleanup_nodes_releases_the_held_latch_so_the_next_frame_recaptures() {
+        let device = crate::test_device();
+        let seen = Arc::new(Mutex::new(None));
+        let mut g = Graph::new();
+        let value = g.add_node(Box::new(Value::new()));
+        let trigger = g.add_node(Box::new(Value::new()));
+        let sh = g.add_node(Box::new(SampleAndHold::new()));
+        let sink = g.add_node(Box::new(Capture {
+            type_id: EffectNodeType::new("test.capture"),
+            seen: seen.clone(),
+        }));
+        g.set_param(value, "value", ParamValue::Float(1.0)).unwrap();
+        g.set_param(trigger, "value", ParamValue::Float(0.0)).unwrap();
+        g.connect((value, "out"), (sh, "value")).unwrap();
+        g.connect((trigger, "out"), (sh, "trigger")).unwrap();
+        g.connect((sh, "out"), (sink, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+
+        let mut store = StateStore::new();
+        let mut exec = Executor::with_mock();
+        let run_frame = |g: &mut Graph, exec: &mut Executor, store: &mut StateStore| {
+            let mut enc = device.create_encoder("sample-and-hold-test");
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+            exec.execute_frame_with_state(g, &plan, frame_time(), &mut gpu, store, 0);
+        };
+
+        // Frame 0: first observation captures value=1.0.
+        run_frame(&mut g, &mut exec, &mut store);
+        assert_eq!(seen.lock().unwrap().take(), Some(1.0));
+
+        // Frame 1: value changes to 2.0 but trigger hasn't moved — held
+        // stays at the captured 1.0 (the "goes dead" half of BUG-104: a
+        // continuous fader driving `value` has no effect while latched).
+        g.set_param(value, "value", ParamValue::Float(2.0)).unwrap();
+        run_frame(&mut g, &mut exec, &mut store);
+        assert_eq!(
+            seen.lock().unwrap().take(),
+            Some(1.0),
+            "held should still be the frame-0 capture; the fader is latched out"
+        );
+
+        // Release exactly this node's StateStore bucket — what
+        // `PresetRuntime::clear_trigger_state` does for every
+        // `is_trigger_latch` node on transport stop / project load.
+        store.cleanup_nodes(&[sh]);
+
+        // Frame 2: trigger STILL hasn't moved (mirrors "Trigger disabled,
+        // no new edge fires") — with the latch released, first-observation
+        // semantics re-arm and the now-current value=2.0 is recaptured
+        // immediately, instead of staying stuck on 1.0 forever (the "stays
+        // dead after Trigger is disabled" half of BUG-104).
+        run_frame(&mut g, &mut exec, &mut store);
+        assert_eq!(
+            seen.lock().unwrap().take(),
+            Some(2.0),
+            "cleanup_nodes should release the latch so the live value reaches the output again"
+        );
     }
 }

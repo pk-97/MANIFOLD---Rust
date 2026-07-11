@@ -5,6 +5,7 @@
 use manifold_core::types::ClockAuthority;
 use manifold_core::{Beats, Seconds};
 use manifold_playback::transport_controller::TransportController;
+use manifold_renderer::generator_renderer::GeneratorRenderer;
 
 use crate::content_command::ContentCommand;
 use crate::content_thread::ContentThread;
@@ -52,6 +53,23 @@ impl ContentThread {
         }
         crate::project_io::install_project_preset_overlay(project);
         self.embedded_presets_fingerprint = fingerprint;
+    }
+
+    /// BUG-104: walk every registered `ClipRenderer`, and for the
+    /// `GeneratorRenderer` among them (downcast — `ClipRenderer` is a
+    /// trait object; generators are the only renderer kind with graph
+    /// trigger-latch state), release every live generator's trigger-edge
+    /// latches. See `GeneratorRenderer::clear_all_trigger_state` /
+    /// `PresetRuntime::clear_trigger_state` for the mechanism. Called from
+    /// `ContentCommand::Stop` and `ContentCommand::LoadProject` — the same
+    /// two moments `manifold_playback::modulation::clear_all_trigger_edges`
+    /// already releases the playback-side (audio-mod) trigger state.
+    fn clear_generator_trigger_state(&mut self) {
+        for renderer in self.engine.renderers_mut() {
+            if let Some(gen_renderer) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
+                gen_renderer.clear_all_trigger_state();
+            }
+        }
     }
 
     /// Handle a single command. Returns true if Shutdown.
@@ -166,6 +184,15 @@ impl ContentThread {
                 self.end_tempo_recording_session();
                 self.engine.stop();
                 self.link_beat_offset = f64::NAN;
+                // BUG-104: release generator-side trigger-edge latches
+                // (sample_and_hold / clip_trigger_cycle / clip_trigger_index /
+                // frequency_ratio / cycle_table_row / trigger_gate /
+                // trigger_ease_to) at the same "kill the trigger" moment
+                // `engine.stop()` already releases the playback-side ones
+                // (`clear_all_trigger_edges`) — otherwise a card param
+                // shadowed by a graph trigger option can stay latched dead
+                // after the option goes back to idle.
+                self.clear_generator_trigger_state();
             }
             ContentCommand::SeekTo(t) => {
                 self.sync_arbiter.set_user_seek_time(self.time_since_start);
@@ -394,6 +421,11 @@ impl ContentThread {
                 // Clear stale temporal effect state from the previous project
                 // (feedback textures, bloom state, etc.) to prevent bleed-through.
                 self.content_pipeline.clear_all_effect_state();
+                // BUG-104: same for generator-side trigger-edge latches —
+                // a freshly loaded project must never inherit a stuck
+                // sample_and_hold / clip_trigger_cycle capture from
+                // whatever was playing before.
+                self.clear_generator_trigger_state();
                 // Resize content pipeline to project dims and render scale.
                 if let Some(p) = self.engine.project() {
                     let w = p.settings.output_width.max(1) as u32;

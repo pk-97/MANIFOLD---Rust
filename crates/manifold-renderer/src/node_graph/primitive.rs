@@ -236,6 +236,15 @@ pub trait Primitive: PrimitiveSpec {
     /// on seek.
     fn clear_state(&mut self) {}
 
+    /// Mirror of [`EffectNode::is_trigger_latch`](crate::node_graph::effect_node::EffectNode::is_trigger_latch).
+    /// Override `true` on trigger-edge latch primitives (`sample_and_hold`,
+    /// `clip_trigger_cycle`, `clip_trigger_index`, `frequency_ratio`,
+    /// `cycle_table_row`, `trigger_gate`, `trigger_ease_to`) — see that
+    /// doc comment for the full BUG-104 rationale.
+    fn is_trigger_latch(&self) -> bool {
+        false
+    }
+
     /// Optional WGSL kernel source — mirror of
     /// [`EffectNode::wgsl_source`](crate::node_graph::effect_node::EffectNode::wgsl_source).
     /// Override only on `node.wgsl_compute_*` primitives.
@@ -538,6 +547,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn clear_state(&mut self) {
         Primitive::clear_state(self);
+    }
+    fn is_trigger_latch(&self) -> bool {
+        Primitive::is_trigger_latch(self)
     }
     fn wgsl_source(&self) -> Option<&str> {
         Primitive::wgsl_source(self)

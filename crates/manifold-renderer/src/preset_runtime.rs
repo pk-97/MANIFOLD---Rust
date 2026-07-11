@@ -2943,6 +2943,39 @@ impl PresetRuntime {
         self.state_store.cleanup_all();
     }
 
+    /// BUG-104 — release trigger-EDGE latch state ONLY (`EffectNode::
+    /// is_trigger_latch` nodes: `sample_and_hold`, `clip_trigger_cycle`,
+    /// `clip_trigger_index`, `frequency_ratio`, `cycle_table_row`,
+    /// `trigger_gate`, `trigger_ease_to`), leaving every other primitive's
+    /// persistent state (feedback textures, particle buffers, mip
+    /// pyramids) untouched.
+    ///
+    /// The narrow sibling of [`Self::reset_state`]: generators are
+    /// deliberately long-lived per layer (`docs/DECOMPOSING_GENERATORS.md`
+    /// §9 — particle sims / feedback survive clip changes), so a full
+    /// `reset_state()` on every transport stop would be its own
+    /// regression (nuking sim state the performer expects to persist).
+    /// A trigger latch has no such expectation — it exists only to mirror
+    /// the "Trigger" card option's last edge, and once that option goes
+    /// back to idle (or the transport stops / a project loads), the latch
+    /// holding a stale captured value or cycle index with no way for the
+    /// performer to release it IS the bug (BUG-104: "goes dead, and stays
+    /// dead after Trigger is disabled"). Call from the same moments the
+    /// playback-side `manifold_playback::modulation::clear_all_trigger_edges`
+    /// already fires (transport stop, project load) — see
+    /// `ContentThread::handle_command`'s `ContentCommand::Stop` /
+    /// `ContentCommand::LoadProject` arms.
+    pub fn clear_trigger_state(&mut self) {
+        let mut latch_ids: Vec<NodeInstanceId> = Vec::new();
+        for inst in self.graph.nodes_mut() {
+            if inst.node.is_trigger_latch() {
+                inst.node.clear_state();
+                latch_ids.push(inst.id);
+            }
+        }
+        self.state_store.cleanup_nodes(&latch_ids);
+    }
+
     /// Resize the generator's backend + re-pre-bind the final-output
     /// placeholder + re-run the canonical pre-allocate pass (resize wipes every
     /// pinned binding incl. Array<T> buffers and Texture3D volumes).
@@ -4865,6 +4898,59 @@ mod generator_runtime_tests {
             "mux_y.selector should be 1.0 (fan-out from same `clip_trigger` outer \
              slider as mux_x), got {:?}",
             mux_y.params.get("selector"),
+        );
+    }
+
+    /// BUG-104 — `clear_trigger_state` on a REAL shipped preset (Lissajous)
+    /// walks the graph, finds exactly the nodes `is_trigger_latch` flags
+    /// (`ratio` — `node.frequency_ratio`), and purges ONLY their
+    /// `StateStore` buckets, leaving an ordinary node's (`render` —
+    /// `node.draw_lines`) bucket untouched. No GPU needed —
+    /// `clear_trigger_state` never touches the backend.
+    #[test]
+    fn clear_trigger_state_purges_only_flagged_nodes_state_store_buckets() {
+        use crate::node_graph::NodeState;
+
+        struct Probe;
+        impl NodeState for Probe {}
+
+        let json = include_str!("../assets/generator-presets/Lissajous.json");
+        let mut g = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
+            .expect("Lissajous preset must load");
+
+        let ratio_id = g
+            .graph
+            .instance_by_node_id(&manifold_core::NodeId::new("ratio"))
+            .expect("Lissajous declares a `ratio` (frequency_ratio) node");
+        let render_id = g
+            .graph
+            .instance_by_node_id(&manifold_core::NodeId::new("render"))
+            .expect("Lissajous declares a `render` (draw_lines) node");
+
+        assert!(
+            g.graph.get_node(ratio_id).unwrap().node.is_trigger_latch(),
+            "frequency_ratio must flag itself as a trigger latch"
+        );
+        assert!(
+            !g.graph.get_node(render_id).unwrap().node.is_trigger_latch(),
+            "draw_lines is not a trigger latch — clear_trigger_state must leave it alone"
+        );
+
+        // Seed a StateStore bucket under BOTH node ids (owner_key 0, the
+        // generator convention) — clear_trigger_state must purge only the
+        // one belonging to the flagged node.
+        g.state_store.insert(ratio_id, 0, Probe);
+        g.state_store.insert(render_id, 0, Probe);
+
+        g.clear_trigger_state();
+
+        assert!(
+            g.state_store.get::<Probe>(ratio_id, 0).is_none(),
+            "trigger-latch node's StateStore bucket must be purged"
+        );
+        assert!(
+            g.state_store.get::<Probe>(render_id, 0).is_some(),
+            "non-latch node's StateStore bucket must survive a trigger-only clear"
         );
     }
 
