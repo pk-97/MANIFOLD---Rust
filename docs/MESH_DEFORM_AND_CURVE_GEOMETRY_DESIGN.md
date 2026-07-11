@@ -311,6 +311,14 @@ flowers) is exercised by a phase demo except "dissolve" (ships today via
 7. Fit/normalize lives in `gltf_mesh_source` at parse time (D7).
 8. glTF animation is a separate future design (D9) — nothing here grows toward it.
 9. Angle/sweep params ship unbounded (BUG-039 class).
+10. **Every atom in this design ships on the freeze/graph-compiler codegen path**
+    (`wgsl_body` + `fusion_kind` + correct `InputAccess`, `standalone_for_spec::<Self>()`
+    pipeline, hand-WGSL parity oracle), never plain hand-WGSL that opts out of fusion.
+    Peter's standing rule, 2026-07-11: all nodes — new and existing — must work
+    perfectly with the graph compiler in full, so a deformer chain fuses to ~1
+    dispatch instead of N on the live-rig hot path. Precedent: `displace_mesh.rs`
+    (coincident MeshVertex buffer + Texture2D through codegen); optional Array/Texture
+    inputs are proven through codegen across 80+ atoms.
 
 ## 7. Deferred
 
