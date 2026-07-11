@@ -1307,7 +1307,7 @@ mod cache_path_full_render {
                 &mut audio_action_snapshot,
                 &mut audio_crossover_snapshot,
                 &mut audio_send_gain_drag_snapshot,
-                &mut user_prefs,
+                user_prefs,
                 &mut active_inspector_drag,
                 None,
             );

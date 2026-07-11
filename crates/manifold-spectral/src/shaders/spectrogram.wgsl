@@ -45,6 +45,13 @@ struct Params {
     // Each tick lane's height as a fraction of the scope (LANE_HEIGHT_FRAC
     // in scope.rs — one owner; the UI gutter legend uses the same value).
     lane_frac: f32,
+    // P7 (AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md §7.2 item 5):
+    // the KEPT y-range (bottom-up 0..1, same convention as band_lo_y/
+    // band_hi_y) of the currently-open fire-mode drawer's selected band —
+    // everything outside it darkens. dim_lo_y < 0 disables dimming.
+    dim_lo_y: f32,
+    dim_hi_y: f32,
+    _pad1: vec2<f32>,
     // Onset lane colours, bottom-up lane order (ScopeOnsets::LANE_COLORS).
     // Fixed capacity; only the first `onset_count` entries are live.
     onset_colors: array<vec4<f32>, 8>,
@@ -182,8 +189,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         rgb = mix(rgb, head, 0.6);
     }
 
-    // Band dividers: a line + grip handle at each split (the drag affordance).
     let y_from_bottom = 1.0 - in.uv.y;
+
+    // P7 band dimming (AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md
+    // §7.2 item 5): darken the magnitude colour OUTSIDE the open fire-mode
+    // drawer's selected band's kept range — dividers/centroids/onsets/cursor
+    // below stay full-brightness (fire feedback lives in the drawer meter,
+    // not here; this shows what the config LISTENS TO). Multiplicative, not
+    // a real alpha quad — this is a single opaque fullscreen pass.
+    if (p.dim_lo_y >= 0.0 && (y_from_bottom < p.dim_lo_y || y_from_bottom > p.dim_hi_y)) {
+        rgb = rgb * 0.28;
+    }
+
+    // Band dividers: a line + grip handle at each split (the drag affordance).
     let ncols = f32(n_cols);
     rgb = divider(rgb, y_from_bottom, in.uv.x, p.band_lo_y, p.hovered_divider == 0.0, ncols);
     rgb = divider(rgb, y_from_bottom, in.uv.x, p.band_hi_y, p.hovered_divider == 1.0, ncols);

@@ -851,10 +851,36 @@ impl Application {
             }
         }
 
+        // 1d2. Export progress (BUG-083) — the content thread's export loop
+        // (content_export.rs's run_export/send_export_progress) blocks the
+        // content thread and pushes a degraded ContentState every 10 frames;
+        // read it the same way percussion import status is read above, so a
+        // multi-minute export no longer looks like a hang.
+        {
+            let is_exporting = self.content_state.is_exporting;
+            self.ws.ui_root.header.set_export_status(
+                &self.content_state.export_status,
+                self.content_state.export_progress,
+                is_exporting,
+            );
+            // Keep redrawing the progress strip while exporting, same as
+            // the percussion import bar above.
+            if is_exporting {
+                self.needs_rebuild = true;
+            }
+        }
+
         // 1e2. Sync live recording state to layer header record button.
         self.ws.ui_root.layer_headers.set_recording_active(
             &mut self.ws.ui_root.tree,
             self.content_state.is_live_recording,
+        );
+        // BUG-084/BUG-086: surface drop counters (video pool exhaustion +
+        // native audio-encoder backpressure) on the same Record button.
+        self.ws.ui_root.layer_headers.set_recording_drops(
+            &mut self.ws.ui_root.tree,
+            self.content_state.recording_dropped_frames,
+            self.content_state.recording_dropped_audio_frames,
         );
 
         self.ui_profile.add("drain_state", seg.elapsed());
@@ -3128,9 +3154,19 @@ impl Application {
         // 6·audio·scope. Push the scope's selected send to the content thread
         // (drives the worker's VQT column producer). Only on change — closing the
         // panel sends `None`, stopping column production.
+        //
+        // P7 tap-follow (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
+        // §7.2 item 5): a currently-open fire-mode drawer (clip trigger or
+        // `is_trigger_gate` param card) wins over the panel's own selected
+        // send — collapsing it falls straight back to the panel's selection,
+        // since this is computed fresh every frame, never persisted (§7.3 P7
+        // "Tap-follow state is session-only").
         {
             let desired = if self.ws.ui_root.audio_setup_panel.is_open() {
-                self.ws.ui_root.audio_setup_panel.selected_send().cloned()
+                self.ws
+                    .ui_root
+                    .open_fire_mode_drawer_send()
+                    .or_else(|| self.ws.ui_root.audio_setup_panel.selected_send().cloned())
             } else {
                 None
             };
@@ -4217,6 +4253,7 @@ impl Application {
                 content_low_hz: self.content_state.spectrogram_low_hz,
                 content_mid_hz: self.content_state.spectrogram_mid_hz,
                 scope_cursor_y,
+                band_dim: self.ws.ui_root.open_fire_mode_drawer_band(),
             })
         };
         #[cfg(not(target_os = "macos"))]

@@ -534,19 +534,15 @@ pub enum PanelAction {
     AudioRenameSend(AudioSendId, String),
     /// Begin inline editing of a send's label (clicked its name).
     AudioSendLabelClicked(AudioSendId),
-    /// Set a send's input channels (downmixed to mono for analysis).
+    /// Set a send's input channels (downmixed to mono for analysis). The
+    /// channel dropdown enumerates stereo pairs AND single channels directly
+    /// (§7.2 item 7, P8, 2026-07-11), so this carries any length channel vec
+    /// — mono falls out of a one-channel pick, no separate toggle needed.
+    /// `AudioSendStereoToggle`, `AudioSendAddLayerClicked`, and
+    /// `AudioSendRoutingsClicked` are deleted the same phase (items 6/7):
+    /// the St/Mo toggle, the Inputs section's "+ Layer" authoring, and the
+    /// Cap chip's click-to-reveal routings popup are all gone outright.
     AudioSetSendChannels(AudioSendId, Vec<u16>),
-    /// Toggle a send between mono (one channel) and stereo (a channel pair).
-    AudioSendStereoToggle(AudioSendId),
-    /// Open the Inputs section's "+ Layer" dropdown for a send — audio layers
-    /// not already feeding it, each item carrying `SetLayerAudioSend(layer,
-    /// Some(send))` (the SAME command the layer header's Send dropdown fires;
-    /// `docs/AUDIO_SENDS_UX_DESIGN.md` D2).
-    AudioSendAddLayerClicked(AudioSendId),
-    /// Open the read-only routings dropdown for a send — a non-editable list of
-    /// where the send is fed from (the capture device + each feeding layer). The
-    /// host opens a dropdown anchored to the source chip; nothing is selectable.
-    AudioSendRoutingsClicked(AudioSendId),
     /// Step a send's input gain trim by a dB delta (the panel's −/＋ buttons).
     /// The host reads the send's current gain, applies the delta, clamps, and
     /// commits — so the project stays the single source of truth.

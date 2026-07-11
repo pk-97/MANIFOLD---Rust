@@ -1260,13 +1260,14 @@ pub fn sync_inspector_data(
             .sends
             .iter()
             .map(|s| {
-                // Read-only source view: a compact chip label plus the full routing
-                // lines (capture device + each feeding layer) for the dropdown.
-                // Routing is edited elsewhere — layers from the layer header,
-                // channels from the channel control.
+                // Read-only source view: the full routing lines (capture device +
+                // each feeding layer) for the Inputs section. Routing is edited
+                // elsewhere — layers from the layer header, channels from the
+                // channel control (§7.2 items 6/7, P8, 2026-07-11: the row-level
+                // "Cap" chip and its click-to-reveal dropdown are gone; this is
+                // the one place the detail lives now).
                 let ch_label = channel_label(device.as_ref(), is_tap, &s.channels);
                 let cap = s.has_capture();
-                let n_layers = s.layers().len();
                 let layer_name = |lid: &manifold_core::LayerId| {
                     project
                         .timeline
@@ -1278,19 +1279,7 @@ pub fn sync_inspector_data(
                             manifold_ui::panels::audio_setup_panel::MISSING_LAYER_LABEL.to_string()
                         })
                 };
-                let first_layer = s
-                    .layers()
-                    .first()
-                    .map(|lid| layer_name(lid).chars().take(6).collect::<String>());
-                let source_label = match (cap, n_layers) {
-                    (true, 0) => "Cap".to_string(),
-                    (true, n) => format!("Cap+{n}"),
-                    (false, 0) => "Off".to_string(),
-                    (false, 1) => first_layer.clone().unwrap_or_else(|| "\u{2014}".to_string()),
-                    (false, n) => format!("{n} lyr"),
-                };
-                let layer_fed = n_layers > 0;
-                // Full routing lines for the read-only dropdown.
+                // Full routing lines for the read-only Inputs section.
                 let mut routings: Vec<String> = Vec::new();
                 if cap {
                     routings.push(format!("Capture \u{2022} {ch_label}"));
@@ -1326,8 +1315,6 @@ pub fn sync_inspector_data(
                     gain_db: s.gain_db,
                     floor_db: s.floor_db,
                     driven_count: project.audio_send_usage_count(&s.id),
-                    source_label,
-                    layer_fed,
                     routings,
                     has_clip_triggers,
                     feeding_layers,
@@ -1373,20 +1360,9 @@ pub fn sync_inspector_data(
         );
 
         // The matrix's trigger-row layer-dropdown cache (`set_audio_trigger_layers`)
-        // is deleted with the matrix (P3, D2).
-
-        // Candidate audio layers for the Inputs section's "+ Layer" dropdown
-        // (`AudioSendAddLayerClicked`) — every `LayerType::Audio` layer, id +
-        // name. The click handler filters out whichever already feed the
-        // clicked send via `AudioSetupPanel::feeding_layer_ids`.
-        let audio_layers: Vec<(manifold_core::LayerId, String)> = project
-            .timeline
-            .layers
-            .iter()
-            .filter(|l| l.layer_type == manifold_core::types::LayerType::Audio)
-            .map(|l| (l.layer_id.clone(), l.name.clone()))
-            .collect();
-        ui.set_audio_layers(audio_layers);
+        // is deleted with the matrix (P3, D2). The Inputs section's "+ Layer"
+        // candidate cache (`set_audio_layers`) is deleted with the section's
+        // authoring (§7.2 item 7, P8, 2026-07-11).
     }
 
     // ── Inspector tabs: the selection's ownership rungs (local→global) ──
