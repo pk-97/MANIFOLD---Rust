@@ -50,8 +50,14 @@ const STATUS_LABEL_H: f32 = 12.0;
 /// `show_meter` is set: a thin track+fill+threshold-tick underline,
 /// mirroring the deleted `TriggerRowIds`/`update_trigger_levels` meter
 /// (470228ec, `audio_setup_panel.rs`), generalized from a fixed per-send row
-/// to any fire-mode drawer's Amount row.
-const METER_STRIP_H: f32 = 6.0;
+/// to every audio-mod drawer's Amount row (2026-07-11: every drawer, not just
+/// fire-mode ones — see `show_amount_meter`). `pub(crate)` so
+/// `param_slider_shared::audio_config_height` — a caller reserving height for
+/// a drawer it isn't itself building — can add this term without duplicating
+/// the literal and drifting from what [`DrawerRow::height`] actually builds
+/// (the under-reservation this closes: a metered drawer used to overflow its
+/// reserved slot by exactly this many pixels).
+pub(crate) const METER_STRIP_H: f32 = 6.0;
 /// Bar thickness within the reserved strip.
 const METER_BAR_H: f32 = 3.0;
 /// Track/idle fill colors — a dim, always-visible well so the meter reads

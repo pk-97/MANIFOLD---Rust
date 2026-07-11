@@ -110,6 +110,13 @@ pub(crate) const ABL_CONFIG_HEIGHT: f32 = 24.0;
 /// way to know about) agrees with what actually gets built. Both existing
 /// callers (`mod_config_height`, the effect/generator card's own height math)
 /// pass `false` — neither builds a clip trigger.
+///
+/// Adds [`crate::panels::drawer::METER_STRIP_H`] unconditionally (2026-07-11):
+/// `build_audio_mod_drawer`'s Amount row now carries a live meter on EVERY
+/// audio-mod drawer, not just fire-mode ones (`show_amount_meter` widened to
+/// unconditional), so the reserved height must always include the strip too —
+/// this used to omit it, so a metered drawer overflowed its reserved slot by
+/// `METER_STRIP_H` (6px) every time one showed.
 pub(crate) fn audio_config_height(
     info: &ParamInfo,
     mod_state: &ParamModState,
@@ -131,7 +138,7 @@ pub(crate) fn audio_config_height(
     if has_length_row {
         n += 1; // Length row (clip triggers only)
     }
-    crate::panels::drawer::uniform_rows_height(n)
+    crate::panels::drawer::uniform_rows_height(n) + crate::panels::drawer::METER_STRIP_H
 }
 
 /// Full-scale for the audio "Sensitivity" slider: 0..this.
@@ -1691,15 +1698,16 @@ pub(crate) fn build_audio_mod_drawer(
     let sens = mod_state.audio_sensitivity.get(i).copied().unwrap_or(1.0);
     let attack = mod_state.audio_attack_ms.get(i).copied().unwrap_or(5.0);
     let release = mod_state.audio_release_ms.get(i).copied().unwrap_or(120.0);
-    // D6 (P3c, BUG-082's fix): the Amount slider on a fire-mode drawer — a
-    // param gate card (`is_trigger_gate`) or ANY clip trigger — gets the live
-    // shaped-signal meter beside it. Never a plain continuous/step card, and
-    // never a fire-BUTTON (`is_trigger`, not `is_trigger_gate`) card: U2/D6
-    // scope this to the two configs that fire from a hidden Schmitt trigger a
-    // performer can't currently see (`AudioModDrawerTarget::ClipTrigger` is
-    // always one; `Param` is one exactly when `info.is_trigger_gate`).
-    let show_amount_meter =
-        matches!(target, AudioModDrawerTarget::ClipTrigger(..)) || info.is_trigger_gate;
+    // D6 (P3c, BUG-082's fix; widened 2026-07-11): the Amount slider on EVERY
+    // audio-mod drawer gets the live shaped-signal meter beside it. Used to
+    // gate on `is_trigger_gate`/`ClipTrigger` only (U2/D6 scoped it to the
+    // configs that fire from a hidden Schmitt trigger a performer couldn't
+    // otherwise see) — that left every continuous/Step/Random drawer with no
+    // meter at all, even though the content thread now captures a level for
+    // every enabled mod regardless of mode. Kept as a named binding (not
+    // inlined `true`) so a future re-scoping has one line to change, and so
+    // the call site below reads the same either way.
+    let show_amount_meter = true;
     let shape_slider = |label: &str,
                          norm: f32,
                          default_norm: f32,
