@@ -253,13 +253,13 @@ pub struct Application {
     /// `SetNodeAtlasVisible` command so it sends only when the visible scope
     /// (or topology) changes, not every frame. Empty = atlas off / editor closed.
     pub(crate) last_atlas_visible_sent: Vec<manifold_core::NodeId>,
-    /// IOSurface bridge + UI-side textures for the clip-thumbnail atlas (§24 5c).
+    /// Single shared IOSurface + the UI-side texture imported from it for the
+    /// clip-thumbnail atlas (§24 5c, BUG-119: one surface, no rotation — see
+    /// `crate::shared_texture::SharedAtlasSurface`).
     #[cfg(target_os = "macos")]
-    pub(crate) clip_atlas_texture_bridge:
-        Option<Arc<crate::shared_texture::SharedTextureBridge>>,
+    pub(crate) clip_atlas_surface: Option<Arc<crate::shared_texture::SharedAtlasSurface>>,
     #[cfg(target_os = "macos")]
-    pub(crate) ui_clip_atlas_textures:
-        [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
+    pub(crate) ui_clip_atlas_texture: Option<manifold_gpu::GpuTexture>,
     /// Last clip-thumbnail visible set sent — dedups `SetClipAtlasVisible`.
     pub(crate) last_clip_atlas_visible_sent: Vec<manifold_core::ClipId>,
     /// Blits clip-thumbnail atlas cells into clip bodies (§24 5c), 4b′ slot.
@@ -617,9 +617,9 @@ impl Application {
             ui_node_atlas_textures: [None, None, None],
             last_atlas_visible_sent: Vec::new(),
             #[cfg(target_os = "macos")]
-            clip_atlas_texture_bridge: None,
+            clip_atlas_surface: None,
             #[cfg(target_os = "macos")]
-            ui_clip_atlas_textures: [None, None, None],
+            ui_clip_atlas_texture: None,
             last_clip_atlas_visible_sent: Vec::new(),
             clip_thumb_gpu: None,
             clip_thumb_quad_scratch: Vec::new(),
@@ -2077,19 +2077,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 self.ui_node_atlas_textures = atlas_textures.map(Some);
                 self.node_atlas_texture_bridge = Some(Arc::clone(&atlas_bridge));
 
-                // Clip-thumbnail FILMSTRIP atlas bridge (§24 5c-2) — its own smaller
-                // cell-grid geometry (many narrow bar cells), independent lifecycle
-                // (always-on in the timeline vs editor-only).
-                let clip_atlas_bridge = Arc::new(crate::shared_texture::SharedTextureBridge::new(
+                // Clip-thumbnail FILMSTRIP atlas surface (§24 5c-2, BUG-119) — its own
+                // smaller cell-grid geometry (many narrow bar cells), independent
+                // lifecycle (always-on in the timeline vs editor-only). A SINGLE
+                // shared IOSurface, not a triple-buffer bridge: the atlas is
+                // persistent, slowly-changing data with no "stale frame" to solve,
+                // and the old ring's periodic publish-with-clear was itself the bug
+                // (BUG_BACKLOG.md BUG-119 — it could clear the surface the UI thread
+                // was concurrently sampling).
+                let clip_atlas_surface = Arc::new(crate::shared_texture::SharedAtlasSurface::new(
                     crate::content_pipeline::CLIP_ATLAS_W,
                     crate::content_pipeline::CLIP_ATLAS_H,
                 ));
-                let clip_atlas_textures: [manifold_gpu::GpuTexture;
-                    crate::shared_texture::SURFACE_COUNT] = std::array::from_fn(|i| unsafe {
-                    clip_atlas_bridge.import_texture_native(&gpu.device, i)
-                });
-                self.ui_clip_atlas_textures = clip_atlas_textures.map(Some);
-                self.clip_atlas_texture_bridge = Some(Arc::clone(&clip_atlas_bridge));
+                let ui_clip_atlas_texture =
+                    unsafe { clip_atlas_surface.import_texture_native(&gpu.device) };
+                self.ui_clip_atlas_texture = Some(ui_clip_atlas_texture);
+                self.clip_atlas_surface = Some(Arc::clone(&clip_atlas_surface));
             }
 
             // Create native Metal device BEFORE renderers so they can build native pipelines.
@@ -2186,14 +2189,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     std::array::from_fn(|i| unsafe { bridge.import_texture_native(native_dev, i) });
                 content_pipeline.set_node_atlas_textures(atlas_textures, Arc::clone(bridge));
             }
-            // Content-side import of the clip-thumbnail atlas IOSurfaces (§24 5c).
+            // Content-side import of the single shared clip-thumbnail atlas
+            // surface (§24 5c, BUG-119), plus its one-time init clear — Metal
+            // doesn't zero-init, and this is the ONLY clear the atlas ever gets:
+            // every cell blit after this uses `LoadAction::Load` (see
+            // `fill_clip_atlas`/`restore_clip_atlas` in content_pipeline.rs). The
+            // clear is waited-out synchronously so the surface is guaranteed
+            // transparent before either thread's first real frame.
             #[cfg(target_os = "macos")]
-            if let Some(ref bridge) = self.clip_atlas_texture_bridge {
+            if let Some(ref surface) = self.clip_atlas_surface {
                 let native_dev = content_pipeline.native_device().unwrap();
-                let clip_atlas_textures: [manifold_gpu::GpuTexture;
-                    crate::shared_texture::SURFACE_COUNT] =
-                    std::array::from_fn(|i| unsafe { bridge.import_texture_native(native_dev, i) });
-                content_pipeline.set_clip_atlas_textures(clip_atlas_textures, Arc::clone(bridge));
+                let clip_atlas_tex = unsafe { surface.import_texture_native(native_dev) };
+                let mut clear_enc = native_dev.create_encoder("Clip Atlas Init Clear");
+                clear_enc.clear_texture(&clip_atlas_tex, 0.0, 0.0, 0.0, 0.0);
+                clear_enc.commit_and_wait_completed();
+                content_pipeline.set_clip_atlas_texture(clip_atlas_tex, Arc::clone(surface));
             }
             self.content_pipeline_output = Some(content_pipeline.shared_output());
 

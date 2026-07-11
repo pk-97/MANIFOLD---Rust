@@ -73,23 +73,23 @@ fn bug035_clip_atlas_persist_drives_900_frames() {
     rebind_gpu_device_pointers(&mut ct);
 
     // `journey_proof`'s headless construction deliberately skips every
-    // IOSurface bridge (export never reads them) — but the clip-atlas
+    // IOSurface bridge/surface (export never reads them) — but the clip-atlas
     // *persist* path this test targets lives entirely downstream of
-    // `fill_clip_atlas`'s `write_tex` param, which is
-    // `self.clip_atlas_textures[write_idx]` and stays `None` (capture is a
-    // no-op) until `set_clip_atlas_textures` installs it. Wire up the same
-    // bridge `app.rs`'s `resumed()` builds (~app.rs:2083-2096), just without
-    // a window behind it — IOSurface is a kernel GPU-memory object, not a
-    // display resource.
-    let clip_atlas_bridge = std::sync::Arc::new(crate::shared_texture::SharedTextureBridge::new(
+    // `fill_clip_atlas`'s `persistent` param, which is
+    // `self.clip_atlas_persistent` and stays `None` (capture is a no-op)
+    // until `set_clip_atlas_texture` installs it. Wire up the same single
+    // shared surface `app.rs`'s `resumed()` builds (~app.rs:2080-2093,
+    // ~2192-2200; BUG-119 replaced the old triple-buffer bridge here), just
+    // without a window behind it — IOSurface is a kernel GPU-memory object,
+    // not a display resource.
+    let clip_atlas_surface = std::sync::Arc::new(crate::shared_texture::SharedAtlasSurface::new(
         crate::content_pipeline::CLIP_ATLAS_W,
         crate::content_pipeline::CLIP_ATLAS_H,
     ));
     let native_dev = ct.content_pipeline.native_device().expect("native device was just set");
-    let clip_atlas_textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT] =
-        std::array::from_fn(|i| unsafe { clip_atlas_bridge.import_texture_native(native_dev, i) });
+    let clip_atlas_tex = unsafe { clip_atlas_surface.import_texture_native(native_dev) };
     ct.content_pipeline
-        .set_clip_atlas_textures(clip_atlas_textures, std::sync::Arc::clone(&clip_atlas_bridge));
+        .set_clip_atlas_texture(clip_atlas_tex, std::sync::Arc::clone(&clip_atlas_surface));
 
     // Clip-atlas visibility is normally driven by the UI thread (the
     // clip-atlas panel reporting which cells are on-screen); this harness

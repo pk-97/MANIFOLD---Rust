@@ -57,12 +57,49 @@ const BPP: u32 = 8;
 /// FourCC for kCVPixelFormatType_64RGBAHalf ('RGhA').
 const PIXEL_FORMAT_RGBA16_FLOAT: i32 = 0x52476841u32 as i32;
 
+/// Create an IOSurface for Rgba16Float at the given dimensions (kernel-managed
+/// GPU memory). Shared by [`SharedTextureBridge`]'s triple buffer and
+/// [`SharedAtlasSurface`]'s single surface — same pixel format, same stride
+/// alignment requirement, just a different number of them.
+fn create_rgba16f_io_surface(width: u32, height: u32) -> io_surface::IOSurface {
+    // Align bytes_per_row to 256 bytes — Metal validation rejects IOSurface-backed
+    // textures whose stride doesn't meet the GPU's minimum linear texture alignment.
+    let bytes_per_row = (width * BPP + 255) & !255;
+    let total_bytes = bytes_per_row * height;
+
+    let mut props = CFMutableDictionary::new();
+
+    unsafe {
+        let key_width = CFString::wrap_under_get_rule(io_surface::kIOSurfaceWidth);
+        let key_height = CFString::wrap_under_get_rule(io_surface::kIOSurfaceHeight);
+        let key_bytes_per_row = CFString::wrap_under_get_rule(io_surface::kIOSurfaceBytesPerRow);
+        let key_bytes_per_elem =
+            CFString::wrap_under_get_rule(io_surface::kIOSurfaceBytesPerElement);
+        let key_pixel_format = CFString::wrap_under_get_rule(io_surface::kIOSurfacePixelFormat);
+        let key_alloc_size = CFString::wrap_under_get_rule(io_surface::kIOSurfaceAllocSize);
+
+        props.set(key_width, CFNumber::from(width as i64));
+        props.set(key_height, CFNumber::from(height as i64));
+        props.set(key_bytes_per_row, CFNumber::from(bytes_per_row as i64));
+        props.set(key_bytes_per_elem, CFNumber::from(BPP as i64));
+        props.set(
+            key_pixel_format,
+            CFNumber::from(PIXEL_FORMAT_RGBA16_FLOAT as i64),
+        );
+        props.set(key_alloc_size, CFNumber::from(total_bytes as i64));
+
+        let surface_ref = io_surface::IOSurfaceCreate(props.as_concrete_TypeRef() as *mut _);
+        assert!(!surface_ref.is_null(), "IOSurfaceCreate failed");
+        TCFType::wrap_under_create_rule(surface_ref)
+    }
+}
+
 impl SharedTextureBridge {
     /// Create a new triple-buffered IOSurface bridge at the given dimensions.
     pub fn new(width: u32, height: u32) -> Self {
-        let surface_a = Self::create_io_surface(width, height);
-        let surface_b = Self::create_io_surface(width, height);
-        let surface_c = Self::create_io_surface(width, height);
+        let surface_a = create_rgba16f_io_surface(width, height);
+        let surface_b = create_rgba16f_io_surface(width, height);
+        let surface_c = create_rgba16f_io_surface(width, height);
 
         log::info!(
             "[SharedTextureBridge] created {}x IOSurface {}x{} Rgba16Float ({} bytes each)",
@@ -78,41 +115,6 @@ impl SharedTextureBridge {
             height: AtomicU32::new(height),
             front_index: AtomicU32::new(0),
             generation: AtomicU64::new(0),
-        }
-    }
-
-    /// Create an IOSurface for Rgba16Float at the given dimensions.
-    fn create_io_surface(width: u32, height: u32) -> io_surface::IOSurface {
-        // Align bytes_per_row to 256 bytes — Metal validation rejects IOSurface-backed
-        // textures whose stride doesn't meet the GPU's minimum linear texture alignment.
-        let bytes_per_row = (width * BPP + 255) & !255;
-        let total_bytes = bytes_per_row * height;
-
-        let mut props = CFMutableDictionary::new();
-
-        unsafe {
-            let key_width = CFString::wrap_under_get_rule(io_surface::kIOSurfaceWidth);
-            let key_height = CFString::wrap_under_get_rule(io_surface::kIOSurfaceHeight);
-            let key_bytes_per_row =
-                CFString::wrap_under_get_rule(io_surface::kIOSurfaceBytesPerRow);
-            let key_bytes_per_elem =
-                CFString::wrap_under_get_rule(io_surface::kIOSurfaceBytesPerElement);
-            let key_pixel_format = CFString::wrap_under_get_rule(io_surface::kIOSurfacePixelFormat);
-            let key_alloc_size = CFString::wrap_under_get_rule(io_surface::kIOSurfaceAllocSize);
-
-            props.set(key_width, CFNumber::from(width as i64));
-            props.set(key_height, CFNumber::from(height as i64));
-            props.set(key_bytes_per_row, CFNumber::from(bytes_per_row as i64));
-            props.set(key_bytes_per_elem, CFNumber::from(BPP as i64));
-            props.set(
-                key_pixel_format,
-                CFNumber::from(PIXEL_FORMAT_RGBA16_FLOAT as i64),
-            );
-            props.set(key_alloc_size, CFNumber::from(total_bytes as i64));
-
-            let surface_ref = io_surface::IOSurfaceCreate(props.as_concrete_TypeRef() as *mut _);
-            assert!(!surface_ref.is_null(), "IOSurfaceCreate failed");
-            TCFType::wrap_under_create_rule(surface_ref)
         }
     }
 
@@ -158,9 +160,9 @@ impl SharedTextureBridge {
     /// Both devices must re-import their textures after this call
     /// (detected via generation counter).
     pub fn resize(&self, width: u32, height: u32) {
-        let surface_a = Self::create_io_surface(width, height);
-        let surface_b = Self::create_io_surface(width, height);
-        let surface_c = Self::create_io_surface(width, height);
+        let surface_a = create_rgba16f_io_surface(width, height);
+        let surface_b = create_rgba16f_io_surface(width, height);
+        let surface_c = create_rgba16f_io_surface(width, height);
         {
             let mut guard = self.io_surfaces.write();
             // Update dimensions while holding the write lock so that
@@ -217,5 +219,68 @@ impl SharedTextureBridge {
     pub fn raw_io_surface(&self, index: usize) -> *const std::ffi::c_void {
         let guard = self.io_surfaces.read();
         guard[index].as_concrete_TypeRef() as *const std::ffi::c_void
+    }
+}
+
+/// A single IOSurface shared verbatim by both threads — content thread blits
+/// into it, UI thread samples it directly. No rotation, no `front_index`, no
+/// publish step: the surface itself IS the published state at every instant.
+///
+/// Built for the clip-thumbnail atlas (BUG-119 root fix), which replaced a
+/// [`SharedTextureBridge`] triple buffer here: the atlas is persistent,
+/// slowly-changing data (cells only ever grow or get re-painted in place), so
+/// there is no "stale frame" problem for a ring to solve — and the ring's
+/// periodic full-surface publish copy (`clear=true`) was itself the bug, since
+/// it could clear the surface the UI thread was concurrently sampling.
+///
+/// Fixed dimensions for its lifetime — the callers that use this (constant
+/// atlas geometry, never resized) each import exactly one `GpuTexture` per
+/// side at startup, unlike `SharedTextureBridge`'s per-resize re-import dance.
+pub struct SharedAtlasSurface {
+    io_surface: io_surface::IOSurface,
+    width: u32,
+    height: u32,
+}
+
+// SAFETY: IOSurface is a kernel-managed object safe to share across threads.
+unsafe impl Send for SharedAtlasSurface {}
+unsafe impl Sync for SharedAtlasSurface {}
+
+impl SharedAtlasSurface {
+    /// Create a new single-surface bridge at the given dimensions.
+    pub fn new(width: u32, height: u32) -> Self {
+        let io_surface = create_rgba16f_io_surface(width, height);
+        log::info!(
+            "[SharedAtlasSurface] created single IOSurface {}x{} Rgba16Float ({} bytes)",
+            width,
+            height,
+            width * height * BPP,
+        );
+        Self {
+            io_surface,
+            width,
+            height,
+        }
+    }
+
+    /// Create a `GpuTexture` backed by this IOSurface.
+    ///
+    /// # Safety
+    /// The returned GpuTexture is backed by the IOSurface — caller must ensure
+    /// `self` outlives the texture.
+    pub unsafe fn import_texture_native(
+        &self,
+        device: &manifold_gpu::GpuDevice,
+    ) -> manifold_gpu::GpuTexture {
+        unsafe {
+            let io_surface_ref = self.io_surface.as_concrete_TypeRef() as *const std::ffi::c_void;
+            device.create_texture_from_io_surface(
+                io_surface_ref,
+                self.width,
+                self.height,
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
+                manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+            )
+        }
     }
 }

@@ -112,7 +112,7 @@
 //!    owns (clip thumbnails, the VQT waterfall) are mac-only in the live
 //!    app today. The mac-only-ness lives entirely in WHICH
 //!    `Application` fields exist to resolve `inputs.thumb`/`inputs.vqt`
-//!    (`clip_atlas_texture_bridge`, `spectrogram_pane`, etc., all
+//!    (`clip_atlas_surface`, `spectrogram_pane`, etc., all
 //!    `#[cfg(target_os = "macos")]` on `Application` — see `app.rs`) — the
 //!    seam only ever sees `Option<ThumbPass>`/`Option<&mut VqtPassState>`,
 //!    already `None` on a non-mac build via the caller's own
