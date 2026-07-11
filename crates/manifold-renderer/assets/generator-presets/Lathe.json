@@ -1,0 +1,223 @@
+{
+  "version": 2,
+  "name": "Lathe",
+  "description": "MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN P3 demo — node.revolve_curve seam render. A wavy vase profile (node.range -> node.array_math sine wobble -> node.combine_xy) is revolved a full sweep (node.revolve_curve, sweep=2*pi, the default) and triangulated (node.make_triangles). At sweep=2*pi the seam column's positions coincide exactly with column 0, so the seam is a lighting-continuity check: the finite-difference normals node.make_triangles computes must agree across the seam with no visible crack, because the seam vertices share position AND the grid wraps cleanly (D5's seam-duplication contract).",
+  "presetMetadata": {
+    "id": "Lathe",
+    "displayName": "Lathe",
+    "category": "Geometry",
+    "oscPrefix": "lathe",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "sweep",
+        "name": "Sweep",
+        "min": 0.0,
+        "max": 12.566371,
+        "defaultValue": 6.2831855,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "orbit",
+        "name": "Orbit",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "sweep",
+        "label": "Sweep",
+        "defaultValue": 6.2831855,
+        "target": {
+          "kind": "node",
+          "nodeId": "revolve",
+          "param": "sweep"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "orbit",
+        "label": "Orbit",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "cam",
+          "param": "orbit"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "never"
+    }
+  },
+  "nodes": [
+    { "id": 0, "typeId": "system.generator_input", "nodeId": "input", "handle": "input" },
+    {
+      "id": 1,
+      "typeId": "node.range",
+      "nodeId": "height",
+      "handle": "height",
+      "title": "Height",
+      "params": {
+        "start": { "type": "Float", "value": -1.0 },
+        "end": { "type": "Float", "value": 1.0 },
+        "max_capacity": { "type": "Int", "value": 8 },
+        "end_inclusive": { "type": "Bool", "value": true }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "node.array_math",
+      "nodeId": "wobble_phase",
+      "handle": "wobble_phase",
+      "title": "Wobble Phase",
+      "params": {
+        "op": { "type": "Enum", "value": 6 },
+        "scale": { "type": "Float", "value": 3.0 },
+        "offset": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 3,
+      "typeId": "node.array_math",
+      "nodeId": "wobble_sin",
+      "handle": "wobble_sin",
+      "title": "Wobble Sine",
+      "params": {
+        "op": { "type": "Enum", "value": 11 }
+      }
+    },
+    {
+      "id": 4,
+      "typeId": "node.array_math",
+      "nodeId": "radius",
+      "handle": "radius",
+      "title": "Radius",
+      "params": {
+        "op": { "type": "Enum", "value": 6 },
+        "scale": { "type": "Float", "value": 0.15 },
+        "offset": { "type": "Float", "value": 0.45 }
+      }
+    },
+    {
+      "id": 5,
+      "typeId": "node.combine_xy",
+      "nodeId": "profile",
+      "handle": "profile",
+      "title": "Profile",
+      "params": {
+        "scale": { "type": "Float", "value": 4.0 }
+      }
+    },
+    {
+      "id": 6,
+      "typeId": "node.revolve_curve",
+      "nodeId": "revolve",
+      "handle": "revolve",
+      "title": "Revolve",
+      "params": {
+        "segments": { "type": "Int", "value": 48 },
+        "sweep": { "type": "Float", "value": 6.2831855 }
+      }
+    },
+    {
+      "id": 7,
+      "typeId": "node.make_triangles",
+      "nodeId": "tris",
+      "handle": "tris",
+      "title": "Triangulate",
+      "params": {
+        "src_cols": { "type": "Int", "value": 49 },
+        "src_rows": { "type": "Int", "value": 8 }
+      }
+    },
+    {
+      "id": 8,
+      "typeId": "node.orbit_camera",
+      "nodeId": "cam",
+      "handle": "cam",
+      "title": "Camera",
+      "params": {
+        "orbit": { "type": "Float", "value": 0.5 },
+        "tilt": { "type": "Float", "value": 0.35 },
+        "distance": { "type": "Float", "value": 3.0 },
+        "fov_y": { "type": "Float", "value": 0.8 }
+      }
+    },
+    {
+      "id": 9,
+      "typeId": "node.phong_material",
+      "nodeId": "mat",
+      "handle": "mat",
+      "title": "Material",
+      "params": {
+        "color_r": { "type": "Float", "value": 0.85 },
+        "color_g": { "type": "Float", "value": 0.75 },
+        "color_b": { "type": "Float", "value": 0.55 },
+        "ambient": { "type": "Float", "value": 0.12 }
+      }
+    },
+    {
+      "id": 10,
+      "typeId": "node.light",
+      "nodeId": "key_light",
+      "handle": "key_light",
+      "title": "Key Light",
+      "params": {
+        "mode": { "type": "Enum", "value": 0 },
+        "pos_x": { "type": "Float", "value": 2.0 },
+        "pos_y": { "type": "Float", "value": 3.0 },
+        "pos_z": { "type": "Float", "value": 2.0 },
+        "aim_x": { "type": "Float", "value": 0.0 },
+        "aim_y": { "type": "Float", "value": 0.0 },
+        "aim_z": { "type": "Float", "value": 0.0 },
+        "color_r": { "type": "Float", "value": 1.0 },
+        "color_g": { "type": "Float", "value": 1.0 },
+        "color_b": { "type": "Float", "value": 1.0 },
+        "intensity": { "type": "Float", "value": 1.0 },
+        "cast_shadows": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 20,
+      "typeId": "node.render_scene",
+      "nodeId": "scene",
+      "handle": "scene",
+      "title": "Render Scene",
+      "params": {
+        "objects": { "type": "Int", "value": 1 },
+        "lights": { "type": "Int", "value": 1 }
+      }
+    },
+    { "id": 99, "typeId": "system.final_output", "nodeId": "out", "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "a" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "a" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "a" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "x" },
+    { "fromNode": 1, "fromPort": "out", "toNode": 5, "toPort": "y" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "profile" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 20, "toPort": "camera" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 20, "toPort": "material_0" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 20, "toPort": "light_0" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 20, "toPort": "mesh_0" },
+    { "fromNode": 20, "fromPort": "color", "toNode": 99, "toPort": "in" }
+  ]
+}

@@ -1,0 +1,304 @@
+{
+  "version": 2,
+  "name": "Vine",
+  "description": "MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN P3 demo — node.tube_from_path growing along a climbing spiral. A circular path (node.range angle -> cos/sin via node.array_math -> node.combine_xy) plus a linear lift (node.range) builds a helical centerline — a vine wrapping a pole. node.tube_from_path sweeps a tube around it; `radius_scale` is a per-point growth-front ramp (node.range fraction -> node.array_math threshold against the grow_phase outer param) so the tube's radius collapses to 0 past the front instead of the whole vine popping in at once — sweeping grow_phase 0 to 1 visibly grows the vine from base to tip. node.make_triangles gives it topology + normals, then node.twist_mesh adds a slight secondary spiral along its own climb for texture. A beat ramp on grow_phase = the vine grows over bars on stage.",
+  "presetMetadata": {
+    "id": "Vine",
+    "displayName": "Vine",
+    "category": "Geometry",
+    "oscPrefix": "vine",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "grow_phase",
+        "name": "Grow Phase",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.3,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "orbit",
+        "name": "Orbit",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "grow_phase",
+        "label": "Grow Phase",
+        "defaultValue": 0.3,
+        "target": {
+          "kind": "node",
+          "nodeId": "grow_scalar",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "orbit",
+        "label": "Orbit",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "cam",
+          "param": "orbit"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "never"
+    }
+  },
+  "nodes": [
+    { "id": 0, "typeId": "system.generator_input", "nodeId": "input", "handle": "input" },
+    {
+      "id": 1,
+      "typeId": "node.range",
+      "nodeId": "angle",
+      "handle": "angle",
+      "title": "Angle",
+      "params": {
+        "start": { "type": "Float", "value": 0.0 },
+        "end": { "type": "Float", "value": 12.566371 },
+        "max_capacity": { "type": "Int", "value": 48 },
+        "end_inclusive": { "type": "Bool", "value": true }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "node.array_math",
+      "nodeId": "cos_angle",
+      "handle": "cos_angle",
+      "title": "Cos Angle",
+      "params": { "op": { "type": "Enum", "value": 12 } }
+    },
+    {
+      "id": 3,
+      "typeId": "node.array_math",
+      "nodeId": "sin_angle",
+      "handle": "sin_angle",
+      "title": "Sin Angle",
+      "params": { "op": { "type": "Enum", "value": 11 } }
+    },
+    {
+      "id": 4,
+      "typeId": "node.array_math",
+      "nodeId": "path_x",
+      "handle": "path_x",
+      "title": "Path X",
+      "params": {
+        "op": { "type": "Enum", "value": 6 },
+        "scale": { "type": "Float", "value": 0.5 },
+        "offset": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 5,
+      "typeId": "node.array_math",
+      "nodeId": "path_z",
+      "handle": "path_z",
+      "title": "Path Z",
+      "params": {
+        "op": { "type": "Enum", "value": 6 },
+        "scale": { "type": "Float", "value": 0.5 },
+        "offset": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 6,
+      "typeId": "node.combine_xy",
+      "nodeId": "path",
+      "handle": "path",
+      "title": "Path",
+      "params": { "scale": { "type": "Float", "value": 4.0 } }
+    },
+    {
+      "id": 7,
+      "typeId": "node.range",
+      "nodeId": "lift",
+      "handle": "lift",
+      "title": "Lift",
+      "params": {
+        "start": { "type": "Float", "value": 0.0 },
+        "end": { "type": "Float", "value": 2.0 },
+        "max_capacity": { "type": "Int", "value": 48 },
+        "end_inclusive": { "type": "Bool", "value": true }
+      }
+    },
+    {
+      "id": 8,
+      "typeId": "node.range",
+      "nodeId": "grow_t",
+      "handle": "grow_t",
+      "title": "Grow Fraction",
+      "params": {
+        "start": { "type": "Float", "value": 0.0 },
+        "end": { "type": "Float", "value": 1.0 },
+        "max_capacity": { "type": "Int", "value": 48 },
+        "end_inclusive": { "type": "Bool", "value": true }
+      }
+    },
+    {
+      "id": 9,
+      "typeId": "node.math",
+      "nodeId": "grow_scalar",
+      "handle": "grow_scalar",
+      "title": "Grow Front Position",
+      "params": {
+        "a": { "type": "Float", "value": 0.3 },
+        "b": { "type": "Float", "value": 24.0 },
+        "op": { "type": "Enum", "value": 2 }
+      }
+    },
+    {
+      "id": 10,
+      "typeId": "node.array_math",
+      "nodeId": "grow_front_raw",
+      "handle": "grow_front_raw",
+      "title": "Grow Front Raw",
+      "params": {
+        "op": { "type": "Enum", "value": 6 },
+        "scale": { "type": "Float", "value": -24.0 },
+        "offset": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 11,
+      "typeId": "node.array_math",
+      "nodeId": "radius_scale",
+      "handle": "radius_scale",
+      "title": "Radius Scale",
+      "params": { "op": { "type": "Enum", "value": 9 } }
+    },
+    {
+      "id": 12,
+      "typeId": "node.tube_from_path",
+      "nodeId": "tube",
+      "handle": "tube",
+      "title": "Tube",
+      "params": {
+        "radius": { "type": "Float", "value": 0.12 },
+        "sides": { "type": "Int", "value": 8 }
+      }
+    },
+    {
+      "id": 13,
+      "typeId": "node.make_triangles",
+      "nodeId": "tris",
+      "handle": "tris",
+      "title": "Triangulate",
+      "params": {
+        "src_cols": { "type": "Int", "value": 9 },
+        "src_rows": { "type": "Int", "value": 48 }
+      }
+    },
+    {
+      "id": 14,
+      "typeId": "node.twist_mesh",
+      "nodeId": "twist",
+      "handle": "twist",
+      "title": "Twist",
+      "params": {
+        "axis": { "type": "Enum", "value": 1 },
+        "angle": { "type": "Float", "value": 0.6 },
+        "center": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 15,
+      "typeId": "node.orbit_camera",
+      "nodeId": "cam",
+      "handle": "cam",
+      "title": "Camera",
+      "params": {
+        "orbit": { "type": "Float", "value": 0.5 },
+        "tilt": { "type": "Float", "value": 0.15 },
+        "distance": { "type": "Float", "value": 7.0 },
+        "fov_y": { "type": "Float", "value": 0.8 }
+      }
+    },
+    {
+      "id": 16,
+      "typeId": "node.phong_material",
+      "nodeId": "mat",
+      "handle": "mat",
+      "title": "Material",
+      "params": {
+        "color_r": { "type": "Float", "value": 0.25 },
+        "color_g": { "type": "Float", "value": 0.65 },
+        "color_b": { "type": "Float", "value": 0.2 },
+        "ambient": { "type": "Float", "value": 0.15 }
+      }
+    },
+    {
+      "id": 17,
+      "typeId": "node.light",
+      "nodeId": "key_light",
+      "handle": "key_light",
+      "title": "Key Light",
+      "params": {
+        "mode": { "type": "Enum", "value": 0 },
+        "pos_x": { "type": "Float", "value": 2.0 },
+        "pos_y": { "type": "Float", "value": 4.0 },
+        "pos_z": { "type": "Float", "value": 2.0 },
+        "aim_x": { "type": "Float", "value": 0.0 },
+        "aim_y": { "type": "Float", "value": 1.0 },
+        "aim_z": { "type": "Float", "value": 0.0 },
+        "color_r": { "type": "Float", "value": 1.0 },
+        "color_g": { "type": "Float", "value": 1.0 },
+        "color_b": { "type": "Float", "value": 1.0 },
+        "intensity": { "type": "Float", "value": 1.0 },
+        "cast_shadows": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 20,
+      "typeId": "node.render_scene",
+      "nodeId": "scene",
+      "handle": "scene",
+      "title": "Render Scene",
+      "params": {
+        "objects": { "type": "Int", "value": 1 },
+        "lights": { "type": "Int", "value": 1 }
+      }
+    },
+    { "id": 99, "typeId": "system.final_output", "nodeId": "out", "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "a" },
+    { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "a" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "a" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "a" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 6, "toPort": "x" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "y" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 12, "toPort": "path" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 12, "toPort": "lift" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "offset" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 10, "toPort": "a" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "a" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "radius_scale" },
+    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "in" },
+    { "fromNode": 13, "fromPort": "out", "toNode": 14, "toPort": "in" },
+    { "fromNode": 15, "fromPort": "out", "toNode": 20, "toPort": "camera" },
+    { "fromNode": 16, "fromPort": "out", "toNode": 20, "toPort": "material_0" },
+    { "fromNode": 17, "fromPort": "out", "toNode": 20, "toPort": "light_0" },
+    { "fromNode": 14, "fromPort": "out", "toNode": 20, "toPort": "mesh_0" },
+    { "fromNode": 20, "fromPort": "color", "toNode": 99, "toPort": "in" }
+  ]
+}
