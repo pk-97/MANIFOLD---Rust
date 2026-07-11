@@ -192,6 +192,21 @@ impl GraphCanvas {
         Some(Rect::new(nx, row_top, sw, row_h))
     }
 
+    /// Screen-space x where a numeric param row's slider TRACK zone begins —
+    /// i.e. past the right-aligned label cell. Mirrors the exact geometry
+    /// `render.rs`'s `NodeRow::Param` branch feeds `BitmapSlider::draw`
+    /// (`slider_x = sx + PARAM_LABEL_X * zoom`, then `label_width =
+    /// PARAM_SLIDER_LABEL_W * zoom`), so the right-click reset hit-zone
+    /// (BUG-105) can't drift from the drawn label/track boundary. Same for
+    /// every row on a node (the offset is node-relative, not per-row), so
+    /// this only needs `node_id`. `None` for a missing node.
+    pub(crate) fn param_slider_track_x(&self, viewport: Rect, node_id: u32) -> Option<f32> {
+        let node = self.find_node(node_id)?;
+        let (nx, _ny) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
+        let slider_x = nx + PARAM_LABEL_X * self.zoom;
+        Some(slider_x + PARAM_SLIDER_LABEL_W * self.zoom)
+    }
+
     /// Screen-space rect of a node's header "reveal sockets" chip — the small
     /// "+N" (hidden) / "−" (revealed) toggle at the header's right edge that
     /// shows / hides the node's unused sockets. `None` for a collapsed node or one

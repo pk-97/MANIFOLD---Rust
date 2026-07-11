@@ -90,17 +90,30 @@ pub struct RasterizedText {
     pub rendered_font_px: f32,
 }
 
-/// One shaped line: glyph ids, their in-line positions, and the line width.
-struct LineMeasure {
+/// One CoreText glyph run: a contiguous span of glyph ids that all share the
+/// same resolved font. A line is usually one run, but CoreText splits a
+/// second run whenever it falls back to a different font for a character the
+/// requested `ct_font` doesn't cover (e.g. a symbol outside Inter's
+/// coverage) — `font` here is THAT run's own resolved font, not the line's,
+/// so drawing stays correct across the split (BUG-107: drawing every run
+/// with one shared base font maps a fallback run's glyph ids onto arbitrary
+/// glyphs in the base font — mojibake).
+struct GlyphRun {
+    font: CTFont,
     glyphs: Vec<u16>,
     positions: Vec<CGPoint>,
+}
+
+/// One shaped line: its glyph runs (see [`GlyphRun`]) and the line width.
+struct LineMeasure {
+    runs: Vec<GlyphRun>,
     width: f32,
 }
 
-/// Output of shaping a whole string at one font size: the resolved font, the
-/// per-line glyph runs, and the metrics needed to size and place the bitmap.
+/// Output of shaping a whole string at one font size: the per-line glyph
+/// runs (each carrying its own resolved font, BUG-107) and the metrics
+/// needed to size and place the bitmap.
 struct ShapeResult {
-    ct_font: CTFont,
     line_measures: Vec<LineMeasure>,
     max_width: f32,
     ascent: f32,
@@ -236,12 +249,13 @@ impl TextRasterizer {
         }
 
         // Local handles so the render_pass closure below reads exactly as it
-        // did before — only their source (the ShapeResult) changed.
+        // did before — only their source (the ShapeResult) changed. `ct_font`
+        // itself is no longer read here: each run now draws with its OWN
+        // resolved font (BUG-107) rather than this shared line-level font.
         let line_measures = &shaped.line_measures;
         let max_width = shaped.max_width;
         let ascent = shaped.ascent;
         let line_height = shaped.line_height;
-        let ct_font = &shaped.ct_font;
 
         let w = bitmap_w as usize;
         let h = bitmap_h as usize;
@@ -280,7 +294,7 @@ impl TextRasterizer {
 
             // CG is y-up: line 0 (top visually) has the highest CG y.
             for (line_idx, measure) in line_measures.iter().enumerate() {
-                if measure.glyphs.is_empty() {
+                if measure.runs.is_empty() {
                     continue;
                 }
 
@@ -298,13 +312,18 @@ impl TextRasterizer {
                 let baseline_y =
                     (bitmap_h as f32 - pad as f32 - ascent - line_idx as f32 * line_height) as f64;
 
-                let draw_positions: Vec<CGPoint> = measure
-                    .positions
-                    .iter()
-                    .map(|p| CGPoint::new(p.x + origin_x, p.y + baseline_y))
-                    .collect();
-
-                ct_font.draw_glyphs(&measure.glyphs, &draw_positions, ctx.clone());
+                // Draw each run with its OWN resolved font (BUG-107) — a run
+                // whose font differs from the line-level `ct_font` is a
+                // CoreText fallback split, and its glyph ids only resolve
+                // correctly against that run's own font.
+                for run in &measure.runs {
+                    let draw_positions: Vec<CGPoint> = run
+                        .positions
+                        .iter()
+                        .map(|p| CGPoint::new(p.x + origin_x, p.y + baseline_y))
+                        .collect();
+                    run.font.draw_glyphs(&run.glyphs, &draw_positions, ctx.clone());
+                }
             }
 
             buf
@@ -369,41 +388,44 @@ impl TextRasterizer {
             let line_text = line_text.trim_end();
             if line_text.is_empty() {
                 line_measures.push(LineMeasure {
-                    glyphs: Vec::new(),
-                    positions: Vec::new(),
+                    runs: Vec::new(),
                     width: 0.0,
                 });
                 continue;
             }
 
-            if let Some((glyphs, mut positions)) = self.shape_line(&ct_font, line_text) {
-                // Apply letter spacing: shift each glyph by index * spacing
+            if let Some(mut runs) = self.shape_line(&ct_font, line_text) {
+                // Apply letter spacing: shift each glyph by its position in
+                // the WHOLE line (not per-run) — a fallback-font run midway
+                // through the line still spaces continuously with its
+                // neighbours.
+                let mut glyph_count = 0usize;
                 if letter_spacing_px.abs() > 0.001 {
-                    for (i, pos) in positions.iter_mut().enumerate() {
-                        pos.x += i as f64 * letter_spacing_px as f64;
+                    for run in runs.iter_mut() {
+                        for pos in run.positions.iter_mut() {
+                            pos.x += glyph_count as f64 * letter_spacing_px as f64;
+                            glyph_count += 1;
+                        }
                     }
+                } else {
+                    glyph_count = runs.iter().map(|r| r.glyphs.len()).sum();
                 }
                 // Compute line width from last glyph position + font metrics
                 let ct_line = self.make_ct_line(&ct_font, line_text);
                 let bounds = ct_line.get_typographic_bounds();
                 let w = bounds.width as f32
-                    + (glyphs.len().saturating_sub(1)) as f32 * letter_spacing_px;
+                    + (glyph_count.saturating_sub(1)) as f32 * letter_spacing_px;
                 max_width = max_width.max(w);
-                line_measures.push(LineMeasure {
-                    glyphs,
-                    positions,
-                    width: w,
-                });
+                line_measures.push(LineMeasure { runs, width: w });
             } else {
                 line_measures.push(LineMeasure {
-                    glyphs: Vec::new(),
-                    positions: Vec::new(),
+                    runs: Vec::new(),
                     width: 0.0,
                 });
             }
         }
 
-        if line_measures.iter().all(|m| m.glyphs.is_empty()) {
+        if line_measures.iter().all(|m| m.runs.is_empty()) {
             return None;
         }
 
@@ -413,7 +435,6 @@ impl TextRasterizer {
         let content_h = base_line_height + (lines.len().saturating_sub(1)) as f32 * line_height;
 
         Some(ShapeResult {
-            ct_font,
             line_measures,
             max_width,
             ascent,
@@ -460,30 +481,45 @@ impl TextRasterizer {
         core_text::line::CTLine::new_with_attributed_string(attr_str.as_concrete_TypeRef())
     }
 
-    /// Shape text into (glyph_ids, positions_in_line).
-    fn shape_line(&self, ct_font: &CTFont, text: &str) -> Option<(Vec<u16>, Vec<CGPoint>)> {
+    /// Shape text into its CoreText glyph runs (BUG-107: kept as separate
+    /// runs, never flattened into one glyph-id list, because each run may
+    /// carry its OWN resolved font — CoreText splits a run whenever it falls
+    /// back from `ct_font` to cover a character `ct_font` lacks, and that
+    /// run's glyph ids only resolve correctly against ITS font).
+    fn shape_line(&self, ct_font: &CTFont, text: &str) -> Option<Vec<GlyphRun>> {
         let line = self.make_ct_line(ct_font, text);
         let runs = line.glyph_runs();
 
-        let mut glyph_ids: Vec<u16> = Vec::new();
-        let mut positions: Vec<CGPoint> = Vec::new();
-
+        let mut result: Vec<GlyphRun> = Vec::new();
         for run in runs.iter() {
             let count = run.glyph_count() as usize;
             if count == 0 {
                 continue;
             }
-            let run_glyphs = run.glyphs();
-            let run_positions = run.positions();
-            glyph_ids.extend_from_slice(&run_glyphs);
-            positions.extend_from_slice(&run_positions);
+            // The font CoreText actually shaped this run with — `kCTFontAttributeName`
+            // on the run's own attribute dictionary, which differs from `ct_font`
+            // exactly when this run is a fallback split. Falls back to `ct_font`
+            // itself if the attribute is somehow absent, so a run always has a
+            // font to draw with.
+            let run_font: CTFont = run
+                .attributes()
+                .and_then(|attrs| {
+                    // Safety: kCTFontAttributeName is a valid CoreText dictionary
+                    // key (a static CFStringRef); `find` only reads it.
+                    let key = unsafe { kCTFontAttributeName };
+                    attrs.find(key).and_then(|v| v.downcast::<CTFont>())
+                })
+                .unwrap_or_else(|| ct_font.clone());
+            let run_glyphs = run.glyphs().into_owned();
+            let run_positions = run.positions().into_owned();
+            result.push(GlyphRun {
+                font: run_font,
+                glyphs: run_glyphs,
+                positions: run_positions,
+            });
         }
 
-        if glyph_ids.is_empty() {
-            None
-        } else {
-            Some((glyph_ids, positions))
-        }
+        if result.is_empty() { None } else { Some(result) }
     }
 }
 

@@ -304,13 +304,47 @@ impl GraphCanvas {
     /// for clicks that miss every param row (the app then leaves the
     /// canvas alone). A right-click anywhere first dismisses an open
     /// popover.
+    ///
+    /// BUG-105: mirrors the card slider's own hit-zone split — a right-click
+    /// on a numeric ranged param row's TRACK zone (right of the label cell,
+    /// same boundary `param_slider_track_x` mirrors from the `render.rs`
+    /// draw call) resets that param to its default in place, exactly like
+    /// every card/panel slider (`chrome/diff.rs`'s `Gesture::RightClick ->
+    /// SliderReset`, which this immediate-mode surface never reaches). The
+    /// LABEL zone is unaffected and keeps falling through to the
+    /// mapping-popover path below. Wire-driven rows are skipped — read-only,
+    /// same guard the scrub uses.
     pub fn on_right_button_down(&mut self, viewport: Rect, sx: f32, sy: f32) -> Option<(u32, usize)> {
         // A right-click outside the open popover dismisses it (and is
         // otherwise treated as a fresh hit-test).
         if self.mapping_popover.is_open() && !self.mapping_popover.contains_point(sx, sy) {
             self.mapping_popover.close();
         }
-        self.param_row_under(viewport, sx, sy)
+        let hit = self.param_row_under(viewport, sx, sy)?;
+        let (node_id, pi) = hit;
+        if let Some(track_x) = self.param_slider_track_x(viewport, node_id)
+            && sx >= track_x
+            && let Some(p) = self.find_node(node_id).and_then(|n| n.params.get(pi).cloned())
+            && p.scrub.is_some()
+            && !p.wire_driven
+        {
+            if let Some(outer_param_id) = p.outer_param_id {
+                self.pending_actions.push(GraphEditCommand::SetOuterParam {
+                    outer_param_id,
+                    new_value: p.default_value,
+                });
+            } else {
+                self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
+                    node_id,
+                    param_name: p.name,
+                    new_value: crate::SerializedParamValue::Float {
+                        value: p.default_value,
+                    },
+                });
+            }
+            return None;
+        }
+        Some(hit)
     }
 
     /// Open the mapping popover for a resolved binding, anchored on its

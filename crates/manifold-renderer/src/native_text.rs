@@ -94,13 +94,28 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
 // ─── GlyphKey ────────────────────────────────────────────────────────────────
 
+/// Which font a glyph id resolves against. `Base` is the common case — one
+/// of the three embedded Inter weights. `Fallback` is CoreText's own
+/// substitute font for a character outside Inter's coverage (BUG-107): a
+/// fallback run's glyph ids index THAT font's glyph table, not Inter's, so
+/// rasterizing them with a `Base` font draws an arbitrary wrong glyph
+/// (mojibake). Identified by a hash of the font's PostScript name — stable
+/// across shape calls, unlike a `CTFont` pointer — with the actual `CTFont`
+/// held in `FontManager::fallback_fonts` so `rasterize_glyph` can find it
+/// again.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum GlyphFont {
+    Base(FontWeight),
+    Fallback(u64),
+}
+
 /// Cache key for a rasterized glyph. `size_x10` is physical_px × 10.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct GlyphKey {
     glyph_id: u16,
     /// Physical font size × 10 (e.g. 12px physical → 120).
     size_x10: u16,
-    weight: FontWeight,
+    font: GlyphFont,
 }
 
 // ─── GlyphInfo ───────────────────────────────────────────────────────────────
@@ -130,6 +145,12 @@ struct FontManager {
     bold: CGFont,
     /// (size_x10_physical, weight) → CTFont cache.
     cache: AHashMap<(u16, FontWeight), CTFont>,
+    /// CoreText fallback fonts encountered during shaping (BUG-107), keyed
+    /// by the hash `shape_line` computed from the font's PostScript name.
+    /// Interned by `intern_fallback` at shape time so `rasterize_glyph` can
+    /// look the exact font back up when it later rasterizes that run's
+    /// glyph ids.
+    fallback_fonts: AHashMap<u64, CTFont>,
 }
 
 impl FontManager {
@@ -142,7 +163,22 @@ impl FontManager {
             medium,
             bold,
             cache: AHashMap::new(),
+            fallback_fonts: AHashMap::new(),
         }
+    }
+
+    /// Register a CoreText-resolved fallback font (a run's font that isn't
+    /// one of the three embedded Inter weights) under a stable hash of its
+    /// PostScript name, so `rasterize_glyph` can recover the same `CTFont`
+    /// later. Idempotent — re-interning the same font is a cheap hash + a
+    /// map lookup that already hits.
+    fn intern_fallback(&mut self, font: &CTFont) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = ahash::AHasher::default();
+        font.postscript_name().hash(&mut hasher);
+        let key = hasher.finish();
+        self.fallback_fonts.entry(key).or_insert_with(|| font.clone());
+        key
     }
 
     fn load(ttf_bytes: &'static [u8]) -> CGFont {
@@ -233,7 +269,26 @@ impl GlyphAtlas {
         }
 
         let physical_size = key.size_x10 as f32 / 10.0;
-        let ct_font = font_mgr.get_ct_font(physical_size, key.weight);
+        // BUG-107: rasterize with the SAME font this glyph id was shaped
+        // against — `Base` is the fast common path (an embedded Inter
+        // weight); `Fallback` looks up the exact CoreText-resolved font
+        // `shape_line` interned, so a fallback run's glyph ids land on their
+        // own glyph table instead of an arbitrary glyph in Inter's.
+        let ct_font: CTFont = match key.font {
+            GlyphFont::Base(weight) => font_mgr.get_ct_font(physical_size, weight).clone(),
+            GlyphFont::Fallback(hash) => match font_mgr.fallback_fonts.get(&hash) {
+                Some(f) => f.clone(),
+                None => {
+                    // Shaping always interns a fallback font before any of
+                    // its glyphs reach the atlas this same frame, so this
+                    // is unreached in practice. Degrade to the base weight
+                    // rather than panic — one glyph mis-renders instead of
+                    // the renderer crashing.
+                    font_mgr.get_ct_font(physical_size, FontWeight::Regular).clone()
+                }
+            },
+        };
+        let ct_font = &ct_font;
         let ascent = ct_font.ascent() as f32;
         let descent = ct_font.descent().abs() as f32;
 
@@ -1057,11 +1112,15 @@ impl NativeTextRenderer {
             let physical_size = cmd.font_size * scale;
             let size_x10 = (physical_size * 10.0).round() as u16;
 
-            let ct_font = self
+            // Clone (a cheap CF retain bump) so the borrow of `font_manager`
+            // ends here — `shape_line` below needs its own `&mut` borrow to
+            // intern any fallback fonts it discovers (BUG-107).
+            let ct_font: CTFont = self
                 .font_manager
-                .get_ct_font(physical_size, cmd.font_weight);
-            let glyphs_and_positions = shape_line(ct_font, text);
-            let Some((glyph_ids, positions_ct)) = glyphs_and_positions else {
+                .get_ct_font(physical_size, cmd.font_weight)
+                .clone();
+            let Some(runs) = shape_line(&mut self.font_manager, cmd.font_weight, &ct_font, text)
+            else {
                 continue;
             };
 
@@ -1081,105 +1140,111 @@ impl NativeTextRenderer {
                 cmd.color[3] as f32 / 255.0,
             ];
 
-            for (i, &glyph_id) in glyph_ids.iter().enumerate() {
-                let key = GlyphKey {
-                    glyph_id,
-                    size_x10,
-                    weight: cmd.font_weight,
-                };
-                let Some(info) = self.atlas.rasterize_glyph(&mut self.font_manager, key) else {
-                    continue;
-                };
-
-                // Quad dimensions in logical (screen) pixels.
-                let bw = info.pixel_w as f32 / scale;
-                let bh = info.pixel_h as f32 / scale;
-                let bearing_x = info.bearing_x / scale;
-                let bearing_y = info.bearing_y / scale;
-
-                // Glyph origin x from the CTRun position (in logical px).
-                let glyph_origin_x = cmd.x + positions_ct[i].x as f32 / scale;
-
-                // Quad top-left, SNAPPED to the physical pixel grid. The atlas
-                // glyph is rasterized at an integer physical size; placing its quad
-                // on a fractional screen pixel makes the bilinear sampler smear the
-                // coverage across texel boundaries — soft, uneven stems ("blocky").
-                // Snapping the top-left to whole physical pixels restores a 1:1
-                // texel→pixel mapping so stems stay crisp. bw/bh are already
-                // integer-physical / scale, so the far edge lands on-grid too.
-                let x0 = (((glyph_origin_x + bearing_x) * scale).round()) / scale;
-                let y0 = (((baseline_y - bearing_y) * scale).round()) / scale;
-                let x1 = x0 + bw;
-                let y1 = y0 + bh;
-
-                // Clip glyph to clip bounds — partial pixel-level clipping.
-                // Adjusts quad positions and UVs so glyphs are cut cleanly
-                // at the clip boundary instead of popping in/out whole.
-                let (mut qx0, mut qy0, mut qx1, mut qy1) = (x0, y0, x1, y1);
-                let (mut u0, mut v0) = (info.uv_x, info.uv_y);
-                let (mut u1, mut v1) = (info.uv_x + info.uv_w, info.uv_y + info.uv_h);
-                if let Some([clip_x0, clip_y0, clip_x1, clip_y1]) = cmd.clip_bounds {
-                    if x1 <= clip_x0 || y1 <= clip_y0 || x0 >= clip_x1 || y0 >= clip_y1 {
+            // Runs stay separate (BUG-107) — each run's glyph ids are only
+            // rasterized correctly against ITS resolved font, so the atlas
+            // key carries `run.font` rather than one shared weight.
+            for run in &runs {
+                for (i, &glyph_id) in run.glyphs.iter().enumerate() {
+                    let key = GlyphKey {
+                        glyph_id,
+                        size_x10,
+                        font: run.font,
+                    };
+                    let Some(info) = self.atlas.rasterize_glyph(&mut self.font_manager, key)
+                    else {
                         continue;
+                    };
+
+                    // Quad dimensions in logical (screen) pixels.
+                    let bw = info.pixel_w as f32 / scale;
+                    let bh = info.pixel_h as f32 / scale;
+                    let bearing_x = info.bearing_x / scale;
+                    let bearing_y = info.bearing_y / scale;
+
+                    // Glyph origin x from the CTRun position (in logical px).
+                    let glyph_origin_x = cmd.x + run.positions[i].x as f32 / scale;
+
+                    // Quad top-left, SNAPPED to the physical pixel grid. The atlas
+                    // glyph is rasterized at an integer physical size; placing its quad
+                    // on a fractional screen pixel makes the bilinear sampler smear the
+                    // coverage across texel boundaries — soft, uneven stems ("blocky").
+                    // Snapping the top-left to whole physical pixels restores a 1:1
+                    // texel→pixel mapping so stems stay crisp. bw/bh are already
+                    // integer-physical / scale, so the far edge lands on-grid too.
+                    let x0 = (((glyph_origin_x + bearing_x) * scale).round()) / scale;
+                    let y0 = (((baseline_y - bearing_y) * scale).round()) / scale;
+                    let x1 = x0 + bw;
+                    let y1 = y0 + bh;
+
+                    // Clip glyph to clip bounds — partial pixel-level clipping.
+                    // Adjusts quad positions and UVs so glyphs are cut cleanly
+                    // at the clip boundary instead of popping in/out whole.
+                    let (mut qx0, mut qy0, mut qx1, mut qy1) = (x0, y0, x1, y1);
+                    let (mut u0, mut v0) = (info.uv_x, info.uv_y);
+                    let (mut u1, mut v1) = (info.uv_x + info.uv_w, info.uv_y + info.uv_h);
+                    if let Some([clip_x0, clip_y0, clip_x1, clip_y1]) = cmd.clip_bounds {
+                        if x1 <= clip_x0 || y1 <= clip_y0 || x0 >= clip_x1 || y0 >= clip_y1 {
+                            continue;
+                        }
+                        let gw = x1 - x0;
+                        let gh = y1 - y0;
+                        if qx0 < clip_x0 {
+                            u0 = info.uv_x + (clip_x0 - x0) / gw * info.uv_w;
+                            qx0 = clip_x0;
+                        }
+                        if qy0 < clip_y0 {
+                            v0 = info.uv_y + (clip_y0 - y0) / gh * info.uv_h;
+                            qy0 = clip_y0;
+                        }
+                        if qx1 > clip_x1 {
+                            u1 = info.uv_x + (clip_x1 - x0) / gw * info.uv_w;
+                            qx1 = clip_x1;
+                        }
+                        if qy1 > clip_y1 {
+                            v1 = info.uv_y + (clip_y1 - y0) / gh * info.uv_h;
+                            qy1 = clip_y1;
+                        }
                     }
-                    let gw = x1 - x0;
-                    let gh = y1 - y0;
-                    if qx0 < clip_x0 {
-                        u0 = info.uv_x + (clip_x0 - x0) / gw * info.uv_w;
-                        qx0 = clip_x0;
-                    }
-                    if qy0 < clip_y0 {
-                        v0 = info.uv_y + (clip_y0 - y0) / gh * info.uv_h;
-                        qy0 = clip_y0;
-                    }
-                    if qx1 > clip_x1 {
-                        u1 = info.uv_x + (clip_x1 - x0) / gw * info.uv_w;
-                        qx1 = clip_x1;
-                    }
-                    if qy1 > clip_y1 {
-                        v1 = info.uv_y + (clip_y1 - y0) / gh * info.uv_h;
-                        qy1 = clip_y1;
-                    }
+
+                    // Multiply each glyph quad corner POSITION by the command's
+                    // captured affine (`docs/UI_TRANSFORM_STACK_DESIGN.md`) — `uv`
+                    // is untouched, so the atlas sampling is unaffected; only the
+                    // screen placement rotates/scales.
+                    let (p0x, p0y) = cmd.transform.apply((qx0, qy0));
+                    let (p1x, p1y) = cmd.transform.apply((qx1, qy0));
+                    let (p2x, p2y) = cmd.transform.apply((qx1, qy1));
+                    let (p3x, p3y) = cmd.transform.apply((qx0, qy1));
+
+                    let base = self.vertices.len() as u32;
+                    self.vertices.push(TextVertex {
+                        position: [p0x, p0y],
+                        uv: [u0, v0],
+                        color,
+                    });
+                    self.vertices.push(TextVertex {
+                        position: [p1x, p1y],
+                        uv: [u1, v0],
+                        color,
+                    });
+                    self.vertices.push(TextVertex {
+                        position: [p2x, p2y],
+                        uv: [u1, v1],
+                        color,
+                    });
+                    self.vertices.push(TextVertex {
+                        position: [p3x, p3y],
+                        uv: [u0, v1],
+                        color,
+                    });
+                    self.indices.extend_from_slice(&[
+                        base,
+                        base + 1,
+                        base + 2,
+                        base,
+                        base + 2,
+                        base + 3,
+                    ]);
                 }
-
-                // Multiply each glyph quad corner POSITION by the command's
-                // captured affine (`docs/UI_TRANSFORM_STACK_DESIGN.md`) — `uv`
-                // is untouched, so the atlas sampling is unaffected; only the
-                // screen placement rotates/scales.
-                let (p0x, p0y) = cmd.transform.apply((qx0, qy0));
-                let (p1x, p1y) = cmd.transform.apply((qx1, qy0));
-                let (p2x, p2y) = cmd.transform.apply((qx1, qy1));
-                let (p3x, p3y) = cmd.transform.apply((qx0, qy1));
-
-                let base = self.vertices.len() as u32;
-                self.vertices.push(TextVertex {
-                    position: [p0x, p0y],
-                    uv: [u0, v0],
-                    color,
-                });
-                self.vertices.push(TextVertex {
-                    position: [p1x, p1y],
-                    uv: [u1, v0],
-                    color,
-                });
-                self.vertices.push(TextVertex {
-                    position: [p2x, p2y],
-                    uv: [u1, v1],
-                    color,
-                });
-                self.vertices.push(TextVertex {
-                    position: [p3x, p3y],
-                    uv: [u0, v1],
-                    color,
-                });
-                self.indices.extend_from_slice(&[
-                    base,
-                    base + 1,
-                    base + 2,
-                    base,
-                    base + 2,
-                    base + 3,
-                ]);
             }
 
             // Extend this depth's text range (commands are depth-sorted, so the
@@ -1567,30 +1632,63 @@ fn make_ct_line(ct_font: &CTFont, text: &str) -> CTLine {
     CTLine::new_with_attributed_string(attr_str.as_concrete_TypeRef())
 }
 
-/// Shape text into (glyph_ids, positions_in_line).
-fn shape_line(ct_font: &CTFont, text: &str) -> Option<(Vec<u16>, Vec<CGPoint>)> {
+/// One CoreText glyph run's shaped glyphs/positions plus which font resolved
+/// them. BUG-107: kept as separate runs rather than flattened into one
+/// glyph-id list, because CoreText splits a run whenever it falls back from
+/// `ct_font` to cover a character `ct_font` doesn't have — that run's glyph
+/// ids only resolve correctly against ITS OWN font.
+struct ShapedRun {
+    font: GlyphFont,
+    glyphs: Vec<u16>,
+    positions: Vec<CGPoint>,
+}
+
+/// Shape text into its CoreText glyph runs. A run whose resolved font
+/// differs from `ct_font` is interned into `font_mgr` (`intern_fallback`) so
+/// the glyph atlas can rasterize it with the right font later — `base_weight`
+/// is `ct_font`'s own weight, carried through for the common non-fallback
+/// case so the atlas key stays the cheap `GlyphFont::Base` variant.
+fn shape_line(
+    font_mgr: &mut FontManager,
+    base_weight: FontWeight,
+    ct_font: &CTFont,
+    text: &str,
+) -> Option<Vec<ShapedRun>> {
     let line = make_ct_line(ct_font, text);
     let runs = line.glyph_runs();
+    let base_ps_name = ct_font.postscript_name();
 
-    let mut glyph_ids: Vec<u16> = Vec::new();
-    let mut positions: Vec<CGPoint> = Vec::new();
-
+    let mut result: Vec<ShapedRun> = Vec::new();
     for run in runs.iter() {
         let count = run.glyph_count() as usize;
         if count == 0 {
             continue;
         }
-        let run_glyphs = run.glyphs();
-        let run_positions = run.positions();
-        glyph_ids.extend_from_slice(&run_glyphs);
-        positions.extend_from_slice(&run_positions);
+        // The font CoreText actually shaped this run with — differs from
+        // `ct_font` exactly when this run is a fallback split. Falls back
+        // to `Base` if the attribute is somehow absent, matching the
+        // pre-fix behavior for that one (unreached in practice) case.
+        let run_font = run.attributes().and_then(|attrs| {
+            // Safety: kCTFontAttributeName is a valid CoreText dictionary
+            // key (a static CFStringRef); `find` only reads it.
+            let key = unsafe { kCTFontAttributeName };
+            attrs.find(key).and_then(|v| v.downcast::<CTFont>())
+        });
+        let font = match run_font {
+            Some(f) if f.postscript_name() == base_ps_name => GlyphFont::Base(base_weight),
+            Some(f) => GlyphFont::Fallback(font_mgr.intern_fallback(&f)),
+            None => GlyphFont::Base(base_weight),
+        };
+        let run_glyphs = run.glyphs().into_owned();
+        let run_positions = run.positions().into_owned();
+        result.push(ShapedRun {
+            font,
+            glyphs: run_glyphs,
+            positions: run_positions,
+        });
     }
 
-    if glyph_ids.is_empty() {
-        None
-    } else {
-        Some((glyph_ids, positions))
-    }
+    if result.is_empty() { None } else { Some(result) }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -1654,7 +1752,7 @@ mod tests {
             let key = GlyphKey {
                 glyph_id: gid,
                 size_x10,
-                weight: FontWeight::Regular,
+                font: GlyphFont::Base(FontWeight::Regular),
             };
             if let Some(info) = atlas.rasterize_glyph(&mut fm, key) {
                 rects.push((
