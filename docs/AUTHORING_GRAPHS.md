@@ -131,10 +131,14 @@ legibility per [GROUPING_GRAPHS.md](GROUPING_GRAPHS.md), not granularity.
    param extremes (0 / mid / max), not just defaults. Describe what you actually see;
    "wires validated" is not a look.
 6. **In-app check (Peter's machine)**: the preset catalog loads from disk **once at
-   app start**, and **a placed clip embeds its own copy of the graph forever** (by
-   design, for project self-containment). After any preset edit: restart the app AND
-   delete + re-drop the clip. Telling the user "pull and look" without this is how
-   two people stare at a stale graph (2026-07-11, twice in one hour).
+   app start**, so a restart is required after any preset edit. A placed clip does
+   NOT embed a graph copy by default — the per-instance override is
+   `Option<EffectGraphDef>` (`crates/manifold-core/src/graph_target.rs`): `None`
+   means the runtime reads the catalog default, so preset edits flow to existing
+   clips on restart. Only a clip whose graph was edited through the graph editor
+   holds its own copy (`Some(def)`, authoritative) — those need delete + re-drop.
+   (Corrected 2026-07-11 against graph_target.rs + live confirmation; the earlier
+   "embeds forever" claim came from a context-rotted transcript.)
 
 ## 6. Recipes
 
@@ -162,8 +166,9 @@ before committing defaults.
 
 ## 7. Landmines (dated, all real)
 
-- Catalog loads at app start; placed clips embed their graph copy. Restart + re-drop.
-  (2026-07-11)
+- Catalog loads at app start — restart after preset edits. Re-drop is only needed for
+  clips whose graph was edited in the graph editor (those hold an override copy;
+  untouched clips read the catalog). (2026-07-11, corrected same day)
 - `render-generator-preset` under-renders async-loading presets silently — BUG-117.
   `--frames 3000` until fixed. (2026-07-11)
 - `render_scene` fog washes out the whole frame instead of depth-grading — BUG-118,
