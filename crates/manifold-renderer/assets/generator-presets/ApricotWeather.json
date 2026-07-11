@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "ApricotWeather",
-  "description": "Scene 1 \u2014 a Japanese apricot (prunus mume) flowering-branch photogrammetry scan (cc0__japanese_apricot_prunus_mume.glb, ~1.4M tris across a sparse cluster of blossom sprigs, NOT a full standing tree) rendered inside node.render_scene alongside a ground plane, one shadow-casting sun, and depth fog. The glb ships 4 materials; material_index 0 is a 24-vertex reference/calibration cube sitting well outside the blossom cluster and is deliberately excluded \u2014 only materials 1/2/3 (the actual scan content) ship. Each surviving material becomes its own render_scene object (node.gltf_mesh_source material_index-filtered -> node.push_along_normals(sway) as mesh, node.gltf_texture_source as its base-color map, node.phong_material) sharing ONE node.transform_3d offset (the three materials' combined world-space bbox center) so they stay spatially coherent \u2014 the same per-material-object shape node_graph::gltf_import's assemble_import_graph builds for any multi-material glTF import, not a merged single-texture mesh (mesh_index=-1 WholeScene would sample all 3 UV atlases through one texture and visibly mismatch). Wind lives in the Wind group: a shared 1-bar sine body plus PER-CLUSTER phased surge (1/2) and flutter (1/8) sines sum into an independent gust per cluster (each sprig moves on its own timing; the chunks were measured fully vertex-disjoint so independence cannot tear seams), multiplied by the swayAmount fader (bound to the wind_amount Value hub - the fader is amount only, motion character lives in the graph). A second perpendicular gust family (its own 1-bar body + per-cluster 1/2 surges) drives a second bend inside the same conjugation: rotate_3d(-phi-90) -> bend(gust_x) -> rotate_3d(+90) -> bend(gust_z) -> rotate_3d(+phi), so blossom tips trace 3D ellipses whose plane drifts with the free-running wander LFO (~42s) without visually spinning the sprig (the rotations cancel exactly where both bend angles are zero). Anchoring: each cluster bends about ITS OWN base (per-material min-y centers: -2.656/-2.495/-1.032) and its node.mesh_ramp weight field is a per-cluster Y ramp zeroed exactly at the lowest verts (bound_max = 1.4x the cluster's y-span, so weight is flat across any single flower - within-flower weight variation shears rigid blossoms). sun_angle (orbited via cos/sin from a Value hub), fog_density and the camera's orbit/tilt/distance round out the exposed performance surface.",
+  "description": "Scene 1 \u2014 a Japanese apricot (prunus mume) flowering-branch photogrammetry scan (cc0__japanese_apricot_prunus_mume.glb, ~1.4M tris across a sparse cluster of blossom sprigs, NOT a full standing tree) rendered inside node.render_scene alongside a ground plane, one shadow-casting sun, and depth fog. The glb ships 4 materials; material_index 0 is a 24-vertex reference/calibration cube sitting well outside the blossom cluster and is deliberately excluded \u2014 only materials 1/2/3 (the actual scan content) ship. Each surviving material becomes its own render_scene object (node.gltf_mesh_source material_index-filtered -> node.push_along_normals(sway) as mesh, node.gltf_texture_source as its base-color map, node.phong_material) sharing ONE node.transform_3d offset (the three materials' combined world-space bbox center) so they stay spatially coherent \u2014 the same per-material-object shape node_graph::gltf_import's assemble_import_graph builds for any multi-material glTF import, not a merged single-texture mesh (mesh_index=-1 WholeScene would sample all 3 UV atlases through one texture and visibly mismatch). Wind lives in the Wind group: a shared 1-bar sine body plus PER-CLUSTER phased surge (1/2) and flutter (1/8) sines sum into an independent gust per cluster (each sprig moves on its own timing; the chunks were measured fully vertex-disjoint so independence cannot tear seams), multiplied by the swayAmount fader (bound to the wind_amount Value hub - the fader is amount only, motion character lives in the graph). A second perpendicular gust family (its own 1-bar body + per-cluster 1/2 surges) drives a second bend inside the same conjugation: rotate_3d(-phi-90) -> bend(gust_x) -> rotate_3d(+90) -> bend(gust_z) -> rotate_3d(+phi), so blossom tips trace 3D ellipses whose plane drifts with the free-running wander LFO (~42s) without visually spinning the sprig (the rotations cancel exactly where both bend angles are zero). Anchoring: each cluster bends about ITS OWN base (per-material min-y centers: -2.656/-2.495/-1.032) and its node.mesh_ramp weight field is a per-cluster Y ramp zeroed exactly at the lowest verts (bounds -0.6..1.1x the cluster's y-span so weight runs ~0.32 at the base to ~0.99 at the tips - lower stems keep gentle motion (Peter: full-zero base read as anchored too high), the exact base stays pinned by the bend pivot itself, and the field stays flat across any single flower (within-flower weight variation shears rigid blossoms)). sun_angle (orbited via cos/sin from a Value hub), fog_density and the camera's orbit/tilt/distance round out the exposed performance surface.",
   "presetMetadata": {
     "id": "ApricotWeather",
     "displayName": "Apricot Weather",
@@ -1540,11 +1540,11 @@
               },
               "bound_min": {
                 "type": "Float",
-                "value": 0.0
+                "value": -2.79
               },
               "bound_max": {
                 "type": "Float",
-                "value": 6.51
+                "value": 5.115
               },
               "invert": {
                 "type": "Bool",
@@ -1923,11 +1923,11 @@
               },
               "bound_min": {
                 "type": "Float",
-                "value": 0.0
+                "value": -3.431
               },
               "bound_max": {
                 "type": "Float",
-                "value": 8.01
+                "value": 6.29
               },
               "invert": {
                 "type": "Bool",
@@ -2306,11 +2306,11 @@
               },
               "bound_min": {
                 "type": "Float",
-                "value": 0.0
+                "value": -1.526
               },
               "bound_max": {
                 "type": "Float",
-                "value": 3.56
+                "value": 2.797
               },
               "invert": {
                 "type": "Bool",
