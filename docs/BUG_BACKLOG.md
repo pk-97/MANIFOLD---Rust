@@ -117,6 +117,15 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ## Open
 
+### BUG-123 (mesh-edges-capacity-vs-active-count) — node.mesh_edges emits edges for the full buffer capacity, not the loaded vertex count — LOW visual artifact, tracked v1 limitation
+**Status:** OPEN — shipped-with-limitation 2026-07-11 (feat/scene3-growth merge `28f29343`); documented in the node's purpose string and BlossomWire's description.
+
+**Symptom** — When a `gltf_mesh_source` feeding `node.mesh_edges` has `max_capacity` larger than the asset's actual flat-vertex count, the zero-filled buffer tail produces degenerate edges that draw as a bright dot artifact at vertex 0's projected position in `draw_lines`.
+
+**Root cause (known)** — Array wires carry buffer capacity but `mesh_edges` has no runtime active count; it derives edge count from `buffer.size / size_of::<MeshVertex>()`. Presets work around it by sizing `max_capacity` exactly to the asset (BlossomWire: 9210 for the confetti cut).
+
+**Fix shape** — An optional `active_count` scalar input on `mesh_edges` mirroring `node.range`, or a mesh-wire active-count convention (curve/particle families already have one). Small, isolated.
+
 ### BUG-122 (graph-editor-node-face-loses-type-name-when-custom-named) — node cards show only the custom name, type name shows nowhere — LOW/MED authoring legibility
 **Status:** OPEN — reported live by Peter 2026-07-11; logged per his call. Mechanism located; not a code change this session.
 
