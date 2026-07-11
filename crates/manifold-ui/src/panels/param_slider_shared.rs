@@ -134,7 +134,7 @@ pub(crate) fn audio_config_height(
     crate::panels::drawer::uniform_rows_height(n)
 }
 
-/// Full-scale for the audio "Amount" (sensitivity) slider: 0..this.
+/// Full-scale for the audio "Sensitivity" slider: 0..this.
 pub(crate) const AUDIO_SENS_MAX: f32 = 4.0;
 /// Full-scale for the audio "Attack" slider, in ms: 0..this.
 pub(crate) const AUDIO_ATTACK_MAX_MS: f32 = 500.0;
@@ -1625,10 +1625,10 @@ pub(crate) enum AudioModDrawerTarget {
 /// callers) omits the row entirely — behavior unchanged.
 ///
 /// `target` (P3b, D5) is the OTHER parameterized piece: which [`PanelAction`]
-/// family the drawer's OWN reset gestures (the Amount/Attack/Release sliders'
-/// right-click resets, built inline below) emit. Everything else a click on
-/// this drawer can do — Source/Feature/Band selection, Inv/Delta, the drag
-/// itself, Length — is resolved by the CALLER (this function only builds
+/// family the drawer's OWN reset gestures (the Sensitivity/Attack/Release
+/// sliders' right-click resets, built inline below) emit. Everything else a
+/// click on this drawer can do — Source/Feature/Band selection, Invert, the
+/// drag itself, Length — is resolved by the CALLER (this function only builds
 /// visuals + those three reset actions), exactly as it already was for the
 /// two `Param` callers below: `ParamCardPanel` owns its own click/drag
 /// dispatch (`match_param_row_click`, `handle_press`/`handle_drag`), keyed on
@@ -1672,7 +1672,6 @@ pub(crate) fn build_audio_mod_drawer(
     let kind_sel = mod_state.audio_kind_idx.get(i).copied().unwrap_or(0);
     let band_sel = mod_state.audio_band_idx.get(i).copied().unwrap_or(0);
     let invert_on = mod_state.audio_invert.get(i).copied().unwrap_or(false);
-    let rate_on = mod_state.audio_rate.get(i).copied().unwrap_or(false);
     // The feature matrix: a Feature row (kind) and a Band row, each a single
     // selection. Flat button indices run sends, then kinds
     // (0..AUDIO_KIND_COUNT), then bands, then the two modifier toggles —
@@ -1740,10 +1739,13 @@ pub(crate) fn build_audio_mod_drawer(
             )
         }
     };
-    // Modifier toggles below the band row: "Inv" (loud → low) then "Delta"
-    // (drive on motion). Flat indices sit one and two past the bands.
-    let toggle_buttons =
-        vec![DrawerButton::new("Inv", invert_on), DrawerButton::new("Delta", rate_on)];
+    // Modifier toggle below the band row: "Invert" (loud → low). Flat index
+    // sits one past the bands. Delta (rate-of-change) removed from the UI
+    // (§7.2 item 2, 2026-07-11: "not very useful and adds a lot of clutter")
+    // — the runtime `AudioModShape::rate_of_change` field and its
+    // `condition()` arm stay compiled for a possible future re-wire; only
+    // this button, and the click routing that read it, are gone.
+    let toggle_buttons = vec![DrawerButton::new("Invert", invert_on)];
     let mut rows = vec![
         DrawerRow::Buttons {
             buttons: send_buttons,
@@ -1762,7 +1764,11 @@ pub(crate) fn build_audio_mod_drawer(
         },
         DrawerRow::Buttons { buttons: toggle_buttons, width: ButtonWidth::Proportional, label: None },
         shape_slider(
-            "Amount",
+            // §7.2 item 3, 2026-07-11: display label only — "Amount" reads as
+            // a generic gain knob; "Sensitivity" says what it tunes (how
+            // easily this config fires/drives against the fixed 0.5 edge).
+            // `AudioShapeParam::Sensitivity` was already the internal name.
+            "Sensitivity",
             sens / AUDIO_SENS_MAX,
             AUDIO_SENS_DEFAULT / AUDIO_SENS_MAX,
             format!("{sens:.2}"),
@@ -1790,9 +1796,9 @@ pub(crate) fn build_audio_mod_drawer(
     // param card. Never built for `is_trigger`/`is_trigger_gate` (F2/D8
     // forbidden move): those rows count events by design, they don't step
     // them. Appended after the shaping sliders, so its flat button index
-    // continues right after Inv/Delta (the three Slider rows above
-    // contribute no buttons) — see `match_param_row_click`, which must stay
-    // in lockstep with this row order.
+    // continues right after Invert (the three Slider rows above contribute
+    // no buttons) — see `match_param_row_click`, which must stay in
+    // lockstep with this row order.
     let show_action = !info.is_toggle && !info.is_trigger;
     let action_idx = mod_state.audio_action_idx.get(i).copied().unwrap_or(0);
     if show_action {
@@ -1872,7 +1878,7 @@ pub(crate) fn build_audio_mod_drawer(
     // P3 D4/D5: the trailing Length row — clip triggers only (`Some`), never
     // param/gate cards (`None`, unchanged). Appended last so its flat button
     // index is easy for the clip-trigger caller to derive: total buttons
-    // across every row above (Source/Feature/Band/Inv-Delta; never Action/
+    // across every row above (Source/Feature/Band/Invert; never Action/
     // Wrap/Mode since the clip-trigger caller's synthesized `info.is_trigger`
     // is true, suppressing `show_action`/`show_mode` above).
     if let Some(beats) = length_beats {
@@ -2588,10 +2594,8 @@ pub(crate) enum RowClick {
     AudioSelectKind(usize, usize),
     /// A band button in the audio drawer (param index, band index).
     AudioSelectBand(usize, usize),
-    /// The "Inv" invert toggle in the audio drawer (param index).
+    /// The "Invert" toggle in the audio drawer (param index).
     AudioToggleInvert(usize),
-    /// The "d/dt" rate-of-change toggle in the audio drawer (param index).
-    AudioToggleRate(usize),
     /// A mode button in an `is_trigger_gate` row's drawer (param index, mode
     /// index — `[ClipEdge, Transient, Both]`, §9 U3). The drawer's trailing
     /// row, only ever built for a trigger-gate target.
@@ -2702,16 +2706,17 @@ pub(crate) fn match_param_row_click(
     }
 
     // Audio drawer buttons: one flat index across rows in build order —
-    // sends, the Feature (kind) row, the Band row, the two modifier toggles,
-    // then (D8, non-toggle/non-trigger rows only) the Action row, then —
-    // while armed to Step — the Wrap row, then — an `is_trigger_gate` row
+    // sends, the Feature (kind) row, the Band row, the ONE modifier toggle
+    // (Invert — Delta removed §7.2 item 2, 2026-07-11), then (D8,
+    // non-toggle/non-trigger rows only) the Action row, then — while armed
+    // to Step — the Wrap row, then — an `is_trigger_gate` row
     // unconditionally, or a slider row armed to Step/Random — the trailing
     // Mode row (§9 U2/D3). Must stay in lockstep with the row order
-    // `build_audio_mod_drawer` actually builds. The shaping/Amount sliders
-    // are `DrawerRow::Slider`s, not buttons, so they contribute nothing to
-    // this flat index; a drawer with fewer trailing rows simply has no
-    // buttons past its last one, so `resolve_button` can never produce an
-    // `f` that reaches an arm that isn't built.
+    // `build_audio_mod_drawer` actually builds. The shaping/Sensitivity
+    // sliders are `DrawerRow::Slider`s, not buttons, so they contribute
+    // nothing to this flat index; a drawer with fewer trailing rows simply
+    // has no buttons past its last one, so `resolve_button` can never
+    // produce an `f` that reaches an arm that isn't built.
     for (pi, cfg) in audio_configs.iter().enumerate() {
         if let Some((dids, send_count)) = cfg
             && let Some(flat) = dids.resolve_button(id)
@@ -2731,10 +2736,7 @@ pub(crate) fn match_param_row_click(
             if f == 0 {
                 return Some(RowClick::AudioToggleInvert(pi));
             }
-            if f == 1 {
-                return Some(RowClick::AudioToggleRate(pi));
-            }
-            let f = f - 2;
+            let f = f - 1;
             let show_action = param_info
                 .get(pi)
                 .map(|p| !p.is_toggle && !p.is_trigger)

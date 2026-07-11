@@ -754,6 +754,16 @@ impl PlaybackEngine {
         self.last_realtime_now = ctx.realtime_now.0;
         self.last_frame_count = ctx.frame_count;
 
+        // D6 fire meter (BUG-109 fix): ONE reset per tick, before either
+        // branch's evaluators write this tick's levels — param gate cards
+        // via `evaluate_modulation` (both branches), clip triggers via
+        // `tick_audio_triggers` (playing, step 3b) or the meter-only
+        // conditioning walk (non-playing, step 1b). Previously reset
+        // separately inside each branch, AFTER playing's step 3b had
+        // already pushed the clip-trigger levels — silently wiping them
+        // every tick the meter was supposed to show (§7.1 item 1).
+        self.fire_meters = manifold_core::audio_trigger::FireMeterCapture::default();
+
         // ── Phase 1 & 2 (beat derivation + tempo recording) ──
         // Handled by ContentThread BEFORE engine.tick() — matching Unity where
         // PlaybackController does this at its level before the engine's per-state logic.
@@ -895,10 +905,9 @@ impl PlaybackEngine {
         // after this call so an edge from an out-of-tick sync is never lost.
         let mut clip_edges = std::mem::take(&mut self.clip_edge_layers);
         let audio = &self.audio_snapshot;
-        // D6 fire meter: reset for this tick before either evaluator writes
-        // (param gate cards here, clip triggers in `tick_audio_triggers`
-        // below) — see the field doc comment.
-        self.fire_meters = manifold_core::audio_trigger::FireMeterCapture::default();
+        // D6 fire meter: this tick's single reset lives at the top of
+        // `tick()`, before step 3b's clip-trigger push (BUG-109) — nothing
+        // to reset here.
         let modulation_dirty = if let Some(project) = &mut self.project {
             crate::modulation::evaluate_modulation(
                 project,
@@ -974,6 +983,26 @@ impl PlaybackEngine {
         //    Port of C# line 1122.
         self.update_active_clip_playback_rates();
 
+        // 2b. Live audio triggers, meter-only (BUG-109 §7.1 item 2). A clip
+        //     trigger never FIRES while stopped — one-shot expiry is
+        //     beat-based and the clock is frozen — but a performer tuning a
+        //     trigger at soundcheck (transport stopped, track through the
+        //     tap) still needs to see the shaped signal move. Runs the same
+        //     `condition()` walk `tick_audio_triggers` runs at step 3b while
+        //     playing, without ever advancing the fire edge, so resuming
+        //     playback can't inherit a fire decided while stopped.
+        if let Some(project) = self.project.as_ref()
+            && project.has_active_clip_triggers()
+        {
+            self.live_trigger_state.evaluate_meter_only(
+                &self.audio_snapshot,
+                &project.audio_setup,
+                &project.timeline.layers,
+                ctx.dt_seconds,
+                &mut self.fire_meters,
+            );
+        }
+
         // 3. Evaluate modulation pipeline even when stopped (for scrub preview / inspector).
         //    Port of C# DriverController — runs in all states.
         let mut timing = std::mem::take(&mut self.modulation_timing_scratch);
@@ -982,12 +1011,10 @@ impl PlaybackEngine {
         // same drain-queue shape, so a scrub-while-stopped's own sync (step 1
         // above, when dirty) still reaches modulation this tick.
         let mut clip_edges = std::mem::take(&mut self.clip_edge_layers);
-        // D6 fire meter: reset for this tick — see the field doc comment.
-        // Clip triggers don't evaluate while stopped (`tick_audio_triggers`
-        // isn't called from here), so only param gate-card levels update on
-        // a stopped tick; that matches "clip triggers don't fire while
-        // stopped" already being true of this code path.
-        self.fire_meters = manifold_core::audio_trigger::FireMeterCapture::default();
+        // D6 fire meter: this tick's single reset lives at the top of
+        // `tick()` — nothing to reset here. Step 2b above already pushed
+        // clip-trigger levels; this evaluate_modulation call pushes param
+        // gate-card levels into the same capture.
         let dirty = {
             let audio = &self.audio_snapshot;
             if let Some(project) = &mut self.project {
@@ -1721,9 +1748,18 @@ impl PlaybackEngine {
     /// one-shot clips, and expire one-shots whose length has elapsed. Returns
     /// true if the live-slot set changed this tick (caller marks dirty + sync).
     ///
-    /// Called from `tick_playing` after modulation, so it reads the same fresh
-    /// snapshot. Stopped-transport triggering is intentionally not handled here
-    /// (one-shot expiry is beat-based and the clock is frozen when stopped).
+    /// Called from `tick_playing` step 3b — BEFORE `sync_clips_to_time`
+    /// (step 4) and BEFORE modulation (step 7), NOT after. (BUG-109: a
+    /// prior version of this comment claimed "after modulation" — the P3c
+    /// worker trusted that stale claim over this call site, sixty lines up,
+    /// and over CORE_ENGINE_MAP's own frame diagram, and placed the D6
+    /// meter reset here as a result, wiping this tick's clip-trigger levels
+    /// every playing tick. Fixed 2026-07-11, §7.1 item 1.) Reads the audio
+    /// snapshot the content thread set before this tick, same as every
+    /// other evaluator this tick. Stopped-transport triggering is
+    /// intentionally not handled here (one-shot expiry is beat-based and
+    /// the clock is frozen when stopped) — see `tick_non_playing`'s
+    /// meter-only conditioning walk for what DOES run while stopped.
     fn tick_audio_triggers(&mut self, realtime_now: f64, dt: Seconds) -> bool {
         if self.project.is_none() || self.live_clip_manager.is_none() {
             return false;
