@@ -190,6 +190,20 @@ fn place_main(@builtin(global_invocation_id) id: vec3<u32>) {
         if n_len > 1.0e-8 {
             n = raw_normal / n_len;
         }
+        // Orient to the mesh's DECLARED outward side: the winding-derived
+        // face normal flips to the hemisphere of the triangle's own vertex
+        // (shading) normals. Winding is not authoritative here — terrain
+        // grids arrive with -Y winding but +Y vertex normals, and aligning
+        // to the raw face normal planted every instance upside-down under
+        // the ground (Scene 2 BlossomField, 2026-07-11: ~98% of flowers
+        // invisible). Zero/degenerate vertex normals leave the face normal
+        // untouched.
+        let n_vertex = vertices[tri * 3u].normal
+            + vertices[tri * 3u + 1u].normal
+            + vertices[tri * 3u + 2u].normal;
+        if dot(n, n_vertex) < 0.0 {
+            n = -n;
+        }
 
         // Build an orthonormal frame with `n` as the up column. `ref_axis`
         // is chosen so the tangent never nearly-parallels world Z when n is

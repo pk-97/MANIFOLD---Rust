@@ -44,6 +44,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-120 | **grid-terrain-winding-disagrees-with-vertex-normals** | Suspected (unverified at the emitter): the grid_mesh -> make_triangles chain emits triangles whose winding-derived face normals point -Y while the vertices carry +Y shading normals. Exposed 2026-07-11 by scatter_on_mesh align_to_normal planting ~98% of Scene 2 instances upside-down/underground; scatter now orients to vertex normals (fixed at the consumer), but any future winding consumer (backface culling, facet_normals-on-terrain, GPU culling passes) will hit the same disagreement. Fix shape: assert/normalize winding in make_triangles against the source vertex normals, or document winding as non-authoritative engine-wide. LOW until a winding consumer ships. | make_triangles / grid_mesh |
 | BUG-119 | **timeline-layer-flickers-intermittently** | Timeline layer clip rendering sometimes flickers rapidly ("flicks like crazy"); intermittent, no repro steps yet. Root cause unknown, NOT investigated (Peter's call 2026-07-11: log, don't chase). |
 | BUG-118 | **render-scene-fog-washes-out-instead-of-depth-grading** | `node.atmosphere` fog at even low density (0.04) uniformly washes out the whole frame instead of reading as distance-graded haze — near geometry loses contrast as much as far geometry. Seen live in Apricot Weather (macro scale, camera distance ~9); fog card removed from the preset as the stopgap. Root cause unknown, NOT yet investigated (Peter's call 2026-07-11: log, don't chase). Suspects: fog factor not actually distance-scaled at short camera ranges; `height_falloff` interaction at y≈0 geometry; fog blend applied pre-tonemap washing highlights. Fix shape: headless fog-density sweep at two camera distances, assert near/far attenuation ratio, then read the atmosphere WGSL blend. | render_scene / atmosphere |
 | BUG-117 | **render-generator-preset-silently-under-renders-async-loaded-presets** | The `render-generator-preset` look-dev CLI has no wait-for-convergence signal, so a preset with a slow background parse/decode (large glTF, `image_folder`, DNN plugins) can write an incomplete PNG with no warning — same class as (fixed) BUG-100, never ported to this general tool. Fix shape: port BUG-100's N-consecutive-identical-frames convergence check into `render_generator_preset.rs`. LOW (dev-tooling only, no runtime/show-time path affected). |
@@ -113,6 +114,17 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-120 (grid-terrain-winding-disagrees-with-vertex-normals) — terrain triangle winding contradicts vertex normals — LOW, consumer-side fixed
+**Status:** OPEN (suspected, emitter unverified) — found 2026-07-11 during Scene 2 (BlossomField) look-dev.
+
+**Symptom** — scatter_on_mesh align_to_normal placed ~98% of instances upside-down (up mapped to -Y), rendering them under the terrain: BlossomField showed ~25 of 420 flowers; Garden showed 44 of 140. GPU test `align_on_flat_ground_keeps_instances_upright_and_finite` reproduced it deterministically on a hand-built flat quad.
+
+**Root cause (consumer, FIXED)** — scatter's align path trusted the winding-derived face normal; the terrain's triangles wind -Y-facing while vertex normals declare +Y. Fixed in scatter_on_mesh.wgsl by flipping the face normal into the hemisphere of the triangle's vertex normals (mesh-declared outward), with flat + sloped GPU tests.
+
+**Root cause (emitter, UNVERIFIED)** — whether grid_mesh/make_triangles genuinely emit -Y winding (vs the test data coincidence) has not been checked at the emitter. If real, every future winding consumer hits it.
+
+**Fix shape** — read make_triangles' emission order against grid_mesh row-major layout; if winding is inverted, either fix the emission order (check draw paths that might depend on current order) or write the engine-wide rule "vertex normals are authoritative, winding is not" into DEVELOPMENT_REFERENCE.md.
 
 ### BUG-119 (timeline-layer-flickers-intermittently) — timeline layer sometimes flickers rapidly in the timeline view — UNKNOWN severity, logged without investigation
 **Status:** OPEN — reported live by Peter 2026-07-11 (screenshot of the "ApricotWeather 1" layer in the timeline); logged without investigation per his call.

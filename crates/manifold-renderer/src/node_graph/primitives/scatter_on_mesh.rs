@@ -542,7 +542,14 @@ mod gpu_tests {
             e1[0] * e2[1] - e1[1] * e2[0],
         ];
         let len = (raw[0] * raw[0] + raw[1] * raw[1] + raw[2] * raw[2]).sqrt();
-        let n = [raw[0] / len, raw[1] / len, raw[2] / len];
+        let mut n = [raw[0] / len, raw[1] / len, raw[2] / len];
+        // The shader orients the face normal to the hemisphere of the
+        // triangle's vertex normals (mk_vertex hardcodes +Y) — winding is
+        // not authoritative. This triangle winds downward, so the aligned
+        // side is the flipped one. Apply the same rule to the reference.
+        if n[1] < 0.0 {
+            n = [-n[0], -n[1], -n[2]];
+        }
 
         // Reconstruct R = Rz(rz)*Ry(ry)*Rx(rx) and check R*(0,1,0) ≈ n for
         // every instance — the decomposed Euler triple must actually
@@ -567,6 +574,41 @@ mod gpu_tests {
                     "instance {i} axis {k}: decomposed rotation's up vector {mapped_up:?} != triangle normal {n:?}"
                 );
             }
+        }
+    }
+
+    /// BUG found by the Scene 2 look-dev (2026-07-11): on NEAR-FLAT faces —
+    /// the common terrain case — align_to_normal produced rotations that
+    /// made ~98% of instances vanish from the render (BlossomField showed
+    /// ~25 of 420 flowers; disabling align carpeted the field). Flat ground
+    /// with align ON must behave like align OFF: every instance finite and
+    /// upright (R·(0,1,0) ≈ (0,1,0)) for EVERY yaw the hash produces.
+    #[test]
+    fn align_on_flat_ground_keeps_instances_upright_and_finite() {
+        let device = crate::test_device();
+        let wgsl = include_str!("shaders/scatter_on_mesh.wgsl");
+        let vertices = quad_mesh();
+        let capacity = 256u32;
+
+        let instances = dispatch_scatter(&device, wgsl, &vertices, capacity, capacity, 11, 1.0, 1.0, true);
+
+        for (i, inst) in instances.iter().enumerate() {
+            for (k, v) in inst.pos_scale.iter().chain(inst.rot_pad.iter()).enumerate() {
+                assert!(v.is_finite(), "instance {i} field {k} is not finite: {v}");
+            }
+            let [rx, ry, rz, _] = inst.rot_pad;
+            let (cx, sx) = (rx.cos(), rx.sin());
+            let (cy, sy) = (ry.cos(), ry.sin());
+            let (cz, sz) = (rz.cos(), rz.sin());
+            let mapped_up = [
+                -cz * sy * sx - sz * cx,
+                -sz * sy * sx + cz * cx,
+                cy * sx,
+            ];
+            assert!(
+                (mapped_up[0].abs() < 1e-3) && ((mapped_up[1] - 1.0).abs() < 1e-3) && (mapped_up[2].abs() < 1e-3),
+                "instance {i}: flat ground must keep instances upright, got up={mapped_up:?} from euler=({rx}, {ry}, {rz})"
+            );
         }
     }
 }
