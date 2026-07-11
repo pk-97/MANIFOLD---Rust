@@ -2407,6 +2407,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         && !self.last_clip_atlas_layout.is_empty()
                     {
                         self.clip_atlas_persist_due = 0;
+                        if flicker_probe::on() {
+                            eprintln!(
+                                "[flicker-probe/content] ATLAS SAVE READBACK submitted (75MB GPU->CPU) at frame {}",
+                                self.clip_atlas_frame
+                            );
+                        }
                         let mut gpu_rb = GpuEncoder::new(&mut native_enc, native_device);
                         if let Some(pt) = self.clip_atlas_persistent.as_ref() {
                             self.clip_atlas_readback.submit(
