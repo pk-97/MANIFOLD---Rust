@@ -1789,15 +1789,30 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
     out.push_str("@compute @workgroup_size(256)\n");
     out.push_str("fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n");
     out.push_str("    let idx = gid.x;\n");
-    // Count anchor: the first ARRAY external (slot 0 in every all-array region,
-    // keeping prior fused WGSL — a pipeline-cache key — byte-identical). It's
-    // coincident with the output (one output element per input element); a
-    // texture slot has no arrayLength, so anchor past any leading texture slot.
-    let count_anchor = ext_tys
+    // Count anchor: the ARRAY externals (slot 0 first in every all-array region,
+    // keeping prior fused WGSL — a pipeline-cache key — byte-identical). Each is
+    // coincident with the output (one output element per input element) and every
+    // one is pre-read at `[idx]` below; a texture slot has no arrayLength, so skip
+    // it. With a SINGLE array external the count is that external's length exactly
+    // (unchanged text). With MORE THAN ONE, bound by the SHORTEST so a shorter
+    // input can't be read out of bounds (BUG-008) — the unfused atoms clamp to
+    // `min(a, b, …)` for the same reason. Equal-length regions (every shipped
+    // buffer preset) are unaffected: `min` of equal lengths is that length.
+    let array_ext: Vec<usize> = ext_tys
         .iter()
-        .position(|t| t.is_some())
-        .ok_or(CodegenError::BadInput)?;
-    writeln!(out, "    let count = arrayLength(&src_{count_anchor});").unwrap();
+        .enumerate()
+        .filter_map(|(e, t)| t.is_some().then_some(e))
+        .collect();
+    let count_anchor = *array_ext.first().ok_or(CodegenError::BadInput)?;
+    if array_ext.len() == 1 {
+        writeln!(out, "    let count = arrayLength(&src_{count_anchor});").unwrap();
+    } else {
+        let mut expr = format!("arrayLength(&src_{count_anchor})");
+        for &e in &array_ext[1..] {
+            expr = format!("min({expr}, arrayLength(&src_{e}))");
+        }
+        writeln!(out, "    let count = {expr};").unwrap();
+    }
     out.push_str("    if idx >= count {\n        return;\n    }\n");
     // Live-count cap (in-place loop regions): early-return past the members'
     // shared `active_count`, leaving the pool tail untouched exactly like the
@@ -2851,6 +2866,59 @@ mod gpu_tests {
         assert!(g.wgsl.contains("let r0 = n0_body"), "first member's element register");
         assert!(g.wgsl.contains("let r1 = n1_body"), "second member threads r0");
         assert!(g.wgsl.contains("dst[idx] = r1;"), "region result written to the fresh output");
+    }
+
+    /// BUG-008: a buffer region with TWO array externals pre-reads BOTH at `[idx]`.
+    /// The dispatch count must be bounded by the SHORTER external so neither read
+    /// goes out of bounds when the two inputs have different lengths (the unfused
+    /// atoms clamp to `min(a, b, …)` for exactly this reason). `LerpInstanceFields`
+    /// (two required `Array<InstanceTransform>` inputs) is the shipped shape.
+    #[test]
+    fn fused_buffer_region_two_array_externals_bounds_count_by_min() {
+        use crate::node_graph::primitive::PrimitiveSpec;
+        use crate::node_graph::primitives::LerpInstanceFields as L;
+        let id = NodeInstanceId;
+        let region = FusionRegion {
+            nodes: vec![RegionNode {
+                node_id: id(0),
+                fusion_kind: L::FUSION_KIND,
+                body: L::WGSL_BODY.unwrap(),
+                params: L::PARAMS,
+                inputs: vec![InputSource::External(0), InputSource::External(1)],
+                input_access: L::INPUT_ACCESS.to_vec(),
+                node_inputs: L::INPUTS,
+                node_outputs: L::OUTPUTS,
+                node_includes: L::WGSL_INCLUDES,
+                derived_uniforms: L::DERIVED_UNIFORMS,
+                output_storage: "rgba16float",
+                stencil_fetch: false,
+                quantize_f16: false,
+            }],
+            num_external_inputs: 2,
+            outputs: vec![id(0)],
+            in_place_alias: None,
+            sampler_address_mode: "clamp",
+            dispatch_count_field: None,
+            virtual_chains: Vec::new(),
+            sampled_externals: Vec::new(),
+        };
+        let g = generate_fused(&region).expect("two-external buffer region fuses");
+        assert!(
+            naga::front::wgsl::parse_str(&g.wgsl).is_ok(),
+            "fused two-external buffer kernel parses:\n{}",
+            g.wgsl
+        );
+        assert!(
+            g.wgsl.contains("let e_0 = src_0[idx];") && g.wgsl.contains("let e_1 = src_1[idx];"),
+            "both array externals are pre-read at [idx]:\n{}",
+            g.wgsl
+        );
+        assert!(
+            g.wgsl
+                .contains("let count = min(arrayLength(&src_0), arrayLength(&src_1));"),
+            "count bounded by the SHORTER external so neither pre-read is OOB (BUG-008):\n{}",
+            g.wgsl
+        );
     }
 
     /// STENCIL tier — a virtual chain emits `n{i}_vsrc_<port>` (per-corner

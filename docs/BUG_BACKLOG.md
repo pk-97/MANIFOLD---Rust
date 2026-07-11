@@ -74,7 +74,6 @@ or human can read it, and it needs no external tool.
 | BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
 | BUG-037 | **glp-first-render-stall** | ~37ms warm-up on a glTF clip's first rendered frame (MED) |
 | BUG-038 | **ableton-log-spam** | bridge warns every 1.5s forever when Live absent (LOW) |
-| BUG-008 | **fused-buffer-oob** | mismatched array lengths read out of bounds in fused region (HIGH) |
 | BUG-009 | **stateless-gate-miss** | harvest skip resets StateStore-held scalar state (HIGH) |
 | BUG-010 | **wgsl-first-entry** | multi-entry wgsl_compute silently dispatches the first (MED) |
 | BUG-011 | **fused-output-oversize** | fused output buffer sized to max of all inputs (MED) |
@@ -1017,25 +1016,6 @@ a signal that a recent UI landing skipped the full workspace test.
 rather than bumping the baseline, which would silently bless the drift the ratchet exists to catch.
 Unrelated to param storage.
 
-### BUG-008 — Fused buffer region with mismatched array lengths reads out of bounds — HIGH
-**Status:** OPEN
-
-**Root cause** — [codegen.rs:1777-1813](../crates/manifold-renderer/src/node_graph/freeze/codegen.rs#L1777-L1813):
-`generate_fused_buffer` anchors the dispatch guard to the FIRST array external's
-`arrayLength`, then unconditionally pre-reads EVERY array external at that index. Nothing
-anywhere (classify, union, `build_region`, `fused_def_builds`) checks that a buffer region's
-array externals agree on length — the tier-6 uniformity gate is texture-only. The unfused
-atom (e.g. `LerpInstanceFields`) explicitly clamps to `min(a_cap, b_cap, out_cap)`.
-
-**Symptom** — two array inputs of different lengths fuse; for indices past the shorter
-buffer the kernel does an out-of-bounds Metal storage read and writes garbage
-instances/particles to the output — silent visual corruption. Shipped presets happen to share
-lengths today; user graphs are unprotected.
-
-**Fix shape** — either refuse at `build_region` when a buffer region has >1 array external
-(conservative, fail-closed, cheapest), or emit a per-external in-bounds guard
-(`idx < arrayLength(&src_e)` with a defined fallback element). Pair with BUG-011.
-
 ### BUG-009 — Segment "stateless" gate misses StateStore-held scalar state; harvest skip resets it — HIGH
 **Status:** OPEN
 
@@ -1644,6 +1624,37 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-008 — Fused buffer region with mismatched array lengths reads out of bounds — HIGH
+**Status:** FIXED (bug/wave1-lane-a-freeze) — guard, not refuse. Option (a) "refuse >1 array
+external at build_region" was ruled out: the shipped DigitalPlants generator fuses a buffer
+region containing `lerp_instance_fields` (two required `Array<InstanceTransform>` inputs), so
+refusing would regress a real preset (`digitalplants_buffer_fusion_renders_like_unfused` would
+panic on the `.expect("...fuses")`). Instead `generate_fused_buffer` (codegen.rs) now bounds
+the 1D dispatch `count` by the SHORTEST array external — `min(arrayLength(&src_0),
+arrayLength(&src_1), …)` — since every array external is pre-read at `[idx]`. This matches the
+unfused atoms' own `min(a, b, …)` clamp and makes every coincident read in-bounds. Byte-identical
+for single-external regions (still `arrayLength(&src_0)`) so the pipeline-cache key of every
+existing buffer kernel is unchanged; multi-external regions with equal lengths (all shipped
+cases) render identically (`min` of equal lengths). Reproduced by a codegen-text test
+(`fused_buffer_region_two_array_externals_bounds_count_by_min`, LerpInstanceFields two-external
+region); DigitalPlants proof re-run green. Paired with BUG-011 (output-side tail).
+
+**Root cause** — [codegen.rs:1777-1813](../crates/manifold-renderer/src/node_graph/freeze/codegen.rs#L1777-L1813):
+`generate_fused_buffer` anchors the dispatch guard to the FIRST array external's
+`arrayLength`, then unconditionally pre-reads EVERY array external at that index. Nothing
+anywhere (classify, union, `build_region`, `fused_def_builds`) checks that a buffer region's
+array externals agree on length — the tier-6 uniformity gate is texture-only. The unfused
+atom (e.g. `LerpInstanceFields`) explicitly clamps to `min(a_cap, b_cap, out_cap)`.
+
+**Symptom** — two array inputs of different lengths fuse; for indices past the shorter
+buffer the kernel does an out-of-bounds Metal storage read and writes garbage
+instances/particles to the output — silent visual corruption. Shipped presets happen to share
+lengths today; user graphs are unprotected.
+
+**Fix shape** — either refuse at `build_region` when a buffer region has >1 array external
+(conservative, fail-closed, cheapest), or emit a per-external in-bounds guard
+(`idx < arrayLength(&src_e)` with a defined fallback element). Pair with BUG-011.
 
 ### BUG-007 — Particle-loop fusion exclusion is blind to configured `node.wgsl_compute` shapes — HIGH
 **Status:** FIXED (bug/wave1-lane-a-freeze) — reproduced (`cycle_through_configured_particle_wgsl_compute_is_particle_loop`,
