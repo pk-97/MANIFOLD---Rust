@@ -202,6 +202,28 @@ These primitives hold state across frames. They require the `StateStore` path �
 
 `wgsl_compute_0in_1tex`, `wgsl_compute_1tex_1tex`, `wgsl_compute_2tex_1tex`. **Read §5 before reaching for these.**
 
+### 4.1 The `trigger_modulate` idiom — compose a trigger onto a continuous control, don't replace it
+
+**Working name, not yet Peter-confirmed** — flagged for a rename pass; do not treat `trigger_modulate` as settled vocabulary.
+
+BUG-104's root cause (2026-07-11): a `switch_value` mux whose selector is trigger-driven and whose branches are "continuous user path" vs. "discrete trigger-cycled value" is a legitimate idiom for cycling a DISCRETE selector (shape index, axis, pattern — see the per-preset intentional-replace decisions in NODE_CATALOG.md / each preset's `description`), but it is the wrong shape for a CONTINUOUS card param the graph's trigger option also drives. Replacing (rather than composing) silently kills whatever fader is bound to the continuous branch for as long as the trigger is active, and — because the mux itself is stateless but often feeds a stateful cycle/hold node downstream — the shadowed fader can stay dead after the trigger goes back to idle too (see Part 1 above).
+
+**§2.5 audit finding: this is NOT a new primitive.** Two existing atoms compose it exactly:
+
+```
+switch_value(selector: <trigger source>, in_0: 1.0 [identity, inline default — no wire], in_1: <trigger-cycled value>)
+  → math(op: Multiply, a: <continuous user path>, b: <switch_value.out>)
+```
+
+- **Idle / disabled** (`selector == 0`): `switch_value` emits its `in_0` default of `1.0` → `math` multiplies the continuous path by identity → the user's fader passes through unchanged.
+- **Firing** (`selector != 0`): `switch_value` emits the trigger-cycled value → `math` scales the continuous path by it, so the fader still visibly moves the result instead of being silently muted.
+
+This is the same shape FluidSim3D's `Clip Triggers` group already ships (`vol_factor_mux` sets `in_0: {"value": 1.0}` inline, `noise_factor` = `1 + mux_noise.out`, `noise_final` = `0.001 × noise_factor`) — an additive variant of the identity default, not a new pattern. `trigger_modulate` just names the multiplicative special case (`in_0 = 1.0`, downstream op = Multiply) so it's discoverable without re-deriving it from FluidSim3D's noise chain every time. No new primitive, no new `wgsl_body`, nothing to add to the codegen path — both `switch_value` and `math` already ship on it.
+
+**When to reach for it:** the mux's `in_0` (or whichever branch carries the idle/disabled state) needs to be the identity element of whatever downstream op combines it with the continuous path — `1.0` for Multiply, `0.0` for Add. If the two branches aren't in comparable ranges (Lissajous's harmonic-ratio `a`/`b` are small integers 1–8, not rates), multiply rather than replace — the downstream curve/shape math that already interpolates smoothly between integer parameter samples (bracket floor/ceil + lerp, per §3 step 1(e)) tolerates the resulting non-integer product the same way it already tolerates a continuous LFO input.
+
+**When NOT to reach for it:** a mux cycling a genuinely discrete selector (shape enum, axis index, pattern index) on trigger, where "replace" is the intended, legible behavior — see the discrete-mux inventory in `PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md` / BUG-104's backlog entry for the per-preset intentional-replace decisions. Composing there would produce a nonsensical blended enum value, not a musically/visually coherent result.
+
 ---
 
 ## 5. The WGSL escape hatch — when it's right, when it's wrong
