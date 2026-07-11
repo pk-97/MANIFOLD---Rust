@@ -4274,17 +4274,9 @@ impl Application {
         if !self.clip_rect_scratch.is_empty()
             && !self.content_state.clip_atlas_layout.is_empty()
         {
-            let front = self
-                .clip_atlas_texture_bridge
-                .as_ref()
-                .map(|b| b.front_index() as usize);
             crate::content_pipeline::flicker_probe::ui_tick();
             if crate::content_pipeline::flicker_probe::on() {
-                if front.is_none()
-                    || front.is_some_and(|f| {
-                        self.ui_clip_atlas_textures.get(f).and_then(|t| t.as_ref()).is_none()
-                    })
-                {
+                if self.ui_clip_atlas_texture.is_none() {
                     crate::content_pipeline::flicker_probe::bump(
                         &crate::content_pipeline::flicker_probe::UI_THUMBPASS_SKIPS,
                     );
@@ -4295,9 +4287,11 @@ impl Application {
                     );
                 }
             }
-            if let Some(front) = front
-                && let Some(atlas) = self.ui_clip_atlas_textures.get(front).and_then(|t| t.as_ref())
-            {
+            // Single shared surface (BUG-119) — no front-buffer index to resolve;
+            // the imported texture always reflects the content thread's latest
+            // cell blits directly (no clear after init, so at worst a cell mid-blit
+            // this frame shows valid-old or valid-new pixels, never blank).
+            if let Some(atlas) = self.ui_clip_atlas_texture.as_ref() {
                 // clip → (filmstrip cell index → atlas cell), from the published
                 // layout. Each clip tiles its captured bar cells across its body.
                 let mut strips_of: ahash::AHashMap<&str, ahash::AHashMap<u32, u32>> =

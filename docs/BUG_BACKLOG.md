@@ -47,7 +47,6 @@ or human can read it, and it needs no external tool.
 | BUG-122 | **graph-editor-node-face-loses-type-name-when-custom-named** | Once a node is given a custom (author) title, the node face shows only that name — the underlying type (e.g. `node.blur`, `node.mix`) is nowhere on the card, not even as a subtitle or tooltip. Root cause found: `display_label()` (`snapshot.rs:838`) returns the author title outright when set, never combining it with the friendly/type label; the `(WGSL)` suffix is the only case that appends anything. Shipped behavior since `ebd48cde` (2026-06-03), not a recent regression. Fix shape: show both, e.g. a secondary type line/tooltip, or a "Custom Name — Blur" compound header. |
 | BUG-121 | **graph-editor-effect-card-missing-mapping-drawer-chevron** | The graph editor's effect/generator card no longer shows the sideways slider-mapping (param range) drawer chevron. Strong lead, not yet confirmed live: `ParamCardPanel::context` defaults to `CardContext::Perform`, and `set_context(CardContext::Author)` — the call the "dedicated panel" host is supposed to make once — has zero production call sites in the current tree (only in `param_card.rs`'s own tests); the chevron and its `OpenCardMapping` action are gated entirely behind `author && info.mappable`. If that's really the live path, the drawer is unreachable app-wide, not just visually missing on this card. Fix shape: find/restore the host's `set_context(Author)` call; confirm live before treating as root-caused. |
 | BUG-120 | **grid-terrain-winding-disagrees-with-vertex-normals** | Suspected (unverified at the emitter): the grid_mesh -> make_triangles chain emits triangles whose winding-derived face normals point -Y while the vertices carry +Y shading normals. Exposed 2026-07-11 by scatter_on_mesh align_to_normal planting ~98% of Scene 2 instances upside-down/underground; scatter now orients to vertex normals (fixed at the consumer), but any future winding consumer (backface culling, facet_normals-on-terrain, GPU culling passes) will hit the same disagreement. Fix shape: assert/normalize winding in make_triangles against the source vertex normals, or document winding as non-authoritative engine-wide. LOW until a winding consumer ships. | make_triangles / grid_mesh |
-| BUG-119 | **timeline-layer-flickers-intermittently** | Timeline layer clip rendering sometimes flickers rapidly ("flicks like crazy"); intermittent, no repro steps yet. Root cause unknown, NOT investigated (Peter's call 2026-07-11: log, don't chase). |
 | BUG-118 | **render-scene-fog-washes-out-instead-of-depth-grading** | `node.atmosphere` fog at even low density (0.04) uniformly washes out the whole frame instead of reading as distance-graded haze — near geometry loses contrast as much as far geometry. Seen live in Apricot Weather (macro scale, camera distance ~9); fog card removed from the preset as the stopgap. Root cause unknown, NOT yet investigated (Peter's call 2026-07-11: log, don't chase). Suspects: fog factor not actually distance-scaled at short camera ranges; `height_falloff` interaction at y≈0 geometry; fog blend applied pre-tonemap washing highlights. Fix shape: headless fog-density sweep at two camera distances, assert near/far attenuation ratio, then read the atmosphere WGSL blend. | render_scene / atmosphere |
 | BUG-117 | **render-generator-preset-silently-under-renders-async-loaded-presets** | The `render-generator-preset` look-dev CLI has no wait-for-convergence signal, so a preset with a slow background parse/decode (large glTF, `image_folder`, DNN plugins) can write an incomplete PNG with no warning — same class as (fixed) BUG-100, never ported to this general tool. Fix shape: port BUG-100's N-consecutive-identical-frames convergence check into `render_generator_preset.rs`. LOW (dev-tooling only, no runtime/show-time path affected). |
 | BUG-116 | **fire-meter-display-ballistics-reads-as-low-fps** | Fire meters read as updating at low FPS despite a 60fps capture/snapshot/UI pipeline — `MeterIds::update`'s intentional peak-hold smoothing (BUG-109 P5: `PEAK_HOLD_SECONDS = 0.25`, `PEAK_DECAY_PER_SEC = 5.0`) trades "a millisecond transient stays visible" for a chunkier feel. Fix shape: tune the ballistics down, or split into an instant live bar + a separate thin peak-hold tick. Deferred by Peter 2026-07-11 — cosmetic only, the edge-detector reads the raw signal. LOW (deferred by design). |
@@ -154,30 +153,6 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 **Root cause (emitter, UNVERIFIED)** — whether grid_mesh/make_triangles genuinely emit -Y winding (vs the test data coincidence) has not been checked at the emitter. If real, every future winding consumer hits it.
 
 **Fix shape** — read make_triangles' emission order against grid_mesh row-major layout; if winding is inverted, either fix the emission order (check draw paths that might depend on current order) or write the engine-wide rule "vertex normals are authoritative, winding is not" into DEVELOPMENT_REFERENCE.md.
-
-### BUG-119 (timeline-layer-flickers-intermittently) — timeline layer sometimes flickers rapidly in the timeline view — UNKNOWN severity, logged without investigation
-**Status:** OPEN — reported live by Peter 2026-07-11 (screenshot of the "ApricotWeather 1" layer in the timeline); logged without investigation per his call.
-
-**Symptom** — the timeline layer clip rendering sometimes flickers rapidly ("flicks like
-crazy"). Intermittent, no repro steps given yet.
-
-**Root cause** — unknown; 2026-07-11 static-read pass (Scene 2 session, Peter re-reported as "extreme churn and flickering" with the heavy 3D scene graphs, gut: auto-load spam) narrowed to two candidate mechanisms in the filmstrip system, undecided without a live repro:
-(a) `clip_content_hash` (clip_thumb_cache.rs:35) hashes every generator card param VALUE — any continuously-written param (automation lane, LFO/MIDI binding writing card values) changes the hash every frame, spamming the disk-cache Load/miss/re-capture path (matches "auto-load spam");
-(b) the capture->persistent-atlas->triple-IOSurface propagation chain (content_pipeline.rs:340-415) — visible clips are eviction-protected and captures are budgeted (4/frame), so a pure eviction storm between visible clips looks impossible by construction, but propagation lag mid-update could read as per-cell flicker.
-Hunt log 2026-07-11 (Scene 2 session, instrumented probe on feat/scene1-wind — Peter stopped the hunt here; probe module stays on the branch until this closes):
-
-**Symptom (full):** timeline layer flickers blue when GPU saturates (heavy instanced 3D scenes, high density); render FPS oscillates 60->30->60 in cycles; churn continues while transport is PAUSED. Mid-flicker artifact screenshots show the clip's filmstrip mostly blank/navy with a few ghost cells.
-
-**Exonerated by probe (MANIFOLD_FLICKER_PROBE=1, three runs):** thumb-pass skips 0, strip misses 0, empty layouts 0, alloc fails 0, RT-only capture refusals 0, surface fence timeouts 0 — all while flicker was CONFIRMED on-screen. The UI thumbnail-draw guard, capacity/eviction failure, and the fence-timeout force-clear are not the mechanism.
-
-**Confirmed real (probe):** a perpetual disk-save loop — ATLAS SAVE READBACK (75MB Rgba16Float 8192x1152, GPU->CPU) fired every ~5-6s in EVERY run (frames 301/661/967; 301/635/995/1355/1685/2045), even fully idle. Capture every ~1.5s -> re-arms the 5s save debounce -> readback, forever. A beat-movement gate on the throttled refresh shipped (commit on feat/scene1-wind) but the FINAL run still shows captures ~1/s AND periodic layout_rebuilds=1 (a burst of captures=4 layout_rebuilds=4 as fence_wait rose to ~20ms) — layout rebuilds on a stable timeline mean cells are being EVICTED and re-allocated, and the existing.is_none() recapture path bypasses the beat gate.
-
-**Prime suspect:** clip_atlas_visible set flapping — a clip that momentarily leaves the UI-reported visible set loses eviction protection, its cells free, then re-allocate on return: capture + layout rebuild + save re-arm, cyclically. Fits the blank-strip artifact (cells mid-cycle), the paused churn, and the load correlation (slow UI frames -> visible-set gaps).
-
-**Next instrumentation (one run):** log evictions with clip ids in ClipAtlasCache::free_cell + begin_frame visible-set size deltas + per-clip capture attribution. Separately: the 75MB readback every 5s during ANY capture activity remains the FPS-oscillation stall candidate — consider save-on-idle-only regardless of the eviction fix.
-
-**Fix shape** — unknown until reproduced; next step is capturing a repro (which layer/clip
-state, timeline zoom level, playback vs. idle) the next time it's seen.
 
 ### BUG-118 (render-scene-fog-washes-out-instead-of-depth-grading) — atmosphere fog reads as uniform washout, not distance-graded haze — MED look-quality / render_scene
 **Status:** OPEN — reported live by Peter 2026-07-11 (Apricot Weather); logged without investigation per his call.
@@ -1535,6 +1510,73 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-119 (timeline-layer-flickers-intermittently) — clip-thumbnail atlas triple-buffer clear-during-read race — HIGH, FIXED at root this session
+**Status:** FIXED (root-caused + fixed this session; pending Peter's visual confirm on a heavy scene). Companion fix `3c108f24` (paused-recapture save loop, same hunt) already landed separately.
+
+**Symptom** — the timeline layer clip rendering sometimes flickers rapidly ("flicks like
+crazy"), reading as a blue/navy strobe over part or all of a layer's filmstrip. Correlated
+with GPU saturation (heavy instanced 3D scenes, high density); render FPS observed
+oscillating 60->30->60 in cycles while it happens.
+
+**Root cause (found this session)** — the clip-thumbnail atlas was a private content-owned
+"persistent" texture PLUS three rotating IOSurface copies (`clip_atlas_textures`, a
+`SharedTextureBridge`, `SURFACE_COUNT = 3`). Every atlas change re-painted the FULL
+8192x1152 texture onto the next rotating write surface via a `MTLLoadAction.Clear` full-copy
+blit (`fill_clip_atlas`'s "Clip Thumbnail Atlas Publish" draw) while the UI thread
+concurrently sampled whichever surface `front_index` pointed at. Under GPU saturation the
+content thread falls behind the fence that gates surface reuse; the ring wraps and the
+writer's `clear=true` publish blit clears the EXACT surface the UI is mid-read on — a
+whole-layer flicker to blue. The 2026-07-11 flicker-probe hunt below (preserved for
+history) never caught it because every probe counter instrumented writer-side bookkeeping
+(captures, layout rebuilds, propagation window) — none of them watched the read/clear edge
+itself, which is a cross-thread race, not something a counter on one side can see.
+
+**Fix (root, this session)** — replaced the triple-buffer ring with ONE IOSurface-backed
+texture (`shared_texture::SharedAtlasSurface`) imported by BOTH threads, so the content
+thread's persistent atlas and the UI's sampled texture are the same surface. Four
+invariants, all shipped: (1) exactly one clip-atlas texture — no rotation, no publish copy,
+no front-buffer flip (`clip_atlas_textures`/`clip_atlas_bridge`/`clip_atlas_propagate` all
+deleted); (2) no clear after the one-time init clear at surface creation — every cell blit
+is `LoadAction::Load`, so the deleted publish blit was the only `clear=true` write the atlas
+ever had; (3) layout never leads pixels — a (re)allocated cell's layout is stashed in
+`clip_atlas_pending_layout` UNSTAMPED, stamped with that frame's real GPU signal value right
+after `signal_event`/commit, and only promoted to the UI-visible `last_clip_atlas_layout`
+once `native_event.is_done(signal)` — so the UI can never learn about a cell before its
+pixels are confirmed landed; (4) a pressure gate (`last_fence_wait_ms > 0.1`, meaning the
+content thread blocked on the GPU fence last frame) skips ALL thumbnail GPU work that
+frame — cold-start renders, filmstrip decode driving, capture/restore blits, new
+save-readback submits — while still allowing an already-in-flight readback to drain (a CPU
+memcpy, no new GPU work). Accepted trade, by design: the UI may sample a cell mid-blit for
+one frame (valid-old or valid-new pixels, never blank) — replacing the ring's stale-frame
+guarantee. See `crates/manifold-app/src/shared_texture.rs` (`SharedAtlasSurface`) and
+`crates/manifold-app/src/content_pipeline.rs` (`fill_clip_atlas`/`restore_clip_atlas`/
+`render_content`'s clip-atlas snapshot + promotion + pressure gate).
+
+**Hunt log (2026-07-11, preserved for history — narrowed the search but didn't find the
+race; superseded by the root cause above):**
+
+**Symptom (full):** timeline layer flickers blue when GPU saturates (heavy instanced 3D
+scenes, high density); render FPS oscillates 60->30->60 in cycles; churn continues while
+transport is PAUSED. Mid-flicker artifact screenshots show the clip's filmstrip mostly
+blank/navy with a few ghost cells.
+
+**Exonerated by probe (MANIFOLD_FLICKER_PROBE=1, three runs):** thumb-pass skips 0, strip misses 0, empty layouts 0, alloc fails 0, RT-only capture refusals 0, surface fence timeouts 0 — all while flicker was CONFIRMED on-screen. The UI thumbnail-draw guard, capacity/eviction failure, and the fence-timeout force-clear are not the mechanism.
+
+**Confirmed real (probe):** a perpetual disk-save loop — ATLAS SAVE READBACK (75MB Rgba16Float 8192x1152, GPU->CPU) fired every ~5-6s in EVERY run (frames 301/661/967; 301/635/995/1355/1685/2045), even fully idle. Capture every ~1.5s -> re-arms the 5s save debounce -> readback, forever. A beat-movement gate on the throttled refresh shipped (commit on feat/scene1-wind) but the FINAL run still shows captures ~1/s AND periodic layout_rebuilds=1 (a burst of captures=4 layout_rebuilds=4 as fence_wait rose to ~20ms) — layout rebuilds on a stable timeline mean cells are being EVICTED and re-allocated, and the existing.is_none() recapture path bypasses the beat gate.
+
+**Prime suspect (partially right):** clip_atlas_visible set flapping was suspected as the
+eviction/re-allocation driver; the actual mechanism found this session is upstream of
+eviction entirely — the clear-during-read race on the rotating ring, independent of
+whether a cell is newly allocated or just being republished.
+
+**Next instrumentation (superseded):** the planned eviction/visible-set logging pass was not
+needed — the root cause was found by re-reading the publish path's `clear=true` argument
+against the ring's completion-lag behavior, not by further counter instrumentation.
+
+**Fix shape (superseded by "Fix (root, this session)" above)** — the originally-planned
+next step (capture a live repro) was overtaken by finding the mechanism from the code path
+directly.
 
 ### BUG-104 (audio-trigger-takes-over-shared-param-mod-goes-dead) — with a Trigger enabled, audio modulation on a card param that the graph's trigger option also drives goes DEAD, and stays dead after disable — MED
 **Status:** FIXED 2026-07-11 (Sonnet, `bug/104-trigger-takeover`, all 5 parts landed) — see the landing summary near the end of this entry for commits, tests, and the two items still owed to Peter (the `trigger_modulate` idiom name, the Lissajous snap feel on the rig). Originally reported by Peter 2026-07-10.
