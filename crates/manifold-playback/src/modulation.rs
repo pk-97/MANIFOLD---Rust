@@ -1217,6 +1217,77 @@ mod tests {
         );
     }
 
+    /// BUG-104 INVESTIGATION (Lane C, scratch — not a fix). Pins the
+    /// ENGINE half of the "fader-riding card mod goes dead and stays dead
+    /// when a trigger is enabled" report. The Continuous arm
+    /// (`modulation.rs`) has no coupling to any trigger state, and the
+    /// per-instance `audio_mods` list is not rebuilt when a trigger toggles,
+    /// so a card audio mod on a plain Float param keeps tracking its signal
+    /// every tick REGARDLESS of trigger enable/disable — and
+    /// `clear_all_trigger_edges` (the transport-stop / "kill the trigger"
+    /// reset) clears only `trigger_edge`/step shadows, never `m.enabled` and
+    /// never `p.value`. Conclusion: any BUG-104 takeover/persistence must
+    /// live on the RENDERER graph side (mux `switch_value` selecting the
+    /// trigger cycle over the user binding, plus the `clip_trigger_cycle`/
+    /// `sample_and_hold` StateStore latch that playback's reset cannot
+    /// reach), not in the engine mod evaluator.
+    #[test]
+    fn bug104_continuous_card_mod_is_decoupled_from_trigger_reset() {
+        let (mut project, send_id) = project_with_audio_send();
+        attach_full_range_low_mod(&mut project, &send_id);
+
+        // The fader tracks its signal every tick — up, down, up.
+        for (level, expect) in [(1.0_f32, 1.0_f32), (0.25, 0.25), (0.8, 0.8)] {
+            let snap = snapshot_low(level);
+            evaluate_all_audio_mods(
+                &mut project,
+                &snap,
+                Seconds(0.016),
+                &mut Vec::new(),
+                &[],
+                &mut FireMeterCapture::default(),
+            );
+            let v = project.timeline.layers[0].effects.as_ref().unwrap()[0]
+                .params
+                .get("amount")
+                .unwrap()
+                .value;
+            assert!(
+                (v - expect).abs() < 1e-6,
+                "continuous card mod tracks signal each tick: expected {expect}, got {v}"
+            );
+        }
+
+        // The transport-stop / trigger-kill reset runs.
+        clear_all_trigger_edges(&mut project);
+
+        // The mod is untouched: still enabled, still tracking.
+        assert!(
+            project.timeline.layers[0].effects.as_ref().unwrap()[0].audio_mods.as_ref().unwrap()[0]
+                .enabled,
+            "trigger-edge reset must not disable the continuous card mod"
+        );
+        let snap = snapshot_low(0.5);
+        let active = evaluate_all_audio_mods(
+            &mut project,
+            &snap,
+            Seconds(0.016),
+            &mut Vec::new(),
+            &[],
+            &mut FireMeterCapture::default(),
+        );
+        assert!(active, "continuous card mod still live after the trigger reset");
+        let v = project.timeline.layers[0].effects.as_ref().unwrap()[0]
+            .params
+            .get("amount")
+            .unwrap()
+            .value;
+        assert!(
+            (v - 0.5).abs() < 1e-6,
+            "continuous card mod still tracks its signal after the reset, got {v}"
+        );
+    }
+
     // ── §9 U1: unified trigger-gate mods (formerly §8's separate
     //    `AudioTriggerMod` config, deleted) ──────────────────────────────
 
