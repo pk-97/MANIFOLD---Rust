@@ -113,6 +113,23 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ## Open
 
+### BUG-118 (render-scene-fog-washes-out-instead-of-depth-grading) — atmosphere fog reads as uniform washout, not distance-graded haze — MED look-quality / render_scene
+
+**Symptom** — `node.atmosphere` fog at even low density (0.04) washes out the whole
+frame uniformly: near geometry loses contrast as much as far geometry, so fog reads
+as a milk filter instead of depth. Seen live in Apricot Weather (macro scale, camera
+distance ~9), 2026-07-11. Stopgap: fog card removed from the preset, density zeroed.
+
+**Root cause** — unknown, NOT investigated (Peter's call 2026-07-11: log, don't
+chase). Suspects: fog factor not distance-scaled at short camera ranges;
+`height_falloff` interaction with geometry near y=0; fog blended pre-tonemap so it
+washes highlights.
+
+**Fix shape** — headless fog-density sweep at two camera distances via
+`render-generator-preset`; assert near/far attenuation ratio differs; then read the
+atmosphere WGSL blend. Rendering-infra-v2 volumetrics work supersedes this if it
+lands first.
+
 ### BUG-117 (render-generator-preset-silently-under-renders-async-loaded-presets) — the look-dev CLI has no wait-for-convergence signal, so a slow-decoding preset can write an incomplete PNG with no warning — LOW (tooling gap, not a runtime bug)
 **Status:** OPEN — found 2026-07-11 authoring Scene 1 (Apricot Weather), a `render_scene` preset over a large (~1.4M-vertex, 84MB) glTF scan.
 
