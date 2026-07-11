@@ -71,7 +71,7 @@ or human can read it, and it needs no external tool.
 | BUG-101 | **setup-spectrogram-scroll-offset** | Docked Audio Setup spectrogram blit doesn't follow the body scroll offset — waterfall draws at pre-scroll position when scrolled (LOW) |
 | BUG-039 | **saw-rotation-wrap** | angle params clamp instead of wrapping; saw LFO can't spin a full rotation (MED, mechanism pinned) |
 | BUG-045 | **gap-ring-down-chase** | tracker follows kernel ring-down down ~2-4 bins in note gaps; notes gate 87.6 vs 90 (LOW) |
-| BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
+| ~~BUG-035~~ FIXED | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread — FIXED @ `55faec0f` (moved to clip-thumb disk worker via `try_read_packed()` + `store_atlas()`), rig confirmation owed |
 | BUG-037 | **glp-first-render-stall** | ~37ms warm-up on a glTF clip's first rendered frame (MED) |
 | BUG-038 | **ableton-log-spam** | bridge warns every 1.5s forever when Live absent (LOW) |
 | BUG-006 | **fused-param-noop** | param edits/undo on fused-away nodes silently no-op (HIGH) |
@@ -821,113 +821,6 @@ WARN level every ~1.5s indefinitely (see any 2026-07-06 trace-run log).
 succeeds (state flip logs "reconnected" at info). Optionally back off the poll while
 refused. `manifold-playback/src/ableton_bridge.rs`, small.
 
-### BUG-035 (authoring-hitch) — 3D scenes hitch when a camera/light param is animated — MED — re-encode hypothesis MEASURED AND REFUTED 2026-07-06; cause is app-side, still open
-**Status:** OPEN
-
-**Measurement (2026-07-06, Fable)** — `freeze-profile scene <glb> [param] [frames]` (new bench
-arm): drives the production import door (`assemble_import_graph`) + production
-`PresetRuntime::render` on the azalea fixture, static params vs `cam_orbit` swept per frame
-(the LFO shape), with a convergence gate (async texture decode means the first ~120 frames
-render black — un-gated numbers are void) and a sweep-sanity readback (min→mid must change
-pixels; min→max on an angle param is a full circle, a no-op).
-
-Results (600 frames/arm, converged, sweep verified live):
-- **CPU encode of the whole chain: ~70µs p50, 0.35ms max, zero >1ms frames in 2400** —
-  static or animated, 1080p or 4K. The "full-chain re-encode grazes the 16ms deadline"
-  hypothesis is off by three orders of magnitude. Incremental command encoding would
-  recover ~0.07ms/frame — **do not build it for this bug.**
-- **No static-vs-animated delta**: CPU 0.067 vs 0.065ms p50 (1080p); GPU 2.23 vs 2.18ms.
-  The graph runtime prices an LFO'd scene identically to a static one.
-- Also refuted along the way: there is NO held-when-static gate at the compositor/layer
-  level (the occlusion skip is blend-only — content_pipeline.rs "Everything still
-  RENDERS"); the static-scene smoothness the original diagnosis leaned on comes from the
-  executor's pure-step memo, and render_scene/gltf_mesh_source re-run every frame anyway.
-- The mesh re-blit + per-object rebind "smaller shaves" live inside that 70µs envelope —
-  not worth building for this bug either.
-
-**Surviving suspects (all app-side, only run when a param animates):** the modulation/LFO
-evaluator on the content thread; UI redraw driven by visibly-changing values (inspector
-sliders, graph-editor canvas + thumbnail dump_set when the editor is watching); content↔UI
-GPU contention (see `ui-present-content-gpu-contention` memory); present/pacing path.
-
-**In-app profiler sessions (2026-07-06, Peter, `meshImportTests.manifold`)** — the hitch is
-now precisely characterized: baseline content frame ~0.09ms, with **isolated single frames
-of ~59ms (58.6/58.7/59.2), entirely inside `render_content_ms`**, cadence roughly one per
-5–6s, present in BOTH the static and the LFO run. LFO/animation is fully exonerated as a
-cause (the original framing was wrong — a static scene hitches identically; you just see it
-when something moves). The quantized ~59ms magnitude + slow cadence says periodic
-maintenance work or a blocking wait inside `render_content_native`, not render cost.
-Candidate: `pool.prune_stale(300)` every 300 frames (content_pipeline.rs:1584-1595) — frame
-indices of the spikes (900, 1233, 3630) are ≡ 0/33/30 mod 300, consistent if the pool's
-counter is offset from the profiler's frame index. Unproven.
-
-**CAUGHT (2026-07-06, MANIFOLD_RENDER_TRACE run)** — five of five spikes land in the
-`clip_atlas` section: `clip_atlas=57.9–61.6ms`, cadence ~360 frames, exactly the
-CLIP_ATLAS_SAVE_DEBOUNCE=300 cycle. The culprit line is
-[content_pipeline.rs:2225](../crates/manifold-app/src/content_pipeline.rs#L2225) —
-`clip_atlas_readback.try_read()` on the completed persist readback. `try_read`
-([gpu_readback.rs:99-115](../crates/manifold-renderer/src/gpu_readback.rs#L99)) converts
-f16→u8 **per pixel, per channel, scalar, on the content thread**, and the clip atlas is
-8192×1152 Rgba16Float (75MB, 9.4M pixels) — ~58ms of CPU once per debounce cycle. The
-section's "all disk IO is off-thread" claim is true; the CPU conversion before the
-hand-off is the stall. (The separate one-off `generators=37.1ms` spike on the first
-frame after load is glTF texture/pipeline warm — not this bug.)
-
-**Fix shape (root: no O(surface) CPU work on the content thread)** — switch the persist
-path to `try_read_packed()` (plain memcpy, gpu_readback.rs:148) and move the f16→u8
-conversion + `slice_atlas_for_store` into the existing clip-thumb disk worker: hand it
-(raw bytes, layout snapshot, hashes) and let it slice/convert/store on its own thread.
-No new threads, no format change on disk.
-
-**Symptom** — animating a 3D scene's camera or sun/light via LFO produces a slight, visible
-hitch — an uneven frame spike, not a clean framerate drop. Reported by Peter 2026-07-05 on
-glTF ("glp") scenes; suspected across all `render_scene` / 3D-mesh output. A static 3D scene
-is smooth, and the *same* LFO on a 2D effect param is smooth (Peter confirmed 2D is fine).
-
-**Root cause (hypothesis, reasoned from code — NOT yet measured)** — when a layer is dirty
-it re-executes its whole effect chain, re-encoding every node's GPU commands into a fresh
-command buffer each frame. There is no incremental "encode once, patch the changed uniform"
-path. A static scene is held/composited without re-running the chain (this held-when-static
-behavior is *inferred* from observed smoothness — the exact gate was not located in code and
-should be confirmed during design). An LFO makes the layer dirty every frame, so the full 3D
-chain re-runs 60×/s. That re-encode is the suspected fixed per-frame cost that grazes the
-16ms deadline on the heavier 3D path while staying invisible on cheap 2D chains.
-
-Confirmed by reading:
-- `render_scene` and `gltf_mesh_source` are both non-pure (`PURE` defaults false,
-  [primitive.rs:104](../crates/manifold-renderer/src/node_graph/primitive.rs#L104);
-  neither overrides it), so the executor's memo-skip
-  ([execution.rs:189](../crates/manifold-renderer/src/node_graph/execution.rs#L189)) never
-  spares them — they re-run every frame the chain runs. The still-scene savings are NOT at
-  the node-memo level.
-- Per animated frame `render_scene` recomposes each object's model matrix, rebuilds its
-  uniform struct, looks up the pipeline, and re-binds all 8 texture/buffer slots
-  ([render_scene.rs:605-680](../crates/manifold-renderer/src/node_graph/primitives/render_scene.rs#L605-L680)),
-  and `gltf_mesh_source` re-blits the whole mesh buffer
-  ([gltf_mesh_source.rs:213-222](../crates/manifold-renderer/src/node_graph/primitives/gltf_mesh_source.rs#L213-L222))
-  even though geometry never changed.
-- NOT the freeze compiler: render nodes are `Boundary` (non-fusable) and its recompile keys
-  on structural content, "never per frame" ([freeze/install.rs:195-205](../crates/manifold-renderer/src/node_graph/freeze/install.rs#L195-L205)).
-  Exposed-param modulation flows as runtime uniforms and never changes the content key.
-
-**Fix shape** — incremental command encoding for the graph runtime: cache a layer's command
-buffer and only re-record when the graph *structure* changes, patching camera/light (and
-other exposed) uniforms in place between frames. System-wide upgrade (every animated layer
-benefits; payoff concentrated on expensive chains — 3D scenes, long stacks, many bindings).
-Orthogonal to, and layers on top of, the existing memo system (skips pure nodes) and freeze
-compiler (fuses pointwise passes) — an *addition*, not a rewrite. It sits on the hot render
-path where a stale-uniform bug becomes the show, so this is HIGH-risk-to-touch. Smaller
-shaves that reduce (not eliminate) the re-encode cost: persistent mesh buffer to kill the
-per-frame re-blit; trim `render_scene`'s per-object rebind.
-
-**Before building** — confirm the CPU re-encode is actually where the ms go: add per-frame
-timing around the 3D chain execution and watch it under a running LFO. Steady ~X ms → render
-cost, optimize the render; sawtooth → scheduling/overhead, and incremental encoding is the
-fix. (Not run this session — the app isn't headless and Peter didn't want the round-trip.)
-
-**Design owner** — queued to Fable for a proper design doc (`docs/*_DESIGN.md`), per
-[[fable-priority-queue]]. Reasoned diagnosis only; verify the measurement first.
-
 ### BUG-081 — Audible blip when an audio clip's voice is built (play-then-pause leaks ~10ms of the file's start) — LOW
 **Status:** OPEN
 
@@ -1666,6 +1559,150 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-035 (authoring-hitch) — 3D scenes hitch when a camera/light param is animated — FIXED (clip-atlas persist f16 convert moved off the content thread)
+**Status:** FIXED @ `55faec0f` (bug-wave lane B, 2026-07-11) — headless before/after `MANIFOLD_RENDER_TRACE` confirms the spike is gone; rig confirmation still owed (not run this session).
+
+**Resolution (`55faec0f`):** the CAUGHT section below pinned the root cause to
+`content_pipeline.rs`'s clip-atlas disk-persist debounce calling
+`ReadbackRequest::try_read()` on the completed readback — a scalar,
+per-pixel, per-channel f16→u8 convert over the full 8192×1152 clip atlas
+(9.4M pixels), inline on the content thread, once per
+`CLIP_ATLAS_SAVE_DEBOUNCE` (~5s) cycle. Fix: switch to `try_read_packed()`
+(plain memcpy, no conversion) and move the f16→u8 convert + per-cell slice
+into the existing clip-thumb disk worker thread via a new
+`ClipThumbCache::store_atlas()` message — no new threads, no on-disk format
+change. The now-dead RGBA8-only persist path (`CacheMsg::Store`,
+`ClipThumbCache::store`, `slice_atlas_for_store`) was deleted rather than
+suppressed (no-bare-`#[allow(dead_code)]` rule). `gpu_readback::f16_to_f32`
+made `pub` for reuse by the worker-side convert.
+
+**Verified at the level that caught it:** a new headless harness
+(`crates/manifold-app/src/bug035_verify.rs`, `journey-proofs` feature)
+reuses `journey_proof.rs`'s headless `ContentThread` construction, wires a
+real clip-atlas IOSurface bridge (`SharedTextureBridge` — a kernel GPU-memory
+object, no display needed), and drives the real, unmodified
+`ContentPipeline::render_content` (`export_mode = false`, the exact call
+`ContentThread::tick_frame` makes every frame) for 900 frames — 3 debounce
+cycles — with `MANIFOLD_RENDER_TRACE=1`. BEFORE (`try_read()`, via `git
+stash` of the fix on the same harness): `frame=301 ... clip_atlas=690.7ms`,
+`frame=631 ... clip_atlas=691.5ms` (dev-profile `cargo test` inflates the
+~58ms live-app figure — no vectorization/inlining — but same debounce
+cadence, same call site, same root cause). AFTER (`try_read_packed()` +
+`store_atlas()`, production 20ms trace threshold): **no `clip_atlas` trace
+line at all** across the same 900 frames — the spike drops entirely below
+the threshold (a diagnostic run with the threshold lowered to 0.3ms measured
+the residual content-thread cost of the now-plain-memcpy at ~11ms, still a
+~63× reduction from the removed scalar-conversion cost, and expected to be
+far smaller in a release build). Gates: `manifold-app` workspace tests (163
+lib + 4 integration, all green), `manifold-renderer --lib` (1020 green, 3
+unrelated ignored), `cargo clippy -p manifold-app -p manifold-renderer -- -D
+warnings` clean, plus a clippy pass with `--features journey-proofs --tests`
+for the new harness module.
+
+**Measurement (2026-07-06, Fable)** — `freeze-profile scene <glb> [param] [frames]` (new bench
+arm): drives the production import door (`assemble_import_graph`) + production
+`PresetRuntime::render` on the azalea fixture, static params vs `cam_orbit` swept per frame
+(the LFO shape), with a convergence gate (async texture decode means the first ~120 frames
+render black — un-gated numbers are void) and a sweep-sanity readback (min→mid must change
+pixels; min→max on an angle param is a full circle, a no-op).
+
+Results (600 frames/arm, converged, sweep verified live):
+- **CPU encode of the whole chain: ~70µs p50, 0.35ms max, zero >1ms frames in 2400** —
+  static or animated, 1080p or 4K. The "full-chain re-encode grazes the 16ms deadline"
+  hypothesis is off by three orders of magnitude. Incremental command encoding would
+  recover ~0.07ms/frame — **do not build it for this bug.**
+- **No static-vs-animated delta**: CPU 0.067 vs 0.065ms p50 (1080p); GPU 2.23 vs 2.18ms.
+  The graph runtime prices an LFO'd scene identically to a static one.
+- Also refuted along the way: there is NO held-when-static gate at the compositor/layer
+  level (the occlusion skip is blend-only — content_pipeline.rs "Everything still
+  RENDERS"); the static-scene smoothness the original diagnosis leaned on comes from the
+  executor's pure-step memo, and render_scene/gltf_mesh_source re-run every frame anyway.
+- The mesh re-blit + per-object rebind "smaller shaves" live inside that 70µs envelope —
+  not worth building for this bug either.
+
+**Surviving suspects (all app-side, only run when a param animates):** the modulation/LFO
+evaluator on the content thread; UI redraw driven by visibly-changing values (inspector
+sliders, graph-editor canvas + thumbnail dump_set when the editor is watching); content↔UI
+GPU contention (see `ui-present-content-gpu-contention` memory); present/pacing path.
+
+**In-app profiler sessions (2026-07-06, Peter, `meshImportTests.manifold`)** — the hitch is
+now precisely characterized: baseline content frame ~0.09ms, with **isolated single frames
+of ~59ms (58.6/58.7/59.2), entirely inside `render_content_ms`**, cadence roughly one per
+5–6s, present in BOTH the static and the LFO run. LFO/animation is fully exonerated as a
+cause (the original framing was wrong — a static scene hitches identically; you just see it
+when something moves). The quantized ~59ms magnitude + slow cadence says periodic
+maintenance work or a blocking wait inside `render_content_native`, not render cost.
+Candidate: `pool.prune_stale(300)` every 300 frames (content_pipeline.rs:1584-1595) — frame
+indices of the spikes (900, 1233, 3630) are ≡ 0/33/30 mod 300, consistent if the pool's
+counter is offset from the profiler's frame index. Unproven.
+
+**CAUGHT (2026-07-06, MANIFOLD_RENDER_TRACE run)** — five of five spikes land in the
+`clip_atlas` section: `clip_atlas=57.9–61.6ms`, cadence ~360 frames, exactly the
+CLIP_ATLAS_SAVE_DEBOUNCE=300 cycle. The culprit line is
+[content_pipeline.rs:2225](../crates/manifold-app/src/content_pipeline.rs#L2225) —
+`clip_atlas_readback.try_read()` on the completed persist readback. `try_read`
+([gpu_readback.rs:99-115](../crates/manifold-renderer/src/gpu_readback.rs#L99)) converts
+f16→u8 **per pixel, per channel, scalar, on the content thread**, and the clip atlas is
+8192×1152 Rgba16Float (75MB, 9.4M pixels) — ~58ms of CPU once per debounce cycle. The
+section's "all disk IO is off-thread" claim is true; the CPU conversion before the
+hand-off is the stall. (The separate one-off `generators=37.1ms` spike on the first
+frame after load is glTF texture/pipeline warm — not this bug.)
+
+**Fix shape (root: no O(surface) CPU work on the content thread)** — switch the persist
+path to `try_read_packed()` (plain memcpy, gpu_readback.rs:148) and move the f16→u8
+conversion + `slice_atlas_for_store` into the existing clip-thumb disk worker: hand it
+(raw bytes, layout snapshot, hashes) and let it slice/convert/store on its own thread.
+No new threads, no format change on disk.
+
+**Symptom** — animating a 3D scene's camera or sun/light via LFO produces a slight, visible
+hitch — an uneven frame spike, not a clean framerate drop. Reported by Peter 2026-07-05 on
+glTF ("glp") scenes; suspected across all `render_scene` / 3D-mesh output. A static 3D scene
+is smooth, and the *same* LFO on a 2D effect param is smooth (Peter confirmed 2D is fine).
+
+**Root cause (hypothesis, reasoned from code — NOT yet measured)** — when a layer is dirty
+it re-executes its whole effect chain, re-encoding every node's GPU commands into a fresh
+command buffer each frame. There is no incremental "encode once, patch the changed uniform"
+path. A static scene is held/composited without re-running the chain (this held-when-static
+behavior is *inferred* from observed smoothness — the exact gate was not located in code and
+should be confirmed during design). An LFO makes the layer dirty every frame, so the full 3D
+chain re-runs 60×/s. That re-encode is the suspected fixed per-frame cost that grazes the
+16ms deadline on the heavier 3D path while staying invisible on cheap 2D chains.
+
+Confirmed by reading:
+- `render_scene` and `gltf_mesh_source` are both non-pure (`PURE` defaults false,
+  [primitive.rs:104](../crates/manifold-renderer/src/node_graph/primitive.rs#L104);
+  neither overrides it), so the executor's memo-skip
+  ([execution.rs:189](../crates/manifold-renderer/src/node_graph/execution.rs#L189)) never
+  spares them — they re-run every frame the chain runs. The still-scene savings are NOT at
+  the node-memo level.
+- Per animated frame `render_scene` recomposes each object's model matrix, rebuilds its
+  uniform struct, looks up the pipeline, and re-binds all 8 texture/buffer slots
+  ([render_scene.rs:605-680](../crates/manifold-renderer/src/node_graph/primitives/render_scene.rs#L605-L680)),
+  and `gltf_mesh_source` re-blits the whole mesh buffer
+  ([gltf_mesh_source.rs:213-222](../crates/manifold-renderer/src/node_graph/primitives/gltf_mesh_source.rs#L213-L222))
+  even though geometry never changed.
+- NOT the freeze compiler: render nodes are `Boundary` (non-fusable) and its recompile keys
+  on structural content, "never per frame" ([freeze/install.rs:195-205](../crates/manifold-renderer/src/node_graph/freeze/install.rs#L195-L205)).
+  Exposed-param modulation flows as runtime uniforms and never changes the content key.
+
+**Fix shape** — incremental command encoding for the graph runtime: cache a layer's command
+buffer and only re-record when the graph *structure* changes, patching camera/light (and
+other exposed) uniforms in place between frames. System-wide upgrade (every animated layer
+benefits; payoff concentrated on expensive chains — 3D scenes, long stacks, many bindings).
+Orthogonal to, and layers on top of, the existing memo system (skips pure nodes) and freeze
+compiler (fuses pointwise passes) — an *addition*, not a rewrite. It sits on the hot render
+path where a stale-uniform bug becomes the show, so this is HIGH-risk-to-touch. Smaller
+shaves that reduce (not eliminate) the re-encode cost: persistent mesh buffer to kill the
+per-frame re-blit; trim `render_scene`'s per-object rebind.
+
+**Before building** — confirm the CPU re-encode is actually where the ms go: add per-frame
+timing around the 3D chain execution and watch it under a running LFO. Steady ~X ms → render
+cost, optimize the render; sawtooth → scheduling/overhead, and incremental encoding is the
+fix. (Not run this session — the app isn't headless and Peter didn't want the round-trip.)
+
+**Design owner** — queued to Fable for a proper design doc (`docs/*_DESIGN.md`), per
+[[fable-priority-queue]]. Reasoned diagnosis only; verify the measurement first.
 
 ### BUG-066 (fluid3d-corner-drift) — FluidSim3D density herded into the top-right octant — FIXED (partial-volume dispatch; class killed via shared `VOLUME_WORKGROUP_3D`)
 **Status:** FIXED — root cause found + fixed 2026-07-10 16:51 @ `eebac94d` (on main); Peter confirmed the artifact gone on the rig 2026-07-11.
