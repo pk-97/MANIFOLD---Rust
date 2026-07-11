@@ -74,7 +74,6 @@ or human can read it, and it needs no external tool.
 | BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
 | BUG-037 | **glp-first-render-stall** | ~37ms warm-up on a glTF clip's first rendered frame (MED) |
 | BUG-038 | **ableton-log-spam** | bridge warns every 1.5s forever when Live absent (LOW) |
-| BUG-007 | **fusion-exclusion-blind** | particle-loop exclusion misses configured wgsl_compute shapes (HIGH) |
 | BUG-008 | **fused-buffer-oob** | mismatched array lengths read out of bounds in fused region (HIGH) |
 | BUG-009 | **stateless-gate-miss** | harvest skip resets StateStore-held scalar state (HIGH) |
 | BUG-010 | **wgsl-first-entry** | multi-entry wgsl_compute silently dispatches the first (MED) |
@@ -1018,29 +1017,6 @@ a signal that a recent UI landing skipped the full workspace test.
 rather than bumping the baseline, which would silently bless the drift the ratchet exists to catch.
 Unrelated to param storage.
 
-### BUG-007 — Particle-loop fusion exclusion is blind to configured `node.wgsl_compute` shapes — HIGH
-**Status:** OPEN
-
-**Root cause** — [region.rs:834](../crates/manifold-renderer/src/node_graph/freeze/region.rs#L834):
-`cycle_contains_array` uses a bare `registry.construct(type_id)` — the ONE hold-out in the
-file; every other classification call site uses `configured_construct`, whose own doc comment
-states why the bare form is wrong. A full-kernel `node.wgsl_compute` with a
-`var<storage, read_write> array<Particle>` output (StrangeAttractor's "simulate" node is a
-shipped instance) introspects as the DEFAULT kernel (no Array output) under the bare
-construct, so the cycle scan can't see the particle stage.
-
-**Symptom** — a texture atom on a feedback loop whose only Array producer is such a node
-passes cut rule 12 and fuses tier-A f16 in-loop, where the bit-exact induction argument does
-not hold across a particle/scatter stage (FluidSim precedent: max_abs ~0.73 over ~31% of
-pixels). Fused render visibly diverges from the editor.
-
-**Fix shape** — one line: use `configured_construct(registry, node)` in
-`cycle_contains_array`. Sweep the file for any other bare-construct hold-outs
-(`node_is_buffer_atom` / `region_is_buffer` at
-[region.rs:1885-1905](../crates/manifold-renderer/src/node_graph/freeze/region.rs#L1885-L1905)
-have the same pattern — audit while there). Test: a loop through a configured wgsl_compute
-particle node must classify its texture atoms Boundary.
-
 ### BUG-008 — Fused buffer region with mismatched array lengths reads out of bounds — HIGH
 **Status:** OPEN
 
@@ -1668,6 +1644,39 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-007 — Particle-loop fusion exclusion is blind to configured `node.wgsl_compute` shapes — HIGH
+**Status:** FIXED (bug/wave1-lane-a-freeze) — reproduced (`cycle_through_configured_particle_wgsl_compute_is_particle_loop`,
+region.rs, loads the real StrangeAttractor sim node) and fixed. `cycle_contains_array`
+(region.rs:834) now uses `configured_construct(registry, node)`. Swept the file: also converted
+the two sibling holdouts `node_is_buffer_atom` + `region_is_buffer` (~region.rs:1898/1914) and
+`input_port_access` (via `wire_coincident_consumed`) — all constructed bare, all the same
+blind-spot class (a configured full-kernel `node.wgsl_compute`'s Array output / gather access
+only appears after `wgsl_source` is parsed). The test pins the root cause directly: a bare
+construct of the sim node reports NO Array output; the configured construct does. Two remaining
+bare `registry.construct` sites in region.rs are the `#[ignore]`d audit-diagnostic prints
+(`domain_flags` ~2613, `explain_preset` ~2682) — not on the runtime classification path; left as
+census-only (they'd under-report configured shapes but only in a manual audit dump).
+
+**Root cause** — [region.rs:834](../crates/manifold-renderer/src/node_graph/freeze/region.rs#L834):
+`cycle_contains_array` uses a bare `registry.construct(type_id)` — the ONE hold-out in the
+file; every other classification call site uses `configured_construct`, whose own doc comment
+states why the bare form is wrong. A full-kernel `node.wgsl_compute` with a
+`var<storage, read_write> array<Particle>` output (StrangeAttractor's "simulate" node is a
+shipped instance) introspects as the DEFAULT kernel (no Array output) under the bare
+construct, so the cycle scan can't see the particle stage.
+
+**Symptom** — a texture atom on a feedback loop whose only Array producer is such a node
+passes cut rule 12 and fuses tier-A f16 in-loop, where the bit-exact induction argument does
+not hold across a particle/scatter stage (FluidSim precedent: max_abs ~0.73 over ~31% of
+pixels). Fused render visibly diverges from the editor.
+
+**Fix shape** — one line: use `configured_construct(registry, node)` in
+`cycle_contains_array`. Sweep the file for any other bare-construct hold-outs
+(`node_is_buffer_atom` / `region_is_buffer` at
+[region.rs:1885-1905](../crates/manifold-renderer/src/node_graph/freeze/region.rs#L1885-L1905)
+have the same pattern — audit while there). Test: a loop through a configured wgsl_compute
+particle node must classify its texture atoms Boundary.
 
 ### BUG-006 — Param edits/undo on fused-away nodes silently no-op until an unrelated rebuild — HIGH
 **Status:** FIXED (bug/wave1-lane-a-freeze) — reproduced by a unit test on the current tip
