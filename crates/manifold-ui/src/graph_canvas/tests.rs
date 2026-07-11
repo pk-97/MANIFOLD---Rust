@@ -751,6 +751,53 @@ fn pressing_row_body_scrubs_and_emits_no_expose() {
     );
 }
 
+/// BUG-105: right-clicking a numeric node-face slider's TRACK zone (right of
+/// the label cell) resets it to its declared default — the same gesture
+/// every card/panel slider already honors via `chrome/diff.rs`'s
+/// `Gesture::RightClick -> SliderReset`, which this immediate-mode canvas
+/// never reached before. `float_param`'s `default_value` is `0.0`; the
+/// current value is `0.8` so a reset is observable.
+#[test]
+fn right_click_track_zone_resets_numeric_param_to_default() {
+    let (mut canvas, vp) = expanded_canvas(float_param("amount", 0.8));
+    let row = canvas.param_row_rect(vp, 1, 0).expect("row rect");
+    // Same track-zone x `press_row_value`/`pressing_row_body_scrubs_...` use
+    // for a left-click scrub — well past the label cell.
+    let hit = canvas.on_right_button_down(vp, row.x + row.w * 0.7, row.y + row.h * 0.5);
+    assert!(
+        hit.is_none(),
+        "a track-zone reset must not also report a row hit for the mapping popover"
+    );
+    let (nid, name, val) = drained_set_param(&mut canvas)
+        .expect("track-zone right-click on a numeric row must emit SetGraphNodeParam");
+    assert_eq!((nid, name.as_str()), (1, "amount"));
+    match val {
+        crate::SerializedParamValue::Float { value } => {
+            assert!((value - 0.0).abs() < 1e-6, "reset must write the declared default (0.0), got {value}");
+        }
+        other => panic!("expected a Float reset value, got {other:?}"),
+    }
+}
+
+/// BUG-105 companion: the LABEL zone of the same row is untouched — a
+/// right-click there still reports the row hit so the app's mapping-popover
+/// path (checked separately against whether the inner param is exposed as a
+/// card binding) keeps working exactly as before.
+#[test]
+fn right_click_label_zone_still_reports_row_hit_for_mapping_popover() {
+    let (mut canvas, vp) = expanded_canvas(float_param("amount", 0.8));
+    let row = canvas.param_row_rect(vp, 1, 0).expect("row rect");
+    let hit = canvas.on_right_button_down(vp, row.x + 4.0, row.y + row.h * 0.5);
+    assert_eq!(hit, Some((1, 0)), "label-zone right-click must still resolve to the row");
+    assert!(
+        canvas
+            .drain_edits()
+            .iter()
+            .all(|a| !matches!(a, GraphEditCommand::SetGraphNodeParam { .. })),
+        "label-zone right-click must not itself reset the param"
+    );
+}
+
 // ─── Phase 2: discrete on-face editing (bool / trigger / enum) ───────────────
 
 /// Press the value side of node 1's row `pi` (past the left-edge expose glyph).
