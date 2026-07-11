@@ -240,30 +240,38 @@ impl LayerClipTrigger {
     }
 }
 
-/// Maximum fire-mode configs [`FireMeterCapture`] tracks in one analysis
-/// block — a real project runs a handful of trigger-gate cards and clip
-/// triggers; 128 is generous headroom, not a tight budget. Configs beyond
-/// this are dropped (matches `manifold_audio::analysis::MAX_SENDS`'s
-/// truncate-and-warn policy).
-pub const MAX_FIRE_METERS: usize = 128;
+/// Maximum audio-mod rows [`FireMeterCapture`] tracks in one analysis block.
+/// Widened 2026-07-11 (128 → 512): every ENABLED audio mod in the project
+/// now captures a level each tick (previously only fire-mode/`is_trigger_gate`
+/// configs did — continuous/Step/Random drawers had no meter at all, the bug
+/// this widening fixes), so headroom must cover every armed drawer across
+/// every effect/generator/clip-trigger row in a heavy show, not just the
+/// handful of gate cards. 512 covers a heavy 53-layer project with room to
+/// spare. Configs beyond this are dropped (matches
+/// `manifold_audio::analysis::MAX_SENDS`'s truncate-and-warn policy).
+pub const MAX_FIRE_METERS: usize = 512;
 
-/// Re-exported at its historical path so `manifold-playback` call sites
-/// written against `manifold_core::audio_trigger::fire_meter_key` are
-/// unchanged. The hash itself lives in `manifold-foundation`
+/// Re-exported at their historical path so `manifold-playback` call sites
+/// written against `manifold_core::audio_trigger::fire_meter_key*` are
+/// unchanged. The hashes themselves live in `manifold-foundation`
 /// (`manifold-ui` cannot depend on `manifold-core` —
 /// `docs/UI_LAYERING_INVERSION.md` — so a pure, zero-domain-semantics byte
 /// hash belongs in the shared zero-dependency vocabulary crate, mirroring
-/// how `id.rs`'s ID types moved there for the same reason).
-pub use manifold_foundation::fire_meter_key;
+/// how `id.rs`'s ID types moved there for the same reason). Production code
+/// should build keys via the two typed constructors, never the raw
+/// `fire_meter_key`; see `manifold_foundation::hash`'s module doc.
+pub use manifold_foundation::{fire_meter_key, fire_meter_key_for_clip_trigger, fire_meter_key_for_param};
 
-/// Live shaped-signal capture for every fire-mode config evaluated this
+/// Live shaped-signal capture for every enabled audio mod evaluated this
 /// analysis block — the content-thread side of the D6 fire meter
 /// (`docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` P3c, BUG-082's
-/// fix). Two evaluators write into ONE shared instance each tick:
-/// `manifold_playback::modulation::evaluate_instance_audio_mods` (param
-/// gate cards, keyed on `fire_meter_key(&[effect_id, param_id])`) and
+/// fix; widened 2026-07-11 from fire-mode-only to every enabled mod). Two
+/// evaluators write into ONE shared instance each tick:
+/// `manifold_playback::modulation::evaluate_instance_audio_mods` (every
+/// enabled param audio mod, keyed via
+/// [`fire_meter_key_for_param`]) and
 /// `manifold_playback::live_trigger::LiveTriggerState::evaluate` (clip
-/// triggers, keyed on `fire_meter_key(&[layer_id, &idx.to_le_bytes()])`).
+/// triggers, keyed via [`fire_meter_key_for_clip_trigger`]).
 /// Both push the SAME pre-range-map `shape.condition()` output the evaluator
 /// edge-detects against the fixed 0.5 threshold (D3 AS-BUILT) — the drawer
 /// meter shows exactly what decides whether the config fires.

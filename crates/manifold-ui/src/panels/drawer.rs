@@ -50,8 +50,14 @@ const STATUS_LABEL_H: f32 = 12.0;
 /// `show_meter` is set: a thin track+fill+threshold-tick underline,
 /// mirroring the deleted `TriggerRowIds`/`update_trigger_levels` meter
 /// (470228ec, `audio_setup_panel.rs`), generalized from a fixed per-send row
-/// to any fire-mode drawer's Amount row.
-const METER_STRIP_H: f32 = 6.0;
+/// to every audio-mod drawer's Amount row (2026-07-11: every drawer, not just
+/// fire-mode ones — see `show_amount_meter`). `pub(crate)` so
+/// `param_slider_shared::audio_config_height` — a caller reserving height for
+/// a drawer it isn't itself building — can add this term without duplicating
+/// the literal and drifting from what [`DrawerRow::height`] actually builds
+/// (the under-reservation this closes: a metered drawer used to overflow its
+/// reserved slot by exactly this many pixels).
+pub(crate) const METER_STRIP_H: f32 = 6.0;
 /// Bar thickness within the reserved strip.
 const METER_BAR_H: f32 = 3.0;
 /// Track/idle fill colors — a dim, always-visible well so the meter reads
@@ -256,11 +262,12 @@ const PEAK_DECAY_PER_SEC: f32 = 5.0;
 /// underline meter (470228ec).
 #[derive(Clone)]
 pub struct MeterIds {
+    /// The meter's track node — its live bounds (not a cached copy) are the
+    /// single source of truth for the fill's geometry every tick, so a
+    /// `ScrollContainer::offset_content` shift (which moves the track's
+    /// absolute bounds directly, no rebuild) carries the fill along with it.
+    track: NodeId,
     fill: NodeId,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
     /// UI-side peak-hold state (BUG-109 P5) — instant attack to a new peak,
     /// held `PEAK_HOLD_SECONDS`, then decays toward the live level. `Cell`,
     /// not `&mut self`, so `update()` stays callable through the existing
@@ -297,7 +304,14 @@ impl MeterIds {
         self.held_level.set(held);
         self.hold_remaining.set(hold);
 
-        tree.set_bounds(self.fill, Rect::new(self.x, self.y, self.w * held, self.h));
+        // Read the track's CURRENT bounds — not a build-time cache — so an
+        // in-place scroll (`ScrollContainer::offset_content`, which shifts
+        // the track's absolute bounds directly) is reflected here too.
+        let track_rect = tree.get_bounds(self.track);
+        tree.set_bounds(
+            self.fill,
+            Rect::new(track_rect.x, track_rect.y, track_rect.width * held, track_rect.height),
+        );
         let firing = held >= 0.5;
         let fill_color = if firing { accent } else { dim(accent, 0.55) };
         tree.set_style(self.fill, UIStyle { bg_color: fill_color, ..UIStyle::default() });
@@ -488,7 +502,7 @@ pub fn build(
                     let meter_y = row_y + ROW_H + 1.0;
                     let meter_x = sx + *label_w;
                     let meter_w = (slider_w - *label_w).max(4.0);
-                    tree.add_panel(
+                    let track = tree.add_panel(
                         Some(container),
                         meter_x,
                         meter_y,
@@ -514,11 +528,8 @@ pub fn build(
                         UIStyle { bg_color: METER_TICK_COLOR, ..UIStyle::default() },
                     );
                     meters.push(Some(MeterIds {
+                        track,
                         fill,
-                        x: meter_x,
-                        y: meter_y,
-                        w: meter_w,
-                        h: METER_BAR_H,
                         held_level: Cell::new(0.0),
                         hold_remaining: Cell::new(0.0),
                     }));
@@ -685,6 +696,61 @@ mod tests {
 
         assert_eq!(ids.button_count(), 0);
         assert_eq!(ids.sliders.len(), 1);
+    }
+
+    #[test]
+    fn meter_fill_tracks_track_after_in_place_scroll() {
+        // Regression: `MeterIds` used to cache the meter's build-time x/y/w/h
+        // and re-assert them from `update()` every tick. An in-place scroll
+        // (`ScrollContainer::offset_content`, simulated below exactly as it
+        // operates — shift every content node's absolute bounds by delta_y,
+        // no rebuild) moves the track's real bounds, but the pre-fix `update`
+        // kept writing the fill back to its stale pre-scroll position, so the
+        // fill visibly detached from the track it's meant to sit inside.
+        // `MeterIds` now stores the track's `NodeId` and reads its CURRENT
+        // bounds each call — this pins the fill to whatever the track's live
+        // bounds are, scrolled or not.
+        let spec = DrawerSpec {
+            rows: vec![DrawerRow::Slider {
+                label: "Amount".into(),
+                norm: 0.5,
+                default_norm: 0.5,
+                value_text: "0.50".into(),
+                label_w: 50.0,
+                reset: placeholder_reset(),
+                show_meter: true,
+            }],
+            btn_font_size: 10,
+            slider_font_size: 11,
+            theme: Theme::INSPECTOR,
+        };
+        let mut tree = UITree::new();
+        let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
+        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec);
+        let meter = ids.meters[0].as_ref().expect("show_meter=true builds a MeterIds");
+
+        // Simulate `ScrollContainer::offset_content`: shift every node's
+        // absolute bounds by delta_y in place, exactly as the real cheap
+        // scroll path does — no rebuild, no call back into any widget code.
+        let delta_y = -37.0;
+        for i in 0..tree.count() {
+            let id = tree.id_at(i);
+            let mut b = tree.get_bounds(id);
+            b.y += delta_y;
+            tree.set_bounds(id, b);
+        }
+
+        meter.update(&mut tree, 0.8, Color32::WHITE, 0.016);
+
+        let track_rect = tree.get_bounds(meter.track);
+        let fill_rect = tree.get_bounds(meter.fill);
+        assert!(
+            (fill_rect.y - track_rect.y).abs() < 0.001,
+            "fill must sit at the track's CURRENT (post-scroll) y, not a stale \
+             build-time y: track.y={} fill.y={}",
+            track_rect.y,
+            fill_rect.y,
+        );
     }
 
     #[test]

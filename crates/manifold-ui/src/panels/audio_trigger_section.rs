@@ -604,8 +604,9 @@ impl AudioTriggerSection {
     /// every open row's Amount meter — in place, no rebuild. Every clip
     /// trigger is a fire-mode config (D6: "clip triggers alike" — no
     /// `is_trigger_gate` gate needed here, unlike `ParamCardPanel`). Keyed
-    /// on `(layer_id, row index)` hashed via `manifold_foundation::
-    /// fire_meter_key` — the SAME hash the content-thread capture uses.
+    /// on `(layer_id, row index)` via `manifold_foundation::
+    /// fire_meter_key_for_clip_trigger` — the SAME constructor the
+    /// content-thread capture uses.
     pub fn update_fire_meters(
         &self,
         tree: &mut UITree,
@@ -616,10 +617,10 @@ impl AudioTriggerSection {
         for (i, cfg) in self.audio_configs.iter().enumerate() {
             let Some((dids, _)) = cfg else { continue };
             let Some(Some(meter)) = dids.meters.first() else { continue };
-            let key = manifold_foundation::fire_meter_key(&[
-                layer_id.as_str().as_bytes(),
-                &(i as u64).to_le_bytes(),
-            ]);
+            let key = manifold_foundation::fire_meter_key_for_clip_trigger(
+                layer_id.as_str(),
+                i as u64,
+            );
             let level = fire_level(key).unwrap_or(0.0);
             meter.update(tree, level, AUDIO_MOD_ACTIVE_C32, dt);
         }

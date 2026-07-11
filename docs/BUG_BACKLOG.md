@@ -44,6 +44,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-116 | **fire-meter-display-ballistics-reads-as-low-fps** | Fire meters read as updating at low FPS despite a 60fps capture/snapshot/UI pipeline — `MeterIds::update`'s intentional peak-hold smoothing (BUG-109 P5: `PEAK_HOLD_SECONDS = 0.25`, `PEAK_DECAY_PER_SEC = 5.0`) trades "a millisecond transient stays visible" for a chunkier feel. Fix shape: tune the ballistics down, or split into an instant live bar + a separate thin peak-hold tick. Deferred by Peter 2026-07-11 — cosmetic only, the edge-detector reads the raw signal. LOW (deferred by design). |
 | BUG-115 | **mux-multiblend-dynamic-arity-blocks-codegen-conversion** | `node.switch_texture` (5 presets) and `node.multi_blend` are fusion boundaries mid-chain: their dynamic port list (`num_inputs` rebuilds ports per instance; multi_blend synthesizes WGSL for N inputs at runtime) can't be expressed in the static `PrimitiveSpec` the freeze codegen reads. Fix shape: half-day spike on a fixed max-arity conversion (declare the max as optional Coincident inputs; the region machinery already folds unwired optionals as `0u` use flags). If the spike fails, dynamic-arity codegen support is a design question for Peter. LOW (working atoms, dispatch-cost only). |
 | BUG-114 | **draw-family-blocked-on-array-into-texture-codegen-read-path** | The six `draw_*` atoms (dots/markers/ticks/gauge/scanlines/connections) pass the codegen mandate's per-element scope test (per-pixel bodies over the output grid) but CANNOT convert: texture-domain codegen has no read-path for an input storage `Array` (the marks buffer) — classify cut rule 9 makes a wired Array input on a texture atom a Boundary, and `freeze/classify.rs` names the needed `BufferIndex` kind as planned-not-built. Fix shape: add the `BufferIndex` read-path to codegen + a region-grow rule, then convert `draw_*` per the mandate. Per ADDING_PRIMITIVES scope test #5 these are BLOCKED (tracked compiler gap), not exempt. LOW (each sits in 1 shipped preset, overlay/HUD chains; cost is one dispatch per atom). |
 | BUG-113 | **param-manifest-get-bench-flakes-under-parallel-load** | `manifold-core::params::tests::bench_resolve` asserts a hard `<= 271.5 ns/op` wall-clock ceiling on `ParamManifest::get`; under `cargo nextest run --workspace`'s parallel thread pool (esp. right after a heavy build or another CPU-saturating process), measured ns/op climbs past the ceiling (333.25, then 398.98 ns/op observed 2026-07-11) and the test fails, while an isolated re-run consistently passes (215.02 ns/op) and a clean full-workspace re-run passes too (3052/3052). Found landing wave2 lane C (BUG-083/084) — confirmed unrelated (file untouched by that change). Fix shape: either give the ceiling real margin for parallel/loaded runs, retry-on-first-failure before asserting, or move this out of the default nextest sweep (e.g. behind a feature, like the GPU-proofs convention) since a wall-clock ceiling assertion is inherently contention-sensitive and doesn't belong in a "safe to run freely" default suite. LOW (flaky-gate annoyance, not a functional regression — the underlying code is fine). |
@@ -109,6 +110,39 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-116 (fire-meter-display-ballistics-reads-as-low-fps) — fire meters read as updating at low FPS despite a 60fps capture/snapshot/UI pipeline — LOW (deferred by design)
+**Status:** DEFERRED — Peter 2026-07-11 ("leave this slow update for now"), found while adding the producer/consumer fire-meter round-trip test (`bug/fire-meter-unification`).
+
+**Symptom** — a card's/clip-trigger's Amount meter visibly reads as updating slowly, more like a
+peak-hold VU meter than a live level bar, even though nothing downstream of the content-thread
+capture is actually throttled.
+
+**Root cause — intentional, not a bug in the pipeline itself.** The pipeline is 60fps end-to-end:
+the audio-analysis worker's hop is ~5.3ms, `evaluate_all_audio_mods`/`LiveTriggerState::evaluate`
+push a fresh `FireMeterCapture` every engine tick, the `ContentState` snapshot carries it to the UI
+thread every tick, and `ParamCardPanel`/`AudioTriggerSection::update_fire_meters` write it into the
+meter every UI tick. What the performer actually sees is display-side peak-hold smoothing added
+deliberately by BUG-109 P5: `MeterIds::update` (`crates/manifold-ui/src/panels/drawer.rs` ~245-306)
+snaps a rising level up instantly, then HOLDS it for `PEAK_HOLD_SECONDS = 0.25` before decaying at
+`PEAK_DECAY_PER_SEC = 5.0` (full-scale 1.0→0.0 in ~200ms) — added specifically so a millisecond-
+scale transient's shaped envelope (which decays faster than the UI's own tick cadence can sample)
+stays visible at all between snapshots, per that fix's own comment. The tradeoff is exactly the
+symptom: a steady/fast-changing signal reads as chunkier and slower than the raw 60fps capture
+underneath it.
+
+**Fix shape** — not a wiring bug, so no root-cause removal; two ballistics directions if revisited:
+1. Tune the constants down (shorter `PEAK_HOLD_SECONDS`, faster `PEAK_DECAY_PER_SEC`) — trades away
+   some of BUG-109 P5's "the transient stays visible" guarantee for a snappier feel.
+2. The pro-audio split: an instant, unsmoothed live bar (tracks `level` every tick, no hold) plus a
+   separate thin peak-hold TICK mark riding above it (only the tick keeps BUG-109 P5's hold/decay).
+   Keeps both properties instead of trading one for the other, at the cost of a second draw
+   primitive per meter.
+
+**Instrument impact:** cosmetic/feel-only — the underlying signal a mod fires on is unaffected (the
+edge-detector reads the raw conditioned value, never the display-smoothed one); this is purely
+"does the meter look as fast as the audio is," which is why Peter deferred it rather than folding
+it into the round-trip test session.
 
 ### BUG-114 (draw-family-blocked-on-array-into-texture-codegen-read-path) — `draw_*` atoms pass the codegen-mandate scope test but the compiler can't express them — LOW (tracked codegen gap)
 **Status:** DEFERRED — default post-release (Peter can pull it forward if overlay chains start to matter); logged 2026-07-11 while sharpening the codegen-mandate scope test.
@@ -731,6 +765,19 @@ detaches from its section header when the panel body is scrolled. **Fix shape:**
 rows), and clip it to the scroll viewport. **Oracle:** not reproducible headless (the blit
 doesn't run in the snapshot harness) — needs the live app or a harness that runs the scope
 blit; a scrolled-body render test would guard it.
+
+**Update 2026-07-11 (fire-meter-unification pass):** confirmed the same root cause also
+explains `SendRowIds`'s per-send level meter (fixed this session — `meter_track: NodeId`
+now read live instead of cached `meter_x/y/w/h`) and `AudioSetupPanel::update_band_meters`
+(`audio_setup_panel.rs`, still open) — both derive from geometry captured in `build_nodes`
+before its own `self.scroll.offset_content()` call. The send-meter case had a track node to
+anchor to, so it's fixed. The scope/band-meter case roots in `self.scope_rect` (`pub fn
+scope_rect(&self) -> Option<Rect>`, no `&UITree` param) — making it scroll-live needs a
+signature change threading `&UITree` through every caller (the present-pass blit, both
+hit-tests, `update_scope_lane_labels`), which is this bug's real fix shape and is out of
+scope for a geometry-sourcing-only pass. Currently dormant either way:
+`AudioSetupPanel::handle_scroll` has zero call sites anywhere in the app (grepped), so
+`scroll_offset()` is always 0 in the shipped build and neither symptom is user-reachable yet.
 
 ### BUG-045 (gap-ring-down-chase) — Tracker chases the transform's kernel ring-down during inter-note gaps — LOW (2.4 points on the notes gate; real-clip impact small)
 **Status:** OPEN

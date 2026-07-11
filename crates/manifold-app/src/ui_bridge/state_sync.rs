@@ -1661,11 +1661,12 @@ struct CardModulation {
 /// `resolve` maps a modulation row's `param_id` to its card slot index.
 /// `latched` is `ContentState::automation_latched_params` — checked against
 /// `(inst.id, lane.param_id)` for the overridden-gray state (P4 §7's dot).
-/// Always `inst.id`, never the card's own possibly-blanked `effect_id` field:
-/// generator instances get a real, freshly-synthesized `EffectId` at load
-/// (see `manifold_playback::automation`'s `AutomationLatches` doc comment)
-/// even though `preset_to_config` blanks the DISPLAYED `effect_id` for
-/// generator cards for unrelated reasons.
+/// Always `inst.id`, which (fixed 2026-07-11) is now also the card's own
+/// DISPLAYED `effect_id` for both kinds — `preset_to_config` used to blank
+/// the generator arm's `effect_id` to `EffectId::new("")`, so this function
+/// and the card disagreed about a generator's identity even though both
+/// ultimately read the same real, freshly-synthesized `EffectId` (see
+/// `manifold_playback::automation`'s `AutomationLatches` doc comment).
 fn build_card_modulation(
     inst: &PresetInstance,
     n: usize,
@@ -1931,6 +1932,9 @@ fn empty_generator_config(inst: &PresetInstance) -> ParamCardConfig {
         name: inst.generator_type().to_string(),
         collapsed: false,
         effect_index: 0,
+        // Stays blank (unlike the real-id arm in `preset_to_config` below):
+        // zero params means zero audio-mod rows, so nothing on this card ever
+        // hosts a fire-meter lookup — there's no divergence risk to fix here.
         effect_id: manifold_core::EffectId::new(""),
         enabled: true,
         supports_envelopes: true,
@@ -2145,7 +2149,14 @@ fn preset_to_config(
         ),
         PresetKind::Generator => (
             ParamCardKind::Generator,
-            manifold_core::EffectId::new(""),
+            // Real `inst.id`, not a blanked placeholder (fixed 2026-07-11):
+            // this is the SAME id `build_card_modulation` already used for
+            // its own lookups (see that fn's doc comment) and the SAME id
+            // the content thread hashes into a fire-meter key
+            // (`fire_meter_key_for_param`) — a blanked display id here meant
+            // the UI's lookup key could never match the content thread's,
+            // so a generator card's audio-mod meters never resolved.
+            inst.id.clone(),
             true,
             false,
             // PRESET_LIBRARY_DESIGN D3/P4: a generator's per-card divergence
@@ -2445,5 +2456,291 @@ mod build_audio_card_state_trigger_mode_tests {
         let params = ["clip_trigger"];
         let cfg = build_audio_card_state(&inst, params.len(), resolve(&params));
         assert_eq!(cfg.trigger_mode_idx[0], 2); // Both
+    }
+}
+
+/// End-to-end round-trip: every fire-meter key the UI's `update_fire_meters`
+/// requests must resolve in the SAME `FireMeterCapture` the content-thread
+/// evaluators (`evaluate_all_audio_mods` + `LiveTriggerState::evaluate`)
+/// produce for the SAME `Project`. Producer (`manifold-playback`) and
+/// consumer (`ParamCardPanel`/`AudioTriggerSection` via this module's
+/// `sync_inspector_data`) each independently recompute a fire-meter key from
+/// an instance's identity — nothing previously verified they agree. That's
+/// exactly the bug class the 2026-07-11 generator-card fix closed:
+/// `preset_to_config`'s Generator arm used to display `EffectId::new("")`
+/// instead of the real `inst.id`, so a generator's audio-mod meter asked for
+/// a key the content thread never pushed anything under.
+///
+/// Builds ONE project carrying all four fire-meter-hosting shapes on a
+/// single layer (so one `sync_inspector_data` + `build_in_rect` pass reaches
+/// every one of them — `sync_inspector_data` only configures the ACTIVE
+/// layer's effects/gen-params/clip-triggers, so spreading the shapes across
+/// separate layers like `ui_snapshot::fixtures::inspector_scene` does would
+/// mean only one shape's layer is ever active at a time):
+///   (a) a GENERATOR instance's `is_trigger_gate` audio mod (Plasma's
+///       `clip_trigger`) — the exact shape the generator-card bug shipped
+///       under;
+///   (b) an EFFECT's plain continuous audio mod on a non-gate param (Bloom)
+///       — the shape the 2026-07-11 widening (128→512 `MAX_FIRE_METERS`,
+///       `fire_meters.push` moved above the gate-mode fork) started
+///       metering;
+///   (c) an EFFECT's `is_trigger_gate` audio mod (Strobe's `clip_trigger`);
+///   (d) a `Layer.clip_triggers` row.
+/// Bloom/Strobe/Plasma are real shipping presets, chosen to mirror
+/// `ui_snapshot::fixtures::inspector_scene` (the BUG-082/P3c gate scene) —
+/// folded onto one layer instead of three so a single active-layer build
+/// surfaces all four.
+#[cfg(test)]
+mod fire_meter_roundtrip_tests {
+    use super::*;
+    use manifold_core::audio_mod::{
+        AudioBand, AudioFeature, AudioFeatureKind, AudioModSource, ParameterAudioMod,
+    };
+    use manifold_core::audio_setup::AudioSend;
+    use manifold_core::audio_trigger::{
+        FireMeterCapture, LayerClipTrigger, TriggerFireMode, fire_meter_key_for_clip_trigger,
+        fire_meter_key_for_param,
+    };
+    use manifold_core::layer::Layer;
+    use manifold_core::project::Project;
+    use manifold_core::{EffectId, LayerId, PresetTypeId, Seconds};
+    use manifold_playback::live_trigger::LiveTriggerState;
+    use manifold_playback::modulation::{TriggerPulse, evaluate_all_audio_mods};
+    use manifold_ui::node::Rect;
+
+    /// Zero attack/release so a mod's conditioned level snaps instantly to
+    /// its raw input within ONE evaluation tick — the same pattern
+    /// `manifold-playback::modulation`'s own tests use for deterministic
+    /// single-tick assertions (`attach_full_range_low_mod`).
+    fn instant_mod(
+        param_id: &str,
+        send_id: &manifold_core::AudioSendId,
+        feature: AudioFeature,
+    ) -> ParameterAudioMod {
+        let mut m = ParameterAudioMod::new(param_id.to_string().into(), send_id.clone(), feature);
+        m.shape.attack_ms = 0.0;
+        m.shape.release_ms = 0.0;
+        m
+    }
+
+    /// The fixture project plus the identity facts the test needs to compute
+    /// each shape's expected fire-meter key.
+    struct Fixture {
+        project: Project,
+        layer_id: LayerId,
+        bloom_id: EffectId,
+        bloom_param: String,
+        strobe_id: EffectId,
+        plasma_id: EffectId,
+    }
+
+    /// One layer carrying all four fire-meter-hosting shapes at once: a
+    /// generator (Plasma) with a gate mod, an effects chain (Bloom
+    /// continuous + Strobe gate) riding on top of it, and its own
+    /// clip-trigger row. A generator layer carrying an effects chain is the
+    /// normal MANIFOLD shape (post-processing over a procedural source), so
+    /// this isn't a contrived overlap — it's just all on one layer instead
+    /// of `inspector_scene`'s three, specifically so ONE `active_layer`
+    /// build reaches all four.
+    fn build_fixture() -> Fixture {
+        let send = AudioSend::new("Kick");
+        let send_id = send.id.clone();
+
+        let mut layer = Layer::new_generator("PLASMA".into(), PresetTypeId::PLASMA, 0);
+        let layer_id = layer.layer_id.clone();
+
+        // (a) GENERATOR instance, `is_trigger_gate` mod on `clip_trigger`.
+        let mut gate_on_gen = instant_mod(
+            "clip_trigger",
+            &send_id,
+            AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+        );
+        gate_on_gen.trigger_mode = Some(TriggerFireMode::Both);
+        layer.gen_params_or_init().audio_mods = Some(vec![gate_on_gen]);
+        let plasma_id = layer.gen_params().unwrap().id.clone();
+
+        // (b) EFFECT, plain continuous mod on a non-gate param — the
+        // newly-metered shape.
+        let mut bloom = PresetInstance::new(PresetTypeId::BLOOM);
+        bloom.init_defaults();
+        let bloom_param = manifold_core::preset_definition_registry::try_get(bloom.effect_type())
+            .and_then(|def| def.param_defs.first().map(|pd| pd.id.clone()))
+            .expect("Bloom has at least one param");
+        bloom.audio_mods = Some(vec![instant_mod(
+            &bloom_param,
+            &send_id,
+            AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Full),
+        )]);
+        let bloom_id = bloom.id.clone();
+
+        // (c) EFFECT, `is_trigger_gate` mod on `clip_trigger`.
+        let mut strobe = PresetInstance::new(PresetTypeId::new("Strobe"));
+        strobe.init_defaults();
+        let mut gate_on_fx = instant_mod(
+            "clip_trigger",
+            &send_id,
+            AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Low),
+        );
+        gate_on_fx.trigger_mode = Some(TriggerFireMode::Transient);
+        strobe.audio_mods = Some(vec![gate_on_fx]);
+        let strobe_id = strobe.id.clone();
+
+        layer.effects = Some(vec![bloom, strobe]);
+
+        // (d) `Layer.clip_triggers` row.
+        let mut trigger = LayerClipTrigger::new(AudioModSource {
+            send_id: send_id.clone(),
+            feature: AudioFeature::new(AudioFeatureKind::Kick, AudioBand::Low),
+        });
+        trigger.enabled = true;
+        trigger.shape.attack_ms = 0.0;
+        trigger.shape.release_ms = 0.0;
+        layer.clip_triggers.push(trigger);
+
+        let mut project = Project::default();
+        project.audio_setup.sends.push(send);
+        project.timeline.layers.push(layer);
+
+        Fixture { project, layer_id, bloom_id, bloom_param, strobe_id, plasma_id }
+    }
+
+    /// One send ("Kick") with a nonzero level on every band/feature the
+    /// fixture's four mods read, so a real evaluation tick leaves every one
+    /// of them in the producer's `FireMeterCapture`.
+    fn hot_snapshot() -> manifold_core::audio_features::AudioFeatureSnapshot {
+        let mut bands = [manifold_core::BandFeatures::default(); 4];
+        bands[AudioBand::Full.index()].amplitude = 0.8; // (b) Bloom
+        bands[AudioBand::Full.index()].transients = 0.8; // (a) Plasma gate
+        bands[AudioBand::Low.index()].transients = 0.8; // (c) Strobe gate
+        bands[AudioBand::Low.index()].kick = 0.8; // (d) clip-trigger row (Kick always reads Low)
+        manifold_core::audio_features::AudioFeatureSnapshot {
+            sends: vec![manifold_core::SendFeatures { bands, ..Default::default() }],
+        }
+    }
+
+    #[test]
+    fn every_ui_requested_fire_meter_key_resolves_in_the_producer_capture() {
+        let Fixture { mut project, layer_id, bloom_id, bloom_param, strobe_id, plasma_id } =
+            build_fixture();
+
+        // ── Producer: the SAME two evaluators the content thread runs every
+        // tick (`manifold_playback::modulation::evaluate_all_audio_mods` for
+        // every enabled param audio mod, `LiveTriggerState::evaluate` for
+        // clip triggers) — see `crates/manifold-playback/tests/engine_tick.rs`
+        // and `live_trigger.rs`'s own tests for the same two-call pattern.
+        let snapshot = hot_snapshot();
+        let dt = Seconds(1.0 / 60.0);
+        let mut fire_meters = FireMeterCapture::default();
+        let mut pulses: Vec<TriggerPulse> = Vec::new();
+        evaluate_all_audio_mods(&mut project, &snapshot, dt, &mut pulses, &[], &mut fire_meters);
+        let mut live_trigger = LiveTriggerState::default();
+        live_trigger.evaluate(&snapshot, &project.audio_setup, &project.timeline.layers, dt, &mut fire_meters);
+
+        // ── Consumer: the real UI build — `sync_inspector_data` (the same
+        // function `ui_snapshot::render_ui_scene` calls) configures the
+        // inspector's cards + AUDIO TRIGGERS section from this SAME project,
+        // then `build_in_rect` (what the graph-editor window's inspector
+        // column, and the main window via `UIRoot::build`, both call)
+        // materializes them into a real `UITree`.
+        let mut ui = UIRoot::new();
+        let mut selection = SelectionState::default();
+        selection.select_layer(layer_id.clone());
+        sync_inspector_data(&mut ui, &project, Some(0), &selection, &[]);
+
+        // Open every fixture drawer. (a)/(b)/(c) need no explicit "open": an
+        // armed audio mod's drawer builds automatically — a toggle/trigger
+        // row's drawer whenever its mod is enabled (`build_toggle_trigger_row`),
+        // a slider row's whenever Audio is its only (or resolved) active
+        // mod-tab (`build_param_row`), both in `param_slider_shared.rs`. Only
+        // the AUDIO TRIGGERS section's clip-trigger row (d) is gated behind
+        // its OWN collapse/expand UI state (`AudioTriggerSection`), which
+        // `configure()` never touches — so it must be opened explicitly here.
+        ui.inspector.audio_trigger_section_mut().toggle_collapsed();
+        ui.inspector.audio_trigger_section_mut().toggle_row_expanded(0);
+
+        ui.build_inspector_in_rect(Rect::new(0.0, 0.0, 640.0, 4000.0));
+
+        // Record every key the UI requests while pushing levels. `fire_level`
+        // is `&dyn Fn`, not `FnMut`, so the recorder needs interior
+        // mutability.
+        let requested = std::cell::RefCell::new(Vec::<u64>::new());
+        let record = |key: u64| -> Option<f32> {
+            requested.borrow_mut().push(key);
+            fire_meters.get(key)
+        };
+        ui.inspector.update_fire_meters(&mut ui.tree, &record, dt.0 as f32);
+        let requested = requested.into_inner();
+
+        // The four keys the PRODUCER computed for the exact same instances —
+        // the ground truth the UI's own keys must agree with.
+        let expected: Vec<(&str, u64)> = vec![
+            (
+                "(a) Plasma generator gate mod (clip_trigger)",
+                fire_meter_key_for_param(plasma_id.as_str(), "clip_trigger"),
+            ),
+            (
+                "(b) Bloom continuous mod",
+                fire_meter_key_for_param(bloom_id.as_str(), &bloom_param),
+            ),
+            (
+                "(c) Strobe gate mod (clip_trigger)",
+                fire_meter_key_for_param(strobe_id.as_str(), "clip_trigger"),
+            ),
+            (
+                "(d) layer clip-trigger row 0",
+                fire_meter_key_for_clip_trigger(layer_id.as_str(), 0),
+            ),
+        ];
+
+        let requested_set: std::collections::HashSet<u64> = requested.iter().copied().collect();
+
+        // (i) every fixture drawer we opened must have had ITS EXACT expected
+        // key requested — catches three distinct failure shapes in one
+        // check: "meter built but never updated" and "drawer missing its
+        // meter" (an audio_configs slot that resolved but whose `DrawerIds`
+        // carries no Meter widget, so `update_fire_meters` silently skips
+        // it) both mean the key is simply absent from `requested_set`; a
+        // THIRD shape — the UI's card computed a DIFFERENT identity for the
+        // same instance than the producer did (a blanked/stale `EffectId`,
+        // e.g. the pre-2026-07-11 generator-card bug this test targets) —
+        // also fails here: the row's drawer still opens and still requests
+        // *some* key, just not this one, so `expected`'s real key is still
+        // absent from `requested_set`.
+        for (label, key) in &expected {
+            assert!(
+                requested_set.contains(key),
+                "the UI never requested the expected fire-meter key for {label}. Either its \
+                 drawer never built (the audio_configs slot stayed None), its DrawerIds carries \
+                 no Meter widget (update_fire_meters silently skips both), OR — the producer/\
+                 consumer divergence class this test exists to catch — the card computed a \
+                 DIFFERENT identity key for this same instance than the content thread did (a \
+                 blanked or stale EffectId/LayerId), so it requested some other key instead"
+            );
+        }
+        assert_eq!(
+            requested_set.len(),
+            expected.len(),
+            "expected exactly {} open fire-meter rows ({:?}) but the UI requested {} distinct \
+             keys — an extra drawer built somewhere this fixture didn't arm",
+            expected.len(),
+            expected.iter().map(|(l, _)| *l).collect::<Vec<_>>(),
+            requested_set.len(),
+        );
+
+        // (ii) every key the UI requested must resolve against the SAME
+        // `FireMeterCapture` the content thread produced — the round-trip
+        // proof, and the exact bug class the 2026-07-11 generator-card fix
+        // closed: `preset_to_config`'s Generator arm once displayed
+        // `EffectId::new("")` instead of the real `inst.id`, so a generator
+        // card's audio-mod meter computed a key the content thread never
+        // pushed anything under.
+        for (label, key) in &expected {
+            assert!(
+                fire_meters.get(*key).is_some(),
+                "producer/consumer key divergence for {label}: the UI's fire-meter key {key} \
+                 was never recorded by the content-thread FireMeterCapture — the UI and the \
+                 evaluators disagree about this instance's identity"
+            );
+        }
     }
 }

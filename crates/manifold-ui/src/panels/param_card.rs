@@ -925,18 +925,23 @@ impl ParamCardPanel {
         &self.effect_id
     }
     /// D6 fire meter (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
-    /// P3c, BUG-082's fix): push this tick's live shaped-signal level onto
-    /// every open `is_trigger_gate` row's Amount meter — in place, no
-    /// rebuild. Keyed on `(effect_id, param_id)` hashed via
-    /// `manifold_foundation::fire_meter_key` — the SAME hash the
-    /// content-thread capture uses — so `fire_level` (built at the app
-    /// boundary from `ContentState::fire_meters`, a `manifold-core` type
-    /// `manifold-ui` cannot depend on — `docs/UI_LAYERING_INVERSION.md`)
-    /// resolves it. Amount is always the first `Slider` row
-    /// `build_audio_mod_drawer` builds (`DrawerIds::meters[0]`), regardless
-    /// of which trailing rows follow. `dt` (BUG-109 P5) is the UI frame delta
-    /// seconds, threaded down to [`crate::panels::drawer::MeterIds::update`]
-    /// for its peak-hold timing.
+    /// P3c, BUG-082's fix; widened 2026-07-11): push this tick's live
+    /// shaped-signal level onto every OPEN row's Amount meter — in place, no
+    /// rebuild. Every enabled audio-mod row now captures a level on the
+    /// content-thread side (`evaluate_instance_audio_mods`), not just
+    /// `is_trigger_gate` ones, so this no longer filters by
+    /// `info.is_trigger_gate` — a continuous/Step/Random drawer's meter now
+    /// updates exactly like a trigger-gate drawer's. Keyed on
+    /// `(effect_id, param_id)` via `manifold_foundation::
+    /// fire_meter_key_for_param` — the SAME constructor the content-thread
+    /// capture uses — so `fire_level` (built at the app boundary from
+    /// `ContentState::fire_meters`, a `manifold-core` type `manifold-ui`
+    /// cannot depend on — `docs/UI_LAYERING_INVERSION.md`) resolves it.
+    /// Amount is always the first `Slider` row `build_audio_mod_drawer`
+    /// builds (`DrawerIds::meters[0]`), regardless of which trailing rows
+    /// follow. `dt` (BUG-109 P5) is the UI frame delta seconds, threaded down
+    /// to [`crate::panels::drawer::MeterIds::update`] for its peak-hold
+    /// timing.
     pub fn update_fire_meters(
         &self,
         tree: &mut UITree,
@@ -946,26 +951,23 @@ impl ParamCardPanel {
         for (pi, cfg) in self.audio_configs.iter().enumerate() {
             let Some((dids, _)) = cfg else { continue };
             let Some(info) = self.param_info.get(pi) else { continue };
-            if !info.is_trigger_gate {
-                continue;
-            }
             let Some(Some(meter)) = dids.meters.first() else { continue };
-            let key = manifold_foundation::fire_meter_key(&[
-                self.effect_id.as_str().as_bytes(),
-                info.param_id.as_bytes(),
-            ]);
+            let key = manifold_foundation::fire_meter_key_for_param(
+                self.effect_id.as_str(),
+                info.param_id.as_ref(),
+            );
             let level = fire_level(key).unwrap_or(0.0);
             meter.update(tree, level, AUDIO_MOD_ACTIVE_C32, dt);
         }
     }
 
     /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item 5):
-    /// param index of the currently-OPEN fire-mode (`is_trigger_gate`, armed —
-    /// an armed `is_trigger_gate` mod's drawer is always visible, matching
-    /// `show_amount_meter`'s D6 gate) drawer, if any. A plain continuous
-    /// mod's open drawer never matches — only fire-mode configs re-tap the
-    /// scope. First match wins; a card with two armed trigger-gate rows is
-    /// not a case this app produces today.
+    /// param index of the currently-OPEN fire-mode (`is_trigger_gate`, armed)
+    /// drawer, if any — deliberately narrower than the Amount meter itself
+    /// (every open drawer shows a meter, 2026-07-11): only a fire-mode config
+    /// re-taps the scope send/band here. A plain continuous mod's open drawer
+    /// never matches. First match wins; a card with two armed trigger-gate
+    /// rows is not a case this app produces today.
     fn open_fire_mode_drawer_row(&self) -> Option<usize> {
         self.audio_configs.iter().enumerate().find_map(|(pi, cfg)| {
             cfg.as_ref()?;
@@ -4570,8 +4572,9 @@ mod tests {
         let mut cfg = effect_config_with_trigger_gate();
         let gi = cfg.params.len() - 1;
         // Same armed row, reshaped into a plain continuous (non-toggle,
-        // non-trigger) param — a genuine `show_amount_meter`-excluded shape,
-        // not just a flag flip on the toggle-row fixture.
+        // non-trigger) param — a genuine non-gate shape (not just a flag flip
+        // on the toggle-row fixture), which still shows an Amount meter but
+        // must never re-tap the scope send/band.
         cfg.params[gi].is_trigger_gate = false;
         cfg.params[gi].is_toggle = false;
         panel.configure(&cfg);
@@ -5605,7 +5608,12 @@ mod tests {
             name: "Plasma".into(),
             collapsed: false,
             effect_index: 0,
-            effect_id: EffectId::new(""),
+            // Real id (fixed 2026-07-11) — a populated generator card carries
+            // `inst.id` now, never the blanked `EffectId::new("")` that used
+            // to break its fire-meter key lookups; this fixture models a
+            // populated card, not the zero-param `empty_generator_config`
+            // fallback (which is the one case that legitimately stays blank).
+            effect_id: EffectId::new("gen-plasma-1"),
             enabled: true,
             supports_envelopes: true,
             has_drv: false,
