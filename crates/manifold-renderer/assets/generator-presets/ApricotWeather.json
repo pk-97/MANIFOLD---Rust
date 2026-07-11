@@ -14,7 +14,7 @@
         "id": "swayAmount",
         "name": "Sway Amount",
         "min": 0.0,
-        "max": 0.6,
+        "max": 0.15,
         "defaultValue": 0.0,
         "wholeNumbers": false,
         "isToggle": false,
@@ -77,7 +77,7 @@
         "name": "Camera Distance",
         "min": 5.0,
         "max": 100.0,
-        "defaultValue": 26.205,
+        "defaultValue": 9.0,
         "wholeNumbers": false,
         "isToggle": false,
         "isTrigger": false,
@@ -93,7 +93,7 @@
         "target": {
           "kind": "node",
           "nodeId": "sway_1",
-          "param": "amount"
+          "param": "angle"
         }
       },
       {
@@ -103,7 +103,7 @@
         "target": {
           "kind": "node",
           "nodeId": "sway_2",
-          "param": "amount"
+          "param": "angle"
         }
       },
       {
@@ -113,7 +113,7 @@
         "target": {
           "kind": "node",
           "nodeId": "sway_3",
-          "param": "amount"
+          "param": "angle"
         }
       },
       {
@@ -316,73 +316,6 @@
         "ambient_tint_b": {
           "type": "Float",
           "value": 0.92
-        }
-      }
-    },
-    {
-      "id": 3,
-      "typeId": "node.grid_mesh",
-      "nodeId": "ground_grid",
-      "handle": "ground_grid",
-      "title": "Ground Grid",
-      "params": {
-        "resolution_x": {
-          "type": "Int",
-          "value": 32
-        },
-        "resolution_y": {
-          "type": "Int",
-          "value": 32
-        },
-        "size_x": {
-          "type": "Float",
-          "value": 40.0
-        },
-        "size_y": {
-          "type": "Float",
-          "value": 40.0
-        }
-      }
-    },
-    {
-      "id": 4,
-      "typeId": "node.make_triangles",
-      "nodeId": "ground_tris",
-      "handle": "ground_tris",
-      "title": "Ground Triangulate",
-      "params": {
-        "src_cols": {
-          "type": "Int",
-          "value": 32
-        },
-        "src_rows": {
-          "type": "Int",
-          "value": 32
-        }
-      }
-    },
-    {
-      "id": 5,
-      "typeId": "node.phong_material",
-      "nodeId": "ground_mat",
-      "handle": "ground_mat",
-      "title": "Ground Material",
-      "params": {
-        "color_r": {
-          "type": "Float",
-          "value": 0.22
-        },
-        "color_g": {
-          "type": "Float",
-          "value": 0.26
-        },
-        "color_b": {
-          "type": "Float",
-          "value": 0.15
-        },
-        "ambient": {
-          "type": "Float",
-          "value": 0.15
         }
       }
     },
@@ -644,18 +577,18 @@
           },
           {
             "id": 15,
-            "typeId": "node.push_along_normals",
+            "typeId": "node.bend_mesh",
             "nodeId": "sway_1",
             "handle": "sway_1",
             "title": "Sway",
             "params": {
-              "amount": {
+              "angle": {
                 "type": "Float",
                 "value": 0.0
               },
-              "field_bias": {
+              "center": {
                 "type": "Float",
-                "value": 0.5
+                "value": -2.66
               }
             }
           },
@@ -821,18 +754,18 @@
           },
           {
             "id": 22,
-            "typeId": "node.push_along_normals",
+            "typeId": "node.bend_mesh",
             "nodeId": "sway_2",
             "handle": "sway_2",
             "title": "Sway",
             "params": {
-              "amount": {
+              "angle": {
                 "type": "Float",
                 "value": 0.0
               },
-              "field_bias": {
+              "center": {
                 "type": "Float",
-                "value": 0.5
+                "value": -2.66
               }
             }
           },
@@ -998,18 +931,18 @@
           },
           {
             "id": 29,
-            "typeId": "node.push_along_normals",
+            "typeId": "node.bend_mesh",
             "nodeId": "sway_3",
             "handle": "sway_3",
             "title": "Sway",
             "params": {
-              "amount": {
+              "angle": {
                 "type": "Float",
                 "value": 0.0
               },
-              "field_bias": {
+              "center": {
                 "type": "Float",
-                "value": 0.5
+                "value": -2.66
               }
             }
           },
@@ -1128,7 +1061,7 @@
       "params": {
         "objects": {
           "type": "Int",
-          "value": 4
+          "value": 3
         },
         "lights": {
           "type": "Int",
@@ -1144,12 +1077,6 @@
     }
   ],
   "wires": [
-    {
-      "fromNode": 3,
-      "fromPort": "vertices",
-      "toNode": 4,
-      "toPort": "in"
-    },
     {
       "fromNode": 1,
       "fromPort": "out",
@@ -1169,88 +1096,76 @@
       "toPort": "light_0"
     },
     {
-      "fromNode": 4,
-      "fromPort": "out",
+      "fromNode": 20,
+      "fromPort": "vertices",
       "toNode": 35,
       "toPort": "mesh_0"
     },
     {
-      "fromNode": 5,
-      "fromPort": "out",
+      "fromNode": 20,
+      "fromPort": "material",
       "toNode": 35,
       "toPort": "material_0"
     },
     {
       "fromNode": 20,
+      "fromPort": "baseColor",
+      "toNode": 35,
+      "toPort": "base_color_map_0"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "transform",
+      "toNode": 35,
+      "toPort": "transform_0"
+    },
+    {
+      "fromNode": 27,
       "fromPort": "vertices",
       "toNode": 35,
       "toPort": "mesh_1"
     },
     {
-      "fromNode": 20,
+      "fromNode": 27,
       "fromPort": "material",
       "toNode": 35,
       "toPort": "material_1"
     },
     {
-      "fromNode": 20,
+      "fromNode": 27,
       "fromPort": "baseColor",
       "toNode": 35,
       "toPort": "base_color_map_1"
     },
     {
-      "fromNode": 20,
+      "fromNode": 27,
       "fromPort": "transform",
       "toNode": 35,
       "toPort": "transform_1"
     },
     {
-      "fromNode": 27,
+      "fromNode": 34,
       "fromPort": "vertices",
       "toNode": 35,
       "toPort": "mesh_2"
     },
     {
-      "fromNode": 27,
+      "fromNode": 34,
       "fromPort": "material",
       "toNode": 35,
       "toPort": "material_2"
     },
     {
-      "fromNode": 27,
+      "fromNode": 34,
       "fromPort": "baseColor",
       "toNode": 35,
       "toPort": "base_color_map_2"
     },
     {
-      "fromNode": 27,
+      "fromNode": 34,
       "fromPort": "transform",
       "toNode": 35,
       "toPort": "transform_2"
-    },
-    {
-      "fromNode": 34,
-      "fromPort": "vertices",
-      "toNode": 35,
-      "toPort": "mesh_3"
-    },
-    {
-      "fromNode": 34,
-      "fromPort": "material",
-      "toNode": 35,
-      "toPort": "material_3"
-    },
-    {
-      "fromNode": 34,
-      "fromPort": "baseColor",
-      "toNode": 35,
-      "toPort": "base_color_map_3"
-    },
-    {
-      "fromNode": 34,
-      "fromPort": "transform",
-      "toNode": 35,
-      "toPort": "transform_3"
     },
     {
       "fromNode": 35,
