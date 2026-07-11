@@ -1,0 +1,119 @@
+{
+  "version": 2,
+  "name": "BlossomWire",
+  "description": "Scene 3 probe - the scanned apricot blossom cluster as a true line wireframe. A hard-decimated cut of the scan (blossom_wire.glb, 3070 tris / 9210 flat verts, Blender quadric collapse from the 80k LOD) feeds the Wireframe-preset pipeline with meshes instead of polytopes: gltf_mesh_source -> rotate_3d (slow time spin) -> flatten_3d perspective -> draw_lines points, while node.mesh_edges (NEW atom, this branch: per-triangle edge topology from the flat triangle list, index arithmetic only) supplies draw_lines edges. gltf max_capacity is sized EXACTLY to the asset (9210) - mesh_edges derives edge count from buffer capacity, so a zero-filled tail would draw dot edges at vertex 0 (documented v1 limitation).",
+  "presetMetadata": {
+    "id": "BlossomWire",
+    "displayName": "Blossom Wire",
+    "category": "Geometry",
+    "oscPrefix": "blossomwire",
+    "available": true,
+    "isLineBased": true,
+    "params": [],
+    "bindings": [],
+    "skipMode": { "kind": "never" },
+    "stringParams": [
+      {
+        "id": "modelPath",
+        "name": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/footer-leak/tests/fixtures/gltf/blossom_wire.glb",
+        "isFilePicker": true,
+        "useDropdown": false
+      }
+    ],
+    "stringBindings": [
+      {
+        "id": "modelPath",
+        "label": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/footer-leak/tests/fixtures/gltf/blossom_wire.glb",
+        "target": { "kind": "node", "nodeId": "sprig", "param": "path" }
+      }
+    ]
+  },
+  "nodes": [
+    { "id": 0, "typeId": "system.generator_input", "nodeId": "input", "handle": "input" },
+    {
+      "id": 1,
+      "typeId": "node.gltf_mesh_source",
+      "nodeId": "sprig",
+      "handle": "sprig",
+      "title": "Blossom (decimated)",
+      "params": {
+        "mesh_index": { "type": "Int", "value": -1 },
+        "primitive_index": { "type": "Int", "value": -1 },
+        "material_index": { "type": "Int", "value": -1 },
+        "max_capacity": { "type": "Int", "value": 9210 },
+        "fit": { "type": "Enum", "value": 1 },
+        "recenter": { "type": "Bool", "value": true }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "node.math",
+      "nodeId": "spin",
+      "handle": "spin",
+      "title": "Spin",
+      "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.25 }, "op": { "type": "Enum", "value": 2 } }
+    },
+    {
+      "id": 3,
+      "typeId": "node.rotate_3d",
+      "nodeId": "rot",
+      "handle": "rot",
+      "title": "Rotate",
+      "params": {}
+    },
+    {
+      "id": 4,
+      "typeId": "node.flatten_3d",
+      "nodeId": "project",
+      "handle": "project",
+      "title": "Project",
+      "params": {
+        "mode": { "type": "Enum", "value": 0 },
+        "proj_dist": { "type": "Float", "value": 3.0 },
+        "proj_scale": { "type": "Float", "value": 1.0 }
+      }
+    },
+    {
+      "id": 5,
+      "typeId": "node.mesh_edges",
+      "nodeId": "topology",
+      "handle": "topology",
+      "title": "Mesh Edges",
+      "params": {}
+    },
+    {
+      "id": 6,
+      "typeId": "node.draw_lines",
+      "nodeId": "render",
+      "handle": "render",
+      "title": "Draw Lines",
+      "params": {
+        "edge_thickness": { "type": "Float", "value": 0.002 },
+        "closed_loop": { "type": "Bool", "value": false },
+        "show_verts": { "type": "Bool", "value": false },
+        "vert_size": { "type": "Float", "value": 1.0 },
+        "animate": { "type": "Bool", "value": false },
+        "beat_flash_amount": { "type": "Float", "value": 0.0 },
+        "speed": { "type": "Float", "value": 1.0 },
+        "window": { "type": "Float", "value": 0.1 },
+        "color_r": { "type": "Float", "value": 1.0 },
+        "color_g": { "type": "Float", "value": 1.0 },
+        "color_b": { "type": "Float", "value": 1.0 },
+        "color_a": { "type": "Float", "value": 1.0 }
+      }
+    },
+    { "id": 99, "typeId": "system.final_output", "nodeId": "out", "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 0, "fromPort": "time", "toNode": 2, "toPort": "a" },
+    { "fromNode": 1, "fromPort": "vertices", "toNode": 3, "toPort": "in" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "angle_y" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
+    { "fromNode": 1, "fromPort": "vertices", "toNode": 5, "toPort": "vertices" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 6, "toPort": "points" },
+    { "fromNode": 5, "fromPort": "edges", "toNode": 6, "toPort": "edges" },
+    { "fromNode": 6, "fromPort": "color", "toNode": 99, "toPort": "in" }
+  ]
+}
