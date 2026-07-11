@@ -21,3 +21,10 @@ rustc-wrapper = "/opt/homebrew/bin/sccache"
 # (feature-gated subcommand of manifold-app). See docs/HEADLESS_UI_HARNESS.md.
 [alias]
 xtask = "run --quiet -p manifold-app --features ui-snapshot --"
+
+# sccache's default 10G disk cache evicts under this workspace's dep graph ×
+# many worktrees; 30G keeps external-dep objects resident. The sccache server
+# reads this only at startup — it picks it up after its next idle shutdown
+# (default 10 min); never stop the server manually while a build may be live.
+[env]
+SCCACHE_CACHE_SIZE = "30G"

@@ -154,8 +154,10 @@ things. Compiles ≠ correct ≠ looks right in the show.
 | Anything feel-dependent | Not verifiable headless. LOG it for Peter's feel-pass with a one-line repro; never guess and never let a worker decide. |
 
 Per phase: clippy on TOUCHED crates only (`cargo clippy -p <crate> -- -D warnings`)
-and focused tests (`-p <crate> --lib`); batch the phase's edits and verify ONCE at
-the end. The full workspace sweep (clippy + tests) runs ONCE per workstream, at
+and focused tests via `cargo nextest run -p <crate> --lib` (parallel test binaries;
+GPU-proofs suites STAY on `cargo test` — the in-process `test_device` lock is the
+device serializer, and nextest's process-per-test model would defeat it); batch the
+phase's edits and verify ONCE at the end. The full workspace sweep (clippy + tests) runs ONCE per workstream, at
 landing time, in the warm main checkout — never in a worktree, where it is a second
 cold build (`feedback_prefer_focused_tests`, `.claude/GIT_TREE_DISCIPLINE.md` §2c).
 

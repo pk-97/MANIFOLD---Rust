@@ -169,6 +169,20 @@ Measured basis: ~80% of a phase's wall-clock is cargo compile/test (playbook,
    loop runs once per 2–3 phases per design, not per phase. Each landing
    skipped saves a gate rerun here and a push-rejection retry for every other
    concurrent session.
+4. **Prewarm during briefing.** The moment a worktree is acquired for a code
+   wave, kick the phase's primary build (`cargo build -p <crate> [--features
+   …] --manifest-path "<wt>/Cargo.toml"`) in the background, then write the
+   worker briefs — the build runs while the worker reads its docs. Free
+   overlap on every cold or profile-invalidated start.
+5. **Test runner + cache size (added 2026-07-11).** CPU-focused gates run
+   `cargo nextest run -p <crate> --lib`; GPU-proofs suites STAY on
+   `cargo test` — the in-process `test_device` lock is the device serializer
+   and nextest's process-per-test model would defeat it.
+   `SCCACHE_CACHE_SIZE = "30G"` (`.cargo/config.toml` `[env]`) stops
+   dep-cache eviction; the server picks it up at its next idle restart.
+   (The dev profile is already build-speed-tuned — `debug =
+   "line-tables-only"` + `split-debuginfo = "unpacked"`, root Cargo.toml —
+   don't re-add those.)
 
 ## §2b. Pending cleanup (2026-07-04 twin-commit remediation)
 
