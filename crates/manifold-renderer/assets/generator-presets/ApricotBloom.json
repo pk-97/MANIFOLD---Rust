@@ -1,0 +1,388 @@
+{
+  "version": 2,
+  "name": "ApricotBloom",
+  "description": "Scene 3 (scene ladder flagship, WIP) - a single scanned apricot sprig growing up out of its own stem, macro. One material cluster of cc0__japanese_apricot_prunus_mume.glb (cluster card 1..3 picks which; fit=unit_box + recenter so the sprig is normalized at origin) grows via a two-part front driven by one growPhase card: (1) reveal - node.taper_mesh axis Y, taper=0, razor-thin length 0.05, so geometry above the front collapses to zero-area triangles (invisible; a wide feather showed collapsing petals as smeared tents, measured 2026-07-11); (2) unfurl - node.bend_mesh nod whose center is hinged just below the front (droop_hinge scale_offset) and whose weights are a node.mesh_ramp curl mask LAGGING the front by 0.25 normalized (curl_phase), so freshly revealed growth arrives nodding over and straightens as the front passes - the fern-frond gesture at sprig scale (bend 0.28 rad; 1.0 rad about the base read as a scythe, and push_along_normals deflate inverted the thin twig shell - both falsified by render). Killed candidates for the growth character: global-axis twist (lateral petal shear at partial phases), normals-deflate (photogrammetry shells self-intersect). Known residual: petals straddling the front smear briefly mid-collapse (per-vertex front vs rigid petal features - judge in motion). growPhase 0 = bare, 1 = fully grown.",
+  "presetMetadata": {
+    "id": "ApricotBloom",
+    "displayName": "Apricot Bloom",
+    "category": "Geometry",
+    "oscPrefix": "apricotbloom",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "growPhase",
+        "name": "Grow Phase",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "cluster",
+        "name": "Cluster",
+        "min": 1.0,
+        "max": 3.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0"
+      },
+      {
+        "id": "camOrbit",
+        "name": "Camera Orbit",
+        "min": -3.14159265,
+        "max": 3.14159265,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Camera"
+      },
+      {
+        "id": "camTilt",
+        "name": "Camera Tilt",
+        "min": -1.5,
+        "max": 1.5,
+        "defaultValue": 0.08,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "section": "Camera"
+      },
+      {
+        "id": "camDistance",
+        "name": "Camera Distance",
+        "min": 1.0,
+        "max": 12.0,
+        "defaultValue": 2.4,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F1",
+        "section": "Camera"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "growPhase",
+        "label": "Grow Phase",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "grow",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "cluster",
+        "label": "Cluster",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "sprig",
+          "param": "material_index"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "cluster",
+        "label": "Cluster",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "sprig_tex",
+          "param": "texture_index"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "camOrbit",
+        "label": "Camera Orbit",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "cam",
+          "param": "orbit"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "camTilt",
+        "label": "Camera Tilt",
+        "defaultValue": 0.08,
+        "target": {
+          "kind": "node",
+          "nodeId": "cam",
+          "param": "tilt"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "camDistance",
+        "label": "Camera Distance",
+        "defaultValue": 2.4,
+        "target": {
+          "kind": "node",
+          "nodeId": "cam",
+          "param": "distance"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "never"
+    },
+    "stringParams": [
+      {
+        "id": "modelPath",
+        "name": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/cc0__japanese_apricot_prunus_mume.glb",
+        "isFilePicker": true,
+        "useDropdown": false
+      }
+    ],
+    "stringBindings": [
+      {
+        "id": "modelPath",
+        "label": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/cc0__japanese_apricot_prunus_mume.glb",
+        "target": {
+          "kind": "node",
+          "nodeId": "sprig",
+          "param": "path"
+        }
+      },
+      {
+        "id": "modelPath",
+        "label": "Model File",
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/gltf/cc0__japanese_apricot_prunus_mume.glb",
+        "target": {
+          "kind": "node",
+          "nodeId": "sprig_tex",
+          "param": "path"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.generator_input",
+      "nodeId": "input",
+      "handle": "input"
+    },
+    {
+      "id": 1,
+      "typeId": "node.orbit_camera",
+      "nodeId": "cam",
+      "handle": "cam",
+      "title": "Camera",
+      "params": {
+        "orbit": { "type": "Float", "value": 0.5 },
+        "tilt": { "type": "Float", "value": 0.08 },
+        "distance": { "type": "Float", "value": 2.4 },
+        "fov_y": { "type": "Float", "value": 0.8 },
+        "look_y": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "node.gltf_mesh_source",
+      "nodeId": "sprig",
+      "handle": "sprig",
+      "title": "Sprig Cluster",
+      "params": {
+        "mesh_index": { "type": "Int", "value": -1 },
+        "primitive_index": { "type": "Int", "value": -1 },
+        "material_index": { "type": "Int", "value": 1 },
+        "max_capacity": { "type": "Int", "value": 1800000 },
+        "fit": { "type": "Enum", "value": 1 },
+        "recenter": { "type": "Bool", "value": true }
+      }
+    },
+    {
+      "id": 3,
+      "typeId": "node.gltf_texture_source",
+      "nodeId": "sprig_tex",
+      "handle": "sprig_tex",
+      "title": "Sprig Atlas",
+      "params": {
+        "texture_index": { "type": "Int", "value": 1 },
+        "color_space": { "type": "Enum", "value": 0 },
+        "width": { "type": "Int", "value": 1024 },
+        "height": { "type": "Int", "value": 1024 }
+      }
+    },
+    {
+      "id": 4,
+      "typeId": "node.value",
+      "nodeId": "grow",
+      "handle": "grow",
+      "title": "Grow Phase",
+      "params": {
+        "value": { "type": "Float", "value": 1.0 }
+      }
+    },
+    {
+      "id": 5,
+      "typeId": "node.scale_offset_value",
+      "nodeId": "front_y",
+      "handle": "front_y",
+      "title": "Growth Front Y",
+      "params": {
+        "scale": { "type": "Float", "value": 1.2 },
+        "offset": { "type": "Float", "value": -0.6 }
+      }
+    },
+    {
+      "id": 6,
+      "typeId": "node.taper_mesh",
+      "nodeId": "reveal",
+      "handle": "reveal",
+      "title": "Growth Front (collapse above)",
+      "params": {
+        "axis": { "type": "Enum", "value": 1 },
+        "taper": { "type": "Float", "value": 0.0 },
+        "center": { "type": "Float", "value": 0.75 },
+        "length": { "type": "Float", "value": 0.05 }
+      }
+    },
+    {
+      "id": 13,
+      "typeId": "node.scale_offset_value",
+      "nodeId": "curl_phase",
+      "handle": "curl_phase",
+      "title": "Curl Phase (lags front)",
+      "params": {
+        "scale": { "type": "Float", "value": 1.0 },
+        "offset": { "type": "Float", "value": -0.25 }
+      }
+    },
+    {
+      "id": 10,
+      "typeId": "node.mesh_ramp",
+      "nodeId": "curl_mask",
+      "handle": "curl_mask",
+      "title": "Curl Mask (1 above front)",
+      "params": {
+        "axis": { "type": "Enum", "value": 1 },
+        "origin_x": { "type": "Float", "value": 0.0 },
+        "origin_y": { "type": "Float", "value": 0.0 },
+        "origin_z": { "type": "Float", "value": 0.0 },
+        "phase": { "type": "Float", "value": 1.0 },
+        "feather": { "type": "Float", "value": 0.3 },
+        "bound_min": { "type": "Float", "value": -0.6 },
+        "bound_max": { "type": "Float", "value": 0.6 },
+        "invert": { "type": "Bool", "value": true }
+      }
+    },
+    {
+      "id": 12,
+      "typeId": "node.bend_mesh",
+      "nodeId": "unfurl_droop",
+      "handle": "unfurl_droop",
+      "title": "Unfurl Droop (tip nods, hinged at front)",
+      "params": {
+        "angle": { "type": "Float", "value": 0.28 },
+        "center": { "type": "Float", "value": -0.55 }
+      }
+    },
+    {
+      "id": 14,
+      "typeId": "node.scale_offset_value",
+      "nodeId": "droop_hinge",
+      "handle": "droop_hinge",
+      "title": "Droop Hinge (just below front)",
+      "params": {
+        "scale": { "type": "Float", "value": 1.2 },
+        "offset": { "type": "Float", "value": -0.95 }
+      }
+    },
+    {
+      "id": 7,
+      "typeId": "node.phong_material",
+      "nodeId": "mat",
+      "handle": "mat",
+      "title": "Sprig Material",
+      "params": {
+        "ambient": { "type": "Float", "value": 0.22 }
+      }
+    },
+    {
+      "id": 8,
+      "typeId": "node.light",
+      "nodeId": "sun",
+      "handle": "sun",
+      "title": "Warm Key",
+      "params": {
+        "mode": { "type": "Enum", "value": 0 },
+        "pos_x": { "type": "Float", "value": 2.5 },
+        "pos_y": { "type": "Float", "value": 3.5 },
+        "pos_z": { "type": "Float", "value": 2.5 },
+        "aim_x": { "type": "Float", "value": 0.0 },
+        "aim_y": { "type": "Float", "value": 0.0 },
+        "aim_z": { "type": "Float", "value": 0.0 },
+        "color_r": { "type": "Float", "value": 1.0 },
+        "color_g": { "type": "Float", "value": 0.88 },
+        "color_b": { "type": "Float", "value": 0.72 },
+        "intensity": { "type": "Float", "value": 2.6 },
+        "cast_shadows": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 9,
+      "typeId": "node.render_scene",
+      "nodeId": "scene",
+      "handle": "scene",
+      "title": "Render Scene",
+      "params": {
+        "objects": { "type": "Int", "value": 1 },
+        "lights": { "type": "Int", "value": 1 }
+      }
+    },
+    {
+      "id": 99,
+      "typeId": "system.final_output",
+      "nodeId": "out",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "a" },
+    { "fromNode": 2, "fromPort": "vertices", "toNode": 6, "toPort": "in" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "center" },
+    { "fromNode": 2, "fromPort": "vertices", "toNode": 10, "toPort": "in" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 13, "toPort": "a" },
+    { "fromNode": 13, "fromPort": "out", "toNode": 10, "toPort": "phase" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 12, "toPort": "in" },
+    { "fromNode": 10, "fromPort": "weights", "toNode": 12, "toPort": "weights" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 14, "toPort": "a" },
+    { "fromNode": 14, "fromPort": "out", "toNode": 12, "toPort": "center" },
+    { "fromNode": 1, "fromPort": "out", "toNode": 9, "toPort": "camera" },
+    { "fromNode": 12, "fromPort": "out", "toNode": 9, "toPort": "mesh_0" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 9, "toPort": "material_0" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 9, "toPort": "base_color_map_0" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 9, "toPort": "light_0" },
+    { "fromNode": 9, "fromPort": "color", "toNode": 99, "toPort": "in" }
+  ]
+}
