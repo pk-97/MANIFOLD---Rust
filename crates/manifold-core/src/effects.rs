@@ -158,6 +158,7 @@ impl ParamDef {
             // onto the spec in `append_user_binding`.
             is_angle: false,
             is_trigger_gate: self.is_trigger_gate,
+            wraps: false,
             // Carries through now (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2
             // D5, load-bearing fix): a glTF-imported generator TRACKS its
             // embedded preset (`graph: None`, D9/BUG-016), so this registry
@@ -799,6 +800,7 @@ fn spec_from_binding(
         // starts false. A later expose/edit reseeds it with the real value.
         is_angle: false,
         is_trigger_gate: false,
+        wraps: false,
         section: None,
     }
 }
@@ -827,6 +829,7 @@ fn placeholder_spec(
         invert: false,
         is_angle: false,
         is_trigger_gate: false,
+        wraps: false,
         section: None,
     }
 }
@@ -1885,6 +1888,7 @@ impl PresetInstance {
             // A user-exposed inner-graph param is never the trigger-gate card
             // (that's the preset-authored `clip_trigger` outer card only).
             is_trigger_gate: false,
+            wraps: false,
             // Section seeding from the innermost enclosing group's display
             // name (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D5) — resolved
             // by the expose command (`mirror_effect_side`) and carried on
@@ -2071,6 +2075,7 @@ impl PresetInstance {
             // angle flag off the captured binding, same as `append_user_binding`.
             is_angle: binding.is_angle,
             is_trigger_gate: false,
+            wraps: false,
             // Same carry-through as `append_user_binding` — this shadow entry
             // is inert anyway (D12 re-derives `meta.params` from the live
             // manifest at serialize time), but keeping it consistent avoids a
@@ -4118,6 +4123,7 @@ mod tests {
             invert: false,
             is_angle: false,
             is_trigger_gate: false,
+            wraps: false,
             section: None,
         };
         let mut p = crate::params::Param::bundled(spec);
@@ -4325,6 +4331,7 @@ mod tests {
                     invert: false,
                     is_angle: false,
                     is_trigger_gate: false,
+                    wraps: false,
                     section: None,
                 }],
                 bindings: vec![BindingDef {
