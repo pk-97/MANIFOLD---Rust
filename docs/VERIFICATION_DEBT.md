@@ -24,6 +24,25 @@ Rules (normative home: `DESIGN_DOC_STANDARD.md` §10):
 
 ## Open
 
+### VD-026 — AUDIO_SETUP_DOCK P7: tap-follow + band dimming has no L3 flow and no live full-pipeline PNG
+Landed 2026-07-11 (`docs/landings/2026-07-11-audio-dock-p7.md`). The phase's own gate asked for an
+L3 ui-flow (expand a trigger drawer on send B while the panel shows send A ⇒ tap command for B;
+collapse ⇒ restored) and a headless PNG of the dimmed scope with a Low-band trigger open — neither
+is reachable in this sandbox. The L3 flow needs a `scripts/ui-flows/` interact verb for
+arming/expanding an audio-mod drawer, which doesn't exist yet (none of `select`/`collapse`/
+`collapse_effect` reach it). The live-dim PNG needs the VQT waterfall itself producing pixels
+(`content_num_bins > 0`, real audio), which is the same live-audio-device gap VD-025 already names
+for the waterfall's own render path — dimming rides the identical shader pass, so it inherits the
+identical gap. **What IS verified:** the selection logic (`open_fire_mode_drawer_send`/`_band`,
+`crates/manifold-ui/src/panels/param_card.rs` tests) at the value level, and the shader's actual
+darkening math on the real Metal pipeline (`spectrogram::gpu_tests::
+dim_range_darkens_outside_the_kept_band_only`, `gpu-proofs`) — a stronger proof of the pixel math
+than a PNG would be, just not of the click-to-pixel round trip. **Burn down:** build the harness
+interact verb (co-owned with VD-024's sibling gap — AudioTriggerSection has no test module either,
+which is what makes hand-rolling a drawer-open fixture there costly right now), and confirm the
+live crossing + dim on Peter's rig alongside VD-025's burn-down (same soundcheck session covers
+both).
+
 ### VD-025 — AUDIO_SETUP_DOCK P3c: fire-meter content-thread work never run through the live MANIFOLD_RENDER_TRACE
 Landed 2026-07-10 (`12fbc37d`; `docs/landings/2026-07-10-audio-dock-p3c.md`). The §5/BUG-035
 content-thread-work gate (any per-tick content-thread work → live `MANIFOLD_RENDER_TRACE=1`, no
