@@ -1395,7 +1395,11 @@ impl PresetRuntime {
             // against an inner that already matches — closes both the static
             // "touch to update" bug (518436a7) and the symmetric user-binding
             // default-seed gap).
-            let bound = BoundGraph::new(bindings, &mut graph);
+            let mut bound = BoundGraph::new(bindings, &mut graph);
+            // Carry the fused view's retarget so an in-place inner-param edit /
+            // undo on a fused-away node reaches the live kernel (BUG-006). Empty
+            // clone on an unfused view — the live editor path — so no cost there.
+            bound.fused_retarget = view.fused_retarget.clone();
             // The user tail lives in the graph now, so its rebuild signal
             // is the graph version (a binding add/remove/reshape bumps it).
             let user_bindings_version = fx.graph_version;

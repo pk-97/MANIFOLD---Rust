@@ -74,12 +74,7 @@ or human can read it, and it needs no external tool.
 | ~~BUG-035~~ FIXED | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread — FIXED @ `55faec0f` (moved to clip-thumb disk worker via `try_read_packed()` + `store_atlas()`), rig confirmation owed |
 | BUG-037 | **glp-first-render-stall** | ~37ms warm-up on a glTF clip's first rendered frame (MED) |
 | BUG-038 | **ableton-log-spam** | bridge warns every 1.5s forever when Live absent (LOW) |
-| BUG-006 | **fused-param-noop** | param edits/undo on fused-away nodes silently no-op (HIGH) |
-| BUG-007 | **fusion-exclusion-blind** | particle-loop exclusion misses configured wgsl_compute shapes (HIGH) |
-| BUG-008 | **fused-buffer-oob** | mismatched array lengths read out of bounds in fused region (HIGH) |
-| BUG-009 | **stateless-gate-miss** | harvest skip resets StateStore-held scalar state (HIGH) |
-| BUG-010 | **wgsl-first-entry** | multi-entry wgsl_compute silently dispatches the first (MED) |
-| BUG-011 | **fused-output-oversize** | fused output buffer sized to max of all inputs (MED) |
+| BUG-111 | **fused-segment-inner-override-noop** | in-place inner-param edits on a fused SEGMENT card never reach the live kernel — segment node_map is `c{i}.`-prefixed, per-card def isn't, so both surviving and fused-away nodes miss (MED) |
 | BUG-015 | **inspector-overlap** | stale-chrome class FIXED 2026-07-08 — incremental cache path now falls back to full render on out-of-sub-region dirt (`has_dirty_outside_ranges` + `incremental_path_safe`); blanket `clear_dirty` narrowed to the overlay region so the fallback isn't erased. (2026-07-04 "sections interleaved" sighting = separate open thread if it recurs) |
 | BUG-060 | **inspector-footer-overpaint** | REOPENED 2026-07-08. Opus 2nd pass: tree-geometry cause **ELIMINATED on the live cache path** (new `footer_leak_probe` test proves the inspector clips at footer_top through `traverse_flat_range`; footer's own render is correct) — the "inspector escapes into the footer" framing is wrong. Cause localized BELOW the tree, to the cache/dirty layer (tab-swap clears it = full recomposite). Artifact is **stale UI content** (UI colours / button fragments left behind), NOT clear/dark — the prior "footer goes dark, RGB 9-16" atlas dump was a HARNESS failure, not the symptom. Stale-pixel / dirty-clear bug, BUG-015 class. Needs live atlas+offscreen pixel dump. Cause still OPEN. **2026-07-10 (Fable + Peter):** Rig screenshots relocate the artifact — fragments accumulate at the scroll viewport's CLIP EDGES (bottom sliver above footer_top on both tabs, top sliver under the tab strip on Master), i.e. INSIDE the inspector panel rows, and build up per scroll step until tab-swap wipes them. Both existing probes are structurally blind there: `footer_leak_probe` checks geometry below footer_top, the P0 differential asserts rows [footer_top, footer_top+h) — the artifact rows were never asserted, so the harness "0 diff" results don't contradict the rig (stop extending the harness; observe the rig instead). Live dump tool BUILT + VALIDATED on branch `debug/bug-060-surface-dump` (worktree `bug060-dump`, e81696b4): `MANIFOLD_BUG060_DUMP=<N>` overwrites `/tmp/bug060_atlas.png` + `/tmp/bug060_offscreen.png` every N dirty-present frames (default 30) and logs sf + footer/inspector rects; readback verified against a live launch (real UI, sf=2 Retina confirmed, playhead-only atlas/offscreen delta proves the surfaces are independent). Next: Peter reproduces with the flag set, then one look at the atlas PNG splits cache-layer vs composite/present. **2026-07-10 VERDICT (live dump, Peter's audioTesting2 repro): the dirt is IN THE ATLAS — and it is not a stale copy, it is a LIVE UNCLIPPED DRAW.** Pixel measurement on the dump: the blue pill in the top sliver spans rows 170–197 physical, the pixel-exact position EdgeStretch's own ON pill would occupy if unclipped (Glitch reference: pill top = title top − 3), while the header bg + title around it are correctly scissored at the viewport line (~188). So the card-header toggle's bg fill draws WITHOUT the column clip; every scroll leaves the previous unclipped copy in territory the (clipped) self-clearing panel render can never repaint — that is the accumulation, and only `invalidate_all` (tab swap) wipes it. Bottom-edge fragments (slider fills) are the same class: once the clip is lost mid-card, later fill quads in the range draw unclipped too. The `traverse_flat_range` suspect was CLEARED by a clip-topology test (`bug060_every_card_node_renders_under_the_column_clip`, green — fresh-build clip chains are sound). **ROOT CAUSE FOUND + FIXED 2026-07-10 @ `39836352`** via a batch-flush band trace (`MANIFOLD_BUG060_TRACE=x0,y0,x1,y1`) on Peter's live repro: card-shaped rects logged as `immediate ... scissor=None` during the inspector pass. `push/pop_transform` and `push/pop_depth` cut the pending rect run via `flush_immediate_run` even mid-traversal, batching already-enqueued TREE rects under `immediate_clip` (`None`) — every card ON pill drawn before its card's **rotated chevron** (`UIStyle.transform`) lost its scissor. This is also why the 2026-07-08 trace swore all 858 draws were clipped: it observed the clip stack at `draw_node` time, upstream of the flush-time theft. Fix: context-aware `flush_pending_run` (tree clip stack while `in_tree_pass`, immediate clip otherwise); regression test `transform_boundary_keeps_tree_scissor_on_pending_batch` proven red-under-old-flush/green-now. Gates green (workspace, gpu-proofs 1248, clippy). **RIG-VERIFIED by Peter + LANDED on main @ `cc4eeb37` 2026-07-10** (dump/trace tooling landed env-gated with it). **CLASS-KILL follow-up (same day): clip bound per command at enqueue** — `RectCommand` now carries `(clip, depth)` captured at the push site (like `LineCommand`/`ImageCommand`/text `clip_bounds`/per-command depth `22c5d528` already did); batches derive in `prepare()` by run-scanning consecutive equal `(clip, depth)`; ALL flush-time scissor inference (`flush_immediate_run`/`flush_scissor_batch`/`flush_pending_run`/`in_tree_pass`) deleted, so the wrong-flush mistake is unrepresentable. Invariant recorded in `docs/DEVELOPMENT_REFERENCE.md` ("UI Renderer Invariant"). CLOSED. |
 | BUG-025 | **timeline-scissor-bleed** | clip content bleeds across row bounds (MED, repro needed — scrolled headless render 07-07 clean) |
@@ -103,7 +98,39 @@ or human can read it, and it needs no external tool.
 | BUG-069 | **shipping-license-audit** | four license problems in shipped components: madmom models + ADTOF (both CC BY-NC-SA), rusty_link crate (GPL-2.0, viral, in manifold-playback), staged ffmpeg copied from the dev machine (likely GPL build); full sweep 2026-07-08, everything else clean (HIGH for commercialization, zero runtime impact) |
 | ~~BUG-070~~ FIXED | **stepper-and-nonstandard-slider-reset** | ~~decay drawer slider~~ + Clip Trigger drawer sliders covered by the intrinsic-reset follow-through (@ 3a88f728). Remainder FIXED (AUDIO_SETUP_DOCK P4): Audio Setup gain `[−]value[＋]` steppers + the D7 overlay-drag value-label gain zone (not `BitmapSlider` tracks, so no `SliderReset` registration existed) now right-click-reset to unity via `PanelAction::slider_reset` replaying the existing `AudioSendGainDrag{Begin,Changed,Commit}` trio at 0.0 dB — the SAME gesture BUG-105 names as "every card/panel slider in the app." `feat/audio-dock-p4`. |
 
+**Freeze-compiler adversarial bug hunt, 2026-07-03** — BUG-006–014 (some now Fixed) come from a
+40-agent Sonnet workflow (`wf_73bb4ddf-885`; 10 finder lenses → every finding attacked by 2
+independent skeptics). BUG-006–012 were **confirmed by both skeptics** with line-level evidence;
+BUG-013/014 got split verdicts (judgment recorded per entry). Full verifier transcripts: the
+workflow journal at
+`~/.claude/projects/-Users-peterkiemann-MANIFOLD---Rust/18511d71-15ae-4119-81cc-894a3f83d247/subagents/workflows/wf_73bb4ddf-885/journal.jsonl`.
+System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
+
 ## Open
+
+### BUG-111 — In-place inner-param edits on a fused SEGMENT card never reach the live kernel — MED
+**Status:** OPEN — found 2026-07-11 while fixing BUG-006 (freeze bug-wave lane A).
+
+**Root cause** — the fused-segment build path (preset_runtime.rs ~977–1064) builds one `node_map`
+from the concatenated segment def, whose node ids carry the `c{i}.` per-card prefix
+(`freeze::segment::card_prefix`). The per-frame in-place override (`run` → `apply_inner_overrides`,
+preset_runtime.rs ~1863) passes each card's OWN def (`fx.graph`), whose node ids are UNPREFIXED.
+So `apply_inner_param_overrides` misses every node: a surviving node `foo` is `c{i}.foo` in the
+map, and a fused-away node isn't there at all. The BUG-006 retarget fix doesn't help — the
+segment's `EffectSlot.bound.fused_retarget` is left empty (the segment retarget map is prefix-keyed
+too), and even a prefixed retarget wouldn't cover the surviving-node miss.
+
+**Symptom** — a value/position edit to a card that is part of a fused segment (multi-card fusion)
+never lands in place; the old value keeps rendering until an unrelated rebuild. Same silent-stale
+class as BUG-006 but scoped to segments. Narrower than BUG-006 (needs a multi-card segment that
+fused), hence MED. Stateless-only cards today (segment eligibility), so no state-loss compounding.
+
+**Fix shape** — populate the segment slot's `bound.fused_retarget` from the segment view's
+prefix-keyed retarget with the `c{i}.` prefix normalized to the per-card def's key space, AND
+translate surviving-node overrides by prefixing the def node id before the `node_map` lookup (or
+apply overrides against a per-card-prefixed view of the def). Pair the two so both surviving and
+fused-away nodes resolve. A focused test mirroring `inner_override_routes_fused_away_node_through_retarget`
+but over a 2-card segment would pin it.
 
 ### BUG-110 (osc-receiver-test-type-complexity-clippy-debt) — `manifold-playback`'s `--tests` clippy gate fails on `osc_receiver.rs`, unrelated to any of this session's changes — LOW (lint-only)
 **Status:** OPEN — found 2026-07-11 during `bug-wave1-lane-d-test-hygiene` (BUG-088/072 re-verification).
@@ -803,139 +830,6 @@ a signal that a recent UI landing skipped the full workspace test.
 rather than bumping the baseline, which would silently bless the drift the ratchet exists to catch.
 Unrelated to param storage.
 
-BUG-006–014 come from the **freeze-compiler adversarial bug hunt, 2026-07-03**
-(40-agent Sonnet workflow `wf_73bb4ddf-885`; 10 finder lenses → every finding attacked by 2
-independent skeptics). BUG-006–012 were **confirmed by both skeptics** with line-level
-evidence; BUG-013/014 got split verdicts (judgment recorded per entry). Full verifier
-transcripts: the workflow journal at
-`~/.claude/projects/-Users-peterkiemann-MANIFOLD---Rust/18511d71-15ae-4119-81cc-894a3f83d247/subagents/workflows/wf_73bb4ddf-885/journal.jsonl`.
-System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
-
-### BUG-006 — Param edits/undo on fused-away nodes silently no-op until an unrelated rebuild — HIGH
-**Status:** OPEN
-
-**Root cause** — [bound_graph.rs:114-133](../crates/manifold-renderer/src/node_graph/bound_graph.rs#L114-L133):
-`apply_inner_param_overrides` looks each node's `node_id` up in `slot.node_map` and silently
-`continue`s on a miss. For a fused card, `node_map` is built from the FUSED def
-([preset_runtime.rs:1285-1288](../crates/manifold-renderer/src/preset_runtime.rs#L1285-L1288)),
-so fused-away members (e.g. `gain`) aren't in it. The path never consults the fused view's
-`fused_retarget` map (which knows `gain.gain` → `fused_region_0.n0_gain`). Value-only edits
-bump only `graph_version`, which is deliberately not in `compute_topology_hash`, so no rebuild
-fires.
-
-**Symptom** — edit a param in the editor, close it (re-fuses, bakes the value), then Undo
-while viewing another effect: the def reverts but the fused kernel keeps rendering the OLD
-value indefinitely, until a resize/editor-open/unrelated edit forces a rebuild. Live control
-stranded, zero errors. `CHAIN_FUSION_DESIGN.md` §6 already flags this as an open item.
-
-**Fix shape** — thread the fused view's `fused_retarget` into `apply_inner_param_overrides`
-(or into `node_map` construction): on a `node_map` miss, translate `(node_id, param)` through
-the retarget map to `(fused node, n{i}_field)` and apply there. Test: fuse, value-edit,
-assert the fused node's param moved without a rebuild.
-
-### BUG-007 — Particle-loop fusion exclusion is blind to configured `node.wgsl_compute` shapes — HIGH
-**Status:** OPEN
-
-**Root cause** — [region.rs:834](../crates/manifold-renderer/src/node_graph/freeze/region.rs#L834):
-`cycle_contains_array` uses a bare `registry.construct(type_id)` — the ONE hold-out in the
-file; every other classification call site uses `configured_construct`, whose own doc comment
-states why the bare form is wrong. A full-kernel `node.wgsl_compute` with a
-`var<storage, read_write> array<Particle>` output (StrangeAttractor's "simulate" node is a
-shipped instance) introspects as the DEFAULT kernel (no Array output) under the bare
-construct, so the cycle scan can't see the particle stage.
-
-**Symptom** — a texture atom on a feedback loop whose only Array producer is such a node
-passes cut rule 12 and fuses tier-A f16 in-loop, where the bit-exact induction argument does
-not hold across a particle/scatter stage (FluidSim precedent: max_abs ~0.73 over ~31% of
-pixels). Fused render visibly diverges from the editor.
-
-**Fix shape** — one line: use `configured_construct(registry, node)` in
-`cycle_contains_array`. Sweep the file for any other bare-construct hold-outs
-(`node_is_buffer_atom` / `region_is_buffer` at
-[region.rs:1885-1905](../crates/manifold-renderer/src/node_graph/freeze/region.rs#L1885-L1905)
-have the same pattern — audit while there). Test: a loop through a configured wgsl_compute
-particle node must classify its texture atoms Boundary.
-
-### BUG-008 — Fused buffer region with mismatched array lengths reads out of bounds — HIGH
-**Status:** OPEN
-
-**Root cause** — [codegen.rs:1777-1813](../crates/manifold-renderer/src/node_graph/freeze/codegen.rs#L1777-L1813):
-`generate_fused_buffer` anchors the dispatch guard to the FIRST array external's
-`arrayLength`, then unconditionally pre-reads EVERY array external at that index. Nothing
-anywhere (classify, union, `build_region`, `fused_def_builds`) checks that a buffer region's
-array externals agree on length — the tier-6 uniformity gate is texture-only. The unfused
-atom (e.g. `LerpInstanceFields`) explicitly clamps to `min(a_cap, b_cap, out_cap)`.
-
-**Symptom** — two array inputs of different lengths fuse; for indices past the shorter
-buffer the kernel does an out-of-bounds Metal storage read and writes garbage
-instances/particles to the output — silent visual corruption. Shipped presets happen to share
-lengths today; user graphs are unprotected.
-
-**Fix shape** — either refuse at `build_region` when a buffer region has >1 array external
-(conservative, fail-closed, cheapest), or emit a per-external in-bounds guard
-(`idx < arrayLength(&src_e)` with a defined fallback element). Pair with BUG-011.
-
-### BUG-009 — Segment "stateless" gate misses StateStore-held scalar state; harvest skip resets it — HIGH
-**Status:** OPEN
-
-**Root cause** — [segment.rs:153-171](../crates/manifold-renderer/src/node_graph/freeze/segment.rs#L153-L171):
-`def_is_segment_stateless` checks only `state_capture_input_ports` + `aliased_array_io`.
-Primitives that hold real cross-frame state in the StateStore without declaring either —
-`sample_and_hold`, `envelope_decay`, `trigger_ease_to`, `compressor_envelope`,
-`envelope_follower_ar`, `inject_burst` — pass as stateless. Segment member slots get
-`def_content_key: 0` ([preset_runtime.rs:1105](../crates/manifold-renderer/src/preset_runtime.rs#L1105))
-and `harvest_state_from` skips them
-([preset_runtime.rs:1693](../crates/manifold-renderer/src/preset_runtime.rs#L1693)), so any
-chain rebuild drops their state.
-
-**Symptom** — AutoGain (shipped: `compressor_envelope` next to pointwise atoms) joins a
-segment; any rebuild while it's a member — editor open/close elsewhere, an unrelated card
-edit, or the fused-segment swap-in itself — resets the envelope: gain snaps to unity, a
-visible/audible pop mid-show. Violates the chain-fusion design's own "never resets state"
-invariant.
-
-**Fix shape** — the root fix is a truthful statefulness signal: a `NodeRequires`-style
-`uses_state_store` flag (or derive it from `ctx.state` usage) that `def_is_segment_stateless`
-also checks. Stop-gap is a hard-coded exclusion list, which is exactly the pattern the freeze
-module refuses everywhere else — prefer the flag.
-
-### BUG-010 — `wgsl_compute` silently dispatches the first of multiple entry points — MED
-**Status:** OPEN
-
-**Root cause** — [wgsl_compute.rs:615-624](../crates/manifold-renderer/src/node_graph/primitives/wgsl_compute.rs#L615-L624):
-`introspect()` takes `module.entry_points[0]` with no `len() == 1` check (the module doc at
-lines 29-31 claims multiple entry points fail validation — they don't). The pipeline compile
-independently picks the same first entry. A fragment-form node embeds the author's raw text
-BEFORE the synthesized `cs_main`, so any leftover `@compute fn` in the fragment becomes
-entry 0 and is what actually runs. Verified empirically by a skeptic (scratch test:
-`compile_failed=false`, `debug_pass` dispatched, real kernel never runs).
-
-**Symptom** — a user kernel/fragment with a stray second `@compute` function (debug leftover,
-copy-paste) renders stale/blank output with no warning; downstream wires read it as if it
-worked. Authoring-time surface, so MED — but it's the exact silent-wrong-output class.
-
-**Fix shape** — in `introspect()`: if the module has >1 compute entry point, prefer `cs_main`
-by name; if absent, fail validation with the warning the doc already promises. Keep the
-dispatch-side pick in lockstep.
-
-### BUG-011 — Fused `@fused_output` buffer sized to max of ALL array inputs, not the member's own rule — MED
-**Status:** OPEN
-
-**Root cause** — [wgsl_compute.rs:1828-1829](../crates/manifold-renderer/src/node_graph/primitives/wgsl_compute.rs#L1828-L1829):
-the fresh-output branch of `array_output_capacity` returns
-`input_capacities.max()` generically, overriding the fused output member's own semantic
-capacity rule (e.g. `LerpInstanceFields` follows only input `a`). Downstream consumers
-(`render_instanced_3d_mesh` computes capacity from physical buffer size) can then draw ghost
-instances from the never-written tail.
-
-**Symptom** — with mismatched input lengths (same shape as BUG-008), the fused output buffer
-is larger than the unfused chain's, and its tail is uninitialized pooled VRAM — potential
-stale-data ghosting across preset/frame boundaries.
-
-**Fix shape** — falls out of BUG-008's decision: if multi-external buffer regions are
-refused, this is unreachable; if guarded instead, size `dst` from the anchor external and
-zero-fill or guard the tail.
-
 ### BUG-012 — Fragment `tex_` port-rename corrupts scalar params named `tex_*` — LOW
 **Status:** OPEN
 
@@ -1484,6 +1378,192 @@ Same bug class as the migration killed for the primary controls.
 
 ## Fixed
 
+### BUG-011 — Fused `@fused_output` buffer sized to max of ALL array inputs, not the member's own rule — MED
+**Status:** FIXED (bug/wave1-lane-a-freeze) — paired with BUG-008's guard decision. The
+fused-output branch of `array_output_capacity` (wgsl_compute.rs) now returns
+`input_capacities.min()`, not `.max()`. This is the exact complement of BUG-008's count guard:
+the kernel writes only `[0, min(arrayLength of every array external))`, so sizing `dst` to the
+SMALLEST input means there is NO never-written tail — the ghost-instance source is removed at the
+allocation, not patched with a zero-fill. (`min` also dominates the "follow input a" member rule
+the entry named: with the min-count guard, a is written only up to `min(a, b)`, so `min` is the
+tail-free size regardless of which input the member nominally follows.) Equal-length regions
+(every shipped buffer preset — DigitalPlants proof re-run green) are unaffected: `min` of equal
+lengths is that length. Reproduced by `fused_output_capacity_is_min_of_inputs_not_max`
+(mismatched `[10, 4]` inputs → capacity 4, not 10).
+
+**Root cause** — [wgsl_compute.rs:1828-1829](../crates/manifold-renderer/src/node_graph/primitives/wgsl_compute.rs#L1828-L1829):
+the fresh-output branch of `array_output_capacity` returns
+`input_capacities.max()` generically, overriding the fused output member's own semantic
+capacity rule (e.g. `LerpInstanceFields` follows only input `a`). Downstream consumers
+(`render_instanced_3d_mesh` computes capacity from physical buffer size) can then draw ghost
+instances from the never-written tail.
+
+**Symptom** — with mismatched input lengths (same shape as BUG-008), the fused output buffer
+is larger than the unfused chain's, and its tail is uninitialized pooled VRAM — potential
+stale-data ghosting across preset/frame boundaries.
+
+**Fix shape** — falls out of BUG-008's decision: if multi-external buffer regions are
+refused, this is unreachable; if guarded instead, size `dst` from the anchor external and
+zero-fill or guard the tail.
+
+### BUG-010 — `wgsl_compute` silently dispatches the first of multiple entry points — MED
+**Status:** FIXED (bug/wave1-lane-a-freeze) — a new `select_compute_entry(&naga::Module)` helper is
+the single authority all three sites now share (introspect for workgroup size, the dispatch-side
+`create_compute_pipeline`, and the specialization-variant pipeline — each previously picked
+`entry_points[0]` independently). Rule: a single `@compute` entry wins by any name (back-compat);
+with more than one, only the entry named `cs_main` is unambiguous, else validation fails with the
+warning the module doc always promised. Refreshed the stale module doc (lines 29-31). Two repro
+tests: a stray leading `@compute fn debug_pass` no longer steals introspection (cs_main's workgroup
+[16,16,1] lands, not debug_pass's [8,8,1]); two entries with no cs_main now set `compile_failed`.
+
+**Root cause** — [wgsl_compute.rs:615-624](../crates/manifold-renderer/src/node_graph/primitives/wgsl_compute.rs#L615-L624):
+`introspect()` takes `module.entry_points[0]` with no `len() == 1` check (the module doc at
+lines 29-31 claims multiple entry points fail validation — they don't). The pipeline compile
+independently picks the same first entry. A fragment-form node embeds the author's raw text
+BEFORE the synthesized `cs_main`, so any leftover `@compute fn` in the fragment becomes
+entry 0 and is what actually runs. Verified empirically by a skeptic (scratch test:
+`compile_failed=false`, `debug_pass` dispatched, real kernel never runs).
+
+**Symptom** — a user kernel/fragment with a stray second `@compute` function (debug leftover,
+copy-paste) renders stale/blank output with no warning; downstream wires read it as if it
+worked. Authoring-time surface, so MED — but it's the exact silent-wrong-output class.
+
+**Fix shape** — in `introspect()`: if the module has >1 compute entry point, prefer `cs_main`
+by name; if absent, fail validation with the warning the doc already promises. Keep the
+dispatch-side pick in lockstep.
+
+### BUG-009 — Segment "stateless" gate misses StateStore-held scalar state; harvest skip resets it — HIGH
+**Status:** FIXED (bug/wave1-lane-a-freeze) — root fix, the truthful signal already existed. The
+`NodeRequires`-style flag the fix shape asked for is `EffectNode::requires().state_store`, and it
+is already declared true by every one of the six named primitives (each calls
+`ctx.state.expect(...)` in `evaluate`, so the executor's provide/withhold contract runtime-enforces
+the declaration — a node that read the StateStore without declaring it would panic, never ship).
+`def_is_segment_stateless` (segment.rs) now checks `!node.requires().state_store` alongside the
+existing `state_capture_input_ports` + `aliased_array_io` gates. No hard-coded exclusion list.
+Reproduced by `state_store_scalar_card_is_not_segment_stateless` (a compressor_envelope card is now
+ineligible; a pure-pointwise card stays eligible). Also refreshed the stale `NodeRequires` doc
+comment ("today only Feedback"). Stricter gate = under-segmenting for stateful cards, which is the
+safe direction.
+
+**Root cause** — [segment.rs:153-171](../crates/manifold-renderer/src/node_graph/freeze/segment.rs#L153-L171):
+`def_is_segment_stateless` checks only `state_capture_input_ports` + `aliased_array_io`.
+Primitives that hold real cross-frame state in the StateStore without declaring either —
+`sample_and_hold`, `envelope_decay`, `trigger_ease_to`, `compressor_envelope`,
+`envelope_follower_ar`, `inject_burst` — pass as stateless. Segment member slots get
+`def_content_key: 0` ([preset_runtime.rs:1105](../crates/manifold-renderer/src/preset_runtime.rs#L1105))
+and `harvest_state_from` skips them
+([preset_runtime.rs:1693](../crates/manifold-renderer/src/preset_runtime.rs#L1693)), so any
+chain rebuild drops their state.
+
+**Symptom** — AutoGain (shipped: `compressor_envelope` next to pointwise atoms) joins a
+segment; any rebuild while it's a member — editor open/close elsewhere, an unrelated card
+edit, or the fused-segment swap-in itself — resets the envelope: gain snaps to unity, a
+visible/audible pop mid-show. Violates the chain-fusion design's own "never resets state"
+invariant.
+
+**Fix shape** — the root fix is a truthful statefulness signal: a `NodeRequires`-style
+`uses_state_store` flag (or derive it from `ctx.state` usage) that `def_is_segment_stateless`
+also checks. Stop-gap is a hard-coded exclusion list, which is exactly the pattern the freeze
+module refuses everywhere else — prefer the flag.
+
+### BUG-008 — Fused buffer region with mismatched array lengths reads out of bounds — HIGH
+**Status:** FIXED (bug/wave1-lane-a-freeze) — guard, not refuse. Option (a) "refuse >1 array
+external at build_region" was ruled out: the shipped DigitalPlants generator fuses a buffer
+region containing `lerp_instance_fields` (two required `Array<InstanceTransform>` inputs), so
+refusing would regress a real preset (`digitalplants_buffer_fusion_renders_like_unfused` would
+panic on the `.expect("...fuses")`). Instead `generate_fused_buffer` (codegen.rs) now bounds
+the 1D dispatch `count` by the SHORTEST array external — `min(arrayLength(&src_0),
+arrayLength(&src_1), …)` — since every array external is pre-read at `[idx]`. This matches the
+unfused atoms' own `min(a, b, …)` clamp and makes every coincident read in-bounds. Byte-identical
+for single-external regions (still `arrayLength(&src_0)`) so the pipeline-cache key of every
+existing buffer kernel is unchanged; multi-external regions with equal lengths (all shipped
+cases) render identically (`min` of equal lengths). Reproduced by a codegen-text test
+(`fused_buffer_region_two_array_externals_bounds_count_by_min`, LerpInstanceFields two-external
+region); DigitalPlants proof re-run green. Paired with BUG-011 (output-side tail).
+
+**Root cause** — [codegen.rs:1777-1813](../crates/manifold-renderer/src/node_graph/freeze/codegen.rs#L1777-L1813):
+`generate_fused_buffer` anchors the dispatch guard to the FIRST array external's
+`arrayLength`, then unconditionally pre-reads EVERY array external at that index. Nothing
+anywhere (classify, union, `build_region`, `fused_def_builds`) checks that a buffer region's
+array externals agree on length — the tier-6 uniformity gate is texture-only. The unfused
+atom (e.g. `LerpInstanceFields`) explicitly clamps to `min(a_cap, b_cap, out_cap)`.
+
+**Symptom** — two array inputs of different lengths fuse; for indices past the shorter
+buffer the kernel does an out-of-bounds Metal storage read and writes garbage
+instances/particles to the output — silent visual corruption. Shipped presets happen to share
+lengths today; user graphs are unprotected.
+
+**Fix shape** — either refuse at `build_region` when a buffer region has >1 array external
+(conservative, fail-closed, cheapest), or emit a per-external in-bounds guard
+(`idx < arrayLength(&src_e)` with a defined fallback element). Pair with BUG-011.
+
+### BUG-007 — Particle-loop fusion exclusion is blind to configured `node.wgsl_compute` shapes — HIGH
+**Status:** FIXED (bug/wave1-lane-a-freeze) — reproduced (`cycle_through_configured_particle_wgsl_compute_is_particle_loop`,
+region.rs, loads the real StrangeAttractor sim node) and fixed. `cycle_contains_array`
+(region.rs:834) now uses `configured_construct(registry, node)`. Swept the file: also converted
+the two sibling holdouts `node_is_buffer_atom` + `region_is_buffer` (~region.rs:1898/1914) and
+`input_port_access` (via `wire_coincident_consumed`) — all constructed bare, all the same
+blind-spot class (a configured full-kernel `node.wgsl_compute`'s Array output / gather access
+only appears after `wgsl_source` is parsed). The test pins the root cause directly: a bare
+construct of the sim node reports NO Array output; the configured construct does. Two remaining
+bare `registry.construct` sites in region.rs are the `#[ignore]`d audit-diagnostic prints
+(`domain_flags` ~2613, `explain_preset` ~2682) — not on the runtime classification path; left as
+census-only (they'd under-report configured shapes but only in a manual audit dump).
+
+**Root cause** — [region.rs:834](../crates/manifold-renderer/src/node_graph/freeze/region.rs#L834):
+`cycle_contains_array` uses a bare `registry.construct(type_id)` — the ONE hold-out in the
+file; every other classification call site uses `configured_construct`, whose own doc comment
+states why the bare form is wrong. A full-kernel `node.wgsl_compute` with a
+`var<storage, read_write> array<Particle>` output (StrangeAttractor's "simulate" node is a
+shipped instance) introspects as the DEFAULT kernel (no Array output) under the bare
+construct, so the cycle scan can't see the particle stage.
+
+**Symptom** — a texture atom on a feedback loop whose only Array producer is such a node
+passes cut rule 12 and fuses tier-A f16 in-loop, where the bit-exact induction argument does
+not hold across a particle/scatter stage (FluidSim precedent: max_abs ~0.73 over ~31% of
+pixels). Fused render visibly diverges from the editor.
+
+**Fix shape** — one line: use `configured_construct(registry, node)` in
+`cycle_contains_array`. Sweep the file for any other bare-construct hold-outs
+(`node_is_buffer_atom` / `region_is_buffer` at
+[region.rs:1885-1905](../crates/manifold-renderer/src/node_graph/freeze/region.rs#L1885-L1905)
+have the same pattern — audit while there). Test: a loop through a configured wgsl_compute
+particle node must classify its texture atoms Boundary.
+
+### BUG-006 — Param edits/undo on fused-away nodes silently no-op until an unrelated rebuild — HIGH
+**Status:** FIXED (bug/wave1-lane-a-freeze) — reproduced by a unit test on the current tip
+(`inner_override_routes_fused_away_node_through_retarget`, bound_graph.rs) and fixed at the
+shared home. `BoundGraph` now carries a `fused_retarget` map; the chain builder populates it
+from `view.fused_retarget` right after `BoundGraph::new` (preset_runtime.rs ~1398).
+`apply_inner_param_overrides` gained a `fused_retarget` param: on a `node_map` miss it routes
+each of the fused-away node's params through the retarget onto the live kernel's uniform field
+(`n{i}_field`), the same repoint the card + user bindings already take. Empty on an unfused
+view (live editor path) → the fast per-node `node_map` hit is unchanged. Verified for float
+fields (the pinned `gain.gain` case). **Residual, unfixed:** (a) the fused SEGMENT in-place
+override path is still no-op — the segment `node_map` is `c{i}.`-prefixed while the per-card
+def is unprefixed, so BOTH surviving and fused-away nodes miss (logged BUG-111); (b) an
+enum-typed fused field is written as `ParamValue::Enum(idx)` rather than the binding path's
+int-rounded float — harmless for the common float case, worth confirming if an enum param ever
+sits on a fused-away node.
+
+**Root cause** — [bound_graph.rs:114-133](../crates/manifold-renderer/src/node_graph/bound_graph.rs#L114-L133):
+`apply_inner_param_overrides` looks each node's `node_id` up in `slot.node_map` and silently
+`continue`s on a miss. For a fused card, `node_map` is built from the FUSED def
+([preset_runtime.rs:1285-1288](../crates/manifold-renderer/src/preset_runtime.rs#L1285-L1288)),
+so fused-away members (e.g. `gain`) aren't in it. The path never consults the fused view's
+`fused_retarget` map (which knows `gain.gain` → `fused_region_0.n0_gain`). Value-only edits
+bump only `graph_version`, which is deliberately not in `compute_topology_hash`, so no rebuild
+fires.
+
+**Symptom** — edit a param in the editor, close it (re-fuses, bakes the value), then Undo
+while viewing another effect: the def reverts but the fused kernel keeps rendering the OLD
+value indefinitely, until a resize/editor-open/unrelated edit forces a rebuild. Live control
+stranded, zero errors. `CHAIN_FUSION_DESIGN.md` §6 already flags this as an open item.
+
+**Fix shape** — thread the fused view's `fused_retarget` into `apply_inner_param_overrides`
+(or into `node_map` construction): on a `node_map` miss, translate `(node_id, param)` through
+the retarget map to `(fused node, n{i}_field)` and apply there. Test: fuse, value-edit,
+assert the fused node's param moved without a rebuild.
 ### BUG-035 (authoring-hitch) — 3D scenes hitch when a camera/light param is animated — FIXED (clip-atlas persist f16 convert moved off the content thread)
 **Status:** FIXED @ `55faec0f` (bug-wave lane B, 2026-07-11) — headless before/after `MANIFOLD_RENDER_TRACE` confirms the spike is gone; rig confirmation still owed (not run this session).
 
