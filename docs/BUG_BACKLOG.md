@@ -114,6 +114,7 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 ## Open
 
 ### BUG-118 (render-scene-fog-washes-out-instead-of-depth-grading) — atmosphere fog reads as uniform washout, not distance-graded haze — MED look-quality / render_scene
+**Status:** OPEN — reported live by Peter 2026-07-11 (Apricot Weather); logged without investigation per his call.
 
 **Symptom** — `node.atmosphere` fog at even low density (0.04) washes out the whole
 frame uniformly: near geometry loses contrast as much as far geometry, so fog reads
