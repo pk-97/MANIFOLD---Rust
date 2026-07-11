@@ -81,6 +81,43 @@ impl LiveTriggerState {
         dt: Seconds,
         fire_meters: &mut FireMeterCapture,
     ) -> Vec<FireRequest> {
+        self.walk(snapshot, setup, layers, dt, fire_meters, true)
+    }
+
+    /// BUG-109 §7.1 item 2: while the transport is stopped, clip triggers
+    /// never fire (one-shot expiry is beat-based and the clock is frozen),
+    /// but a performer tuning a trigger at soundcheck — transport stopped,
+    /// track playing through the tap — still needs to see the shaped signal
+    /// move. Runs the identical `condition()` walk [`Self::evaluate`] does —
+    /// same follower state, same fixed-0.5 meter push — but never advances
+    /// [`TransientEdge`] and never emits a [`FireRequest`], so resuming
+    /// playback can't inherit a fire decided while stopped.
+    pub fn evaluate_meter_only(
+        &mut self,
+        snapshot: &AudioFeatureSnapshot,
+        setup: &AudioSetup,
+        layers: &[Layer],
+        dt: Seconds,
+        fire_meters: &mut FireMeterCapture,
+    ) {
+        self.walk(snapshot, setup, layers, dt, fire_meters, false);
+    }
+
+    /// Shared walk behind [`Self::evaluate`] and [`Self::evaluate_meter_only`]
+    /// — `fire_enabled` gates the one line that can start a clip (advancing
+    /// the edge and emitting a [`FireRequest`]); everything upstream of that
+    /// line (feature extraction, `condition()` shaping, the meter push) runs
+    /// identically either way, so the drawer meter and the follower envelope
+    /// behave the same whether or not the transport is playing.
+    fn walk(
+        &mut self,
+        snapshot: &AudioFeatureSnapshot,
+        setup: &AudioSetup,
+        layers: &[Layer],
+        dt: Seconds,
+        fire_meters: &mut FireMeterCapture,
+        fire_enabled: bool,
+    ) -> Vec<FireRequest> {
         let mut fires = Vec::new();
         let dt_s = dt.0 as f32;
         for layer in layers {
@@ -118,12 +155,13 @@ impl LiveTriggerState {
                 // config's index — the drawer meter shows exactly what
                 // decides whether the clip fires. Pushed before the edge
                 // check so the meter reflects the level every tick, not only
-                // on a fire.
+                // on a fire — and, since BUG-109, whether or not `fire_enabled`
+                // is set, so the meter breathes with the music while stopped.
                 fire_meters.push(
                     fire_meter_key(&[layer.layer_id.as_str().as_bytes(), &(idx as u64).to_le_bytes()]),
                     conditioned,
                 );
-                if follower.edge.advance(conditioned, 0.5) {
+                if fire_enabled && follower.edge.advance(conditioned, 0.5) {
                     fires.push(FireRequest {
                         target_layer: layer.layer_id.clone(),
                         one_shot_beats: cfg.one_shot_beats,
@@ -257,6 +295,40 @@ mod tests {
         assert_eq!(state.evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default()).len(), 0); // disarmed
         state.clear();
         assert_eq!(state.evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default()).len(), 1); // re-armed
+    }
+
+    #[test]
+    fn evaluate_meter_only_pushes_the_level_but_never_advances_the_edge() {
+        // BUG-109 §7.1 item 2: the stopped-tick walk must push the same
+        // shaped signal the edge reads, without ever deciding a fire.
+        let (setup, layers) = setup_and_layer("Kick", AudioBand::Full, 1.0);
+        let mut state = LiveTriggerState::default();
+        let hot = snapshot_with_transient(AudioBand::Full, 0.9);
+
+        let mut meters = FireMeterCapture::default();
+        state.evaluate_meter_only(&hot, &setup, &layers, DT, &mut meters);
+        let key = fire_meter_key(&[
+            layers[0].layer_id.as_str().as_bytes(),
+            &0u64.to_le_bytes(),
+        ]);
+        assert!(
+            meters.get(key).unwrap() >= 0.5,
+            "meter-only walk must push the conditioned level even though nothing fires"
+        );
+
+        // Repeated meter-only calls on a hot signal never advance the edge —
+        // proven indirectly: a REAL evaluate() call right after still sees a
+        // fresh rising edge and fires, exactly as if evaluate_meter_only had
+        // never run (had it advanced the edge, this would now be disarmed).
+        state.evaluate_meter_only(&hot, &setup, &layers, DT, &mut FireMeterCapture::default());
+        state.evaluate_meter_only(&hot, &setup, &layers, DT, &mut FireMeterCapture::default());
+        assert_eq!(
+            state
+                .evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default())
+                .len(),
+            1,
+            "the edge must still be armed after any number of meter-only calls"
+        );
     }
 
     #[test]

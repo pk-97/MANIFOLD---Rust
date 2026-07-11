@@ -100,7 +100,7 @@ pub enum GraphParamTarget {
 /// this records which field the live edit and the commit write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioShapeParam {
-    /// `sensitivity` — how hard the feature drives ("Amount").
+    /// `sensitivity` — how hard the feature drives (drawer label "Sensitivity").
     Sensitivity,
     /// `attack_ms` — rise smoothing.
     Attack,
@@ -423,11 +423,17 @@ pub enum PanelAction {
     /// Remove the audio modulation from a param.
     AudioModRemove(GraphParamTarget, ParamId),
     /// Toggle an audio modulation's invert flag (`AudioModShape::invert`) — the
-    /// drawer's "Inv" button (loud → low).
+    /// drawer's "Invert" button (loud → low).
     AudioModSetInvert(GraphParamTarget, ParamId),
     /// Toggle an audio modulation's rate-of-change flag
-    /// (`AudioModShape::rate_of_change`) — the drawer's "d/dt" button; the
-    /// feature drives on its motion rather than its level.
+    /// (`AudioModShape::rate_of_change`) — the feature would drive on its
+    /// motion rather than its level. No drawer button reaches this anymore
+    /// (§7.2 item 2, 2026-07-11 — "Delta" removed from the UI, "not very
+    /// useful and adds a lot of clutter"); the variant and the runtime field
+    /// and `condition()` arm it drives stay compiled for a possible future
+    /// re-wire. Un-suppression trigger for any dead-code warning this
+    /// strands: re-wire per AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md
+    /// §7.2 item 2.
     AudioModSetRateOfChange(GraphParamTarget, ParamId),
     /// Snapshot an audio mod's shape before a drawer-slider drag (undo start).
     AudioModShapeSnapshot(GraphParamTarget, ParamId),
@@ -445,7 +451,7 @@ pub enum PanelAction {
     /// dispatch boundary (this crate mirrors core enums rather than
     /// depending on `manifold-core` directly; see `ui_translate.rs`). The
     /// drawer's one trigger-only row, on top of the standard Source/Feature/
-    /// Band/Inv/Delta/Amount/Attack/Release rows every audio mod has.
+    /// Band/Invert/Sensitivity/Attack/Release rows every audio mod has.
     AudioModSetTriggerMode(GraphParamTarget, ParamId, usize),
     /// Set an audio mod's fire ACTION kind (PARAM_STEP_ACTIONS D8) — the
     /// drawer's Action segmented row. Index: 0=Continuous, 1=Step, 2=Random.
