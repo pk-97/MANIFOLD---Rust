@@ -851,9 +851,11 @@ impl ContentThread {
                 if let Some(session) = self.content_pipeline.recording_session.take() {
                     let result = session.stop();
                     log::info!(
-                        "[ContentThread] Recording stopped: {} frames, {} dropped, {:.1}s -> {}",
+                        "[ContentThread] Recording stopped: {} frames, {} dropped, \
+                         {} audio frames dropped, {:.1}s -> {}",
                         result.frames_recorded,
                         result.frames_dropped,
+                        result.audio_frames_dropped,
                         result.duration_seconds,
                         result.output_path,
                     );

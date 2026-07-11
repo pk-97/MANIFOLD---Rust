@@ -406,14 +406,31 @@ fn execute(args: &Args) -> i32 {
     // that lost ~91% of the audio -- gets caught by the 50% floor; a few
     // percent of unexplained variance gets reported (below), not gated.
     if args.audio {
+        // BUG-084/BUG-086 instrument: the native encoder's backpressure-drop
+        // counter, now live (previously this drop path returned success and
+        // logged nothing at all). Always printed when audio is on, whether
+        // or not the coverage gate below fires -- a 0 reading on a take that
+        // still falls short is itself an observation (rules the gate out as
+        // BUG-086's cause for that run).
+        println!(
+            "[recording-soak] audio_frames_dropped (native backpressure gate) = {}",
+            result.audio_frames_dropped
+        );
         match report.audio_duration_s {
             Some(a) if a >= duration_s * 0.5 => {
                 if (a - duration_s).abs() > duration_s * 0.02 {
                     eprintln!(
                         "[recording-soak] WARNING: audio_duration_s {a:.1}s is {:.1}s short of \
                          the intended {duration_s:.1}s (BUG-086 -- known, unexplained, \
-                         non-gating variance; not a SOAK FAIL)",
+                         non-gating variance; not a SOAK FAIL). audio_frames_dropped={} \
+                         -- {} the shortfall.",
                         duration_s - a,
+                        result.audio_frames_dropped,
+                        if result.audio_frames_dropped > 0 {
+                            "backpressure drops correlate with"
+                        } else {
+                            "backpressure gate is NOT firing, so it does not explain"
+                        },
                     );
                 }
             }

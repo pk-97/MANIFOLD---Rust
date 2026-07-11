@@ -2,6 +2,8 @@
 //! Contains `run_export`, `export_one_frame`, `get_metal_texture_ptr`,
 //! `send_export_progress`, and `send_export_finished`.
 
+use std::sync::Arc;
+
 use crossbeam_channel::{Receiver, Sender};
 
 use manifold_core::{Beats, Seconds};
@@ -506,7 +508,7 @@ impl ContentThread {
         self.engine.reclaim_tick_result(tick_result);
 
         if frame_idx.is_multiple_of(10) {
-            self.send_export_progress(state_tx);
+            self.send_export_progress(state_tx, session);
         }
 
         None
@@ -519,16 +521,23 @@ impl ContentThread {
         Some(texture.raw_ptr())
     }
 
-    /// Send export progress to the UI thread.
+    /// Send export progress to the UI thread. BUG-083: `is_exporting` /
+    /// `export_progress` / `export_status` were deleted un-consumed by the
+    /// 2026-07-09 ContentState orphan purge (UI_PROJECTION_LAYER_DESIGN.md
+    /// P0) — this call kept running as a transport keep-alive into a void.
+    /// Restored here WITH their UI consumer (the header export status
+    /// strip, `app_render.rs`), per I1's "fields land with their consumer
+    /// or not at all".
     #[cfg(target_os = "macos")]
-    fn send_export_progress(&self, state_tx: &Sender<ContentState>) {
-        // Transport keep-alive while the export loop owns the content thread.
-        // The progress fields this used to carry (is_exporting / export_progress /
-        // export_status, from ExportSession) were never read by any UI code —
-        // deleted 2026-07-09 in the ContentState orphan purge
-        // (UI_PROJECTION_LAYER_DESIGN.md P0). An export progress display is
-        // BUG-083; restore the fields WITH their consumer from this commit's parent.
+    fn send_export_progress(
+        &self,
+        state_tx: &Sender<ContentState>,
+        session: &manifold_media::export_session::ExportSession,
+    ) {
         let state = ContentState {
+            is_exporting: true,
+            export_progress: session.progress(),
+            export_status: Arc::from(session.status_text()),
             current_beat: self.engine.current_beat(),
             current_time: self.engine.current_time(),
             is_playing: self.engine.is_playing(),
