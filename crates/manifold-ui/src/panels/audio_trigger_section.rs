@@ -625,6 +625,33 @@ impl AudioTriggerSection {
         }
     }
 
+    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item 5):
+    /// row index of the currently-OPEN clip-trigger drawer, if any. Every
+    /// clip trigger is fire-mode by construction (D6: no `is_trigger_gate`
+    /// gate needed here, unlike `ParamCardPanel`) — `audio_configs[i].is_some()`
+    /// already means "this row is expanded AND the section isn't collapsed"
+    /// (see `configure_and_build`'s gate). First match wins.
+    fn open_fire_mode_drawer_row(&self) -> Option<usize> {
+        self.audio_configs.iter().position(Option::is_some)
+    }
+
+    /// The send the currently-open clip-trigger drawer is reading, if any.
+    pub fn open_fire_mode_drawer_send(&self) -> Option<manifold_foundation::AudioSendId> {
+        let i = self.open_fire_mode_drawer_row()?;
+        let idx = self.mod_state.audio_send_idx.get(i).copied().unwrap_or(-1);
+        if idx < 0 {
+            return None;
+        }
+        self.mod_state.audio_send_ids.get(idx as usize).cloned()
+    }
+
+    /// The band the currently-open clip-trigger drawer is reading, if any.
+    pub fn open_fire_mode_drawer_band(&self) -> Option<crate::types::AudioBand> {
+        let i = self.open_fire_mode_drawer_row()?;
+        let idx = self.mod_state.audio_band_idx.get(i).copied().unwrap_or(0);
+        crate::types::AudioBand::ALL.get(idx as usize).copied()
+    }
+
     /// Right-click resets on the shaping sliders — the drawer's own
     /// `slider_resets`, registered exactly as `ParamCardPanel` does.
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {

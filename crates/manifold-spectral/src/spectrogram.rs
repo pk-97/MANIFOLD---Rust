@@ -74,6 +74,15 @@ struct Params {
     /// fraction of the scope, carried in the uniform like the rest of the
     /// lane definition so the WGSL holds no lane-geometry literal.
     lane_frac: f32,
+    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item 5):
+    /// the KEPT (undimmed) y-range, same bottom-up 0..1 convention as
+    /// `band_lo_y`/`band_hi_y` — the shader darkens everything OUTSIDE
+    /// `[dim_lo_y, dim_hi_y]`. `dim_lo_y < 0.0` disables dimming entirely
+    /// (Full band, or no fire-mode drawer open). Two f32 + two pad, so the
+    /// following `onset_colors` array stays 16-byte aligned.
+    dim_lo_y: f32,
+    dim_hi_y: f32,
+    _pad1: [f32; 2],
     /// Onset lane colours (bottom-up), [`ONSET_LANE_COLORS_PADDED`]. Fixed
     /// capacity; only the first `onset_count` entries are live.
     onset_colors: [[f32; 4]; MAX_ONSET_LANES],
@@ -237,7 +246,10 @@ impl Spectrogram {
     /// over; pass `0.0` to disable the tilt (Flat look). `cursor_y` draws a
     /// faint horizontal locator line (uv.y, 0 top → 1 bottom); negative hides it.
     /// `hovered_divider` brightens a divider's grip handle (`0` low/mid, `1`
-    /// mid/high, `< 0` none) to signal it's draggable.
+    /// mid/high, `< 0` none) to signal it's draggable. `dim_range` (P7,
+    /// AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md §7.2 item 5) is the
+    /// KEPT y-range (same bottom-up 0..1 convention as `band_ys`) — `Some`
+    /// darkens everything outside it, `None` disables dimming.
     pub fn render(
         &mut self,
         encoder: &mut GpuEncoder,
@@ -246,6 +258,7 @@ impl Spectrogram {
         freq_log_ratio: f32,
         cursor_y: f32,
         hovered_divider: f32,
+        dim_range: Option<(f32, f32)>,
     ) {
         let slot = self.buf_frame % BUFFER_ROTATION;
         let buf = &self.bufs[slot];
@@ -284,6 +297,9 @@ impl Spectrogram {
             onset_base: ScopeColumn::ONSET_BASE as u32,
             onset_count: ScopeOnsets::COUNT as u32,
             lane_frac: crate::scope::LANE_HEIGHT_FRAC,
+            dim_lo_y: dim_range.map_or(-1.0, |(lo, _)| lo),
+            dim_hi_y: dim_range.map_or(-1.0, |(_, hi)| hi),
+            _pad1: [0.0, 0.0],
             onset_colors: ONSET_LANE_COLORS_PADDED,
         };
         // SAFETY: `Params` is `#[repr(C)]` plain-old-data.
@@ -364,8 +380,8 @@ mod gpu_tests {
             mip_levels: 1,
         });
         let mut enc = device.create_encoder("scope-gpu-proof");
-        // Dividers, tilt, cursor, hover all off — only background + lanes.
-        spec.render(&mut enc, &target, [-1.0, -1.0], 0.0, -1.0, -1.0);
+        // Dividers, tilt, cursor, hover, dim all off — only background + lanes.
+        spec.render(&mut enc, &target, [-1.0, -1.0], 0.0, -1.0, -1.0, None);
         enc.commit_and_wait_completed();
 
         let bytes_per_row = COLS * 4;
@@ -407,6 +423,69 @@ mod gpu_tests {
         for i in 0..ScopeOnsets::COUNT as u32 {
             let got = at(50, lane_center_y(i));
             assert!(got.iter().all(|&c| c < 25), "unfired col 50 lane {i} lit: {got:?}");
+        }
+    }
+
+    /// GPU-readback proof of P7 band dimming
+    /// (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item 5): a
+    /// uniform unit-magnitude fill (colormap(1.0) = white, everywhere,
+    /// undimmed) renders full-brightness inside the kept `dim_range` and
+    /// darkened outside it — the actual Metal shader, not a value-level proof
+    /// of the Rust-side `Params` construction alone.
+    #[test]
+    fn dim_range_darkens_outside_the_kept_band_only() {
+        const COLS: u32 = 32;
+        const H: u32 = 256;
+        let device = GpuDevice::new();
+        let mut spec =
+            Spectrogram::new(&device, 64, COLS as usize, GpuTextureFormat::Rgba8Unorm, -59.0, 0.0, 0.0);
+
+        // Unit magnitude -> power 1 -> db 0 -> norm 1.0 -> colormap(1.0) =
+        // white, uniformly, so any darkening is unambiguously the dim pass.
+        let loud = vec![1.0f32; 64];
+        for _ in 0..COLS as usize {
+            spec.push_column(&loud, super::ScopeColumn::EMPTY);
+        }
+
+        let target = device.create_texture(&GpuTextureDesc {
+            width: COLS,
+            height: H,
+            depth: 1,
+            format: GpuTextureFormat::Rgba8Unorm,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET | GpuTextureUsage::COPY_SRC,
+            label: "scope-gpu-proof-dim",
+            mip_levels: 1,
+        });
+        let mut enc = device.create_encoder("scope-gpu-proof-dim");
+        // Dividers/tilt/cursor/hover off; kept band (0.3, 0.7) — everything
+        // above or below darkens.
+        spec.render(&mut enc, &target, [-1.0, -1.0], 0.0, -1.0, -1.0, Some((0.3, 0.7)));
+        enc.commit_and_wait_completed();
+
+        let bytes_per_row = COLS * 4;
+        let readback = device.create_buffer_shared(u64::from(H * bytes_per_row));
+        let mut rb = device.create_encoder("scope-gpu-proof-dim-readback");
+        rb.copy_texture_to_buffer(&target, &readback, COLS, H, bytes_per_row);
+        rb.commit_and_wait_completed();
+        let ptr = readback.mapped_ptr().expect("shared buffer maps");
+        let px = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), (COLS * H * 4) as usize) };
+        let at = |x: u32, y: u32| -> [u8; 3] {
+            let i = ((y * COLS + x) * 4) as usize;
+            [px[i], px[i + 1], px[i + 2]]
+        };
+        // y_from_bottom = 1 - uv.y; pixel row 0 is uv.y≈0 (top, y_from_bottom≈1).
+        let row_for_y_from_bottom = |v: f32| -> u32 { (((1.0 - v) * H as f32) as u32).min(H - 1) };
+
+        // Inside the kept band: full brightness, untouched by the dim pass.
+        let kept = at(16, row_for_y_from_bottom(0.5));
+        assert!(kept.iter().all(|&c| c > 235), "kept-band pixel dimmed unexpectedly: {kept:?}");
+
+        // Outside on both sides: darkened toward the shader's 0.28x multiplier.
+        let above = at(16, row_for_y_from_bottom(0.9));
+        let below = at(16, row_for_y_from_bottom(0.1));
+        for (label, got) in [("above", above), ("below", below)] {
+            assert!(got.iter().all(|&c| c < 100), "{label}-band pixel not dimmed: {got:?}");
         }
     }
 }

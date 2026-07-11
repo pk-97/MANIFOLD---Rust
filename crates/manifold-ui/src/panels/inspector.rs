@@ -803,6 +803,53 @@ impl InspectorCompositePanel {
         self.audio_trigger_section.update_fire_meters(tree, fire_level, dt);
     }
 
+    /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item 5):
+    /// the send whichever fire-mode drawer is currently open across the whole
+    /// inspector is reading, if any — master effects, active-layer effects,
+    /// the active layer's generator, and the layer's own clip triggers, same
+    /// walk order as [`Self::update_fire_meters`]. First match wins (the app
+    /// doesn't let a performer open two fire-mode drawers at once today).
+    pub fn open_fire_mode_drawer_send(&self) -> Option<manifold_foundation::AudioSendId> {
+        for card in &self.master_effects {
+            if let Some(id) = card.open_fire_mode_drawer_send() {
+                return Some(id);
+            }
+        }
+        for card in &self.layer_effects {
+            if let Some(id) = card.open_fire_mode_drawer_send() {
+                return Some(id);
+            }
+        }
+        if let Some(gp) = &self.gen_params
+            && let Some(id) = gp.open_fire_mode_drawer_send()
+        {
+            return Some(id);
+        }
+        self.audio_trigger_section.open_fire_mode_drawer_send()
+    }
+
+    /// The band whichever fire-mode drawer is currently open across the whole
+    /// inspector is reading, if any — same walk order and pairing as
+    /// [`Self::open_fire_mode_drawer_send`] (both read off the same open row).
+    pub fn open_fire_mode_drawer_band(&self) -> Option<crate::types::AudioBand> {
+        for card in &self.master_effects {
+            if let Some(b) = card.open_fire_mode_drawer_band() {
+                return Some(b);
+            }
+        }
+        for card in &self.layer_effects {
+            if let Some(b) = card.open_fire_mode_drawer_band() {
+                return Some(b);
+            }
+        }
+        if let Some(gp) = &self.gen_params
+            && let Some(b) = gp.open_fire_mode_drawer_band()
+        {
+            return Some(b);
+        }
+        self.audio_trigger_section.open_fire_mode_drawer_band()
+    }
+
     pub fn is_dragging(&self) -> bool {
         self.dragging_scrollbar
             || self.card_drag_active
