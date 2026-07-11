@@ -211,8 +211,9 @@ pub struct LayerClipTrigger {
     /// Send + feature + band — the SAME source type every audio mod uses.
     pub source: AudioModSource,
     /// Sensitivity/attack/release/curve/invert/rate-of-change — the SAME
-    /// shape. `sensitivity` ("Amount") tunes the shaped signal against the
-    /// fixed 0.5 fire edge, exactly like a trigger-gate param mod (U2).
+    /// shape. `sensitivity` (drawer label "Sensitivity") tunes the shaped
+    /// signal against the fixed 0.5 fire edge, exactly like a trigger-gate
+    /// param mod (U2).
     pub shape: AudioModShape,
     /// How long the fired one-shot holds. A transient has no note-off, so the
     /// fire length is fixed here rather than by a release event.

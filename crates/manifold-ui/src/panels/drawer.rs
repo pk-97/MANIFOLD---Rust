@@ -16,6 +16,8 @@
 //!
 //! See `docs/AUDIO_MODULATION_DESIGN.md` §10.2.
 
+use std::cell::Cell;
+
 use super::PanelAction;
 use crate::chrome::Theme;
 use crate::node::*;
@@ -234,28 +236,69 @@ pub(crate) fn uniform_rows_height(n: usize) -> f32 {
     TOP_PAD * 2.0 + ROW_H * n as f32 + ROW_GAP * (n as f32 - 1.0)
 }
 
+/// BUG-109 §7.1 item 3: the content-thread signal this meter displays decays
+/// in milliseconds (a transient's shaped envelope), but `ContentState`
+/// snapshots only reach the UI at UI-tick cadence — an instantaneous fill
+/// between two snapshots is invisible. `PEAK_HOLD_SECONDS` is the minimum
+/// time a peak stays fully visible before it's allowed to fall; the "fire"
+/// bright accent latches for the same window, so a 5 ms spike crossing 0.5
+/// still reads as a fire.
+const PEAK_HOLD_SECONDS: f32 = 0.25;
+/// Fall rate once the hold expires, in meter-units (0..1) per second. Not
+/// specified numerically by the design brief — chosen for a fast-but-visible
+/// fall (full-scale 1.0 → 0.0 in ~200 ms), so consecutive kicks read as
+/// distinct pulses rather than one smeared bar.
+const PEAK_DECAY_PER_SEC: f32 = 5.0;
+
 /// D6 fire meter node ids for one `Slider` row whose `show_meter` was set —
 /// updated in place every UI tick from the live `FireMeterCapture` snapshot,
 /// never rebuilt. Mirrors the deleted `TriggerRowIds`/`update_trigger_levels`
 /// underline meter (470228ec).
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct MeterIds {
     fill: NodeId,
     x: f32,
     y: f32,
     w: f32,
     h: f32,
+    /// UI-side peak-hold state (BUG-109 P5) — instant attack to a new peak,
+    /// held `PEAK_HOLD_SECONDS`, then decays toward the live level. `Cell`,
+    /// not `&mut self`, so `update()` stays callable through the existing
+    /// `&self` chain (`ParamCardPanel::update_fire_meters` and friends) —
+    /// display-only smoothing; the content-thread capture stays the raw
+    /// conditioned value the fire edge reads (forbidden move: content-side
+    /// smoothing of the meter signal).
+    held_level: Cell<f32>,
+    hold_remaining: Cell<f32>,
 }
 
 impl MeterIds {
     /// Push the current shaped-signal level (0..1) onto this meter's fill —
-    /// in place, no rebuild. `accent` recolors the fill to the drawer's own
-    /// identity color when the level has crossed the fixed 0.5 threshold
-    /// (the fire-flash cue); idle stays a dimmed version of that color.
-    pub fn update(&self, tree: &mut UITree, level: f32, accent: Color32) {
+    /// in place, no rebuild. Peak-holds: a rising level snaps the display up
+    /// instantly and restarts the hold window; once the hold expires the
+    /// display decays at `PEAK_DECAY_PER_SEC` toward the live `level`,
+    /// clamped so it never falls below whatever the signal is doing right
+    /// now. `accent` recolors the fill to the drawer's own identity color
+    /// while the HELD level (not the instantaneous one) is at/above the
+    /// fixed 0.5 threshold — the fire-flash cue latches for the hold too.
+    pub fn update(&self, tree: &mut UITree, level: f32, accent: Color32, dt: f32) {
         let level = level.clamp(0.0, 1.0);
-        tree.set_bounds(self.fill, Rect::new(self.x, self.y, self.w * level, self.h));
-        let firing = level >= 0.5;
+        let dt = dt.max(0.0);
+        let mut held = self.held_level.get();
+        let mut hold = self.hold_remaining.get();
+        if level >= held {
+            held = level;
+            hold = PEAK_HOLD_SECONDS;
+        } else if hold > 0.0 {
+            hold = (hold - dt).max(0.0);
+        } else {
+            held = (held - PEAK_DECAY_PER_SEC * dt).max(level);
+        }
+        self.held_level.set(held);
+        self.hold_remaining.set(hold);
+
+        tree.set_bounds(self.fill, Rect::new(self.x, self.y, self.w * held, self.h));
+        let firing = held >= 0.5;
         let fill_color = if firing { accent } else { dim(accent, 0.55) };
         tree.set_style(self.fill, UIStyle { bg_color: fill_color, ..UIStyle::default() });
     }
@@ -476,6 +519,8 @@ pub fn build(
                         y: meter_y,
                         w: meter_w,
                         h: METER_BAR_H,
+                        held_level: Cell::new(0.0),
+                        hold_remaining: Cell::new(0.0),
                     }));
                 } else {
                     meters.push(None);

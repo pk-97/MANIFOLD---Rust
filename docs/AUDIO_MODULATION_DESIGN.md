@@ -208,8 +208,15 @@ The drawer parallels the existing envelope/driver drawers built on `param_slider
   - **Source** — send picker (the named sends, tinted with each send's identity color).
   - **Feature** — the detector: Amplitude / Brightness / Noisiness / Liveliness / Transients.
   - **Band** — Full / Low / Mid / High. Feature × Band = the cell that drives the slider.
-  - **Invert / Delta** toggles (loud→low; drive on rate-of-change).
-  - **Amount / Attack / Release** shaping sliders (sensitivity + envelope-follower smoothing). Range is the green trim handles on the slider itself.
+  - **Invert** toggle (loud→low). **As-built note (2026-07-11):** the Delta
+    (drive-on-rate-of-change) toggle shown here was removed from the drawer —
+    `AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item 2, Peter's
+    call: "not very useful and adds a lot of clutter." The runtime
+    `AudioModShape::rate_of_change` field and the `condition()` arm that
+    reads it stay compiled — dormant, not deleted — for a possible future
+    re-wire; no UI button can set or clear it anymore, so a load migration
+    clears any `rate_of_change: true` a project saved before the removal.
+  - **Sensitivity / Attack / Release** shaping sliders (sensitivity + envelope-follower smoothing; the slider's display label was "Amount" before the same 2026-07-11 rename — §7.2 item 3, "Amount" read as a generic gain knob, "Sensitivity" says what it tunes). Range is the green trim handles on the slider itself.
 - The main slider moves as the mod drives it, doubling as the live meter; a dedicated post-shape meter and the spectrogram feature-overlays are the next step.
 - Mutations route through `EditingService` like every other param change — a command that edits `audio_mods` on the target `PresetInstance`. No direct model writes from the UI.
 

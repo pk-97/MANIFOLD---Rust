@@ -20,8 +20,8 @@
 //! gestures emit the additive `PanelAction::AudioTrigger*` family instead of
 //! `AudioMod*` (a `LayerClipTrigger` has no `GraphParamTarget`/`ParamId`).
 //!
-//! This module owns its OWN click/drag dispatch (Source/Feature/Band/Inv/
-//! Delta/Length button clicks, Amount/Attack/Release slider drags) — the
+//! This module owns its OWN click/drag dispatch (Source/Feature/Band/Invert/
+//! Length button clicks, Sensitivity/Attack/Release slider drags) — the
 //! same division of labor `ParamCardPanel` already has with the shared
 //! drawer builder (drawer = shared visuals + 3 reset actions; click/drag
 //! resolution = caller-owned). It's a second CALLER of the shared builder,
@@ -481,10 +481,12 @@ impl AudioTriggerSection {
             }
         }
 
-        // Drawer button clicks — send/feature/band/inv/delta/length. Flat
+        // Drawer button clicks — send/feature/band/invert/length. Flat
         // index order matches exactly what `build_audio_mod_drawer` builds
         // for a `ClipTrigger` target (is_trigger:true, is_trigger_gate:false,
-        // length_beats:Some): Source, Feature, Band, [Inv, Delta], Length.
+        // length_beats:Some): Source, Feature, Band, [Invert], Length. Delta
+        // removed from the drawer (§7.2 item 2, 2026-07-11), so the toggle
+        // row now contributes exactly one flat index, not two.
         // Action/Wrap/Mode never appear (`show_action`/`show_mode` are false
         // whenever `info.is_trigger` is true), unlike the general-purpose
         // `match_param_row_click` this deliberately doesn't reuse.
@@ -506,10 +508,7 @@ impl AudioTriggerSection {
             if f == 0 {
                 return vec![PanelAction::AudioTriggerSetInvert(layer_id, i)];
             }
-            if f == 1 {
-                return vec![PanelAction::AudioTriggerSetRateOfChange(layer_id, i)];
-            }
-            let f = f - 2;
+            let f = f - 1;
             if f < LENGTH_OPTIONS.len() {
                 return vec![PanelAction::AudioTriggerSetLength(layer_id, i, LENGTH_OPTIONS[f])];
             }
@@ -607,7 +606,12 @@ impl AudioTriggerSection {
     /// `is_trigger_gate` gate needed here, unlike `ParamCardPanel`). Keyed
     /// on `(layer_id, row index)` hashed via `manifold_foundation::
     /// fire_meter_key` — the SAME hash the content-thread capture uses.
-    pub fn update_fire_meters(&self, tree: &mut UITree, fire_level: &dyn Fn(u64) -> Option<f32>) {
+    pub fn update_fire_meters(
+        &self,
+        tree: &mut UITree,
+        fire_level: &dyn Fn(u64) -> Option<f32>,
+        dt: f32,
+    ) {
         let Some(layer_id) = self.layer_id.as_ref() else { return };
         for (i, cfg) in self.audio_configs.iter().enumerate() {
             let Some((dids, _)) = cfg else { continue };
@@ -617,7 +621,7 @@ impl AudioTriggerSection {
                 &(i as u64).to_le_bytes(),
             ]);
             let level = fire_level(key).unwrap_or(0.0);
-            meter.update(tree, level, AUDIO_MOD_ACTIVE_C32);
+            meter.update(tree, level, AUDIO_MOD_ACTIVE_C32, dt);
         }
     }
 
