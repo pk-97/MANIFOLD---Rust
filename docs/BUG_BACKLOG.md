@@ -44,6 +44,8 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-115 | **mux-multiblend-dynamic-arity-blocks-codegen-conversion** | `node.switch_texture` (5 presets) and `node.multi_blend` are fusion boundaries mid-chain: their dynamic port list (`num_inputs` rebuilds ports per instance; multi_blend synthesizes WGSL for N inputs at runtime) can't be expressed in the static `PrimitiveSpec` the freeze codegen reads. Fix shape: half-day spike on a fixed max-arity conversion (declare the max as optional Coincident inputs; the region machinery already folds unwired optionals as `0u` use flags). If the spike fails, dynamic-arity codegen support is a design question for Peter. LOW (working atoms, dispatch-cost only). |
+| BUG-114 | **draw-family-blocked-on-array-into-texture-codegen-read-path** | The six `draw_*` atoms (dots/markers/ticks/gauge/scanlines/connections) pass the codegen mandate's per-element scope test (per-pixel bodies over the output grid) but CANNOT convert: texture-domain codegen has no read-path for an input storage `Array` (the marks buffer) — classify cut rule 9 makes a wired Array input on a texture atom a Boundary, and `freeze/classify.rs` names the needed `BufferIndex` kind as planned-not-built. Fix shape: add the `BufferIndex` read-path to codegen + a region-grow rule, then convert `draw_*` per the mandate. Per ADDING_PRIMITIVES scope test #5 these are BLOCKED (tracked compiler gap), not exempt. LOW (each sits in 1 shipped preset, overlay/HUD chains; cost is one dispatch per atom). |
 | BUG-113 | **param-manifest-get-bench-flakes-under-parallel-load** | `manifold-core::params::tests::bench_resolve` asserts a hard `<= 271.5 ns/op` wall-clock ceiling on `ParamManifest::get`; under `cargo nextest run --workspace`'s parallel thread pool (esp. right after a heavy build or another CPU-saturating process), measured ns/op climbs past the ceiling (333.25, then 398.98 ns/op observed 2026-07-11) and the test fails, while an isolated re-run consistently passes (215.02 ns/op) and a clean full-workspace re-run passes too (3052/3052). Found landing wave2 lane C (BUG-083/084) — confirmed unrelated (file untouched by that change). Fix shape: either give the ceiling real margin for parallel/loaded runs, retry-on-first-failure before asserting, or move this out of the default nextest sweep (e.g. behind a feature, like the GPU-proofs convention) since a wall-clock ceiling assertion is inherently contention-sensitive and doesn't belong in a "safe to run freely" default suite. LOW (flaky-gate annoyance, not a functional regression — the underlying code is fine). |
 | BUG-112 | **manifold-ui-all-targets-clippy-debt-audio-setup-panel-graph-canvas-tests** | `cargo clippy -p manifold-ui --all-targets -- -D warnings` fails on two pre-existing, unrelated lints: `needless_borrows_for_generic_args` (`audio_setup_panel.rs:2494,2498`, `LayerId::new(&format!(...))`) and `useless_vec` (`graph_canvas/tests.rs:2391`, a `vec![...]` that could be an array). Both files byte-identical to HEAD, last touched by unrelated commit `f1a35270`. Found 2026-07-11 isolating wave2 lane C's (BUG-083/084) scoped clippy gate — same "pre-existing test-target debt surfaces under `--all-targets`" pattern as BUG-110. Fix shape: drop the `&` before each `format!(...)` arg; replace the `vec![...]` literal with an array. LOW (lint-only, `--tests`/`--all-targets` scope; the plain-lib clippy gate this session actually ran is clean). |
 | BUG-110 | **osc-receiver-test-type-complexity-clippy-debt** | `manifold-playback`'s `--tests`/`--all-targets` clippy gate fails on two `clippy::type_complexity` hits in `osc_receiver.rs:366,368` (`Arc<Mutex<Vec<(String, Vec<f32>)>>>`), unrelated to and pre-dating `bug-wave1-lane-d-test-hygiene` (byte-identical to base commit `dd31cde4`; last touched by an unrelated "F3" session). Found 2026-07-11 isolating BUG-088/072's gate. Fix shape: factor the type into a local `type` alias at both sites. LOW (lint-only). |
@@ -107,6 +109,45 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-114 (draw-family-blocked-on-array-into-texture-codegen-read-path) — `draw_*` atoms pass the codegen-mandate scope test but the compiler can't express them — LOW (tracked codegen gap)
+**Status:** DEFERRED — default post-release (Peter can pull it forward if overlay chains start to matter); logged 2026-07-11 while sharpening the codegen-mandate scope test.
+
+**Symptom** — the six `draw_*` atoms (draw_dots/markers/ticks/gauge/scanlines/connections) remain
+plain-WGSL fusion boundaries despite being per-element in shape: each dispatches one thread per
+OUTPUT PIXEL (`[w/16, h/16]`, e.g. draw_dots.rs ~161) and indexes a marks `Array` (blob
+detections) inside the body — a gather, not a scatter. An overlay chain costs one dispatch per
+atom where a fused run would cost ~1.
+
+**Root cause** — a codegen capability gap, not an atom defect: texture-domain codegen has no
+read-path for an input storage `Array`. Classify cut rule 9 (FREEZE_COMPILER_MAP §4) makes any
+wired Array input on a texture atom a Boundary, and the buffer-region path requires no texture
+output, so the shape fits neither. `freeze/classify.rs` names the needed kind — `BufferIndex`,
+"read element i from a storage buffer" — as planned-but-not-built (additive: one codegen
+read-path + one region-grow rule, per its own comments).
+
+**Fix shape** — build the `BufferIndex` read-path for texture-domain bodies, then convert the six
+atoms per the ADDING_PRIMITIVES recipe (wgsl_body + markers + `standalone_for_spec` + parity
+oracle). Per the mandate's scope test #5 these are BLOCKED, not exempt — the debt lives in the
+compiler. Severity LOW: each atom sits in exactly 1 shipped preset (overlay/HUD vocabulary), so
+the unfused cost only bites in stacked per-pixel overlay chains.
+
+### BUG-115 (mux-multiblend-dynamic-arity-blocks-codegen-conversion) — dynamic port count can't be expressed in the static spec the codegen reads — LOW (spike owed)
+**Status:** OPEN — logged 2026-07-11 while sharpening the codegen-mandate scope test; the spike is part of the conversion-sweep sequencing.
+
+**Symptom** — `node.switch_texture` (mux_texture, 5 shipped presets — and mid-chain by its
+nature, it selects between texture chains) and `node.multi_blend` are fusion boundaries.
+
+**Root cause** — both have a dynamic port list: `num_inputs` rebuilds the ports per instance, and
+multi_blend synthesizes its WGSL for N inputs at runtime (multi_blend.rs ~124). The freeze
+codegen reads a static `PrimitiveSpec` (`standalone_for_spec::<Self>()` is type-level), which
+can't express variable arity.
+
+**Fix shape** — half-day spike first: convert at a fixed max arity (declare the max as optional
+`Coincident` texture inputs; the texture-region machinery already folds unwired optional
+coincident inputs as `0u` use flags per FREEZE_COMPILER_MAP §4 region gates), body selects/sums
+over the wired flags. If the spike shows dynamic ports can't square with the static spec, growing
+dynamic-arity codegen support becomes a design decision for Peter — flag it, don't improvise.
 
 ### BUG-111 — In-place inner-param edits on a fused SEGMENT card never reach the live kernel — MED
 **Status:** OPEN — found 2026-07-11 while fixing BUG-006 (freeze bug-wave lane A).
