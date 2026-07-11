@@ -121,7 +121,12 @@ def build_board(raw: bool = False) -> str:
         for _, name, date, status in group:
             text = status or "(no **Status line in doc)"
             if len(text) > TRIM:
-                text = text[:TRIM - 1].rstrip() + "…"
+                # Status lines append their NEWEST facts at the END (2026-07-11:
+                # head-only truncation hid a same-day "P8 SHIPPED" tail and a
+                # session re-briefed already-landed work). Keep head AND tail.
+                head = (TRIM * 2) // 5
+                tail = TRIM - head - 3
+                text = text[:head].rstrip() + " … " + text[-tail:].lstrip()
             out.append(f"  {name:<{width}}  {date}  {text}")
     return "\n".join(out)
 
