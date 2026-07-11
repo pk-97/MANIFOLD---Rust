@@ -1,0 +1,237 @@
+{
+  "version": 2,
+  "name": "Breathe",
+  "description": "MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN P1 demo. A flat grid plane (node.grid_mesh -> node.make_triangles for smooth finite-difference normals) grows a per-vertex weight mask (node.mesh_ramp, sweeping across Z), pushed along its own surface normals by node.push_along_normals (amplitude driven by an LFO), then re-faceted by node.facet_normals so the pushed geometry keeps exact per-triangle shading. Sweep the Phase outer card 0 to 1 to watch the deformed band grow across the plane, near edge to far edge.",
+  "presetMetadata": {
+    "id": "Breathe",
+    "displayName": "Breathe",
+    "category": "Geometry",
+    "oscPrefix": "breathe",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 0.2,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "phase",
+        "name": "Phase",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "feather",
+        "name": "Feather",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.3,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 0.2,
+        "target": {
+          "kind": "node",
+          "nodeId": "breathe_lfo",
+          "param": "max"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "phase",
+        "label": "Phase",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "growth_mask",
+          "param": "phase"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "feather",
+        "label": "Feather",
+        "defaultValue": 0.3,
+        "target": {
+          "kind": "node",
+          "nodeId": "growth_mask",
+          "param": "feather"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "never"
+    }
+  },
+  "nodes": [
+    { "id": 0, "typeId": "system.generator_input", "nodeId": "input", "handle": "input" },
+    {
+      "id": 1,
+      "typeId": "node.grid_mesh",
+      "nodeId": "grid",
+      "handle": "grid",
+      "title": "Grid",
+      "params": {
+        "max_capacity": { "type": "Int", "value": 2000 },
+        "resolution_x": { "type": "Int", "value": 40 },
+        "resolution_y": { "type": "Int", "value": 40 },
+        "size_x": { "type": "Float", "value": 2.0 },
+        "size_y": { "type": "Float", "value": 2.0 }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "node.make_triangles",
+      "nodeId": "tris",
+      "handle": "tris",
+      "title": "Triangulate",
+      "params": {
+        "src_cols": { "type": "Int", "value": 40 },
+        "src_rows": { "type": "Int", "value": 40 }
+      }
+    },
+    {
+      "id": 3,
+      "typeId": "node.mesh_ramp",
+      "nodeId": "growth_mask",
+      "handle": "growth_mask",
+      "title": "Growth Mask",
+      "params": {
+        "axis": { "type": "Enum", "value": 2 },
+        "origin_x": { "type": "Float", "value": 0.0 },
+        "origin_y": { "type": "Float", "value": 0.0 },
+        "origin_z": { "type": "Float", "value": 0.0 },
+        "phase": { "type": "Float", "value": 0.5 },
+        "feather": { "type": "Float", "value": 0.15 },
+        "bound_min": { "type": "Float", "value": -0.8 },
+        "bound_max": { "type": "Float", "value": 0.8 },
+        "invert": { "type": "Bool", "value": false }
+      }
+    },
+    {
+      "id": 4,
+      "typeId": "node.push_along_normals",
+      "nodeId": "breathe",
+      "handle": "breathe",
+      "title": "Breathe",
+      "params": {
+        "amount": { "type": "Float", "value": 0.2 },
+        "field_bias": { "type": "Float", "value": 0.5 }
+      }
+    },
+    { "id": 5, "typeId": "node.facet_normals", "nodeId": "facets", "handle": "facets", "title": "Facet Normals" },
+    {
+      "id": 6,
+      "typeId": "node.orbit_camera",
+      "nodeId": "cam",
+      "handle": "cam",
+      "title": "Camera",
+      "params": {
+        "orbit": { "type": "Float", "value": 0.6 },
+        "tilt": { "type": "Float", "value": 0.6 },
+        "distance": { "type": "Float", "value": 4.0 },
+        "fov_y": { "type": "Float", "value": 0.8 }
+      }
+    },
+    {
+      "id": 7,
+      "typeId": "node.phong_material",
+      "nodeId": "mat",
+      "handle": "mat",
+      "title": "Material",
+      "params": {
+        "color_r": { "type": "Float", "value": 1.0 },
+        "color_g": { "type": "Float", "value": 0.85 },
+        "color_b": { "type": "Float", "value": 0.6 },
+        "ambient": { "type": "Float", "value": 0.1 }
+      }
+    },
+    {
+      "id": 8,
+      "typeId": "node.light",
+      "nodeId": "key_light",
+      "handle": "key_light",
+      "title": "Key Light",
+      "params": {
+        "mode": { "type": "Enum", "value": 0 },
+        "pos_x": { "type": "Float", "value": 0.0 },
+        "pos_y": { "type": "Float", "value": 30.0 },
+        "pos_z": { "type": "Float", "value": 0.0 },
+        "aim_x": { "type": "Float", "value": 0.0 },
+        "aim_y": { "type": "Float", "value": 0.0 },
+        "aim_z": { "type": "Float", "value": 0.0 },
+        "color_r": { "type": "Float", "value": 1.0 },
+        "color_g": { "type": "Float", "value": 1.0 },
+        "color_b": { "type": "Float", "value": 1.0 },
+        "intensity": { "type": "Float", "value": 1.0 },
+        "cast_shadows": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 9,
+      "typeId": "node.lfo",
+      "nodeId": "breathe_lfo",
+      "handle": "breathe_lfo",
+      "title": "Breathe LFO",
+      "params": {
+        "rate_mode": { "type": "Enum", "value": 0 },
+        "rate": { "type": "Enum", "value": 2 },
+        "shape": { "type": "Enum", "value": 0 },
+        "phase": { "type": "Float", "value": 0.0 },
+        "min": { "type": "Float", "value": 0.0 },
+        "max": { "type": "Float", "value": 0.2 }
+      }
+    },
+    {
+      "id": 20,
+      "typeId": "node.render_scene",
+      "nodeId": "scene",
+      "handle": "scene",
+      "title": "Render Scene",
+      "params": {
+        "objects": { "type": "Int", "value": 1 },
+        "lights": { "type": "Int", "value": 1 }
+      }
+    },
+    { "id": 99, "typeId": "system.final_output", "nodeId": "out", "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 1, "fromPort": "vertices", "toNode": 2, "toPort": "in" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "in" },
+    { "fromNode": 3, "fromPort": "weights", "toNode": 4, "toPort": "weights" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 4, "toPort": "amount" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 20, "toPort": "camera" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 20, "toPort": "material_0" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 20, "toPort": "light_0" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 20, "toPort": "mesh_0" },
+    { "fromNode": 20, "fromPort": "color", "toNode": 99, "toPort": "in" }
+  ]
+}

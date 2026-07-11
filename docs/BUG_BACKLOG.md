@@ -49,7 +49,7 @@ or human can read it, and it needs no external tool.
 | BUG-106 | **audio-mixdown-analysis-only-test-order-flaky** | `manifold-playback` `audio_mixdown::tests::render_export_audio_analysis_only_layer_taps_but_never_hits_master` failed once inside a full `cargo test --workspace` sweep but passes deterministically in isolation and in the full `-p manifold-playback` suite (228 ok) — an order-dependent/shared-state flake, not a real mixdown regression. Found 2026-07-10 during SCENE_BUILD P5's wave-closing sweep (P5 touches no playback/audio code). LOW (test-isolation defect; undermines the sweep gate's determinism). Fix shape: find the cross-test shared state (global/static or env) the mixdown test reads, and reset it per-test or serialize. Suspect the manifold-playback test binary's shared audio-setup/registry statics touched by the concurrently-landed audio-dock trigger tests. |
 | BUG-105 | **graph-node-slider-no-right-click-reset** | Node-face param sliders in the graph editor don't reset to default on right-click, unlike every card/panel slider in the app. They're drawn through `BitmapSlider::draw` (the immediate-mode twin of the retained builder) so they LOOK identical, but interaction is canvas-owned: right-click on a param row is consumed by the mapping-popover flow (`on_right_button_down`), and the retained-slider `SliderReset` registration (`chrome/diff.rs`) never runs on this surface. `ParamSnapshot.default_value` is already in the node snapshot, so the fix is a hit-zone split mirroring the card contract (label zone → mapping popover, track zone → emit the same `SetGraphNodeParam`/`SetOuterParam` the scrub already commits, with `default_value`). Same missing-intrinsic-reset class as BUG-070's remaining steppers/fader. (LOW) |
 | BUG-104 | **audio-trigger-takes-over-shared-param-mod-goes-dead** | With a Trigger enabled, audio modulation on a card param that the graph's trigger-parameter option also drives stops responding — and stays dead after the Trigger is disabled (state that outlives the trigger, not a live-only diversion). Repro pending (which generator/param pair; does the card value still move). Suspects: trigger mux/envelope replacing instead of composing with the exposed binding (BUG-094 family); the `is_trigger` mod-arm hijack (`modulation.rs:550`); AUDIO TRIGGERS ↔ param-card shared drawer state misroute (`audio_trigger_section.rs:189`). MED — unrecoverable-live breakage on the perform surface. |
-| BUG-102 | **mapping-popover-has-no-text-input-surface** | The graph-editor's `MappingPopover` (the calibration drawer) has never had a working free-text field for ANY string param — `label` editing was deliberately deferred in the popover's own doc comment ("a real text field on the immediate-mode canvas would need caret/selection/IME handling that doesn't exist on this surface yet"), and `EditField::Label` sits unused groundwork. Found 2026-07-10 building SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md P3's `section` mapping-editor deliverable: the command-side write (`BindingMappingEdit::section` + `EditParamMappingCommand` + `PanelAction::EffectMappingSection`) is real and tested, but the popover can't yet render an editable text box for it — same pre-existing gap as `label`, not introduced by P3. Fix shape: build the caret/selection/IME text-input primitive for `MappingPopover` once (shared by label + section, and any future string field), then wire both. LOW (the write path is real and reachable via `PanelAction` for any future caller — e.g. a future non-popover surface — just not from this popover today). |
+| BUG-102 | **mapping-popover-has-no-text-input-surface** | The graph-editor's `MappingPopover` (the calibration drawer) has never had a working free-text field for ANY string param — `label` editing was deliberately deferred in the popover's own doc comment ("a real text field on the immediate-mode canvas would need caret/selection/IME handling that doesn't exist on this surface yet"), and `EditField::Label` sits unused groundwork. Found 2026-07-10 building SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md P3's `section` mapping-editor deliverable: the command-side write (`BindingMappingEdit::section` + `EditParamMappingCommand` + `PanelAction::EffectMappingSection`) is real and tested, but the popover can't yet render an editable text box for it — same pre-existing gap as `label`, not introduced by P3. Fix shape: build the caret/selection/IME text-input primitive for `MappingPopover` once (shared by label + section, and any future string field), then wire both. LOW (the write path is real and reachable via `PanelAction` for any future caller — e.g. a future non-popover surface — just not from this popover today). **DEFERRED to the widget-unification track (Peter 2026-07-11):** UI_WIDGET_UNIFICATION_DESIGN.md D3 dead-stops canvas text entry and its Deferred section revives on exactly this primitive — build it there. |
 | BUG-100 | **gltf-fresh-import-renders-near-black-for-non-azalea-geometry** | `assemble_import_graph`'s fixed default sun (`pos 5,2,3` / `intensity 3.5`) + material `ambient 0.18` were tuned specifically for the azalea fixture's geometry/orientation; a FRESH import of `cc0__japanese_apricot_prunus_mume.glb` or `lowe.glb` (both held-out fixtures) renders visibly near-black (silhouette only, no legible surface) despite passing the >2% non-black structural threshold. Confirmed pre-existing and unrelated to SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md P2's render_scene param->port swap (`git diff` against P2's base commit shows zero changes to any sun/ambient/intensity/distance default). Found 2026-07-10 visually inspecting P2's held-out-input demo PNGs (a `git diff` audit alone wouldn't have caught this — the render had to actually be looked at, not just structurally validated). Fix shape: scale sun position/intensity to the model's own bbox radius (like camera distance already does) instead of fixed world-space numbers, or lift ambient for fresh imports. LOW (cosmetic default-tuning gap on first import; a performer would immediately notice and just raise Sun Intensity/Reflections on the card — the sliders exist and work). |
 | BUG-098 | **film-grain-drifts-and-reads-as-blocky-pixels** | FilmGrain.json's grain slides toward a corner instead of re-rolling (the time jitter is a smooth linear offset, `time x 39.7/61.3`, which TRANSLATES the hash field - a moving offset is a pan, not a re-roll), and the grain itself reads as hard blocky pixels at 4K (unfiltered square hash cells at noise scale ~1000). Peter 2026-07-10: "drifts to the top left corner and it just looks like blocky pixels not real film grain." Fix shape: derive the offset from frame parity/hash so every frame jumps >= 1 cell (decorrelate, no slide), and soften the grain (finer cells + slight blur, or a Value-noise blend / luma-weighted response) so it reads as emulsion rather than pixel snow. MED (shipped effect looks wrong at its one job; Peter deferred to a dedicated session). |
 | ~~BUG-097~~ FIXED | **ui-snap-render-overlay-pass-uses-wrong-traversal** | FIXED 2026-07-10 by construction (HARNESS_FIDELITY_INVARIANT §4 step 2): the harness's parallel overlay pass was DELETED along with `draw_immediate_passes`, and the overlay assembly now has one owner — `ui_frame::render_main_ui_passes` — which uses `render_sub_region` @ `Depth::OVERLAY`. Not point-fixed. Confirmed reproducible after all: `build_overlays` ALWAYS records `start` after the region root, so EVERY open overlay excluded its root (the "may be latent" caveat was wrong). Permanent proof: `overlay_fidelity_proof::bug097_...` (mod.rs) shows `render_tree_range` leaves the range byte-identical (blank) while `render_sub_region` + the seam draw it. See detail below. |
@@ -60,13 +60,13 @@ or human can read it, and it needs no external tool.
 | BUG-085 | **recording-frames-recorded-overstates-async-append-drops** | `LiveRecorder_EncodeVideoFrame` returns success (and Rust's `frames_recorded` counts it) as soon as the synchronous GPU blit into the CVPixelBuffer completes — but the actual `appendPixelBuffer:` call happens later, async, on `state->appendQueue`, and silently drops the frame (`"[LiveRecorder] VideoToolbox backpressure — dropped frame"`, no counter incremented) if `videoIn.isReadyForMoreMediaData` is false at that moment. Under heavy backpressure `frames_recorded` can overstate the file's real packet count by the async-drop count. Found 2026-07-10 building LIVE_RECORDING_PROOFS P1 (`pool_accounting_consistent`'s bounded-retry-recovery variant hit it once: 107 counted vs 106 actual packets). MED (accounting-only — the file itself stays valid, PTS stays monotonic; but a post-set frame count could read wrong). LOW in practice — the async drop needs genuinely sustained backpressure a real 60fps show submission rate is unlikely to hit. |
 | BUG-083 | **video-export-has-no-progress-display** | Exporting video shows nothing until the finish toast — the content thread's per-10-frame progress snapshots never had a UI consumer (found 2026-07-09 by the A1 orphan lint; fields deleted, restore WITH a display from the P0 purge commit's parent). A multi-minute export looks like a hang. MED |
 | BUG-084 | **recording-drop-counter-never-surfaced** | `recording_dropped_frames` (pool-exhaustion drops during live recording) was emitted every tick, read nowhere — a set-recording silently dropping frames is invisible to the performer. Surface on the recording indicator when non-zero; same restore path as BUG-083. LOW |
-| BUG-080 | **param-manifest-construction-not-a-unified-safe-gate** | The param manifest (an instance's live knob list) is built at deserialize AND rebuilt by a later `reconcile_param_manifests` pass, because deserialize can't see project-embedded presets yet. Consumers that read `.params` *between* the two — a direct `serde_json::from_str::<PresetInstance>`, the keep-don't-drop backstop, the legacy audio-trigger migration, ~18 tests — depend on the deserialize-time build being correct. It works today only because the double-build papers over the timing; it's a latent hazard, not SOTA: a future load path added without a reconcile silently inherits an empty/partial manifest (the BUG-036 class). Root cause: manifest construction has no single safe gate — "partially built" is an observable, readable state. Fix shape (design pass, NOT a patch): make a half-built manifest un-observable — one construction gate every load/paste/bare-read passes through, OR a type-state where params can't be read until reconciled, OR deserialize carries enough context to build complete in one shot. The naive "build once in reconcile" was tried this session and is unsafe for exactly the reasons above (design doc §2 D1 priced + rejected it; see the 2026-07-09 double-build escalation). MEDIUM (design-quality / latent-robustness; wants an Opus design pass). |
+| BUG-080 | **param-manifest-construction-not-a-unified-safe-gate** | The param manifest (an instance's live knob list) is built at deserialize AND rebuilt by a later `reconcile_param_manifests` pass, because deserialize can't see project-embedded presets yet. Consumers that read `.params` *between* the two — a direct `serde_json::from_str::<PresetInstance>`, the keep-don't-drop backstop, the legacy audio-trigger migration, ~18 tests — depend on the deserialize-time build being correct. It works today only because the double-build papers over the timing; it's a latent hazard, not SOTA: a future load path added without a reconcile silently inherits an empty/partial manifest (the BUG-036 class). Root cause: manifest construction has no single safe gate — "partially built" is an observable, readable state. Fix shape (design pass, NOT a patch): make a half-built manifest un-observable — one construction gate every load/paste/bare-read passes through, OR a type-state where params can't be read until reconciled, OR deserialize carries enough context to build complete in one shot. The naive "build once in reconcile" was tried this session and is unsafe for exactly the reasons above (design doc §2 D1 priced + rejected it; see the 2026-07-09 double-build escalation). MEDIUM (design-quality / latent-robustness). **Fix path settled (Peter 2026-07-11): dedicated Opus design session + its own implementation session; not a bug-wave item.** |
 | BUG-079 | **missing-preset-fails-silently-no-onscreen-signal** | Loading a project that references an unresolvable preset def (deleted, unregistered, or missing on this machine) degrades *safely but silently*: saved params are kept on a placeholder (keep-don't-drop, [`effects.rs:940`](../crates/manifold-core/src/effects.rs#L940)) and the effect falls back to **source passthrough** ([`preset_runtime.rs:808`](../crates/manifold-renderer/src/preset_runtime.rs#L808)) — but the ONLY signal is a console `eprintln`; nothing shows on screen. A performer sees the layer render without its effect (a missing *generator* layer likely renders empty — inferred, unconfirmed) with no visible reason. Fix shape: surface unresolvable presets in-app (a card/badge or a load-time notice). LOW |
 | BUG-076 | **inspector-scroll-underestimates-content-height** | `layer_scroll`/`master_scroll`'s `max_scroll()` clamps to ~13-20px on a 9-card stack that's visibly ~1200px too tall for its viewport — the built content overflows but the scroll estimator doesn't agree (LOW, suspected root cause: `compute_height()` reads a mid-tween drawer-animation value instead of the settled/armed-at-build height) |
 | BUG-074 | **audio-mixdown-flaky-under-parallel-tests** | `render_export_audio_tapped_layer_matches_rendering_alone` fails ~1-in-3 under default parallel `cargo test`, always green with `--test-threads=1`; unrelated to PARAM_STEP_ACTIONS (LOW) |
 | BUG-073 | **ui-snap-script-drawer-tween-never-ticks** | `--script` harness has no per-frame tick, so a mod armed mid-script renders its drawer at a permanently zero-height clip region (unclickable rows) until the fixture pre-arms the state instead (LOW) |
 | BUG-072 | **audio-mixdown-all-targets-clippy-debt** | Pre-existing `--all-targets` clippy failures in audio_mixdown.rs, unrelated to PARAM_STEP_ACTIONS, two one-line fixes (LOW) |
-| BUG-046 | **low-band-kick-deafness-on-mixes** | Low=kick binding near-deaf on bass-heavy full mixes; HPSS measured DEAD 2026-07-06, successor = ridge-motion sweep event; partial (OR'd floored-novelty) on the shelf (HIGH) |
+| ~~BUG-046~~ FIXED | **low-band-kick-deafness-on-mixes** | resolved by the dedicated ridge-only Kick channel (KICK_SWEEP_EVENT P1/P2/P4/P5, shipped 2026-07-07) — reads the kick's FM sweep, breaks the bad_guy deafness at equal bass-false-fire cost; kick-triggering binds Kick now, not Low; Peter confirmed 2026-07-11; live feel-pass = design P3 |
 | BUG-101 | **setup-spectrogram-scroll-offset** | Docked Audio Setup spectrogram blit doesn't follow the body scroll offset — waterfall draws at pre-scroll position when scrolled (LOW) |
 | BUG-039 | **saw-rotation-wrap** | angle params clamp instead of wrapping; saw LFO can't spin a full rotation (MED, mechanism pinned) |
 | BUG-045 | **gap-ring-down-chase** | tracker follows kernel ring-down down ~2-4 bins in note gaps; notes gate 87.6 vs 90 (LOW) |
@@ -97,7 +97,7 @@ or human can read it, and it needs no external tool.
 | BUG-019 / 020 / 021 | deferred | group-fold gap · gen-card collapse · snap-back gap |
 | ~~BUG-056~~ FIXED | **audio-mixdown-clippy-debt** | no longer reproduces — verified 2026-07-11: `cargo clippy --workspace -- -D warnings` green (9.8s warm), no `#[allow(clippy)]` in the file. Almost certainly rewritten away by the P1 offline-export mixdown refactor (`d207f94a`, 2026-07-07), the last substantive change to `audio_mixdown.rs`; not bisected to the exact commit (LOW stakes) |
 | BUG-063 | **silent-load-repairs** | PARTIAL — load-repairs now surface as a non-blocking "opened with repairs" toast (P3, no longer silent); the heavier rescue path (blocking ack dialog + journal the pre-repair project.json to history/) is deferred (MED-HIGH) |
-| BUG-066 | **fluid3d-corner-drift** | OPEN — root cause NOT found. Peter's live artifact (bright cube in the TR quadrant at strong flow, turbulence OFF) reproduces in the harness and survived every mechanism tested 2026-07-10 (~8 falsified with evidence, see entry). Two real-but-secondary defects were fixed on main that day (noise-lattice scale → Turb Detail param; chained-hash diagonal correlation in seed + kicks) — NEITHER fixes the artifact, and the Turb Detail improvement is harness-sweep-only, not confirmed by Peter's eye. Next instrument: Texture3D slice viewer (in entry). MED-HIGH, visible on stage |
+| ~~BUG-066~~ FIXED | **fluid3d-corner-drift** | FIXED 2026-07-10 @ `eebac94d`, Peter rig-confirmed 2026-07-11 — root cause: `edge_slope_3d`/`swirl_force_3d` sized dispatch for the legacy 8³ workgroup while codegen emits 4³, so forces only ever existed in the (0..64)³ octant of the 128³ volume, which projects to the TR quadrant. Class killed: all volume nodes size grids from codegen's exported `VOLUME_WORKGROUP_3D`, emission pinned by test. The same-day "root cause NOT found" correction predates the fix (15:03 vs 16:51); the entry's falsification record stands as history |
 | BUG-068 | **inspector-scene-cliphit-overlap** | the `inspector` ui-snap scene fixture has a clip-vs-panel hit-test overlap at its narrower zoom — a clip can't be both uniquely-labeled and safely positioned over the inspector column, which forced DRAG_CAPTURE P1's L3 flow onto the `timeline` scene. Fixture-only, no runtime impact. Pre-existing at `b9304330` (LOW) |
 | BUG-069 | **shipping-license-audit** | four license problems in shipped components: madmom models + ADTOF (both CC BY-NC-SA), rusty_link crate (GPL-2.0, viral, in manifold-playback), staged ffmpeg copied from the dev machine (likely GPL build); full sweep 2026-07-08, everything else clean (HIGH for commercialization, zero runtime impact) |
 | ~~BUG-070~~ FIXED | **stepper-and-nonstandard-slider-reset** | ~~decay drawer slider~~ + Clip Trigger drawer sliders covered by the intrinsic-reset follow-through (@ 3a88f728). Remainder FIXED (AUDIO_SETUP_DOCK P4): Audio Setup gain `[−]value[＋]` steppers + the D7 overlay-drag value-label gain zone (not `BitmapSlider` tracks, so no `SliderReset` registration existed) now right-click-reset to unity via `PanelAction::slider_reset` replaying the existing `AudioSendGainDrag{Begin,Changed,Commit}` trio at 0.0 dB — the SAME gesture BUG-105 names as "every card/panel slider in the app." `feat/audio-dock-p4`. |
@@ -159,7 +159,7 @@ or human can read it, and it needs no external tool.
 **Instrument impact:** a fader Peter is riding stops being his mid-set and does not come back when he backs the trigger out — unrecoverable-live breakage on the perform surface, which is why this stays MED despite the pending repro.
 
 ### BUG-102 (mapping-popover-has-no-text-input-surface) — the calibration popover can't render an editable text field for `label` or the new `section` — LOW
-**Status:** OPEN — found 2026-07-10 building SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md P3's "section in the param mapping editor" deliverable.
+**Status:** DEFERRED — owned by the widget-unification track (Peter 2026-07-11). `UI_WIDGET_UNIFICATION_DESIGN.md` D3 keeps canvas text entry an explicit dead stop (`EditValue` → none on the canvas), and its Deferred section names BUG-102's caret/selection/IME primitive as the revive trigger — build it there, not as a standalone bug fix. Found 2026-07-10 building SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md P3's "section in the param mapping editor" deliverable.
 
 **Symptom:** `crates/manifold-ui/src/graph_canvas/mapping_popover.rs`'s own module doc (line ~24) says label editing is "intentionally deferred: a real text field on the immediate-mode canvas would need caret/selection/IME handling that doesn't exist on this surface yet" — the label is shown read-only in the popover header, and `EditField::Label` is unused groundwork waiting for that surface. P3 needed the SAME kind of text field for the new `section` property and hit the identical wall: there is nowhere on this popover today that accepts typed text for any string field.
 
@@ -373,7 +373,7 @@ non-zero; re-add the field with its consumer, emit side restorable from the P0 p
 parent. Owner context: LIVE_RECORDING_PROOFS / gig-resilience territory.
 
 ### BUG-080 (param-manifest-construction-not-a-unified-safe-gate) — manifest construction has no single safe gate; "partially built" is an observable state — MED (design-quality / latent-robustness; wants an Opus design pass)
-**Status:** OPEN
+**Status:** OPEN — fix path settled with Peter 2026-07-11: a dedicated design session (Opus) followed by its own implementation session. Not a bug-wave item; do not patch it inside a fix sweep.
 
 The param manifest (an instance's live knob list) is built at deserialize AND rebuilt by a later `reconcile_param_manifests` pass, because deserialize can't see project-embedded presets yet. Consumers that read `.params` *between* the two — a direct `serde_json::from_str::<PresetInstance>`, the keep-don't-drop backstop, the legacy audio-trigger migration, ~18 tests — depend on the deserialize-time build being correct. It works today only because the double-build papers over the timing; it's a latent hazard: a future load path added without a reconcile silently inherits an empty/partial manifest (the BUG-036 class). Root cause: manifest construction has no single safe gate — "partially built" is an observable, readable state. **Fix shape (design pass, NOT a patch):** make a half-built manifest un-observable — one construction gate every load/paste/bare-read passes through, OR a type-state where params can't be read until reconciled, OR deserialize carries enough context to build complete in one shot. The naive "build once in reconcile" was tried 2026-07-09 and is unsafe for exactly those reasons (design doc §2 D1 priced + rejected it).
 
@@ -437,201 +437,6 @@ column, so no clip in it is simultaneously uniquely-labeled and safely draggable
 P1's `drag-clip-release-over-inspector.json` flow proves position-independence on the `timeline`
 scene (drag past the tracks' right edge) instead. Fixture-only, no app runtime impact. Fix shape:
 adjust the `inspector` scene's clip layout or zoom so a clip clears the panel.
-
-### BUG-066 (fluid3d-corner-drift) — FluidSim3D density herds into one corner; two causes isolated, one root still open — MED-HIGH (visible on stage in long-running clips)
-**Status:** OPEN — root cause of Peter's live artifact NOT found (2026-07-10 addenda at the end of this entry: two secondary defects fixed, ~8 mechanisms falsified, next instrument named). Do not read the "dominant defect FIXED" phrasing in the first addendum as closing the bug — Peter's screenshot falsified that same day (his repro runs with turbulence OFF).
-
-**Found 2026-07-07 by Peter on the live output (subtle top-right dominance, no container and
-cube container), bisected headless the same session.** Harness:
-`crates/manifold-renderer/tests/fluid3d_bias.rs` (gpu-proofs, `--ignored`) — renders the
-bundled preset 900 frames per scenario, prints per-quadrant luminance shares, dumps PNGs to
-`/tmp/fluid3d_bias/`. Scenario matrix is edit-and-rerun (~12s/scenario at 512²); it injects
-card params past their UI ranges (e.g. `curl 0`/`90`, `flow` sign flip), which the UI can't.
-
-**Established (all at 512², cube container, deterministic):**
-1. Baseline is clean: with turbulence=0, curl=0, flow=0 the steady state is symmetric
-   (≈25% per quadrant) — spawn, NGP scatter, resolve, integrator, container repel/bounds,
-   camera splat are not the bias.
-2. **Turbulence is a wandering tide** (largest contributor at defaults): the 3-plane 2D
-   simplex in `simplex_noise_force_3d_at_particles_body.wgsl` spans only ~2 lattice cells
-   across the volume (`noise_pos = pos * 2.0`), so its instantaneous volume-mean is a real
-   net force (measured ±0.05/axis in a CPU replica; drifts over ~30–60s as
-   `noise_time = time*0.1` scrolls). Whole fluid leans on one wall, wall changes slowly.
-   Fix shape: make the per-axis noise zero-mean over the volume (subtract the analytic/
-   sampled mean, or raise frequency + add octaves — changes the look, needs Peter's eye).
-3. **Slope force has a systematic diagonal drift — root cause OPEN.** slope-only (turb 0,
-   curl 0, flow −0.01 default) pools 33–37% of luminance in the top-right with voxel-aligned
-   "shelves"; at feather=40 it's a violent bulk translation (TR 50% by f300, striping against
-   the +x face); at feather=4 the bias is gone. Flipping `flow` sign mirrors it to
-   bottom-left; rotating the camera 180° mirrors it on screen (so sim-space, +x/+y-ward).
-   The mean slope force over all particles is nonzero — for a pure density-gradient force
-   that should be impossible (momentum conservation), so something in
-   density→blur×3→gradient→curl_slope→blur×3→trilinear-sample is spatially shifted, and the
-   shift grows with blur radius.
-4. **Refuted with evidence (don't re-chase):** (a) NGP-deposit/trilinear-read PIC mismatch —
-   a matched trilinear (CIC) 8-corner deposit in the scatter body changed the trajectory
-   ~0.1% and the bias not at all; (b) Metal 8-bit subtexel rounding of the blur's bilinear
-   tap-pair offsets — replacing pairs with exact integer-offset taps changed nothing;
-   (c) codegen uv convention — the 3D wrapper uses texel-center `(id+0.5)/dims`
-   (codegen.rs:168); (d) resolve index mapping — `id.z*dims.x*dims.y + id.y*dims.x + id.x`
-   matches the scatter packing exactly. Also checked clean by read: gradient central-diff
-   wrap, container SDFs, euler step, samplers (linear, clamp-to-edge).
-
-**New evidence (Peter, 2026-07-07, after the session):** the pre-decomposition fused
-`node.fluid_simulate_3d` (the original Rust generator, before the node-graph migration)
-did NOT visibly have this bug. Unverified memory — verify it first (checkout a
-pre-decomposition commit, run the harness's slope_only/feather40 scenarios against the old
-generator, or eyeball a long run). If it holds, the root is something the decomposition
-changed about the COMPOSITION, not the kernels — the per-kernel gpu_tests prove each atom
-matches its legacy shader, so the delta must be in: pass ordering / which texture each pass
-reads (stale-intermediate suspect, already ranked first below), double-buffering the legacy
-frame did that the graph doesn't, blur radius units or pass count, gradient boundary
-convention, or preset wiring/param scaling. Corroborating smell: the per-voxel curl wobble
-(2211b20f) was added AFTER decomposition to fix "swirl pools in one octant" — pooling the
-legacy sim reportedly never had, i.e. the wobble may have papered over one symptom of the
-same introduced asymmetry. **This makes the first step a history diff:** `git log -S
-fluid_simulate_3d` to recover the fused generator's frame recipe (kernel order, texture
-ping-pong, per-pass params), then line it up against the FluidSim3D preset graph's execution
-plan and diff the compositions.
-
-**Legacy-composition diff (Fable, same night — step 0 partially done):** recovered the
-pre-node-graph Rust generator (`git show 044e7c8a~1:.../fluid_simulation_3d.rs`) and the
-fused-primitive era (`git show 50909419~1`). Force math is IDENTICAL through both eras
-(same central-diff gradient, same cross(gradient, ref_axis) + slope, no wobble; fused
-per-particle kernel = today's chain step for step), so the decomposition did NOT change the
-physics. The composition deltas, complete list: (a) blur radius — legacy
-`feather × vol_res/640` = 4 at defaults vs preset `feather × 0.2 + 1` = 5
-(`blur_radius_scaled`); the harness cliff sits exactly there (radius ~1 clean, 5 visibly
-biased, 9 violent); (b) legacy amortized the whole volume pipeline to alternate frames —
-half-rate field updates ≈ half-speed drift; (c) legacy blur ping-ponged vol→temp→vol
-explicitly (graph allocates per-pass outputs — check the executor actually does the same);
-(d) the curl wobble exists only post-decomposition. Net: legacy likely drifted too, ~2–3×
-slower (radius 4 vs 5 at the steep part of the response + half-rate updates) — consistent
-with \"never noticed\" rather than \"absent\". So Peter's report probably does NOT convict the
-decomposition; the drift mechanism itself (why any radius ≥ ~4 drifts diagonally) is still
-the open question and the antisymmetry probe remains the way in. Verify (b)/(c) against the
-execution plan before trusting this paragraph's \"identical\" claims for the blur pass wiring.
-
-**Next steps (Opus):** the drift needs blur *range*, not blur sampling mode. Candidates, in
-order: (0) finish the legacy diff — confirm the graph's blur ping-pong/order matches (c),
-and if cheap, run the harness at radius 4 + half-rate to see legacy-equivalent drift speed;
-(1) synthetic-volume antisymmetry probe at the kernel level — upload a symmetric
-Gaussian density, run blur→grad→(slope)→blur, sample at mirrored probe positions with the
-codegen standalone kernels (pattern: `gpu_tests` in scatter_particles_3d.rs), assert
-F(p) = −F(mirror p) stage by stage; the first stage that breaks antisymmetry is the bug.
-(2) The executor/fusion schedule for the 6-blur chain — if any blur pass reads a stale
-(last-frame or not-yet-written) intermediate, symmetric math still yields a lagged, shifted
-field; check the plan order + barriers for Render Volume/Force Field groups (this is the one
-hypothesis that needs blur *range* to matter and survived every kernel-level check).
-(1b) measure the violation directly instead of the drift: the per-particle force array is a
-plain buffer — read it back in the harness and sum it. Nonzero mean force = the conservation
-break itself, visible in ONE frame (vs 900-frame integration), and nulling force terms
-attributes it to a stage instantly. Build this meter first; it makes every other probe 100×
-faster. (1c) elimination note: vol_res 128 is a power of two, so blur/gradient coordinates
-are EXACT in f32, and the integer-tap experiment made the blur reads exact too — drift
-unchanged. The only position-dependent inexact ops left in the loop are the deposit
-(refuted via CIC) and the per-particle trilinear read (2b below) — among precision theories,
-2b is nearly the last one standing;
-(2b) Peter's rounding hunch, sharpened (untested, fits ALL evidence): any precision theory
-must round DIRECTIONALLY — symmetric noise can't pick a corner. Prime candidate: the per-particle force read in
-`sample_volume_at_particles` — the one filtered read the integer-tap experiment did NOT
-touch. Metal's trilinear filter fraction is ~8-bit; IF its rounding truncates (UNVERIFIED —
-Apple documents the precision, not the direction; if it's round-to-nearest this candidate
-dies), every read carries a fixed ~1/512-voxel shift toward −xyz and the feedback loop
-amplifies it, and feather sets the force field's spatial COHERENCE
-(radius 1 → decorrelated gradients, biases cancel; radius 5+ → aligned pushes compound) —
-which explains the radius cliff without the per-read error changing size. Cheap test:
-replace that one trilinear sample with a manual 8-tap textureLoad trilerp in f32 and rerun
-slope_only — if the drift dies, root found (and the fix is exactly that manual trilerp);
-(3) clamp-to-edge interaction at large sigma: blur clamps while the gradient wraps
-toroidally — mixed boundary conventions couple opposite faces asymmetrically once the kernel
-reaches the volume edge. Fix at whichever level the probe convicts; then rerun the harness
-matrix (slope_only + slope_feather40 must go ≈25% flat) and give Peter a look-pass, since
-zero-mean turbulence (item 2) changes the fluid's feel.
-
-**2026-07-10 session (Fable + Peter) — dominant defect FIXED, projection fix REFUTED, meter now in-repo:**
-
-*The force meter (next-step 1b) is built* into `fluid3d_bias.rs`: `set_dump_all` +
-buffer readback prints per-axis mean/max force for every per-particle array at
-checkpoint frames (note: `Array<[f32;3]>` decodes as three scalar `f32` fields, not
-`vec3f`; and the in-place force chain aliases one buffer, so every force-node row
-shows the same post-accumulation content — attribute terms via scenario nulls, not
-rows). Measured: the slope tide is real — slope_only holds a persistent
-+5e-5/axis mean (~0.5% of peak force) for 900 frames; the null control reads ~1e-7.
-
-*Refuted this session, with evidence:* (e) hardware trilinear rounding (2b) — a
-manual exact-f32 8-tap trilerp in the sample body left the tide and pooling
-unchanged; ALL precision theories are now dead. (f) uniform zero-mean projection as
-the fix — built (`node.remove_drift_3d`, three-pass reduce+subtract, GPU-oracle
-proven, registered but UNCONSUMED — shelf atom) and wired into the preset: it
-*inverted and amplified* the pooling (slope_only TR 37% → BL 46%; no-container BL
-63%). The imbalance is spatially concentrated (wall bands), so cancelling its net
-uniformly injects a volume-coherent counter-force — coherence is the amplifier.
-(g) volume-edge convention mixing (blur clamps / gradient wraps) — refuted by
-logic over existing data: no-container puts particles AT the volume edges and
-measures clean. Fused vs `MANIFOLD_FREEZE=0` renders bit-identical (weak evidence
-against the executor-schedule suspect; the toggle's effect on this path unverified).
-
-*The DOMINANT visible defect was a different bug at a higher level* (Peter's call —
-he saw quadrant-structured turbulence on the live output, one cube-shaped region
-behaving differently, stable across resolutions): the turbulence noise lattice.
-`node.turbulence_3d` sampled its 3-plane simplex at `pos * 2.0` (baked constant) —
-~2 lattice cells across the whole volume, so one noise cell reads as a quadrant of
-the sim, and a 2-cell field can't average to zero (= the item-2 wandering tide).
-**Fixed:** `turb_scale` param (port-shadowed, default 2.0 = legacy so old saves
-render unchanged) + "Turb Detail" card param on FluidSim3D (default 8.0). Sweep
-(detail 2/4/6/8/12, full defaults, 900f): quadrant anatomy gone from ~6 up,
-quadrant shares stable within ~2 points (legacy sloshes 10+), wandering tide 3–10×
-smaller. Peter look-pass at the rig owed (default 8 = my eye, not his yet).
-
-*Still open (the original slope tide, now LOW-MED):* root cause of the +diagonal
-~0.5%-of-peak slope-force mean. Next instruments, in order: (1) the synthetic
-antisymmetry probe (upload a mirror-symmetric density, run blur→gradient→slope→blur
-via the standalone kernels, find the first stage where F(p) ≠ −F(mirror p));
-(1b) octant-conditioned meter means (10-line harness change) to confirm the
-wall-band concentration; (2) unverified hypothesis from this session: an off-center
-tap range in `blur_3d_separable` (a `[-r, r-1]`-style kernel = half-voxel shift per
-pass, same sign every axis — fits all-axes-equal tide, feather scaling, legacy
-drifting slower, and survives parity because the oracle would share the defect).
-Read the blur kernel before building anything.
-
-**2026-07-10 part 2 (same session, after Peter's live falsification at flow −0.10 /
-feather 43 / turbulence 0 / ctr_scale 1.0 / 2M particles — the TR cube survives the
-Turb Detail fix because turbulence isn't even running):**
-
-*Shipped:* **hash-lane decorrelation.** `hash_float3` in the FluidSim3D seed pattern
-and `dfp_hash_float3` in `diffuse_force_3d_at_particles` (body + hand oracle) chained
-their lanes (h1 = hash(h0)), correlating x/y/z at 0.75/0.75/0.50 (CPU-verified) — the
-default seed cluster was a corner-to-corner diagonal CIGAR, and every anti-clump kick
-leaned diagonal. Fixed to independent lanes (seed XOR distinct constants; corr ≈ 0.01
-after). Real defects, worth having fixed — but NOT the cube's root: the artifact
-survived unchanged. **`BlackHole.json` carries the same chained-hash pattern — unfixed,
-needs its own look pass.**
-
-*Falsified this part, with evidence:* curl-wobble anatomy (cube survives curl=0 —
-though the wobble trig IS 2-periods-across-volume and its axis_raw CAN pass near
-zero; cosmetic hazard, still worth a later look); volume-edge convention mixing (cube
-unchanged at ctr_scale 1.0/0.9/0.8); blur kernel asymmetry (read: taps and weights
-exactly mirrored); container bounds + Euler integrator (read: symmetric);
-`flatten_to_camera_plane` at flatten=0 (read: clean early-out); Texture3D
-allocation-vs-dispatch mismatch (all vol_res/vol_depth params 128, plan sizes volumes
-from those params); two-population/index-identity split (half-split meter: all 2M
-live particles uniform in the low half of a 4M buffer, forces present for all).
-
-*Open clues for the next session:* (a) center of mass at f900 sits at
-**[0.58, 0.41, 0.27] — the displacement is z-DOMINANT**, invisible in the 2D view and
-unexplained by any surface theory; (b) peak |force| at flow −0.10 is **0.137/frame ≈
-14% of the volume per Euler step** — wildly over-CFL; the churn cube may be a
-numerical-instability zone whose location is set by whatever seeds the z asymmetry;
-(c) the artifact needs strong flow (−0.10); at −0.01 only mild TR pooling.
-
-*Next instrument (build BEFORE more hypothesis testing):* a **Texture3D slice
-viewer** — render z-slices of each stage's volume (density, blurred density,
-gradient, force, blurred force) to PNGs from the harness, and LOOK at which stage
-the cube/asymmetry first enters. Bisects the pipeline in one run instead of testing
-mechanisms one at a time; also a graph-editor gap (no Texture3D preview exists), so
-the work serves the product. The half-split meter machinery in `fluid3d_bias.rs`
-stays.
 
 ### BUG-063 (silent-load-repairs) — load-time repairs delete project data with log-only notice — MED-HIGH (silent data alteration; compounds BUG-062)
 **Status:** PARTIAL
@@ -928,61 +733,6 @@ detaches from its section header when the panel body is scrolled. **Fix shape:**
 rows), and clip it to the scroll viewport. **Oracle:** not reproducible headless (the blit
 doesn't run in the snapshot harness) — needs the live app or a harness that runs the scope
 blit; a scrolled-body render test would guard it.
-
-### BUG-046 (low-band-kick-deafness-on-mixes) — The canonical Low=kick binding is near-deaf on full mixes with active basslines — HIGH for the streaming/live-trigger use case
-**Status:** OPEN
-
-**Found 2026-07-06 (post-BUG-044 measurement, prompted by Peter):** on full mixes,
-the Low band catches almost no kicks while Full catches plenty — bad_guy mix Low 6
-vs drums-stem Low 46 (mix Full: 82); feel 7 vs 36; apricots 6 vs 13. inhale (29 vs
-23) and tears (32 vs 26) are healthy — arrangement-dependent. Peter's use model is
-per-band by design (Low = kicks/bass, Mid = vocals/synths, High = hats), so this is
-the primary binding for kick-triggering being broken on bass-heavy genres.
-
-**Mechanism (high confidence):** the Low band of a mix is where the sustained,
-note-active bassline lives; the kick's low-frequency energy competes with the bass
-IN the very band bound for it, keeping that band's ODF baseline (median AND recent
-max) elevated. Full recovers kicks via their broadband attack click in mid/high —
-which is why mixes fire well on Full but not Low. BUG-044's novelty criterion can't
-help: bass notes are themselves novel events in the Low band.
-
-**Fix direction (REVISED 2026-07-06 evening — HPSS-at-the-ODF measured and
-exhausted; do NOT re-try it):** the P6a offline campaign
-(AUDIO_OBJECT_TRACKING_DESIGN.md D9/P6; instrument kept at
-`crates/manifold-audio/examples/hpss_proto.rs`, replica validated
-fire-count-exact on all 25 fixtures) swept four causal families — column masks
-(flutter manufactures ±59 dB events; growl 16–73 false fires), Wiener (dB flux
-is scale-invariant; no effect), dB-novelty-floor replacement (collapses the
-adaptive median's context; growl 0→62-73), OR'd floored-novelty (guard-green,
-drums retention 1.00, apricots 5→12/13, feel 4→16/35, tears 8→12/25 — but
-bad_guy 0→8/45). None reached the ~50% bad_guy bar; not integrated. **Measured
-mechanism limit:** in a bass-occupied Low band the mix kick's surviving
-evidence is its descending FM sweep (~2 bins/hop, plainly visible in the
-bad_guy mix PNG crossing the bassline), which SuperFlux's max-filter nulls BY
-DESIGN — no flux-family detector or threshold can recover it. **Successor
-direction:** a percussive-sweep EVENT read from ridge motion (D5-tracker-
-adjacent; v0 argmax-run prototype confirmed the signal exists but needs real
-ridge tracking — apex sticks to the louder bass, bass portamento must be
-discriminated by rate/extent, and cross-criterion refractory is needed or
-attack+body double-fires). Needs its own short design; re-run the tracker gate
-lines (extra Low fires feed D5 step 4 re-acquire). **Partial SHIPPED 2026-07-06 late @ `61c2b0fd`**
-(Peter approved; masked-novelty third criterion in `reduce_send`; exact-match
-gate vs the prototype 100/100, selftest green minus BUG-045's line): recovery
-now apricots 12/13, feel 16/35, tears 12/25, inhale 17/22 — **bad_guy 8/45
-keeps this bug OPEN** for the ridge-motion successor. Behavior change shipped
-knowingly: Low transients also fire on bass-note attacks now. **Oracle caveat
-(Peter, same night):** the drums-stem ground truth is ITSELF unverified
-detector output — the bad_guy stem shows ~31 kick sweeps by eye but fired 46
-times, so every recovery denominator is suspect until human labels exist. Do
-NOT re-litigate recovery percentages against stem fires; the next pass grades
-BOTH stem and mix detection against Peter's hand-labeled kick positions
-(corpus incoming, Ableton-labeled — doubles as ingest P1's blocker). Also
-settled in discussion: on-stage routing (drum bus as its own send) caps this
-bug's priority for Peter's own sets — mix-only detection matters most for
-finished/other-people's tracks; and the ridge-motion successor should track
-the second ridge under the bass (the D5 machinery), not the argmax. Full-band is still NOT a substitute (hats spam —
-Peter). Crossover-defaults sweep: independent report-only task; does not
-address this bug (kick and bass share bins — re-confirmed at the bin level).
 
 ### BUG-045 (gap-ring-down-chase) — Tracker chases the transform's kernel ring-down during inter-note gaps — LOW (2.4 points on the notes gate; real-clip impact small)
 **Status:** OPEN
@@ -1917,6 +1667,258 @@ Same bug class as the migration killed for the primary controls.
 Reopened the substance of BUG-082 (whose P3c closure was false — see that entry's 2026-07-11 annotation). Three breaks: (1) **playing** — P3c (`12fbc37d`) put the per-tick `FireMeterCapture` reset in `tick_playing`'s modulation step ([`engine.rs:901`](../crates/manifold-playback/src/engine.rs#L901)), whose comment claims clip triggers evaluate "below"; they evaluate at step 3b ([`engine.rs:844`](../crates/manifold-playback/src/engine.rs#L844), placed by `d285663f` so fired clips start same-frame before step 4's `sync_clips_to_time`) — so trigger levels are pushed then wiped, every tick. The stale `tick_audio_triggers` doc comment ("called after modulation") and CORE_ENGINE_MAP's correct frame diagram disagree; the worker trusted the comment. (2) **stopped** — `tick_non_playing` never calls `tick_audio_triggers`, so the meter is zero in exactly the tune-a-trigger-at-soundcheck state the D6 meter was built for. (3) **latent** — even with (1)+(2) fixed, a conditioned transient decays in ms; without UI-side peak-hold the fill is invisible at snapshot cadence.
 
 **Fixed (P5):** (1) the `FireMeterCapture` reset moved to ONE call at the top of `PlaybackEngine::tick`, before either branch's evaluators run, replacing the two mid-branch resets. (2) `LiveTriggerState::evaluate` was split into a shared `walk` helper behind `evaluate` (fires) and the new `evaluate_meter_only` (pushes the identical `condition()` signal, never advances `TransientEdge`, never fires); `tick_non_playing` calls it whenever the project has an active clip trigger. (3) `MeterIds` (`crates/manifold-ui/src/panels/drawer.rs`) grew `Cell<f32>` peak-hold state — instant attack, `PEAK_HOLD_SECONDS = 0.25` hold, `PEAK_DECAY_PER_SEC = 5.0` fall — threaded a `dt: f32` UI-frame-delta parameter down through `update_fire_meters` on `ParamCardPanel`/`AudioTriggerSection`/`InspectorCompositePanel`/`UIRoot` from `app_render.rs`'s existing `frame_timer` value. Also fixed the stale `tick_audio_triggers` doc comment and updated `CORE_ENGINE_MAP.md` §3/§6. **Gate:** `playing_tick_leaves_the_clip_trigger_level_in_fire_meters` and `stopped_tick_pushes_the_level_and_fires_no_clip` (`crates/manifold-playback/tests/engine_tick.rs`) are the regression the bug made impossible before; `evaluate_meter_only_pushes_the_level_but_never_advances_the_edge` (`live_trigger.rs`) proves the edge never moves while stopped. `cargo xtask ui-snap inspector` with a synthetic `Some(0.9)` fed through the real `update_fire_meters` API (not a live `FireMeterCapture` — that path is the engine tests' job) shows the Strobe card's Amount meter filled ~90% and bright — evidence in the landing report.
+
+### BUG-066 (fluid3d-corner-drift) — FluidSim3D density herded into the top-right octant — FIXED (partial-volume dispatch; class killed via shared `VOLUME_WORKGROUP_3D`)
+**Status:** FIXED — root cause found + fixed 2026-07-10 16:51 @ `eebac94d` (on main); Peter confirmed the artifact gone on the rig 2026-07-11.
+
+**Resolution (`eebac94d`):** `node.edge_slope_3d` and `node.swirl_force_3d` sized their dispatch grids `div_ceil(8)` (the legacy hand shaders' 8×8×8 workgroup), but the freeze codegen emits every 3D-volume kernel at `@workgroup_size(4,4,4)` — so only the (0..64)³ octant of the 128³ volume ever received forces, and under the default camera that octant projects exactly to the top-right screen quadrant. Every observed symptom follows: sharp axis-aligned box edges (the dispatch cutoff), same position every boot, independent of seed/container/camera orbit. Kernel parity tests couldn't catch it — they dispatch the generated kernel with the test's own grid. The fix removes the class, not the instances: codegen exports `VOLUME_WORKGROUP_3D`, all four volume-node `run()`s size their grids from it, and a unit test pins the emitted `"4, 4, 4"` workgroup string to the constant so emission and host dispatch can't drift silently again. Verified headless on Peter's exact repro settings (uniform centred cloud at frame 900 vs. the pre-fix parked box); `d401e202` the same day restored the toroidal blur + legacy curl axis. **Timeline note:** the "root cause NOT found" status correction was authored 15:03 that same day and merged to main 2026-07-11 morning — it predates the 16:51 fix. Read the addenda below as the falsification record that narrowed the search to this, not as the current state.
+
+**Found 2026-07-07 by Peter on the live output (subtle top-right dominance, no container and
+cube container), bisected headless the same session.** Harness:
+`crates/manifold-renderer/tests/fluid3d_bias.rs` (gpu-proofs, `--ignored`) — renders the
+bundled preset 900 frames per scenario, prints per-quadrant luminance shares, dumps PNGs to
+`/tmp/fluid3d_bias/`. Scenario matrix is edit-and-rerun (~12s/scenario at 512²); it injects
+card params past their UI ranges (e.g. `curl 0`/`90`, `flow` sign flip), which the UI can't.
+
+**Established (all at 512², cube container, deterministic):**
+1. Baseline is clean: with turbulence=0, curl=0, flow=0 the steady state is symmetric
+   (≈25% per quadrant) — spawn, NGP scatter, resolve, integrator, container repel/bounds,
+   camera splat are not the bias.
+2. **Turbulence is a wandering tide** (largest contributor at defaults): the 3-plane 2D
+   simplex in `simplex_noise_force_3d_at_particles_body.wgsl` spans only ~2 lattice cells
+   across the volume (`noise_pos = pos * 2.0`), so its instantaneous volume-mean is a real
+   net force (measured ±0.05/axis in a CPU replica; drifts over ~30–60s as
+   `noise_time = time*0.1` scrolls). Whole fluid leans on one wall, wall changes slowly.
+   Fix shape: make the per-axis noise zero-mean over the volume (subtract the analytic/
+   sampled mean, or raise frequency + add octaves — changes the look, needs Peter's eye).
+3. **Slope force has a systematic diagonal drift — root cause OPEN.** slope-only (turb 0,
+   curl 0, flow −0.01 default) pools 33–37% of luminance in the top-right with voxel-aligned
+   "shelves"; at feather=40 it's a violent bulk translation (TR 50% by f300, striping against
+   the +x face); at feather=4 the bias is gone. Flipping `flow` sign mirrors it to
+   bottom-left; rotating the camera 180° mirrors it on screen (so sim-space, +x/+y-ward).
+   The mean slope force over all particles is nonzero — for a pure density-gradient force
+   that should be impossible (momentum conservation), so something in
+   density→blur×3→gradient→curl_slope→blur×3→trilinear-sample is spatially shifted, and the
+   shift grows with blur radius.
+4. **Refuted with evidence (don't re-chase):** (a) NGP-deposit/trilinear-read PIC mismatch —
+   a matched trilinear (CIC) 8-corner deposit in the scatter body changed the trajectory
+   ~0.1% and the bias not at all; (b) Metal 8-bit subtexel rounding of the blur's bilinear
+   tap-pair offsets — replacing pairs with exact integer-offset taps changed nothing;
+   (c) codegen uv convention — the 3D wrapper uses texel-center `(id+0.5)/dims`
+   (codegen.rs:168); (d) resolve index mapping — `id.z*dims.x*dims.y + id.y*dims.x + id.x`
+   matches the scatter packing exactly. Also checked clean by read: gradient central-diff
+   wrap, container SDFs, euler step, samplers (linear, clamp-to-edge).
+
+**New evidence (Peter, 2026-07-07, after the session):** the pre-decomposition fused
+`node.fluid_simulate_3d` (the original Rust generator, before the node-graph migration)
+did NOT visibly have this bug. Unverified memory — verify it first (checkout a
+pre-decomposition commit, run the harness's slope_only/feather40 scenarios against the old
+generator, or eyeball a long run). If it holds, the root is something the decomposition
+changed about the COMPOSITION, not the kernels — the per-kernel gpu_tests prove each atom
+matches its legacy shader, so the delta must be in: pass ordering / which texture each pass
+reads (stale-intermediate suspect, already ranked first below), double-buffering the legacy
+frame did that the graph doesn't, blur radius units or pass count, gradient boundary
+convention, or preset wiring/param scaling. Corroborating smell: the per-voxel curl wobble
+(2211b20f) was added AFTER decomposition to fix "swirl pools in one octant" — pooling the
+legacy sim reportedly never had, i.e. the wobble may have papered over one symptom of the
+same introduced asymmetry. **This makes the first step a history diff:** `git log -S
+fluid_simulate_3d` to recover the fused generator's frame recipe (kernel order, texture
+ping-pong, per-pass params), then line it up against the FluidSim3D preset graph's execution
+plan and diff the compositions.
+
+**Legacy-composition diff (Fable, same night — step 0 partially done):** recovered the
+pre-node-graph Rust generator (`git show 044e7c8a~1:.../fluid_simulation_3d.rs`) and the
+fused-primitive era (`git show 50909419~1`). Force math is IDENTICAL through both eras
+(same central-diff gradient, same cross(gradient, ref_axis) + slope, no wobble; fused
+per-particle kernel = today's chain step for step), so the decomposition did NOT change the
+physics. The composition deltas, complete list: (a) blur radius — legacy
+`feather × vol_res/640` = 4 at defaults vs preset `feather × 0.2 + 1` = 5
+(`blur_radius_scaled`); the harness cliff sits exactly there (radius ~1 clean, 5 visibly
+biased, 9 violent); (b) legacy amortized the whole volume pipeline to alternate frames —
+half-rate field updates ≈ half-speed drift; (c) legacy blur ping-ponged vol→temp→vol
+explicitly (graph allocates per-pass outputs — check the executor actually does the same);
+(d) the curl wobble exists only post-decomposition. Net: legacy likely drifted too, ~2–3×
+slower (radius 4 vs 5 at the steep part of the response + half-rate updates) — consistent
+with \"never noticed\" rather than \"absent\". So Peter's report probably does NOT convict the
+decomposition; the drift mechanism itself (why any radius ≥ ~4 drifts diagonally) is still
+the open question and the antisymmetry probe remains the way in. Verify (b)/(c) against the
+execution plan before trusting this paragraph's \"identical\" claims for the blur pass wiring.
+
+**Next steps (Opus):** the drift needs blur *range*, not blur sampling mode. Candidates, in
+order: (0) finish the legacy diff — confirm the graph's blur ping-pong/order matches (c),
+and if cheap, run the harness at radius 4 + half-rate to see legacy-equivalent drift speed;
+(1) synthetic-volume antisymmetry probe at the kernel level — upload a symmetric
+Gaussian density, run blur→grad→(slope)→blur, sample at mirrored probe positions with the
+codegen standalone kernels (pattern: `gpu_tests` in scatter_particles_3d.rs), assert
+F(p) = −F(mirror p) stage by stage; the first stage that breaks antisymmetry is the bug.
+(2) The executor/fusion schedule for the 6-blur chain — if any blur pass reads a stale
+(last-frame or not-yet-written) intermediate, symmetric math still yields a lagged, shifted
+field; check the plan order + barriers for Render Volume/Force Field groups (this is the one
+hypothesis that needs blur *range* to matter and survived every kernel-level check).
+(1b) measure the violation directly instead of the drift: the per-particle force array is a
+plain buffer — read it back in the harness and sum it. Nonzero mean force = the conservation
+break itself, visible in ONE frame (vs 900-frame integration), and nulling force terms
+attributes it to a stage instantly. Build this meter first; it makes every other probe 100×
+faster. (1c) elimination note: vol_res 128 is a power of two, so blur/gradient coordinates
+are EXACT in f32, and the integer-tap experiment made the blur reads exact too — drift
+unchanged. The only position-dependent inexact ops left in the loop are the deposit
+(refuted via CIC) and the per-particle trilinear read (2b below) — among precision theories,
+2b is nearly the last one standing;
+(2b) Peter's rounding hunch, sharpened (untested, fits ALL evidence): any precision theory
+must round DIRECTIONALLY — symmetric noise can't pick a corner. Prime candidate: the per-particle force read in
+`sample_volume_at_particles` — the one filtered read the integer-tap experiment did NOT
+touch. Metal's trilinear filter fraction is ~8-bit; IF its rounding truncates (UNVERIFIED —
+Apple documents the precision, not the direction; if it's round-to-nearest this candidate
+dies), every read carries a fixed ~1/512-voxel shift toward −xyz and the feedback loop
+amplifies it, and feather sets the force field's spatial COHERENCE
+(radius 1 → decorrelated gradients, biases cancel; radius 5+ → aligned pushes compound) —
+which explains the radius cliff without the per-read error changing size. Cheap test:
+replace that one trilinear sample with a manual 8-tap textureLoad trilerp in f32 and rerun
+slope_only — if the drift dies, root found (and the fix is exactly that manual trilerp);
+(3) clamp-to-edge interaction at large sigma: blur clamps while the gradient wraps
+toroidally — mixed boundary conventions couple opposite faces asymmetrically once the kernel
+reaches the volume edge. Fix at whichever level the probe convicts; then rerun the harness
+matrix (slope_only + slope_feather40 must go ≈25% flat) and give Peter a look-pass, since
+zero-mean turbulence (item 2) changes the fluid's feel.
+
+**2026-07-10 session (Fable + Peter) — dominant defect FIXED, projection fix REFUTED, meter now in-repo:**
+
+*The force meter (next-step 1b) is built* into `fluid3d_bias.rs`: `set_dump_all` +
+buffer readback prints per-axis mean/max force for every per-particle array at
+checkpoint frames (note: `Array<[f32;3]>` decodes as three scalar `f32` fields, not
+`vec3f`; and the in-place force chain aliases one buffer, so every force-node row
+shows the same post-accumulation content — attribute terms via scenario nulls, not
+rows). Measured: the slope tide is real — slope_only holds a persistent
++5e-5/axis mean (~0.5% of peak force) for 900 frames; the null control reads ~1e-7.
+
+*Refuted this session, with evidence:* (e) hardware trilinear rounding (2b) — a
+manual exact-f32 8-tap trilerp in the sample body left the tide and pooling
+unchanged; ALL precision theories are now dead. (f) uniform zero-mean projection as
+the fix — built (`node.remove_drift_3d`, three-pass reduce+subtract, GPU-oracle
+proven, registered but UNCONSUMED — shelf atom) and wired into the preset: it
+*inverted and amplified* the pooling (slope_only TR 37% → BL 46%; no-container BL
+63%). The imbalance is spatially concentrated (wall bands), so cancelling its net
+uniformly injects a volume-coherent counter-force — coherence is the amplifier.
+(g) volume-edge convention mixing (blur clamps / gradient wraps) — refuted by
+logic over existing data: no-container puts particles AT the volume edges and
+measures clean. Fused vs `MANIFOLD_FREEZE=0` renders bit-identical (weak evidence
+against the executor-schedule suspect; the toggle's effect on this path unverified).
+
+*The DOMINANT visible defect was a different bug at a higher level* (Peter's call —
+he saw quadrant-structured turbulence on the live output, one cube-shaped region
+behaving differently, stable across resolutions): the turbulence noise lattice.
+`node.turbulence_3d` sampled its 3-plane simplex at `pos * 2.0` (baked constant) —
+~2 lattice cells across the whole volume, so one noise cell reads as a quadrant of
+the sim, and a 2-cell field can't average to zero (= the item-2 wandering tide).
+**Fixed:** `turb_scale` param (port-shadowed, default 2.0 = legacy so old saves
+render unchanged) + "Turb Detail" card param on FluidSim3D (default 8.0). Sweep
+(detail 2/4/6/8/12, full defaults, 900f): quadrant anatomy gone from ~6 up,
+quadrant shares stable within ~2 points (legacy sloshes 10+), wandering tide 3–10×
+smaller. Peter look-pass at the rig owed (default 8 = my eye, not his yet).
+
+*Still open (the original slope tide, now LOW-MED):* root cause of the +diagonal
+~0.5%-of-peak slope-force mean. Next instruments, in order: (1) the synthetic
+antisymmetry probe (upload a mirror-symmetric density, run blur→gradient→slope→blur
+via the standalone kernels, find the first stage where F(p) ≠ −F(mirror p));
+(1b) octant-conditioned meter means (10-line harness change) to confirm the
+wall-band concentration; (2) unverified hypothesis from this session: an off-center
+tap range in `blur_3d_separable` (a `[-r, r-1]`-style kernel = half-voxel shift per
+pass, same sign every axis — fits all-axes-equal tide, feather scaling, legacy
+drifting slower, and survives parity because the oracle would share the defect).
+Read the blur kernel before building anything.
+
+**2026-07-10 part 2 (same session, after Peter's live falsification at flow −0.10 /
+feather 43 / turbulence 0 / ctr_scale 1.0 / 2M particles — the TR cube survives the
+Turb Detail fix because turbulence isn't even running):**
+
+*Shipped:* **hash-lane decorrelation.** `hash_float3` in the FluidSim3D seed pattern
+and `dfp_hash_float3` in `diffuse_force_3d_at_particles` (body + hand oracle) chained
+their lanes (h1 = hash(h0)), correlating x/y/z at 0.75/0.75/0.50 (CPU-verified) — the
+default seed cluster was a corner-to-corner diagonal CIGAR, and every anti-clump kick
+leaned diagonal. Fixed to independent lanes (seed XOR distinct constants; corr ≈ 0.01
+after). Real defects, worth having fixed — but NOT the cube's root: the artifact
+survived unchanged. **`BlackHole.json` carries the same chained-hash pattern — unfixed,
+needs its own look pass.**
+
+*Falsified this part, with evidence:* curl-wobble anatomy (cube survives curl=0 —
+though the wobble trig IS 2-periods-across-volume and its axis_raw CAN pass near
+zero; cosmetic hazard, still worth a later look); volume-edge convention mixing (cube
+unchanged at ctr_scale 1.0/0.9/0.8); blur kernel asymmetry (read: taps and weights
+exactly mirrored); container bounds + Euler integrator (read: symmetric);
+`flatten_to_camera_plane` at flatten=0 (read: clean early-out); Texture3D
+allocation-vs-dispatch mismatch (all vol_res/vol_depth params 128, plan sizes volumes
+from those params); two-population/index-identity split (half-split meter: all 2M
+live particles uniform in the low half of a 4M buffer, forces present for all).
+
+*Open clues for the next session:* (a) center of mass at f900 sits at
+**[0.58, 0.41, 0.27] — the displacement is z-DOMINANT**, invisible in the 2D view and
+unexplained by any surface theory; (b) peak |force| at flow −0.10 is **0.137/frame ≈
+14% of the volume per Euler step** — wildly over-CFL; the churn cube may be a
+numerical-instability zone whose location is set by whatever seeds the z asymmetry;
+(c) the artifact needs strong flow (−0.10); at −0.01 only mild TR pooling.
+
+*Next instrument (build BEFORE more hypothesis testing):* a **Texture3D slice
+viewer** — render z-slices of each stage's volume (density, blurred density,
+gradient, force, blurred force) to PNGs from the harness, and LOOK at which stage
+the cube/asymmetry first enters. Bisects the pipeline in one run instead of testing
+mechanisms one at a time; also a graph-editor gap (no Texture3D preview exists), so
+the work serves the product. The half-split meter machinery in `fluid3d_bias.rs`
+stays.
+
+### BUG-046 (low-band-kick-deafness-on-mixes) — The canonical Low=kick binding is near-deaf on full mixes with active basslines — FIXED by the dedicated Kick channel (KICK_SWEEP_EVENT)
+**Status:** FIXED — resolved by `KICK_SWEEP_EVENT_DESIGN.md` P1/P2/P4/P5 (SHIPPED 2026-07-07): kick-triggering now binds the dedicated ridge-only **Kick** channel (split from Transients), which reads the mix kick's descending FM sweep — the one surviving evidence no flux-family detector could recover — and breaks the bad_guy deafness specifically at equal bass-false-fire cost. Peter confirmed implemented 2026-07-11. The Low band itself still fires on bass-note attacks (the `61c2b0fd` behavior change, kept knowingly) — the fix is the new canonical binding, not a Low-band cure. Remaining: the live feel-pass is the design's P3, owed to Peter and tracked there, not here.
+
+**Found 2026-07-06 (post-BUG-044 measurement, prompted by Peter):** on full mixes,
+the Low band catches almost no kicks while Full catches plenty — bad_guy mix Low 6
+vs drums-stem Low 46 (mix Full: 82); feel 7 vs 36; apricots 6 vs 13. inhale (29 vs
+23) and tears (32 vs 26) are healthy — arrangement-dependent. Peter's use model is
+per-band by design (Low = kicks/bass, Mid = vocals/synths, High = hats), so this is
+the primary binding for kick-triggering being broken on bass-heavy genres.
+
+**Mechanism (high confidence):** the Low band of a mix is where the sustained,
+note-active bassline lives; the kick's low-frequency energy competes with the bass
+IN the very band bound for it, keeping that band's ODF baseline (median AND recent
+max) elevated. Full recovers kicks via their broadband attack click in mid/high —
+which is why mixes fire well on Full but not Low. BUG-044's novelty criterion can't
+help: bass notes are themselves novel events in the Low band.
+
+**Fix direction (REVISED 2026-07-06 evening — HPSS-at-the-ODF measured and
+exhausted; do NOT re-try it):** the P6a offline campaign
+(AUDIO_OBJECT_TRACKING_DESIGN.md D9/P6; instrument kept at
+`crates/manifold-audio/examples/hpss_proto.rs`, replica validated
+fire-count-exact on all 25 fixtures) swept four causal families — column masks
+(flutter manufactures ±59 dB events; growl 16–73 false fires), Wiener (dB flux
+is scale-invariant; no effect), dB-novelty-floor replacement (collapses the
+adaptive median's context; growl 0→62-73), OR'd floored-novelty (guard-green,
+drums retention 1.00, apricots 5→12/13, feel 4→16/35, tears 8→12/25 — but
+bad_guy 0→8/45). None reached the ~50% bad_guy bar; not integrated. **Measured
+mechanism limit:** in a bass-occupied Low band the mix kick's surviving
+evidence is its descending FM sweep (~2 bins/hop, plainly visible in the
+bad_guy mix PNG crossing the bassline), which SuperFlux's max-filter nulls BY
+DESIGN — no flux-family detector or threshold can recover it. **Successor
+direction:** a percussive-sweep EVENT read from ridge motion (D5-tracker-
+adjacent; v0 argmax-run prototype confirmed the signal exists but needs real
+ridge tracking — apex sticks to the louder bass, bass portamento must be
+discriminated by rate/extent, and cross-criterion refractory is needed or
+attack+body double-fires). Needs its own short design; re-run the tracker gate
+lines (extra Low fires feed D5 step 4 re-acquire). **Partial SHIPPED 2026-07-06 late @ `61c2b0fd`**
+(Peter approved; masked-novelty third criterion in `reduce_send`; exact-match
+gate vs the prototype 100/100, selftest green minus BUG-045's line): recovery
+now apricots 12/13, feel 16/35, tears 12/25, inhale 17/22 — **bad_guy 8/45
+keeps this bug OPEN** for the ridge-motion successor. Behavior change shipped
+knowingly: Low transients also fire on bass-note attacks now. **Oracle caveat
+(Peter, same night):** the drums-stem ground truth is ITSELF unverified
+detector output — the bad_guy stem shows ~31 kick sweeps by eye but fired 46
+times, so every recovery denominator is suspect until human labels exist. Do
+NOT re-litigate recovery percentages against stem fires; the next pass grades
+BOTH stem and mix detection against Peter's hand-labeled kick positions
+(corpus incoming, Ableton-labeled — doubles as ingest P1's blocker). Also
+settled in discussion: on-stage routing (drum bus as its own send) caps this
+bug's priority for Peter's own sets — mix-only detection matters most for
+finished/other-people's tracks; and the ridge-motion successor should track
+the second ridge under the bass (the D5 machinery), not the argmax. Full-band is still NOT a substitute (hats spam —
+Peter). Crossover-defaults sweep: independent report-only task; does not
+address this bug (kick and bass share bins — re-confirmed at the bin level).
 
 ### BUG-056 (audio-mixdown-clippy-debt) — `manifold-playback` fails `cargo clippy -D warnings` pre-existing on `audio_mixdown.rs` — LOW (blocks the crate's clippy gate, not correctness)
 **Status:** FIXED — verified gone 2026-07-11 (discipline audit): full workspace clippy `-D warnings` green in 9.8s warm, and `audio_mixdown.rs` carries no `#[allow(clippy)]` attrs, so the lints were genuinely rewritten away, not silenced. Almost certainly the P1 offline-export mixdown refactor (`d207f94a`, 2026-07-07) — the last substantive change to the file; not bisected to the exact commit (LOW stakes, dev-tooling only).
