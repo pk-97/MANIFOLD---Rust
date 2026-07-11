@@ -10,6 +10,13 @@
 // so the SAME per-object mesh vertex buffer binds here at @binding(1)
 // with no re-pack. Only position is read; normal/uv are ignored (a
 // depth pass has no shading).
+//
+// The shadow pass instances too (REALTIME_3D_DESIGN.md §10 D11+P8): the
+// SAME per-object instances buffer (or identity stub) binds at
+// @binding(2), and vs_main applies the identical instance-then-model TRS
+// composition as render_scene.wgsl's vs_main, so a shadow-casting
+// instance's silhouette in the depth map matches its silhouette in the
+// lit pass exactly.
 
 struct Vertex {
     position: vec3<f32>,
@@ -27,13 +34,53 @@ struct ShadowUniforms {
     model: mat4x4<f32>,
 };
 
+struct Instance {
+    pos_scale: vec4<f32>,
+    rot_pad: vec4<f32>,
+};
+
 @group(0) @binding(0) var<uniform> su: ShadowUniforms;
 @group(0) @binding(1) var<storage, read> verts: array<Vertex>;
+@group(0) @binding(2) var<storage, read> instances: array<Instance>;
+
+// Bit-for-bit the same as render_scene.wgsl's euler_xyz — forked, not
+// shared, per this file's header convention.
+fn euler_xyz(angles: vec3<f32>) -> mat3x3<f32> {
+    let cx = cos(angles.x);
+    let sx = sin(angles.x);
+    let cy = cos(angles.y);
+    let sy = sin(angles.y);
+    let cz = cos(angles.z);
+    let sz = sin(angles.z);
+
+    let rx = mat3x3<f32>(
+        vec3<f32>(1.0, 0.0, 0.0),
+        vec3<f32>(0.0, cx, sx),
+        vec3<f32>(0.0, -sx, cx),
+    );
+    let ry = mat3x3<f32>(
+        vec3<f32>(cy, 0.0, -sy),
+        vec3<f32>(0.0, 1.0, 0.0),
+        vec3<f32>(sy, 0.0, cy),
+    );
+    let rz = mat3x3<f32>(
+        vec3<f32>(cz, sz, 0.0),
+        vec3<f32>(-sz, cz, 0.0),
+        vec3<f32>(0.0, 0.0, 1.0),
+    );
+    return rz * ry * rx;
+}
 
 @vertex
-fn vs_main(@builtin(vertex_index) vid: u32) -> @builtin(position) vec4<f32> {
+fn vs_main(
+    @builtin(vertex_index) vid: u32,
+    @builtin(instance_index) iid: u32,
+) -> @builtin(position) vec4<f32> {
     let v = verts[vid];
-    let world = su.model * vec4<f32>(v.position, 1.0);
+    let inst = instances[iid];
+    let rot = euler_xyz(inst.rot_pad.xyz);
+    let inst_pos = rot * (v.position * inst.pos_scale.w) + inst.pos_scale.xyz;
+    let world = su.model * vec4<f32>(inst_pos, 1.0);
     return su.light_view_proj * world;
 }
 
