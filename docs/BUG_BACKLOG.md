@@ -783,6 +783,19 @@ rows), and clip it to the scroll viewport. **Oracle:** not reproducible headless
 doesn't run in the snapshot harness) — needs the live app or a harness that runs the scope
 blit; a scrolled-body render test would guard it.
 
+**Update 2026-07-11 (fire-meter-unification pass):** confirmed the same root cause also
+explains `SendRowIds`'s per-send level meter (fixed this session — `meter_track: NodeId`
+now read live instead of cached `meter_x/y/w/h`) and `AudioSetupPanel::update_band_meters`
+(`audio_setup_panel.rs`, still open) — both derive from geometry captured in `build_nodes`
+before its own `self.scroll.offset_content()` call. The send-meter case had a track node to
+anchor to, so it's fixed. The scope/band-meter case roots in `self.scope_rect` (`pub fn
+scope_rect(&self) -> Option<Rect>`, no `&UITree` param) — making it scroll-live needs a
+signature change threading `&UITree` through every caller (the present-pass blit, both
+hit-tests, `update_scope_lane_labels`), which is this bug's real fix shape and is out of
+scope for a geometry-sourcing-only pass. Currently dormant either way:
+`AudioSetupPanel::handle_scroll` has zero call sites anywhere in the app (grepped), so
+`scroll_offset()` is always 0 in the shipped build and neither symptom is user-reachable yet.
+
 ### BUG-045 (gap-ring-down-chase) — Tracker chases the transform's kernel ring-down during inter-note gaps — LOW (2.4 points on the notes gate; real-clip impact small)
 **Status:** OPEN
 

@@ -250,13 +250,12 @@ struct SendRowIds {
     /// (`pointer-down` arms [`AudioSetupPanel::gain_drag_target`]).
     gain_value: NodeId,
     delete: NodeId,
-    /// Level-meter fill node + its full-scale geometry, resized in place each
-    /// frame by [`AudioSetupPanel::update_meters`] (no rebuild).
+    /// Level-meter track + fill nodes. [`AudioSetupPanel::update_meters`]
+    /// resizes `meter_fill` in place each frame, reading `meter_track`'s
+    /// CURRENT tree bounds (not a build-time cache) so a scroll shift to the
+    /// track carries the fill along with it.
+    meter_track: NodeId,
     meter_fill: NodeId,
-    meter_x: f32,
-    meter_y: f32,
-    meter_w: f32,
-    meter_h: f32,
 }
 
 impl Default for SendRowIds {
@@ -269,11 +268,8 @@ impl Default for SendRowIds {
             gain_plus: NodeId::PLACEHOLDER,
             gain_value: NodeId::PLACEHOLDER,
             delete: NodeId::PLACEHOLDER,
+            meter_track: NodeId::PLACEHOLDER,
             meter_fill: NodeId::PLACEHOLDER,
-            meter_x: 0.0,
-            meter_y: 0.0,
-            meter_w: 0.0,
-            meter_h: 0.0,
         }
     }
 }
@@ -845,7 +841,7 @@ impl AudioSetupPanel {
             let meter_x = ch_x;
             let meter_y = cy + ROW_H - meter_h;
             let meter_w = ch_w;
-            tree.add_panel(
+            let track = tree.add_panel(
                 Some(self.content_parent),
                 meter_x,
                 meter_y,
@@ -861,11 +857,8 @@ impl AudioSetupPanel {
                 meter_h,
                 UIStyle { bg_color: super::audio_send_color(&send.id), ..UIStyle::default() },
             );
+            self.send_ids[i].meter_track = track;
             self.send_ids[i].meter_fill = fill;
-            self.send_ids[i].meter_x = meter_x;
-            self.send_ids[i].meter_y = meter_y;
-            self.send_ids[i].meter_w = meter_w;
-            self.send_ids[i].meter_h = meter_h;
 
             cy += ROW_H + ROW_GAP;
         }
@@ -1533,10 +1526,13 @@ impl AudioSetupPanel {
         for (i, ids) in self.send_ids.iter().enumerate() {
             let level = levels.get(i).copied().unwrap_or(0.0);
             let shown = (level * 2.5).clamp(0.0, 1.0); // ~ -8 dB reaches full scale
-            let w = ids.meter_w * shown;
+            // Read the track's CURRENT bounds, not a build-time cache, so an
+            // in-place scroll shift lands under the fill too.
+            let track_rect = tree.get_bounds(ids.meter_track);
+            let w = track_rect.width * shown;
             tree.set_bounds(
                 ids.meter_fill,
-                Rect::new(ids.meter_x, ids.meter_y, w, ids.meter_h),
+                Rect::new(track_rect.x, track_rect.y, w, track_rect.height),
             );
         }
     }
