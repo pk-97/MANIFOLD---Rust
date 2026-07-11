@@ -44,6 +44,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-119 | **timeline-layer-flickers-intermittently** | Timeline layer clip rendering sometimes flickers rapidly ("flicks like crazy"); intermittent, no repro steps yet. Root cause unknown, NOT investigated (Peter's call 2026-07-11: log, don't chase). |
 | BUG-118 | **render-scene-fog-washes-out-instead-of-depth-grading** | `node.atmosphere` fog at even low density (0.04) uniformly washes out the whole frame instead of reading as distance-graded haze — near geometry loses contrast as much as far geometry. Seen live in Apricot Weather (macro scale, camera distance ~9); fog card removed from the preset as the stopgap. Root cause unknown, NOT yet investigated (Peter's call 2026-07-11: log, don't chase). Suspects: fog factor not actually distance-scaled at short camera ranges; `height_falloff` interaction at y≈0 geometry; fog blend applied pre-tonemap washing highlights. Fix shape: headless fog-density sweep at two camera distances, assert near/far attenuation ratio, then read the atmosphere WGSL blend. | render_scene / atmosphere |
 | BUG-117 | **render-generator-preset-silently-under-renders-async-loaded-presets** | The `render-generator-preset` look-dev CLI has no wait-for-convergence signal, so a preset with a slow background parse/decode (large glTF, `image_folder`, DNN plugins) can write an incomplete PNG with no warning — same class as (fixed) BUG-100, never ported to this general tool. Fix shape: port BUG-100's N-consecutive-identical-frames convergence check into `render_generator_preset.rs`. LOW (dev-tooling only, no runtime/show-time path affected). |
 | BUG-116 | **fire-meter-display-ballistics-reads-as-low-fps** | Fire meters read as updating at low FPS despite a 60fps capture/snapshot/UI pipeline — `MeterIds::update`'s intentional peak-hold smoothing (BUG-109 P5: `PEAK_HOLD_SECONDS = 0.25`, `PEAK_DECAY_PER_SEC = 5.0`) trades "a millisecond transient stays visible" for a chunkier feel. Fix shape: tune the ballistics down, or split into an instant live bar + a separate thin peak-hold tick. Deferred by Peter 2026-07-11 — cosmetic only, the edge-detector reads the raw signal. LOW (deferred by design). |
@@ -112,6 +113,17 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-119 (timeline-layer-flickers-intermittently) — timeline layer sometimes flickers rapidly in the timeline view — UNKNOWN severity, logged without investigation
+**Status:** OPEN — reported live by Peter 2026-07-11 (screenshot of the "ApricotWeather 1" layer in the timeline); logged without investigation per his call.
+
+**Symptom** — the timeline layer clip rendering sometimes flickers rapidly ("flicks like
+crazy"). Intermittent, no repro steps given yet.
+
+**Root cause** — unknown, NOT investigated (Peter's call 2026-07-11: log, don't chase).
+
+**Fix shape** — unknown until reproduced; next step is capturing a repro (which layer/clip
+state, timeline zoom level, playback vs. idle) the next time it's seen.
 
 ### BUG-118 (render-scene-fog-washes-out-instead-of-depth-grading) — atmosphere fog reads as uniform washout, not distance-graded haze — MED look-quality / render_scene
 **Status:** OPEN — reported live by Peter 2026-07-11 (Apricot Weather); logged without investigation per his call.
