@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use manifold_core::audio_features::{AudioFeatureSnapshot, SendFeatures};
 use manifold_core::audio_mod::{TriggerAction, WrapMode, random_step_value};
-use manifold_core::audio_trigger::{FireMeterCapture, TriggerFireMode, fire_meter_key};
+use manifold_core::audio_trigger::{FireMeterCapture, TriggerFireMode, fire_meter_key_for_param};
 use manifold_core::id::AudioSendId;
 use manifold_core::{Beats, Seconds};
 use manifold_core::effects::{PresetInstance, ParamEnvelope, ParameterDriver};
@@ -541,15 +541,18 @@ fn evaluate_instance_audio_mods(
         let conditioned = shape.condition(raw, dt_s, &mut m.smoothed, &mut m.prev_raw);
         let out_norm = shape.map_range(conditioned);
 
+        // D6 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` P3c,
+        // BUG-082's fix; widened 2026-07-11 — this used to sit inside the
+        // `is_trigger_gate` arm below, so a continuous/Step/Random drawer's
+        // Amount meter never had a level to show): capture the SAME
+        // pre-range-map `conditioned` signal any edge detector below reads,
+        // keyed on this mod's owning effect/generator + param — the drawer
+        // meter shows exactly what the mod is reading, gate or not. Push
+        // happens unconditionally, above every mode fork, so every enabled
+        // audio-mod drawer gets a live meter regardless of threshold or mode.
+        fire_meters.push(fire_meter_key_for_param(fx.id.as_str(), m.param_id.as_ref()), conditioned);
+
         if is_trigger_gate {
-            // D6 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` P3c,
-            // BUG-082's fix): capture the SAME pre-range-map `conditioned`
-            // signal the edge detector below reads, keyed on this mod's
-            // owning effect/generator + param — the drawer meter shows
-            // exactly what decides whether the card fires. Push happens
-            // before the edge check so the meter reflects the level even on
-            // a tick that doesn't cross the fixed 0.5 threshold.
-            fire_meters.push(fire_meter_key(&[fx.id.as_str().as_bytes(), m.param_id.as_bytes()]), conditioned);
             // §9 U1: the mod's target is a trigger-gate card (e.g.
             // `clip_trigger`) — never write the toggle's value (R2's
             // continuous-mod flapping stays dead; the toggle is a user
@@ -1123,11 +1126,25 @@ mod tests {
         let (mut project, send_id) = project_with_audio_send();
         attach_full_range_low_mod(&mut project, &send_id);
 
+        let mut fire_meters = FireMeterCapture::default();
         let snap = snapshot_low(1.0);
-        let active = evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016), &mut Vec::new(), &[], &mut FireMeterCapture::default());
+        let active = evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016), &mut Vec::new(), &[], &mut fire_meters);
         assert!(active, "an audio mod with signal reports modulation");
 
+        // Widened 2026-07-11 (was: only `is_trigger_gate` mods captured a
+        // level, so continuous/Step/Random drawers had no meter): this mod is
+        // a plain Continuous `TriggerAction` on a non-gate param, and it must
+        // still leave its conditioned level in `fire_meters` — the meter
+        // strip on every audio-mod drawer, not just fire-mode ones, reads
+        // from here.
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+        let key = manifold_core::audio_trigger::fire_meter_key_for_param(fx.id.as_str(), "amount");
+        assert!(
+            fire_meters.get(key).is_some_and(|l| (l - 1.0).abs() < 1e-6),
+            "a plain continuous mod must capture its conditioned level too, got {:?}",
+            fire_meters.get(key)
+        );
+
         // amount range 0..1, full-range mapping, raw 1.0 → 1.0.
         assert!(
             (fx.params.get("amount").unwrap().value - 1.0).abs() < 1e-6,
