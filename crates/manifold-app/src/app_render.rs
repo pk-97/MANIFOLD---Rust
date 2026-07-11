@@ -4278,6 +4278,23 @@ impl Application {
                 .clip_atlas_texture_bridge
                 .as_ref()
                 .map(|b| b.front_index() as usize);
+            crate::content_pipeline::flicker_probe::ui_tick();
+            if crate::content_pipeline::flicker_probe::on() {
+                if front.is_none()
+                    || front.is_some_and(|f| {
+                        self.ui_clip_atlas_textures.get(f).and_then(|t| t.as_ref()).is_none()
+                    })
+                {
+                    crate::content_pipeline::flicker_probe::bump(
+                        &crate::content_pipeline::flicker_probe::UI_THUMBPASS_SKIPS,
+                    );
+                }
+                if self.content_state.clip_atlas_layout.is_empty() {
+                    crate::content_pipeline::flicker_probe::bump(
+                        &crate::content_pipeline::flicker_probe::UI_EMPTY_LAYOUT,
+                    );
+                }
+            }
             if let Some(front) = front
                 && let Some(atlas) = self.ui_clip_atlas_textures.get(front).and_then(|t| t.as_ref())
             {
@@ -4305,6 +4322,9 @@ impl Application {
                         continue;
                     }
                     let Some(strip) = strips_of.get(cr.clip_id.as_str()) else {
+                        crate::content_pipeline::flicker_probe::bump(
+                            &crate::content_pipeline::flicker_probe::UI_STRIP_MISSES,
+                        );
                         continue;
                     };
                     // Reserve the bottom name-strip band: the thumbnail tiles only

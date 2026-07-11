@@ -362,6 +362,10 @@
         "align_to_normal": {
           "type": "Bool",
           "value": true
+        },
+        "max_capacity": {
+          "type": "Int",
+          "value": 64
         }
       }
     },

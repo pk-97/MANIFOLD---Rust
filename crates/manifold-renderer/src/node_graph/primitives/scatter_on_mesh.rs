@@ -10,12 +10,14 @@
 //! §7's shared-buffer rule) — it feeds `place_main` directly, same as the
 //! precedent.
 //!
-//! `count` doubles as both the port-shadowed runtime instance count AND
-//! the allocation-capacity source (`array_output_capacity`), matching how
-//! `node.triangulate_grid` derives capacity from its own params rather
-//! than a separate `max_capacity` ceiling — simpler than
-//! `spawn_from_mesh`'s two-param split since scatter has no analogous
-//! "vertices mode" needing an independent ceiling.
+//! `max_capacity` is the allocation ceiling (`array_output_capacity`);
+//! `count` is the live, port-shadowed instance count sweeping under it.
+//! This is `spawn_from_mesh`'s two-param split — scatter originally
+//! collapsed the two into `count` "for simplicity", which meant the
+//! buffer was sized from whatever the count card happened to read at
+//! graph-build time, silently capping the fader's live range (Scene 2,
+//! 2026-07-11: slider to 48, 18 drawn). Presets without `max_capacity`
+//! fall back to sizing from `count` (back-compat, Garden.json).
 //!
 //! Deterministic for a fixed `(seed, mesh)`: every random draw in the
 //! shader is a `wang_hash` chain seeded from `(instance index, seed)`, no
@@ -75,6 +77,14 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
+            name: Cow::Borrowed("max_capacity"),
+            label: "Max Capacity",
+            ty: ParamType::Int,
+            default: ParamValue::Float(0.0), // 0 = size from count (back-compat)
+            range: Some((0.0, 1_000_000.0)),
+            enum_values: &[],
+        },
+        ParamDef {
             name: Cow::Borrowed("seed"),
             label: "Seed",
             ty: ParamType::Int,
@@ -107,7 +117,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "count/seed/scale_min/scale_max are port-shadows-param — wire an LFO or envelope into count to sweep flower density live, or into seed to re-roll the placement (a re-roll is a hard cut, not an animatable morph — the whole field re-samples). align_to_normal is NOT port-shadowed (a structural on/off choice, not a performance scalar): off gives every instance a random upright yaw (local +Y stays world-up); on additionally tilts +Y onto the sampled triangle's flat face normal, so instances lie flush against sloped or curved surfaces. `count` also declares the output's allocation capacity (array_output_capacity) — raising it live still clamps to whatever capacity the graph allocated at compile time, same clamp-to-allocated-capacity pattern as node.spawn_from_mesh's active_count vs max_capacity, but with a single param doing both jobs here. Triangles are read as flat [v0,v1,v2] triples (standard triangle-list layout); a trailing partial triangle (vertex_count % 3 != 0) is ignored.",
+    composition_notes: "count/seed/scale_min/scale_max are port-shadows-param — wire an LFO or envelope into count to sweep flower density live, or into seed to re-roll the placement (a re-roll is a hard cut, not an animatable morph — the whole field re-samples). align_to_normal is NOT port-shadowed (a structural on/off choice, not a performance scalar): off gives every instance a random upright yaw (local +Y stays world-up); on additionally tilts +Y onto the sampled triangle's flat face normal, so instances lie flush against sloped or curved surfaces. `max_capacity` (static, never bind it to a card) declares the output's allocation ceiling; `count` sweeps live beneath it and slots beyond count park at zero scale. Set max_capacity to the count card's max so the fader's whole range is real; when max_capacity is 0/absent the buffer sizes from count at build time (legacy single-param behavior). Triangles are read as flat [v0,v1,v2] triples (standard triangle-list layout); a trailing partial triangle (vertex_count % 3 != 0) is ignored.",
     examples: ["Garden"],
     picker: { label: "Scatter On Mesh", category: Atom },
     summary: "Scatters copies of an object across a mesh's surface — a field of instances placed and sized randomly but deterministically, area-weighted so they don't clump on small triangles.",
@@ -137,6 +147,13 @@ impl Primitive for ScatterOnMesh {
     ) -> Option<u32> {
         if port_name != "instances" {
             return None;
+        }
+        // Ceiling from max_capacity when set (> 0); otherwise size from
+        // count — the original single-param behavior, kept so presets
+        // without max_capacity load identically.
+        match params.get("max_capacity") {
+            Some(ParamValue::Float(n)) if *n >= 1.0 => return Some(n.round() as u32),
+            _ => {}
         }
         match params.get("count") {
             Some(ParamValue::Float(n)) => Some(n.round().max(0.0) as u32),
@@ -331,7 +348,7 @@ mod tests {
         let names: Vec<&str> = ScatterOnMesh::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
-            vec!["count", "seed", "scale_min", "scale_max", "align_to_normal"]
+            vec!["count", "max_capacity", "seed", "scale_min", "scale_max", "align_to_normal"]
         );
         let align = ScatterOnMesh::PARAMS
             .iter()
@@ -358,6 +375,27 @@ mod tests {
         assert!(
             !rt.required,
             "reset_trigger is optional (unwired ⇒ recompute every frame)"
+        );
+    }
+
+    /// Scene 2 bug (2026-07-11): capacity sized from `count` at build time
+    /// silently capped the density fader at whatever the card read when the
+    /// graph was built (slider 48, 18 drawn). `max_capacity` > 0 must win;
+    /// 0/absent falls back to count (Garden.json back-compat).
+    #[test]
+    fn max_capacity_overrides_count_as_ceiling() {
+        use crate::node_graph::effect_node::ParamValues;
+        let prim = ScatterOnMesh::new();
+        let node: &dyn EffectNode = &prim;
+        let mut params: ParamValues = ParamValues::default();
+        params.insert(Cow::Borrowed("count"), ParamValue::Float(18.0));
+        params.insert(Cow::Borrowed("max_capacity"), ParamValue::Float(64.0));
+        assert_eq!(node.array_output_capacity("instances", &params, &[]), Some(64));
+        params.insert(Cow::Borrowed("max_capacity"), ParamValue::Float(0.0));
+        assert_eq!(
+            node.array_output_capacity("instances", &params, &[]),
+            Some(18),
+            "max_capacity 0 must fall back to count sizing"
         );
     }
 
