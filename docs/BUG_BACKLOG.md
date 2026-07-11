@@ -95,7 +95,7 @@ or human can read it, and it needs no external tool.
 | BUG-034 | **atlas-uv-test-gap** | headless preview doesn't cover live atlas UV path (LOW) |
 | BUG-014 / 030 | parked | NaN content-key hash · color-ratchet red |
 | BUG-019 / 020 / 021 | deferred | group-fold gap · gen-card collapse · snap-back gap |
-| BUG-056 | **audio-mixdown-clippy-debt** | `manifold-playback` clippy gate (`-D warnings`) fails pre-existing on `audio_mixdown.rs` — `cloned_ref_to_slice_refs` + `needless_range_loop` (LOW, blocks the crate's clippy gate, not correctness) |
+| ~~BUG-056~~ FIXED | **audio-mixdown-clippy-debt** | no longer reproduces — verified 2026-07-11: `cargo clippy --workspace -- -D warnings` green (9.8s warm), no `#[allow(clippy)]` in the file. Almost certainly rewritten away by the P1 offline-export mixdown refactor (`d207f94a`, 2026-07-07), the last substantive change to `audio_mixdown.rs`; not bisected to the exact commit (LOW stakes) |
 | BUG-063 | **silent-load-repairs** | PARTIAL — load-repairs now surface as a non-blocking "opened with repairs" toast (P3, no longer silent); the heavier rescue path (blocking ack dialog + journal the pre-repair project.json to history/) is deferred (MED-HIGH) |
 | BUG-066 | **fluid3d-corner-drift** | OPEN — root cause NOT found. Peter's live artifact (bright cube in the TR quadrant at strong flow, turbulence OFF) reproduces in the harness and survived every mechanism tested 2026-07-10 (~8 falsified with evidence, see entry). Two real-but-secondary defects were fixed on main that day (noise-lattice scale → Turb Detail param; chained-hash diagonal correlation in seed + kicks) — NEITHER fixes the artifact, and the Turb Detail improvement is harness-sweep-only, not confirmed by Peter's eye. Next instrument: Texture3D slice viewer (in entry). MED-HIGH, visible on stage |
 | BUG-068 | **inspector-scene-cliphit-overlap** | the `inspector` ui-snap scene fixture has a clip-vs-panel hit-test overlap at its narrower zoom — a clip can't be both uniquely-labeled and safely positioned over the inspector column, which forced DRAG_CAPTURE P1's L3 flow onto the `timeline` scene. Fixture-only, no runtime impact. Pre-existing at `b9304330` (LOW) |
@@ -821,7 +821,7 @@ PARAM_STEP_ACTIONS (audio_mixdown.rs isn't part of that design) — left untouch
 scope-fence rule.
 
 ### BUG-056 (audio-mixdown-clippy-debt) — `manifold-playback` fails `cargo clippy -D warnings` pre-existing on `audio_mixdown.rs` — LOW (blocks the crate's clippy gate, not correctness)
-**Status:** OPEN
+**Status:** FIXED — verified gone 2026-07-11 (discipline audit): full workspace clippy `-D warnings` green in 9.8s warm, and `audio_mixdown.rs` carries no `#[allow(clippy)]` attrs, so the lints were genuinely rewritten away, not silenced. Almost certainly the P1 offline-export mixdown refactor (`d207f94a`, 2026-07-07) — the last substantive change to the file; not bisected to the exact commit (LOW stakes, dev-tooling only).
 
 **Found 2026-07-07** while gating U-P1 of `LIVE_AUDIO_TRIGGERS_DESIGN.md` §9 (the
 `AudioTriggerMod` → `ParameterAudioMod` unification). Not this wave's fault: reproduces
