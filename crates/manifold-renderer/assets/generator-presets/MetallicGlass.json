@@ -119,6 +119,7 @@
         "wholeNumbers": false,
         "isToggle": false,
         "isTrigger": false,
+        "wraps": true,
         "formatString": "F0"
       },
       {

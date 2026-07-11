@@ -97,6 +97,34 @@ impl Param {
     pub fn whole_numbers(&self) -> bool {
         self.spec.whole_numbers || !self.spec.value_labels.is_empty()
     }
+
+    /// True when this param is periodic (BUG-039) — modulation constrains
+    /// its effective value with [`constrain_to_range`]'s wrap arm instead of
+    /// clamping. Reads straight off `spec.wraps` (D1: the spec is the single
+    /// authority), mirroring [`Self::whole_numbers`]'s shape.
+    #[inline]
+    pub fn wraps(&self) -> bool {
+        self.spec.wraps
+    }
+}
+
+/// Constrain a modulation-computed value to a param's `[min, max]` range —
+/// the single post-process point every driver/automation write funnels
+/// through (BUG-039). `wraps` params rem_euclid back into range instead of
+/// clamping, so a saw LFO or an automation ramp sweeping past `max` (or
+/// below `min`) continues spinning instead of hitching at the rail:
+/// `min + (value - min).rem_euclid(max - min)`. `rem_euclid` (not `%`) so a
+/// downward-sweeping (negative) saw still lands on the geometrically
+/// correct in-range value rather than a negative one. Falls back to a plain
+/// clamp when `wraps` is false, or when the range is degenerate
+/// (`max <= min`, nothing to wrap around).
+#[inline]
+pub fn constrain_to_range(value: f32, min: f32, max: f32, wraps: bool) -> f32 {
+    if wraps && max > min {
+        min + (value - min).rem_euclid(max - min)
+    } else {
+        value.clamp(min, max)
+    }
 }
 
 /// The per-instance parameter manifest. Insertion order = card display order;
@@ -243,6 +271,7 @@ mod tests {
             invert: false,
             is_angle: false,
             is_trigger_gate: false,
+            wraps: false,
             section: None,
         }
     }
@@ -338,6 +367,66 @@ mod tests {
         let mut s2 = spec("mode", 0.0);
         s2.value_labels = vec!["off".into(), "on".into()];
         assert!(Param::bundled(s2).whole_numbers());
+    }
+
+    #[test]
+    fn wraps_from_spec() {
+        let mut s = spec("rotation", 0.0);
+        assert!(!Param::bundled(s.clone()).wraps(), "false by default");
+        s.wraps = true;
+        assert!(Param::bundled(s).wraps());
+    }
+
+    // ─── constrain_to_range (BUG-039) ──────────────────────────────────
+
+    #[test]
+    fn constrain_to_range_clamps_when_not_wrapping() {
+        assert_eq!(constrain_to_range(400.0, 0.0, 360.0, false), 360.0);
+        assert_eq!(constrain_to_range(-10.0, 0.0, 360.0, false), 0.0);
+        assert_eq!(constrain_to_range(180.0, 0.0, 360.0, false), 180.0);
+    }
+
+    #[test]
+    fn constrain_to_range_wraps_a_positive_saw_past_max() {
+        // A saw LFO / automation ramp overshooting max continues spinning
+        // instead of plateauing at the rail.
+        assert_eq!(constrain_to_range(370.0, 0.0, 360.0, true), 10.0);
+        assert_eq!(constrain_to_range(360.0, 0.0, 360.0, true), 0.0);
+        assert_eq!(constrain_to_range(720.0, 0.0, 360.0, true), 0.0);
+        assert_eq!(constrain_to_range(725.0, 0.0, 360.0, true), 5.0);
+    }
+
+    #[test]
+    fn constrain_to_range_wraps_a_negative_saw_below_min() {
+        // A downward-sweeping saw (or a reversed automation ramp) must land
+        // on the geometrically correct in-range value, not a negative one —
+        // this is exactly why the fix uses `rem_euclid`, not `%`.
+        assert_eq!(constrain_to_range(-10.0, 0.0, 360.0, true), 350.0);
+        assert_eq!(constrain_to_range(-360.0, 0.0, 360.0, true), 0.0);
+        assert_eq!(constrain_to_range(-370.0, 0.0, 360.0, true), 350.0);
+    }
+
+    #[test]
+    fn constrain_to_range_wraps_an_offset_range() {
+        // min != 0 (e.g. a -180..180 rotation card) still wraps correctly.
+        assert_eq!(constrain_to_range(190.0, -180.0, 180.0, true), -170.0);
+        assert_eq!(constrain_to_range(-190.0, -180.0, 180.0, true), 170.0);
+    }
+
+    #[test]
+    fn constrain_to_range_in_range_value_is_untouched() {
+        // No-op for values already inside range, wrapping or not — existing
+        // shows stay byte-identical.
+        assert_eq!(constrain_to_range(90.0, 0.0, 360.0, true), 90.0);
+        assert_eq!(constrain_to_range(90.0, 0.0, 360.0, false), 90.0);
+    }
+
+    #[test]
+    fn constrain_to_range_degenerate_range_falls_back_to_clamp() {
+        // max <= min: nothing to wrap around, must not divide by zero / NaN.
+        let v = constrain_to_range(5.0, 3.0, 3.0, true);
+        assert_eq!(v, 3.0);
+        assert!(v.is_finite());
     }
 
     /// New-storage replacement for the deleted `bench_old_resolve_param_in_baseline`

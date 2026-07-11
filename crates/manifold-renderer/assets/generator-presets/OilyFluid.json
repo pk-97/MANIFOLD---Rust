@@ -98,6 +98,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "wraps": true,
         "formatString": "F2"
       },
       {
