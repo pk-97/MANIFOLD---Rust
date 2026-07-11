@@ -35,18 +35,6 @@
         "section": "Sun"
       },
       {
-        "id": "fogDensity",
-        "name": "Fog Density",
-        "min": 0.0,
-        "max": 0.3,
-        "defaultValue": 0.04,
-        "wholeNumbers": false,
-        "isToggle": false,
-        "isTrigger": false,
-        "formatString": "F2",
-        "section": "Atmosphere"
-      },
-      {
         "id": "camOrbit",
         "name": "Camera Orbit",
         "min": -3.14159265,
@@ -124,16 +112,6 @@
           "kind": "node",
           "nodeId": "sun_angle",
           "param": "value"
-        }
-      },
-      {
-        "id": "fogDensity",
-        "label": "Fog Density",
-        "defaultValue": 0.04,
-        "target": {
-          "kind": "node",
-          "nodeId": "atmosphere",
-          "param": "fog_density"
         }
       },
       {
@@ -299,7 +277,7 @@
         },
         "fog_density": {
           "type": "Float",
-          "value": 0.04
+          "value": 0.0
         },
         "height_falloff": {
           "type": "Float",
