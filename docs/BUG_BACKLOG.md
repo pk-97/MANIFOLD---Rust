@@ -74,12 +74,12 @@ or human can read it, and it needs no external tool.
 | BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
 | BUG-037 | **glp-first-render-stall** | ~37ms warm-up on a glTF clip's first rendered frame (MED) |
 | BUG-038 | **ableton-log-spam** | bridge warns every 1.5s forever when Live absent (LOW) |
-| BUG-006 | **fused-param-noop** | param edits/undo on fused-away nodes silently no-op (HIGH) |
 | BUG-007 | **fusion-exclusion-blind** | particle-loop exclusion misses configured wgsl_compute shapes (HIGH) |
 | BUG-008 | **fused-buffer-oob** | mismatched array lengths read out of bounds in fused region (HIGH) |
 | BUG-009 | **stateless-gate-miss** | harvest skip resets StateStore-held scalar state (HIGH) |
 | BUG-010 | **wgsl-first-entry** | multi-entry wgsl_compute silently dispatches the first (MED) |
 | BUG-011 | **fused-output-oversize** | fused output buffer sized to max of all inputs (MED) |
+| BUG-110 | **fused-segment-inner-override-noop** | in-place inner-param edits on a fused SEGMENT card never reach the live kernel — segment node_map is `c{i}.`-prefixed, per-card def isn't, so both surviving and fused-away nodes miss (MED) |
 | BUG-015 | **inspector-overlap** | stale-chrome class FIXED 2026-07-08 — incremental cache path now falls back to full render on out-of-sub-region dirt (`has_dirty_outside_ranges` + `incremental_path_safe`); blanket `clear_dirty` narrowed to the overlay region so the fallback isn't erased. (2026-07-04 "sections interleaved" sighting = separate open thread if it recurs) |
 | BUG-060 | **inspector-footer-overpaint** | REOPENED 2026-07-08. Opus 2nd pass: tree-geometry cause **ELIMINATED on the live cache path** (new `footer_leak_probe` test proves the inspector clips at footer_top through `traverse_flat_range`; footer's own render is correct) — the "inspector escapes into the footer" framing is wrong. Cause localized BELOW the tree, to the cache/dirty layer (tab-swap clears it = full recomposite). Artifact is **stale UI content** (UI colours / button fragments left behind), NOT clear/dark — the prior "footer goes dark, RGB 9-16" atlas dump was a HARNESS failure, not the symptom. Stale-pixel / dirty-clear bug, BUG-015 class. Needs live atlas+offscreen pixel dump. Cause still OPEN. **2026-07-10 (Fable + Peter):** Rig screenshots relocate the artifact — fragments accumulate at the scroll viewport's CLIP EDGES (bottom sliver above footer_top on both tabs, top sliver under the tab strip on Master), i.e. INSIDE the inspector panel rows, and build up per scroll step until tab-swap wipes them. Both existing probes are structurally blind there: `footer_leak_probe` checks geometry below footer_top, the P0 differential asserts rows [footer_top, footer_top+h) — the artifact rows were never asserted, so the harness "0 diff" results don't contradict the rig (stop extending the harness; observe the rig instead). Live dump tool BUILT + VALIDATED on branch `debug/bug-060-surface-dump` (worktree `bug060-dump`, e81696b4): `MANIFOLD_BUG060_DUMP=<N>` overwrites `/tmp/bug060_atlas.png` + `/tmp/bug060_offscreen.png` every N dirty-present frames (default 30) and logs sf + footer/inspector rects; readback verified against a live launch (real UI, sf=2 Retina confirmed, playhead-only atlas/offscreen delta proves the surfaces are independent). Next: Peter reproduces with the flag set, then one look at the atlas PNG splits cache-layer vs composite/present. **2026-07-10 VERDICT (live dump, Peter's audioTesting2 repro): the dirt is IN THE ATLAS — and it is not a stale copy, it is a LIVE UNCLIPPED DRAW.** Pixel measurement on the dump: the blue pill in the top sliver spans rows 170–197 physical, the pixel-exact position EdgeStretch's own ON pill would occupy if unclipped (Glitch reference: pill top = title top − 3), while the header bg + title around it are correctly scissored at the viewport line (~188). So the card-header toggle's bg fill draws WITHOUT the column clip; every scroll leaves the previous unclipped copy in territory the (clipped) self-clearing panel render can never repaint — that is the accumulation, and only `invalidate_all` (tab swap) wipes it. Bottom-edge fragments (slider fills) are the same class: once the clip is lost mid-card, later fill quads in the range draw unclipped too. The `traverse_flat_range` suspect was CLEARED by a clip-topology test (`bug060_every_card_node_renders_under_the_column_clip`, green — fresh-build clip chains are sound). **ROOT CAUSE FOUND + FIXED 2026-07-10 @ `39836352`** via a batch-flush band trace (`MANIFOLD_BUG060_TRACE=x0,y0,x1,y1`) on Peter's live repro: card-shaped rects logged as `immediate ... scissor=None` during the inspector pass. `push/pop_transform` and `push/pop_depth` cut the pending rect run via `flush_immediate_run` even mid-traversal, batching already-enqueued TREE rects under `immediate_clip` (`None`) — every card ON pill drawn before its card's **rotated chevron** (`UIStyle.transform`) lost its scissor. This is also why the 2026-07-08 trace swore all 858 draws were clipped: it observed the clip stack at `draw_node` time, upstream of the flush-time theft. Fix: context-aware `flush_pending_run` (tree clip stack while `in_tree_pass`, immediate clip otherwise); regression test `transform_boundary_keeps_tree_scissor_on_pending_batch` proven red-under-old-flush/green-now. Gates green (workspace, gpu-proofs 1248, clippy). **RIG-VERIFIED by Peter + LANDED on main @ `cc4eeb37` 2026-07-10** (dump/trace tooling landed env-gated with it). **CLASS-KILL follow-up (same day): clip bound per command at enqueue** — `RectCommand` now carries `(clip, depth)` captured at the push site (like `LineCommand`/`ImageCommand`/text `clip_bounds`/per-command depth `22c5d528` already did); batches derive in `prepare()` by run-scanning consecutive equal `(clip, depth)`; ALL flush-time scissor inference (`flush_immediate_run`/`flush_scissor_batch`/`flush_pending_run`/`in_tree_pass`) deleted, so the wrong-flush mistake is unrepresentable. Invariant recorded in `docs/DEVELOPMENT_REFERENCE.md` ("UI Renderer Invariant"). CLOSED. |
 | BUG-025 | **timeline-scissor-bleed** | clip content bleeds across row bounds (MED, repro needed — scrolled headless render 07-07 clean) |
@@ -103,7 +103,39 @@ or human can read it, and it needs no external tool.
 | BUG-069 | **shipping-license-audit** | four license problems in shipped components: madmom models + ADTOF (both CC BY-NC-SA), rusty_link crate (GPL-2.0, viral, in manifold-playback), staged ffmpeg copied from the dev machine (likely GPL build); full sweep 2026-07-08, everything else clean (HIGH for commercialization, zero runtime impact) |
 | ~~BUG-070~~ FIXED | **stepper-and-nonstandard-slider-reset** | ~~decay drawer slider~~ + Clip Trigger drawer sliders covered by the intrinsic-reset follow-through (@ 3a88f728). Remainder FIXED (AUDIO_SETUP_DOCK P4): Audio Setup gain `[−]value[＋]` steppers + the D7 overlay-drag value-label gain zone (not `BitmapSlider` tracks, so no `SliderReset` registration existed) now right-click-reset to unity via `PanelAction::slider_reset` replaying the existing `AudioSendGainDrag{Begin,Changed,Commit}` trio at 0.0 dB — the SAME gesture BUG-105 names as "every card/panel slider in the app." `feat/audio-dock-p4`. |
 
+**Freeze-compiler adversarial bug hunt, 2026-07-03** — BUG-006–014 (some now Fixed) come from a
+40-agent Sonnet workflow (`wf_73bb4ddf-885`; 10 finder lenses → every finding attacked by 2
+independent skeptics). BUG-006–012 were **confirmed by both skeptics** with line-level evidence;
+BUG-013/014 got split verdicts (judgment recorded per entry). Full verifier transcripts: the
+workflow journal at
+`~/.claude/projects/-Users-peterkiemann-MANIFOLD---Rust/18511d71-15ae-4119-81cc-894a3f83d247/subagents/workflows/wf_73bb4ddf-885/journal.jsonl`.
+System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
+
 ## Open
+
+### BUG-110 — In-place inner-param edits on a fused SEGMENT card never reach the live kernel — MED
+**Status:** OPEN — found 2026-07-11 while fixing BUG-006 (freeze bug-wave lane A).
+
+**Root cause** — the fused-segment build path (preset_runtime.rs ~977–1064) builds one `node_map`
+from the concatenated segment def, whose node ids carry the `c{i}.` per-card prefix
+(`freeze::segment::card_prefix`). The per-frame in-place override (`run` → `apply_inner_overrides`,
+preset_runtime.rs ~1863) passes each card's OWN def (`fx.graph`), whose node ids are UNPREFIXED.
+So `apply_inner_param_overrides` misses every node: a surviving node `foo` is `c{i}.foo` in the
+map, and a fused-away node isn't there at all. The BUG-006 retarget fix doesn't help — the
+segment's `EffectSlot.bound.fused_retarget` is left empty (the segment retarget map is prefix-keyed
+too), and even a prefixed retarget wouldn't cover the surviving-node miss.
+
+**Symptom** — a value/position edit to a card that is part of a fused segment (multi-card fusion)
+never lands in place; the old value keeps rendering until an unrelated rebuild. Same silent-stale
+class as BUG-006 but scoped to segments. Narrower than BUG-006 (needs a multi-card segment that
+fused), hence MED. Stateless-only cards today (segment eligibility), so no state-loss compounding.
+
+**Fix shape** — populate the segment slot's `bound.fused_retarget` from the segment view's
+prefix-keyed retarget with the `c{i}.` prefix normalized to the per-card def's key space, AND
+translate surviving-node overrides by prefixing the def node id before the `node_map` lookup (or
+apply overrides against a per-card-prefixed view of the def). Pair the two so both surviving and
+fused-away nodes resolve. A focused test mirroring `inner_override_routes_fused_away_node_through_retarget`
+but over a 2-card segment would pin it.
 
 ### BUG-109 (fire-meter-dead-in-all-transport-states) — the D6 fire meter has never displayed a clip-trigger level: wiped every playing tick, never evaluated while stopped — MED-HIGH
 **Status:** OPEN — root-caused 2026-07-11 (Peter rig report: meter dead stopped AND playing; this session traced both). Fix = `AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7 P5 (wave 2, authored, not built).
@@ -986,36 +1018,6 @@ a signal that a recent UI landing skipped the full workspace test.
 rather than bumping the baseline, which would silently bless the drift the ratchet exists to catch.
 Unrelated to param storage.
 
-BUG-006–014 come from the **freeze-compiler adversarial bug hunt, 2026-07-03**
-(40-agent Sonnet workflow `wf_73bb4ddf-885`; 10 finder lenses → every finding attacked by 2
-independent skeptics). BUG-006–012 were **confirmed by both skeptics** with line-level
-evidence; BUG-013/014 got split verdicts (judgment recorded per entry). Full verifier
-transcripts: the workflow journal at
-`~/.claude/projects/-Users-peterkiemann-MANIFOLD---Rust/18511d71-15ae-4119-81cc-894a3f83d247/subagents/workflows/wf_73bb4ddf-885/journal.jsonl`.
-System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
-
-### BUG-006 — Param edits/undo on fused-away nodes silently no-op until an unrelated rebuild — HIGH
-**Status:** OPEN
-
-**Root cause** — [bound_graph.rs:114-133](../crates/manifold-renderer/src/node_graph/bound_graph.rs#L114-L133):
-`apply_inner_param_overrides` looks each node's `node_id` up in `slot.node_map` and silently
-`continue`s on a miss. For a fused card, `node_map` is built from the FUSED def
-([preset_runtime.rs:1285-1288](../crates/manifold-renderer/src/preset_runtime.rs#L1285-L1288)),
-so fused-away members (e.g. `gain`) aren't in it. The path never consults the fused view's
-`fused_retarget` map (which knows `gain.gain` → `fused_region_0.n0_gain`). Value-only edits
-bump only `graph_version`, which is deliberately not in `compute_topology_hash`, so no rebuild
-fires.
-
-**Symptom** — edit a param in the editor, close it (re-fuses, bakes the value), then Undo
-while viewing another effect: the def reverts but the fused kernel keeps rendering the OLD
-value indefinitely, until a resize/editor-open/unrelated edit forces a rebuild. Live control
-stranded, zero errors. `CHAIN_FUSION_DESIGN.md` §6 already flags this as an open item.
-
-**Fix shape** — thread the fused view's `fused_retarget` into `apply_inner_param_overrides`
-(or into `node_map` construction): on a `node_map` miss, translate `(node_id, param)` through
-the retarget map to `(fused node, n{i}_field)` and apply there. Test: fuse, value-edit,
-assert the fused node's param moved without a rebuild.
-
 ### BUG-007 — Particle-loop fusion exclusion is blind to configured `node.wgsl_compute` shapes — HIGH
 **Status:** OPEN
 
@@ -1666,6 +1668,41 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-006 — Param edits/undo on fused-away nodes silently no-op until an unrelated rebuild — HIGH
+**Status:** FIXED (bug/wave1-lane-a-freeze) — reproduced by a unit test on the current tip
+(`inner_override_routes_fused_away_node_through_retarget`, bound_graph.rs) and fixed at the
+shared home. `BoundGraph` now carries a `fused_retarget` map; the chain builder populates it
+from `view.fused_retarget` right after `BoundGraph::new` (preset_runtime.rs ~1398).
+`apply_inner_param_overrides` gained a `fused_retarget` param: on a `node_map` miss it routes
+each of the fused-away node's params through the retarget onto the live kernel's uniform field
+(`n{i}_field`), the same repoint the card + user bindings already take. Empty on an unfused
+view (live editor path) → the fast per-node `node_map` hit is unchanged. Verified for float
+fields (the pinned `gain.gain` case). **Residual, unfixed:** (a) the fused SEGMENT in-place
+override path is still no-op — the segment `node_map` is `c{i}.`-prefixed while the per-card
+def is unprefixed, so BOTH surviving and fused-away nodes miss (logged BUG-110); (b) an
+enum-typed fused field is written as `ParamValue::Enum(idx)` rather than the binding path's
+int-rounded float — harmless for the common float case, worth confirming if an enum param ever
+sits on a fused-away node.
+
+**Root cause** — [bound_graph.rs:114-133](../crates/manifold-renderer/src/node_graph/bound_graph.rs#L114-L133):
+`apply_inner_param_overrides` looks each node's `node_id` up in `slot.node_map` and silently
+`continue`s on a miss. For a fused card, `node_map` is built from the FUSED def
+([preset_runtime.rs:1285-1288](../crates/manifold-renderer/src/preset_runtime.rs#L1285-L1288)),
+so fused-away members (e.g. `gain`) aren't in it. The path never consults the fused view's
+`fused_retarget` map (which knows `gain.gain` → `fused_region_0.n0_gain`). Value-only edits
+bump only `graph_version`, which is deliberately not in `compute_topology_hash`, so no rebuild
+fires.
+
+**Symptom** — edit a param in the editor, close it (re-fuses, bakes the value), then Undo
+while viewing another effect: the def reverts but the fused kernel keeps rendering the OLD
+value indefinitely, until a resize/editor-open/unrelated edit forces a rebuild. Live control
+stranded, zero errors. `CHAIN_FUSION_DESIGN.md` §6 already flags this as an open item.
+
+**Fix shape** — thread the fused view's `fused_retarget` into `apply_inner_param_overrides`
+(or into `node_map` construction): on a `node_map` miss, translate `(node_id, param)` through
+the retarget map to `(fused node, n{i}_field)` and apply there. Test: fuse, value-edit,
+assert the fused node's param moved without a rebuild.
 
 ### BUG-066 (fluid3d-corner-drift) — FluidSim3D density herded into the top-right octant — FIXED (partial-volume dispatch; class killed via shared `VOLUME_WORKGROUP_3D`)
 **Status:** FIXED — root cause found + fixed 2026-07-10 16:51 @ `eebac94d` (on main); Peter confirmed the artifact gone on the rig 2026-07-11.
