@@ -790,7 +790,9 @@
         "sky tint"
       ],
       "category": "3D Geometry",
-      "examples": [],
+      "examples": [
+        "ApricotWeather"
+      ],
       "inputs": [
         {
           "name": "fog_color_r",
@@ -7152,7 +7154,9 @@
         "File In SOP"
       ],
       "category": "3D Geometry",
-      "examples": [],
+      "examples": [
+        "ApricotWeather"
+      ],
       "inputs": [],
       "label": "glTF Mesh",
       "outputs": [
@@ -7244,7 +7248,9 @@
         "File In TOP"
       ],
       "category": "Generate",
-      "examples": [],
+      "examples": [
+        "ApricotWeather"
+      ],
       "inputs": [],
       "label": "glTF Texture",
       "outputs": [
@@ -7462,6 +7468,7 @@
       ],
       "category": "3D Geometry",
       "examples": [
+        "ApricotWeather",
         "Breathe",
         "Garden",
         "MetallicGlass",
@@ -8678,6 +8685,7 @@
       ],
       "category": "Materials & Lighting",
       "examples": [
+        "ApricotWeather",
         "Breathe",
         "Garden",
         "Lathe",
@@ -9247,6 +9255,7 @@
       ],
       "category": "3D Geometry",
       "examples": [
+        "ApricotWeather",
         "Breathe",
         "Garden",
         "Lathe",
@@ -9420,6 +9429,7 @@
       ],
       "category": "Control",
       "examples": [
+        "ApricotWeather",
         "BasicShapes",
         "BlackHole",
         "ChromaticAberration",
@@ -10555,6 +10565,7 @@
       ],
       "category": "3D Geometry",
       "examples": [
+        "ApricotWeather",
         "Breathe",
         "DigitalPlants",
         "FluidSim3D",
@@ -11259,6 +11270,7 @@
       ],
       "category": "Materials & Lighting",
       "examples": [
+        "ApricotWeather",
         "Breathe",
         "Garden",
         "Lathe",
@@ -11885,6 +11897,7 @@
       ],
       "category": "3D Geometry",
       "examples": [
+        "ApricotWeather",
         "Breathe"
       ],
       "inputs": [
@@ -12796,6 +12809,7 @@
       ],
       "category": "3D Geometry",
       "examples": [
+        "ApricotWeather",
         "Breathe",
         "Garden",
         "Lathe",
@@ -14100,6 +14114,7 @@
       ],
       "category": "Control",
       "examples": [
+        "ApricotWeather",
         "BlackHole",
         "BlobTracking",
         "DigitalPlants",
@@ -17170,7 +17185,9 @@
         "object transform"
       ],
       "category": "3D Geometry",
-      "examples": [],
+      "examples": [
+        "ApricotWeather"
+      ],
       "inputs": [
         {
           "name": "pos_x",
@@ -18084,6 +18101,7 @@
       ],
       "category": "Control",
       "examples": [
+        "ApricotWeather",
         "ColorCompass",
         "DigitalDrift",
         "FluidSim2D",
@@ -18872,6 +18890,7 @@
       ],
       "category": "Routing",
       "examples": [
+        "ApricotWeather",
         "AutoGain",
         "BasicShapes",
         "BlackHole",
@@ -18949,6 +18968,7 @@
       ],
       "category": "Routing",
       "examples": [
+        "ApricotWeather",
         "BasicShapes",
         "BlackHole",
         "Breathe",
@@ -19120,8 +19140,59 @@
       "type_id": "system.source"
     }
   ],
-  "preset_count": 51,
+  "preset_count": 52,
   "presets": [
+    {
+      "category": "Geometry",
+      "id": "ApricotWeather",
+      "is_line_based": false,
+      "kind": "generator",
+      "name": "Apricot Weather",
+      "params": [
+        {
+          "default": "0",
+          "id": "swayAmount",
+          "max": "0.6",
+          "min": "0",
+          "name": "Sway Amount"
+        },
+        {
+          "default": "0.9",
+          "id": "sunAngle",
+          "max": "3.1415927",
+          "min": "-3.1415927",
+          "name": "Sun Angle"
+        },
+        {
+          "default": "0.04",
+          "id": "fogDensity",
+          "max": "0.3",
+          "min": "0",
+          "name": "Fog Density"
+        },
+        {
+          "default": "0.6",
+          "id": "camOrbit",
+          "max": "3.1415927",
+          "min": "-3.1415927",
+          "name": "Camera Orbit"
+        },
+        {
+          "default": "0.32",
+          "id": "camTilt",
+          "max": "1.5",
+          "min": "-1.5",
+          "name": "Camera Tilt"
+        },
+        {
+          "default": "26.205",
+          "id": "camDistance",
+          "max": "100",
+          "min": "5",
+          "name": "Camera Distance"
+        }
+      ]
+    },
     {
       "category": "Stylize",
       "id": "AutoGain",
