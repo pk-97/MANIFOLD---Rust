@@ -404,7 +404,7 @@ fn fill_clip_atlas(
     sampler: Option<&manifold_gpu::GpuSampler>,
     visible: &[ClipId],
     cache: &mut crate::clip_atlas::ClipAtlasCache,
-    last_snapshot: &mut AHashMap<ClipId, (u32, u64)>,
+    last_snapshot: &mut AHashMap<ClipId, (u32, u64, f64)>,
     frame_counter: &mut u64,
     propagate: &mut u8,
     persistent: &mut Option<manifold_gpu::GpuTexture>,
@@ -467,12 +467,17 @@ fn fill_clip_atlas(
         let existing = cache.cell_for(cid, target_cell);
         let due = match last_snapshot.get(cid) {
             None => true,
-            Some(&(last_cell, last_frame)) => {
+            Some(&(last_cell, last_frame, last_beat)) => {
                 last_cell != target_cell
                     || existing.is_none()
-                    // Throttled re-capture only of the live playhead bar; a parked
-                    // clip's still never churns.
-                    || (is_active && frame.wrapping_sub(last_frame) >= REFRESH_INTERVAL)
+                    // Throttled re-capture only of the live playhead bar — and
+                    // only if the transport actually MOVED since the last
+                    // capture. A paused playhead re-captured identical pixels
+                    // every 1.5s, and each capture re-armed the disk-save
+                    // debounce: a perpetual 75MB readback loop while idle.
+                    || (is_active
+                        && frame.wrapping_sub(last_frame) >= REFRESH_INTERVAL
+                        && current_beat != last_beat)
             }
         };
         if !due {
@@ -485,7 +490,7 @@ fn fill_clip_atlas(
             flicker_probe::bump(&flicker_probe::ALLOC_FAILS);
         }
         if let Some(cell) = cache.get_or_alloc(cid, target_cell) {
-            last_snapshot.insert(cid.clone(), (target_cell, frame));
+            last_snapshot.insert(cid.clone(), (target_cell, frame, current_beat));
             to_blit.push((cell, tex));
             if existing.is_none() {
                 allocated_new = true; // new mapping (and any eviction it triggered)
@@ -783,7 +788,12 @@ pub struct ContentPipeline {
     /// Per clip: the filmstrip cell last captured and the frame it was captured, so
     /// the playhead's current bar is captured on bar-crossing and refreshed at a
     /// throttled rate while it sits in a bar.
-    clip_atlas_last_snapshot: AHashMap<manifold_core::ClipId, (u32, u64)>,
+    // (cell, frame, beat-at-capture). The beat gates the throttled refresh:
+    // a paused transport re-captures identical pixels forever otherwise, and
+    // every capture re-arms the 5s disk-save debounce -> a perpetual 75MB
+    // GPU->CPU readback loop on a completely static timeline (BUG-119 probe,
+    // 2026-07-11: saves at frames 301/661/967 with nothing changing).
+    clip_atlas_last_snapshot: AHashMap<manifold_core::ClipId, (u32, u64, f64)>,
     /// Monotonic fill-frame counter (refresh cadence + propagation window).
     clip_atlas_frame: u64,
     /// Frames left to keep copying the persistent atlas to the rotating write
