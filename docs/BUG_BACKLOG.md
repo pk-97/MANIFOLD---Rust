@@ -132,7 +132,10 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 **Symptom** — the timeline layer clip rendering sometimes flickers rapidly ("flicks like
 crazy"). Intermittent, no repro steps given yet.
 
-**Root cause** — unknown, NOT investigated (Peter's call 2026-07-11: log, don't chase).
+**Root cause** — unknown; 2026-07-11 static-read pass (Scene 2 session, Peter re-reported as "extreme churn and flickering" with the heavy 3D scene graphs, gut: auto-load spam) narrowed to two candidate mechanisms in the filmstrip system, undecided without a live repro:
+(a) `clip_content_hash` (clip_thumb_cache.rs:35) hashes every generator card param VALUE — any continuously-written param (automation lane, LFO/MIDI binding writing card values) changes the hash every frame, spamming the disk-cache Load/miss/re-capture path (matches "auto-load spam");
+(b) the capture->persistent-atlas->triple-IOSurface propagation chain (content_pipeline.rs:340-415) — visible clips are eviction-protected and captures are budgeted (4/frame), so a pure eviction storm between visible clips looks impossible by construction, but propagation lag mid-update could read as per-cell flicker.
+Next step: 5 printlns (captures/frame, Load requests/frame, hash of one clip across 60 frames, evictions, propagate count) on Peter's repro project — decides (a) vs (b) in one run.
 
 **Fix shape** — unknown until reproduced; next step is capturing a repro (which layer/clip
 state, timeline zoom level, playback vs. idle) the next time it's seen.
