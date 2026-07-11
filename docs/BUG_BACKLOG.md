@@ -820,26 +820,6 @@ gate.
 PARAM_STEP_ACTIONS (audio_mixdown.rs isn't part of that design) — left untouched per the
 scope-fence rule.
 
-### BUG-056 (audio-mixdown-clippy-debt) — `manifold-playback` fails `cargo clippy -D warnings` pre-existing on `audio_mixdown.rs` — LOW (blocks the crate's clippy gate, not correctness)
-**Status:** FIXED — verified gone 2026-07-11 (discipline audit): full workspace clippy `-D warnings` green in 9.8s warm, and `audio_mixdown.rs` carries no `#[allow(clippy)]` attrs, so the lints were genuinely rewritten away, not silenced. Almost certainly the P1 offline-export mixdown refactor (`d207f94a`, 2026-07-07) — the last substantive change to the file; not bisected to the exact commit (LOW stakes, dev-tooling only).
-
-**Found 2026-07-07** while gating U-P1 of `LIVE_AUDIO_TRIGGERS_DESIGN.md` §9 (the
-`AudioTriggerMod` → `ParameterAudioMod` unification). Not this wave's fault: reproduces
-identically on the wave's base tip (`8ccc4fc6`, verified via `git stash` + re-run before
-touching anything) — a clippy-version-sensitive lint that was clean at whatever toolchain
-last gated `manifold-playback`, now firing on unrelated code:
-
-- `crates/manifold-playback/src/audio_mixdown.rs:589` and `:643` —
-  `clippy::cloned_ref_to_slice_refs`: `&[normal_id.clone()]` / `&[analysis_id.clone()]` should
-  be `std::slice::from_ref(&normal_id)` / `std::slice::from_ref(&analysis_id)`.
-- `crates/manifold-playback/src/audio_mixdown.rs:623` — `clippy::needless_range_loop`: `for i
-  in 0..tapped.len()` should iterate `tapped.iter().enumerate()`.
-
-**Fix shape:** three mechanical one-line-ish clippy fixups in `audio_mixdown.rs`, no behavior
-change. `cargo test -p manifold-playback --lib` is unaffected (tests still build and pass;
-only `--tests -- -D warnings` fails). Not fixed here — out of scope for the audio-trigger
-unification and touching `audio_mixdown.rs` wasn't part of this phase's brief.
-
 ### BUG-054 (renderer-device-ptr-dangles) — renderers cache a raw `*const GpuDevice` that only `ContentThread::run()` repoints — MED (latent; every new headless/embedded consumer of ContentThread hits it)
 **Status:** OPEN
 
@@ -1930,6 +1910,26 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-056 (audio-mixdown-clippy-debt) — `manifold-playback` fails `cargo clippy -D warnings` pre-existing on `audio_mixdown.rs` — LOW (blocks the crate's clippy gate, not correctness)
+**Status:** FIXED — verified gone 2026-07-11 (discipline audit): full workspace clippy `-D warnings` green in 9.8s warm, and `audio_mixdown.rs` carries no `#[allow(clippy)]` attrs, so the lints were genuinely rewritten away, not silenced. Almost certainly the P1 offline-export mixdown refactor (`d207f94a`, 2026-07-07) — the last substantive change to the file; not bisected to the exact commit (LOW stakes, dev-tooling only).
+
+**Found 2026-07-07** while gating U-P1 of `LIVE_AUDIO_TRIGGERS_DESIGN.md` §9 (the
+`AudioTriggerMod` → `ParameterAudioMod` unification). Not this wave's fault: reproduces
+identically on the wave's base tip (`8ccc4fc6`, verified via `git stash` + re-run before
+touching anything) — a clippy-version-sensitive lint that was clean at whatever toolchain
+last gated `manifold-playback`, now firing on unrelated code:
+
+- `crates/manifold-playback/src/audio_mixdown.rs:589` and `:643` —
+  `clippy::cloned_ref_to_slice_refs`: `&[normal_id.clone()]` / `&[analysis_id.clone()]` should
+  be `std::slice::from_ref(&normal_id)` / `std::slice::from_ref(&analysis_id)`.
+- `crates/manifold-playback/src/audio_mixdown.rs:623` — `clippy::needless_range_loop`: `for i
+  in 0..tapped.len()` should iterate `tapped.iter().enumerate()`.
+
+**Fix shape:** three mechanical one-line-ish clippy fixups in `audio_mixdown.rs`, no behavior
+change. `cargo test -p manifold-playback --lib` is unaffected (tests still build and pass;
+only `--tests -- -D warnings` fails). Not fixed here — out of scope for the audio-trigger
+unification and touching `audio_mixdown.rs` wasn't part of this phase's brief.
 
 ### BUG-070 (stepper-and-nonstandard-slider-reset) — right-click reset was absent on the non-slider-track gain controls — FIXED 2026-07-10 (AUDIO_SETUP_DOCK P4, `feat/audio-dock-p4`), decay drawer PARTIALLY FIXED 2026-07-08 @ 3a88f728 — LOW (found 2026-07-08 during BUG-061)
 **Status:** FIXED
