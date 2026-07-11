@@ -74,7 +74,6 @@ or human can read it, and it needs no external tool.
 | BUG-035 | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread (MED, root-caused) |
 | BUG-037 | **glp-first-render-stall** | ~37ms warm-up on a glTF clip's first rendered frame (MED) |
 | BUG-038 | **ableton-log-spam** | bridge warns every 1.5s forever when Live absent (LOW) |
-| BUG-009 | **stateless-gate-miss** | harvest skip resets StateStore-held scalar state (HIGH) |
 | BUG-010 | **wgsl-first-entry** | multi-entry wgsl_compute silently dispatches the first (MED) |
 | BUG-011 | **fused-output-oversize** | fused output buffer sized to max of all inputs (MED) |
 | BUG-110 | **fused-segment-inner-override-noop** | in-place inner-param edits on a fused SEGMENT card never reach the live kernel — segment node_map is `c{i}.`-prefixed, per-card def isn't, so both surviving and fused-away nodes miss (MED) |
@@ -1016,30 +1015,6 @@ a signal that a recent UI landing skipped the full workspace test.
 rather than bumping the baseline, which would silently bless the drift the ratchet exists to catch.
 Unrelated to param storage.
 
-### BUG-009 — Segment "stateless" gate misses StateStore-held scalar state; harvest skip resets it — HIGH
-**Status:** OPEN
-
-**Root cause** — [segment.rs:153-171](../crates/manifold-renderer/src/node_graph/freeze/segment.rs#L153-L171):
-`def_is_segment_stateless` checks only `state_capture_input_ports` + `aliased_array_io`.
-Primitives that hold real cross-frame state in the StateStore without declaring either —
-`sample_and_hold`, `envelope_decay`, `trigger_ease_to`, `compressor_envelope`,
-`envelope_follower_ar`, `inject_burst` — pass as stateless. Segment member slots get
-`def_content_key: 0` ([preset_runtime.rs:1105](../crates/manifold-renderer/src/preset_runtime.rs#L1105))
-and `harvest_state_from` skips them
-([preset_runtime.rs:1693](../crates/manifold-renderer/src/preset_runtime.rs#L1693)), so any
-chain rebuild drops their state.
-
-**Symptom** — AutoGain (shipped: `compressor_envelope` next to pointwise atoms) joins a
-segment; any rebuild while it's a member — editor open/close elsewhere, an unrelated card
-edit, or the fused-segment swap-in itself — resets the envelope: gain snaps to unity, a
-visible/audible pop mid-show. Violates the chain-fusion design's own "never resets state"
-invariant.
-
-**Fix shape** — the root fix is a truthful statefulness signal: a `NodeRequires`-style
-`uses_state_store` flag (or derive it from `ctx.state` usage) that `def_is_segment_stateless`
-also checks. Stop-gap is a hard-coded exclusion list, which is exactly the pattern the freeze
-module refuses everywhere else — prefer the flag.
-
 ### BUG-010 — `wgsl_compute` silently dispatches the first of multiple entry points — MED
 **Status:** OPEN
 
@@ -1624,6 +1599,40 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-009 — Segment "stateless" gate misses StateStore-held scalar state; harvest skip resets it — HIGH
+**Status:** FIXED (bug/wave1-lane-a-freeze) — root fix, the truthful signal already existed. The
+`NodeRequires`-style flag the fix shape asked for is `EffectNode::requires().state_store`, and it
+is already declared true by every one of the six named primitives (each calls
+`ctx.state.expect(...)` in `evaluate`, so the executor's provide/withhold contract runtime-enforces
+the declaration — a node that read the StateStore without declaring it would panic, never ship).
+`def_is_segment_stateless` (segment.rs) now checks `!node.requires().state_store` alongside the
+existing `state_capture_input_ports` + `aliased_array_io` gates. No hard-coded exclusion list.
+Reproduced by `state_store_scalar_card_is_not_segment_stateless` (a compressor_envelope card is now
+ineligible; a pure-pointwise card stays eligible). Also refreshed the stale `NodeRequires` doc
+comment ("today only Feedback"). Stricter gate = under-segmenting for stateful cards, which is the
+safe direction.
+
+**Root cause** — [segment.rs:153-171](../crates/manifold-renderer/src/node_graph/freeze/segment.rs#L153-L171):
+`def_is_segment_stateless` checks only `state_capture_input_ports` + `aliased_array_io`.
+Primitives that hold real cross-frame state in the StateStore without declaring either —
+`sample_and_hold`, `envelope_decay`, `trigger_ease_to`, `compressor_envelope`,
+`envelope_follower_ar`, `inject_burst` — pass as stateless. Segment member slots get
+`def_content_key: 0` ([preset_runtime.rs:1105](../crates/manifold-renderer/src/preset_runtime.rs#L1105))
+and `harvest_state_from` skips them
+([preset_runtime.rs:1693](../crates/manifold-renderer/src/preset_runtime.rs#L1693)), so any
+chain rebuild drops their state.
+
+**Symptom** — AutoGain (shipped: `compressor_envelope` next to pointwise atoms) joins a
+segment; any rebuild while it's a member — editor open/close elsewhere, an unrelated card
+edit, or the fused-segment swap-in itself — resets the envelope: gain snaps to unity, a
+visible/audible pop mid-show. Violates the chain-fusion design's own "never resets state"
+invariant.
+
+**Fix shape** — the root fix is a truthful statefulness signal: a `NodeRequires`-style
+`uses_state_store` flag (or derive it from `ctx.state` usage) that `def_is_segment_stateless`
+also checks. Stop-gap is a hard-coded exclusion list, which is exactly the pattern the freeze
+module refuses everywhere else — prefer the flag.
 
 ### BUG-008 — Fused buffer region with mismatched array lengths reads out of bounds — HIGH
 **Status:** FIXED (bug/wave1-lane-a-freeze) — guard, not refuse. Option (a) "refuse >1 array

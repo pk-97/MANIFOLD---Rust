@@ -145,11 +145,24 @@ pub fn concat_defs(cards: &[&EffectGraphDef]) -> Option<EffectGraphDef> {
 
 /// Segment eligibility: a card may join a segment only when its (flattened)
 /// def carries NO cross-frame state — no state-capture loop, no aliased
-/// in-place buffer IO. Stateful cards stay segment boundaries because segment
-/// node-id prefixes are positional: prefixing a feedback node's `NodeId` would
-/// key its state by chain position, and moving a neighbouring card would then
-/// perturb it (the exact thing the design forbids). Unknown node types fail
-/// closed.
+/// in-place buffer IO, AND no StateStore-backed primitive. Stateful cards stay
+/// segment boundaries because segment node-id prefixes are positional: prefixing
+/// a stateful node's `NodeId` would key its state by chain position, so a member
+/// slot gets `def_content_key: 0` and `harvest_state_from` skips it — any rebuild
+/// while the card is a member drops that state. Unknown node types fail closed.
+///
+/// The three statefulness channels checked here:
+///   - `state_capture_input_ports` — feedback loops through the StateStore;
+///   - `aliased_array_io` — in-place particle/sim buffers;
+///   - `requires().state_store` — the truthful catch-all for a primitive that
+///     reads/writes the StateStore directly in `evaluate` (the scalar envelope
+///     family: `compressor_envelope`, `sample_and_hold`, `envelope_decay`,
+///     `trigger_ease_to`, `envelope_follower_ar`, `inject_burst`). These declare
+///     NEITHER of the first two — the earlier gate missed them, so AutoGain's
+///     `compressor_envelope` joined a segment and its envelope reset on any
+///     rebuild (gain snapped to unity mid-show, BUG-009). `requires().state_store`
+///     is runtime-enforced (the executor withholds the StateStore and the node's
+///     `evaluate` panics if it lied), so it is a reliable statefulness signal.
 pub(crate) fn def_is_segment_stateless(
     def: &EffectGraphDef,
     registry: &crate::node_graph::PrimitiveRegistry,
@@ -163,7 +176,9 @@ pub(crate) fn def_is_segment_stateless(
         }
         match crate::node_graph::freeze::region::configured_construct(registry, n) {
             Some(node) => {
-                node.state_capture_input_ports().is_empty() && node.aliased_array_io().is_empty()
+                node.state_capture_input_ports().is_empty()
+                    && node.aliased_array_io().is_empty()
+                    && !node.requires().state_store
             }
             None => false,
         }
@@ -292,5 +307,41 @@ mod tests {
         );
         assert!(concat_defs(&[&a, &broken]).is_none());
         assert!(concat_defs(&[&a]).is_none(), "a single card is not a segment");
+    }
+
+    /// BUG-009: a card holding a StateStore-backed scalar primitive
+    /// (`compressor_envelope`, as shipped in AutoGain) is NOT segment-stateless.
+    /// It declares neither `state_capture_input_ports` nor `aliased_array_io`, so
+    /// the old two-signal gate passed it — then, as a segment member, its
+    /// `def_content_key: 0` made `harvest_state_from` skip it and any rebuild
+    /// dropped its envelope (gain snapped to unity mid-show). The gate now also
+    /// consults the truthful `requires().state_store` signal.
+    #[test]
+    fn state_store_scalar_card_is_not_segment_stateless() {
+        let reg = registry();
+        // Control: a pure-pointwise card stays eligible.
+        assert!(
+            def_is_segment_stateless(&card(CARD_A), &reg),
+            "a pure pointwise card is segment-stateless",
+        );
+
+        // A card whose graph includes a compressor_envelope is not eligible.
+        let stateful = card(
+            r#"{
+            "version": 1, "name": "autogain", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
+                { "id": 2, "typeId": "node.compressor_envelope", "nodeId": "env" },
+                { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#,
+        );
+        assert!(
+            !def_is_segment_stateless(&stateful, &reg),
+            "a StateStore-backed scalar node makes the card segment-ineligible (BUG-009)",
+        );
     }
 }

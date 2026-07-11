@@ -389,8 +389,10 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
 /// X" mismatch at the boundary instead of mid-evaluate via an
 /// `.expect()` panic. Today's surface:
 ///   - `state_store` — the node calls
-///     [`EffectNodeContext::state_store`] (today only
-///     [`Feedback`](crate::node_graph::primitives::Feedback)).
+///     [`EffectNodeContext::state_store`] (feedback plus the scalar-envelope
+///     family: compressor/sample-and-hold/envelope-decay/trigger-ease-to/
+///     envelope-follower/inject-burst). Also the authoritative statefulness
+///     signal `def_is_segment_stateless` consults (BUG-009).
 ///   - `gpu_encoder` — the node calls
 ///     [`EffectNodeContext::gpu_encoder`] (every real-GPU primitive).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
