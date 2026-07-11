@@ -783,18 +783,24 @@ impl InspectorCompositePanel {
     /// `AudioSetupPanel::update_meters`/the deleted `update_trigger_levels`).
     /// Walks every card that can host a fire-mode drawer: master effects,
     /// active-layer effects, the active layer's generator, and the layer's
-    /// own clip triggers.
-    pub fn update_fire_meters(&self, tree: &mut UITree, fire_level: &dyn Fn(u64) -> Option<f32>) {
+    /// own clip triggers. `dt` (BUG-109 P5) is the UI frame delta seconds for
+    /// each meter's peak-hold timing.
+    pub fn update_fire_meters(
+        &self,
+        tree: &mut UITree,
+        fire_level: &dyn Fn(u64) -> Option<f32>,
+        dt: f32,
+    ) {
         for card in &self.master_effects {
-            card.update_fire_meters(tree, fire_level);
+            card.update_fire_meters(tree, fire_level, dt);
         }
         for card in &self.layer_effects {
-            card.update_fire_meters(tree, fire_level);
+            card.update_fire_meters(tree, fire_level, dt);
         }
         if let Some(gp) = &self.gen_params {
-            gp.update_fire_meters(tree, fire_level);
+            gp.update_fire_meters(tree, fire_level, dt);
         }
-        self.audio_trigger_section.update_fire_meters(tree, fire_level);
+        self.audio_trigger_section.update_fire_meters(tree, fire_level, dt);
     }
 
     pub fn is_dragging(&self) -> bool {

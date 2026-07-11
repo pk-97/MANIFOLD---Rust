@@ -197,6 +197,13 @@ impl Project {
         // `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §3.2.
         self.migrate_legacy_clip_triggers();
 
+        // §7.2 item 2 (2026-07-11): "Delta" (rate-of-change) left the drawer
+        // UI everywhere — no button can toggle or clear it anymore. A saved
+        // `rate_of_change: true` would carry invisible behavior the UI can't
+        // show, so clear it on load across every carrier. See
+        // `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2.
+        self.clear_legacy_rate_on_flags();
+
         // Validate tempo map data
         self.tempo_map.ensure_valid();
         self.tempo_map
@@ -323,6 +330,47 @@ impl Project {
             log::warn!(
                 "[Migration] dropped {dropped} unresolvable legacy trigger route(s) during \
                  clip-trigger migration (see stderr for per-route detail)"
+            );
+        }
+    }
+
+    /// §7.2 item 2 load migration (2026-07-11): "Delta" (rate-of-change)
+    /// left the drawer UI everywhere — no button can toggle or clear
+    /// `AudioModShape::rate_of_change` anymore, on either carrier. A `true`
+    /// flag saved before this migration would carry invisible behavior no
+    /// UI can show, so every carrier gets cleared on load: `ParameterAudioMod
+    /// .shape` (every `PresetInstance.audio_mods` entry — master/layer/clip
+    /// effects and the active layer's generator, via
+    /// `for_each_preset_instance_mut`) and `LayerClipTrigger.shape` (every
+    /// layer's `clip_triggers`). Counted + `eprintln!`'d, never silent — the
+    /// same pattern `migrate_legacy_clip_triggers` uses for its drops. The
+    /// runtime field and its `condition()` arm stay compiled for a possible
+    /// future re-wire; this migration only clears what a project SAVED
+    /// while the now-removed button could still set it. Idempotent: a
+    /// project with no `rate_of_change: true` anywhere is a no-op.
+    fn clear_legacy_rate_on_flags(&mut self) {
+        let mut cleared = 0usize;
+        self.for_each_preset_instance_mut(|fx| {
+            let Some(mods) = fx.audio_mods.as_mut() else { return };
+            for m in mods.iter_mut() {
+                if m.shape.rate_of_change {
+                    m.shape.rate_of_change = false;
+                    cleared += 1;
+                }
+            }
+        });
+        for layer in &mut self.timeline.layers {
+            for cfg in layer.clip_triggers.iter_mut() {
+                if cfg.shape.rate_of_change {
+                    cfg.shape.rate_of_change = false;
+                    cleared += 1;
+                }
+            }
+        }
+        if cleared > 0 {
+            eprintln!(
+                "[Migration] cleared rate_of_change on {cleared} audio-mod config(s) — \
+                 \"Delta\" was removed from the drawer UI 2026-07-11 (§7.2 item 2)"
             );
         }
     }
@@ -2562,6 +2610,86 @@ mod tests {
         p.migrate_legacy_clip_triggers();
         assert!(p.timeline.layers[0].clip_triggers.is_empty());
         assert!(p.audio_setup.sends[0].triggers.is_empty());
+    }
+
+    // ─── clear_legacy_rate_on_flags (§7.2 item 2) ───
+
+    #[test]
+    fn clear_legacy_rate_on_flags_clears_both_carriers_and_counts() {
+        let mut p = Project::default();
+
+        // A param mod (`PresetInstance.audio_mods`) with rate_of_change set.
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        let mut m = crate::audio_mod::ParameterAudioMod::new(
+            "amount".into(),
+            crate::AudioSendId::new("send-a"),
+            crate::audio_mod::AudioFeature::new(
+                crate::audio_mod::AudioFeatureKind::Amplitude,
+                crate::audio_mod::AudioBand::Full,
+            ),
+        );
+        m.shape.rate_of_change = true;
+        fx.audio_mods = Some(vec![m]);
+        p.settings.master_effects.push(fx);
+
+        // A clip trigger (`Layer.clip_triggers`) with rate_of_change set.
+        let mut layer = layer_with_clip_trigger(
+            crate::AudioSendId::new("send-b"),
+            crate::audio_mod::AudioBand::Low,
+            true,
+        );
+        layer.clip_triggers[0].shape.rate_of_change = true;
+        p.timeline.layers.push(layer);
+
+        p.clear_legacy_rate_on_flags();
+
+        assert!(
+            !p.settings.master_effects[0].audio_mods.as_ref().unwrap()[0]
+                .shape
+                .rate_of_change,
+            "param-mod carrier cleared"
+        );
+        assert!(
+            !p.timeline.layers[0].clip_triggers[0].shape.rate_of_change,
+            "clip-trigger carrier cleared"
+        );
+    }
+
+    #[test]
+    fn clear_legacy_rate_on_flags_is_idempotent_when_none_are_set() {
+        let mut p = Project::default();
+        p.timeline.layers.push(layer_with_clip_trigger(
+            crate::AudioSendId::new("send-a"),
+            crate::audio_mod::AudioBand::Low,
+            true,
+        ));
+        // shape.rate_of_change defaults false — nothing to clear.
+        p.clear_legacy_rate_on_flags();
+        assert!(!p.timeline.layers[0].clip_triggers[0].shape.rate_of_change);
+    }
+
+    #[test]
+    fn clear_legacy_rate_on_flags_stays_cleared_across_a_save_reload_round_trip() {
+        // DESIGN_DOC_STANDARD §5's round-trip gate: create-path green is half
+        // a gate for stateful features. Save → reload must not resurrect the
+        // flag `on_after_deserialize` cleared on the previous load.
+        let mut p = Project::default();
+        p.timeline.layers.push(layer_with_clip_trigger(
+            crate::AudioSendId::new("send-a"),
+            crate::audio_mod::AudioBand::Low,
+            true,
+        ));
+        p.timeline.layers[0].clip_triggers[0].shape.rate_of_change = true;
+        p.clear_legacy_rate_on_flags();
+        assert!(!p.timeline.layers[0].clip_triggers[0].shape.rate_of_change);
+
+        let json = serde_json::to_string(&p).expect("serialize");
+        let mut reloaded: Project = serde_json::from_str(&json).expect("deserialize");
+        reloaded.on_after_deserialize();
+        assert!(
+            !reloaded.timeline.layers[0].clip_triggers[0].shape.rate_of_change,
+            "round trip must not resurrect rate_of_change"
+        );
     }
 
     /// A `clip_trigger`-shaped bundled param, `is_trigger_gate` set — the

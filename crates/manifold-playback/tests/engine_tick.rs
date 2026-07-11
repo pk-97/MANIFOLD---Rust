@@ -43,6 +43,125 @@ fn create_engine() -> PlaybackEngine {
     PlaybackEngine::new(renderers)
 }
 
+/// A fixture-free project with one video layer owning one enabled, maximally
+/// sensitive clip trigger reading a single send's Full-band transient —
+/// BUG-109's regression tests don't need a real fixture, just the minimal
+/// shape `has_active_clip_triggers()` and `LiveTriggerState::evaluate*` walk.
+fn project_with_clip_trigger(sensitivity: f32) -> manifold_core::project::Project {
+    let send = manifold_core::audio_setup::AudioSend::new("Kick");
+    let send_id = send.id.clone();
+    let mut project = manifold_core::project::Project::default();
+    project.audio_setup.sends.push(send);
+
+    let mut layer = manifold_core::layer::Layer::new(
+        "Strobe".to_string(),
+        manifold_core::types::LayerType::Video,
+        0,
+    );
+    let mut cfg = manifold_core::audio_trigger::LayerClipTrigger::new(
+        manifold_core::audio_mod::AudioModSource {
+            send_id,
+            feature: manifold_core::audio_mod::AudioFeature::new(
+                manifold_core::audio_mod::AudioFeatureKind::Transients,
+                manifold_core::audio_mod::AudioBand::Full,
+            ),
+        },
+    );
+    cfg.enabled = true;
+    cfg.shape.sensitivity = sensitivity;
+    cfg.shape.attack_ms = 0.0;
+    cfg.shape.release_ms = 0.0;
+    layer.clip_triggers.push(cfg);
+    project.timeline.layers.push(layer);
+    project
+}
+
+/// A snapshot with one send whose Full-band transient is hot (well above the
+/// fixed 0.5 fire edge).
+fn hot_snapshot() -> manifold_core::audio_features::AudioFeatureSnapshot {
+    let mut f = manifold_core::SendFeatures::default();
+    f.bands[manifold_core::audio_mod::AudioBand::Full.index()].transients = 0.9;
+    manifold_core::audio_features::AudioFeatureSnapshot { sends: vec![f] }
+}
+
+/// BUG-109 §7.1 item 1: P3c's per-branch `FireMeterCapture` reset ran AFTER
+/// `tick_playing`'s step 3b had already pushed the clip-trigger level,
+/// wiping it every playing tick. The fix moved the reset to the top of
+/// `tick()`, once, before either branch's evaluators run.
+#[test]
+fn playing_tick_leaves_the_clip_trigger_level_in_fire_meters() {
+    let project = project_with_clip_trigger(1.0);
+    let key = manifold_core::audio_trigger::fire_meter_key(&[
+        project.timeline.layers[0].layer_id.as_str().as_bytes(),
+        &0u64.to_le_bytes(),
+    ]);
+
+    let mut engine = create_engine();
+    engine.initialize(project);
+    // `tick_audio_triggers` (step 3b) no-ops without a live clip manager —
+    // real app startup always sets one; construct the default here so the
+    // test exercises the same evaluator path a live session does.
+    engine.set_live_clip_manager(manifold_playback::live_clip_manager::LiveClipManager::new());
+    engine.set_state(PlaybackState::Playing);
+    *engine.audio_snapshot_mut() = hot_snapshot();
+
+    let ctx = TickContext {
+        dt_seconds: Seconds(1.0 / 60.0),
+        realtime_now: Seconds(0.0),
+        pre_render_dt: Seconds(1.0 / 60.0),
+        frame_count: 0,
+        export_fixed_dt: Seconds(0.0),
+    };
+    let _ = engine.tick(ctx);
+
+    let level = engine.fire_meters().get(key);
+    assert!(
+        level.is_some_and(|l| l >= 0.5),
+        "playing tick must leave the clip trigger's level in fire_meters, got {level:?}"
+    );
+}
+
+/// BUG-109 §7.1 item 2: while stopped, clip triggers must still push their
+/// shaped level (a performer tuning at soundcheck needs to see it move) but
+/// must never fire a clip.
+#[test]
+fn stopped_tick_pushes_the_level_and_fires_no_clip() {
+    let project = project_with_clip_trigger(1.0);
+    let key = manifold_core::audio_trigger::fire_meter_key(&[
+        project.timeline.layers[0].layer_id.as_str().as_bytes(),
+        &0u64.to_le_bytes(),
+    ]);
+
+    let mut engine = create_engine();
+    engine.initialize(project);
+    // Engine starts Stopped (see engine_initializes_with_project below).
+    *engine.audio_snapshot_mut() = hot_snapshot();
+
+    let ctx = TickContext {
+        dt_seconds: Seconds(1.0 / 60.0),
+        realtime_now: Seconds(0.0),
+        pre_render_dt: Seconds(1.0 / 60.0),
+        frame_count: 0,
+        export_fixed_dt: Seconds(0.0),
+    };
+    let result = engine.tick(ctx);
+
+    let level = engine.fire_meters().get(key);
+    assert!(
+        level.is_some_and(|l| l >= 0.5),
+        "stopped tick must still show the shaped signal for soundcheck tuning, got {level:?}"
+    );
+    assert!(
+        result.ready_clips.is_empty(),
+        "a stopped tick must never fire a clip trigger"
+    );
+    assert_eq!(
+        engine.active_clip_count(),
+        0,
+        "a stopped tick must never start a clip"
+    );
+}
+
 #[test]
 fn engine_initializes_with_project() {
     let project = load_project("Burn V5.manifold");

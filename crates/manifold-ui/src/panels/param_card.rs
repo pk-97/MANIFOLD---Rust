@@ -934,8 +934,15 @@ impl ParamCardPanel {
     /// `manifold-ui` cannot depend on — `docs/UI_LAYERING_INVERSION.md`)
     /// resolves it. Amount is always the first `Slider` row
     /// `build_audio_mod_drawer` builds (`DrawerIds::meters[0]`), regardless
-    /// of which trailing rows follow.
-    pub fn update_fire_meters(&self, tree: &mut UITree, fire_level: &dyn Fn(u64) -> Option<f32>) {
+    /// of which trailing rows follow. `dt` (BUG-109 P5) is the UI frame delta
+    /// seconds, threaded down to [`crate::panels::drawer::MeterIds::update`]
+    /// for its peak-hold timing.
+    pub fn update_fire_meters(
+        &self,
+        tree: &mut UITree,
+        fire_level: &dyn Fn(u64) -> Option<f32>,
+        dt: f32,
+    ) {
         for (pi, cfg) in self.audio_configs.iter().enumerate() {
             let Some((dids, _)) = cfg else { continue };
             let Some(info) = self.param_info.get(pi) else { continue };
@@ -948,7 +955,7 @@ impl ParamCardPanel {
                 info.param_id.as_bytes(),
             ]);
             let level = fire_level(key).unwrap_or(0.0);
-            meter.update(tree, level, AUDIO_MOD_ACTIVE_C32);
+            meter.update(tree, level, AUDIO_MOD_ACTIVE_C32, dt);
         }
     }
     pub fn effect_name(&self) -> &str {
@@ -3242,12 +3249,6 @@ impl ParamCardPanel {
                 RowClick::AudioToggleInvert(pi) => {
                     vec![PanelAction::AudioModSetInvert(GraphParamTarget::Effect(ei), self.pid_at(pi))]
                 }
-                RowClick::AudioToggleRate(pi) => {
-                    vec![PanelAction::AudioModSetRateOfChange(
-                        GraphParamTarget::Effect(ei),
-                        self.pid_at(pi),
-                    )]
-                }
                 RowClick::AudioSelectTriggerMode(pi, m) => {
                     self.audio_set_trigger_mode_action(GraphParamTarget::Effect(ei), pi, m)
                 }
@@ -3417,12 +3418,6 @@ impl ParamCardPanel {
                 }
                 RowClick::AudioToggleInvert(pi) => {
                     vec![PanelAction::AudioModSetInvert(GraphParamTarget::Generator, self.pid_at(pi))]
-                }
-                RowClick::AudioToggleRate(pi) => {
-                    vec![PanelAction::AudioModSetRateOfChange(
-                        GraphParamTarget::Generator,
-                        self.pid_at(pi),
-                    )]
                 }
                 RowClick::AudioSelectTriggerMode(pi, m) => {
                     self.audio_set_trigger_mode_action(GraphParamTarget::Generator, pi, m)
@@ -4478,9 +4473,9 @@ mod tests {
         }
 
         // The Mode row's last button ("Both") — flat index = send_count(1) +
-        // kind_count(8) + band_count(4) + 2 (Inv/Delta) + 2 (Both is the
-        // Mode row's 3rd button, index 2).
-        let mode_both_btn = button_ids[1 + AUDIO_KIND_COUNT + 4 + 2 + 2];
+        // kind_count(8) + band_count(4) + 1 (Invert — Delta removed §7.2
+        // item 2) + 2 (Both is the Mode row's 3rd button, index 2).
+        let mode_both_btn = button_ids[1 + AUDIO_KIND_COUNT + 4 + 1 + 2];
         let actions = panel.handle_click(mode_both_btn);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
