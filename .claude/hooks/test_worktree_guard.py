@@ -149,6 +149,37 @@ def test_deny_reason_names_worktree_command():
     check("deny reason includes the worktree command", r and "git worktree add" in r, r)
 
 
+def test_merge_conflicted_file_allowed():
+    target = PROJ / "docs/BUG_BACKLOG.md"
+    orig = hook.merge_conflict_paths
+    hook.merge_conflict_paths = lambda: {target.resolve()}
+    try:
+        r = run_hook(edit(str(target)))
+    finally:
+        hook.merge_conflict_paths = orig
+    check("unmerged file during live merge -> allow", r is None, r)
+
+
+def test_merge_nonconflicted_file_still_denies():
+    orig = hook.merge_conflict_paths
+    hook.merge_conflict_paths = lambda: {(PROJ / "docs/OTHER.md").resolve()}
+    try:
+        r = run_hook(edit(str(PROJ / "docs/BUG_BACKLOG.md")))
+    finally:
+        hook.merge_conflict_paths = orig
+    check("non-conflicted file during live merge -> deny", r is not None, r)
+
+
+def test_no_merge_denies():
+    orig = hook.merge_conflict_paths
+    hook.merge_conflict_paths = lambda: set()
+    try:
+        r = run_hook(edit(str(PROJ / "docs/BUG_BACKLOG.md")))
+    finally:
+        hook.merge_conflict_paths = orig
+    check("no merge in progress -> deny unchanged", r is not None, r)
+
+
 def main():
     for fn in [
         test_main_source_absolute_denies,
@@ -167,6 +198,9 @@ def main():
         test_malformed_payload_silent,
         test_multiedit_main_denies,
         test_deny_reason_names_worktree_command,
+        test_merge_conflicted_file_allowed,
+        test_merge_nonconflicted_file_still_denies,
+        test_no_merge_denies,
     ]:
         fn()
 
