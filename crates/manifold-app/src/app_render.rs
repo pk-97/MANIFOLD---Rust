@@ -851,10 +851,36 @@ impl Application {
             }
         }
 
+        // 1d2. Export progress (BUG-083) — the content thread's export loop
+        // (content_export.rs's run_export/send_export_progress) blocks the
+        // content thread and pushes a degraded ContentState every 10 frames;
+        // read it the same way percussion import status is read above, so a
+        // multi-minute export no longer looks like a hang.
+        {
+            let is_exporting = self.content_state.is_exporting;
+            self.ws.ui_root.header.set_export_status(
+                &self.content_state.export_status,
+                self.content_state.export_progress,
+                is_exporting,
+            );
+            // Keep redrawing the progress strip while exporting, same as
+            // the percussion import bar above.
+            if is_exporting {
+                self.needs_rebuild = true;
+            }
+        }
+
         // 1e2. Sync live recording state to layer header record button.
         self.ws.ui_root.layer_headers.set_recording_active(
             &mut self.ws.ui_root.tree,
             self.content_state.is_live_recording,
+        );
+        // BUG-084/BUG-086: surface drop counters (video pool exhaustion +
+        // native audio-encoder backpressure) on the same Record button.
+        self.ws.ui_root.layer_headers.set_recording_drops(
+            &mut self.ws.ui_root.tree,
+            self.content_state.recording_dropped_frames,
+            self.content_state.recording_dropped_audio_frames,
         );
 
         self.ui_profile.add("drain_state", seg.elapsed());

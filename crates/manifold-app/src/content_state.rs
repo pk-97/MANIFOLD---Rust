@@ -154,12 +154,28 @@ pub struct ContentState {
     // ── Live Recording ─────────────────────────────────────────────
     /// Whether a live recording is currently in progress.
     pub is_live_recording: bool,
+    /// Video frames dropped this recording (texture-pool exhaustion). BUG-084
+    /// — surfaced on the layer-header record button. Restored (with its
+    /// consumer, per UI_PROJECTION_LAYER_DESIGN I1) from the P0 orphan purge
+    /// that originally deleted it un-consumed.
+    pub recording_dropped_frames: u32,
+    /// Audio sample-frames dropped this recording by the native encoder's
+    /// backpressure gate (`LiveRecordingPlugin.m`'s `WriteAudioSamples`).
+    /// Feeds the same drop indicator as `recording_dropped_frames`; also an
+    /// instrument for BUG-086 (recorded audio track under-covering duration
+    /// on longer takes, root cause unconfirmed) — a non-zero reading during
+    /// a short take implicates this gate, a zero reading rules it out.
+    pub recording_dropped_audio_frames: u32,
 
     // ── Export ────────────────────────────────────────────────────
-    // (An export *progress* display never existed — the old is_exporting /
-    // export_progress / export_status fields were emitted into a void and were
-    // deleted 2026-07-09; BUG-083 tracks building the display. Same for the
-    // recording drop counter, BUG-084.)
+    /// Whether an export is currently in progress. BUG-083: restored (with
+    /// its UI consumer, per UI_PROJECTION_LAYER_DESIGN I1) from the P0
+    /// orphan purge that originally deleted this un-consumed.
+    pub is_exporting: bool,
+    /// Export progress, 0.0..1.0. BUG-083.
+    pub export_progress: f32,
+    /// Export status text (e.g. "Exporting 120/600 (20%)"). BUG-083.
+    pub export_status: Arc<str>,
     /// Set once when export finishes (success or failure).
     pub export_finished: Option<ExportFinishedEvent>,
 
@@ -476,6 +492,11 @@ impl Default for ContentState {
             profiling_frame_count: 0,
             led_enabled: false,
             is_live_recording: false,
+            recording_dropped_frames: 0,
+            recording_dropped_audio_frames: 0,
+            is_exporting: false,
+            export_progress: 0.0,
+            export_status: Arc::from(""),
             export_finished: None,
             undo_redo_event: None,
             ableton_session: None,

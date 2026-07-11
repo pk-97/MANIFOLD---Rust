@@ -51,6 +51,16 @@ unsafe extern "C" {
         elapsed_seconds: f64,
     ) -> i32;
 
+    /// Read the number of audio sample-frames dropped so far by the native
+    /// encoder's backpressure gate (`AVAssetWriterInput.isReadyForMoreMediaData`
+    /// returning false in `WriteAudioSamples`) — BUG-084's counter, and an
+    /// instrument for BUG-086's still-unexplained audio-duration shortfall.
+    ///
+    /// Backed by an atomic counter; safe to poll from any thread at any
+    /// point before `LiveRecorder_Finalize` is called on this handle (that
+    /// call frees the native state — do not poll afterward).
+    pub fn LiveRecorder_GetAudioFramesDropped(handle: *mut c_void) -> i32;
+
     /// Finalize the recording: drain buffers, close AVAssetWriter.
     ///
     /// Returns the total number of video frames encoded, or negative on error.
