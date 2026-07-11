@@ -1661,11 +1661,12 @@ struct CardModulation {
 /// `resolve` maps a modulation row's `param_id` to its card slot index.
 /// `latched` is `ContentState::automation_latched_params` — checked against
 /// `(inst.id, lane.param_id)` for the overridden-gray state (P4 §7's dot).
-/// Always `inst.id`, never the card's own possibly-blanked `effect_id` field:
-/// generator instances get a real, freshly-synthesized `EffectId` at load
-/// (see `manifold_playback::automation`'s `AutomationLatches` doc comment)
-/// even though `preset_to_config` blanks the DISPLAYED `effect_id` for
-/// generator cards for unrelated reasons.
+/// Always `inst.id`, which (fixed 2026-07-11) is now also the card's own
+/// DISPLAYED `effect_id` for both kinds — `preset_to_config` used to blank
+/// the generator arm's `effect_id` to `EffectId::new("")`, so this function
+/// and the card disagreed about a generator's identity even though both
+/// ultimately read the same real, freshly-synthesized `EffectId` (see
+/// `manifold_playback::automation`'s `AutomationLatches` doc comment).
 fn build_card_modulation(
     inst: &PresetInstance,
     n: usize,
@@ -1931,6 +1932,9 @@ fn empty_generator_config(inst: &PresetInstance) -> ParamCardConfig {
         name: inst.generator_type().to_string(),
         collapsed: false,
         effect_index: 0,
+        // Stays blank (unlike the real-id arm in `preset_to_config` below):
+        // zero params means zero audio-mod rows, so nothing on this card ever
+        // hosts a fire-meter lookup — there's no divergence risk to fix here.
         effect_id: manifold_core::EffectId::new(""),
         enabled: true,
         supports_envelopes: true,
@@ -2145,7 +2149,14 @@ fn preset_to_config(
         ),
         PresetKind::Generator => (
             ParamCardKind::Generator,
-            manifold_core::EffectId::new(""),
+            // Real `inst.id`, not a blanked placeholder (fixed 2026-07-11):
+            // this is the SAME id `build_card_modulation` already used for
+            // its own lookups (see that fn's doc comment) and the SAME id
+            // the content thread hashes into a fire-meter key
+            // (`fire_meter_key_for_param`) — a blanked display id here meant
+            // the UI's lookup key could never match the content thread's,
+            // so a generator card's audio-mod meters never resolved.
+            inst.id.clone(),
             true,
             false,
             // PRESET_LIBRARY_DESIGN D3/P4: a generator's per-card divergence

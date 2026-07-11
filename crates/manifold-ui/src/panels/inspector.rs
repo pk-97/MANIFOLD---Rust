@@ -2630,7 +2630,6 @@ mod tests {
     }
 
     fn mk_config(kind: super::super::param_card::ParamCardKind, name: &str, n: usize) -> ParamCardConfig {
-        use super::super::param_card::ParamCardKind;
         let params: Vec<_> = (0..n)
             .map(|i| mk_param(["a", "b", "c", "d"][i % 4], &format!("P{i}")))
             .collect();
@@ -2641,11 +2640,11 @@ mod tests {
             string_params: vec![],
             collapsed: false,
             effect_index: 0,
-            effect_id: if kind == ParamCardKind::Effect {
-                EffectId::new(name)
-            } else {
-                EffectId::new("")
-            },
+            // Real id for both kinds (fixed 2026-07-11): a populated
+            // generator card carries `inst.id` in production now, never a
+            // blanked `EffectId::new("")` — this mirrors that for both arms
+            // instead of modeling the pre-fix shape.
+            effect_id: EffectId::new(name),
             enabled: true,
             supports_envelopes: true,
             has_drv: false,
