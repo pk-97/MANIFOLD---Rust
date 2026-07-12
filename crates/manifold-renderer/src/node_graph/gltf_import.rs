@@ -407,6 +407,17 @@ fn build_import_graph(
     sun_node.params.insert("cast_shadows".to_string(), float(1.0));
     sun_node.params.insert("shadow_softness".to_string(), enum_val(0)); // Hard
     sun_node.params.insert("light_size".to_string(), float(1.0));
+    // Shadow quality: the Sun's `range` is the shadow's orthographic
+    // half-extent, and the shadow map's texels spread across it. The default
+    // 30 wraps a huge area, so on a recentered hero mesh (spanning ±radius
+    // about the origin) almost none of the map's texels land on the subject —
+    // that's the blocky, texel-stepping look as the sun moves. Wrap the extent
+    // tightly to the model (radius × 1.5 for margin) and quadruple the map to
+    // 4096², so the shadow texels are fine enough that edges read crisp and
+    // per-frame motion stops stepping. Both are normal light-node params the
+    // user can still dial.
+    sun_node.params.insert("range".to_string(), float((radius * 1.5).max(0.01)));
+    sun_node.params.insert("shadow_resolution".to_string(), float(4096.0));
     nodes.push(sun_node);
 
     let render_id = fresh_id();
