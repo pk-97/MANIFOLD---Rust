@@ -4,11 +4,13 @@
 //! `manifold_ui::bitmap_renderer::LayerBitmapRenderer`. Textures are rendered
 //! as positioned quads in the viewport area via `draw_indexed`.
 
+use std::sync::Arc;
+
 use manifold_gpu::{
-    GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuDevice, GpuEncoder,
-    GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler, GpuSamplerDesc, GpuTexture,
-    GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage, GpuVertexAttribute,
-    GpuVertexFormat, GpuVertexLayout,
+    FrameFence, GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuDevice,
+    GpuEncoder, GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler, GpuSamplerDesc,
+    GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+    GpuVertexAttribute, GpuVertexFormat, GpuVertexLayout,
 };
 use manifold_ui::node::{Color32, Rect};
 
@@ -69,8 +71,15 @@ struct LayerTexture {
     // No view or bind_group — manifold-gpu uses slot-based bindings
 }
 
-/// Number of ring-buffer slots (avoids aliasing with in-flight GPU work).
-const VBUF_RING_SIZE: usize = 3;
+/// Number of ring-buffer slots. Sized for stall-frequency relief under GPU
+/// backlog; correctness against slot reuse comes from `frame_fence`
+/// stamping each slot claim and blocking if the GPU hasn't retired the
+/// command buffer that last wrote it — not from this depth alone.
+/// 16 = 8 frames of cover at this ring's 2 claims per frame (Pass 4a grid +
+/// Pass 4c overview/lanes): fence logs at 4K project load (2026-07-12)
+/// showed the UI queue running 4-5 frames behind, so the previous 8-slot
+/// depth (4 frames) sat inside the backlog window and hit wait timeouts.
+const VBUF_RING_SIZE: usize = 16;
 /// Max layers per frame in the pre-allocated vertex buffer.
 const MAX_LAYER_QUADS: usize = 64;
 
@@ -85,6 +94,16 @@ pub struct LayerBitmapGpu {
     /// Each buffer holds MAX_LAYER_QUADS * 4 vertices.
     vbuf_ring: [GpuBuffer; VBUF_RING_SIZE],
     vbuf_ring_idx: usize,
+    /// Frame each vbuf_ring slot was last claimed at (0 = never claimed).
+    /// Checked against `frame_fence` before a slot is reused; this struct
+    /// consumes the ring twice per frame (Pass 4a + 4c in ui_frame.rs), so
+    /// depth alone can't guarantee the GPU has retired a slot's prior use.
+    vbuf_stamps: [u64; VBUF_RING_SIZE],
+    /// Shared GPU-completion fence — `None` in the headless test harness,
+    /// which never constructs one (unchanged stamp-0 behavior).
+    frame_fence: Option<Arc<FrameFence>>,
+    /// Rate limiter for `[frame-fence]` stall logging (see `FrameFence::guard_slot`).
+    fence_wait_events: u64,
     /// Pre-allocated scratch for draw list (reused each frame).
     draw_list: Vec<(usize, usize)>,
 }
@@ -156,8 +175,17 @@ impl LayerBitmapGpu {
             index_buf,
             vbuf_ring,
             vbuf_ring_idx: 0,
+            vbuf_stamps: [0; VBUF_RING_SIZE],
+            frame_fence: None,
+            fence_wait_events: 0,
             draw_list: Vec::with_capacity(MAX_LAYER_QUADS),
         }
+    }
+
+    /// Install the shared GPU-completion fence used to gate vbuf ring-slot
+    /// reuse. Not set by the headless test harness.
+    pub fn set_frame_fence(&mut self, fence: Arc<FrameFence>) {
+        self.frame_fence = Some(fence);
     }
 
     /// Upload CPU pixel buffer to GPU texture for a layer.
@@ -229,9 +257,21 @@ impl LayerBitmapGpu {
         let globals: [f32; 2] = [screen_w as f32, screen_h as f32];
         let globals_bytes: &[u8] = bytemuck::bytes_of(&globals);
 
-        // Rotate ring buffer — avoids aliasing with in-flight GPU work.
-        let vbuf = &self.vbuf_ring[self.vbuf_ring_idx];
-        self.vbuf_ring_idx = (self.vbuf_ring_idx + 1) % VBUF_RING_SIZE;
+        // Rotate ring buffer. Depth alone doesn't guarantee the GPU has
+        // retired this slot's last use (this struct's ring is consumed
+        // twice per frame, and heavy scenes can back up the queue past the
+        // ring depth) — frame_fence blocks the claim if it hasn't.
+        let slot = self.vbuf_ring_idx;
+        self.vbuf_ring_idx = (slot + 1) % VBUF_RING_SIZE;
+        if let Some(fence) = &self.frame_fence {
+            fence.guard_slot(
+                "LayerBitmapGpu",
+                slot,
+                &mut self.vbuf_stamps[slot],
+                &mut self.fence_wait_events,
+            );
+        }
+        let vbuf = &self.vbuf_ring[slot];
 
         // Write all layer quad vertices into the ring buffer in one batch.
         let ptr = vbuf.mapped_ptr().unwrap() as *mut BitmapVertex;

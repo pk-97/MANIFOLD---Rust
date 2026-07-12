@@ -52,9 +52,15 @@ pub enum LightMode {
 }
 
 /// Stepped PCF kernel size — the user-facing softness knob on `node.light`.
-/// Three discrete levels matching the variable-tap-count decision in the
-/// design audit (the `Hard` 3×3, `Soft` 5×5, `VerySoft` 7×7 PCF taps).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Four levels: the fixed-kernel `Hard` 3×3 / `Soft` 5×5 / `VerySoft` 7×7
+/// PCF taps from the original design audit, plus `Contact` — PCSS
+/// contact-hardening penumbra (REALTIME_3D_DESIGN §11, D12): a per-fragment
+/// dynamic kernel width driven by a blocker search instead of a fixed tap
+/// count, so shadows harden at contact and soften with occluder distance.
+/// `light_size` carries the world-units light diameter that drives the
+/// blocker-search radius and penumbra width; enum growth is additive, so
+/// projects saved before this variant existed load unchanged.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ShadowSoftness {
     /// 3×3 PCF kernel (9 taps). Sharp shadow edges.
     Hard,
@@ -64,25 +70,42 @@ pub enum ShadowSoftness {
     /// 7×7 PCF kernel (49 taps). Very soft shadows; visible noise on
     /// thin features.
     VerySoft,
+    /// PCSS contact-hardening penumbra (D12). `light_size` is the
+    /// world-units light diameter driving both the blocker-search radius
+    /// and the penumbra-width estimate; the render-side kernel width is
+    /// computed per-fragment, not fixed.
+    Contact { light_size: f32 },
 }
 
 impl ShadowSoftness {
     /// PCF kernel half-width — the loop bound for the (-N..=N, -N..=N)
     /// sample pattern. Hard → 1 (3×3), Soft → 2 (5×5), VerySoft → 3 (7×7).
+    /// `Contact` has no fixed width (it's computed per-fragment in the
+    /// shader from the PCSS penumbra estimate); this returns the sentinel
+    /// `-1`, consumed only by `render_scene.rs`'s caster-table build to
+    /// select the PCSS branch in `render_scene.wgsl`.
     pub fn kernel_half_width(self) -> i32 {
         match self {
             Self::Hard => 1,
             Self::Soft => 2,
             Self::VerySoft => 3,
+            Self::Contact { .. } => -1,
         }
     }
 
     /// Total tap count = (2N+1)². Useful for the divisor when averaging
-    /// PCF results.
+    /// PCF results. `Contact`'s tap count is dynamic (per-fragment PCF
+    /// half-width, plus the fixed 16-tap PCSS blocker search) — 0 here
+    /// since no caller derives a fixed divisor from it.
     pub fn tap_count(self) -> u32 {
-        let n = self.kernel_half_width() as u32;
-        let k = 2 * n + 1;
-        k * k
+        match self {
+            Self::Contact { .. } => 0,
+            _ => {
+                let n = self.kernel_half_width() as u32;
+                let k = 2 * n + 1;
+                k * k
+            }
+        }
     }
 }
 

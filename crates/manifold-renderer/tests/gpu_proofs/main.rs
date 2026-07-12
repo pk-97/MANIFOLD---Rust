@@ -28,5 +28,6 @@ mod render_scene_exposure;
 mod render_scene_fog;
 mod render_scene_instances;
 mod render_scene_lights;
+mod render_scene_pcss;
 mod render_scene_shadows;
 mod smoke;

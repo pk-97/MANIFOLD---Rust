@@ -44,6 +44,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-124 | **mesh-primitive-tests-clippy-debt-under-tests-features** | `cargo clippy -p manifold-renderer --tests --features gpu-proofs -- -D warnings` fails with 12 pre-existing `needless_range_loop`/`manual_range_contains`/`identity_op` errors in `push_along_normals.rs`/`scatter_on_mesh.rs`/`taper_mesh.rs`/`twist_mesh.rs`/`revolve_curve.rs` test modules — none touched by the session that found it (REALTIME_3D §11 P9). The routine per-phase gate (`clippy -p <crate> -- -D warnings`, no `--tests`) stays clean, which is how this drifted unnoticed. Fix shape: mechanical rewrites in the five files; optionally fold `--tests --features gpu-proofs` into the landing-time full-workspace sweep. LOW. |
 | BUG-123 | **mesh-edges-capacity-vs-active-count** | `node.mesh_edges` derives edge count from buffer capacity, not the asset's loaded vertex count — a `max_capacity` larger than the asset produces degenerate zero-vertex edges drawing as a bright dot at vertex 0's projection. Workaround: size `max_capacity` exactly to the asset (BlossomWire: 9210). Fix shape: optional `active_count` scalar input mirroring `node.range`, or a mesh-wire active-count convention. LOW (tracked v1 limitation, shipped 2026-07-11). |
 | BUG-122 | **graph-editor-node-face-loses-type-name-when-custom-named** | Once a node is given a custom (author) title, the node face shows only that name — the underlying type (e.g. `node.blur`, `node.mix`) is nowhere on the card, not even as a subtitle or tooltip. Root cause found: `display_label()` (`snapshot.rs:838`) returns the author title outright when set, never combining it with the friendly/type label; the `(WGSL)` suffix is the only case that appends anything. Shipped behavior since `ebd48cde` (2026-06-03), not a recent regression. Fix shape: show both, e.g. a secondary type line/tooltip, or a "Custom Name — Blur" compound header. |
 | BUG-121 | **graph-editor-effect-card-missing-mapping-drawer-chevron** | The graph editor's effect/generator card no longer shows the sideways slider-mapping (param range) drawer chevron. Strong lead, not yet confirmed live: `ParamCardPanel::context` defaults to `CardContext::Perform`, and `set_context(CardContext::Author)` — the call the "dedicated panel" host is supposed to make once — has zero production call sites in the current tree (only in `param_card.rs`'s own tests); the chevron and its `OpenCardMapping` action are gated entirely behind `author && info.mappable`. If that's really the live path, the drawer is unreachable app-wide, not just visually missing on this card. Fix shape: find/restore the host's `set_context(Author)` call; confirm live before treating as root-caused. |
@@ -68,8 +69,8 @@ or human can read it, and it needs no external tool.
 | ~~BUG-090~~ FIXED | **audio-mixdown-analysis-only-test-flakes-under-parallel-run** | FIXED @ `78e97d4a` — the named `TestDir`/temp-path-collision suspect was confirmed correct, not float summation-order non-determinism: `SystemTime::now()`'s nanosecond value isn't actually nanosecond-resolution here (~96% collision rate measured over 200k tight-loop calls), so tests sharing the `TestDir` prefix collided on the same directory under parallel execution and raced on the shared `tone.wav` fixture. Fixed with a per-process atomic sequence number in the path; 10/10 consecutive parallel runs green. |
 | BUG-089 | **live-clip-pending-tick-queue-dead-on-all-live-paths** | `LiveClipManager`'s tick-based pending-launch queue (`pending_by_tick`/`pending_by_layer`/`pending_by_clip_id`, `PendingLiveLaunch.target_tick`, `queue_pending`, `activate_due_pending_launches[_at_tick]`, `has_pending_activations`) can only ever be written when `event_absolute_tick >= 0`, but midir events always set `absolute_tick = -1` (`midi_input.rs`) and it is the sole producer of `MidiNoteEvent` in the whole workspace; `fire_layer_oneshot` also always passes `tick = -1`. `activate_due_pending_launches_at_tick` is the only live caller (`engine.rs:803`, fed `self.last_frame_count`, a frame counter, not a real clock tick) and drains a map that can never be non-empty in production — confirmed by exhaustive grep, not inference. Found 2026-07-10 while scoping F2's tick-queue deletion call; left OPEN rather than deleted because the dead footprint is the whole subsystem (7 items across 2 files plus a dead cancellation branch in `commit_live_clip`), wider than the single function F2 was scoped to evaluate — a clean full removal deserves its own dedicated pass. LOW (dead code, zero runtime cost beyond an empty-map check per tick; risk is only in a future session doing a partial removal). |
 | ~~BUG-088~~ FIXED | **pre-existing-clippy-tests-gate-dirty-since-f1-landing** | FIXED @ `78e97d4a` — the 3 `audio_mixdown.rs` lints (`cloned_ref_to_slice_refs` x2, `needless_range_loop`) rewritten with `std::slice::from_ref` / `.iter().zip().enumerate()`. `osc_timecode.rs:172`'s `doc_lazy_continuation` no longer reproduces under the current toolchain (file unchanged) — nothing to fix. Surfaced a separate, unrelated pre-existing `osc_receiver.rs` lint while isolating the gate — logged as BUG-110. |
-| BUG-086 | **recording-audio-track-under-covers-duration-on-longer-takes** | Repeated 2-minute 1920x1080 unpaced `recording-soak` self-checks measured `audio_duration_s` 1.3%-3.3% short of the intended duration (116.0s/118.4s/118.5s of 120.0s across three runs — variable, not a fixed percentage), while two independent 1-minute runs (1280x720 and 1920x1080) both measured exactly 60.0s — duration-dependent, not resolution-dependent, and not a "still queued at `stop()`" race (a 500ms settle delay before `stop()` changed the result by <0.1s). The native audio input silently drops on backpressure with no counter at all (`LiveRecordingPlugin.m:546-547`: `if (!state->audioInput.isReadyForMoreMediaData) return LR_OK; // drop samples rather than block` — unlike video's BUG-085, this path doesn't even log). Found 2026-07-10 building LIVE_RECORDING_PROOFS P2's soak self-check; root cause unknown (suspects: sustained real-time backpressure only manifesting past ~60-90s of continuous writing — disk I/O contention as the file grows, fragment-flush cadence, or AAC internal encoder buffering not fully flushed). MED — silent and uncounted, variable magnitude; unknown whether it scales worse over a full 20-minute take. |
-| BUG-085 | **recording-frames-recorded-overstates-async-append-drops** | `LiveRecorder_EncodeVideoFrame` returns success (and Rust's `frames_recorded` counts it) as soon as the synchronous GPU blit into the CVPixelBuffer completes — but the actual `appendPixelBuffer:` call happens later, async, on `state->appendQueue`, and silently drops the frame (`"[LiveRecorder] VideoToolbox backpressure — dropped frame"`, no counter incremented) if `videoIn.isReadyForMoreMediaData` is false at that moment. Under heavy backpressure `frames_recorded` can overstate the file's real packet count by the async-drop count. Found 2026-07-10 building LIVE_RECORDING_PROOFS P1 (`pool_accounting_consistent`'s bounded-retry-recovery variant hit it once: 107 counted vs 106 actual packets). MED (accounting-only — the file itself stays valid, PTS stays monotonic; but a post-set frame count could read wrong). LOW in practice — the async drop needs genuinely sustained backpressure a real 60fps show submission rate is unlikely to hit. |
+| BUG-086 | **recording-audio-track-under-covers-duration-on-longer-takes** | Repeated 2-minute 1920x1080 unpaced `recording-soak` self-checks measured `audio_duration_s` 1.3%-3.3% short of the intended duration (116.0s/118.4s/118.5s of 120.0s across three runs — variable, not a fixed percentage), while two independent 1-minute runs (1280x720 and 1920x1080) both measured exactly 60.0s — duration-dependent, not resolution-dependent, and not a "still queued at `stop()`" race (a 500ms settle delay before `stop()` changed the result by <0.1s). The native audio input silently drops on backpressure with no counter at all (`LiveRecordingPlugin.m:546-547`: `if (!state->audioInput.isReadyForMoreMediaData) return LR_OK; // drop samples rather than block` — unlike video's BUG-085, this path doesn't even log). Found 2026-07-10 building LIVE_RECORDING_PROOFS P2's soak self-check; root cause unknown (suspects: sustained real-time backpressure only manifesting past ~60-90s of continuous writing — disk I/O contention as the file grows, fragment-flush cadence, or AAC internal encoder buffering not fully flushed). **CRITICAL (escalated by Peter 2026-07-12: live takes are release material — "IT IS CRITICAL"; audio running short = audio/visual desync)** — silent and uncounted, variable magnitude; unknown whether it scales worse over a full 20-minute take. |
+| BUG-085 | **recording-frames-recorded-overstates-async-append-drops** | `LiveRecorder_EncodeVideoFrame` returns success (and Rust's `frames_recorded` counts it) as soon as the synchronous GPU blit into the CVPixelBuffer completes — but the actual `appendPixelBuffer:` call happens later, async, on `state->appendQueue`, and silently drops the frame (`"[LiveRecorder] VideoToolbox backpressure — dropped frame"`, no counter incremented) if `videoIn.isReadyForMoreMediaData` is false at that moment. Under heavy backpressure `frames_recorded` can overstate the file's real packet count by the async-drop count. Found 2026-07-10 building LIVE_RECORDING_PROOFS P1 (`pool_accounting_consistent`'s bounded-retry-recovery variant hit it once: 107 counted vs 106 actual packets). MED (accounting-only — the file itself stays valid, PTS stays monotonic; but a post-set frame count could read wrong). **Escalated to CRITICAL-adjacent 2026-07-12 (Peter): same silent-drop class as BUG-086; fixed together in the recording-sync lane** — counters must reflect actual appends and no path may drop without counting. |
 | BUG-080 | **param-manifest-construction-not-a-unified-safe-gate** | The param manifest (an instance's live knob list) is built at deserialize AND rebuilt by a later `reconcile_param_manifests` pass, because deserialize can't see project-embedded presets yet. Consumers that read `.params` *between* the two — a direct `serde_json::from_str::<PresetInstance>`, the keep-don't-drop backstop, the legacy audio-trigger migration, ~18 tests — depend on the deserialize-time build being correct. It works today only because the double-build papers over the timing; it's a latent hazard, not SOTA: a future load path added without a reconcile silently inherits an empty/partial manifest (the BUG-036 class). Root cause: manifest construction has no single safe gate — "partially built" is an observable, readable state. Fix shape (design pass, NOT a patch): make a half-built manifest un-observable — one construction gate every load/paste/bare-read passes through, OR a type-state where params can't be read until reconciled, OR deserialize carries enough context to build complete in one shot. The naive "build once in reconcile" was tried this session and is unsafe for exactly the reasons above (design doc §2 D1 priced + rejected it; see the 2026-07-09 double-build escalation). MEDIUM (design-quality / latent-robustness). **Fix path settled (Peter 2026-07-11): dedicated Opus design session + its own implementation session; not a bug-wave item.** |
 | BUG-079 | **missing-preset-fails-silently-no-onscreen-signal** | Loading a project that references an unresolvable preset def (deleted, unregistered, or missing on this machine) degrades *safely but silently*: saved params are kept on a placeholder (keep-don't-drop, [`effects.rs:940`](../crates/manifold-core/src/effects.rs#L940)) and the effect falls back to **source passthrough** ([`preset_runtime.rs:808`](../crates/manifold-renderer/src/preset_runtime.rs#L808)) — but the ONLY signal is a console `eprintln`; nothing shows on screen. A performer sees the layer render without its effect (a missing *generator* layer likely renders empty — inferred, unconfirmed) with no visible reason. Fix shape: surface unresolvable presets in-app (a card/badge or a load-time notice). LOW |
 | BUG-076 | **inspector-scroll-underestimates-content-height** | `layer_scroll`/`master_scroll`'s `max_scroll()` clamps to ~13-20px on a 9-card stack that's visibly ~1200px too tall for its viewport — the built content overflows but the scroll estimator doesn't agree (LOW, suspected root cause: `compute_height()` reads a mid-tween drawer-animation value instead of the settled/armed-at-build height) |
@@ -85,7 +86,7 @@ or human can read it, and it needs no external tool.
 | BUG-038 | **ableton-log-spam** | bridge warns every 1.5s forever when Live absent (LOW) |
 | BUG-111 | **fused-segment-inner-override-noop** | in-place inner-param edits on a fused SEGMENT card never reach the live kernel — segment node_map is `c{i}.`-prefixed, per-card def isn't, so both surviving and fused-away nodes miss (MED) |
 | BUG-015 | **inspector-overlap** | stale-chrome class FIXED 2026-07-08 — incremental cache path now falls back to full render on out-of-sub-region dirt (`has_dirty_outside_ranges` + `incremental_path_safe`); blanket `clear_dirty` narrowed to the overlay region so the fallback isn't erased. (2026-07-04 "sections interleaved" sighting = separate open thread if it recurs) |
-| BUG-060 | **inspector-footer-overpaint** | REOPENED 2026-07-08. Opus 2nd pass: tree-geometry cause **ELIMINATED on the live cache path** (new `footer_leak_probe` test proves the inspector clips at footer_top through `traverse_flat_range`; footer's own render is correct) — the "inspector escapes into the footer" framing is wrong. Cause localized BELOW the tree, to the cache/dirty layer (tab-swap clears it = full recomposite). Artifact is **stale UI content** (UI colours / button fragments left behind), NOT clear/dark — the prior "footer goes dark, RGB 9-16" atlas dump was a HARNESS failure, not the symptom. Stale-pixel / dirty-clear bug, BUG-015 class. Needs live atlas+offscreen pixel dump. Cause still OPEN. **2026-07-10 (Fable + Peter):** Rig screenshots relocate the artifact — fragments accumulate at the scroll viewport's CLIP EDGES (bottom sliver above footer_top on both tabs, top sliver under the tab strip on Master), i.e. INSIDE the inspector panel rows, and build up per scroll step until tab-swap wipes them. Both existing probes are structurally blind there: `footer_leak_probe` checks geometry below footer_top, the P0 differential asserts rows [footer_top, footer_top+h) — the artifact rows were never asserted, so the harness "0 diff" results don't contradict the rig (stop extending the harness; observe the rig instead). Live dump tool BUILT + VALIDATED on branch `debug/bug-060-surface-dump` (worktree `bug060-dump`, e81696b4): `MANIFOLD_BUG060_DUMP=<N>` overwrites `/tmp/bug060_atlas.png` + `/tmp/bug060_offscreen.png` every N dirty-present frames (default 30) and logs sf + footer/inspector rects; readback verified against a live launch (real UI, sf=2 Retina confirmed, playhead-only atlas/offscreen delta proves the surfaces are independent). Next: Peter reproduces with the flag set, then one look at the atlas PNG splits cache-layer vs composite/present. **2026-07-10 VERDICT (live dump, Peter's audioTesting2 repro): the dirt is IN THE ATLAS — and it is not a stale copy, it is a LIVE UNCLIPPED DRAW.** Pixel measurement on the dump: the blue pill in the top sliver spans rows 170–197 physical, the pixel-exact position EdgeStretch's own ON pill would occupy if unclipped (Glitch reference: pill top = title top − 3), while the header bg + title around it are correctly scissored at the viewport line (~188). So the card-header toggle's bg fill draws WITHOUT the column clip; every scroll leaves the previous unclipped copy in territory the (clipped) self-clearing panel render can never repaint — that is the accumulation, and only `invalidate_all` (tab swap) wipes it. Bottom-edge fragments (slider fills) are the same class: once the clip is lost mid-card, later fill quads in the range draw unclipped too. The `traverse_flat_range` suspect was CLEARED by a clip-topology test (`bug060_every_card_node_renders_under_the_column_clip`, green — fresh-build clip chains are sound). **ROOT CAUSE FOUND + FIXED 2026-07-10 @ `39836352`** via a batch-flush band trace (`MANIFOLD_BUG060_TRACE=x0,y0,x1,y1`) on Peter's live repro: card-shaped rects logged as `immediate ... scissor=None` during the inspector pass. `push/pop_transform` and `push/pop_depth` cut the pending rect run via `flush_immediate_run` even mid-traversal, batching already-enqueued TREE rects under `immediate_clip` (`None`) — every card ON pill drawn before its card's **rotated chevron** (`UIStyle.transform`) lost its scissor. This is also why the 2026-07-08 trace swore all 858 draws were clipped: it observed the clip stack at `draw_node` time, upstream of the flush-time theft. Fix: context-aware `flush_pending_run` (tree clip stack while `in_tree_pass`, immediate clip otherwise); regression test `transform_boundary_keeps_tree_scissor_on_pending_batch` proven red-under-old-flush/green-now. Gates green (workspace, gpu-proofs 1248, clippy). **RIG-VERIFIED by Peter + LANDED on main @ `cc4eeb37` 2026-07-10** (dump/trace tooling landed env-gated with it). **CLASS-KILL follow-up (same day): clip bound per command at enqueue** — `RectCommand` now carries `(clip, depth)` captured at the push site (like `LineCommand`/`ImageCommand`/text `clip_bounds`/per-command depth `22c5d528` already did); batches derive in `prepare()` by run-scanning consecutive equal `(clip, depth)`; ALL flush-time scissor inference (`flush_immediate_run`/`flush_scissor_batch`/`flush_pending_run`/`in_tree_pass`) deleted, so the wrong-flush mistake is unrepresentable. Invariant recorded in `docs/DEVELOPMENT_REFERENCE.md` ("UI Renderer Invariant"). CLOSED. |
+| ~~BUG-060~~ FIXED | **inspector-footer-overpaint** | FIXED @ `39836352` (landed `cc4eeb37`, rig-verified by Peter 2026-07-10, re-confirmed solved by Peter 2026-07-12; class-killed — clip bound per command at enqueue). History: REOPENED 2026-07-08. Opus 2nd pass: tree-geometry cause **ELIMINATED on the live cache path** (new `footer_leak_probe` test proves the inspector clips at footer_top through `traverse_flat_range`; footer's own render is correct) — the "inspector escapes into the footer" framing is wrong. Cause localized BELOW the tree, to the cache/dirty layer (tab-swap clears it = full recomposite). Artifact is **stale UI content** (UI colours / button fragments left behind), NOT clear/dark — the prior "footer goes dark, RGB 9-16" atlas dump was a HARNESS failure, not the symptom. Stale-pixel / dirty-clear bug, BUG-015 class. Needs live atlas+offscreen pixel dump. Cause still OPEN. **2026-07-10 (Fable + Peter):** Rig screenshots relocate the artifact — fragments accumulate at the scroll viewport's CLIP EDGES (bottom sliver above footer_top on both tabs, top sliver under the tab strip on Master), i.e. INSIDE the inspector panel rows, and build up per scroll step until tab-swap wipes them. Both existing probes are structurally blind there: `footer_leak_probe` checks geometry below footer_top, the P0 differential asserts rows [footer_top, footer_top+h) — the artifact rows were never asserted, so the harness "0 diff" results don't contradict the rig (stop extending the harness; observe the rig instead). Live dump tool BUILT + VALIDATED on branch `debug/bug-060-surface-dump` (worktree `bug060-dump`, e81696b4): `MANIFOLD_BUG060_DUMP=<N>` overwrites `/tmp/bug060_atlas.png` + `/tmp/bug060_offscreen.png` every N dirty-present frames (default 30) and logs sf + footer/inspector rects; readback verified against a live launch (real UI, sf=2 Retina confirmed, playhead-only atlas/offscreen delta proves the surfaces are independent). Next: Peter reproduces with the flag set, then one look at the atlas PNG splits cache-layer vs composite/present. **2026-07-10 VERDICT (live dump, Peter's audioTesting2 repro): the dirt is IN THE ATLAS — and it is not a stale copy, it is a LIVE UNCLIPPED DRAW.** Pixel measurement on the dump: the blue pill in the top sliver spans rows 170–197 physical, the pixel-exact position EdgeStretch's own ON pill would occupy if unclipped (Glitch reference: pill top = title top − 3), while the header bg + title around it are correctly scissored at the viewport line (~188). So the card-header toggle's bg fill draws WITHOUT the column clip; every scroll leaves the previous unclipped copy in territory the (clipped) self-clearing panel render can never repaint — that is the accumulation, and only `invalidate_all` (tab swap) wipes it. Bottom-edge fragments (slider fills) are the same class: once the clip is lost mid-card, later fill quads in the range draw unclipped too. The `traverse_flat_range` suspect was CLEARED by a clip-topology test (`bug060_every_card_node_renders_under_the_column_clip`, green — fresh-build clip chains are sound). **ROOT CAUSE FOUND + FIXED 2026-07-10 @ `39836352`** via a batch-flush band trace (`MANIFOLD_BUG060_TRACE=x0,y0,x1,y1`) on Peter's live repro: card-shaped rects logged as `immediate ... scissor=None` during the inspector pass. `push/pop_transform` and `push/pop_depth` cut the pending rect run via `flush_immediate_run` even mid-traversal, batching already-enqueued TREE rects under `immediate_clip` (`None`) — every card ON pill drawn before its card's **rotated chevron** (`UIStyle.transform`) lost its scissor. This is also why the 2026-07-08 trace swore all 858 draws were clipped: it observed the clip stack at `draw_node` time, upstream of the flush-time theft. Fix: context-aware `flush_pending_run` (tree clip stack while `in_tree_pass`, immediate clip otherwise); regression test `transform_boundary_keeps_tree_scissor_on_pending_batch` proven red-under-old-flush/green-now. Gates green (workspace, gpu-proofs 1248, clippy). **RIG-VERIFIED by Peter + LANDED on main @ `cc4eeb37` 2026-07-10** (dump/trace tooling landed env-gated with it). **CLASS-KILL follow-up (same day): clip bound per command at enqueue** — `RectCommand` now carries `(clip, depth)` captured at the push site (like `LineCommand`/`ImageCommand`/text `clip_bounds`/per-command depth `22c5d528` already did); batches derive in `prepare()` by run-scanning consecutive equal `(clip, depth)`; ALL flush-time scissor inference (`flush_immediate_run`/`flush_scissor_batch`/`flush_pending_run`/`in_tree_pass`) deleted, so the wrong-flush mistake is unrepresentable. Invariant recorded in `docs/DEVELOPMENT_REFERENCE.md` ("UI Renderer Invariant"). CLOSED. |
 | BUG-025 | **timeline-scissor-bleed** | clip content bleeds across row bounds (MED, repro needed — scrolled headless render 07-07 clean) |
 | BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
 | BUG-050 | **ableton-anchor-yankback** | play-from-cursor snap-backs; anchor fix landed, rig confirmation owed via [ABL-SYNC] logs (HIGH) |
@@ -116,6 +117,15 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-124 (mesh-primitive-tests-clippy-debt-under-tests-features) — clippy fails on `-p manifold-renderer --tests --features gpu-proofs` in files unrelated to any recent change — LOW, gate-scope gap
+**Status:** OPEN — found 2026-07-12 during REALTIME_3D_DESIGN §11 (P9 PCSS) landing, while scoping clippy for that phase.
+
+**Symptom** — `cargo clippy -p manifold-renderer --tests --features gpu-proofs -- -D warnings` fails with 12 errors (`needless_range_loop`, `manual_range_contains`, `identity_op`) in `push_along_normals.rs`, `scatter_on_mesh.rs`, `taper_mesh.rs`, `twist_mesh.rs`, `revolve_curve.rs` test modules — none touched by the P9 session. The plain `cargo clippy -p manifold-renderer -- -D warnings` (lib+bins, no `--tests`) stays clean, which is why this debt went unnoticed: the CLAUDE.md-specified per-phase gate omits `--tests`, so nobody runs the stricter form routinely.
+
+**Root cause (known)** — ordinary clippy debt in `#[cfg(test)]` code (index-loop patterns, manual range checks, a `1 * COLS` identity-op) that accumulated because the test-scope clippy variant isn't part of the routine gate.
+
+**Fix shape** — mechanical: apply the suggested rewrites (`iter().enumerate()`, `RangeInclusive::contains`, drop the `1 *`) in the five listed files. Small, isolated, no behavior change. Optionally fold `--tests --features gpu-proofs` into the landing-time full-workspace clippy sweep so it doesn't silently drift again.
 
 ### BUG-123 (mesh-edges-capacity-vs-active-count) — node.mesh_edges emits edges for the full buffer capacity, not the loaded vertex count — LOW visual artifact, tracked v1 limitation
 **Status:** OPEN — shipped-with-limitation 2026-07-11 (feat/scene3-growth merge `28f29343`); documented in the node's purpose string and BlossomWire's description.
@@ -1195,8 +1205,140 @@ _Verification:_ new device-free unit tests at the cache-manager helper layer —
 stale scrollbar). The 2026-07-04 "sections interleaved" sighting (hole #2 + rebuild-while-scrolled)
 is a separate open thread if it recurs.
 
+### BUG-019 — Motion "group fold" (D17) has no UI surface to fold — DESIGN GAP (deferred)
+**Status:** DEFERRED
+
+**Symptom** — found 2026-07-04 completing UI motion P2. D17 lists "group fold: children
+collapse into header," but the animation has nothing to animate: `EffectGroup.collapsed`
+exists at the model layer (`crates/manifold-core/src/effects.rs:3194`) with zero rendering
+surface — no group header, no collapse toggle, no child-card grouping by `group_id` in the
+inspector (`rg EffectGroup crates/manifold-ui/src` → 0 hits).
+
+**Root cause** — the design assumed a foldable effect-group UI in the inspector that was
+never built. Group fold is a *new feature* (group header + child-card filtering + collapse
+toggle), not an animation retrofit — correctly out of the motion layer's scope.
+
+**Fix shape** — build the effect-group inspector UI first (own small design: header row,
+`group_id`-keyed child filtering, collapse toggle), THEN the fold animation is a `FlipList`
++ exit-state retrofit like the other P2 collapses. Needs a design/build decision from Peter.
+
+### BUG-020 — Card collapse animates effect cards but not generator cards — LOW (deferred)
+**Status:** DEFERRED
+
+**Symptom** — found 2026-07-04 (UI motion P2 batch 1). Effect cards collapse/expand with the
+`collapse_anim` reflow; generator cards do not — their rows parent at root (`None`) in
+`ParamCardPanel::build_generator`, so there is no `ClipRegion` seam to clip the collapsing
+body the way `build_effect` has.
+
+**Fix shape** — give `build_generator` the same parent/clip-region seam `build_effect` uses,
+then reuse the existing `collapse_anim`. Small, localized to `param_card.rs`.
+
+### BUG-021 — Value snap-back is Perform-inspector only, not the graph-editor param cards — LOW (deferred)
+**Status:** DEFERRED
+
+**Symptom** — found 2026-07-04 (UI motion P2 closer). Right-click value-reset eases the fill
+(EASE_SNAP) on Perform-context inspector cards; the graph editor owns a separate
+`ParamCardPanel` instance not reachable from the `ParamRightClick` dispatch site
+(`ui_bridge/inspector.rs:1140`), so its value resets snap without the settle.
+
+**Fix shape** — thread the snap-back trigger to the graph-editor's `ParamCardPanel` too, or
+lift the reset-with-settle into shared `ParamCardPanel` logic both dispatch sites reach.
+
+### BUG-025 — Timeline layer/header scissoring: clip content bleeds across row bounds — MED (repro needed)
+**Status:** OPEN
+
+**Symptom** — reported by Peter 2026-07-05 (screenshot in session transcript) as "layer and
+header scissoring": in the arrangement view, the bottom layer's purple clip body renders far
+beyond its row — a solid block filling the timeline from its row down to the window edge —
+while the layer-header column at bottom-left shows the Plasma MIDI drawer (MIDI / CHANNEL /
+DEVICE) overlapping into that region. Clip content and header-column content are not being
+mutually clipped to their rows/panes.
+
+**Root cause** — unknown. Suspect surface: the per-row scissor rect for clip bodies (last or
+expanded row), the `track-header-invariant` / `single-source-y-layout` class, or a stale
+subregion scissor (`subregion-scissor-invariant`). Likely same family as BUG-015 (inspector
+sections at stale offsets) — both smell like Y-layout/scissor divergence after the recent
+timeline waves.
+
+**Repro** — not pinned; NOT reproduced headless (2026-07-05 Opus). Snapshotted the `states`
+and `timeline` scenes (both carry a selected generator layer with an open MIDI/CHANNEL/DEVICE
+drawer, the closest fixtures to Peter's screenshot) — both render correctly: every clip body is
+scissored to its row, every header drawer stays in the left column, group nesting clips fine.
+A scroll-down + re-snapshot on `timeline` also did not reproduce (and scroll may not be fully
+wired in the headless tracks path). So the general scissoring path is sound; the bug is
+state-specific. Triage narrows it to a config the fixtures don't hit — most likely the
+*last* row being a selected generator whose clip fills the remaining viewport height, and/or a
+live scroll offset. Pin it with either a targeted fixture (selected generator as the final
+layer) or a running-app repro from Peter's project.
+
+**Repro attempt 2026-07-07 (timeline-ux audit)** — the 07-05 note's "scroll may not be fully
+wired in the headless tracks path" is now explained: `--scroll` was seeded AFTER the base
+render (fixed this branch), so every prior "scrolled" base PNG was actually unscrolled. With
+scroll genuinely applied (via the interact after-render), headers + lanes offset together and
+clip bodies stay scissored to their rows — still not reproduced. The state-specific triage
+above stands.
+
+**Fix shape** — TBD after repro. If it's the invariant class (likely, given BUG-015 is the same
+family), fix at the single Y-layout source, not per-widget patches.
+
+### BUG-026 — Batch-2 popups: entrance fade freezes at t=0 (transparent bg) until an input re-dirties the frame — MED — FIX LANDED, running-app verification owed
+**Status:** OPEN
+
+**Symptom** — reported by Peter 2026-07-05 (before/after screenshots): opening the Add Effect
+browser renders the search field, filter chips, and preset cells floating directly over the
+timeline — the popup's dark background panel is missing. Moving the mouse over the popup makes
+the background appear and it then looks correct.
+
+**Root cause (FOUND)** — not the alpha math, a missing animation-poll in the dirty-driven
+renderer. The batch-2 popups (browser / ableton picker / settings) run a D17 entrance tween:
+`enter_anim` starts at `t=0` and, while `t<0.999`, `BrowserPopupPanel::build` multiplies the
+modal container's background + border alpha by `t` (browser_popup.rs:451,469-474) — so frame 0
+draws the panel fully transparent while the cells (opaque, not `t`-gated) float on top. The
+tween is ticked inside each popup's `update()`, which only re-runs while the frame stays dirty.
+The inspector drawer + panel-split tweens self-sustain via a `needs_rebuild` poll after
+`UIRoot::update()` (app_render.rs ~2927), but the batch-2 popups were added to `update()` and
+never to that poll. Opening a popup dirties exactly one frame (drawing it invisible); nothing
+re-dirties it, so the fade freezes at `t=0` until an unrelated input (mouseover) re-dirties the
+frame — the "no background until mouseover" symptom.
+
+**Fix (LANDED)** — added `is_animating()` to each batch-2 popup and the matching poll in the
+app motion block, mirroring `drawer_anim_active` exactly. Gate: clippy `-D warnings` clean;
+`manifold-ui --lib` 604/604. Commit `01c15213` (branch `fix/popup-enter-anim`).
+
+**Verification owed (L4)** — the headless `--script` driver has no frame loop and its
+`enter_anim` ticks off wall-clock, so it cannot exercise this timing bug; a running-app check
+(open the Add Effect browser, confirm the background is present immediately without moving the
+mouse) is the remaining proof. Tracked in VERIFICATION_DEBT (VD-006).
+
+### BUG-031 — Layer context-menu + rename still address layers positionally — LOW (follow-up to the LayerId migration `877852a9`)
+**Status:** OPEN
+
+**Root cause** — the primary layer-header actions were migrated to carry a stable `LayerId`
+(commit `877852a9`, kills the panel-index-vs-live-model collision). Two related clusters were
+deliberately left positional to keep that diff bounded:
+- The **`Context*Layer` right-click-menu family** (`ContextPasteAtLayer`, `ContextImportMidi`,
+  `ContextAddVideoLayer/GeneratorLayer/AudioLayer`, `ContextDuplicateLayer`, `ContextUngroup`,
+  `ContextDeleteLayer`, `DropdownContext::LayerContext`) still carry a `usize`. `LayerHeaderRightClicked`
+  now carries the id and `ui_root` resolves it to the current row synchronously when the menu opens,
+  so there's no regression — but the menu ITEMS bake in that index, leaving a (rare) stale window
+  between menu-open and item-click.
+- **`TextInputField::LayerName(usize)`** (layer rename): the enum derives `Copy`, and `LayerId`
+  isn't `Copy`, so migrating it forces dropping `Copy` and cascades through the whole text-input
+  subsystem (`app.rs` field handling). The double-click intercept resolves id→index locally, so the
+  rename has the same (unchanged) stale window it always had.
+
+**Symptom** — none observed; latent. A context-menu action or a rename committed after the layer
+list changed under it (another command, undo/redo, MIDI phantom layer) could hit the wrong layer.
+Same bug class as the migration killed for the primary controls.
+
+**Fix shape** — carry `LayerId` in the `Context*Layer` family (thread it from
+`LayerHeaderRightClicked` through the menu items) and switch `TextInputField::LayerName` to
+`LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
+
+## Fixed
+
 ### BUG-060 — Inspector content paints over the footer bar — REOPENED 2026-07-08 (UI_CLIP_AND_Z P1 verified the wrong render path)
-**Status:** REOPENED
+**Status:** FIXED @ `39836352` (landed main `cc4eeb37` 2026-07-10, rig-verified by Peter same day; bookkeeping closed 2026-07-12 on Peter's confirmation — the index row's own tail already recorded the fix + the enqueue-time clip class-kill, only this status line was stale)
 
 **REOPENED 2026-07-08 (Peter, on latest main after P1 landed).** Still repros. New observations,
 none yet explained:
@@ -1361,138 +1503,6 @@ path and the frame loop's blanket `clear_dirty`
 precisely because leftover dirty flags once defeated the idle fast path — a careless fix
 reintroduces that regression; verify by reasoning + a unit test at the
 `render_dirty_panels` helper layer (no snapshot can show it).
-
-### BUG-019 — Motion "group fold" (D17) has no UI surface to fold — DESIGN GAP (deferred)
-**Status:** DEFERRED
-
-**Symptom** — found 2026-07-04 completing UI motion P2. D17 lists "group fold: children
-collapse into header," but the animation has nothing to animate: `EffectGroup.collapsed`
-exists at the model layer (`crates/manifold-core/src/effects.rs:3194`) with zero rendering
-surface — no group header, no collapse toggle, no child-card grouping by `group_id` in the
-inspector (`rg EffectGroup crates/manifold-ui/src` → 0 hits).
-
-**Root cause** — the design assumed a foldable effect-group UI in the inspector that was
-never built. Group fold is a *new feature* (group header + child-card filtering + collapse
-toggle), not an animation retrofit — correctly out of the motion layer's scope.
-
-**Fix shape** — build the effect-group inspector UI first (own small design: header row,
-`group_id`-keyed child filtering, collapse toggle), THEN the fold animation is a `FlipList`
-+ exit-state retrofit like the other P2 collapses. Needs a design/build decision from Peter.
-
-### BUG-020 — Card collapse animates effect cards but not generator cards — LOW (deferred)
-**Status:** DEFERRED
-
-**Symptom** — found 2026-07-04 (UI motion P2 batch 1). Effect cards collapse/expand with the
-`collapse_anim` reflow; generator cards do not — their rows parent at root (`None`) in
-`ParamCardPanel::build_generator`, so there is no `ClipRegion` seam to clip the collapsing
-body the way `build_effect` has.
-
-**Fix shape** — give `build_generator` the same parent/clip-region seam `build_effect` uses,
-then reuse the existing `collapse_anim`. Small, localized to `param_card.rs`.
-
-### BUG-021 — Value snap-back is Perform-inspector only, not the graph-editor param cards — LOW (deferred)
-**Status:** DEFERRED
-
-**Symptom** — found 2026-07-04 (UI motion P2 closer). Right-click value-reset eases the fill
-(EASE_SNAP) on Perform-context inspector cards; the graph editor owns a separate
-`ParamCardPanel` instance not reachable from the `ParamRightClick` dispatch site
-(`ui_bridge/inspector.rs:1140`), so its value resets snap without the settle.
-
-**Fix shape** — thread the snap-back trigger to the graph-editor's `ParamCardPanel` too, or
-lift the reset-with-settle into shared `ParamCardPanel` logic both dispatch sites reach.
-
-### BUG-025 — Timeline layer/header scissoring: clip content bleeds across row bounds — MED (repro needed)
-**Status:** OPEN
-
-**Symptom** — reported by Peter 2026-07-05 (screenshot in session transcript) as "layer and
-header scissoring": in the arrangement view, the bottom layer's purple clip body renders far
-beyond its row — a solid block filling the timeline from its row down to the window edge —
-while the layer-header column at bottom-left shows the Plasma MIDI drawer (MIDI / CHANNEL /
-DEVICE) overlapping into that region. Clip content and header-column content are not being
-mutually clipped to their rows/panes.
-
-**Root cause** — unknown. Suspect surface: the per-row scissor rect for clip bodies (last or
-expanded row), the `track-header-invariant` / `single-source-y-layout` class, or a stale
-subregion scissor (`subregion-scissor-invariant`). Likely same family as BUG-015 (inspector
-sections at stale offsets) — both smell like Y-layout/scissor divergence after the recent
-timeline waves.
-
-**Repro** — not pinned; NOT reproduced headless (2026-07-05 Opus). Snapshotted the `states`
-and `timeline` scenes (both carry a selected generator layer with an open MIDI/CHANNEL/DEVICE
-drawer, the closest fixtures to Peter's screenshot) — both render correctly: every clip body is
-scissored to its row, every header drawer stays in the left column, group nesting clips fine.
-A scroll-down + re-snapshot on `timeline` also did not reproduce (and scroll may not be fully
-wired in the headless tracks path). So the general scissoring path is sound; the bug is
-state-specific. Triage narrows it to a config the fixtures don't hit — most likely the
-*last* row being a selected generator whose clip fills the remaining viewport height, and/or a
-live scroll offset. Pin it with either a targeted fixture (selected generator as the final
-layer) or a running-app repro from Peter's project.
-
-**Repro attempt 2026-07-07 (timeline-ux audit)** — the 07-05 note's "scroll may not be fully
-wired in the headless tracks path" is now explained: `--scroll` was seeded AFTER the base
-render (fixed this branch), so every prior "scrolled" base PNG was actually unscrolled. With
-scroll genuinely applied (via the interact after-render), headers + lanes offset together and
-clip bodies stay scissored to their rows — still not reproduced. The state-specific triage
-above stands.
-
-**Fix shape** — TBD after repro. If it's the invariant class (likely, given BUG-015 is the same
-family), fix at the single Y-layout source, not per-widget patches.
-
-### BUG-026 — Batch-2 popups: entrance fade freezes at t=0 (transparent bg) until an input re-dirties the frame — MED — FIX LANDED, running-app verification owed
-**Status:** OPEN
-
-**Symptom** — reported by Peter 2026-07-05 (before/after screenshots): opening the Add Effect
-browser renders the search field, filter chips, and preset cells floating directly over the
-timeline — the popup's dark background panel is missing. Moving the mouse over the popup makes
-the background appear and it then looks correct.
-
-**Root cause (FOUND)** — not the alpha math, a missing animation-poll in the dirty-driven
-renderer. The batch-2 popups (browser / ableton picker / settings) run a D17 entrance tween:
-`enter_anim` starts at `t=0` and, while `t<0.999`, `BrowserPopupPanel::build` multiplies the
-modal container's background + border alpha by `t` (browser_popup.rs:451,469-474) — so frame 0
-draws the panel fully transparent while the cells (opaque, not `t`-gated) float on top. The
-tween is ticked inside each popup's `update()`, which only re-runs while the frame stays dirty.
-The inspector drawer + panel-split tweens self-sustain via a `needs_rebuild` poll after
-`UIRoot::update()` (app_render.rs ~2927), but the batch-2 popups were added to `update()` and
-never to that poll. Opening a popup dirties exactly one frame (drawing it invisible); nothing
-re-dirties it, so the fade freezes at `t=0` until an unrelated input (mouseover) re-dirties the
-frame — the "no background until mouseover" symptom.
-
-**Fix (LANDED)** — added `is_animating()` to each batch-2 popup and the matching poll in the
-app motion block, mirroring `drawer_anim_active` exactly. Gate: clippy `-D warnings` clean;
-`manifold-ui --lib` 604/604. Commit `01c15213` (branch `fix/popup-enter-anim`).
-
-**Verification owed (L4)** — the headless `--script` driver has no frame loop and its
-`enter_anim` ticks off wall-clock, so it cannot exercise this timing bug; a running-app check
-(open the Add Effect browser, confirm the background is present immediately without moving the
-mouse) is the remaining proof. Tracked in VERIFICATION_DEBT (VD-006).
-
-### BUG-031 — Layer context-menu + rename still address layers positionally — LOW (follow-up to the LayerId migration `877852a9`)
-**Status:** OPEN
-
-**Root cause** — the primary layer-header actions were migrated to carry a stable `LayerId`
-(commit `877852a9`, kills the panel-index-vs-live-model collision). Two related clusters were
-deliberately left positional to keep that diff bounded:
-- The **`Context*Layer` right-click-menu family** (`ContextPasteAtLayer`, `ContextImportMidi`,
-  `ContextAddVideoLayer/GeneratorLayer/AudioLayer`, `ContextDuplicateLayer`, `ContextUngroup`,
-  `ContextDeleteLayer`, `DropdownContext::LayerContext`) still carry a `usize`. `LayerHeaderRightClicked`
-  now carries the id and `ui_root` resolves it to the current row synchronously when the menu opens,
-  so there's no regression — but the menu ITEMS bake in that index, leaving a (rare) stale window
-  between menu-open and item-click.
-- **`TextInputField::LayerName(usize)`** (layer rename): the enum derives `Copy`, and `LayerId`
-  isn't `Copy`, so migrating it forces dropping `Copy` and cascades through the whole text-input
-  subsystem (`app.rs` field handling). The double-click intercept resolves id→index locally, so the
-  rename has the same (unchanged) stale window it always had.
-
-**Symptom** — none observed; latent. A context-menu action or a rename committed after the layer
-list changed under it (another command, undo/redo, MIDI phantom layer) could hit the wrong layer.
-Same bug class as the migration killed for the primary controls.
-
-**Fix shape** — carry `LayerId` in the `Context*Layer` family (thread it from
-`LayerHeaderRightClicked` through the menu items) and switch `TextInputField::LayerName` to
-`LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
-
-## Fixed
 
 ### BUG-018 — `node_graph::catalog_gen::tests::regenerates_in_sync` red on main: `docs/node_catalog.json` stale against the node registry — LOW
 **Status:** FIXED @ `38ec595f` (2026-07-12, Fable, `feat/cinematic-camera-designs`) — regenerated per the test's own instruction; the diff was the stale ApricotBloom `wireAmount` card entry (scene-3 morph revert leftover), inspected before overwrite per the note below. Verified: `catalog_gen` tests 4/4 green in the worktree post-fix (this was main's sole red in a 3089/3090 pre-fix sweep); the landing sweep is the full re-proof.

@@ -3215,6 +3215,13 @@ impl Application {
             None => return,
         };
 
+        // Advance the UI frame fence once per frame, before any ring-owning
+        // encoder below (present_all_windows' layer/clip/UI passes) claims a
+        // slot this tick — those claims stamp with this frame number.
+        if let Some(fence) = &self.ui_frame_fence {
+            fence.advance();
+        }
+
         // Workspace preview via IOSurface (dual device, zero GPU copy).
         #[cfg(target_os = "macos")]
         {
@@ -3264,6 +3271,13 @@ impl Application {
             let g0 = std::time::Instant::now();
             self.present_graph_editor_window();
             self.ui_profile.add("present_graph_editor", g0.elapsed());
+            // Frame-fence sentinel must be the LAST commit of the frame's UI
+            // encoders: the graph-editor window shares UIRenderer's vertex
+            // rings, so a sentinel committed before it would mark slots
+            // retired while that encoder is still in flight.
+            if let (Some(fence), Some(gpu)) = (&self.ui_frame_fence, &self.gpu) {
+                fence.commit_frame(&gpu.device);
+            }
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -3272,6 +3286,10 @@ impl Application {
             let g0 = std::time::Instant::now();
             self.present_graph_editor_window();
             self.ui_profile.add("present_graph_editor", g0.elapsed());
+            // Frame-fence sentinel: see the macos branch comment above.
+            if let (Some(fence), Some(gpu)) = (&self.ui_frame_fence, &self.gpu) {
+                fence.commit_frame(&gpu.device);
+            }
         }
 
         let display_hz = self
