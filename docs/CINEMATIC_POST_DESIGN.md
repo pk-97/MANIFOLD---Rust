@@ -319,10 +319,32 @@ gpu_tests; workspace sweep at landing.
   new decision). Deliverables: atom per D5, CPU reference (I1), preset
   re-wire (two variable_blur nodes → one bokeh_gather), I2 re-proof, I5.
   Demo: none — L1 (cluster no-PNG rule).
+- **P5 — `node.ssao_gtao` swap (NOT pre-approved — decision needed before
+  a build session, unlike P4)** (proposed 2026-07-12, Peter: GTAO visibly
+  beats SSAO/HBAO on real scenes, want it if it's cheap). GTAO subsumes
+  HBAO — same horizon-search core, plus a proper cosine-weighted integral
+  — so this phase targets GTAO directly, not an HBAO intermediate step.
+  Two things need a committed decision before any code, both because
+  real-world GTAO implementations typically lean on temporal
+  accumulation to hit good quality cheaply, which conflicts with D2
+  ("no temporal accumulation... deterministic... CPU-reference-parity
+  testable... two exports bit-identical" — §5 "Decided — do not reopen"
+  item 2): (a) the exact per-pixel horizon-direction/step counts sized
+  for ONE deterministic frame, no cross-frame spread — this is what
+  keeps it cheap without breaking D2, and is a real algorithm choice,
+  not an implementation detail; (b) whether `node.ssao_gtao` REPLACES
+  `node.ssao_from_depth` outright or ships alongside it as a second,
+  pickable AO atom. Once those two lines are committed (a short doc
+  amendment, not a new design campaign), the build itself is
+  P2-shaped and P2-sized: one primitive, same `depth`+`camera` inputs,
+  same AO-texture output, same `node.mix` preset wiring, CPU reference
+  parity test, roughly one session.
 
 Phasing-completeness check: D7→P0, D1→P1, D3→P2, D4→P3, D5→P4, D6 grown
 across P1–P4; D2 is inside P2/P4 deliverables; exposure card (CAMERA D5)
-rides P1's preset. No body-committed affordance is unphased.
+rides P1's preset. No body-committed affordance is unphased. P5 is a
+2026-07-12 addition, outside the original phasing-completeness set — it
+extends D3, not any of D1/D4/D5/D6/D7.
 
 ## 5. Decided — do not reopen
 
