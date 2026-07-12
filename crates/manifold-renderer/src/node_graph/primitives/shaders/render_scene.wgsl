@@ -112,11 +112,17 @@ struct Uniforms {
 
 // Shadow-caster table: MAX_SHADOW_CASTING_LIGHTS (=4) slots × 5 vec4.
 // Per slot: [0..3] = the caster's light-space view_proj columns,
-// [4] = (bias, kernel_half_width, texel_size, 0). Filled only for active
-// casters (zeroed otherwise); a light's caster slot rides lights[i*2+1].w
-// (−1.0 = this light casts no shadow). The four shadow maps are separate
-// bindings because WGSL has no dynamic texture-binding indexing — the K=4
-// switch in sample_shadow() picks the right one.
+// [4] = (bias, kernel_half_width, texel_size, light_size). Filled only for
+// active casters (zeroed otherwise); a light's caster slot rides
+// lights[i*2+1].w (−1.0 = this light casts no shadow). The four shadow maps
+// are separate bindings because WGSL has no dynamic texture-binding
+// indexing — the K=4 switch in sample_shadow() picks the right one.
+// `kernel_half_width` doubles as the PCSS dispatch: a NEGATIVE value (D12,
+// REALTIME_3D_DESIGN §11) means this caster is the `Contact` softness tier
+// — `shadow_factor` runs the PCSS blocker-search branch instead of the
+// fixed kernel, and `light_size` (the 4th component, otherwise unused —
+// "zero layout growth" per D12) drives both the blocker-search radius and
+// the penumbra-width estimate.
 @group(0) @binding(9) var<storage, read> casters: array<vec4<f32>>;
 @group(0) @binding(10) var shadow_map_0: texture_depth_2d;
 @group(0) @binding(11) var shadow_map_1: texture_depth_2d;
@@ -181,11 +187,141 @@ fn sample_shadow(slot: i32, suv: vec2<f32>, ref_depth: f32) -> f32 {
     }
 }
 
+// Plain (non-comparison) depth read for the PCSS blocker search (D12) —
+// nearest texel, no hardware PCF. `texture_depth_2d` supports `textureLoad`
+// directly (standard WGSL builtin), so this needs no second binding or
+// sampler — the VERIFY-AT-IMPL in REALTIME_3D_DESIGN §11 resolves to "yes,
+// via the existing binding": same four textures `sample_shadow` above
+// already binds.
+fn plain_shadow_depth(slot: i32, uv: vec2<f32>) -> f32 {
+    let clamped = clamp(uv, vec2<f32>(0.0), vec2<f32>(0.999999));
+    switch slot {
+        case 0: {
+            let px = vec2<i32>(clamped * vec2<f32>(textureDimensions(shadow_map_0)));
+            return textureLoad(shadow_map_0, px, 0);
+        }
+        case 1: {
+            let px = vec2<i32>(clamped * vec2<f32>(textureDimensions(shadow_map_1)));
+            return textureLoad(shadow_map_1, px, 0);
+        }
+        case 2: {
+            let px = vec2<i32>(clamped * vec2<f32>(textureDimensions(shadow_map_2)));
+            return textureLoad(shadow_map_2, px, 0);
+        }
+        default: {
+            let px = vec2<i32>(clamped * vec2<f32>(textureDimensions(shadow_map_3)));
+            return textureLoad(shadow_map_3, px, 0);
+        }
+    }
+}
+
+// Shared (2·khw+1)² box-average PCF loop — byte-identical to the loop
+// `shadow_factor` used to run inline. Both the fixed-kernel tiers
+// (Hard/Soft/VerySoft) and the Contact tier's dynamic per-fragment width
+// (D12 step 3, "the EXISTING PCF loop with half-width = ceil(penumbra_px)")
+// go through this one function.
+fn pcf_average(slot: i32, suv: vec2<f32>, ref_depth: f32, texel: f32, khw: i32) -> f32 {
+    var sum = 0.0;
+    var count = 0.0;
+    for (var dy = -khw; dy <= khw; dy = dy + 1) {
+        for (var dx = -khw; dx <= khw; dx = dx + 1) {
+            let off = vec2<f32>(f32(dx), f32(dy)) * texel;
+            sum = sum + sample_shadow(slot, suv + off, ref_depth);
+            count = count + 1.0;
+        }
+    }
+    return sum / count;
+}
+
+const PCSS_TAPS: u32 = 16u;
+const GOLDEN_ANGLE: f32 = 2.399963;
+
+// Project a world point through the caster's light-space `vp` into shadow-
+// map UV space — the same math `shadow_factor` runs for the fragment
+// itself. `w <= 0.0` (behind the light) reads as "no offset" rather than a
+// divide-by-negative, which only matters for the degenerate light_size=0
+// callers below (a real occluded fragment is always in front of its own
+// caster).
+fn project_to_shadow_uv(vp: mat4x4<f32>, world_pos: vec3<f32>) -> vec2<f32> {
+    let clip = vp * vec4<f32>(world_pos, 1.0);
+    if clip.w <= 0.0 {
+        return vec2<f32>(0.0);
+    }
+    let ndc = clip.xyz / clip.w;
+    return vec2<f32>(ndc.x * 0.5 + 0.5, ndc.y * -0.5 + 0.5);
+}
+
+// D12's `light_size` is a world-units light diameter (the outer-card
+// fader), but the blocker search and penumbra formula below both need a
+// UV-space radius. The caster table carries no world-scale `range` field
+// to convert one into the other without growing the ABI ("zero layout
+// growth"), so this derives the conversion exactly, per-fragment, from the
+// caster's own `vp` matrix instead: project `world_pos` offset by
+// `light_size` along world X and world Z, and take the larger of the two
+// resulting UV-space displacements. Two axes (not one) because a single
+// offset axis can be near-parallel to the light's view direction for some
+// light orientations, which would collapse to a near-zero UV shift and
+// underestimate the true radius; X and Z can't both be degenerate for the
+// same light. Exact for Sun's uniform-scale ortho frustum; a reasonable
+// per-point approximation for Point's perspective one (same "v1
+// approximation" spirit as `light.rs`'s single-face point-shadow doc
+// comment).
+fn pcss_search_radius_uv(vp: mat4x4<f32>, world_pos: vec3<f32>, suv: vec2<f32>, light_size: f32) -> f32 {
+    let uv_x = project_to_shadow_uv(vp, world_pos + vec3<f32>(light_size, 0.0, 0.0));
+    let uv_z = project_to_shadow_uv(vp, world_pos + vec3<f32>(0.0, 0.0, light_size));
+    return max(length(uv_x - suv), length(uv_z - suv));
+}
+
+// D12 — PCSS contact-hardening penumbra (REALTIME_3D_DESIGN §11).
+// (1) Blocker search: 16 golden-angle taps (CINEMATIC_POST D2 formula:
+// r_i = sqrt((i+0.5)/N), theta_i = i·2.399963) in a `search_radius_uv`
+// (the world-units `light_size` converted to UV space by
+// `pcss_search_radius_uv`) radius, PLAIN depth reads (no hardware
+// compare). Average the blockers' depth; zero blockers found = nothing
+// occludes this point = fully lit, early out — no PCF sample needed.
+// (2) penumbra_px = search_radius_uv·(z_r−z_b)/z_b, mapped to texels via
+// `texel`, clamped [0, 24] — `search_radius_uv` stands in for the doc's
+// `light_size` term here because it's already `light_size` converted
+// through the exact same world→UV scale the search radius used, so the
+// two stay consistent. (3) `pcf_average` above with
+// half-width = ceil(penumbra_px).
+fn pcss_shadow_factor(slot: i32, suv: vec2<f32>, ref_depth: f32, z_r: f32, search_radius_uv: f32, texel: f32) -> f32 {
+    if search_radius_uv <= 0.0 {
+        // D12 gate (b): Contact with light_size=0 must match the sharpest
+        // fixed tier (Hard, kernel_half_width=1) within 1px of gradient
+        // width. Reuse Hard's exact half-width so the two are
+        // byte-identical, not just close.
+        return pcf_average(slot, suv, ref_depth, texel, 1);
+    }
+    var blocker_sum = 0.0;
+    var blocker_count = 0.0;
+    for (var i: u32 = 0u; i < PCSS_TAPS; i = i + 1u) {
+        let r = sqrt((f32(i) + 0.5) / f32(PCSS_TAPS));
+        let theta = f32(i) * GOLDEN_ANGLE;
+        let tap_uv = suv + search_radius_uv * r * vec2<f32>(cos(theta), sin(theta));
+        let d = plain_shadow_depth(slot, tap_uv);
+        if d < ref_depth {
+            blocker_sum = blocker_sum + d;
+            blocker_count = blocker_count + 1.0;
+        }
+    }
+    if blocker_count < 0.5 {
+        return 1.0;
+    }
+    let z_b = blocker_sum / blocker_count;
+    let penumbra_px = clamp(search_radius_uv * (z_r - z_b) / max(z_b, 1e-6) / texel, 0.0, 24.0);
+    let khw = i32(ceil(penumbra_px));
+    return pcf_average(slot, suv, ref_depth, texel, khw);
+}
+
 // Light visibility in [0,1]: 1 = fully lit, 0 = fully shadowed. `slot_f` is
 // lights[i*2+1].w — negative means this light casts no shadow, so the point
-// is always lit. Reconstructs the fragment's light-space position, does a
-// PCF depth compare with a (2·khw+1)² kernel. Points outside the caster's
-// frustum read as lit (no shadow data there) rather than clamped-dark.
+// is always lit. Reconstructs the fragment's light-space position, then
+// either runs the fixed (2·khw+1)² PCF kernel or (D12) the PCSS branch — a
+// NEGATIVE `kernel_half_width` in the caster table is the Contact-tier
+// sentinel (`render_scene.rs`'s caster-table build). Points outside the
+// caster's frustum read as lit (no shadow data there) rather than
+// clamped-dark.
 fn shadow_factor(world_pos: vec3<f32>, slot_f: f32) -> f32 {
     if slot_f < 0.0 {
         return 1.0;
@@ -200,8 +336,9 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32) -> f32 {
     );
     let params = casters[base + 4u];
     let bias = params.x;
-    let khw = i32(params.y);
+    let khw_raw = params.y;
     let texel = params.z;
+    let light_size = params.w;
 
     let clip = vp * vec4<f32>(world_pos, 1.0);
     if clip.w <= 0.0 {
@@ -216,16 +353,11 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32) -> f32 {
     }
     let ref_depth = ndc.z - bias;
 
-    var sum = 0.0;
-    var count = 0.0;
-    for (var dy = -khw; dy <= khw; dy = dy + 1) {
-        for (var dx = -khw; dx <= khw; dx = dx + 1) {
-            let off = vec2<f32>(f32(dx), f32(dy)) * texel;
-            sum = sum + sample_shadow(slot, suv + off, ref_depth);
-            count = count + 1.0;
-        }
+    if khw_raw < 0.0 {
+        let search_radius_uv = pcss_search_radius_uv(vp, world_pos, suv, light_size);
+        return pcss_shadow_factor(slot, suv, ref_depth, ndc.z, search_radius_uv, texel);
     }
-    return sum / count;
+    return pcf_average(slot, suv, ref_depth, texel, i32(khw_raw));
 }
 
 struct VsOut {

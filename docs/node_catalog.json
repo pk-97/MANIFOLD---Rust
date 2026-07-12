@@ -8771,6 +8771,11 @@
           "name": "shadow_bias",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "light_size",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Light",
@@ -8933,15 +8938,16 @@
           "enum_values": [
             "Hard",
             "Soft",
-            "VerySoft"
+            "VerySoft",
+            "Contact"
           ],
           "label": "Shadow Softness",
           "name": "shadow_softness",
           "range": [
             "0",
-            "2"
+            "3"
           ],
-          "tooltip": "How fuzzy the shadow edges are, Hard, Soft, or VerySoft. Softer edges look nicer but cost more to render.",
+          "tooltip": "How fuzzy the shadow edges are, Hard, Soft, or VerySoft. Contact gives real contact-hardening shadows, sharp where things touch, soft further away. Softer edges look nicer but cost more to render.",
           "type": "enum"
         },
         {
@@ -8965,9 +8971,20 @@
           ],
           "tooltip": "The detail of the shadow map, default 2048. Higher gives sharper shadows on big scenes, lower runs faster. Rarely needs changing during a show.",
           "type": "int"
+        },
+        {
+          "default": "1",
+          "label": "Light Size",
+          "name": "light_size",
+          "range": [
+            "0",
+            "20"
+          ],
+          "tooltip": "Only used in Contact shadow softness. How big the light source is, in world units, default 1. Bigger sizes give softer, wider penumbras away from contact points.",
+          "type": "float"
         }
       ],
-      "purpose": "Single light source for 3D lighting pipelines. Mode enum picks Sun (parallel rays, ortho shadow frustum) or Point (omnidirectional, perspective shadow frustum). Outputs a Light wire consumed by shading atoms (lambert_directional, blinn_specular, etc.) and shadow-aware mesh renderers (the PBR path lives inside node.render_mesh's material). All scalar params are port-shadow so the light can be animated by LFOs, MIDI, or other control sources. Colour is premultiplied with intensity at emission. Industry-standard Blender / TouchDesigner shape — one node per light, shadow-mapping is a property of the light not a separate pipeline stage.",
+      "purpose": "Single light source for 3D lighting pipelines. Mode enum picks Sun (parallel rays, ortho shadow frustum) or Point (omnidirectional, perspective shadow frustum). Outputs a Light wire consumed by shading atoms (lambert_directional, blinn_specular, etc.) and shadow-aware mesh renderers (the PBR path lives inside node.render_mesh's material). All scalar params are port-shadow so the light can be animated by LFOs, MIDI, or other control sources. Colour is premultiplied with intensity at emission. Industry-standard Blender / TouchDesigner shape — one node per light, shadow-mapping is a property of the light not a separate pipeline stage. shadow_softness's Contact tier (REALTIME_3D_DESIGN §11 D12) trades the fixed PCF kernel for PCSS contact-hardening: shadows go sharp where the caster touches the receiver and soften with distance, driven by the port-shadowed light_size (world-units light diameter).",
       "role": "Source",
       "stratum": "driver",
       "summary": "A single light source for 3D scenes, set to a sun for parallel rays or a point for a local glow. Wire it into a material or a mesh renderer.",

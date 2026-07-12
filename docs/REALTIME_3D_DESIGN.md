@@ -1,6 +1,6 @@
 # Realtime 3D — Scenes, Lighting, Viewport
 
-**Status: IN PROGRESS (status corrected + baseline-reviewed 2026-07-05; D3/D8 AMENDED 2026-07-06 by `SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` — read its §8 before P6; D3/D4/§3/§6/§7.3 AMENDED 2026-07-10 (F2 coherence audit) — shadow-caster cap `MAX_SHADOW_CASTING_LIGHTS = 4` replaces the dead "8 objects, 4 lights" budget, read D4 before P2).** Shipped: P0 (MATERIAL M1–M6, all verified in-tree), P1 `node.render_scene` @ `8daa89fc`, P4 camera atoms (both `node.free_camera` + `node.look_at_camera` in-tree), §9 `node.spawn_from_mesh`, **P2 shadow maps + P3 atmosphere/fog @ `feat/realtime3d-p2p3` 2026-07-11** (gpu-proofs `render_scene_shadows` + `render_scene_fog`, PNG-verified; lights also moved to a ring-buffered storage buffer), **P8 scene instancing @ `feat/realtime3d-p8-instancing` 2026-07-11** (§10 D11 — each object group grows an optional `instances_n: Array(InstanceTransform)` port; wired draws `instance_count = buffer_size / 32` copies with `model_n · T_instance` in both the main pass and every caster's shadow pass; unwired binds a cached 1-entry identity stub, byte-identical to pre-P8 output; gpu-proofs `render_scene_instances` 4/4 green — identity parity, occlusion, instanced-shadow, instanced-fog; `Garden.json` re-wired single-pass, the `node.mix` Max-blend composite deleted). **The P1 "transforms not port-shadowed" deviation is retired by amendment, not by shadows: per-object transforms move to `node.transform_3d` atoms feeding `transform_n: Transform` ports** (SCENE_BUILD P2). Remaining: P5 viewport navigate, P6 gizmos, P7 scene starter preset, P9 PCSS penumbra (§11, added 2026-07-12). · designed 2026-07-03 · Fable
+**Status: IN PROGRESS (status corrected + baseline-reviewed 2026-07-05; D3/D8 AMENDED 2026-07-06 by `SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` — read its §8 before P6; D3/D4/§3/§6/§7.3 AMENDED 2026-07-10 (F2 coherence audit) — shadow-caster cap `MAX_SHADOW_CASTING_LIGHTS = 4` replaces the dead "8 objects, 4 lights" budget, read D4 before P2).** Shipped: P0 (MATERIAL M1–M6, all verified in-tree), P1 `node.render_scene` @ `8daa89fc`, P4 camera atoms (both `node.free_camera` + `node.look_at_camera` in-tree), §9 `node.spawn_from_mesh`, **P2 shadow maps + P3 atmosphere/fog @ `feat/realtime3d-p2p3` 2026-07-11** (gpu-proofs `render_scene_shadows` + `render_scene_fog`, PNG-verified; lights also moved to a ring-buffered storage buffer), **P8 scene instancing @ `feat/realtime3d-p8-instancing` 2026-07-11** (§10 D11 — each object group grows an optional `instances_n: Array(InstanceTransform)` port; wired draws `instance_count = buffer_size / 32` copies with `model_n · T_instance` in both the main pass and every caster's shadow pass; unwired binds a cached 1-entry identity stub, byte-identical to pre-P8 output; gpu-proofs `render_scene_instances` 4/4 green — identity parity, occlusion, instanced-shadow, instanced-fog; `Garden.json` re-wired single-pass, the `node.mix` Max-blend composite deleted), **P9 PCSS contact-hardening penumbra @ `feat/pcss-penumbra` 2026-07-12** (§11 D12 — `ShadowSoftness::Contact { light_size }`, 16-tap golden-angle blocker search + standard-PCSS penumbra estimate feeding the existing PCF loop with a dynamic half-width; `light_size`'s world-units→UV-space conversion derived per-fragment from the caster's own `vp` matrix, not a new caster-table field — zero layout growth as D12 required; gpu-proofs `render_scene_pcss` 3/3 green — contact-hardening gradient-width ratio, `light_size=0` byte-matches Hard tier, existing tiers unperturbed; `render_scene_shadows` proof unmodified and green). **The P1 "transforms not port-shadowed" deviation is retired by amendment, not by shadows: per-object transforms move to `node.transform_3d` atoms feeding `transform_n: Transform` ports** (SCENE_BUILD P2). Remaining: P5 viewport navigate, P6 gizmos, P7 scene starter preset. · designed 2026-07-03 · Fable
 **Prerequisites: MATERIAL_SYSTEM_DESIGN M1–M5 (un-held by this doc — its contract is
 unchanged; this design consumes its extension points). Vocab-audit apply should land
 first (this doc uses post-rename ids: `node.render_mesh`, `node.render_copies`).**
@@ -415,12 +415,35 @@ appears.
 
 ## 11. Addendum 2026-07-12 — P9: PCSS contact-hardening penumbra (soft shadows v2)
 
-**Status: APPROVED, not built · Fable 5.** Graduates RENDERING_INFRA_V2 §8. P2's
-PCF shipped fixed-width softness (`ShadowSoftness` Off/Soft/Softer/Softest →
-kernel half-width, `light.rs:72`); real shadows harden at contact and soften
-with occluder distance. Peter's acceptance frame, 2026-07-12, choosing
-self-shadowing as the target for his black-background hero scenes: *"a
-statue's arm onto its torso, leaves onto stems is exactly what I want."*
+**Status: SHIPPED @ `feat/pcss-penumbra` 2026-07-12 · Fable 5 design, Sonnet 5
+build.** Graduates RENDERING_INFRA_V2 §8. P2's PCF shipped fixed-width softness
+(`ShadowSoftness` kernel half-width, `light.rs:69` — this addendum's own audit
+below misnamed the variants "Off/Soft/Softer/Softest"; the shipped enum is
+`Hard`/`Soft`/`VerySoft`, doc-drift corrected at build time, no functional
+consequence); real shadows harden at contact and soften with occluder
+distance. Peter's acceptance frame, 2026-07-12, choosing self-shadowing as
+the target for his black-background hero scenes: *"a statue's arm onto its
+torso, leaves onto stems is exactly what I want."*
+
+**As-built deviations from the plan below (both interior-mechanism choices,
+not architecture changes — see landing report `docs/landings/2026-07-12-pcss-penumbra.md`
+for the full reasoning):**
+1. **`light_size`'s world→UV conversion is derived per-fragment from the
+   caster's own `vp` matrix** (project `world_pos` offset by `light_size`
+   along world X and Z, take the larger UV displacement), not read as a raw
+   UV-space number. The first implementation read `light_size` directly as
+   a UV offset, which is wrong by 2-3 orders of magnitude at any
+   performer-sensible value (a `light_size` of 1.5 world units produced UV
+   offsets of 1.5 — off the [0,1] texture entirely) and silently produced
+   "always fully lit" (zero blockers found, every tap clamped to the
+   texture edge) instead of a visible error. The VP-transform fix needs no
+   new caster-table field (D12's "zero layout growth" holds) and makes
+   `light_size` behave as the literal world-units diameter the outer-card
+   fader implies.
+2. **`Contact` with `light_size = 0` reuses `pcf_average(khw=1)` directly**
+   (Hard tier's exact kernel) rather than running the blocker-search loop
+   with a zero radius, so gate (b) holds at 0px difference, not just within
+   the required 1px.
 
 **Audit (2026-07-12, tip `9e537b16`):** PCF sampling `render_scene.wgsl:172-196`
 (`sample_shadow` switch + (2·khw+1)² loop); caster table `@binding(9)`, 5

@@ -44,6 +44,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-124 | **mesh-primitive-tests-clippy-debt-under-tests-features** | `cargo clippy -p manifold-renderer --tests --features gpu-proofs -- -D warnings` fails with 12 pre-existing `needless_range_loop`/`manual_range_contains`/`identity_op` errors in `push_along_normals.rs`/`scatter_on_mesh.rs`/`taper_mesh.rs`/`twist_mesh.rs`/`revolve_curve.rs` test modules — none touched by the session that found it (REALTIME_3D §11 P9). The routine per-phase gate (`clippy -p <crate> -- -D warnings`, no `--tests`) stays clean, which is how this drifted unnoticed. Fix shape: mechanical rewrites in the five files; optionally fold `--tests --features gpu-proofs` into the landing-time full-workspace sweep. LOW. |
 | BUG-123 | **mesh-edges-capacity-vs-active-count** | `node.mesh_edges` derives edge count from buffer capacity, not the asset's loaded vertex count — a `max_capacity` larger than the asset produces degenerate zero-vertex edges drawing as a bright dot at vertex 0's projection. Workaround: size `max_capacity` exactly to the asset (BlossomWire: 9210). Fix shape: optional `active_count` scalar input mirroring `node.range`, or a mesh-wire active-count convention. LOW (tracked v1 limitation, shipped 2026-07-11). |
 | BUG-122 | **graph-editor-node-face-loses-type-name-when-custom-named** | Once a node is given a custom (author) title, the node face shows only that name — the underlying type (e.g. `node.blur`, `node.mix`) is nowhere on the card, not even as a subtitle or tooltip. Root cause found: `display_label()` (`snapshot.rs:838`) returns the author title outright when set, never combining it with the friendly/type label; the `(WGSL)` suffix is the only case that appends anything. Shipped behavior since `ebd48cde` (2026-06-03), not a recent regression. Fix shape: show both, e.g. a secondary type line/tooltip, or a "Custom Name — Blur" compound header. |
 | BUG-121 | **graph-editor-effect-card-missing-mapping-drawer-chevron** | The graph editor's effect/generator card no longer shows the sideways slider-mapping (param range) drawer chevron. Strong lead, not yet confirmed live: `ParamCardPanel::context` defaults to `CardContext::Perform`, and `set_context(CardContext::Author)` — the call the "dedicated panel" host is supposed to make once — has zero production call sites in the current tree (only in `param_card.rs`'s own tests); the chevron and its `OpenCardMapping` action are gated entirely behind `author && info.mappable`. If that's really the live path, the drawer is unreachable app-wide, not just visually missing on this card. Fix shape: find/restore the host's `set_context(Author)` call; confirm live before treating as root-caused. |
@@ -116,6 +117,15 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-124 (mesh-primitive-tests-clippy-debt-under-tests-features) — clippy fails on `-p manifold-renderer --tests --features gpu-proofs` in files unrelated to any recent change — LOW, gate-scope gap
+**Status:** OPEN — found 2026-07-12 during REALTIME_3D_DESIGN §11 (P9 PCSS) landing, while scoping clippy for that phase.
+
+**Symptom** — `cargo clippy -p manifold-renderer --tests --features gpu-proofs -- -D warnings` fails with 12 errors (`needless_range_loop`, `manual_range_contains`, `identity_op`) in `push_along_normals.rs`, `scatter_on_mesh.rs`, `taper_mesh.rs`, `twist_mesh.rs`, `revolve_curve.rs` test modules — none touched by the P9 session. The plain `cargo clippy -p manifold-renderer -- -D warnings` (lib+bins, no `--tests`) stays clean, which is why this debt went unnoticed: the CLAUDE.md-specified per-phase gate omits `--tests`, so nobody runs the stricter form routinely.
+
+**Root cause (known)** — ordinary clippy debt in `#[cfg(test)]` code (index-loop patterns, manual range checks, a `1 * COLS` identity-op) that accumulated because the test-scope clippy variant isn't part of the routine gate.
+
+**Fix shape** — mechanical: apply the suggested rewrites (`iter().enumerate()`, `RangeInclusive::contains`, drop the `1 *`) in the five listed files. Small, isolated, no behavior change. Optionally fold `--tests --features gpu-proofs` into the landing-time full-workspace clippy sweep so it doesn't silently drift again.
 
 ### BUG-123 (mesh-edges-capacity-vs-active-count) — node.mesh_edges emits edges for the full buffer capacity, not the loaded vertex count — LOW visual artifact, tracked v1 limitation
 **Status:** OPEN — shipped-with-limitation 2026-07-11 (feat/scene3-growth merge `28f29343`); documented in the node's purpose string and BlossomWire's description.
