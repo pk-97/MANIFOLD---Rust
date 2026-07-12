@@ -302,7 +302,14 @@ fn pcss_search_radius_uv(vp: mat4x4<f32>, world_pos: vec3<f32>, suv: vec2<f32>, 
 // through the exact same world→UV scale the search radius used, so the
 // two stay consistent. (3) `pcf_average` above with
 // half-width = ceil(penumbra_px).
-fn pcss_shadow_factor(slot: i32, suv: vec2<f32>, ref_depth: f32, z_r: f32, search_radius_uv: f32, texel: f32) -> f32 {
+// `rot` spins the golden-angle disc by a per-pixel angle (interleaved
+// gradient noise from the fragment's screen position, computed once in
+// `shadow_factor`). With an unrotated disc every pixel shares one tap
+// pattern, which reads as visible banding/stippling across gentle penumbra
+// gradients at 17 taps; rotating per pixel trades that structured artifact
+// for fine unstructured noise the eye averages away. Applied to BOTH loops
+// so the blocker search and the filter stay on the same disc.
+fn pcss_shadow_factor(slot: i32, suv: vec2<f32>, ref_depth: f32, z_r: f32, search_radius_uv: f32, texel: f32, rot: f32) -> f32 {
     if search_radius_uv <= 0.0 {
         // D12 gate (b): Contact with light_size=0 must match the sharpest
         // fixed tier (Hard, kernel_half_width=1) within 1px of gradient
@@ -314,7 +321,7 @@ fn pcss_shadow_factor(slot: i32, suv: vec2<f32>, ref_depth: f32, z_r: f32, searc
     var blocker_count = 0.0;
     for (var i: u32 = 0u; i < PCSS_TAPS; i = i + 1u) {
         let r = sqrt((f32(i) + 0.5) / f32(PCSS_TAPS));
-        let theta = f32(i) * GOLDEN_ANGLE;
+        let theta = f32(i) * GOLDEN_ANGLE + rot;
         let tap_uv = suv + search_radius_uv * r * vec2<f32>(cos(theta), sin(theta));
         let d = plain_shadow_depth(slot, tap_uv);
         if d < ref_depth {
@@ -345,7 +352,7 @@ fn pcss_shadow_factor(slot: i32, suv: vec2<f32>, ref_depth: f32, z_r: f32, searc
     var sum = sample_shadow(slot, suv, ref_depth);
     for (var i: u32 = 0u; i < PCSS_TAPS; i = i + 1u) {
         let r = sqrt((f32(i) + 0.5) / f32(PCSS_TAPS));
-        let theta = f32(i) * GOLDEN_ANGLE;
+        let theta = f32(i) * GOLDEN_ANGLE + rot;
         let tap_uv = suv + radius_uv * r * vec2<f32>(cos(theta), sin(theta));
         sum = sum + sample_shadow(slot, tap_uv, ref_depth);
     }
@@ -360,7 +367,7 @@ fn pcss_shadow_factor(slot: i32, suv: vec2<f32>, ref_depth: f32, z_r: f32, searc
 // sentinel (`render_scene.rs`'s caster-table build). Points outside the
 // caster's frustum read as lit (no shadow data there) rather than
 // clamped-dark.
-fn shadow_factor(world_pos: vec3<f32>, slot_f: f32) -> f32 {
+fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
     if slot_f < 0.0 {
         return 1.0;
     }
@@ -393,7 +400,13 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32) -> f32 {
 
     if khw_raw < 0.0 {
         let search_radius_uv = pcss_search_radius_uv(vp, world_pos, suv, light_size);
-        return pcss_shadow_factor(slot, suv, ref_depth, ndc.z, search_radius_uv, texel);
+        // Interleaved gradient noise (Jimenez 2014) on the fragment's
+        // screen position: a well-distributed per-pixel angle in [0, 2π)
+        // with no state and no texture read. Screen-space (not a
+        // world_pos hash) so the noise density is uniform on screen
+        // regardless of surface scale or viewing angle.
+        let ign = fract(52.9829189 * fract(dot(frag_xy, vec2<f32>(0.06711056, 0.00583715))));
+        return pcss_shadow_factor(slot, suv, ref_depth, ndc.z, search_radius_uv, texel, ign * 6.2831853);
     }
     return pcf_average(slot, suv, ref_depth, texel, i32(khw_raw));
 }
@@ -556,7 +569,7 @@ fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
         let n_dot_h = max(dot(N, H), 0.0);
         let diffuse = albedo.rgb * n_dot_l;
         let spec = u.specular.rgb * pow(n_dot_h, max(u.specular.w, 1.0)) * n_dot_l;
-        let vis = shadow_factor(in.world_pos, l_col.w);
+        let vis = shadow_factor(in.world_pos, l_col.w, in.clip_pos.xy);
         lit = lit + (diffuse + spec) * l_col.rgb * l_dir.w * vis;
     }
     let ambient = albedo.rgb * u.scene_params.y * u.ambient_tint.rgb;
@@ -616,7 +629,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         let kd = (1.0 - F) * (1.0 - metallic);
         let diffuse = kd * albedo.rgb / PI;
 
-        let vis = shadow_factor(in.world_pos, l_col.w);
+        let vis = shadow_factor(in.world_pos, l_col.w, in.clip_pos.xy);
         direct = direct + (diffuse + specular) * l_col.rgb * n_dot_l * l_dir.w * vis;
     }
 
@@ -661,7 +674,7 @@ fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
         let n_dot_l = max(dot(N, L), 0.0);
         let snapped = floor(n_dot_l * bands) / (bands - 1.0);
         let level = mix(band_low, band_high, clamp(snapped, 0.0, 1.0));
-        let vis = shadow_factor(in.world_pos, l_col.w);
+        let vis = shadow_factor(in.world_pos, l_col.w, in.clip_pos.xy);
         lit = lit + albedo.rgb * level * l_col.rgb * l_dir.w * vis;
     }
     let ambient = albedo.rgb * u.scene_params.y * u.ambient_tint.rgb;
