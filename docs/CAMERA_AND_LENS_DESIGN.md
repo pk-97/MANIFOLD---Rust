@@ -1,6 +1,6 @@
 # Camera & Lens — one projection convention, one performable lens
 
-**Status:** APPROVED design, not built · 2026-07-12 · Fable 5
+**Status:** SHIPPED · P1 (`22530ac1`) + P2 (`de193e01`) landed 2026-07-12, main · designed 2026-07-12 · Fable 5
 **Prerequisites:** none (REALTIME_3D P1–P3 shipped; camera atoms shipped)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 **Companions:** [GBUFFER_DESIGN.md](GBUFFER_DESIGN.md) (stored depth this doc's lens consumers read) · [CINEMATIC_POST_DESIGN.md](CINEMATIC_POST_DESIGN.md) (DoF/motion-blur atoms that consume `LensParams`) · [RENDERING_INFRA_V2_DESIGN.md](RENDERING_INFRA_V2_DESIGN.md) (direction doc this graduates from, §6) · [REALTIME_3D_DESIGN.md](REALTIME_3D_DESIGN.md) (the scene pass; its Camera port is the convention's anchor)
