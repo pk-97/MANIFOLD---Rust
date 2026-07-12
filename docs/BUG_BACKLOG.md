@@ -93,7 +93,7 @@ or human can read it, and it needs no external tool.
 | BUG-048 | **arm-two-reds** | ARM idle/armed both red, shade-only difference (LOW, UX call) |
 | BUG-049 | **child-row-right-indent** | group-child right-anchored controls misaligned ~20px (LOW) |
 | BUG-012 | **tex-rename-corrupt** | fragment `tex_` port-rename corrupts `tex_*` scalars (LOW) |
-| BUG-018 | **catalog-stale** | node_catalog.json out of sync test red (LOW) |
+| ~~BUG-018~~ FIXED | **catalog-stale** | FIXED @ `38ec595f` — regenerated; stale entry was the ApricotBloom `wireAmount` card (scene-3 morph revert leftover) |
 | BUG-081 | **audio-load-blip** | ~10ms of audio leaks when a voice is built (LOW) |
 | BUG-031 | **layer-menu-positional** | Layer context-menu + rename still address layers positionally (LOW, follow-up to the LayerId migration `877852a9`) |
 | BUG-053 | **hdr-live-recording-structural** | HDR live recording can't work: pool format mismatches the native pixel buffer, nothing PQ-encodes (LOW today, blocks HDR capture) |
@@ -1362,24 +1362,6 @@ precisely because leftover dirty flags once defeated the idle fast path — a ca
 reintroduces that regression; verify by reasoning + a unit test at the
 `render_dirty_panels` helper layer (no snapshot can show it).
 
-### BUG-018 — `node_graph::catalog_gen::tests::regenerates_in_sync` red on main: `docs/node_catalog.json` stale against the node registry — LOW
-**Status:** OPEN
-
-**Symptom** — found 2026-07-04, same full-workspace sweep as BUG-017, same shape: confirmed
-pre-existing on origin/main (`90ab8531`) before the automation-P4 landing branch touched
-anything — reproduced standalone in a disposable worktree at that exact commit.
-`cargo test -p manifold-renderer --lib node_graph::catalog_gen::tests::regenerates_in_sync`
-fails with `docs/node_catalog.json is stale`.
-
-**Root cause** — not investigated; some session added/changed a node-graph primitive without
-re-running `cargo run -p manifold-renderer --bin gen_node_catalog` afterward. Given `node_count`
-sits at 214 in the checked-in file, worth diffing against the live-generated output to see
-which node(s) are missing/changed before just overwriting.
-
-**Fix shape** — mechanical: `cargo run -p manifold-renderer --bin gen_node_catalog`, commit
-the regenerated `docs/node_catalog.json`. Same reasoning as BUG-017 for not fixing it this
-session (unrelated to the work at hand, and worth doing once rather than mid-churn).
-
 ### BUG-019 — Motion "group fold" (D17) has no UI surface to fold — DESIGN GAP (deferred)
 **Status:** DEFERRED
 
@@ -1511,6 +1493,24 @@ Same bug class as the migration killed for the primary controls.
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ## Fixed
+
+### BUG-018 — `node_graph::catalog_gen::tests::regenerates_in_sync` red on main: `docs/node_catalog.json` stale against the node registry — LOW
+**Status:** FIXED @ `38ec595f` (2026-07-12, Fable, `feat/cinematic-camera-designs`) — regenerated per the test's own instruction; the diff was the stale ApricotBloom `wireAmount` card entry (scene-3 morph revert leftover), inspected before overwrite per the note below. Verified: `catalog_gen` tests 4/4 green in the worktree post-fix (this was main's sole red in a 3089/3090 pre-fix sweep); the landing sweep is the full re-proof.
+
+**Symptom** — found 2026-07-04, same full-workspace sweep as BUG-017, same shape: confirmed
+pre-existing on origin/main (`90ab8531`) before the automation-P4 landing branch touched
+anything — reproduced standalone in a disposable worktree at that exact commit.
+`cargo test -p manifold-renderer --lib node_graph::catalog_gen::tests::regenerates_in_sync`
+fails with `docs/node_catalog.json is stale`.
+
+**Root cause** — not investigated; some session added/changed a node-graph primitive without
+re-running `cargo run -p manifold-renderer --bin gen_node_catalog` afterward. Given `node_count`
+sits at 214 in the checked-in file, worth diffing against the live-generated output to see
+which node(s) are missing/changed before just overwriting.
+
+**Fix shape** — mechanical: `cargo run -p manifold-renderer --bin gen_node_catalog`, commit
+the regenerated `docs/node_catalog.json`. Same reasoning as BUG-017 for not fixing it this
+session (unrelated to the work at hand, and worth doing once rather than mid-churn).
 
 ### BUG-119 (timeline-layer-flickers-intermittently) — clip-thumbnail atlas triple-buffer clear-during-read race — HIGH, FIXED at root this session
 **Status:** FIXED (root-caused + fixed this session; pending Peter's visual confirm on a heavy scene). Companion fix `3c108f24` (paused-recapture save loop, same hunt) already landed separately.
