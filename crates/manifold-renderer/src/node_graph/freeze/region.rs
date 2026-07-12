@@ -1154,6 +1154,7 @@ fn classify_node(
         n.derived_uniforms(),
         n.outputs(),
         n.stencil_fetch(),
+        n.wgsl_includes(),
     );
     match standalone {
         Ok(kernel) if naga::front::wgsl::parse_str(&kernel).is_ok() => NodeClass::Eligible,

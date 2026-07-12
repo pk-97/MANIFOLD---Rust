@@ -230,6 +230,7 @@ pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
         P::DERIVED_UNIFORMS,
         P::OUTPUTS,
         P::STENCIL_FETCH,
+        P::WGSL_INCLUDES,
     )
 }
 
@@ -298,10 +299,21 @@ pub fn generate_standalone(
         derived_uniforms,
         outputs,
         false,
+        &[],
     )
 }
 
-/// [`generate_standalone`] with the STENCIL-FETCH body ABI flag. When
+/// [`generate_standalone`] with the STENCIL-FETCH body ABI flag and shared
+/// WGSL library includes (CINEMATIC_POST P1: the texture-domain standalone
+/// path previously had no way to thread `wgsl_includes` at all — only
+/// [`generate_standalone_buffer`] did — so a texture atom whose body called a
+/// shared helper (`depth_common.wgsl`'s `linearize_depth`, the
+/// synthesis-drift-prevention header every depth consumer must use) failed
+/// naga parsing both at dispatch time and at `region.rs`'s classify gate,
+/// permanently boundary-stuck. `includes` mirrors the buffer path's handling
+/// exactly: deduped-by-caller, prepended verbatim before the body so its
+/// helper calls resolve (same shape as `generate_standalone_buffer`'s
+/// identical block). When
 /// `stencil_fetch` is true, each sampler-`Gather` input is read by the body
 /// through a free `fetch_<port>(uv) -> vec4<f32>` function this wrapper
 /// DEFINES as the real `textureSampleLevel` over the bound texture — instead
@@ -319,6 +331,7 @@ pub fn generate_standalone_ext(
     derived_uniforms: &[&str],
     outputs: &[NodeOutput],
     stencil_fetch: bool,
+    includes: &[&str],
 ) -> Result<String, CodegenError> {
     if body.is_empty() {
         return Err(CodegenError::NoBody);
@@ -337,7 +350,7 @@ pub fn generate_standalone_ext(
         // classify final-gate parse-check in region.rs) still needs its derived
         // fields to generate the same Params layout its real dispatch will use.
         return generate_standalone_buffer(
-            body, inputs, params, input_access, derived_uniforms, &[], outputs, &[],
+            body, inputs, params, input_access, derived_uniforms, includes, outputs, &[],
         );
     }
     let tex_inputs: Vec<&NodeInput> = inputs.iter().filter(|i| is_texture_input(i)).collect();
@@ -552,6 +565,15 @@ pub fn generate_standalone_ext(
                 .unwrap();
             }
         }
+    }
+
+    // --- shared WGSL library includes (e.g. depth_common's linearize_depth),
+    // prepended so the body's helper calls resolve — mirrors
+    // generate_standalone_buffer's identical block and run()'s
+    // format!("{lib}\n{body}") convention. ---
+    for inc in includes {
+        out.push_str(inc.trim_end());
+        out.push_str("\n\n");
     }
 
     // --- the atom's body fragment, verbatim ---
@@ -2747,6 +2769,7 @@ mod dispatch_contract_tests {
             &["foo", "cam_pos:vec3"],
             &outputs,
             false,
+            &[],
         )
         .expect("synthetic source atom with derived uniforms generates");
 
@@ -4433,6 +4456,7 @@ mod gpu_tests {
             node.derived_uniforms(),
             node.outputs(),
             node.stencil_fetch(),
+            node.wgsl_includes(),
         )
         .expect("gaussian_blur generates");
         assert!(
@@ -4751,6 +4775,7 @@ mod gpu_tests {
             node.derived_uniforms(),
             node.outputs(),
             node.stencil_fetch(),
+            node.wgsl_includes(),
         )
         .expect("variable-width blur generates");
         assert!(
