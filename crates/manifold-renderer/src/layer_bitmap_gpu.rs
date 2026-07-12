@@ -75,7 +75,11 @@ struct LayerTexture {
 /// backlog; correctness against slot reuse comes from `frame_fence`
 /// stamping each slot claim and blocking if the GPU hasn't retired the
 /// command buffer that last wrote it — not from this depth alone.
-const VBUF_RING_SIZE: usize = 8;
+/// 16 = 8 frames of cover at this ring's 2 claims per frame (Pass 4a grid +
+/// Pass 4c overview/lanes): fence logs at 4K project load (2026-07-12)
+/// showed the UI queue running 4-5 frames behind, so the previous 8-slot
+/// depth (4 frames) sat inside the backlog window and hit wait timeouts.
+const VBUF_RING_SIZE: usize = 16;
 /// Max layers per frame in the pre-allocated vertex buffer.
 const MAX_LAYER_QUADS: usize = 64;
 

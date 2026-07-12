@@ -119,7 +119,10 @@ impl FrameFence {
                     self.completed_frame()
                 );
             }
-            if !self.wait_for(*stamp) {
+            // Timeout shares the caller's rate-limiter: a sustained backlog
+            // would otherwise emit one error per claim, per frame — console
+            // spam at exactly the moment (a live set) it hurts most.
+            if !self.wait_for(*stamp) && (n <= 10 || n.is_multiple_of(256)) {
                 log::error!(
                     "[frame-fence] {owner}: slot {slot} wait timed out (stamped frame {}, \
                      completed frame {}) — GPU backlog exceeds ring depth, proceeding anyway",
