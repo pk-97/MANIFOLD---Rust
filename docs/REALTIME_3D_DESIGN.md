@@ -486,3 +486,20 @@ turns noon (hard) into overcast (soft) on the hero mesh's self-shadowing.
 **Forbidden moves:** replacing the PCF loop · a second shadow shader file ·
 resolution-dependent constants hard-coded from the test scene · touching the
 caster-cap policy (D4/F2) · "improving" bias handling while in there.
+
+**Amendment 2026-07-12 (post-ship, perf):** step (3)'s dense-PCF reuse was the
+shipped implementation's bottleneck — at the 24px clamp it is a 49×49 = 2,401
+compare-tap kernel per fragment, and foliage scenes (occluders far above
+their receivers) drive most fragments to that ceiling: 5FPS on a tree GLB
+that runs 60FPS on Hard. Step (3) is now a fixed 16-tap golden-angle compare
+disc (+1 center tap) over the penumbra radius, with per-pixel IGN rotation of
+the disc (blocker search + filter, same rotation) to break shared-pattern
+banding. penumbra_px ≤ 1 falls back to the shared 3×3 loop so near-contact
+stays byte-identical to Hard; gate (b)'s light_size=0 early-out untouched.
+Landed `e21008b2` + `e43dd2dd`; gates (a)/(c) not re-run at landing
+(usage-constrained session) — Peter confirmed 60FPS restored and the
+contact-hardening look on the reference GLBs. This supersedes "the EXISTING
+PCF loop" in step (3) and narrows the "replacing the PCF loop" forbidden move
+to the fixed tiers (Hard/Soft/VerySoft), which still run the shared loop
+unmodified. The glTF importer card now exposes the tier as a Shadow Type
+stepper bound EnumRound → `shadow_softness` (`gltf_import.rs`).

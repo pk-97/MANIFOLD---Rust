@@ -698,6 +698,26 @@ fn build_import_graph(
     card_bindings.push(card_binding("sun_y", "Sun Y", 2.0, "sun", "pos_y", 1.0));
     card_params.push(card_param("sun_z", "Sun Z", -15.0, 15.0, 3.0, false, "Sun"));
     card_bindings.push(card_binding("sun_z", "Sun Z", 3.0, "sun", "pos_z", 1.0));
+    // Shadow tier on the outer card: the Hard-vs-Contact choice is a look
+    // decision (crisp per-stem shadows vs contact-hardened realism), so it
+    // rides next to the sun sliders instead of requiring a trip into the
+    // graph. Labels must stay in `ShadowSoftness` variant order — the
+    // EnumRound binding writes the label's index straight into the light's
+    // `shadow_softness` enum. Default 3 mirrors the Contact default the
+    // assembler stamps on the sun node above.
+    let mut shadow_param = card_param("sun_shadow", "Shadow Type", 0.0, 3.0, 3.0, false, "Sun");
+    shadow_param.whole_numbers = true;
+    shadow_param.value_labels = vec![
+        "Hard".to_string(),
+        "Soft".to_string(),
+        "Very Soft".to_string(),
+        "Contact".to_string(),
+    ];
+    card_params.push(shadow_param);
+    let mut shadow_binding =
+        card_binding("sun_shadow", "Shadow Type", 3.0, "sun", "shadow_softness", 1.0);
+    shadow_binding.convert = manifold_core::effects::ParamConvert::EnumRound;
+    card_bindings.push(shadow_binding);
 
     // `node.bake_environment`'s `horizon_strength` is its brightness knob
     // (default 1.0, range 0..4) — the closest thing to "envmap intensity"
@@ -824,9 +844,9 @@ mod tests {
 
         // Curated performance surface (D9 / P0): the card must carry real
         // params + bindings, not the empty vecs the pre-P0 assembler emitted.
-        // Azalea has 2 objects → 4 camera + 4 sun + 1 envmap + 2×(metallic +
-        // roughness) = 13 sliders, each with exactly one binding.
-        assert_eq!(meta.params.len(), 13, "4 camera + 4 sun + 1 envmap + 2×2 material");
+        // Azalea has 2 objects → 4 camera + 5 sun + 1 envmap + 2×(metallic +
+        // roughness) = 14 sliders, each with exactly one binding.
+        assert_eq!(meta.params.len(), 14, "4 camera + 5 sun + 1 envmap + 2×2 material");
         assert_eq!(
             meta.bindings.len(),
             meta.params.len(),
