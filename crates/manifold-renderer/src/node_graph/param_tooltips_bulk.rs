@@ -396,6 +396,7 @@ crate::param_tooltips!("node.bake_environment", {
     "height" => "Height of the baked panorama in pixels. Keep it at half the width so the longitude and latitude mapping stays undistorted.",
     "horizon_strength" => "How bright the horizon band glows. 1 matches the default studio look, higher pushes a stronger rim of light into reflections.",
     "azimuth_variation" => "How much the lighting changes as you turn around the horizon. 0 is perfectly even, higher breaks up the ring so reflections shift with angle.",
+    "intensity" => "Master brightness of the whole environment. 1 is the full studio look, higher brightens every reflection, and 0 bakes a black map so objects are lit only by the scene's own lights.",
 });
 
 crate::param_tooltips!("node.shininess", {

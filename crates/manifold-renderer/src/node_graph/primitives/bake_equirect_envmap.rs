@@ -25,6 +25,15 @@ struct EnvmapUniforms {
     height: u32,
     horizon_strength: f32,
     azimuth_variation: f32,
+    // Master brightness applied to the WHOLE baked map (every studio term),
+    // unlike `horizon_strength` which only scales the horizon band. 0 = a
+    // fully black environment (no IBL contribution at all — the "lit only by
+    // scene lights" case). Padded to 32 bytes so the uniform stays a 16-byte
+    // multiple (naga uniform-size rule).
+    intensity: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 crate::primitive! {
@@ -66,6 +75,18 @@ crate::primitive! {
             ty: ParamType::Float,
             default: ParamValue::Float(0.12),
             range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("intensity"),
+            label: "Environment Intensity",
+            ty: ParamType::Float,
+            // 1.0 = the legacy studio look unchanged (every existing preset
+            // wiring this node is unaffected). 0 = a black environment, so PBR
+            // objects receive no image-based lighting and are lit purely by
+            // their scene lights.
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 4.0)),
             enum_values: &[],
         },
     ],
@@ -117,6 +138,7 @@ impl Primitive for BakeEquirectEnvmap {
         let height = read_int("height", 256.0).round().max(32.0) as u32;
         let horizon_strength = read_float("horizon_strength", 1.0);
         let azimuth_variation = read_float("azimuth_variation", 0.12);
+        let intensity = read_float("intensity", 1.0);
 
         let Some(envmap) = ctx.outputs.texture_2d("envmap") else {
             return;
@@ -141,6 +163,10 @@ impl Primitive for BakeEquirectEnvmap {
             height: tex_height.min(height),
             horizon_strength,
             azimuth_variation,
+            intensity,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(

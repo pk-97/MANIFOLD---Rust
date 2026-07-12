@@ -364,8 +364,15 @@ fn build_import_graph(
     let input_id = fresh_id();
     nodes.push(plain_node(input_id, "input", GENERATOR_INPUT_TYPE_ID, "input"));
 
+    // The IBL envmap is still baked and wired (node.pbr_material needs an
+    // envmap bound), but at intensity 0 the map is fully black — so PBR objects
+    // receive no image-based lighting and are lit purely by the scene's lights,
+    // the hard dramatic "model on black" look. The Environment card below turns
+    // it back up for a softer, reflective studio look.
     let envmap_id = fresh_id();
-    nodes.push(plain_node(envmap_id, "envmap", "node.bake_environment", "envmap"));
+    let mut envmap_node = plain_node(envmap_id, "envmap", "node.bake_environment", "envmap");
+    envmap_node.params.insert("intensity".to_string(), float(0.0));
+    nodes.push(envmap_node);
 
     let camera_id = fresh_id();
     let mut cam_node = plain_node(camera_id, "camera", "node.orbit_camera", "camera");
@@ -488,11 +495,11 @@ fn build_import_graph(
         mat_node
             .params
             .insert("roughness".to_string(), float(m.roughness.max(0.01)));
-        // 0.18, not the atom's 0.05 default: a single key light leaves the
-        // shadow side of a matte model near-black, so it reads as a silhouette
-        // rather than a form. A modest ambient lift restores the far side
-        // enough to see shape under the default rig.
-        mat_node.params.insert("ambient".to_string(), float(0.18));
+        // 0.0 ambient: no flat fill floor, so the shadow side of a matte model
+        // goes to true black under the default single-key rig — the hard,
+        // dramatic "lit only by scene lights" look. The shared Ambient card
+        // (below) raises it across every material to restore fill.
+        mat_node.params.insert("ambient".to_string(), float(0.0));
         mat_node
             .params
             .insert("emission_r".to_string(), float(m.emissive[0]));
@@ -534,6 +541,13 @@ fn build_import_graph(
         card_params.push(card_param(&rough_id, "Roughness", 0.01, 1.0, rough_default, false, &group_name));
         card_bindings.push(card_binding(
             &rough_id, "Roughness", rough_default, &mat_node_id, "roughness", 1.0,
+        ));
+        // One shared "Ambient" fill knob fans out to every material's ambient
+        // (a single source_id across all mat_k bindings — the preset_runtime
+        // fan-out). Default 0.0 = the lights-only look; raise it for flat fill.
+        // The card param itself is pushed once after the loop.
+        card_bindings.push(card_binding(
+            "scene_ambient", "Ambient", 0.0, &mat_node_id, "ambient", 1.0,
         ));
 
         // The group's outward interface: the mesh geometry, the material,
@@ -814,13 +828,19 @@ fn build_import_graph(
     shadow_binding.convert = manifold_core::effects::ParamConvert::EnumRound;
     card_bindings.push(shadow_binding);
 
-    // `node.bake_environment`'s `horizon_strength` is its brightness knob
-    // (default 1.0, range 0..4) — the closest thing to "envmap intensity"
-    // and what drives IBL reflection strength on the PBR materials.
-    card_params.push(card_param("env_bright", "Reflections", 0.0, 4.0, 1.0, false, "Environment"));
+    // `node.bake_environment`'s `intensity` master scales the WHOLE baked map
+    // (every studio term), so 0 = a black environment and no image-based
+    // lighting at all — unlike `horizon_strength`, which only dims the horizon
+    // band and leaves the bright zenith/sun terms lighting the scene. Default 0
+    // gives the lights-only look; raise it for a reflective studio environment.
+    card_params.push(card_param("env_intensity", "Environment", 0.0, 4.0, 0.0, false, "Environment"));
     card_bindings.push(card_binding(
-        "env_bright", "Reflections", 1.0, "envmap", "horizon_strength", 1.0,
+        "env_intensity", "Environment", 0.0, "envmap", "intensity", 1.0,
     ));
+    // The shared Ambient fill knob (its per-material bindings were fanned out
+    // in the object loop above). 0.0 = no flat fill (lights-only); raise it to
+    // lift the shadow side of every material at once.
+    card_params.push(card_param("scene_ambient", "Ambient", 0.0, 1.0, 0.0, false, "Environment"));
 
     // Physical-camera / cinematic-post knobs (CINEMATIC_POST_DESIGN.md D6).
     // The four lens params live on the ONE node.camera_lens under a "Lens"
@@ -1001,22 +1021,22 @@ mod tests {
             }
         }
 
-        // Curated performance surface (D9 / P0): the card must carry real
-        // params + bindings, not the empty vecs the pre-P0 assembler emitted.
-        // Azalea has 2 objects → 4 camera + 5 sun + 1 envmap + 2×(metallic +
-        // roughness) = 14 framing/material sliders, PLUS the 9 physical-camera
-        // knobs (4 lens + 1 DoF + 3 SSAO + 1 motion) = 23 params.
+        // Curated performance surface. Azalea has 2 objects → 4 camera + 5 sun
+        // + 1 Environment + 1 Ambient + 2×(metallic + roughness) = 15
+        // framing/material sliders, PLUS the 9 physical-camera knobs (4 lens +
+        // 1 DoF + 3 SSAO + 1 motion) = 24 params.
         assert_eq!(
             meta.params.len(),
-            23,
-            "14 framing/material + 9 physical-camera (lens/DoF/SSAO/motion) knobs"
+            24,
+            "15 framing/material/env + 9 physical-camera (lens/DoF/SSAO/motion) knobs"
         );
-        // Most params route one-to-one, but the DoF radius fans out to three
-        // node params (coc + both variable_blur passes), so bindings = 25.
+        // Most params route one-to-one, but two fan out: the DoF radius drives
+        // 3 nodes (coc + both variable_blur passes) and the shared Ambient
+        // drives every material's ambient (2 for azalea). 24 + 2 + 1 = 27.
         assert_eq!(
             meta.bindings.len(),
-            25,
-            "23 one-to-one + the DoF radius fanned to 3 nodes (coc/blur_h/blur_v)"
+            27,
+            "24 params, DoF radius fanned to 3 nodes and Ambient to 2 materials"
         );
         // Every card param routes to at least one node param.
         for p in &meta.params {
@@ -1042,7 +1062,7 @@ mod tests {
         // Spot-check the shared framing knobs and the per-object material
         // knobs. No more numeric label suffix — the `section` (D5/D9) now
         // carries the per-object identity instead.
-        for id in ["cam_orbit", "cam_dist", "sun_int", "env_bright", "metal_0", "rough_1"] {
+        for id in ["cam_orbit", "cam_dist", "sun_int", "env_intensity", "scene_ambient", "metal_0", "rough_1"] {
             assert!(meta.params.iter().any(|p| p.id == id), "missing card param `{id}`");
         }
         let metal0 = meta.params.iter().find(|p| p.id == "metal_0").unwrap();
@@ -1059,8 +1079,42 @@ mod tests {
         assert_eq!(cam_orbit.section.as_deref(), Some("Camera"));
         let sun_int = meta.params.iter().find(|p| p.id == "sun_int").unwrap();
         assert_eq!(sun_int.section.as_deref(), Some("Sun"));
-        let env_bright = meta.params.iter().find(|p| p.id == "env_bright").unwrap();
-        assert_eq!(env_bright.section.as_deref(), Some("Environment"));
+        let env_intensity = meta.params.iter().find(|p| p.id == "env_intensity").unwrap();
+        assert_eq!(env_intensity.section.as_deref(), Some("Environment"));
+        // Lights-only defaults: the environment master and the shared ambient
+        // fill both start at 0, so a freshly imported model is lit purely by
+        // its scene lights.
+        assert_eq!(env_intensity.default_value, 0.0, "environment bakes dark by default");
+        let scene_ambient = meta.params.iter().find(|p| p.id == "scene_ambient").unwrap();
+        assert_eq!(scene_ambient.default_value, 0.0, "no ambient fill by default");
+        // The Ambient card fans out to every material's `ambient` param.
+        let ambient_targets: std::collections::HashSet<String> = meta
+            .bindings
+            .iter()
+            .filter(|b| b.id == "scene_ambient")
+            .filter_map(|b| match &b.target {
+                BindingTarget::Node { node_id, param } => {
+                    assert_eq!(param, "ambient");
+                    Some(node_id.as_str().to_string())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            ambient_targets,
+            ["mat_0", "mat_1"].into_iter().map(String::from).collect(),
+            "shared Ambient drives both azalea materials"
+        );
+        // The environment master routes to the envmap's new `intensity` param
+        // (not the old horizon_strength).
+        let env_binding = meta.bindings.iter().find(|b| b.id == "env_intensity").unwrap();
+        match &env_binding.target {
+            BindingTarget::Node { node_id, param } => {
+                assert_eq!(node_id.as_str(), "envmap");
+                assert_eq!(param, "intensity");
+            }
+            other => panic!("expected envmap node target, got {other:?}"),
+        }
 
         // Camera angle sliders store radians (app-wide `is_angle` convention),
         // so the binding is a pass-through — no unit fold at the write boundary.
