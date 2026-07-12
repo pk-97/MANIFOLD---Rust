@@ -84,6 +84,23 @@ crate::primitive! {
     derived_uniforms: ["cam_fwd_x", "cam_fwd_y", "cam_fwd_z"],
 }
 
+// D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): per-frame recompute for a FUSED
+// region's `cam_fwd_x`/`_y`/`_z` fields, IN DECLARATION ORDER — reads the
+// region's routed Camera external (via install.rs's `camera_ext_N` wiring),
+// matching `run()`'s own `cam.fwd` read below. `None` when unwired (no
+// Camera reached this fused kernel) — the fields stay zeroed, same as the
+// unfused atom's `Camera::default_perspective()` fallback would give a
+// forward of `[0,0,1]`... except the zero-fallback here differs (all-zero,
+// not a unit vector); this can only happen if install ever routes a
+// `camera_ext_N` with nothing wired, which it does not — install only
+// creates the port when a real producer wire exists.
+inventory::submit! {
+    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+        type_id: "node.flatten_to_camera_plane",
+        recompute: |ctx| ctx.camera.map(|c| vec![c.fwd[0], c.fwd[1], c.fwd[2]]),
+    }
+}
+
 impl Primitive for FlattenToCameraPlane {
     fn array_output_capacity(
         &self,

@@ -729,6 +729,133 @@ fn auto_fused_colorgrade_via_executor_matches_unfused() {
     );
 }
 
+/// **I6** (D7/P0 amendment, `docs/CINEMATIC_POST_DESIGN.md`): a graph chaining
+/// a camera-derived Pointwise TEXTURE atom (`test.camera_pointwise` — the I6
+/// test fixture; see its doc comment) with a Pointwise neighbour
+/// (`node.invert`) must render byte-identical fused vs unfused. This is the
+/// texture-fusion half of P0's contract: the fused kernel recomputes
+/// `cam_x` (the wired `node.free_camera`'s `pos.x`) every frame via
+/// `derived_uniform_registry::recompute`, routed onto the fused node's
+/// synthesized `camera_ext_0` port — the SAME mechanism that lets a real
+/// future camera-derived atom (P1's `coc_from_depth`) fuse with a pointwise
+/// neighbour instead of being a permanent boundary. Same precision tier as
+/// the ColorGrade proof above (freeze §7 tier 4, "out-of-loop texture
+/// regions: ≈1 ulp, not bit-exact, and cannot be" — the unfused chain
+/// round-trips the intermediate through an actual rgba16float texture
+/// between the two members; the fused kernel keeps it in an f32 register).
+/// Measured gap: max_abs ≈ 1/1024 (one f16 ULP at this value range) — the
+/// SAME tolerance band `auto_fused_colorgrade_via_executor_matches_unfused`
+/// uses.
+#[test]
+fn camera_derived_pointwise_atom_fuses_and_matches_unfused() {
+    use super::install::{FusedDef, fuse_canonical_def};
+    use crate::node_graph::primitives::test_camera_pointwise_fixture::TestCameraPointwise;
+
+    let device = crate::test_device();
+    // The fixture is deliberately NOT globally inventory-registered (see its
+    // doc comment) so `catalog_gen`'s completeness tests never see it — build
+    // a registry that adds it on top of the real builtins for this test only.
+    let mut registry = PrimitiveRegistry::with_builtin();
+    registry.register("test.camera_pointwise", || Box::new(TestCameraPointwise::new()));
+    let (w, h) = (64u32, 64u32);
+    let input = gradient_input(&device, w, h);
+
+    let json = r#"{
+        "version": 1, "name": "CameraDerivedFusion", "nodes": [
+            { "id": 0, "typeId": "system.source", "nodeId": "source" },
+            { "id": 1, "typeId": "node.free_camera", "nodeId": "cam" },
+            { "id": 2, "typeId": "test.camera_pointwise", "nodeId": "cam_atom" },
+            { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
+            { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+        ], "wires": [
+            { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "in" },
+            { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "camera" },
+            { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+            { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+        ]
+    }"#;
+    let def: EffectGraphDef = serde_json::from_str(json).expect("parse fixture graph");
+
+    // One fixture value set, both sides: cam.pos_x (a surviving boundary —
+    // camera producers never fuse) set directly on both graphs; cam_atom.gain
+    // set by node id on the unfused side, by retarget field on the fused side.
+    let cam_pos_x = 2.5f32;
+    let gain = 1.4f32;
+
+    // ── Unfused: the canonical graph, params set by node id. ──
+    let mut unfused_graph = def.clone().into_graph(&registry).expect("unfused graph");
+    let set_by_node_id = |g: &mut Graph, node_id: &str, param: &str, v: f32| {
+        let id = g
+            .node_id_by_handle(node_id)
+            .or_else(|| g.instance_by_node_id(&manifold_core::NodeId::new(node_id)))
+            .unwrap_or_else(|| panic!("unfused graph missing node `{node_id}`"));
+        g.set_param(id, param, ParamValue::Float(v))
+            .unwrap_or_else(|e| panic!("set {node_id}.{param}: {e:?}"));
+    };
+    set_by_node_id(&mut unfused_graph, "cam", "pos_x", cam_pos_x);
+    set_by_node_id(&mut unfused_graph, "cam_atom", "gain", gain);
+    let unfused_plan = compile(&unfused_graph).expect("compile unfused");
+    let u_src = resource_for_output(&unfused_plan, find_node(&unfused_graph, "system.source"), "out");
+    let u_out =
+        resource_for_output(&unfused_plan, find_node(&unfused_graph, "node.invert"), "out");
+    let unfused = render_graph(&device, &mut unfused_graph, &unfused_plan, u_src, &input, u_out);
+
+    // ── Fused: cam_atom + invert must collapse into ONE node.wgsl_compute,
+    // with `cam` surviving as a boundary (a Camera producer never fuses) and
+    // its output routed onto the fused node's synthesized `camera_ext_0`. ──
+    let FusedDef { def: fused_def, retarget, .. } =
+        fuse_canonical_def(&def, &registry).expect("cam_atom + invert is one fusable region");
+    assert_eq!(
+        fused_def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").count(),
+        1,
+        "cam_atom and invert must collapse to exactly one fused node"
+    );
+    assert!(
+        fused_def.nodes.iter().any(|n| n.type_id == "node.free_camera"),
+        "the camera producer must survive as a boundary, not fuse away"
+    );
+    assert!(
+        fused_def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.wgsl_compute")
+            .and_then(|n| n.wgsl_source.as_deref())
+            .is_some_and(|s| s.contains("@camera_external: camera_ext_0")
+                && s.contains("@derived_uniform_member:")),
+        "the fused kernel must carry BOTH D7/P0 markers (camera_ext port + \
+         derived-uniform recompute), not just fuse structurally"
+    );
+
+    let mut fused_graph = fused_def.into_graph(&registry).expect("fused graph builds");
+    set_by_node_id(&mut fused_graph, "cam", "pos_x", cam_pos_x);
+    let fused_node = find_node(&fused_graph, "node.wgsl_compute");
+    let (_, gain_field) = retarget
+        .get(&("cam_atom".to_string(), "gain".to_string()))
+        .expect("retarget carries cam_atom.gain");
+    fused_graph
+        .set_param(fused_node, gain_field, ParamValue::Float(gain))
+        .unwrap_or_else(|e| panic!("set fused {gain_field}: {e:?}"));
+    let fused_plan = compile(&fused_graph).expect("compile fused");
+    let f_src = resource_for_output(&fused_plan, find_node(&fused_graph, "system.source"), "out");
+    let f_out = resource_for_output(&fused_plan, fused_node, "dst");
+    let fused = render_graph(&device, &mut fused_graph, &fused_plan, f_src, &input, f_out);
+
+    let differ = TextureDiff::new(&device);
+    // Out-of-loop texture tier (freeze §7.4): ≈1 f16 ULP, same tolerance band
+    // the ColorGrade proof above uses.
+    let r = differ.compare(&device, &unfused.texture, &fused.texture, 1.0e-2, 3.0e-2);
+    assert!(
+        r.passes(0.005) && r.over_count < 64,
+        "camera-derived pointwise fusion must match unfused within the \
+         out-of-loop tolerance: max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
+
 /// Broad safety net for activating partial-region fusion library-wide: every
 /// bundled preset the finder fuses must render one frame through its fused view
 /// without panicking — the structural-breakage class (invalid generated WGSL, a
@@ -2044,9 +2171,12 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
 /// BUFFER-domain fusion with FRAME-DERIVED uniforms: the real FluidSim2D —
 /// whose per-particle hot chain (noise force, euler integrate with `dt_scaled`,
 /// wrap, anti-clump with `frame_count`, …) only fuses now that the codegen emits
-/// each member's derived uniform as an `n{i}_<name>` field and the install pass
-/// wires it from `system.generator_input` (frame_delta / frame_count) — must
-/// render frame-for-frame like the unfused preset.
+/// each member's derived uniform as an `n{i}_<name>` field and
+/// `node.wgsl_compute` recomputes its VALUE every frame via
+/// `derived_uniform_registry::recompute` (D7/P0 — this test predates that
+/// mechanism and originally asserted the install-time `system.generator_input`
+/// control wire it replaced; see the marker check below) — must render
+/// frame-for-frame like the unfused preset.
 ///
 /// This is the test the whole buffer-chain-fusion build is gated on, and it only
 /// became POSSIBLE after the determinism fix: a chaotic feedback sim amplifies any
@@ -2094,20 +2224,24 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
         .expect("FluidSim2D fuses + builds (derived-uniform buffer region)");
 
     // The build's whole point: a derived-uniform particle atom must actually have
-    // fused. Assert the fused def added a generator_input → fused frame wire — if
-    // it didn't, the region stayed unfused and this test would pass vacuously.
-    let has_frame_wire = fused_def.nodes.iter().any(|n| n.type_id == "node.wgsl_compute")
-        && fused_def.wires.iter().any(|wire| {
-            fused_def
-                .nodes
-                .iter()
-                .any(|n| n.id == wire.from_node && n.type_id == "system.generator_input")
-                && (wire.from_port == "frame_delta" || wire.from_port == "frame_count")
-        });
+    // fused. D7/P0 deleted the install-time `system.generator_input` control-wire
+    // whitelist this check used to look for (`node.wgsl_compute` now recomputes
+    // derived uniforms itself every frame via `derived_uniform_registry`) — the
+    // non-vacuous proof is now the `// @derived_uniform_member:` marker
+    // `emit_derived_uniform_markers` carries on any fused kernel with a
+    // derived-uniform member (euler_step's `dt_scaled`, the diffuse/anti-clump
+    // forces' `frame_count`). If no fused kernel carries the marker, the
+    // derived-uniform region stayed unfused and this test would pass vacuously.
+    let has_derived_uniform_member = fused_def.nodes.iter().any(|n| {
+        n.type_id == "node.wgsl_compute"
+            && n.wgsl_source
+                .as_deref()
+                .is_some_and(|s| s.contains("// @derived_uniform_member:"))
+    });
     assert!(
-        has_frame_wire,
-        "FluidSim fusion must wire a frame-derived uniform from generator_input — \
-         no such wire means the derived-uniform region never fused (vacuous pass)"
+        has_derived_uniform_member,
+        "FluidSim fusion must carry a @derived_uniform_member marker on its fused \
+         kernel — no marker means the derived-uniform region never fused (vacuous pass)"
     );
 
     // The live-count dispatch cap must engage: euler+wrap agree on one

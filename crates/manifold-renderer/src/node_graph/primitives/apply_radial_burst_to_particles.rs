@@ -124,6 +124,16 @@ crate::primitive! {
     derived_uniforms: ["time_val", "dt_scaled"],
 }
 
+// D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): per-frame recompute for a FUSED
+// region's `time_val`/`dt_scaled` fields, IN DECLARATION ORDER (matches
+// `derived_uniforms` above) — `run()`'s own computation below.
+inventory::submit! {
+    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+        type_id: "node.add_burst",
+        recompute: |ctx| Some(vec![ctx.frame.seconds.0 as f32, ctx.frame.delta.0 as f32 * 60.0]),
+    }
+}
+
 impl Primitive for ApplyRadialBurstToParticles {
     fn array_output_capacity(
         &self,

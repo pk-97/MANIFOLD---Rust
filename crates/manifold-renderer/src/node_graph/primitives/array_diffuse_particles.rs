@@ -78,6 +78,15 @@ crate::primitive! {
     derived_uniforms: ["frame_count:u32"],
 }
 
+// D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): per-frame recompute for a FUSED
+// region's `frame_count` field. Matches `run()`'s own computation below.
+inventory::submit! {
+    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+        type_id: "node.spread_out",
+        recompute: |ctx| Some(vec![ctx.frame.frame_count as f32]),
+    }
+}
+
 impl Primitive for ArrayDiffuseParticles {
     fn array_output_capacity(
         &self,

@@ -102,6 +102,15 @@ crate::primitive! {
     derived_uniforms: ["time2"],
 }
 
+// D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): per-frame recompute for a FUSED
+// region's `time2` field. Matches `run()`'s own computation below.
+inventory::submit! {
+    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+        type_id: "node.turbulence_3d",
+        recompute: |ctx| Some(vec![ctx.frame.seconds.0 as f32]),
+    }
+}
+
 impl Primitive for SimplexNoiseForce3DAtParticles {
     fn array_output_capacity(
         &self,

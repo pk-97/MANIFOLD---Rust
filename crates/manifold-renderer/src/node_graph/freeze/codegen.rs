@@ -227,6 +227,7 @@ pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
         P::INPUTS,
         P::PARAMS,
         P::INPUT_ACCESS,
+        P::DERIVED_UNIFORMS,
         P::OUTPUTS,
         P::STENCIL_FETCH,
     )
@@ -285,9 +286,19 @@ pub fn generate_standalone(
     inputs: &[NodeInput],
     params: &[ParamDef],
     input_access: &[InputAccess],
+    derived_uniforms: &[&str],
     outputs: &[NodeOutput],
 ) -> Result<String, CodegenError> {
-    generate_standalone_ext(fusion_kind, body, inputs, params, input_access, outputs, false)
+    generate_standalone_ext(
+        fusion_kind,
+        body,
+        inputs,
+        params,
+        input_access,
+        derived_uniforms,
+        outputs,
+        false,
+    )
 }
 
 /// [`generate_standalone`] with the STENCIL-FETCH body ABI flag. When
@@ -305,6 +316,7 @@ pub fn generate_standalone_ext(
     inputs: &[NodeInput],
     params: &[ParamDef],
     input_access: &[InputAccess],
+    derived_uniforms: &[&str],
     outputs: &[NodeOutput],
     stencil_fetch: bool,
 ) -> Result<String, CodegenError> {
@@ -319,10 +331,13 @@ pub fn generate_standalone_ext(
     // storage array. Texture atoms are unaffected (no Array output).
     if outputs.iter().any(|o| matches!(o.ty, PortType::Array(_))) {
         // Direct callers of generate_standalone (texture-path tests) carry no
-        // derived uniforms / atomic outputs; standalone_for_spec routes buffer
-        // atoms with their DERIVED_UNIFORMS / ATOMIC_OUTPUTS before reaching here.
+        // atomic outputs; standalone_for_spec routes buffer atoms with their
+        // ATOMIC_OUTPUTS before reaching here. `derived_uniforms` DOES thread
+        // through — a buffer atom reached via this generic entry point (e.g. the
+        // classify final-gate parse-check in region.rs) still needs its derived
+        // fields to generate the same Params layout its real dispatch will use.
         return generate_standalone_buffer(
-            body, inputs, params, input_access, &[], &[], outputs, &[],
+            body, inputs, params, input_access, derived_uniforms, &[], outputs, &[],
         );
     }
     let tex_inputs: Vec<&NodeInput> = inputs.iter().filter(|i| is_texture_input(i)).collect();
@@ -377,9 +392,13 @@ pub fn generate_standalone_ext(
     // so its textures start at binding 0 — matching the hand shader, which has no
     // uniform either. The body simply takes no param args (the param loop below
     // is empty). A uniform is also needed when there are injected flags (multi-
-    // output write flags or optional-input use flags) even if there are no params.
-    let has_uniform =
-        !params.is_empty() || multi_output || !optional_tex_inputs.is_empty();
+    // output write flags or optional-input use flags) or derived fields (a
+    // camera-consuming atom with no user params still needs the uniform for its
+    // frame-derived values) even if there are no params.
+    let has_uniform = !params.is_empty()
+        || multi_output
+        || !optional_tex_inputs.is_empty()
+        || !derived_uniforms.is_empty();
 
     let mut out = String::new();
 
@@ -412,6 +431,24 @@ pub fn generate_standalone_ext(
                 writeln!(out, "    {f}: {ty},").unwrap();
             }
             header_words += param_word_count(p)?;
+        }
+        // Injected non-param derived fields (frame-derived values recomputed by
+        // the atom's run() each frame from a CPU-struct input, e.g. a Camera's
+        // basis vectors) — placed right after the scalar params, mirroring the
+        // buffer path's layout (generate_standalone_buffer). Same naming/packing
+        // convention: "name" defaults to f32, "name:ty" is an explicit scalar
+        // type, "name:vec3" expands to three consecutive f32 fields.
+        for d in derived_uniforms {
+            let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
+            if dty == "vec3" {
+                writeln!(out, "    {dname}_x: f32,").unwrap();
+                writeln!(out, "    {dname}_y: f32,").unwrap();
+                writeln!(out, "    {dname}_z: f32,").unwrap();
+                header_words += 3;
+            } else {
+                writeln!(out, "    {dname}: {dty},").unwrap();
+                header_words += 1;
+            }
         }
         for t in &table_params {
             writeln!(out, "    {}_count: u32,", t.name).unwrap();
@@ -564,14 +601,18 @@ pub fn generate_standalone_ext(
             InputAccess::Gather | InputAccess::GatherTexel | InputAccess::BufferGather => {}
         }
     }
-    // body(<per-input args>, uv, dims, params.<p0>, ...). Each input contributes:
-    // a Coincident/CoincidentTexel input → its pre-read colour register `c_<name>`;
-    // a Gather input → the texture handle `tex_<name>` + the shared `samp`, which
-    // the body samples at a coord it computes. `uv` (normalized center-of-texel)
-    // and `dims` (float canvas size) are the ambient fragment context every body
-    // receives after its inputs (design §slot / line 60, extended with dims so
-    // positional atoms recover aspect = dims.x/dims.y and pixel = uv*dims). Atoms
-    // that ignore an arg simply don't read it — spirv-opt's DCE drops it.
+    // body(<per-input args>, uv, dims, params.<p0>, ..., <derived fields>,
+    // <table count/array pairs>, <optional-input use-flags>). Each input
+    // contributes: a Coincident/CoincidentTexel input → its pre-read colour
+    // register `c_<name>`; a Gather input → the texture handle `tex_<name>` +
+    // the shared `samp`, which the body samples at a coord it computes. `uv`
+    // (normalized center-of-texel) and `dims` (float canvas size) are the
+    // ambient fragment context every body receives after its inputs (design
+    // §slot / line 60, extended with dims so positional atoms recover aspect =
+    // dims.x/dims.y and pixel = uv*dims). Derived fields (frame-recomputed
+    // CPU-struct data, e.g. a Camera's basis vectors) follow the user params,
+    // mirroring the buffer path's layout. Atoms that ignore an arg simply
+    // don't read it — spirv-opt's DCE drops it.
     let mut args: Vec<String> = Vec::new();
     for (i, inp) in tex_inputs.iter().enumerate() {
         match access_of(i) {
@@ -600,8 +641,9 @@ pub fn generate_standalone_ext(
     }
     args.push("uv".to_string());
     args.push(forms.dims_arg.to_string());
-    // Scalar params first (PARAMS order; Vec3 reassembled), then each table as
-    // (count, array) — matching the body signature `…, <t>_count, <t>` per table.
+    // Scalar params first (PARAMS order; Vec3 reassembled), then the derived
+    // fields (matching the struct layout above), then each table as (count,
+    // array) — matching the body signature `…, <t>_count, <t>` per table.
     for p in params {
         if p.ty == ParamType::Table {
             continue;
@@ -611,6 +653,16 @@ pub fn generate_standalone_ext(
             args.push(format!("vec3<f32>(params.{f}_x, params.{f}_y, params.{f}_z)"));
         } else {
             args.push(format!("params.{f}"));
+        }
+    }
+    for d in derived_uniforms {
+        let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
+        if dty == "vec3" {
+            args.push(format!(
+                "vec3<f32>(params.{dname}_x, params.{dname}_y, params.{dname}_z)"
+            ));
+        } else {
+            args.push(format!("params.{dname}"));
         }
     }
     for t in &table_params {
@@ -1217,13 +1269,25 @@ pub struct RegionNode<'a> {
     /// atoms inline their helpers).
     pub node_includes: &'a [&'static str],
     /// Frame-derived uniform fields the member's body takes as trailing args
-    /// (`dt_scaled`, `frame_count:u32`, …), in body-arg order after the params.
-    /// The standalone path computes these in run() and packs them; the fused
-    /// buffer path emits them as `n{i}_<name>` Params fields + body args, and the
-    /// install pass wires each to the matching `system.generator_input` output so
-    /// the fused kernel reads the same frame value the unfused atom would. Empty
-    /// for atoms with no frame-derived uniforms (and the texture path).
+    /// (`dt_scaled`, `frame_count:u32`, a camera's `cam_fwd_x`/`_y`/`_z`, …), in
+    /// body-arg order after the params. The standalone path computes these in
+    /// run() and packs them; a fused region (buffer OR texture) emits them as
+    /// `n{i}_<name>` Params fields + body args (see [`Self::type_id`] /
+    /// [`Self::derived_camera_ext`] for how `node.wgsl_compute` recomputes their
+    /// VALUES every frame — D7/P0, `docs/CINEMATIC_POST_DESIGN.md`). Empty for
+    /// atoms with no frame-derived uniforms.
     pub derived_uniforms: &'static [&'static str],
+    /// This member's own `type_id` (e.g. `"node.euler_step_particles"`) — the
+    /// registry key `derived_uniform_registry::recompute` uses every frame to
+    /// refresh [`Self::derived_uniforms`]'s uniform fields. Only meaningful when
+    /// `derived_uniforms` is non-empty; unused (empty string) otherwise.
+    pub type_id: String,
+    /// Index into the region's distinct Camera externals (see
+    /// [`FusionRegion::camera_externals`]) this member's recompute reads, if its
+    /// `derived_uniforms` are sourced from a wired `Camera` input port. `None`
+    /// for a purely frame-derived member (the time-family) and for any member
+    /// with no `derived_uniforms` at all.
+    pub derived_camera_ext: Option<usize>,
     /// TEXTURE members only: the WGSL storage-format token the unfused executor
     /// allocates this member's output texture at — `"rgba16float"` (working
     /// default) or `"rgba32float"` (an `outputFormats` fp32 override). When this
@@ -1310,6 +1374,16 @@ pub struct FusionRegion<'a> {
     /// Forces the shared `samp` to exist. Empty ⇒ every external textureLoad'd,
     /// byte-identical to the v1 codegen.
     pub sampled_externals: Vec<usize>,
+    /// Count of distinct `camera_ext_N` CPU-struct external ports this region's
+    /// members' derived-uniform recomputes need (D7/P0). The codegen emits one
+    /// `// @camera_external: camera_ext_N` marker per index `0..camera_externals`
+    /// — `node.wgsl_compute` reads the marker to synthesize a Camera-typed input
+    /// port of that name (never a GPU binding: Camera has no WGSL
+    /// representation, so this is a DECLARED, non-introspected port — the only
+    /// way a CPU-struct external can reach a fused node whose entire persisted
+    /// shape is its WGSL text). Zero for every region with no camera-derived
+    /// member — the overwhelmingly common case, byte-identical to prior codegen.
+    pub camera_externals: usize,
 }
 
 /// Result of fusing a region: the kernel + the ordered uniform field list
@@ -1431,6 +1505,61 @@ fn is_top_level_decl(line: &str) -> bool {
 /// and the consuming body samples it at an element-computed coord — the same
 /// `tex + samp` ABI the standalone buffer kernel passes, so the sample is
 /// bit-identical (the `*_at_particles` force samplers, anti_clump's modulator).
+/// Emit the D7/P0 side-channel markers a fused region's derived-uniform members
+/// need (`docs/CINEMATIC_POST_DESIGN.md`, `docs/FREEZE_COMPILER_MAP.md` §5 marker
+/// ABI): one `// @camera_external: camera_ext_N` per distinct Camera external the
+/// region routes (`FusionRegion::camera_externals`), then one
+/// `// @derived_uniform_member: <first_field> words=<n> <type_id> [<camera_port>]`
+/// per member with non-empty `derived_uniforms`. `node.wgsl_compute`'s
+/// introspection (`primitives/wgsl_compute.rs`) is the sole consumer: the first
+/// marker synthesizes a DECLARED, non-introspected Camera-typed input port (no
+/// WGSL binding exists for Camera, so naga can't discover it — this comment is
+/// the only channel); the second tells `evaluate()`, every frame, which
+/// contiguous uniform-field block to skip in the generic port-shadow pack and
+/// instead fill via `derived_uniform_registry::recompute(type_id, ctx)`. Shared
+/// by both fused paths (buffer and texture) so a member's derived-uniform
+/// contract is identical regardless of which domain fuses it. Emits nothing for
+/// a region with no derived-uniform members — byte-identical to prior codegen.
+fn emit_derived_uniform_markers(out: &mut String, region: &FusionRegion<'_>) {
+    for e in 0..region.camera_externals {
+        writeln!(out, "// @camera_external: camera_ext_{e}").unwrap();
+    }
+    for (i, node) in region.nodes.iter().enumerate() {
+        if node.derived_uniforms.is_empty() {
+            continue;
+        }
+        let words: usize = node
+            .derived_uniforms
+            .iter()
+            .map(|d| {
+                let (_, dty) = d.split_once(':').unwrap_or((d, "f32"));
+                if dty == "vec3" { 3 } else { 1 }
+            })
+            .sum();
+        let (first_dname, first_dty) =
+            node.derived_uniforms[0].split_once(':').unwrap_or((node.derived_uniforms[0], "f32"));
+        let first_field = if first_dty == "vec3" {
+            format!("n{i}_{first_dname}_x")
+        } else {
+            format!("n{i}_{first_dname}")
+        };
+        match node.derived_camera_ext {
+            Some(e) => writeln!(
+                out,
+                "// @derived_uniform_member: {first_field} words={words} {} camera_ext_{e}",
+                node.type_id
+            )
+            .unwrap(),
+            None => writeln!(
+                out,
+                "// @derived_uniform_member: {first_field} words={words} {}",
+                node.type_id
+            )
+            .unwrap(),
+        }
+    }
+}
+
 fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, CodegenError> {
     let index_of = |id: NodeInstanceId| region.nodes.iter().position(|n| n.node_id == id);
     let specs_of = |ty: &PortType| -> Option<&'static [ChannelSpec]> {
@@ -1638,20 +1767,22 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
             field_count += 1;
         }
     }
-    // Frame-derived uniform fields (`dt_scaled`, `frame_count:u32`, …) per member,
-    // after the params — mirrors the standalone path's emission, namespaced
-    // `n{i}_<name>`. NOT added to `param_order`: their per-frame value comes from a
-    // wire the install pass adds (system.generator_input → this field's port-
-    // shadow), not from inst.params. wgsl_compute port-shadows every uniform field,
-    // so each becomes an optional ScalarF32 input the installer wires.
+    // Frame-derived uniform fields (`dt_scaled`, `frame_count:u32`, a camera's
+    // `cam_fwd_x`/`_y`/`_z`, …) per member, after the params — mirrors the
+    // standalone path's emission, namespaced `n{i}_<name>`. NOT added to
+    // `param_order`: these fields are never sourced from a wire OR inst.params —
+    // `node.wgsl_compute` recomputes their VALUES itself every frame via
+    // `derived_uniform_registry::recompute(member.type_id, ...)`, keyed off the
+    // `// @derived_uniform_member:` marker `emit_derived_uniform_markers` writes
+    // below (D7/P0, `docs/CINEMATIC_POST_DESIGN.md`; superseded the old
+    // install-time control-wire whitelist).
     for (i, node) in region.nodes.iter().enumerate() {
         for d in node.derived_uniforms {
             let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
             if dty == "vec3" {
-                // A vec3 derived field expands to three f32 fields (matches the
-                // standalone packing). No buffer atom that fuses needs one yet
-                // (camera-basis atoms are gather/atomic boundaries), but keep the
-                // shape consistent so a future one codegens correctly.
+                // A vec3 derived field expands to three f32 fields, matching the
+                // standalone packing (a camera-basis atom, e.g. a future
+                // `coc_from_depth`-style member).
                 writeln!(struct_body, "    n{i}_{dname}_x: f32,").unwrap();
                 writeln!(struct_body, "    n{i}_{dname}_y: f32,").unwrap();
                 writeln!(struct_body, "    n{i}_{dname}_z: f32,").unwrap();
@@ -1679,6 +1810,7 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
     out.push_str("struct Params {\n");
     out.push_str(&struct_body);
     out.push_str("}\n\n");
+    emit_derived_uniform_markers(&mut out, region);
 
     // --- bindings: uniform(0), then the external arrays. Two output models:
     //
@@ -2021,6 +2153,26 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
             field_count += 1;
         }
     }
+    // Frame-derived uniform fields (D7/P0) — see the identical block in
+    // `generate_fused_buffer` for the full rationale. Texture-fused regions
+    // never carried these before this phase (only the standalone texture path
+    // did, and only as of the P0 standalone-layer commit); this is the fusion
+    // half, letting a camera-derived pointwise atom (D1's `coc_from_depth`
+    // shape) fuse with a pointwise neighbour instead of forcing a boundary.
+    for (i, node) in region.nodes.iter().enumerate() {
+        for d in node.derived_uniforms {
+            let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
+            if dty == "vec3" {
+                writeln!(struct_body, "    n{i}_{dname}_x: f32,").unwrap();
+                writeln!(struct_body, "    n{i}_{dname}_y: f32,").unwrap();
+                writeln!(struct_body, "    n{i}_{dname}_z: f32,").unwrap();
+                field_count += 3;
+            } else {
+                writeln!(struct_body, "    n{i}_{dname}: {dty},").unwrap();
+                field_count += 1;
+            }
+        }
+    }
     let pad_words = (4 - (field_count % 4)) % 4;
     for k in 0..pad_words {
         writeln!(struct_body, "    _pad{k}: u32,").unwrap();
@@ -2033,6 +2185,7 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     out.push_str("struct Params {\n");
     out.push_str(&struct_body);
     out.push_str("}\n\n");
+    emit_derived_uniform_markers(&mut out, region);
 
     // --- which region-node indices are VIRTUAL (chain members recomputed inside
     // a stencil fetch). cs_main never evaluates them and never pre-reads their
@@ -2380,6 +2533,20 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         for p in node.params {
             args.push(format!("params.n{i}_{}", p.name));
         }
+        // Frame-derived uniforms trail the params (D7/P0) — same body-arg order
+        // the standalone path uses; a vec3 is reassembled from its three packed
+        // f32 fields. `node.wgsl_compute` (not this codegen) is responsible for
+        // keeping `params.n{i}_<name>` refreshed every frame.
+        for d in node.derived_uniforms {
+            let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
+            if dty == "vec3" {
+                args.push(format!(
+                    "vec3<f32>(params.n{i}_{dname}_x, params.n{i}_{dname}_y, params.n{i}_{dname}_z)"
+                ));
+            } else {
+                args.push(format!("params.n{i}_{dname}"));
+            }
+        }
         // Optional-input use flags trail the params — the same body-arg order the
         // standalone wrapper uses (`params.use_<name>` there). Wiring is static in
         // the def, so each flag folds to a literal here. `node_inputs` describes
@@ -2486,6 +2653,21 @@ fn chain_member_args(
     for p in node.params {
         args.push(format!("params.n{j}_{}", p.name));
     }
+    // Frame-derived uniforms trail the params (D7/P0) — same convention as the
+    // non-virtual cs_main marshaller above; a stencil-absorbed chain member with
+    // derived uniforms (e.g. a camera-derived producer feeding a blur's fetch)
+    // reads the SAME `n{j}_<name>` fields `node.wgsl_compute` refreshes every
+    // frame, whether or not this member ends up inside a virtual chain.
+    for d in node.derived_uniforms {
+        let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
+        if dty == "vec3" {
+            args.push(format!(
+                "vec3<f32>(params.n{j}_{dname}_x, params.n{j}_{dname}_y, params.n{j}_{dname}_z)"
+            ));
+        } else {
+            args.push(format!("params.n{j}_{dname}"));
+        }
+    }
     let tex_specs: Vec<&NodeInput> =
         node.node_inputs.iter().filter(|p| is_texture_input(p)).collect();
     if tex_specs.len() == node.inputs.len() {
@@ -2517,6 +2699,90 @@ mod dispatch_contract_tests {
             dim_forms(TexDim::D3).workgroup,
             format!("{n}, {n}, {n}"),
             "dim_forms D3 workgroup drifted from VOLUME_WORKGROUP_3D"
+        );
+    }
+
+    /// CINEMATIC_POST P0 (D7, standalone layer): the TEXTURE codegen path now
+    /// accepts `derived_uniforms` exactly like the buffer path
+    /// (`generate_standalone_buffer`, see its own field-emission block) — a
+    /// scalar defaults to `f32`, a `"name:vec3"` entry expands to three
+    /// consecutive f32 fields, and both are appended to the Params struct AFTER
+    /// the user's scalar params (so a future Camera-consuming texture atom like
+    /// `coc_from_depth` (P1, not this phase) can declare `derived_uniforms:
+    /// ["cam_pos:vec3"]` the same way `scatter_particles_camera` /
+    /// `flatten_to_camera_plane` already do on the buffer path). This is a
+    /// synthetic 0-texture-input (Source) atom — no registered primitive
+    /// exercises this path yet — proving the mechanism, not a new node.
+    #[test]
+    fn generate_standalone_ext_threads_derived_uniforms_after_params() {
+        use crate::node_graph::parameters::ParamValue;
+        use crate::node_graph::ports::PortKind;
+        use std::borrow::Cow;
+
+        let outputs = [NodeOutput {
+            name: Cow::Borrowed("out"),
+            ty: PortType::Texture2D,
+            kind: PortKind::Output,
+            required: false,
+        }];
+        let params = [ParamDef {
+            name: Cow::Borrowed("gain"),
+            label: "Gain",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 4.0)),
+            enum_values: &[],
+        }];
+        // Body signature order matches the wrapper's arg-building order for a
+        // 0-texture-input Source atom: uv, dims, <scalar params...>, <derived
+        // fields...>. `foo` (bare name) → f32; `cam_pos:vec3` → vec3<f32>.
+        let body = "fn body(uv: vec2<f32>, dims: vec2<f32>, gain: f32, foo: f32, cam_pos: vec3<f32>) -> vec4<f32> {\n    return vec4<f32>(gain + foo + cam_pos.x, cam_pos.y, cam_pos.z, 1.0);\n}";
+
+        let generated = generate_standalone_ext(
+            FusionKind::Source,
+            body,
+            &[],
+            &params,
+            &[],
+            &["foo", "cam_pos:vec3"],
+            &outputs,
+            false,
+        )
+        .expect("synthetic source atom with derived uniforms generates");
+
+        assert!(
+            naga::front::wgsl::parse_str(&generated).is_ok(),
+            "generated kernel must parse through naga:\n{generated}"
+        );
+
+        // Exact Params struct: gain (the user param) first, then the derived
+        // fields in declaration order (foo scalar, then cam_pos's 3 f32 words),
+        // then padding to the next 16-byte (4-word) multiple. 1 + 1 + 3 = 5
+        // words → 3 padding words, so this also proves the word-count/padding
+        // arithmetic accounts for derived fields, not just user params.
+        let expected_params_struct = "struct Params {\n    \
+            gain: f32,\n    \
+            foo: f32,\n    \
+            cam_pos_x: f32,\n    \
+            cam_pos_y: f32,\n    \
+            cam_pos_z: f32,\n    \
+            _pad0: u32,\n    \
+            _pad1: u32,\n    \
+            _pad2: u32,\n\
+            }\n";
+        assert!(
+            generated.contains(expected_params_struct),
+            "Params struct must place derived fields after params, then pad 5 words to 8:\n{generated}"
+        );
+
+        // The body call threads the derived fields as its trailing args, in the
+        // same order, with the vec3 reassembled from its three packed words.
+        assert!(
+            generated.contains(
+                "let result = body(uv, vec2<f32>(dims), params.gain, params.foo, \
+                 vec3<f32>(params.cam_pos_x, params.cam_pos_y, params.cam_pos_z));"
+            ),
+            "body call must pass derived fields after params, vec3 reassembled:\n{generated}"
         );
     }
 }
@@ -2662,8 +2928,8 @@ mod gpu_tests {
     fn generated_wgsl_is_deterministic() {
         let g = Gain::new();
         let body = g.wgsl_body().unwrap();
-        let a = generate_standalone(g.fusion_kind(), body, g.inputs(), g.parameters(), g.input_access(), g.outputs()).unwrap();
-        let b = generate_standalone(g.fusion_kind(), body, g.inputs(), g.parameters(), g.input_access(), g.outputs()).unwrap();
+        let a = generate_standalone(g.fusion_kind(), body, g.inputs(), g.parameters(), g.input_access(), g.derived_uniforms(), g.outputs()).unwrap();
+        let b = generate_standalone(g.fusion_kind(), body, g.inputs(), g.parameters(), g.input_access(), g.derived_uniforms(), g.outputs()).unwrap();
         assert_eq!(a, b, "codegen must be deterministic");
         assert!(a.contains("fn cs_main"), "must emit the cs_main entry");
         assert!(!a.contains("cs_main_"), "no symbol may have cs_main as a prefix");
@@ -2691,7 +2957,7 @@ mod gpu_tests {
                     node_inputs: &[],
                     node_outputs: &[],
                     node_includes: &[],
-                    derived_uniforms: &[],
+                    derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
                     output_storage: "rgba16float",
                     stencil_fetch: false,
                     quantize_f16: false,
@@ -2706,7 +2972,7 @@ mod gpu_tests {
                     node_inputs: &[],
                     node_outputs: &[],
                     node_includes: &[],
-                    derived_uniforms: &[],
+                    derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
                     output_storage: "rgba16float",
                     stencil_fetch: false,
                     quantize_f16: false,
@@ -2718,7 +2984,7 @@ mod gpu_tests {
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
             virtual_chains: Vec::new(),
-            sampled_externals: Vec::new(),
+            sampled_externals: Vec::new(), camera_externals: 0,
         };
         let g = generate_fused(&region).expect("a region whose body declares a const fuses");
         assert_eq!(
@@ -2758,7 +3024,7 @@ mod gpu_tests {
                     node_inputs: &[],
                     node_outputs: &[],
                     node_includes: &[],
-                    derived_uniforms: &[],
+                    derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
                     output_storage: "rgba16float",
                     stencil_fetch: false,
                     quantize_f16: false,
@@ -2773,7 +3039,7 @@ mod gpu_tests {
                     node_inputs: &[],
                     node_outputs: &[],
                     node_includes: &[],
-                    derived_uniforms: &[],
+                    derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
                     output_storage: "rgba16float",
                     stencil_fetch: false,
                     quantize_f16: false,
@@ -2785,7 +3051,7 @@ mod gpu_tests {
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
             virtual_chains: Vec::new(),
-            sampled_externals: vec![1],
+            sampled_externals: vec![1], camera_externals: 0,
         };
         let g = generate_fused(&region).expect("cross-res region fuses");
         assert!(
@@ -2835,6 +3101,8 @@ mod gpu_tests {
             node_outputs: J::OUTPUTS,
             node_includes: J::WGSL_INCLUDES,
             derived_uniforms: J::DERIVED_UNIFORMS,
+            type_id: J::TYPE_ID.to_string(),
+            derived_camera_ext: None,
             output_storage: "rgba16float",
             stencil_fetch: false,
             quantize_f16: false,
@@ -2847,7 +3115,7 @@ mod gpu_tests {
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
             virtual_chains: Vec::new(),
-            sampled_externals: Vec::new(),
+            sampled_externals: Vec::new(), camera_externals: 0,
         };
         let g = generate_fused(&region).expect("buffer region fuses");
         assert!(
@@ -2898,6 +3166,8 @@ mod gpu_tests {
                 node_outputs: L::OUTPUTS,
                 node_includes: L::WGSL_INCLUDES,
                 derived_uniforms: L::DERIVED_UNIFORMS,
+                type_id: L::TYPE_ID.to_string(),
+                derived_camera_ext: None,
                 output_storage: "rgba16float",
                 stencil_fetch: false,
                 quantize_f16: false,
@@ -2908,7 +3178,7 @@ mod gpu_tests {
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
             virtual_chains: Vec::new(),
-            sampled_externals: Vec::new(),
+            sampled_externals: Vec::new(), camera_externals: 0,
         };
         let g = generate_fused(&region).expect("two-external buffer region fuses");
         assert!(
@@ -2952,7 +3222,7 @@ mod gpu_tests {
                     node_inputs: GaussianBlur::INPUTS,
                     node_outputs: GaussianBlur::OUTPUTS,
                     node_includes: &[],
-                    derived_uniforms: &[],
+                    derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
                     output_storage: "rgba16float",
                     stencil_fetch: true,
                     quantize_f16: false,
@@ -2967,7 +3237,7 @@ mod gpu_tests {
                     node_inputs: Gain::INPUTS,
                     node_outputs: Gain::OUTPUTS,
                     node_includes: &[],
-                    derived_uniforms: &[],
+                    derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
                     output_storage: "rgba16float",
                     stencil_fetch: false,
                     quantize_f16: false,
@@ -2984,7 +3254,7 @@ mod gpu_tests {
                 members: vec![1],
                 output: 1,
             }],
-            sampled_externals: Vec::new(),
+            sampled_externals: Vec::new(), camera_externals: 0,
         };
         let g = generate_fused(&region).expect("virtual-chain region fuses");
         assert!(
@@ -3028,7 +3298,7 @@ mod gpu_tests {
                     node_inputs: &[],
                     node_outputs: &[],
                     node_includes: &[],
-                    derived_uniforms: &[],
+                    derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
                     output_storage: "rgba16float",
                     stencil_fetch: false,
                     quantize_f16: false,
@@ -3043,7 +3313,7 @@ mod gpu_tests {
                     node_inputs: &[],
                     node_outputs: &[],
                     node_includes: &[],
-                    derived_uniforms: &[],
+                    derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
                     output_storage: "rgba16float",
                     stencil_fetch: false,
                     quantize_f16: false,
@@ -3055,7 +3325,7 @@ mod gpu_tests {
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
             virtual_chains: Vec::new(),
-            sampled_externals: Vec::new(),
+            sampled_externals: Vec::new(), camera_externals: 0,
         };
         let g = generate_fused(&region).expect("gather region fuses");
         assert!(g.wgsl.contains("var samp: sampler"), "a sampler is bound for the gather");
@@ -3092,7 +3362,7 @@ mod gpu_tests {
                     node_inputs: &[],
                     node_outputs: &[],
                     node_includes: &[],
-                    derived_uniforms: &[],
+                    derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
                     output_storage: "rgba16float",
                     stencil_fetch: false,
                     quantize_f16: false,
@@ -3107,7 +3377,7 @@ mod gpu_tests {
                     node_inputs: &[],
                     node_outputs: &[],
                     node_includes: &[],
-                    derived_uniforms: &[],
+                    derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
                     output_storage: "rgba16float",
                     stencil_fetch: false,
                     quantize_f16: false,
@@ -3122,7 +3392,7 @@ mod gpu_tests {
                     node_inputs: &[],
                     node_outputs: &[],
                     node_includes: &[],
-                    derived_uniforms: &[],
+                    derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None,
                     output_storage: "rgba16float",
                     stencil_fetch: false,
                     quantize_f16: false,
@@ -3134,7 +3404,7 @@ mod gpu_tests {
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
             virtual_chains: Vec::new(),
-            sampled_externals: Vec::new(),
+            sampled_externals: Vec::new(), camera_externals: 0,
         };
         let g = generate_fused(&region).expect("fan-out region fuses");
         assert!(g.wgsl.contains("var dst_0:"), "first output binding");
@@ -3166,6 +3436,7 @@ mod gpu_tests {
             g.inputs(),
             g.parameters(),
             g.input_access(),
+            g.derived_uniforms(),
             g.outputs(),
         )
         .expect("gain generates");
@@ -3250,6 +3521,7 @@ mod gpu_tests {
                 node.inputs(),
                 node.parameters(),
                 node.input_access(),
+                node.derived_uniforms(),
                 node.outputs(),
             )
             .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
@@ -3324,13 +3596,13 @@ mod gpu_tests {
         // atom types' consts.
         let region = FusionRegion {
             nodes: vec![
-                RegionNode { node_id: id(0), fusion_kind: Gain::FUSION_KIND, body: Gain::WGSL_BODY.unwrap(), params: Gain::PARAMS, inputs: vec![InputSource::External(0)], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
-                RegionNode { node_id: id(1), fusion_kind: Saturation::FUSION_KIND, body: Saturation::WGSL_BODY.unwrap(), params: Saturation::PARAMS, inputs: vec![InputSource::Node(id(0))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
-                RegionNode { node_id: id(2), fusion_kind: HueSaturation::FUSION_KIND, body: HueSaturation::WGSL_BODY.unwrap(), params: HueSaturation::PARAMS, inputs: vec![InputSource::Node(id(1))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
-                RegionNode { node_id: id(3), fusion_kind: Contrast::FUSION_KIND, body: Contrast::WGSL_BODY.unwrap(), params: Contrast::PARAMS, inputs: vec![InputSource::Node(id(2))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
-                RegionNode { node_id: id(4), fusion_kind: Colorize::FUSION_KIND, body: Colorize::WGSL_BODY.unwrap(), params: Colorize::PARAMS, inputs: vec![InputSource::Node(id(3))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
-                RegionNode { node_id: id(5), fusion_kind: Mix::FUSION_KIND, body: Mix::WGSL_BODY.unwrap(), params: Mix::PARAMS, inputs: vec![InputSource::External(0), InputSource::Node(id(4))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
-                RegionNode { node_id: id(6), fusion_kind: ClampTexture::FUSION_KIND, body: ClampTexture::WGSL_BODY.unwrap(), params: ClampTexture::PARAMS, inputs: vec![InputSource::Node(id(5))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
+                RegionNode { node_id: id(0), fusion_kind: Gain::FUSION_KIND, body: Gain::WGSL_BODY.unwrap(), params: Gain::PARAMS, inputs: vec![InputSource::External(0)], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None, output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
+                RegionNode { node_id: id(1), fusion_kind: Saturation::FUSION_KIND, body: Saturation::WGSL_BODY.unwrap(), params: Saturation::PARAMS, inputs: vec![InputSource::Node(id(0))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None, output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
+                RegionNode { node_id: id(2), fusion_kind: HueSaturation::FUSION_KIND, body: HueSaturation::WGSL_BODY.unwrap(), params: HueSaturation::PARAMS, inputs: vec![InputSource::Node(id(1))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None, output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
+                RegionNode { node_id: id(3), fusion_kind: Contrast::FUSION_KIND, body: Contrast::WGSL_BODY.unwrap(), params: Contrast::PARAMS, inputs: vec![InputSource::Node(id(2))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None, output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
+                RegionNode { node_id: id(4), fusion_kind: Colorize::FUSION_KIND, body: Colorize::WGSL_BODY.unwrap(), params: Colorize::PARAMS, inputs: vec![InputSource::Node(id(3))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None, output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
+                RegionNode { node_id: id(5), fusion_kind: Mix::FUSION_KIND, body: Mix::WGSL_BODY.unwrap(), params: Mix::PARAMS, inputs: vec![InputSource::External(0), InputSource::Node(id(4))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None, output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
+                RegionNode { node_id: id(6), fusion_kind: ClampTexture::FUSION_KIND, body: ClampTexture::WGSL_BODY.unwrap(), params: ClampTexture::PARAMS, inputs: vec![InputSource::Node(id(5))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None, output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
             ],
             num_external_inputs: 1,
             outputs: vec![id(6)],
@@ -3338,7 +3610,7 @@ mod gpu_tests {
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
             virtual_chains: Vec::new(),
-            sampled_externals: Vec::new(),
+            sampled_externals: Vec::new(), camera_externals: 0,
         };
         let fused = generate_fused(&region).expect("fuse ColorGrade region");
 
@@ -3448,6 +3720,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("mix generates");
@@ -3493,6 +3766,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("vignette generates");
@@ -3589,6 +3863,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("dither generates");
@@ -3694,6 +3969,7 @@ mod gpu_tests {
                 node.inputs(),
                 node.parameters(),
                 node.input_access(),
+                node.derived_uniforms(),
                 node.outputs(),
             )
             .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
@@ -3775,6 +4051,7 @@ mod gpu_tests {
                 node.inputs(),
                 node.parameters(),
                 node.input_access(),
+                node.derived_uniforms(),
                 node.outputs(),
             )
             .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
@@ -3840,6 +4117,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("abs_texture generates");
@@ -3896,6 +4174,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("remap generates");
@@ -4010,6 +4289,7 @@ mod gpu_tests {
                 node.inputs(),
                 node.parameters(),
                 node.input_access(),
+                node.derived_uniforms(),
                 node.outputs(),
             )
             .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
@@ -4096,6 +4376,7 @@ mod gpu_tests {
                 node.inputs(),
                 node.parameters(),
                 node.input_access(),
+                node.derived_uniforms(),
                 node.outputs(),
             )
             .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
@@ -4149,6 +4430,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
             node.stencil_fetch(),
         )
@@ -4232,6 +4514,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("basic_shape generates");
@@ -4313,6 +4596,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("gradient_ramp generates");
@@ -4392,6 +4676,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("downsample generates");
@@ -4463,6 +4748,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
             node.stencil_fetch(),
         )
@@ -4553,6 +4839,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("blur_3d generates");
@@ -4719,6 +5006,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("gradient_central_diff_3d generates");
@@ -4802,6 +5090,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("curl_slope_force_3d generates");
@@ -4908,6 +5197,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
                 node.inputs(),
                 node.parameters(),
                 node.input_access(),
+                node.derived_uniforms(),
                 node.outputs(),
             )
             .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
@@ -4937,6 +5227,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("rotate_vec2 generates");
@@ -4983,6 +5274,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("hash_field_by_seed generates");
@@ -5055,6 +5347,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("pack_channels generates");
@@ -5124,6 +5417,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("trig_texture generates");
@@ -5199,6 +5493,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("block_displace_field generates");
@@ -5256,6 +5551,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("lic_integrate generates");
@@ -5301,6 +5597,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("sample_volume_2d generates");
@@ -5412,6 +5709,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("voronoi_2d generates");
@@ -5588,6 +5886,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
                 node.inputs(),
                 node.parameters(),
                 node.input_access(),
+                node.derived_uniforms(),
                 node.outputs(),
             )
             .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));

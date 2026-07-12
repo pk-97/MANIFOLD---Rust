@@ -1164,6 +1164,16 @@ pub(crate) fn fuse_canonical_def_masked(
         let node_index_of =
             |doc: u32| -> Option<usize> { all_members.iter().position(|m| m.doc_id == doc) };
         let mut region_nodes: Vec<RegionNode<'_>> = Vec::with_capacity(all_members.len());
+        // D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): distinct Camera-producing
+        // externals this region's derived-uniform members need, deduped by
+        // (producer doc id, producer output port). Assigned `camera_ext_{index}`
+        // names below; wired onto the fused node once `fused_doc` is known, via
+        // the SAME `control_wires` mechanism ordinary control wires use — a
+        // Camera-typed wire into a Camera-typed port is an unremarkable, plain
+        // typed wire once `node.wgsl_compute` declares that port (see
+        // `emit_derived_uniform_markers` in codegen.rs / `introspect` in
+        // `primitives/wgsl_compute.rs`).
+        let mut camera_ext_producers: Vec<(u32, String)> = Vec::new();
         for member in &all_members {
             let doc_node = def.nodes.iter().find(|n| n.id == member.doc_id)?;
             let node = crate::node_graph::freeze::region::configured_construct(registry, doc_node)?;
@@ -1186,6 +1196,51 @@ pub(crate) fn fuse_canonical_def_masked(
                     RegionInput::Virtual(ci) => InputSource::Virtual(*ci),
                 })
                 .collect();
+            let derived = node.derived_uniforms();
+            // D7/P0: a member with declared derived uniforms must have a
+            // registered recompute or the whole region bails to unfused — the
+            // fail-closed contract the deleted install-time name whitelist had
+            // (an unrecognized name used to `return None`; an unregistered
+            // type_id does the same now, data-driven instead of name-matched).
+            if !derived.is_empty()
+                && !crate::node_graph::freeze::derived_uniform_registry::has_recompute(
+                    &doc_node.type_id,
+                )
+            {
+                return None;
+            }
+            // If this member has a wired Camera input port, route that producer
+            // to the fused node as a distinct `camera_ext_N` external (deduped
+            // across members feeding the same producer wire). A member with
+            // derived_uniforms but no wired Camera port (the whole time-family)
+            // needs no camera routing — `derived_camera_ext` stays `None`.
+            let derived_camera_ext = if derived.is_empty() {
+                None
+            } else {
+                let camera_wire = node
+                    .inputs()
+                    .iter()
+                    .find(|i| i.ty == PortType::Camera)
+                    .and_then(|inp| {
+                        def.wires
+                            .iter()
+                            .find(|w| w.to_node == member.doc_id && w.to_port == inp.name.as_ref())
+                    });
+                match camera_wire {
+                    Some(cw) => {
+                        if member_region.contains_key(&cw.from_node) {
+                            return None; // camera producer fused away — can't route it
+                        }
+                        let key = (cw.from_node, cw.from_port.clone());
+                        let idx = camera_ext_producers.iter().position(|e| *e == key).unwrap_or_else(|| {
+                            camera_ext_producers.push(key.clone());
+                            camera_ext_producers.len() - 1
+                        });
+                        Some(idx)
+                    }
+                    None => None,
+                }
+            };
             region_nodes.push(RegionNode {
                 node_id: NodeInstanceId(member.doc_id),
                 fusion_kind: node.fusion_kind(),
@@ -1199,7 +1254,9 @@ pub(crate) fn fuse_canonical_def_masked(
                 node_inputs: leak_ports(node.inputs()),
                 node_outputs: leak_ports(node.outputs()),
                 node_includes: node.wgsl_includes(),
-                derived_uniforms: node.derived_uniforms(),
+                derived_uniforms: derived,
+                type_id: doc_node.type_id.clone(),
+                derived_camera_ext,
                 output_storage: resolve_output_storage(doc_node, node.as_ref()),
                 stencil_fetch: node.stencil_fetch(),
                 quantize_f16: member.quantize_f16,
@@ -1251,6 +1308,7 @@ pub(crate) fn fuse_canonical_def_masked(
             dispatch_count_field,
             virtual_chains,
             sampled_externals: region.sampled_externals.clone(),
+            camera_externals: camera_ext_producers.len(),
         };
         let generated = codegen::generate_fused(&fusion_region).ok()?;
         // Defense in depth: the fused kernel must parse through the plain pipeline
@@ -1310,35 +1368,29 @@ pub(crate) fn fuse_canonical_def_masked(
                 }
             }
 
-            // Frame-derived uniforms (dt_scaled, frame_count, …): the fused kernel
-            // has no per-member run() to recompute them, so wire each from the
-            // matching system.generator_input output — the same wired-frame-value
-            // mechanism scatter's width/height already use. wgsl_compute shadows the
-            // `n{idx}_<field>` uniform member as an optional ScalarF32 input, so this
-            // is a plain control wire (an f32 destined for a u32 field is converted
-            // `as u32` at pack time). Bail to unfused if the graph has no
-            // generator_input or carries a derived uniform we can't source — safe,
-            // just no speedup.
-            for d in node.derived_uniforms() {
-                let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
-                // A vec3 derived (camera basis) can't be reconstructed from one
-                // scalar output — those atoms are gather/atomic boundaries anyway.
-                if dty == "vec3" {
-                    return None;
-                }
-                let src_port = match dname {
-                    "dt_scaled" => "frame_delta",
-                    "frame_count" => "frame_count",
-                    "time" | "time2" | "time_val" => "time",
-                    _ => return None, // unknown derived uniform — can't source it
-                };
-                let gen_in = def
-                    .nodes
-                    .iter()
-                    .find(|n| n.type_id == "system.generator_input")?;
-                let field = format!("n{idx}_{dname}");
-                control_wires.push((fused_doc, gen_in.id, src_port.to_string(), field));
-            }
+            // Frame-derived uniforms (dt_scaled, frame_count, a camera's
+            // cam_fwd_x/_y/_z, …): D7/P0 deleted the install-time name whitelist
+            // that used to wire each from `system.generator_input` here. There is
+            // nothing left to DO at install time — `node.wgsl_compute` recomputes
+            // every derived-uniform field itself, every frame, from the
+            // `// @derived_uniform_member:` marker `emit_derived_uniform_markers`
+            // wrote into this member's slice of the fused kernel (registry lookup
+            // by type_id — `derived_uniform_registry::recompute`, gated at
+            // fuse-build time above by `has_recompute`). See
+            // `docs/CINEMATIC_POST_DESIGN.md` D7 and
+            // `crates/manifold-renderer/src/node_graph/freeze/derived_uniform_registry.rs`.
+        }
+        // D7/P0: wire each distinct Camera external this region's derived-uniform
+        // members need onto the fused node's synthesized `camera_ext_N` port —
+        // the SAME `control_wires` mechanism ordinary param control wires use
+        // (a plain node→port wire; `camera_ext_N` is Camera-typed on both ends).
+        for (n, (from_node, from_port)) in camera_ext_producers.iter().enumerate() {
+            control_wires.push((
+                fused_doc,
+                *from_node,
+                from_port.clone(),
+                format!("camera_ext_{n}"),
+            ));
         }
 
         // Tier 6: stamp the region's element space onto the fused node so the

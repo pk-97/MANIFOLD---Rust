@@ -111,7 +111,13 @@ unfused, which is always correct. Order matters; from `classify_node`:
 8. Any Texture3D port (texture finder is 2D; 3D fuses only inside buffer
    regions as sampled volumes).
 9. A wire into any input that is neither a texture port nor a scalar param
-   (e.g. an Array port on a texture atom).
+   (e.g. an Array port on a texture atom) — **exemption (P0/D7, 2026-07-12):**
+   a wire into a `Camera`-typed CPU-struct port does NOT cut, when the member
+   has a non-empty `derived_uniforms()` (i.e. consumes the struct entirely via
+   recomputed uniform fields, never as a GPU binding — true by construction,
+   since Camera has no WGSL representation). Applies on both the texture
+   (`classify_node`) and buffer (`classify_buffer_node`) paths — one shared
+   predicate. Any other non-texture non-param wire still cuts.
 10. Control PRODUCER (its scalar output drives someone's param) — must survive
     the rewrite so its wire can re-anchor onto the fused port-shadow.
 11. In-loop f16 with q16 disabled (`MANIFOLD_FREEZE_Q16=0`).
@@ -127,9 +133,23 @@ unfused, which is always correct. Order matters; from `classify_node`:
 out; no texture output; texture *inputs* must be wired sampled 2D/3D (unwired
 optional = boundary — the fused node's port would be required and silently kill
 the dispatch); no `BufferGather` (neighbor_smooth); no atomic outputs
-(scatter); same wire/control-producer rules. Derived uniforms (dt_scaled,
-frame_count, time) are ALLOWED — install wires them from
-`system.generator_input` (vec3 camera basis is not sourceable → refuse).
+(scatter); same wire/control-producer rules. **Derived uniforms, ANY declared
+name (P0/D7, 2026-07-12, superseding the old name-whitelist rule below):** a
+member with `derived_uniforms()` fuses (texture or buffer path) iff its
+type_id has a registered recompute in `freeze::derived_uniform_registry`
+(`has_recompute`, checked at install time) — data-driven, not name-matched.
+vec3-typed derived uniforms (e.g. a camera basis vector) are now sourceable,
+via the member's wired `Camera` input routed to the fused node as a
+`@camera_external` port (see §5) and recomputed every frame in
+`wgsl_compute::evaluate()`. The time-family (`dt_scaled`, `frame_count`,
+`time`/`time2`/`time_val`) migrated onto this same mechanism — the old
+per-name control wire from `system.generator_input` is gone; every primitive
+that declares `derived_uniforms` now also registers a recompute fn next to
+its `primitive!` (see the precedent primitives in
+`node_graph/primitives/euler_step_particles.rs` and siblings, plus the
+camera-consuming `flatten_to_camera_plane.rs`). A member whose type_id has no
+registered recompute still fails the region closed, same fail-safe contract
+the old whitelist had.
 
 **Union gates (`partition_regions`):** an edge unions two eligible nodes only
 if: same domain (texture wire, but never *into* a buffer atom — that's a
@@ -185,6 +205,8 @@ should diff both ends.
 | `// @static_param: <field>` (one per line, prefix block) | install, texture regions only (never buffer — detected by `var<storage`) | Field is *eligible* for const-baking (specialization). Excluded: control-wired fields AND outer-card binding targets. Correctness does NOT rest on this classification — see §7. |
 | `// @pure` | hand-authored kernels (BlackHole bake) | Author asserts output = f(params, inputs) → memoizer may hold it. |
 | `// @fusion: pointwise\|source` (+ `fn body`) | user-authored fragment-form `wgsl_compute` | The node synthesizes its standalone kernel via `generate_standalone` and reports a real `fusion_kind`, so user fragments fuse like built-ins. |
+| `// @camera_external: camera_ext_N` (P0/D7, 2026-07-12) | fused texture/buffer codegen, when a region member has a wired `Camera` input | Declares a synthetic, non-introspected `Camera`-typed input port on the fused node — the only channel a CPU-struct with no WGSL representation can travel through the def. Producer wire (Camera→Camera) reuses the ordinary `control_wires` rewrite. |
+| `// @derived_uniform_member: <first_field> words=<n> <type_id> [<camera_port>]` (P0/D7, 2026-07-12) | fused texture/buffer codegen, one per region member with non-empty `derived_uniforms()` | The contiguous uniform-buffer block that member's derived fields occupy, and how to refresh it every frame: `wgsl_compute::evaluate()` calls `derived_uniform_registry::recompute(type_id, ctx)` (ctx = frame clock + the routed `@camera_external` value, if named) and packs the result through each field's real `UniformMemberType`. Consulted by `introspect()` to exclude these fields from the generic port-shadow/param set. Kernels carrying this marker are excluded from static-param specialization (§7) — baking would shift the surviving fields' byte offsets. |
 
 Sampler default everywhere is ClampToEdge; markers only encode deviations, so
 all-clamp regions keep byte-identical WGSL — and the WGSL text is the
@@ -244,6 +266,9 @@ variant keyed by that value-set (LRU 4, compiled only after the key holds
 `SPEC_STABLE_FRAMES`); any mismatch between live values and a variant's key
 serves the generic all-uniform kernel. A per-frame-driven "static" field just
 never stabilizes → generic path → correct. Kill: `MANIFOLD_WGSL_SPECIALIZE=0`.
+A kernel carrying a `@derived_uniform_member` marker (P0/D7, 2026-07-12) never
+specializes at all — baking a const variant would shift the surviving fields'
+byte offsets against what `evaluate()`'s recompute pack expects.
 
 ## 8. Caches, keys, threads, kill switches
 
@@ -320,6 +345,15 @@ invariant a fused def must respect:
    epochs are unchanged; held slots serve consumers. Fused nodes are not
    `@pure` (they read uniforms every frame) — no interaction today, but a
    review should confirm specialization variants don't confuse epoch tracking.
+10. **Derived-uniform recompute (P0/D7, 2026-07-12)** — a fused kernel has no
+    per-member `run()`, so any member's `derived_uniforms()` fields (frame-
+    derived, or recomputed from a routed `Camera` external) must be refreshed
+    every frame from the SAME ambient context the unfused `run()` would have
+    read (`freeze::derived_uniform_registry`, consumed in
+    `wgsl_compute::evaluate()`; see §5's two new markers). A type_id with no
+    registered recompute fails the fuse closed at install time
+    (`has_recompute`) — the same fail-safe contract every other cut rule
+    follows: refusal always renders unfused, unfused is always correct.
 
 ## 10. Test surface & how to debug
 

@@ -12,6 +12,7 @@
 
 pub mod classify;
 pub mod codegen;
+pub mod derived_uniform_registry;
 pub mod diff;
 pub mod install;
 pub mod reference;
