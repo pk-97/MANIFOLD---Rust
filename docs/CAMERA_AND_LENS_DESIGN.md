@@ -43,7 +43,7 @@ cluster, by his explicit call.
 | `look_at_rh` / `perspective_rh` (depth [0,1] Metal) / `mat4_mul` | `crates/manifold-renderer/src/generators/mesh_pipeline.rs:171-196` | The convention's math. `ortho_rh` lives in `camera.rs:279` |
 | Camera emitters: `node.orbit_camera`, `node.free_camera`, `node.look_at_camera` | `primitives/camera_orbit.rs`, `free_camera.rs`, `look_at_camera.rs` | All conform (all build via the `Camera` builders) |
 | Camera consumers, conforming: `node.render_scene` (required port, `cam.view_proj(aspect)` at `render_scene.rs:813`), `node.render_mesh`, `node.render_copies`, `node.flatten_to_camera_plane` (reads `cam.fwd` only) | respective primitives | Extend, don't redesign |
-| Camera consumer, fused own math: `node.scatter_particles_camera` ("projects each particle through orthographic (with toroidal wrap) or perspective camera math", `scatter_particles_camera.rs:71`) | `primitives/scatter_particles_camera.rs` | ⚠ VERIFY-AT-IMPL (P1): read its projection math; if it diverges from `Camera::proj` semantics, log the delta in the conformance table — do NOT change it in this design (fluid-scatter behavior is shipped content) |
+| Camera consumer, fused own math: `node.scatter_particles_camera` ("projects each particle through orthographic (with toroidal wrap) or perspective camera math", `scatter_particles_camera.rs:71`) | `primitives/scatter_particles_camera.rs` | VERIFIED-DIVERGENT (P1, 2026-07-12): its perspective branch (`scp_project` in `shaders/scatter_particles_camera_body.wgsl`) computes `dot(rel,right)/(view_z·aspect)` / `dot(rel,up)/view_z` — a tangent-plane projection via the camera's raw basis vectors, with NO `f = 1/tan(fov_y/2)` scale term (the comment says so explicitly: "ignores cam.fov_y ... implicit-FOV — basis vectors set the projection scale"). `Camera::proj`'s `perspective_rh` applies that `f` factor to both axes. The two agree only at the one `fov_y` where `f = 1` (90°); at any other `fov_y` this primitive's output is off by a constant multiplicative factor of `f` in both NDC axes vs. what `Camera::project_to_pixel` would compute for the same camera. Per this design: NOT changed — fluid-scatter's shipped presets tune their look against this exact math, and D3's precedent (Rejected: rewriting legacy modes in terms of `Camera`) applies here too. Revival trigger unchanged in §6. |
 | NON-conforming projector: `node.flatten_3d` — no Camera port; `mode` ortho (`xy·proj_scale`) / perspective (`s = proj_dist/(proj_dist+z)`, **+z away = opposite handedness**), origin-centred pre-aspect output | `primitives/project_3d.rs:43-95`, body shader `shaders/project_3d_body.wgsl` | The gap this design closes |
 | `node.draw_lines` screen mapping: `curve_to_screen(p) = (p.x/aspect + 0.5, p.y + 0.5)`, aspect = `rt_width/rt_height` | `primitives/shaders/render_lines.wgsl:63-66` | Fixed contract — flatten_3d's camera mode must target it |
 | `node.project_4d` (4D→2D, own projection) | `primitives/project_4d.rs` | Out of scope: no 3D camera semantics for a 4D→2D map. Listed so nobody "fixes" it |
@@ -179,7 +179,7 @@ the next scene-wide scalar pays a 16 B uniform growth.
 |---|---|
 | I1 — Every GPU projection path agrees with `Camera::project_to_pixel` within 1.0 px | `gpu_proofs::camera_conformance` (P1): render_scene rasterized probe + flatten_3d camera-mode readback vs oracle, asserted per-vertex |
 | I2 — `LensParams::PINHOLE` cameras render byte-identically to pre-lens builds | P2 gate: existing `render_scene` gpu_tests + fog/shadow proofs pass unmodified (they construct cameras via builders, which default to PINHOLE) |
-| I3 — flatten_3d unwired-camera output is bit-identical to today | existing `project_3d.rs::gpu_tests::generated_project3d_matches_hand_kernel_both_modes` (must pass unmodified) |
+| I3 — flatten_3d unwired-camera output is bit-identical to today | existing `project_3d.rs::gpu_tests::generated_project3d_matches_hand_kernel_both_modes` passes with `shaders/project_3d.wgsl` and all its assertions unmodified; the test's `gen_bytes` packing updates mechanically to the new `Params` layout (PARAMS words → one zero word per derived word, `use_camera` inert → `dispatch_count` → pad) — amended 2026-07-12 (Fable review, P1 escalation) after the packing/derived-uniforms conflict below was found |
 | I4 — No new bespoke projection math in any primitive | negative gate, landing: `rg -n 'proj_dist|proj_scale' crates/manifold-renderer/src/node_graph/primitives/ -g '*.rs'` hit-count == pre-phase count (re-derive at execution; new hits must be in flatten_3d only) |
 | I5 — ev=0 byte-identity | P2 gate: `gpu_proofs::render_scene_fog` density-0 byte-identity test extended with `ev=0` assertion |
 
@@ -213,9 +213,37 @@ Restate: the forbidden moves, the S-sign procedure, why unwired must be bit-iden
 - `scatter_particles_camera` projection-math conformance note (VERIFY-AT-IMPL
   from §1) appended to this doc's audit table.
 **Gate:** `cargo test -p manifold-renderer --features gpu-proofs camera_conformance`
-green; I3's existing parity test green UNMODIFIED (`git diff --stat` on that
-test file = 0 lines); focused `cargo nextest run -p manifold-renderer --lib`;
-clippy `-p manifold-renderer`.
+green; I3's existing parity test green — `git diff` on `shaders/project_3d.wgsl`
+= 0 lines and the test's assertion block (lines ~284-327 pre-phase) unchanged;
+only the `gen_bytes` packing (the hand-constructed generated-layout bytes) may
+differ, per the amended I3 machine-check above. Focused
+`cargo nextest run -p manifold-renderer --lib`; clippy `-p manifold-renderer`.
+
+**Amendment 2026-07-12 (Fable review, P1 escalation):** D3's derived-uniforms
+extension and I3's original "0-line diff on the test file" gate are mutually
+exclusive — the freeze codegen (`codegen.rs:834-880`) always places
+`derived_uniforms` fields immediately before the injected `dispatch_count`
+word, so any new derived field moves `dispatch_count`'s byte offset and the
+test's hardcoded `gen_bytes` buffer misfeeds it. Ruling: the "0-line diff" was
+a proxy for "legacy math untouched," not a literal freeze — the test's
+byte-packing is scaffolding, not the oracle. Pin `Project3D::DERIVED_UNIFORMS`
+as, in order: `"cam_right:vec3", "cam_up:vec3", "cam_fwd:vec3", "cam_pos:vec3",
+"proj_f", "cam_near", "use_camera:u32"` (15 words: vec3 expands to 3 scalars
+per codegen.rs:852-862; basis+pos = the view rows, `proj_f` = 1/tan(fov_y/2)
+at aspect 1, `cam_near` = the cull epsilon). Rebuild `gen_bytes` as: (1) `mode`
+u32, `proj_scale` f32, `proj_dist` f32, `active as f32` — unchanged, 4 words;
+(2) 15 zero words (60 zero bytes) — the derived camera block, correctly zero
+since `use_camera = 0` makes it dead; (3) `CAPACITY` u32 — `dispatch_count`;
+(4) no pad needed, 4+15+1 = 20 words ≡ 0 mod 4 per codegen.rs:877 (80 bytes
+total). If the derived-field list drifts during implementation, recompute
+packing as: PARAMS words in order → one zero word per derived word →
+`dispatch_count` → pad to a 4-word multiple — nothing else changes. The hand
+layout, `shaders/project_3d.wgsl`, and every assertion in the test stay
+byte-for-byte unchanged. Rejected: reordering freeze codegen so
+`dispatch_count`'s offset never moves — a cross-cutting change touching every
+other primitive's `derived_uniforms` usage and every hand-packed gpu_test,
+far outside a one-primitive phase, for a stability guarantee nothing needs
+yet.
 **Demo:** none — L1 (cluster-wide no-PNG rule, header note).
 **Performer gesture:** orbit-camera `orbit` param on an LFO — wireframe and
 solid views rotate in lockstep.

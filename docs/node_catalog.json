@@ -6305,6 +6305,11 @@
           "name": "proj_dist",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "camera",
+          "required": false,
+          "type": "Camera"
         }
       ],
       "label": "Flatten 3D → 2D",
@@ -6349,7 +6354,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Project an Array<MeshVertex> (3D positions) to an Array<CurvePoint> (2D pre-aspect curve space) with either orthographic or perspective projection. Output is centred at the origin — node.draw_lines applies the center offset itself, so the convention matches every other Array<CurvePoint> producer (generate_lissajous, etc.). For Wireframe-shaped decompositions: polytope_vertices → Rotate3D → Project3D → render_lines.",
+      "purpose": "Project an Array<MeshVertex> (3D positions) to an Array<CurvePoint> (2D pre-aspect curve space) with either orthographic or perspective projection. Output is centred at the origin — node.draw_lines applies the center offset itself, so the convention matches every other Array<CurvePoint> producer (generate_lissajous, etc.). For Wireframe-shaped decompositions: polytope_vertices → Rotate3D → Project3D → render_lines. An optional camera: Camera port overrides both legacy modes (port-shadows-param, docs/CAMERA_AND_LENS_DESIGN.md D3): when wired, every point projects through the same right-handed camera convention node.render_scene uses, so the wireframe path agrees pixel-for-pixel with the scene-renderer family. Unwired, the legacy mode/proj_scale/proj_dist math is bit-identical to before — no migration for existing presets.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Flattens a 3D mesh down to 2D points using a camera, so you can draw it as lines. The projection step for wireframe rendering.",

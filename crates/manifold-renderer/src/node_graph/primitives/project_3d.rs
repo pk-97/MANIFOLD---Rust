@@ -17,6 +17,7 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::{CurvePoint, MeshVertex};
+use crate::node_graph::camera::CameraMode;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -24,9 +25,16 @@ use crate::node_graph::primitive::Primitive;
 pub const PROJECT_3D_MODES: &[&str] = &["Orthographic", "Perspective"];
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`mode`
-/// Enum → u32, `proj_scale` f32, `proj_dist` f32), then the derived
-/// `active_count` (f32), then the codegen-injected `dispatch_count` (= output
-/// capacity, the guard), padded to a 16-byte multiple. 5 words + 3 pad = 32 B.
+/// Enum → u32, `proj_scale` f32, `proj_dist` f32), then the derived fields —
+/// `active_count` (f32, unchanged), then the camera-branch block added for
+/// the optional `camera: Camera` port (docs/CAMERA_AND_LENS_DESIGN.md §2 D3,
+/// Amendment 2026-07-12): `cam_right`/`cam_up`/`cam_fwd`/`cam_pos` (vec3 each
+/// → 3 scalars per codegen.rs:852-862), `proj_f` (= `1/tan(fov_y/2)` at
+/// aspect 1), `cam_near` (the wired camera's near-plane cull threshold), and
+/// `use_camera` (u32, 1 = wired) — then the codegen-injected `dispatch_count`
+/// (= output capacity, the guard), padded to a 16-byte multiple. 3 params + 1
+/// (active_count) + 12 (4 vec3s) + 3 (proj_f/cam_near/use_camera) + 1
+/// (dispatch_count) = 20 words ≡ 0 mod 4 — no padding needed. 80 B total.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Project3DUniforms {
@@ -34,16 +42,28 @@ struct Project3DUniforms {
     proj_scale: f32,
     proj_dist: f32,
     active_count: f32,
+    cam_right_x: f32,
+    cam_right_y: f32,
+    cam_right_z: f32,
+    cam_up_x: f32,
+    cam_up_y: f32,
+    cam_up_z: f32,
+    cam_fwd_x: f32,
+    cam_fwd_y: f32,
+    cam_fwd_z: f32,
+    cam_pos_x: f32,
+    cam_pos_y: f32,
+    cam_pos_z: f32,
+    proj_f: f32,
+    cam_near: f32,
+    use_camera: u32,
     dispatch_count: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
 }
 
 crate::primitive! {
     name: Project3D,
     type_id: "node.flatten_3d",
-    purpose: "Project an Array<MeshVertex> (3D positions) to an Array<CurvePoint> (2D pre-aspect curve space) with either orthographic or perspective projection. Output is centred at the origin — node.draw_lines applies the center offset itself, so the convention matches every other Array<CurvePoint> producer (generate_lissajous, etc.). For Wireframe-shaped decompositions: polytope_vertices → Rotate3D → Project3D → render_lines.",
+    purpose: "Project an Array<MeshVertex> (3D positions) to an Array<CurvePoint> (2D pre-aspect curve space) with either orthographic or perspective projection. Output is centred at the origin — node.draw_lines applies the center offset itself, so the convention matches every other Array<CurvePoint> producer (generate_lissajous, etc.). For Wireframe-shaped decompositions: polytope_vertices → Rotate3D → Project3D → render_lines. An optional camera: Camera port overrides both legacy modes (port-shadows-param, docs/CAMERA_AND_LENS_DESIGN.md D3): when wired, every point projects through the same right-handed camera convention node.render_scene uses, so the wireframe path agrees pixel-for-pixel with the scene-renderer family. Unwired, the legacy mode/proj_scale/proj_dist math is bit-identical to before — no migration for existing presets.",
     inputs: {
         in: Array(MeshVertex) required,
         // Port-shadows-param: control-rate wires take precedence over
@@ -52,6 +72,11 @@ crate::primitive! {
         // (e.g. `outer_scale × wireframe_zoom_factor → proj_scale`).
         proj_scale: ScalarF32 optional,
         proj_dist: ScalarF32 optional,
+        // Optional Camera port (D3): when wired, overrides BOTH legacy
+        // modes with the canonical camera projection so flatten_3d agrees
+        // with render_scene pixel-for-pixel. Unwired, the mode/proj_scale/
+        // proj_dist math below is untouched.
+        camera: Camera optional,
     },
     outputs: {
         out: Array(CurvePoint),
@@ -91,7 +116,16 @@ crate::primitive! {
     aliases: ["project 3d", "flatten", "perspective", "camera projection"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/project_3d_body.wgsl"),
-    derived_uniforms: ["active_count"],
+    derived_uniforms: [
+        "active_count",
+        "cam_right:vec3",
+        "cam_up:vec3",
+        "cam_fwd:vec3",
+        "cam_pos:vec3",
+        "proj_f",
+        "cam_near",
+        "use_camera:u32",
+    ],
 }
 
 impl Primitive for Project3D {
@@ -117,6 +151,35 @@ impl Primitive for Project3D {
         };
         let proj_scale = ctx.scalar_or_param("proj_scale", 0.25);
         let proj_dist = ctx.scalar_or_param("proj_dist", 3.0);
+
+        // Optional Camera port (D3): resolved CPU-side into the camera's
+        // basis vectors + position (the same values that build its view
+        // matrix — no per-node projection math is reintroduced in WGSL,
+        // the shader just does dot products against an already-orthonormal
+        // basis) plus `proj_f = 1/tan(fov_y/2)` (the perspective scale
+        // factor at aspect 1 — "aspect 1: pre-aspect by construction",
+        // flatten_3d's output is pre-aspect curve space) and `cam_near`
+        // (the wired camera's near-plane cull threshold).
+        let cam = ctx.inputs.camera("camera");
+        let use_camera: u32 = if cam.is_some() { 1 } else { 0 };
+        let (cam_right, cam_up, cam_fwd, cam_pos, proj_f, cam_near) = match cam {
+            Some(c) => {
+                let proj_f = match c.mode {
+                    CameraMode::Perspective { fov_y } => 1.0 / (fov_y * 0.5).tan(),
+                    // No current camera-source primitive emits Orthographic
+                    // (orbit_camera/free_camera/look_at_camera all hardcode
+                    // Perspective) — this branch is unreachable today. XY
+                    // scale factor kept consistent with `ortho_rh` at
+                    // aspect 1 (`2/(right-left)` with `half_width ==
+                    // half_height`) so it's not silently wrong if that ever
+                    // changes; the missing depth-divide difference vs a
+                    // true orthographic projection is a known limitation.
+                    CameraMode::Orthographic { half_height } => 1.0 / half_height,
+                };
+                (c.right, c.up, c.fwd, c.pos, proj_f, c.near)
+            }
+            None => ([0.0; 3], [0.0; 3], [0.0; 3], [0.0; 3], 0.0, 0.0),
+        };
 
         let Some(in_buf) = ctx.inputs.array("in") else {
             return;
@@ -152,10 +215,22 @@ impl Primitive for Project3D {
             proj_scale,
             proj_dist,
             active_count: active_count as f32,
+            cam_right_x: cam_right[0],
+            cam_right_y: cam_right[1],
+            cam_right_z: cam_right[2],
+            cam_up_x: cam_up[0],
+            cam_up_y: cam_up[1],
+            cam_up_z: cam_up[2],
+            cam_fwd_x: cam_fwd[0],
+            cam_fwd_y: cam_fwd[1],
+            cam_fwd_z: cam_fwd[2],
+            cam_pos_x: cam_pos[0],
+            cam_pos_y: cam_pos[1],
+            cam_pos_z: cam_pos[2],
+            proj_f,
+            cam_near,
+            use_camera,
             dispatch_count: out_capacity,
-            _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -194,7 +269,7 @@ mod tests {
         let mesh_layout = ArrayType::of_known::<MeshVertex>();
         let point_layout = ArrayType::of_known::<CurvePoint>();
         assert_eq!(Project3D::TYPE_ID, "node.flatten_3d");
-        assert_eq!(Project3D::INPUTS.len(), 3);
+        assert_eq!(Project3D::INPUTS.len(), 4);
         assert_eq!(Project3D::INPUTS[0].name, "in");
         assert!(Project3D::INPUTS[0].required);
         assert_eq!(Project3D::INPUTS[0].ty, PortType::Array(mesh_layout));
@@ -206,6 +281,9 @@ mod tests {
                 PortType::Scalar(crate::node_graph::ports::ScalarType::F32)
             );
         }
+        assert_eq!(Project3D::INPUTS[3].name, "camera");
+        assert!(!Project3D::INPUTS[3].required);
+        assert_eq!(Project3D::INPUTS[3].ty, PortType::Camera);
         assert_eq!(Project3D::OUTPUTS.len(), 1);
         assert_eq!(Project3D::OUTPUTS[0].ty, PortType::Array(point_layout));
     }
@@ -293,15 +371,23 @@ mod gpu_tests {
             hand.extend_from_slice(&proj_dist.to_le_bytes());
             hand.extend_from_slice(&[0u8; 8]);
 
-            // Generated layout: mode(u32), proj_scale(f32), proj_dist(f32),
-            //                   active_count(f32), dispatch_count(u32), 3 pad.
+            // Generated layout (docs/CAMERA_AND_LENS_DESIGN.md I3, amended
+            // 2026-07-12 after the P1 escalation): mode(u32), proj_scale(f32),
+            // proj_dist(f32), active_count(f32) — unchanged, 4 words — then
+            // the 15-word camera-branch derived block (cam_right/up/fwd/pos
+            // vec3s + proj_f + cam_near + use_camera), all zero here since
+            // `use_camera = 0` makes the whole block dead (this test never
+            // wires a camera — legacy-mode math only), then dispatch_count,
+            // then no padding (4 + 15 + 1 = 20 words ≡ 0 mod 4). Only this
+            // packing changed; the hand layout/kernel and every assertion
+            // below are untouched.
             let mut gen_bytes = Vec::new();
             gen_bytes.extend_from_slice(&mode.to_le_bytes());
             gen_bytes.extend_from_slice(&proj_scale.to_le_bytes());
             gen_bytes.extend_from_slice(&proj_dist.to_le_bytes());
             gen_bytes.extend_from_slice(&(active as f32).to_le_bytes());
+            gen_bytes.extend_from_slice(&[0u8; 15 * 4]);
             gen_bytes.extend_from_slice(&CAPACITY.to_le_bytes());
-            gen_bytes.extend_from_slice(&[0u8; 12]);
 
             let hand_wgsl = include_str!("shaders/project_3d.wgsl");
             let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Project3D>()

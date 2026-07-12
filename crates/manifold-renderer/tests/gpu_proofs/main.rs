@@ -21,6 +21,7 @@
 mod harness;
 
 mod alpha_contract;
+mod camera_conformance;
 mod film_grain_decorrelation;
 mod fragment_storage;
 mod render_scene_fog;
