@@ -376,6 +376,22 @@ fn build_import_graph(
     cam_node.params.insert("look_y".to_string(), float(0.0));
     nodes.push(cam_node);
 
+    // The one physical lens (CAMERA_AND_LENS_DESIGN.md D4): inserted between
+    // the orbit camera and every 3D consumer so render_scene's exposure,
+    // coc_from_depth's DoF, and motion_blur's shutter all read the SAME lens.
+    // focus_distance seeded to the camera distance so the recentered model
+    // (at the origin, the camera's look target) sits in focus by default;
+    // f/2.8 gives a visible-but-not-extreme cinematic depth of field; shutter
+    // 0 and EV 0 are neutral (no motion blur, no exposure shift) until the
+    // performer dials them in on the card.
+    let lens_id = fresh_id();
+    let mut lens_node = plain_node(lens_id, "lens", "node.camera_lens", "lens");
+    lens_node.params.insert("focus_distance".to_string(), float(distance));
+    lens_node.params.insert("f_stop".to_string(), float(2.8));
+    lens_node.params.insert("shutter_angle".to_string(), float(0.0));
+    lens_node.params.insert("exposure_ev".to_string(), float(0.0));
+    nodes.push(lens_node);
+
     let sun_id = fresh_id();
     let mut sun_node = plain_node(sun_id, "sun", "node.light", "sun");
     sun_node.params.insert("mode".to_string(), enum_val(0)); // Sun
@@ -642,13 +658,92 @@ fn build_import_graph(
 
     nodes.push(render_node);
 
+    // Cinematic post chain — the shipped `CinematicScene` preset's wiring
+    // (CINEMATIC_POST_DESIGN.md D6), applied to every imported model by
+    // default: render_scene's color runs through an SSAO contact-occlusion
+    // multiply, a depth-of-field gather (coc_from_depth driving two
+    // variable_blur passes), and a velocity-directed motion blur tail.
+    // depth/velocity are lazy render_scene outputs — they cost nothing until
+    // wired, which they now always are here.
+    //
+    // SSAO radius is a WORLD-space distance and the importer never rescales
+    // the model, so a hero mesh can be fractions of a unit or hundreds across.
+    // Scale the default to the model's own bounding radius (kept inside the
+    // atom's declared 0.01..5.0 envelope) so contact shadows read at any size.
+    let ssao_radius_default = (radius * 0.5).clamp(0.01, 5.0);
+
+    let coc_id = fresh_id();
+    let mut coc_node = plain_node(coc_id, "coc", "node.coc_from_depth", "coc");
+    coc_node.params.insert("max_radius".to_string(), float(24.0));
+    nodes.push(coc_node);
+
+    let ssao_id = fresh_id();
+    let mut ssao_node = plain_node(ssao_id, "ssao", "node.ssao_from_depth", "ssao");
+    ssao_node.params.insert("radius".to_string(), float(ssao_radius_default));
+    ssao_node.params.insert("intensity".to_string(), float(1.0));
+    ssao_node.params.insert("bias".to_string(), float(0.025));
+    nodes.push(ssao_node);
+
+    let ssao_mix_id = fresh_id();
+    let mut ssao_mix_node = plain_node(ssao_mix_id, "ssao_mix", "node.mix", "ssao_mix");
+    ssao_mix_node.params.insert("amount".to_string(), float(1.0));
+    ssao_mix_node.params.insert("mode".to_string(), enum_val(4)); // Multiply
+    nodes.push(ssao_mix_node);
+
+    // DoF gather: coc_from_depth emits a normalized CoC that both variable_blur
+    // passes denormalize by their OWN max_radius — the three max_radius params
+    // MUST stay equal (coc's composition_notes), which the single fanned-out
+    // `dof_radius` card below enforces.
+    let blur_h_id = fresh_id();
+    let mut blur_h_node = plain_node(blur_h_id, "blur_h", "node.variable_blur", "blur_h");
+    blur_h_node.params.insert("axis".to_string(), enum_val(0)); // Horizontal
+    blur_h_node.params.insert("max_radius".to_string(), float(24.0));
+    blur_h_node.params.insert("quality".to_string(), enum_val(1));
+    blur_h_node.params.insert("weighting_mode".to_string(), enum_val(0));
+    nodes.push(blur_h_node);
+
+    let blur_v_id = fresh_id();
+    let mut blur_v_node = plain_node(blur_v_id, "blur_v", "node.variable_blur", "blur_v");
+    blur_v_node.params.insert("axis".to_string(), enum_val(1)); // Vertical
+    blur_v_node.params.insert("max_radius".to_string(), float(24.0));
+    blur_v_node.params.insert("quality".to_string(), enum_val(1));
+    blur_v_node.params.insert("weighting_mode".to_string(), enum_val(0));
+    nodes.push(blur_v_node);
+
+    let motion_blur_id = fresh_id();
+    let mut motion_blur_node =
+        plain_node(motion_blur_id, "motion_blur", "node.motion_blur", "motion_blur");
+    motion_blur_node.params.insert("max_blur_px".to_string(), float(32.0));
+    nodes.push(motion_blur_node);
+
     let final_id = fresh_id();
     nodes.push(plain_node(final_id, "final", FINAL_OUTPUT_TYPE_ID, "final"));
 
-    wires.push(wire(camera_id, "out", render_id, "camera"));
+    // Camera → lens → render, and the same lens feeds every depth/velocity
+    // consumer's camera port.
+    wires.push(wire(camera_id, "out", lens_id, "camera"));
+    wires.push(wire(lens_id, "out", render_id, "camera"));
     wires.push(wire(envmap_id, "envmap", render_id, "envmap"));
     wires.push(wire(sun_id, "out", render_id, "light_0"));
-    wires.push(wire(render_id, "color", final_id, "in"));
+    wires.push(wire(lens_id, "out", coc_id, "camera"));
+    wires.push(wire(lens_id, "out", ssao_id, "camera"));
+    wires.push(wire(lens_id, "out", motion_blur_id, "camera"));
+
+    // depth → CoC + SSAO; velocity → motion blur.
+    wires.push(wire(render_id, "depth", coc_id, "depth"));
+    wires.push(wire(render_id, "depth", ssao_id, "depth"));
+    wires.push(wire(render_id, "velocity", motion_blur_id, "velocity"));
+
+    // color → SSAO multiply → DoF blur (H then V, both driven by the CoC) →
+    // motion blur → final output.
+    wires.push(wire(render_id, "color", ssao_mix_id, "a"));
+    wires.push(wire(ssao_id, "out", ssao_mix_id, "b"));
+    wires.push(wire(ssao_mix_id, "out", blur_h_id, "in"));
+    wires.push(wire(coc_id, "out", blur_h_id, "width"));
+    wires.push(wire(blur_h_id, "out", blur_v_id, "in"));
+    wires.push(wire(coc_id, "out", blur_v_id, "width"));
+    wires.push(wire(blur_v_id, "out", motion_blur_id, "in"));
+    wires.push(wire(motion_blur_id, "out", final_id, "in"));
 
     // Shared framing / light / environment card knobs. These come LAST in
     // `card_params` (after the per-object material knobs) but read first on
@@ -725,6 +820,70 @@ fn build_import_graph(
     card_params.push(card_param("env_bright", "Reflections", 0.0, 4.0, 1.0, false, "Environment"));
     card_bindings.push(card_binding(
         "env_bright", "Reflections", 1.0, "envmap", "horizon_strength", 1.0,
+    ));
+
+    // Physical-camera / cinematic-post knobs (CINEMATIC_POST_DESIGN.md D6).
+    // The four lens params live on the ONE node.camera_lens under a "Lens"
+    // section; the DoF, AO, and motion-blur atoms each get their own section.
+    // focus_distance and the SSAO radius are scene-scaled (world units); the
+    // rest mirror the CinematicScene reference defaults. Not angle params —
+    // f-stop/EV/shutter-degrees/pixels/world-units are all stored as-is
+    // (shutter is degrees the atom consumes directly, not a radians-backed
+    // slider), so every binding is a pass-through.
+    card_params.push(card_param(
+        "lens_focus", "Focus Distance", 0.1, (distance * 3.0).max(1.0), distance, false, "Lens",
+    ));
+    card_bindings.push(card_binding(
+        "lens_focus", "Focus Distance", distance, "lens", "focus_distance", 1.0,
+    ));
+    card_params.push(card_param("lens_fstop", "F-Stop", 0.5, 32.0, 2.8, false, "Lens"));
+    card_bindings.push(card_binding("lens_fstop", "F-Stop", 2.8, "lens", "f_stop", 1.0));
+    card_params.push(card_param("lens_shutter", "Shutter Angle", 0.0, 360.0, 0.0, false, "Lens"));
+    card_bindings.push(card_binding(
+        "lens_shutter", "Shutter Angle", 0.0, "lens", "shutter_angle", 1.0,
+    ));
+    card_params.push(card_param("lens_ev", "Exposure (EV)", -8.0, 8.0, 0.0, false, "Lens"));
+    card_bindings.push(card_binding("lens_ev", "Exposure (EV)", 0.0, "lens", "exposure_ev", 1.0));
+
+    // DoF blur radius: ONE card fanned out to the CoC atom AND both
+    // variable_blur passes (a single source_id on three bindings — the
+    // preset_runtime fan-out). Their max_radius must stay locked or the blur
+    // desyncs from the physically-computed circle of confusion.
+    card_params.push(card_param(
+        "dof_radius", "DoF Blur Radius", 1.0, 64.0, 24.0, false, "Depth of Field",
+    ));
+    card_bindings.push(card_binding("dof_radius", "DoF Blur Radius", 24.0, "coc", "max_radius", 1.0));
+    card_bindings.push(card_binding(
+        "dof_radius", "DoF Blur Radius", 24.0, "blur_h", "max_radius", 1.0,
+    ));
+    card_bindings.push(card_binding(
+        "dof_radius", "DoF Blur Radius", 24.0, "blur_v", "max_radius", 1.0,
+    ));
+
+    // SSAO — contact-occlusion arm.
+    card_params.push(card_param(
+        "ssao_intensity", "SSAO Intensity", 0.0, 4.0, 1.0, false, "Ambient Occlusion",
+    ));
+    card_bindings.push(card_binding(
+        "ssao_intensity", "SSAO Intensity", 1.0, "ssao", "intensity", 1.0,
+    ));
+    card_params.push(card_param(
+        "ssao_radius", "SSAO Radius", 0.01, 5.0, ssao_radius_default, false, "Ambient Occlusion",
+    ));
+    card_bindings.push(card_binding(
+        "ssao_radius", "SSAO Radius", ssao_radius_default, "ssao", "radius", 1.0,
+    ));
+    card_params.push(card_param(
+        "ssao_bias", "SSAO Bias", 0.0, 0.5, 0.025, false, "Ambient Occlusion",
+    ));
+    card_bindings.push(card_binding("ssao_bias", "SSAO Bias", 0.025, "ssao", "bias", 1.0));
+
+    // Motion blur.
+    card_params.push(card_param(
+        "motion_blur_px", "Motion Blur (px)", 0.0, 128.0, 32.0, false, "Motion Blur",
+    ));
+    card_bindings.push(card_binding(
+        "motion_blur_px", "Motion Blur (px)", 32.0, "motion_blur", "max_blur_px", 1.0,
     ));
 
     // Category "Geometry" matches the existing 3D-geometry generator
@@ -845,13 +1004,28 @@ mod tests {
         // Curated performance surface (D9 / P0): the card must carry real
         // params + bindings, not the empty vecs the pre-P0 assembler emitted.
         // Azalea has 2 objects → 4 camera + 5 sun + 1 envmap + 2×(metallic +
-        // roughness) = 14 sliders, each with exactly one binding.
-        assert_eq!(meta.params.len(), 14, "4 camera + 5 sun + 1 envmap + 2×2 material");
+        // roughness) = 14 framing/material sliders, PLUS the 9 physical-camera
+        // knobs (4 lens + 1 DoF + 3 SSAO + 1 motion) = 23 params.
+        assert_eq!(
+            meta.params.len(),
+            23,
+            "14 framing/material + 9 physical-camera (lens/DoF/SSAO/motion) knobs"
+        );
+        // Most params route one-to-one, but the DoF radius fans out to three
+        // node params (coc + both variable_blur passes), so bindings = 25.
         assert_eq!(
             meta.bindings.len(),
-            meta.params.len(),
-            "every card param routes to exactly one node param"
+            25,
+            "23 one-to-one + the DoF radius fanned to 3 nodes (coc/blur_h/blur_v)"
         );
+        // Every card param routes to at least one node param.
+        for p in &meta.params {
+            assert!(
+                meta.bindings.iter().any(|b| b.id == p.id),
+                "card param `{}` has no binding",
+                p.id
+            );
+        }
         // Every binding must reference a param that actually exists (address
         // by id, never by position — the fan-out rule).
         for b in &meta.bindings {
@@ -899,6 +1073,68 @@ mod tests {
         assert!(
             (orbit.scale - 1.0).abs() < 1e-6,
             "camera angle bindings pass radians straight through"
+        );
+
+        // The physical-camera nodes are wired into the spine by default.
+        for type_id in [
+            "node.camera_lens",
+            "node.coc_from_depth",
+            "node.ssao_from_depth",
+            "node.motion_blur",
+        ] {
+            assert!(
+                def.nodes.iter().any(|n| n.type_id == type_id),
+                "imported graph must carry a `{type_id}` spine node"
+            );
+        }
+        // Every physical-camera parameter is exposed on the card.
+        for id in [
+            "lens_focus",
+            "lens_fstop",
+            "lens_shutter",
+            "lens_ev",
+            "dof_radius",
+            "ssao_intensity",
+            "ssao_radius",
+            "ssao_bias",
+            "motion_blur_px",
+        ] {
+            assert!(
+                meta.params.iter().any(|p| p.id == id),
+                "missing physical-camera card param `{id}`"
+            );
+        }
+        // The four lens knobs sit under one "Lens" section (the single
+        // node.camera_lens they all drive).
+        for id in ["lens_focus", "lens_fstop", "lens_shutter", "lens_ev"] {
+            let p = meta.params.iter().find(|p| p.id == id).unwrap();
+            assert_eq!(p.section.as_deref(), Some("Lens"), "`{id}` is a Lens knob");
+            let b = meta.bindings.iter().find(|b| b.id == id).unwrap();
+            match &b.target {
+                BindingTarget::Node { node_id, .. } => {
+                    assert_eq!(node_id.as_str(), "lens", "`{id}` binds the lens node")
+                }
+                other => panic!("expected a Node target for `{id}`, got {other:?}"),
+            }
+        }
+        // The DoF radius is one card fanned out to three nodes' max_radius so
+        // the CoC and both blur passes stay locked (coc's composition_notes).
+        let dof_targets: std::collections::HashSet<String> = meta
+            .bindings
+            .iter()
+            .filter(|b| b.id == "dof_radius")
+            .filter_map(|b| match &b.target {
+                BindingTarget::Node { node_id, param } => {
+                    assert_eq!(param, "max_radius");
+                    Some(node_id.as_str().to_string())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            dof_targets,
+            ["coc", "blur_h", "blur_v"].into_iter().map(String::from).collect(),
+            "DoF radius drives the CoC atom and both variable_blur passes"
         );
     }
 
