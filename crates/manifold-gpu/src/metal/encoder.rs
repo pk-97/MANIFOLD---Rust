@@ -9,8 +9,9 @@ use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLCommandBuffer,
     MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLIndexType,
-    MTLLoadAction, MTLOrigin, MTLPrimitiveType, MTLRenderCommandEncoder, MTLRenderPassDescriptor,
-    MTLScissorRect, MTLSize, MTLStoreAction, MTLTexture, MTLTextureUsage, MTLViewport,
+    MTLLoadAction, MTLMultisampleDepthResolveFilter, MTLOrigin, MTLPrimitiveType,
+    MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLScissorRect, MTLSize, MTLStoreAction,
+    MTLTexture, MTLTextureUsage, MTLViewport,
 };
 
 use super::profiling::{self, ProfileState};
@@ -125,6 +126,29 @@ pub struct DepthMsaaDraw<'a> {
     bindings: &'a [GpuBinding<'a>],
     vertex_count: u32,
     instance_count: u32,
+}
+
+/// Committed shape (`docs/GBUFFER_DESIGN.md` §2 D3) for
+/// [`GpuEncoder::draw_instanced_depth_msaa_batch_desc`] — the desc-struct
+/// seam that lets ONE batch entry point grow optional G-buffer attachments
+/// instead of a parallel `_with_depth` function per attachment combination.
+/// [`GpuEncoder::draw_instanced_depth_msaa_batch`] (unchanged signature)
+/// forwards here with `depth_resolve: None, aux_color: &[]` — byte-identical
+/// to the pre-D3 pass (I1/I4).
+pub struct DepthMsaaPassDesc<'a> {
+    pub msaa_color: &'a GpuTexture,
+    pub resolve_target: &'a GpuTexture,
+    pub msaa_depth: &'a GpuTexture,
+    /// `Some(tex)` → the depth attachment stores `MultisampleResolve`
+    /// (filter `Sample0` — D2: deterministic, matches a single-sample
+    /// render, unlike `Min`/`Max`) into this single-sample `R32Float`
+    /// texture. `None` → `DontCare`, exactly today's memoryless depth.
+    pub depth_resolve: Option<&'a GpuTexture>,
+    /// Extra MRT color attachments (index 1..), each `(msaa_tex,
+    /// resolve_tex)`. Reserved for P2's velocity output; empty slice today
+    /// produces exactly the pre-D3 single-color-attachment pass.
+    pub aux_color: &'a [(&'a GpuTexture, &'a GpuTexture)],
+    pub depth_stencil_state: &'a GpuDepthStencilState,
 }
 
 impl GpuEncoder {
@@ -730,6 +754,7 @@ impl GpuEncoder {
     /// `create_render_pipeline_depth_msaa` (alpha-to-coverage on) so cutout
     /// edges resolve too, not just silhouettes.
     #[allow(clippy::too_many_arguments)]
+    #[inline]
     pub fn draw_instanced_depth_msaa_batch(
         &mut self,
         msaa_color: &GpuTexture,
@@ -739,14 +764,41 @@ impl GpuEncoder {
         draws: &[DepthMsaaDraw],
         label: &str,
     ) {
+        let desc = DepthMsaaPassDesc {
+            msaa_color,
+            resolve_target,
+            msaa_depth,
+            depth_resolve: None,
+            aux_color: &[],
+            depth_stencil_state,
+        };
+        self.draw_instanced_depth_msaa_batch_desc(&desc, draws, label);
+    }
+
+    /// [`Self::draw_instanced_depth_msaa_batch`]'s desc-driven superset
+    /// (`docs/GBUFFER_DESIGN.md` §2 D3). Same single 4x-MSAA pass, same
+    /// shared depth buffer resolving inter-object occlusion; additionally:
+    /// `desc.depth_resolve` — `Some(tex)` stores the depth attachment via
+    /// `MultisampleResolve` with filter `Sample0` into `tex` (single-sample
+    /// `R32Float`, raw non-linear clip depth); `None` keeps today's
+    /// `DontCare` (memoryless, never leaves the GPU). `desc.aux_color` —
+    /// extra MRT color attachments (index 1..), reserved for P2's velocity
+    /// output; empty today.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_instanced_depth_msaa_batch_desc(
+        &mut self,
+        desc: &DepthMsaaPassDesc,
+        draws: &[DepthMsaaDraw],
+        label: &str,
+    ) {
         self.end_current();
 
-        let desc = new_render_pass_descriptor();
+        let pass_desc = new_render_pass_descriptor();
 
-        let color = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
+        let color = unsafe { pass_desc.colorAttachments().objectAtIndexedSubscript(0) };
         unsafe {
-            color.setTexture(Some(&msaa_color.raw));
-            color.setResolveTexture(Some(&resolve_target.raw));
+            color.setTexture(Some(&desc.msaa_color.raw));
+            color.setResolveTexture(Some(&desc.resolve_target.raw));
             color.setLoadAction(MTLLoadAction::Clear);
             color.setStoreAction(MTLStoreAction::MultisampleResolve);
             color.setClearColor(objc2_metal::MTLClearColor {
@@ -757,23 +809,60 @@ impl GpuEncoder {
             });
         }
 
-        let depth = unsafe { desc.depthAttachment() };
-        unsafe {
-            depth.setTexture(Some(&msaa_depth.raw));
-            depth.setLoadAction(MTLLoadAction::Clear);
-            depth.setStoreAction(MTLStoreAction::DontCare);
-            depth.setClearDepth(1.0);
+        // Reserved MRT slots (P2: one for velocity). Each aux attachment
+        // gets its own memoryless multisample + resolve target, same
+        // Clear/MultisampleResolve shape as the primary color attachment.
+        for (i, (aux_msaa, aux_resolve)) in desc.aux_color.iter().enumerate() {
+            let idx = i + 1;
+            let aux = unsafe {
+                pass_desc
+                    .colorAttachments()
+                    .objectAtIndexedSubscript(idx)
+            };
+            unsafe {
+                aux.setTexture(Some(&aux_msaa.raw));
+                aux.setResolveTexture(Some(&aux_resolve.raw));
+                aux.setLoadAction(MTLLoadAction::Clear);
+                aux.setStoreAction(MTLStoreAction::MultisampleResolve);
+                aux.setClearColor(objc2_metal::MTLClearColor {
+                    red: 0.0,
+                    green: 0.0,
+                    blue: 0.0,
+                    alpha: 0.0,
+                });
+            }
         }
 
-        let enc = self.make_render_encoder(&desc, label);
+        let depth = unsafe { pass_desc.depthAttachment() };
+        unsafe {
+            depth.setTexture(Some(&desc.msaa_depth.raw));
+            depth.setLoadAction(MTLLoadAction::Clear);
+            depth.setClearDepth(1.0);
+            match desc.depth_resolve {
+                Some(resolve) => {
+                    depth.setResolveTexture(Some(&resolve.raw));
+                    depth.setStoreAction(MTLStoreAction::MultisampleResolve);
+                    // D2: deterministic, matches a single-sample render —
+                    // Min/Max bias edges toward one surface and can't be
+                    // predicted by the CPU oracle without re-implementing
+                    // MSAA sample positions.
+                    depth.setDepthResolveFilter(MTLMultisampleDepthResolveFilter::Sample0);
+                }
+                None => {
+                    depth.setStoreAction(MTLStoreAction::DontCare);
+                }
+            }
+        }
+
+        let enc = self.make_render_encoder(&pass_desc, label);
         unsafe {
             enc.pushDebugGroup(&NSString::from_str(label));
-            enc.setDepthStencilState(Some(&depth_stencil_state.raw));
+            enc.setDepthStencilState(Some(&desc.depth_stencil_state.raw));
             enc.setViewport(MTLViewport {
                 originX: 0.0,
                 originY: 0.0,
-                width: resolve_target.width as f64,
-                height: resolve_target.height as f64,
+                width: desc.resolve_target.width as f64,
+                height: desc.resolve_target.height as f64,
                 znear: 0.0,
                 zfar: 1.0,
             });

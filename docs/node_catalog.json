@@ -13065,6 +13065,14 @@
         {
           "name": "color",
           "type": "Texture2D"
+        },
+        {
+          "name": "depth",
+          "type": "Texture2D"
+        },
+        {
+          "name": "velocity",
+          "type": "Texture2D"
         }
       ],
       "params": [

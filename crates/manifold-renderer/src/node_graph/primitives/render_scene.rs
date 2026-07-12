@@ -146,12 +146,32 @@ const CASTER_VEC4_STRIDE: usize = 5;
 // `Owned` variant carries drop glue, so `&RENDER_SCENE_OUTPUTS` can no longer
 // be rvalue-static-promoted out of a `const`. A `static` gives the slice a
 // genuine `'static` address to borrow.
-static RENDER_SCENE_OUTPUTS: [NodeOutput; 1] = [NodePort {
-    name: std::borrow::Cow::Borrowed("color"),
-    ty: PortType::Texture2D,
-    kind: PortKind::Output,
-    required: false,
-}];
+static RENDER_SCENE_OUTPUTS: [NodeOutput; 3] = [
+    NodePort {
+        name: std::borrow::Cow::Borrowed("color"),
+        ty: PortType::Texture2D,
+        kind: PortKind::Output,
+        required: false,
+    },
+    // GBUFFER_DESIGN.md §2 D1: lazy — rendered ONLY when wired (same rule
+    // as `render_mesh`'s `world_pos`/`world_normal`). Raw [0,1] clip depth
+    // (D2), `R32Float` via the `output_format` override below.
+    NodePort {
+        name: std::borrow::Cow::Borrowed("depth"),
+        ty: PortType::Texture2D,
+        kind: PortKind::Output,
+        required: false,
+    },
+    // GBUFFER_DESIGN.md §2 D5 (P2): lazy, same D1 rule as `depth`. NDC-space
+    // per-pixel motion (camera + rigid-object motion only — see D5's
+    // documented v1 limitation), `Rg16Float` via `output_format` below.
+    NodePort {
+        name: std::borrow::Cow::Borrowed("velocity"),
+        ty: PortType::Texture2D,
+        kind: PortKind::Output,
+        required: false,
+    },
+];
 
 /// Per-object uniform, one draw call per object. Superset shape shared
 /// with `render_3d_mesh.wgsl`'s Material fields, plus a per-object
@@ -188,11 +208,22 @@ struct RenderSceneUniforms {
     fog_params: [f32; 4],
     /// Scene-wide ambient/sky tint (rgb multiplier on the ambient term).
     ambient_tint: [f32; 4],
+    /// GBUFFER_DESIGN.md §2 D5 (P2): previous frame's scene `view_proj`.
+    /// Always present — one `Uniforms` layout shared by both the
+    /// velocity-on and velocity-off pipeline variants (the velocity-off
+    /// shader code simply never reads it). Seeded to THIS frame's
+    /// `view_proj` on the node's very first `evaluate()` (no history yet),
+    /// so first-frame velocity is exactly zero (see `RenderScene::evaluate`).
+    prev_view_proj: [[f32; 4]; 4],
+    /// GBUFFER_DESIGN.md §2 D5 (P2): this object's previous-frame `model`
+    /// matrix. Same always-present / first-frame-seeded rule as
+    /// `prev_view_proj`.
+    prev_model: [[f32; 4]; 4],
 }
 
-// 320 = 20 × 16 → the naga 16-byte uniform-size rule holds. Was 272 before
-// the P3 atmosphere fields (fog_color + fog_params + ambient_tint = 3 vec4).
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 320);
+// 448 = 28 × 16 → the naga 16-byte uniform-size rule holds. Was 320 before
+// the P2 prev_view_proj/prev_model pair (2 more mat4x4 = 128 bytes).
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 448);
 
 /// Per-(caster, object) uniform for the shadow depth pass
 /// (`shaders/shadow_depth.wgsl`). The vertex shader composes
@@ -210,7 +241,13 @@ pub struct RenderScene {
     params: Vec<ParamDef>,
     num_objects: u32,
     num_lights: u32,
-    pipelines: AHashMap<MaterialKind, manifold_gpu::GpuRenderPipeline>,
+    /// Keyed `(MaterialKind, emit_velocity)` — GBUFFER_DESIGN.md §2 D5
+    /// (P2): the velocity-on/off pipeline variants are two DISTINCT
+    /// compiled pipelines per material (function-constant text
+    /// substitution, not a second WGSL file — see `pipeline_for`), so the
+    /// cache key grows from `MaterialKind` alone. 4 materials × 2 = 8
+    /// entries max.
+    pipelines: AHashMap<(MaterialKind, bool), manifold_gpu::GpuRenderPipeline>,
     depth_stencil: Option<manifold_gpu::GpuDepthStencilState>,
     /// Memoryless 4x-MSAA color + depth targets for the scene pass, sized
     /// to the render target. Both resolve on-chip; only `msaa_color`
@@ -219,6 +256,27 @@ pub struct RenderScene {
     depth_texture: Option<manifold_gpu::GpuTexture>,
     depth_width: u32,
     depth_height: u32,
+    /// Memoryless 4x-MSAA `Rg16Float` velocity aux-MRT target
+    /// (GBUFFER_DESIGN.md §2 D5, P2's `aux_color` slot). Allocated ONLY
+    /// when `evaluate` finds the `velocity` output wired this frame (the
+    /// D1 lazy rule) — an unwired scene never calls
+    /// `ensure_velocity_msaa_target`, so it costs nothing.
+    velocity_msaa: Option<manifold_gpu::GpuTexture>,
+    velocity_width: u32,
+    velocity_height: u32,
+    /// Per-object-slot previous-frame `model` matrix (GBUFFER_DESIGN.md §2
+    /// D5, P2), indexed by object slot `n`. `None` at a slot means "no
+    /// history yet" — the frame that finds `None` there seeds
+    /// `prev_model = model` (this frame's own value) so that object's
+    /// first-ever velocity is exactly zero, not approximately. Resized and
+    /// reset to all-`None` on every `rebuild` (an object-count change may
+    /// reassign what slot `n` means, so any stale history there is
+    /// discarded rather than risked).
+    prev_model: Vec<Option<[[f32; 4]; 4]>>,
+    /// Previous frame's scene `view_proj` (GBUFFER_DESIGN.md §2 D5, P2).
+    /// `None` = no history yet (same first-frame seeding rule as
+    /// `prev_model`); reset on every `rebuild`.
+    prev_view_proj: Option<[[f32; 4]; 4]>,
     dummy_texture: Option<manifold_gpu::GpuTexture>,
     sampler: Option<manifold_gpu::GpuSampler>,
     /// Ring of per-frame light storage buffers (see [`FRAMES_IN_FLIGHT`]).
@@ -263,6 +321,11 @@ impl RenderScene {
             depth_texture: None,
             depth_width: 0,
             depth_height: 0,
+            velocity_msaa: None,
+            velocity_width: 0,
+            velocity_height: 0,
+            prev_model: Vec::new(),
+            prev_view_proj: None,
             dummy_texture: None,
             sampler: None,
             light_buffers: Vec::new(),
@@ -383,6 +446,14 @@ impl RenderScene {
         self.params = params;
         self.num_objects = objects;
         self.num_lights = lights;
+        // GBUFFER_DESIGN.md §2 D5 (P2): an object-count change may reassign
+        // what slot `n` means, so any previous-frame history is discarded
+        // here rather than risked — the next `evaluate()` after a rebuild
+        // treats every object as brand new (first-frame zero velocity),
+        // exactly the same "no history yet" case a freshly-created node
+        // starts in.
+        self.prev_model = vec![None; n_obj];
+        self.prev_view_proj = None;
     }
 
     /// Ensure the memoryless MSAA color + depth targets match the render
@@ -412,6 +483,33 @@ impl RenderScene {
         ));
         self.depth_width = width;
         self.depth_height = height;
+    }
+
+    /// Ensure the memoryless MSAA `Rg16Float` velocity aux-MRT target
+    /// matches the render target size (GBUFFER_DESIGN.md §2 D5, P2). Called
+    /// ONLY when `evaluate` finds `velocity` wired this frame (D1 lazy
+    /// rule) — an unwired scene never calls this, so it costs nothing.
+    fn ensure_velocity_msaa_target(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        width: u32,
+        height: u32,
+    ) {
+        if self.velocity_width == width
+            && self.velocity_height == height
+            && self.velocity_msaa.is_some()
+        {
+            return;
+        }
+        self.velocity_msaa = Some(device.create_texture_msaa_memoryless(
+            width,
+            height,
+            manifold_gpu::GpuTextureFormat::Rg16Float,
+            MSAA_SAMPLES,
+            "node.render_scene msaa velocity",
+        ));
+        self.velocity_width = width;
+        self.velocity_height = height;
     }
 
     fn ensure_sampler(&mut self, device: &manifold_gpu::GpuDevice) {
@@ -551,10 +649,43 @@ impl RenderScene {
         }
     }
 
+    /// GBUFFER_DESIGN.md §2 D5 (P2) text-substitution patterns that turn
+    /// the base `render_scene.wgsl` (unmodified — the velocity-off
+    /// pipeline compiles the file exactly as it ships) into the
+    /// EMIT_VELOCITY variant: inject the `FsOut` struct and `VsOut`'s two
+    /// extra clip-space fields, compute `clip_now`/`clip_prev` in
+    /// `vs_main`, and rewrap every fragment entry's `-> @location(0)
+    /// vec4<f32>` return into `-> FsOut` returning
+    /// `(color, ndc_now.xy - ndc_prev.xy)`. All four fragment entry points
+    /// share byte-identical signature/return text in the base file, so
+    /// these two patterns apply once and cover all four — no per-material
+    /// duplication, no second shader file (the whole point of the
+    /// function-constant mechanism over a shader fork).
+    const VELOCITY_SPECIALIZATIONS: &'static [(&'static str, &'static str)] = &[
+        (
+            "// GBUFFER_FSOUT_VELOCITY_STRUCT",
+            "struct FsOut {\n    @location(0) color: vec4<f32>,\n    @location(1) velocity: vec2<f32>,\n};",
+        ),
+        (
+            "// GBUFFER_VSOUT_VELOCITY_FIELDS",
+            "@location(3) clip_now: vec4<f32>,\n    @location(4) clip_prev: vec4<f32>,",
+        ),
+        (
+            "// GBUFFER_VS_VELOCITY_BODY",
+            "out.clip_now = out.clip_pos;\n    let prev_world = u.prev_model * vec4<f32>(inst_pos, 1.0);\n    out.clip_prev = u.prev_view_proj * prev_world;",
+        ),
+        ("-> @location(0) vec4<f32> {", "-> FsOut {"),
+        (
+            "return vec4<f32>(rgb, albedo.a);",
+            "return FsOut(vec4<f32>(rgb, albedo.a), (in.clip_now.xy / in.clip_now.w) - (in.clip_prev.xy / in.clip_prev.w));",
+        ),
+    ];
+
     fn pipeline_for(
         &mut self,
         device: &manifold_gpu::GpuDevice,
         kind: MaterialKind,
+        emit_velocity: bool,
     ) -> &manifold_gpu::GpuRenderPipeline {
         let fs_entry = match kind {
             MaterialKind::Unlit => "fs_unlit",
@@ -562,19 +693,37 @@ impl RenderScene {
             MaterialKind::Pbr => "fs_pbr",
             MaterialKind::Cel => "fs_cel",
         };
-        self.pipelines.entry(kind).or_insert_with(|| {
-            device.create_render_pipeline_depth_msaa(
-                include_str!("shaders/render_scene.wgsl"),
-                "vs_main",
-                fs_entry,
-                manifold_gpu::GpuTextureFormat::Rgba16Float,
-                manifold_gpu::GpuTextureFormat::Depth32Float,
-                None,
-                MSAA_SAMPLES,
-                true, // alpha-to-coverage: antialias the cutout `discard` edge, not just silhouettes
-                "node.render_scene",
-            )
-        })
+        self.pipelines
+            .entry((kind, emit_velocity))
+            .or_insert_with(|| {
+                if emit_velocity {
+                    device.create_specialized_render_pipeline_depth_msaa(
+                        include_str!("shaders/render_scene.wgsl"),
+                        "vs_main",
+                        fs_entry,
+                        Self::VELOCITY_SPECIALIZATIONS,
+                        manifold_gpu::GpuTextureFormat::Rgba16Float,
+                        manifold_gpu::GpuTextureFormat::Depth32Float,
+                        None,
+                        MSAA_SAMPLES,
+                        true,
+                        Some(manifold_gpu::GpuTextureFormat::Rg16Float),
+                        "node.render_scene.velocity",
+                    )
+                } else {
+                    device.create_render_pipeline_depth_msaa(
+                        include_str!("shaders/render_scene.wgsl"),
+                        "vs_main",
+                        fs_entry,
+                        manifold_gpu::GpuTextureFormat::Rgba16Float,
+                        manifold_gpu::GpuTextureFormat::Depth32Float,
+                        None,
+                        MSAA_SAMPLES,
+                        true, // alpha-to-coverage: antialias the cutout `discard` edge, not just silhouettes
+                        "node.render_scene",
+                    )
+                }
+            })
     }
 
     /// AI-composition surface metadata.
@@ -669,6 +818,8 @@ fn build_uniforms(
     material: &Material,
     light_count: f32,
     atmosphere: &Atmosphere,
+    prev_view_proj: [[f32; 4]; 4],
+    prev_model: [[f32; 4]; 4],
 ) -> RenderSceneUniforms {
     RenderSceneUniforms {
         view_proj,
@@ -707,6 +858,8 @@ fn build_uniforms(
         fog_color: atmosphere.fog_color,
         fog_params: [atmosphere.fog_density, atmosphere.height_falloff, 0.0, 0.0],
         ambient_tint: atmosphere.ambient_tint,
+        prev_view_proj,
+        prev_model,
     }
 }
 
@@ -721,6 +874,18 @@ impl EffectNode for RenderScene {
 
     fn outputs(&self) -> &[NodeOutput] {
         &RENDER_SCENE_OUTPUTS
+    }
+
+    /// `depth` is `R32Float` (GBUFFER_DESIGN.md §2 D2 — raw device depth,
+    /// not linearized: consumers linearize via the shared `depth.wgsl`
+    /// helper, D4). `velocity` is `Rg16Float` (§2 D5 — NDC-space `(dx,
+    /// dy)` per pixel). `color` uses the backend default.
+    fn output_format(&self, port: &str) -> Option<manifold_gpu::GpuTextureFormat> {
+        match port {
+            "depth" => Some(manifold_gpu::GpuTextureFormat::R32Float),
+            "velocity" => Some(manifold_gpu::GpuTextureFormat::Rg16Float),
+            _ => None,
+        }
     }
 
     fn parameters(&self) -> &[ParamDef] {
@@ -831,6 +996,19 @@ impl EffectNode for RenderScene {
         }
         let aspect = width as f32 / height as f32;
         let view_proj = cam.view_proj(aspect);
+        // GBUFFER_DESIGN.md §2 D1: lazy — `velocity` costs nothing unless a
+        // consumer actually wired it (checked once per frame, cheap: a
+        // step-output lookup, not a texture allocation).
+        let velocity_wired = ctx.outputs.texture_2d("velocity").is_some();
+        // GBUFFER_DESIGN.md §2 D5 (P2): `None` (no history yet) seeds to
+        // THIS frame's own `view_proj`, so a scene's first-ever evaluate()
+        // has prev == current and velocity is exactly zero — not
+        // approximately. Stored immediately (not gated on `velocity_wired`)
+        // so history is tracked continuously: if velocity is wired mid-
+        // session, the first wired frame sees the object's REAL prior
+        // motion, not a spurious first-frame zero.
+        let prev_view_proj = self.prev_view_proj.unwrap_or(view_proj);
+        self.prev_view_proj = Some(view_proj);
 
         // ---- Pass 1 (mutable phase): validate every object's required
         // inputs, compose its model matrix + uniforms, and get-or-compile
@@ -901,6 +1079,16 @@ impl EffectNode for RenderScene {
                 .transform(&format!("transform_{n}"))
                 .unwrap_or_default();
             let model = model_matrix(t.pos, t.rot_euler, t.scale);
+            // GBUFFER_DESIGN.md §2 D5 (P2): `None` at this slot (no history
+            // yet — a brand-new node, or the slot right after a rebuild)
+            // seeds prev = current, giving THIS object exactly-zero
+            // first-frame velocity. Stored immediately after reading (not
+            // gated on `velocity_wired`) — see the `prev_view_proj` comment
+            // above for why continuous tracking is the correct default.
+            let prev_model_n = self.prev_model.get(n).copied().flatten().unwrap_or(model);
+            if let Some(slot) = self.prev_model.get_mut(n) {
+                *slot = Some(model);
+            }
             let mut uniforms = build_uniforms(
                 view_proj,
                 model,
@@ -908,6 +1096,8 @@ impl EffectNode for RenderScene {
                 &material,
                 light_count as f32,
                 &atmosphere,
+                prev_view_proj,
+                prev_model_n,
             );
             if base_color_map.is_some() {
                 uniforms.texture_flags[2] = 1.0; // z = base_color_map present (matches resolve_albedo's texture_flags.z gate)
@@ -915,7 +1105,8 @@ impl EffectNode for RenderScene {
 
             let pipeline = {
                 let gpu = ctx.gpu_encoder();
-                self.pipeline_for(gpu.device, material.kind).clone()
+                self.pipeline_for(gpu.device, material.kind, velocity_wired)
+                    .clone()
             };
 
             // D11: wired instances_n draws instance_count = buffer_size / 32
@@ -955,6 +1146,13 @@ impl EffectNode for RenderScene {
                 ));
             }
             self.ensure_msaa_targets(gpu.device, width, height);
+            // GBUFFER_DESIGN.md §2 D1/D5 (P2): the velocity aux-MRT
+            // memoryless target is allocated ONLY when wired this frame —
+            // this call site (not `ensure_msaa_targets`, which always runs)
+            // is the actual zero-cost-when-unwired enforcement point.
+            if velocity_wired {
+                self.ensure_velocity_msaa_target(gpu.device, width, height);
+            }
             self.ensure_sampler(gpu.device);
             self.ensure_dummy_texture(gpu.device);
             // Identity instance stub (D11) — bound to any object's
@@ -1069,6 +1267,14 @@ impl EffectNode for RenderScene {
         let Some(target) = ctx.outputs.texture_2d("color") else {
             return;
         };
+        // GBUFFER_DESIGN.md §2 D1: `None` when unwired — the graph compiler
+        // never assigns "depth" a step-output binding in that case (same
+        // lazy mechanism as `render_mesh`'s G-buffer outputs), so this pass
+        // costs zero new bytes unless a consumer actually wired it (I1).
+        let depth_resolve_target = ctx.outputs.texture_2d("depth");
+        // GBUFFER_DESIGN.md §2 D1/D5 (P2): same lazy rule as `depth` —
+        // `None` when unwired, costing zero new bytes (I1).
+        let velocity_resolve_target = ctx.outputs.texture_2d("velocity");
         let depth_stencil = self.depth_stencil.as_ref().expect("just inserted");
         let depth_tex = self.depth_texture.as_ref().expect("just inserted");
         let msaa_color = self.msaa_color.as_ref().expect("just inserted");
@@ -1208,14 +1414,39 @@ impl EffectNode for RenderScene {
             })
             .collect();
 
-        ctx.gpu_encoder().native_enc.draw_instanced_depth_msaa_batch(
+        // GBUFFER_DESIGN.md §2 D5 (P2): the aux-MRT slot P1 built but never
+        // exercised. `velocity_pair` is `Some` only when BOTH this node's
+        // own memoryless velocity_msaa scratch AND the graph-allocated
+        // single-sample resolve target exist — i.e. exactly when
+        // `velocity_wired` gated `ensure_velocity_msaa_target` above.
+        // `aux_color_storage`/`aux_color` follow the same "declare outside,
+        // conditionally initialize, borrow" shape needed to hand the pass a
+        // `&[(&GpuTexture, &GpuTexture)]` from either branch without an
+        // allocation.
+        let velocity_pair = match (self.velocity_msaa.as_ref(), velocity_resolve_target) {
+            (Some(msaa), Some(resolve)) => Some((msaa, resolve)),
+            _ => None,
+        };
+        let aux_color_storage: [(&manifold_gpu::GpuTexture, &manifold_gpu::GpuTexture); 1];
+        let aux_color: &[(&manifold_gpu::GpuTexture, &manifold_gpu::GpuTexture)] =
+            if let Some(pair) = velocity_pair {
+                aux_color_storage = [pair];
+                &aux_color_storage
+            } else {
+                &[]
+            };
+
+        let pass_desc = manifold_gpu::DepthMsaaPassDesc {
             msaa_color,
-            target,
-            depth_tex,
-            depth_stencil,
-            &draw_calls,
-            "node.render_scene",
-        );
+            resolve_target: target,
+            msaa_depth: depth_tex,
+            depth_resolve: depth_resolve_target,
+            aux_color,
+            depth_stencil_state: depth_stencil,
+        };
+        ctx.gpu_encoder()
+            .native_enc
+            .draw_instanced_depth_msaa_batch_desc(&pass_desc, &draw_calls, "node.render_scene");
     }
 }
 
@@ -1425,5 +1656,139 @@ mod tests {
         assert!((m[0][0] - 2.0).abs() < 1e-6);
         assert!((m[1][1] - 3.0).abs() < 1e-6);
         assert!((m[2][2] - 4.0).abs() < 1e-6);
+    }
+
+    // ---- GBUFFER_DESIGN.md P1, I1 — lazy `depth` output ----
+    //
+    // Descriptor-level, no GPU device: `depth`'s step-output binding (and
+    // therefore the R32Float resolve texture the backend would allocate for
+    // it) only exists when the graph actually wires a consumer. Proven via
+    // `compile()` alone — the SAME `consumed_outputs` mechanism that already
+    // makes `render_mesh`'s `world_pos`/`world_normal` lazy (execution_plan.rs)
+    // — rather than constructing a live `DepthMsaaPassDesc` (whose other
+    // fields need real GPU textures the default test build can't create).
+
+    /// Minimal stand-in producer: no inputs, one output of the given type.
+    /// Just enough to satisfy `validate()`'s required-input check for
+    /// `camera`/`mesh_0`/`material_0` — `compile()` never runs `evaluate()`,
+    /// so this never needs to touch a GPU device.
+    struct StubProducer {
+        type_id: EffectNodeType,
+        out: NodeOutput,
+    }
+
+    impl StubProducer {
+        fn new(id: &'static str, ty: PortType) -> Self {
+            Self {
+                type_id: EffectNodeType::new(id),
+                out: NodePort {
+                    name: std::borrow::Cow::Borrowed("out"),
+                    ty,
+                    kind: PortKind::Output,
+                    required: false,
+                },
+            }
+        }
+    }
+
+    impl EffectNode for StubProducer {
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &[]
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            std::slice::from_ref(&self.out)
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+    }
+
+    /// Build a one-object, zero-light `render_scene` fed by stub
+    /// camera/mesh/material producers, `color` always wired to a
+    /// `FinalOutput`; `depth` wired to a second `FinalOutput` iff
+    /// `wire_depth`. Returns the compiled plan plus the scene node's id so
+    /// the caller can inspect its step's `outputs` list.
+    fn compile_scene(wire_depth: bool) -> (crate::node_graph::ExecutionPlan, crate::node_graph::NodeInstanceId) {
+        use crate::node_graph::{FinalOutput, Graph, compile};
+
+        let mut graph = Graph::new();
+        let cam = graph.add_node(Box::new(StubProducer::new("stub.camera", PortType::Camera)));
+        let mesh = graph.add_node(Box::new(StubProducer::new(
+            "stub.mesh",
+            PortType::Array(ArrayType::of_known::<MeshVertex>()),
+        )));
+        let mat = graph.add_node(Box::new(StubProducer::new("stub.material", PortType::Material)));
+
+        // `Graph::add_node` (via `NodeInstance::new`) reconfigures the node
+        // against its OWN default params right after insertion — a
+        // pre-insertion `reconfigure` call would just get overwritten by
+        // that. Set `objects`/`lights` through `Graph::set_param` instead,
+        // which re-reconfigures against the new values (mirrors how every
+        // real host — JSON load, editor slider — drives this node).
+        let scene_id = graph.add_node(Box::new(RenderScene::new()));
+        graph
+            .set_param(scene_id, "objects", ParamValue::Float(1.0))
+            .expect("objects param exists");
+        graph
+            .set_param(scene_id, "lights", ParamValue::Float(0.0))
+            .expect("lights param exists");
+
+        let color_sink = graph.add_node(Box::new(FinalOutput::new()));
+        graph.connect((cam, "out"), (scene_id, "camera")).expect("camera wires");
+        graph.connect((mesh, "out"), (scene_id, "mesh_0")).expect("mesh wires");
+        graph.connect((mat, "out"), (scene_id, "material_0")).expect("material wires");
+        graph.connect((scene_id, "color"), (color_sink, "in")).expect("color wires");
+
+        if wire_depth {
+            let depth_sink = graph.add_node(Box::new(FinalOutput::new()));
+            graph.connect((scene_id, "depth"), (depth_sink, "in")).expect("depth wires");
+        }
+
+        let plan = compile(&graph).expect("stub scene graph must compile");
+        (plan, scene_id)
+    }
+
+    #[test]
+    fn depth_output_unwired_gets_no_step_output_binding() {
+        let (plan, scene_id) = compile_scene(false);
+        let step = plan
+            .steps()
+            .iter()
+            .find(|s| s.node == scene_id)
+            .expect("render_scene step present");
+        assert!(
+            step.outputs.iter().any(|(name, _)| *name == "color"),
+            "color must still get a binding"
+        );
+        assert!(
+            !step.outputs.iter().any(|(name, _)| *name == "depth"),
+            "I1: unwired depth must not get a step-output binding — the \
+             backend would never allocate its R32Float resolve texture"
+        );
+    }
+
+    #[test]
+    fn depth_output_wired_gets_a_step_output_binding() {
+        let (plan, scene_id) = compile_scene(true);
+        let step = plan
+            .steps()
+            .iter()
+            .find(|s| s.node == scene_id)
+            .expect("render_scene step present");
+        let depth_res = step
+            .outputs
+            .iter()
+            .find(|(name, _)| *name == "depth")
+            .map(|(_, res)| *res);
+        assert!(depth_res.is_some(), "wired depth must get a step-output binding");
+        assert_eq!(
+            plan.resource_format(depth_res.unwrap()),
+            Some(manifold_gpu::GpuTextureFormat::R32Float),
+            "depth's resource_format must be R32Float at compile time"
+        );
     }
 }

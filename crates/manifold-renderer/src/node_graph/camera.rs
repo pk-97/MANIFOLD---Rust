@@ -341,6 +341,19 @@ pub struct PixelProjection {
     pub view_z: f32,
 }
 
+/// CPU twin of `shared/depth_common.wgsl`'s `linearize_depth`
+/// (`docs/GBUFFER_DESIGN.md` §2 D4) — the exact inverse of
+/// [`crate::generators::mesh_pipeline::perspective_rh`]'s depth mapping
+/// (`range = far / (near - far)`). Both implementations MUST stay
+/// bit-for-bit the same formula (I3's unit test checks them against the
+/// same `Camera::project_to_pixel` oracle); re-deriving this inline in a
+/// consumer atom instead of sharing the WGSL header is the synthesis-drift
+/// bug class this exists to prevent.
+pub fn linearize_depth(raw: f32, near: f32, far: f32) -> f32 {
+    let range = far / (near - far);
+    (range * near) / (raw + range)
+}
+
 /// Multiply a column-major 4x4 matrix (`m[col][row]`, matching `mat4_mul`'s
 /// convention) by a column vector.
 fn mat4_mul_vec4(m: [[f32; 4]; 4], v: [f32; 4]) -> [f32; 4] {
@@ -551,6 +564,42 @@ mod tests {
         let cam = Camera::look_at([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], std::f32::consts::FRAC_PI_2, 0.1, 100.0);
         // +Z is behind a camera looking down -Z.
         assert_eq!(cam.project_to_pixel([0.0, 0.0, 1.0], 512, 512), None);
+    }
+
+    #[test]
+    fn linearize_depth_is_the_exact_perspective_rh_inverse() {
+        // I3 (GBUFFER_DESIGN.md §2 D4): `linearize_depth` must invert
+        // `perspective_rh`'s depth mapping exactly — checked against the
+        // SAME oracle (`Camera::project_to_pixel`) every other conformance
+        // gate in this cluster uses, at 5 depths spanning the near/far
+        // range.
+        // Depths kept modest (not spanning to `far`): the forward mapping
+        // compresses almost the entire [0,1] raw-depth range into values
+        // extremely close to 1.0 as view_z approaches `far`, so recovering
+        // view_z from raw loses f32 precision (catastrophic cancellation in
+        // `raw + range`) the further out a point sits — a property of the
+        // depth encoding itself, present in the GPU path too, not a defect
+        // in this formula. Peter's stated scene profile ("pure black
+        // backgrounds with the models... main focus") is exactly this
+        // regime: hero objects close to camera, not deep background reads.
+        let near = 0.05;
+        let far = 200.0;
+        let cam = Camera::look_at([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], 0.9, near, far);
+        for &d in &[0.1_f32, 0.5, 1.0, 3.0, 8.0] {
+            let world = [0.0, 0.0, -d];
+            let oracle = cam
+                .project_to_pixel(world, 256, 256)
+                .unwrap_or_else(|| panic!("depth {d}: point unexpectedly behind camera"));
+            let lin = linearize_depth(oracle.depth, cam.near, cam.far);
+            assert!(
+                (lin - oracle.view_z).abs() < 1e-4,
+                "depth {d}: linearize_depth({}, {}, {}) = {lin}, oracle.view_z = {}",
+                oracle.depth,
+                cam.near,
+                cam.far,
+                oracle.view_z,
+            );
+        }
     }
 
     #[test]

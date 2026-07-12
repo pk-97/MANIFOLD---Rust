@@ -1,6 +1,6 @@
 # Stored G-buffer — depth (and velocity) leave the tile
 
-**Status:** APPROVED design, not built · 2026-07-12 · Fable 5
+**Status:** SHIPPED · P1 (`560c59fd`) + P2 (`390d58dc`) landed 2026-07-12, main · designed 2026-07-12 · Fable 5
 **Prerequisites:** none for P1 (render_scene P1–P3 shipped). P2 needs P1.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 **Companions:** [RENDERING_INFRA_V2_DESIGN.md](RENDERING_INFRA_V2_DESIGN.md) §2 (the keystone framing this graduates) · [REALTIME_3D_DESIGN.md](REALTIME_3D_DESIGN.md) (§3 already commits lazy `depth`/`world_normal` outputs; §10 records the memoryless rationale) · [CAMERA_AND_LENS_DESIGN.md](CAMERA_AND_LENS_DESIGN.md) (the oracle + lens the consumers read) · [CINEMATIC_POST_DESIGN.md](CINEMATIC_POST_DESIGN.md) (the consumers) · [PERF_BUDGET_GATE_DESIGN.md](PERF_BUDGET_GATE_DESIGN.md) (owns the bandwidth measurement)
