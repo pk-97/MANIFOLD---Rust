@@ -5,7 +5,7 @@
 // and brightness multipliers.
 //
 // Bindings:
-//   @binding(0) uniforms (16 bytes — w + h + horizon_strength + azimuth_variation)
+//   @binding(0) uniforms (32 bytes — w + h + horizon_strength + azimuth_variation + intensity + 3 pad)
 //   @binding(1) output_tex (rgba16float storage)
 
 struct Uniforms {
@@ -13,6 +13,10 @@ struct Uniforms {
     height: u32,
     horizon_strength: f32,
     azimuth_variation: f32,
+    intensity: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -52,6 +56,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Azimuthal variation — 1.0 + variation * sin(2 azimuth).
     color *= sin(azimuth * 2.0) * uniforms.azimuth_variation + 1.0;
+
+    // Master brightness over every studio term — 0 bakes a fully black map so
+    // PBR objects get no image-based lighting (lit only by their scene lights).
+    color *= uniforms.intensity;
 
     textureStore(dst_tex, vec2<i32>(gid.xy), vec4<f32>(color, 1.0));
 }

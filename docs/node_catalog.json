@@ -994,6 +994,17 @@
           ],
           "tooltip": "How much the lighting changes as you turn around the horizon. 0 is perfectly even, higher breaks up the ring so reflections shift with angle.",
           "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Environment Intensity",
+          "name": "intensity",
+          "range": [
+            "0",
+            "4"
+          ],
+          "tooltip": "Master brightness of the whole environment. 1 is the full studio look, higher brightens every reflection, and 0 bakes a black map so objects are lit only by the scene's own lights.",
+          "type": "float"
         }
       ],
       "purpose": "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). Defaults match the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. Output is HDR — wire into `node.render_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
