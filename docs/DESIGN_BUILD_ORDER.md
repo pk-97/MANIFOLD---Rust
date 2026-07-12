@@ -60,6 +60,10 @@ prerequisites aren't shipped, stop.
 | AUDIO_OBJECT_TRACKING_DESIGN (P1–P4 ✅ 2026-07-06; **P5 scope overlay + BUG-045 remain**) | none; P5 re-derives scope anchors (ScopeColumn typed-overlay refactor landed 2026-07-07) | full |
 | AUDIO_OBJECT_INGEST_DESIGN | OBJECT_TRACKING P0–P2 ✅; P1 blocked on Peter (labeled clips) **and on the F10 reconciliation with ANALYSIS_ACCURACY's eval harness** | conformance |
 | KICK_SWEEP_EVENT_DESIGN (P1/P2/P4/P5 ✅) | P3 feel-pass = Peter-owned (L4, not agent-executable) | full |
+| CAMERA_AND_LENS_DESIGN (added 2026-07-12) | none (REALTIME_3D P1–P3 ✅); its P1 oracle gates GBUFFER P1's conformance test | full |
+| GBUFFER_DESIGN (added 2026-07-12; the RENDERING_INFRA_V2 §2 keystone) | CAMERA_AND_LENS P1 (oracle) for its P1 gate; PERF_BUDGET_GATE measures its bandwidth line but does NOT block (lazy rule is the cost control until then) | full |
+| CINEMATIC_POST_DESIGN (added 2026-07-12) | P1/P2 need CAMERA_AND_LENS P1–P2 + GBUFFER P1; P3 needs GBUFFER P2 | full |
+| REALTIME_3D §11 P9 PCSS (added 2026-07-12) | none (P2 shadows ✅); independent of the three docs above | full |
 
 Directions, pre-queue (not designed to STANDARD, no rows): MAPPING_GRAMMAR (first
 card = future Peter discussion) · AUTO_POPULATE (Opus design owed; gated on the
