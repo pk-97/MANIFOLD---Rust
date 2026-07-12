@@ -128,7 +128,12 @@ const FRAMES_IN_FLIGHT: usize = 3;
 /// Per-caster shadow metadata, packed as 5 `vec4<f32>` into the
 /// `@binding(9)` caster table (`MAX_SHADOW_CASTING_LIGHTS` slots, always
 /// bound). Columns 0–3 are the light's `shadow_view_proj`; the 5th vec4 is
-/// `(bias, kernel_half_width, texel_size, 0)`. Kept as a plain vec4 stride
+/// `(bias, kernel_half_width, texel_size, light_size)` — `light_size` is
+/// the D12/PCSS spare `.w` (REALTIME_3D_DESIGN §11): zero for the fixed
+/// Hard/Soft/VerySoft tiers, the light's `Contact { light_size }` value
+/// otherwise, paired with a negative `kernel_half_width` sentinel that
+/// tells `render_scene.wgsl`'s `shadow_factor` to run the PCSS branch
+/// instead of the fixed-kernel PCF loop. Kept as a plain vec4 stride
 /// (not a struct with a mat4 member) so the storage layout is unambiguous
 /// through SPIRV-Cross → MSL — same discipline as the light buffer.
 const CASTER_VEC4_STRIDE: usize = 5;
@@ -785,8 +790,9 @@ impl EffectNode for RenderScene {
         // Caster table (`@binding(9)`): `MAX_SHADOW_CASTING_LIGHTS` slots ×
         // `CASTER_VEC4_STRIDE` vec4, zeroed then filled per active caster.
         // Columns 0–3 = shadow_view_proj; vec4 4 = (bias, kernel_half_width,
-        // texel_size, 0). Always fully sized so `@binding(9)` is a fixed
-        // bind regardless of caster count (Bytes, copy-at-encode, hazard-free).
+        // texel_size, light_size). Always fully sized so `@binding(9)` is a
+        // fixed bind regardless of caster count (Bytes, copy-at-encode,
+        // hazard-free).
         let mut caster_table: Vec<[f32; 4]> =
             vec![[0.0; 4]; MAX_SHADOW_CASTING_LIGHTS * CASTER_VEC4_STRIDE];
         for (slot, l) in casters.iter().enumerate() {
@@ -796,9 +802,17 @@ impl EffectNode for RenderScene {
             caster_table[base + 1] = vp[1];
             caster_table[base + 2] = vp[2];
             caster_table[base + 3] = vp[3];
+            // D12: `Contact` has no fixed kernel width — `kernel_half_width()`
+            // returns the sentinel `-1`, which `render_scene.wgsl`'s
+            // `shadow_factor` reads as "run the PCSS blocker-search branch,
+            // using `light_size` below" instead of the fixed PCF loop.
             let khw = l.shadow_softness.kernel_half_width() as f32;
+            let light_size = match l.shadow_softness {
+                crate::node_graph::light::ShadowSoftness::Contact { light_size } => light_size,
+                _ => 0.0,
+            };
             let texel = 1.0 / l.shadow_resolution.clamp(256, 4096) as f32;
-            caster_table[base + 4] = [l.shadow_bias, khw, texel, 0.0];
+            caster_table[base + 4] = [l.shadow_bias, khw, texel, light_size];
         }
 
         let Some(dims_tex) = ctx.outputs.texture_2d("color") else {

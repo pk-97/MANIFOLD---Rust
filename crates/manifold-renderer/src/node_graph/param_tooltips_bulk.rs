@@ -458,9 +458,10 @@ crate::param_tooltips!("node.light", {
     "intensity" => "How bright the light is, default 1. 0 turns it off, higher pushes more light onto the scene.",
     "range" => "How far the light reaches, default 30. For a Sun it sizes the shadow area, for a Point it is the distance where brightness halves. Set it to your scene scale.",
     "cast_shadows" => "Whether this light drops shadows. Above 0.5 turns them on, below skips the shadow pass entirely for speed.",
-    "shadow_softness" => "How fuzzy the shadow edges are, Hard, Soft, or VerySoft. Softer edges look nicer but cost more to render.",
+    "shadow_softness" => "How fuzzy the shadow edges are, Hard, Soft, or VerySoft. Contact gives real contact-hardening shadows, sharp where things touch, soft further away. Softer edges look nicer but cost more to render.",
     "shadow_bias" => "Nudges the shadow off the surface to stop a surface shadowing itself, default 0.003. Raise it if you see speckled self-shadowing, lower it if shadows float away from contact points.",
     "shadow_resolution" => "The detail of the shadow map, default 2048. Higher gives sharper shadows on big scenes, lower runs faster. Rarely needs changing during a show.",
+    "light_size" => "Only used in Contact shadow softness. How big the light source is, in world units, default 1. Bigger sizes give softer, wider penumbras away from contact points.",
 });
 
 crate::param_tooltips!("node.matcap_two_tone", {
