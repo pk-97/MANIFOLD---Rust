@@ -3215,6 +3215,13 @@ impl Application {
             None => return,
         };
 
+        // Advance the UI frame fence once per frame, before any ring-owning
+        // encoder below (present_all_windows' layer/clip/UI passes) claims a
+        // slot this tick — those claims stamp with this frame number.
+        if let Some(fence) = &self.ui_frame_fence {
+            fence.advance();
+        }
+
         // Workspace preview via IOSurface (dual device, zero GPU copy).
         #[cfg(target_os = "macos")]
         {
@@ -3261,6 +3268,9 @@ impl Application {
             }
             self.ui_profile.add("update_repaint_upload", seg.elapsed());
             self.present_all_windows(front);
+            if let (Some(fence), Some(gpu)) = (&self.ui_frame_fence, &self.gpu) {
+                fence.commit_frame(&gpu.device);
+            }
             let g0 = std::time::Instant::now();
             self.present_graph_editor_window();
             self.ui_profile.add("present_graph_editor", g0.elapsed());
@@ -3269,6 +3279,9 @@ impl Application {
         {
             self.ui_profile.add("update_repaint_upload", seg.elapsed());
             self.present_all_windows(0);
+            if let (Some(fence), Some(gpu)) = (&self.ui_frame_fence, &self.gpu) {
+                fence.commit_frame(&gpu.device);
+            }
             let g0 = std::time::Instant::now();
             self.present_graph_editor_window();
             self.ui_profile.add("present_graph_editor", g0.elapsed());

@@ -1,8 +1,10 @@
+use std::sync::Arc;
+
 use manifold_gpu::{
-    GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuDevice, GpuEncoder,
-    GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler, GpuSamplerDesc, GpuTexture,
-    GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage, GpuVertexAttribute,
-    GpuVertexFormat, GpuVertexLayout,
+    FrameFence, GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuDevice,
+    GpuEncoder, GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler, GpuSamplerDesc,
+    GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+    GpuVertexAttribute, GpuVertexFormat, GpuVertexLayout,
 };
 
 #[cfg(target_os = "macos")]
@@ -381,8 +383,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 /// browser cell grid (tens of presets visible at once at most).
 const MAX_IMAGE_QUADS: usize = 128;
 /// Ring size for the image vertex buffer — mirrors `ClipThumbGpu`'s
-/// `VBUF_RING_SIZE`, small since image draws are far rarer than rect batches.
-const IMAGE_VBUF_RING_SIZE: usize = 3;
+/// `VBUF_RING_SIZE`. Stall-frequency relief only; correctness against slot
+/// reuse comes from `frame_fence` (see `guard_slot`), not this depth.
+const IMAGE_VBUF_RING_SIZE: usize = 6;
 
 /// Initial vertex/index buffer capacities (vertices / indices).
 const INITIAL_VERTEX_CAPACITY: usize = 1024;
@@ -390,9 +393,11 @@ const INITIAL_INDEX_CAPACITY: usize = 1536;
 
 /// Ring buffer slots for GPU buffers. Each prepare() call uses the next slot.
 /// After RING_SIZE prepare() calls the ring wraps around. With ~10 prepare
-/// calls per frame (panel cache + sub-regions + overlay) and 3 frames in
-/// flight, 32 slots guarantees no aliasing with in-flight GPU work.
-const BUF_RING_SIZE: usize = 32;
+/// calls per frame (panel cache + sub-regions + overlay), 64 slots keeps
+/// wraparound infrequent under normal GPU load — but depth alone can't
+/// guarantee a slot's prior use has retired under backlog, so `frame_fence`
+/// gates each claim (see `guard_slot`) for correctness.
+const BUF_RING_SIZE: usize = 64;
 
 /// RAII guard for [`UIRenderer::lane_content_scissor`] (D7). Holds the
 /// timeline's lane-content scissor open; `Drop` issues the matching
@@ -445,6 +450,9 @@ pub struct UIRenderer {
     vbuf_ring: Vec<Option<GpuBuffer>>,
     ibuf_ring: Vec<Option<GpuBuffer>>,
     ring_idx: usize,
+    /// Frame each `vbuf_ring`/`ibuf_ring` slot (shared index) was last
+    /// claimed at (0 = never claimed); checked/updated via `frame_fence`.
+    ring_stamps: Vec<u64>,
     /// Which ring slot the current prepared data lives in.
     prepared_slot: usize,
     prepared_index_count: u32,
@@ -508,6 +516,9 @@ pub struct UIRenderer {
     image_index_buf: GpuBuffer,
     image_vbuf_ring: Vec<Option<GpuBuffer>>,
     image_ring_idx: usize,
+    /// Frame each `image_vbuf_ring` slot was last claimed at (0 = never
+    /// claimed); checked/updated via `frame_fence`.
+    image_ring_stamps: Vec<u64>,
     // Per-frame queue, accumulated by `draw_node` from `UINodeType::Image`
     // tree nodes; converted to `prepared_image_draws` and cleared in
     // `prepare()` (mirrors `rect_commands`).
@@ -522,6 +533,13 @@ pub struct UIRenderer {
     /// populated or consulted on a per-frame render path — only at the
     /// (rare) point a new key shows up.
     image_textures: ahash::AHashMap<TextureHandle, GpuTexture>,
+
+    // ── GPU-completion fence (rect ring + image ring) ───────────────────
+    /// Shared GPU-completion fence — `None` in the headless test harness,
+    /// which never constructs one (unchanged stamp-0 behavior).
+    frame_fence: Option<Arc<FrameFence>>,
+    /// Rate limiter for `[frame-fence]` stall logging, shared by both rings.
+    fence_wait_events: u64,
 }
 
 impl UIRenderer {
@@ -638,6 +656,7 @@ impl UIRenderer {
             vbuf_ring,
             ibuf_ring,
             ring_idx: 0,
+            ring_stamps: vec![0; BUF_RING_SIZE],
             prepared_slot: 0,
             prepared_index_count: 0,
             prepared_globals: [0.0; 4],
@@ -658,11 +677,20 @@ impl UIRenderer {
             image_index_buf,
             image_vbuf_ring,
             image_ring_idx: 0,
+            image_ring_stamps: vec![0; IMAGE_VBUF_RING_SIZE],
             image_commands: Vec::with_capacity(32),
             prepared_image_draws: Vec::with_capacity(32),
             prepared_image_slot: 0,
             image_textures: ahash::AHashMap::new(),
+            frame_fence: None,
+            fence_wait_events: 0,
         }
+    }
+
+    /// Install the shared GPU-completion fence used to gate rect-ring and
+    /// image-ring slot reuse. Not set by the headless test harness.
+    pub fn set_frame_fence(&mut self, fence: Arc<FrameFence>) {
+        self.frame_fence = Some(fence);
     }
 
     // ── Static images (PRESET_LIBRARY_DESIGN P6, D7) ────────────────────
@@ -1849,6 +1877,14 @@ impl UIRenderer {
         if !self.image_commands.is_empty() {
             let slot = self.image_ring_idx % IMAGE_VBUF_RING_SIZE;
             self.image_ring_idx += 1;
+            if let Some(fence) = &self.frame_fence {
+                fence.guard_slot(
+                    "UIRenderer(image)",
+                    slot,
+                    &mut self.image_ring_stamps[slot],
+                    &mut self.fence_wait_events,
+                );
+            }
             self.prepared_image_slot = slot;
             let mut image_vertices: Vec<ImageVertex> =
                 Vec::with_capacity(self.image_commands.len().min(MAX_IMAGE_QUADS) * 4);
@@ -1899,6 +1935,14 @@ impl UIRenderer {
         if !self.vertices.is_empty() {
             let slot = self.ring_idx % BUF_RING_SIZE;
             self.ring_idx += 1;
+            if let Some(fence) = &self.frame_fence {
+                fence.guard_slot(
+                    "UIRenderer(rect)",
+                    slot,
+                    &mut self.ring_stamps[slot],
+                    &mut self.fence_wait_events,
+                );
+            }
 
             let vdata = bytemuck::cast_slice::<UIVertex, u8>(&self.vertices);
             let vbuf = match self.vbuf_ring[slot].take() {

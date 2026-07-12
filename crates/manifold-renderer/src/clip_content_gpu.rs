@@ -18,12 +18,14 @@
 //! `layer_bitmap_gpu` (rounded corners are respected by insetting the waveform
 //! horizontally by the clip radius, so bars never reach the rounded corners).
 
+use std::sync::Arc;
+
 use ahash::{AHashMap, AHashSet};
 use manifold_gpu::{
-    GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuDevice, GpuEncoder,
-    GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler, GpuSamplerDesc, GpuTexture,
-    GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage, GpuVertexAttribute,
-    GpuVertexFormat, GpuVertexLayout,
+    FrameFence, GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuDevice,
+    GpuEncoder, GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler, GpuSamplerDesc,
+    GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+    GpuVertexAttribute, GpuVertexFormat, GpuVertexLayout,
 };
 use manifold_foundation::ClipId;
 use manifold_ui::node::{Color32, Rect};
@@ -95,7 +97,9 @@ struct PendingDraw {
     rect: Rect,
 }
 
-const VBUF_RING_SIZE: usize = 3;
+/// Ring depth for stall-frequency relief; correctness against slot reuse
+/// comes from `frame_fence`, not from this depth alone (see `guard_slot`).
+const VBUF_RING_SIZE: usize = 6;
 /// Max audio-clip quads drawn per frame (visible audio clips; well above any real
 /// on-screen count). Extras are safely dropped; a `debug_assert` in `render`
 /// trips in debug builds if the cap is ever hit so it can be raised.
@@ -114,6 +118,13 @@ pub struct ClipContentGpu {
     index_buf: GpuBuffer,
     vbuf_ring: [GpuBuffer; VBUF_RING_SIZE],
     vbuf_ring_idx: usize,
+    /// Frame each vbuf_ring slot was last claimed at (0 = never claimed);
+    /// checked/updated via `frame_fence`.
+    vbuf_stamps: [u64; VBUF_RING_SIZE],
+    /// Shared GPU-completion fence — `None` in the headless test harness.
+    frame_fence: Option<Arc<FrameFence>>,
+    /// Rate limiter for `[frame-fence]` stall logging.
+    fence_wait_events: u64,
     /// CPU scratch the waveform rasteriser paints into before upload (reused).
     scratch: Vec<Color32>,
     /// This frame's draw list (reused).
@@ -187,10 +198,19 @@ impl ClipContentGpu {
             index_buf,
             vbuf_ring,
             vbuf_ring_idx: 0,
+            vbuf_stamps: [0; VBUF_RING_SIZE],
+            frame_fence: None,
+            fence_wait_events: 0,
             scratch: Vec::new(),
             draws: Vec::with_capacity(MAX_CLIP_QUADS),
             seen: AHashSet::with_capacity(MAX_CLIP_QUADS),
         }
+    }
+
+    /// Install the shared GPU-completion fence used to gate vbuf ring-slot
+    /// reuse. Not set by the headless test harness.
+    pub fn set_frame_fence(&mut self, fence: Arc<FrameFence>) {
+        self.frame_fence = Some(fence);
     }
 
     /// Rasterise + upload the waveform texture for every visible audio clip whose
@@ -378,8 +398,17 @@ impl ClipContentGpu {
         // Write all quad vertices into the ring buffer in one batch.
         let globals: [f32; 2] = [screen_w as f32, screen_h as f32];
         let globals_bytes: &[u8] = bytemuck::bytes_of(&globals);
-        let vbuf = &self.vbuf_ring[self.vbuf_ring_idx];
-        self.vbuf_ring_idx = (self.vbuf_ring_idx + 1) % VBUF_RING_SIZE;
+        let slot = self.vbuf_ring_idx;
+        self.vbuf_ring_idx = (slot + 1) % VBUF_RING_SIZE;
+        if let Some(fence) = &self.frame_fence {
+            fence.guard_slot(
+                "ClipContentGpu",
+                slot,
+                &mut self.vbuf_stamps[slot],
+                &mut self.fence_wait_events,
+            );
+        }
+        let vbuf = &self.vbuf_ring[slot];
         let ptr = vbuf.mapped_ptr().unwrap() as *mut ContentVertex;
         for (i, d) in self.draws.iter().enumerate() {
             let (x0, y0) = (d.rect.x, d.rect.y);

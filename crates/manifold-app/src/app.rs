@@ -313,6 +313,14 @@ pub struct Application {
     pub(crate) thumb_sampler: Option<manifold_gpu::GpuSampler>,
     pub(crate) ui_renderer: Option<UIRenderer>,
     pub(crate) ui_cache_manager: Option<manifold_renderer::ui_cache_manager::UICacheManager>,
+    /// GPU-completion fence shared by every UI immediate-draw vertex ring
+    /// (`ui_renderer`, `layer_bitmap_gpu`, `clip_content_gpu`,
+    /// `clip_thumb_gpu`) — gates ring-slot reuse against in-flight command
+    /// buffers so a GPU backlog (e.g. heavy GLB scene renders) can't let a
+    /// later frame overwrite a slot an earlier, still-queued frame is about
+    /// to read. `advance()`d once per frame in `tick_and_render`, committed
+    /// (marking retirement) right after `present_all_windows`.
+    pub(crate) ui_frame_fence: Option<Arc<manifold_gpu::FrameFence>>,
     /// Per-layer grid bitmaps (grid lines + top separator) plus the lane / stem /
     /// overview / collapsed-group bitmaps — all drawn around the GPU clip passes.
     /// The grid (per-layer indices) draws BEFORE the clips so opaque bodies occlude
@@ -640,6 +648,7 @@ impl Application {
             thumb_sampler: None,
             ui_renderer: None,
             ui_cache_manager: None,
+            ui_frame_fence: None,
             layer_bitmap_gpu: None,
             clip_content_gpu: None,
             clip_rect_scratch: Vec::new(),
@@ -2001,6 +2010,29 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 &native_device,
                 manifold_gpu::GpuTextureFormat::Bgra8Unorm,
             ));
+
+            // GPU-completion fence for the four UI immediate-draw vertex
+            // rings above: gates ring-slot reuse under GPU backlog instead
+            // of trusting ring depth alone (BUG: GLB timeline flicker under
+            // heavy scenes). See `ui_frame_fence` field doc.
+            let ui_frame_fence = Arc::new(manifold_gpu::FrameFence::new());
+            self.ui_renderer
+                .as_mut()
+                .expect("ui_renderer just constructed above")
+                .set_frame_fence(ui_frame_fence.clone());
+            self.layer_bitmap_gpu
+                .as_mut()
+                .expect("layer_bitmap_gpu just constructed above")
+                .set_frame_fence(ui_frame_fence.clone());
+            self.clip_content_gpu
+                .as_mut()
+                .expect("clip_content_gpu just constructed above")
+                .set_frame_fence(ui_frame_fence.clone());
+            self.clip_thumb_gpu
+                .as_mut()
+                .expect("clip_thumb_gpu just constructed above")
+                .set_frame_fence(ui_frame_fence.clone());
+            self.ui_frame_fence = Some(ui_frame_fence);
 
             self.scale_factor = scale;
 

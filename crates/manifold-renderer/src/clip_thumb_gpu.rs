@@ -16,10 +16,12 @@
 //! Drawn in the same 4b′ slot as the audio waveform (`clip_content_gpu`): a clip
 //! is audio → waveform, or generator/video → thumbnail, never both.
 
+use std::sync::Arc;
+
 use manifold_gpu::{
-    GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuDevice, GpuEncoder,
-    GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler, GpuSamplerDesc, GpuTexture,
-    GpuTextureFormat, GpuVertexAttribute, GpuVertexFormat, GpuVertexLayout,
+    FrameFence, GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuDevice,
+    GpuEncoder, GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler, GpuSamplerDesc,
+    GpuTexture, GpuTextureFormat, GpuVertexAttribute, GpuVertexFormat, GpuVertexLayout,
 };
 use manifold_ui::node::Rect;
 
@@ -165,7 +167,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     )
 }
 
-const VBUF_RING_SIZE: usize = 3;
+/// Ring depth for stall-frequency relief; correctness against slot reuse
+/// comes from `frame_fence`, not from this depth alone (see `guard_slot`).
+const VBUF_RING_SIZE: usize = 6;
 const MAX_THUMB_QUADS: usize = 512;
 
 /// Blits thumbnail-atlas cells into clip bodies.
@@ -175,6 +179,13 @@ pub struct ClipThumbGpu {
     index_buf: GpuBuffer,
     vbuf_ring: [GpuBuffer; VBUF_RING_SIZE],
     vbuf_ring_idx: usize,
+    /// Frame each vbuf_ring slot was last claimed at (0 = never claimed);
+    /// checked/updated via `frame_fence`.
+    vbuf_stamps: [u64; VBUF_RING_SIZE],
+    /// Shared GPU-completion fence — `None` in the headless test harness.
+    frame_fence: Option<Arc<FrameFence>>,
+    /// Rate limiter for `[frame-fence]` stall logging.
+    fence_wait_events: u64,
 }
 
 impl ClipThumbGpu {
@@ -230,7 +241,22 @@ impl ClipThumbGpu {
         let vbuf_size = (MAX_THUMB_QUADS * 4 * std::mem::size_of::<ThumbVertex>()) as u64;
         let vbuf_ring = std::array::from_fn(|_| device.create_buffer_shared(vbuf_size));
 
-        Self { pipeline, sampler, index_buf, vbuf_ring, vbuf_ring_idx: 0 }
+        Self {
+            pipeline,
+            sampler,
+            index_buf,
+            vbuf_ring,
+            vbuf_ring_idx: 0,
+            vbuf_stamps: [0; VBUF_RING_SIZE],
+            frame_fence: None,
+            fence_wait_events: 0,
+        }
+    }
+
+    /// Install the shared GPU-completion fence used to gate vbuf ring-slot
+    /// reuse. Not set by the headless test harness.
+    pub fn set_frame_fence(&mut self, fence: Arc<FrameFence>) {
+        self.frame_fence = Some(fence);
     }
 
     /// Draw each quad's atlas cell into its clip body, masked to the rounded shape.
@@ -259,8 +285,17 @@ impl ClipThumbGpu {
 
         let globals: [f32; 2] = [screen_w as f32, screen_h as f32];
         let globals_bytes: &[u8] = bytemuck::bytes_of(&globals);
-        let vbuf = &self.vbuf_ring[self.vbuf_ring_idx];
-        self.vbuf_ring_idx = (self.vbuf_ring_idx + 1) % VBUF_RING_SIZE;
+        let slot = self.vbuf_ring_idx;
+        self.vbuf_ring_idx = (slot + 1) % VBUF_RING_SIZE;
+        if let Some(fence) = &self.frame_fence {
+            fence.guard_slot(
+                "ClipThumbGpu",
+                slot,
+                &mut self.vbuf_stamps[slot],
+                &mut self.fence_wait_events,
+            );
+        }
+        let vbuf = &self.vbuf_ring[slot];
         let ptr = vbuf.mapped_ptr().unwrap() as *mut ThumbVertex;
 
         let mut n = 0usize;
