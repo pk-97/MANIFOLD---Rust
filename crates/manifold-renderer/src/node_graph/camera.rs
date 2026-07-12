@@ -250,6 +250,60 @@ impl Camera {
     pub fn view_proj(&self, aspect: f32) -> [[f32; 4]; 4] {
         mat4_mul(self.proj(aspect), self.view)
     }
+
+    /// THE reference oracle for every conformance gate in the camera/lens
+    /// cluster (`docs/CAMERA_AND_LENS_DESIGN.md` §2 D2) — GPU projection
+    /// paths are verified against this function, never against each other
+    /// or a screenshot. Projects a world-space point to a pixel coordinate
+    /// in a `width x height` render target using this camera's `view_proj`.
+    /// Returns `None` when the point is behind the near plane (`clip.w <=
+    /// 0`), matching the standard perspective-divide cull.
+    pub fn project_to_pixel(&self, world: [f32; 3], width: u32, height: u32) -> Option<PixelProjection> {
+        let aspect = width as f32 / (height.max(1) as f32);
+        let vp = self.view_proj(aspect);
+        let clip = mat4_mul_vec4(vp, [world[0], world[1], world[2], 1.0]);
+        if clip[3] <= 0.0 {
+            return None;
+        }
+        let ndc = [clip[0] / clip[3], clip[1] / clip[3]];
+        // Metal rasterizes y-down: NDC +y (up) lands at the SMALLER pixel row.
+        let px = (ndc[0] * 0.5 + 0.5) * width as f32;
+        let py = (1.0 - (ndc[1] * 0.5 + 0.5)) * height as f32;
+        let view_z = dot3(sub3(world, self.pos), self.fwd);
+        Some(PixelProjection { px, py, ndc, depth: clip[2] / clip[3], view_z })
+    }
+}
+
+/// Result of [`Camera::project_to_pixel`] — the committed CPU oracle shape
+/// (`docs/CAMERA_AND_LENS_DESIGN.md` §2 D2). Every field is derived from the
+/// same `view_proj` every GPU consumer is expected to agree with.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PixelProjection {
+    /// Pixel x in `[0, width)`.
+    pub px: f32,
+    /// Pixel y in `[0, height)`, y-down (Metal viewport convention).
+    pub py: f32,
+    /// Pre-viewport NDC, `+y` up, each component nominally in `[-1, 1]`.
+    pub ndc: [f32; 2],
+    /// Clip-space depth in `[0, 1]` (raw, non-linear — Metal depth range).
+    pub depth: f32,
+    /// Linear view-space distance along `-fwd` (i.e. `dot(world - pos,
+    /// fwd)`), for CoC / SSAO consumers that want a linear depth.
+    pub view_z: f32,
+}
+
+/// Multiply a column-major 4x4 matrix (`m[col][row]`, matching `mat4_mul`'s
+/// convention) by a column vector.
+fn mat4_mul_vec4(m: [[f32; 4]; 4], v: [f32; 4]) -> [f32; 4] {
+    let mut out = [0.0f32; 4];
+    for (row, slot) in out.iter_mut().enumerate() {
+        *slot = m[0][row] * v[0] + m[1][row] * v[1] + m[2][row] * v[2] + m[3][row] * v[3];
+    }
+    out
+}
+
+fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
 fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
@@ -416,6 +470,38 @@ mod tests {
         assert!(dot(cam.fwd, cam.right).abs() < 1e-5);
         assert!(dot(cam.fwd, cam.up).abs() < 1e-5);
         assert!(dot(cam.right, cam.up).abs() < 1e-5);
+    }
+
+    #[test]
+    fn project_to_pixel_center_point_lands_on_center_pixel() {
+        // Camera at origin looking down -Z (fov_y irrelevant for an
+        // on-axis point — s=0 regardless of the perspective scale factor).
+        let cam = Camera::look_at([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], std::f32::consts::FRAC_PI_2, 0.1, 100.0);
+        let proj = cam.project_to_pixel([0.0, 0.0, -5.0], 800, 600).expect("in front of camera");
+        assert!((proj.ndc[0] - 0.0).abs() < 1e-5, "ndc.x = {}", proj.ndc[0]);
+        assert!((proj.ndc[1] - 0.0).abs() < 1e-5, "ndc.y = {}", proj.ndc[1]);
+        assert!((proj.px - 400.0).abs() < 1e-3, "px = {}", proj.px);
+        assert!((proj.py - 300.0).abs() < 1e-3, "py = {}", proj.py);
+    }
+
+    #[test]
+    fn project_to_pixel_45deg_fov_point_matches_hand_derivation() {
+        // fov_y = 90 deg (half-angle 45 deg, f = 1/tan(45 deg) = 1) so a
+        // point at view-space (1, 0, -1) sits exactly on the right frustum
+        // edge: clip.x = f/aspect * 1 = 1, clip.w = 1 -> ndc.x = 1.
+        let cam = Camera::look_at([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], std::f32::consts::FRAC_PI_2, 0.1, 100.0);
+        let proj = cam.project_to_pixel([1.0, 0.0, -1.0], 512, 512).expect("in front of camera");
+        assert!((proj.ndc[0] - 1.0).abs() < 1e-5, "ndc.x = {}", proj.ndc[0]);
+        assert!((proj.ndc[1] - 0.0).abs() < 1e-5, "ndc.y = {}", proj.ndc[1]);
+        assert!((proj.px - 512.0).abs() < 1e-3, "px = {}", proj.px);
+        assert!((proj.py - 256.0).abs() < 1e-3, "py = {}", proj.py);
+    }
+
+    #[test]
+    fn project_to_pixel_behind_camera_is_none() {
+        let cam = Camera::look_at([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], std::f32::consts::FRAC_PI_2, 0.1, 100.0);
+        // +Z is behind a camera looking down -Z.
+        assert_eq!(cam.project_to_pixel([0.0, 0.0, 1.0], 512, 512), None);
     }
 
     #[test]
