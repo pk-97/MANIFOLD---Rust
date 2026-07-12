@@ -1,6 +1,6 @@
 # Cinematic Post — DoF, SSAO, motion blur as graph atoms
 
-**Status:** APPROVED design, not built · 2026-07-12 · Fable 5 · **Amended 2026-07-12 (Fable 5, Peter-directed): P0 added — derived uniforms become first-class on the texture codegen path AND in fused regions (D7). P1 found blocked on this at implementation; Peter's call: no stopgaps, no boundary carve-out.**
+**Status:** IN PROGRESS · 2026-07-12 · Fable 5 · **P0 SHIPPED 2026-07-12 (D7/I6, both layers, `docs/landings/2026-07-12-cinematic-post-batch-a.md`) — derived uniforms are first-class on the texture codegen path AND in fused regions. P1–P4 not built.**
 **Prerequisites:** P0 (this doc, D7) before P1–P4; CAMERA_AND_LENS P1+P2 and GBUFFER P1 before this P1/P2; GBUFFER P2 before this P3.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 **Companions:** [CAMERA_AND_LENS_DESIGN.md](CAMERA_AND_LENS_DESIGN.md) (`LensParams` on the Camera wire; the CPU oracle) · [GBUFFER_DESIGN.md](GBUFFER_DESIGN.md) (the depth/velocity inputs; the shared linearize helper) · [RENDERING_INFRA_V2_DESIGN.md](RENDERING_INFRA_V2_DESIGN.md) (direction: pillar 2, "our 2D graph system already excels here; the missing inputs are per-pixel depth and motion vectors") · [docs/ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) (authoring contract; the codegen-path rule every atom here satisfies)
@@ -259,22 +259,25 @@ atoms · frame-index/time inputs into any of these atoms (determinism is
 load-bearing). **Test scope:** focused `-p manifold-renderer` + the new
 gpu_tests; workspace sweep at landing.
 
-- **P0 — derived uniforms first-class in the freeze compiler** (D7; one
-  to two sessions — the standalone layer and the fusion layer are
-  separately landable, in that order, but BOTH are P1's entry: landing
-  only the standalone half and calling it done is the exact stopgap
-  Peter rejected). Entry: none (GBUFFER P1 is on main). Deliverables:
+- **P0 — derived uniforms first-class in the freeze compiler — SHIPPED
+  2026-07-12** (D7; two sessions, standalone layer `42929678` then fusion
+  layer `38d2f0f8`, both landed together in batch A `docs/landings/
+  2026-07-12-cinematic-post-batch-a.md`). Deliverables landed:
   texture-path `DERIVED_UNIFORMS` in `generate_standalone_ext` +
-  CPU-struct inputs binding nothing; whitelist + vec3 bail deleted from
-  `install.rs` in favour of per-member registry recompute; `region.rs`
-  classify exemption; time-family migrated onto the same path.
-  Gate: I6 + the full existing freeze proof suite + all existing
-  buffer-atom `gpu_tests` (project_3d, particle sims — they exercise
-  the migrated time-family) + focused suite + clippy. Read-back adds
-  `docs/FREEZE_COMPILER_MAP.md` (whole thing — this phase edits the
-  compiler it maps) and UPDATES the map's §4/§5/§9 to the new sourcing
-  model at landing. Demo: none — compiler phase, the proofs are the
-  demo.
+  CPU-struct inputs binding nothing; `install.rs`'s name whitelist +
+  vec3 bail deleted, replaced by `freeze/derived_uniform_registry.rs`
+  (inventory-based, type_id-keyed per-member recompute); `region.rs`
+  classify exemption (both texture and buffer paths — one shared
+  predicate, wider than D7's literal texture-only line, judged as
+  completing the one conceptual fix consistently); time-family migrated
+  onto the same path. Gate: I6 (`camera_derived_pointwise_atom_fuses_
+  and_matches_unfused`) + the full existing freeze proof suite (125
+  passed) + the full `manifold-renderer --features gpu-proofs` sweep
+  (1412 passed, 0 failed) + focused suite (1114 passed) + clippy — all
+  independently re-run by the orchestrating session, not self-reported.
+  `docs/FREEZE_COMPILER_MAP.md` §4/§5/§9 (+ a §7 cross-reference) updated
+  to the new sourcing model in the same landing. Demo: none — compiler
+  phase, the proofs are the demo.
 - **P1 — `coc_from_depth` + DoF slice of `CinematicScene`** (one session).
   Entry: P0 landed (both layers) + CAMERA P2 + GBUFFER P1 landed (verify:
   `rg 'LensParams'` hits camera.rs; `rg 'linearize_depth'` hits shared
