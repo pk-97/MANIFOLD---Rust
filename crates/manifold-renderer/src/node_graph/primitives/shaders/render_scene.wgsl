@@ -310,8 +310,29 @@ fn pcss_shadow_factor(slot: i32, suv: vec2<f32>, ref_depth: f32, z_r: f32, searc
     }
     let z_b = blocker_sum / blocker_count;
     let penumbra_px = clamp(search_radius_uv * (z_r - z_b) / max(z_b, 1e-6) / texel, 0.0, 24.0);
-    let khw = i32(ceil(penumbra_px));
-    return pcf_average(slot, suv, ref_depth, texel, khw);
+    // Fixed tap count, variable radius (standard PCSS step 3). The original
+    // step 3 fed penumbra_px into the dense (2·khw+1)² box above, which
+    // grows to 49×49 = 2,401 compare taps per fragment at the 24px clamp —
+    // ~250× the Hard tier's 9, and foliage scenes (occluders far above
+    // their ground shadow) push nearly every fragment to that ceiling
+    // (measured 5FPS on a tree GLB that runs 60FPS on Hard). The same
+    // golden-angle disc as the blocker search, but with compare taps over
+    // the penumbra radius, costs the same at every width. penumbra_px <= 1
+    // keeps the shared 3×3 loop so near-contact regions stay byte-identical
+    // to Hard — the same D12 gate (b) contract the light_size=0 early-out
+    // above satisfies, here for the z_b → z_r limit.
+    if penumbra_px <= 1.0 {
+        return pcf_average(slot, suv, ref_depth, texel, 1);
+    }
+    let radius_uv = penumbra_px * texel;
+    var sum = sample_shadow(slot, suv, ref_depth);
+    for (var i: u32 = 0u; i < PCSS_TAPS; i = i + 1u) {
+        let r = sqrt((f32(i) + 0.5) / f32(PCSS_TAPS));
+        let theta = f32(i) * GOLDEN_ANGLE;
+        let tap_uv = suv + radius_uv * r * vec2<f32>(cos(theta), sin(theta));
+        sum = sum + sample_shadow(slot, tap_uv, ref_depth);
+    }
+    return sum / (f32(PCSS_TAPS) + 1.0);
 }
 
 // Light visibility in [0,1]: 1 = fully lit, 0 = fully shadowed. `slot_f` is
