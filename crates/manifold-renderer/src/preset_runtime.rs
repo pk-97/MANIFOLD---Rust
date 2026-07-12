@@ -5546,6 +5546,32 @@ mod generator_runtime_tests {
         assert_eq!(preset.type_id().as_str(), "Plasma");
     }
 
+    /// **I5** (`docs/CINEMATIC_POST_DESIGN.md`): the DoF chain (camera_lens ->
+    /// render_scene[depth wired] -> coc_from_depth -> variable_blur H -> V)
+    /// loads and compiles as ordinary preset JSON. The render-one-frame /
+    /// finite-pixels half of I5 is covered generically by
+    /// `smoke::every_registered_generator_runs_without_panicking_or_nans`,
+    /// which iterates every bundled generator preset by discovery — this test
+    /// is the named, dedicated build check (mirrors
+    /// `bundled_plasma_loads_and_compiles` above).
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn bundled_cinematic_scene_loads_and_compiles() {
+        let device = crate::test_device();
+        let json = include_str!("../assets/generator-presets/CinematicScene.json");
+        let preset = PresetRuntime::from_json_str_with_device(
+            json,
+            &PrimitiveRegistry::with_builtin(),
+            &device,
+            1920,
+            1080,
+            GpuTextureFormat::Rgba16Float,
+            None,
+        )
+        .expect("bundled CinematicScene must load + compile");
+        assert_eq!(preset.type_id().as_str(), "CinematicScene");
+    }
+
     #[cfg(feature = "gpu-proofs")]
     #[test]
     fn resize_re_pre_allocates_array_buffers() {

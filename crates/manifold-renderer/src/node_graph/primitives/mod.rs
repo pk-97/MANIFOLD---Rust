@@ -38,6 +38,7 @@ mod pack_channels;
 mod pack_curve_xy;
 mod clip_trigger_cycle;
 mod clip_trigger_index;
+mod coc_from_depth;
 mod color;
 mod color_sample;
 mod colorize;
