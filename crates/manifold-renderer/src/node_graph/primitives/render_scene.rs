@@ -146,12 +146,23 @@ const CASTER_VEC4_STRIDE: usize = 5;
 // `Owned` variant carries drop glue, so `&RENDER_SCENE_OUTPUTS` can no longer
 // be rvalue-static-promoted out of a `const`. A `static` gives the slice a
 // genuine `'static` address to borrow.
-static RENDER_SCENE_OUTPUTS: [NodeOutput; 1] = [NodePort {
-    name: std::borrow::Cow::Borrowed("color"),
-    ty: PortType::Texture2D,
-    kind: PortKind::Output,
-    required: false,
-}];
+static RENDER_SCENE_OUTPUTS: [NodeOutput; 2] = [
+    NodePort {
+        name: std::borrow::Cow::Borrowed("color"),
+        ty: PortType::Texture2D,
+        kind: PortKind::Output,
+        required: false,
+    },
+    // GBUFFER_DESIGN.md §2 D1: lazy — rendered ONLY when wired (same rule
+    // as `render_mesh`'s `world_pos`/`world_normal`). Raw [0,1] clip depth
+    // (D2), `R32Float` via the `output_format` override below.
+    NodePort {
+        name: std::borrow::Cow::Borrowed("depth"),
+        ty: PortType::Texture2D,
+        kind: PortKind::Output,
+        required: false,
+    },
+];
 
 /// Per-object uniform, one draw call per object. Superset shape shared
 /// with `render_3d_mesh.wgsl`'s Material fields, plus a per-object
@@ -723,6 +734,16 @@ impl EffectNode for RenderScene {
         &RENDER_SCENE_OUTPUTS
     }
 
+    /// `depth` is `R32Float` (GBUFFER_DESIGN.md §2 D2 — raw device depth,
+    /// not linearized: consumers linearize via the shared `depth.wgsl`
+    /// helper, D4). Every other output (`color`) uses the backend default.
+    fn output_format(&self, port: &str) -> Option<manifold_gpu::GpuTextureFormat> {
+        match port {
+            "depth" => Some(manifold_gpu::GpuTextureFormat::R32Float),
+            _ => None,
+        }
+    }
+
     fn parameters(&self) -> &[ParamDef] {
         &self.params
     }
@@ -1069,6 +1090,11 @@ impl EffectNode for RenderScene {
         let Some(target) = ctx.outputs.texture_2d("color") else {
             return;
         };
+        // GBUFFER_DESIGN.md §2 D1: `None` when unwired — the graph compiler
+        // never assigns "depth" a step-output binding in that case (same
+        // lazy mechanism as `render_mesh`'s G-buffer outputs), so this pass
+        // costs zero new bytes unless a consumer actually wired it (I1).
+        let depth_resolve_target = ctx.outputs.texture_2d("depth");
         let depth_stencil = self.depth_stencil.as_ref().expect("just inserted");
         let depth_tex = self.depth_texture.as_ref().expect("just inserted");
         let msaa_color = self.msaa_color.as_ref().expect("just inserted");
@@ -1208,14 +1234,17 @@ impl EffectNode for RenderScene {
             })
             .collect();
 
-        ctx.gpu_encoder().native_enc.draw_instanced_depth_msaa_batch(
+        let pass_desc = manifold_gpu::DepthMsaaPassDesc {
             msaa_color,
-            target,
-            depth_tex,
-            depth_stencil,
-            &draw_calls,
-            "node.render_scene",
-        );
+            resolve_target: target,
+            msaa_depth: depth_tex,
+            depth_resolve: depth_resolve_target,
+            aux_color: &[],
+            depth_stencil_state: depth_stencil,
+        };
+        ctx.gpu_encoder()
+            .native_enc
+            .draw_instanced_depth_msaa_batch_desc(&pass_desc, &draw_calls, "node.render_scene");
     }
 }
 
@@ -1425,5 +1454,139 @@ mod tests {
         assert!((m[0][0] - 2.0).abs() < 1e-6);
         assert!((m[1][1] - 3.0).abs() < 1e-6);
         assert!((m[2][2] - 4.0).abs() < 1e-6);
+    }
+
+    // ---- GBUFFER_DESIGN.md P1, I1 — lazy `depth` output ----
+    //
+    // Descriptor-level, no GPU device: `depth`'s step-output binding (and
+    // therefore the R32Float resolve texture the backend would allocate for
+    // it) only exists when the graph actually wires a consumer. Proven via
+    // `compile()` alone — the SAME `consumed_outputs` mechanism that already
+    // makes `render_mesh`'s `world_pos`/`world_normal` lazy (execution_plan.rs)
+    // — rather than constructing a live `DepthMsaaPassDesc` (whose other
+    // fields need real GPU textures the default test build can't create).
+
+    /// Minimal stand-in producer: no inputs, one output of the given type.
+    /// Just enough to satisfy `validate()`'s required-input check for
+    /// `camera`/`mesh_0`/`material_0` — `compile()` never runs `evaluate()`,
+    /// so this never needs to touch a GPU device.
+    struct StubProducer {
+        type_id: EffectNodeType,
+        out: NodeOutput,
+    }
+
+    impl StubProducer {
+        fn new(id: &'static str, ty: PortType) -> Self {
+            Self {
+                type_id: EffectNodeType::new(id),
+                out: NodePort {
+                    name: std::borrow::Cow::Borrowed("out"),
+                    ty,
+                    kind: PortKind::Output,
+                    required: false,
+                },
+            }
+        }
+    }
+
+    impl EffectNode for StubProducer {
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &[]
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            std::slice::from_ref(&self.out)
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+    }
+
+    /// Build a one-object, zero-light `render_scene` fed by stub
+    /// camera/mesh/material producers, `color` always wired to a
+    /// `FinalOutput`; `depth` wired to a second `FinalOutput` iff
+    /// `wire_depth`. Returns the compiled plan plus the scene node's id so
+    /// the caller can inspect its step's `outputs` list.
+    fn compile_scene(wire_depth: bool) -> (crate::node_graph::ExecutionPlan, crate::node_graph::NodeInstanceId) {
+        use crate::node_graph::{FinalOutput, Graph, compile};
+
+        let mut graph = Graph::new();
+        let cam = graph.add_node(Box::new(StubProducer::new("stub.camera", PortType::Camera)));
+        let mesh = graph.add_node(Box::new(StubProducer::new(
+            "stub.mesh",
+            PortType::Array(ArrayType::of_known::<MeshVertex>()),
+        )));
+        let mat = graph.add_node(Box::new(StubProducer::new("stub.material", PortType::Material)));
+
+        // `Graph::add_node` (via `NodeInstance::new`) reconfigures the node
+        // against its OWN default params right after insertion — a
+        // pre-insertion `reconfigure` call would just get overwritten by
+        // that. Set `objects`/`lights` through `Graph::set_param` instead,
+        // which re-reconfigures against the new values (mirrors how every
+        // real host — JSON load, editor slider — drives this node).
+        let scene_id = graph.add_node(Box::new(RenderScene::new()));
+        graph
+            .set_param(scene_id, "objects", ParamValue::Float(1.0))
+            .expect("objects param exists");
+        graph
+            .set_param(scene_id, "lights", ParamValue::Float(0.0))
+            .expect("lights param exists");
+
+        let color_sink = graph.add_node(Box::new(FinalOutput::new()));
+        graph.connect((cam, "out"), (scene_id, "camera")).expect("camera wires");
+        graph.connect((mesh, "out"), (scene_id, "mesh_0")).expect("mesh wires");
+        graph.connect((mat, "out"), (scene_id, "material_0")).expect("material wires");
+        graph.connect((scene_id, "color"), (color_sink, "in")).expect("color wires");
+
+        if wire_depth {
+            let depth_sink = graph.add_node(Box::new(FinalOutput::new()));
+            graph.connect((scene_id, "depth"), (depth_sink, "in")).expect("depth wires");
+        }
+
+        let plan = compile(&graph).expect("stub scene graph must compile");
+        (plan, scene_id)
+    }
+
+    #[test]
+    fn depth_output_unwired_gets_no_step_output_binding() {
+        let (plan, scene_id) = compile_scene(false);
+        let step = plan
+            .steps()
+            .iter()
+            .find(|s| s.node == scene_id)
+            .expect("render_scene step present");
+        assert!(
+            step.outputs.iter().any(|(name, _)| *name == "color"),
+            "color must still get a binding"
+        );
+        assert!(
+            !step.outputs.iter().any(|(name, _)| *name == "depth"),
+            "I1: unwired depth must not get a step-output binding — the \
+             backend would never allocate its R32Float resolve texture"
+        );
+    }
+
+    #[test]
+    fn depth_output_wired_gets_a_step_output_binding() {
+        let (plan, scene_id) = compile_scene(true);
+        let step = plan
+            .steps()
+            .iter()
+            .find(|s| s.node == scene_id)
+            .expect("render_scene step present");
+        let depth_res = step
+            .outputs
+            .iter()
+            .find(|(name, _)| *name == "depth")
+            .map(|(_, res)| *res);
+        assert!(depth_res.is_some(), "wired depth must get a step-output binding");
+        assert_eq!(
+            plan.resource_format(depth_res.unwrap()),
+            Some(manifold_gpu::GpuTextureFormat::R32Float),
+            "depth's resource_format must be R32Float at compile time"
+        );
     }
 }
