@@ -213,3 +213,92 @@ fn density_zero_atmosphere_is_byte_identical_to_no_atmosphere() {
         "density-0 atmosphere must be byte-identical to no atmosphere"
     );
 }
+
+/// Same ground-plane scene as [`fog_scene_json`] (no atmosphere), but with a
+/// `node.camera_lens` spliced between `cam` and `scene` when `lens_ev` is
+/// `Some` — wired at that `exposure_ev`, every other lens param left at its
+/// neutral default. `None` wires the camera directly into `render_scene`,
+/// matching `fog_scene_json(None)`'s shape exactly (no `camera_lens` node in
+/// the graph at all).
+fn fog_scene_json_with_lens(lens_ev: Option<f32>) -> String {
+    let mut nodes = String::from(
+        r#"{"id":0,"typeId":"system.generator_input","nodeId":"input"},
+        {"id":1,"typeId":"node.grid_mesh","nodeId":"ground_grid","params":{
+            "max_capacity":{"type":"Int","value":16384},
+            "resolution_x":{"type":"Int","value":32},
+            "resolution_y":{"type":"Int","value":32},
+            "size_x":{"type":"Float","value":40.0},
+            "size_y":{"type":"Float","value":40.0}}},
+        {"id":2,"typeId":"node.make_triangles","nodeId":"ground_tris","params":{
+            "src_cols":{"type":"Int","value":32},
+            "src_rows":{"type":"Int","value":32}}},
+        {"id":3,"typeId":"node.orbit_camera","nodeId":"cam","params":{
+            "orbit":{"type":"Float","value":0.0},
+            "tilt":{"type":"Float","value":0.12},
+            "distance":{"type":"Float","value":15.0},
+            "fov_y":{"type":"Float","value":1.0}}},
+        {"id":4,"typeId":"node.phong_material","nodeId":"mat","params":{
+            "color_r":{"type":"Float","value":1.0},
+            "color_g":{"type":"Float","value":1.0},
+            "color_b":{"type":"Float","value":1.0},
+            "ambient":{"type":"Float","value":0.1}}},
+        {"id":30,"typeId":"node.light","nodeId":"sun","params":{
+            "mode":{"type":"Enum","value":0},
+            "pos_x":{"type":"Float","value":0.0},
+            "pos_y":{"type":"Float","value":30.0},
+            "pos_z":{"type":"Float","value":0.0},
+            "aim_x":{"type":"Float","value":0.0},
+            "aim_y":{"type":"Float","value":0.0},
+            "aim_z":{"type":"Float","value":0.0},
+            "color_r":{"type":"Float","value":1.0},
+            "color_g":{"type":"Float","value":1.0},
+            "color_b":{"type":"Float","value":1.0},
+            "intensity":{"type":"Float","value":1.0},
+            "cast_shadows":{"type":"Float","value":0.0}}},
+        {"id":20,"typeId":"node.render_scene","nodeId":"scene","params":{
+            "objects":{"type":"Int","value":1},
+            "lights":{"type":"Int","value":1}}},
+        {"id":99,"typeId":"system.final_output","nodeId":"out"}"#,
+    );
+
+    let mut wires = String::from(
+        r#"{"fromNode":1,"fromPort":"vertices","toNode":2,"toPort":"in"},
+        {"fromNode":2,"fromPort":"out","toNode":20,"toPort":"mesh_0"},
+        {"fromNode":4,"fromPort":"out","toNode":20,"toPort":"material_0"},
+        {"fromNode":30,"fromPort":"out","toNode":20,"toPort":"light_0"},
+        {"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}"#,
+    );
+
+    match lens_ev {
+        Some(ev) => {
+            nodes.push_str(&format!(
+                r#",{{"id":40,"typeId":"node.camera_lens","nodeId":"lens","params":{{
+                    "exposure_ev":{{"type":"Float","value":{ev}}}}}}}"#,
+            ));
+            wires.push_str(
+                r#",{"fromNode":3,"fromPort":"out","toNode":40,"toPort":"camera"},
+                {"fromNode":40,"fromPort":"out","toNode":20,"toPort":"camera"}"#,
+            );
+        }
+        None => {
+            wires.push_str(r#",{"fromNode":3,"fromPort":"out","toNode":20,"toPort":"camera"}"#);
+        }
+    }
+
+    format!(r#"{{"version":2,"name":"RenderSceneLensProof","nodes":[{nodes}],"wires":[{wires}]}}"#)
+}
+
+#[test]
+fn ev_zero_camera_lens_is_byte_identical_to_no_camera_lens() {
+    // I5 (docs/CAMERA_AND_LENS_DESIGN.md §3): extends this file's density-0
+    // byte-identity contract to camera_lens's exposure_ev — a camera_lens
+    // wired at ev=0 must render byte-for-byte identical to not wiring
+    // camera_lens at all, same "unwired/neutral = zero cost" shape as
+    // `density_zero_atmosphere_is_byte_identical_to_no_atmosphere` above.
+    let with_zero_ev = render_readback(&fog_scene_json_with_lens(Some(0.0)));
+    let without_lens = render_readback(&fog_scene_json_with_lens(None));
+    assert_eq!(
+        with_zero_ev, without_lens,
+        "camera_lens at exposure_ev=0 must be byte-identical to no camera_lens node"
+    );
+}

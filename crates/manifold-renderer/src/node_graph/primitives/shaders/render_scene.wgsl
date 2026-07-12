@@ -77,7 +77,9 @@ struct Uniforms {
     alpha_params: vec4<f32>,
     // x: light_count (as f32, unbounded — the `lights` storage buffer is
     // runtime-sized), y: ambient (this object's material.ambient),
-    // z/w: reserved.
+    // z: exposure_ev (CAMERA_AND_LENS_DESIGN.md §2 D5 — the camera lens'
+    // exposure_ev; every fragment entry multiplies its final straight rgb
+    // by exp2(exposure_ev) just before returning), w: reserved.
     scene_params: vec4<f32>,
     // Atmosphere (P3), scene-wide (same in every object's uniform).
     // fog_color.rgb = colour distant geometry fades toward.
@@ -477,7 +479,11 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
-    let rgb = apply_fog(albedo.rgb + u.emission.rgb, in.world_pos);
+    // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md §2 D5. Multiplies the
+    // final STRAIGHT rgb (post-fog, post-emission, pre-output); alpha is
+    // untouched (alpha contract). exposure_ev = 0 (PINHOLE default) → ×1,
+    // byte-identical to pre-lens builds (I2/I5).
+    let rgb = apply_fog(albedo.rgb + u.emission.rgb, in.world_pos) * exp2(u.scene_params.z);
     return vec4<f32>(rgb, albedo.a);
 }
 
@@ -511,7 +517,8 @@ fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
         lit = lit + (diffuse + spec) * l_col.rgb * l_dir.w * vis;
     }
     let ambient = albedo.rgb * u.scene_params.y * u.ambient_tint.rgb;
-    let rgb = apply_fog(lit + ambient + u.emission.rgb, in.world_pos);
+    // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md §2 D5, see fs_unlit.
+    let rgb = apply_fog(lit + ambient + u.emission.rgb, in.world_pos) * exp2(u.scene_params.z);
     return vec4<f32>(rgb, albedo.a);
 }
 
@@ -580,7 +587,8 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let ibl = f_view * ibl_sample * ibl_strength;
 
     let ambient = albedo.rgb * u.scene_params.y * u.ambient_tint.rgb;
-    let rgb = apply_fog(direct + ibl + ambient + u.emission.rgb, in.world_pos);
+    // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md §2 D5, see fs_unlit.
+    let rgb = apply_fog(direct + ibl + ambient + u.emission.rgb, in.world_pos) * exp2(u.scene_params.z);
     return vec4<f32>(rgb, albedo.a);
 }
 
@@ -614,6 +622,7 @@ fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
         lit = lit + albedo.rgb * level * l_col.rgb * l_dir.w * vis;
     }
     let ambient = albedo.rgb * u.scene_params.y * u.ambient_tint.rgb;
-    let rgb = apply_fog(lit + ambient + u.emission.rgb, in.world_pos);
+    // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md §2 D5, see fs_unlit.
+    let rgb = apply_fog(lit + ambient + u.emission.rgb, in.world_pos) * exp2(u.scene_params.z);
     return vec4<f32>(rgb, albedo.a);
 }

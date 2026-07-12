@@ -33,10 +33,51 @@ pub enum CameraMode {
     Orthographic { half_height: f32 },
 }
 
+/// Physical lens parameters rewritten by `node.camera_lens`
+/// (`docs/CAMERA_AND_LENS_DESIGN.md` §2 D4) — the one writer of this block.
+/// Rides the `Camera` struct so every consumer (DoF, motion blur, exposure)
+/// reads the same lens instead of duplicating four params each.
+///
+/// This struct is CPU-only wire data, same as `Camera` itself — never
+/// serialized (`Camera` is "wire data, never serialized" per the design's
+/// §1 audit). `node.camera_lens`'s own PARAMS (which back these fields when
+/// unwired) ARE serialized like any param, which is why that primitive's
+/// `f_stop` param default is a large finite sentinel rather than literally
+/// `f32::INFINITY` — `serde_json` silently encodes non-finite floats as
+/// JSON `null` and then fails to decode `null` back into an `f32` on load,
+/// which would round-trip-corrupt any saved project (verified empirically,
+/// not assumed). `LensParams::PINHOLE` itself, being a Rust const on a
+/// never-serialized wire struct, is unaffected and keeps the literal
+/// `f32::INFINITY` the design commits to.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LensParams {
+    /// World units along `fwd`; `<= 0` means hyperfocal/neutral (no focus
+    /// plane to rack toward).
+    pub focus_distance: f32,
+    /// Aperture N (f-number). `f32::INFINITY` = pinhole (depth of field off).
+    pub f_stop: f32,
+    /// Degrees, `0..=360`. `0` = no motion blur.
+    pub shutter_angle: f32,
+    /// Stops. `0` = neutral (scene rgb × `2^exposure_ev`).
+    pub exposure_ev: f32,
+}
+
+impl LensParams {
+    /// Neutral lens: no DoF, no motion blur, no exposure shift. Every
+    /// existing camera builder in this file sets `lens: LensParams::PINHOLE`
+    /// so shipped graphs render byte-identically to pre-lens builds (I2).
+    pub const PINHOLE: Self = Self {
+        focus_distance: 0.0,
+        f_stop: f32::INFINITY,
+        shutter_angle: 0.0,
+        exposure_ev: 0.0,
+    };
+}
+
 /// Camera struct flowing through `PortType::Camera` wires.
 ///
 /// Built once per frame in `node.orbit_camera::run()` (or future camera
-/// sources), passed by value to every downstream consumer. ~96 bytes —
+/// sources), passed by value to every downstream consumer. ~112 bytes —
 /// trivially cheap to clone per wire per frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Camera {
@@ -57,6 +98,10 @@ pub struct Camera {
     /// Precomputed right-handed view matrix (world → camera-space).
     /// View doesn't depend on aspect, so it's cached here.
     pub view: [[f32; 4]; 4],
+    /// Physical lens (focus/aperture/shutter/exposure). Every builder below
+    /// sets `LensParams::PINHOLE` — `node.camera_lens` is the only writer
+    /// that changes it (`docs/CAMERA_AND_LENS_DESIGN.md` §2 D4).
+    pub lens: LensParams,
 }
 
 impl Camera {
@@ -83,6 +128,7 @@ impl Camera {
             far,
             mode: CameraMode::Perspective { fov_y },
             view,
+            lens: LensParams::PINHOLE,
         }
     }
 
@@ -136,6 +182,7 @@ impl Camera {
             far,
             mode: CameraMode::Perspective { fov_y },
             view,
+            lens: LensParams::PINHOLE,
         }
     }
 
@@ -192,6 +239,7 @@ impl Camera {
             far,
             mode: CameraMode::Perspective { fov_y },
             view,
+            lens: LensParams::PINHOLE,
         }
     }
 
@@ -219,6 +267,7 @@ impl Camera {
             far,
             mode: CameraMode::Perspective { fov_y },
             view,
+            lens: LensParams::PINHOLE,
         }
     }
 
@@ -250,6 +299,60 @@ impl Camera {
     pub fn view_proj(&self, aspect: f32) -> [[f32; 4]; 4] {
         mat4_mul(self.proj(aspect), self.view)
     }
+
+    /// THE reference oracle for every conformance gate in the camera/lens
+    /// cluster (`docs/CAMERA_AND_LENS_DESIGN.md` §2 D2) — GPU projection
+    /// paths are verified against this function, never against each other
+    /// or a screenshot. Projects a world-space point to a pixel coordinate
+    /// in a `width x height` render target using this camera's `view_proj`.
+    /// Returns `None` when the point is behind the near plane (`clip.w <=
+    /// 0`), matching the standard perspective-divide cull.
+    pub fn project_to_pixel(&self, world: [f32; 3], width: u32, height: u32) -> Option<PixelProjection> {
+        let aspect = width as f32 / (height.max(1) as f32);
+        let vp = self.view_proj(aspect);
+        let clip = mat4_mul_vec4(vp, [world[0], world[1], world[2], 1.0]);
+        if clip[3] <= 0.0 {
+            return None;
+        }
+        let ndc = [clip[0] / clip[3], clip[1] / clip[3]];
+        // Metal rasterizes y-down: NDC +y (up) lands at the SMALLER pixel row.
+        let px = (ndc[0] * 0.5 + 0.5) * width as f32;
+        let py = (1.0 - (ndc[1] * 0.5 + 0.5)) * height as f32;
+        let view_z = dot3(sub3(world, self.pos), self.fwd);
+        Some(PixelProjection { px, py, ndc, depth: clip[2] / clip[3], view_z })
+    }
+}
+
+/// Result of [`Camera::project_to_pixel`] — the committed CPU oracle shape
+/// (`docs/CAMERA_AND_LENS_DESIGN.md` §2 D2). Every field is derived from the
+/// same `view_proj` every GPU consumer is expected to agree with.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PixelProjection {
+    /// Pixel x in `[0, width)`.
+    pub px: f32,
+    /// Pixel y in `[0, height)`, y-down (Metal viewport convention).
+    pub py: f32,
+    /// Pre-viewport NDC, `+y` up, each component nominally in `[-1, 1]`.
+    pub ndc: [f32; 2],
+    /// Clip-space depth in `[0, 1]` (raw, non-linear — Metal depth range).
+    pub depth: f32,
+    /// Linear view-space distance along `-fwd` (i.e. `dot(world - pos,
+    /// fwd)`), for CoC / SSAO consumers that want a linear depth.
+    pub view_z: f32,
+}
+
+/// Multiply a column-major 4x4 matrix (`m[col][row]`, matching `mat4_mul`'s
+/// convention) by a column vector.
+fn mat4_mul_vec4(m: [[f32; 4]; 4], v: [f32; 4]) -> [f32; 4] {
+    let mut out = [0.0f32; 4];
+    for (row, slot) in out.iter_mut().enumerate() {
+        *slot = m[0][row] * v[0] + m[1][row] * v[1] + m[2][row] * v[2] + m[3][row] * v[3];
+    }
+    out
+}
+
+fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
 fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
@@ -419,6 +522,38 @@ mod tests {
     }
 
     #[test]
+    fn project_to_pixel_center_point_lands_on_center_pixel() {
+        // Camera at origin looking down -Z (fov_y irrelevant for an
+        // on-axis point — s=0 regardless of the perspective scale factor).
+        let cam = Camera::look_at([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], std::f32::consts::FRAC_PI_2, 0.1, 100.0);
+        let proj = cam.project_to_pixel([0.0, 0.0, -5.0], 800, 600).expect("in front of camera");
+        assert!((proj.ndc[0] - 0.0).abs() < 1e-5, "ndc.x = {}", proj.ndc[0]);
+        assert!((proj.ndc[1] - 0.0).abs() < 1e-5, "ndc.y = {}", proj.ndc[1]);
+        assert!((proj.px - 400.0).abs() < 1e-3, "px = {}", proj.px);
+        assert!((proj.py - 300.0).abs() < 1e-3, "py = {}", proj.py);
+    }
+
+    #[test]
+    fn project_to_pixel_45deg_fov_point_matches_hand_derivation() {
+        // fov_y = 90 deg (half-angle 45 deg, f = 1/tan(45 deg) = 1) so a
+        // point at view-space (1, 0, -1) sits exactly on the right frustum
+        // edge: clip.x = f/aspect * 1 = 1, clip.w = 1 -> ndc.x = 1.
+        let cam = Camera::look_at([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], std::f32::consts::FRAC_PI_2, 0.1, 100.0);
+        let proj = cam.project_to_pixel([1.0, 0.0, -1.0], 512, 512).expect("in front of camera");
+        assert!((proj.ndc[0] - 1.0).abs() < 1e-5, "ndc.x = {}", proj.ndc[0]);
+        assert!((proj.ndc[1] - 0.0).abs() < 1e-5, "ndc.y = {}", proj.ndc[1]);
+        assert!((proj.px - 512.0).abs() < 1e-3, "px = {}", proj.px);
+        assert!((proj.py - 256.0).abs() < 1e-3, "py = {}", proj.py);
+    }
+
+    #[test]
+    fn project_to_pixel_behind_camera_is_none() {
+        let cam = Camera::look_at([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], std::f32::consts::FRAC_PI_2, 0.1, 100.0);
+        // +Z is behind a camera looking down -Z.
+        assert_eq!(cam.project_to_pixel([0.0, 0.0, 1.0], 512, 512), None);
+    }
+
+    #[test]
     fn proj_dispatches_on_mode() {
         let mut cam = Camera::orbit_perspective(0.0, 0.0, 5.0, 1.0, 0.0, 0.0, 0.1, 100.0);
         let _persp = cam.proj(16.0 / 9.0);
@@ -427,5 +562,39 @@ mod tests {
         // Ortho-specific signature: [3][3] (perspective stores -1 there for
         // perspective divide, ortho stores 1.0)
         assert!((ortho[2][3] - 0.0).abs() < 1e-5);
+    }
+
+    // ===== LensParams (CAMERA_AND_LENS_DESIGN.md §2 D4, P2) =====
+
+    #[test]
+    fn pinhole_lens_is_neutral_per_committed_field_semantics() {
+        let p = LensParams::PINHOLE;
+        assert!(p.focus_distance <= 0.0, "focus_distance should be <= 0 (neutral)");
+        assert!(p.f_stop.is_infinite() && p.f_stop > 0.0, "f_stop should be +infinity (pinhole)");
+        assert_eq!(p.shutter_angle, 0.0, "shutter_angle should be 0 (no motion blur)");
+        assert_eq!(p.exposure_ev, 0.0, "exposure_ev should be 0 (neutral)");
+    }
+
+    #[test]
+    fn default_perspective_lens_defaults_to_pinhole() {
+        assert_eq!(Camera::default_perspective().lens, LensParams::PINHOLE);
+    }
+
+    #[test]
+    fn orbit_perspective_lens_defaults_to_pinhole() {
+        let cam = Camera::orbit_perspective(0.7, 0.3, 4.0, 0.9, 0.0, 0.0, 0.05, 200.0);
+        assert_eq!(cam.lens, LensParams::PINHOLE);
+    }
+
+    #[test]
+    fn from_pos_euler_lens_defaults_to_pinhole() {
+        let cam = Camera::from_pos_euler([1.0, 2.0, 3.0], 0.0, 0.0, 0.0, 0.9, 0.05, 200.0);
+        assert_eq!(cam.lens, LensParams::PINHOLE);
+    }
+
+    #[test]
+    fn look_at_lens_defaults_to_pinhole() {
+        let cam = Camera::look_at([1.0, 2.0, 3.0], [-4.0, 0.5, 2.0], [0.0, 1.0, 0.0], 1.0, 0.1, 100.0);
+        assert_eq!(cam.lens, LensParams::PINHOLE);
     }
 }
