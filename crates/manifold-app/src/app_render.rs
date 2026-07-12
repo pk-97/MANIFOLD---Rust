@@ -3268,23 +3268,28 @@ impl Application {
             }
             self.ui_profile.add("update_repaint_upload", seg.elapsed());
             self.present_all_windows(front);
-            if let (Some(fence), Some(gpu)) = (&self.ui_frame_fence, &self.gpu) {
-                fence.commit_frame(&gpu.device);
-            }
             let g0 = std::time::Instant::now();
             self.present_graph_editor_window();
             self.ui_profile.add("present_graph_editor", g0.elapsed());
+            // Frame-fence sentinel must be the LAST commit of the frame's UI
+            // encoders: the graph-editor window shares UIRenderer's vertex
+            // rings, so a sentinel committed before it would mark slots
+            // retired while that encoder is still in flight.
+            if let (Some(fence), Some(gpu)) = (&self.ui_frame_fence, &self.gpu) {
+                fence.commit_frame(&gpu.device);
+            }
         }
         #[cfg(not(target_os = "macos"))]
         {
             self.ui_profile.add("update_repaint_upload", seg.elapsed());
             self.present_all_windows(0);
-            if let (Some(fence), Some(gpu)) = (&self.ui_frame_fence, &self.gpu) {
-                fence.commit_frame(&gpu.device);
-            }
             let g0 = std::time::Instant::now();
             self.present_graph_editor_window();
             self.ui_profile.add("present_graph_editor", g0.elapsed());
+            // Frame-fence sentinel: see the macos branch comment above.
+            if let (Some(fence), Some(gpu)) = (&self.ui_frame_fence, &self.gpu) {
+                fence.commit_frame(&gpu.device);
+            }
         }
 
         let display_hz = self
