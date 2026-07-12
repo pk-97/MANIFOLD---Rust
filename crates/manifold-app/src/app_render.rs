@@ -3974,47 +3974,37 @@ impl Application {
                 self.ws.surface_resized_this_frame = false;
                 return;
             }
-            let drawable = {
-                let ws = match self.window_registry.get_mut(&window_id) {
-                    Some(ws) => ws,
-                    None => return,
-                };
-                let surface = match ws.surface.as_ref() {
-                    Some(s) => s,
-                    None => return,
-                };
-                match surface.next_drawable() {
-                    Some(d) => d,
-                    None => return,
-                }
-            };
-            self.ui_profile
-                .add("present.fast_next_drawable", pseg.elapsed());
-            pseg = std::time::Instant::now();
-            let drawable_tex = drawable.gpu_texture(manifold_gpu::GpuTextureFormat::Bgra8Unorm);
-            if let (Some(blit_p), Some(blit_s)) = (&self.blit_pipeline, &self.blit_sampler) {
-                let mut enc = gpu.device.create_encoder("Re-present");
-                enc.draw_fullscreen(
-                    blit_p,
-                    &drawable_tex,
-                    &[
-                        manifold_gpu::GpuBinding::Texture {
-                            binding: 0,
-                            texture: offscreen,
-                        },
-                        manifold_gpu::GpuBinding::Sampler {
-                            binding: 1,
-                            sampler: blit_s,
-                        },
-                    ],
-                    false,
-                    true,
-                    "Offscreen → Drawable",
+            self.represent_cached_offscreen(window_id, &mut pseg);
+            return;
+        }
+
+        // ── Admission control: the offscreen DOES need a redraw, but the
+        // GPU is badly behind on retiring already-encoded UI work. Encoding
+        // yet another frame's ring-owner passes (layer bitmap, clip content/
+        // thumb, UI renderer) would just mean more `guard_slot` callers
+        // blocking mid-encode for up to `WAIT_TIMEOUT` — up to 50ms of UI
+        // stall — once the ring wraps into an unretired slot. Skip this
+        // redraw instead: re-present the still-valid cached offscreen (same
+        // pixels as last frame) and leave `offscreen_dirty` set so the
+        // pending redraw runs the moment the GPU catches up. Gated on the
+        // resize/size checks above already having passed (surface not mid-
+        // resize, offscreen dims match) so this never re-presents a stale-
+        // sized frame.
+        if let Some(lag) = self
+            .ui_frame_fence
+            .as_ref()
+            .map(|f| f.lag())
+            .filter(|&lag| lag > 3)
+        {
+            self.ui_frame_fence_skip_events += 1;
+            let n = self.ui_frame_fence_skip_events;
+            if n <= 3 || n.is_multiple_of(256) {
+                log::info!(
+                    "[frame-fence] UI redraw skipped, GPU {lag} frames behind — \
+                     re-presenting cached frame"
                 );
-                enc.present_drawable(&drawable);
-                enc.commit();
             }
-            self.ui_profile.add("present.fast_blit_present", pseg.elapsed());
+            self.represent_cached_offscreen(window_id, &mut pseg);
             return;
         }
         self.ws.offscreen_dirty = false;
@@ -4597,6 +4587,64 @@ impl Application {
                 }
             }
         }
+    }
+
+    /// Re-blit the cached offscreen onto a fresh drawable and present it,
+    /// without touching `offscreen_dirty`. Shared by two callers in
+    /// `present_all_windows`: the steady-state fast path (nothing changed —
+    /// clears `offscreen_dirty` itself, which is already false) and
+    /// admission control (something *did* change, but the GPU is too far
+    /// behind to encode a new frame this tick — leaves `offscreen_dirty`
+    /// set so the pending redraw runs once the backlog clears). Both
+    /// present the identical cached pixels; only whether the redraw is
+    /// considered "done" differs, so the callers own that bookkeeping, not
+    /// this helper.
+    fn represent_cached_offscreen(&mut self, window_id: winit::window::WindowId, pseg: &mut std::time::Instant) {
+        let Some(gpu) = &self.gpu else { return };
+        let Some(offscreen) = self.ws.ui_offscreen.as_ref() else {
+            return;
+        };
+        let drawable = {
+            let ws = match self.window_registry.get_mut(&window_id) {
+                Some(ws) => ws,
+                None => return,
+            };
+            let surface = match ws.surface.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
+            match surface.next_drawable() {
+                Some(d) => d,
+                None => return,
+            }
+        };
+        self.ui_profile
+            .add("present.fast_next_drawable", pseg.elapsed());
+        *pseg = std::time::Instant::now();
+        let drawable_tex = drawable.gpu_texture(manifold_gpu::GpuTextureFormat::Bgra8Unorm);
+        if let (Some(blit_p), Some(blit_s)) = (&self.blit_pipeline, &self.blit_sampler) {
+            let mut enc = gpu.device.create_encoder("Re-present");
+            enc.draw_fullscreen(
+                blit_p,
+                &drawable_tex,
+                &[
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 0,
+                        texture: offscreen,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 1,
+                        sampler: blit_s,
+                    },
+                ],
+                false,
+                true,
+                "Offscreen → Drawable",
+            );
+            enc.present_drawable(&drawable);
+            enc.commit();
+        }
+        self.ui_profile.add("present.fast_blit_present", pseg.elapsed());
     }
 }
 

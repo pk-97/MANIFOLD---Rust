@@ -11,6 +11,11 @@
 //! Frame numbers start at 1; `0` is reserved as the "never used" sentinel
 //! and is always considered completed (a ring slot that has never been
 //! claimed has nothing to wait for).
+//!
+//! `lag()` is primarily consumed by UI-thread admission control (skip a
+//! redraw and re-present the cached offscreen instead of encoding new ring
+//! work when the GPU is badly behind) — `guard_slot`'s blocking wait is the
+//! backstop for whatever admission control lets through.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -60,6 +65,14 @@ impl FrameFence {
     /// `is_completed`/`wait_for`, which read the same counter atomically.
     pub fn completed_frame(&self) -> u64 {
         self.completed.load(Ordering::SeqCst)
+    }
+
+    /// How many frames of encoded-but-not-yet-retired GPU work are
+    /// outstanding. Used by admission control to decide whether to skip a
+    /// UI redraw rather than let ring owners stall mid-encode.
+    pub fn lag(&self) -> u64 {
+        self.current_frame()
+            .saturating_sub(self.completed_frame())
     }
 
     /// Block (via short sleeps, not a busy spin) until `frame` is
@@ -213,5 +226,25 @@ mod tests {
         let mut wait_events = 0u64;
         fence.guard_slot("Test", 0, &mut stamp, &mut wait_events);
         assert_eq!(stamp, next);
+    }
+
+    #[test]
+    fn lag_is_zero_when_nothing_encoded() {
+        let fence = FrameFence::new();
+        assert_eq!(fence.lag(), 0);
+    }
+
+    #[test]
+    fn lag_reflects_outstanding_encoded_frames() {
+        let fence = FrameFence::new();
+        fence.advance();
+        fence.advance();
+        fence.advance();
+        assert_eq!(fence.current_frame(), 3);
+        assert_eq!(fence.lag(), 3);
+        fence.mark_completed_for_test(2);
+        assert_eq!(fence.lag(), 1);
+        fence.mark_completed_for_test(3);
+        assert_eq!(fence.lag(), 0);
     }
 }
