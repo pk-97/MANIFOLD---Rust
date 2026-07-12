@@ -169,9 +169,11 @@ struct RenderSceneUniforms {
     /// normal_map/roughness_map/metallic_map inputs per object yet.
     texture_flags: [f32; 4],
     alpha_params: [f32; 4],
-    /// `(light_count, ambient, 0, 0)`. `light_count` is the sole source of
-    /// truth for how many `@binding(8)` entries the shader reads — NOT
-    /// `arrayLength` (D1).
+    /// `(light_count, ambient, exposure_ev, 0)`. `light_count` is the sole
+    /// source of truth for how many `@binding(8)` entries the shader reads —
+    /// NOT `arrayLength` (D1). `exposure_ev` (CAMERA_AND_LENS_DESIGN.md §2
+    /// D5, was zero-padded until P2) is the camera's `lens.exposure_ev` —
+    /// the shader multiplies its final straight rgb by `exp2(exposure_ev)`.
     scene_params: [f32; 4],
     /// Atmosphere (P3): fog colour (rgb; a reserved). Scene-wide — the same
     /// values are copied into every object's uniform.
@@ -692,7 +694,11 @@ fn build_uniforms(
             0.0,
             0.0,
         ],
-        scene_params: [light_count, material.ambient, 0.0, 0.0],
+        // z = exposure_ev (CAMERA_AND_LENS_DESIGN.md §2 D5) — the fragment
+        // shaders multiply their final straight rgb by exp2(scene_params.z).
+        // Every builder defaults `cam.lens` to `LensParams::PINHOLE`
+        // (exposure_ev = 0.0), so an unwired lens is byte-identical (I2/I5).
+        scene_params: [light_count, material.ambient, cam.lens.exposure_ev, 0.0],
         fog_color: atmosphere.fog_color,
         fog_params: [atmosphere.fog_density, atmosphere.height_falloff, 0.0, 0.0],
         ambient_tint: atmosphere.ambient_tint,

@@ -33,10 +33,51 @@ pub enum CameraMode {
     Orthographic { half_height: f32 },
 }
 
+/// Physical lens parameters rewritten by `node.camera_lens`
+/// (`docs/CAMERA_AND_LENS_DESIGN.md` §2 D4) — the one writer of this block.
+/// Rides the `Camera` struct so every consumer (DoF, motion blur, exposure)
+/// reads the same lens instead of duplicating four params each.
+///
+/// This struct is CPU-only wire data, same as `Camera` itself — never
+/// serialized (`Camera` is "wire data, never serialized" per the design's
+/// §1 audit). `node.camera_lens`'s own PARAMS (which back these fields when
+/// unwired) ARE serialized like any param, which is why that primitive's
+/// `f_stop` param default is a large finite sentinel rather than literally
+/// `f32::INFINITY` — `serde_json` silently encodes non-finite floats as
+/// JSON `null` and then fails to decode `null` back into an `f32` on load,
+/// which would round-trip-corrupt any saved project (verified empirically,
+/// not assumed). `LensParams::PINHOLE` itself, being a Rust const on a
+/// never-serialized wire struct, is unaffected and keeps the literal
+/// `f32::INFINITY` the design commits to.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LensParams {
+    /// World units along `fwd`; `<= 0` means hyperfocal/neutral (no focus
+    /// plane to rack toward).
+    pub focus_distance: f32,
+    /// Aperture N (f-number). `f32::INFINITY` = pinhole (depth of field off).
+    pub f_stop: f32,
+    /// Degrees, `0..=360`. `0` = no motion blur.
+    pub shutter_angle: f32,
+    /// Stops. `0` = neutral (scene rgb × `2^exposure_ev`).
+    pub exposure_ev: f32,
+}
+
+impl LensParams {
+    /// Neutral lens: no DoF, no motion blur, no exposure shift. Every
+    /// existing camera builder in this file sets `lens: LensParams::PINHOLE`
+    /// so shipped graphs render byte-identically to pre-lens builds (I2).
+    pub const PINHOLE: Self = Self {
+        focus_distance: 0.0,
+        f_stop: f32::INFINITY,
+        shutter_angle: 0.0,
+        exposure_ev: 0.0,
+    };
+}
+
 /// Camera struct flowing through `PortType::Camera` wires.
 ///
 /// Built once per frame in `node.orbit_camera::run()` (or future camera
-/// sources), passed by value to every downstream consumer. ~96 bytes —
+/// sources), passed by value to every downstream consumer. ~112 bytes —
 /// trivially cheap to clone per wire per frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Camera {
@@ -57,6 +98,10 @@ pub struct Camera {
     /// Precomputed right-handed view matrix (world → camera-space).
     /// View doesn't depend on aspect, so it's cached here.
     pub view: [[f32; 4]; 4],
+    /// Physical lens (focus/aperture/shutter/exposure). Every builder below
+    /// sets `LensParams::PINHOLE` — `node.camera_lens` is the only writer
+    /// that changes it (`docs/CAMERA_AND_LENS_DESIGN.md` §2 D4).
+    pub lens: LensParams,
 }
 
 impl Camera {
@@ -83,6 +128,7 @@ impl Camera {
             far,
             mode: CameraMode::Perspective { fov_y },
             view,
+            lens: LensParams::PINHOLE,
         }
     }
 
@@ -136,6 +182,7 @@ impl Camera {
             far,
             mode: CameraMode::Perspective { fov_y },
             view,
+            lens: LensParams::PINHOLE,
         }
     }
 
@@ -192,6 +239,7 @@ impl Camera {
             far,
             mode: CameraMode::Perspective { fov_y },
             view,
+            lens: LensParams::PINHOLE,
         }
     }
 
@@ -219,6 +267,7 @@ impl Camera {
             far,
             mode: CameraMode::Perspective { fov_y },
             view,
+            lens: LensParams::PINHOLE,
         }
     }
 
@@ -513,5 +562,39 @@ mod tests {
         // Ortho-specific signature: [3][3] (perspective stores -1 there for
         // perspective divide, ortho stores 1.0)
         assert!((ortho[2][3] - 0.0).abs() < 1e-5);
+    }
+
+    // ===== LensParams (CAMERA_AND_LENS_DESIGN.md §2 D4, P2) =====
+
+    #[test]
+    fn pinhole_lens_is_neutral_per_committed_field_semantics() {
+        let p = LensParams::PINHOLE;
+        assert!(p.focus_distance <= 0.0, "focus_distance should be <= 0 (neutral)");
+        assert!(p.f_stop.is_infinite() && p.f_stop > 0.0, "f_stop should be +infinity (pinhole)");
+        assert_eq!(p.shutter_angle, 0.0, "shutter_angle should be 0 (no motion blur)");
+        assert_eq!(p.exposure_ev, 0.0, "exposure_ev should be 0 (neutral)");
+    }
+
+    #[test]
+    fn default_perspective_lens_defaults_to_pinhole() {
+        assert_eq!(Camera::default_perspective().lens, LensParams::PINHOLE);
+    }
+
+    #[test]
+    fn orbit_perspective_lens_defaults_to_pinhole() {
+        let cam = Camera::orbit_perspective(0.7, 0.3, 4.0, 0.9, 0.0, 0.0, 0.05, 200.0);
+        assert_eq!(cam.lens, LensParams::PINHOLE);
+    }
+
+    #[test]
+    fn from_pos_euler_lens_defaults_to_pinhole() {
+        let cam = Camera::from_pos_euler([1.0, 2.0, 3.0], 0.0, 0.0, 0.0, 0.9, 0.05, 200.0);
+        assert_eq!(cam.lens, LensParams::PINHOLE);
+    }
+
+    #[test]
+    fn look_at_lens_defaults_to_pinhole() {
+        let cam = Camera::look_at([1.0, 2.0, 3.0], [-4.0, 0.5, 2.0], [0.0, 1.0, 0.0], 1.0, 0.1, 100.0);
+        assert_eq!(cam.lens, LensParams::PINHOLE);
     }
 }
