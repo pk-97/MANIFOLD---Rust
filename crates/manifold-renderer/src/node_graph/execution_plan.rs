@@ -431,6 +431,22 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             // construction — the largest dim in the chain and we
             // can't compute max(canvas, explicit) at compile time.
             // Otherwise, max of the explicit input dims.
+            // Producer-declared canvas-relative scale, queried up
+            // front: an explicit declaration ("my output is a canvas
+            // fraction") beats the implicit max-of-input-dims
+            // heuristic below. Rasterizers (render_scene /
+            // render_*_mesh) declare (1, 1): their texture inputs
+            // (envmap, base-color maps) are scene resources whose
+            // dims say nothing about the render target — before this
+            // priority flip, the import graph's render_scene color
+            // inherited the envmap's fixed 1024², rendering the scene
+            // square and stretching it to canvas (BUG-140).
+            let declared_scale = if output_port.ty.is_texture_2d() {
+                inst.node
+                    .output_canvas_scale(output_port.name.as_ref(), &inst.params)
+            } else {
+                None
+            };
             let dims = if output_port.ty.is_texture_2d() {
                 // CANVAS dims aren't known at compile time. We pass
                 // a sentinel (0, 0) here — primitives that need the
@@ -440,7 +456,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
                 inst.node
                     .output_dims(output_port.name.as_ref(), (0, 0), &input_dims_scratch, &inst.params)
                     .or_else(|| {
-                        if any_canvas_input {
+                        if declared_scale.is_some() || any_canvas_input {
                             // Propagate canvas: any None input means
                             // we can't be sure max is below canvas,
                             // so leave dims = None for the executor
@@ -478,8 +494,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             let canvas_scale = if output_port.ty.is_texture_2d()
                 && dims.is_none()
             {
-                inst.node
-                    .output_canvas_scale(output_port.name.as_ref(), &inst.params)
+                declared_scale
                     .or_else(|| {
                         // Only propagate when ALL wired inputs are
                         // canvas-scaled (none canvas-default, none

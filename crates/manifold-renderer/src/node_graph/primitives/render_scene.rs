@@ -876,6 +876,20 @@ impl EffectNode for RenderScene {
         &RENDER_SCENE_OUTPUTS
     }
 
+    /// A rasterizer's outputs are screen-space: always canvas-sized.
+    /// Its texture INPUTS (envmap, per-object base-color maps) are scene
+    /// resources whose dims say nothing about the render target — without
+    /// this declaration the plan's max-of-input-dims default sized `color`
+    /// to the envmap's fixed 1024², so the scene rendered square and was
+    /// stretched to canvas by the next node (BUG-140).
+    fn output_canvas_scale(
+        &self,
+        _port: &str,
+        _params: &crate::node_graph::effect_node::ParamValues,
+    ) -> Option<(u32, u32)> {
+        Some((1, 1))
+    }
+
     /// `depth` is `R32Float` (GBUFFER_DESIGN.md §2 D2 — raw device depth,
     /// not linearized: consumers linearize via the shared `depth.wgsl`
     /// helper, D4). `velocity` is `Rg16Float` (§2 D5 — NDC-space `(dx,
