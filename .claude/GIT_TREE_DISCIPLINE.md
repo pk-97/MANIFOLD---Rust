@@ -125,6 +125,14 @@ origin main` (allow + reminder present); `merge <branch>` while on main
   reflow and design-doc status lines land in the same merge as the code. The
   post-merge housekeeper on main is a backstop, not the workflow — its
   remedies are worktree-shaped, never in-place edits to main.
+- **Supersession sweep (part of the gate when a landing completes/supersedes
+  a design phase, bug, or named plan):** update the design doc status header
+  and the backlog `**Status:` line, then `rg` the plan's name AND its stage
+  labels across `docs/` and the memory directory and fix or tombstone every
+  hit still asserting the old state. Supersession under a different name is
+  the known killer (PRESET_INSTANCE_COLLAPSE absorbed BINDING_UNIFICATION's
+  "B+/B++/C" 2026-06-07; the stale memories cost two Fable sessions a month
+  later). Full rule: CLAUDE.md hard rules.
 - **Twin-killer 1:** never cherry-pick or re-commit content that already
   exists as commits on a live branch — merge the branch so SHAs stay shared.
   The one sanctioned exception: landing the final content of a branch that
