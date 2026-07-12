@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 234 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 235 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -61,7 +61,7 @@ _Generated from the node registry. Do not hand-edit. 234 nodes registered, group
 | Saturation | `node.saturation` | Filter | Pulls colours toward grey or pushes them more vivid. |
 | Tone Map | `node.tone_map` | Filter | Fits HDR content, where colours can run far brighter than pure white, onto whatever display you are sending to. On a normal SDR screen or export it rolls the b… |
 
-### Blur & Sharpen (6)
+### Blur & Sharpen (7)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -69,6 +69,7 @@ _Generated from the node registry. Do not hand-edit. 234 nodes registered, group
 | Blur (3D) | `node.blur_3d` | Filter | Blurs a 3D volume one axis at a time, softening a density or flow field. Run it on each axis for an even blur in all directions. |
 | Custom Convolution | `node.custom_convolution` | Filter | Runs a custom 3x3 kernel over the image, so you can build your own blur, sharpen, edge-detect, or emboss from nine weights. For when the preset filters don't d… |
 | Gaussian Blur | `node.gaussian_blur` | Filter | A single-axis Gaussian blur. Pair a horizontal pass with a vertical one for an even, soft blur in all directions. |
+| Motion Blur | `node.motion_blur` | Filter | Smears each pixel along its own screen-space motion, scaled by the camera's shutter angle — the classic filmic motion-blur look, driven by real per-object move… |
 | Sharpen | `node.sharpen` | Filter | Sharpens the image by boosting the difference between each pixel and its neighbours. At 0 it passes through, higher values make edges crisper. |
 | Variable Blur | `node.variable_blur` | Filter | A Gaussian blur whose strength changes per pixel from a control image, so some areas blur more than others. Feed a mask or depth map into the width input for s… |
 
@@ -374,7 +375,7 @@ _Generated from the node registry. Do not hand-edit. 234 nodes registered, group
 | `BlossomWire` | Blossom Wire | generator | Geometry | 11 |
 | `Breathe` | Breathe | generator | Geometry | 3 |
 | `ChromaticAberration` | Chromatic Aberration | effect | Filmic | 5 |
-| `CinematicScene` | Cinematic Scene | generator | Geometry | 5 |
+| `CinematicScene` | Cinematic Scene | generator | Geometry | 6 |
 | `ColorCompass` | Color Compass | effect | Spatial | 2 |
 | `ColorGrade` | Color Grade | effect | Color | 9 |
 | `ConcentricTunnel` | Concentric Tunnel | generator | Pattern | 6 |
