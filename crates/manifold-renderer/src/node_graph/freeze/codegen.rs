@@ -227,6 +227,7 @@ pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
         P::INPUTS,
         P::PARAMS,
         P::INPUT_ACCESS,
+        P::DERIVED_UNIFORMS,
         P::OUTPUTS,
         P::STENCIL_FETCH,
     )
@@ -285,9 +286,19 @@ pub fn generate_standalone(
     inputs: &[NodeInput],
     params: &[ParamDef],
     input_access: &[InputAccess],
+    derived_uniforms: &[&str],
     outputs: &[NodeOutput],
 ) -> Result<String, CodegenError> {
-    generate_standalone_ext(fusion_kind, body, inputs, params, input_access, outputs, false)
+    generate_standalone_ext(
+        fusion_kind,
+        body,
+        inputs,
+        params,
+        input_access,
+        derived_uniforms,
+        outputs,
+        false,
+    )
 }
 
 /// [`generate_standalone`] with the STENCIL-FETCH body ABI flag. When
@@ -305,6 +316,7 @@ pub fn generate_standalone_ext(
     inputs: &[NodeInput],
     params: &[ParamDef],
     input_access: &[InputAccess],
+    derived_uniforms: &[&str],
     outputs: &[NodeOutput],
     stencil_fetch: bool,
 ) -> Result<String, CodegenError> {
@@ -319,10 +331,13 @@ pub fn generate_standalone_ext(
     // storage array. Texture atoms are unaffected (no Array output).
     if outputs.iter().any(|o| matches!(o.ty, PortType::Array(_))) {
         // Direct callers of generate_standalone (texture-path tests) carry no
-        // derived uniforms / atomic outputs; standalone_for_spec routes buffer
-        // atoms with their DERIVED_UNIFORMS / ATOMIC_OUTPUTS before reaching here.
+        // atomic outputs; standalone_for_spec routes buffer atoms with their
+        // ATOMIC_OUTPUTS before reaching here. `derived_uniforms` DOES thread
+        // through — a buffer atom reached via this generic entry point (e.g. the
+        // classify final-gate parse-check in region.rs) still needs its derived
+        // fields to generate the same Params layout its real dispatch will use.
         return generate_standalone_buffer(
-            body, inputs, params, input_access, &[], &[], outputs, &[],
+            body, inputs, params, input_access, derived_uniforms, &[], outputs, &[],
         );
     }
     let tex_inputs: Vec<&NodeInput> = inputs.iter().filter(|i| is_texture_input(i)).collect();
@@ -377,9 +392,13 @@ pub fn generate_standalone_ext(
     // so its textures start at binding 0 — matching the hand shader, which has no
     // uniform either. The body simply takes no param args (the param loop below
     // is empty). A uniform is also needed when there are injected flags (multi-
-    // output write flags or optional-input use flags) even if there are no params.
-    let has_uniform =
-        !params.is_empty() || multi_output || !optional_tex_inputs.is_empty();
+    // output write flags or optional-input use flags) or derived fields (a
+    // camera-consuming atom with no user params still needs the uniform for its
+    // frame-derived values) even if there are no params.
+    let has_uniform = !params.is_empty()
+        || multi_output
+        || !optional_tex_inputs.is_empty()
+        || !derived_uniforms.is_empty();
 
     let mut out = String::new();
 
@@ -412,6 +431,24 @@ pub fn generate_standalone_ext(
                 writeln!(out, "    {f}: {ty},").unwrap();
             }
             header_words += param_word_count(p)?;
+        }
+        // Injected non-param derived fields (frame-derived values recomputed by
+        // the atom's run() each frame from a CPU-struct input, e.g. a Camera's
+        // basis vectors) — placed right after the scalar params, mirroring the
+        // buffer path's layout (generate_standalone_buffer). Same naming/packing
+        // convention: "name" defaults to f32, "name:ty" is an explicit scalar
+        // type, "name:vec3" expands to three consecutive f32 fields.
+        for d in derived_uniforms {
+            let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
+            if dty == "vec3" {
+                writeln!(out, "    {dname}_x: f32,").unwrap();
+                writeln!(out, "    {dname}_y: f32,").unwrap();
+                writeln!(out, "    {dname}_z: f32,").unwrap();
+                header_words += 3;
+            } else {
+                writeln!(out, "    {dname}: {dty},").unwrap();
+                header_words += 1;
+            }
         }
         for t in &table_params {
             writeln!(out, "    {}_count: u32,", t.name).unwrap();
@@ -564,14 +601,18 @@ pub fn generate_standalone_ext(
             InputAccess::Gather | InputAccess::GatherTexel | InputAccess::BufferGather => {}
         }
     }
-    // body(<per-input args>, uv, dims, params.<p0>, ...). Each input contributes:
-    // a Coincident/CoincidentTexel input → its pre-read colour register `c_<name>`;
-    // a Gather input → the texture handle `tex_<name>` + the shared `samp`, which
-    // the body samples at a coord it computes. `uv` (normalized center-of-texel)
-    // and `dims` (float canvas size) are the ambient fragment context every body
-    // receives after its inputs (design §slot / line 60, extended with dims so
-    // positional atoms recover aspect = dims.x/dims.y and pixel = uv*dims). Atoms
-    // that ignore an arg simply don't read it — spirv-opt's DCE drops it.
+    // body(<per-input args>, uv, dims, params.<p0>, ..., <derived fields>,
+    // <table count/array pairs>, <optional-input use-flags>). Each input
+    // contributes: a Coincident/CoincidentTexel input → its pre-read colour
+    // register `c_<name>`; a Gather input → the texture handle `tex_<name>` +
+    // the shared `samp`, which the body samples at a coord it computes. `uv`
+    // (normalized center-of-texel) and `dims` (float canvas size) are the
+    // ambient fragment context every body receives after its inputs (design
+    // §slot / line 60, extended with dims so positional atoms recover aspect =
+    // dims.x/dims.y and pixel = uv*dims). Derived fields (frame-recomputed
+    // CPU-struct data, e.g. a Camera's basis vectors) follow the user params,
+    // mirroring the buffer path's layout. Atoms that ignore an arg simply
+    // don't read it — spirv-opt's DCE drops it.
     let mut args: Vec<String> = Vec::new();
     for (i, inp) in tex_inputs.iter().enumerate() {
         match access_of(i) {
@@ -600,8 +641,9 @@ pub fn generate_standalone_ext(
     }
     args.push("uv".to_string());
     args.push(forms.dims_arg.to_string());
-    // Scalar params first (PARAMS order; Vec3 reassembled), then each table as
-    // (count, array) — matching the body signature `…, <t>_count, <t>` per table.
+    // Scalar params first (PARAMS order; Vec3 reassembled), then the derived
+    // fields (matching the struct layout above), then each table as (count,
+    // array) — matching the body signature `…, <t>_count, <t>` per table.
     for p in params {
         if p.ty == ParamType::Table {
             continue;
@@ -611,6 +653,16 @@ pub fn generate_standalone_ext(
             args.push(format!("vec3<f32>(params.{f}_x, params.{f}_y, params.{f}_z)"));
         } else {
             args.push(format!("params.{f}"));
+        }
+    }
+    for d in derived_uniforms {
+        let (dname, dty) = d.split_once(':').unwrap_or((d, "f32"));
+        if dty == "vec3" {
+            args.push(format!(
+                "vec3<f32>(params.{dname}_x, params.{dname}_y, params.{dname}_z)"
+            ));
+        } else {
+            args.push(format!("params.{dname}"));
         }
     }
     for t in &table_params {
@@ -2519,6 +2571,90 @@ mod dispatch_contract_tests {
             "dim_forms D3 workgroup drifted from VOLUME_WORKGROUP_3D"
         );
     }
+
+    /// CINEMATIC_POST P0 (D7, standalone layer): the TEXTURE codegen path now
+    /// accepts `derived_uniforms` exactly like the buffer path
+    /// (`generate_standalone_buffer`, see its own field-emission block) — a
+    /// scalar defaults to `f32`, a `"name:vec3"` entry expands to three
+    /// consecutive f32 fields, and both are appended to the Params struct AFTER
+    /// the user's scalar params (so a future Camera-consuming texture atom like
+    /// `coc_from_depth` (P1, not this phase) can declare `derived_uniforms:
+    /// ["cam_pos:vec3"]` the same way `scatter_particles_camera` /
+    /// `flatten_to_camera_plane` already do on the buffer path). This is a
+    /// synthetic 0-texture-input (Source) atom — no registered primitive
+    /// exercises this path yet — proving the mechanism, not a new node.
+    #[test]
+    fn generate_standalone_ext_threads_derived_uniforms_after_params() {
+        use crate::node_graph::parameters::ParamValue;
+        use crate::node_graph::ports::PortKind;
+        use std::borrow::Cow;
+
+        let outputs = [NodeOutput {
+            name: Cow::Borrowed("out"),
+            ty: PortType::Texture2D,
+            kind: PortKind::Output,
+            required: false,
+        }];
+        let params = [ParamDef {
+            name: Cow::Borrowed("gain"),
+            label: "Gain",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 4.0)),
+            enum_values: &[],
+        }];
+        // Body signature order matches the wrapper's arg-building order for a
+        // 0-texture-input Source atom: uv, dims, <scalar params...>, <derived
+        // fields...>. `foo` (bare name) → f32; `cam_pos:vec3` → vec3<f32>.
+        let body = "fn body(uv: vec2<f32>, dims: vec2<f32>, gain: f32, foo: f32, cam_pos: vec3<f32>) -> vec4<f32> {\n    return vec4<f32>(gain + foo + cam_pos.x, cam_pos.y, cam_pos.z, 1.0);\n}";
+
+        let generated = generate_standalone_ext(
+            FusionKind::Source,
+            body,
+            &[],
+            &params,
+            &[],
+            &["foo", "cam_pos:vec3"],
+            &outputs,
+            false,
+        )
+        .expect("synthetic source atom with derived uniforms generates");
+
+        assert!(
+            naga::front::wgsl::parse_str(&generated).is_ok(),
+            "generated kernel must parse through naga:\n{generated}"
+        );
+
+        // Exact Params struct: gain (the user param) first, then the derived
+        // fields in declaration order (foo scalar, then cam_pos's 3 f32 words),
+        // then padding to the next 16-byte (4-word) multiple. 1 + 1 + 3 = 5
+        // words → 3 padding words, so this also proves the word-count/padding
+        // arithmetic accounts for derived fields, not just user params.
+        let expected_params_struct = "struct Params {\n    \
+            gain: f32,\n    \
+            foo: f32,\n    \
+            cam_pos_x: f32,\n    \
+            cam_pos_y: f32,\n    \
+            cam_pos_z: f32,\n    \
+            _pad0: u32,\n    \
+            _pad1: u32,\n    \
+            _pad2: u32,\n\
+            }\n";
+        assert!(
+            generated.contains(expected_params_struct),
+            "Params struct must place derived fields after params, then pad 5 words to 8:\n{generated}"
+        );
+
+        // The body call threads the derived fields as its trailing args, in the
+        // same order, with the vec3 reassembled from its three packed words.
+        assert!(
+            generated.contains(
+                "let result = body(uv, vec2<f32>(dims), params.gain, params.foo, \
+                 vec3<f32>(params.cam_pos_x, params.cam_pos_y, params.cam_pos_z));"
+            ),
+            "body call must pass derived fields after params, vec3 reassembled:\n{generated}"
+        );
+    }
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -2662,8 +2798,8 @@ mod gpu_tests {
     fn generated_wgsl_is_deterministic() {
         let g = Gain::new();
         let body = g.wgsl_body().unwrap();
-        let a = generate_standalone(g.fusion_kind(), body, g.inputs(), g.parameters(), g.input_access(), g.outputs()).unwrap();
-        let b = generate_standalone(g.fusion_kind(), body, g.inputs(), g.parameters(), g.input_access(), g.outputs()).unwrap();
+        let a = generate_standalone(g.fusion_kind(), body, g.inputs(), g.parameters(), g.input_access(), g.derived_uniforms(), g.outputs()).unwrap();
+        let b = generate_standalone(g.fusion_kind(), body, g.inputs(), g.parameters(), g.input_access(), g.derived_uniforms(), g.outputs()).unwrap();
         assert_eq!(a, b, "codegen must be deterministic");
         assert!(a.contains("fn cs_main"), "must emit the cs_main entry");
         assert!(!a.contains("cs_main_"), "no symbol may have cs_main as a prefix");
@@ -3166,6 +3302,7 @@ mod gpu_tests {
             g.inputs(),
             g.parameters(),
             g.input_access(),
+            g.derived_uniforms(),
             g.outputs(),
         )
         .expect("gain generates");
@@ -3250,6 +3387,7 @@ mod gpu_tests {
                 node.inputs(),
                 node.parameters(),
                 node.input_access(),
+                node.derived_uniforms(),
                 node.outputs(),
             )
             .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
@@ -3448,6 +3586,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("mix generates");
@@ -3493,6 +3632,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("vignette generates");
@@ -3589,6 +3729,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("dither generates");
@@ -3694,6 +3835,7 @@ mod gpu_tests {
                 node.inputs(),
                 node.parameters(),
                 node.input_access(),
+                node.derived_uniforms(),
                 node.outputs(),
             )
             .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
@@ -3775,6 +3917,7 @@ mod gpu_tests {
                 node.inputs(),
                 node.parameters(),
                 node.input_access(),
+                node.derived_uniforms(),
                 node.outputs(),
             )
             .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
@@ -3840,6 +3983,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("abs_texture generates");
@@ -3896,6 +4040,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("remap generates");
@@ -4010,6 +4155,7 @@ mod gpu_tests {
                 node.inputs(),
                 node.parameters(),
                 node.input_access(),
+                node.derived_uniforms(),
                 node.outputs(),
             )
             .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
@@ -4096,6 +4242,7 @@ mod gpu_tests {
                 node.inputs(),
                 node.parameters(),
                 node.input_access(),
+                node.derived_uniforms(),
                 node.outputs(),
             )
             .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
@@ -4149,6 +4296,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
             node.stencil_fetch(),
         )
@@ -4232,6 +4380,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("basic_shape generates");
@@ -4313,6 +4462,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("gradient_ramp generates");
@@ -4392,6 +4542,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("downsample generates");
@@ -4463,6 +4614,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
             node.stencil_fetch(),
         )
@@ -4553,6 +4705,7 @@ mod gpu_tests {
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("blur_3d generates");
@@ -4719,6 +4872,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("gradient_central_diff_3d generates");
@@ -4802,6 +4956,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("curl_slope_force_3d generates");
@@ -4908,6 +5063,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
                 node.inputs(),
                 node.parameters(),
                 node.input_access(),
+                node.derived_uniforms(),
                 node.outputs(),
             )
             .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));
@@ -4937,6 +5093,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("rotate_vec2 generates");
@@ -4983,6 +5140,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("hash_field_by_seed generates");
@@ -5055,6 +5213,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("pack_channels generates");
@@ -5124,6 +5283,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("trig_texture generates");
@@ -5199,6 +5359,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("block_displace_field generates");
@@ -5256,6 +5417,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("lic_integrate generates");
@@ -5301,6 +5463,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("sample_volume_2d generates");
@@ -5412,6 +5575,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             node.inputs(),
             node.parameters(),
             node.input_access(),
+            node.derived_uniforms(),
             node.outputs(),
         )
         .expect("voronoi_2d generates");
@@ -5588,6 +5752,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
                 node.inputs(),
                 node.parameters(),
                 node.input_access(),
+                node.derived_uniforms(),
                 node.outputs(),
             )
             .unwrap_or_else(|e| panic!("{type_id} generate: {e:?}"));

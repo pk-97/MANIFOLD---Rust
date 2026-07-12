@@ -1711,6 +1711,7 @@ impl FusionFragment {
             &self.inputs,
             &self.params,
             &[],
+            &[],
             OUT,
         )
         .map_err(|e| format!("{e:?}"))

@@ -1127,6 +1127,7 @@ fn classify_node(
         n.inputs(),
         n.parameters(),
         n.input_access(),
+        n.derived_uniforms(),
         n.outputs(),
         n.stencil_fetch(),
     );
