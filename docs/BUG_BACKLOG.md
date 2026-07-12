@@ -50,6 +50,9 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-138 | **variable-blur-fixed-tap-count-blocky-at-large-coc-radius** | `node.variable_blur`'s Gaussian kernel is a fixed 9/17/25 taps, but tap *spacing* scales directly with the per-pixel CoC (`step_size = center_coc * max_radius + 1.0`, `gaussian_blur_variable_width_body.wgsl:77`) — at a large blur radius (e.g. `CinematicScene`'s DoF Blur Radius=64) the fixed tap count spans a wide area with real gaps between samples, so large-CoC areas look like discrete rings, not a smooth blur. Fix shape: P4's `node.bokeh_gather` (true 32-tap 2D disc gather, already designed) likely fixes this; alternatively scale tap count with radius. LOW-MED visual, CINEMATIC_POST. |
+| BUG-137 | **variable-blur-no-coc-dilation-hard-cutoff-at-depth-edges** | `node.variable_blur` picks its sample radius from *only the center pixel's own* CoC (same line as BUG-138) — there's no dilation/max-CoC pre-pass, so a blurred pixel never borrows a wider radius from a neighboring high-CoC pixel and a sharp pixel never gets bled into by an adjacent blurred one. At any depth discontinuity (an in-focus subject's silhouette against a blurred background) this produces a hard seam instead of a soft blend — "the blur looks applied to a plane." Confirmed `CinematicScene` runs `weighting_mode: 0` (plain), so the CoC-comparison step function isn't even in play; the hard edge is purely the missing dilation. Fix shape: add a CoC-dilation atom (spread max nearby CoC outward ~1 tile before the blur passes, the standard industry trick) — new primitive, needs a short design decision (own atom vs folded into `coc_from_depth`) before a build session, same shape as the P5 GTAO note. MED visual, CINEMATIC_POST. |
+| BUG-136 | **cinematic-post-motion-blur-no-visible-effect-despite-correct-wiring** | Peter (`SceneLadders.manifold`, glb auto-import wiring): orbiting the camera with `lens.shutter_angle=181` and `motion_blur.max_blur_px=128` shows no visible blur. Statically verified correct — not yet observed at runtime: the graph wiring is right (`camera` → `lens` → `render`, `lens.out` also feeds `motion_blur.camera`, `render.velocity` → `motion_blur.velocity`, `motion_blur` sits last before `final`, confirmed via `project.json`/`wires`), and `render_scene.rs`'s `prev_view_proj` frame-to-frame diff (the velocity source) only resets on a structural rebuild (`rebuild()`, object/light count change), not on an ordinary param edit like dragging Orbit — so camera-orbit motion should register. Root cause UNKNOWN pending runtime observation. Suspects: (a) the UI param-edit path may not be live-propagating slider drags into the running content-thread graph in real time (the codebase's known `ui-state-sync-path` bug class); (b) `node.motion_blur`'s fused-vs-standalone codegen routing may be silently mis-selecting a stale/pass-through kernel, same failure family as BUG-135's fused `wgsl_includes` gap; (c) the render loop may not be ticking continuously while scrubbing outside playback, collapsing `prev`/`current` camera state to the same value per redraw. Fix shape: reproduce live, add temporary `println!`s in `render_scene.rs`'s velocity computation and `motion_blur`'s `evaluate()`/derived-uniform recompute to confirm both are seeing nonzero values at runtime, then narrow. MED-HIGH — a shipped P3 feature with no observable effect. |
 | BUG-134 | **bug-status-py-tail-boundary-hides-entries-past-the-appendix** | `bug_status.py`'s `parse()` stops entry-scanning at the first `## ` heading past `## Fixed` (the "Checked and safe" appendix) and copies the rest of the file verbatim — any `### BUG-NNN` entry appended after that point (BUG-094/095/096/097/103/126, this session) is invisible to `--check`. Concretely hid a real duplicate `BUG-097` id (one FIXED, one OPEN) and a `derive_status()` false positive (`\bFIXED\b` matches inside "found not fixed" — BUG-126). Fix shape: continue the entry scan across every appendix heading, or make an entry-outside-Open/Fixed a hard check failure; separately tighten the FIXED regex to exclude a preceding not/never. LOW (tooling only). |
 | BUG-133 | **video-extension-list-overpromises-webm-avi** | `metadata::SUPPORTED_EXTENSIONS` includes `.webm`/`.avi` but the decoder is AVFoundation, which generally can't open them — import accepts the file, failure surfaces later as a per-clip decode error instead of at the import gate. Fix shape: trim the list to what AVFoundation decodes, or probe at import and reject with a message. LOW. |
 | BUG-132 | **video-decode-nearest-neighbor-scaling** | The NV12→RGBA convert shader samples with `read()` at a truncated coordinate — nearest-neighbor — while also doing the aspect-fit scale, so any source whose resolution ≠ canvas is scaled unfiltered (blocky upscale, shimmering downscale). Fix shape: bilinear tap in the shader (sample Y/CbCr with a linear sampler or manual 4-tap). LOW-MED visual. |
@@ -1422,6 +1425,80 @@ Same bug class as the migration killed for the primary controls.
 **Fix shape** — carry `LayerId` in the `Context*Layer` family (thread it from
 `LayerHeaderRightClicked` through the menu items) and switch `TextInputField::LayerName` to
 `LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
+
+### BUG-136 — CINEMATIC_POST motion blur has no visible effect despite correct wiring — MED-HIGH
+**Status:** OPEN
+
+**Symptom** — Peter, live in `SceneLadders.manifold` (glb auto-import's physical-camera/
+cinematic-post wiring): with `lens.shutter_angle = 181.05` and `motion_blur.max_blur_px = 128`,
+orbiting the camera produces no visible motion blur.
+
+**Verified correct, NOT the cause** — the graph wiring itself, read directly from the saved
+project (`project.json`'s `wires` array): `camera` (`node.orbit_camera`) → `lens`
+(`node.camera_lens`) → `render` (`node.render_scene`); `lens.out` also feeds
+`motion_blur.camera` directly (so `motion_blur` reads the same lens-modified Camera, not a
+bypassed one); `render.velocity` → `motion_blur.velocity`; `motion_blur` sits last in the chain
+before `final`. Also confirmed the velocity source itself: `render_scene.rs`'s `prev_view_proj`
+frame-to-frame diff (`render_scene.rs:1010-1011`) is only reset by `rebuild()` (object/light count
+change, `render_scene.rs:456`), never by an ordinary param edit — so camera-orbit motion should
+register as nonzero velocity independent of whether it's playback- or slider-driven.
+
+**Root cause — UNKNOWN, needs runtime observation** (static/code-read verification stops here;
+this needs the render observed live, not just re-derived). Suspects, not yet ruled out:
+1. The UI param-edit path may not be live-propagating a dragged slider into the running
+   content-thread graph on every frame (the codebase's known `ui-state-sync-path` bug class —
+   see the memory of the same name).
+2. `node.motion_blur`'s fused-vs-standalone codegen routing may be silently selecting a
+   stale/pass-through kernel — same failure family as BUG-135's fused `wgsl_includes` gap,
+   unconfirmed whether `motion_blur` is affected.
+3. The render loop may not tick continuously while scrubbing a slider outside of active
+   playback, collapsing `prev_view_proj`/current into the same value on each redraw.
+
+**Fix shape** — reproduce live in the running app with the exact `SceneLadders.manifold` values
+above; add temporary `println!`/`eprintln!` in `render_scene.rs`'s velocity fragment output and
+in `node.motion_blur`'s `evaluate()`/derived-uniform recompute path to confirm both are actually
+seeing nonzero `shutter_angle` and nonzero velocity per frame at runtime; narrow from whichever
+one is flat when it shouldn't be.
+
+### BUG-137 — `node.variable_blur` has no CoC dilation; hard cutoff at depth discontinuities — MED (CINEMATIC_POST DoF)
+**Status:** OPEN
+
+**Root cause** — `node.variable_blur` picks its per-pixel gather radius from *only the center
+pixel's own* CoC (`step_size = center_coc * max_radius + 1.0`,
+`gaussian_blur_variable_width_body.wgsl:77`). There is no dilation / max-CoC pre-pass, so a
+heavily-blurred pixel never borrows a wider radius from a neighboring high-CoC pixel, and a sharp
+pixel is never bled into by an adjacent blurred one. At any depth discontinuity — the silhouette
+of an in-focus subject against a blurred background, or vice versa — this produces a hard seam
+right at the edge instead of a soft transition. Peter's description: "like the blur is applied to
+a plane." Confirmed `CinematicScene` runs `weighting_mode: 0` (plain averaging, every neighbor
+weighted equally) — the CoC-comparison step function (`coc_weight()`, same file) isn't even
+active in the shipped preset, so the hard edge is purely the missing dilation, not the weighting
+mode.
+
+**Fix shape** — add a CoC-dilation atom: spread the maximum CoC found in a small neighborhood
+(e.g. one tile) outward before the two `variable_blur` passes consume it — the standard technique
+used by most real-time DoF implementations to get soft depth-edge blending from an otherwise
+naive per-pixel-radius gather. New primitive, `Gather`-family input access, CPU-reference
+testable like every other atom this wave. Needs a short scoping decision (a standalone atom vs.
+folding the dilation into `coc_from_depth` itself) before a build session — same shape as the P5
+GTAO follow-up already noted in `CINEMATIC_POST_DESIGN.md`.
+
+### BUG-138 — `node.variable_blur` fixed tap count looks blocky at large CoC radius — LOW-MED (CINEMATIC_POST DoF)
+**Status:** OPEN
+
+**Root cause** — the Gaussian kernel is a fixed 9/17/25 taps (`QUALITY_LEVEL` specialization,
+`gaussian_blur_variable_width_body.wgsl`), but tap *spacing* scales directly with the per-pixel
+CoC radius (same `step_size` line as BUG-137). At a large blur radius — e.g. `CinematicScene`'s
+`DoF Blur Radius` card at 64px — the fixed tap count spreads across a wide span with visible gaps
+between the actual samples, so heavily out-of-focus areas render as discrete rings rather than a
+smooth blur, instead of the graceful falloff a real lens produces.
+
+**Fix shape** — P4 (`node.bokeh_gather`, already designed in `CINEMATIC_POST_DESIGN.md` D5, a
+true 32-tap 2D disc gather rather than a sparse separable 9/17/25-tap kernel) will likely reduce
+this substantially just by construction, though it hasn't been built or verified against this
+specific symptom. It will NOT fix BUG-137's dilation/bleeding gap on its own — that's a separate
+mechanism. If P4 alone doesn't resolve the blockiness, the fallback is scaling tap count with
+radius rather than holding it fixed.
 
 ## Fixed
 
