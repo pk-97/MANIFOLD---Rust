@@ -1,6 +1,6 @@
 # Cinematic Post — DoF, SSAO, motion blur as graph atoms
 
-**Status:** IN PROGRESS · 2026-07-12 · Fable 5 · **P0 SHIPPED 2026-07-12 (D7/I6, both layers, `docs/landings/2026-07-12-cinematic-post-batch-a.md`) — derived uniforms are first-class on the texture codegen path AND in fused regions. P1–P4 not built.**
+**Status:** IN PROGRESS · 2026-07-12 · Sonnet 5 · **P0 SHIPPED 2026-07-12 (D7/I6, both layers, `docs/landings/2026-07-12-cinematic-post-batch-a.md`) — derived uniforms are first-class on the texture codegen path AND in fused regions. P1+P2 SHIPPED 2026-07-12 (`docs/landings/2026-07-12-cinematic-post-batch-b.md`) — `node.coc_from_depth` + DoF slice, `node.ssao_from_depth` + SSAO arm, both wired into the `CinematicScene` preset. P3–P4 not built.**
 **Prerequisites:** P0 (this doc, D7) before P1–P4; CAMERA_AND_LENS P1+P2 and GBUFFER P1 before this P1/P2; GBUFFER P2 before this P3.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 **Companions:** [CAMERA_AND_LENS_DESIGN.md](CAMERA_AND_LENS_DESIGN.md) (`LensParams` on the Camera wire; the CPU oracle) · [GBUFFER_DESIGN.md](GBUFFER_DESIGN.md) (the depth/velocity inputs; the shared linearize helper) · [RENDERING_INFRA_V2_DESIGN.md](RENDERING_INFRA_V2_DESIGN.md) (direction: pillar 2, "our 2D graph system already excels here; the missing inputs are per-pixel depth and motion vectors") · [docs/ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) (authoring contract; the codegen-path rule every atom here satisfies)
@@ -278,7 +278,10 @@ gpu_tests; workspace sweep at landing.
   `docs/FREEZE_COMPILER_MAP.md` §4/§5/§9 (+ a §7 cross-reference) updated
   to the new sourcing model in the same landing. Demo: none — compiler
   phase, the proofs are the demo.
-- **P1 — `coc_from_depth` + DoF slice of `CinematicScene`** (one session).
+- **P1 — `coc_from_depth` + DoF slice of `CinematicScene`** — SHIPPED
+  2026-07-12 (`docs/landings/2026-07-12-cinematic-post-batch-b.md`; `focus_distance`/`f_stop`
+  read entirely via derived_uniforms from the Camera's lens block, no port-shadowed
+  overrides on the atom itself — cards bind to `camera_lens` directly). (one session).
   Entry: P0 landed (both layers) + CAMERA P2 + GBUFFER P1 landed (verify:
   `rg 'LensParams'` hits camera.rs; `rg 'linearize_depth'` hits shared
   header; `rg 'DERIVED_UNIFORMS' crates/manifold-renderer/src/node_graph/freeze/codegen.rs`
@@ -291,7 +294,10 @@ gpu_tests; workspace sweep at landing.
   (cluster no-PNG rule). Performer gesture: `focus_distance` bound to a slow LFO — the
   rack-focus breathe; the gate exercises the binding path by driving the
   card param and asserting the CoC buffer changes accordingly.
-- **P2 — `ssao_from_depth` + SSAO arm** (one session). Entry: GBUFFER P1.
+- **P2 — `ssao_from_depth` + SSAO arm** — SHIPPED 2026-07-12
+  (`docs/landings/2026-07-12-cinematic-post-batch-b.md`; `radius`/`intensity`/`bias`
+  are ordinary atom params, not port-shadowed — D3 doesn't call for it and the
+  preset cards bind directly). (one session). Entry: GBUFFER P1.
   Deliverables: atom per D3 (Gather), CPU reference, synthetic-ramp parity
   (I1), analytic sanity unit test (flat plane → occlusion 0 everywhere
   except bias tolerance), preset arm + `ssao_intensity`/`ssao_radius`
