@@ -44,8 +44,11 @@ struct Vertex {
 };
 
 // Superset uniform, rebuilt once per object per draw call. 16-byte
-// aligned throughout (two mat4x4s + nine vec4s — every member is already
-// a vec4/mat4 multiple, so no manual padding is needed). Total 272 bytes.
+// aligned throughout — every member is already a vec4/mat4 multiple, so no
+// manual padding is needed. Total 448 bytes (four mat4x4s + twelve vec4s;
+// stale as "272"/"320" in older comments — grew with the P3 atmosphere
+// fields and the P2 prev_view_proj/prev_model pair; `RenderSceneUniforms`'s
+// `size_of` assert in render_scene.rs is the authoritative check).
 // Lights are NO LONGER in here: they live in the `@binding(8)` storage
 // buffer below (a scene can carry any number of lights, not the old 4).
 struct Uniforms {
@@ -89,6 +92,18 @@ struct Uniforms {
     fog_params: vec4<f32>,
     // rgb: ambient/sky tint multiplier on the ambient term (1,1,1 = neutral).
     ambient_tint: vec4<f32>,
+    // GBUFFER_DESIGN.md §2 D5 (P2): previous-frame scene view_proj and this
+    // object's previous-frame model matrix — inputs to the EMIT_VELOCITY
+    // pipeline variant's vs_main (clip_prev = prev_view_proj * prev_model *
+    // position). Always present, ONE Uniforms layout shared by both the
+    // velocity-on and velocity-off pipeline variants; the velocity-off
+    // fragment/vertex code (the unmodified base file below) simply never
+    // reads them. render_scene.rs seeds prev_model/prev_view_proj = this
+    // frame's own model/view_proj on the very first evaluate() call (no
+    // history yet), so first-frame velocity is exactly zero, not
+    // approximately — see RenderScene::evaluate.
+    prev_view_proj: mat4x4<f32>,
+    prev_model: mat4x4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -383,11 +398,28 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32) -> f32 {
     return pcf_average(slot, suv, ref_depth, texel, i32(khw_raw));
 }
 
+// GBUFFER_DESIGN.md §2 D5, P2: the EMIT_VELOCITY pipeline variant's
+// FsOut struct is text-substituted in here (replacing this comment) so
+// fs_unlit/fs_phong/fs_pbr/fs_cel can return a second MRT output
+// (`@location(1) velocity`) alongside `color`. Inert (a no-op comment) in
+// the base/velocity-off compile — GBUFFER_FSOUT_VELOCITY_STRUCT is the
+// substitution marker `render_scene.rs` targets.
+// GBUFFER_FSOUT_VELOCITY_STRUCT
+
 struct VsOut {
     @builtin(position) clip_pos: vec4<f32>,
     @location(0) world_pos: vec3<f32>,
     @location(1) world_normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
+    // GBUFFER_DESIGN.md §2 D5, P2: EMIT_VELOCITY substitutes
+    // `@location(3) clip_now: vec4<f32>, @location(4) clip_prev: vec4<f32>,`
+    // here — the CURRENT and PREVIOUS clip-space positions, carried as
+    // plain (perspective-correctly interpolated) varyings rather than
+    // reusing `@builtin(position)` (whose fragment-stage value is already
+    // viewport-transformed with `w` replaced by `1/w_clip` — not usable
+    // for the NDC divide the velocity fragment code needs). Inert comment
+    // in the velocity-off compile.
+    // GBUFFER_VSOUT_VELOCITY_FIELDS
 };
 
 // Instance TRS applies FIRST, the object group's `model` (transform_n)
@@ -410,6 +442,17 @@ fn vs_main(
     let world = u.model * vec4<f32>(inst_pos, 1.0);
     out.world_pos = world.xyz;
     out.clip_pos = u.view_proj * world;
+    // GBUFFER_DESIGN.md §2 D5, P2: EMIT_VELOCITY substitutes
+    // `out.clip_now = out.clip_pos; let prev_world = u.prev_model *
+    // vec4<f32>(inst_pos, 1.0); out.clip_prev = u.prev_view_proj *
+    // prev_world;` here — reusing THIS frame's `inst_pos` (there is no
+    // previous-frame instance buffer to diff against), so only the
+    // object group's rigid `model_n` motion is captured; a moving
+    // instance array (e.g. scatter_on_mesh re-scattering per frame)
+    // contributes no per-instance velocity, the same documented v1
+    // rigid-only-motion limitation D5 states for deform atoms. Inert
+    // comment in the velocity-off compile.
+    // GBUFFER_VS_VELOCITY_BODY
     out.world_normal = normalize((u.model * vec4<f32>(inst_normal, 0.0)).xyz);
     out.uv = v.uv;
     return out;

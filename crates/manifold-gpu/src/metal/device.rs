@@ -1074,6 +1074,7 @@ impl GpuDevice {
             blend,
             sample_count,
             false,
+            None,
             label,
         )
     }
@@ -1106,6 +1107,51 @@ impl GpuDevice {
             blend,
             sample_count,
             alpha_to_coverage,
+            None,
+            label,
+        )
+    }
+
+    /// [`Self::create_render_pipeline_depth_msaa`]'s specialized-plus-MRT
+    /// superset (`docs/GBUFFER_DESIGN.md` §2 D5, P2): text-substitutes
+    /// `specializations` into `wgsl_source` before compiling (the same
+    /// "function constant" mechanism as [`Self::create_specialized_render_pipeline`]
+    /// — a single WGSL template compiled into distinct pipeline variants,
+    /// never a second shader file), and — when `aux_color_format` is
+    /// `Some` — declares a second color attachment (index 1) at that pixel
+    /// format so the fragment can write an extra MRT output (e.g.
+    /// velocity). `aux_color_format: None` reproduces exactly
+    /// [`Self::create_render_pipeline_depth_msaa`]'s single-attachment
+    /// pipeline, just from substituted source.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_specialized_render_pipeline_depth_msaa(
+        &self,
+        wgsl_source: &str,
+        vs_entry: &str,
+        fs_entry: &str,
+        specializations: &[(&str, &str)],
+        color_format: GpuTextureFormat,
+        depth_format: GpuTextureFormat,
+        blend: Option<GpuBlendState>,
+        sample_count: u32,
+        alpha_to_coverage: bool,
+        aux_color_format: Option<GpuTextureFormat>,
+        label: &str,
+    ) -> GpuRenderPipeline {
+        let mut source = wgsl_source.to_string();
+        for &(pattern, replacement) in specializations {
+            source = source.replace(pattern, replacement);
+        }
+        self.create_render_pipeline_depth_inner(
+            &source,
+            vs_entry,
+            fs_entry,
+            color_format,
+            depth_format,
+            blend,
+            sample_count,
+            alpha_to_coverage,
+            aux_color_format,
             label,
         )
     }
@@ -1121,6 +1167,7 @@ impl GpuDevice {
         blend: Option<GpuBlendState>,
         sample_count: u32,
         alpha_to_coverage: bool,
+        aux_color_format: Option<GpuTextureFormat>,
         label: &str,
     ) -> GpuRenderPipeline {
         let base_hash = archive::render_pipeline_hash(wgsl_source, vs_entry, fs_entry);
@@ -1131,6 +1178,7 @@ impl GpuDevice {
             sample_count.hash(&mut h);
             depth_format.hash(&mut h);
             alpha_to_coverage.hash(&mut h);
+            aux_color_format.hash(&mut h);
             "depth".hash(&mut h);
             h.finish()
         };
@@ -1227,6 +1275,19 @@ impl GpuDevice {
                 color_attach.setSourceAlphaBlendFactor(to_mtl_blend_factor(blend.src_alpha_factor));
                 color_attach
                     .setDestinationAlphaBlendFactor(to_mtl_blend_factor(blend.dst_alpha_factor));
+            }
+        }
+
+        // Optional MRT aux attachment (index 1) — `docs/GBUFFER_DESIGN.md`
+        // §2 D3/D5, P2's velocity output. `None` leaves attachment 1 at the
+        // descriptor's default (`PixelFormatInvalid` = unused), reproducing
+        // exactly today's single-color-attachment pipeline. No blending —
+        // velocity (and any future aux MRT use) writes raw values, not a
+        // compositing blend.
+        if let Some(aux_fmt) = aux_color_format {
+            let aux_attach = unsafe { desc.colorAttachments().objectAtIndexedSubscript(1) };
+            unsafe {
+                aux_attach.setPixelFormat(to_mtl_pixel_format(aux_fmt));
             }
         }
 

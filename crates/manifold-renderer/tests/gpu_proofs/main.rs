@@ -25,6 +25,7 @@ mod camera_conformance;
 mod film_grain_decorrelation;
 mod fragment_storage;
 mod gbuffer_depth;
+mod gbuffer_velocity;
 mod render_scene_exposure;
 mod render_scene_fog;
 mod render_scene_instances;
