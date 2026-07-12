@@ -217,6 +217,12 @@ mod tone_map;
 mod torus_wrap_field;
 mod triangulate_grid;
 mod tube_from_path;
+// D7/P0 I6 test fixture only (docs/CINEMATIC_POST_DESIGN.md) — the whole file
+// is `#![cfg(test)]`, never registered outside test builds. `pub(crate)` so
+// `freeze::proof`'s I6 test can construct it directly (it is deliberately
+// NOT in the global inventory-backed registry — see the module doc comment).
+#[cfg(test)]
+pub(crate) mod test_camera_pointwise_fixture;
 mod twist_mesh;
 mod trigger_ease_to;
 mod trigger_gate;

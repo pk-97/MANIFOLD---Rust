@@ -73,6 +73,15 @@ crate::primitive! {
     derived_uniforms: ["dt_scaled"],
 }
 
+// D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): per-frame recompute for a FUSED
+// region's `dt_scaled` field. Matches `run()`'s own computation below exactly.
+inventory::submit! {
+    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+        type_id: "node.move_particles_3d",
+        recompute: |ctx| Some(vec![ctx.frame.delta.0 as f32 * 60.0]),
+    }
+}
+
 impl Primitive for EulerStepParticles3D {
     fn array_output_capacity(
         &self,

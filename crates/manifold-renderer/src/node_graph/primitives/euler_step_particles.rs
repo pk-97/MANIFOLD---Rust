@@ -76,6 +76,18 @@ crate::primitive! {
     derived_uniforms: ["dt_scaled"],
 }
 
+// D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): registers this atom's per-frame
+// recompute for the `dt_scaled` derived uniform, so a FUSED region containing
+// this atom can refresh the field every frame (`node.wgsl_compute::evaluate`)
+// instead of the deleted install-time `system.generator_input` control wire.
+// Matches `run()`'s own `dt_scaled` computation below exactly.
+inventory::submit! {
+    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+        type_id: "node.move_particles",
+        recompute: |ctx| Some(vec![ctx.frame.delta.0 as f32 * 60.0]),
+    }
+}
+
 impl Primitive for EulerStepParticles {
     fn array_output_capacity(
         &self,

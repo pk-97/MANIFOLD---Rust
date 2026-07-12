@@ -1044,10 +1044,34 @@ fn classify_node(
         .filter(|p| param_wgsl_type(p).is_ok())
         .map(|p| p.name.as_ref())
         .collect();
+    // D7/P0 exemption (`docs/CINEMATIC_POST_DESIGN.md`): a wire into a
+    // CPU-struct (Camera) port no longer cuts, PROVIDED the atom consumes that
+    // struct entirely via `derived_uniforms()` — never as a GPU binding (already
+    // true by construction: `is_texture_port` excludes `PortType::Camera`, so a
+    // Camera port was never a texture/buffer binding). The predicate is
+    // therefore: the wire's target port is Camera-typed AND the atom declares a
+    // non-empty `derived_uniforms()` list. A Camera port on an atom with NO
+    // derived_uniforms (a complex 3D renderer reading the whole matrix inline,
+    // not expressible as a handful of recomputed scalar fields) is not exempted
+    // — it still cuts, same as any other non-texture non-param wire. Install
+    // routes the exempted wire's producer onto the fused node's synthesized
+    // `camera_ext_N` port (`freeze/install.rs`); the fused kernel recomputes the
+    // member's derived fields every frame via
+    // `derived_uniform_registry::recompute` (`primitives/wgsl_compute.rs`).
+    let camera_ports: AHashSet<&str> = if n.derived_uniforms().is_empty() {
+        AHashSet::default()
+    } else {
+        n.inputs()
+            .iter()
+            .filter(|i| i.ty == PortType::Camera)
+            .map(|i| i.name.as_ref())
+            .collect()
+    };
     for w in &def.wires {
         if w.to_node == node.id
             && !tex_ports.contains(w.to_port.as_str())
             && !scalar_params.contains(w.to_port.as_str())
+            && !camera_ports.contains(w.to_port.as_str())
         {
             return NodeClass::Boundary;
         }
@@ -1240,17 +1264,20 @@ fn classify_buffer_node(
         return NodeClass::Boundary;
     }
     // Frame-derived-uniform integrators (euler_step's dt_scaled, the forces'
-    // frame_count) FUSE: the fused buffer codegen emits each derived uniform as an
-    // `n{i}_<name>` Params field + body arg, and the install pass wires it from
-    // system.generator_input (frame_delta / frame_count / time) — the same
-    // wired-frame-value mechanism scatter's width/height use. The in-place-loop
-    // hazard (fusing a region inside array_feedback's in==out loop) is handled at
-    // the install/region level: `region_output_aliases_external` +
-    // `external_is_inplace_loop` detect a feedback-loop region and the codegen
+    // frame_count, flatten_to_camera_plane's cam_fwd_x/_y/_z) FUSE: the fused
+    // buffer codegen emits each derived uniform as an `n{i}_<name>` Params field
+    // + body arg, and `node.wgsl_compute` recomputes its VALUE every frame via
+    // `derived_uniform_registry::recompute` (D7/P0 — the install-time
+    // `system.generator_input` control-wire whitelist this comment used to
+    // describe is deleted; see `docs/CINEMATIC_POST_DESIGN.md` D7). The
+    // in-place-loop hazard (fusing a region inside array_feedback's in==out
+    // loop) is handled at the install/region level: `region_output_aliases_external`
+    // + `external_is_inplace_loop` detect a feedback-loop region and the codegen
     // writes back to the aliased `src_k` buffer in place, preserving the loop. So
-    // this per-node gate no longer excludes derived-uniform atoms; the install bails
-    // to unfused only if it can't source a derived uniform (no generator_input, or a
-    // vec3 camera basis). Proven by `fluidsim_buffer_fusion_renders_like_unfused`.
+    // this per-node gate no longer excludes derived-uniform atoms; install bails
+    // to unfused only if a member's `type_id` has no registered recompute
+    // (`derived_uniform_registry::has_recompute`). Proven by
+    // `fluidsim_buffer_fusion_renders_like_unfused`.
     //
     // Atomic-accumulator outputs (scatter) write via `atomicAdd`, not a coincident
     // element write — boundary.
@@ -1275,10 +1302,29 @@ fn classify_buffer_node(
         .filter(|p| param_wgsl_type(p).is_ok())
         .map(|p| p.name.as_ref())
         .collect();
+    // D7/P0 exemption — same predicate as `classify_node`'s texture-domain wire
+    // gate above: a wire into a Camera-typed port no longer cuts, provided the
+    // atom declares a non-empty `derived_uniforms()` (consumes the struct
+    // entirely via recomputed scalar fields, never a GPU binding). This is what
+    // lets `node.flatten_to_camera_plane` — a real, shipped buffer atom already
+    // declaring `derived_uniforms: ["cam_fwd_x", "cam_fwd_y", "cam_fwd_z"]` and
+    // `fusion_kind: Pointwise` in anticipation of exactly this fix — actually
+    // fuse with a pointwise neighbour instead of being permanently stuck at
+    // Boundary by this gate.
+    let camera_ports: AHashSet<&str> = if n.derived_uniforms().is_empty() {
+        AHashSet::default()
+    } else {
+        n.inputs()
+            .iter()
+            .filter(|i| i.ty == PortType::Camera)
+            .map(|i| i.name.as_ref())
+            .collect()
+    };
     for w in &def.wires {
         if w.to_node == node.id
             && !arr_ports.contains(w.to_port.as_str())
             && !scalar_params.contains(w.to_port.as_str())
+            && !camera_ports.contains(w.to_port.as_str())
         {
             return NodeClass::Boundary;
         }

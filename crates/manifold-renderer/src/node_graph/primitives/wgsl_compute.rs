@@ -180,6 +180,13 @@ pub struct WgslCompute {
     /// integrators, which dispatch only live particles. The kernel carries the
     /// matching in-bounds guard, so this is purely a perf cap.
     dispatch_count_param: Option<String>,
+    /// `// @derived_uniform_member:` markers (D7/P0), resolved against the
+    /// uniform layout: one per fused member with non-empty `derived_uniforms`.
+    /// `evaluate()` refreshes each frame via `derived_uniform_registry::recompute`
+    /// instead of the generic port-shadow pack. Empty for every kernel this
+    /// phase doesn't touch (a hand-authored kernel, a fragment, an ordinary
+    /// fused region with no derived-uniform member) — behaviour unchanged.
+    derived_uniform_members: Vec<DerivedUniformMember>,
     /// `true` when the source carries a `// @pure` marker: the author asserts
     /// the kernel's output depends only on its params + wired inputs (no time,
     /// no frame counter, no carried state), so the executor's memoizer may
@@ -318,6 +325,28 @@ enum UniformMemberType {
     Bool,
 }
 
+/// A resolved `// @derived_uniform_member:` marker (D7/P0,
+/// `docs/CINEMATIC_POST_DESIGN.md`): the contiguous uniform-field block
+/// `[offset, offset + words*4)` a fused member's `derived_uniforms()` occupies,
+/// and how to refresh it every frame. `evaluate()` (a) SKIPS this byte range in
+/// the generic port-shadow pack loop (these fields are never wired/bound — the
+/// whole point is they're recomputed, not read from a param/wire) and (b)
+/// separately calls `derived_uniform_registry::recompute(type_id, ctx)` and
+/// writes the returned values into the range, in order.
+#[derive(Clone, Debug)]
+struct DerivedUniformMember {
+    /// Byte offset of the block's first field in the packed uniform buffer.
+    offset: u32,
+    /// Consecutive f32 words (== struct fields, a vec3 already expanded to 3
+    /// named fields by codegen) the block spans.
+    words: u32,
+    /// The member's original primitive `type_id` — the recompute registry key.
+    type_id: String,
+    /// `camera_ext_N` port name to read for this member's recompute, if its
+    /// derived uniforms are sourced from a wired Camera external.
+    camera_port: Option<String>,
+}
+
 impl UniformMemberType {
     fn write_to(self, dst: &mut [u8], value: &ParamValue) {
         // `ParamValue::Int` was collapsed into `Float` in the storage
@@ -382,6 +411,7 @@ impl WgslCompute {
             source_pure: false,
             last_reset_trigger: None,
             dispatch_count_param: None,
+            derived_uniform_members: Vec::new(),
             pipeline: None,
             sampler: None,
             compiled_hash: None,
@@ -478,6 +508,7 @@ impl WgslCompute {
         self.reset_gated = parsed.reset_gated;
         self.source_pure = parsed.source_pure;
         self.dispatch_count_param = parsed.dispatch_count_param;
+        self.derived_uniform_members = parsed.derived_uniform_members;
         // A new source invalidates every baked variant (different kernel, different
         // value-keys). Drop them and the stability tracker so specialization
         // re-derives from the new kernel.
@@ -606,6 +637,9 @@ struct ParsedShader {
     /// Uniform member names tagged `// @static_param:` by the freeze install —
     /// the param fields eligible to bake into a specialized `const` variant.
     static_param_fields: Vec<String>,
+    /// Resolved `// @derived_uniform_member:` markers (D7/P0). See
+    /// [`DerivedUniformMember`].
+    derived_uniform_members: Vec<DerivedUniformMember>,
 }
 
 /// The synthetic input port a `// @reset_gated` kernel exposes to receive its
@@ -674,6 +708,11 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
     // `// @dispatch_count_param: <field>`: the named uniform param caps the
     // array dispatch grid at the live element count (fused buffer codegen).
     let dispatch_count_param = extract_dispatch_count_param(source);
+    // D7/P0: `// @camera_external:` / `// @derived_uniform_member:` markers —
+    // see `emit_derived_uniform_markers` in `freeze/codegen.rs` for what emits
+    // them and the resolution block below for what consumes them.
+    let camera_externals = extract_camera_externals(source);
+    let raw_derived_markers = extract_derived_uniform_markers(source);
 
     let mut inputs: Vec<NodeInput> = Vec::new();
     let mut outputs: Vec<NodeOutput> = Vec::new();
@@ -951,6 +990,56 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
         default_dispatch_port = first_array_out;
     }
 
+    // D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): resolve each raw
+    // `// @derived_uniform_member:` marker against the uniform layout's field
+    // offsets (now known), then EXCLUDE that member's fields from the generic
+    // port-shadow/param set built above — these fields are never wired/bound by
+    // a user; `node.wgsl_compute` recomputes them itself every frame (see
+    // `evaluate()`). A marker naming a field this kernel doesn't actually have
+    // is ignored defensively (never panics — codegen is trusted, but a hand-
+    // edited kernel with a stray marker degrades to "field stays a normal
+    // param" rather than crashing introspection).
+    let mut derived_uniform_members: Vec<DerivedUniformMember> = Vec::new();
+    if !raw_derived_markers.is_empty()
+        && let Some(layout) = &uniform_layout
+    {
+        let mut excluded: AHashSet<String> = AHashSet::default();
+        for m in &raw_derived_markers {
+            let Some(start) = layout.members.iter().position(|f| f.name == m.first_field) else {
+                continue;
+            };
+            for f in layout.members.iter().skip(start).take(m.words as usize) {
+                excluded.insert(f.name.clone());
+            }
+            derived_uniform_members.push(DerivedUniformMember {
+                offset: layout.members[start].offset,
+                words: m.words,
+                type_id: m.type_id.clone(),
+                camera_port: m.camera_port.clone(),
+            });
+        }
+        if !excluded.is_empty() {
+            params.retain(|p| !excluded.contains(p.name.as_ref()));
+            inputs.retain(|i| !excluded.contains(i.name.as_ref()));
+        }
+    }
+
+    // D7/P0: each `// @camera_external:` marker synthesizes a DECLARED,
+    // non-introspected Camera-typed input port. Camera has no WGSL
+    // representation (unlike every texture/storage/uniform binding above), so
+    // this is the only way a CPU-struct external reaches a fused node whose
+    // entire persisted shape is its WGSL text.
+    for name in &camera_externals {
+        if !inputs.iter().any(|p| p.name == name.as_str()) {
+            inputs.push(NodePort {
+                name: Cow::Owned(name.clone()),
+                ty: PortType::Camera,
+                kind: PortKind::Input,
+                required: true,
+            });
+        }
+    }
+
     // A `// @reset_gated` kernel gains a synthetic optional `reset_trigger` input
     // (an f32 the caller wires from a clip-trigger count). Skip if the shader
     // already declares a same-named member, so there's never a double port.
@@ -978,6 +1067,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
         source_pure,
         dispatch_count_param,
         static_param_fields: extract_static_params(source),
+        derived_uniform_members,
     })
 }
 
@@ -1485,6 +1575,71 @@ fn extract_dispatch_count_param(source: &str) -> Option<String> {
     None
 }
 
+/// Scan for `// @camera_external: <name>` markers (emitted by the fused-region
+/// codegen — `emit_derived_uniform_markers` in `freeze/codegen.rs`, one per
+/// distinct Camera external the region routes). Each names a DECLARED,
+/// non-introspected Camera-typed input port to synthesize: Camera has no WGSL
+/// representation, so unlike every other port kind this one can't be discovered
+/// from a binding — the marker is the only channel (D7/P0,
+/// `docs/CINEMATIC_POST_DESIGN.md`). Order preserved, deduped.
+fn extract_camera_externals(source: &str) -> Vec<String> {
+    let stripped = strip_block_comments(source);
+    let mut names = Vec::new();
+    for line in stripped.lines() {
+        if let (_, Some(c)) = split_line_comment(line)
+            && let Some(rest) = c.trim().strip_prefix("@camera_external:")
+        {
+            let name = rest.trim();
+            if !name.is_empty() && !names.iter().any(|n| n == name) {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names
+}
+
+/// One `// @derived_uniform_member: <first_field> words=<n> <type_id>
+/// [<camera_port>]` marker, parsed but not yet resolved against the uniform
+/// layout (that happens in [`introspect`], once `parse_uniform` has field
+/// offsets). `first_field` is the exact name of the first uniform-struct field
+/// in this member's derived-uniform block (`n{i}_dt_scaled`, `n{i}_cam_fwd_x`,
+/// …); `words` is how many CONSECUTIVE fields (== f32 values, a vec3 already
+/// expanded to 3 named fields by codegen) the block spans.
+struct RawDerivedUniformMarker {
+    first_field: String,
+    words: u32,
+    type_id: String,
+    camera_port: Option<String>,
+}
+
+/// Scan for `// @derived_uniform_member:` markers (emitted by
+/// `emit_derived_uniform_markers`, one per fused-region member with non-empty
+/// `derived_uniforms`). Format: `<first_field> words=<n> <type_id>`, optionally
+/// followed by a `camera_ext_N` port name when the member's recompute needs a
+/// Camera external.
+fn extract_derived_uniform_markers(source: &str) -> Vec<RawDerivedUniformMarker> {
+    let stripped = strip_block_comments(source);
+    let mut markers = Vec::new();
+    for line in stripped.lines() {
+        let Some((_, Some(c))) = Some(split_line_comment(line)) else { continue };
+        let Some(rest) = c.trim().strip_prefix("@derived_uniform_member:") else { continue };
+        let mut parts = rest.split_whitespace();
+        let Some(first_field) = parts.next() else { continue };
+        let Some(words_tok) = parts.next() else { continue };
+        let Some(words_str) = words_tok.strip_prefix("words=") else { continue };
+        let Ok(words) = words_str.parse::<u32>() else { continue };
+        let Some(type_id) = parts.next() else { continue };
+        let camera_port = parts.next().map(|s| s.to_string());
+        markers.push(RawDerivedUniformMarker {
+            first_field: first_field.to_string(),
+            words,
+            type_id: type_id.to_string(),
+            camera_port,
+        });
+    }
+    markers
+}
+
 fn source_has_reset_gated_marker(source: &str) -> bool {
     let stripped = strip_block_comments(source);
     stripped
@@ -1988,6 +2143,15 @@ impl EffectNode for WgslCompute {
                         if m.name.starts_with("_pad") {
                             continue;
                         }
+                        // D7/P0: a field inside a `derived_uniform_members` block
+                        // is never wired/bound — skip the generic port-shadow
+                        // pack here; the dedicated loop below (after this match)
+                        // recomputes and writes it instead.
+                        if self.derived_uniform_members.iter().any(|d| {
+                            m.offset >= d.offset && m.offset < d.offset + d.words * 4
+                        }) {
+                            continue;
+                        }
                         let f = ctx.scalar_or_param(&m.name, 0.0);
                         if trace && self.last_logged_uniforms.get(&m.name).copied() != Some(f) {
                             eprintln!(
@@ -2005,6 +2169,58 @@ impl EffectNode for WgslCompute {
                         let end = start + size;
                         if end <= self.uniform_scratch.len() {
                             m.ty.write_to(&mut self.uniform_scratch[start..end], &val);
+                        }
+                    }
+                }
+                // D7/P0: refresh every derived-uniform block this frame via the
+                // registry (frame context +, when the member needs one, the
+                // wired Camera external's live value) — the per-member `run()`
+                // equivalent for a fused kernel. `None` (unregistered, or a
+                // camera-derived member whose camera is unwired) leaves the
+                // block's bytes at the zero-fill above — a visible-but-safe
+                // degrade, never a panic; `has_recompute` at fuse-build time
+                // (`freeze/install.rs`) means "unregistered" should not occur
+                // for a member that made it into a fused kernel at all. Each
+                // field is written through its OWN `UniformMemberType::write_to`
+                // (looked up from `layout.members`, not assumed f32) — a
+                // `frame_count:u32` field needs the same `.max(0.0) as u32` cast
+                // `run()`'s hand packing gets, not a raw f32 bit-copy.
+                if let Some(layout) = &self.uniform_layout {
+                    for d in &self.derived_uniform_members {
+                        let Some(start_idx) =
+                            layout.members.iter().position(|f| f.offset == d.offset)
+                        else {
+                            continue;
+                        };
+                        let camera = d.camera_port.as_deref().and_then(|p| ctx.inputs.camera(p));
+                        let dctx =
+                            crate::node_graph::freeze::derived_uniform_registry::DerivedUniformContext {
+                                frame: &ctx.time,
+                                camera: camera.as_ref(),
+                            };
+                        let Some(values) =
+                            crate::node_graph::freeze::derived_uniform_registry::recompute(
+                                &d.type_id,
+                                &dctx,
+                            )
+                        else {
+                            continue;
+                        };
+                        for (field, v) in layout
+                            .members
+                            .iter()
+                            .skip(start_idx)
+                            .take(d.words as usize)
+                            .zip(values.iter())
+                        {
+                            let start = field.offset as usize;
+                            let end = start + 4;
+                            if end <= self.uniform_scratch.len() {
+                                field.ty.write_to(
+                                    &mut self.uniform_scratch[start..end],
+                                    &ParamValue::Float(*v),
+                                );
+                            }
                         }
                     }
                 }
@@ -2205,6 +2421,16 @@ impl WgslCompute {
     /// nothing, a settle pays one compile). The device-level pipeline cache makes a
     /// previously-seen value-set's compile near-instant.
     fn select_spec_variant(&mut self, ctx: &mut EffectNodeContext<'_, '_>) -> Option<usize> {
+        // D7/P0: a kernel carrying derived-uniform members never specializes.
+        // Baking a reduced variant would shift the surviving fields' byte
+        // offsets (fewer dynamic fields → different padding), and
+        // `derived_uniform_members`'s stored `offset`s are computed once from
+        // the GENERIC layout — reusing them against a specialized variant's
+        // scratch would write to the wrong bytes. Simple, always-correct:
+        // these kernels just always ride the generic (permanent fallback) path.
+        if !self.derived_uniform_members.is_empty() {
+            return None;
+        }
         if self.static_param_fields.is_empty() || !specialization_enabled() {
             return None;
         }
