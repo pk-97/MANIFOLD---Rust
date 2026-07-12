@@ -360,7 +360,7 @@ _Generated from the node registry. Do not hand-edit. 231 nodes registered, group
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
-| `ApricotBloom` | Apricot Bloom | generator | Geometry | 6 |
+| `ApricotBloom` | Apricot Bloom | generator | Geometry | 5 |
 | `ApricotWeather` | Apricot Weather | generator | Geometry | 5 |
 | `AutoGain` | Auto Gain | effect | Stylize | 4 |
 | `BasicShapes` | Basic Shapes | generator | Pattern | 4 |

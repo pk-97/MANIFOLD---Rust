@@ -5236,7 +5236,6 @@
       ],
       "category": "Stylize",
       "examples": [
-        "ApricotBloom",
         "EdgeDetect"
       ],
       "inputs": [
@@ -19236,13 +19235,6 @@
           "max": "1",
           "min": "0",
           "name": "Grow Phase"
-        },
-        {
-          "default": "0",
-          "id": "wireAmount",
-          "max": "1",
-          "min": "0",
-          "name": "Wire Look"
         },
         {
           "default": "1",

@@ -1,6 +1,6 @@
 # Realtime 3D — Scenes, Lighting, Viewport
 
-**Status: IN PROGRESS (status corrected + baseline-reviewed 2026-07-05; D3/D8 AMENDED 2026-07-06 by `SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` — read its §8 before P6; D3/D4/§3/§6/§7.3 AMENDED 2026-07-10 (F2 coherence audit) — shadow-caster cap `MAX_SHADOW_CASTING_LIGHTS = 4` replaces the dead "8 objects, 4 lights" budget, read D4 before P2).** Shipped: P0 (MATERIAL M1–M6, all verified in-tree), P1 `node.render_scene` @ `8daa89fc`, P4 camera atoms (both `node.free_camera` + `node.look_at_camera` in-tree), §9 `node.spawn_from_mesh`, **P2 shadow maps + P3 atmosphere/fog @ `feat/realtime3d-p2p3` 2026-07-11** (gpu-proofs `render_scene_shadows` + `render_scene_fog`, PNG-verified; lights also moved to a ring-buffered storage buffer), **P8 scene instancing @ `feat/realtime3d-p8-instancing` 2026-07-11** (§10 D11 — each object group grows an optional `instances_n: Array(InstanceTransform)` port; wired draws `instance_count = buffer_size / 32` copies with `model_n · T_instance` in both the main pass and every caster's shadow pass; unwired binds a cached 1-entry identity stub, byte-identical to pre-P8 output; gpu-proofs `render_scene_instances` 4/4 green — identity parity, occlusion, instanced-shadow, instanced-fog; `Garden.json` re-wired single-pass, the `node.mix` Max-blend composite deleted). **The P1 "transforms not port-shadowed" deviation is retired by amendment, not by shadows: per-object transforms move to `node.transform_3d` atoms feeding `transform_n: Transform` ports** (SCENE_BUILD P2). Remaining: P5 viewport navigate, P6 gizmos, P7 scene starter preset. · designed 2026-07-03 · Fable
+**Status: IN PROGRESS (status corrected + baseline-reviewed 2026-07-05; D3/D8 AMENDED 2026-07-06 by `SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` — read its §8 before P6; D3/D4/§3/§6/§7.3 AMENDED 2026-07-10 (F2 coherence audit) — shadow-caster cap `MAX_SHADOW_CASTING_LIGHTS = 4` replaces the dead "8 objects, 4 lights" budget, read D4 before P2).** Shipped: P0 (MATERIAL M1–M6, all verified in-tree), P1 `node.render_scene` @ `8daa89fc`, P4 camera atoms (both `node.free_camera` + `node.look_at_camera` in-tree), §9 `node.spawn_from_mesh`, **P2 shadow maps + P3 atmosphere/fog @ `feat/realtime3d-p2p3` 2026-07-11** (gpu-proofs `render_scene_shadows` + `render_scene_fog`, PNG-verified; lights also moved to a ring-buffered storage buffer), **P8 scene instancing @ `feat/realtime3d-p8-instancing` 2026-07-11** (§10 D11 — each object group grows an optional `instances_n: Array(InstanceTransform)` port; wired draws `instance_count = buffer_size / 32` copies with `model_n · T_instance` in both the main pass and every caster's shadow pass; unwired binds a cached 1-entry identity stub, byte-identical to pre-P8 output; gpu-proofs `render_scene_instances` 4/4 green — identity parity, occlusion, instanced-shadow, instanced-fog; `Garden.json` re-wired single-pass, the `node.mix` Max-blend composite deleted). **The P1 "transforms not port-shadowed" deviation is retired by amendment, not by shadows: per-object transforms move to `node.transform_3d` atoms feeding `transform_n: Transform` ports** (SCENE_BUILD P2). Remaining: P5 viewport navigate, P6 gizmos, P7 scene starter preset, P9 PCSS penumbra (§11, added 2026-07-12). · designed 2026-07-03 · Fable
 **Prerequisites: MATERIAL_SYSTEM_DESIGN M1–M5 (un-held by this doc — its contract is
 unchanged; this design consumes its extension points). Vocab-audit apply should land
 first (this doc uses post-rename ids: `node.render_mesh`, `node.render_copies`).**
@@ -412,3 +412,54 @@ each at a bounded draw-call count.
 `Channels` color lane when the first look needs it. Depth-aware compositing for
 non-mesh passes (splats/particles vs scene) — its own design when such a preset
 appears.
+
+## 11. Addendum 2026-07-12 — P9: PCSS contact-hardening penumbra (soft shadows v2)
+
+**Status: APPROVED, not built · Fable 5.** Graduates RENDERING_INFRA_V2 §8. P2's
+PCF shipped fixed-width softness (`ShadowSoftness` Off/Soft/Softer/Softest →
+kernel half-width, `light.rs:72`); real shadows harden at contact and soften
+with occluder distance. Peter's acceptance frame, 2026-07-12, choosing
+self-shadowing as the target for his black-background hero scenes: *"a
+statue's arm onto its torso, leaves onto stems is exactly what I want."*
+
+**Audit (2026-07-12, tip `9e537b16`):** PCF sampling `render_scene.wgsl:172-196`
+(`sample_shadow` switch + (2·khw+1)² loop); caster table `@binding(9)`, 5
+vec4/slot, **`[4].w` spare = 0** (`render_scene.rs:129-134,799-801`); `Light`
+carries `shadow_softness/bias/resolution` (`light.rs:95-123`); comparison
+sampler is `compare: Less` linear (`render_scene.rs:450`). PCSS blocker-search
+needs a PLAIN depth sample — `textureSampleCompareLevel` returns a comparison,
+not depth. ⚠ VERIFY-AT-IMPL: whether shadow maps can additionally bind for
+plain `textureSampleLevel`/`textureLoad` under the current binding layout
+(read `create_render_pipeline_depth_msaa` reflection handling in
+`manifold-gpu`); expected answer yes (`SHADER_READ` usage is already set) —
+if the sampler-type collision bites, bind the map twice (depth + non-compare
+sampler slots 15/16), an ABI addition, not a redesign.
+
+**D12 — PCSS as a fourth+ softness tier, not a replacement.** `ShadowSoftness`
+gains `Contact { light_size: f32 }` (world-units light diameter; serialized
+like every light param — old saves load unchanged, enum growth is additive).
+Existing tiers keep their exact code path (negative gate: existing
+`render_scene_shadows` proof green unmodified). Algorithm, committed
+(standard PCSS): (1) blocker search — 16 golden-angle taps (CINEMATIC_POST D2
+formula) in a `light_size`-scaled search radius via PLAIN depth samples, avg
+blocker depth `z_b` over taps with `z_b < z_r − bias`; zero blockers → fully
+lit, early out. (2) penumbra_px = `light_size · (z_r − z_b) / z_b`, mapped to
+texels via the caster's `texel_size`, clamped [0, 24]. (3) the EXISTING PCF
+loop with half-width = ceil(penumbra_px). `light_size` rides the spare
+caster-table `[4].w` — zero layout growth.
+
+**Gate (numeric, no image judgment):** gpu_proof `render_scene_pcss` — box
+floating above a plane, sun caster: (a) shadow-edge gradient width (count of
+readback pixels with 0.05 < shade < 0.95 along a committed scanline) at
+contact (box touching plane) is ≥3× NARROWER than at height 2.0 — the
+contact-hardening property as an integer comparison; (b) `Contact` with
+`light_size = 0` matches `Off`-tier hard edge within 1 px of gradient width;
+(c) existing softness tiers byte-identical to build-of-record. Focused test
+scope + clippy; workspace sweep at landing.
+
+**Performer gesture:** `light_size` port-shadowed on the light — a fader ride
+turns noon (hard) into overcast (soft) on the hero mesh's self-shadowing.
+
+**Forbidden moves:** replacing the PCF loop · a second shadow shader file ·
+resolution-dependent constants hard-coded from the test scene · touching the
+caster-cap policy (D4/F2) · "improving" bias handling while in there.
