@@ -392,6 +392,17 @@ fn build_import_graph(
     // without the user having to touch the light. Aesthetic default; the light
     // node is a normal graph node the user can dial down.
     sun_node.params.insert("intensity".to_string(), float(3.5));
+    // Contact (PCSS) shadow softness, not the primitive's Soft default:
+    // REALTIME_3D_DESIGN.md §11 (D12) — self-shadowing (an arm onto a
+    // torso, leaves onto stems) is exactly what an imported hero mesh
+    // needs to read as grounded, and Contact gives that without the user
+    // having to find the light node and switch it. `light_size = 1.0` is
+    // a middle-of-the-road default (the primitive's own range is 0–20);
+    // aesthetic default, the light node is a normal graph node the user
+    // can dial down to Hard or up to a softer look.
+    sun_node.params.insert("cast_shadows".to_string(), float(1.0));
+    sun_node.params.insert("shadow_softness".to_string(), enum_val(3)); // Contact
+    sun_node.params.insert("light_size".to_string(), float(1.0));
     nodes.push(sun_node);
 
     let render_id = fresh_id();
