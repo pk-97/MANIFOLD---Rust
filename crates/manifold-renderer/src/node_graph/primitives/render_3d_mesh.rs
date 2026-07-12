@@ -280,6 +280,19 @@ impl Primitive for Render3DMesh {
         CONDITIONAL_RULES
     }
 
+    /// Rasterizer outputs are screen-space: always canvas-sized. The
+    /// texture inputs (envmap, normal/roughness/base-color/metallic maps)
+    /// are scene resources — without this declaration the plan's
+    /// max-of-input-dims default would size the render target to the
+    /// largest wired map instead of the canvas (BUG-140 class).
+    fn output_canvas_scale(
+        &self,
+        _port: &str,
+        _params: &crate::node_graph::effect_node::ParamValues,
+    ) -> Option<(u32, u32)> {
+        Some((1, 1))
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let cam = ctx
             .inputs
