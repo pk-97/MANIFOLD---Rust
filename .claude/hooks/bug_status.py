@@ -22,6 +22,18 @@ deliberate, human-run reflow.
 The index table is intentionally NOT regenerated: its one-liners are hand-curated
 (richer than the headings) and it carries index-only design items (e.g. BUG-080)
 that have no entry. ``--check`` reports index/entry drift instead of flattening it.
+
+**Closed-bug archive (added 2026-07-12):** ``## Fixed`` no longer holds every closed
+bug as a full ``### BUG-NNN`` entry forever — periodically (not per-fix) the full
+write-ups are swept verbatim into ``docs/archive/BUG_BACKLOG_CLOSED.md`` and ``##
+Fixed`` keeps a one-line ``- BUG-NNN (slug) — STATUS ... — full history in
+docs/archive/...`` pointer per archived bug instead. The per-fix workflow is
+unchanged (set ``**Status:`` to FIXED, run ``--write`` to reflow the *full* entry
+into ``## Fixed`` as before) — a bug lives there as a complete write-up until the
+next archive sweep turns it into a pointer. ``--check`` treats both shapes as valid
+under ``## Fixed`` and cross-checks the pointers against the archive file: every
+pointer must resolve to a real archived entry, every archived entry must have a
+live pointer, and no id may exist as a full entry in both places at once.
 """
 from __future__ import annotations
 
@@ -32,6 +44,9 @@ from pathlib import Path
 HOOKS_DIR = Path(__file__).resolve().parent
 REPO = HOOKS_DIR.parents[1]
 BACKLOG = REPO / "docs" / "BUG_BACKLOG.md"
+ARCHIVE = REPO / "docs" / "archive" / "BUG_BACKLOG_CLOSED.md"
+
+POINTER_RE = re.compile(r"^-\s+(BUG-[0-9A-Za-z-]+)\s+\(")
 
 # Statuses that mean "resolved" — these belong under ## Fixed and out of the open index.
 RESOLVED = {"FIXED", "SUPERSEDED"}
@@ -197,9 +212,40 @@ def index_ids(head_lines) -> list[str]:
     return ids
 
 
+def archive_ids() -> set[str]:
+    """IDs of ``### BUG-NNN`` entries archived to docs/archive/BUG_BACKLOG_CLOSED.md."""
+    if not ARCHIVE.exists():
+        return set()
+    ids = set()
+    for l in ARCHIVE.read_text().split("\n"):
+        m = HEADING_RE.match(l)
+        if m:
+            ids.add(m.group(1))
+    return ids
+
+
+def pointer_ids(strays: list[str]) -> set[str]:
+    """IDs referenced by one-line closed-bug pointers under ``## Fixed`` (found among strays)."""
+    return {m.group(1) for l in strays if (m := POINTER_RE.match(l.strip()))}
+
+
 def check(text: str) -> list[str]:
     head, entries, tail, strays = parse(text)
     problems: list[str] = []
+
+    # closed-bug archive cross-check: every live pointer must resolve to a real
+    # archived entry, every archived entry must have a live pointer, and an id
+    # should never be a full entry in the live file AND already archived.
+    arch_ids = archive_ids()
+    if arch_ids or any(POINTER_RE.match(l.strip()) for l in strays):
+        ptr_ids = pointer_ids(strays)
+        for bug_id in sorted(ptr_ids - arch_ids):
+            problems.append(f"{bug_id}: has a ## Fixed pointer but no entry in {ARCHIVE.name}")
+        for bug_id in sorted(arch_ids - ptr_ids):
+            problems.append(f"{bug_id}: archived in {ARCHIVE.name} but has no ## Fixed pointer here")
+        live_full_ids = {e.id for e in entries}
+        for bug_id in sorted(arch_ids & live_full_ids):
+            problems.append(f"{bug_id}: archived AND still a full entry in this file — stale duplicate")
 
     # per-entry status hygiene
     seen: dict[str, int] = {}
