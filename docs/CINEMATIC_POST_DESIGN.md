@@ -1,7 +1,7 @@
 # Cinematic Post — DoF, SSAO, motion blur as graph atoms
 
-**Status:** APPROVED design, not built · 2026-07-12 · Fable 5
-**Prerequisites:** CAMERA_AND_LENS P1+P2 and GBUFFER P1 before this P1/P2; GBUFFER P2 before this P3.
+**Status:** APPROVED design, not built · 2026-07-12 · Fable 5 · **Amended 2026-07-12 (Fable 5, Peter-directed): P0 added — derived uniforms become first-class on the texture codegen path AND in fused regions (D7). P1 found blocked on this at implementation; Peter's call: no stopgaps, no boundary carve-out.**
+**Prerequisites:** P0 (this doc, D7) before P1–P4; CAMERA_AND_LENS P1+P2 and GBUFFER P1 before this P1/P2; GBUFFER P2 before this P3.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 **Companions:** [CAMERA_AND_LENS_DESIGN.md](CAMERA_AND_LENS_DESIGN.md) (`LensParams` on the Camera wire; the CPU oracle) · [GBUFFER_DESIGN.md](GBUFFER_DESIGN.md) (the depth/velocity inputs; the shared linearize helper) · [RENDERING_INFRA_V2_DESIGN.md](RENDERING_INFRA_V2_DESIGN.md) (direction: pillar 2, "our 2D graph system already excels here; the missing inputs are per-pixel depth and motion vectors") · [docs/ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) (authoring contract; the codegen-path rule every atom here satisfies)
 
@@ -165,6 +165,68 @@ tail — each phase's preset edit passes the checker AND a load-smoke test
 (checker ≠ runtime). Rejected: N separate demo presets (nobody performs a
 demo; one instrument, grown).
 
+**D7 — Derived uniforms become first-class in the freeze compiler, on
+both paths; no camera-atom boundary carve-out (P0; amendment 2026-07-12).**
+Discovered at P1 implementation start: D1 commits `coc_from_depth` to read
+`fov_y`/`near`/`far`/viewport CPU-side from the Camera wire into its
+kernel's uniform every frame — and the mechanism for exactly that,
+`DERIVED_UNIFORMS` (`n: [...]` in `primitive!`), exists **only for
+Array-output buffer atoms**. Verified anchors (tip `71a3503e`):
+`standalone_for_spec` routes derived uniforms solely through
+`generate_standalone_buffer` (`freeze/codegen.rs:203-217`; the texture
+path `generate_standalone_ext` has no derived parameter); in fused
+regions, derived values are sourced by a NAME WHITELIST
+(`dt_scaled`/`frame_count`/`time*` wired from `system.generator_input`,
+`freeze/install.rs:1322-1334`) where an unknown name bails the whole
+region and a vec3 bails unconditionally; and a Camera wire into any
+texture atom classifies it a Boundary outright (`freeze/region.rs:
+1047-1053`). Without P0, every atom in this doc (D1/D3/D4 all take
+`camera`) is unimplementable on the codegen path — violating I4 and the
+repo-wide all-nodes-fusable rule.
+
+The committed fix, two layers, both mandatory (Peter, 2026-07-12: *"I
+don't want any stopgaps"*):
+
+- **Standalone:** the texture codegen path accepts `DERIVED_UNIFORMS`
+  exactly as the buffer path does — fields appended to the merged params
+  uniform (same `param_word_count` layout rules, vec3 included), values
+  recomputed per frame by the atom's `run()` from its CPU-struct inputs
+  (Camera) + frame context. CPU-struct input ports (`Camera`, later
+  `Light`/`Material`) are legal on texture atoms and emit no GPU binding —
+  consumed CPU-side only. Generated-vs-hand parity proof required (the
+  existing I4 meta-test covers any `wgsl_body` atom automatically).
+- **Fusion:** the install-time name whitelist and the vec3 bail are
+  **deleted**, replaced by per-member recompute: the fused
+  `node.wgsl_compute` node recomputes each member's derived-uniform
+  values at uniform-pack time via the member's registered recompute
+  (registry lookup by the member's type-id string — data-driven, no
+  closures serialized into the def), fed by (a) frame context and (b) the
+  region's CPU-struct externals, which install routes to the fused node.
+  The time-family (`dt_scaled` etc.) migrates onto the same mechanism —
+  one sourcing path, zero per-name install code, so any future derived
+  uniform works without touching the compiler again. The classify cut at
+  `region.rs:1047` gains the matching exemption: a CPU-struct wire into
+  an atom that consumes it entirely via derived uniforms no longer cuts;
+  a wire into any other non-texture non-param port still does. How the
+  Camera external physically reaches the fused node (a declared
+  non-introspected input port vs. a freeze-marker side channel) is
+  implementation latitude — the fixed contract is I6.
+
+Honest scope statement, so nobody oversells the win: in the D6 chain
+itself, `variable_blur`/`motion_blur`/`bokeh_gather` GATHER their
+upstream inputs, and a gather can never fuse with its producer (the
+intermediate must be materialized) — those cuts are physics of fusion,
+not this gap. What P0 buys is (1) the four atoms existing at all on the
+codegen path, and (2) pointwise camera consumers (`coc_from_depth`, and
+future depth-fog/exposure-style atoms) fusing with adjacent pointwise
+work instead of punching a hole per camera read. Rejected alternatives:
+boundary carve-out for camera atoms (a stopgap by name — Peter rejected
+it directly); scalar output ports (fov/near/far) on every camera
+producer + control wires (authoring-surface creep on N camera nodes, and
+it leaves the whitelist alive); camera scalars as fake user params packed
+by the preset (breaks the wire-carries-the-camera model and desyncs the
+lens from render_scene).
+
 **Consequences of the whole design, stated honestly:** four full-res
 dispatches when the whole chain is wired (CoC + 2×blur + SSAO + blur ≈ 5)
 — on top of GBUFFER's bandwidth line; the perf gate measures, the lazy/
@@ -184,6 +246,7 @@ the committed math is the contract, upgrades are new decisions).
 | I3 — CoC math agrees with hand-computed values | unit test (CPU, no GPU): 5 (depth, focus, f_stop) triples → coc_px vs values computed by hand in the test source with the D1 formula |
 | I4 — All four atoms are codegen-path | existing meta-test that every `primitive!` with `wgsl_body` proves generated-vs-hand parity; plus negative gate `rg 'create_compute_pipeline\(include_str' <the four new files>` = 0 hits |
 | I5 — Presets stay loadable | `check_presets` green + load-smoke gpu_test instantiating `CinematicScene` and executing one frame (magenta-free readback: no structured errors) |
+| I6 — Derived-uniform atoms are fused == unfused, byte-identical under the precision contract (FREEZE_COMPILER_MAP §7) | freeze proof gpu_test: a graph chaining a camera-derived pointwise atom with a pointwise neighbour, fused vs unfused full-buffer byte-compare; PLUS the entire existing freeze proof suite stays green (the time-family migration in D7 touches every fused buffer sim) |
 
 ## 4. Phasing
 
@@ -196,9 +259,27 @@ atoms · frame-index/time inputs into any of these atoms (determinism is
 load-bearing). **Test scope:** focused `-p manifold-renderer` + the new
 gpu_tests; workspace sweep at landing.
 
+- **P0 — derived uniforms first-class in the freeze compiler** (D7; one
+  to two sessions — the standalone layer and the fusion layer are
+  separately landable, in that order, but BOTH are P1's entry: landing
+  only the standalone half and calling it done is the exact stopgap
+  Peter rejected). Entry: none (GBUFFER P1 is on main). Deliverables:
+  texture-path `DERIVED_UNIFORMS` in `generate_standalone_ext` +
+  CPU-struct inputs binding nothing; whitelist + vec3 bail deleted from
+  `install.rs` in favour of per-member registry recompute; `region.rs`
+  classify exemption; time-family migrated onto the same path.
+  Gate: I6 + the full existing freeze proof suite + all existing
+  buffer-atom `gpu_tests` (project_3d, particle sims — they exercise
+  the migrated time-family) + focused suite + clippy. Read-back adds
+  `docs/FREEZE_COMPILER_MAP.md` (whole thing — this phase edits the
+  compiler it maps) and UPDATES the map's §4/§5/§9 to the new sourcing
+  model at landing. Demo: none — compiler phase, the proofs are the
+  demo.
 - **P1 — `coc_from_depth` + DoF slice of `CinematicScene`** (one session).
-  Entry: CAMERA P2 + GBUFFER P1 landed (verify: `rg 'LensParams'` hits
-  camera.rs; `rg 'linearize_depth'` hits shared header). Deliverables: the
+  Entry: P0 landed (both layers) + CAMERA P2 + GBUFFER P1 landed (verify:
+  `rg 'LensParams'` hits camera.rs; `rg 'linearize_depth'` hits shared
+  header; `rg 'DERIVED_UNIFORMS' crates/manifold-renderer/src/node_graph/freeze/codegen.rs`
+  shows the texture route). Deliverables: the
   atom (full descriptor/picker/aliases; `Pointwise`, `[CoincidentTexel]`),
   variable_blur width-unit note resolved (VERIFY-AT-IMPL) and recorded in
   the atom's composition_notes, I2+I3 tests, `CinematicScene` preset with
@@ -225,9 +306,9 @@ gpu_tests; workspace sweep at landing.
   re-wire (two variable_blur nodes → one bokeh_gather), I2 re-proof, I5.
   Demo: none — L1 (cluster no-PNG rule).
 
-Phasing-completeness check: D1→P1, D3→P2, D4→P3, D5→P4, D6 grown across
-P1–P4; D2 is inside P2/P4 deliverables; exposure card (CAMERA D5) rides
-P1's preset. No body-committed affordance is unphased.
+Phasing-completeness check: D7→P0, D1→P1, D3→P2, D4→P3, D5→P4, D6 grown
+across P1–P4; D2 is inside P2/P4 deliverables; exposure card (CAMERA D5)
+rides P1's preset. No body-committed affordance is unphased.
 
 ## 5. Decided — do not reopen
 
@@ -238,6 +319,9 @@ P1's preset. No body-committed affordance is unphased.
 4. Shutter/focus/f-stop read from the Camera wire, port-shadow overridable.
 5. Lens-neutral chain is bit-clean pass-through — enforced, not aspirational (I2).
 6. One grown `CinematicScene` preset, not demo-per-feature (D6).
+7. Derived uniforms are first-class on both codegen paths; the sourcing
+   whitelist dies; NO boundary carve-out for camera atoms — Peter,
+   2026-07-12: "I don't want any stopgaps" (D7/P0).
 
 ## 6. Deferred
 
