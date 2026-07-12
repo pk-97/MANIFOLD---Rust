@@ -119,7 +119,12 @@ origin main` (allow + reminder present); `merge <branch>` while on main
   radius says so) → `git merge --no-ff` into main → push → if the push is
   rejected because someone landed first, repeat. New/renamed docs need
   `python3 scripts/gen_docs_index.py` before the sweep — a freshness test
-  enforces it.
+  enforces it. The gate also owns status housekeeping: in the worktree, run
+  its copies of `bug_status.py --check` (fix drift with `--write` there — it
+  refuses in main) and `design_status_check.py origin/main HEAD`, so backlog
+  reflow and design-doc status lines land in the same merge as the code. The
+  post-merge housekeeper on main is a backstop, not the workflow — its
+  remedies are worktree-shaped, never in-place edits to main.
 - **Twin-killer 1:** never cherry-pick or re-commit content that already
   exists as commits on a live branch — merge the branch so SHAs stay shared.
   The one sanctioned exception: landing the final content of a branch that

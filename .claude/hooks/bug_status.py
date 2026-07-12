@@ -291,6 +291,16 @@ def write(text: str) -> str:
 def main() -> int:
     text = BACKLOG.read_text()
     if "--write" in sys.argv:
+        # Main checkout has .git as a directory; worktrees have a .git file. Writing
+        # the backlog in main violates the landing protocol (edits land via worktree
+        # merges) — refuse here, at the write site, so the post-merge nudge can't be
+        # followed literally in main. --force = deliberate human override.
+        if (REPO / ".git").is_dir() and "--force" not in sys.argv:
+            raise SystemExit(
+                "refusing --write in the MAIN checkout (landing protocol: edits go "
+                "through a worktree). Run the worktree's copy instead:\n"
+                "  python3 .claude/worktrees/<name>/.claude/hooks/bug_status.py --write\n"
+                "then land it as a --no-ff merge. Override (human, deliberate): --force")
         new_text = write(text)
         BACKLOG.write_text(new_text)
         moved = check(new_text)

@@ -117,8 +117,9 @@ def main() -> int:
             suggestion = ask_haiku(claude_bin, name, current, subs) if claude_bin else ""
             if suggestion:
                 print(f"      Haiku suggests: {suggestion}", file=sys.stderr)
-        print("  Update the doc's **Status line if these shipped (the board reads it).\n",
-              file=sys.stderr)
+        print("  Backstop only — fix belongs on the branch pre-landing. If it slipped: "
+              "update the doc's **Status line IN A WORKTREE and land as a follow-up "
+              "merge (main edits are guard-denied).\n", file=sys.stderr)
 
     bug_backlog_check()
     return 0
@@ -140,7 +141,9 @@ def bug_backlog_check() -> None:
     print("\n⚠  bug-backlog housekeeper — status drift (bug_status.py):", file=sys.stderr)
     for p in problems:
         print(f"  · {p}", file=sys.stderr)
-    print("  Fix the **Status: line / index / section, or run bug_status.py --write.\n",
+    print("  Backstop only — reflow belongs on the branch pre-landing. If it slipped: "
+          "run the WORKTREE's copy (python3 .claude/worktrees/<name>/.claude/hooks/"
+          "bug_status.py --write) and land as a follow-up merge; --write refuses in main.\n",
           file=sys.stderr)
 
 
