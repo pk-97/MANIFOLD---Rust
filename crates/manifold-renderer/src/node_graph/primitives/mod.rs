@@ -136,6 +136,7 @@ mod cel_material;
 mod multi_blend;
 mod mesh_ramp;
 mod morph_mesh;
+mod motion_blur;
 mod push_along_normals;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod mesh_snapshot;

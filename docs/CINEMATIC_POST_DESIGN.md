@@ -1,6 +1,6 @@
 # Cinematic Post — DoF, SSAO, motion blur as graph atoms
 
-**Status:** IN PROGRESS · 2026-07-12 · Sonnet 5 · **P0 SHIPPED 2026-07-12 (D7/I6, both layers, `docs/landings/2026-07-12-cinematic-post-batch-a.md`) — derived uniforms are first-class on the texture codegen path AND in fused regions. P1+P2 SHIPPED 2026-07-12 (`docs/landings/2026-07-12-cinematic-post-batch-b.md`) — `node.coc_from_depth` + DoF slice, `node.ssao_from_depth` + SSAO arm, both wired into the `CinematicScene` preset. P3–P4 not built.**
+**Status:** P0–P3 SHIPPED 2026-07-12 · Sonnet 5 · **P0 (D7/I6, both layers, `docs/landings/2026-07-12-cinematic-post-batch-a.md`) — derived uniforms are first-class on the texture codegen path AND in fused regions. P1+P2 (`docs/landings/2026-07-12-cinematic-post-batch-b.md`) — `node.coc_from_depth` + DoF slice, `node.ssao_from_depth` + SSAO arm. P3 (`docs/landings/2026-07-12-cinematic-post-batch-c.md`) — `node.motion_blur` tail. `CinematicScene` now runs the full DoF+SSAO+motion-blur chain. P4 (`node.bokeh_gather` swap) is pre-approved but deliberately not run this wave — triggered whenever Peter wants bokeh over gaussian.**
 **Prerequisites:** P0 (this doc, D7) before P1–P4; CAMERA_AND_LENS P1+P2 and GBUFFER P1 before this P1/P2; GBUFFER P2 before this P3.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 **Companions:** [CAMERA_AND_LENS_DESIGN.md](CAMERA_AND_LENS_DESIGN.md) (`LensParams` on the Camera wire; the CPU oracle) · [GBUFFER_DESIGN.md](GBUFFER_DESIGN.md) (the depth/velocity inputs; the shared linearize helper) · [RENDERING_INFRA_V2_DESIGN.md](RENDERING_INFRA_V2_DESIGN.md) (direction: pillar 2, "our 2D graph system already excels here; the missing inputs are per-pixel depth and motion vectors") · [docs/ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) (authoring contract; the codegen-path rule every atom here satisfies)
@@ -303,7 +303,12 @@ gpu_tests; workspace sweep at landing.
   except bias tolerance), preset arm + `ssao_intensity`/`ssao_radius`
   cards, I5. Demo: none — L1 (cluster no-PNG rule).
   Performer gesture: `ssao_intensity` on a fader — contact weight swells.
-- **P3 — `node.motion_blur`** (one session). Entry: GBUFFER P2 (velocity
+- **P3 — `node.motion_blur`** — SHIPPED 2026-07-12
+  (`docs/landings/2026-07-12-cinematic-post-batch-c.md`; `shutter_angle` read
+  entirely via derived_uniforms from the Camera's lens block, no port-shadowed
+  override on the atom itself — the card binds to `camera_lens` directly,
+  matching P1/P2's precedent; `node.camera_lens` already had a working
+  port-shadowed `shutter_angle` param reserved for this). (one session). Entry: GBUFFER P2 (velocity
   exists) + CAMERA P2 (shutter on the wire). Deliverables: atom per D4,
   CPU reference on a synthetic velocity ramp (I1), I2 zero-shutter
   identity, preset tail + `shutter_angle` card, I5. Demo: none — L1

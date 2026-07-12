@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "CinematicScene",
-  "description": "Physical-camera 3D scene with true depth of field and contact-shadow AO (docs/CINEMATIC_POST_DESIGN.md D6). A faceted mesh under one key light, shot through node.camera_lens (the one lens node.render_scene's exposure AND node.coc_from_depth's circle-of-confusion both read), an ssao_from_depth -> node.mix(Multiply) contact-occlusion arm, and a coc_from_depth -> variable_blur(H) -> variable_blur(V) gather. Grown incrementally across CINEMATIC_POST's phases: P1 shipped the DoF chain; P2 adds the SSAO arm; P3 adds a motion-blur tail.",
+  "description": "Physical-camera 3D scene with true depth of field, contact-shadow AO, and velocity-directed motion blur (docs/CINEMATIC_POST_DESIGN.md D6). A faceted mesh under one key light, shot through node.camera_lens (the one lens node.render_scene's exposure, node.coc_from_depth's circle-of-confusion, AND node.motion_blur's shutter angle all read), an ssao_from_depth -> node.mix(Multiply) contact-occlusion arm, a coc_from_depth -> variable_blur(H) -> variable_blur(V) gather, and a motion_blur tail reading render_scene's velocity output. Grown incrementally across CINEMATIC_POST's phases: P1 shipped the DoF chain; P2 added the SSAO arm; P3 adds the motion-blur tail.",
   "presetMetadata": {
     "id": "CinematicScene",
     "displayName": "Cinematic Scene",
@@ -31,6 +31,17 @@
         "isToggle": false,
         "isTrigger": false,
         "formatString": "F1"
+      },
+      {
+        "id": "shutter_angle",
+        "name": "Shutter Angle",
+        "min": 0.0,
+        "max": 360.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0"
       },
       {
         "id": "exposure_ev",
@@ -88,6 +99,19 @@
           "kind": "node",
           "nodeId": "lens",
           "param": "f_stop"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "shutter_angle",
+        "label": "Shutter Angle",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "lens",
+          "param": "shutter_angle"
         },
         "convert": {
           "type": "Float"
@@ -307,6 +331,16 @@
       }
     },
     {
+      "id": 14,
+      "typeId": "node.motion_blur",
+      "nodeId": "motion_blur",
+      "handle": "motion_blur",
+      "title": "Motion Blur",
+      "params": {
+        "max_blur_px": { "type": "Float", "value": 32.0 }
+      }
+    },
+    {
       "id": 99,
       "typeId": "system.final_output",
       "nodeId": "out",
@@ -320,6 +354,7 @@
     { "fromNode": 5, "fromPort": "out", "toNode": 8, "toPort": "camera" },
     { "fromNode": 5, "fromPort": "out", "toNode": 9, "toPort": "camera" },
     { "fromNode": 5, "fromPort": "out", "toNode": 12, "toPort": "camera" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 14, "toPort": "camera" },
     { "fromNode": 6, "fromPort": "out", "toNode": 8, "toPort": "material_0" },
     { "fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "light_0" },
     { "fromNode": 3, "fromPort": "out", "toNode": 8, "toPort": "mesh_0" },
@@ -331,6 +366,8 @@
     { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "width" },
     { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "in" },
     { "fromNode": 9, "fromPort": "out", "toNode": 11, "toPort": "width" },
-    { "fromNode": 11, "fromPort": "out", "toNode": 99, "toPort": "in" }
+    { "fromNode": 11, "fromPort": "out", "toNode": 14, "toPort": "in" },
+    { "fromNode": 8, "fromPort": "velocity", "toNode": 14, "toPort": "velocity" },
+    { "fromNode": 14, "fromPort": "out", "toNode": 99, "toPort": "in" }
   ]
 }
