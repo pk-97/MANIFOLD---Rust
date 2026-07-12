@@ -24,7 +24,9 @@ cluster follows the same shape: small single-dispatch atoms consuming the
 G-buffer, composed in preset JSON, every one on the codegen path.
 
 Execution note (Peter, 2026-07-12, governs all phases): every gate is
-numeric. The house pattern here is the **CPU-reference parity gate**: each
+numeric, and no phase produces a PNG artifact (*"No need to produce the
+PNGs if they're not going to look at them"* — overrides the standard's
+L2-demo minimum for this cluster). The house pattern here is the **CPU-reference parity gate**: each
 atom's algorithm is implemented twice from the same committed spec — once
 as the WGSL body, once as a plain-Rust reference in the test module — and
 the gate uploads a *synthetic* input texture, runs both, and asserts
@@ -201,28 +203,27 @@ gpu_tests; workspace sweep at landing.
   variable_blur width-unit note resolved (VERIFY-AT-IMPL) and recorded in
   the atom's composition_notes, I2+I3 tests, `CinematicScene` preset with
   DoF chain + `focus_distance`/`f_stop`/`exposure_ev` cards, I5 smoke.
-  Gate: I1(coc)+I2+I3+I5 + focused suite + clippy. Demo (Peter, L2):
-  headless PNG pair — near-focus vs far-focus of three depth-staggered
-  objects. Performer gesture: `focus_distance` bound to a slow LFO — the
+  Gate: I1(coc)+I2+I3+I5 + focused suite + clippy. Demo: none — L1
+  (cluster no-PNG rule). Performer gesture: `focus_distance` bound to a slow LFO — the
   rack-focus breathe; the gate exercises the binding path by driving the
   card param and asserting the CoC buffer changes accordingly.
 - **P2 — `ssao_from_depth` + SSAO arm** (one session). Entry: GBUFFER P1.
   Deliverables: atom per D3 (Gather), CPU reference, synthetic-ramp parity
   (I1), analytic sanity unit test (flat plane → occlusion 0 everywhere
   except bias tolerance), preset arm + `ssao_intensity`/`ssao_radius`
-  cards, I5. Demo: AO buffer PNG of a corner scene (Peter, L2).
+  cards, I5. Demo: none — L1 (cluster no-PNG rule).
   Performer gesture: `ssao_intensity` on a fader — contact weight swells.
 - **P3 — `node.motion_blur`** (one session). Entry: GBUFFER P2 (velocity
   exists) + CAMERA P2 (shutter on the wire). Deliverables: atom per D4,
   CPU reference on a synthetic velocity ramp (I1), I2 zero-shutter
-  identity, preset tail + `shutter_angle` card, I5. Demo: two-frame PNG of
-  a moving cube, blur along motion (Peter, L2). Performer gesture:
+  identity, preset tail + `shutter_angle` card, I5. Demo: none — L1
+  (cluster no-PNG rule). Performer gesture:
   `shutter_angle` spiked by a beat envelope — drop smear.
 - **P4 — `node.bokeh_gather` swap** (one session; triggered when Peter
   wants bokeh over gaussian — this phase is pre-approved, not gated on a
   new decision). Deliverables: atom per D5, CPU reference (I1), preset
   re-wire (two variable_blur nodes → one bokeh_gather), I2 re-proof, I5.
-  Demo: point-highlight scene, discs visible (Peter, L2).
+  Demo: none — L1 (cluster no-PNG rule).
 
 Phasing-completeness check: D1→P1, D3→P2, D4→P3, D5→P4, D6 grown across
 P1–P4; D2 is inside P2/P4 deliverables; exposure card (CAMERA D5) rides

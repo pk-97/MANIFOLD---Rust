@@ -24,7 +24,9 @@ inputs for ONE `render_scene`'s image, not a cross-renderer depth exchange.
 
 Execution note (Peter, 2026-07-12, governs all phases): gates are numeric —
 CPU oracle vs GPU readback — *"without Sonnet needing to make judgement
-calls or by looking at images."*
+calls or by looking at images."* No PNG artifacts are produced by any phase
+(his call, same day: *"No need to produce the PNGs if they're not going to
+look at them"*).
 
 ## 1. Audit — what exists (verified 2026-07-12, tip `9e537b16`)
 
@@ -189,8 +191,8 @@ lazy-output shape; `encoder.rs:721-804` end-to-end.
 gbuffer_depth` green; full render_scene gpu_proofs suite green UNMODIFIED;
 `cargo nextest run -p manifold-renderer --lib` + `-p manifold-gpu`; clippy
 `-p manifold-gpu -p manifold-renderer`. Negative: I4 rg gate.
-**Demo:** headless PNG — depth output through a normalize-to-gray graph
-next to the color output, for Peter (L2 at landing; executor's gate is I2).
+**Demo:** none — L1 (Peter, 2026-07-12: no PNG artifacts anywhere in this
+cluster; the I2 conformance readback is the acceptance).
 **Performer gesture:** none this phase (infrastructure) — the gesture ships
 with CINEMATIC_POST P1 (focus fader).
 **Forbidden moves:** a second batch function per attachment combo · storing
@@ -213,8 +215,8 @@ output (`Rg16Float`, `output_format` override); `prev_model` Vec +
 byte-identical, suite unmodified).
 **Gate:** as P1's shape; plus I5. Test scope: focused; the full-workspace
 sweep runs at landing per the scope rule.
-**Demo:** two-frame PNG pair of velocity magnitude on a moving object
-(Peter's L2).
+**Demo:** none — L1 (cluster no-PNG rule; the I5 two-frame velocity readback
+is the acceptance).
 **Performer gesture:** none (consumed by CINEMATIC_POST motion blur).
 **Forbidden moves:** velocity via post reprojection · a velocity geometry
 pass · shader-file fork per variant (function constant, not a second wgsl) ·

@@ -29,8 +29,11 @@ Execution note (Peter's directive for this whole cluster, 2026-07-12): *"written
 to a standard that a cheap Sonnet → Sonnet orchestration session can get them
 all implemented in full without Sonnet needing to make judgement calls or by
 looking at images."* Every gate in this doc is a numeric assertion (CPU oracle
-vs GPU readback). PNG demos exist for **Peter's** review only and are logged as
-verification debt, never judged by the executor.
+vs GPU readback). **No PNG artifacts are produced by any phase** (Peter,
+2026-07-12: *"No need to produce the PNGs if they're not going to look at
+them"*) — acceptance is the numeric gates; Peter looks in-app when he
+chooses. This overrides DESIGN_DOC_STANDARD §5's L2-demo minimum for this
+cluster, by his explicit call.
 
 ## 1. Audit — what exists (verified 2026-07-12, tip `9e537b16`)
 
@@ -213,9 +216,7 @@ Restate: the forbidden moves, the S-sign procedure, why unwired must be bit-iden
 green; I3's existing parity test green UNMODIFIED (`git diff --stat` on that
 test file = 0 lines); focused `cargo nextest run -p manifold-renderer --lib`;
 clippy `-p manifold-renderer`.
-**Demo:** headless PNG of the same cube wireframe (flatten_3d+camera) and
-solid (render_scene), same `Camera` — for Peter's eyes at landing (L2 target;
-the numeric gate is what the executor runs).
+**Demo:** none — L1 (cluster-wide no-PNG rule, header note).
 **Performer gesture:** orbit-camera `orbit` param on an LFO — wireframe and
 solid views rotate in lockstep.
 **Forbidden moves:** changing legacy-mode math or its shader lines · a new
@@ -239,7 +240,7 @@ byte-identical to a build-of-record readback (I5).
 **Gate:** focused nextest + the render_scene gpu_proofs modules green;
 clippy; negative: `rg 'exposure' crates/manifold-renderer/src -g '*.wgsl'`
 hits only `render_scene.wgsl`.
-**Demo:** none beyond the numeric readbacks — L1/L2 via test artifacts.
+**Demo:** none — L1 (cluster-wide no-PNG rule, header note).
 **Performer gesture:** `exposure_ev` on a fader — whole scene dips to black
 and blooms back without touching any light.
 **Forbidden moves:** applying EV in tone-map atoms "as well" (parallel path) ·
