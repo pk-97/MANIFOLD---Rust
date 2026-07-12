@@ -321,6 +321,11 @@ pub struct Application {
     /// to read. `advance()`d once per frame in `tick_and_render`, committed
     /// (marking retirement) right after `present_all_windows`.
     pub(crate) ui_frame_fence: Option<Arc<manifold_gpu::FrameFence>>,
+    /// Count of admission-control redraw skips (`present_all_windows`
+    /// re-presenting the cached offscreen instead of encoding a new frame
+    /// because `ui_frame_fence.lag()` is too high). Rate-limits the
+    /// `[frame-fence]` skip log the same way ring-owner stall logging does.
+    pub(crate) ui_frame_fence_skip_events: u64,
     /// Per-layer grid bitmaps (grid lines + top separator) plus the lane / stem /
     /// overview / collapsed-group bitmaps — all drawn around the GPU clip passes.
     /// The grid (per-layer indices) draws BEFORE the clips so opaque bodies occlude
@@ -649,6 +654,7 @@ impl Application {
             ui_renderer: None,
             ui_cache_manager: None,
             ui_frame_fence: None,
+            ui_frame_fence_skip_events: 0,
             layer_bitmap_gpu: None,
             clip_content_gpu: None,
             clip_rect_scratch: Vec::new(),
