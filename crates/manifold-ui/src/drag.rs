@@ -20,6 +20,17 @@
 //! slider is the degenerate case — no payload (`T = ()`), absolute-position
 //! tracking — so it exercises the skeleton; the timeline and canvas wrappers
 //! exercise the typed payload and the delta.
+//!
+//! P7 migration progress (`docs/UI_WIDGET_UNIFICATION_DESIGN.md`): the audit
+//! at P7's start found `UIState` no longer owns a separate timeline-drag
+//! copy — it was already folded into `InteractionOverlay`'s `drag_mode`
+//! before this phase began (`ui_state.rs`: "Drag/trim lifecycle ... lives on
+//! InteractionOverlay — the single owner"), so that item in the five-machine
+//! list above is historical, not a live fifth machine. Migrated onto
+//! `DragController<T>` so far: `AudioTriggerSection::dragging_shape` (one of
+//! the per-panel `dragging` bools). Still open: the remaining per-panel ad
+//! hoc drag state (`param_slider_shared::ParamDragState`'s six drag slots),
+//! `InteractionOverlay::DragMode`, and `graph_canvas::DragMode`.
 
 use crate::node::Vec2;
 
