@@ -1,8 +1,12 @@
-// node.render_scene internal pass (VOLUMETRIC_LIGHT_DESIGN.md D2, P2) —
+// node.render_scene internal pass (VOLUMETRIC_LIGHT_DESIGN.md D2, P2/P3) —
 // half-res single-scattering light-shaft march. Committed algorithm (§2 D2's
-// block), implemented verbatim — no substitution. Sun lights only in P2;
-// Point lights are P3 (this file's `shaft_lights` buffer is pre-filtered to
-// Sun-mode lights by render_scene.rs before this kernel ever sees it).
+// block), implemented verbatim — no substitution. P3: every wired light
+// (Sun AND Point) contributes; Point attenuation is D2's
+// `1/(1+d²/range²)` (light.rs:261), and Point shadow sampling is
+// frustum-clipped against the light's single-frustum view-proj (light.rs:
+// 48-51) via the SAME `shadow_vis` caster-table lookup Sun already uses —
+// outside the frustum (or no caster slot) falls through to `vis=1.0`
+// unshadowed glow (D2's honest cost, not a bug).
 // Internal to render_scene, not a graph atom (§2.5 audit).
 //
 // `linearize_depth` is forked (copied, not shared/concatenated) from
@@ -30,6 +34,9 @@ fn linearize_depth(raw: f32, near: f32, far: f32) -> f32 {
 
 const PI: f32 = 3.14159265358979;
 const CASTER_STRIDE: u32 = 5u;
+// P3: 3 vec4s per light (was 2 in P2's Sun-only packing) — see the binding(2)
+// doc comment below for the field layout.
+const LIGHT_STRIDE: u32 = 3u;
 
 struct Uniforms {
     camera_pos: vec4<f32>,   // xyz, near
@@ -42,10 +49,13 @@ struct Uniforms {
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var half_depth: texture_2d<f32>;
-// Sun-only light array, SAME 2-vec4-per-light packing as render_scene.wgsl's
-// `lights` storage buffer: [i*2] = (dir toward light, .xyz, .w unused here),
-// [i*2+1] = (premultiplied color.rgb, .w = this light's caster slot index,
-// -1 = no shadow).
+// P3: every wired light (Sun AND Point), 3 vec4s per light:
+//   [i*3+0] = Sun: dir-toward-light (.xyz, toward the light, matches
+//             `Light::light_dir_at`'s Sun case), .w = 0.0 (mode Sun)
+//           = Point: light world position (.xyz), .w = 1.0 (mode Point)
+//   [i*3+1] = premultiplied color.rgb, .w = this light's caster slot index
+//             (-1 = no shadow, unshadowed glow per D2)
+//   [i*3+2] = .x = attenuation range (Point only; ignored for Sun), rest 0
 @group(0) @binding(2) var<storage, read> shaft_lights: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read> casters: array<vec4<f32>>;
 @group(0) @binding(4) var shadow_map_0: texture_depth_2d;
@@ -159,14 +169,37 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         let x = cam_pos + ray_dir * t;
         let sigma = fog_density * exp(-height_falloff * max(x.y, 0.0));
         for (var li: u32 = 0u; li < light_count; li = li + 1u) {
-            let dir_to_light = shaft_lights[li * 2u];
-            let color_slot = shaft_lights[li * 2u + 1u];
+            let base = li * LIGHT_STRIDE;
+            let pos_or_dir = shaft_lights[base];
+            let color_slot = shaft_lights[base + 1u];
+            let range_v = shaft_lights[base + 2u];
             let vis = shadow_vis(color_slot.w, x);
-            // Sun attenuation = 1.0 (D2) — omitted, not multiplied by 1.
-            let light_to_x_dir = -dir_to_light.xyz;
+
+            // D2: Sun att = 1.0, fixed L (dir toward light). Point att =
+            // 1/(1+d²/range²) (light.rs:261), L = normalize(pos - x)
+            // (recomputed per sample, matches `Light::light_dir_at`'s Point
+            // case).
+            var light_dir_toward_light: vec3<f32>;
+            var att: f32;
+            if pos_or_dir.w < 0.5 {
+                light_dir_toward_light = pos_or_dir.xyz;
+                att = 1.0;
+            } else {
+                let to_light = pos_or_dir.xyz - x;
+                let d_sq = dot(to_light, to_light);
+                let range = range_v.x;
+                let r_sq = range * range;
+                light_dir_toward_light = select(
+                    vec3<f32>(0.0, 0.0, 1.0),
+                    to_light * inverseSqrt(max(d_sq, 1e-12)),
+                    d_sq > 1e-12,
+                );
+                att = select(1.0 / (1.0 + d_sq / max(r_sq, 1e-10)), 0.0, r_sq < 1e-10);
+            }
+            let light_to_x_dir = -light_dir_toward_light;
             let cos_theta = dot(ray_dir, light_to_x_dir);
             let phase = henyey_greenstein(g, cos_theta);
-            accum = accum + transmittance * sigma * vis * phase * color_slot.rgb * seg;
+            accum = accum + transmittance * sigma * vis * att * phase * color_slot.rgb * seg;
         }
         transmittance = transmittance * exp(-sigma * seg);
     }

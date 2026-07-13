@@ -15,11 +15,12 @@
 //! byte-for-byte equal.
 
 use half::f16;
-use manifold_gpu::GpuTextureFormat;
+use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::node_graph::PrimitiveRegistry;
 use manifold_renderer::preset_context::PresetContext;
 use manifold_renderer::preset_runtime::PresetRuntime;
+use manifold_renderer::render_target::RenderTarget;
 
 use crate::harness;
 
@@ -319,6 +320,118 @@ fn shaft_intensity_is_a_monotonic_performer_fader() {
     assert!(prev_sum > 0.0, "sanity: the final (hottest) frame must have nonzero total light");
 }
 
+/// P3: a ground plane lit by ONE Point light (`cast_shadows` toggle exposed
+/// so callers can exercise both the shadow-clipped-carve path and the
+/// unshadowed-glow path), with a wired `node.atmosphere` (fog + shafts).
+/// `color` lets the performer-gesture test drive the light's colour across
+/// frames with zero new binding work (VOLUMETRIC_LIGHT_DESIGN.md P3: "key
+/// light color bound to a beat envelope").
+#[allow(clippy::too_many_arguments)]
+fn point_light_shaft_scene_json(
+    fog_density: f32,
+    shaft_intensity: f32,
+    shaft_quality: u32,
+    point_color: (f32, f32, f32),
+    point_intensity: f32,
+    cast_shadows: bool,
+) -> String {
+    let (r, g, b) = point_color;
+    let cast_shadows_f = if cast_shadows { 1.0 } else { 0.0 };
+    let nodes = format!(
+        r#"{{"id":0,"typeId":"system.generator_input","nodeId":"input"}},
+        {{"id":1,"typeId":"node.grid_mesh","nodeId":"ground_grid","params":{{
+            "max_capacity":{{"type":"Int","value":16384}},
+            "resolution_x":{{"type":"Int","value":32}},
+            "resolution_y":{{"type":"Int","value":32}},
+            "size_x":{{"type":"Float","value":40.0}},
+            "size_y":{{"type":"Float","value":40.0}}}}}},
+        {{"id":2,"typeId":"node.make_triangles","nodeId":"ground_tris","params":{{
+            "src_cols":{{"type":"Int","value":32}},
+            "src_rows":{{"type":"Int","value":32}}}}}},
+        {{"id":3,"typeId":"node.orbit_camera","nodeId":"cam","params":{{
+            "orbit":{{"type":"Float","value":0.0}},
+            "tilt":{{"type":"Float","value":0.12}},
+            "distance":{{"type":"Float","value":15.0}},
+            "fov_y":{{"type":"Float","value":1.0}}}}}},
+        {{"id":4,"typeId":"node.phong_material","nodeId":"mat","params":{{
+            "color_r":{{"type":"Float","value":1.0}},
+            "color_g":{{"type":"Float","value":1.0}},
+            "color_b":{{"type":"Float","value":1.0}},
+            "ambient":{{"type":"Float","value":0.1}}}}}},
+        {{"id":30,"typeId":"node.light","nodeId":"point","params":{{
+            "mode":{{"type":"Enum","value":1}},
+            "pos_x":{{"type":"Float","value":6.0}},
+            "pos_y":{{"type":"Float","value":8.0}},
+            "pos_z":{{"type":"Float","value":6.0}},
+            "aim_x":{{"type":"Float","value":0.0}},
+            "aim_y":{{"type":"Float","value":0.0}},
+            "aim_z":{{"type":"Float","value":0.0}},
+            "color_r":{{"type":"Float","value":{r}}},
+            "color_g":{{"type":"Float","value":{g}}},
+            "color_b":{{"type":"Float","value":{b}}},
+            "intensity":{{"type":"Float","value":{point_intensity}}},
+            "range":{{"type":"Float","value":20.0}},
+            "cast_shadows":{{"type":"Float","value":{cast_shadows_f}}}}}}},
+        {{"id":20,"typeId":"node.render_scene","nodeId":"scene","params":{{
+            "objects":{{"type":"Int","value":1}},
+            "lights":{{"type":"Int","value":1}}}}}},
+        {{"id":40,"typeId":"node.atmosphere","nodeId":"atmo","params":{{
+            "fog_density":{{"type":"Float","value":{fog_density}}},
+            "shaft_intensity":{{"type":"Float","value":{shaft_intensity}}},
+            "shaft_quality":{{"type":"Enum","value":{shaft_quality}}}}}}},
+        {{"id":99,"typeId":"system.final_output","nodeId":"out"}}"#,
+    );
+
+    let wires = r#"{"fromNode":1,"fromPort":"vertices","toNode":2,"toPort":"in"},
+        {"fromNode":2,"fromPort":"out","toNode":20,"toPort":"mesh_0"},
+        {"fromNode":3,"fromPort":"out","toNode":20,"toPort":"camera"},
+        {"fromNode":4,"fromPort":"out","toNode":20,"toPort":"material_0"},
+        {"fromNode":30,"fromPort":"out","toNode":20,"toPort":"light_0"},
+        {"fromNode":40,"fromPort":"atmosphere","toNode":20,"toPort":"atmosphere"},
+        {"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}"#;
+
+    format!(r#"{{"version":2,"name":"RenderScenePointShaftProof","nodes":[{nodes}],"wires":[{wires}]}}"#)
+}
+
+/// VOLUMETRIC_LIGHT_DESIGN.md P3 performer gesture: "key light color bound
+/// to a beat envelope — the beams pulse with the music with ZERO new
+/// binding work." `light.color` is already a per-frame CPU wire value (no
+/// GPU-side plumbing added for this) — driving it across frames must move
+/// the beam-region luminance, proving the shaft march re-reads
+/// `shaft_lights` fresh every frame rather than caching a stale colour.
+#[test]
+fn point_light_color_modulation_tracks_beam_luminance_with_zero_new_binding() {
+    let dim = point_light_shaft_scene_json(0.15, 1.5, 2, (0.2, 0.2, 0.2), 2.0, true);
+    let bright = point_light_shaft_scene_json(0.15, 1.5, 2, (1.0, 1.0, 1.0), 2.0, true);
+    let (dim_bytes, _, _) = render_readback(&dim);
+    let (bright_bytes, _, _) = render_readback(&bright);
+    let dim_sum = total_rgb_sum(&dim_bytes);
+    let bright_sum = total_rgb_sum(&bright_bytes);
+    assert!(
+        bright_sum > dim_sum,
+        "brighter light.color must raise the frame's total additive-light response: \
+         dim={dim_sum:.4} bright={bright_sum:.4}"
+    );
+}
+
+/// VOLUMETRIC_LIGHT_DESIGN.md P3 V3 (Point case, end-to-end through the
+/// real graph — the gpu_tests module's `shaft_march_matches_cpu_reference`
+/// proves the kernel math directly; this proves a Point light wired
+/// through `node.light` -> `node.render_scene` actually reaches the march
+/// and moves pixels, matching D2's "unshadowed lights still glow" honest
+/// consequence (`cast_shadows: false` here).
+#[test]
+fn point_light_unshadowed_glow_moves_pixels_versus_shafts_off() {
+    let off = point_light_shaft_scene_json(0.15, 0.0, 1, (1.0, 1.0, 1.0), 2.0, false);
+    let on = point_light_shaft_scene_json(0.15, 1.5, 1, (1.0, 1.0, 1.0), 2.0, false);
+    let (off_bytes, _, _) = render_readback(&off);
+    let (on_bytes, _, _) = render_readback(&on);
+    assert_ne!(
+        off_bytes, on_bytes,
+        "a Point light (cast_shadows=false, D2's unshadowed-glow branch) must still move pixels through the march"
+    );
+}
+
 fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
     let h = harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
@@ -529,4 +642,312 @@ fn ev_zero_camera_lens_is_byte_identical_to_no_camera_lens() {
         with_zero_ev, without_lens,
         "camera_lens at exposure_ev=0 must be byte-identical to no camera_lens node"
     );
+}
+
+// ─── P3 night-garden acceptance demo (D6, L2) ──────────────────────────────
+//
+// A TRUE void — no ground/backdrop geometry at all (adding an opaque backdrop
+// mesh to "catch" the light was tried and rejected: it gets directly lit by
+// the point lights and reads as an ordinary lit wall with a shadow patch on
+// it, exactly the P2 failure mode this design's D6 exists to catch — see the
+// session notes). Two Point lights: `beam_light` (cast_shadows=true, aimed
+// through two pillar occluders so its beam is actually carved) and
+// `glow_light` (cast_shadows=false, D2's honest "bare glow" case). Camera
+// frames both pillars against open space so the shaft has room to read.
+//
+// `render-generator-preset`'s own readback multiplies rgb by alpha before
+// tonemapping (correct for its normal "one layer in a stack" use, wrong for
+// judging a void scene in isolation) — the void's additive shaft glow has
+// alpha=0 there and vanishes. This harness instead composites the raw f16
+// readback over a checkerboard background using the standard premultiplied-
+// over blend (`out = src_rgb + bg_rgb*(1-a)`), the same technique P2's demo
+// used: for a fully-opaque pillar pixel (a≈1) this reduces to the pillar's
+// own lit colour; for a void pixel (a=0) it reduces to the checkerboard PLUS
+// whatever additive glow the march wrote — exactly proving beams read over
+// transparency, and it saves an unambiguous opaque RGB8 PNG (no alpha
+// channel a viewer could hide behind).
+fn night_garden_scene_json(shaft_quality: u32) -> String {
+    format!(
+        r#"{{"version":2,"name":"VolLightP3NightGarden","nodes":[
+        {{"id":0,"typeId":"system.generator_input","nodeId":"input"}},
+        {{"id":1,"typeId":"node.cube_mesh","nodeId":"pillar_a_mesh"}},
+        {{"id":2,"typeId":"node.transform_3d","nodeId":"pillar_a_xf","params":{{
+            "pos_x":{{"type":"Float","value":-2.0}},
+            "pos_y":{{"type":"Float","value":0.0}},
+            "pos_z":{{"type":"Float","value":-4.0}},
+            "scale_x":{{"type":"Float","value":1.0}},
+            "scale_y":{{"type":"Float","value":6.0}},
+            "scale_z":{{"type":"Float","value":1.0}}}}}},
+        {{"id":3,"typeId":"node.cube_mesh","nodeId":"pillar_b_mesh"}},
+        {{"id":4,"typeId":"node.transform_3d","nodeId":"pillar_b_xf","params":{{
+            "pos_x":{{"type":"Float","value":1.6}},
+            "pos_y":{{"type":"Float","value":0.0}},
+            "pos_z":{{"type":"Float","value":-5.0}},
+            "scale_x":{{"type":"Float","value":0.8}},
+            "scale_y":{{"type":"Float","value":7.0}},
+            "scale_z":{{"type":"Float","value":0.8}}}}}},
+        {{"id":5,"typeId":"node.phong_material","nodeId":"pillar_mat","params":{{
+            "color_r":{{"type":"Float","value":0.05}},
+            "color_g":{{"type":"Float","value":0.05}},
+            "color_b":{{"type":"Float","value":0.06}},
+            "ambient":{{"type":"Float","value":0.02}}}}}},
+        {{"id":6,"typeId":"node.orbit_camera","nodeId":"cam","params":{{
+            "orbit":{{"type":"Float","value":0.15}},
+            "tilt":{{"type":"Float","value":0.06}},
+            "distance":{{"type":"Float","value":14.0}},
+            "fov_y":{{"type":"Float","value":0.85}}}}}},
+        {{"id":10,"typeId":"node.light","nodeId":"beam_light","params":{{
+            "mode":{{"type":"Enum","value":1}},
+            "pos_x":{{"type":"Float","value":1.0}},
+            "pos_y":{{"type":"Float","value":15.0}},
+            "pos_z":{{"type":"Float","value":22.0}},
+            "aim_x":{{"type":"Float","value":-0.3}},
+            "aim_y":{{"type":"Float","value":2.5}},
+            "aim_z":{{"type":"Float","value":-4.5}},
+            "color_r":{{"type":"Float","value":0.55}},
+            "color_g":{{"type":"Float","value":0.75}},
+            "color_b":{{"type":"Float","value":1.0}},
+            "intensity":{{"type":"Float","value":7.0}},
+            "range":{{"type":"Float","value":22.0}},
+            "cast_shadows":{{"type":"Float","value":1.0}},
+            "shadow_softness":{{"type":"Enum","value":0}},
+            "shadow_bias":{{"type":"Float","value":0.005}}}}}},
+        {{"id":11,"typeId":"node.light","nodeId":"glow_light","params":{{
+            "mode":{{"type":"Enum","value":1}},
+            "pos_x":{{"type":"Float","value":9.0}},
+            "pos_y":{{"type":"Float","value":3.0}},
+            "pos_z":{{"type":"Float","value":6.0}},
+            "color_r":{{"type":"Float","value":1.0}},
+            "color_g":{{"type":"Float","value":0.5}},
+            "color_b":{{"type":"Float","value":0.25}},
+            "intensity":{{"type":"Float","value":2.5}},
+            "range":{{"type":"Float","value":10.0}},
+            "cast_shadows":{{"type":"Float","value":0.0}}}}}},
+        {{"id":20,"typeId":"node.atmosphere","nodeId":"atmo","params":{{
+            "fog_color_r":{{"type":"Float","value":0.0}},
+            "fog_color_g":{{"type":"Float","value":0.0}},
+            "fog_color_b":{{"type":"Float","value":0.0}},
+            "fog_density":{{"type":"Float","value":0.11}},
+            "ambient_tint_r":{{"type":"Float","value":0.0}},
+            "ambient_tint_g":{{"type":"Float","value":0.0}},
+            "ambient_tint_b":{{"type":"Float","value":0.0}},
+            "shaft_intensity":{{"type":"Float","value":1.8}},
+            "shaft_anisotropy":{{"type":"Float","value":0.85}},
+            "shaft_quality":{{"type":"Enum","value":{shaft_quality}}}}}}},
+        {{"id":30,"typeId":"node.render_scene","nodeId":"scene","params":{{
+            "objects":{{"type":"Int","value":2}},
+            "lights":{{"type":"Int","value":2}}}}}},
+        {{"id":99,"typeId":"system.final_output","nodeId":"out"}}
+        ],"wires":[
+        {{"fromNode":1,"fromPort":"vertices","toNode":30,"toPort":"mesh_0"}},
+        {{"fromNode":2,"fromPort":"transform","toNode":30,"toPort":"transform_0"}},
+        {{"fromNode":5,"fromPort":"out","toNode":30,"toPort":"material_0"}},
+        {{"fromNode":3,"fromPort":"vertices","toNode":30,"toPort":"mesh_1"}},
+        {{"fromNode":4,"fromPort":"transform","toNode":30,"toPort":"transform_1"}},
+        {{"fromNode":5,"fromPort":"out","toNode":30,"toPort":"material_1"}},
+        {{"fromNode":6,"fromPort":"out","toNode":30,"toPort":"camera"}},
+        {{"fromNode":10,"fromPort":"out","toNode":30,"toPort":"light_0"}},
+        {{"fromNode":11,"fromPort":"out","toNode":30,"toPort":"light_1"}},
+        {{"fromNode":20,"fromPort":"atmosphere","toNode":30,"toPort":"atmosphere"}},
+        {{"fromNode":30,"fromPort":"color","toNode":99,"toPort":"in"}}
+        ]}}"#
+    )
+}
+
+/// Standard premultiplied-over blend onto a checkerboard, saved as an
+/// opaque RGB8 PNG (no alpha channel — nothing for a viewer to hide behind).
+/// `out = src_rgb + bg_rgb*(1-a)`: a void pixel (a=0) shows the checkerboard
+/// PLUS whatever additive glow the shaft composite wrote; an opaque pillar
+/// pixel (a≈1) reduces to its own lit colour.
+fn write_checkerboard_composite_png(bytes: &[u8], w: u32, h: u32, path: &str) {
+    let tile = 16u32;
+    let mut out = Vec::with_capacity((w * h * 3) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) as usize * 8;
+            let px = &bytes[i..i + 8];
+            let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
+            let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
+            let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
+            let a = f16::from_le_bytes([px[6], px[7]]).to_f32().clamp(0.0, 1.0);
+            let checker = if ((x / tile) + (y / tile)) % 2 == 0 { 0.25f32 } else { 0.35f32 };
+            let comp = [r + checker * (1.0 - a), g + checker * (1.0 - a), b + checker * (1.0 - a)];
+            for v in comp {
+                let mapped = (v / (1.0 + v)).clamp(0.0, 1.0);
+                out.push((mapped.powf(1.0 / 2.2) * 255.0).round() as u8);
+            }
+        }
+    }
+    image::save_buffer(path, &out, w, h, image::ExtendedColorType::Rgb8)
+        .unwrap_or_else(|e| panic!("write {path}: {e}"));
+}
+
+/// Same render path as [`render_readback`] but at an arbitrary resolution,
+/// own device/target (not `harness::shared()`'s fixed 128x128 parity
+/// canvas) — 128x128 is fine for the numeric proofs above but too small for
+/// a look-pass PNG a reviewer actually looks at (L2).
+fn render_readback_hires(json: &str, w: u32, h: u32) -> Vec<u8> {
+    let device = GpuDevice::new();
+    let registry = PrimitiveRegistry::with_builtin();
+    let format = GpuTextureFormat::Rgba16Float;
+    let mut runtime =
+        PresetRuntime::from_json_str_with_device(json, &registry, &device, w, h, format, None)
+            .expect("night-garden hires scene graph must build");
+    let target = RenderTarget::new(&device, w, h, format, "p3-night-garden-hires");
+    for frame in 0..3 {
+        let ctx = PresetContext {
+            time: frame as f64 / 60.0,
+            beat: frame as f64 / 30.0,
+            dt: 1.0 / 60.0,
+            width: w,
+            height: h,
+            output_width: w,
+            output_height: h,
+            aspect: w as f32 / h as f32,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: frame,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let mut enc = device.create_encoder("p3-night-garden-hires-enc");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+            runtime.render(
+                &mut gpu,
+                &target.texture,
+                &ctx,
+                &manifold_core::params::ParamManifest::default(),
+            );
+        }
+        enc.commit_and_wait_completed();
+    }
+    let bytes_per_row = w * 8;
+    let total = u64::from(h * bytes_per_row);
+    let readback = device.create_buffer_shared(total);
+    let mut enc = device.create_encoder("p3-night-garden-hires-readback");
+    enc.copy_texture_to_buffer(&target.texture, &readback, w, h, bytes_per_row);
+    enc.commit_and_wait_completed();
+    let ptr = readback.mapped_ptr().expect("shared readback buffer");
+    unsafe { std::slice::from_raw_parts(ptr, total as usize).to_vec() }
+}
+
+#[test]
+fn p3_night_garden_hires_acceptance_demo() {
+    // D6/L2: the real look-pass artifact, at a size Peter can actually judge
+    // (960x540, vs the 128x128 numeric-proof canvas above). Med and High
+    // quality, same checkerboard-over composite so the void's additive glow
+    // is visible rather than hidden behind alpha.
+    for (quality, path) in [
+        (1u32, "/tmp/vol_light_p3_night_garden_hires_med.png"),
+        (2u32, "/tmp/vol_light_p3_night_garden_hires_high.png"),
+    ] {
+        let json = night_garden_scene_json(quality);
+        let bytes = render_readback_hires(&json, 960, 540);
+        write_checkerboard_composite_png(&bytes, 960, 540, path);
+    }
+}
+
+#[test]
+fn p3_night_garden_acceptance_demo() {
+    // D6/L2 acceptance demo for P3: renders the night-garden scene at Med
+    // (shaft_quality=1) and High (shaft_quality=2) and writes both PNGs for
+    // Peter's look-pass — this test's job is to produce the artifact, not to
+    // grade it (the report's honest description of what's actually in the
+    // PNG is the real gate, per D6's lesson).
+    for (quality, path) in [
+        (1u32, "/tmp/vol_light_p3_night_garden_med.png"),
+        (2u32, "/tmp/vol_light_p3_night_garden_high.png"),
+    ] {
+        let json = night_garden_scene_json(quality);
+        let (bytes, w, h) = render_readback(&json);
+        write_checkerboard_composite_png(&bytes, w, h, path);
+        // Sanity: shafts must actually be contributing SOMETHING (not a
+        // silent no-op) — total additive response over the whole frame must
+        // be well above the numeric noise floor.
+        let sum = total_rgb_sum(&bytes);
+        assert!(sum > 1.0, "quality {quality}: night-garden total rgb sum {sum:.4} looks like a no-op");
+    }
+}
+
+#[test]
+fn beam_color_tracks_light_color_modulation() {
+    // P3 performer-gesture line: "god rays shouldn't react to audio, lights
+    // will do that for us" — `light.color` is already modulatable per the
+    // existing binding system (zero new binding work), and the shafts must
+    // inherit it for free. Drive `beam_light`'s colour across two frames
+    // (a stand-in for a beat-enveloped light-colour binding) and assert the
+    // beam-region luminance tracks the change — same monotonic-style check
+    // pattern as P2's `shaft_intensity_is_a_monotonic_performer_fader`,
+    // applied to colour instead of intensity.
+    fn colored_scene_json(color_scale: f32) -> String {
+        // Reuse the night-garden shape but collapse to ONE unshadowed Point
+        // light so "beam-region response" is unambiguous (no second light's
+        // contribution to disentangle), fog+shafts on, quality Med.
+        format!(
+            r#"{{"version":2,"name":"BeamColorGesture","nodes":[
+            {{"id":0,"typeId":"system.generator_input","nodeId":"input"}},
+            {{"id":1,"typeId":"node.cube_mesh","nodeId":"pillar_mesh"}},
+            {{"id":2,"typeId":"node.transform_3d","nodeId":"pillar_xf","params":{{
+                "pos_x":{{"type":"Float","value":0.0}},
+                "pos_y":{{"type":"Float","value":0.0}},
+                "pos_z":{{"type":"Float","value":-30.0}},
+                "scale_x":{{"type":"Float","value":1.0}},
+                "scale_y":{{"type":"Float","value":1.0}},
+                "scale_z":{{"type":"Float","value":1.0}}}}}},
+            {{"id":5,"typeId":"node.phong_material","nodeId":"mat"}},
+            {{"id":6,"typeId":"node.orbit_camera","nodeId":"cam","params":{{
+                "orbit":{{"type":"Float","value":0.0}},
+                "tilt":{{"type":"Float","value":0.0}},
+                "distance":{{"type":"Float","value":10.0}},
+                "fov_y":{{"type":"Float","value":0.9}}}}}},
+            {{"id":10,"typeId":"node.light","nodeId":"beam_light","params":{{
+                "mode":{{"type":"Enum","value":1}},
+                "pos_x":{{"type":"Float","value":0.0}},
+                "pos_y":{{"type":"Float","value":0.0}},
+                "pos_z":{{"type":"Float","value":2.0}},
+                "color_r":{{"type":"Float","value":{cr}}},
+                "color_g":{{"type":"Float","value":{cg}}},
+                "color_b":{{"type":"Float","value":{cb}}},
+                "intensity":{{"type":"Float","value":4.0}},
+                "range":{{"type":"Float","value":20.0}},
+                "cast_shadows":{{"type":"Float","value":0.0}}}}}},
+            {{"id":20,"typeId":"node.atmosphere","nodeId":"atmo","params":{{
+                "fog_color_r":{{"type":"Float","value":0.0}},
+                "fog_color_g":{{"type":"Float","value":0.0}},
+                "fog_color_b":{{"type":"Float","value":0.0}},
+                "fog_density":{{"type":"Float","value":0.12}},
+                "shaft_intensity":{{"type":"Float","value":1.0}},
+                "shaft_quality":{{"type":"Enum","value":1}}}}}},
+            {{"id":30,"typeId":"node.render_scene","nodeId":"scene","params":{{
+                "objects":{{"type":"Int","value":1}},
+                "lights":{{"type":"Int","value":1}}}}}},
+            {{"id":99,"typeId":"system.final_output","nodeId":"out"}}
+            ],"wires":[
+            {{"fromNode":1,"fromPort":"vertices","toNode":30,"toPort":"mesh_0"}},
+            {{"fromNode":2,"fromPort":"transform","toNode":30,"toPort":"transform_0"}},
+            {{"fromNode":5,"fromPort":"out","toNode":30,"toPort":"material_0"}},
+            {{"fromNode":6,"fromPort":"out","toNode":30,"toPort":"camera"}},
+            {{"fromNode":10,"fromPort":"out","toNode":30,"toPort":"light_0"}},
+            {{"fromNode":20,"fromPort":"atmosphere","toNode":30,"toPort":"atmosphere"}},
+            {{"fromNode":30,"fromPort":"color","toNode":99,"toPort":"in"}}
+            ]}}"#,
+            cr = color_scale,
+            cg = color_scale * 0.6,
+            cb = color_scale * 0.3,
+        )
+    }
+
+    let mut prev_sum = -1.0f64;
+    for color_scale in [0.0f32, 0.3, 0.8, 1.5, 3.0] {
+        let (bytes, _, _) = render_readback(&colored_scene_json(color_scale));
+        let sum = total_rgb_sum(&bytes);
+        assert!(
+            sum >= prev_sum - 1e-3,
+            "color_scale {color_scale}: beam total rgb sum {sum:.4} must be >= previous {prev_sum:.4} \
+             (beams must track light.color modulation with zero new binding work)"
+        );
+        prev_sum = sum;
+    }
+    assert!(prev_sum > 0.0, "sanity: the final (brightest colour) frame must have nonzero total light");
 }

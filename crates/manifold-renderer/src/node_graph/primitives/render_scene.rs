@@ -987,6 +987,54 @@ impl RenderScene {
                 "node.render_scene.velocity",
             );
         }
+
+        // BUG-found-by-P3-perf-gate (VOLUMETRIC_LIGHT_DESIGN.md P3): the
+        // shadow depth-only pipeline (`ensure_shadow_pass`) and the three
+        // shaft pipelines (`ensure_shaft_pipelines`) are BOTH asset-
+        // independent (fixed shader source, fixed entry points) — the exact
+        // BUG-037 shape (a lazy `Option::get_or_insert_with` cache never
+        // touched by `GeneratorRegistry::prewarm_all`'s bundled-preset loop,
+        // because no bundled preset happens to hit a shadow-casting light or
+        // a nonzero shaft_intensity). The P3 content-thread perf gate
+        // (`MANIFOLD_RENDER_TRACE=1`, a 4-shadow-casting-light High-quality
+        // scene) measured frame 0 at 79.9ms — entirely first-use pipeline
+        // compiles, steady state (frames 1-119) stayed under the 20ms
+        // budget with no RENDER_TRACE spike at all. Root fix, not a
+        // per-scene workaround: warm all four pipelines here so a live
+        // project's first shadow-casting/shaft-on frame is a cache hit.
+        device.create_render_pipeline_depth_only(
+            include_str!("shaders/shadow_depth.wgsl"),
+            "vs_main",
+            "fs_shadow",
+            manifold_gpu::GpuTextureFormat::Depth32Float,
+            "node.render_scene shadow depth",
+        );
+        device.create_compute_pipeline(
+            include_str!("shaders/shaft_depth_downsample.wgsl"),
+            "cs_main",
+            "node.render_scene shaft downsample",
+        );
+        device.create_compute_pipeline(
+            include_str!("shaders/shaft_march.wgsl"),
+            "cs_main",
+            "node.render_scene shaft march",
+        );
+        let shaft_composite_blend = manifold_gpu::GpuBlendState {
+            src_factor: manifold_gpu::GpuBlendFactor::One,
+            dst_factor: manifold_gpu::GpuBlendFactor::One,
+            operation: manifold_gpu::GpuBlendOp::Add,
+            src_alpha_factor: manifold_gpu::GpuBlendFactor::Zero,
+            dst_alpha_factor: manifold_gpu::GpuBlendFactor::One,
+            alpha_operation: manifold_gpu::GpuBlendOp::Add,
+        };
+        device.create_render_pipeline(
+            include_str!("shaders/shaft_composite.wgsl"),
+            "vs_main",
+            "fs_main",
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            Some(shaft_composite_blend),
+            "node.render_scene shaft composite",
+        );
     }
 
     /// AI-composition surface metadata.
@@ -1223,12 +1271,18 @@ impl EffectNode for RenderScene {
         let mut light_count: u32 = 0;
         let mut casters: Vec<crate::node_graph::light::Light> =
             Vec::with_capacity(MAX_SHADOW_CASTING_LIGHTS);
-        // VOLUMETRIC_LIGHT_DESIGN.md D2 (P2): Sun-only subset of the same
-        // 2-vec4-per-light packing, for the march kernel. Point lights are
-        // P3 — filtered out here rather than in the shader, so the march
-        // never even sees them (no wasted per-step work on lights it can't
-        // yet handle). Reuses the SAME `slot` this loop already computed
-        // (the caster table below is shared, unfiltered by mode).
+        // VOLUMETRIC_LIGHT_DESIGN.md D2 (P3): every wired light (Sun AND
+        // Point) contributes to the march — 3-vec4-per-light packing,
+        // matching `shaft_march.wgsl`'s `shaft_lights` binding(2) layout
+        // field-for-field:
+        //   [i*3+0] = Sun: dir-toward-light (.xyz, matches
+        //             `Light::light_dir_at`'s Sun case), .w = 0.0 (mode Sun)
+        //           = Point: light world position (.xyz), .w = 1.0 (mode Point)
+        //   [i*3+1] = premultiplied color.rgb, .w = caster slot (-1 =
+        //             unshadowed glow, D2's honest cost)
+        //   [i*3+2] = .x = attenuation range (Point only; ignored for Sun)
+        // Reuses the SAME `slot` this loop already computed (the caster
+        // table below is shared, unfiltered by mode).
         let mut shaft_light_data: Vec<[f32; 4]> = Vec::new();
         let mut shaft_light_count: u32 = 0;
         for i in 0..lights_n {
@@ -1243,11 +1297,18 @@ impl EffectNode for RenderScene {
                 light_data.push([-l.dir[0], -l.dir[1], -l.dir[2], 1.0]);
                 light_data.push([l.color[0], l.color[1], l.color[2], slot]);
                 light_count += 1;
-                if l.mode == crate::node_graph::light::LightMode::Sun {
-                    shaft_light_data.push([-l.dir[0], -l.dir[1], -l.dir[2], 1.0]);
-                    shaft_light_data.push([l.color[0], l.color[1], l.color[2], slot]);
-                    shaft_light_count += 1;
-                }
+                let pos_or_dir = match l.mode {
+                    crate::node_graph::light::LightMode::Sun => {
+                        [-l.dir[0], -l.dir[1], -l.dir[2], 0.0]
+                    }
+                    crate::node_graph::light::LightMode::Point => {
+                        [l.pos[0], l.pos[1], l.pos[2], 1.0]
+                    }
+                };
+                shaft_light_data.push(pos_or_dir);
+                shaft_light_data.push([l.color[0], l.color[1], l.color[2], slot]);
+                shaft_light_data.push([l.range, 0.0, 0.0, 0.0]);
+                shaft_light_count += 1;
             }
         }
         // D4: `@binding(8)` must ALWAYS be bound (the fragment shaders
@@ -1258,11 +1319,11 @@ impl EffectNode for RenderScene {
             light_data.extend([[0.0f32; 4]; 2]);
         }
         // Same D4 always-bind discipline: the march's `shaft_lights`
-        // binding must be a valid (non-zero-length) buffer even at 0 Sun
+        // binding must be a valid (non-zero-length) buffer even at 0
         // lights (`shaft_light_count` gates the shader's loop, not the
-        // binding's presence).
+        // binding's presence). 3 vec4s = one zeroed light-shaped stub.
         if shaft_light_data.is_empty() {
-            shaft_light_data.extend([[0.0f32; 4]; 2]);
+            shaft_light_data.extend([[0.0f32; 4]; 3]);
         }
 
         // Caster table (`@binding(9)`): `MAX_SHADOW_CASTING_LIGHTS` slots ×
@@ -1923,6 +1984,23 @@ mod tests {
         );
     }
 
+    /// VOLUMETRIC_LIGHT_DESIGN.md P3 deliverable 4: `shaft_quality`'s
+    /// 0/1/2 (Low/Med/High) enum must decode to D2's committed 16/24/32
+    /// step counts, and the march's uniform build (`evaluate`, ~line 1837)
+    /// feeds `shaft_step_count(atmosphere.shaft_quality)` straight into
+    /// `misc.x` — this pins the CPU-side half of "quality actually drives
+    /// step count" (already wired since P2; P3 confirms it, per the phase
+    /// brief's "confirm P2 actually reads shaft_quality" instruction).
+    #[test]
+    fn shaft_step_count_matches_design() {
+        assert_eq!(shaft_step_count(0), 16, "Low");
+        assert_eq!(shaft_step_count(1), 24, "Med (default)");
+        assert_eq!(shaft_step_count(2), 32, "High");
+        // Any value past 2 clamps to High (the enum can only ever carry
+        // 0..=2 in practice; this just keeps the decode total).
+        assert_eq!(shaft_step_count(3), 32);
+    }
+
     /// D3's committed upsample-tap weight, in isolation: `exp(-(Δz/z_full)^2
     /// * 400)`, `Δz = |z_full - z_tap|`.
     fn bilateral_weight(z_full: f32, z_tap: f32) -> f32 {
@@ -2399,6 +2477,9 @@ mod gpu_tests {
     fn add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
         [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
     }
+    fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+        [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+    }
     fn scale3(a: [f32; 3], s: f32) -> [f32; 3] {
         [a[0] * s, a[1] * s, a[2] * s]
     }
@@ -2425,15 +2506,33 @@ mod gpu_tests {
         v - v.floor()
     }
 
-    /// Plain-Rust twin of `shaft_march.wgsl`'s `cs_main`, ONE Sun light,
-    /// shadow visibility computed against a KNOWN-constant occluder
-    /// light-space depth (`occluder_ndc_z`) rather than re-deriving PCF —
-    /// legitimate because the GPU fixture's shadow map is spatially uniform
-    /// by construction (a single flat occluder plane under a straight-down
-    /// Sun ortho projection projects to the SAME light-space depth
-    /// everywhere), so a linear-filtered hardware compare against a
-    /// constant field can never partially blend — it's exactly the same
-    /// boolean at all 4 taps.
+    /// One march-visible light, CPU-twin shape mirroring `shaft_lights`'
+    /// binding(2) 3-vec4 packing (VOLUMETRIC_LIGHT_DESIGN.md D2, P3): `slot
+    /// < 0.0` means unshadowed glow (no caster table lookup at all) — this
+    /// is how the Point-light case below stays simple (no second shadow
+    /// map fixture needed; D2's honest "no slot -> vis=1.0" consequence is
+    /// exactly what's being exercised).
+    struct MarchLight {
+        mode_point: bool,
+        pos: [f32; 3],
+        dir: [f32; 3],
+        range: f32,
+        color: [f32; 3],
+        slot: f32,
+    }
+
+    /// Plain-Rust twin of `shaft_march.wgsl`'s `cs_main`, Sun AND Point
+    /// lights (P3), shadow visibility computed against a KNOWN-constant
+    /// occluder light-space depth (`occluder_ndc_z`) rather than
+    /// re-deriving PCF — legitimate because the GPU fixture's shadow map is
+    /// spatially uniform by construction (a single flat occluder plane
+    /// under a straight-down Sun ortho projection projects to the SAME
+    /// light-space depth everywhere), so a linear-filtered hardware compare
+    /// against a constant field can never partially blend — it's exactly
+    /// the same boolean at all 4 taps. Only `slot == 0` (the Sun in this
+    /// fixture) ever consults `vp`/`bias`/`occluder_ndc_z`; any other slot
+    /// (including the Point light's `-1`, unshadowed) short-circuits to
+    /// `vis = 1.0`, matching `shadow_vis`'s `slot_f < 0.0` branch.
     #[allow(clippy::too_many_arguments)]
     fn cpu_march_reference(
         x: u32,
@@ -2455,7 +2554,7 @@ mod gpu_tests {
         shaft_intensity: f32,
         steps: u32,
         exposure_ev: f32,
-        light: &Light,
+        lights: &[MarchLight],
         vp: [[f32; 4]; 4],
         bias: f32,
         occluder_ndc_z: f32,
@@ -2486,25 +2585,46 @@ mod gpu_tests {
             let px = add3(cam_pos, scale3(ray_dir, t));
             let sigma = fog_density * (-height_falloff * px[1].max(0.0)).exp();
 
-            let clip = mat4_mul_vec4_test(vp, [px[0], px[1], px[2], 1.0]);
-            let vis = if clip[3] <= 0.0 {
-                1.0
-            } else {
-                let ndc_z = clip[2] / clip[3];
-                let ndc_xy = [clip[0] / clip[3], clip[1] / clip[3]];
-                let suv = [ndc_xy[0] * 0.5 + 0.5, ndc_xy[1] * -0.5 + 0.5];
-                if !(0.0..=1.0).contains(&suv[0]) || !(0.0..=1.0).contains(&suv[1]) || !(0.0..=1.0).contains(&ndc_z) {
+            for light in lights {
+                let vis = if light.slot < 0.0 {
                     1.0
                 } else {
-                    let ref_depth = ndc_z - bias;
-                    if ref_depth < occluder_ndc_z { 1.0 } else { 0.0 }
+                    let clip = mat4_mul_vec4_test(vp, [px[0], px[1], px[2], 1.0]);
+                    if clip[3] <= 0.0 {
+                        1.0
+                    } else {
+                        let ndc_z = clip[2] / clip[3];
+                        let ndc_xy = [clip[0] / clip[3], clip[1] / clip[3]];
+                        let suv = [ndc_xy[0] * 0.5 + 0.5, ndc_xy[1] * -0.5 + 0.5];
+                        if !(0.0..=1.0).contains(&suv[0])
+                            || !(0.0..=1.0).contains(&suv[1])
+                            || !(0.0..=1.0).contains(&ndc_z)
+                        {
+                            1.0
+                        } else {
+                            let ref_depth = ndc_z - bias;
+                            if ref_depth < occluder_ndc_z { 1.0 } else { 0.0 }
+                        }
+                    }
+                };
+
+                // D2: Sun att = 1.0, fixed L (dir toward light). Point att =
+                // 1/(1+d²/range²) (light.rs:261), L = normalize(pos - x).
+                let (light_to_x_dir, att) = if light.mode_point {
+                    let to_light = sub3(light.pos, px);
+                    let d_sq = dot3(to_light, to_light);
+                    let r_sq = light.range * light.range;
+                    let att = if r_sq < 1e-10 { 0.0 } else { 1.0 / (1.0 + d_sq / r_sq) };
+                    let d = d_sq.max(1e-12).sqrt();
+                    (scale3(to_light, -1.0 / d), att)
+                } else {
+                    (light.dir, 1.0)
+                };
+                let cos_theta = dot3(ray_dir, light_to_x_dir);
+                let phase = henyey_greenstein_test(g, cos_theta);
+                for (c, acc) in accum.iter_mut().enumerate() {
+                    *acc += transmittance * sigma * vis * att * phase * light.color[c] * seg;
                 }
-            };
-            let light_to_x_dir = light.dir;
-            let cos_theta = dot3(ray_dir, light_to_x_dir);
-            let phase = henyey_greenstein_test(g, cos_theta);
-            for (c, acc) in accum.iter_mut().enumerate() {
-                *acc += transmittance * sigma * vis * phase * light.color[c] * seg;
             }
             transmittance *= (-sigma * seg).exp();
         }
@@ -2521,9 +2641,12 @@ mod gpu_tests {
     /// `depth_common.wgsl` concatenated ahead) must agree with
     /// `cpu_march_reference` (same committed D2 math, independent Rust
     /// implementation) within 1e-3, on a small synthetic grid: one Sun
-    /// light, a fabricated 8x8 shadow map (a real depth-only render of one
-    /// flat occluder quad — not a hand-uploaded texture, since Depth32Float
-    /// textures don't support CPU upload), flat scene depth.
+    /// light (shadow-casting, against a fabricated 8x8 shadow map — a real
+    /// depth-only render of one flat occluder quad, not a hand-uploaded
+    /// texture, since Depth32Float textures don't support CPU upload) PLUS
+    /// one Point light (P3, `cast_shadows=false` — no second caster map
+    /// needed, exercises D2's unshadowed-glow branch and the Point
+    /// attenuation/phase math), flat scene depth.
     #[test]
     fn shaft_march_matches_cpu_reference() {
         let device = crate::test_device();
@@ -2554,6 +2677,24 @@ mod gpu_tests {
         );
         assert_eq!(light.mode, LightMode::Sun);
         let vp = light.shadow_view_proj();
+
+        // P3: a Point light alongside the Sun. Deliberately `cast_shadows:
+        // false` — no second shadow map fixture needed; D2's honest
+        // consequence ("no caster slot -> vis=1.0 unshadowed glow") is
+        // exactly what this exercises, and it's a real production shape
+        // ("one bare glow" in the P3 acceptance demo).
+        let point_light = Light::point(
+            [8.0, 6.0, 4.0],
+            [0.0, 0.0, 0.0],
+            [0.3, 0.6, 1.0],
+            2.0,
+            12.0,
+            false,
+            ShadowSoftness::Soft,
+            0.001,
+            8,
+        );
+        assert_eq!(point_light.mode, LightMode::Point);
 
         // Fabricate the 8x8 shadow map by actually rendering one large flat
         // occluder quad at world y=20 (between the light at y=50 and the
@@ -2641,9 +2782,18 @@ mod gpu_tests {
         caster_table[4] = [bias, 2.0, 1.0 / smap_res as f32, 0.0];
         let caster_bytes: &[u8] = bytemuck::cast_slice(&caster_table);
 
+        // 3-vec4-per-light packing (matches `shaft_march.wgsl`'s
+        // binding(2) layout / `RenderScene::evaluate`'s shaft_light_data
+        // build): [pos_or_dir(.w=mode)], [color.rgb, slot], [range, 0,0,0].
+        // Sun (slot 0, this fixture's only caster) -> dir-toward-light,
+        // mode 0. Point (slot -1, unshadowed) -> world pos, mode 1.
         let shaft_light_data: Vec<[f32; 4]> = vec![
-            [-light.dir[0], -light.dir[1], -light.dir[2], 1.0],
+            [-light.dir[0], -light.dir[1], -light.dir[2], 0.0],
             [light.color[0], light.color[1], light.color[2], 0.0],
+            [light.range, 0.0, 0.0, 0.0],
+            [point_light.pos[0], point_light.pos[1], point_light.pos[2], 1.0],
+            [point_light.color[0], point_light.color[1], point_light.color[2], -1.0],
+            [point_light.range, 0.0, 0.0, 0.0],
         ];
         let shaft_light_bytes: &[u8] = bytemuck::cast_slice(&shaft_light_data);
 
@@ -2679,7 +2829,7 @@ mod gpu_tests {
             camera_up: [up[0], up[1], up[2], fov_y],
             camera_fwd: [fwd[0], fwd[1], fwd[2], aspect],
             fog_shaft: [fog_density, height_falloff, g, shaft_intensity],
-            misc: [steps as f32, 1.0, exposure_ev, 0.0],
+            misc: [steps as f32, 2.0, exposure_ev, 0.0],
         };
 
         let pipeline = device.create_compute_pipeline(
@@ -2726,12 +2876,31 @@ mod gpu_tests {
             clip[2] / clip[3]
         };
 
+        let march_lights = [
+            MarchLight {
+                mode_point: false,
+                pos: light.pos,
+                dir: light.dir,
+                range: light.range,
+                color: [light.color[0], light.color[1], light.color[2]],
+                slot: 0.0,
+            },
+            MarchLight {
+                mode_point: true,
+                pos: point_light.pos,
+                dir: point_light.dir,
+                range: point_light.range,
+                color: [point_light.color[0], point_light.color[1], point_light.color[2]],
+                slot: -1.0,
+            },
+        ];
+
         for y in 0..h {
             for x in 0..w {
                 let cpu = cpu_march_reference(
                     x, y, w, h, raw_depth, near, far, cam_pos, right, up, fwd, fov_y, aspect,
-                    fog_density, height_falloff, g, shaft_intensity, steps, exposure_ev, &light,
-                    vp, bias, occluder_ndc_z,
+                    fog_density, height_falloff, g, shaft_intensity, steps, exposure_ev,
+                    &march_lights, vp, bias, occluder_ndc_z,
                 );
                 let idx = (y * w + x) as usize;
                 let gpu = gpu_out[idx];
