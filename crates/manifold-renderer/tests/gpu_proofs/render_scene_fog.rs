@@ -93,10 +93,10 @@ fn fog_scene_json(fog: Option<(f32, f32, f32, f32)>) -> String {
 
 /// Same ground-plane scene as [`fog_scene_json`], no fog, with a
 /// `node.atmosphere` wired whose ONLY non-default field is `shaft_intensity`
-/// (VOLUMETRIC_LIGHT_DESIGN.md D1/P1). P1 threads the field into
-/// `RenderSceneUniforms` but no shader code reads `shaft_params` yet — no
-/// march kernel exists until P2 — so ANY `shaft_intensity` value must
-/// currently be a pure no-op at the pixel.
+/// (VOLUMETRIC_LIGHT_DESIGN.md D1/D2). At `shaft_intensity == 0` (the
+/// default/unwired value) this must still be byte-identical to no atmosphere
+/// at all (V1) — the march never runs. Non-zero values now (P2) drive the
+/// real march kernel.
 fn shaft_scene_json(shaft_intensity: f32) -> String {
     let mut nodes = String::from(
         r#"{"id":0,"typeId":"system.generator_input","nodeId":"input"},
@@ -155,11 +155,10 @@ fn shaft_scene_json(shaft_intensity: f32) -> String {
 
 #[test]
 fn shafts_off_byte_identical() {
-    // VOLUMETRIC_LIGHT_DESIGN.md V1 (P1): shaft_intensity == 0 (default,
-    // unwired) must render byte-identical to today. P1 has no march kernel
-    // at all yet, so this also proves the stronger P1-local claim: ANY
-    // shaft_intensity value is currently a pixel-level no-op (the field is
-    // threaded into the uniform but no shader code reads it until P2).
+    // VOLUMETRIC_LIGHT_DESIGN.md V1 (re-run at P2): shaft_intensity == 0
+    // (default, unwired) must render byte-identical to today, even now that
+    // the march kernel exists — `wants_shafts` gates it off entirely, no
+    // texture/pipeline is ever touched.
     let (off, _, _) = render_readback(&shaft_scene_json(0.0));
     let (golden, _, _) = render_readback(&fog_scene_json(None));
     assert_eq!(
@@ -167,11 +166,157 @@ fn shafts_off_byte_identical() {
         "shaft_intensity 0 must be byte-identical to no atmosphere at all (the pre-change golden buffer)"
     );
 
-    let (hot, _, _) = render_readback(&shaft_scene_json(5.0));
-    assert_eq!(
-        hot, golden,
-        "P1 has no march kernel yet: shaft_intensity must be a no-op at the pixel until P2 wires the consumer"
+    // The inverse of the old P1-only assertion: now that the march kernel
+    // exists, a non-zero shaft_intensity MUST change pixels (there's a lit
+    // Sun with cast_shadows off — unshadowed glow — so a nonzero fog_density
+    // is needed for the march to have anything to scatter through; the
+    // scene here has fog_density 0 via `node.atmosphere`'s default, so the
+    // march's sigma is 0 everywhere and it's STILL a no-op — that's D1's own
+    // "one haze, two renderings" contract, not a P2 regression). Assert the
+    // real positive case instead: wiring both fog_density and shaft_intensity
+    // must move pixels away from the golden buffer.
+    let hazy = shaft_and_fog_scene_json(0.15, 5.0);
+    let (hazy_bytes, _, _) = render_readback(&hazy);
+    assert_ne!(
+        hazy_bytes, golden,
+        "fog_density>0 AND shaft_intensity>0 must move pixels — the march kernel must actually run (P2)"
     );
+}
+
+/// Same ground-plane scene as [`shaft_scene_json`], but the `node.atmosphere`
+/// also carries a nonzero `fog_density` — the march's `σ(x)` needs density to
+/// have anything to scatter (D2: `σ = fog_density · exp(-height_falloff ·
+/// max(x.y,0))`), so this is the minimal scene that actually exercises the
+/// march kernel end-to-end.
+fn shaft_and_fog_scene_json(fog_density: f32, shaft_intensity: f32) -> String {
+    let mut nodes = String::from(
+        r#"{"id":0,"typeId":"system.generator_input","nodeId":"input"},
+        {"id":1,"typeId":"node.grid_mesh","nodeId":"ground_grid","params":{
+            "max_capacity":{"type":"Int","value":16384},
+            "resolution_x":{"type":"Int","value":32},
+            "resolution_y":{"type":"Int","value":32},
+            "size_x":{"type":"Float","value":40.0},
+            "size_y":{"type":"Float","value":40.0}}},
+        {"id":2,"typeId":"node.make_triangles","nodeId":"ground_tris","params":{
+            "src_cols":{"type":"Int","value":32},
+            "src_rows":{"type":"Int","value":32}}},
+        {"id":3,"typeId":"node.orbit_camera","nodeId":"cam","params":{
+            "orbit":{"type":"Float","value":0.0},
+            "tilt":{"type":"Float","value":0.12},
+            "distance":{"type":"Float","value":15.0},
+            "fov_y":{"type":"Float","value":1.0}}},
+        {"id":4,"typeId":"node.phong_material","nodeId":"mat","params":{
+            "color_r":{"type":"Float","value":1.0},
+            "color_g":{"type":"Float","value":1.0},
+            "color_b":{"type":"Float","value":1.0},
+            "ambient":{"type":"Float","value":0.1}}},
+        {"id":30,"typeId":"node.light","nodeId":"sun","params":{
+            "mode":{"type":"Enum","value":0},
+            "pos_x":{"type":"Float","value":0.0},
+            "pos_y":{"type":"Float","value":30.0},
+            "pos_z":{"type":"Float","value":0.0},
+            "aim_x":{"type":"Float","value":0.0},
+            "aim_y":{"type":"Float","value":0.0},
+            "aim_z":{"type":"Float","value":0.0},
+            "color_r":{"type":"Float","value":1.0},
+            "color_g":{"type":"Float","value":1.0},
+            "color_b":{"type":"Float","value":1.0},
+            "intensity":{"type":"Float","value":1.0},
+            "cast_shadows":{"type":"Float","value":1.0}}},
+        {"id":20,"typeId":"node.render_scene","nodeId":"scene","params":{
+            "objects":{"type":"Int","value":1},
+            "lights":{"type":"Int","value":1}}}"#,
+    );
+    nodes.push_str(&format!(
+        r#",{{"id":40,"typeId":"node.atmosphere","nodeId":"atmo","params":{{
+            "fog_density":{{"type":"Float","value":{fog_density}}},
+            "shaft_intensity":{{"type":"Float","value":{shaft_intensity}}}}}}}"#,
+    ));
+    nodes.push_str(r#",{"id":99,"typeId":"system.final_output","nodeId":"out"}"#);
+
+    let wires = r#"{"fromNode":1,"fromPort":"vertices","toNode":2,"toPort":"in"},
+        {"fromNode":2,"fromPort":"out","toNode":20,"toPort":"mesh_0"},
+        {"fromNode":3,"fromPort":"out","toNode":20,"toPort":"camera"},
+        {"fromNode":4,"fromPort":"out","toNode":20,"toPort":"material_0"},
+        {"fromNode":30,"fromPort":"out","toNode":20,"toPort":"light_0"},
+        {"fromNode":40,"fromPort":"atmosphere","toNode":20,"toPort":"atmosphere"},
+        {"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}"#;
+
+    format!(r#"{{"version":2,"name":"RenderSceneShaftFogProof","nodes":[{nodes}],"wires":[{wires}]}}"#)
+}
+
+#[test]
+fn shafts_two_runs_bit_identical() {
+    // VOLUMETRIC_LIGHT_DESIGN.md V2: the journey-proofs determinism
+    // property, scene-local. Committed hash jitter + fixed step counts +
+    // no temporal accumulation (D5) means two independent renders of the
+    // SAME graph must be bit-for-bit identical — not merely close.
+    let json = shaft_and_fog_scene_json(0.15, 1.2);
+    let (first, _, _) = render_readback(&json);
+    let (second, _, _) = render_readback(&json);
+    assert_eq!(first, second, "two runs of the same shaft graph must be bit-identical (D5, no temporal accumulation)");
+}
+
+#[test]
+fn shafts_leave_alpha_untouched() {
+    // VOLUMETRIC_LIGHT_DESIGN.md V4: the additive composite's alpha channel
+    // must be untouched by the shaft blend (D3) — the ROP's src_alpha=Zero/
+    // dst_alpha=One enforces this, this test proves it at the pixel.
+    let on = shaft_and_fog_scene_json(0.15, 1.2);
+    let off = shaft_and_fog_scene_json(0.15, 0.0);
+    let (on_bytes, _, _) = render_readback(&on);
+    let (off_bytes, _, _) = render_readback(&off);
+    assert_eq!(on_bytes.len(), off_bytes.len());
+    for (i, chunk) in on_bytes.chunks_exact(8).enumerate() {
+        let off_chunk = &off_bytes[i * 8..i * 8 + 8];
+        let on_a = f16::from_le_bytes([chunk[6], chunk[7]]).to_f32();
+        let off_a = f16::from_le_bytes([off_chunk[6], off_chunk[7]]).to_f32();
+        assert_eq!(
+            on_a, off_a,
+            "pixel {i}: alpha must be untouched by the shaft composite (shafts-on {on_a} vs shafts-off {off_a})"
+        );
+    }
+}
+
+/// Sum of every channel over EVERY pixel (no "lit pixel" filtering). The
+/// composite is a pure additive blend (`color.rgb += result`, never
+/// subtracts, D3) and the march's own output scales linearly with
+/// `shaft_intensity` (D2's `out = L * shaft_intensity * exp2(exposure_ev)`,
+/// every term in `L` non-negative) — so this total is the metric that MUST
+/// be monotonic. A "mean over lit (>0.02) pixels" metric is the wrong
+/// oracle here: turning shafts on pulls previously-excluded near-black
+/// background pixels into the filtered set, which can lower a filtered mean
+/// even though every individual pixel's value only went up.
+fn total_rgb_sum(bytes: &[u8]) -> f64 {
+    let mut sum = 0.0f64;
+    for px in bytes.chunks_exact(8) {
+        for c in 0..3 {
+            let v = f16::from_le_bytes([px[c * 2], px[c * 2 + 1]]).to_f32();
+            assert!(v.is_finite(), "non-finite pixel channel");
+            sum += v as f64;
+        }
+    }
+    sum
+}
+
+#[test]
+fn shaft_intensity_is_a_monotonic_performer_fader() {
+    // Performer-gesture line (P2): `shaft_intensity` is a card-driven fader —
+    // driving it across a range must monotonically increase the frame's
+    // total additive-light response (see `total_rgb_sum` for why this is
+    // the correct metric, not a filtered mean).
+    let mut prev_sum = -1.0f64;
+    for intensity in [0.0f32, 0.3, 0.8, 1.5, 3.0] {
+        let json = shaft_and_fog_scene_json(0.15, intensity);
+        let (bytes, _, _) = render_readback(&json);
+        let sum = total_rgb_sum(&bytes);
+        assert!(
+            sum >= prev_sum - 1e-3,
+            "shaft_intensity {intensity}: total rgb sum {sum:.4} must be >= previous {prev_sum:.4} (monotonic fader)"
+        );
+        prev_sum = sum;
+    }
+    assert!(prev_sum > 0.0, "sanity: the final (hottest) frame must have nonzero total light");
 }
 
 fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {

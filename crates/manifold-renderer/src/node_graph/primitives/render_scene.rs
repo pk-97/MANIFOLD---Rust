@@ -312,29 +312,86 @@ pub struct RenderScene {
     /// exactly `model_n` — an unwired object costs one extra 32-byte L1
     /// storage-buffer read, nothing observable in the output.
     identity_instance_stub: Option<manifold_gpu::GpuBuffer>,
-    /// VOLUMETRIC_LIGHT_DESIGN.md D3 (P2 populates this): half-res
-    /// light-shaft inscatter texture, to be lazily created via the
-    /// `ensure_shadow_map` pattern ONLY when [`wants_shafts`] is true. P1
-    /// introduces the gate and this slot; it stays `None` forever in P1 —
-    /// no march kernel exists yet, so nothing ever calls an `ensure_` fn
-    /// for it (the `wants_shafts_gate` V1 test pins this half of the
+    /// VOLUMETRIC_LIGHT_DESIGN.md D3 (P2): half-res `Rgba16Float` light-shaft
+    /// inscatter texture, lazily created via the `ensure_shadow_map` pattern
+    /// ONLY when [`wants_shafts`] is true. Stays `None` when shafts are off
+    /// (the `wants_shafts_gate` V1 test pins this half of the
     /// zero-cost-when-off contract).
-    // Un-suppression trigger: VOLUMETRIC_LIGHT_DESIGN.md P2 wires the march
-    // kernel, which reads/writes this slot via `ensure_shaft_inscatter`.
-    #[allow(dead_code)]
     shaft_inscatter: Option<manifold_gpu::GpuTexture>,
+    /// VOLUMETRIC_LIGHT_DESIGN.md D3 (P2): half-res `R32Float` point-sampled
+    /// depth downsample, feeding both the march (ray-endpoint depth) and the
+    /// upsample-composite (depth-similarity weights). Same lazy-creation
+    /// rule as `shaft_inscatter`.
+    shaft_depth_half: Option<manifold_gpu::GpuTexture>,
+    /// Cached half-res dims the two textures above were last sized to
+    /// (resize detection, same pattern as `depth_width`/`depth_height`).
+    shaft_half_width: u32,
+    shaft_half_height: u32,
+    /// VOLUMETRIC_LIGHT_DESIGN.md D3 (P2): full-res `R32Float` internal
+    /// depth resolve, used ONLY when shafts are on AND the graph's `depth`
+    /// output is unwired — "shafts-on forces the internal Sample0 depth
+    /// resolve even when `depth` is unwired" (D3). When `depth` IS wired,
+    /// the march reads the graph-allocated resolve target directly and this
+    /// stays `None`.
+    shaft_depth_internal: Option<manifold_gpu::GpuTexture>,
+    shaft_depth_internal_width: u32,
+    shaft_depth_internal_height: u32,
+    /// The three internal compute/render pipelines P2 adds. Not graph atoms
+    /// (§2.5 audit: zero new graph primitives) — hand-written pipelines like
+    /// `shadow_pipeline` above, built directly from `include_str!` WGSL, not
+    /// the `primitive!` codegen path (that path is for user-wireable atoms;
+    /// these are internal passes of the `render_*` draw-call boundary node,
+    /// the same exemption class as `ensure_shadow_pass`).
+    shaft_downsample_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    shaft_march_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    shaft_composite_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
 }
 
 /// VOLUMETRIC_LIGHT_DESIGN.md D1/V1: the sole CPU gate for the whole
 /// light-shaft feature. `shaft_intensity <= 0` (the unwired default) means
 /// the march must never run and no shaft texture is ever allocated — the
 /// "unwired = zero cost" contract, extended from fog to shafts.
-// Un-suppression trigger: VOLUMETRIC_LIGHT_DESIGN.md P2's evaluate() calls
-// this to decide whether to run the march + upsample dispatches this frame.
-#[allow(dead_code)]
 fn wants_shafts(atmosphere: &Atmosphere) -> bool {
     atmosphere.shaft_intensity > 0.0
 }
+
+/// D1's `shaft_quality` enum (0/1/2 = Low/Med/High) -> D2's committed march
+/// step count (16/24/32). Any value past 2 clamps to High — the enum can
+/// only ever carry 0..=2 (`AtmosphereNode`'s param clamps it), this is just
+/// the CPU-side decode staying total.
+fn shaft_step_count(quality: u32) -> u32 {
+    match quality {
+        0 => 16,
+        1 => 24,
+        _ => 32,
+    }
+}
+
+/// Half-res march uniforms (VOLUMETRIC_LIGHT_DESIGN.md D2). Mirrors
+/// `shaft_march.wgsl`'s `Uniforms` struct field-for-field — four vec4s of
+/// camera basis (each carrying one derived scalar in `.w`), then fog/shaft
+/// params, then march-loop scalars. 96 bytes = 6 x 16, naga's uniform-size
+/// rule holds trivially since every member is already a vec4.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ShaftMarchUniforms {
+    camera_pos: [f32; 4],
+    camera_right: [f32; 4],
+    camera_up: [f32; 4],
+    camera_fwd: [f32; 4],
+    fog_shaft: [f32; 4],
+    misc: [f32; 4],
+}
+const _: () = assert!(std::mem::size_of::<ShaftMarchUniforms>() == 96);
+
+/// Upsample-composite uniforms (VOLUMETRIC_LIGHT_DESIGN.md D3). Just the
+/// camera near/far the bilateral weight's `linearize_depth` needs.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ShaftCompositeUniforms {
+    near_far: [f32; 4],
+}
+const _: () = assert!(std::mem::size_of::<ShaftCompositeUniforms>() == 16);
 
 impl RenderScene {
     pub fn new() -> Self {
@@ -366,6 +423,15 @@ impl RenderScene {
             dummy_depth: None,
             identity_instance_stub: None,
             shaft_inscatter: None,
+            shaft_depth_half: None,
+            shaft_half_width: 0,
+            shaft_half_height: 0,
+            shaft_depth_internal: None,
+            shaft_depth_internal_width: 0,
+            shaft_depth_internal_height: 0,
+            shaft_downsample_pipeline: None,
+            shaft_march_pipeline: None,
+            shaft_composite_pipeline: None,
         };
         s.rebuild(DEFAULT_OBJECTS, DEFAULT_LIGHTS);
         s
@@ -657,6 +723,120 @@ impl RenderScene {
                 mip_levels: 1,
             });
             self.shadow_maps[slot] = Some((res, tex));
+        }
+    }
+
+    /// VOLUMETRIC_LIGHT_DESIGN.md D3 (P2): ensure the half-res
+    /// `shaft_inscatter` (`Rgba16Float`) and `shaft_depth_half` (`R32Float`)
+    /// textures match `half_w x half_h`, recreating on resize. Same
+    /// `ensure_shadow_map` lazy pattern — called ONLY when [`wants_shafts`]
+    /// is true this frame.
+    fn ensure_shaft_half_res(&mut self, device: &manifold_gpu::GpuDevice, half_w: u32, half_h: u32) {
+        if self.shaft_half_width == half_w
+            && self.shaft_half_height == half_h
+            && self.shaft_inscatter.is_some()
+            && self.shaft_depth_half.is_some()
+        {
+            return;
+        }
+        self.shaft_inscatter = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width: half_w,
+            height: half_h,
+            depth: 1,
+            format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::SHADER_READ
+                | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
+            label: "node.render_scene shaft inscatter",
+            mip_levels: 1,
+        }));
+        self.shaft_depth_half = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width: half_w,
+            height: half_h,
+            depth: 1,
+            format: manifold_gpu::GpuTextureFormat::R32Float,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::SHADER_READ
+                | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
+            label: "node.render_scene shaft depth half",
+            mip_levels: 1,
+        }));
+        self.shaft_half_width = half_w;
+        self.shaft_half_height = half_h;
+    }
+
+    /// VOLUMETRIC_LIGHT_DESIGN.md D3 (P2): ensure the full-res internal
+    /// depth-resolve target used ONLY when shafts are on and the graph's
+    /// `depth` output is unwired this frame — "shafts-on forces the
+    /// internal Sample0 depth resolve even when `depth` is unwired" (D3).
+    /// `RENDER_TARGET` because it is a resolve target of the MSAA depth
+    /// pass; `SHADER_READ` because the downsample kernel reads it.
+    fn ensure_shaft_depth_internal(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+        if self.shaft_depth_internal_width == width
+            && self.shaft_depth_internal_height == height
+            && self.shaft_depth_internal.is_some()
+        {
+            return;
+        }
+        self.shaft_depth_internal = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width,
+            height,
+            depth: 1,
+            format: manifold_gpu::GpuTextureFormat::R32Float,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
+                | manifold_gpu::GpuTextureUsage::SHADER_READ,
+            label: "node.render_scene shaft depth internal",
+            mip_levels: 1,
+        }));
+        self.shaft_depth_internal_width = width;
+        self.shaft_depth_internal_height = height;
+    }
+
+    /// VOLUMETRIC_LIGHT_DESIGN.md D2/D3 (P2): ensure the three internal
+    /// shaft pipelines exist. Compiled once, straight from `include_str!`
+    /// WGSL — each file forks its own `linearize_depth` copy (the
+    /// established "forked, not shared" convention this codebase's other
+    /// hand-authored consumers already use, e.g. ssao_from_depth.wgsl), so
+    /// no concatenation is needed and each file validates standalone under
+    /// `tests/wgsl_validation.rs`'s auto-discovery. Hand-written pipelines,
+    /// NOT the `primitive!` codegen path (these are internal `render_scene`
+    /// passes, not graph atoms; §2.5 audit).
+    fn ensure_shaft_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.shaft_downsample_pipeline.is_none() {
+            self.shaft_downsample_pipeline = Some(device.create_compute_pipeline(
+                include_str!("shaders/shaft_depth_downsample.wgsl"),
+                "cs_main",
+                "node.render_scene shaft downsample",
+            ));
+        }
+        if self.shaft_march_pipeline.is_none() {
+            self.shaft_march_pipeline = Some(device.create_compute_pipeline(
+                include_str!("shaders/shaft_march.wgsl"),
+                "cs_main",
+                "node.render_scene shaft march",
+            ));
+        }
+        if self.shaft_composite_pipeline.is_none() {
+            let blend = manifold_gpu::GpuBlendState {
+                src_factor: manifold_gpu::GpuBlendFactor::One,
+                dst_factor: manifold_gpu::GpuBlendFactor::One,
+                operation: manifold_gpu::GpuBlendOp::Add,
+                // Alpha untouched (D3): src_alpha=Zero, dst_alpha=One means
+                // `dst.a * 1 + 0 = dst.a` regardless of what the fragment
+                // shader writes to its own alpha channel.
+                src_alpha_factor: manifold_gpu::GpuBlendFactor::Zero,
+                dst_alpha_factor: manifold_gpu::GpuBlendFactor::One,
+                alpha_operation: manifold_gpu::GpuBlendOp::Add,
+            };
+            self.shaft_composite_pipeline = Some(device.create_render_pipeline(
+                include_str!("shaders/shaft_composite.wgsl"),
+                "vs_main",
+                "fs_main",
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
+                Some(blend),
+                "node.render_scene shaft composite",
+            ));
         }
     }
 
@@ -1043,6 +1223,14 @@ impl EffectNode for RenderScene {
         let mut light_count: u32 = 0;
         let mut casters: Vec<crate::node_graph::light::Light> =
             Vec::with_capacity(MAX_SHADOW_CASTING_LIGHTS);
+        // VOLUMETRIC_LIGHT_DESIGN.md D2 (P2): Sun-only subset of the same
+        // 2-vec4-per-light packing, for the march kernel. Point lights are
+        // P3 — filtered out here rather than in the shader, so the march
+        // never even sees them (no wasted per-step work on lights it can't
+        // yet handle). Reuses the SAME `slot` this loop already computed
+        // (the caster table below is shared, unfiltered by mode).
+        let mut shaft_light_data: Vec<[f32; 4]> = Vec::new();
+        let mut shaft_light_count: u32 = 0;
         for i in 0..lights_n {
             if let Some(l) = ctx.inputs.light(&format!("light_{i}")) {
                 let slot: f32 = if l.cast_shadows && casters.len() < MAX_SHADOW_CASTING_LIGHTS {
@@ -1055,6 +1243,11 @@ impl EffectNode for RenderScene {
                 light_data.push([-l.dir[0], -l.dir[1], -l.dir[2], 1.0]);
                 light_data.push([l.color[0], l.color[1], l.color[2], slot]);
                 light_count += 1;
+                if l.mode == crate::node_graph::light::LightMode::Sun {
+                    shaft_light_data.push([-l.dir[0], -l.dir[1], -l.dir[2], 1.0]);
+                    shaft_light_data.push([l.color[0], l.color[1], l.color[2], slot]);
+                    shaft_light_count += 1;
+                }
             }
         }
         // D4: `@binding(8)` must ALWAYS be bound (the fragment shaders
@@ -1063,6 +1256,13 @@ impl EffectNode for RenderScene {
         // the binding on empty is the forbidden silent-fallback shape.
         if light_data.is_empty() {
             light_data.extend([[0.0f32; 4]; 2]);
+        }
+        // Same D4 always-bind discipline: the march's `shaft_lights`
+        // binding must be a valid (non-zero-length) buffer even at 0 Sun
+        // lights (`shaft_light_count` gates the shader's loop, not the
+        // binding's presence).
+        if shaft_light_data.is_empty() {
+            shaft_light_data.extend([[0.0f32; 4]; 2]);
         }
 
         // Caster table (`@binding(9)`): `MAX_SHADOW_CASTING_LIGHTS` slots ×
@@ -1107,6 +1307,14 @@ impl EffectNode for RenderScene {
         // consumer actually wired it (checked once per frame, cheap: a
         // step-output lookup, not a texture allocation).
         let velocity_wired = ctx.outputs.texture_2d("velocity").is_some();
+        // VOLUMETRIC_LIGHT_DESIGN.md D1/D3 (P2): the sole CPU gate for the
+        // whole light-shaft feature, checked once per frame like
+        // `velocity_wired`. `depth_wired` decides whether the march reads
+        // the graph-allocated resolve target or the internal one (D3:
+        // "shafts-on forces the internal Sample0 depth resolve even when
+        // `depth` is unwired").
+        let wants_shafts_now = wants_shafts(&atmosphere);
+        let depth_wired = ctx.outputs.texture_2d("depth").is_some();
         // GBUFFER_DESIGN.md §2 D5 (P2): `None` (no history yet) seeds to
         // THIS frame's own `view_proj`, so a scene's first-ever evaluate()
         // has prev == current and velocity is exactly zero — not
@@ -1277,6 +1485,20 @@ impl EffectNode for RenderScene {
                     self.ensure_shadow_map(gpu.device, slot, l.shadow_resolution);
                 }
             }
+            // VOLUMETRIC_LIGHT_DESIGN.md D1/D3 (P2): the whole feature's
+            // real GPU cost gate. `wants_shafts_now == false` (the default)
+            // means none of these run and none of these textures/pipelines
+            // are ever allocated — the "unwired = zero cost" contract
+            // extended from fog to shafts (V1).
+            if wants_shafts_now {
+                self.ensure_shaft_pipelines(gpu.device);
+                let half_w = width.div_ceil(2).max(1);
+                let half_h = height.div_ceil(2).max(1);
+                self.ensure_shaft_half_res(gpu.device, half_w, half_h);
+                if !depth_wired {
+                    self.ensure_shaft_depth_internal(gpu.device, width, height);
+                }
+            }
             // Rotate + (re)size the light ring buffer, then write this
             // frame's light data into the current ring slot. Rotating across
             // FRAMES_IN_FLIGHT buffers guarantees the CPU never overwrites a
@@ -1378,7 +1600,16 @@ impl EffectNode for RenderScene {
         // never assigns "depth" a step-output binding in that case (same
         // lazy mechanism as `render_mesh`'s G-buffer outputs), so this pass
         // costs zero new bytes unless a consumer actually wired it (I1).
-        let depth_resolve_target = ctx.outputs.texture_2d("depth");
+        let graph_depth_resolve_target = ctx.outputs.texture_2d("depth");
+        // VOLUMETRIC_LIGHT_DESIGN.md D3 (P2): when shafts are on and `depth`
+        // is unwired, resolve into the internal target instead (ensured
+        // above) so the march has a depth source regardless — "shafts-on
+        // forces the internal Sample0 depth resolve even when `depth` is
+        // unwired". When `depth` IS wired, the graph's own resolve target
+        // is used for BOTH the graph consumer and the march (one resolve,
+        // two readers).
+        let depth_resolve_target = graph_depth_resolve_target
+            .or(if wants_shafts_now { self.shaft_depth_internal.as_ref() } else { None });
         // GBUFFER_DESIGN.md §2 D1/D5 (P2): same lazy rule as `depth` —
         // `None` when unwired, costing zero new bytes (I1).
         let velocity_resolve_target = ctx.outputs.texture_2d("velocity");
@@ -1554,6 +1785,100 @@ impl EffectNode for RenderScene {
         ctx.gpu_encoder()
             .native_enc
             .draw_instanced_depth_msaa_batch_desc(&pass_desc, &draw_calls, "node.render_scene");
+
+        // ---- VOLUMETRIC_LIGHT_DESIGN.md D2/D3 (P2): light-shaft march +
+        // depth-aware bilateral upsample + additive composite. Runs ONLY
+        // when `wants_shafts_now` (the V1/D1 gate) — the default
+        // `shaft_intensity == 0` never reaches this block, so the rest of
+        // this function's behavior (and every byte it produces) is
+        // untouched when shafts are off. ----
+        if wants_shafts_now {
+            let half_w = self.shaft_half_width;
+            let half_h = self.shaft_half_height;
+            let full_depth = depth_resolve_target.expect("ensured above: wants_shafts_now => Some");
+            let half_depth = self.shaft_depth_half.as_ref().expect("ensured above");
+            let inscatter = self.shaft_inscatter.as_ref().expect("ensured above");
+            let downsample_pipeline = self.shaft_downsample_pipeline.as_ref().expect("ensured above");
+            let march_pipeline = self.shaft_march_pipeline.as_ref().expect("ensured above");
+            let composite_pipeline = self.shaft_composite_pipeline.as_ref().expect("ensured above");
+
+            {
+                let gpu = ctx.gpu_encoder();
+                gpu.native_enc.dispatch_compute(
+                    downsample_pipeline,
+                    &[
+                        GpuBinding::Texture { binding: 0, texture: full_depth },
+                        GpuBinding::Texture { binding: 1, texture: half_depth },
+                    ],
+                    [half_w.div_ceil(16), half_h.div_ceil(16), 1],
+                    "node.render_scene shaft downsample",
+                );
+            }
+
+            let fov_y = match cam.mode {
+                crate::node_graph::camera::CameraMode::Perspective { fov_y } => fov_y,
+                crate::node_graph::camera::CameraMode::Orthographic { .. } => {
+                    std::f32::consts::FRAC_PI_3
+                }
+            };
+            let steps = shaft_step_count(atmosphere.shaft_quality) as f32;
+            let march_uniforms = ShaftMarchUniforms {
+                camera_pos: [cam.pos[0], cam.pos[1], cam.pos[2], cam.near],
+                camera_right: [cam.right[0], cam.right[1], cam.right[2], cam.far],
+                camera_up: [cam.up[0], cam.up[1], cam.up[2], fov_y],
+                camera_fwd: [cam.fwd[0], cam.fwd[1], cam.fwd[2], aspect],
+                fog_shaft: [
+                    atmosphere.fog_density,
+                    atmosphere.height_falloff,
+                    atmosphere.shaft_anisotropy,
+                    atmosphere.shaft_intensity,
+                ],
+                misc: [steps, shaft_light_count as f32, cam.lens.exposure_ev, 0.0],
+            };
+            let shaft_light_bytes: &[u8] = bytemuck::cast_slice(&shaft_light_data);
+            {
+                let gpu = ctx.gpu_encoder();
+                gpu.native_enc.dispatch_compute(
+                    march_pipeline,
+                    &[
+                        GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&march_uniforms) },
+                        GpuBinding::Texture { binding: 1, texture: half_depth },
+                        GpuBinding::Bytes { binding: 2, data: shaft_light_bytes },
+                        GpuBinding::Bytes { binding: 3, data: caster_bytes },
+                        GpuBinding::Texture { binding: 4, texture: shadow_0 },
+                        GpuBinding::Texture { binding: 5, texture: shadow_1 },
+                        GpuBinding::Texture { binding: 6, texture: shadow_2 },
+                        GpuBinding::Texture { binding: 7, texture: shadow_3 },
+                        GpuBinding::Sampler { binding: 8, sampler: shadow_sampler },
+                        GpuBinding::Texture { binding: 9, texture: inscatter },
+                    ],
+                    [half_w.div_ceil(16), half_h.div_ceil(16), 1],
+                    "node.render_scene shaft march",
+                );
+            }
+
+            let composite_uniforms = ShaftCompositeUniforms {
+                near_far: [cam.near, cam.far, 0.0, 0.0],
+            };
+            let gpu = ctx.gpu_encoder();
+            gpu.native_enc.draw_instanced(
+                composite_pipeline,
+                target,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&composite_uniforms),
+                    },
+                    GpuBinding::Texture { binding: 1, texture: inscatter },
+                    GpuBinding::Texture { binding: 2, texture: half_depth },
+                    GpuBinding::Texture { binding: 3, texture: full_depth },
+                ],
+                3,
+                1,
+                manifold_gpu::GpuLoadAction::Load,
+                "node.render_scene shaft composite",
+            );
+        }
     }
 }
 
@@ -1596,6 +1921,76 @@ mod tests {
             scene.shaft_inscatter.is_none(),
             "off -> no ensure_ call -> the shaft slot stays None"
         );
+    }
+
+    /// D3's committed upsample-tap weight, in isolation: `exp(-(Δz/z_full)^2
+    /// * 400)`, `Δz = |z_full - z_tap|`.
+    fn bilateral_weight(z_full: f32, z_tap: f32) -> f32 {
+        let dz = (z_full - z_tap) / z_full;
+        (-(dz * dz) * 400.0).exp()
+    }
+
+    /// VOLUMETRIC_LIGHT_DESIGN.md V5: the committed upsample weights must
+    /// not bleed the far side of a depth silhouette into the near side by
+    /// more than 1%. Synthetic 2x2 half-res neighbourhood: three taps share
+    /// the near-side depth (matching the full-res center pixel exactly,
+    /// `Δz=0` → weight 1), the fourth sits on the far side of a modest 10%
+    /// depth step. All four bilinear weights equal (0.25, the 2x2-block
+    /// center) — the committed contract this test proves: the depth term
+    /// alone crushes the far tap's contribution to under 1% of the
+    /// renormalized sum, even for a step this small (a bigger step crushes
+    /// it further, per the formula's `exp(-x^2*400)` shape).
+    #[test]
+    fn upsample_weight_does_not_bleed_across_a_depth_silhouette() {
+        let z_near = 10.0f32;
+        let z_far = 11.0f32; // 10% step
+        let bilinear_w = 0.25f32; // 2x2-block center, all four taps equal
+
+        let w_near = bilateral_weight(z_near, z_near); // Δz=0 -> weight 1
+        let w_far = bilateral_weight(z_near, z_far);
+
+        // Three near-side taps (color 1.0), one far-side tap (color 1.0) —
+        // same color on both sides isolates the WEIGHT's contribution from
+        // any color difference: the far tap's fractional contribution to
+        // the final weighted sum is exactly its weight fraction.
+        let weighted_far = bilinear_w * w_far;
+        let weighted_near = 3.0 * bilinear_w * w_near;
+        let weight_sum = weighted_near + weighted_far;
+        let far_fraction = weighted_far / weight_sum;
+
+        assert!(
+            far_fraction < 0.01,
+            "far-side tap must contribute <1% of the renormalized sum at a 10% depth step; \
+             got {:.4}% (w_near={w_near:.6}, w_far={w_far:.6})",
+            far_fraction * 100.0
+        );
+    }
+
+    /// Same synthetic edge, but the fallback branch: when ALL taps are on
+    /// the far side (so the near-side reference itself IS the "far" depth,
+    /// i.e. no matching-depth tap exists at all) the committed weight sum
+    /// can still collapse toward zero — D3's `weight_sum < 1e-4` fallback to
+    /// plain bilinear exists exactly for this case, and the fallback must
+    /// equal the plain (undepth-weighted) bilinear blend, not zero.
+    #[test]
+    fn upsample_weight_fallback_matches_plain_bilinear_when_all_taps_disagree() {
+        // Every tap is equally far from `z_full` (an extreme case: a full-res
+        // pixel whose own depth doesn't match ANY of its four half-res
+        // neighbours) — weight collapses near zero for every tap.
+        let z_full = 100.0f32;
+        let z_tap = 5.0f32; // huge relative jump on all 4 taps
+        let w = bilateral_weight(z_full, z_tap);
+        assert!(w < 1e-4, "all four taps must collapse under the 1e-4 fallback threshold, got {w}");
+
+        // The committed fallback (D3): plain bilinear, weights sum to 1 by
+        // construction, so a 4-tap bilinear blend of equal-color taps must
+        // reproduce that color exactly regardless of the (collapsed) depth
+        // weights.
+        let colors = [1.0f32, 1.0, 1.0, 1.0];
+        let bilinear_ws = [0.09f32, 0.21, 0.21, 0.49]; // arbitrary, sums to 1
+        assert!((bilinear_ws.iter().sum::<f32>() - 1.0).abs() < 1e-6);
+        let plain_bilinear: f32 = colors.iter().zip(&bilinear_ws).map(|(c, bw)| c * bw).sum();
+        assert!((plain_bilinear - 1.0).abs() < 1e-6, "plain bilinear of identical-color taps must reproduce that color");
     }
 
     fn params_with(objects: f32, lights: f32) -> ParamValues {
@@ -1934,6 +2329,423 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
+    use crate::generators::mesh_common::InstanceTransform;
+    use crate::node_graph::light::{Light, LightMode, ShadowSoftness};
+    use half::f16;
+    use manifold_gpu::{
+        GpuCompareFunction, GpuDepthStencilDesc, GpuTextureDesc, GpuTextureDimension,
+        GpuTextureFormat, GpuTextureUsage,
+    };
+
+    fn readback_rgba16f(
+        device: &manifold_gpu::GpuDevice,
+        tex: &manifold_gpu::GpuTexture,
+        w: u32,
+        h: u32,
+    ) -> Vec<[f32; 4]> {
+        let bytes_per_row = w * 8;
+        let total = u64::from(h * bytes_per_row);
+        let readback = device.create_buffer_shared(total);
+        let mut enc = device.create_encoder("shaft-march-readback");
+        enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
+        enc.commit_and_wait_completed();
+        let ptr = readback.mapped_ptr().expect("shared readback buffer");
+        let halves: &[u16] =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+        (0..(w * h) as usize)
+            .map(|i| {
+                let o = i * 4;
+                [
+                    f16::from_bits(halves[o]).to_f32(),
+                    f16::from_bits(halves[o + 1]).to_f32(),
+                    f16::from_bits(halves[o + 2]).to_f32(),
+                    f16::from_bits(halves[o + 3]).to_f32(),
+                ]
+            })
+            .collect()
+    }
+
+    fn upload_r32f(
+        device: &manifold_gpu::GpuDevice,
+        w: u32,
+        h: u32,
+        raw: &[f32],
+        label: &str,
+    ) -> manifold_gpu::GpuTexture {
+        let tex = device.create_texture(&GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format: GpuTextureFormat::R32Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label,
+            mip_levels: 1,
+        });
+        let bytes =
+            unsafe { std::slice::from_raw_parts(raw.as_ptr().cast::<u8>(), std::mem::size_of_val(raw)) };
+        device.upload_texture(&tex, bytes);
+        tex
+    }
+
+    fn mat4_mul_vec4_test(m: [[f32; 4]; 4], v: [f32; 4]) -> [f32; 4] {
+        let mut out = [0.0f32; 4];
+        for (row, slot) in out.iter_mut().enumerate() {
+            *slot = m[0][row] * v[0] + m[1][row] * v[1] + m[2][row] * v[2] + m[3][row] * v[3];
+        }
+        out
+    }
+
+    fn add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+        [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+    }
+    fn scale3(a: [f32; 3], s: f32) -> [f32; 3] {
+        [a[0] * s, a[1] * s, a[2] * s]
+    }
+    fn len3(a: [f32; 3]) -> f32 {
+        (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt()
+    }
+    fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
+        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    }
+
+    fn henyey_greenstein_test(g: f32, cos_theta: f32) -> f32 {
+        let g2 = g * g;
+        let denom = (1.0 + g2 - 2.0 * g * cos_theta).max(1e-6).powf(1.5);
+        (1.0 - g2) / (4.0 * std::f32::consts::PI * denom)
+    }
+
+    /// CINEMATIC_POST_DESIGN.md D2's committed hash, Rust twin — WGSL
+    /// `fract` is `x - floor(x)` (always non-negative), NOT Rust's
+    /// `f32::fract` (which truncates toward zero and can be negative).
+    #[allow(clippy::excessive_precision)] // the committed hash constant, verbatim
+    fn hash01(px: [f32; 2]) -> f32 {
+        let d = px[0] * 12.9898 + px[1] * 78.233;
+        let v = d.sin() * 43758.5453;
+        v - v.floor()
+    }
+
+    /// Plain-Rust twin of `shaft_march.wgsl`'s `cs_main`, ONE Sun light,
+    /// shadow visibility computed against a KNOWN-constant occluder
+    /// light-space depth (`occluder_ndc_z`) rather than re-deriving PCF —
+    /// legitimate because the GPU fixture's shadow map is spatially uniform
+    /// by construction (a single flat occluder plane under a straight-down
+    /// Sun ortho projection projects to the SAME light-space depth
+    /// everywhere), so a linear-filtered hardware compare against a
+    /// constant field can never partially blend — it's exactly the same
+    /// boolean at all 4 taps.
+    #[allow(clippy::too_many_arguments)]
+    fn cpu_march_reference(
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+        raw_depth: f32,
+        near: f32,
+        far: f32,
+        cam_pos: [f32; 3],
+        right: [f32; 3],
+        up: [f32; 3],
+        fwd: [f32; 3],
+        fov_y: f32,
+        aspect: f32,
+        fog_density: f32,
+        height_falloff: f32,
+        g: f32,
+        shaft_intensity: f32,
+        steps: u32,
+        exposure_ev: f32,
+        light: &Light,
+        vp: [[f32; 4]; 4],
+        bias: f32,
+        occluder_ndc_z: f32,
+    ) -> [f32; 3] {
+        let view_z = crate::node_graph::camera::linearize_depth(raw_depth, near, far);
+        let uv = [(x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32];
+        let ndc_x = uv[0] * 2.0 - 1.0;
+        let ndc_y = 1.0 - uv[1] * 2.0;
+        let tan_half_fov = (fov_y * 0.5).tan();
+
+        let ray = add3(
+            add3(
+                scale3(fwd, view_z),
+                scale3(right, ndc_x * aspect * tan_half_fov * view_z),
+            ),
+            scale3(up, ndc_y * tan_half_fov * view_z),
+        );
+        let ray_length = len3(ray);
+        let ray_dir = if ray_length > 1e-6 { scale3(ray, 1.0 / ray_length) } else { fwd };
+
+        let seg = ray_length / steps as f32;
+        let t0 = (hash01([x as f32, y as f32]) - 0.5) * seg;
+
+        let mut transmittance = 1.0f32;
+        let mut accum = [0.0f32; 3];
+        for i in 0..steps {
+            let t = seg * (i as f32 + 0.5) + t0;
+            let px = add3(cam_pos, scale3(ray_dir, t));
+            let sigma = fog_density * (-height_falloff * px[1].max(0.0)).exp();
+
+            let clip = mat4_mul_vec4_test(vp, [px[0], px[1], px[2], 1.0]);
+            let vis = if clip[3] <= 0.0 {
+                1.0
+            } else {
+                let ndc_z = clip[2] / clip[3];
+                let ndc_xy = [clip[0] / clip[3], clip[1] / clip[3]];
+                let suv = [ndc_xy[0] * 0.5 + 0.5, ndc_xy[1] * -0.5 + 0.5];
+                if !(0.0..=1.0).contains(&suv[0]) || !(0.0..=1.0).contains(&suv[1]) || !(0.0..=1.0).contains(&ndc_z) {
+                    1.0
+                } else {
+                    let ref_depth = ndc_z - bias;
+                    if ref_depth < occluder_ndc_z { 1.0 } else { 0.0 }
+                }
+            };
+            let light_to_x_dir = light.dir;
+            let cos_theta = dot3(ray_dir, light_to_x_dir);
+            let phase = henyey_greenstein_test(g, cos_theta);
+            for (c, acc) in accum.iter_mut().enumerate() {
+                *acc += transmittance * sigma * vis * phase * light.color[c] * seg;
+            }
+            transmittance *= (-sigma * seg).exp();
+        }
+
+        [
+            accum[0] * shaft_intensity * exposure_ev.exp2(),
+            accum[1] * shaft_intensity * exposure_ev.exp2(),
+            accum[2] * shaft_intensity * exposure_ev.exp2(),
+        ]
+    }
+
+    /// VOLUMETRIC_LIGHT_DESIGN.md V3: the SHIPPING `shaft_march.wgsl` kernel
+    /// (dispatched exactly as `ensure_shaft_pipelines`/`evaluate` builds it —
+    /// `depth_common.wgsl` concatenated ahead) must agree with
+    /// `cpu_march_reference` (same committed D2 math, independent Rust
+    /// implementation) within 1e-3, on a small synthetic grid: one Sun
+    /// light, a fabricated 8x8 shadow map (a real depth-only render of one
+    /// flat occluder quad — not a hand-uploaded texture, since Depth32Float
+    /// textures don't support CPU upload), flat scene depth.
+    #[test]
+    fn shaft_march_matches_cpu_reference() {
+        let device = crate::test_device();
+        let (w, h) = (4u32, 4u32);
+        let raw_depth = 0.5f32;
+        let half_depth_raw = vec![raw_depth; (w * h) as usize];
+        let half_depth = upload_r32f(&device, w, h, &half_depth_raw, "shaft-test-half-depth");
+
+        let cam_pos = [0.0f32, 10.0, 20.0];
+        let right = [1.0f32, 0.0, 0.0];
+        let up = [0.0f32, 1.0, 0.0];
+        let fwd = [0.0f32, 0.0, -1.0];
+        let near = 0.1f32;
+        let far = 100.0f32;
+        let fov_y = std::f32::consts::FRAC_PI_3;
+        let aspect = 1.0f32;
+
+        let light = Light::sun(
+            [0.0, 50.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [1.0, 1.0, 1.0],
+            1.0,
+            30.0,
+            true,
+            ShadowSoftness::Soft,
+            0.001,
+            8,
+        );
+        assert_eq!(light.mode, LightMode::Sun);
+        let vp = light.shadow_view_proj();
+
+        // Fabricate the 8x8 shadow map by actually rendering one large flat
+        // occluder quad at world y=20 (between the light at y=50 and the
+        // geometry the march samples near y<=10), sized well beyond the
+        // ortho frustum's +/-30 extent so the WHOLE map gets one constant
+        // stored depth — same production shadow_depth.wgsl pipeline
+        // render_scene.rs itself uses for real casters.
+        let smap_res = 8u32;
+        let shadow_map = device.create_texture(&GpuTextureDesc {
+            width: smap_res,
+            height: smap_res,
+            depth: 1,
+            format: GpuTextureFormat::Depth32Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET | GpuTextureUsage::SHADER_READ,
+            label: "shaft-test-shadow-map",
+            mip_levels: 1,
+        });
+        let shadow_ds = device.create_depth_stencil_state(&GpuDepthStencilDesc {
+            compare: GpuCompareFunction::Less,
+            write_enabled: true,
+        });
+        let shadow_pipeline = device.create_render_pipeline_depth_only(
+            include_str!("shaders/shadow_depth.wgsl"),
+            "vs_main",
+            "fs_shadow",
+            GpuTextureFormat::Depth32Float,
+            "shaft-test-shadow-pipeline",
+        );
+        let quad_y = 20.0f32;
+        let ext = 80.0f32;
+        let mk_vertex = |x: f32, z: f32| MeshVertex {
+            position: [x, quad_y, z],
+            _pad0: 0.0,
+            normal: [0.0, 1.0, 0.0],
+            _pad1: 0.0,
+            uv: [0.0, 0.0],
+            _pad2: [0.0, 0.0],
+        };
+        let quad_verts = [
+            mk_vertex(-ext, -ext),
+            mk_vertex(ext, -ext),
+            mk_vertex(ext, ext),
+            mk_vertex(-ext, -ext),
+            mk_vertex(ext, ext),
+            mk_vertex(-ext, ext),
+        ];
+        let vbuf = device.create_buffer_shared(std::mem::size_of_val(&quad_verts) as u64);
+        unsafe {
+            vbuf.write(0, bytemuck::cast_slice(&quad_verts));
+        }
+        let identity_inst = InstanceTransform {
+            pos_scale: [0.0, 0.0, 0.0, 1.0],
+            rot_pad: [0.0, 0.0, 0.0, 0.0],
+        };
+        let ibuf = device.create_buffer_shared(std::mem::size_of::<InstanceTransform>() as u64);
+        unsafe {
+            ibuf.write(0, bytemuck::bytes_of(&identity_inst));
+        }
+
+        const IDENTITY4: [[f32; 4]; 4] = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        let shadow_uniforms = ShadowUniforms { light_view_proj: vp, model: IDENTITY4 };
+        let shadow_bindings = [
+            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&shadow_uniforms) },
+            GpuBinding::Buffer { binding: 1, buffer: &vbuf, offset: 0 },
+            GpuBinding::Buffer { binding: 2, buffer: &ibuf, offset: 0 },
+        ];
+        let shadow_draw =
+            manifold_gpu::GpuEncoder::depth_msaa_draw(&shadow_pipeline, &shadow_bindings, 6, 1);
+        let mut shadow_enc = device.create_encoder("shaft-test-shadow-pass");
+        shadow_enc.draw_instanced_depth_only_batch(&shadow_map, &shadow_ds, &[shadow_draw], "shaft-test-shadow");
+        shadow_enc.commit_and_wait_completed();
+
+        let bias = light.shadow_bias;
+        let mut caster_table: Vec<[f32; 4]> = vec![[0.0f32; 4]; MAX_SHADOW_CASTING_LIGHTS * CASTER_VEC4_STRIDE];
+        caster_table[0] = vp[0];
+        caster_table[1] = vp[1];
+        caster_table[2] = vp[2];
+        caster_table[3] = vp[3];
+        caster_table[4] = [bias, 2.0, 1.0 / smap_res as f32, 0.0];
+        let caster_bytes: &[u8] = bytemuck::cast_slice(&caster_table);
+
+        let shaft_light_data: Vec<[f32; 4]> = vec![
+            [-light.dir[0], -light.dir[1], -light.dir[2], 1.0],
+            [light.color[0], light.color[1], light.color[2], 0.0],
+        ];
+        let shaft_light_bytes: &[u8] = bytemuck::cast_slice(&shaft_light_data);
+
+        let dummy_depth = device.create_texture(&GpuTextureDesc {
+            width: 1,
+            height: 1,
+            depth: 1,
+            format: GpuTextureFormat::Depth32Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET | GpuTextureUsage::SHADER_READ,
+            label: "shaft-test-dummy-depth",
+            mip_levels: 1,
+        });
+        let shadow_sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+            mag_filter: manifold_gpu::GpuFilterMode::Linear,
+            min_filter: manifold_gpu::GpuFilterMode::Linear,
+            mip_filter: manifold_gpu::GpuFilterMode::Linear,
+            address_mode_u: manifold_gpu::GpuAddressMode::ClampToEdge,
+            address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
+            address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
+            compare: Some(GpuCompareFunction::Less),
+        });
+
+        let fog_density = 0.05f32;
+        let height_falloff = 0.0f32;
+        let g = 0.0f32;
+        let shaft_intensity = 1.0f32;
+        let steps = 8u32;
+        let exposure_ev = 0.0f32;
+        let march_uniforms = ShaftMarchUniforms {
+            camera_pos: [cam_pos[0], cam_pos[1], cam_pos[2], near],
+            camera_right: [right[0], right[1], right[2], far],
+            camera_up: [up[0], up[1], up[2], fov_y],
+            camera_fwd: [fwd[0], fwd[1], fwd[2], aspect],
+            fog_shaft: [fog_density, height_falloff, g, shaft_intensity],
+            misc: [steps as f32, 1.0, exposure_ev, 0.0],
+        };
+
+        let pipeline = device.create_compute_pipeline(
+            include_str!("shaders/shaft_march.wgsl"),
+            "cs_main",
+            "shaft-march-test",
+        );
+
+        let out_tex = device.create_texture(&GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE,
+            label: "shaft-test-out",
+            mip_levels: 1,
+        });
+
+        let mut enc = device.create_encoder("shaft-march-dispatch");
+        enc.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&march_uniforms) },
+                GpuBinding::Texture { binding: 1, texture: &half_depth },
+                GpuBinding::Bytes { binding: 2, data: shaft_light_bytes },
+                GpuBinding::Bytes { binding: 3, data: caster_bytes },
+                GpuBinding::Texture { binding: 4, texture: &shadow_map },
+                GpuBinding::Texture { binding: 5, texture: &dummy_depth },
+                GpuBinding::Texture { binding: 6, texture: &dummy_depth },
+                GpuBinding::Texture { binding: 7, texture: &dummy_depth },
+                GpuBinding::Sampler { binding: 8, sampler: &shadow_sampler },
+                GpuBinding::Texture { binding: 9, texture: &out_tex },
+            ],
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "shaft-march-dispatch",
+        );
+        enc.commit_and_wait_completed();
+
+        let gpu_out = readback_rgba16f(&device, &out_tex, w, h);
+
+        let occluder_ndc_z = {
+            let clip = mat4_mul_vec4_test(vp, [0.0, quad_y, 0.0, 1.0]);
+            clip[2] / clip[3]
+        };
+
+        for y in 0..h {
+            for x in 0..w {
+                let cpu = cpu_march_reference(
+                    x, y, w, h, raw_depth, near, far, cam_pos, right, up, fwd, fov_y, aspect,
+                    fog_density, height_falloff, g, shaft_intensity, steps, exposure_ev, &light,
+                    vp, bias, occluder_ndc_z,
+                );
+                let idx = (y * w + x) as usize;
+                let gpu = gpu_out[idx];
+                for c in 0..3 {
+                    assert!(
+                        (cpu[c] - gpu[c]).abs() < 1e-3,
+                        "pixel ({x},{y}) channel {c}: cpu={} gpu={} (V3 tolerance 1e-3)",
+                        cpu[c],
+                        gpu[c]
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn prewarm_pipelines_populates_the_shared_render_cache() {
