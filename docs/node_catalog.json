@@ -9956,6 +9956,11 @@
           "name": "vertices",
           "required": true,
           "type": "Array"
+        },
+        {
+          "name": "active_count",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Mesh Edges",
@@ -9966,7 +9971,7 @@
         }
       ],
       "params": [],
-      "purpose": "Emit the per-triangle wireframe edge topology of a flat triangle-list Array<MeshVertex> as Array<EdgePair>: triangle t contributes (3t, 3t+1), (3t+1, 3t+2), (3t+2, 3t). Pure index arithmetic — glTF meshes are unindexed flat triangle lists (gltf_load expands indices), so no vertex data is read and edge count equals vertex count. Pair with node.flatten_3d (same mesh) into node.draw_lines for a true mesh wireframe of any imported or procedural triangle mesh. Interior edges shared by two triangles are emitted twice (flat verts carry no adjacency) — under draw_lines' additive blend shared edges draw ~2x brighter; dedup would need adjacency reconstruction (future work if renders demand it). Edge count tracks the BUFFER capacity, not a runtime active count — size the source's max_capacity to the asset (a zero-filled tail draws degenerate dot edges at vertex 0).",
+      "purpose": "Emit the per-triangle wireframe edge topology of a flat triangle-list Array<MeshVertex> as Array<EdgePair>: triangle t contributes (3t, 3t+1), (3t+1, 3t+2), (3t+2, 3t). Pure index arithmetic — glTF meshes are unindexed flat triangle lists (gltf_load expands indices), so no vertex data is read and edge count equals vertex count. Pair with node.flatten_3d (same mesh) into node.draw_lines for a true mesh wireframe of any imported or procedural triangle mesh. Interior edges shared by two triangles are emitted twice (flat verts carry no adjacency) — under draw_lines' additive blend shared edges draw ~2x brighter; dedup would need adjacency reconstruction (future work if renders demand it). `active_count` (input-only) overrides the vertex count used for topology when the source buffer's capacity exceeds the asset's real loaded vertex count — when unwired, edge count tracks the BUFFER capacity, which produces degenerate (0,0)-style dot edges from the zero-filled tail if max_capacity was sized larger than the asset.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Outputs the wireframe edges of a triangle mesh, so any imported model can be drawn as lines. The mesh counterpart of Grid Edges.",

@@ -9,8 +9,8 @@
 
 use std::path::PathBuf;
 
-use objc2_app_kit::{NSPasteboard, NSPasteboardTypeFileURL};
-use objc2_foundation::NSURL;
+use objc2_app_kit::{NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypeString};
+use objc2_foundation::{NSString, NSURL};
 
 /// AppKit's `NSPasteboard.generalPasteboard.changeCount` — increments every
 /// time anything (this app or another) writes to the general pasteboard.
@@ -52,4 +52,30 @@ pub fn file_urls_on_general_pasteboard() -> Vec<PathBuf> {
         }
     }
     paths
+}
+
+/// The general pasteboard's plain-text string, if any (UI_WIDGET_UNIFICATION
+/// P5b — Cmd+C/X/V for `TextEditModel`-backed sessions). `None` when the
+/// pasteboard holds no string content (e.g. only a file copy).
+pub fn general_pasteboard_string() -> Option<String> {
+    let pasteboard = NSPasteboard::generalPasteboard();
+    // SAFETY: NSPasteboardTypeString is a valid `&'static NSPasteboardType`
+    // static provided by AppKit — same pattern as NSPasteboardTypeFileURL
+    // above.
+    let string_type = unsafe { NSPasteboardTypeString };
+    pasteboard
+        .stringForType(string_type)
+        .map(|s| s.to_string())
+}
+
+/// Replaces the general pasteboard's contents with `s` as plain text
+/// (Cmd+C/X). Clears any other content the pasteboard was holding — the
+/// same one-owner-at-a-time semantics as the system Cmd+C.
+pub fn set_general_pasteboard_string(s: &str) {
+    let pasteboard = NSPasteboard::generalPasteboard();
+    pasteboard.clearContents();
+    let ns = NSString::from_str(s);
+    // SAFETY: see `general_pasteboard_string` above.
+    let string_type = unsafe { NSPasteboardTypeString };
+    pasteboard.setString_forType(&ns, string_type);
 }

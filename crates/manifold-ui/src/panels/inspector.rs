@@ -3228,6 +3228,81 @@ mod tests {
         );
     }
 
+    /// BUG-076 instrumentation: a 9-card stack (the `bug060_scene` shape —
+    /// several cards with an armed, already-open audio-mod drawer, no
+    /// "click to open" step) must report `layer_column_height()` equal to
+    /// the sum of each card's SETTLED `compute_height()` — even on the very
+    /// first `configure_layer_effects` call, with zero `tick_drawers` calls
+    /// in between (the headless single-shot render path has no per-frame
+    /// animation loop, per BUG-073). If `max_scroll()` were computed from an
+    /// undercounted `content_height`, `try_inspector_scroll` would clamp far
+    /// short of the visible overflow — the exact BUG-076 symptom.
+    #[test]
+    fn layer_column_height_matches_settled_heights_with_armed_audio_drawers_on_first_configure() {
+        use super::super::param_card::ParamCardKind;
+        use super::super::param_slider_shared::AudioCardState;
+
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = {
+            let mut l = ScreenLayout::new(1920.0, 1080.0);
+            l.inspector_width = 500.0;
+            l
+        };
+
+        // 9 cards, 4 params each — same shape as the other 9-card fixtures
+        // above. Every OTHER card has its first param's audio mod armed
+        // from the start (mirrors bug060_scene's mix of armed/plain cards).
+        let configs: Vec<_> = (0..9)
+            .map(|i| {
+                let mut c = mk_config(ParamCardKind::Effect, &format!("FX{i}"), 4);
+                if i % 2 == 0 {
+                    c.audio = AudioCardState {
+                        active: vec![true, false, false, false],
+                        ..Default::default()
+                    };
+                }
+                c
+            })
+            .collect();
+
+        // Single configure call — no prior "unarmed" configure, no ticks —
+        // the realistic first-selection / first-render case.
+        panel.configure_layer_effects(&configs, None);
+        panel.configure_tabs(&[InspectorTab::Layer, InspectorTab::Master], InspectorTab::Layer);
+        panel.build(&mut tree, &layout);
+
+        let reported_height = panel.right_column_height();
+
+        // Ticking further must not change any card's reported height — if
+        // it did, `reported_height` (taken before any tick) was reading a
+        // mid-tween value instead of the settled one, i.e. undercounting.
+        for card in &mut panel.layer_effects {
+            for _ in 0..20 {
+                card.tick_drawers(20.0);
+            }
+        }
+        let height_after_ticking = panel.right_column_height();
+        assert!(
+            (reported_height - height_after_ticking).abs() < 0.5,
+            "right_column_height before any tick ({reported_height}) must already equal the \
+             fully-settled height ({height_after_ticking}) — an armed drawer whose height only \
+             appears after ticking means the first-configure value undercounted"
+        );
+
+        // The scroll bound itself must reflect real overflow, not clamp to
+        // a near-zero max — this is the actual user-visible symptom.
+        panel.layer_scroll.set_content_height(panel.right_column_height());
+        let scrolled = panel.try_scroll_in_place(-1_000_000.0, layout.inspector().x + 10.0, &mut tree);
+        assert!(scrolled, "sanity: scrollable content must exist");
+        assert!(
+            panel.layer_scroll.max_scroll() > 200.0,
+            "max_scroll ({}) must reflect the real overflow of a 9-card, several-drawers-open \
+             stack, not clamp to a handful of pixels",
+            panel.layer_scroll.max_scroll()
+        );
+    }
+
     /// Dragging the scrollbar thumb now moves the content with it (in place),
     /// not just the thumb — and raises the `scrolled_in_place` signal so the app
     /// re-renders the inspector slot.

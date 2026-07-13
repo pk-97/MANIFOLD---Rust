@@ -34,6 +34,7 @@ pub mod slider;
 pub mod snap;
 pub mod stepper;
 pub mod text;
+pub mod text_edit;
 pub mod timeline_editing_host;
 pub mod timeline_input_host;
 pub mod transform;

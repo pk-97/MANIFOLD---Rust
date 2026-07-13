@@ -1135,8 +1135,20 @@ impl Project {
     /// instances with no stash (freshly constructed, or already resolved by
     /// an earlier call) are untouched. Walks exactly the homes
     /// `tracking_preset_ids` walks (its mut sibling, above).
-    pub fn reconcile_param_manifests(&mut self) {
-        self.for_each_preset_instance_mut(|fx| fx.reconcile_manifest());
+    ///
+    /// Returns how many instances still have an unresolved preset template
+    /// after this pass (`PresetInstance::template_unresolved`) — BUG-079:
+    /// the loader folds this into `Project::load_report` so a missing
+    /// preset def surfaces on-screen instead of only in an `eprintln`.
+    pub fn reconcile_param_manifests(&mut self) -> usize {
+        let mut unresolved = 0;
+        self.for_each_preset_instance_mut(|fx| {
+            fx.reconcile_manifest();
+            if fx.template_unresolved() {
+                unresolved += 1;
+            }
+        });
+        unresolved
     }
 
     /// Remove every `Snapshot`-origin embedded preset whose id is not in
@@ -1721,6 +1733,11 @@ pub struct LoadReport {
     pub orphaned_clips_purged: usize,
     pub orphaned_midi_purged: usize,
     pub missing_media_files: Vec<String>,
+    /// BUG-079: preset instances whose def couldn't be resolved at load
+    /// (deleted/unregistered/missing) — kept on a placeholder spec
+    /// (keep-don't-drop) rather than dropped. Was console-only (`eprintln!`
+    /// in `effects.rs` / `preset_runtime.rs`) before this field existed.
+    pub unresolved_preset_templates: usize,
 }
 
 impl LoadReport {
@@ -1730,6 +1747,7 @@ impl LoadReport {
             && self.orphaned_clips_purged == 0
             && self.orphaned_midi_purged == 0
             && self.missing_media_files.is_empty()
+            && self.unresolved_preset_templates == 0
     }
 
     /// One human line per non-zero entry, e.g. "3 unknown effects removed".
@@ -1777,6 +1795,13 @@ impl LoadReport {
                 "{} missing media {}",
                 self.missing_media_files.len(),
                 plural(self.missing_media_files.len(), "file", "files")
+            ));
+        }
+        if self.unresolved_preset_templates > 0 {
+            lines.push(format!(
+                "{} unresolved preset {} kept with saved values (preset not registered)",
+                self.unresolved_preset_templates,
+                plural(self.unresolved_preset_templates, "reference", "references")
             ));
         }
         lines

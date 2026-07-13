@@ -336,6 +336,21 @@ impl GpuDevice {
         }
     }
 
+    /// Number of distinct compute pipelines currently cached (keyed by
+    /// shader hash, shared across every caller). Test/verification-only
+    /// introspection — proves a prewarm pass (e.g. BUG-037's
+    /// `GltfTextureSource::prewarm_pipeline`) actually populated the shared
+    /// cache, without needing a live render to observe a cache hit.
+    pub fn compute_pipeline_cache_len(&self) -> usize {
+        self.compute_cache.lock().unwrap().len()
+    }
+
+    /// Sibling of [`Self::compute_pipeline_cache_len`] for render pipelines
+    /// (e.g. BUG-037's `RenderScene::prewarm_pipelines`).
+    pub fn render_pipeline_cache_len(&self) -> usize {
+        self.render_cache.lock().unwrap().len()
+    }
+
     /// Create a compute pipeline from WGSL source (full f32 precision).
     pub fn create_compute_pipeline(
         &self,

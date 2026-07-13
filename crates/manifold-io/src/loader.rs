@@ -217,7 +217,11 @@ pub fn load_project_from_json_with(
     // the now-complete registry. Unconditional — this is what makes BUG-036
     // (project-local preset types registering after their own layer data
     // deserialized) unreachable by construction, not just correctly ordered.
-    project.reconcile_param_manifests();
+    // BUG-079: instances that still can't resolve a template after this pass
+    // (deleted/unregistered/missing preset def) are counted into
+    // `load_report` so the "opened with repairs" toast names them instead of
+    // only logging to console.
+    project.load_report.unresolved_preset_templates = project.reconcile_param_manifests();
 
     // Strip unrecognized effect types (e.g. removed effects from Unity projects).
     // Without this, Unknown effects stay in the effect list and show in the UI.

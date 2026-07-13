@@ -220,15 +220,18 @@ impl AnchorRect {
 pub struct TextInputState {
     pub active: bool,
     pub field: TextInputField,
-    pub text: String,
-    pub cursor: usize,
+    /// The editing model (UI_WIDGET_UNIFICATION P5b, D16) — caret, selection,
+    /// and text mechanics, shared with `MappingPopover` (P5c) and the canvas
+    /// numeric type-in (P5d). This struct keeps its own field/session/anchor
+    /// bookkeeping; the model owns only the buffer.
+    pub model: manifold_ui::text_edit::TextEditModel,
+    /// The text at `begin()` — Cmd+Z in-session reverts to this (D16: single-
+    /// level, never touches the app undo stack). Cleared on cancel/commit.
+    seed: String,
     /// Anchor rect in logical pixels — the overlay renders here.
     pub anchor: AnchorRect,
     /// Font size for the overlay text (logical pixels).
     pub font_size: f32,
-    /// When true, the entire text is selected. First keystroke replaces all.
-    /// Set on `begin()`, cleared on any edit action.
-    pub select_all: bool,
     /// When true, Shift+Enter inserts a newline instead of committing.
     pub multiline: bool,
     /// MarkerId for MarkerName field (String not Copy, so stored separately).
@@ -252,6 +255,15 @@ pub struct TextInputState {
     /// Context for `RenamePreset` (kind + id + source). Set right after
     /// `begin()`, read (and taken) on commit.
     pub rename_preset: Option<RenamePresetCtx>,
+    /// True between a mouse press inside the field and its release (P5b) —
+    /// tells `on_pointer_move` to extend the selection via `drag_to` rather
+    /// than ignore cursor motion. Cleared on release, cancel, and commit.
+    pub(crate) dragging: bool,
+    /// Time + position (logical px) of the previous press inside this field
+    /// (P5b mouse double-click → select-word), compared against `color.rs`'s
+    /// single-sourced double-click constants (I8). `None` after begin/cancel/
+    /// commit — a double-click can't span two different sessions.
+    pub(crate) last_press: Option<(f32, f32, f32)>,
     /// The overlay hosting this session, if any — `None` for panel-owned
     /// fields. Set by [`Self::begin_owned`], cleared by [`Self::begin`]
     /// (a raw `begin` is always panel-owned) and [`Self::cancel`]/[`Self::commit`].
@@ -263,11 +275,10 @@ impl TextInputState {
         Self {
             active: false,
             field: TextInputField::Bpm,
-            text: String::new(),
-            cursor: 0,
+            model: manifold_ui::text_edit::TextEditModel::new(""),
+            seed: String::new(),
             anchor: AnchorRect::zero(),
             font_size: 12.0,
-            select_all: false,
             multiline: false,
             marker_id: None,
             audio_send_id: None,
@@ -277,6 +288,8 @@ impl TextInputState {
             driver_free_period: None,
             save_preset: None,
             rename_preset: None,
+            dragging: false,
+            last_press: None,
             owner: None,
         }
     }
@@ -295,11 +308,11 @@ impl TextInputState {
     ) {
         self.active = true;
         self.field = field;
-        self.text = initial.to_string();
-        self.cursor = self.text.len();
+        self.model = manifold_ui::text_edit::TextEditModel::new(initial);
+        self.model.select_all(); // first keystroke replaces everything (today's behavior, now a real selection)
+        self.seed = initial.to_string();
         self.anchor = anchor;
         self.font_size = font_size;
-        self.select_all = true;
         self.multiline = matches!(
             field,
             TextInputField::GenStringParam(_) | TextInputField::GraphWgsl(_)
@@ -311,6 +324,8 @@ impl TextInputState {
         self.driver_free_period = None;
         self.save_preset = None;
         self.rename_preset = None;
+        self.dragging = false;
+        self.last_press = None;
         self.owner = None;
     }
 
@@ -344,8 +359,8 @@ impl TextInputState {
     /// Cancel editing without committing.
     pub fn cancel(&mut self) {
         self.active = false;
-        self.text.clear();
-        self.select_all = false;
+        self.model = manifold_ui::text_edit::TextEditModel::new("");
+        self.seed.clear();
         self.multiline = false;
         // Drop any per-session graph edit context so a cancelled cell/param
         // edit can't be mistaken for a later one.
@@ -355,100 +370,126 @@ impl TextInputState {
         self.driver_free_period = None;
         self.save_preset = None;
         self.rename_preset = None;
+        self.dragging = false;
+        self.last_press = None;
         self.owner = None;
     }
 
-    /// Insert a character at the cursor position.
-    /// If select_all is active, replaces all text first.
+    /// The live text (delegates to the model — I7's single editing home).
+    pub fn text(&self) -> &str {
+        self.model.text()
+    }
+
+    /// Insert a character at the caret, replacing the selection if any
+    /// (typing replaces the selection, D16).
     pub fn insert_char(&mut self, c: char) {
-        if self.select_all {
-            self.text.clear();
-            self.cursor = 0;
-            self.select_all = false;
-        }
-        self.text.insert(self.cursor, c);
-        self.cursor += c.len_utf8();
+        self.model.insert_char(c);
     }
 
-    /// Delete the character before the cursor (backspace).
-    /// If select_all is active, clears all text.
+    /// Delete the selection, or (no selection) the char before the caret.
     pub fn backspace(&mut self) {
-        if self.select_all {
-            self.text.clear();
-            self.cursor = 0;
-            self.select_all = false;
-            return;
-        }
-        if self.cursor > 0 {
-            let prev = self.text[..self.cursor]
-                .char_indices()
-                .last()
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            self.text.remove(prev);
-            self.cursor = prev;
-        }
+        self.model.backspace();
     }
 
-    /// Delete the character after the cursor.
-    /// If select_all is active, clears all text.
+    /// Delete the selection, or (no selection) the char after the caret.
     pub fn delete(&mut self) {
-        if self.select_all {
-            self.text.clear();
-            self.cursor = 0;
-            self.select_all = false;
-            return;
-        }
-        if self.cursor < self.text.len() {
-            self.text.remove(self.cursor);
-        }
+        self.model.delete();
+    }
+
+    /// Places the caret at `byte` (a click); `extend` (shift-click) grows
+    /// the selection instead of collapsing it.
+    pub fn caret_to(&mut self, byte: usize, extend: bool) {
+        self.model.caret_to(byte, extend);
+    }
+
+    /// Moves the caret to `byte` during a mouse drag, anchor held at the
+    /// press position.
+    pub fn drag_to(&mut self, byte: usize) {
+        self.model.drag_to(byte);
+    }
+
+    /// Selects the word touching `byte` (mouse double-click).
+    pub fn select_word_at(&mut self, byte: usize) {
+        self.model.select_word_at(byte);
     }
 
     /// Commit the current text. Returns the field and final text.
     pub fn commit(&mut self) -> (TextInputField, String) {
         self.active = false;
-        self.select_all = false;
+        self.dragging = false;
+        self.last_press = None;
         self.owner = None;
         let field = self.field;
-        let text = std::mem::take(&mut self.text);
+        let text = self.model.take_text();
+        self.seed.clear();
         (field, text)
     }
 
-    /// Move cursor left. Clears select_all.
-    pub fn move_left(&mut self) {
-        if self.select_all {
-            self.cursor = 0;
-            self.select_all = false;
-            return;
-        }
-        if self.cursor > 0 {
-            self.cursor = self.text[..self.cursor]
-                .char_indices()
-                .last()
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-        }
+    /// Move the caret left. `select` extends (Shift), `word` steps a whole
+    /// word (Option) instead of one char — standard macOS bindings.
+    pub fn move_left(&mut self, select: bool, word: bool) {
+        self.model.move_left(select, word);
     }
 
-    /// Move cursor right. Clears select_all.
-    pub fn move_right(&mut self) {
-        if self.select_all {
-            self.cursor = self.text.len();
-            self.select_all = false;
-            return;
-        }
-        if self.cursor < self.text.len() {
-            self.cursor += self.text[self.cursor..]
-                .chars()
-                .next()
-                .map_or(0, |c| c.len_utf8());
-        }
+    /// Move the caret right. `select` extends (Shift), `word` steps a whole
+    /// word (Option) instead of one char.
+    pub fn move_right(&mut self, select: bool, word: bool) {
+        self.model.move_right(select, word);
+    }
+
+    /// Move the caret to the start of the text (Cmd+Left). `select` extends.
+    pub fn move_home(&mut self, select: bool) {
+        self.model.move_home(select);
+    }
+
+    /// Move the caret to the end of the text (Cmd+Right). `select` extends.
+    pub fn move_end(&mut self, select: bool) {
+        self.model.move_end(select);
     }
 
     /// Select all text (Cmd+A / Ctrl+A).
     pub fn select_all_text(&mut self) {
-        self.select_all = true;
-        self.cursor = self.text.len();
+        self.model.select_all();
+    }
+
+    /// In-session Cmd+Z (D16): reverts the buffer to its seed text — the
+    /// text at `begin()` — single-level, never touches the app undo stack.
+    /// A no-op if there's no active session (nothing to revert).
+    pub fn undo_to_seed(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.model = manifold_ui::text_edit::TextEditModel::new(&self.seed);
+    }
+
+    /// Copies the current selection (empty string if none) — Cmd+C.
+    pub fn copy_selection(&self) -> String {
+        self.model.selected_text().to_string()
+    }
+
+    /// Cuts the current selection (empty string if none), removing it from
+    /// the buffer — Cmd+X.
+    pub fn cut_selection(&mut self) -> String {
+        let s = self.model.selected_text().to_string();
+        if !s.is_empty() {
+            self.model.backspace(); // selection non-empty: this deletes exactly the selection
+        }
+        s
+    }
+
+    /// Pastes `s` at the caret, replacing the selection if any — Cmd+V.
+    /// Single-line fields strip newlines (a paste can't smuggle in a
+    /// multiline edit where the field has no way to render one).
+    pub fn paste(&mut self, s: &str) {
+        if s.is_empty() {
+            return;
+        }
+        if self.multiline {
+            self.model.insert_str(s);
+        } else {
+            let flat: String = s.chars().filter(|&c| c != '\n' && c != '\r').collect();
+            self.model.insert_str(&flat);
+        }
     }
 }
 
